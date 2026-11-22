@@ -15,6 +15,9 @@ case "$out" in *.tar.xz) ;; *) die "$out doesn't end in .tar.xz" ;; esac
 commit="$(git -C "$root" rev-parse --verify "$commit_rev^{commit}")" || die "no commit $commit_rev in this checkout"
 prebuilt="$(git -C "$root" show "$commit:scripts/windows/engine/prebuilt.json")" || die "$commit has no scripts/windows/engine/prebuilt.json"
 engine_source_rev="$(python3 -c 'import json, sys; print(json.load(sys.stdin).get("source", ""))' <<<"$prebuilt")"
+if [ -z "$engine_source_rev" ]; then
+  engine_source_rev="$commit"
+fi
 [[ "$engine_source_rev" =~ ^[0-9a-f]{40}$ ]] || die "scripts/windows/engine/prebuilt.json at $commit names no full source commit for its engine"
 if ! git -C "$root" cat-file -e "$engine_source_rev^{commit}" 2>/dev/null; then
   git -C "$root" fetch --quiet --no-tags --depth=1 origin "$engine_source_rev" \
