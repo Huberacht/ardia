@@ -72,14 +72,14 @@ enum ServerWindowDrag {
     armStale(window, after: staleAtMost)
   }
 
-  private static func armStale(_ window: NSWindow, after delay: TimeInterval) {
+  private static func armStale(_ window: NSWindow, after delay: TimeInterval, waited: Bool = false) {
     let key = ObjectIdentifier(window)
     let work = DispatchWorkItem { [weak window] in
       guard let window, stale[key] != nil else { return }
       let wait = untilScrollQuiet()
       guard wait > 0 else { return refresh(window) }
-      counts.scrollWaits += 1
-      armStale(window, after: wait)
+      if !waited { counts.scrollWaits += 1 }
+      armStale(window, after: wait, waited: true)
     }
     stale[key] = work
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -152,7 +152,7 @@ enum ServerWindowDrag {
 
   private static var pending: [ObjectIdentifier: DispatchWorkItem] = [:]
 
-  static func scheduleRefresh(_ window: NSWindow, after delay: CFTimeInterval = refreshEvery) {
+  static func scheduleRefresh(_ window: NSWindow, after delay: CFTimeInterval = refreshEvery, waited: Bool = false) {
     let key = ObjectIdentifier(window)
     pending[key]?.cancel()
     let work = DispatchWorkItem { [weak window] in
@@ -160,8 +160,8 @@ enum ServerWindowDrag {
       guard let window else { return }
       let wait = untilScrollQuiet()
       guard wait > 0 else { return refresh(window) }
-      counts.scrollWaits += 1
-      scheduleRefresh(window, after: wait)
+      if !waited { counts.scrollWaits += 1 }
+      scheduleRefresh(window, after: wait, waited: true)
     }
     pending[key] = work
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)

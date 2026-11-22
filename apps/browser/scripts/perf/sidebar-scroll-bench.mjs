@@ -259,7 +259,9 @@ class Frames {
     const records = this.records();
     const periods = records.filter((r) => r.k === "f" && r.ts >= from && r.ts < to && r.tgt > r.ts).map((r) => r.tgt - r.ts).sort((x, y) => x - y);
     const lateAfter = 1.5 * (periods.length ? periods[periods.length >> 1] : 1000 / 120);
+    const before = records.filter((r) => r.k === "y" && r.ts < from).at(-1);
     const offsets = records.filter((r) => r.k === "y" && r.ts >= from && r.ts < to);
+    if (offsets.length && before) offsets.unshift(before);
     if (offsets.length) Object.assign(out, { moving: 0, lateMoving: 0, movingMaxGap: 0 });
     for (let i = 1; i < offsets.length; i++) {
       if (Math.abs(offsets[i].y - offsets[i - 1].y) < 0.5) continue;
