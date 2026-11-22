@@ -3,7 +3,8 @@ import type { Animated } from "react-native";
 import { setTrafficLightsCenter } from "../../state/windows/nativeWindow";
 import { dockMoving, sidebarLightsCenter, stillOffWindow, TOP_STRIP_LIGHTS_CENTER } from "../../state/windows/dockMotion";
 import { currentValue } from "../ui/motion";
-import { noteSidebarLightsLeftBehind } from "../../state/telemetry/dockCounts";
+import { noteSidebarLightsLeftBehind, noteSidebarPeekPastTarget } from "../../state/telemetry/dockCounts";
+import { consentToken } from "../../state/telemetry/client";
 
 export function useTopStripLights(windowId: string, dock: Animated.Value, on: boolean, travel: number, open: boolean) {
   useEffect(() => {
@@ -47,8 +48,14 @@ export function useSidebarLights(windowId: string, dock: Animated.Value, slide: 
   }, [windowId, dock]);
   useEffect(() => {
     if (!o.peeking) return;
+    const consent = consentToken();
+    let pastTarget = false;
     const b = slide.addListener(({ value }) => {
       values.current.slide = value;
+      if (value > 1 && !pastTarget) {
+        pastTarget = true;
+        noteSidebarPeekPastTarget(consent);
+      }
       apply.current();
     });
     return () => slide.removeListener(b);

@@ -211,11 +211,55 @@ const ARC_HIDE = [
   [[0, 0], [0.017, 0.328], [0.034, 0.654], [0.05, 0.853], [0.075, 0.956], [0.092, 1]],
 ];
 
-test("Arc's peek slides in on its measured spring and leaves on its ease-in-out; its hide is a 100 ms ease-out", () => {
-  for (const motion of ARC_PEEK_IN) {
-    const rms = fitT0(motion, (t) => springAt(t, dm.ARC_PEEK_SPRING));
-    assert.ok(rms < 0.04, `peek in rms ${rms.toFixed(3)}`);
+const ARC_TRACED_SPRING = { response: 0.18, damping: 0.8 };
+const peekIn = (t) => (t <= 0 ? 0 : t >= dm.PEEK_IN_MS / 1000 ? 1 : dm.easeOutCubic(t / (dm.PEEK_IN_MS / 1000)));
+
+test("the peek slides in on an ease-out over 150 ms that never passes its final width or pulls back (#3631: Arc's 1.5 % overshoot detached the panel from the window's edge)", () => {
+  assert.equal(dm.PEEK_IN_MS, 150);
+  assert.equal(dm.PEEK_IN_MS, dm.ARC_PEEK_OUT_MS, "in as quickly as it leaves");
+  let last = 0;
+  for (let ms = 0; ms <= 400; ms++) {
+    const x = peekIn(ms / 1000);
+    assert.ok(x >= last && x <= 1, `${ms} ms: ${x} after ${last}`);
+    last = x;
   }
+  for (const hz of [60, 120]) {
+    const frames = Array.from({ length: Math.ceil((hz * dm.PEEK_IN_MS) / 1000) + 2 }, (_, i) => peekIn(i / hz));
+    assert.ok(Math.max(...frames) <= 1, `${hz} Hz: peak ${Math.max(...frames)}`);
+    assert.ok(frames.every((x, i) => i === 0 || x >= frames[i - 1]), `${hz} Hz: one way only`);
+  }
+  assert.ok(peekIn(0.05) > 0.7, `most of the way in 50 ms: ${peekIn(0.05)}`);
+  assert.ok(peekIn(0.1) > 0.95, `all but a hair by 100 ms: ${peekIn(0.1)}`);
+  assert.equal(peekIn(dm.PEEK_IN_MS / 1000), 1, "at rest when the slide ends, no tail");
+  const travel = 227.5 + 12;
+  const pastFinal = Math.max(...Array.from({ length: 400 }, (_, ms) => peekIn(ms / 1000) * travel)) - travel;
+  assert.ok(pastFinal <= 0, `the panel never passes its final edge (${pastFinal} pt)`);
+  const arcPeak = Math.max(...ARC_PEEK_IN.flat().map(([, x]) => x));
+  assert.ok(arcPeak > 1.01, `Arc's traced peek overshoots (${arcPeak}), ours doesn't`);
+  const arcSpringPeak = Math.max(...Array.from({ length: 400 }, (_, i) => springAt(i / 1000, ARC_TRACED_SPRING)));
+  assert.ok(Math.abs(arcSpringPeak - arcPeak) < 0.002, `Arc's traced spring peaks with its traces: ${arcSpringPeak}`);
+  for (const motion of ARC_PEEK_IN) {
+    const rms = fitT0(motion.map(([t, x]) => [t, Math.min(x, 1)]), peekIn);
+    assert.ok(rms < 0.04, `keeps Arc's pace up to its overshoot: rms ${rms.toFixed(3)}`);
+  }
+});
+
+test("the traffic lights in the peek ride the same curve: never past their place in the panel, never back", async () => {
+  const { slidingCenter } = await import("./useDockLights.ts");
+  for (const right of [false, true]) {
+    const o = { width: 227.5, moving: false, peeking: true, fullscreen: false, lights: dm.ARC_LIGHTS_CENTER, right, peekAt: DEFAULT_PEEK };
+    const rest = slidingCenter(o, 0, 1)[0];
+    let last = slidingCenter(o, 0, 0)[0];
+    for (let ms = 0; ms <= 400; ms += 1000 / 120) {
+      const [x] = slidingCenter(o, 0, peekIn(ms / 1000));
+      assert.ok(last <= x && x <= rest, `${right ? "right" : "left"} ${ms.toFixed(1)} ms: ${x} after ${last}, rest ${rest}`);
+      last = x;
+    }
+    assert.equal(last, rest);
+  }
+});
+
+test("Arc's peek leaves on its ease-in-out; its hide is a 100 ms ease-out", () => {
   const hide = (t) => (t <= 0 ? 0 : t >= dm.ARC_HIDE_MS / 1000 ? 1 : dm.easeOutCubic(t / (dm.ARC_HIDE_MS / 1000)));
   for (const motion of ARC_HIDE) {
     const rms = fitT0(motion, hide);
@@ -226,9 +270,6 @@ test("Arc's peek slides in on its measured spring and leaves on its ease-in-out;
   assert.equal(dm.easeInOutCubic(0), 0);
   assert.equal(dm.easeInOutCubic(0.5), 0.5);
   assert.equal(dm.easeInOutCubic(1), 1);
-  const peak = Math.max(...Array.from({ length: 400 }, (_, i) => springAt(i / 1000, dm.ARC_PEEK_SPRING)));
-  const arcPeak = Math.max(...ARC_PEEK_IN.flat().map(([, x]) => x));
-  assert.ok(Math.abs(peak - arcPeak) < 0.002, `the panel's overshoot ${peak}, Arc's ${arcPeak}`);
 });
 
 test("the peek stays off the window edge even when the page frame is zero, its corner nested in the window's", () => {

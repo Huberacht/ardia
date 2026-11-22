@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, AppState } from "react-native";
-import { easeInOutCubic, PEEK_CLOSE_DELAY_MS } from "./dockMotion";
-import { curve, duration, spring } from "../ui/motion";
-import { ARC_PEEK_OUT_MS, ARC_PEEK_SPRING } from "./tokens";
+import { easeInOutCubic, easeOutCubic, PEEK_CLOSE_DELAY_MS } from "./dockMotion";
+import { curve, duration } from "../ui/motion";
+import { ARC_PEEK_OUT_MS, PEEK_IN_MS } from "./tokens";
 import { backgroundInstance } from "../../state/app/appSettings";
 
 const SLIDE_MS = duration.base;
-const ARC_IN = spring(ARC_PEEK_SPRING);
 const appInFront = () => backgroundInstance || AppState.currentState === "active";
 
 export function usePeek(
@@ -24,11 +23,11 @@ export function usePeek(
   const out = useRef(false);
   const waitingForFocus = useRef(false);
   const animate = (to: number, done?: () => void) =>
-    (arc
-      ? to > 0
-        ? Animated.spring(slide, { toValue: to, ...ARC_IN, restDisplacementThreshold: 0.001, restSpeedThreshold: 0.01, useNativeDriver: true })
-        : Animated.timing(slide, { toValue: to, duration: ARC_PEEK_OUT_MS, easing: easeInOutCubic, useNativeDriver: true })
-      : Animated.timing(slide, { toValue: to, duration: SLIDE_MS, easing: curve.enter, useNativeDriver: true })
+    (to > 0
+      ? Animated.timing(slide, { toValue: to, duration: PEEK_IN_MS, easing: easeOutCubic, useNativeDriver: true })
+      : arc
+        ? Animated.timing(slide, { toValue: to, duration: ARC_PEEK_OUT_MS, easing: easeInOutCubic, useNativeDriver: true })
+        : Animated.timing(slide, { toValue: to, duration: SLIDE_MS, easing: curve.enter, useNativeDriver: true })
     ).start(({ finished }) => finished && done?.());
   const slideOut = () => {
     out.current = false;
