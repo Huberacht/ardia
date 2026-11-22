@@ -239,8 +239,10 @@ function revealCurve(arc) {
   assert.equal(reveal.toValue, 1);
   assert.equal(reveal.useNativeDriver, true);
   assert.equal(typeof reveal.easing, "function");
+  assert.equal(reveal.easing(0), 0, "first frame starts at 0");
+  assert.equal(reveal.easing(1), 1, "final frame lands on 1");
   const seconds = reveal.duration / 1000;
-  return { duration: reveal.duration, at: (t) => (t <= 0 ? 0 : t >= seconds ? 1 : reveal.easing(t / seconds)) };
+  return { duration: reveal.duration, at: (t) => reveal.easing(Math.max(0, Math.min(1, t / seconds))) };
 }
 
 for (const arc of [true, false]) {
