@@ -317,13 +317,14 @@ struct NativeViewHolder {
   int immediate_layouts = 0;
 };
 using NativeViewHost = NativeViewHolder;
-class WebView : public View {
+class WebView : public View, private content::WebContentsObserver {
  public:
   explicit WebView(Profile* = nullptr) : holder_(this) {}
   void SetWebContents(content::WebContents* contents) {
     if (contents == contents_) return;
     if (contents_) holder_.Detach();
     contents_ = contents;
+    Observe(contents);
     if (!contents && detach_advances_focus && focus_manager.focused == this) {
       focused_detaches++;
       focus_manager.focused = nullptr;
@@ -342,6 +343,7 @@ class WebView : public View {
     holder_.SetBoundsRect(gfx::Rect(bounds().size()));
   }
  private:
+  void WebContentsDestroyed() override { SetWebContents(nullptr); }
   content::WebContents* contents_ = nullptr;
   NativeViewHolder holder_;
 };
