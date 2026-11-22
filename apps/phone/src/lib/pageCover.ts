@@ -4,3 +4,5 @@ export type CoverPageState = { isLive: boolean; isLoading: boolean };
 
 export const pageCoverNeeded = (state: CoverPageState | null, hasSnapshot: boolean) =>
   !(state !== null && state.isLive && !state.isLoading && !hasSnapshot);
+
+export const pageAtRest = (state: CoverPageState | null) => state !== null && state.isLive && !state.isLoading;

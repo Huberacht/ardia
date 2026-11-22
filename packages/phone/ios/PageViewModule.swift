@@ -14,6 +14,7 @@ struct SnapshotOptionsRecord: Record {
   @Field var maxWidth: Int? = nil
   @Field var quality: Int? = nil
   @Field var coveredInsets: [Double]? = nil
+  @Field var quiet: Bool = false
 }
 
 struct RequestAnswerRecord: Record {
@@ -224,7 +225,7 @@ public final class PageViewModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("snapshot") { (pageID: String, options: SnapshotOptionsRecord, promise: Promise) in
-      Self.main(promise) { try await PhonePages.shared.snapshot(pageID, maxWidth: options.maxWidth, quality: options.quality) }
+      Self.main(promise) { try await PhonePages.shared.snapshot(pageID, maxWidth: options.maxWidth, quality: options.quality, quiet: options.quiet) }
     }.runOnQueue(.main)
 
     AsyncFunction("loadHtml") { (pageID: String, html: String, baseURL: String) in

@@ -2,13 +2,15 @@ import { memo, useEffect, useState, type ReactNode } from "react";
 import { countRender } from "../../state/app/interactionPerf";
 import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
-import { PAGE_COVER, pageCoverNeeded } from "../../lib/pageCover";
+import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
-import { arrivalCovers, useBrowse } from "../../state/browse/store";
+import { arrivalCovers, useBrowse, whenPageDrawn } from "../../state/browse/store";
 import { holdTone, pageNavigation, releaseTone, usePages } from "../../state/pages/store";
 import { display } from "../../state/search/omnibox";
 import { launchArguments } from "../../state/app/launchFlags";
 import type { BrowserTab } from "../../state/tabs/tabModels";
+import { currentTabs } from "../../state/tabs/store";
+import { findTab } from "../../state/tabs/tabsState";
 import { TabFace, useTheme } from "../ui";
 import { PageLoadingPlaceholder } from "./PageLoadingPlaceholder";
 import { pageWords } from "../../lib/sharedWords";
@@ -30,6 +32,12 @@ const openingCardOf = (id: string): OpeningCard | null => {
 
 type Box = { width: number; height: number };
 
+const CUTS_WHEN_DRAWN = Platform.OS === "ios";
+
+const coverCuts = new Map<string, () => void>();
+
+export const cutPageCover = (id: string) => coverCuts.get(id)?.();
+
 function AtCardScale({ cardWidth, box, children }: { cardWidth: number | null; box: Box; children: ReactNode }) {
   if (!cardWidth || box.width <= 0 || box.height <= 0) return children;
   const scale = box.width / cardWidth;
@@ -41,8 +49,10 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const theme = useTheme();
   const tone = usePageTone(tab.id);
   const [frozen] = useState(() => launchArguments().loadFreeze !== null);
-  const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(tab.snapshotFileName) && !arrivalCovers(tab.id)));
-  const [face] = useState(() => coverFace(tab, frozen ? null : tab.snapshotFileName, openingCardOf(tab.id)));
+  const [picture] = useState(() => findTab(currentTabs(), tab.id)?.snapshotFileName ?? tab.snapshotFileName);
+  const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && !arrivalCovers(tab.id)));
+  const [atRest] = useState(() => CUTS_WHEN_DRAWN && !frozen && pageAtRest(pageNavigation(tab.id)));
+  const [face] = useState(() => coverFace(tab, frozen ? null : picture, openingCardOf(tab.id)));
   const window = useWindowDimensions();
   const [box, setBox] = useState<Box>(() => ({ width: window.width, height: window.height }));
   const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was.width === layout.width && was.height === layout.height ? was : { width: layout.width, height: layout.height }));
@@ -57,6 +67,8 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     if (!needed || frozen) return;
     let fading = false;
     let sawLoading = false;
+    let drawn = false;
+    let touched = false;
     let deadline: ReturnType<typeof setTimeout> | null = null;
     let settle: ReturnType<typeof setTimeout> | null = null;
     const fade = () => {
@@ -65,6 +77,12 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       opacity.value = withTiming(0, { duration: PAGE_COVER.fadeMs }, (finished) => {
         if (finished) runOnJS(coverGone)(tab.id);
       });
+    };
+    const cut = () => {
+      if (fading) return;
+      fading = true;
+      opacity.value = 0;
+      coverGone(tab.id);
     };
     const check = () => {
       if (fading) return;
@@ -83,14 +101,31 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
         fade();
         return;
       }
+      if (atRest && (drawn || touched)) {
+        cut();
+        return;
+      }
       if (!settle) settle = setTimeout(fade, PAGE_COVER.settleMs);
     };
+    const stopDrawn = atRest
+      ? whenPageDrawn(tab.id, PAGE_COVER.deadlineMs, (wasDrawn) => {
+          drawn = wasDrawn;
+          check();
+        })
+      : null;
+    const cutOnTouch = () => {
+      touched = true;
+      check();
+    };
+    if (atRest) coverCuts.set(tab.id, cutOnTouch);
     check();
     const pages = usePages.subscribe(check);
     const browse = useBrowse.subscribe(check);
     return () => {
       pages();
       browse();
+      stopDrawn?.();
+      if (coverCuts.get(tab.id) === cutOnTouch) coverCuts.delete(tab.id);
       if (deadline) clearTimeout(deadline);
       if (settle) clearTimeout(settle);
     };

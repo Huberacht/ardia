@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent, type ViewInstance } from "react-native";
+import { AccessibilityInfo, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type AccessibilityActionEvent, type ViewInstance } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { FadeIn, FadeOut, runOnJS, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import Animated, { FadeIn, FadeOut, runOnJS, useAnimatedKeyboard, useAnimatedStyle, useSharedValue, withSpring, type SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useBottomLift } from "../search/useKeyboardHeight";
+import { keyboardIsUp } from "../../lib/trayMotion";
 import { useSurface } from "../../state/browse/hooks";
 import { useDeckBarTop, useToast } from "../../state/toasts/hooks";
-import { pageBarClearance, TOAST_MOTION, toastDragDismisses, toastPlace } from "../../state/toasts/placement";
+import { pageBarClearance, TOAST_MOTION, toastDragDismisses, toastPlace, type ToastPlacement } from "../../state/toasts/placement";
 import { dismissesToast, toastAnnouncement, toastDragReturn, toastSemantics, toastSpokenLabel } from "../../state/toasts/semantics";
 import { dismissToast, holdToast, tapToast, type ToastIcon } from "../../state/toasts/store";
 import { ChromeSurface, font, space, stroke, Symbol, tabsMotion, toastLayout, toastMotion, useDesign, usePressStyle, useTheme, type SymbolName, useReduceMotion } from "../ui";
@@ -39,23 +39,24 @@ export function ToastHost() {
   );
 }
 
+type ToastSpot = ToastPlacement & { safeTop: number };
+
 function ToastLayer() {
   const insets = useSafeAreaInsets();
-  const { lift, keyboard } = useBottomLift();
   const surface = useSurface();
   const barTop = useDeckBarTop();
   const material = useDesign() === "material";
   const frame = useRef<ViewInstance>(null);
   const [hostBottom, setHostBottom] = useState(0);
-  const place = toastPlace({
+  const spot: ToastSpot = {
     safeTop: insets.top,
-    keyboardLift: keyboard ? lift : null,
+    keyboardLift: null,
     safeBottom: insets.bottom,
     barClearance: pageBarClearance(material ? materialBottomBar : null, toastLayout.barClearance, space.s),
     hostBottomY: hostBottom,
     barTopY: surface === "browsing" ? null : barTop,
     gap: space.s,
-  });
+  };
   return (
     <View
       ref={frame}
@@ -63,13 +64,28 @@ function ToastLayer() {
       pointerEvents="box-none"
       onLayout={() => frame.current?.measureInWindow((_x, y, _width, height) => setHostBottom(y + height))}
     >
-      <ToastView place={place} />
+      <ToastView spot={spot} />
     </View>
   );
 }
 
-function ToastView({ place }: { place: { top: number } | { bottom: number } }) {
+function useKeyboardRide(spot: ToastSpot, resting: number, arrivedOverKeyboard: boolean, keyboardHeight: SharedValue<number>) {
+  const screenHeight = useWindowDimensions().height;
+  const belowHost = spot.hostBottomY > 0 ? Math.max(0, screenHeight - spot.hostBottomY) : 0;
+  return useAnimatedStyle(() => {
+    if (arrivedOverKeyboard) return { transform: [{ translateY: 0 }] };
+    const above = keyboardHeight.value - belowHost + spot.gap;
+    return { transform: [{ translateY: -Math.max(0, above - resting) }] };
+  }, [arrivedOverKeyboard, belowHost, resting, spot.gap]);
+}
+
+function ToastView({ spot }: { spot: ToastSpot }) {
   const toast = useToast();
+  const keyboard = useAnimatedKeyboard({ isStatusBarTranslucentAndroid: true, isNavigationBarTranslucentAndroid: true });
+  const arrivedOverKeyboard = useMemo(() => keyboardIsUp(keyboard.height.value), [toast?.id, keyboard]);
+  const place = toastPlace({ ...spot, keyboardLift: arrivedOverKeyboard ? keyboard.height.value : null });
+  const resting = "bottom" in place ? place.bottom : 0;
+  const ride = useKeyboardRide(spot, resting, arrivedOverKeyboard, keyboard.height);
   const theme = useTheme();
   const reduceMotion = useReduceMotion();
   const drag = useSharedValue(0);
@@ -116,7 +132,7 @@ function ToastView({ place }: { place: { top: number } | { bottom: number } }) {
     </ToastPlate>
   );
   return (
-    <View style={[styles.host, place]} pointerEvents="box-none">
+    <Animated.View testID="toastPlace" style={[styles.host, place, ride]} pointerEvents="box-none">
       <GestureDetector gesture={gesture}>
         <Animated.View key={toast.id} entering={reduceMotion ? REDUCED_IN : toastIn} exiting={reduceMotion ? REDUCED_OUT : toastOut} style={[styles.origin, dragged]}>
           {semantics.pressable ? (
@@ -130,7 +146,7 @@ function ToastView({ place }: { place: { top: number } | { bottom: number } }) {
           )}
         </Animated.View>
       </GestureDetector>
-    </View>
+    </Animated.View>
   );
 }
 

@@ -139,7 +139,10 @@ export function deletePageSnapshots(ids: readonly string[]) {
 
 export const endPrivateSession = () => void settled(() => pages.endPrivateSession(), undefined);
 
-export const snapshotPage = (id: string, windowCopy = true): Promise<PageSnapshot | RefusedSnapshot | null> => settled(() => pages.snapshot(id, windowCopy ? { maxWidth: 600, quality: 72 } : { maxWidth: 600, quality: 72, windowCopy }), null);
+export type SnapshotTiming = "now" | "quiet";
+
+export const snapshotPage = (id: string, windowCopy = true, timing: SnapshotTiming = "now"): Promise<PageSnapshot | RefusedSnapshot | null> =>
+  settled(() => pages.snapshot(id, { maxWidth: 600, quality: 72, ...(windowCopy ? {} : { windowCopy }), ...(timing === "quiet" ? { quiet: true } : {}) }), null);
 
 export function snapshotIsCurrent(id: string): boolean | null {
   try {

@@ -13,6 +13,7 @@ import {
   snapshotIsCurrent,
   snapshotPage,
   storeNavigation,
+  type SnapshotTiming,
   storeTone,
   type PageEngineEvent,
   type PageState,
@@ -23,7 +24,7 @@ import { showOnboarding, useOnboarding } from "../onboarding/store";
 import { pageUi } from "../page/store";
 import { settingsNav } from "../settings/nav";
 import { refreshDefaultBrowser } from "../settings/defaultBrowser";
-import { forgetPosition, saveTabPosition, watchFrontScroll } from "./positions";
+import { forgetPosition, frontScrollCameToRest, saveTabPosition, watchFrontScroll } from "./positions";
 import { noteLocalChange, showSpace } from "../sync/store";
 import { spaceToShow, tabsInSpace } from "../tabs/spaces";
 import { currentPreferences, loadPreferences, setPreference } from "../settings/store";
@@ -38,6 +39,7 @@ import {
   closePrivateTabs,
   closeTabById,
   currentTabs,
+  flushTabWrites,
   loadTabs,
   openNewTab,
   reopenClosedTab,
@@ -100,12 +102,14 @@ export function startBrowser(beforeOpening: () => void = () => undefined) {
   archiveDueTabs();
   archiveTimer = setInterval(archiveDueTabs, AUTO_ARCHIVE_CHECK_MS);
   listenToPages(pageEvent);
-  watchFrontScroll(frontPageId, pictureScrolledOrQuietPage);
+  if (!SCROLL_REST_IS_REPORTED) watchFrontScroll(frontPageId, pictureScrolledOrQuietPage);
   if (!currentPreferences().hasFinishedOnboarding) showOnboarding();
   else if (currentPreferences().autoOpensKeyboard) presentSearch("home", "", useTabs.getState().incognito, null, "atRest");
 }
 
 let appActive = true;
+
+const SCROLL_REST_IS_REPORTED = Platform.OS === "ios";
 
 function frontPageId() {
   if (!appActive || useBrowse.getState().surface !== "browsing" || pageCovered()) return null;
@@ -147,6 +151,7 @@ export function appWillResignActive() {
   archiveTimer = null;
   const selected = currentTabs().selectedId;
   if (selected) selectTabById(selected);
+  flushTabWrites();
   void savePageStates();
 }
 
@@ -431,7 +436,7 @@ export function keepFrontPictureCurrent() {
   if (!id || useBrowse.getState().surface !== "browsing" || deckPullInFlight() || deckPullGrowing() !== null) return;
   if (!coverIsCapturable(loading.get(id) === false, pageCovered()) || !snapshotAllowed(id) || pictureIsCurrent(id)) return;
   labTrace(`PAGELAB snapshot ${id} taken while the page is quiet`);
-  void captureSnapshot(id);
+  void captureSnapshot(id, null, false, "quiet");
 }
 
 function latchDeckCapture(id: string, covered: boolean, pageTop: number | null, afterMotion: boolean) {
@@ -781,6 +786,7 @@ function pageEvent(event: PageEngineEvent) {
   else if (event.name === "page.state" && currentTabs().selectedId !== event.pageId) backgroundPageState(event.pageId, event.state);
   else if (event.name === "page.closeRequested") closeTabById(event.pageId);
   else if (event.name === "page.snapshotLanded") snapshotLanded(event.pageId, event.uri, event.generation);
+  else if (event.name === "page.scrollSettled") frontScrollCameToRest(event.pageId, event.y, frontPageId(), pictureScrolledOrQuietPage);
 }
 
 const loading = new Map<string, boolean>();
@@ -800,10 +806,23 @@ export function captureCurrentCover() {
   void captureSnapshot(id);
 }
 
-export async function captureSnapshot(id: string, pageTop: number | null = null, latched = false): Promise<boolean> {
+const exactCaptureStarted = new Map<string, number>();
+const publishedCaptureStarted = new Map<string, number>();
+let captureClock = 0;
+
+const captureIsStale = (id: string, startedAt: number, timing: SnapshotTiming) =>
+  (publishedCaptureStarted.get(id) ?? 0) > startedAt || (timing === "quiet" && (exactCaptureStarted.get(id) ?? 0) > startedAt);
+
+export async function captureSnapshot(id: string, pageTop: number | null = null, latched = false, timing: SnapshotTiming = "now"): Promise<boolean> {
   if (!latched && !snapshotAllowed(id)) return false;
   const countable = pictureCountable(id);
-  const taken = await snapshotPage(id, !latched);
+  const startedAt = ++captureClock;
+  if (timing === "now") exactCaptureStarted.set(id, startedAt);
+  const taken = await snapshotPage(id, !latched, timing);
+  if (captureIsStale(id, startedAt, timing)) {
+    labTrace(`PAGELAB snapshot ${id} dropped, a newer one was taken after it`);
+    return false;
+  }
   const counts = countable && pictureCountable(id);
   if (taken && isRefusedSnapshot(taken)) {
     pictureRefused(id, taken.refused, counts);
@@ -818,6 +837,7 @@ export async function captureSnapshot(id: string, pageTop: number | null = null,
   const tab = snapshot ? findTab(currentTabs(), id) : null;
   if (!snapshot || !tab) return false;
   const step = pictureCaptured(tab, snapshot.uri, snapshot.durable !== false, snapshot.generation);
+  if (step) publishedCaptureStarted.set(id, startedAt);
   if (step && tab.snapshotFileName !== step.show) {
     updateTabById(id, { snapshotFileName: step.show });
     showHiddenDeckThePicture(id);
@@ -888,7 +908,7 @@ function scheduleSnapshot(id: string, tries = SNAPSHOT_RETRIES) {
       if (!findTab(currentTabs(), id)) return;
       const selected = currentTabs().selectedId === id;
       if (selected && useBrowse.getState().surface !== "browsing") return;
-      if (snapshotAllowed(id)) void captureSnapshot(id);
+      if (snapshotAllowed(id)) void captureSnapshot(id, null, false, "quiet");
       else if (tries > 0) scheduleSnapshot(id, tries - 1);
     }, SNAPSHOT_SETTLE_MS),
   );
@@ -970,6 +990,8 @@ useTabs.subscribe((tabs) => {
     lastVisits.delete(id);
     loading.delete(id);
     forgetPosition(id);
+    exactCaptureStarted.delete(id);
+    publishedCaptureStarted.delete(id);
     clearTimeout(snapshotTimers.get(id));
     snapshotTimers.delete(id);
   }

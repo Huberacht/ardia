@@ -48,13 +48,13 @@ import { useSearchFromDockedMenu, useSearchOpen, useSearchSession } from "../../
 import { cancelSearch } from "../../state/browse/store";
 import { useTab } from "../../state/tabs/hooks";
 import type { BrowserTab } from "../../state/tabs/tabModels";
-import { ConfirmDialog, settingsUIAvailable, FloatingMenu, font, iconRoles, MaterialIconButton, menuLayout, PressInPlace, shape, Sheet, slotSide, smoothCorners, space, stroke, Symbol, tabsMotion, ToggleRow as SharedToggleRow, useDesign, usePressStyle, useTheme, type PressKind, type SymbolName } from "../ui";
+import { ConfirmDialog, FloatingMenu, font, iconRoles, MaterialIconButton, menuLayout, PressInPlace, shape, Sheet, slotSide, smoothCorners, space, stroke, Symbol, tabsMotion, ToggleRow as SharedToggleRow, useDesign, usePressStyle, useTheme, type PressKind, type SymbolName } from "../ui";
 import { MaterialPageMenu, MaterialPageMenuItems, MaterialSiteSettingsContent, MaterialSiteSettingsHeader } from "./MaterialPageMenu";
 import { countSearchExpansion, MaterialSearchField, MaterialSearchResults, useMaterialSheetSearch } from "../search/MaterialSearchView";
 import { barAddress } from "./FloatingBar";
 import { PageMenuWords, usePageMenuInk } from "./PageMenuWords";
 import { classicPageMenu, pageMenuCards } from "./pageMenuTokens";
-import { SystemPageMenu } from "./SystemPageMenu";
+import { SystemPageMenu, usesSystemPageMenu } from "./SystemPageMenu";
 import { MaterialAddressContent } from "../ui/MaterialBottomBar";
 import { useMaterialTheme } from "../ui/materialTheme";
 import { MaterialSheet, useMaterialRipple } from "../ui/MaterialSurfaces";
@@ -65,7 +65,19 @@ import { usePageSummariesEnabled } from "../../state/pageSummary/enabled";
 const PAGE_MENU_LIST_HEIGHT_RATIO = 0.52;
 const countPageMenuExpansion = () => countUsage("site_settings_sheet_expanded");
 
-export function PageMenu({ tabId, open, onHidden }: { tabId: string; open: boolean; onHidden: () => void }) {
+type PageMenuProps = { tabId: string; open: boolean; onHidden: () => void };
+
+export function PageMenu(props: PageMenuProps) {
+  if (usesSystemPageMenu(useDesign())) return <SystemPageMenu tabId={props.tabId} open={props.open} onDismissed={() => hideSystemPageMenu(props.onHidden)} />;
+  return <DrawnPageMenu {...props} />;
+}
+
+function hideSystemPageMenu(onHidden: () => void) {
+  onHidden();
+  pageMenuHidden();
+}
+
+function DrawnPageMenu({ tabId, open, onHidden }: PageMenuProps) {
   const model = useMenuModel(tabId);
   const [confirmsTranslation, setConfirmsTranslation] = useState(false);
   const tab = useTab(tabId);
@@ -90,9 +102,6 @@ export function PageMenu({ tabId, open, onHidden }: { tabId: string; open: boole
   const tappedAway = isPrivate ? undefined : () => countUsage("page_menu_tapped_away");
   if (design === "material" && docked) {
     return <DockedPageMenu tabId={tabId} tab={tab} model={model} page={page} open={open} onHidden={hidden} onTranslate={translate}>{confirmation}</DockedPageMenu>;
-  }
-  if (redesigned && Platform.OS === "ios" && settingsUIAvailable()) {
-    return <SystemPageMenu tabId={tabId} model={model} open={open} asksTranslation={confirmsTranslation} onAsksTranslationChange={setConfirmsTranslation} onTranslate={translate} onHidden={hidden} />;
   }
   if (redesigned) {
     return (

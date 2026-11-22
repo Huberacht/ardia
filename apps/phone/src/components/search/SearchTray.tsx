@@ -522,8 +522,6 @@ function StagedTray() {
   const corners = place.corners;
   const trayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
   const underKeyboard = place.underKeyboard;
-  const newTabPanelNow = useRef(!editsPage && arcPanel);
-  newTabPanelNow.current = !editsPage && arcPanel;
   const morphs = phoneLayout && !reduceMotion && command === null && pills > 0;
   live.current.morphs = morphs;
   const heightNow = useSharedValue(trayHeight);
@@ -542,12 +540,26 @@ function StagedTray() {
     if (heldRelease.current) clearTimeout(heldRelease.current);
     heldRelease.current = null;
   };
+
+  const presentStage = (presentation: number) => {
+    live.current.presentation = presentation;
+    setPresentation(presentation);
+    if (!editsPage && searchPanelShown(phoneLayout, command !== null) && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
+    setPresented(false);
+    const launch = searchState().arrival === "atRest";
+    void stage.current?.present().then(() => {
+      if (live.current.presentation !== presentation || live.current.closing) return;
+      if (launch) launchTrayUp();
+      setPresented(true);
+      stagePresented();
+    });
+  };
   useEffect(() => clearHeldRelease, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const now = live.current;
     if (open) {
-      if (now.mounted === null || now.closing) setPresentation((count) => count + 1);
+      const presents = now.mounted === null || now.closing;
       now.mounted = session;
       now.closing = false;
       now.revealed = false;
@@ -560,6 +572,7 @@ function StagedTray() {
       stageOpened();
       setStageMorphs(now.morphs);
       setStageShown(true);
+      if (presents) presentStage(now.presentation + 1);
       return;
     }
     if (now.mounted === null || now.closing) return;
@@ -573,19 +586,6 @@ function StagedTray() {
     stage.current?.close(stageExit(searchState().ending, now.morphs), velocity);
   }, [open, session]);
 
-  useEffect(() => {
-    live.current.presentation = presentation;
-    if (presentation === 0) return;
-    if (newTabPanelNow.current && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
-    setPresented(false);
-    const launch = searchState().arrival === "atRest";
-    void stage.current?.present().then(() => {
-      if (live.current.presentation !== presentation || live.current.closing) return;
-      if (launch) launchTrayUp();
-      setPresented(true);
-      stagePresented();
-    });
-  }, [presentation]);
 
   const [handOver, setHandOver] = useState(0);
   useEffect(() => {
@@ -626,9 +626,15 @@ function StagedTray() {
     dim.value = withTiming(dimUp ? 1 : 0, { duration: reduceMotion ? barReturnMotion.fadeMs : stageMotion.dimMs, easing: tabsCurve.easeOut });
   }, [dimUp]);
 
+  const sizesByRows = mounted !== null && placement === "aboveKeyboard";
+  const sizesByRowsNow = useRef(sizesByRows);
+  sizesByRowsNow.current = sizesByRows;
+  useEffect(() => {
+    if (sizesByRows && knownRowsHeight) setRowsHeight((was) => (Math.abs(was - knownRowsHeight) < 1 ? was : knownRowsHeight));
+  }, [sizesByRows]);
   const measuredRows = useCallback((height: number) => {
     knownRowsHeight = height;
-    setRowsHeight((was) => (Math.abs(was - height) < 1 ? was : height));
+    if (sizesByRowsNow.current) setRowsHeight((was) => (Math.abs(was - height) < 1 ? was : height));
   }, []);
 
   const measuredField = useCallback((height: number) => {
@@ -1100,7 +1106,7 @@ function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
     setBottoms((known) => (known[index] === bottom ? known : Object.assign([...known], { [index]: bottom })));
   };
   const rowViews = rows.map((row, index) => (
-    <View key={index} onLayout={(event) => measure(index, event.nativeEvent.layout)}>
+    <View key={index} onLayout={arc ? undefined : (event) => measure(index, event.nativeEvent.layout)}>
       <SuggestionRow row={row} typed={typed} roles={theme} menu={trayRowActions(row)} onActivate={leaving.activate} onRefine={refine} onMenu={showMenu} />
     </View>
   ));
@@ -1113,7 +1119,7 @@ function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
     );
   }
   return (
-    <Animated.View key="rows" testID={arc ? "searchPanelRows" : undefined} entering={resultsIn} exiting={resultsOut} style={styles.rows} onLayout={(event) => setRoom(event.nativeEvent.layout.height)}>
+    <Animated.View key="rows" testID={arc ? "searchPanelRows" : undefined} entering={resultsIn} exiting={resultsOut} style={styles.rows} onLayout={arc ? undefined : (event) => setRoom(event.nativeEvent.layout.height)}>
       {list ? (
         <GestureDetector gesture={list.drag}>
           <View style={styles.rows} collapsable={false}>

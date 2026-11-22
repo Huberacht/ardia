@@ -59,7 +59,7 @@ const page = (tab: BrowserTab) => {
   scrolled(tab, "up");
   return renderSurface(
     <DesignProvider design="redesigned">
-      <BrowsingScreen tab={tab} />
+      <BrowsingScreen tabId={tab.id} />
     </DesignProvider>,
   );
 };

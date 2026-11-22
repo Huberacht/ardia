@@ -44,6 +44,11 @@ final class PageView: ExpoView {
   private var contentSizeObservation: NSKeyValueObservation?
   private let sideMargins = UIView()
   private var lastScroll: TimeInterval = 0
+  private var scrollRestTask: Task<Void, Never>?
+  private var drawnTask: Task<Void, Never>?
+  private var drawnSent = false
+  static let scrollRest: TimeInterval = 0.5
+  static let drawnAfter: Duration = .milliseconds(32)
   private var madeGestures: PageGestures?
   private var madePinchWatcher: PagePinchWatcher?
   private var summaryLayer: PageSummaryLayer?
@@ -136,6 +141,11 @@ final class PageView: ExpoView {
     observing += 1
     toneTask?.cancel()
     toneTask = nil
+    scrollRestTask?.cancel()
+    scrollRestTask = nil
+    drawnTask?.cancel()
+    drawnTask = nil
+    drawnSent = false
     scrollObservation = nil
     contentSizeObservation = nil
     madeGestures?.detach()
@@ -178,6 +188,21 @@ final class PageView: ExpoView {
       MainActor.assumeIsolated { self?.keepOffsetWithinContent() }
     }
     scheduleToneSample(after: .milliseconds(120))
+    reportDrawnSoon()
+  }
+
+  @MainActor
+  private func reportDrawnSoon() {
+    guard !drawnSent, drawnTask == nil, window != nil, let webView = hostedWebView, webView.superview === self else { return }
+    let generation = observing
+    drawnTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: PageView.drawnAfter)
+      guard let self, !Task.isCancelled, self.observing == generation else { return }
+      self.drawnTask = nil
+      guard !self.drawnSent, self.window != nil, let shown = self.hostedWebView, shown.superview === self else { return }
+      self.drawnSent = true
+      self.onPageEvent(["name": "drawn"])
+    }
   }
 
   @MainActor
@@ -227,6 +252,7 @@ final class PageView: ExpoView {
   private func scrollMoved() {
     keepOffsetWithinContent()
     lastScroll = CACurrentMediaTime()
+    scheduleScrollRest()
     guard toneTask == nil else { return }
     toneTask = Task { @MainActor [weak self] in
       while let self, !Task.isCancelled {
@@ -237,6 +263,23 @@ final class PageView: ExpoView {
       guard let self, !Task.isCancelled else { return }
       self.toneTask = nil
       await self.sampleTone()
+    }
+  }
+
+  @MainActor
+  private func scheduleScrollRest() {
+    guard scrollRestTask == nil else { return }
+    scrollRestTask = Task { @MainActor [weak self] in
+      while let self, !Task.isCancelled {
+        let quiet = CACurrentMediaTime() - self.lastScroll
+        let held = self.hostedWebView.map { $0.scrollView.isTracking || $0.scrollView.isDecelerating || $0.scrollView.isZooming } ?? false
+        if quiet >= PageView.scrollRest, !held { break }
+        try? await Task.sleep(for: .seconds(max(PageView.scrollRest - quiet, 0.1)))
+      }
+      guard let self, !Task.isCancelled else { return }
+      self.scrollRestTask = nil
+      guard self.window != nil, let pageID = self.registeredPageID, let scroller = self.hostedWebView?.scrollView else { return }
+      PhonePages.shared.send(pageID, "page.scrollSettled", ["y": Double(scroller.contentOffset.y + scroller.adjustedContentInset.top)])
     }
   }
 
@@ -276,6 +319,7 @@ final class PageView: ExpoView {
       if let page, !isPrivate { PhoneHandoff.offer(page.url, title: page.title, from: self) }
       if let pageID, page != nil { _ = PhonePages.shared.activate(pageID) }
       scheduleToneSample(after: .milliseconds(120))
+      reportDrawnSoon()
     }
     if pinsSafeArea { applyObscuredInsets() }
   }

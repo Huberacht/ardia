@@ -1,3 +1,4 @@
+import { useShallow } from "zustand/react/shallow";
 import { offersDefaultBrowser } from "../settings/settingsRules";
 import { launchArguments } from "../app/launchFlags";
 import { usePages } from "../pages/store";
@@ -11,6 +12,10 @@ import { useDefaultBrowser } from "../settings/defaultBrowser";
 import type { Request } from "./pagePrompts";
 
 export const useMenuOpen = () => usePageUi((s) => s.menuOpen);
+
+export const useDrawnMenuOpen = (systemSheet: boolean) => usePageUi((s) => !systemSheet && s.menuOpen);
+
+export const usePageQuiet = (id: string, already: boolean) => usePages((s) => already || s.navigation[id]?.isLoading === false);
 
 export const useTranslationConfirmed = () => usePageUi((s) => s.menuTranslation?.confirmed ?? false);
 
@@ -29,9 +34,18 @@ export const useFindResult = (id: string | null) => usePages((s) => (id ? s.find
 
 export const usePageRequest = (id: string | null) => usePages((s) => (id ? (s.requests[id] as Request | null | undefined) ?? null : null));
 
+const NO_PAGE = { hasPage: false, url: null, canGoBack: false, canGoForward: false, isLoading: false, pageZoom: 1, isDesktopSite: false, blockedRequests: 0 } as const;
+
 export function useMenuModel(id: string): MenuModel {
   const dark = useDarkScheme();
-  const state = usePages((s) => s.navigation[id] ?? null);
+  const state = usePages(
+    useShallow((s) => {
+      const page = s.navigation[id];
+      return page
+        ? { hasPage: true, url: page.url, canGoBack: page.canGoBack, canGoForward: page.canGoForward, isLoading: page.isLoading, pageZoom: page.pageZoom, isDesktopSite: page.isDesktopSite, blockedRequests: page.blockedRequests }
+        : NO_PAGE;
+    }),
+  );
   const tabUrl = useTabs((s) => s.open.find((t) => t.id === id)?.url ?? s.privates.find((t) => t.id === id)?.url ?? "");
   const site = usePageUi((s) => s.menuSite);
   const levels = usePageUi((s) => s.zoomLevels);
@@ -39,18 +53,18 @@ export function useMenuModel(id: string): MenuModel {
   const browserStatus = useDefaultBrowser((s) => s.status);
   const isDefault = browserStatus?.isDefault ?? false;
   return menuModel({
-    url: state?.url ?? tabUrl,
-    hasPage: state !== null,
-    canGoBack: state?.canGoBack ?? false,
-    canGoForward: state?.canGoForward ?? false,
-    isLoading: state?.isLoading ?? false,
-    pageZoom: state?.pageZoom ?? 1,
+    url: state.url ?? tabUrl,
+    hasPage: state.hasPage,
+    canGoBack: state.canGoBack,
+    canGoForward: state.canGoForward,
+    isLoading: state.isLoading,
+    pageZoom: state.pageZoom,
     zoomLevels: levels,
-    isDesktopSite: state?.isDesktopSite ?? false,
+    isDesktopSite: state.isDesktopSite,
     nightShade: site?.nightShade ?? "disabled",
     systemDark: dark,
     blockersEnabled: site?.blockersEnabled ?? true,
-    blockedRequests: state?.blockedRequests ?? 0,
+    blockedRequests: state.blockedRequests,
     isDefaultBrowser: isDefault,
     canOfferDefaultBrowser: offersDefaultBrowser(browserStatus),
     translationLanguageName,

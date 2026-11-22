@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { actionWords, incognitoWords } from "../../lib/sharedWords";
 import { Pressable, StyleSheet, TextInput, View, type StyleProp, type TextInputInstance, type ViewInstance, type ViewStyle } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { useAnimatedKeyboard, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { floatingBarCenter } from "../../lib/deckGeometry";
 import { haptics } from "../../state/app/haptics";
@@ -10,7 +10,7 @@ import { switchDeckIncognito } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { noteDeckBarTop, watchDeckBar } from "../../state/toasts/store";
-import { capsule, chromeLayout, ChromeSurface, controlSize, deckChromeLayout, deckChromeMotion, FieldAccessory, font, iconRoles, iPhoneOr, PressInPlace, rolesFor, ToggleIconButton, tabsCurve, tabsLayout, tabsMotion, useReduceMotion, useTheme, type MenuItem, SystemGlyph } from "../ui";
+import { capsule, chromeLayout, ChromeSurface, controlSize, deckChromeLayout, FieldAccessory, font, iconRoles, iPhoneOr, PressInPlace, rolesFor, ToggleIconButton, tabsLayout, tabsMotion, useReduceMotion, useTheme, type MenuItem, SystemGlyph } from "../ui";
 import { MenuTrigger } from "../ui/MenuTrigger";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
 import { deckLook } from "./deckLook";
@@ -59,7 +59,19 @@ export function IncognitoSwitch({ incognito, dark, onLongPress, glassShown, glas
 
 const switchIncognitoSide = () => switchDeckIncognito();
 
-export const deckBarAboveKeyboard = (deckHeight: number, keyboard: number) => deckHeight - keyboard - deckChromeLayout.barGap - controlSize.bar / 2;
+const KEYBOARD_DOWN = 0;
+const KEYBOARD_LEAVING = 1;
+const KEYBOARD_OURS = 2;
+
+export const deckBarAboveKeyboard = (deckHeight: number, keyboard: number) => {
+  "worklet";
+  return deckHeight - keyboard - deckChromeLayout.barGap - controlSize.bar / 2;
+};
+
+export const deckBarLift = (centerY: number, deckHeight: number, keyboardTop: number) => {
+  "worklet";
+  return keyboardTop > 0 ? Math.max(0, centerY - deckBarAboveKeyboard(deckHeight, keyboardTop)) : 0;
+};
 
 export type SearchTabs = { input: RefObject<TextInputInstance | null>; text: string; focused: boolean; change: (next: string) => void; focus: () => void; blur: () => void };
 
@@ -136,20 +148,29 @@ export function DeckBottomBar({ shown, barCenterY, deckHeight, width, layout, in
   const search = useSearchTabs(shown, incognito, onQuery);
   const { focused } = search;
   const row = useRef<ViewInstance>(null);
-  const keyboard = useKeyboardTopFromBottom(shown);
+  const reach = duoFieldReach(width, layout, chromeLayout.barSideInset);
+  const keyboard = useKeyboardTopFromBottom(shown && reach !== null);
+  const liveKeyboard = useAnimatedKeyboard({ isStatusBarTranslucentAndroid: true, isNavigationBarTranslucentAndroid: true });
   const barCenterFromBottom = floatingBarCenter(useSafeAreaInsets().bottom, "android");
   const centerY = iPhoneOr(barCenterY, deckHeight - barCenterFromBottom);
   const rest = iPhoneOr<ViewStyle>({ top: centerY - controlSize.bar / 2 }, { bottom: barCenterFromBottom - controlSize.bar / 2 });
-  const lift = focused && keyboard > 0 ? Math.max(0, centerY - deckBarAboveKeyboard(deckHeight, keyboard)) : 0;
-  const rise = useSharedValue(0);
-  useEffect(() => {
-    rise.value = withTiming(-lift, { duration: deckChromeMotion.keyboard, easing: tabsCurve.easeOut });
-  }, [lift]);
-  const riseStyle = useAnimatedStyle(() => ({ transform: [{ translateY: rise.value }] }));
+  const focusedNow = useSharedValue(focused);
+  const typing = useSharedValue(focused);
+  useLayoutEffect(() => {
+    focusedNow.value = focused;
+  }, [focused]);
+  useAnimatedReaction(
+    () => (focusedNow.value ? KEYBOARD_OURS : liveKeyboard.height.value > 0 ? KEYBOARD_LEAVING : KEYBOARD_DOWN),
+    (now) => {
+      if (now === KEYBOARD_OURS) typing.value = true;
+      else if (now === KEYBOARD_DOWN) typing.value = false;
+    },
+  );
   const riseNow = () => {
     "worklet";
-    return rise.value;
+    return typing.value ? -deckBarLift(centerY, deckHeight, liveKeyboard.height.value) : 0;
   };
+  const riseStyle = useAnimatedStyle(() => ({ transform: [{ translateY: typing.value ? -deckBarLift(centerY, deckHeight, liveKeyboard.height.value) : 0 }] }), [centerY, deckHeight]);
   const { span, strip } = layout;
   const plusTop = strip ? (strip.ends ? strip.plus : strip.tabs) : 0;
   const plusPlace = strip ? { bottom: deckHeight - centerY - controlSize.bar / 2 - plusTop, ...besideStrip(strip, width, tabsLayout.menuWidth, deckChromeLayout.menuGap) } : { bottom: deckHeight - centerY + controlSize.bar / 2 + deckChromeLayout.menuGap, right: span.right, width: tabsLayout.menuWidth };
@@ -165,13 +186,12 @@ export function DeckBottomBar({ shown, barCenterY, deckHeight, width, layout, in
   const opened = search.focused || search.text !== "";
   const reduceMotion = useReduceMotion();
   const growth = useSharedValue(opened ? 1 : 0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     growth.value = reduceMotion ? withTiming(opened ? 1 : 0, { duration: tabsMotion.barCollapseReduced }) : withSpring(opened ? 1 : 0, tabsMotion.barCollapse);
   }, [opened, reduceMotion]);
-  const reach = duoFieldReach(width, layout, chromeLayout.barSideInset);
   const reachTo = reach ? (focused && keyboard > 0 ? reach.typing : opened ? reach.open : reach.rest) : 0;
   const edge = useSharedValue(reachTo);
-  useEffect(() => {
+  useLayoutEffect(() => {
     edge.value = reduceMotion ? withTiming(reachTo, { duration: tabsMotion.barCollapseReduced }) : withSpring(reachTo, tabsMotion.barCollapse);
   }, [reachTo, reduceMotion]);
   const reachSide = reach?.side ?? null;

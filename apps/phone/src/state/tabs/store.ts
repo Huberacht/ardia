@@ -16,6 +16,7 @@ import {
   writeTabs,
 } from "../store/browserDatabase";
 import { tabDatabase } from "../store/database";
+import type { SqlDatabase } from "../../lib/sqlDatabase";
 import { forgetPictures, forTheDatabase } from "./pictures";
 import { privatePagesRefused, refuseIncognito } from "./privatePages";
 import { receiveTabs, type IncomingTab } from "./received";
@@ -67,14 +68,48 @@ export const setTabProfile = (profileSyncId: string | null) => {
   tabProfile = profileSyncId;
 };
 
-function apply(change: TabsChange) {
+let pendingWrites: { db: SqlDatabase; tabs: Map<string, BrowserTab> } | null = null;
+let writeFlushQueued = false;
+
+export function flushTabWrites() {
+  const held = pendingWrites;
+  pendingWrites = null;
+  if (held && held.tabs.size) writeTabs(held.db, [...held.tabs.values()].map(forTheDatabase), []);
+}
+
+const nextFrame = (run: () => void) => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : setTimeout(run, 0));
+
+function writeAfterFrame(db: SqlDatabase, put: readonly BrowserTab[]) {
+  const stored = put.filter((tab) => !tab.isPrivate);
+  if (!stored.length) return;
+  if (pendingWrites && pendingWrites.db !== db) flushTabWrites();
+  const pending = (pendingWrites ??= { db, tabs: new Map() });
+  for (const tab of stored) pending.tabs.set(tab.id, tab);
+  if (writeFlushQueued) return;
+  writeFlushQueued = true;
+  nextFrame(() =>
+    setTimeout(() => {
+      writeFlushQueued = false;
+      flushTabWrites();
+    }, 0),
+  );
+}
+
+type WriteTiming = "now" | "afterFrame";
+
+function apply(change: TabsChange, timing: WriteTiming = "now") {
   const db = tabDatabase();
   const hadPrivate = useTabs.getState().privates.length > 0;
-  writeTabs(db, change.put.map(forTheDatabase), change.remove);
-  forgetPictures(change.remove);
-  const cleared = change.clearArchived ? deleteArchivedTabs(db) : [];
   const listed = change.put.some((t) => !t.isPrivate) || change.remove.length > 0;
   useTabs.setState((s) => ({ ...change.data, listing: listed ? s.listing + 1 : s.listing }));
+  forgetPictures(change.remove);
+  const deferred = timing === "afterFrame" && change.remove.length === 0 && !change.clearArchived;
+  if (deferred) writeAfterFrame(db, change.put);
+  else {
+    flushTabWrites();
+    writeTabs(db, change.put.map(forTheDatabase), change.remove);
+  }
+  const cleared = change.clearArchived ? deleteArchivedTabs(db) : [];
   const archived = new Set(change.put.filter((t) => t.archivedAt !== null && !t.isPrivate).map((t) => t.id));
   endPages(change.endedPages.filter((id) => !archived.has(id)));
   for (const id of change.endedPages) if (archived.has(id)) void saveAndEnd(id);
@@ -114,6 +149,7 @@ export function pruneExpiredArchive() {
 }
 
 export function loadTabs() {
+  flushTabWrites();
   const db = tabDatabase();
   pruneExpiredArchive();
   useTabs.setState({ ...withSpaces(launchTabs(readOpenTabs(db), countArchivedTabs(db)), data().spaces), incognito: false, listing: 0 });
@@ -148,7 +184,7 @@ export function moveTabToSpace(id: string, space: string) {
   countUsage("tabs_moved_to_space");
 }
 
-export const selectTabById = (id: string | null) => apply(selectTab(data(), id, now()));
+export const selectTabById = (id: string | null) => apply(selectTab(data(), id, now()), "afterFrame");
 
 export const closeTabById = (id: string) => apply(closeTab(data(), id, now()));
 
@@ -168,11 +204,11 @@ export function reopenClosedTab(): BrowserTab | null {
   return reopened.find((t) => t.id === change.data.selectedId) ?? reopened[reopened.length - 1] ?? null;
 }
 
-export const updateTabById = (id: string, patch: TabPatch) => apply(updateTab(data(), id, patch));
+export const updateTabById = (id: string, patch: TabPatch) => apply(updateTab(data(), id, patch), "afterFrame");
 
 export function rewriteTab(id: string) {
   const tab = findTab(data(), id);
-  if (tab) writeTabs(tabDatabase(), [forTheDatabase(tab)], []);
+  if (tab) writeAfterFrame(tabDatabase(), [tab]);
 }
 
 export const archiveDueTabs = () => apply(runAutoArchive(data(), currentPreferences().autoArchiveInterval, now()));
@@ -193,7 +229,13 @@ export function setIncognito(incognito: boolean): boolean {
 
 export const archivedTabById = (id: string): BrowserTab | null => readArchivedTab(tabDatabase(), id);
 
-export const loadArchive = () => useTabs.setState(withArchive(data(), readArchivedTabs(tabDatabase(), ARCHIVE_LIMIT)));
+const sameArchive = (before: readonly BrowserTab[] | null, after: readonly BrowserTab[] | null) => before !== null && after !== null && before.length === after.length && before.every((tab, index) => tab === after[index]);
+
+export function loadArchive() {
+  const current = data();
+  const next = withArchive(current, readArchivedTabs(tabDatabase(), ARCHIVE_LIMIT));
+  if (!sameArchive(current.archive, next.archive)) useTabs.setState(next);
+}
 
 const PREPARED_ARCHIVE_FRESH_MS = 2_000;
 let archivePreparedAt = 0;
@@ -207,6 +249,8 @@ export function loadArchiveUnlessPrepared() {
   if (data().archive !== null && now() - archivePreparedAt < PREPARED_ARCHIVE_FRESH_MS) return;
   loadArchive();
 }
+
+export const archiveInMemory = () => data().archive !== null;
 
 export function searchArchive(text: string): BrowserTab[] {
   const query = text.trim();

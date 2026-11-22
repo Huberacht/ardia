@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { Platform, Pressable, StyleSheet, Text } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { haptics } from "../../state/app/haptics";
@@ -25,6 +25,7 @@ export function HostPill({ tab, dark, shown, anchors = false, contentStyle, onEx
     haptics.barPress();
   };
   const pressOut = () => setPressed(false);
+  const glassShown = (Platform.OS === "android" || shown) && back.centreGlass.shown;
   const ids = anchors ? back.ids : null;
   const centreWas = useRef(back.centreGlass.shown);
   const centreFlips = centreWas.current !== back.centreGlass.shown;
@@ -34,7 +35,7 @@ export function HostPill({ tab, dark, shown, anchors = false, contentStyle, onEx
   return (
     <Animated.View testID="hostPillCentre" nativeID={ids?.anchor} collapsable={false} pointerEvents={back.centreShown ? "box-none" : "none"} importantForAccessibility={back.centreShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.centreShown}>
     <Pressable testID="hostPillReach" accessible={false} importantForAccessibility="no" onPress={onExpand} onPressIn={pressIn} onPressOut={pressOut} style={styles.reach} />
-    <ChromeSurface testID="hostPill" shape="capsule" cornerRadius={capsule(hostPillLayout.height)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={(Platform.OS === "android" || shown) && back.centreGlass.shown} shownMs={Platform.OS === "android" ? 0 : centreFlips ? back.centreGlass.shownMs : hostPillLayout.glassMs} style={styles.pill}>
+    <ChromeSurface testID="hostPill" shape="capsule" cornerRadius={capsule(hostPillLayout.height)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow && glassShown} shown={glassShown} shownMs={Platform.OS === "android" ? 0 : centreFlips ? back.centreGlass.shownMs : hostPillLayout.glassMs} style={styles.pill}>
       <Animated.View testID="hostPillCentreGlyphs" collapsable={false} style={back.centreGlyphs}>
       <Animated.View testID="hostPillContent" nativeID={ids?.face} collapsable={false} style={[styles.content, contentStyle]}>
       <Pressable testID="hostPillButton" accessibilityRole="button" accessibilityLabel="Show Toolbar" accessibilityValue={{ text: spokenAddress(address) }} accessibilityState={{ busy }} onPress={onExpand} onPressIn={pressIn} onPressOut={pressOut} style={[styles.hit, pressedLook("text", pressed, false, rowPressed)]}>
@@ -57,14 +58,14 @@ export function HostPill({ tab, dark, shown, anchors = false, contentStyle, onEx
 
 export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
   const android = Platform.OS === "android";
-  const presence = usePresence(android || collapsed);
+  const glass = usePresence(android || collapsed);
   const fold = useSharedValue(collapsed ? 1 : 0);
-  const unmountPill = presence.hidden;
-  useEffect(() => {
+  const glassGone = glass.hidden;
+  useLayoutEffect(() => {
     const target = collapsed ? 1 : 0;
     const settled = (finished?: boolean) => {
       "worklet";
-      if (finished && target === 0 && !android) runOnJS(unmountPill)();
+      if (finished && target === 0 && !android) runOnJS(glassGone)();
     };
     fold.value = reduceMotion ? withTiming(target, { duration: android ? 0 : tabsMotion.barCollapseReduced, easing: motionAliases.hostPillEase }, settled) : withSpring(target, tabsMotion.barCollapse, settled);
   }, [collapsed, reduceMotion]);
@@ -78,7 +79,7 @@ export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
     return { opacity: android ? fold.value : 1, transform: [{ translateY: (hostPillLayout.height / 2) * (1 - scale) }, { scale }] };
   }, [shrink]);
   const pillContent = useAnimatedStyle(() => ({ opacity: fold.value }));
-  return { bar, pill, pillContent, pillMounted: android || presence.mounted, progress: fold };
+  return { bar, pill, pillContent, pillGlass: android || glass.mounted, progress: fold };
 }
 
 const styles = StyleSheet.create({

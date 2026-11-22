@@ -5,6 +5,7 @@ import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue, type Share
 import { isUnseenReceived } from "../../lib/tabFace";
 import { DECK, DECK_HEADER, deckArcHeaderPlacement, deckArcTitleReveal, deckBarBand, deckPileScale, deckFlyLift, deckHeaderIconReveal, deckHeaderReveal, deckLeaveFade, deckStatusStrip, deckHeaderLeading, deckHeaderPlacement, deckLeading, deckSlot, deckVisibleWidth, lerp, titleReveal, type DeckGeometry, type DeckLeaving, type DeckSlots } from "../../lib/deckGeometry";
 import { pullTuck } from "../../lib/deckPull";
+import { CARD_MOVE_RESPONSE } from "../../lib/sharedMotion";
 import { useHeldPageTone } from "../../state/browse/deckHold";
 import { display } from "../../state/search/omnibox";
 import type { BrowserTab } from "../../state/tabs/tabModels";
@@ -197,6 +198,18 @@ export function cardPose(g: DeckGeometry, role: DeckRole, relative: number, sp: 
   return { x, y, scale, corner, opacity, header: Math.min(1, settle) * Math.min(1, liftFade) * shown, visible: deckVisibleWidth(g, relative, isLast), lift, fade: 1 - shown };
 }
 
+function reachPose(g: DeckGeometry, p: { x: number; y: number; scale: number; visible: number }) {
+  "worklet";
+  return {
+    transform: [
+      { translateX: p.x - (g.cardWidth * p.scale) / 2 },
+      { translateY: p.y - (g.cardHeight * p.scale) / 2 },
+      { scaleX: Math.max(1, p.visible * p.scale) / g.cardWidth },
+      { scaleY: p.scale },
+    ],
+  };
+}
+
 export function useCardPlacement(id: string, g: DeckGeometry, motion: DeckMotion, restCorner: number = g.cardCorner) {
   const { orderIds, covering } = motion;
   const at = useDerivedValue(() => orderIds.value.indexOf(id), [id]);
@@ -219,29 +232,19 @@ export function useCardPlacement(id: string, g: DeckGeometry, motion: DeckMotion
       rest: growing ? now.scaleProgress : 1,
     };
   }, [g, id]);
-  const cardStyle = useAnimatedStyle(() => {
+  const cardLayer = useAnimatedStyle(() => ({ zIndex: placed.value.z }));
+  const overCardLayer = useAnimatedStyle(() => ({ zIndex: placed.value.z + 1 }));
+  const cardMotion = useAnimatedStyle(() => {
     const p = placed.value.pose;
     const corner = p.corner + (restCorner - g.cardCorner) * placed.value.rest;
     return {
-      zIndex: placed.value.z,
       opacity: covering.value === id ? 0 : p.opacity,
       borderRadius: placed.value.launcher ? restCorner : corner / Math.max(p.scale, 0.01),
       transform: [{ translateX: p.x - g.cardWidth / 2 }, { translateY: p.y - g.cardHeight / 2 }, { scale: p.scale }],
     };
   }, [g, restCorner]);
-  const reachStyle = useAnimatedStyle(() => {
-    const p = placed.value.pose;
-    return {
-      zIndex: placed.value.z + 1,
-      transform: [
-        { translateX: p.x - (g.cardWidth * p.scale) / 2 },
-        { translateY: p.y - (g.cardHeight * p.scale) / 2 },
-        { scaleX: Math.max(1, p.visible * p.scale) / g.cardWidth },
-        { scaleY: p.scale },
-      ],
-    };
-  }, [g]);
-  return { placed, cardStyle, reachStyle };
+  const reachMotion = useAnimatedStyle(() => reachPose(g, placed.value.pose), [g]);
+  return { placed, cardStyle: [cardLayer, cardMotion], reachStyle: [overCardLayer, reachMotion] };
 }
 
 export type DeckCardProps = Props;
@@ -270,10 +273,11 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
     const cardLeft = p.x - (g.cardWidth * p.scale) / 2;
     return { pose: p, top, place: arcHeader ? deckArcHeaderPlacement(cardLeft, p.visible) : deckHeaderPlacement(cardLeft, p.visible), z: m.z, expanded: m.role === "expanded", shown: 1, headed: revealed };
   }, [g, id, arcHeader]);
+  const cardLayer = useAnimatedStyle(() => ({ zIndex: placed.value.z }));
+  const overCardLayer = useAnimatedStyle(() => ({ zIndex: placed.value.z + 1 }));
   const cardStyle = useAnimatedStyle(() => {
     const p = placed.value.pose;
     return {
-      zIndex: placed.value.z,
       opacity: covering.value === id ? 0 : p.opacity * placed.value.shown,
       borderRadius: p.corner / Math.max(p.scale, 0.01),
       transform: [{ translateX: p.x - g.cardWidth / 2 }, { translateY: p.y - g.cardHeight / 2 }, { scale: p.scale }],
@@ -284,23 +288,11 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
   const headerStyle = useAnimatedStyle(() => {
     const { pose: p, top, place } = placed.value;
     return {
-      zIndex: placed.value.z + 1,
       opacity: p.header * placed.value.headed * (wholeHeader ? deckHeaderReveal(place.available) : deckHeaderIconReveal(place.available, tabsLayout.faviconSize)),
       transform: [{ translateX: place.left + place.available - g.cardWidth }, { translateY: top }],
     };
   }, [wholeHeader]);
-  const reachStyle = useAnimatedStyle(() => {
-    const p = placed.value.pose;
-    return {
-      zIndex: placed.value.z + 1,
-      transform: [
-        { translateX: p.x - (g.cardWidth * p.scale) / 2 },
-        { translateY: p.y - (g.cardHeight * p.scale) / 2 },
-        { scaleX: Math.max(1, p.visible * p.scale) / g.cardWidth },
-        { scaleY: p.scale },
-      ],
-    };
-  }, [g]);
+  const reachStyle = useAnimatedStyle(() => reachPose(g, placed.value.pose), [g]);
   const rowStyle = useAnimatedStyle(() => {
     const available = placed.value.place.available;
     return { transform: [{ translateX: g.cardWidth - available + (wholeHeader || arcHeader ? 0 : deckHeaderLeading(available, tabsLayout.faviconSize, tabsLayout.headerSpacing, titleWidth.value, titleReveal(available))) }] };
@@ -336,6 +328,7 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
         style={[
           styles.card,
           { width: g.cardWidth, height: g.cardHeight, borderColor: theme.cardEdge, backgroundColor: tone.top ?? theme.canvas },
+          cardLayer,
           cardStyle,
         ]}
       >
@@ -355,9 +348,9 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
         open={() => onOpen(index)}
         close={() => onCloseNow(index)}
         menu={onMenu ? () => onMenu(index, reach) : undefined}
-        style={[styles.reach, { width: g.cardWidth, height: g.cardHeight }, reachStyle]}
+        style={[styles.reach, { width: g.cardWidth, height: g.cardHeight }, overCardLayer, reachStyle]}
       />
-      <Animated.View style={[styles.header, { width: g.cardWidth }, headerStyle]} pointerEvents="none">
+      <Animated.View style={[styles.header, { width: g.cardWidth }, overCardLayer, headerStyle]} pointerEvents="none">
         <FadeView testID="deckHeaderFade" trailing={{ length: DECK_HEADER.trailingFade }} style={StyleSheet.absoluteFill}>
           <Animated.View style={[styles.headerRow, rowStyle]}>
             <CardIcon tab={tab} />
@@ -467,7 +460,7 @@ const androidCardOpen = (): CardOpen => (isLabBuild && launchArguments().opening
 
 export const cardOpen: () => CardOpen = iPhoneOr(() => "openingCard", androidCardOpen);
 
-export const OPENING_CARD_RESPONSE = 0.18;
+export const OPENING_CARD_RESPONSE = CARD_MOVE_RESPONSE;
 export const OPENING_CARD_MOTION: MotionCurve = { type: "spring", response: OPENING_CARD_RESPONSE, dampingFraction: 1 };
 
 type OpeningCardProps = { tab: BrowserTab; geometry: DeckGeometry; centerX: number; centerY: number; growsAtMount?: boolean; endsSquare?: boolean; onGrowing: () => void; onLanded?: () => void };

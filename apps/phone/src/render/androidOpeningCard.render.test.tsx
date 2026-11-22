@@ -8,7 +8,7 @@ import { BottomBar } from "../components/browsing/BottomBar";
 import { MaterialBottomBar } from "../components/ui/MaterialBottomBar";
 import { DECK_ARC, deckGeometry } from "../lib/deckGeometry";
 
-import { coverFrame } from "../components/tabs/DeckCard";
+import { coverFrame, OPENING_CARD_RESPONSE } from "../components/tabs/DeckCard";
 import { deckHeaderBottom } from "../components/tabs/DeckHeader";
 import { NO_LAUNCH_ARGUMENTS, parseLaunchArguments } from "../lib/launchArguments";
 import * as launchFlags from "../state/app/launchFlags";
@@ -47,7 +47,8 @@ jest.mock("../components/tabs/DeckCard", () => {
 
 const onAndroid = Platform.OS === "android" ? test : test.skip;
 
-const LANDS_MS = 167;
+const CRITICAL_LANDING_PHASE = 5.8339;
+const LANDS_MS = Math.round((CRITICAL_LANDING_PHASE * OPENING_CARD_RESPONSE * 1000) / (2 * Math.PI));
 const EXPANDED_Z = 100_000;
 
 let counted: jest.SpyInstance;

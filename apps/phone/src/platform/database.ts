@@ -16,6 +16,7 @@ function bind(native: SQLiteDatabase): SqlDatabase {
 export function openSqlDatabase(name: string): SqlDatabase {
   const native = openDatabaseSync(name);
   native.execSync("PRAGMA journal_mode = WAL");
+  native.execSync("PRAGMA synchronous = NORMAL");
   return bind(native);
 }
 

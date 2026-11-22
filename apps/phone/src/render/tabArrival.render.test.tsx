@@ -43,7 +43,7 @@ afterEach(() => {
 
 function Page() {
   const tab = useSelectedTab();
-  return tab ? <BrowsingScreen tab={tab} /> : null;
+  return tab ? <BrowsingScreen tabId={tab.id} /> : null;
 }
 
 const neighbour = () => {

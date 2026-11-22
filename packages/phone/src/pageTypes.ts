@@ -153,7 +153,7 @@ export type PageSnapshot = {
   uri: string;
   width: number;
   height: number;
-  route?: "draw" | "windowCopy" | "screenCopy" | "engine";
+  route?: "draw" | "windowCopy" | "screenCopy" | "engine" | "quiet";
   bytes?: number;
   kept?: boolean;
   durable?: boolean;
@@ -205,6 +205,7 @@ export type PageEngineEvent =
   | { name: "page.summaryOpened"; pageId: string; trigger: PageSummaryTrigger; isPrivate: boolean }
   | { name: "page.summarySettled"; pageId: string; trigger: PageSummaryTrigger; outcome: PageSummaryOutcome; chatGPTFellBack?: boolean; geminiNanoMissing?: string | null; isPrivate: boolean }
   | { name: "page.snapshotLanded"; pageId: string; uri: string; generation: number }
+  | { name: "page.scrollSettled"; pageId: string; y: number }
   | { name: "page.externalAppMissing"; pageId: string; url: string }
   | { name: "page.desktop"; pageId: string; line: string }
   | { name: "pages.privateSessionEnded" };

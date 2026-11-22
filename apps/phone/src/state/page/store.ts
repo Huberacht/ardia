@@ -8,10 +8,11 @@ export type MenuTranslation = { languageName: string | null; confirmed: boolean 
 
 export type Press = { tabId: string; target: PressTarget; x: number; y: number };
 
-export type MenuPage = "main" | "siteSettings";
+export type MenuPage = "main" | "siteSettings" | "library";
 
 type PageUi = {
   menuOpen: boolean;
+  menuArmed: boolean;
   menuPage: MenuPage;
   menuDocked: boolean;
   menuSite: MenuSite | null;
@@ -27,6 +28,7 @@ type PageUi = {
 
 export const usePageUi = create<PageUi>()(() => ({
   menuOpen: false,
+  menuArmed: false,
   menuPage: "main",
   menuDocked: false,
   menuSite: null,

@@ -1,7 +1,7 @@
 import { pageScrollPosition, savePageState } from "../pages/store";
 import { currentTabs, saveTabState } from "../tabs/store";
 import { findTab } from "../tabs/tabsState";
-import { scrollSaveDecision, type ScrollWatch } from "../../lib/scrollSettle";
+import { SCROLL_MOVE_THRESHOLD, scrollSaveDecision, type ScrollWatch } from "../../lib/scrollSettle";
 
 const SCROLL_CHECK_MS = 2000;
 
@@ -39,6 +39,13 @@ async function checkFront(frontId: () => string | null, cameToRest: (id: string)
 export function watchFrontScroll(frontId: () => string | null, cameToRest: (id: string) => void = () => undefined) {
   if (timer) return;
   timer = setInterval(() => void checkFront(frontId, cameToRest), SCROLL_CHECK_MS);
+}
+
+export function frontScrollCameToRest(id: string, y: number, frontId: string | null, cameToRest: (id: string) => void) {
+  if (frontId !== id) return;
+  const saved = watches.get(id)?.lastSaved ?? null;
+  cameToRest(id);
+  if (saved === null || Math.abs(y - saved) > SCROLL_MOVE_THRESHOLD) void saveTabPosition(id);
 }
 
 export function forgetPosition(id: string) {

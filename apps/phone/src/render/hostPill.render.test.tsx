@@ -44,7 +44,7 @@ const page = (design: Design) => {
   scrolled("up");
   return renderSurface(
     <DesignProvider design={design}>
-      <BrowsingScreen tab={currentTabs().open[0]!} />
+      <BrowsingScreen tabId={currentTabs().open[0]!.id} />
     </DesignProvider>,
   );
 };
@@ -63,8 +63,12 @@ const moved = (node: ReactTestInstance) => {
 
 const expectPill = (root: Root, shown: boolean) => {
   if (!android) {
-    if (shown) expect(host(root, "hostPill")).toBeDefined();
-    else expect(host(root, "hostPill")).toBeUndefined();
+    const glass = root.root.findAll((node) => node.props.testID === "hostPill" && node.props.shown !== undefined && typeof node.type !== "string")[0]!;
+    expect(host(root, "hostPillFold")!.props.pointerEvents).toBe(shown ? "box-none" : "none");
+    expect(host(root, "hostPillFold")!.props.accessibilityElementsHidden).toBe(!shown);
+    expect(moved(host(root, "hostPillFold")!).opacity).toBe(1);
+    expect(glass.props.shown).toBe(shown);
+    expect(moved(host(root, "hostPillContent")!).opacity).toBeCloseTo(shown ? 1 : 0, 3);
     return;
   }
   expect(host(root, "hostPillFold")!.props.pointerEvents).toBe(shown ? "box-none" : "none");
@@ -192,7 +196,7 @@ test("Android's design keeps sliding its bar away with no pill", () => {
 });
 
 test("each phone runs its own design's collapse: the pill on iPhone, the slide on Android", () => {
-  const root = renderSurface(<BrowsingScreen tab={currentTabs().open[0]!} />);
+  const root = renderSurface(<BrowsingScreen tabId={currentTabs().open[0]!.id} />);
   scrolled("down");
   settle();
   expect(root.root.findAll((node) => node.type === HostPill)).toHaveLength(appDesign === "redesigned" ? 1 : 0);

@@ -11,14 +11,20 @@ enum PageSnapshots {
   static var saved: URL { URL.applicationSupportDirectory.appending(path: "PageSnapshots", directoryHint: .isDirectory) }
   static var privateFolder: URL { URL.cachesDirectory.appending(path: "PrivatePageSnapshots", directoryHint: .isDirectory) }
 
-  static func write(_ pageID: String, image: UIImage, isPrivate: Bool, quality: Int) async -> [String: Any]? {
+  struct HeldImage: @unchecked Sendable {
+    let image: UIImage
+  }
+
+  static func write(_ pageID: String, image: UIImage, isPrivate: Bool, quality: Int, priority: TaskPriority = .userInitiated) async -> [String: Any]? {
     let folder = isPrivate ? privateFolder : saved
     let stem = fileStem(pageID)
     let width = Int((image.size.width * image.scale).rounded())
     let height = Int((image.size.height * image.scale).rounded())
-    guard let data = image.jpegData(compressionQuality: CGFloat(min(max(quality, 1), 100)) / 100) else { return nil }
+    let compression = CGFloat(min(max(quality, 1), 100)) / 100
+    let held = HeldImage(image: image)
     let stamp = Int(Date.now.timeIntervalSince1970 * 1000)
-    return await Task.detached(priority: .utility) { () -> [String: Any]? in
+    return await Task.detached(priority: priority) { () -> [String: Any]? in
+      guard let data = held.image.jpegData(compressionQuality: compression) else { return nil }
       let manager = FileManager.default
       guard (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
       let target = folder.appending(path: "\(stem)-\(stamp).jpg")
@@ -72,6 +78,11 @@ enum PageSnapshots {
 
   static let flatSample = 16
   static let flatSpread = 3
+
+  static func isFlatAwayFromMain(_ image: UIImage) async -> Bool {
+    let held = HeldImage(image: image)
+    return await Task.detached(priority: .utility) { PageSnapshots.isFlat(held.image) }.value
+  }
 
   static func isFlat(_ image: UIImage) -> Bool {
     guard let cgImage = image.cgImage else { return false }

@@ -18,7 +18,7 @@ afterEach(() => jest.useRealTimers());
 
 test("a page that hasn't painted is covered by its face until it finishes loading, then the cover fades", () => {
   const tab = currentTabs().open[0]!;
-  const root = renderSurface(<BrowsingScreen tab={tab} />, { flushTimers: false });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
   expect(cover(root)).toBe(true);
   act(() => storeNavigation(tab.id, state(true, true)));
   act(() => jest.advanceTimersByTime(1000));
@@ -31,7 +31,7 @@ test("a page that hasn't painted is covered by its face until it finishes loadin
 
 test("a page that never reports gives up its cover after four seconds", () => {
   const tab = currentTabs().open[0]!;
-  const root = renderSurface(<BrowsingScreen tab={tab} />, { flushTimers: false });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
   act(() => jest.advanceTimersByTime(3900));
   expect(cover(root)).toBe(true);
   act(() => jest.advanceTimersByTime(500));
@@ -42,7 +42,7 @@ test("a page that never reports gives up its cover after four seconds", () => {
 test("a page that is already live and settled with no saved picture shows no cover at all", () => {
   const tab = currentTabs().open[0]!;
   storeNavigation(tab.id, state(true, false));
-  const root = renderSurface(<BrowsingScreen tab={tab} />, { flushTimers: false });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
   expect(cover(root)).toBe(false);
   unmount(root);
 });
@@ -50,7 +50,7 @@ test("a page that is already live and settled with no saved picture shows no cov
 test("while the deck still covers the page, the cover holds; it fades only once the page is shown alone, so the fade is seen", () => {
   const tab = currentTabs().open[0]!;
   useBrowse.setState({ surface: "deck" });
-  const root = renderSurface(<BrowsingScreen tab={tab} />, { flushTimers: false });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
   act(() => storeNavigation(tab.id, state(true, true)));
   act(() => storeNavigation(tab.id, state(true, false)));
   act(() => jest.advanceTimersByTime(5000));

@@ -82,7 +82,7 @@ type PagesNative = {
   translationUrl?(pageUrl: string): Promise<string | null>;
   confirmTranslation?(): Promise<void>;
   presentSystemFind?(pageId: string, text: string | null): Promise<boolean>;
-  snapshot(pageId: string, options: { maxWidth?: number; quality?: number; coveredInsets?: [number, number]; windowCopy?: boolean }): Promise<PageSnapshot | RefusedSnapshot | null>;
+  snapshot(pageId: string, options: { maxWidth?: number; quality?: number; coveredInsets?: [number, number]; windowCopy?: boolean; quiet?: boolean }): Promise<PageSnapshot | RefusedSnapshot | null>;
   loadHtml(pageId: string, html: string, baseUrl: string): Promise<void>;
   scrollPosition(pageId: string): Promise<PageScrollPosition | null>;
   evaluate(pageId: string, script: string): Promise<string | null>;
@@ -182,12 +182,13 @@ export const pages = {
   confirmTranslation: (): Promise<void> => native().confirmTranslation?.() ?? Promise.resolve(),
   hasSystemFind: (): boolean => typeof native().presentSystemFind === "function",
   presentSystemFind: (pageId: string, text?: string): Promise<boolean> => native().presentSystemFind?.(pageId, text ?? null) ?? Promise.resolve(false),
-  snapshot: (pageId: string, options: { maxWidth?: number; quality?: number; coveredInsets?: PageToneInsets; windowCopy?: boolean } = {}) =>
+  snapshot: (pageId: string, options: { maxWidth?: number; quality?: number; coveredInsets?: PageToneInsets; windowCopy?: boolean; quiet?: boolean } = {}) =>
     native().snapshot(pageId, {
       maxWidth: options.maxWidth,
       quality: options.quality,
       coveredInsets: options.coveredInsets ? [options.coveredInsets.top, options.coveredInsets.bottom] : undefined,
       windowCopy: options.windowCopy,
+      ...(options.quiet ? { quiet: true } : {}),
     }),
   loadHtml: (pageId: string, html: string, baseUrl: string) => native().loadHtml(pageId, html, baseUrl),
   scrollPosition: (pageId: string) => native().scrollPosition(pageId),
