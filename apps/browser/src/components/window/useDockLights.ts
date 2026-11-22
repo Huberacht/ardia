@@ -3,8 +3,7 @@ import type { Animated } from "react-native";
 import { setTrafficLightsCenter } from "../../state/windows/nativeWindow";
 import { dockMoving, sidebarLightsCenter, stillOffWindow, TOP_STRIP_LIGHTS_CENTER } from "../../state/windows/dockMotion";
 import { currentValue } from "../ui/motion";
-import { noteSidebarLightsLeftBehind, noteSidebarPeekPastTarget } from "../../state/telemetry/dockCounts";
-import { consentToken } from "../../state/telemetry/client";
+import { noteSidebarLightsLeftBehind } from "../../state/telemetry/dockCounts";
 
 export function useTopStripLights(windowId: string, dock: Animated.Value, on: boolean, travel: number, open: boolean) {
   useEffect(() => {
@@ -22,7 +21,9 @@ export function useTopStripLights(windowId: string, dock: Animated.Value, on: bo
 
 export type SidebarLights = { width: number; moving: boolean; peeking: boolean; fullscreen: boolean; lights: readonly [number, number]; right: boolean; peekAt: { left: number; top: number } };
 
-export function useSidebarLights(windowId: string, dock: Animated.Value, slide: Animated.Value, o: SidebarLights) {
+export function useSidebarLights(windowId: string, dock: Animated.Value, slide: Animated.Value, o: SidebarLights, onSlide: (value: number) => void = () => {}) {
+  const latestOnSlide = useRef(onSlide);
+  latestOnSlide.current = onSlide;
   const values = useRef({ dock: 1, slide: 0 });
   const apply = useRef<() => void>(() => {});
   const sent = useRef<ReturnType<typeof slidingCenter> | undefined>(undefined);
@@ -48,14 +49,9 @@ export function useSidebarLights(windowId: string, dock: Animated.Value, slide: 
   }, [windowId, dock]);
   useEffect(() => {
     if (!o.peeking) return;
-    const consent = consentToken();
-    let pastTarget = false;
     const b = slide.addListener(({ value }) => {
       values.current.slide = value;
-      if (value > 1 && !pastTarget) {
-        pastTarget = true;
-        noteSidebarPeekPastTarget(consent);
-      }
+      latestOnSlide.current(value);
       apply.current();
     });
     return () => slide.removeListener(b);
