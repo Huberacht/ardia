@@ -164,11 +164,11 @@ test("MenuShown reports the matching window as enums, never as its class name", 
   assert.match(name, /if \(!info\.present\) return @"none";/);
 });
 
-test("a click in another browser window while an episode is open is counted, not dropped silently", () => {
+test("a click in another browser window while an episode is open is counted, and an app-wide halfActive episode moves to that window so the click can repair it", () => {
   const handle = body(probe, "void HandleHoverCheck(");
   assert.match(
     handle,
-    /if \(!window\) return;\s*if \(gEpisode\.open && gEpisode\.owner != window\) \{\s*if \(trigger == HoverTrigger::click\) gEpisode\.otherWindowClicks\+\+;\s*return;\s*\}/,
+    /if \(!window\) return;\s*if \(gEpisode\.open && gEpisode\.owner != window\) \{\s*if \(trigger != HoverTrigger::click\) return;\s*gEpisode\.otherWindowClicks\+\+;\s*if \(gEpisode\.first\.reason != HoverReason::halfActive \|\| gEpisode\.healed\) return;\s*gEpisode\.owner = window;\s*\}\s*const HoverCheck check = Probe\(window/,
   );
 });
 

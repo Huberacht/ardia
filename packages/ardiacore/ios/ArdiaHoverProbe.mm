@@ -445,8 +445,10 @@ void HandleHoverCheck(NSWindow *window, NSPoint point, HoverTrigger trigger, Ard
   if (gEpisode.open && !gEpisode.owner) CloseEpisode(@"windowClosed");
   if (!window) return;
   if (gEpisode.open && gEpisode.owner != window) {
-    if (trigger == HoverTrigger::click) gEpisode.otherWindowClicks++;
-    return;
+    if (trigger != HoverTrigger::click) return;
+    gEpisode.otherWindowClicks++;
+    if (gEpisode.first.reason != HoverReason::halfActive || gEpisode.healed) return;
+    gEpisode.owner = window;
   }
   const HoverCheck check = Probe(window, point, trigger == HoverTrigger::click);
   if (trigger == HoverTrigger::move && !check.overPage) return;
