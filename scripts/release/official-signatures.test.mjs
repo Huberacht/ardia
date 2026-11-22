@@ -92,3 +92,14 @@ test("a brotli tarball is read like a gzip one", { skip: !onMac }, () => {
   assert.match(out, /WARN {2}cli\/bin\/adhoc is ad hoc signed/);
   assert.match(out, /WARNING {2}cli-plugin-9\.9\.9: 1 of 1 Mach-O files aren't Developer ID signed/);
 });
+
+test("a gzip and a brotli tarball of the same name are each read alone", { skip: !onMac }, () => {
+  const adhoc = (path) => execFileSync("codesign", ["--force", "--sign", "-", compiled(path)]);
+  const dir = fixtures({ first: adhoc, second: adhoc });
+  const brotli = fixtures({ only: adhoc }, "br");
+  copyFileSync(join(brotli, "cli-plugin-9.9.9-macos-arm64.tar.br"), join(dir, "cli-plugin-9.9.9-macos-arm64.tar.br"));
+  const { status, out } = check(dir);
+  assert.equal(status, 0, out);
+  assert.match(out, /cli-plugin-9\.9\.9: 2 of 2 Mach-O files/);
+  assert.match(out, /cli-plugin-9\.9\.9: 1 of 1 Mach-O files/, "the brotli scan counts only what its own tarball holds");
+});

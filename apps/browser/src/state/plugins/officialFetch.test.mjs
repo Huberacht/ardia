@@ -397,15 +397,15 @@ test("a finished download counts its time, its check time and its resumes; a cop
   host.officialFetchOk.cli = { timings: { downloadMs: 2345, verifyMs: 87, bytes: 29_000_000, resumes: 2 } };
   assert.deepEqual(await fetchOfficialCandidate("cli", consentToken()), { ok: true });
   let counts = takePluginCounts();
-  assert.deepEqual([counts.official_fetches, counts.official_fetch_ms, counts.official_verify_ms, counts.official_fetch_resumes, counts.official_fetches_reused], [1, 2300, 90, 2, 0]);
+  assert.deepEqual([counts.official_fetches, counts.official_fetches_timed, counts.official_fetch_ms, counts.official_verify_ms, counts.official_fetch_resumes, counts.official_fetches_reused], [1, 1, 2300, 90, 2, 0]);
   await fresh();
   host.officialFetchOk.cli = { reused: true };
   assert.deepEqual(await fetchOfficialCandidate("cli", consentToken()), { ok: true });
   counts = takePluginCounts();
-  assert.deepEqual([counts.official_fetches, counts.official_fetch_ms, counts.official_verify_ms, counts.official_fetch_resumes, counts.official_fetches_reused], [1, 0, 0, 0, 1]);
+  assert.deepEqual([counts.official_fetches, counts.official_fetches_timed, counts.official_fetch_ms, counts.official_verify_ms, counts.official_fetch_resumes, counts.official_fetches_reused], [1, 0, 0, 0, 0, 1]);
   await fresh();
   delete host.officialFetchOk.cli;
   assert.deepEqual(await fetchOfficialCandidate("cli", consentToken()), { ok: true });
   counts = takePluginCounts();
-  assert.deepEqual([counts.official_fetches, counts.official_fetch_ms, counts.official_fetches_reused], [1, 0, 0], "an older native build sends no timings");
+  assert.deepEqual([counts.official_fetches, counts.official_fetches_timed, counts.official_fetch_ms, counts.official_fetches_reused], [1, 0, 0, 0], "an older native build sends no timings");
 });

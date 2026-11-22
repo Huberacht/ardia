@@ -26,8 +26,7 @@ archives=("$fixtures"/*-macos-arm64.tar.gz "$fixtures"/*-macos-arm64.tar.br)
 status=0
 for archive in "${archives[@]}"; do
   name="$(basename "$(basename "$archive" -macos-arm64.tar.gz)" -macos-arm64.tar.br)"
-  dest="$work/$name"
-  mkdir -p "$dest"
+  dest="$(mktemp -d "$work/$name.XXXXXX")"
   "$here/untar-plugin.sh" "$archive" "$dest"
   passed=0 warned=0 failed=0
   while IFS= read -r -d '' file; do

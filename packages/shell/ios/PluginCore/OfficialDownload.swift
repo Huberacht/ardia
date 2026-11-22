@@ -83,18 +83,19 @@ final class OfficialDownload: NSObject, URLSessionDownloadDelegate {
         guard Self.shouldResume(failure, resumeData: data, received: received) || (wasResumed && failure.code == "failed"),
           let wait = retries.next(), DispatchTime.now() + wait < giveUp
         else { return .failure(failure) }
-        guard pause(wait, isCancelled: isCancelled) else { return .failure(Failure(code: "cancelled", reason: "Cancelled.")) }
+        guard pause(until: DispatchTime.now() + wait, giveUp: giveUp, isCancelled: isCancelled) else { return .failure(Failure(code: "cancelled", reason: "Cancelled.")) }
         resumeData = wasResumed && failure.code == "failed" ? nil : data
         if resumeData != nil { resumes += 1 }
       }
     }
   }
 
-  private func pause(_ seconds: TimeInterval, isCancelled: () -> Bool) -> Bool {
-    let until = Date().addingTimeInterval(seconds)
-    while Date() < until {
+  private func pause(until wanted: DispatchTime, giveUp: DispatchTime, isCancelled: () -> Bool) -> Bool {
+    let until = min(wanted, giveUp)
+    while DispatchTime.now() < until {
       if isCancelled() { return false }
-      Thread.sleep(forTimeInterval: min(Self.cancelPoll, max(until.timeIntervalSinceNow, 0)))
+      let left = Double(until.uptimeNanoseconds - DispatchTime.now().uptimeNanoseconds) / 1e9
+      Thread.sleep(forTimeInterval: min(Self.cancelPoll, max(left, 0)))
     }
     return !isCancelled()
   }

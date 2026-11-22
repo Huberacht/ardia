@@ -164,6 +164,7 @@ export function fetchOfficialCandidate(name: string, consent: ConsentToken | nul
       }
       if (result.reused) notePlugin("official_fetches_reused", consent);
       else if (result.timings) {
+        notePlugin("official_fetches_timed", consent);
         notePluginMs("official_fetch_ms", result.timings.downloadMs, 100, consent);
         notePluginMs("official_verify_ms", result.timings.verifyMs, 10, consent);
         notePluginTimes("official_fetch_resumes", result.timings.resumes, consent);

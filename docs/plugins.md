@@ -1073,7 +1073,8 @@ in the local copy. Hourly `usage_counts`:
   at quit, only while sharing is on and tagged with that sharing period, and counted at the next launch only in the
   same period).
 - Official plugin downloads: `official_fetches`, `official_fetch_failures`, `official_fetch_offline`,
-  `official_verify_failures`, `official_fetches_reused` (a copy already downloaded was used), `official_fetch_ms`
+  `official_verify_failures`, `official_fetches_reused` (a copy already downloaded was used), `official_fetches_timed` (a download that finished
+  and carried its timings, the denominator for the two times below), `official_fetch_ms`
   (download time, each rounded to 100 ms, resumes included), `official_verify_ms` (SHA-256 check, unpack and publish,
   each rounded to 10 ms), `official_fetch_resumes` (a dropped download picked up again), `official_program_links` (an official plugin's
   successful PATH link) and `official_program_link_ms` (how long each took, rounded to 10 ms).

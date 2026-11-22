@@ -22,6 +22,7 @@ const NONE = {
   official_fetches: 0,
   official_fetch_failures: 0,
   official_fetches_reused: 0,
+  official_fetches_timed: 0,
   official_fetch_ms: 0,
   official_fetch_resumes: 0,
   official_verify_ms: 0,
