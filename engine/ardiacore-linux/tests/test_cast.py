@@ -80,7 +80,9 @@ class CastTests(unittest.TestCase):
         copies = (ROOT / 'copies.tsv').read_text().splitlines()
         for name in ('ac_test_media_route_provider.h', 'ac_test_media_route_provider.cc'):
             self.assertIn(f'engine/ardiacore/src/ardia/core/{name}\tardia/core/{name}', copies)
-        self.assertIn('--paths) printf', (ROOT / 'apply.sh').read_text())
+        listed = subprocess.run([str(ROOT / 'apply.sh'), '--paths'], capture_output=True, text=True, check=True).stdout.splitlines()
+        for name in ('ac_test_media_route_provider.h', 'ac_test_media_route_provider.cc'):
+            self.assertIn(f'ardia/core/{name}', listed)
         provider = (REPO / 'engine/ardiacore/src/ardia/core/ac_test_media_route_provider.cc').read_text()
         self.assertIn('TestFlag("mediaRouteProvider")', provider)
         switches = (SOURCE / 'ardia/core/ac_launch_switches_linux.cc').read_text()

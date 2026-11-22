@@ -69,6 +69,7 @@ final class OfficialDownload: NSObject, URLSessionDownloadDelegate {
       let ending = run(key, task: task, resumed: resumeData != nil, until: giveUp, started: started)
       switch ending {
       case .downloaded(let temporary, _):
+        defer { try? FileManager.default.removeItem(at: temporary) }
         do {
           try FileManager.default.moveItem(at: temporary, to: archive)
         } catch {
@@ -92,10 +93,11 @@ final class OfficialDownload: NSObject, URLSessionDownloadDelegate {
 
   private func pause(until wanted: DispatchTime, giveUp: DispatchTime, isCancelled: () -> Bool) -> Bool {
     let until = min(wanted, giveUp)
-    while DispatchTime.now() < until {
+    while true {
+      let now = DispatchTime.now()
+      guard now < until else { break }
       if isCancelled() { return false }
-      let left = Double(until.uptimeNanoseconds - DispatchTime.now().uptimeNanoseconds) / 1e9
-      Thread.sleep(forTimeInterval: min(Self.cancelPoll, max(left, 0)))
+      Thread.sleep(forTimeInterval: min(Self.cancelPoll, Double(until.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9))
     }
     return !isCancelled()
   }
