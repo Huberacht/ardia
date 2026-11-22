@@ -87,6 +87,7 @@ export function Omnibox({
     selected,
     dropdown,
     opensTab: !!opensTab,
+    switchToOpenTab: !!opensTab || hero,
     windowId,
     profileId,
     tabId,
