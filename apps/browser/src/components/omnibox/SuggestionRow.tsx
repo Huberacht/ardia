@@ -38,17 +38,16 @@ export function SuggestionIcon({ suggestion: s, color }: { suggestion: Suggestio
 function labels(s: Suggestion): [string, string | null] {
   switch (s.kind) {
     case "page":
-      if (s.tabId) return [s.title || displayUrl(s.url), null];
-      return s.title ? [s.title, displayUrl(s.url)] : [displayUrl(s.url), null];
+      return [s.title || displayUrl(s.url), null];
     case "search":
       return [s.bang ? `Search ${s.engine} for ${s.query}` : s.query, null];
     case "calc":
-      return [s.value, s.expression];
+      return [s.value, null];
     case "action":
     case "create":
       return [s.title, null];
     case "extension":
-      return [s.title, s.open === "action" ? "Open Extension" : "Extension Options"];
+      return [s.title, null];
     case "provider": {
       const host = displayHost(hostOf(s.url)) || displayUrl(s.url);
       return [s.title, s.subtitle ? `${host} · ${s.subtitle}` : host];
@@ -57,7 +56,8 @@ function labels(s: Suggestion): [string, string | null] {
 }
 
 export function enterLabel(s: Suggestion): string {
-  if (s.kind === "page" && s.tabId) return "Switch to Tab";
+  if (s.kind === "page") return s.tabId ? "Switch to Tab" : displayHost(hostOf(s.url)) || displayUrl(s.url);
+  if (s.kind === "extension") return s.open === "action" ? "Open Extension" : "Extension Options";
   if (s.kind === "search") return s.engine;
   if (s.kind === "calc") return "Copy";
   return "Go";
@@ -121,8 +121,8 @@ const SuggestionRow = memo(
     const { hovered, hoverProps } = useHover();
     const [title, accessory] = labels(s);
     const ownHint = trailing ?? (s.kind === "action" ? s.hint : s.kind === "provider" ? s.provider : null);
-    const switchesTab = s.kind === "page" && !!s.tabId;
-    const hint = ownHint ?? (selected ? `${enterLabel(s)}  ↵` : hovered && switchesTab ? enterLabel(s) : null);
+    const named = s.kind === "page" || s.kind === "extension";
+    const hint = ownHint ?? (selected ? `${enterLabel(s)}  ↵` : hovered && named ? enterLabel(s) : null);
     const onRemove = isRemovable(s) ? () => actions.remove(s.url) : undefined;
     const removable = !!onRemove && (hovered || selected);
     return (
@@ -151,7 +151,7 @@ const SuggestionRow = memo(
               ) : null}
             </Text>
             <View style={{ flex: 1 }} />
-            {hint && !removable ? <Text size="small" tone="textTertiary" ardiaCentersCapitals>{hint}</Text> : null}
+            {hint ? <Text lines={1} size="small" tone="textTertiary" ardiaCentersCapitals style={{ flexShrink: 0, maxWidth: "45%" }}>{hint}</Text> : null}
             {removable ? (
               <Button variant="icon" icon="xmark" size="s" color={theme.textSecondary} tooltip="Remove from History" onPress={onRemove} />
             ) : null}

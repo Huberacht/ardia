@@ -46,7 +46,7 @@ export const ClearDivider = memo(function ClearDivider({ windowId, profileId, li
         {pinned ? <HoverSlot hovered={foldShown} width="content" reserve="hover" align="start" hover={<FoldButton pinned={pinned} onPress={() => togglePinnedFold(profileId)} />} /> : null}
         <View style={{ flex: 1, height: 1, overflow: "hidden" }}>
           {lineWidth && shown ? (
-            <View style={{ position: "absolute", left: 0, bottom: 0, width: lineWidth, height: DASH_BOX_HEIGHT, borderBottomWidth: 1, borderStyle: "solid", borderColor: theme.pinnedDivider }} />
+            <View style={{ position: "absolute", left: 0, bottom: 0, width: lineWidth, height: DASH_BOX_HEIGHT, borderBottomWidth: 1, borderStyle: "dashed", borderColor: theme.pinnedDivider }} />
           ) : null}
         </View>
         {actions ? (

@@ -185,7 +185,7 @@ function customTheme(custom: ProfileTheme, color: ProfileColor, appDark: boolean
       adaptiveInk,
       profileColor: nearestPreset(accent),
       backdrop: {
-        ...backdropTint(accent, false, true),
+        ...backdropTint(accent, false),
         ...themeBackdrop(look, dark),
         ...(dark !== requestedDark ? { themeAppearance: dark ? ("dark" as const) : ("light" as const) } : source === "own" ? {} : { themeAppearance: "auto" as const }),
       },

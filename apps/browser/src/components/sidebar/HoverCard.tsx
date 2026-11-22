@@ -97,9 +97,9 @@ function TabCard({ tabId, windowId, anchor }: { tabId: string; windowId: string;
         </Text>
       ) : null}
       <View style={{ flexDirection: "row", gap: space.xs, marginTop: space.m }}>
-        <ActionTile caption icon={tab.pin ? "pin.slash" : "pin"} label={tab.pin ? "Unpin" : "Pin"} onPress={() => (noteTabHoverCardPress(false), togglePin(tabId))} />
+        <ActionTile icon={tab.pin ? "pin.slash" : "pin"} label={tab.pin ? "Unpin" : "Pin"} onPress={() => (noteTabHoverCardPress(false), togglePin(tabId))} />
         {tab.url && showBookmarks ? (
-          <ActionTile caption
+          <ActionTile
             icon={bookmarked ? "bookmark.fill" : "bookmark"}
             active={bookmarked}
             label="Bookmark"
@@ -107,7 +107,7 @@ function TabCard({ tabId, windowId, anchor }: { tabId: string; windowId: string;
           />
         ) : null}
         {!isActive && !tab.pin && splitViewAvailable ? (
-          <ActionTile caption
+          <ActionTile
             icon="rectangle.split.2x1"
             label="Split"
             onPress={() => {
@@ -117,9 +117,9 @@ function TabCard({ tabId, windowId, anchor }: { tabId: string; windowId: string;
             }}
           />
         ) : null}
-        {video ? <ActionTile caption icon={pip ? "pip.exit" : "pip.enter"} label={pip ? "Exit PiP" : "PiP"} onPress={(press) => (noteTabHoverCardPress(false), togglePip(press))} /> : null}
+        {video ? <ActionTile icon={pip ? "pip.exit" : "pip.enter"} label={pip ? "Exit PiP" : "PiP"} onPress={(press) => (noteTabHoverCardPress(false), togglePip(press))} /> : null}
         {away ? (
-          <ActionTile caption
+          <ActionTile
             icon="arrow.uturn.backward"
             label="Reset"
             onPress={() => {

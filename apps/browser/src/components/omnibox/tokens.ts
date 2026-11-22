@@ -63,7 +63,7 @@ export const SUGGESTION = {
   iconBox: 16,
 } as const;
 
-export const SELECTED_SUGGESTION_ALPHA = { dark: 0.16, light: 0.12 } as const;
+export const SELECTED_SUGGESTION_ALPHA = { dark: 0.56, light: 0.3 } as const;
 
 export const SCOPE_PULSE = {
   fill: { dark: 0.28, light: 0.2 },

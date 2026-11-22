@@ -112,7 +112,7 @@ export const NewTabRow = memo(function NewTabRow({ windowId, shift = null, clip 
             </Text>
           }
         />
-        {quiet && !hovered ? null : <Button variant="icon"
+        {!hovered ? null : <Button variant="icon"
           icon="chevron.down"
           size="s"
           weight="semibold"
