@@ -39,7 +39,7 @@ gesture, as a real pointer is while you scroll; away parks it over the page.
 Per gesture, over the gesture plus 700 ms: main- and JS-thread CPU ms (thread_info, read on each display-link tick) and
 run-loop busy ms (acframes.m), the longest main run-loop iteration and how many ran over 8.3 ms (each costs a 120 Hz
 frame; mainLong in the report lists when and how long), the display-link ticks on which the list had moved and how many of
-those came over 12 ms after the tick before (a frame dropped while it moved, the one you see), app process CPU ms (acperf rusage), display-link frames and the longest gap between them (about 63 Hz while locked), React commits, renders, host view updates, store updates, JS tasks from native events by name
+those came over 1.5 display frames after the tick before (a frame dropped while it moved, the one you see; null with --post acperf, which samples no offsets), app process CPU ms (acperf rusage), display-link frames and the longest gap between them (about 63 Hz while locked), React commits, renders, host view updates, store updates, JS tasks from native events by name
 (scroll and hover events), native view updates and layout passes (acframes counters), and how far the list moved.
 Instances alternate nothing: run two labels in turn with --append to interleave builds (A B A B), e.g.
   for i in 1 2 3 4 5; do for s in base:A.jsbundle new:B.jsbundle; do
@@ -255,19 +255,29 @@ class Frames {
     }).filter(Boolean);
   }
   busy(from, to) {
-    const out = { m: 0, j: 0, mMax: 0, jMax: 0, mOver: 0, mLong: [], layoutMs: 0, frames: 0, maxGap: 0, mainCpu: null, jsCpu: null, moving: 0, lateMoving: 0, movingMaxGap: 0 };
+    const out = { m: 0, j: 0, mMax: 0, jMax: 0, mOver: 0, mLong: [], layoutMs: 0, frames: 0, maxGap: 0, mainCpu: null, jsCpu: null, moving: null, lateMoving: null, movingMaxGap: null };
+    const records = this.records();
+    const periods = records.filter((r) => r.k === "f" && r.ts >= from && r.ts < to && r.tgt > r.ts).map((r) => r.tgt - r.ts).sort((x, y) => x - y);
+    const lateAfter = 1.5 * (periods.length ? periods[periods.length >> 1] : 1000 / 120);
+    const offsets = records.filter((r) => r.k === "y" && r.ts >= from && r.ts < to);
+    if (offsets.length) Object.assign(out, { moving: 0, lateMoving: 0, movingMaxGap: 0 });
+    for (let i = 1; i < offsets.length; i++) {
+      if (Math.abs(offsets[i].y - offsets[i - 1].y) < 0.5) continue;
+      const gap = offsets[i].ts - offsets[i - 1].ts;
+      out.moving++;
+      out.movingMaxGap = Math.max(out.movingMaxGap, gap);
+      if (gap > lateAfter) out.lateMoving++;
+    }
+    const wholeIterations = records.some((r) => r.k === "i");
     let last = null;
     let first = null;
-    let lastY = null;
-    for (const r of this.records()) {
-      if (r.k === "y" && r.ts >= from && r.ts < to) {
-        if (lastY && Math.abs(r.y - lastY.y) >= 0.5) {
-          const gap = r.ts - lastY.ts;
-          out.moving++;
-          out.movingMaxGap = Math.max(out.movingMaxGap, gap);
-          if (gap > 12) out.lateMoving++;
+    for (const r of records) {
+      if (r.k === "i" && r.th === "m" && r.a >= from && r.a < to) {
+        out.mMax = Math.max(out.mMax, r.d);
+        if (r.d > 8.3) {
+          out.mOver++;
+          out.mLong.push([Math.round(r.a - from), Math.round(r.d * 10) / 10]);
         }
-        lastY = r;
       }
       if (r.k === "f" && r.ts >= from && r.ts < to) {
         first ??= r;
@@ -279,8 +289,8 @@ class Frames {
       }
       if (r.k === "r" && r.a >= from && r.a < to) {
         out[r.th] += r.d;
-        out[`${r.th}Max`] = Math.max(out[`${r.th}Max`], r.d);
-        if (r.th === "m" && r.d > 8.3) {
+        if (r.th === "j" || !wholeIterations) out[`${r.th}Max`] = Math.max(out[`${r.th}Max`], r.d);
+        if (r.th === "m" && !wholeIterations && r.d > 8.3) {
           out.mOver++;
           out.mLong.push([Math.round(r.a - from), Math.round(r.d * 10) / 10]);
         }

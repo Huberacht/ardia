@@ -255,12 +255,13 @@ export function noteRowsScrolled(windowId: string) {
 export const forgetRowsScrolled = (windowId: string) => void scrolledAt.delete(windowId);
 
 export function whenRowsStill(windowId: string, run: () => void): () => void {
+  const consent = consentToken();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let held = false;
   const check = () => {
     const left = SCROLL_SETTLE_MS - stillFor(windowId);
     if (left <= 0) return run();
-    if (!held) noteSidebarTeardownHeld();
+    if (!held) noteSidebarTeardownHeld(consent);
     held = true;
     timer = setTimeout(check, left);
   };

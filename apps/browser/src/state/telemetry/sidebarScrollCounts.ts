@@ -1,4 +1,5 @@
-import { onConsentPeriodChange } from "./choice";
+import { onConsentPeriodChange, type ConsentToken } from "./choice";
+import { consentOrNow, countFor } from "./countFor";
 
 const NEW_SCROLL_GAP_MS = 250;
 const STALL_GAP_MS = 34;
@@ -23,8 +24,8 @@ export function noteSidebarHoverHeld() {
   heldHovers++;
 }
 
-export function noteSidebarTeardownHeld() {
-  heldTeardowns++;
+export function noteSidebarTeardownHeld(consent?: ConsentToken | null) {
+  countFor(consentOrNow(consent), () => void heldTeardowns++);
 }
 
 export function noteNewTabDocked(docked: boolean) {

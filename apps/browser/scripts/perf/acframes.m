@@ -41,6 +41,7 @@ static void Flush(void) {
       case 'l': fprintf(gOut, "{\"k\":\"l\",\"a\":%.3f,\"d\":%.3f}\n", r.a, r.b); break;
       case 'k': fprintf(gOut, "{\"k\":\"key\",\"made\":%.3f,\"seen\":%.3f}\n", r.a, r.b); break;
       case 'y': fprintf(gOut, "{\"k\":\"y\",\"ts\":%.3f,\"y\":%.2f}\n", r.a, r.b); break;
+      case 'i': fprintf(gOut, "{\"k\":\"i\",\"th\":\"%c\",\"a\":%.3f,\"d\":%.3f}\n", r.th, r.a, r.b); break;
     }
   }
   atomic_store(&gTail, t);
@@ -133,17 +134,19 @@ static double ThreadCpuMs(mach_port_t t) {
 typedef struct {
   char th;
   double start;
+  double wholeStart;
 } LoopState;
-static LoopState gMainLoop = {'m', 0}, gJSLoop = {'j', 0};
+static LoopState gMainLoop = {'m', 0, 0}, gJSLoop = {'j', 0, 0};
 
 static void LoopActivity(CFRunLoopObserverRef observer, CFRunLoopActivity activity, void *info) {
   LoopState *st = info;
   if (activity == kCFRunLoopAfterWaiting) {
-    st->start = EpochMs();
+    st->start = st->wholeStart = EpochMs();
   } else if (st->start > 0) {
     double end = EpochMs();
     if (end - st->start >= 0.05) Push('r', st->th, st->start, end - st->start, 0, 0, 0);
-    st->start = 0;
+    if (end - st->wholeStart >= 1) Push('i', st->th, st->wholeStart, end - st->wholeStart, 0, 0, 0);
+    st->start = st->wholeStart = 0;
   }
 }
 

@@ -191,8 +191,11 @@ enum ServerWindowDrag {
       guard let window = event.window else { return event }
       if event.type != .leftMouseDown {
         scheduleRefresh(window)
-      } else if stale[ObjectIdentifier(window)] != nil, event.locationInWindow.y >= window.frame.height - band(window) {
-        counts.stalePresses += 1
+      } else if event.locationInWindow.y >= window.frame.height - band(window) {
+        let key = ObjectIdentifier(window)
+        let isStale = stale[key] != nil
+        guard isStale || pending[key] != nil else { return event }
+        if isStale { counts.stalePresses += 1 }
         refresh(window)
       }
       return event
