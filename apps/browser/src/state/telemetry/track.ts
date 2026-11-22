@@ -35,8 +35,8 @@ export function commandBarPlacementLabel(panel: Pick<PanelState, "newTab" | "pla
   return "field";
 }
 
-export const trackSuggestionChosen = (s: SuggestionLike, via?: SuggestionVia) =>
-  capture("suggestion_chosen", { type: suggestionType(s), ...(s?.kind === "action" && s.id ? { command: s.id.split(":")[0] } : {}), ...(via ? { via } : {}) }, consentNow());
+export const trackSuggestionChosen = (s: SuggestionLike, via?: SuggestionVia, keyboard?: boolean) =>
+  capture("suggestion_chosen", { type: suggestionType(s), ...(s?.kind === "action" && s.id ? { command: s.id.split(":")[0] } : {}), ...(via ? { via } : {}), ...(keyboard === undefined ? {} : { keyboard }) }, consentNow());
 
 export type CalendarConnectReport = { before: string; after: string; responsible: string; errored: boolean; settingsOpened: boolean; ms: number };
 

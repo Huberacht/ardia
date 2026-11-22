@@ -1,6 +1,6 @@
 import { curve, duration } from "../ui/motion";
 import { PANEL_FIELD_LIFT } from "../../lib/platformChrome";
-import { capsule, concentric, font, perLook, radius, space } from "../ui/tokens";
+import { concentric, font, perLook, radius, space } from "../ui/tokens";
 
 export const PANEL_TEXT_LEFT = 48;
 const PANEL_ICON_LEFT = 21;
@@ -13,7 +13,6 @@ export const BAR_TYPE = {
   get heroField() { return font.large; },
   get floatingField() { return font.title; },
   get panelField() { return font.body; },
-  get goLabel() { return font.title; },
   get scope() { return font.title; },
   get heroScope() { return font.title; },
 } as const;
@@ -30,36 +29,12 @@ export const BAR = {
     right: 18,
     heroGap: space.m,
     gap: PANEL_TEXT_LEFT - FIELD_TEXT_INSET - PANEL_ICON_LEFT - ICON_SLOT,
+    belowList: space.s,
+    heroBelowList: space.m,
   },
   dropdown: { height: 44, left: 13, right: 9, gap: 9 },
   siteControls: { glyph: 15 },
-  bottom: { left: 14, heroLeft: 13, right: 13, heroRight: 15, height: 52, heroHeight: 43, heroBelow: space.m, mic: 14 },
-} as const;
-
-export const ADD_CHIP = {
-  height: 32,
-  radius: capsule(32),
-  border: 1,
-  left: 9,
-  right: 12,
-  gap: 5,
-  glyph: 10,
-  glyphBox: 14,
-  otherTabs: 12,
-} as const;
-
-export const GO_BUTTON = {
-  before: space.m,
-  minWidth: 99,
-  height: 32,
-  padX: space.xl,
-  radius: capsule(32),
-  hoverOpacity: 0.9,
-  pressedOpacity: 0.78,
-  gap: space.s,
-  glyph: 11,
-  glyphBox: 14,
-  glyphAlpha: "99",
+  bottom: { heroLeft: 13, heroRight: 15, heroHeight: 43 },
 } as const;
 
 export const SCOPE_CHIP = {
@@ -88,7 +63,7 @@ export const SUGGESTION = {
   iconBox: 16,
 } as const;
 
-export const SELECTED_SUGGESTION_ALPHA = { dark: 0.56, light: 0.3 } as const;
+export const SELECTED_SUGGESTION_ALPHA = { dark: 0.16, light: 0.12 } as const;
 
 export const SCOPE_PULSE = {
   fill: { dark: 0.28, light: 0.2 },

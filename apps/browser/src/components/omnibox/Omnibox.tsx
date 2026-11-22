@@ -1,8 +1,6 @@
-import { displayUrl, asksForBackspace, keywordBySpace, resolveInput, searchUrl, scopedSearchUrl, suggestionKey, type Suggestion } from "@ardia/core";
+import { asksForBackspace, keywordBySpace, resolveInput, searchUrl, scopedSearchUrl, suggestionKey, type Suggestion } from "@ardia/core";
 import { Symbol, useTheme } from "../ui";
-import { copyText, pickFiles } from "../../state/app/system";
-import { chooseFromMenu } from "../../state/app/menuChoice";
-import { dictationAvailable, startDictation } from "../../state/omnibox/textInput";
+import { copyText } from "../../state/app/system";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { findNodeHandle, type TextInput, type View } from "react-native";
 import { journeyBarCommitted, journeyBarFocused, journeyKeystroke, journeyNavigate, journeySuggestions } from "../../state/telemetry/journeys";
@@ -16,7 +14,7 @@ import { createBangSubmitter, mayBeBang } from "../../state/omnibox/bangs";
 import { traceOmnibox, useOmniboxDriver } from "./devDriver";
 import { claimFocusTag, commandBarFocus, heroBarFocus } from "../../state/focus/focusClaims";
 import { registerHeroBar, saveNtpQuery, type BarDismissal, type BarSnapshot } from "../../state/omnibox/barState";
-import { barSplitsFrom, openFromBar, otherOpenTabs, switchFromBar, type Disposition } from "../../state/omnibox/openFromBar";
+import { barSplitsFrom, openFromBar, switchFromBar, type Disposition } from "../../state/omnibox/openFromBar";
 import { openFromNewTabBar } from "../../state/omnibox/newTabBar";
 import { isBookmarklet, runBookmarklet } from "../../state/bookmarks/bookmarklets";
 import type { NewTabTarget } from "../../state/browser/types";
@@ -24,14 +22,12 @@ import { showFieldMenu } from "../../state/omnibox/paste";
 import { SuggestionIcon, SuggestionList, isRemovable, type RowActions } from "./SuggestionRow";
 import { keywordScope } from "../../state/omnibox/scopes";
 import { setPopover } from "../../state/tabs/pageState";
-import { AddChip } from "./AddChip";
 import { INCOGNITO_ICON } from "../ntp/IncognitoHeading";
 import { BarField } from "./BarField";
-import { destinationLabel } from "./GoButton";
-import { BottomRow, DropdownFrame, PanelFrame } from "./OmniboxFrame";
+import { DropdownFrame, PanelFrame } from "./OmniboxFrame";
 import { ScopePulse } from "./ScopePulse";
 import { barKeyDown, barKeyDownEvents, type BarKeyEvent } from "./omniboxKeys";
-import { ADD_CHIP, BAR } from "./tokens";
+import { BAR } from "./tokens";
 import { useBarItems } from "./useBarItems";
 import { useHeldSelection, useProviderEnter } from "./heldSelection";
 import { useBarText } from "./useBarText";
@@ -155,7 +151,7 @@ export function Omnibox({
 
   const choose = (s: Suggestion | undefined, disposition: Disposition = "current", byEnter = false) => {
     bangEnter.cancel();
-    if (s || !scope) trackSuggestionChosen(s, s && via?.[suggestionKey(s)]);
+    if (s || !scope) trackSuggestionChosen(s, s && via?.[suggestionKey(s)], byEnter);
     const typedSearch = !s || (byEnter && selectedIndex === 0 && s.kind === "search" && !s.bang && !s.suggested);
     if (!scope && typedSearch) {
       const text = edited ? value : initialText || value;
@@ -317,13 +313,6 @@ export function Omnibox({
   const latest = useRef({ choose, profileId, go, current, onCancel, tabId, windowId, releaseRows });
   latest.current = { choose, profileId, go, current, onCancel, tabId, windowId, releaseRows };
   const [barActions] = useState(() => ({
-    go: (url: string) => latest.current.go(url),
-    openTabOrFile: () => void openTabOrFile(latest.current.windowId, latest.current.tabId, (url) => latest.current.go(url)),
-    choose: () => latest.current.choose(latest.current.current, "current", true),
-    dictate: () => {
-      focusField();
-      startDictation();
-    },
     siteControls: () => {
       latest.current.onCancel?.();
       setPopover(latest.current.tabId, "siteControls");
@@ -363,35 +352,11 @@ export function Omnibox({
       leadingIcon={leadingIcon}
       scope={scope}
       field={field}
-      list={listAway ? null : suggestionList}
+      list={listAway || !items.length ? null : suggestionList}
       rowsHover={rowsHover}
       pulse={pulse}
       hero={hero}
       rowHeight={fieldRowHeight}
-      bottom={
-        <BottomRow
-          hero={hero}
-          addChip={<AddChip onPress={barActions.openTabOrFile} />}
-          onDictate={dictationAvailable() ? barActions.dictate : undefined}
-          label={destinationLabel(current)}
-          enabled={!hero || !!typed.trim() || previewing}
-          onGo={barActions.choose}
-        />
-      }
     />
   );
-}
-
-async function openTabOrFile(windowId: string, tabId: string, onGo: (url: string) => void) {
-  const others = otherOpenTabs(windowId, ADD_CHIP.otherTabs);
-  const choice = await chooseFromMenu<{ tab: string }, "files">([
-    ...others.map((t) => ({ value: { tab: t.id }, title: t.title || displayUrl(t.url) })),
-    ...(others.length ? [{ separator: true as const }] : []),
-    { id: "files", title: "Open File…", symbol: "doc" },
-  ]);
-  if (choice && typeof choice === "object") switchFromBar(choice.tab, "", tabId, "current");
-  if (choice === "files") {
-    const [file] = await pickFiles();
-    if (file) onGo(file);
-  }
 }

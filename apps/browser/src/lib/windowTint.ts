@@ -7,12 +7,13 @@ export type BackdropTint = {
 };
 
 const LIGHTNESS = 0.25;
+const TINT_ALPHA = { neutral: 0.08, preset: 0.14, custom: 0.36 } as const;
 
-export function backdropTint(color: string, neutral: boolean): BackdropTint {
-  return { tintColor: color, tintAlpha: neutral ? 0.12 : 0.36, tintLightness: LIGHTNESS };
+export function backdropTint(color: string, neutral: boolean, ownLook = false): BackdropTint {
+  return { tintColor: color, tintAlpha: neutral ? TINT_ALPHA.neutral : ownLook ? TINT_ALPHA.custom : TINT_ALPHA.preset, tintLightness: LIGHTNESS };
 }
 
-const INACTIVE_FILL = { dark: [40.7, 33.1, 31.8], light: [235, 231, 230] };
+const INACTIVE_FILL = { dark: [36, 36, 37], light: [238, 238, 236] };
 
 export function opaqueTint(tint: BackdropTint, dark: boolean): [string, string] {
   const a = tint.tintAlpha * (dark ? 0.5 : 0.75);

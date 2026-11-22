@@ -149,9 +149,9 @@ export const Toolbar = memo(function Toolbar({
             tooltip={withShortcut(tabsShown ? "Hide Tabs" : "Show Tabs", hints.toggleSidebar)}
           />
         )}
-        <HistoryButton place={at.back} tabId={tab.id} windowId={tab.windowId} direction={-1} disabled={!history.back} palette={palette} onFocus={focus} closesTab={history.backCloses} historyHint={hints.back} />
-        <HistoryButton place={at.forward} tabId={tab.id} windowId={tab.windowId} direction={1} disabled={!history.forward} palette={palette} onFocus={focus} historyHint={hints.forward} />
-        <ReloadButton place={at.reload} tab={tab} loading={isLoading} palette={palette} onFocus={focus} reloadHint={hints.reload} />
+        {!!(tab.url || history.back || history.forward) && <HistoryButton place={at.back} tabId={tab.id} windowId={tab.windowId} direction={-1} disabled={!history.back} palette={palette} onFocus={focus} closesTab={history.backCloses} historyHint={hints.back} />}
+        {!!(tab.url || history.back || history.forward) && <HistoryButton place={at.forward} tabId={tab.id} windowId={tab.windowId} direction={1} disabled={!history.forward} palette={palette} onFocus={focus} historyHint={hints.forward} />}
+        {tab.url ? <ReloadButton place={at.reload} tab={tab} loading={isLoading} palette={palette} onFocus={focus} reloadHint={hints.reload} /> : null}
         <ToolbarExtensions tabId={tab.id} windowId={windowId} palette={palette} top={row.center - row.extensionButton / 2} right={extensionsRight} />
         {pluginToolbar ? <PluginToolbarItems windowId={windowId} palette={palette} top={row.center - row.extensionButton / 2} right={extensionsRight + extensionsWidth} onWidth={setPluginsWidth} /> : null}
         <View nativeID={PAGE_IDENTITY_TAG} collapsable={false} pointerEvents="box-none" style={StyleSheet.absoluteFill}>

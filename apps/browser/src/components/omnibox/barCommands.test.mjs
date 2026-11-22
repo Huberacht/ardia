@@ -151,15 +151,19 @@ test("picking a command bar action counts which command it ran, never its profil
   trackSuggestionChosen({ kind: "search" });
   trackSuggestionChosen({ kind: "page", url: "https://excalidraw.com/#json=a,b" }, "literal");
   trackSuggestionChosen({ kind: "page", url: "https://linear.app/b", tabId: "t7" }, "renamed_tab");
+  trackSuggestionChosen({ kind: "search" }, undefined, true);
+  trackSuggestionChosen({ kind: "search" }, undefined, false);
   await client.saveQueueNow();
   const events = JSON.parse(stub.docs.get("telemetry-queue.json")).events.filter((x) => x.event === "suggestion_chosen");
-  const sent = events.map((x) => [x.properties.type, x.properties.command, x.properties.via]);
+  const sent = events.map((x) => [x.properties.type, x.properties.command, x.properties.via, x.properties.keyboard]);
   assert.deepEqual(sent, [
-    ["action", "viewSource", undefined],
-    ["action", "switchProfile", undefined],
-    ["search", undefined, undefined],
-    ["url", undefined, "literal"],
-    ["tab", undefined, "renamed_tab"],
+    ["action", "viewSource", undefined, undefined],
+    ["action", "switchProfile", undefined, undefined],
+    ["search", undefined, undefined, undefined],
+    ["url", undefined, "literal", undefined],
+    ["tab", undefined, "renamed_tab", undefined],
+    ["search", undefined, undefined, true],
+    ["search", undefined, undefined, false],
   ]);
   assert.ok(!JSON.stringify(events).includes("excalidraw") && !JSON.stringify(events).includes("linear.app"), "no address is sent");
 });

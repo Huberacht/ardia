@@ -81,7 +81,7 @@ export function ProfileIndicator({ room, profileShown = true }: { room: number; 
               }}
             >
               {showName ? (
-                <Text numberOfLines={1} ellipsizeMode="tail" weight="semibold" style={{ flexShrink: 1, color }}>
+                <Text numberOfLines={1} ellipsizeMode="tail" weight="semibold" style={{ flexShrink: 1, color, opacity: incognito || hovered || pressed ? 1 : 0 }}>
                   {title}
                 </Text>
               ) : textWidth ? (
