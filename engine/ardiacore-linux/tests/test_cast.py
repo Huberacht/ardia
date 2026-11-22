@@ -77,10 +77,10 @@ class CastTests(unittest.TestCase):
         build = (LINUX / 'BUILD.gn').read_text()
         for name in ('ac_linux_cast.cc', 'ac_linux_cast_core.h', '//ardia/core/ac_test_media_route_provider.cc', '//components/media_router/browser'):
             self.assertIn(f'"{name}"', build)
-        apply = (ROOT / 'apply.sh').read_text()
+        copies = (ROOT / 'copies.tsv').read_text().splitlines()
         for name in ('ac_test_media_route_provider.h', 'ac_test_media_route_provider.cc'):
-            self.assertIn(f'copy_file "$here/../ardiacore/src/ardia/core/{name}" "$src/ardia/core/{name}"', apply)
-            self.assertIn(f'ardia/core/{name}', apply.split('--paths)')[1].split(';;')[0])
+            self.assertIn(f'engine/ardiacore/src/ardia/core/{name}\tardia/core/{name}', copies)
+        self.assertIn('--paths) printf', (ROOT / 'apply.sh').read_text())
         provider = (REPO / 'engine/ardiacore/src/ardia/core/ac_test_media_route_provider.cc').read_text()
         self.assertIn('TestFlag("mediaRouteProvider")', provider)
         switches = (SOURCE / 'ardia/core/ac_launch_switches_linux.cc').read_text()
