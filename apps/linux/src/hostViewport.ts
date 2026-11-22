@@ -16,6 +16,11 @@ const boxOf = (element: Element): Bounds => {
   return { x, y, width, height };
 };
 
+const borderWidth = (value: string | undefined) => {
+  const px = Number.parseFloat(value ?? "");
+  return Number.isFinite(px) && px > 0 ? px : 0;
+};
+
 function clipBoxOf(element: Element, raw: Bounds): Bounds {
   let left = raw.x;
   let top = raw.y;
@@ -28,12 +33,12 @@ function clipBoxOf(element: Element, raw: Bounds): Bounds {
     if (!clipsX && !clipsY) continue;
     const outer = parent.getBoundingClientRect();
     if (clipsX) {
-      left = Math.max(left, outer.left);
-      right = Math.min(right, outer.right);
+      left = Math.max(left, outer.left + borderWidth(style.borderLeftWidth));
+      right = Math.min(right, outer.right - borderWidth(style.borderRightWidth));
     }
     if (clipsY) {
-      top = Math.max(top, outer.top);
-      bottom = Math.min(bottom, outer.bottom);
+      top = Math.max(top, outer.top + borderWidth(style.borderTopWidth));
+      bottom = Math.min(bottom, outer.bottom - borderWidth(style.borderBottomWidth));
     }
   }
   return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };

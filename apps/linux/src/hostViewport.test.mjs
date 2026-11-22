@@ -340,6 +340,13 @@ test("a page protruding below an overflow-hidden card reports the clipped pane r
     assert.deepEqual(updates.at(-1), { rect: { x: 240, y: 48, width: 752, height: 644 }, visible: true });
     assert.equal("contentRect" in updates.at(-1), false);
     stop();
+    const borderedWrap = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(100, 50, 400, 300) };
+    const borderedChild = { isConnected: true, parentElement: borderedWrap, getBoundingClientRect: () => box(100, 50, 400, 320) };
+    globalThis.getComputedStyle = (node) =>
+      node === borderedWrap
+        ? { overflowX: "hidden", overflowY: "hidden", borderLeftWidth: "2px", borderTopWidth: "3px", borderRightWidth: "2px", borderBottomWidth: "4px" }
+        : { overflowX: "visible", overflowY: "visible" };
+    assert.deepEqual(clippedRectOf(borderedChild), { x: 102, y: 53, width: 396, height: 293 });
     const panelUpdates = [];
     pageBox = box(600, 48, 360, 644);
     const panelWrap = { isConnected: true, parentElement: null, getBoundingClientRect: () => box(900, 48, 60, 644) };
