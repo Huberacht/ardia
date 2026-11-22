@@ -126,7 +126,13 @@ test("every Checks job runs when its filter matches, when the filter can't tell 
       /\n    if: \$\{\{ !cancelled\(\) && \(needs\.changes\.result != 'success' \|\| needs\.changes\.outputs\.(code|browser|repo) == 'true'\) \}\}\n/,
       `${name} runs when the changes job failed or timed out`,
     );
+    assert.match(
+      job,
+      /\n    concurrency:\n      group: checks-(code|browser-\$\{\{ matrix\.shard \}\}|repo)-\$\{\{ github\.ref \}\}\n      cancel-in-progress: true\n/,
+      `${name} cancels only superseded runs of the same job on main`,
+    );
   }
+  assert.match(text, /\nconcurrency:\n  group: checks-\$\{\{ github\.event_name == 'pull_request' && github\.ref \|\| github\.run_id \}\}\n  cancel-in-progress: true\n/);
   assert.match(text, /- id: filter\n        if: github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.changed_files < 3000\n        continue-on-error: true\n/);
 });
 

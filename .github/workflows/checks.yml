@@ -36,7 +36,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: checks-${{ github.ref }}
+  group: checks-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -140,6 +140,9 @@ jobs:
     name: typecheck, tests and Mac bundle
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    concurrency:
+      group: checks-code-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -183,6 +186,9 @@ jobs:
     name: browser tests, share ${{ matrix.shard }} of 3
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.browser == 'true') }}
+    concurrency:
+      group: checks-browser-${{ matrix.shard }}-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -226,6 +232,9 @@ jobs:
     name: repository, vouch and stale tests
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.repo == 'true') }}
+    concurrency:
+      group: checks-repo-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
