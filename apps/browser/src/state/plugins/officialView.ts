@@ -1,4 +1,4 @@
-import { bytesProgress, formatTimeLeft } from "../../lib/transferText";
+import { bytesProgress, formatBytes, formatTimeLeft } from "../../lib/transferText";
 import type { InstallResult } from "./installWaiters";
 import type { OfficialPlugin } from "./official";
 import type { OfficialFetch, ProgramsState } from "./store";
@@ -34,7 +34,8 @@ export function downloadStatus(fetch: OfficialFetch | undefined, now = Date.now(
   const progress = `Downloading… ${bytesProgress(received, fetch.total)}`;
   const elapsedMs = now - fetch.startedAt;
   const gained = received - Math.min(fetch.startedFrom, received);
-  if (fetch.total <= 0 || received >= fetch.total || elapsedMs < TIME_LEFT_AFTER_MS || gained <= 0) return progress;
+  const looksDone = formatBytes(received) === formatBytes(fetch.total);
+  if (fetch.total <= 0 || looksDone || elapsedMs < TIME_LEFT_AFTER_MS || gained <= 0) return progress;
   const bytesPerSecond = gained / (elapsedMs / 1000);
   return `${progress} — ${formatTimeLeft((fetch.total - received) / bytesPerSecond)}`;
 }

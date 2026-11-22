@@ -86,6 +86,7 @@ test("a download in progress reads like the Downloads list: bytes so far, then t
   assert.equal(downloadStatus(fetching(12_000_000, 29_000_000, 1000), 7000), "Downloading… 12 MB of 29 MB — 9 sec left");
   assert.equal(downloadStatus(fetching(1_000_000, 290_000_000), 1000), "Downloading… 1.0 MB of 290 MB — 5 min left");
   assert.equal(downloadStatus(fetching(29_000_000, 29_000_000), 6000), "Downloading… 29 MB of 29 MB");
+  assert.equal(downloadStatus(fetching(28_700_000, 29_050_000), 6000), "Downloading… 29 MB of 29 MB", "no time left once the sizes read the same");
   assert.equal(downloadStatus(fetching(31_000_000, 29_000_000), 6000), "Downloading… 29 MB of 29 MB");
   assert.equal(downloadStatus(fetching(12_000_000, 0), 6000), "Downloading… 12 MB");
   assert.equal(downloadStatus(fetching(20_000_000, 29_000_000, 0, 14_000_000), 6000), "Downloading… 20 MB of 29 MB — 9 sec left", "speed counts only what arrived since this attempt began");
