@@ -33,4 +33,14 @@ final class WindowDragTakeoverTests: XCTestCase {
     XCTAssertTrue(WindowDragTakeover.belongs(eventAt: 100, pressedAt: 100))
     XCTAssertTrue(WindowDragTakeover.belongs(eventAt: 100.4, pressedAt: 100))
   }
+
+  func testATakeoverAfterAPartialNativeMoveStaysAnchoredToThePressTimeOrigin() {
+    let pressOrigin = CGPoint(x: 100, y: 100), press = CGPoint(x: 150, y: 120)
+    let movedByMacOS = CGPoint(x: 130, y: 100), pointer = CGPoint(x: 190, y: 120)
+    XCTAssertEqual(WindowDragTakeover.anchoredOrigin(origin: pressOrigin, press: press, pointer: pointer), CGPoint(x: 140, y: 100))
+    XCTAssertNotEqual(
+      WindowDragTakeover.anchoredOrigin(origin: movedByMacOS, press: press, pointer: pointer),
+      WindowDragTakeover.anchoredOrigin(origin: pressOrigin, press: press, pointer: pointer),
+      "anchoring on the origin macOS left behind would jump the window by its partial move")
+  }
 }

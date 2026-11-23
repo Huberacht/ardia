@@ -30,7 +30,7 @@ test("a completion is bound to its own press: a newer press, dispatched or still
   assert.match(asking, /case \.native:\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragNative"\]\)\)/);
   assert.match(
     asking,
-    /DispatchQueue\.main\.async \{\s*guard let window,\s*WindowDragTakeover\.outcome\(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: queuedPressAt\(\), held: true\) == \.takeOver\s*else \{ return \}\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragTakeover"\]\)\)\s*_ = follow\(window, from: event, stamp: stamp\)/,
+    /DispatchQueue\.main\.async \{\s*guard let window,\s*WindowDragTakeover\.outcome\(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: queuedPressAt\(\), held: true\) == \.takeOver\s*else \{ return \}/,
   );
   assert.match(move, /NSApp\.nextEvent\(matching: \.leftMouseDown, until: \.distantPast, inMode: \.eventTracking, dequeue: false\)\?\.timestamp/);
   assert.ok(!/lastHardwareDown|secondsSinceLastEventType/.test(move), "no wall-clock guess at which press is current");
@@ -41,6 +41,22 @@ test("a completion is bound to its own press: a newer press, dispatched or still
 test("Ardia's loop consumes only events of its own press: an older event ends it, as a new press does", () => {
   const follow = move.slice(move.indexOf("static func follow"), move.indexOf("private static let gestureEvents"));
   assert.match(follow, /if !WindowDragTakeover\.belongs\(eventAt: next\.timestamp, pressedAt: event\.timestamp\) \|\| next\.type != \.leftMouseDragged \|\| next\.windowNumber != window\.windowNumber \{\s*NSApp\.postEvent\(next, atStart: true\)\s*return true\s*\}/);
+});
+
+test("a takeover anchors on the window's origin from the press, taken before macOS is asked to drag", () => {
+  const asking = move.slice(move.indexOf("static func asksWindowServer"), move.indexOf("static func follow"));
+  const origin = asking.indexOf("let pressOrigin = window.frame.origin");
+  assert.ok(origin > 0 && origin < asking.indexOf("dragWithCompletion(window, dragWithCompletionSelector, event)"), "the origin is read before the native drag can move the window");
+  assert.match(asking, /follow\(window, from: event, stamp: stamp, anchoredAt: pressOrigin\)/);
+  const follow = move.slice(move.indexOf("static func follow"), move.indexOf("private static let gestureEvents"));
+  assert.match(follow, /let origin = anchoredAt \?\? window\.frame\.origin/);
+  assert.match(move, /WindowDragTakeover\.anchoredOrigin\(origin: origin, press: start, pointer: pointer\)/);
+});
+
+test("a takeover is counted only once Ardia's loop has admitted the window", () => {
+  const asking = move.slice(move.indexOf("static func asksWindowServer"), move.indexOf("static func follow"));
+  assert.match(asking, /if follow\(window, from: event, stamp: stamp, anchoredAt: pressOrigin\) \{\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragTakeover"\]\)\)\s*\}/);
+  assert.ok(asking.indexOf('"windowDragTakeover"') > asking.indexOf("if follow("), "nothing counts a takeover before follow says yes");
 });
 
 test("a press the window server owns in the title bar announces nothing, so a click there keeps Little Ardia's landing fit", () => {

@@ -163,6 +163,7 @@ enum WindowMove {
     askingWindowServer = true
     defer { askingWindowServer = false }
     let pressedAt = event.timestamp
+    let pressOrigin = window.frame.origin
     dragWithCompletion(window, dragWithCompletionSelector, event) { [weak window] _ in
       let outcome = WindowDragTakeover.outcome(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: nil, held: NSEvent.pressedMouseButtons & 1 != 0)
       #if DEBUG
@@ -179,15 +180,16 @@ enum WindowMove {
           guard let window,
                 WindowDragTakeover.outcome(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: queuedPressAt(), held: true) == .takeOver
           else { return }
-          ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
-          _ = follow(window, from: event, stamp: stamp)
+          if follow(window, from: event, stamp: stamp, anchoredAt: pressOrigin) {
+            ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
+          }
         }
       }
     }
     return true
   }
 
-  static func follow(_ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin()) -> Bool {
+  static func follow(_ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin(), anchoredAt: NSPoint? = nil) -> Bool {
     guard !following, event.type == .leftMouseDown, event.clickCount < 2,
           window.isMovable, !window.styleMask.contains(.fullScreen), window.isVisible
     else { return false }
@@ -202,7 +204,7 @@ enum WindowMove {
       placements.object(forKey: window)?.drainsUntil = CACurrentMediaTime() + echoDrain
     }
     let start = screenPoint(event)
-    let origin = window.frame.origin
+    let origin = anchoredAt ?? window.frame.origin
     var wasActive = NSApp.isActive
     var announced = false
     let pacer = WindowMovePacer(window: window) { pointer in
@@ -256,7 +258,7 @@ enum WindowMove {
   }
 
   private static func place(_ window: NSWindow, _ origin: NSPoint, _ start: NSPoint, _ pointer: NSPoint) -> NSPoint {
-    var target = NSRect(origin: NSPoint(x: origin.x + pointer.x - start.x, y: origin.y + pointer.y - start.y), size: window.frame.size)
+    var target = NSRect(origin: WindowDragTakeover.anchoredOrigin(origin: origin, press: start, pointer: pointer), size: window.frame.size)
     guard holdsPlacement else {
       guard let screen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? window.screen else { return NSPoint(x: target.minX.rounded(), y: target.minY.rounded()) }
       let constrained = window.constrainFrameRect(target, to: screen)
