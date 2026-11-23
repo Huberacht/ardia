@@ -43,3 +43,24 @@ test("a flush stays in its own window", async () => {
   assert.equal(foldsFilling("w2"), true);
   other();
 });
+
+test("R5-S6: a flush keeps going while rounds make progress, and says so when one makes none", async () => {
+  const chain = [];
+  const link = (n) => {
+    const stop = fillingFold("w3", () => {
+      chain.push(n);
+      stop();
+      if (n < 12) link(n + 1);
+    });
+  };
+  link(1);
+  let done = flushFolds("w3");
+  await drain();
+  assert.equal(await done, true);
+  assert.equal(chain.length, 12, "deeper than any fixed cap of rounds");
+  const stuck = fillingFold("w4", () => {});
+  done = flushFolds("w4");
+  await drain();
+  assert.equal(await done, false, "a round that settles nothing reports the flush incomplete");
+  stuck();
+});

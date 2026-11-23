@@ -1,4 +1,3 @@
-const MAX_ROUNDS = 8;
 const filling = new Map<string, Set<() => void>>();
 
 export function fillingFold(windowId: string, flush: () => void): () => void {
@@ -15,9 +14,13 @@ export const foldsFilling = (windowId: string | null) => windowId !== null && (f
 
 const twoFrames = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
 
-export async function flushFolds(windowId: string): Promise<void> {
-  for (let round = 0; round < MAX_ROUNDS && foldsFilling(windowId); round++) {
-    for (const flush of [...filling.get(windowId)!]) flush();
+export async function flushFolds(windowId: string): Promise<boolean> {
+  while (foldsFilling(windowId)) {
+    const round = [...filling.get(windowId)!];
+    for (const flush of round) flush();
     await twoFrames();
+    const left = filling.get(windowId);
+    if (left && round.every((flush) => left.has(flush))) return false;
   }
+  return true;
 }
