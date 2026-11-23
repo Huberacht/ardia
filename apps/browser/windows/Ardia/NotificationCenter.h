@@ -170,7 +170,7 @@ inline std::optional<std::wstring> FileUrlOf(std::wstring const &path) noexcept 
   return std::wstring(url);
 }
 
-inline constexpr size_t kMaxIconDataUriBytes = 1048576;
+inline constexpr size_t kMaxIconDataUriBytes = 1049600;
 inline constexpr DWORD kMaxIconBytes = 786432;
 
 inline std::optional<std::wstring> DataUriIcon(std::string const &icon, std::string const &id) noexcept {

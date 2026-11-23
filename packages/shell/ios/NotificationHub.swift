@@ -138,7 +138,7 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
     center.removePendingNotificationRequests(withIdentifiers: ids)
   }
 
-  static let maxIconDataUriBytes = 1_048_576
+  static let maxIconDataUriBytes = 1_049_600
   static let maxIconBytes = 786_432
 
   private func attachment(from url: URL, id: String, completion: @escaping (UNNotificationAttachment?, NotificationIcon) -> Void) {
@@ -158,9 +158,9 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
       return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil))
     }
     let raw = url.absoluteString
-    let comma = raw.firstIndex(of: ",") ?? raw.endIndex
-    let payloadBytes = raw.utf8.count - raw[..<comma].utf8.count
-    let decodedBound = raw[..<comma].lowercased().hasSuffix(";base64") ? payloadBytes / 4 * 3 : payloadBytes
+    let header = raw.firstIndex(of: ",").map { raw[..<$0] } ?? raw[...]
+    let payloadBytes = max(0, raw.utf8.count - header.utf8.count - 1)
+    let decodedBound = header.lowercased().hasSuffix(";base64") ? payloadBytes / 4 * 3 : payloadBytes
     guard raw.utf8.count <= Self.maxIconDataUriBytes, decodedBound <= Self.maxIconBytes else {
       return completion(nil, NotificationIcon(status: "too_large", errorCode: nil))
     }
