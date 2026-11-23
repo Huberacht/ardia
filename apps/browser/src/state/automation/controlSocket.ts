@@ -45,6 +45,7 @@ import { backgroundInstance } from "../app/appSettings";
 import { programControlOn } from "../app/programControlSetting";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { startPeerDoorbell } from "./peerDoorbell";
+import { CONTROL_OFF, DEVTOOLS_ENDPOINT, devtoolsEndpointLine, devtoolsEndpointMethod, isDevtoolsEndpoint, refuseDevtoolsEndpoint } from "./socketDevtools";
 
 export const useControlSocket = create<{ status: ControlSocketStatus | null }>()(() => ({ status: null }));
 
@@ -136,7 +137,7 @@ export function handleControlRequest({ connection, generation: tagged, line }: C
   const request = parseRequest(line);
   if ("error" in request) return send(connection, request.id, { error: request.error });
   const { id, method, params } = request;
-  if (tagged !== generation || !controlOn()) return send(connection, id, failure("failed", "Control is off."));
+  if (tagged !== generation || !controlOn()) return send(connection, id, method === DEVTOOLS_ENDPOINT ? refuseDevtoolsEndpoint("control_off", consentToken()) : failure("failed", CONTROL_OFF));
   openConnections.add(connection);
   const ticket = method === "run" ? ++nextTicket : 0;
   const caller = callers.get(connection);
@@ -154,7 +155,7 @@ export function handleControlRequest({ connection, generation: tagged, line }: C
   const family = familyOf(method);
   const consent = consentToken();
   const reply = (settled: Body) => {
-    const line = replyLine(id, settled, method, consent);
+    const line = method === DEVTOOLS_ENDPOINT && "result" in settled && isDevtoolsEndpoint(settled.result) ? devtoolsEndpointLine(id, settled.result) : replyLine(id, settled, method, consent);
     const failedResult = "result" in settled && typeof settled.result === "object" && settled.result !== null && (settled.result as { ok?: unknown }).ok === false;
     noteSocketCall(family, "error" in settled || failedResult || line.startsWith(`{"id":${JSON.stringify(id)},"error":`), consent);
     const replay = takeIdleReplay(connection);
@@ -263,6 +264,8 @@ function answerAs(origin: Pick<SocketOrigin, "segment">, connection: number, met
     }
     case "run":
       return runMethod(params, backgroundInstance, stillOn);
+    case DEVTOOLS_ENDPOINT:
+      return devtoolsEndpointMethod(connection, stillOn, () => generation === serving && controlOn(), consentToken());
   }
   const area = runSpec(spec, params, servingWhile(stillOn, connection));
   if (area) return area;

@@ -2682,7 +2682,7 @@ __define("packages/core/src/secret.ts", function (exports, __require) {
   __export(exports, "onSecretEscape", () => onSecretEscape);
   __export(exports, "secretsDropped", () => secretsDropped);
   __export(exports, "withoutSecrets", () => withoutSecrets);
-const SECRET_KINDS = ["password", "oauthToken", "oauthClientSecret", "apiToken", "pluginSecret", "syncPhrase"]         ;
+const SECRET_KINDS = ["password", "oauthToken", "oauthClientSecret", "apiToken", "pluginSecret", "syncPhrase", "devtoolsToken"]         ;
 
                                                        
 

@@ -27,6 +27,10 @@ public class AutomationModule: Module {
       ControlSocket.shared.broadcast(connections, line)
     }
 
+    AsyncFunction("devtoolsEndpoint") { (connection: Int, promise: Promise) in
+      ControlSocket.shared.devtoolsEndpoint(connection) { promise.resolve($0) }
+    }
+
     AsyncFunction("answerPeer") { (ask: Int, outcome: String, promise: Promise) in
       ControlSocket.shared.answerPeer(ask, outcome) { promise.resolve($0) }
     }
