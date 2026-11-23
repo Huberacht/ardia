@@ -21,14 +21,21 @@ export function useTopStripLights(windowId: string, dock: Animated.Value, on: bo
 
 type SidebarLights = { width: number; moving: boolean; peeking: boolean; fullscreen: boolean; lights: readonly [number, number]; right: boolean; peekAt: { left: number; top: number } };
 
-export function useSidebarLights(windowId: string, dock: Animated.Value, slide: Animated.Value, o: SidebarLights, onSlide: (value: number) => void = () => {}) {
+export function useSidebarLights(
+  windowId: string,
+  dock: Animated.Value,
+  slide: Animated.Value,
+  o: SidebarLights,
+  onSlide: (value: number) => void = () => {},
+  liveWidth?: Animated.Value,
+) {
   const latestOnSlide = useRef(onSlide);
   latestOnSlide.current = onSlide;
   const values = useRef({ dock: 1, slide: 0 });
   const apply = useRef<() => void>(() => {});
   const sent = useRef<ReturnType<typeof slidingCenter> | undefined>(undefined);
   apply.current = () => {
-    const center = slidingCenter(o, values.current.dock, values.current.slide);
+    const center = slidingCenter(liveWidth ? { ...o, width: currentValue(liveWidth) } : o, values.current.dock, values.current.slide);
     const last = sent.current;
     if ((last && last.join(",") === center.join(",")) || stillOffWindow(last, center)) return;
     sent.current = center;
@@ -47,6 +54,11 @@ export function useSidebarLights(windowId: string, dock: Animated.Value, slide: 
       void setTrafficLightsCenter(windowId, null);
     };
   }, [windowId, dock]);
+  useEffect(() => {
+    if (!liveWidth) return;
+    const c = liveWidth.addListener(() => apply.current());
+    return () => liveWidth.removeListener(c);
+  }, [liveWidth]);
   useEffect(() => {
     if (!o.peeking) return;
     const b = slide.addListener(({ value }) => {
