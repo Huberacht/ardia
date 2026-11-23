@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { EventEmitter, once } from "node:events";
+import http from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
 import { after, before, describe, it } from "node:test";
-import { launchArdia, launchArguments, launchEnvironment } from "../lib/ardia.mjs";
+import { ArdiaApp, launchArdia, launchArguments, launchEnvironment } from "../lib/ardia.mjs";
 import { connectCdp } from "../lib/cdp.mjs";
 import { withSignal } from "../lib/util.mjs";
 import { startMockCdp } from "./mock-cdp.mjs";
@@ -247,5 +249,44 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
     await assert.rejects(withSignal(controller.signal, () => launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 30000, connectImpl: hanging })), /check stopped/);
     assert.equal(seenSignal.aborted, true);
     assert.ok(Date.now() - started < 5000);
+  });
+
+  it("closes a session that arrives after the check was cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("check stopped");
+    let session = null;
+    const racing = async (url, options) => {
+      session = await connectCdp(url, { timeout: options.timeout });
+      controller.abort(reason);
+      return session;
+    };
+    await assert.rejects(withSignal(controller.signal, () => launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 30000, connectImpl: racing })), /check stopped/);
+    for (let waited = 0; !session.closed && waited < 2000; waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(session.closed, true);
+  });
+});
+
+describe("shell probes against stalled renderers", () => {
+  it("stop probing once the polling deadline passes", async () => {
+    const sockets = new Set();
+    const server = http.createServer((request, response) => {
+      const port = server.address().port;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify([1, 2, 3, 4].map((n) => ({ id: `shell-${n}`, type: "page", url: "chrome://ardia/index.html", webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/shell-${n}` }))));
+    });
+    server.on("upgrade", (request, socket) => { sockets.add(socket); socket.on("error", () => {}); });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "stalled" });
+    app.port = server.address().port;
+    try {
+      const started = Date.now();
+      await assert.rejects(app.mainShell({ timeout: 300 }), /Timed out after 300 ms waiting for a browser shell renderer/);
+      assert.ok(Date.now() - started < 1500, `took ${Date.now() - started} ms`);
+    } finally {
+      for (const socket of sockets) socket.destroy();
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(() => resolve()));
+    }
   });
 });
