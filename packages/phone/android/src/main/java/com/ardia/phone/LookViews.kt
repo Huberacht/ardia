@@ -1489,33 +1489,6 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         stripStats = StripStats(strips.size, strips.values.sumOf { it.bytes })
     }
 
-    private val cadence = StripCadence(FrostRefresh.PAGE_STRIP_HZ)
-    private var contentChanged = false
-    private var heldBack = false
-    private var refreshPosted = false
-    private val stripRefresh = Runnable {
-        refreshPosted = false
-        refreshStrips()
-    }
-
-    private fun postStripRefresh() {
-        if (refreshPosted || !isAttachedToWindow) return
-        refreshPosted = true
-        postOnAnimation(stripRefresh)
-    }
-
-    internal fun contentMoved() {
-        if (strips.isEmpty() || recorder == null) return
-        contentChanged = true
-        heldBack = false
-        postStripRefresh()
-    }
-
-    override fun onDescendantInvalidated(child: View, target: View) {
-        super.onDescendantInvalidated(child, target)
-        contentMoved()
-    }
-
     internal fun join(frost: FrostView, key: FrostStrip.Key, drawingTime: Long, wanted: Rect): FrostStrip {
         var evicted = false
         val iterator = strips.entries.iterator()
@@ -1531,6 +1504,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         }
         val strip = strips.getOrPut(key) { FrostStrip(key) }
         if (strip.consumers.add(frost)) strip.stale = true
+        strip.discardRetiredBefore(drawingTime)
         if (strip.stale || strip.laidOutAt != drawingTime || !strip.covers(FrostStrip.place(wanted, width, height, key.scale))) layout(strip, drawingTime, frost)
         if (evicted) publishStats()
         return strip
@@ -1551,7 +1525,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         }
         if (!changed) return
         publishStats()
-        contentMoved()
+        strips.values.firstNotNullOfOrNull { strip -> strip.consumers.firstOrNull { it.samplesNow } }?.invalidate()
     }
 
     private fun layout(strip: FrostStrip, drawingTime: Long, drawing: FrostView?) {
@@ -1584,29 +1558,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         LookActivity.stripRecords += 1
     }
 
-    private var refreshedAt = Long.MIN_VALUE
-
-    internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis(), drawPending: Boolean = isDirty, paced: Boolean = holdsPage): Boolean {
-        val content = recorder ?: return false
-        if (strips.isEmpty() || !contentChanged || frameTime == refreshedAt) return false
-        if (paced && !cadence.offer(frameTime)) {
-            heldBack = true
-            postStripRefresh()
-            return false
-        }
-        val trailing = heldBack && !drawPending
-        contentChanged = false
-        heldBack = false
-        refreshedAt = frameTime
-        for (strip in strips.values) if (strip.stale) layout(strip, frameTime, null) else strip.refresh(content)
-        if (trailing) strips.values.firstNotNullOfOrNull { it.consumers.firstOrNull() }?.invalidate()
-        return true
-    }
-
     private fun stopRecording() {
-        removeCallbacks(stripRefresh)
-        refreshPosted = false
-        contentChanged = false
         recorder?.discardDisplayList()
         recorder = null
         strips.values.forEach(FrostStrip::release)
@@ -1656,7 +1608,6 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         }
         canvas.drawRenderNode(node)
         FrostSources.redrawFrostsOf(this)
-        contentMoved()
     }
 }
 
@@ -1717,24 +1668,6 @@ internal object FrostPage {
     }
 }
 
-internal class StripCadence(private val hz: Float) {
-    private var credit = 0f
-    private var offeredAt = Long.MIN_VALUE
-
-    fun offer(frameTimeMs: Long): Boolean {
-        credit = if (offeredAt == Long.MIN_VALUE) 1f else credit + ((frameTimeMs - offeredAt).coerceAtLeast(0L) * hz / 1000f).coerceAtMost(1f)
-        offeredAt = frameTimeMs
-        if (credit < DUE) return false
-        credit = (credit - 1f).coerceIn(0f, CARRY)
-        return true
-    }
-
-    companion object {
-        const val DUE = 0.9f
-        const val CARRY = 0.5f
-    }
-}
-
 internal class FrostStrip(val key: Key) {
     data class Key(val blurPx: Float, val saturation: Float, val scale: Float)
 
@@ -1773,14 +1706,6 @@ internal class FrostStrip(val key: Key) {
 
     fun nodeFor(frost: FrostView): RenderNode = if (lensed == 0 || frost in slotted) node else plainNode ?: node
 
-    fun refresh(source: RenderNode): Boolean {
-        if (width <= 0 || height <= 0) return false
-        draw(source)
-        records += 1
-        LookActivity.stripRecords += 1
-        return true
-    }
-
     fun record(source: RenderNode, placed: Rect, drawingTime: Long, lenses: LiquidGlassRules.LensField? = null, slots: Set<FrostView> = emptySet(), drawers: Collection<FrostView> = slots) {
         laidOutAt = drawingTime
         left = placed.left
@@ -1818,11 +1743,27 @@ internal class FrostStrip(val key: Key) {
         draw(source)
     }
 
+    private val retired = ArrayList<Pair<RenderNode, Long>>()
+
+    val retiring: Int get() = retired.size
+
     private fun dropPlain() {
-        plainNode?.discardDisplayList()
-        plainFiltered?.discardDisplayList()
+        plainNode?.let { retired += it to laidOutAt }
+        plainFiltered?.let { retired += it to laidOutAt }
         plainNode = null
         plainFiltered = null
+    }
+
+    fun discardRetiredBefore(drawingTime: Long) {
+        if (retired.isEmpty()) return
+        val gone = retired.filter { it.second != drawingTime }
+        gone.forEach { it.first.discardDisplayList() }
+        retired.removeAll(gone)
+    }
+
+    private fun discardRetired() {
+        retired.forEach { it.first.discardDisplayList() }
+        retired.clear()
     }
 
     private fun draw(source: RenderNode) {
@@ -1853,6 +1794,7 @@ internal class FrostStrip(val key: Key) {
         node.discardDisplayList()
         filtered.discardDisplayList()
         dropPlain()
+        discardRetired()
         laidOutAt = Long.MIN_VALUE
         stale = true
         effectSet = false
@@ -1895,7 +1837,6 @@ internal object FrostScale {
 }
 
 internal object FrostRefresh {
-    const val PAGE_STRIP_HZ = 60f
 
     fun label(name: String?, source: String?, variant: String?, number: Int): String =
         name?.takeIf { it.isNotBlank() } ?: "${source ?: "-"}/${variant ?: "bar"} #$number"
@@ -1907,6 +1848,15 @@ internal object FrostRefresh {
 
 open class FrostView(context: Context, appContext: AppContext) : LookView(context, appContext) {
     var source: String? = null
+        set(value) {
+            if (field == value) return
+            val before = field
+            field = value
+            forgetLayer()
+            FrostSources.sourceChanged(before)
+            FrostSources.sourceChanged(value)
+            invalidate()
+        }
     var name: String? = null
     var variant: String? = null
 
@@ -1991,6 +1941,13 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal open fun solidFill(dark: Boolean): Int? = null
 
     internal open fun lensAt(xPx: Int, yPx: Int, scale: Float): LiquidGlassRules.StripLens? = null
+
+    internal open val samplesNow: Boolean get() = isAttachedToWindow && isShown
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (!isVisible) forgetLayer() else invalidate()
+    }
 
     internal open fun forgetLayer() {
         joined?.leave(this)
@@ -2153,7 +2110,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     }
 
     internal fun stripNeed(from: FrostSourceView, into: Rect): FrostStrip.Key? {
-        if (!isAttachedToWindow || !isShown || width <= 0 || height <= 0 || !canBlur()) return null
+        if (!samplesNow || width <= 0 || height <= 0 || !canBlur()) return null
         val style = LookRules.frost(variant, lookOrNull)
         val blur = style.blurRadius.value * density
         val margin = LiquidGlassRules.marginPx(blur, lensReach())

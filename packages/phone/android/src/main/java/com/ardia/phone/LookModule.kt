@@ -6,9 +6,17 @@ import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
+internal object LookThread {
+    private val main by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    fun onMain(work: () -> Unit) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) work() else main.post(work)
+    }
+}
+
 class LookModule : Module() {
     private val systemLook = SystemLookWatch(read = { appContext.reactContext?.let(SystemMotion::read) ?: SystemMotion.unknown }) { now ->
-        if (SystemMotion.note(now)) AttachedLookViews.all().forEach { it.invalidate() }
+        if (SystemMotion.note(now)) LookThread.onMain { AttachedLookViews.all().forEach { it.invalidate() } }
         if (PhoneLab.isOn) android.util.Log.i("PAGELAB", "PAGELAB look system settings changed while running: reduce motion ${now["reduceMotion"]}, reduce transparency ${now["reduceTransparency"]}")
         runCatching { sendEvent(SYSTEM_LOOK_CHANGED, now) }
     }
@@ -52,8 +60,10 @@ class LookModule : Module() {
         Function("setPageFrost") { mode: String ->
             check(PhoneLab.isOn) { "the page frost mode is a lab switch" }
             FrostSources.pageMode = FrostSources.PageMode.entries.firstOrNull { it.raw == mode } ?: FrostSources.PageMode.Live
-            FrostSources.frosts().forEach { it.invalidate() }
-            FrostSources.allSources().forEach { it.invalidate() }
+            LookThread.onMain {
+                FrostSources.frosts().forEach { it.invalidate() }
+                FrostSources.allSources().forEach { it.invalidate() }
+            }
             FrostSources.pageMode.raw
         }
 
@@ -61,9 +71,11 @@ class LookModule : Module() {
             val context = appContext.reactContext ?: throw IllegalStateException("the app context is gone")
             LookSwitch.set(context, off)
             android.util.Log.i("PAGELAB", "PAGELAB look views ${if (off) "off: flat colours, no blur, grain or motion" else "on"} (takes effect for views drawn from now; force-stop to measure a clean launch)")
-            AttachedLookViews.all().forEach { it.invalidate() }
-            FrostSources.frosts().forEach { it.invalidate() }
-            FrostSources.allSources().forEach { it.invalidate() }
+            LookThread.onMain {
+                AttachedLookViews.all().forEach { it.invalidate() }
+                FrostSources.frosts().forEach { it.invalidate() }
+                FrostSources.allSources().forEach { it.invalidate() }
+            }
             off
         }
 
@@ -134,7 +146,7 @@ class LookModule : Module() {
                 else -> "paced: a frame each time the fastest blob has moved ${(LookRules.BLOB_STEP_SHARE * 100).toInt()}% of its radius"
             }
             android.util.Log.i("PAGELAB", "PAGELAB look blobs $shown (lasts across launches; force-stop to measure a clean launch)")
-            DeckBackdrops.all().forEach { it.invalidate() }
+            LookThread.onMain { DeckBackdrops.all().forEach { it.invalidate() } }
             kept
         }
 
@@ -142,8 +154,10 @@ class LookModule : Module() {
             val context = appContext.reactContext ?: throw IllegalStateException("the app context is gone")
             LookSwitch.setBlurOverBackdrop(context, blur)
             android.util.Log.i("PAGELAB", "PAGELAB look frosts over the backdrop alone ${if (blur) "blur it (as before)" else "are fills tinted from it"}")
-            FrostSources.frosts().forEach { it.invalidate() }
-            FrostSources.allSources().forEach { it.invalidate() }
+            LookThread.onMain {
+                FrostSources.frosts().forEach { it.invalidate() }
+                FrostSources.allSources().forEach { it.invalidate() }
+            }
             blur
         }
 
@@ -152,7 +166,7 @@ class LookModule : Module() {
             val draw = LookSwitch.BackdropDraw.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: throw IllegalArgumentException("no backdrop draw named $name")
             LookSwitch.setBackdropDraw(context, draw)
             android.util.Log.i("PAGELAB", "PAGELAB look backdrop drawn as ${draw.label}")
-            DeckBackdrops.all().forEach { it.invalidate() }
+            LookThread.onMain { DeckBackdrops.all().forEach { it.invalidate() } }
             draw.name.lowercase()
         }
 

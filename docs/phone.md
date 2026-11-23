@@ -487,7 +487,9 @@ off in the lab`.
     - From sync14 the deck bar's frosts, which sit over nothing but the backdrop, are fills tinted from the
       backdrop's colours under them, with no blur layer: the bar's colour follows the blobs, but the blobs are
       not seen through it. Since #3949 that holds for frost variants and Android 12 only: a Glass on Android 13+
-      blurs and refracts the backdrop and reads `path=live`, with the DECK source recording. Logcat has, at each deck build and for each frost, `PAGELAB look frost … path=… (why);
+      blurs and refracts the backdrop and reads `path=live`, with the DECK source recording, so on Android 13+ the deck's
+      chrome glass reads `path=live` where the steps below expect `path=tinted`, and the Memory line counts it as a
+      layer over a shared blur strip, not as tinted. Logcat has, at each deck build and for each frost, `PAGELAB look frost … path=… (why);
       source deck: …`, which says what the frost found in its source. For the bar it should read `path=tinted
       … source deck: only the deck backdrop shows: N view(s) under it hidden by it, M over it that draw
       nothing`. When it reads anything else, report the line: it names the view that kept the blur (sync14's
@@ -1376,15 +1378,19 @@ look surface: it has no frost source to refract.
   node translated to the source, with no layer or effect of its own, and no glass's backdrop moves when the strip
   grows or shrinks. HWUI applies a layer's `RenderEffect` where the layer is drawn and reuses it only for the same
   clip, so the strip is two nodes: one holds the source with the effect, and the compositing layer every glass draws
-  holds that one, filtered once a frame. The source refreshes its strips when something inside it is invalidated (the
-  WebView scrolling or animating, a deck backdrop frame: `onDescendantInvalidated`), at most once a frame, and only
-  then, so a still page costs nothing; when the cadence below held a sample back and nothing has been invalidated
-  since (the last frame of a fling), no draw is coming, so it asks one glass to draw and the sample reaches the
-  screen. A refresh an invalidation started never asks: that invalidation's draw is already coming. A glass redraws only when it moves
+  holds that one, filtered once a frame. Nothing on the UI thread refreshes the strip when the page scrolls or the
+  backdrop moves: the strip's filtered node draws the source's node, HWUI carries the source's damage into every
+  node that draws it (`mDamageGenerationId`), and it re-renders a layer only where that damage lands inside the
+  layer's bounds. So the strip follows the content under the glasses on every frame it changes, the last frame of a
+  fling included, and costs nothing while it is still. Damage inside a WebView covers the WebView's bounds, so an
+  animation anywhere on a page (a GIF out of view of the bar) re-renders the strip at the animation's rate; a native
+  view animating outside the strip doesn't. A frozen copy of the page between refreshes would need the WebView's
+  draw functor run a second time, which turned the page white in #3759. A glass redraws only when it moves
   or changes, and its draw records the strip only when the strip's extent, lenses or slots change, comparing
   extents clamped to the source, so a glass near the edge doesn't re-record it on every draw. Each strip knows the
   glasses that draw it: one that leaves (detached, hidden, trimmed, or moved to another strip after a density change)
-  takes its lens with it at the next refresh, and the last one out drops the strip. The memory line counts strips
+  takes its lens with it at once (a glass that still shows draws again to lay the strip out without it), and the last
+  one out drops the strip. A plain overflow layer retires a frame after the last glass stops drawing it. The memory line counts strips
   from a snapshot the UI thread publishes (`lookCounts().strips`, `stripRecords`), and a source that stops recording
   drops them. A source that goes away, or a new one under the same name, makes the glasses naming it draw again, and
   a glass with no source still asks for one, so a replacement records on its first draw.
@@ -1407,9 +1413,7 @@ look surface: it has no frost source to refract.
   old lab flag) 7.2 and 6.8 % (p50 12 to 14, p90 21, p99 36 to 38) with 32 GPU passes a frame; the shipped strip
   8.6 % (p50 14, p90 23, p99 48) with 10. Frame by frame the RenderThread issues 3.5 ms at the median against 2.8
   with the solid bar (6.2 before the strip refreshed at 60 Hz) and the GPU takes 3.5 ms against 1.7: the page's
-  layer is what remains. A strip over a page refreshes about 60 times a second whatever the screen's rate
-  (`StripCadence`: every frame at 60 Hz, two of three at 90, every other at 120), so the frames between redraw only
-  the page's layer. The fold views' own
+  layer is what remains. The fold views' own
   hardware layers (`renderToHardwareTextureAndroid` on `floatingBarFold` and `hostPillFold`) now redraw with the
   strip, about 0.5 ms a frame; they stay for the fold's fade (b66c3bbdb).
 - **Over the deck, measured.** The idle deck on the F4 with its five glasses live: the look budget's own sample reads

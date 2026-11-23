@@ -15,6 +15,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.robolectric.Shadows.shadowOf
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -125,39 +126,15 @@ class GlassStripTest {
     }
 
     @Test
-    fun theContentRefreshFollowsWhatMovesUnderTheGlassOnceAFrame() {
+    fun whatMovesUnderTheGlassReachesTheStripWithoutTheUiThreadRecordingIt() {
         val scene = bar()
         live(scene)
         val strip = scene.source.stripsHeld.single()
         val recorded = strip.records
-        assertFalse("nothing under the glass changed", scene.source.refreshStrips(frameTime = 1_000L, drawPending = true))
-        scene.source.contentMoved()
-        assertTrue(scene.source.refreshStrips(frameTime = 1_000L, drawPending = true))
-        assertFalse("once a frame however many ask", scene.source.refreshStrips(frameTime = 1_000L, drawPending = true))
-        assertEquals(recorded + 1, strip.records)
+        scene.source.getChildAt(0).setBackgroundColor(Color.GREEN)
+        onHardware(scene.source)
         scene.glasses.forEach(::onHardware)
-        scene.source.contentMoved()
-        assertTrue(scene.source.refreshStrips(frameTime = 1_016L, drawPending = false))
-        assertFalse("a refresh an invalidation started has its draw coming", scene.glasses.any { it.isDirty })
-        scene.source.release()
-        assertEquals("releasing the source drops its strips", 0, scene.source.stripsHeld.size)
-        assertEquals(0, scene.source.stripStats.count)
-        scene.source.contentMoved()
-        assertFalse(scene.source.refreshStrips(frameTime = 1_032L, drawPending = true))
-    }
-
-    @Test
-    fun overAPageTheLastSampleTheCadenceHeldBackAsksOneGlassToDraw() {
-        val scene = bar()
-        live(scene)
-        scene.glasses.forEach(::onHardware)
-        scene.source.contentMoved()
-        assertTrue(scene.source.refreshStrips(frameTime = 1_000L, drawPending = true, paced = true))
-        scene.source.contentMoved()
-        assertFalse("120 Hz: the next frame is held back", scene.source.refreshStrips(frameTime = 1_008L, drawPending = true, paced = true))
-        assertFalse(scene.glasses.any { it.isDirty })
-        assertTrue("the held-back sample goes out a frame later", scene.source.refreshStrips(frameTime = 1_017L, drawPending = false, paced = true))
-        assertEquals("with no draw coming, one glass draws so it reaches the screen", 1, scene.glasses.count { it.isDirty })
+        assertEquals("HWUI carries the source's damage into the strip; nothing re-records it", recorded, strip.records)
     }
 
     @Test
@@ -167,15 +144,55 @@ class GlassStripTest {
         val strip = scene.source.stripsHeld.single()
         scene.glasses[1].forgetLayer()
         assertEquals(setOf<FrostView>(scene.glasses[0]), strip.consumers.toSet())
-        assertTrue(strip.stale)
-        scene.source.contentMoved()
-        assertTrue(scene.source.refreshStrips(frameTime = 2_000L, drawPending = true))
+        assertTrue("the glass still showing draws again to lay the strip out", scene.glasses[0].isDirty)
+        onHardware(scene.glasses[0])
         assertEquals("the lens is rebuilt for the glass still there", 1, strip.lensed)
         assertEquals(1, shapesInLens)
         assertTrue("and the strip shrinks to it", strip.left + strip.width < 264)
         scene.glasses[0].forgetLayer()
         assertEquals(0, scene.source.stripsHeld.size)
         assertEquals(0, scene.source.stripStats.count)
+    }
+
+    @Test
+    fun aHiddenGlassGivesUpItsPlaceInTheStrip() {
+        val scene = bar()
+        live(scene)
+        val strip = scene.source.stripsHeld.single()
+        scene.glasses[1].shownMs = 0f
+        scene.glasses[1].shown = false
+        assertEquals("hidden by its shown prop", setOf<FrostView>(scene.glasses[0]), strip.consumers.toSet())
+        assertFalse(scene.glasses[1].samplesNow)
+        scene.glasses[1].shown = true
+        onHardware(scene.glasses[1])
+        assertEquals(setOf<FrostView>(scene.glasses[0], scene.glasses[1]), strip.consumers.toSet())
+        scene.glasses[1].visibility = View.INVISIBLE
+        assertEquals("hidden by its visibility, which Android may never draw", setOf<FrostView>(scene.glasses[0]), strip.consumers.toSet())
+        assertFalse(scene.glasses[1].samplesNow)
+    }
+
+    @Test
+    fun aGlassMovedToAnIdleSourceLeavesTheOldOneAndWakesTheNew() {
+        val scene = bar()
+        live(scene)
+        val idle = FrostSourceView(activity, appContext).apply { sourceId = "idle-source" }
+        idle.addView(View(activity).apply { setBackgroundColor(Color.YELLOW) })
+        scene.root.addView(idle, 1)
+        idle.at(0, 0, 320, 470)
+        idle.getChildAt(0).at(0, 0, 320, 470)
+        onHardware(idle)
+        assertFalse("nobody wants it yet", idle.isRecording)
+        scene.glasses.forEach(::onHardware)
+        scene.glasses[0].source = "idle-source"
+        assertEquals("it leaves the old strip at once", setOf<FrostView>(scene.glasses[1]), scene.source.stripsHeld.single().consumers.toSet())
+        assertTrue("the new source is asked to draw", idle.isDirty)
+        assertTrue(scene.glasses[0].isDirty)
+        assertTrue(FrostSources.anyFrostCanBlur("idle-source"))
+        onHardware(idle)
+        assertTrue("and records on that draw", idle.isRecording)
+        onHardware(scene.glasses[0])
+        assertEquals(FrostPage.Path.Live, scene.glasses[0].lastChoice?.path)
+        assertEquals(setOf<FrostView>(scene.glasses[0]), idle.stripsHeld.single().consumers.toSet())
     }
 
     @Test
@@ -205,11 +222,17 @@ class GlassStripTest {
         assertTrue("an overflow glass draws a plain blur, not a neighbour's refraction", strip.holdsPlain)
         assertNotSame(strip.node, strip.nodeFor(youngest))
         scene.glasses.filter { it !== youngest }.forEach { assertSame(strip.node, strip.nodeFor(it)) }
+        val plain = strip.nodeFor(youngest)
         scene.glasses.first { it !== youngest }.forgetLayer()
-        scene.source.contentMoved()
-        assertTrue(scene.source.refreshStrips(frameTime = 3_000L, drawPending = true))
+        val wanted = Rect()
+        val key = youngest.stripNeed(scene.source, wanted)!!
+        scene.source.join(youngest, key, 7_000L, wanted)
         assertSame("a freed slot goes to the glass that was waiting", strip.node, strip.nodeFor(youngest))
         assertFalse(strip.holdsPlain)
+        assertTrue("the plain layer outlives the frame that retired it, for any glass that drew it earlier", strip.retiring > 0)
+        assertNotSame(strip.node, plain)
+        scene.source.join(youngest, key, 7_008L, wanted)
+        assertEquals("and goes the next frame", 0, strip.retiring)
     }
 
     @Test
@@ -231,5 +254,20 @@ class GlassStripTest {
         assertTrue(FrostSources.anyFrostCanBlur("strip-test"))
         onHardware(replacement)
         assertTrue("and records for them on its first draw", replacement.isRecording)
+    }
+
+    @Test
+    fun aLabSwitchFromTheJsThreadTouchesViewsOnlyOnTheUiThread() {
+        var ran = 0
+        var onMain = false
+        val worker = Thread { LookThread.onMain { ran += 1; onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper() } }
+        worker.start()
+        worker.join()
+        assertEquals("posted, not run on the JS thread", 0, ran)
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(1, ran)
+        assertTrue(onMain)
+        LookThread.onMain { ran += 1 }
+        assertEquals("already on the UI thread it runs at once", 2, ran)
     }
 }

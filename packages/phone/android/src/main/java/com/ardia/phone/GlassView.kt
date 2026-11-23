@@ -128,6 +128,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
             if (field == value) return
             val was = field
             field = value
+            if (!value) forgetLayer() else lastChoice?.let(unsourced::settled)
             showSurface(was)
         }
 
@@ -141,7 +142,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     private var rimShader: RuntimeShader? = null
     private var rimDrawn: LiquidGlassRules.Rim? = null
     private val bound = LensBound()
-    private val unsourced = UnsourcedWatch({ job, delay -> postDelayed(job, delay) }, { job -> removeCallbacks(job) }) { isAttachedToWindow && isShown && canBlur() && FrostPage.unsourced(lastChoice) }
+    private val unsourced = UnsourcedWatch({ job, delay -> postDelayed(job, delay) }, { job -> removeCallbacks(job) }) { samplesNow && canBlur() && FrostPage.unsourced(lastChoice) }
 
     init {
         variant = "glass"
@@ -155,6 +156,8 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     val isClassic: Boolean get() = GlassRules.solid(surface, reduceTransparency)
+
+    override val samplesNow: Boolean get() = super.samplesNow && shown
 
     override fun canBlur(): Boolean = !isClassic && super.canBlur()
 
@@ -205,6 +208,11 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         lastChoice?.let(unsourced::settled)
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (isVisible) lastChoice?.let(unsourced::settled)
     }
 
     override fun onDetachedFromWindow() {
