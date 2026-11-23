@@ -76,7 +76,7 @@ reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
   later, Safari 16.4 and later) can open the socket or ask `/ardia/active`, even holding the token; a top-level GET from
   an older Safari still needs the token and can't read the answer. Then the `RemoteDebuggingAllowed` policy, and a data
   folder only you can write to: the engine opens the folder once, checks it belongs to you, that no one else can write
-  to it, that no macOS access list lets anyone else in, that its disk doesn't ignore ownership, and on Linux that it isn't a FUSE mount shared with `allow_other` that skips permission checks, and creates, checks
+  to it, that no macOS access list lets anyone else in, that its disk doesn't ignore ownership, and on Linux that it isn't a mount that skips permission checks for other users (FUSE `allow_other` without `default_permissions`, SMB `noperm`), and creates, checks
   (0600, owned by you, any inherited macOS ACL removed) and renames the file through that same open folder, so a folder
   swapped meanwhile is never written to. The
   engine also keeps its bookkeeping: a command must be a JSON object with an integer `id` and a string `method`

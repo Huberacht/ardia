@@ -164,13 +164,15 @@ AclState ExtendedAcl(int fd) {
 #endif
 
 #if BUILDFLAG(IS_LINUX)
-bool OthersBypassPermissions(int dir_fd) {
+enum class MountCheck { kEnforced, kShared, kUnknown };
+
+MountCheck PermissionsOfMount(int dir_fd) {
   std::string fdinfo;
   if (!base::ReadFileToString(
           base::FilePath(base::StrCat(
               {"/proc/self/fdinfo/", base::NumberToString(dir_fd)})),
           &fdinfo)) {
-    return true;
+    return MountCheck::kUnknown;
   }
   std::string mount_id;
   for (std::string_view line : base::SplitStringPiece(
@@ -184,7 +186,7 @@ bool OthersBypassPermissions(int dir_fd) {
   if (mount_id.empty() ||
       !base::ReadFileToString(base::FilePath("/proc/self/mountinfo"),
                               &mounts)) {
-    return true;
+    return MountCheck::kUnknown;
   }
   for (std::string_view line : base::SplitStringPiece(
            mounts, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
@@ -195,21 +197,28 @@ bool OthersBypassPermissions(int dir_fd) {
     }
     const auto dash = std::ranges::find(fields, std::string_view("-"));
     if (dash == fields.end() || fields.end() - dash < 4) {
-      return true;
+      return MountCheck::kUnknown;
     }
     const std::string_view type = *(dash + 1);
-    if (type != "fuse" && !base::StartsWith(type, "fuse.") &&
-        type != "fuseblk") {
-      return false;
-    }
     const std::vector<std::string_view> options = base::SplitStringPiece(
         *(dash + 3), ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     const auto has = [&options](std::string_view option) {
       return std::ranges::find(options, option) != options.end();
     };
-    return has("allow_other") && !has("default_permissions");
+    const bool fuse = type == "fuse" || type == "fuseblk" ||
+                      base::StartsWith(type, "fuse.") ||
+                      base::StartsWith(type, "fuseblk.");
+    if (fuse) {
+      return has("allow_other") && !has("default_permissions")
+                 ? MountCheck::kShared
+                 : MountCheck::kEnforced;
+    }
+    if (type == "cifs" || type == "smb3") {
+      return has("noperm") ? MountCheck::kShared : MountCheck::kEnforced;
+    }
+    return MountCheck::kEnforced;
   }
-  return true;
+  return MountCheck::kUnknown;
 }
 #endif
 
@@ -228,11 +237,19 @@ std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
     return base::StrCat({"Others can write to ", dir.value(), "."});
   }
 #if BUILDFLAG(IS_LINUX)
-  if (OthersBypassPermissions(dir_fd)) {
-    return base::StrCat(
-        {dir.value(), " is on a shared mount that doesn't check permissions "
-                      "(allow_other without default_permissions), so other "
-                      "users could read the control token there."});
+  switch (PermissionsOfMount(dir_fd)) {
+    case MountCheck::kEnforced:
+      break;
+    case MountCheck::kShared:
+      return base::StrCat(
+          {dir.value(), " is on a shared mount that doesn't check "
+                        "permissions (FUSE allow_other without "
+                        "default_permissions, or SMB noperm), so other users "
+                        "could read the control token there."});
+    case MountCheck::kUnknown:
+      return base::StrCat({"Couldn't check the mount ", dir.value(),
+                           " is on (/proc/self/mountinfo), so the control "
+                           "token isn't published there."});
   }
 #endif
 #if BUILDFLAG(IS_MAC)
