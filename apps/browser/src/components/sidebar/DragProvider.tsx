@@ -15,6 +15,7 @@ import { onAppEvent } from "../../state/drag/dragNative";
 import { WindowDropGlow } from "../tabstrip/WindowDropGlow";
 import { dragGesture } from "./dragGesture";
 import { FoldedAway } from "./hoverController";
+import { useWindowId } from "../../state/browser/hooks";
 
 const dropGlowPlace = perLook(() => ({ left: 5, right: 5, top: 44, bottom: 6, borderRadius: radius.chrome }));
 
@@ -25,6 +26,7 @@ export const FoldEntryContext = createContext(false);
 
 export function DragProvider({ children }: { children: (ghost: Ghost | null, controller: DragController) => ReactNode }) {
   const controller = useMemo(() => new DragController(), []);
+  controller.windowId = useWindowId();
   const items = useMemo(() => new DragItems(controller, true), [controller]);
   const [ghost, setGhost] = useState<Ghost | null>(null);
   controller.setGhost = setGhost;

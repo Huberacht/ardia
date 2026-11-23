@@ -300,9 +300,11 @@ test("a drag that starts while a fold is still filling in mounts the rest first 
   const late = c.create(entryKey("tab", m.id.d) + ":filled");
   Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "list" });
   late.view = D.fakeView({ x: 6, y: 600, w: 180, h: 30 });
-  const stop = fillingFold(() => {
+  c.windowId = "w-drag";
+  const stop = fillingFold("w-drag", () => {
     ran.push("flush");
     c.items.set(late.key, late);
+    stop();
   });
   const b = frameOf(m, entryKey("tab", m.id.b));
   await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
@@ -310,5 +312,77 @@ test("a drag that starts while a fold is still filling in mounts the rest first 
   assert.deepEqual(ran, ["flush"]);
   assert.deepEqual(late.frame, { x: 6, y: 600, w: 180, h: 30 }, "the drag's own pass measured the row the flush mounted");
   c.end(false);
+  await D.settle();
+});
+
+test("a drag's measure keeps no frame for a row its fold hid while the measure was out", async () => {
+  const { DragItems } = await import("./dragItems.ts");
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const items = new DragItems(c, true);
+  const listeners = new Set();
+  let away = false;
+  const folded = { away: () => away, subscribe: (f) => (listeners.add(f), () => listeners.delete(f)) };
+  const row = c.create(entryKey("tab", m.id.d) + ":folded");
+  Object.assign(row, { kind: "row", tabIds: [m.id.d], section: "list" });
+  row.view = D.fakeView({ x: 6, y: 600, w: 180, h: 30 });
+  items.addWhileShown(row.key, row, folded);
+  row.view.held = true;
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  await D.settle();
+  away = true;
+  for (const f of [...listeners]) f();
+  away = false;
+  for (const f of [...listeners]) f();
+  row.view.release();
+  await begun;
+  assert.equal(row.frame, null, "the answer for the registration the fold took away is dropped");
+  c.end(false);
+  await D.settle();
+});
+
+test("a row its fold hides while the room springs open gives its gap back for good", async () => {
+  const { DragItems } = await import("./dragItems.ts");
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const items = new DragItems(c, true);
+  const listeners = new Set();
+  let away = false;
+  const folded = { away: () => away, subscribe: (f) => (listeners.add(f), () => listeners.delete(f)) };
+  const dKey = entryKey("tab", m.id.d);
+  const d = c.items.get(dKey);
+  c.items.delete(dKey);
+  items.addWhileShown(dKey, d, folded);
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  animations.held = true;
+  c.move(60, frameOf(m, dKey).y + 2);
+  assert.ok(c.room, "a room spring is running");
+  away = true;
+  for (const f of [...listeners]) f();
+  animations.held = false;
+  animations.finish();
+  await D.settle();
+  assert.equal(d.gap.__getValue(), 0);
+  c.end(false);
+  await D.settle();
+});
+
+test("a drag cancelled while it waits for a fold to finish doesn't go on to measure", async () => {
+  const { fillingFold } = await import("./foldFlush.ts");
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  c.windowId = "w-cancel";
+  const stop = fillingFold("w-cancel", () => stop());
+  let measured = 0;
+  const measure = c.root.measureInWindow;
+  c.root.measureInWindow = (done) => (measured++, measure(done));
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  c.end(false);
+  await begun;
+  await new Promise((done) => setTimeout(done, 50));
+  assert.equal(measured, 0);
   await D.settle();
 });

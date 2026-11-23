@@ -18,7 +18,14 @@ function folded(away) {
   };
 }
 
-const controller = (active = false) => ({ items: new Map(), active });
+const controller = (active = false) => ({
+  items: new Map(),
+  active,
+  releaseGap(item) {
+    item.gap.stopAnimation();
+    item.gap.setValue(0);
+  },
+});
 
 function row(key) {
   let gap = 0;

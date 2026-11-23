@@ -21,7 +21,7 @@ const UNMEASURED_WINDOW_HEIGHT = 1200;
 const FIRST_REVEAL = 0.3;
 const REVEAL_AHEAD = 0.25;
 
-type FoldState = { open: Animated.Value; moving: boolean };
+type FoldState = { open: Animated.Value; moving: boolean; finish: () => void };
 
 export const FoldSettling = createContext(false);
 
@@ -33,6 +33,8 @@ export function useFold(collapsed: boolean): FoldState {
   const [settled, setSettled] = useState(collapsed);
   const [running, setRunning] = useState(false);
   const mounted = useRef(false);
+  const animating = useRef<Animated.CompositeAnimation | null>(null);
+  const [finish] = useState(() => () => animating.current?.stop());
   useLayoutEffect(() => {
     if (!mounted.current) {
       mounted.current = true;
@@ -41,15 +43,22 @@ export function useFold(collapsed: boolean): FoldState {
     setRunning(true);
     const timing = noteFoldMotion(FOLD_MS);
     const animation = Animated.timing(open, { toValue: collapsed ? 0 : 1, duration: FOLD_MS, easing: FOLD_EASING, useNativeDriver: layoutOnCompositor });
+    animating.current = animation;
+    let cancelled = false;
     animation.start(({ finished }) => {
       timing.end(finished);
-      if (!finished) return;
+      if (animating.current === animation) animating.current = null;
+      if (cancelled) return;
+      if (!finished) open.setValue(collapsed ? 0 : 1);
       setSettled(collapsed);
       setRunning(false);
     });
-    return () => animation.stop();
+    return () => {
+      cancelled = true;
+      animation.stop();
+    };
   }, [collapsed]);
-  return { open, moving: running || settled !== collapsed };
+  return { open, moving: running || settled !== collapsed, finish };
 }
 
 export type FoldEntry = { key: string; node: ReactNode; ghost?: boolean };
@@ -151,10 +160,15 @@ export function Fold({
   }, [revealing, open, gap]);
   const unfilled = partial && !collapsed && now.shown !== Infinity;
   const growing = unfilled && !moving && !ancestorSettling;
+  const pending = unfilled || moving;
+  const finishFold = fold.finish;
   useEffect(() => {
-    if (!unfilled) return;
-    return fillingFold(() => setMount((m) => (m.collapsed ? m : { collapsed: false, shown: Infinity })));
-  }, [unfilled]);
+    if (!pending) return;
+    return fillingFold(windowId, () => {
+      finishFold();
+      setMount((m) => (m.collapsed ? m : { collapsed: false, shown: Infinity }));
+    });
+  }, [pending, windowId, finishFold]);
   useEffect(() => {
     if (!growing) return;
     const frame = requestAnimationFrame(() => setMount((m) => (m.collapsed !== collapsed ? m : nextFoldMount(m, collapsed, entries, heightOf, gap, reach, true))));

@@ -1,14 +1,23 @@
-const filling = new Set<() => void>();
+const MAX_ROUNDS = 8;
+const filling = new Map<string, Set<() => void>>();
 
-export function fillingFold(flush: () => void): () => void {
-  filling.add(flush);
-  return () => void filling.delete(flush);
+export function fillingFold(windowId: string, flush: () => void): () => void {
+  let folds = filling.get(windowId);
+  if (!folds) filling.set(windowId, (folds = new Set()));
+  folds.add(flush);
+  return () => {
+    folds.delete(flush);
+    if (!folds.size && filling.get(windowId) === folds) filling.delete(windowId);
+  };
 }
 
-export const foldsFilling = () => filling.size > 0;
+export const foldsFilling = (windowId: string | null) => windowId !== null && (filling.get(windowId)?.size ?? 0) > 0;
 
-export function flushFolds(): Promise<void> {
-  if (!filling.size) return Promise.resolve();
-  for (const flush of [...filling]) flush();
-  return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+const twoFrames = () => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+
+export async function flushFolds(windowId: string): Promise<void> {
+  for (let round = 0; round < MAX_ROUNDS && foldsFilling(windowId); round++) {
+    for (const flush of [...filling.get(windowId)!]) flush();
+    await twoFrames();
+  }
 }

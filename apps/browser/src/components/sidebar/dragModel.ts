@@ -7,8 +7,6 @@ import { TILE_GAP } from "./pinZone";
 import { folderIdOfCell } from "../../state/pins/tileFolders";
 import { entryKey } from "../../state/sidebar/entryKey";
 
-export { flushFolds, foldsFilling } from "./foldFlush";
-
 export type Frame = { x: number; y: number; w: number; h: number };
 export type Section = "tiles" | "pinnedRows" | "pinnedGroups" | "list" | "folder";
 
@@ -31,6 +29,7 @@ export type Item = ItemSpec & {
   size: Animated.Value;
   frame: Frame | null;
   headerFrame: Frame | null;
+  held?: number;
 };
 
 export type Drop = StoreDrop & { sequence?: string[] };

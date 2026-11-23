@@ -10,6 +10,7 @@ import { overPins, pinGrid, pinGridHeight } from "./pinZone";
 import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, pinnedBlock, spring } from "./dragModel";
 import { aimAt, type Pointing } from "./dragZones";
 import { DragGeometry } from "./dragGeometry";
+import { flushFolds, foldsFilling } from "./foldFlush";
 import { reorderTick } from "../../state/drag/reorderTick";
 import { entryKey } from "../../state/sidebar/entryKey";
 import { previewPaneSlot } from "./splitPaneGeometry";
@@ -60,7 +61,34 @@ export class DragTargeting extends DragGeometry {
     return siblings[siblings.indexOf(row) + 1]?.key === gapKey;
   }
 
-  protected room: { progress: Animated.Value; listener: string } | null = null;
+  protected room: { progress: Animated.Value; listener: string; moves: { value: Animated.Value; from: number; to: number }[] } | null = null;
+  windowId: string | null = null;
+  private heldAt = new WeakMap<Item, number>();
+
+  protected foldsPending() {
+    return foldsFilling(this.windowId);
+  }
+
+  protected async foldsSettled(current: () => boolean) {
+    await flushFolds(this.windowId!);
+    return current();
+  }
+
+  protected heldItems(): Item[] {
+    const items = [...this.items.values()];
+    for (const i of items) this.heldAt.set(i, i.held ?? 0);
+    return items;
+  }
+
+  protected stillHeld(i: Item) {
+    return this.items.get(i.key) === i && (i.held ?? 0) === this.heldAt.get(i);
+  }
+
+  releaseGap(item: Item) {
+    if (this.room) this.room.moves = this.room.moves.filter((m) => m.value !== item.gap);
+    item.gap.stopAnimation();
+    item.gap.setValue(0);
+  }
 
   protected stopRoom() {
     const room = this.room;
@@ -84,14 +112,14 @@ export class DragTargeting extends DragGeometry {
     if (!this.crossed) for (const s of sources) if (s.kind !== "tile") add(s.size, 0);
     if (!moves.length) return;
     const progress = new Animated.Value(0);
-    const listener = progress.addListener(({ value }) => {
-      for (const m of moves) m.value.setValue(m.from + (m.to - m.from) * value);
+    const room = (this.room = { progress, listener: "", moves });
+    room.listener = progress.addListener(({ value }) => {
+      for (const m of room.moves) m.value.setValue(m.from + (m.to - m.from) * value);
     });
-    const room = (this.room = { progress, listener });
     Animated.spring(progress, { toValue: 1, ...ROOM_SPRING }).start(({ finished }) => {
       if (this.room !== room) return;
       this.stopRoom();
-      if (finished) for (const m of moves) m.value.setValue(m.to);
+      if (finished) for (const m of room.moves) m.value.setValue(m.to);
     });
   }
 

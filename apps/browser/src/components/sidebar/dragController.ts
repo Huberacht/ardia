@@ -12,7 +12,7 @@ import { arrangeLive } from "../../state/sidebar/pinnedOrder";
 import { suppressHover } from "../../state/sidebar/hover";
 import { closeFolderPanel } from "../../state/sidebar/tileFolderUi";
 import { dragMarksOf, markDrag } from "../../state/sidebar/dragMarks";
-import { boxed, type Drop, EDGE, flushFolds, foldsFilling, type Item, measure, spring, tabCell, tailKey } from "./dragModel";
+import { boxed, type Drop, EDGE, type Item, measure, spring, tabCell, tailKey } from "./dragModel";
 import { DragTargeting } from "./dragTargeting";
 import { edgeAt, edgeStep } from "./dragProfiles";
 import { type DragSession, newDragSession } from "./dragGeometry";
@@ -140,9 +140,9 @@ export class DragController extends DragTargeting {
   }
 
   protected async measureAll(session: DragSession, current: () => boolean): Promise<boolean> {
-    if (foldsFilling()) await flushFolds();
+    if (this.foldsPending() && !(await this.foldsSettled(current))) return false;
     const scrollY = this.scrollY;
-    const items = [...this.items.values()];
+    const items = this.heldItems();
     const regions = [...this.regions];
     const [rootFrame, viewport, frames, regionFrames, profileFrames] = await Promise.all([
       measure(this.root),
@@ -155,7 +155,7 @@ export class DragController extends DragTargeting {
     this.rootFrame = rootFrame ?? this.rootFrame;
     session.viewport = viewport;
     session.startScrollY = scrollY;
-    items.forEach((i, k) => ([i.frame, i.headerFrame] = frames[k]!));
+    items.forEach((i, k) => this.stillHeld(i) && ([i.frame, i.headerFrame] = frames[k]!));
     for (const [name, frame] of regionFrames) session.regionFrames.set(name, frame);
     session.gridBase = items.some((i) => i.kind === "tile") ? (session.regionFrames.get("tiles") ?? null) : null;
     session.gridGrowth = 0;

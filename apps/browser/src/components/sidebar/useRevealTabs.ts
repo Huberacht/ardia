@@ -4,7 +4,7 @@ import { inShownProfile, selectedTabIn, showsProfile, watchRevealTargets, window
 import { reduceMotion } from "../ui/reduceMotion";
 import { GLOW_ROOM, type SidebarGeometry } from "./pageLayout";
 import { locateTab } from "./selectedRow";
-import { flushFolds } from "./foldFlush";
+import { flushFolds, foldsFilling } from "./foldFlush";
 import { releaseLaunchRows } from "../../state/sidebar/launchRows";
 import { REVEAL_ROW_MARGIN } from "./tokens";
 
@@ -30,7 +30,10 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
     const show = (row: { y: number; height: number }, pill: boolean) => {
       const { viewport, edgeLift } = geometry.current;
       const move = revealScrollFor(row, { top: scrollY.current ?? 0, viewport, edgeLift }, pill && !stillMotion());
-      if (move) scroll.current?.scrollTo(move);
+      if (!move) return;
+      if (!foldsFilling(windowId)) return scroll.current?.scrollTo(move);
+      const scroller = scroll.current;
+      void flushFolds(windowId).then(() => scroll.current === scroller && scroller?.scrollTo(move));
     };
     const reveal = () => {
       frame = 0;
@@ -51,7 +54,6 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
       viaPill = false;
       if (!tabId) return;
       releaseLaunchRows(windowId, "reveal");
-      void flushFolds();
       const scroller = scroll.current;
       const from = scrollY.current ?? 0;
       const row = locateTab(windowId, tabId, geometry.current, scroller as ScrollView, () => scrollY.current ?? 0);

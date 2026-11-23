@@ -14,6 +14,7 @@ export class DragItems {
 
   add(key: string, item: Item) {
     this.own.set(key, item);
+    item.held = (item.held ?? 0) + 1;
     if (this.live) this.controller.items.set(key, item);
     return () => {
       if (this.own.get(key) === item) this.own.delete(key);
@@ -25,10 +26,8 @@ export class DragItems {
     let remove = folded.away() ? null : this.add(key, item);
     const stop = folded.subscribe(() => {
       if (!folded.away()) return void (remove ??= this.add(key, item));
-      if (remove && this.controller.active) {
-        item.gap.stopAnimation();
-        item.gap.setValue(0);
-      }
+      if (remove && this.controller.active) this.controller.releaseGap(item);
+      item.held = (item.held ?? 0) + 1;
       item.frame = item.headerFrame = null;
       remove?.();
       remove = null;

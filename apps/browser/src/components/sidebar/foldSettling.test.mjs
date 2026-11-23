@@ -30,7 +30,7 @@ const rowsIn = (element) => {
   return provider.props.children.filter((slot) => slot?.key?.startsWith("tab:")).length;
 };
 const fold = (settling, n = 500) =>
-  mount(() => Fold({ fold: { open: new Animated.Value(1), moving: false }, collapsed: false, entries: entries(n), rowHeight: () => ROW }), { contexts: [[FoldSettling, settling]] });
+  mount(() => Fold({ fold: { open: new Animated.Value(1), moving: false, finish() {} }, collapsed: false, entries: entries(n), rowHeight: () => ROW }), { contexts: [[FoldSettling, settling]] });
 
 test("an open fold mounted while an ancestor is still moving or filling in mounts one window of rows, not its whole list", () => {
   const settling = fold(true);
@@ -76,18 +76,28 @@ test("a fold still filling in mounts every row at once when a drag or a reveal a
   const filling = fold(true);
   const element = filling.setContext(FoldSettling, false);
   assert.ok(rowsIn(element) < 500);
-  assert.equal(foldsFilling(), true);
-  void flushFolds();
+  assert.equal(foldsFilling(""), true);
+  void flushFolds("");
   assert.equal(rowsIn(filling.value), 500);
-  assert.equal(foldsFilling(), false);
+  assert.equal(foldsFilling(""), false);
   filling.unmount();
 });
 
 test("opening a fold with a kept row lays the rows past the window out at full height, so a reveal sees the settled length", () => {
-  const kept = mount(() => Fold({ fold: { open: new Animated.Value(0), moving: true }, collapsed: false, entries: entries(200), keep: "tab:t150", rowHeight: () => ROW }), { contexts: [[FoldSettling, false]] });
+  const kept = mount(() => Fold({ fold: { open: new Animated.Value(0), moving: true, finish() {} }, collapsed: false, entries: entries(200), keep: "tab:t150", rowHeight: () => ROW }), { contexts: [[FoldSettling, false]] });
   const slots = [kept.value.props.children.props.children].flat().find((c) => c?.type === FoldSettling.Provider).props.children;
   const far = slots.filter((slot) => slot?.key?.startsWith("tab:t1") && Number(slot.key.slice(5)) > 100);
   assert.ok(far.length > 0);
   for (const slot of far) assert.notDeepEqual(slot.props.children.props.style, { display: "none" });
   kept.unmount();
+});
+
+test("a fold still moving finishes its motion when a drag or a reveal flushes it", async () => {
+  const { flushFolds, foldsFilling } = await import("./foldFlush.ts");
+  let finished = 0;
+  const moving = mount(() => Fold({ fold: { open: new Animated.Value(0.4), moving: true, finish: () => finished++ }, collapsed: false, entries: entries(10), rowHeight: () => ROW }), { contexts: [[FoldSettling, false]] });
+  assert.equal(foldsFilling(""), true, "a moving fold counts as pending");
+  void flushFolds("");
+  assert.equal(finished, 1);
+  moving.unmount();
 });

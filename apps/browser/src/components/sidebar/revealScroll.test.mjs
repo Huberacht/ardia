@@ -314,10 +314,46 @@ test("a tab reveal finishes the folds still filling in, so the row it scrolls to
   S().activate(ids[0]);
   runFrames();
   let flushed = 0;
-  const stop = fillingFold(() => flushed++);
+  const stop = fillingFold(w, () => {
+    flushed++;
+    stop();
+  });
   S().activate(ids[45]);
   runFrames();
   stop();
   watching();
   assert.equal(flushed, 1);
+});
+
+test("a reveal that has to scroll waits for the window's folds to finish first, and one already in view doesn't touch them", async () => {
+  const { fillingFold } = await import("./foldFlush.ts");
+  const ids = S().windows[w].tabIds;
+  const asked = [];
+  const g = { current: { viewport: 300, regions: { pinnedGroups: 0, list: 0 }, newTabAtTop: false, tilesFixed: false } };
+  const watching = startRevealTabs(w, { current: { scrollTo: (move) => asked.push(move) } }, { current: 0 }, g);
+  runFrames();
+  S().activate(ids[0]);
+  runFrames();
+  asked.length = 0;
+  let flushed = 0;
+  const other = fillingFold("another-window", () => flushed++);
+  let stop = fillingFold(w, () => {
+    flushed++;
+    stop();
+  });
+  S().activate(ids[1]);
+  runFrames();
+  assert.equal(flushed, 0, "a row already in view needs no flush, here or in another window");
+  S().activate(ids[45]);
+  runFrames();
+  assert.equal(flushed, 1);
+  assert.equal(asked.length, 0, "the scroll waits for the fold to finish");
+  for (let i = 0; i < 4; i++) {
+    await Promise.resolve();
+    runFrames();
+  }
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(asked.length, 1);
+  other();
+  watching();
 });
