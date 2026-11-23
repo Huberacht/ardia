@@ -7,6 +7,7 @@ import { muteTitle, type MuteState } from "../../state/tabs/mute";
 import { firstStaying } from "../../state/drag/drops";
 import { pressTabClose, useTabCloseControl } from "../../state/sidebar/closeControl";
 import { currentMovingTabIds } from "../../state/tabs/topStrip";
+import { markStripPress } from "../../state/tabs/stripPress";
 import { TabBadges } from "../media/TabBadges";
 import { TabIcon } from "../sidebar/TabIcon";
 import { Button, FadeLabel, HoverFill, Symbol, useTooltip } from "../ui";
@@ -200,7 +201,7 @@ export const TabChip = memo(function TabChip({ tabId, width, drawn, tuck, dragge
                   size="xs"
                   weight="semibold"
                   color={onBand ? palette.icon : undefined}
-                  onPress={tuck ?? (() => pressTabClose(tab.id))}
+                  onPress={tuck ?? (() => (markStripPress(windowId, "close", tab.id), pressTabClose(tab.id)))}
                   tooltip={tuck ? "Hide in Group" : closeControl.tooltip}
                 />
               }

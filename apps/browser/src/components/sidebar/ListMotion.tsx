@@ -1,5 +1,5 @@
 import { devRegister } from "../dev/devRegister";
-import { createContext, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState } from "react";
 import { Animated } from "react-native";
 import { layout } from "../ui/theme";
 import type { BrowserState } from "../../state/browser/store";
@@ -7,8 +7,8 @@ import { workspaceSnapshot } from "../../state/browser/current";
 import type { Capture, ListSnapshot } from "../../state/sidebar/listCapture";
 import { appearOf, setAppearing, setSliding, type ClipSource, type EntryMotion } from "./EntryMotion";
 import { appearProgress, startAppear } from "./shiftMarks";
-import { entryHeight, headGap } from "../../state/sidebar/geometry";
-import { GROUP_BORDER } from "./geometry";
+import { entryHeight } from "../../state/sidebar/geometry";
+import { groupSeen, type Section } from "./groupPlace";
 import { snapshotEntry, type EntrySnapshot } from "./GhostEntry";
 
 export { GhostSlot } from "./GhostSlot";
@@ -40,7 +40,7 @@ type Plan = { moves: Move[]; ghosts: Ghost[]; clipped: string[]; below: number; 
 type Planner = (before: Snapshot, after: Snapshot, slides: Map<string, Slide>, ghosts: Ghost[], t: number) => Plan | null;
 type InView = (key: string, from: number) => boolean;
 export type ListSlot = { entry: string } | { ghost: Ghost; top: number };
-export type ListMotionScope = { slideBelow: ((entry: string, delta: number) => void) | null; seenIn?: ((entry: string, y: number, height: number) => boolean) | null };
+export type ListMotionScope = { slideBelow: ((entry: string, delta: number) => void) | null; seenIn?: ((groupId: string, y: number, height: number, before: BrowserState) => boolean) | null };
 
 export const ListMotionContext = createContext<ListMotionScope>({ slideBelow: null });
 let ghostIds = 0;
@@ -324,7 +324,7 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
   return { motion, slots, fading: ghosts.current.length > 0, slideBelow, tail: slides.get(TAIL)?.value ?? null, tailClip: source(TAIL) };
 }
 
-export function useListMotion(windowId: string, profileId: string, entries: string[], from: Capture, enabled: boolean, viewport: ListViewport | null = null, above = 0) {
+export function useListMotion(windowId: string, profileId: string, entries: string[], from: Capture, enabled: boolean, viewport: ListViewport | null = null, above = 0, pinned: (() => Section | null) | null = null) {
   const height: Height = (s, e) => entryHeight(s, windowId, profileId, e);
   const inView = (s: BrowserState) => (list: string[]): InView | null => {
     const band = shiftedBand(viewport?.band() ?? null, above);
@@ -363,18 +363,15 @@ export function useListMotion(windowId: string, profileId: string, entries: stri
     const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: true, snapshot, clipAfter: grown, start, ghostSeen });
     return plan && onlySeen(plan, inView(after.state)(after.list), slides);
   };
-  const latest = useRef({ entries, viewport, above });
-  latest.current = { entries, viewport, above };
-  const seenIn = useRef((entry: string, y: number, h: number) => {
-    const band = shiftedBand(latest.current.viewport?.band() ?? null, latest.current.above);
-    const top = band && offsets(workspaceSnapshot(), latest.current.entries, height).at.get(entry);
-    return top === null || top === undefined || seenSliding(top + y, h, 0, band);
-  }).current;
+  const committed = useRef({ entries, viewport, above, pinned });
+  useLayoutEffect(() => void (committed.current = { entries, viewport, above, pinned }));
+  const seenIn = useRef(groupSeen(() => committed.current, height)).current;
   return { ...useMotion({ devKey: windowId, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: true, inView: (list) => inView(workspaceSnapshot())(list) }), seenIn };
 }
 
 export function useGroupMotion(windowId: string, profileId: string, groupId: string, entries: string[], from: Capture, scope: ListMotionScope, enabled: boolean) {
   const height: Height = (s, e) => entryHeight(s, windowId, profileId, e);
+  const seenIn = useContext(ListMotionContext).seenIn;
   const planner: Planner = (before, after, slides, ghosts, t) => {
     const was = before.state.groups[groupId];
     const now = after.state.groups[groupId];
@@ -389,8 +386,7 @@ export function useGroupMotion(windowId: string, profileId: string, groupId: str
     const next = offsets(after.state, after.list, height);
     const snapshot = (e: string) => snapshotEntry(before.state, windowId, profileId, e);
     const atEnd = !removed.length && groupGrowsAtEnd(before.state, after.state, groupId);
-    const membersTop = GROUP_BORDER + layout.rowHeight + headGap(before.list[0]);
-    const ghostSeen = scope.seenIn ? (e: string, y: number) => scope.seenIn!(entryKey("group", groupId), membersTop + y, height(before.state, e)) : null;
+    const ghostSeen = seenIn ? (e: string, y: number) => seenIn(groupId, y, height(before.state, e), before.state) : null;
     const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: !atEnd, snapshot, clipAfter: [], start: 0, ghostSeen });
     if (!atEnd) return plan;
     return { ...(plan ?? { moves: [], ghosts: [], clipped: [], appears: [] }), below: old.end - next.end };

@@ -40,10 +40,10 @@ test("a close while a chip still slides keeps the slide and restarts it from whe
     const slide = own.motion.slide("b");
     assert.ok(slide);
     own.motion.mount(slide);
-    assert.equal(slide.runs, 1);
+    assert.ok(slide.moving);
     own.apply({ moves: [{ key: "b", from: 154 }], appears: [], ghosts: [], at: Date.now() + 50 });
     assert.equal(own.motion.slide("b"), slide, "the live slide survives the second close");
-    assert.equal(slide.runs, 1, "and runs again");
+    assert.ok(slide.moving, "and runs again");
     assert.equal(slide.value.__getValue(), 154);
   });
   animations.finish();
@@ -58,7 +58,7 @@ test("three closes in a row each restart the same chips without dropping one", (
     for (const k of ["c", "d"]) own.motion.mount(own.motion.slide(k));
     for (let i = 1; i < 3; i++) {
       own.apply({ moves: [{ key: "c", from: 104 * (i + 1) }, { key: "d", from: 104 * (i + 1) }], appears: [], ghosts: [], at: at + 120 * i });
-      for (const k of ["c", "d"]) assert.equal(own.motion.slide(k)?.runs, 1, `${k} after close ${i + 1}`);
+      for (const k of ["c", "d"]) assert.ok(own.motion.slide(k)?.moving, `${k} after close ${i + 1}`);
     }
   });
   animations.finish();
@@ -101,7 +101,7 @@ test("an overrun counts in the consent period its run started in, not the one it
   animations.running = [];
 });
 
-test("a drag landing the strip puts every sliding chip in its final place at once", () => {
+test("a drag landing the strip puts every sliding chip in its final place at once and lets fades finish", () => {
   const own = createMotion();
   held(() => {
     own.apply({ moves: [{ key: "g", from: 104 }], appears: ["h"], ghosts: [], at: Date.now() });
@@ -109,11 +109,12 @@ test("a drag landing the strip puts every sliding chip in its final place at onc
     const g = own.motion.slide("g");
     const h = own.motion.slide("h");
     own.motion.land();
-    assert.equal(own.slides.size, 0);
+    assert.equal(own.motion.slide("g"), null);
     assert.equal(g.value.__getValue(), 0);
-    assert.equal(h.opacity.__getValue(), 1);
+    assert.equal(h.value.__getValue(), 0, "nothing is left out of place");
   });
-  animations.running = [];
+  animations.finish();
+  assert.equal(own.slides.size, 0);
 });
 
 test("a second close leaves a chip whose place it doesn't change on its running slide, the + button too", () => {
@@ -159,11 +160,51 @@ test("a tab closed while it fades in leaves a ghost that starts where its fade w
   animations.running = [];
 });
 
-test("a change made with the pointer in the strip moves nothing under it: only the fades run", () => {
+test("only the close a strip press made steps; a close from elsewhere still slides, wherever the pointer is", () => {
   const before = shot(["a", "b", "c"], { end: 312 });
   const after = shot(["a", "c"], { end: 208 });
   delete after.state.tabs.b;
-  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), true);
-  assert.deepEqual(p.moves, []);
-  assert.equal(p.ghosts.length, 1);
+  const pressed = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.includes("b"));
+  assert.equal(pressed.stepped, true);
+  assert.deepEqual(pressed.moves, []);
+  assert.equal(pressed.ghosts.length, 1);
+  const elsewhere = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.includes("x"));
+  assert.equal(elsewhere.stepped, false);
+  assert.deepEqual(elsewhere.moves.map((m) => m.key), ["c", "~new"]);
+});
+
+test("a step lands translations but lets a fade-in finish", () => {
+  const own = createMotion();
+  held(() => {
+    own.apply({ moves: [{ key: "m", from: 104 }], appears: ["n"], ghosts: [], at: Date.now(), stepped: false });
+    for (const k of ["m", "n"]) own.motion.mount(own.motion.slide(k));
+    const n = own.motion.slide("n");
+    own.motion.land();
+    assert.equal(own.motion.slide("m"), null, "the slide lands");
+    assert.equal(own.motion.slide("n"), n, "the fade keeps running");
+    assert.equal(n.fading, true);
+    assert.equal(n.opacity.__getValue(), 0);
+  });
+  animations.finish();
+  assert.equal(own.slides.size, 0);
+});
+
+test("a fading tab that slides keeps its fade's own clock, so its ghost starts where the fade is", () => {
+  const own = createMotion();
+  const at = Date.now();
+  held(() => {
+    own.apply({ moves: [], appears: ["n"], ghosts: [], at, stepped: false });
+    const n = own.motion.slide("n");
+    own.motion.mount(n);
+    n.appearAt = at - 70;
+    own.apply({ moves: [{ key: "n", from: 104 }], appears: [], ghosts: [], at: at + 10, stepped: false });
+    assert.equal(n.appearAt, at - 70, "moving it doesn't restart its fade");
+    assert.equal(n.fading, true);
+    const opened = shot(["a", "n"]);
+    const closed = shot(["a"]);
+    delete closed.state.tabs.n;
+    const ghost = plan(opened, closed, own.slides, [-48, 1000], at + 20, false).ghosts[0];
+    assert.equal(ghost.opacity.__getValue(), 90 / 140);
+  });
+  animations.running = [];
 });

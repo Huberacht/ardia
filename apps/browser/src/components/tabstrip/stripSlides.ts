@@ -12,12 +12,12 @@ const FRAME_SLACK_MS = 50;
 const BAND_MARGIN = 48;
 
 type Run = Animated.CompositeAnimation;
-export type StripSlide = { key: string; value: Animated.Value; opacity: Animated.Value | null; from: number; at: number; until: number; runs: number; pending: boolean; mounted: boolean; consent: ConsentToken | null };
+export type StripSlide = { key: string; value: Animated.Value; opacity: Animated.Value | null; from: number; at: number; until: number; moving: number; fading: boolean; appearAt: number | null; pending: boolean; mounted: boolean; consent: ConsentToken | null };
 type GhostTab = { title: string; url: string; favicon?: string | null; icon?: string | null; profileId: string };
 export type StripGhost = { key: string; x: number; width: number; tab: GhostTab; opacity: Animated.Value; until: number; started: boolean };
 export type Shot = { keys: string[]; x: Map<string, number>; width: Map<string, number>; tabs: Map<string, string[]>; groups: Set<string>; end: number | null; state: BrowserState };
 type Move = { key: string; from: number };
-export type Plan = { moves: Move[]; appears: string[]; ghosts: StripGhost[]; at: number };
+export type Plan = { moves: Move[]; appears: string[]; ghosts: StripGhost[]; at: number; stepped: boolean };
 
 export type StripMotion = {
   slide: (key: string) => StripSlide | null;
@@ -52,13 +52,13 @@ export function shoot(entries: StripEntry[], top: DragGeometry, start: number, e
 }
 
 function shownAt(slide: StripSlide | undefined, now: number): number {
-  if (!slide?.opacity || (!slide.runs && !slide.pending)) return 1;
-  if (slide.pending) return 0;
-  return STRIP_MOTION.appearEasing(Math.min(1, Math.max(0, (now - slide.at) / STRIP_MOTION.appear)));
+  if (!slide?.opacity) return 1;
+  if (slide.appearAt === null) return 0;
+  return slide.fading ? STRIP_MOTION.appearEasing(Math.min(1, Math.max(0, (now - slide.appearAt) / STRIP_MOTION.appear))) : 1;
 }
 
 export function offsetAt(slide: StripSlide | undefined, now: number): number {
-  if (!slide || (!slide.runs && !slide.pending)) return 0;
+  if (!slide || (!slide.moving && !slide.pending)) return 0;
   const p = Math.min(1, Math.max(0, (now - slide.at) / STRIP_MOTION.slide));
   return slide.from * (1 - slideEasing(p));
 }
@@ -68,7 +68,7 @@ function ghostTab(s: BrowserState, tabId: string): GhostTab | null {
   return tab ? { title: tabTitle(tab), url: tab.url, favicon: tab.favicon, icon: tab.customIcon, profileId: tab.profileId } : null;
 }
 
-export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>, band: [number, number], now: number, still: boolean): Plan | null {
+export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>, band: [number, number], now: number, still: boolean, pressed: (closed: string[], opened: string[]) => boolean = () => false): Plan | null {
   const had = new Set(before.keys);
   const has = new Set(after.keys);
   const removed = before.keys.filter((k) => !has.has(k));
@@ -77,9 +77,10 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
   const closed = removed.filter((k) => before.tabs.get(k)!.every((id) => !after.state.tabs[id]));
   const opened = added.filter((k) => after.tabs.get(k)!.every((id) => !before.state.tabs[id]));
   if (!closed.length && !opened.length) return null;
+  const stepped = pressed(closed.flatMap((k) => before.tabs.get(k)!), opened.flatMap((k) => after.tabs.get(k)!));
   const seen = (x: number, width: number) => x + width > band[0] && x < band[1];
   const moves: Move[] = [];
-  let blocked = still;
+  let blocked = still || stepped;
   for (const key of after.keys) {
     if (!had.has(key)) continue;
     const delta = before.x.get(key)! - after.x.get(key)!;
@@ -90,7 +91,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     if (after.groups.has(key)) blocked = true;
     if (blocked) continue;
     const width = after.width.get(key)!;
-    if (live?.runs || seen(after.x.get(key)!, width) || seen(before.x.get(key)!, width)) moves.push({ key, from });
+    if (live?.moving || seen(after.x.get(key)!, width) || seen(before.x.get(key)!, width)) moves.push({ key, from });
   }
   if (!blocked && before.end !== null && after.end !== null && Math.abs(before.end - after.end) >= 0.5) {
     const from = offsetAt(slides.get(NEW_TAB_SLOT), now) + before.end - after.end;
@@ -104,8 +105,8 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     const tab = ids.length === 1 && !before.groups.has(k) ? ghostTab(before.state, ids[0]!) : null;
     return tab && seen(x, width) ? [{ key: `ghost:${++ghostIds}`, x, width, tab, opacity: new Animated.Value(shownAt(slides.get(k), now)), until: 0, started: false }] : [];
   });
-  if (!moves.length && !appears.length && !ghosts.length) return null;
-  return { moves, appears, ghosts, at: now };
+  if (!moves.length && !appears.length && !ghosts.length && !stepped) return null;
+  return { moves, appears, ghosts, at: now, stepped };
 }
 
 export function createMotion() {
@@ -120,14 +121,25 @@ export function createMotion() {
     for (const changed of ghostWatchers) changed();
   };
   const settle = (slide: StripSlide) => {
-    if (slide.runs || slide.pending || slides.get(slide.key) !== slide) return;
+    if (slide.moving || slide.fading || slide.pending || slides.get(slide.key) !== slide) return;
     slides.delete(slide.key);
     notify(slide.key);
   };
-  const track = (slide: StripSlide, run: Run) => {
-    slide.runs++;
+  let runs = 0;
+  const move = (slide: StripSlide) => {
+    const run: Run = Animated.timing(slide.value, { toValue: 0, duration: STRIP_MOTION.slide, easing: slideEasing, useNativeDriver: true });
+    const id = (slide.moving = ++runs);
     run.start(() => {
-      slide.runs--;
+      if (slide.moving !== id) return;
+      slide.moving = 0;
+      settle(slide);
+    });
+  };
+  const fadeIn = (slide: StripSlide, opacity: Animated.Value) => {
+    slide.fading = true;
+    slide.appearAt = Date.now();
+    Animated.timing(opacity, { toValue: 1, duration: STRIP_MOTION.appear, easing: STRIP_MOTION.appearEasing, useNativeDriver: true }).start(() => {
+      slide.fading = false;
       settle(slide);
     });
   };
@@ -136,17 +148,18 @@ export function createMotion() {
     slide.pending = false;
     slide.consent = consentToken();
     slide.until = slide.at + STRIP_MOTION.slide + FRAME_SLACK_MS;
-    if (slide.from) track(slide, Animated.timing(slide.value, { toValue: 0, duration: STRIP_MOTION.slide, easing: slideEasing, useNativeDriver: true }));
-    if (slide.opacity) track(slide, Animated.timing(slide.opacity, { toValue: 1, duration: STRIP_MOTION.appear, easing: STRIP_MOTION.appearEasing, useNativeDriver: true }));
+    if (slide.from) move(slide);
+    if (slide.opacity && slide.appearAt === null) fadeIn(slide, slide.opacity);
     settle(slide);
   };
   const prune = (now: number) => {
     for (const slide of slides.values()) {
+      const fadeOver = slide.fading && slide.appearAt !== null && now > slide.appearAt + STRIP_MOTION.appear + FRAME_SLACK_MS;
+      if (fadeOver) slide.opacity?.stopAnimation();
       if (!slide.until || now < slide.until) continue;
-      if (slide.runs) noteTabMotion(slide.consent, "strip", "overrun");
+      if (slide.moving || fadeOver) noteTabMotion(slide.consent, "strip", "overrun");
+      slide.moving = 0;
       slide.value.stopAnimation();
-      slide.opacity?.stopAnimation();
-      slide.runs = 0;
       slide.pending = false;
       settle(slide);
     }
@@ -160,7 +173,7 @@ export function createMotion() {
   const apply = (p: Plan) => {
     prune(p.at);
     const consent = consentToken();
-    if ([...slides.values()].some((s) => s.runs)) noteTabMotion(consent, "strip", "interrupt");
+    if ([...slides.values()].some((s) => s.moving)) noteTabMotion(consent, "strip", "interrupt");
     const fresh: string[] = [];
     const restart: StripSlide[] = [];
     for (const m of p.moves) {
@@ -173,11 +186,11 @@ export function createMotion() {
         if (live.mounted) restart.push(live);
         continue;
       }
-      slides.set(m.key, { key: m.key, value: new Animated.Value(m.from), opacity: null, from: m.from, at: p.at, until: 0, runs: 0, pending: true, mounted: false, consent: null });
+      slides.set(m.key, { key: m.key, value: new Animated.Value(m.from), opacity: null, from: m.from, at: p.at, until: 0, moving: 0, fading: false, appearAt: null, pending: true, mounted: false, consent: null });
       fresh.push(m.key);
     }
     for (const key of p.appears) {
-      slides.set(key, { key, value: new Animated.Value(0), opacity: new Animated.Value(0), from: 0, at: p.at, until: 0, runs: 0, pending: true, mounted: false, consent: null });
+      slides.set(key, { key, value: new Animated.Value(0), opacity: new Animated.Value(0), from: 0, at: p.at, until: 0, moving: 0, fading: false, appearAt: null, pending: true, mounted: false, consent: null });
       fresh.push(key);
     }
     if (p.ghosts.length) {
@@ -191,12 +204,11 @@ export function createMotion() {
   };
   const land = () => {
     for (const slide of [...slides.values()]) {
-      slide.pending = false;
+      slide.moving = 0;
+      slide.from = 0;
       slide.value.stopAnimation();
-      slide.opacity?.stopAnimation();
       slide.value.setValue(0);
-      slide.opacity?.setValue(1);
-      slide.runs = 0;
+      if (!slide.opacity || slide.appearAt !== null) slide.pending = false;
       settle(slide);
     }
   };
