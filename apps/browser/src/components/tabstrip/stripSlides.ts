@@ -51,6 +51,12 @@ export function shoot(entries: StripEntry[], top: DragGeometry, start: number, e
   return shot;
 }
 
+function shownAt(slide: StripSlide | undefined, now: number): number {
+  if (!slide?.opacity || (!slide.runs && !slide.pending)) return 1;
+  if (slide.pending) return 0;
+  return STRIP_MOTION.appearEasing(Math.min(1, Math.max(0, (now - slide.at) / STRIP_MOTION.appear)));
+}
+
 export function offsetAt(slide: StripSlide | undefined, now: number): number {
   if (!slide || (!slide.runs && !slide.pending)) return 0;
   const p = Math.min(1, Math.max(0, (now - slide.at) / STRIP_MOTION.slide));
@@ -77,6 +83,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
   for (const key of after.keys) {
     if (!had.has(key)) continue;
     const delta = before.x.get(key)! - after.x.get(key)!;
+    if (Math.abs(delta) < 0.5) continue;
     const live = slides.get(key);
     const from = offsetAt(live, now) + delta;
     if (Math.abs(from) < 0.5) continue;
@@ -85,7 +92,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     const width = after.width.get(key)!;
     if (live?.runs || seen(after.x.get(key)!, width) || seen(before.x.get(key)!, width)) moves.push({ key, from });
   }
-  if (!blocked && before.end !== null && after.end !== null) {
+  if (!blocked && before.end !== null && after.end !== null && Math.abs(before.end - after.end) >= 0.5) {
     const from = offsetAt(slides.get(NEW_TAB_SLOT), now) + before.end - after.end;
     if (Math.abs(from) >= 0.5) moves.push({ key: NEW_TAB_SLOT, from });
   }
@@ -95,7 +102,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     const x = before.x.get(k)! + offsetAt(slides.get(k), now);
     const width = before.width.get(k)!;
     const tab = ids.length === 1 && !before.groups.has(k) ? ghostTab(before.state, ids[0]!) : null;
-    return tab && seen(x, width) ? [{ key: `ghost:${++ghostIds}`, x, width, tab, opacity: new Animated.Value(1), until: 0, started: false }] : [];
+    return tab && seen(x, width) ? [{ key: `ghost:${++ghostIds}`, x, width, tab, opacity: new Animated.Value(shownAt(slides.get(k), now)), until: 0, started: false }] : [];
   });
   if (!moves.length && !appears.length && !ghosts.length) return null;
   return { moves, appears, ghosts, at: now };
@@ -136,7 +143,7 @@ export function createMotion() {
   const prune = (now: number) => {
     for (const slide of slides.values()) {
       if (!slide.until || now < slide.until) continue;
-      if (slide.runs) noteTabMotion("strip", "overrun", 1, slide.consent);
+      if (slide.runs) noteTabMotion(slide.consent, "strip", "overrun");
       slide.value.stopAnimation();
       slide.opacity?.stopAnimation();
       slide.runs = 0;
@@ -152,7 +159,8 @@ export function createMotion() {
   };
   const apply = (p: Plan) => {
     prune(p.at);
-    if ([...slides.values()].some((s) => s.runs)) noteTabMotion("strip", "interrupt");
+    const consent = consentToken();
+    if ([...slides.values()].some((s) => s.runs)) noteTabMotion(consent, "strip", "interrupt");
     const fresh: string[] = [];
     const restart: StripSlide[] = [];
     for (const m of p.moves) {
@@ -178,8 +186,8 @@ export function createMotion() {
     }
     for (const slide of restart) start(slide);
     for (const key of fresh) notify(key);
-    if (p.appears.length) noteTabMotion("strip", "open", p.appears.length);
-    if (p.ghosts.length) noteTabMotion("strip", "close", p.ghosts.length);
+    if (p.appears.length) noteTabMotion(consent, "strip", "open", p.appears.length);
+    if (p.ghosts.length) noteTabMotion(consent, "strip", "close", p.ghosts.length);
   };
   const land = () => {
     for (const slide of [...slides.values()]) {

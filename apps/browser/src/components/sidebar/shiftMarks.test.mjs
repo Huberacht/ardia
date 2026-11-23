@@ -24,3 +24,13 @@ test("an appearing row holds its style for a native fade and lets a JS-driven fa
   opacity.__isNative = true;
   assert.equal(holdsDrawn(shift), true);
 });
+
+test("a row closed while it fades in reports how far its fade got, so its ghost starts there", async () => {
+  const { appearProgress, startAppear } = await import("./shiftMarks.ts");
+  const shift = new Animated.Value(0);
+  assert.equal(appearProgress(shift, 1000, 140), 1);
+  setAppearing(shift, new Animated.Value(0));
+  startAppear(shift, 1000);
+  assert.equal(appearProgress(shift, 1035, 140), 0.25);
+  assert.equal(appearProgress(shift, 2000, 140), 1);
+});

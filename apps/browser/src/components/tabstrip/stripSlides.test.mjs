@@ -115,3 +115,55 @@ test("a drag landing the strip puts every sliding chip in its final place at onc
   });
   animations.running = [];
 });
+
+test("a second close leaves a chip whose place it doesn't change on its running slide, the + button too", () => {
+  const own = createMotion();
+  const at = Date.now();
+  const first = shot(["a", "b", "c", "d"], { end: 420 });
+  const second = shot(["b", "c", "d"], { end: 316 });
+  delete second.state.tabs.a;
+  held(() => {
+    own.apply(plan(first, second, own.slides, [-48, 1000], at, false));
+    for (const k of own.slides.keys()) own.motion.mount(own.motion.slide(k));
+    const b = own.motion.slide("b");
+    const plus = own.motion.slide("~new");
+    const third = shot(["b", "d"], { end: 212 });
+    delete third.state.tabs.a;
+    delete third.state.tabs.c;
+    third.x.set("b", second.x.get("b"));
+    third.end = second.end;
+    const p = plan(second, third, own.slides, [-48, 1000], at + 50, false);
+    assert.deepEqual(p.moves.map((m) => m.key), ["d"]);
+    own.apply(p);
+    assert.equal(own.motion.slide("b"), b);
+    assert.equal(b.from, 104, "b keeps the run it had");
+    assert.equal(own.motion.slide("~new"), plus);
+  });
+  animations.running = [];
+});
+
+test("a tab closed while it fades in leaves a ghost that starts where its fade was", () => {
+  const own = createMotion();
+  const at = Date.now();
+  const opened = shot(["a", "n", "b"]);
+  const closed = shot(["a", "b"]);
+  delete closed.state.tabs.n;
+  held(() => {
+    own.apply({ moves: [], appears: ["n"], ghosts: [], at });
+    own.motion.mount(own.motion.slide("n"));
+    const p = plan(opened, closed, own.slides, [-48, 1000], at + 30, false);
+    assert.equal(p.ghosts.length, 1);
+    const start = p.ghosts[0].opacity.__getValue();
+    assert.ok(start > 0 && start < 1, `the ghost starts at ${start}, not opaque`);
+  });
+  animations.running = [];
+});
+
+test("a change made with the pointer in the strip moves nothing under it: only the fades run", () => {
+  const before = shot(["a", "b", "c"], { end: 312 });
+  const after = shot(["a", "c"], { end: 208 });
+  delete after.state.tabs.b;
+  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), true);
+  assert.deepEqual(p.moves, []);
+  assert.equal(p.ghosts.length, 1);
+});

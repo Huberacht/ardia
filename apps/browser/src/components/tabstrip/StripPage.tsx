@@ -124,7 +124,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const scrolled = useRef(0);
   const viewport = useRef(pageWidth + flare * 2);
   const content = useRef(0);
-  const motion = useStripMotion({ entries: parsed, top, dock, flare, end: pinned ? null : stripEnd(top) + GAP, viewport: viewport.current, offset: () => scrolled.current, enabled: current && !resting });
+  const motion = useStripMotion({ entries: parsed, top, dock, flare, end: pinned ? null : stripEnd(top) + GAP, viewport: viewport.current, offset: () => scrolled.current, pointerIn: () => pointerIn.current, enabled: current && !resting });
   const ownScrollUntil = useRef(0);
   const userScrollAt = useRef(-Infinity);
   const userScrolling = () => performance.now() - userScrollAt.current < USER_SCROLL_QUIET_MS;

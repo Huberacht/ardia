@@ -1,19 +1,24 @@
 import { devRegister } from "../dev/devRegister";
-import { createContext, memo, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Animated, View } from "react-native";
-import { layout, useTheme } from "../ui/theme";
+import { createContext, useLayoutEffect, useRef, useState } from "react";
+import { Animated } from "react-native";
+import { layout } from "../ui/theme";
 import type { BrowserState } from "../../state/browser/store";
 import { workspaceSnapshot } from "../../state/browser/current";
 import type { Capture, ListSnapshot } from "../../state/sidebar/listCapture";
-import { appearOf, setAppearing, setSliding, useAnimatedStyle, type ClipSource, type EntryMotion } from "./EntryMotion";
-import { entryHeight } from "../../state/sidebar/geometry";
-import { ghostEntry, snapshotEntry, type EntrySnapshot } from "./GhostEntry";
+import { appearOf, setAppearing, setSliding, type ClipSource, type EntryMotion } from "./EntryMotion";
+import { appearProgress, startAppear } from "./shiftMarks";
+import { entryHeight, headGap } from "../../state/sidebar/geometry";
+import { GROUP_BORDER } from "./geometry";
+import { snapshotEntry, type EntrySnapshot } from "./GhostEntry";
+
+export { GhostSlot } from "./GhostSlot";
 import { curve } from "../ui/motion";
 import { SIDEBAR_MOTION } from "./tokens";
 import { entryId, entryKey, parseEntry } from "../../state/sidebar/entryKey";
 import { closedIn, groupChange, groupGrowsAtEnd, openedIn, type GroupChange } from "./listChanges";
 import { noteSidebarMotion } from "../../state/telemetry/usage";
 import { noteTabMotion } from "../../state/telemetry/tabMotionCounts";
+import { consentToken } from "../../state/telemetry/client";
 import { reduceMotion } from "../ui/reduceMotion";
 import { settleSlides, type Slide } from "./slideSettle";
 import { seenSliding, shiftedBand, type ListViewport } from "./listViewport";
@@ -35,7 +40,7 @@ type Plan = { moves: Move[]; ghosts: Ghost[]; clipped: string[]; below: number; 
 type Planner = (before: Snapshot, after: Snapshot, slides: Map<string, Slide>, ghosts: Ghost[], t: number) => Plan | null;
 type InView = (key: string, from: number) => boolean;
 export type ListSlot = { entry: string } | { ghost: Ghost; top: number };
-export type ListMotionScope = { slideBelow: ((entry: string, delta: number) => void) | null };
+export type ListMotionScope = { slideBelow: ((entry: string, delta: number) => void) | null; seenIn?: ((entry: string, y: number, height: number) => boolean) | null };
 
 export const ListMotionContext = createContext<ListMotionScope>({ slideBelow: null });
 let ghostIds = 0;
@@ -85,7 +90,7 @@ function buildPlan({ before, after, old, next, removed, added, slides, ghosts, t
     if (ghostSeen && !ghostSeen(e, y)) return [];
     const shot = snapshot(e);
     if (!shot) return [];
-    return [{ key: `ghost:${++ghostIds}`, anchor: anchorAfter(e), y, snapshot: shot, opacity: new Animated.Value(1), until: 0 }];
+    return [{ key: `ghost:${++ghostIds}`, anchor: anchorAfter(e), y, snapshot: shot, opacity: new Animated.Value(FADE_EASING(appearProgress(slides.get(e)?.value, t, APPEAR_MS * devScale()))), until: 0 }];
   });
   const appears = added.filter((e) => next.at.has(e));
   if (!moves.length) return born.length || appears.length ? { moves, ghosts: born, clipped: [], below: 0, appears } : null;
@@ -189,7 +194,7 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
     const pending = queued.current;
     const next = pending ? mergePlans(pending, plan) : plan;
     if (pending) noteSidebarMotion("merge");
-    if (slides.size && [...slides.values()].some((s) => s.run)) noteTabMotion("sidebar", "interrupt", 1);
+    if (slides.size && [...slides.values()].some((s) => s.run)) noteTabMotion(consentToken(), "sidebar", "interrupt");
     clipped.clear();
     for (const key of next.clipped) clipped.add(key);
     queued.current = next;
@@ -266,6 +271,7 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
       const opacity = slide && appearOf(slide.value);
       if (!slide || !opacity) continue;
       const appearMs = APPEAR_MS * devScale();
+      startAppear(slide.value, at);
       if (!slide.run) {
         slide.at = at;
         slide.until = at + appearMs + FRAME_SLACK_MS;
@@ -275,8 +281,9 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
         if (!slide.run) setSliding(slide.value, false);
       });
     }
-    if (plan.appears.length) noteTabMotion("sidebar", "open", plan.appears.length);
-    if (plan.ghosts.length) noteTabMotion("sidebar", "close", plan.ghosts.length);
+    const consent = consentToken();
+    if (plan.appears.length) noteTabMotion(consent, "sidebar", "open", plan.appears.length);
+    if (plan.ghosts.length) noteTabMotion(consent, "sidebar", "close", plan.ghosts.length);
     announce();
     if (plan.below) below?.(plan.below);
   });
@@ -356,7 +363,14 @@ export function useListMotion(windowId: string, profileId: string, entries: stri
     const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: true, snapshot, clipAfter: grown, start, ghostSeen });
     return plan && onlySeen(plan, inView(after.state)(after.list), slides);
   };
-  return useMotion({ devKey: windowId, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: true, inView: (list) => inView(workspaceSnapshot())(list) });
+  const latest = useRef({ entries, viewport, above });
+  latest.current = { entries, viewport, above };
+  const seenIn = useRef((entry: string, y: number, h: number) => {
+    const band = shiftedBand(latest.current.viewport?.band() ?? null, latest.current.above);
+    const top = band && offsets(workspaceSnapshot(), latest.current.entries, height).at.get(entry);
+    return top === null || top === undefined || seenSliding(top + y, h, 0, band);
+  }).current;
+  return { ...useMotion({ devKey: windowId, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: true, inView: (list) => inView(workspaceSnapshot())(list) }), seenIn };
 }
 
 export function useGroupMotion(windowId: string, profileId: string, groupId: string, entries: string[], from: Capture, scope: ListMotionScope, enabled: boolean) {
@@ -375,22 +389,12 @@ export function useGroupMotion(windowId: string, profileId: string, groupId: str
     const next = offsets(after.state, after.list, height);
     const snapshot = (e: string) => snapshotEntry(before.state, windowId, profileId, e);
     const atEnd = !removed.length && groupGrowsAtEnd(before.state, after.state, groupId);
-    const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: !atEnd, snapshot, clipAfter: [], start: 0 });
+    const membersTop = GROUP_BORDER + layout.rowHeight + headGap(before.list[0]);
+    const ghostSeen = scope.seenIn ? (e: string, y: number) => scope.seenIn!(entryKey("group", groupId), membersTop + y, height(before.state, e)) : null;
+    const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: !atEnd, snapshot, clipAfter: [], start: 0, ghostSeen });
     if (!atEnd) return plan;
     return { ...(plan ?? { moves: [], ghosts: [], clipped: [], appears: [] }), below: old.end - next.end };
   };
   const below = scope.slideBelow ? (delta: number) => scope.slideBelow?.(entryKey("group", groupId), delta) : null;
   return useMotion({ devKey: `${windowId}:${groupId}`, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: false, below });
 }
-
-export const GhostSlot = memo(function GhostSlot({ snapshot, top, opacity }: { snapshot: EntrySnapshot; top: number; opacity: Animated.Value }) {
-  const style = useMemo(() => ({ opacity }), [opacity]);
-  const [fade, ref] = useAnimatedStyle(style);
-  const theme = useTheme();
-  return (
-    <View pointerEvents="none" {...fade} ref={ref} style={[{ height: 0, marginBottom: -layout.rowGap }, fade.style as object]}>
-      {ghostEntry(snapshot, theme, top)}
-    </View>
-  );
-});
-

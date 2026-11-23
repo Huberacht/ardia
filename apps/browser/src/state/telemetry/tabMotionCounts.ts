@@ -1,5 +1,5 @@
 import { consentedCount } from "./consentedCount";
-import { consentToken, countFor, type ConsentToken } from "./consentPeriod";
+import { countFor, type ConsentToken } from "./consentPeriod";
 
 type Layout = "sidebar" | "strip";
 type Kind = "open" | "close" | "interrupt" | "overrun";
@@ -9,7 +9,7 @@ const counts = {
   strip: { open: consentedCount(), close: consentedCount(), interrupt: consentedCount(), overrun: consentedCount() },
 } as const;
 
-export function noteTabMotion(layout: Layout, kind: Kind, times = 1, consent: ConsentToken | null = consentToken()) {
+export function noteTabMotion(consent: ConsentToken | null, layout: Layout, kind: Kind, times = 1) {
   countFor(consent, () => {
     for (let i = 0; i < times; i++) counts[layout][kind].note();
   });

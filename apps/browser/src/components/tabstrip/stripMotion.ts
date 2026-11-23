@@ -12,9 +12,9 @@ export { NEW_TAB_SLOT, type StripGhost, type StripMotion, type StripSlide } from
 
 export const StripMotionContext = createContext<StripMotion | null>(null);
 
-export type StripMotionInput = { entries: StripEntry[]; top: DragGeometry; dock: Dock | null; flare: number; end: number | null; viewport: number; offset: () => number; enabled: boolean };
+export type StripMotionInput = { entries: StripEntry[]; top: DragGeometry; dock: Dock | null; flare: number; end: number | null; viewport: number; offset: () => number; pointerIn: () => boolean; enabled: boolean };
 
-export function useStripMotion({ entries, top, dock, flare, end, viewport, offset, enabled }: StripMotionInput): StripMotion {
+export function useStripMotion({ entries, top, dock, flare, end, viewport, offset, pointerIn, enabled }: StripMotionInput): StripMotion {
   const [own] = useState(createMotion);
   const last = useRef<Shot | null>(null);
   const inputs = useRef<unknown[]>([]);
@@ -28,11 +28,14 @@ export function useStripMotion({ entries, top, dock, flare, end, viewport, offse
   }
   const now = shot.current;
   const before = last.current;
-  queued.current = enabled && before && before !== now && before.state.tabs !== now.state.tabs ? plan(before, now, own.slides, band(offset(), viewport), Date.now(), reduceMotion() === true) : null;
+  const changed = enabled && !!before && before !== now && before.state.tabs !== now.state.tabs;
+  const aimed = changed && pointerIn();
+  queued.current = changed ? plan(before, now, own.slides, band(offset(), viewport), Date.now(), reduceMotion() === true || aimed) : null;
   useLayoutEffect(() => {
     last.current = now;
     const p = queued.current;
     queued.current = null;
+    if (aimed) own.motion.land();
     if (p) own.apply(p);
   });
   return own.motion;
