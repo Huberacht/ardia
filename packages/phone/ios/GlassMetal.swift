@@ -16,6 +16,7 @@ enum GlassLaunch {
 
   static let flat = PhoneTestBuild.flag("ArdiaFlatGlass")
   static let solidPage = PhoneTestBuild.flag("ArdiaGlassSolidPage")
+  static let snapshotAfterUpdates = !PhoneTestBuild.flag("ArdiaGlassSnapshotVisible")
   static let capture: Capture = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassCapture").flatMap(Capture.init(rawValue:)) ?? .auto) : .auto
 }
 
