@@ -11,8 +11,14 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
 - **Safe place.** The server starts only if the data dir is a real directory (not a symlink) owned by the user, not
   writable by group or others, not on a volume that ignores ownership, and with no macOS access list that allows
   anyone but the user anything (an inherited `everyone allow read` would otherwise reach every file made in it, 0600
-  or not; `ControlPeerCore/PrivateFolder.swift`, as the engine's `UnsafeControlFolder`); otherwise it logs one line
-  and reports an error status. The socket is created under a
+  or not; `ControlPeerCore/PrivateFolder.swift`, as the engine's `UnsafeControlFolder`), and only if no folder above
+  it (its real path, `F_GETPATH`) could be swapped by someone else: each is owned by root or the user, not writable by
+  others unless sticky, with no access list that lets anyone else write, delete or take ownership; otherwise it logs
+  one line and reports an error status. The checked folder stays open while the socket serves: the lock file, the old
+  socket's removal and the stop's cleanup all go through that descriptor (`openat`, `fstatat`, `unlinkat`), and
+  since `bind` only takes a path, the socket bound at the path must be the same inode found through the descriptor, or
+  it doesn't start (binding relative to the folder after `fchdir` would change the whole process's working folder,
+  which Chromium's threads share). The socket is created under a
   0177 umask, so it is 0600 from the start (a socket is made 0777 less the umask, so 0077 would leave it 0700).
 - **One owner.** The server holds an exclusive `flock` on `<data dir>/ArdiaControl.sock.lock` for as long as it
   serves. Only after taking the lock may it remove an old path, and only a socket (never a regular file, directory or

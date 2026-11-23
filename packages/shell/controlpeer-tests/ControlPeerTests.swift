@@ -125,14 +125,45 @@ final class ControlPeerTests: XCTestCase {
   }
 
   func testOnlyOwnerCanReadStripsAnInheritedAccessList() throws {
-    let file = scratch.appendingPathComponent("secret").path
-    XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: Data(), attributes: [.posixPermissions: 0o644]))
-    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow read", file]), 0)
-    let fd = open(file, O_RDWR)
+    let folder = scratch.appendingPathComponent("inherits").path
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow read,file_inherit", folder]), 0)
+    let fd = open((folder as NSString).appendingPathComponent("secret"), O_RDWR | O_CREAT | O_EXCL, 0o600)
+    XCTAssertGreaterThanOrEqual(fd, 0)
     defer { close(fd) }
     XCTAssertEqual(PrivateFolder.extendedAccess(fd), .allowsOthers)
     XCTAssertTrue(PrivateFolder.onlyOwnerCanRead(fd))
     XCTAssertEqual(PrivateFolder.extendedAccess(fd), .none)
+  }
+
+  func testAncestorsMustNotBeReplaceableBySomeoneElse() throws {
+    let parent = scratch.appendingPathComponent("parent").path
+    let child = (parent as NSString).appendingPathComponent("data")
+    try FileManager.default.createDirectory(atPath: child, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    var folder = PrivateFolder.openFolder(child)
+    XCTAssertNil(folder.problem)
+    XCTAssertNil(PrivateFolder.ancestorProblem(folder.fd))
+    close(folder.fd)
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow read,list", parent]), 0)
+    folder = PrivateFolder.openFolder(child)
+    XCTAssertNil(PrivateFolder.ancestorProblem(folder.fd))
+    close(folder.fd)
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow delete_child,add_subdirectory", parent]), 0)
+    folder = PrivateFolder.openFolder(child)
+    let aclProblem = try XCTUnwrap(PrivateFolder.ancestorProblem(folder.fd))
+    XCTAssertTrue(aclProblem.contains("access list"), aclProblem)
+    close(folder.fd)
+    XCTAssertEqual(run("/bin/chmod", ["-N", parent]), 0)
+    XCTAssertEqual(chmod(parent, 0o777), 0)
+    folder = PrivateFolder.openFolder(child)
+    let writable = try XCTUnwrap(PrivateFolder.ancestorProblem(folder.fd))
+    XCTAssertTrue(writable.contains("Others can write"), writable)
+    close(folder.fd)
+    XCTAssertEqual(chmod(parent, 0o1777), 0)
+    folder = PrivateFolder.openFolder(child)
+    XCTAssertNil(PrivateFolder.ancestorProblem(folder.fd))
+    close(folder.fd)
+    XCTAssertEqual(chmod(parent, 0o700), 0)
   }
 
   func testDisplayTextIsPlainAndBounded() {

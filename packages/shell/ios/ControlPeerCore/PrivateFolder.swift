@@ -21,6 +21,20 @@ public enum PrivateFolder {
       return errno == ENOENT || errno == ENOTSUP ? .none : .unknown
     }
     defer { acl_free(UnsafeMutableRawPointer(acl)) }
+    return classify(acl, modifyingOnly: false)
+  }
+
+  public static func othersCanModify(path: String) -> Access {
+    guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else {
+      return errno == ENOENT || errno == ENOTSUP ? .none : .unknown
+    }
+    defer { acl_free(UnsafeMutableRawPointer(acl)) }
+    return classify(acl, modifyingOnly: true)
+  }
+
+  private static let modifyingPermissions: [acl_perm_t] = [ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_DELETE, ACL_DELETE_CHILD, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER]
+
+  private static func classify(_ acl: acl_t, modifyingOnly: Bool) -> Access {
     var owner = uuid_t(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     let ownerKnown = withUnsafeMutableBytes(of: &owner) { ownerUUID(geteuid(), $0.baseAddress!.assumingMemoryBound(to: UInt8.self)) } == 0
     var entry: acl_entry_t?
@@ -32,7 +46,13 @@ public enum PrivateFolder {
       var tag = ACL_UNDEFINED_TAG
       guard acl_get_tag_type(entry, &tag) == 0 else { return .allowsOthers }
       if tag == ACL_EXTENDED_DENY { continue }
-      guard tag == ACL_EXTENDED_ALLOW, ownerKnown, let qualifier = acl_get_qualifier(entry) else { return .allowsOthers }
+      guard tag == ACL_EXTENDED_ALLOW else { return .allowsOthers }
+      if modifyingOnly {
+        var permissions: acl_permset_t?
+        guard acl_get_permset(entry, &permissions) == 0, let permissions else { return .allowsOthers }
+        if !modifyingPermissions.contains(where: { acl_get_perm_np(permissions, $0) != 0 }) { continue }
+      }
+      guard ownerKnown, let qualifier = acl_get_qualifier(entry) else { return .allowsOthers }
       let namesOwner = withUnsafeBytes(of: &owner) { mine in
         memcmp(qualifier, mine.baseAddress, MemoryLayout<uuid_t>.size) == 0
       }
@@ -40,6 +60,30 @@ public enum PrivateFolder {
       if !namesOwner { return .allowsOthers }
     }
     return entries == 0 ? .none : .denyOnly
+  }
+
+  public static func ancestorProblem(_ fd: Int32) -> String? {
+    var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return "Couldn't tell where the data folder is (\(String(cString: strerror(errno))))." }
+    var path = (String(cString: buffer) as NSString).deletingLastPathComponent
+    while true {
+      if let problem = replaceableBySomeoneElse(path) { return problem }
+      if path == "/" || path.isEmpty { return nil }
+      path = (path as NSString).deletingLastPathComponent
+    }
+  }
+
+  static func replaceableBySomeoneElse(_ path: String) -> String? {
+    var info = stat()
+    guard lstat(path, &info) == 0 else { return "Couldn't read \(path) (\(String(cString: strerror(errno))))." }
+    guard (info.st_mode & S_IFMT) == S_IFDIR else { return "\(path), which holds the data folder, isn't a real folder." }
+    guard info.st_uid == 0 || info.st_uid == geteuid() else { return "\(path), which holds the data folder, belongs to another user, who could swap it." }
+    guard info.st_mode & (S_IWGRP | S_IWOTH) == 0 || info.st_mode & S_ISVTX != 0 else { return "Others can write to \(path), which holds the data folder, so they could swap it." }
+    switch othersCanModify(path: path) {
+    case .none, .denyOnly: return nil
+    case .allowsOthers: return "\(path), which holds the data folder, has an access list that lets someone else change it."
+    case .unknown: return "Couldn't read the access list of \(path), which holds the data folder."
+    }
   }
 
   public static func problem(_ fd: Int32, path: String) -> String? {

@@ -20,6 +20,7 @@ final class ControlSocket {
   private var sink: (owner: ObjectIdentifier, send: Sink)?
   private var listenFd: Int32 = -1
   private var lockFd: Int32 = -1
+  private var folderFd: Int32 = -1
   private var acceptSource: DispatchSourceRead?
   private var bound: (path: String, device: dev_t, inode: ino_t)?
   private var connections: [Int: ControlConnection] = [:]
@@ -194,23 +195,27 @@ final class ControlSocket {
       return refuse("Ardia has no data folder.")
     }
     let path = (dir as NSString).appendingPathComponent(Self.socketName)
-    if let problem = Self.unsafeFolder(dir) { return refuse(problem, path: path) }
     guard path.utf8.count <= Self.maxPathBytes else {
       return refuse("The socket path is longer than \(Self.maxPathBytes) bytes: \(path)", path: path)
     }
-    let lock = Darwin.open((dir as NSString).appendingPathComponent(Self.lockName), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o600)
+    let folder = PrivateFolder.openFolder(dir)
+    guard folder.fd >= 0 else { return refuse(folder.problem ?? "Couldn't open the data folder.", path: path) }
+    var keepFolder = false
+    defer { if !keepFolder { Darwin.close(folder.fd) } }
+    if let problem = PrivateFolder.ancestorProblem(folder.fd) { return refuse(problem, path: path) }
+    let lock = openat(folder.fd, Self.lockName, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0o600)
     guard lock >= 0 else { return refuse("Couldn't open the socket's lock file (\(Self.errnoText())).", path: path) }
-    guard flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+    guard PrivateFolder.onlyOwnerCanRead(lock), flock(lock, LOCK_EX | LOCK_NB) == 0 else {
       Darwin.close(lock)
-      return refuse("Another Ardia is serving this data folder.", path: path)
+      return refuse("Another Ardia is serving this data folder, or its lock file isn't yours alone.", path: path)
     }
     var old = stat()
-    if lstat(path, &old) == 0 {
+    if fstatat(folder.fd, Self.socketName, &old, AT_SYMLINK_NOFOLLOW) == 0 {
       guard (old.st_mode & S_IFMT) == S_IFSOCK else {
         Darwin.close(lock)
         return refuse("\(path) exists and isn't a socket, so it was left alone.", path: path)
       }
-      unlink(path)
+      unlinkat(folder.fd, Self.socketName, 0)
     }
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     guard fd >= 0 else {
@@ -232,15 +237,23 @@ final class ControlSocket {
     }
     umask(previousMask)
     var made = stat()
-    guard bindResult == 0, listen(fd, Int32(Self.maxConnections)) == 0, lstat(path, &made) == 0 else {
+    var atPath = stat()
+    guard bindResult == 0, listen(fd, Int32(Self.maxConnections)) == 0, fstatat(folder.fd, Self.socketName, &made, AT_SYMLINK_NOFOLLOW) == 0 else {
       let text = Self.errnoText()
       Darwin.close(fd)
       Darwin.close(lock)
       return refuse("Couldn't listen on \(path) (\(text)).", path: path)
     }
+    guard (made.st_mode & S_IFMT) == S_IFSOCK, lstat(path, &atPath) == 0, atPath.st_dev == made.st_dev, atPath.st_ino == made.st_ino else {
+      Darwin.close(fd)
+      Darwin.close(lock)
+      return refuse("The data folder \(dir) changed while Ardia was starting its socket, so it didn't start.", path: path)
+    }
     generation += 1
     listenFd = fd
     lockFd = lock
+    folderFd = folder.fd
+    keepFolder = true
     bound = (path, made.st_dev, made.st_ino)
     let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
     source.setEventHandler { [weak self] in self?.acceptAll() }
@@ -267,11 +280,13 @@ final class ControlSocket {
     acceptSource = nil
     listenFd = -1
     var now = stat()
-    if lstat(bound.path, &now) == 0, (now.st_mode & S_IFMT) == S_IFSOCK, now.st_dev == bound.device, now.st_ino == bound.inode {
-      unlink(bound.path)
+    if fstatat(folderFd, Self.socketName, &now, AT_SYMLINK_NOFOLLOW) == 0, (now.st_mode & S_IFMT) == S_IFSOCK, now.st_dev == bound.device, now.st_ino == bound.inode {
+      unlinkat(folderFd, Self.socketName, 0)
     }
     Darwin.close(lockFd)
     lockFd = -1
+    Darwin.close(folderFd)
+    folderFd = -1
   }
 
   private func acceptAll() {
@@ -370,12 +385,6 @@ final class ControlSocket {
     _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
     var on: Int32 = 1
     _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-  }
-
-  private static func unsafeFolder(_ dir: String) -> String? {
-    let folder = PrivateFolder.openFolder(dir)
-    if folder.fd >= 0 { Darwin.close(folder.fd) }
-    return folder.problem
   }
 
   private static func errnoText() -> String {
