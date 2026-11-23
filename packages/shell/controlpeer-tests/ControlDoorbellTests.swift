@@ -291,4 +291,18 @@ final class ControlDoorbellTests: XCTestCase {
     XCTAssertEqual(queue.sync { bell.openAsks.count }, 0)
     XCTAssertEqual(refusal(clients.last!), "refused")
   }
+
+  func testDenyOnAGoneProcessLeavesAnotherProcesssAskAlone() {
+    let bell = doorbell()
+    queue.sync {
+      bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9))
+    }
+    let first = clients.last!
+    queue.sync { bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey, token: token(10)) }
+    close(first)
+    clients.removeAll { $0 == first }
+    XCTAssertFalse(queue.sync { bell.answer(events[0].1["ask"] as! Int, .deny, approvals: nil) })
+    XCTAssertEqual(queue.sync { bell.openAsks.map(\.connections) }, [[2]])
+    XCTAssertEqual(events.filter { $0.0 == "onPeerAskEnded" }.map { $0.1["outcome"] as? String }, ["left"])
+  }
 }

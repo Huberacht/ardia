@@ -96,7 +96,8 @@ final class ControlSocket {
     let kept = data.starts(with: Self.decidePrefix)
     queue.async { [self] in
       for id in targets {
-        if kept { connections[id]?.send(data) } else { connections[id]?.event(data) }
+        guard let target = connections[id], stillApproved(target) else { continue }
+        if kept { target.send(data) } else { target.event(data) }
       }
     }
   }
@@ -162,7 +163,7 @@ final class ControlSocket {
       self.retireApproved { $0 == key }
     }
     expiries[key] = item
-    queue.asyncAfter(wallDeadline: .now() + max(0, until.timeIntervalSinceNow) + 0.5, execute: item)
+    queue.asyncAfter(wallDeadline: .now() + max(0, until.timeIntervalSinceNow), execute: item)
   }
 
   private static let decidePrefix = Data("{\"decide\":".utf8)

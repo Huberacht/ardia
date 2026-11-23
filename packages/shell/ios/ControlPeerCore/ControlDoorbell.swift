@@ -94,8 +94,9 @@ public final class ControlDoorbell {
       return false
     }
     if outcome == .deny {
-      quietAll(ask.key, .deny, at: at)
+      guard stillLive(id, at: at) != nil else { return false }
       end(id, .deny, admit: false)
+      quietAll(ask.key, .deny, at: at)
       return true
     }
     if outcome == .unshown {
