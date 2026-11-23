@@ -346,10 +346,9 @@ public final class WebTab: DiscardablePage, Identifiable {
       if let value = tab.progressThrottle.offer(view.estimatedProgress, at: .now) { tab.progress = value }
     }
     watch(\.isLoading) { tab, view in
-      if view.isLoading, !tab.isLoading {
-        tab.navigationGeneration += 1
-        tab.hasCommittedLoad = false
-      }
+      if view.isLoading, !tab.isLoading { tab.navigationGeneration += 1 }
+      let committed = PageLoadCommit.after(loading: view.isLoading, wasLoading: tab.isLoading, committed: tab.hasCommittedLoad)
+      if committed != tab.hasCommittedLoad { tab.hasCommittedLoad = committed }
       if tab.isLoading != view.isLoading { tab.isLoading = view.isLoading }
       if !view.isLoading {
         tab.progressThrottle.reset()

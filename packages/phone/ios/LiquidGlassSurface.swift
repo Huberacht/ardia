@@ -289,7 +289,7 @@ final class LiquidGlassSurface: UIView {
   private func setLens(on: Bool, fades: Bool) {
     guard on != lensOn else { return }
     let now = CACurrentMediaTime()
-    if lensOn == true, !on, choice.path == .live, now - lastBridge >= 1 {
+    if lensOn == true, !on, choice.path == .live, waitsForPage, now - lastBridge >= 1 {
       lastBridge = now
       PendingCounts.add(PendingCounts.glassLensBridged)
     }

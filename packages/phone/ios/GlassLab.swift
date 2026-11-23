@@ -12,17 +12,19 @@ final class GlassLabScroll: NSObject {
   private let seconds: Double
   private let period: Double
   private let reach: CGFloat
+  private let zoom: CGFloat?
   private var link: CADisplayLink?
   private var started: CFTimeInterval = 0
 
-  private init(web: WKWebView, seconds: Double, period: Double, reach: CGFloat) {
+  private init(web: WKWebView, seconds: Double, period: Double, reach: CGFloat, zoom: CGFloat?) {
     self.web = web
     self.seconds = seconds
     self.period = period
     self.reach = reach
+    self.zoom = zoom
   }
 
-  static func start(after delay: Double, for seconds: Double, period: Double = 4, reach: CGFloat = 2400) {
+  static func start(after delay: Double, for seconds: Double, period: Double = 4, reach: CGFloat = 2400, zoom: CGFloat? = nil) {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
       MainActor.assumeIsolated {
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
@@ -30,7 +32,7 @@ final class GlassLabScroll: NSObject {
           NSLog("PAGELAB glass scroll found no page")
           return
         }
-        let scroll = GlassLabScroll(web: web, seconds: seconds, period: period, reach: reach)
+        let scroll = GlassLabScroll(web: web, seconds: seconds, period: period, reach: reach, zoom: zoom)
         running = scroll
         scroll.begin()
       }
@@ -47,6 +49,12 @@ final class GlassLabScroll: NSObject {
   }
 
   private func begin() {
+    if let zoom {
+      let scroll = web.scrollView
+      scroll.maximumZoomScale = max(scroll.maximumZoomScale, scroll.zoomScale * zoom)
+      scroll.setZoomScale(scroll.zoomScale * zoom, animated: false)
+      NSLog("PAGELAB glass zoom %.2f (min %.2f max %.2f)", scroll.zoomScale, scroll.minimumZoomScale, scroll.maximumZoomScale)
+    }
     started = CACurrentMediaTime()
     WebTab.labScrollCountsAsTouch = true
     let made = CADisplayLink(target: self, selector: #selector(tick(_:)))
@@ -95,6 +103,27 @@ enum GlassLabRim {
         }
         window.addSubview(board)
         NSLog("PAGELAB glass rim probe shown")
+      }
+    }
+  }
+}
+
+@MainActor
+enum GlassLabNavigate {
+  static func start(after delay: Double, to target: URL, stopAfter: Double?) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+      MainActor.assumeIsolated {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let web = windows.flatMap(GlassLabScroll.pages).first else { return }
+        NSLog("PAGELAB glass navigate to %@", target.host ?? "-")
+        web.load(URLRequest(url: target))
+        guard let stopAfter else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + stopAfter) {
+          MainActor.assumeIsolated {
+            NSLog("PAGELAB glass stop loading (still loading: %@)", web.isLoading ? "yes" : "no")
+            web.stopLoading()
+          }
+        }
       }
     }
   }

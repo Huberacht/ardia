@@ -242,30 +242,30 @@ struct LiquidGlassTests {
     #expect(GlassStacking.opaqueFloor([GlassStacking.Coverage(rect: screen, opaque: false)], covering: strip) == nil)
   }
 
-  @Test func `a snapshot is kept only for the page and navigation it was asked for`() {
+  @Test func `a page picture is kept only for the page and committed document it was asked for`() {
     var gate = GlassSnapshotGate()
-    let first = GlassPageKey(page: 1, navigation: 4)
+    let first = GlassPageKey(page: 1, committed: 4)
     let firstSeen = gate.observe(first)
     let seenAgain = gate.observe(first)
     #expect(firstSeen)
     #expect(!seenAgain)
     let asked = gate.begin(now: 0)
     #expect(gate.accepts(token: asked, key: first))
-    let otherTab = gate.observe(GlassPageKey(page: 2, navigation: 4))
+    let otherTab = gate.observe(GlassPageKey(page: 2, committed: 4))
     #expect(otherTab, "another tab")
     #expect(!gate.accepts(token: asked, key: first), "a late completion from the old tab is refused")
-    #expect(!gate.accepts(token: asked, key: GlassPageKey(page: 2, navigation: 4)))
-    let newDocument = gate.observe(GlassPageKey(page: 2, navigation: 5))
-    #expect(newDocument, "a new document in the same tab")
+    #expect(!gate.accepts(token: asked, key: GlassPageKey(page: 2, committed: 4)))
+    let newDocument = gate.observe(GlassPageKey(page: 2, committed: 5))
+    #expect(newDocument, "a new document committed in the same tab")
     let again = gate.begin(now: 1)
     let newer = gate.begin(now: 1.1)
-    #expect(!gate.accepts(token: again, key: GlassPageKey(page: 2, navigation: 5)), "only the newest request counts")
-    #expect(gate.accepts(token: newer, key: GlassPageKey(page: 2, navigation: 5)))
+    #expect(!gate.accepts(token: again, key: GlassPageKey(page: 2, committed: 5)), "only the newest request counts")
+    #expect(gate.accepts(token: newer, key: GlassPageKey(page: 2, committed: 5)))
   }
 
   @Test func `WebKit is asked while the page is still or scrolls slowly, far from the last snapshot or after a second`() {
     var gate = GlassSnapshotGate()
-    gate.observe(GlassPageKey(page: 1, navigation: 1, committed: 1))
+    gate.observe(GlassPageKey(page: 1, committed: 1))
     func ask(image: Bool = true, pending: Bool = false, still: Int = 5, distance: CGFloat = 0, age: TimeInterval = 0, committed: Bool = true, speed: CGFloat = 0, moving: Bool = false) -> GlassSnapshotAsk {
       GlassSnapshotAsk(hasImage: image, pending: pending, stillFrames: still, distance: distance, age: age, committed: committed, speed: speed, allowsMoving: moving)
     }
@@ -293,11 +293,11 @@ struct LiquidGlassTests {
     #expect(!GlassFlowRules.acceptsSnapshot(moved: true, maxSpeed: 900, allowsMoving: true, zoomRequested: 1, zoomNow: 1), "a fling while it was taken")
     #expect(!GlassFlowRules.acceptsSnapshot(moved: false, maxSpeed: 0, allowsMoving: true, zoomRequested: 1, zoomNow: 2))
     var gate = GlassSnapshotGate()
-    gate.observe(GlassPageKey(page: 1, navigation: 3, committed: 7))
+    gate.observe(GlassPageKey(page: 1, committed: 7))
     let asked = gate.begin(now: 0)
-    let reloaded = gate.observe(GlassPageKey(page: 1, navigation: 3, committed: 8))
+    let reloaded = gate.observe(GlassPageKey(page: 1, committed: 8))
     #expect(reloaded, "the same URL committed again")
-    #expect(!gate.accepts(token: asked, key: GlassPageKey(page: 1, navigation: 3, committed: 7)))
+    #expect(!gate.accepts(token: asked, key: GlassPageKey(page: 1, committed: 7)))
   }
 
   @Test func `a flat snapshot is kept only when the page's own background is that flat colour`() {
@@ -355,6 +355,25 @@ struct LiquidGlassTests {
     #expect(GlassFlowRules.direction(velocity: 5, last: -1) == -1, "a creep keeps the last direction")
   }
 
+  @Test func `a zoomed page reaches as far on screen, and its picture never takes more than two million pixels`() {
+    let visible = CGRect(x: 0, y: 2000, width: 402 / 5, height: 874 / 5)
+    let zoomed = GlassFlowRules.documentArea(visible: visible, documentHeight: 20000, direction: 1, speed: 0, zoom: 5)
+    #expect(abs((zoomed.maxY - visible.maxY) * 5 - 3600) < 0.01 && abs((visible.minY - zoomed.minY) * 5 - 1200) < 0.01)
+    #expect(GlassFlowRules.rasterScale(area: CGRect(x: 0, y: 0, width: 402, height: 9600), zoom: 1, pixelsPerPoint: 0.5) == 0.5)
+    let area = CGRect(x: 0, y: 0, width: 170, height: 9000)
+    let scale = GlassFlowRules.rasterScale(area: area, zoom: 5, pixelsPerPoint: 0.5)
+    #expect(scale < 2.5 && area.width * area.height * scale * scale <= GlassFlowRules.rasterPixelsLongest + 1, "at 5x a 9,000 point picture would be 9.6 million pixels")
+  }
+
+  @Test func `WebKit's PDF work counts against the budget when it runs most of the time`() {
+    let spans: [(start: TimeInterval, end: TimeInterval?)] = [(10, 10.08), (10.3, 10.38), (10.6, 10.68)]
+    #expect(abs(GlassFlowRules.documentBusy(spans, now: 11) - 0.12) < 0.001)
+    #expect(!GlassFlowRules.documentOverBudget(spans, now: 11))
+    let back: [(start: TimeInterval, end: TimeInterval?)] = [(9.0, 9.5), (9.5, 10.0), (10.0, 10.4), (10.4, nil)]
+    #expect(GlassFlowRules.documentOverBudget(back, now: 10.9), "one after another, the last still running")
+    #expect(!GlassFlowRules.documentOverBudget(Array(back.dropLast()) + [(start: 10.4, end: 10.9)], now: 13.5), "and it drains once they stop")
+  }
+
   @Test func `a new document picture is asked for before the scroll runs past the one it has`() {
     let needed = CGRect(x: 0, y: 736, width: 402, height: 96)
     let placed = CGRect(x: 0, y: -1200, width: 402, height: 4000)
@@ -369,6 +388,8 @@ struct LiquidGlassTests {
     #expect(wanted(velocity: 3000), "a fling needs 2,250 points of lead")
     #expect(wanted(placed: placed.offsetBy(dx: 0, dy: 1000), velocity: -1000), "scrolling up runs out above")
     #expect(!wanted(document: CGRect(x: 0, y: -5000, width: 402, height: 7800), velocity: 3000), "no lead is asked for past the end of the document")
+    #expect(!wanted(placed: CGRect(x: 0, y: -1200, width: 402, height: 5100), velocity: 9400), "a fling's lead is capped at 3,000 points, half a fresh picture's 6,000, so a new picture lasts")
+    #expect(wanted(placed: CGRect(x: 0, y: -1200, width: 402, height: 4000), velocity: 9400))
     let need = GlassFlowRules.captureNeed(footprint: CGRect(x: 0, y: 700, width: 402, height: 160), velocity: CGPoint(x: 0, y: 1000))
     #expect(need == CGRect(x: 0, y: 700, width: 402, height: 410))
     let held = CGRect(x: 0, y: -1000, width: 402, height: 2500)

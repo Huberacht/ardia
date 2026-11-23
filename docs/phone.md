@@ -1393,33 +1393,42 @@ Metal.
     deck's Incognito crossfade). This is how the deck's chrome draws its backdrop and the start page's buttons their
     spaces and mark.
   - Views are drawn off the main thread (`GlassLayerCopy`, `GlassSteps`): on the main thread the walk copies the
-    layer tree it would draw (geometry, contents, colours, corners, borders, masks, shapes, gradients, from the
-    presentation tree, so it matches what is on screen mid-animation; at most 2,000 layers), and a capture queue
-    renders the copy with `layer.render(in:)`, decoding any new pictures there. The result lands a frame or two later;
-    until then the glass keeps its last capture. `GlassLayerCopyTests` checks the copy renders pixel for pixel what the
-    original does. A source the copy refuses, or one whose layer tree comes back blank, is drawn on the main thread as
-    before (`drawHierarchy(afterScreenUpdates: false)` for a blank one). `ArdiaGlassOnMain` draws on the main thread for
-    comparison and `ArdiaGlassCopyProbe` draws both ways and logs how far they differ.
+    layer tree it would draw from the presentation tree, so it matches what is on screen mid-animation (at most
+    2,000 layers), and a capture queue renders the copy with `layer.render(in:)`. The copy carries only immutable
+    things across: geometry, colours, corners, borders, shapes, gradients and `CGImage` contents, so a new picture
+    is decoded off the main thread. Anything else a layer draws itself (a drawn backing store, text) is rasterized on
+    the main thread at the capture's scale, a cheap blit of pixels that already exist, and carried as a picture.
+    Replicator, transform, scroll and tiled layers, and a mask the copy can't carry, are refused, and that source is
+    drawn on the main thread as before (`drawHierarchy(afterScreenUpdates: false)` for one whose layer tree comes back
+    blank). The result lands a frame or two later; until then the glass keeps its last capture.
+    `GlassLayerCopyTests` renders text, a picture, a drawn layer and shape and picture masks both ways and checks
+    the refusals. `ArdiaGlassOnMain` draws on the main thread for comparison and `ArdiaGlassCopyProbe` draws both ways
+    and logs how far they differ.
   - The page bar and host pill draw the page from WebKit's `createPDF`, which WebKit paints in its own process from
     the document itself, in document coordinates, so a picture taken while the page scrolls lands exactly where the
-    page is (the lab's placement probe measures 0 to 0.5 points against the screen). A document up to 9,000 points
-    tall is drawn whole; a longer one from 1,200 points behind the scroll to 3,600 ahead (during a fling up to
-    6,000 ahead, 1.5 s of travel, and up to 3,000 behind in case it turns; 2,400 each way before the page has
-    moved). The picture is rasterized off the main thread at the capture's scale. A new one is asked for, one at a time, before the scroll is within 1,200 points (or 0.75 s of
-    travel) of its end, and every 2 s while the page is still, for changes in the page. While the page scrolls the
-    lens samples the blurred picture where the page now is (a uniform, not a new capture) and redraws it, off the
-    main thread, 1,800 points each way around the glass (up to 3,600 during a fling), only to recentre it a quarter
-    second ahead of the scroll or when a new picture arrives, as long as
-    nothing over the page crosses the strip. A picture is used only for the web view, navigation and committed
-    document it was asked for (`WebTab.committedDocuments`, so a same-URL reload drops it) at the same zoom; one that
-    fails, comes back blank, or comes back a flat colour that isn't the page's own background is refused and the
-    requests back off. Fixed and sticky elements are painted where the document places them, not where they float
-    on screen.
+    page is (the lab's placement probe measures 0 to 0.5 points against the screen). A document up to 9,000 screen
+    points tall is drawn whole; a longer one from 1,200 screen points behind the scroll to 3,600 ahead (during a
+    fling up to 6,000 ahead, 1.5 s of travel, and up to 3,000 behind in case it turns; 2,400 each way before the page
+    has moved), measured on screen, so a pinch-zoomed page reaches as far. The picture is rasterized off the main
+    thread at the capture's scale, at most two million pixels (a zoomed page's picture drops in resolution; the blur
+    hides it). A new one is asked for, one at a time and at least a quarter second apart, before the scroll is within
+    1,200 points (0.75 s of travel, at most 3,000, half of the furthest picture) of its end, and every 2 s while the
+    page is still, for changes in the page. While the page scrolls the lens samples the blurred picture where the page
+    now is (a uniform, not a new capture). That capture holds the page's picture alone, 1,800 points each way around
+    the glass (up to 3,600 during a fling) and only where the picture has pixels, and is redrawn off the main thread
+    only to recentre it a quarter second ahead of the scroll or when a new picture arrives, as long as nothing over
+    the page comes within 200 points of the glass and the glass sits over the web view; otherwise the strip around
+    the glass is redrawn as it is on screen. A picture is used only for the web view and committed document it was
+    asked for (`WebTab.committedDocuments`, so a same-URL reload drops it, while a load that is stopped or fails
+    before it commits keeps the page it was showing) at the same zoom. A capture that was being drawn when a new
+    document committed is dropped when it lands. One that fails, comes back blank, or comes back a flat colour that
+    isn't the page's own background is refused and the requests back off. Fixed and sticky elements are painted
+    where the document places them, not where they float on screen. WebKit's work counts against the budget: a
+    page whose pictures keep WebKit busy more than 60 % of two seconds is over budget like main-thread work.
   - WebKit's `takeSnapshot` is kept for comparison (`ArdiaGlassPageShot snapshot`): it returns only the visible
     viewport, whatever rect it is asked for (the rest comes back transparent), so it can't reach ahead of a scroll,
-    and a snapshot taken while scrolling can't be placed exactly. In that mode WebKit is asked again every 8 points
-    while the page creeps (under 400 points a second), never during a fling; `ArdiaGlassStillSnapshots` asks only
-    while it is still.
+    and a snapshot taken while scrolling can't be placed exactly. In that mode WebKit is asked only while the page is
+    still; `ArdiaGlassMovingSnapshots` also asks every 8 points while it creeps (under 400 points a second).
   - **Clear glass.** Whenever a refracting glass has no capture that covers it (past the snapshot during a fling,
     before its first capture, after a failure, while the shader compiles, while it is over budget), it shows clear
     glass instead of an opaque fill: a translucent veil (#FFFFFF at 66 %, #1C1C1E at 62 % in dark) under the profile
@@ -1452,7 +1461,10 @@ Metal.
   chrome fill over a page, `ArdiaGlassCapture auto|hierarchy|layer|none` picks the capture (`auto` is the default;
   `none` is the control), `ArdiaGlassScroll <s>` scrolls the page on screen up and down for that long (counting as a touch, so the bar
   collapses; `ArdiaGlassScrollPeriod <s>` sets how fast and `ArdiaGlassScrollReach <points>` how far),
-  `ArdiaGlassPlacementProbe` checks each page picture against WebKit's own snapshot of the screen, `ArdiaGlassSnapshotVisible` uses WebKit's visible-view
+  `ArdiaGlassPlacementProbe` checks each page picture against WebKit's own snapshot of the screen,
+  `ArdiaGlassZoom <x>` pinch-zooms the page before the lab scroll, `ArdiaGlassNavigate <s>` with `ArdiaGlassNavigateTo
+  <url>` loads another page (and `ArdiaGlassStopAfter <s>` stops that load), `ArdiaGlassSlowCopy <s>` holds each
+  capture on its queue that long, `ArdiaGlassSnapshotVisible` uses WebKit's visible-view
   snapshot for comparison, `ArdiaGlassPageMode full` recaptures every frame instead of shifting,
   `ArdiaGlassReload <s>` reloads the page on screen, `ArdiaGlassRimProbe` shows two glasses with and without their rim
   over a solid and a translucent colour (the screen proves `plusL` adds: both rise by the same 63 levels, clamped at
@@ -1938,7 +1950,7 @@ Every count and timing the phone can send, for the owner to read as one set and 
 | `card_close_tapped` | the × on a card in Android's Material deck | Whether people close tabs with the card's own button rather than a flick; zero across Android testers after a release means the × stopped closing cards, or its tap zone opens the card instead |
 | `material_back_swiped` | a predictive back swipe on Android's Material sheets, dialogs, menus and library | Whether people swipe back out of Material surfaces; zero across Android testers after a release means the swipe stopped reaching them, or Back goes to the wrong surface |
 | `glass_shaders_failed` | Liquid Glass on Android (CodeRabbit on #3759: a lens refused mid-session still reported `lens` at launch) | Counted natively and drained with the pending counts: each time Android refused to build the lens or rim shader, so that glass drew plain frost until the app next came back to the foreground and tried again. `app_launched.glass_render` can't see this, since it's read before any glass draws. Any count on Android 13+ phones means a GPU or driver rejects the AGSL; compare it with the `lens` launches. Since #3950 the iPhone counts its Metal shader failing to compile the same way |
-| `glass_lens_bridged` | Liquid Glass on iPhone, the lens over the page on every frame (#3950) | Counted natively and drained with the pending counts: each time a refracting iPhone glass faded from its lens to clear glass because its capture of what lies under it ran out (a page scrolled past its picture, a capture that failed), at most once a second per glass; over-budget glass is counted in `glass_captures_over_budget` instead. It should stay near zero: a rising count against `glass_render` `lens` launches means the page pictures don't keep up on those phones |
+| `glass_lens_bridged` | Liquid Glass on iPhone, the lens over the page on every frame (#3950) | Counted natively and drained with the pending counts: each time the page bar or host pill faded from its lens to clear glass because its capture of the page ran out (a page scrolled past its picture, a capture that failed), at most once a second per glass; the deck's and other glass's fades aren't counted; over-budget glass is counted in `glass_captures_over_budget` instead. It should stay near zero: a rising count against `glass_render` `lens` launches means the page pictures don't keep up on those phones |
 | `glass_captures_over_budget` | Liquid Glass on iPhone, every glass refracting (#3950) | Counted natively and drained with the pending counts: each time an iPhone glass's capture of what lies under it went over budget (its main-thread work, from the walk to the capture, took longer than one frame once, or more than 12 % of the main thread over two seconds), so that glass showed clear glass for 3 s, doubling up to 30 s while it kept tripping within a minute. A rising count means capturing is too slow on those phones; compare it with the iPhone `lens` launches |
 | `night_shade_verdicts_reused`, `night_shade_verdicts_learned`, `night_shade_verdicts_corrected` | Night Shade's cached verdicts on Android (a tester's report: yahoo.com loaded white until half way) | Counted natively and drained with the pending counts, never for private tabs. `reused` is a page load, with Night Shade not off, whose site's verdict was already known, so the shade was decided before the first paint; `learned` is a site measured for the first time, whose first load can still shade late; `corrected` is a site whose verdict changed, so that load showed the old one until `DOMContentLoaded`. Read `reused` against `learned` for the hit rate, which should climb as testers revisit sites; a `corrected` share that grows means the measurement disagrees with itself between loads |
 

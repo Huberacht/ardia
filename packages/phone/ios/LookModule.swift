@@ -21,7 +21,11 @@ public final class LookModule: Module {
           if PhoneTestBuild.isOn, let seconds = UserDefaults.standard.object(forKey: "ArdiaGlassScroll").flatMap({ Double(String(describing: $0)) }), seconds > 0 {
             let period = UserDefaults.standard.object(forKey: "ArdiaGlassScrollPeriod").flatMap { Double(String(describing: $0)) } ?? 4
             let reach = UserDefaults.standard.object(forKey: "ArdiaGlassScrollReach").flatMap { Double(String(describing: $0)) } ?? 2400
-            GlassLabScroll.start(after: 8, for: seconds, period: max(period, 0.2), reach: CGFloat(reach))
+            let zoom = UserDefaults.standard.object(forKey: "ArdiaGlassZoom").flatMap { Double(String(describing: $0)) }
+            GlassLabScroll.start(after: 8, for: seconds, period: max(period, 0.2), reach: CGFloat(reach), zoom: zoom.map { CGFloat($0) })
+          }
+          if PhoneTestBuild.isOn, let delay = UserDefaults.standard.object(forKey: "ArdiaGlassNavigate").flatMap({ Double(String(describing: $0)) }), let target = UserDefaults.standard.string(forKey: "ArdiaGlassNavigateTo").flatMap(URL.init(string:)) {
+            GlassLabNavigate.start(after: delay, to: target, stopAfter: UserDefaults.standard.object(forKey: "ArdiaGlassStopAfter").flatMap { Double(String(describing: $0)) })
           }
           if PhoneTestBuild.flag("ArdiaGlassRimProbe") { GlassLabRim.start(after: 6) }
           if PhoneTestBuild.isOn, let delay = UserDefaults.standard.object(forKey: "ArdiaGlassReload").flatMap({ Double(String(describing: $0)) }), delay > 0 { GlassLabReload.start(after: delay) }

@@ -3,12 +3,10 @@ import Foundation
 
 public struct GlassPageKey: Hashable, Sendable {
   public var page: Int
-  public var navigation: Int
   public var committed: Int
 
-  public init(page: Int, navigation: Int, committed: Int = 0) {
+  public init(page: Int, committed: Int) {
     self.page = page
-    self.navigation = navigation
     self.committed = committed
   }
 }
@@ -143,6 +141,10 @@ public enum GlassFlowRules {
   public static let documentAheadSeconds: CGFloat = 1.5
   public static let documentLead: CGFloat = 1200
   public static let documentLeadSeconds: CGFloat = 0.75
+  public static let documentLeadLongest: CGFloat = 3000
+  public static let documentGap: TimeInterval = 0.25
+  public static let documentBusyShare = 0.6
+  public static let rasterPixelsLongest: CGFloat = 2_000_000
   public static let documentBehindSeconds: CGFloat = 0.4
   public static let documentBehindLongest: CGFloat = 3000
   public static let documentWhole: CGFloat = 9000
@@ -152,18 +154,39 @@ public enum GlassFlowRules {
   public static let captureReachSeconds: CGFloat = 0.6
   public static let captureLeadSeconds: CGFloat = 0.25
 
-  public static func documentArea(visible: CGRect, documentHeight: CGFloat, direction: CGFloat, speed: CGFloat) -> CGRect {
-    let first = min(visible.minY, 0) - documentOverscroll
-    let last = max(documentHeight, visible.maxY) + documentOverscroll
-    if last - first <= documentWhole { return CGRect(x: visible.minX, y: first, width: visible.width, height: last - first) }
-    let ahead = min(max(documentAhead, speed * documentAheadSeconds), documentAheadLongest)
-    let behind = min(max(documentBehind, speed * documentBehindSeconds), documentBehindLongest)
+  public static func documentArea(visible: CGRect, documentHeight: CGFloat, direction: CGFloat, speed: CGFloat, zoom: CGFloat = 1) -> CGRect {
+    let scale = max(zoom, 0.01)
+    let first = min(visible.minY, 0) - documentOverscroll / scale
+    let last = max(documentHeight, visible.maxY) + documentOverscroll / scale
+    if (last - first) * scale <= documentWhole { return CGRect(x: visible.minX, y: first, width: visible.width, height: last - first) }
+    let ahead = min(max(documentAhead, speed * documentAheadSeconds), documentAheadLongest) / scale
+    let behind = min(max(documentBehind, speed * documentBehindSeconds), documentBehindLongest) / scale
     let even = (ahead + behind) / 2
     let above = direction > 0 ? behind : direction < 0 ? ahead : even
     let below = direction > 0 ? ahead : direction < 0 ? behind : even
     let top = max(visible.minY - above, first)
     let bottom = min(visible.maxY + below, last)
     return CGRect(x: visible.minX, y: top, width: visible.width, height: max(bottom - top, visible.height))
+  }
+
+  public static func rasterScale(area: CGRect, zoom: CGFloat, pixelsPerPoint: CGFloat) -> CGFloat {
+    let wanted = zoom * pixelsPerPoint
+    let pixels = area.width * area.height * wanted * wanted
+    guard pixels > rasterPixelsLongest, pixels > 0 else { return wanted }
+    return wanted * (rasterPixelsLongest / pixels).squareRoot()
+  }
+
+  public static func documentBusy(_ spans: [(start: TimeInterval, end: TimeInterval?)], now: TimeInterval) -> Double {
+    let from = now - LiquidGlassRules.budgetWindow
+    let busy = spans.reduce(0.0) { total, span in
+      let end = min(span.end ?? now, now)
+      return total + max(end - max(span.start, from), 0)
+    }
+    return busy / LiquidGlassRules.budgetWindow
+  }
+
+  public static func documentOverBudget(_ spans: [(start: TimeInterval, end: TimeInterval?)], now: TimeInterval) -> Bool {
+    documentBusy(spans, now: now) > documentBusyShare
   }
 
   public static func captureReach(speed: CGFloat) -> CGFloat {
@@ -174,7 +197,7 @@ public enum GlassFlowRules {
     guard hasImage, !placed.isNull else { return true }
     let reachable = needed.intersection(document)
     if still { return age >= documentRefresh || !placed.contains(reachable.isNull ? needed : reachable) }
-    let lead = max(documentLead, abs(velocity) * documentLeadSeconds)
+    let lead = min(max(documentLead, abs(velocity) * documentLeadSeconds), documentLeadLongest)
     let ahead = needed.union(needed.offsetBy(dx: 0, dy: velocity >= 0 ? lead : -lead)).intersection(document)
     guard !ahead.isNull else { return false }
     return !placed.insetBy(dx: -0.5, dy: -0.5).contains(ahead)

@@ -20,7 +20,7 @@ struct GlassSteps: @unchecked Sendable {
   private(set) var layers = 0
 
   @MainActor
-  static func make(_ pieces: [GlassLayerPiece], page: GlassPageShot) -> GlassSteps? {
+  static func make(_ pieces: [GlassLayerPiece], page: GlassPageShot, pixelsPerPoint: CGFloat) -> GlassSteps? {
     var made = GlassSteps()
     for piece in pieces {
       let clips = piece.clips.map(\.path)
@@ -28,7 +28,7 @@ struct GlassSteps: @unchecked Sendable {
         guard let placed = page.placed(web) else { return nil }
         made.steps.append(Step(kind: .image(placed.image, rect: placed.rect, clip: web.bounds), transform: piece.transform, alpha: piece.alpha, clips: clips))
       } else if let view = piece.view {
-        guard case .success(let tree) = GlassLayerCopy.tree(of: view.layer) else { return nil }
+        guard case .success(let tree) = GlassLayerCopy.tree(of: view.layer, pixelsPerPoint: pixelsPerPoint) else { return nil }
         made.layers += tree.layers
         let alpha = piece.alpha / (GlassProbe.appliesOwnAlpha(.layer) ? max(CGFloat(tree.root.opacity), 0.01) : 1)
         made.steps.append(Step(kind: .layer(tree), transform: piece.transform, alpha: alpha, clips: clips))
@@ -38,6 +38,13 @@ struct GlassSteps: @unchecked Sendable {
       }
     }
     return made
+  }
+
+  static func page(_ image: CGImage, in rect: CGRect, across bounds: CGRect, transform: CGAffineTransform) -> (steps: GlassSteps, drawn: CGRect) {
+    let band = CGRect(x: bounds.minX, y: rect.minY, width: bounds.width, height: rect.height).intersection(rect)
+    var made = GlassSteps()
+    made.steps.append(Step(kind: .image(image, rect: rect, clip: band), transform: transform, alpha: 1, clips: []))
+    return (made, band.applying(transform))
   }
 
   func draw(in context: CGContext) {

@@ -82,7 +82,7 @@ final class GlassCapture {
 
   var strikes = 1
 
-  func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, strikes: strikes) }
+  func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, strikes: strikes) || page.isOverBudget(now: now) }
 
   func forgetSamples() {
     samples = []
@@ -96,6 +96,9 @@ final class GlassCapture {
   var isChanging: Bool { settle > 0 }
 
   func drop() {
+    token += 1
+    flying = false
+    landed = nil
     guard texture != nil else { return }
     texture = nil
     rect = .null
@@ -195,13 +198,18 @@ final class GlassCapture {
     flying = true
     let follow = web.map { (web: $0, offset: $0.scrollView.contentOffset) }
     let box = GlassPixels(pixels)
+    let slow = GlassLaunch.slowCopy
     Self.queue.async {
       let started = CACurrentMediaTime()
+      if slow > 0 { Thread.sleep(forTimeInterval: slow) }
       let inked = Self.render(steps, into: box.pixels, rect: captured, pixelsPerPoint: pixelsPerPoint)
       let ms = (CACurrentMediaTime() - started) * 1000
       DispatchQueue.main.async {
         MainActor.assumeIsolated {
-          guard token == self.token else { return }
+          guard token == self.token else {
+            if PhoneTestBuild.isOn { NSLog("PAGELAB glass copy dropped: the document or capture changed while it was drawn") }
+            return
+          }
           self.flying = false
           self.landed = Landed(pixels: box.pixels, rect: captured, valid: wanted, inked: inked, ms: ms, askedAt: now, follow: follow)
           GlassFrames.shared.schedule()

@@ -28,13 +28,13 @@ public enum GlassLayerCopy {
   }
 
   @MainActor
-  public static func tree(of layer: CALayer) -> Result<GlassLayerTree, Refusal> {
+  public static func tree(of layer: CALayer, pixelsPerPoint: CGFloat = 1) -> Result<GlassLayerTree, Refusal> {
     var budget = layerBudget
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     defer { CATransaction.commit() }
     do {
-      let root = try copy(shown(layer), budget: &budget) ?? CALayer()
+      let root = try copy(shown(layer), scale: max(pixelsPerPoint, 0.05), budget: &budget) ?? CALayer()
       return .success(GlassLayerTree(root: root, layers: layerBudget - budget))
     } catch {
       return .failure(error)
@@ -43,31 +43,77 @@ public enum GlassLayerCopy {
 
   static func shown(_ layer: CALayer) -> CALayer { layer.presentation() ?? layer }
 
-  public static func renders(_ layer: CALayer) -> Bool {
-    !(layer is CAMetalLayer) && !NSStringFromClass(type(of: layer)).contains("Backdrop") && !(layer is CAEmitterLayer) && !(layer is CAReplicatorLayer) && !(layer is CATransformLayer)
+  public static func drawsNothing(_ layer: CALayer) -> Bool {
+    layer is CAMetalLayer || layer is CAEmitterLayer || NSStringFromClass(type(of: layer)).contains("Backdrop")
+  }
+
+  public static func refuses(_ layer: CALayer) -> Bool {
+    layer is CAReplicatorLayer || layer is CATransformLayer || layer is CAScrollLayer || layer is CATiledLayer
+  }
+
+  public static func isPicture(_ contents: Any?) -> Bool {
+    guard let contents else { return true }
+    return CFGetTypeID(contents as CFTypeRef) == CGImage.typeID
   }
 
   @MainActor
-  private static func copy(_ layer: CALayer, budget: inout Int) throws(Refusal) -> CALayer? {
+  private static func copy(_ layer: CALayer, scale: CGFloat, budget: inout Int) throws(Refusal) -> CALayer? {
     guard budget > 0 else { throw Refusal.tooMany }
     budget -= 1
-    guard renders(layer), !layer.isHidden, layer.opacity > 0 else { return nil }
+    if refuses(layer) { throw Refusal.unsafe }
+    guard !drawsNothing(layer), !layer.isHidden, layer.opacity > 0 else { return nil }
     let made: CALayer
     switch layer {
     case let shape as CAShapeLayer: made = shapeCopy(shape)
     case let gradient as CAGradientLayer: made = gradientCopy(gradient)
-    case let text as CATextLayer: made = textCopy(text)
     default: made = CALayer()
     }
     copyBase(layer, into: made)
+    if layer is CATextLayer || !isPicture(layer.contents) {
+      guard let picture = ownContents(of: layer, scale: scale) else { throw Refusal.unsafe }
+      made.contents = picture
+      made.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+      made.contentsCenter = CGRect(x: 0, y: 0, width: 1, height: 1)
+      made.contentsGravity = .resize
+    }
     if let mask = layer.mask {
-      guard let copied = try copy(mask, budget: &budget) else { return nil }
+      guard let copied = try copy(mask, scale: scale, budget: &budget) else { throw Refusal.unsafe }
       made.mask = copied
     }
     for sublayer in layer.sublayers ?? [] {
-      if let copied = try copy(sublayer, budget: &budget) { made.addSublayer(copied) }
+      if let copied = try copy(sublayer, scale: scale, budget: &budget) { made.addSublayer(copied) }
     }
     return made
+  }
+
+  @MainActor
+  private static func ownContents(of layer: CALayer, scale: CGFloat) -> CGImage? {
+    let bounds = layer.bounds
+    let width = max(Int((bounds.width * scale).rounded(.up)), 1)
+    let height = max(Int((bounds.height * scale).rounded(.up)), 1)
+    guard bounds.width > 0, bounds.height > 0, width <= 4096, height <= 4096, let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+    let own: CALayer
+    if let text = layer as? CATextLayer {
+      own = textCopy(text)
+    } else {
+      own = CALayer()
+      own.contents = layer.contents
+      own.contentsRect = layer.contentsRect
+      own.contentsCenter = layer.contentsCenter
+      own.contentsGravity = layer.contentsGravity
+      own.contentsScale = layer.contentsScale
+      own.isGeometryFlipped = layer.isGeometryFlipped
+    }
+    own.bounds = bounds
+    #if os(iOS)
+    context.translateBy(x: 0, y: CGFloat(height))
+    context.scaleBy(x: CGFloat(width) / bounds.width, y: -CGFloat(height) / bounds.height)
+    #else
+    context.scaleBy(x: CGFloat(width) / bounds.width, y: CGFloat(height) / bounds.height)
+    #endif
+    context.translateBy(x: -bounds.minX, y: -bounds.minY)
+    own.render(in: context)
+    return context.makeImage()
   }
 
   private static func copyBase(_ layer: CALayer, into made: CALayer) {
@@ -80,7 +126,7 @@ public enum GlassLayerCopy {
     made.sublayerTransform = layer.sublayerTransform
     made.isGeometryFlipped = layer.isGeometryFlipped
     made.isDoubleSided = layer.isDoubleSided
-    made.contents = layer.contents
+    if isPicture(layer.contents) { made.contents = layer.contents }
     made.contentsRect = layer.contentsRect
     made.contentsCenter = layer.contentsCenter
     made.contentsGravity = layer.contentsGravity
@@ -132,6 +178,7 @@ public enum GlassLayerCopy {
     return made
   }
 
+  @MainActor
   private static func textCopy(_ text: CATextLayer) -> CATextLayer {
     let made = CATextLayer()
     made.string = text.string

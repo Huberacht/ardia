@@ -26,10 +26,11 @@ enum GlassLaunch {
   static let pageMode: PageMode = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassPageMode").flatMap(PageMode.init(rawValue:)) ?? .shift) : .shift
   static let capture: Capture = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassCapture").flatMap(Capture.init(rawValue:)) ?? .auto) : .auto
   static let offMain = !PhoneTestBuild.flag("ArdiaGlassOnMain")
-  static let movingSnapshots = !PhoneTestBuild.flag("ArdiaGlassStillSnapshots")
+  static let movingSnapshots = PhoneTestBuild.flag("ArdiaGlassMovingSnapshots")
   static let forceClear = PhoneTestBuild.flag("ArdiaGlassForceClear")
   static let copyProbe = PhoneTestBuild.flag("ArdiaGlassCopyProbe")
   static let placementProbe = PhoneTestBuild.flag("ArdiaGlassPlacementProbe")
+  static let slowCopy = PhoneTestBuild.isOn ? (UserDefaults.standard.object(forKey: "ArdiaGlassSlowCopy").flatMap { Double(String(describing: $0)) } ?? 0) : 0
 
   enum PageShot: String {
     case pdf
