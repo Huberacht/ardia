@@ -195,6 +195,7 @@ test("signing by comment records the signature, flips the comment and re-runs th
     workflow_id: "cla.yml",
     event: "pull_request_target",
     head_sha: "head1",
+    branch: "feature",
     per_page: 20,
   });
   assert.equal(github.named("actions.reRunWorkflow")[0].params.run_id, 555);
@@ -240,6 +241,8 @@ test("an unlinked commit that only claims an allowlisted name still has to sign"
   const { core } = await runWith(github, pullEvent("opened"));
   assert.ok(core.failed);
   assert.match(github.named("issues.createComment")[0].params.body, /\*\*mantrakp04\*\* seems not to be a GitHub user/);
+  const behindTheOwner = fakeGithub({ commits: [commitBy(users.owner), commitBy(null, { name: "mantrakp04" })] });
+  assert.ok((await runWith(behindTheOwner, pullEvent("opened"))).core.failed);
   const linked = fakeGithub({ commits: [commitBy(users.owner)] });
   assert.equal((await runWith(linked, pullEvent("opened"))).core.failed, null);
 });

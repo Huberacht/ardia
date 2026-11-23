@@ -92,7 +92,8 @@ function committersOf(commits, number, allowlist = CONFIG.allowlist) {
   for (const commit of commits) {
     const who = committerOf(commit);
     const user = { name: who.login || who.name, id: who.databaseId || "", pullRequestNo: number };
-    if (!committers.some((known) => known.name === user.name)) committers.push(user);
+    const same = (known) => known.name === user.name && (known.id === user.id || !allowlisted(user.name, allowlist));
+    if (!committers.some(same)) committers.push(user);
   }
   const exempt = (committer) => allowlisted(committer.name, allowlist) && (Boolean(committer.id) || committer.name.endsWith("[bot]"));
   return committers.filter((committer) => committer.id !== GITHUB_ACTIONS_USER_ID && !exempt(committer));
@@ -264,6 +265,7 @@ async function rerunFailedCheck(github, repo, pull, core, config) {
     workflow_id: config.workflowFile,
     event: "pull_request_target",
     head_sha: pull.headSha,
+    branch: pull.headRef,
     per_page: 20,
   });
   const ofThisPull = (run) =>
