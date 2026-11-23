@@ -446,6 +446,45 @@ with `ProgramArguments` `/usr/bin/python3`, `<repo>/engine/patches/series.py`, `
 needs only the repo plus a copy of the base and the tree's touched files: `CHROMIUM_SRC` and `AC_SERIES_BASE` say
 where they are.
 
+### The series base archive
+
+`series.py check` needs a whole Chromium tree. CI has none, so each builder's base is published: only the files the
+platform's series touches, as step 3 left them, in `series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>.tar.xz`
+on the prerelease `series-base-<chromium>-<helium12>` (`helium12` is helium-chromium's commit, `helium-platform12`
+helium-macos's or helium-linux's), with a `.sha256` and a manifest of each file's sha256.
+`scripts/engine/series-bases.tsv` pins each archive's sha256 for its Chromium version, Helium commits, platform and CPU.
+`scripts/engine/series-zero-fuzz.py` reads the pins in `env.sh` and `helium-pins.ini`, fetches and verifies the
+matching archives (cached in `~/.cache/ardia/series-base`), and applies the series to each in a scratch directory:
+every `chromium` line with `git apply` and its exact context, every `layer` line with its `apply.sh`. A hunk that needs
+fuzz fails, naming the patch, its series line, the file and the hunk. A hunk that lands at an offset from its header
+fails when it does so on every platform that applies the patch: a patch for both platforms can sit exactly on only
+one when platform-only steps shift its file (`chromium-cef-carryover`, `chromium-helium-context-menu-cast` and
+`chromium-freeze-spares-live-connections` on 158).
+
+The Engine series workflow (`.github/workflows/engine-series.yml`, gated like the builds) runs it on Ubuntu for both
+platforms on every change to `engine/patches`, the layers' `apply.sh` and `copies.tsv`, `engine/chromium` and
+`scripts/engine`, with `--offsets warn --strict-since HEAD^`: a patch the change edits must land exactly, and the 67
+patches that already land at an offset on 158 are listed as warnings. `series-zero-fuzz.py --refresh-offsets` rewrites
+those hunks' headers and nothing else (every hunk then lands exactly on at least one platform); that moves both
+engine keys, so it goes in with the next engine build, after which the workflow can drop `--offsets warn`.
+
+**Re-pack the base on every Chromium or Helium move** (a new `CHROMIUM_VERSION` in `env.sh` or a new commit in
+`helium-pins.ini`), and when a step-3 input changes (`03-helium.py`, `ardia_namesub.py`, `ardia_resources.txt`,
+`domsub-keep-store.txt`, `ardia-icons`; the checker notes a digest mismatch). Until then the workflow fails with "no
+series base for …". Also re-pack when the series starts changing a file the archive lacks (a new hook): the
+checker names the file and asks for it. On each builder (the Mac tree and the Linux builder), after step 4, run:
+
+    scripts/agent/locked chromium --take <you>
+    python3 scripts/engine/series-base-pack.py pack --platform mac --dest <scratch dir>
+    scripts/agent/locked chromium --release <you>
+
+(`--platform linux` on the Linux builder). It is read-only on the tree: it checks that `chrome/VERSION` and the Helium checkouts match the pins and that
+`series.py check` reproduces the tree from the base (set `AC_CHROMIUM_BUILD` for a tree outside `~/chromium-build`),
+then packs. Copy the three files to a machine where `gh` is signed in (a Boat VM's isn't) and run
+`python3 scripts/engine/series-base-pack.py publish <archive>`. It creates the prerelease if needed, uploads the
+files (an asset already there must be identical) and writes the row into `series-bases.tsv`; commit that row with the
+pin move.
+
 ## Blocking a compromised certificate
 
 CRLSets and Chrome Root Store updates reach the engine from Google through the component updater
