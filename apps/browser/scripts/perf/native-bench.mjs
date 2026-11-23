@@ -124,7 +124,7 @@
 //   idle CPU / idle wakeups/s (…)           sessionRun  idle: idleWindow(), acperf rusage over the process tree --idle
 //                                                        secs apart with the channel paused, at 1 tab (--launch-settle
 //                                                        secs after the first page paints) and at 20
-//   JS heap / JS live objects (Hermes)      sessionRun  memory: HermesInternal.getInstrumentedStats() right after each
+//   JS heap / JS allocated (Hermes)         sessionRun  memory: HermesInternal.getInstrumentedStats() right after each
 //                                                        footprint: js_heapSize (the GC's capacity, in 4 MB segments) and
 //                                                        js_allocatedBytes
 //   memory (phys_footprint), …              sessionRun  memory: footprint() of the tree at 1 tab (after the idle
@@ -1092,7 +1092,7 @@ async function profilesRun(side, i) {
 
 const SESSION_PARTS = ["idle", "memory", "switch", "newtab", "newwindow"];
 
-const jsHeap = (app) => app.run(`const s = globalThis.HermesInternal?.getInstrumentedStats?.(); return s ? { heapMB: s.js_heapSize / 1048576, liveMB: s.js_allocatedBytes / 1048576 } : null;`).catch(() => null);
+const jsHeap = (app) => app.run(`const s = globalThis.HermesInternal?.getInstrumentedStats?.(); return s ? { heapMB: s.js_heapSize / 1048576, allocatedMB: s.js_allocatedBytes / 1048576 } : null;`).catch(() => null);
 
 async function sessionRun(side, i, parts) {
   const has = (part) => parts.has(part);

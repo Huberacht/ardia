@@ -46,7 +46,7 @@ export function summary(res) {
   for (const m of ["tabs1", "tabs10", "tabs20", "closed"]) {
     const at = m === "closed" ? "after closing" : `${m.slice(4)} tab(s)`;
     add(`JS heap (Hermes), ${at}`, S.map((r) => r.heap?.[m]?.heapMB), "MB", 1);
-    add(`JS live objects (Hermes), ${at}`, S.map((r) => r.heap?.[m]?.liveMB), "MB", 2);
+    add(`JS allocated, incl. garbage not yet collected (Hermes), ${at}`, S.map((r) => r.heap?.[m]?.allocatedMB), "MB", 2);
   }
   const used = (r, k) => {
     const windows = [r.idle.tabs1, r.idle.tabs20].filter(Boolean);
