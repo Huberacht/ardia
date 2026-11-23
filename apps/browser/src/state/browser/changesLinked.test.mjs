@@ -281,3 +281,13 @@ test("shrinking a big record lets its key order go, so the live record doesn't k
   assert.deepEqual(Object.keys(small), ["k0", "k1"]);
   assert.deepEqual(changedIds(withEntry(withEntry(small, "k1", { v: 0 }), "k0", { v: 0 }), small), ["k0", "k1"]);
 });
+
+test("a removal that lists one id several times counts it once toward letting the key order go", () => {
+  const first = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`k${i}`, { v: i }]));
+  const ordered = withEntry(withEntry(first, "k1", { v: -1 }), "k2", { v: -2 });
+  assert.deepEqual(changedIds(ordered, first), ["k1", "k2"]);
+  const base = keyOrderBase(ordered);
+  const removed = withoutEntries(ordered, ["k3", "k3", "k3", "k3", "k3", "k3"]);
+  assert.equal(keyOrderBase(removed), base, "one real deletion of ten keeps the inherited order");
+  assert.deepEqual(changedIds(removed, ordered), ["k3"]);
+});

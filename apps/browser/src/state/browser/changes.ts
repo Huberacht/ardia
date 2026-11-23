@@ -123,7 +123,7 @@ export function withEntry<T>(record: Record<string, T>, id: string, value: T): R
 
 export function withoutEntries<T>(record: Record<string, T>, ids: Iterable<string>): Record<string, T> {
   const next = { ...record };
-  const gone = [...ids];
+  const gone = [...new Set(ids)];
   for (const id of gone) delete next[id];
   return linkEdits(next, record, gone);
 }

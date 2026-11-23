@@ -106,3 +106,39 @@ test("a watcher that unsubscribes another while two tabs change at once stops it
   offC();
   assert.equal(watchedTabs(), 0);
 });
+
+test("a sole watcher that unsubscribes itself and watches the same tab again wakes the new watcher too, as before", () => {
+  const { a, b } = setup();
+  const offB = watchTab(b, () => {});
+  const woke = [];
+  let offFirst = () => {};
+  let offReplacement = () => {};
+  offFirst = watchTab(a, () => {
+    woke.push("first");
+    offFirst();
+    offReplacement = watchTab(a, () => woke.push("replacement"));
+  });
+  S().updateTab(a, { title: "one tab changed" });
+  assert.deepEqual(woke, ["first", "replacement"]);
+  S().updateTab(a, { title: "again" });
+  assert.deepEqual(woke, ["first", "replacement", "replacement"], "the replacement stays subscribed");
+  offReplacement();
+  offB();
+  assert.equal(watchedTabs(), 0);
+});
+
+test("a watcher that keeps replacing itself is called once per wake", () => {
+  const { a } = setup();
+  let calls = 0;
+  let off = () => {};
+  const again = () => {
+    calls++;
+    off();
+    off = watchTab(a, again);
+  };
+  off = watchTab(a, again);
+  S().updateTab(a, { title: "x" });
+  assert.equal(calls, 1);
+  off();
+  assert.equal(watchedTabs(), 0);
+});

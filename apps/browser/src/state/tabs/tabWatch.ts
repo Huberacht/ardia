@@ -14,12 +14,26 @@ export const watchBrowser = (listener: (s: BrowserState, prev: BrowserState) => 
 const watchers = new Map<string, Set<() => void>>();
 let listening = false;
 
+function wakeTab(id: string) {
+  let listeners = watchers.get(id);
+  const called = new Set<() => void>();
+  while (listeners) {
+    for (const listener of [...listeners]) {
+      if (called.has(listener)) continue;
+      called.add(listener);
+      listener();
+    }
+    const now = watchers.get(id);
+    if (now === listeners) return;
+    listeners = now;
+  }
+}
+
 function wake(s: BrowserState, prev: BrowserState) {
   if (s.tabs === prev.tabs) return;
   const changed = linkedChangedIds(s.tabs, prev.tabs);
   if (changed && changed.length <= 1) {
-    const listeners = changed.length ? watchers.get(changed[0]!) : undefined;
-    if (listeners) for (const listener of [...listeners]) listener();
+    if (changed.length) wakeTab(changed[0]!);
     return;
   }
   for (const [id, listeners] of watchers) {
