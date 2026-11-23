@@ -171,17 +171,18 @@ is the only source of which version may be fetched.
       digest), it's on, and the record's `approved` is that copy's exact receipt;
     - the new copy is the verified download of the pin's own digest (`folderId` is the pin's), its manifest has the
       same `name`, is marked `official` and has no problems;
-    - its manifest asks for nothing the approved one didn't. Permissions may narrow key by key (`tabs` write → read
-      → off, booleans true → false, `network` `"*"` → hosts the old ones cover → off). Everything else that runs,
-      reaches pages or changes the browser must be identical, order and limits included: programs with their paths
-      and after-update steps, hooks, tools and their timeouts, settings defaults and rows, menus, toolbar, sidebar
-      views, panels, omnibox, themes, site switches, the page bar, the page, `main` and sidecar specs with their
-      memory budgets, and every activation event other than `onCommand:`. Existing commands must stay exactly as
-      they were. The only additions are new command-bar commands that show a view or run a handler, and a first
-      `main` whose only way in is the command bar (all its activation events `onCommand:`; no page, panels, sidebar
-      views, toolbar, omnibox, menus, tools, hooks or sidecar). Title, description, version, `requires`, icon,
-      keywords, the telemetry text and a program's `example` and `claim` don't count. Any field the comparison
-      doesn't know prompts.
+    - its manifest asks for nothing the approved one didn't. Every field that runs, reaches pages, changes the
+      browser or grants anything must be identical, order and limits included: permissions (narrowing too, since it
+      changes which other plugins may call its tools; only the order of network hosts doesn't count), programs with
+      their paths and after-update steps, hooks, tools and their timeouts, settings defaults and rows, menus, toolbar,
+      sidebar views, panels, omnibox, themes, site switches, the page bar, the page, `main` and sidecar specs with
+      their memory budgets, every activation event other than `onCommand:`, and every approved command. The one
+      addition is a first `main` whose only way in is the command bar, with the new view or handler commands that
+      reach it: all its activation events `onCommand:`, no page, panels, sidebar views, toolbar, omnibox, menus,
+      tools, hooks or sidecar, and no permission it could use (only `control`, which is the separate program-control
+      setting). Title, description, version, `requires`, icon, keywords, the telemetry text and a program's
+      `example` and `claim` don't count. Any field the comparison doesn't know, or a malformed one, prompts. The
+      boundary row is `plugin-update:official-auto`.
     - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, and the consent lines that are
       new). While that copy is the one installed, the plugin's page shows "Updated by itself to 0.6.0", that it asks
       for nothing new, and those lines. `official_updates_auto` counts the switch once it took.

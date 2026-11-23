@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { HOSTILE_STRINGS } from "../../../../../scripts/security/hostile-inputs.mjs";
 const stub = await import("../../test-native/index.ts");
 const { appInfo, officialLegacyHash } = await import("../../test-native/shell.ts");
 const { useBrowser } = await import("../browser/store.ts");
@@ -225,4 +226,30 @@ test("the plugin page says it updated by itself and what's new", () => {
     title: "Updated by itself to 0.6.0",
     description: "It asks for nothing you hadn't already approved. New since 0.4.0: Adds to the command bar: Command Line: Show Status.",
   });
+});
+
+test("hostile values in a downloaded official plugin.json never reach plugins.json or a switch: approval and promotion stay untouched", async () => {
+  const doc = JSON.parse(BUN_060);
+  const variants = (value) => [
+    { ...doc, permissions: { control: true, network: [value] } },
+    { ...doc, main: value },
+    { ...doc, activationEvents: [value] },
+    { ...doc, contributes: { ...doc.contributes, programs: [{ ...doc.contributes.programs[0], afterUpdate: [...AFTER_UPDATE, [value]] }] } },
+    { ...doc, contributes: { ...doc.contributes, programs: [{ ...doc.contributes.programs[0], path: value }] } },
+    { ...doc, contributes: { ...doc.contributes, commands: [...doc.contributes.commands, { name: "x", title: value, icon: "bolt", open: "tab" }] } },
+  ];
+  let checked = 0;
+  for (const { value } of HOSTILE_STRINGS) {
+    for (const variant of variants(value)) {
+      const text = JSON.stringify(variant);
+      await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(text) }]);
+      assert.deepEqual(host.promotes, [], `promotion for ${text.slice(0, 160)}`);
+      assert.equal(parsePluginRecords(stub.docs.get("plugins.json")).cli.approved, PY_RECEIPT, "plugins.json keeps the old approval");
+      assert.equal(P().records.cli.updated, undefined);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 6 * 20);
+  await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(BUN_060) }]);
+  assert.equal(host.promotes.length, 1, "the same path still switches the real 0.6.0");
 });

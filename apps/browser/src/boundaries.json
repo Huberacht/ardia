@@ -1547,6 +1547,16 @@
    "detected": false
   },
   {
+   "id": "plugin-update:official-auto",
+   "source": "plugin",
+   "guard": "An official update's manifest is approved without a sheet only when the installed copy and the download are the pin's verified copies and every field but cosmetic text is identical to the approved manifest (a first command-bar-only main excepted); anything else, unknown or malformed keeps the prompt",
+   "checks": [
+    "apps/browser/src/state/plugins/officialUpdate.ts#updateWithin",
+    "apps/browser/src/state/plugins/official.ts#officialUpdateVerdict"
+   ],
+   "detected": false
+  },
+  {
    "id": "plugin-install:official",
    "source": "native",
    "guard": "Official copies checked against the signed pin on every lookup; one verified snapshot is unpacked within caps of 512 MB downloaded, 1 GB unpacked, 100 times the download and 200 times an entry's compressed size past 4 MB, 20,000 entries and 32 levels (Swift tests in packages/shell/plugin-tests)",

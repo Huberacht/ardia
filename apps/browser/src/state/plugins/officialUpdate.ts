@@ -1,5 +1,4 @@
-import { CONTRIBUTES_KEYS, MENU_SLOTS, PERMISSION_KEYS, type CommandSpec, type PluginContributions, type PluginManifest, type PluginPermissions, type ProgramSpec } from "../../lib/pluginManifest";
-import { ANY_HOST, hostPatternCovers } from "../../lib/pluginNetwork";
+import { CONTRIBUTES_KEYS, isPluginPath, MENU_SLOTS, PERMISSION_KEYS, type MainSpec, type CommandSpec, type PluginContributions, type PluginManifest, type PluginPermissions, type ProgramSpec } from "../../lib/pluginManifest";
 import { consentLines } from "./consent";
 
 export const UPDATE_PROMPT_REASONS = ["baseline", "permissions", "network", "runtime", "activation", "programs", "hooks", "settings", "contributions", "unknown"] as const;
@@ -14,7 +13,9 @@ function canonical(value: unknown): string {
     const keys = Object.keys(value as Record<string, unknown>).sort();
     return `{${keys.map((k) => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`).join(",")}}`;
   }
-  return JSON.stringify(value) ?? "undefined";
+  if (typeof value === "number" && !Number.isFinite(value)) return `#${value}`;
+  if (value !== null && typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return `#${typeof value}`;
+  return JSON.stringify(value);
 }
 
 const same = (a: unknown, b: unknown) => canonical(a) === canonical(b);
@@ -26,36 +27,18 @@ const identical =
 
 const cosmetic: Rule<unknown> = () => null;
 
-const TAB_RANK = { false: 0, read: 1, write: 2 } as const;
-
-function networkWithin(a: PluginPermissions["network"], b: PluginPermissions["network"]): boolean {
-  if (b === false || a === ANY_HOST) return true;
-  if (b === ANY_HOST || a === false || !Array.isArray(a) || !Array.isArray(b)) return false;
-  return b.every((host) => a.some((allowed) => hostPatternCovers(allowed, host)));
-}
-
-const flagWithin = (a: boolean, b: boolean) => !b || a;
-
-const PERMISSION_RULES: Record<keyof PluginPermissions, (a: PluginPermissions, b: PluginPermissions) => UpdatePromptReason | null> = {
-  tabs: (a, b) => (TAB_RANK[`${b.tabs}`] <= TAB_RANK[`${a.tabs}`] ? null : "permissions"),
-  fullUrls: (a, b) => (flagWithin(a.fullUrls, b.fullUrls) ? null : "permissions"),
-  activePage: (a, b) => (flagWithin(a.activePage, b.activePage) ? null : "permissions"),
-  workspace: (a, b) => (flagWithin(a.workspace, b.workspace) ? null : "permissions"),
-  commands: (a, b) => (flagWithin(a.commands, b.commands) ? null : "permissions"),
-  storage: (a, b) => (flagWithin(a.storage, b.storage) ? null : "permissions"),
-  secrets: (a, b) => (flagWithin(a.secrets, b.secrets) ? null : "permissions"),
-  network: (a, b) => (networkWithin(a.network, b.network) ? null : "network"),
-  control: (a, b) => (flagWithin(a.control, b.control) ? null : "permissions"),
+const permissionsSame: Rule<PluginPermissions> = (a, b) => {
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!(PERMISSION_KEYS as readonly string[]).includes(key)) return "unknown";
+  const hosts = (p: PluginPermissions) => (Array.isArray(p.network) ? [...p.network].sort() : p.network);
+  if (!same(hosts(a), hosts(b))) return "network";
+  return same({ ...a, network: null }, { ...b, network: null }) ? null : "permissions";
 };
 
-const permissionsWithin: Rule<PluginPermissions> = (a, b) => {
-  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) if (!(PERMISSION_KEYS as readonly string[]).includes(key) || !Object.hasOwn(PERMISSION_RULES, key)) return "unknown";
-  for (const key of PERMISSION_KEYS) {
-    const reason = PERMISSION_RULES[key](a, b);
-    if (reason) return reason;
-  }
-  return null;
-};
+const MAIN_USES = PERMISSION_KEYS.filter((key) => key !== "control");
+
+const grantsMainNothing = (p: PluginPermissions) => MAIN_USES.every((key) => p[key] === false);
+
+const firstMain = ({ approved, next }: { approved: PluginManifest; next: PluginManifest }) => approved.main === null && next.main !== null;
 
 const runs = (programs: readonly ProgramSpec[]) => programs.map((p) => ({ name: p.name, path: p.path, afterUpdate: p.afterUpdate }));
 
@@ -63,12 +46,12 @@ const programsWithin: Rule<ProgramSpec[]> = (a, b) => (same(runs(a), runs(b)) ? 
 
 const isAddableCommand = (c: CommandSpec) => "view" in c.action || "handler" in c.action;
 
-const commandsWithin: Rule<CommandSpec[]> = (a, b) => {
+const commandsWithin: Rule<CommandSpec[]> = (a, b, both) => {
   for (const before of a) {
     const after = b.find((c) => c.name === before.name);
     if (!after || !same(before, after)) return "contributions";
   }
-  for (const command of b) if (!a.some((c) => c.name === command.name) && !isAddableCommand(command)) return "contributions";
+  for (const command of b) if (!a.some((c) => c.name === command.name) && (!isAddableCommand(command) || !firstMain(both))) return "contributions";
   const kept = b.filter((c) => a.some((x) => x.name === c.name));
   return same(kept.map((c) => c.name), a.map((c) => c.name)) ? null : "contributions";
 };
@@ -111,11 +94,14 @@ const contributionsWithin: Rule<PluginContributions> = (a, b, both) => {
 function firstMainOnDemand(b: PluginManifest): boolean {
   const k = b.contributes;
   const elsewhere = b.page || k.panels.length || k.sidebarViews.length || k.toolbar.length || k.omnibox.length || k.tools.length || k.hooks.length || MENU_SLOTS.some((slot) => k.menus[slot].length);
-  return !elsewhere && !b.sidecar && b.activationEvents.every((e) => e.startsWith("onCommand:"));
+  return !elsewhere && !b.sidecar && grantsMainNothing(b.permissions) && b.activationEvents.every((e) => e.startsWith("onCommand:"));
 }
 
+const isMainSpec = (m: unknown): boolean =>
+  !!m && typeof m === "object" && Object.keys(m).sort().join() === "entry,memoryMB" && typeof (m as MainSpec).entry === "string" && isPluginPath((m as MainSpec).entry) && Number.isSafeInteger((m as MainSpec).memoryMB);
+
 const mainWithin: Rule<PluginManifest["main"]> = (a, b, { approved, next }) => {
-  if (a === null && b !== null) return !approved.sidecar && firstMainOnDemand(next) ? null : "runtime";
+  if (a === null && b !== null) return !approved.sidecar && isMainSpec(b) && firstMainOnDemand(next) ? null : "runtime";
   return same(a, b) ? null : "runtime";
 };
 
@@ -123,7 +109,7 @@ const MANIFEST_RULES: { [K in keyof PluginManifest]: Rule<PluginManifest[K]> } =
   manifest: cosmetic,
   declaredManifest: cosmetic,
   name: (a, b) => (a === b ? null : "baseline"),
-  official: (a, b) => (a && b ? null : "baseline"),
+  official: (a, b) => (a === true && b === true ? null : "baseline"),
   title: cosmetic,
   description: cosmetic,
   version: cosmetic,
@@ -131,7 +117,7 @@ const MANIFEST_RULES: { [K in keyof PluginManifest]: Rule<PluginManifest[K]> } =
   icon: cosmetic,
   keywords: cosmetic,
   telemetry: cosmetic,
-  permissions: permissionsWithin,
+  permissions: permissionsSame,
   main: mainWithin,
   sidecar: identical("runtime"),
   activationEvents: activationWithin,
@@ -149,6 +135,14 @@ const MANIFEST_RULES: { [K in keyof PluginManifest]: Rule<PluginManifest[K]> } =
 };
 
 export function updateWithin(approved: PluginManifest, next: PluginManifest): UpdateVerdict {
+  try {
+    return compare(approved, next);
+  } catch {
+    return { ok: false, reason: "unknown" };
+  }
+}
+
+function compare(approved: PluginManifest, next: PluginManifest): UpdateVerdict {
   for (const key of new Set([...Object.keys(approved), ...Object.keys(next)])) if (!Object.hasOwn(MANIFEST_RULES, key)) return { ok: false, reason: "unknown" };
   const both = { approved, next };
   for (const key of Object.keys(MANIFEST_RULES) as (keyof PluginManifest)[]) {

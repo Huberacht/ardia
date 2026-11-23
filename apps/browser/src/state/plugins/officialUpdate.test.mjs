@@ -38,12 +38,12 @@ test("the Python CLI 0.4.0 to 0.6.0: same permissions, so it passes, and the not
   assert.ok(!verdict.added.some((line) => line.includes("PATH")), "PATH lines were already approved");
 });
 
-test("permissions narrow per key: control off, tabs write to read, a host the old pattern covers, every site to one host", () => {
+test("permissions must stay the same: narrowing prompts too, since it changes which other plugins may call its tools; reordered hosts don't count", () => {
   const wide = parse(v2("0.6.0", { permissions: { control: true, network: ["api.example.com", "*.example.org"], tabs: "write" } }));
-  assert.equal(updateWithin(wide, parse(v2("0.7.0", { permissions: { network: ["a.example.org"], tabs: "read" } }))).ok, true);
-  assert.equal(updateWithin(parse(v2("0.6.0", { permissions: { control: true, network: "*" } })), parse(v2("0.7.0", { permissions: { control: true, network: ["x.example.com"] } }))).ok, true);
-  const hosts = parse(v2("0.7.0", { permissions: { control: true, network: ["*.example.org", "api.example.com"], tabs: "write" } }));
-  assert.equal(updateWithin(wide, hosts).ok, true, "reordered hosts");
+  assert.deepEqual(updateWithin(wide, parse(v2("0.7.0", { permissions: { control: true, network: ["api.example.com", "*.example.org"], tabs: "read" } }))), { ok: false, reason: "permissions" });
+  assert.deepEqual(updateWithin(wide, parse(v2("0.7.0", { permissions: { control: true, network: ["api.example.com"], tabs: "write" } }))), { ok: false, reason: "network" });
+  assert.deepEqual(updateWithin(wide, parse(v2("0.7.0", { permissions: { network: ["api.example.com", "*.example.org"], tabs: "write" } }))), { ok: false, reason: "permissions" });
+  assert.equal(updateWithin(wide, parse(v2("0.7.0", { permissions: { control: true, network: ["*.example.org", "api.example.com"], tabs: "write" } }))).ok, true, "reordered hosts");
 });
 
 test("what runs must stay identical: programs and their after-update steps, in order and count", () => {
@@ -160,11 +160,24 @@ test("round 2: order, resolved targets, limits and row defaults that change beha
   assert.deepEqual(updateWithin(row(false), row(true)), { ok: false, reason: "settings" }, "a row default flipped");
 });
 
-test("a new command-bar command that shows a view or runs a handler is the only addition that passes", () => {
-  const extra = parse(v2("0.7.0", {}, { commands: [...CLI_060.contributes.commands, { name: "ping", title: "Ping", icon: "bolt", handler: true }] }));
-  assert.equal(updateWithin(parse(CLI_060), extra).ok, true);
+test("new commands come in only with a first main reachable from nowhere else, and only when the permissions give it nothing to use", () => {
+  const ping = { name: "ping", title: "Ping", icon: "bolt", handler: true };
+  assert.equal(updateWithin(parse(CLI_040), parse(v2("0.6.0", {}, { commands: [...CLI_060.contributes.commands, ping] }))).ok, true, "with the first main");
+  assert.deepEqual(updateWithin(parse(CLI_060), parse(v2("0.7.0", {}, { commands: [...CLI_060.contributes.commands, ping] }))), { ok: false, reason: "contributions" }, "an existing main gets no new way in");
   const renamed = parse(v2("0.7.0", {}, { commands: [{ ...CLI_060.contributes.commands[0], title: "Other" }] }));
   assert.deepEqual(updateWithin(parse(CLI_060), renamed), { ok: false, reason: "contributions" }, "a kept command must stay as it was");
+});
+
+test("round 3: a first main can't put dormant permissions to use, and an existing main can't gain a command that reaches other pages", () => {
+  const dormant = { ...CLI_040, permissions: { control: true, network: ["api.example.com"] }, manifest: 2, programs: undefined, contributes: { programs: [{ name: "ardia", path: "bin/ardia", afterUpdate: AFTER_UPDATE }] } };
+  delete dormant.programs;
+  const a = parse(dormant);
+  const next = parse(v2("0.6.0", { permissions: { control: true, network: ["api.example.com"] } }));
+  assert.deepEqual(updateWithin(a, next), { ok: false, reason: "runtime" }, "network declared with no code to use it stays unusable without review");
+  const reads = (commands) => parse(v2("0.6.0", { permissions: { control: true, tabs: "read", activePage: true } }, { commands }));
+  const approved = reads([{ name: "here", title: "Here", icon: "doc", handler: true, when: "urlHost == 'example.com'" }]);
+  const wider = reads([{ name: "here", title: "Here", icon: "doc", handler: true, when: "urlHost == 'example.com'" }, { name: "anywhere", title: "Anywhere", icon: "doc", handler: true }]);
+  assert.deepEqual(updateWithin(approved, wider), { ok: false, reason: "contributions" });
 });
 
 test("a different name or a manifest not marked official never passes", () => {
