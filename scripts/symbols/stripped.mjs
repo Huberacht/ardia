@@ -15,7 +15,10 @@ export function maskedWords(words) {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const pcRelative = (w & 0x1f000000) >>> 0 === 0x10000000;
-    if ((w & 0x7c000000) >>> 0 === 0x14000000) out[i] = (w & 0xfc000000) >>> 0;
+    if ((w & 0xfc000000) >>> 0 === 0x14000000) {
+      const target = i + (((w & 0x03ffffff) << 6) >> 6);
+      out[i] = target >= 0 && target < words.length ? w : 0x14000000;
+    } else if ((w & 0xfc000000) >>> 0 === 0x94000000) out[i] = 0x94000000;
     else if (pcRelative) out[i] = (w & 0x9f00001f) >>> 0;
     else if ((w & 0x3b000000) >>> 0 === 0x18000000) out[i] = (w & 0xff00001f) >>> 0;
     else if (pageRegisters.has((w >>> 5) & 0x1f) && ((w & 0x7f800000) >>> 0 === 0x11000000 || (w & 0x3b000000) >>> 0 === 0x39000000)) out[i] = (w & ~(0xfff << 10)) >>> 0;
@@ -24,6 +27,15 @@ export function maskedWords(words) {
     else if (writesDestination(w)) pageRegisters.delete(w & 0x1f);
   }
   return out;
+}
+
+export function parseObjc(text, base) {
+  const seen = new Map();
+  for (const m of text.matchAll(/^\s+0x([0-9A-F]+)\s+([-+]\[.*\])$/gm)) {
+    const offset = parseInt(m[1], 16) - base;
+    seen.set(offset, (seen.get(offset) ?? new Set()).add(m[2]));
+  }
+  return new Map([...seen].filter(([, names]) => names.size === 1).map(([offset, names]) => [offset, [...names][0]]));
 }
 
 export function functionsOf(buffer) {
@@ -59,6 +71,7 @@ export function nameStripped({ targetBuffer, siblingBuffer, dsymBuffer, objc = n
   const targetHashCount = new Map();
   for (const f of target.funcs) targetHashCount.set(f.hash, (targetHashCount.get(f.hash) ?? 0) + 1);
   const pair = target.funcs.map((f) => (targetHashCount.get(f.hash) === 1 && (siblingByHash.get(f.hash) ?? -1) >= 0 ? siblingByHash.get(f.hash) : -1));
+  const pairedSibling = new Set(pair.filter((p) => p >= 0));
 
   const entries = [];
   const counts = { objc: 0, code: 0, position: 0, none: 0 };
@@ -73,8 +86,9 @@ export function nameStripped({ targetBuffer, siblingBuffer, dsymBuffer, objc = n
     else if (pair[i] >= 0 && (name = siblingName(sibling.funcs[pair[i]].start))) counts.code++;
     else {
       const next = nextPaired[i + 1];
-      if (previous >= 0 && previous < i && next < target.funcs.length && pair[next] - pair[previous] === next - previous) {
-        const guess = siblingName(sibling.funcs[pair[previous] + (i - previous)].start);
+      const slot = previous >= 0 ? pair[previous] + (i - previous) : -1;
+      if (previous >= 0 && previous < i && next < target.funcs.length && pair[next] - pair[previous] === next - previous && !pairedSibling.has(slot)) {
+        const guess = siblingName(sibling.funcs[slot].start);
         if (guess) {
           name = `${guess} (by position)`;
           counts.position++;

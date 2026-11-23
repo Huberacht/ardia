@@ -98,8 +98,14 @@ export class SymbolStore {
     if (this.index) return this.index;
     const index = new Map();
     for (let page = 1; page <= 20; page++) {
-      const res = await this.get(`https://api.github.com/repos/${this.repo}/releases?per_page=100&page=${page}`, true);
-      const releases = await res.json();
+      let releases;
+      try {
+        releases = await (await this.get(`https://api.github.com/repos/${this.repo}/releases?per_page=100&page=${page}`, true)).json();
+      } catch (error) {
+        if (!index.size) throw error;
+        this.log(`release listing stopped at page ${page}, using the ${index.size} images found so far: ${error.message}`);
+        return index;
+      }
       if (!Array.isArray(releases) || !releases.length) break;
       for (const release of releases) {
         const tag = String(release?.tag_name ?? "");
@@ -134,7 +140,7 @@ export class SymbolStore {
 
   async importMapAsset(tag, name) {
     const marker = join(this.cache, "uuids", `${tag}--${name}.seen`);
-    if (existsSync(marker)) return;
+    if (existsSync(marker) && existsSync(this.mapPath(readFileSync(marker, "utf8").trim()))) return;
     try {
       const raw = Buffer.from(await (await this.get(this.assetUrl(tag, name))).arrayBuffer());
       const map = parseMap(gunzipSync(raw).toString("utf8"));

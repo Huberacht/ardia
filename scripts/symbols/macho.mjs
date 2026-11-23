@@ -55,14 +55,16 @@ export function parseImage(slice) {
   if (slice.readUInt32LE(0) !== MH_MAGIC_64) throw new Error("not a 64-bit Mach-O slice");
   const cpu = slice.readInt32LE(4);
   const ncmds = slice.readUInt32LE(16);
+  const commandsEnd = 32 + slice.readUInt32LE(20);
+  if (commandsEnd > slice.length) throw new Error("not a Mach-O file: its load commands run past the end");
   const image = { arch: ARCHES[cpu] ?? `cpu${cpu}`, uuid: null, base: null, text: null, symtab: null, functionStarts: null };
   let at = 32;
   let sectionIndex = 0;
   for (let i = 0; i < ncmds; i++) {
-    if (at + 8 > slice.length) throw new Error("not a Mach-O file: load commands run past the end");
+    if (at + 8 > commandsEnd) throw new Error("not a Mach-O file: load commands run past sizeofcmds");
     const cmd = slice.readUInt32LE(at);
     const size = slice.readUInt32LE(at + 4);
-    if (size < (FIXED_SIZE[cmd] ?? 8) || at + size > slice.length) throw new Error("not a Mach-O file: a load command has a bad size");
+    if (size < (FIXED_SIZE[cmd] ?? 8) || at + size > commandsEnd) throw new Error("not a Mach-O file: a load command has a bad size");
     if (cmd === LC_SEGMENT_64) {
       const segment = cString(slice.subarray(at + 8, at + 24), 0);
       const vmaddr = Number(slice.readBigUInt64LE(at + 24));

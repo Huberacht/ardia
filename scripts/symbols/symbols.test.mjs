@@ -7,10 +7,10 @@ import { after, test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { fat, machO, words } from "./fixture.mjs";
 import { crashFrames, frameOffset, freezeFrames, imageUuids, nativeFrames, wantedFrames } from "./frames.mjs";
-import { knownSql, plan, resolve, RETRY_MISSING_MS, run } from "./job.mjs";
+import { clickhouse, KNOWN_CHUNK, knownSql, plan, resolve, RETRY_MISSING_MS, run } from "./job.mjs";
 import { functionStarts, functionSymbols, imageFor, parseImage } from "./macho.mjs";
 import { parseUuids, SymbolStore } from "./releases.mjs";
-import { functionsOf, maskedWords, nameStripped } from "./stripped.mjs";
+import { functionsOf, maskedWords, nameStripped, parseObjc } from "./stripped.mjs";
 import { buildMap, demangle, lookup, parseMap, serializeMap } from "./symbol-map.mjs";
 
 const NO_DEMANGLERS = { swift: [], cxx: [] };
@@ -417,4 +417,92 @@ test("a page register written again is no longer treated as page-relative, and m
   assert.deepEqual([...pastStoresAndBranches(0x124)], [...pastStoresAndBranches(0x675)], "a store, CBZ or branch naming x21 leaves it page-relative");
   assert.throws(() => functionsOf(machO({ uuid: OTHER_UUID, cpu: 0x01000007, text: Buffer.alloc(16), starts: [TEXT] })), /arm64/);
   assert.equal(functionsOf(fat([machO({ uuid: OTHER_UUID, cpu: 0x01000007, text: Buffer.alloc(16), starts: [TEXT] }), appBinary()])).image.arch, "arm64");
+});
+
+test("credentials only go to ClickHouse over https, or plain http on this machine, and a bad database name sends nothing", async () => {
+  const creds = { user: "reader", password: "secret", fetch: async () => new Response("") };
+  assert.throws(() => clickhouse({ ...creds, url: "http://telemetry.example/_ch/" }), /https/);
+  assert.throws(() => clickhouse({ ...creds, url: "ftp://telemetry.example/" }), /https/);
+  assert.equal(typeof clickhouse({ ...creds, url: "https://telemetry.example/_ch/" }), "function");
+  assert.equal(typeof clickhouse({ ...creds, url: "http://localhost:8123/" }), "function");
+  let calls = 0;
+  const counting = async () => (calls++, "");
+  await assert.rejects(run({ reader: counting, sandbox: counting, db: "sand-box", store: null }), /plain identifier/);
+  assert.equal(calls, 0);
+});
+
+test("stored rows are read in chunks, so a long backfill stays under ClickHouse's query size", async () => {
+  const frames = Array.from({ length: KNOWN_CHUNK + 1 }, (_, i) => ({ module: "Ardia", image_offset: `0x${(i + 1).toString(16)}` }));
+  const event = { kind: "freeze", images: JSON.stringify([{ name: "Ardia", uuid: APP_UUID }]), frames: JSON.stringify(frames) };
+  const selects = [];
+  const sandbox = async (sql) => {
+    if (sql.startsWith("SELECT")) selects.push(sql);
+    return sql.startsWith("SELECT") && selects.length === 2 ? JSON.stringify({ uuid: APP_UUID, offset: KNOWN_CHUNK + 1, source: "dsym", symbol: "x", symbol_offset: 0, at: 0 }) + "\n" : "";
+  };
+  const store = { maps: async () => new Map() };
+  const { rows } = await run({ reader: async () => JSON.stringify(event), sandbox, store, now: 0 });
+  assert.equal(selects.length, 2);
+  assert.ok(selects.every((sql) => sql.length < 262144));
+  assert.equal(rows.length, KNOWN_CHUNK, "the row found in the second chunk isn't named again");
+});
+
+test("a map with an unknown source, or load commands past sizeofcmds, is refused", () => {
+  const map = buildMap(appBinary(), APP_UUID, { demanglers: NO_DEMANGLERS });
+  assert.throws(() => parseMap(serializeMap({ ...map, source: "matched" })), /header/);
+  assert.equal(parseMap(serializeMap({ ...map, source: "match" })).source, "match");
+  const short = appBinary();
+  short.writeUInt32LE(short.readUInt32LE(36), 20);
+  assert.throws(() => parseImage(short), /sizeofcmds/);
+  const huge = appBinary();
+  huge.writeUInt32LE(huge.length, 20);
+  assert.throws(() => parseImage(huge), /run past the end/);
+});
+
+test("branches inside a function keep their target, Objective-C aliases name nothing, and a position guess never reuses a matched sibling", () => {
+  const inside = (to) => [...maskedWords(Uint32Array.from([0xd503201f, (0x14000000 | to) >>> 0, 0xd503201f, 0xd503201f, 0xd65f03c0]))];
+  assert.notDeepEqual(inside(2), inside(3));
+  const outside = (to) => [...maskedWords(Uint32Array.from([(0x14000000 | to) >>> 0, 0xd65f03c0]))];
+  assert.deepEqual(outside(0x100), outside(0x2000));
+  assert.deepEqual(outside(0x3fffff0), outside(0x3ffff00), "a branch back before the function is masked too");
+  const objc = parseObjc(["    0x100001000  -[Foo alpha]", "    0x100001000  -[Foo beta]", "    0x100002000  -[Foo gamma]", "    0x100002000  -[Foo gamma]"].join("\n"), BASE);
+  assert.deepEqual([...objc], [[0x2000, "-[Foo gamma]"]]);
+  const body = (seed) => words([0xd503201f, seed, 0xd2800000 | seed, 0xd65f03c0]);
+  const starts = [TEXT, TEXT + 16, TEXT + 32, TEXT + 48];
+  const sibling = machO({ uuid: OTHER_UUID, text: Buffer.concat([body(1), body(2), body(3), body(4)]), starts });
+  const dsym = machO({ uuid: OTHER_UUID, text: Buffer.alloc(64), symbols: ["_one", "_two", "_three", "_four"].map((name, i) => ({ name, address: TEXT + i * 16 })) });
+  const target = machO({ uuid: APP_UUID, text: Buffer.concat([body(1), body(99), body(3), body(2)]), starts });
+  const { map, counts } = nameStripped({ targetBuffer: target, siblingBuffer: sibling, dsymBuffer: dsym, demanglers: NO_DEMANGLERS });
+  assert.deepEqual(map.entries.map((e) => [e.start, e.name]), [[0x1000, "one"], [0x1020, "three"], [0x1030, "two"]]);
+  assert.deepEqual(counts, { objc: 0, code: 3, position: 0, none: 1 });
+});
+
+test("a release map is imported again when its cached copy went bad, and dSYMs found before a failed page are still used", { skip: !haveXz && "needs tar and xz" }, async () => {
+  const cache = join(scratch, "reimport-cache");
+  const mapAsset = gzipSync(serializeMap({ ...buildMap(appBinary(), APP_UUID, { demanglers: NO_DEMANGLERS }), source: "match" }));
+  const dwarf = "Chromium Framework.dSYM/Contents/Resources/DWARF/Chromium Framework";
+  const release = join(scratch, "page-one-release");
+  mkdirSync(join(release, "Chromium Framework.dSYM/Contents/Resources/DWARF"), { recursive: true });
+  writeFileSync(join(release, dwarf), machO({ uuid: ENGINE_UUID, base: 0, textAddr: 0x4000, text: Buffer.alloc(0x100), symbols: [{ name: "_engine_fn", address: 0x4000 }] }));
+  const archive = join(scratch, "ArdiaCore-111111111111-symbols.tar.xz");
+  assert.equal(spawnSync("tar", ["-cJf", archive, "-C", release, "Chromium Framework.dSYM"]).status, 0);
+  const pageOne = [
+    { tag_name: "v0.2.47", assets: [{ name: "Ardia-0.2.47-symbol-map.tsv.gz" }] },
+    { tag_name: "engine-111111111111", assets: [{ name: "ArdiaCore-111111111111-uuids.txt" }, { name: "ArdiaCore-111111111111-symbols.tar.xz" }] },
+  ];
+  const fetch = async (url) => {
+    const u = decodeURIComponent(String(url));
+    if (u.endsWith("page=1")) return new Response(JSON.stringify(pageOne), { status: 200 });
+    if (u.startsWith("https://api.github.com/")) return new Response("rate limited", { status: 403 });
+    if (u.endsWith("Ardia-0.2.47-symbol-map.tsv.gz")) return new Response(mapAsset, { status: 200 });
+    if (u.endsWith("ArdiaCore-111111111111-uuids.txt")) return new Response(`${ENGINE_UUID}\tarm64\t${dwarf}\n`, { status: 200 });
+    if (u.endsWith("ArdiaCore-111111111111-symbols.tar.xz")) return new Response(readFileSync(archive), { status: 200 });
+    return new Response("missing", { status: 404 });
+  };
+  const first = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch, log: () => {} });
+  const maps = await first.maps([APP_UUID, ENGINE_UUID]);
+  assert.equal(maps.get(APP_UUID)?.source, "match");
+  assert.equal(maps.get(ENGINE_UUID)?.source, "dsym", "the dSYM listed on page 1 is built though page 2 failed");
+  writeFileSync(first.mapPath(APP_UUID), "corrupt");
+  const second = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch, log: () => {} });
+  assert.equal((await second.maps([APP_UUID])).get(APP_UUID)?.source, "match", "the release map comes back after its cached copy went bad");
 });

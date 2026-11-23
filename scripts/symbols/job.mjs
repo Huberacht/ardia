@@ -3,6 +3,7 @@ import { lookup } from "./symbol-map.mjs";
 
 export const TABLE = "ardia_frame_symbols";
 export const RETRY_MISSING_MS = 24 * 60 * 60_000;
+export const KNOWN_CHUNK = 5000;
 const RECHECKED = new Set(["none", "outside", "match"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const IDENTIFIER = /^\w+$/;
@@ -78,8 +79,11 @@ export function summarize(rows) {
 
 export function clickhouse({ url, user, password, fetch = globalThis.fetch }) {
   if (!url || !user || !password) return null;
+  const endpoint = new URL(url);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname);
+  if (endpoint.protocol !== "https:" && !(local && endpoint.protocol === "http:")) throw new Error(`ClickHouse URLs must use https (plain http only to localhost), got ${endpoint.protocol}//${endpoint.hostname}`);
   return async (sql, { params = {}, body } = {}) => {
-    const target = new URL(url);
+    const target = new URL(endpoint);
     for (const [key, value] of Object.entries(params)) target.searchParams.set(`param_${key}`, String(value));
     if (body !== undefined) target.searchParams.set("query", sql);
     const res = await fetch(target, {
@@ -98,6 +102,7 @@ export const jsonLines = (text) => text.split("\n").filter(Boolean).map((line) =
 
 export async function run({ reader, sandbox, db = "sandbox", store, days = 14, dryRun = false, now = Date.now(), log = () => {} }) {
   if (!Number.isInteger(days) || days < 1 || days > 90) throw new Error("--days takes a whole number from 1 to 90");
+  if (!IDENTIFIER.test(db)) throw new Error("the sandbox database must be a plain identifier");
   const events = jsonLines(await reader(EVENTS_SQL, { params: { days } }));
   const wanted = wantedFrames(events);
   log(`${events.length} distinct stacks, ${wanted.length} distinct frames in the last ${days} days`);
@@ -105,7 +110,10 @@ export async function run({ reader, sandbox, db = "sandbox", store, days = 14, d
   if (sandbox) {
     if (!dryRun) await sandbox(createTable(db));
     try {
-      known = jsonLines(await sandbox(knownSql(db, wanted.map((f) => f.uuid), wanted.map((f) => f.offset))));
+      for (let i = 0; i < wanted.length; i += KNOWN_CHUNK) {
+        const chunk = wanted.slice(i, i + KNOWN_CHUNK);
+        known.push(...jsonLines(await sandbox(knownSql(db, chunk.map((f) => f.uuid), chunk.map((f) => f.offset)))));
+      }
     } catch (error) {
       if (!dryRun) throw error;
       log(`couldn't read ${db}.${TABLE}: ${error.message}`);

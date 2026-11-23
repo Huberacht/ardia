@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { functionSymbols, imageFor } from "./macho.mjs";
 
 export const MAP_HEADER = "# ardia-symbol-map 1";
+const MAP_SOURCES = new Set(["dsym", "match"]);
 
 const SWIFT = /^(\$[sSe]|_T0)/;
 const CXX = /^_Z/;
@@ -97,7 +98,7 @@ export function parseMap(text) {
   const head = lines[0]?.split(" ") ?? [];
   if (head.length !== 8 || head.slice(0, 3).join(" ") !== MAP_HEADER) throw new Error("not an Ardia symbol map");
   const [, , , uuid, arch, source, textStart, textEnd] = head;
-  if (!UUID.test(uuid) || !HEX.test(textStart) || !HEX.test(textEnd) || !/^[a-z]+$/.test(source)) throw new Error("the symbol map's header is malformed");
+  if (!UUID.test(uuid) || !HEX.test(textStart) || !HEX.test(textEnd) || !MAP_SOURCES.has(source)) throw new Error("the symbol map's header is malformed");
   const entries = [];
   let previousEnd = 0;
   for (const line of lines.slice(1)) {

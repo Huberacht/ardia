@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { gzipSync } from "node:zlib";
 import { imageFor } from "./macho.mjs";
-import { nameStripped } from "./stripped.mjs";
+import { nameStripped, parseObjc } from "./stripped.mjs";
 import { serializeMap } from "./symbol-map.mjs";
 
 const HELP = `Writes a symbol map for a shipped, stripped Mac build that has no dSYM, from a nearby build that has one.
@@ -47,8 +47,7 @@ function objcNames(path, base, arch) {
     console.error("warning: dyld_info -objc failed, so no Objective-C names from the target itself");
     return names;
   }
-  for (const m of run.stdout.matchAll(/^\s+0x([0-9A-F]+)\s+([-+]\[.*\])$/gm)) names.set(parseInt(m[1], 16) - base, m[2]);
-  return names;
+  return parseObjc(run.stdout, base);
 }
 
 const targetBuffer = readFileSync(values.target);
