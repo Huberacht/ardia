@@ -148,8 +148,19 @@ export function generatedPositionFor(map: ParsedMap, wanted: string, line1: numb
   return best ? { line: best.line, column: best.column } : null;
 }
 
-const DIRECTIVE = /(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL=([^\s'"*]+(?:\*(?!\/)[^\s'"*]*)*)\s*(?:\*\/)?\s*$/;
+const MARKER = "sourceMappingURL=";
+const DIRECTIVE_LEAD = /(?:\/\/|\/\*)[ \t]{0,16}[#@][ \t]{0,16}$/;
+const MAP_REF = /^[^\s'"]+$/;
 const COMMENT_ONLY = /^\s*(?:\/\/|\/\*|\*)/;
+
+function directiveOf(line: string): string | null {
+  const trimmed = line.trimEnd();
+  const at = trimmed.lastIndexOf(MARKER);
+  if (at < 0 || !DIRECTIVE_LEAD.test(trimmed.slice(Math.max(0, at - 40), at))) return null;
+  let ref = trimmed.slice(at + MARKER.length);
+  if (ref.endsWith("*/")) ref = ref.slice(0, -2).trimEnd();
+  return ref && MAP_REF.test(ref) ? ref : null;
+}
 
 export function sourceMapRefOf(script: string): string | null {
   let end = script.length;
@@ -158,8 +169,8 @@ export function sourceMapRefOf(script: string): string | null {
     const line = script.slice(start, end);
     end = start - 1;
     if (!line.trim()) continue;
-    const match = DIRECTIVE.exec(line);
-    if (match) return match[1]!;
+    const ref = directiveOf(line);
+    if (ref) return ref;
     if (!COMMENT_ONLY.test(line)) return null;
   }
   return null;

@@ -44,7 +44,9 @@ export async function recordTrace(session: InspectionSession, options: { duratio
     await session.pause(options.durationMs);
     const done = session.waitFor("Tracing.tracingComplete", COMPLETE_TIMEOUT_MS);
     await session.send("Tracing.end");
-    const complete = (await done) !== null;
+    const finished = await done;
+    const complete = finished !== null;
+    if (finished?.dataLossOccurred === true) truncated = true;
     if (!complete && !events.length) throw new OpError("failed", "The trace didn't finish in time, so there's nothing to analyse.");
     const recorded = events;
     events = [];

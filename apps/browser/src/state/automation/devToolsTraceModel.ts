@@ -70,22 +70,24 @@ function isMainNavigation(ev: Ev, mainFrame: string | null): boolean {
 function targetFramesOf(events: Ev[], mainFrame: string | null): Set<string> {
   const frames = new Set<string>();
   if (mainFrame === null) return frames;
-  frames.add(mainFrame);
+  const children = new Map<string, Set<string>>();
+  const link = (id: string | null, parent: string | null) => {
+    if (!id || !parent) return;
+    const set = children.get(parent) ?? new Set<string>();
+    set.add(id);
+    children.set(parent, set);
+  };
   for (const ev of events) {
     const data = ev.args.data;
-    if (ev.name === "TracingStartedInBrowser") {
-      const listed = field(data, "frames");
-      for (const frame of Array.isArray(listed) ? listed : []) {
-        const id = text(field(frame, "frame"), 256);
-        const parent = text(field(frame, "parent"), 256);
-        if (id && (parent === null ? id === mainFrame : frames.has(parent))) frames.add(id);
-      }
-    }
-    if (ev.name === "FrameCommittedInBrowser") {
-      const id = text(field(data, "frame"), 256);
-      const parent = text(field(data, "parent"), 256);
-      if (id && parent && frames.has(parent)) frames.add(id);
-    }
+    if (ev.name === "TracingStartedInBrowser") for (const frame of Array.isArray(field(data, "frames")) ? (field(data, "frames") as unknown[]) : []) link(text(field(frame, "frame"), 256), text(field(frame, "parent"), 256));
+    if (ev.name === "FrameCommittedInBrowser") link(text(field(data, "frame"), 256), text(field(data, "parent"), 256));
+  }
+  const queue = [mainFrame];
+  while (queue.length) {
+    const frame = queue.pop()!;
+    if (frames.has(frame)) continue;
+    frames.add(frame);
+    for (const child of children.get(frame) ?? []) queue.push(child);
   }
   return frames;
 }
@@ -147,7 +149,12 @@ export function requestsOf(events: Ev[], targetFrames: ReadonlySet<string> = new
     if (!requestId) continue;
     if (ev.name === "ResourceSendRequest") {
       const url = text(field(data, "url"));
-      if (!url || requests.has(requestId)) continue;
+      if (!url) continue;
+      const hop = requests.get(requestId);
+      if (hop) {
+        hop.url = url;
+        continue;
+      }
       const frame = text(field(data, "frame"), 256);
       if (targetFrames.size && (frame === null || !targetFrames.has(frame))) continue;
       requests.set(requestId, {

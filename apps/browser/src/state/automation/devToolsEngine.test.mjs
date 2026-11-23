@@ -717,3 +717,60 @@ test("an explicit cause: null is kept in the chain", () => {
   const chain = vm.runInNewContext(`(${CAUSE_CHAIN_FUNCTION}).call(new Error("outer", { cause: null }))`);
   assert.deepEqual(JSON.parse(JSON.stringify(chain)).map((l) => l.message), ["outer", "null"]);
 });
+
+test("a directive followed by a long run of spaces and junk is rejected in linear time", () => {
+  const started = Date.now();
+  assert.equal(sourceMapRefOf(`x();\n//# sourceMappingURL=x${" ".repeat(32_000)}!`), null);
+  assert.equal(sourceMapRefOf(`x();\n//#${" ".repeat(32_000)}sourceMappingURL=x`), null);
+  assert.ok(Date.now() - started < 100, `took ${Date.now() - started} ms`);
+  assert.equal(sourceMapRefOf(`x();\n//# sourceMappingURL=app.js.map${" ".repeat(32_000)}`), "app.js.map");
+});
+
+test("a long task that starts before FCP counts its blocking time after FCP", () => {
+  const start = 6_000_000_000;
+  const events = [
+    navStart(start, "M", "https://a.example/"),
+    { name: "firstContentfulPaint", ph: "R", pid: 2, tid: 3, ts: start + 2_000_000, args: { frame: "M" } },
+    { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: start + 1_990_000, dur: 1_000_000, args: {} },
+  ];
+  assert.equal(analyzeTrace(events).metrics.tbt.ms, 950);
+});
+
+test("a document redirect that reuses its request id still gives TTFB for the final URL", () => {
+  const start = 7_000_000_000;
+  const events = [
+    navStart(start, "M", "https://a.example/"),
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "D", url: "https://a.example/old", frame: "M" } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 100_000, args: { data: { requestId: "D", url: "https://a.example/", frame: "M" } } },
+    { name: "ResourceReceiveResponse", ph: "I", pid: 2, tid: 3, ts: start + 400_000, args: { data: { requestId: "D", statusCode: 200, timing: { requestTime: (start + 100_000) / 1e6, receiveHeadersEnd: 300 } } } },
+  ];
+  assert.equal(analyzeTrace(events).metrics.ttfb.ms, 400);
+});
+
+test("frames are found whatever order the trace lists them in", () => {
+  const start = 8_000_000_000;
+  const events = [
+    { name: "TracingStartedInBrowser", ph: "I", pid: 1, tid: 1, ts: start - 10, args: { data: { frames: [{ frame: "M", processId: 2, isOutermostMainFrame: true }, { frame: "G", parent: "C", processId: 2 }, { frame: "C", parent: "M", processId: 2 }] } } },
+    navStart(start, "M", "https://a.example/"),
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "R", url: "https://a.example/grandchild.js", frame: "G" } } },
+    { name: "ResourceFinish", ph: "I", pid: 2, tid: 3, ts: start + 5000, args: { data: { requestId: "R", finishTime: (start + 5000) / 1e6 } } },
+  ];
+  assert.equal(analyzeTrace(events).counts.requests, 1);
+});
+
+test("a trace the browser reports as lossy comes back truncated", async () => {
+  const fake = fakeTransport({
+    "Tracing.end": (_params, emit) => {
+      emit("Tracing.dataCollected", { value: [{ name: "RunTask", ph: "X", ts: 1, dur: 1, pid: 1, tid: 1 }] });
+      setTimeout(() => emit("Tracing.tracingComplete", { dataLossOccurred: true }), 1);
+      return {};
+    },
+  });
+  const session = new InspectionSession("tab-9", 909, fake.transport);
+  try {
+    const recording = await recordTrace(session, { durationMs: 1, reload: false, beforeReload: () => {} });
+    assert.deepEqual([recording.complete, recording.truncated], [true, true]);
+  } finally {
+    await session.close();
+  }
+});
