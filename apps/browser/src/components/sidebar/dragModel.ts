@@ -1,5 +1,6 @@
 import { Animated, type View } from "react-native";
 import { layout } from "../ui/theme";
+import { currentValue } from "../ui/motion";
 import { perLook } from "../ui/tokens";
 import type { Drop as StoreDrop } from "../../state/drag/drops";
 import { SLIDE } from "../tabstrip/tokens";
@@ -65,6 +66,11 @@ export function dragItemStyle(item: Item, { source, landing, clipped, inFold, ro
         : null),
     ...(clipped && !source && !landing ? { marginTop: horizontal ? -rowGap : tailOffset, paddingTop: rowGap, overflow: "hidden" as const } : null),
   };
+}
+export function openGapsAbove(item: Item, y: number, items: Iterable<Item>): number {
+  let open = currentValue(item.gap);
+  for (const other of items) if (other !== item && other.kind !== "tile" && other.frame && other.frame.y + other.frame.h <= y) open += currentValue(other.gap);
+  return open;
 }
 export const pinSlotPitch = () => layout.pinnedHeight + TILE_GAP;
 export const EDGE = 28;

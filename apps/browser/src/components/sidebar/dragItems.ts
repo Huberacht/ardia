@@ -29,6 +29,10 @@ export class DragItems {
     let remove = shown.away() ? null : this.add(key, item);
     const stop = shown.subscribe(() => {
       if (shown.away()) {
+        if (remove && this.controller.active) {
+          item.gap.stopAnimation();
+          item.gap.setValue(0);
+        }
         remove?.();
         remove = null;
       } else remove ??= this.add(key, item);

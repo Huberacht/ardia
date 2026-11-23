@@ -7,7 +7,7 @@ import { tabDragOutside } from "../../state/drag/tabDrag";
 import { dragMarksOf, markDrag, type SplitHalfMark } from "../../state/sidebar/dragMarks";
 import { folderPanel } from "../../state/sidebar/tileFolderUi";
 import { overPins, pinGrid, pinGridHeight } from "./pinZone";
-import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, measure, pinnedBlock, spring } from "./dragModel";
+import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, measure, openGapsAbove, pinnedBlock, spring } from "./dragModel";
 import { aimAt, type Pointing } from "./dragZones";
 import { DragGeometry } from "./dragGeometry";
 import { reorderTick } from "../../state/drag/reorderTick";
@@ -118,8 +118,9 @@ export class DragTargeting extends DragGeometry {
       void Promise.all([measure(item.view), measure(item.header)]).then(([frame, header]) => {
         if (this.session !== session || this.items.get(item.key) !== item) return;
         const shift = this.scrollY - session.startScrollY;
-        item.frame = frame && { ...frame, y: frame.y + shift };
-        item.headerFrame = header && { ...header, y: header.y + shift };
+        const open = frame ? openGapsAbove(item, frame.y + shift, this.items.values()) : 0;
+        item.frame = frame && { ...frame, y: frame.y + shift - open };
+        item.headerFrame = header && { ...header, y: header.y + shift - open };
         this.retarget();
       });
     });

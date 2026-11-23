@@ -337,6 +337,8 @@ class Frames {
         if (r.th === "j" && r.d > 8.33) out.jOver8++;
       } else if (r.k === "l" && r.a >= from && r.a < to) out.layoutMs += r.d;
     }
+    const after = records.find((r) => r.k === "f" && r.ts >= to);
+    if (after && last !== null) gaps.push(after.ts - last);
     const tick = periods.length ? periods[periods.length >> 1] : refresh;
     out.maxGap = gaps.length ? Math.max(...gaps) : 0;
     out.late = gaps.reduce((n, g) => n + (g > tick * 1.5 ? Math.max(1, Math.round(g / tick) - 1) : 0), 0);
