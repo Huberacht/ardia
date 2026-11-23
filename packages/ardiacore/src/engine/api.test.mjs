@@ -42,6 +42,13 @@ test("a type composed from anything but generated domains and one row literal is
     assert.throws(() => typeRows(api.replace(row, `${row} ${extra}`), manifest, "EngineEvents"), /only rows/, extra);
   }
   assert.throws(() => typeRows(api.replace(row, `${row}\n${row}`), manifest, "EngineEvents"), /twice/);
+  assert.throws(() => typeRows(api.replace(head, 'export type EngineEvents<HistoryEvents = { "history.undeclared": unknown }> = HistoryEvents & {'), manifest, "EngineEvents"), /non-generic/);
+  assert.throws(() => typeRows(api.replace(head, head.replace("export ", "")) + "\nexport type { EngineEvents };\n", manifest, "EngineEvents"), /2 times|exported/);
+  assert.throws(() => typeRows(api.replace(head, head.replace("export ", "")), manifest, "EngineEvents"), /exported/);
+  const historyImport = 'import type { HistoryCalls, HistoryEvents } from "./generated/history";';
+  assert.ok(api.includes(historyImport));
+  assert.throws(() => typeRows(api.replace(historyImport, `${"/"}* ${historyImport} *${"/"}\nimport type { HistoryCalls } from "./generated/history";\ntype HistoryEvents = { "history.undeclared": unknown };`), manifest, "EngineEvents"), /imported as is/);
+  assert.throws(() => typeRows(api.replace(historyImport, 'import type { HistoryCalls, HistoryCalls as HistoryEvents } from "./generated/history";'), manifest, "EngineEvents"), /imported as is/);
 });
 
 test("a payload whose own keys look like rows doesn't count as a row", () => {

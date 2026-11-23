@@ -21,14 +21,18 @@ function literalRows(name, literal, file) {
 }
 
 export function typeRows(source, manifest, name) {
-  const file = ts.createSourceFile("api.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  if (file.parseDiagnostics?.length) {
-    const first = file.parseDiagnostics[0];
-    throw new Error(`api.ts must parse as TypeScript; ${name}'s row literal holds only rows: ${ts.flattenDiagnosticMessageText(first.messageText, " ")}`);
+  const syntax = ts.transpileModule(source, { fileName: "api.ts", reportDiagnostics: true, compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.Latest } }).diagnostics ?? [];
+  if (syntax.length) {
+    throw new Error(`api.ts must parse as TypeScript; ${name}'s row literal holds only rows: ${ts.flattenDiagnosticMessageText(syntax[0].messageText, " ")}`);
   }
-  const aliases = file.statements.filter((statement) => ts.isTypeAliasDeclaration(statement) && statement.name.text === name);
-  if (aliases.length !== 1) throw new Error(`api.ts declares ${name} ${aliases.length} times`);
-  const alias = aliases[0];
+  const file = ts.createSourceFile("api.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const declared = file.statements.filter((statement) => (ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement)) && statement.name?.text === name);
+  const reexported = file.statements.some((statement) => ts.isExportDeclaration(statement) && statement.exportClause && ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.some((element) => element.name.text === name));
+  if (declared.length !== 1 || reexported) throw new Error(`api.ts declares ${name} ${declared.length + (reexported ? 1 : 0)} times`);
+  const alias = declared[0];
+  if (!ts.isTypeAliasDeclaration(alias) || !alias.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) || alias.typeParameters) {
+    throw new Error(`${name} is an exported, non-generic type alias: \`export type ${name} = HistoryCalls & {\``);
+  }
   const parts = ts.isIntersectionTypeNode(alias.type) ? [...alias.type.types] : [alias.type];
   const literal = parts.at(-1);
   if (!literal || !ts.isTypeLiteralNode(literal)) {
@@ -43,6 +47,13 @@ export function typeRows(source, manifest, name) {
   const kind = name.endsWith("Calls") ? "calls" : "events";
   const generated = new Map(Object.entries(manifest.domains).map(([domain, entry]) => [`${capitalized(domain)}${capitalized(kind)}`, { domain, entry }]));
   const operands = operandNodes.map((node) => node.typeName.text);
+  for (const operand of operands) {
+    const found = generated.get(operand);
+    if (!found) continue;
+    const imported = file.statements.some((statement) => ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === `./generated/${found.domain}` && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings) && statement.importClause.namedBindings.elements.some((element) => element.name.text === operand && (element.propertyName ?? element.name).text === operand));
+    const shadowed = file.statements.some((statement) => (ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name?.text === operand);
+    if (!imported || shadowed) throw new Error(`${name} composes ${operand}, which must be imported as is from ./generated/${found.domain} and not declared in api.ts`);
+  }
   const rows = [];
   for (const operand of operands) {
     const found = generated.get(operand);
