@@ -28,12 +28,15 @@ const sealIntact = (app) => spawnSync("codesign", ["--verify", "--strict", "--de
 
 const cdhashOf = (app) => spawnSync("codesign", ["-dvvv", app], { encoding: "utf8" }).stderr.match(/^CDHash=(\w+)$/m)?.[1] ?? null;
 
-function reuseOrClone(source, dir, copy) {
+const SHIPPED_BUNDLE = "Contents/Resources/main.jsbundle";
+const sameBundle = (copy, wanted) => existsSync(join(copy, SHIPPED_BUNDLE)) && existsSync(wanted) && readFileSync(join(copy, SHIPPED_BUNDLE)).equals(readFileSync(wanted));
+
+function reuseOrClone(source, dir, copy, bundle) {
   const stampFile = join(dir, "source.txt");
   const hash = cdhashOf(source);
   const stamp = `${source}\n${hash}\n`;
   copiesToUnregister.add(copy);
-  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash && sealIntact(copy)) return copy;
+  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash && sameBundle(copy, bundle ?? join(source, SHIPPED_BUNDLE)) && sealIntact(copy)) return copy;
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   execFileSync("cp", ["-cR", source, copy]);
@@ -49,7 +52,7 @@ export function prepareApp(app, dir, { bundle = null, entitlements: extra = [] }
   const copy = join(dir, "Ardia.app");
   const granted = execFileSync("codesign", ["-d", "--entitlements", "-", "--xml", source], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   const missing = extra.filter((key) => !granted.includes(`<key>${key}</key>`));
-  if (untouchedCopy({ source, bundle, granted, missing })) return reuseOrClone(source, dir, copy);
+  if (untouchedCopy({ source, bundle, granted, missing })) return reuseOrClone(source, dir, copy, bundle);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   execFileSync("cp", ["-cR", source, copy]);

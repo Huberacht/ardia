@@ -65,21 +65,13 @@ async function timersSettled(stepMs = 1000, timeoutMs = 15000) {
   return { settled: false, last: previous };
 }
 
-const FLUSH_DEADLINE_MS = 5000;
-
 async function persisted(persistence) {
   if (!persistence) return false;
   if (typeof persistence.sessionSaved !== "function") {
     persistence.flushPersistence();
     return true;
   }
-  let deadline;
-  const late = new Promise((resolve) => (deadline = setTimeout(function benchSettleStep() {
-    resolve(`no answer in ${FLUSH_DEADLINE_MS} ms`);
-  }, FLUSH_DEADLINE_MS)));
-  const saved = persistence.sessionSaved().then((ok) => (ok ? null : "it reported it didn't"), (error) => `it failed: ${error?.message ?? error}`);
-  const problem = await Promise.race([saved, late]);
-  clearTimeout(deadline);
+  const problem = await persistence.sessionSaved().then((ok) => (ok ? null : "it reported it didn't"), (error) => `it failed: ${error?.message ?? error}`);
   if (problem) throw new Error(`settle: the session didn't save (${problem}), so the sample could count its writes`);
   return true;
 }

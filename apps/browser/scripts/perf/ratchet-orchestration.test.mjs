@@ -3,7 +3,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { allFinished, evaluate, JOURNEYS, laneLabel, portPlan, retryPlan, SMALL_JOURNEYS, spawnAsync, splitRuns, stopLanes, withRetry } from "./ratchet.mjs";
+import { allFinished, collectWithRetry, evaluate, JOURNEYS, laneLabel, portPlan, positiveInteger, retryPlan, SMALL_JOURNEYS, spawnAsync, splitRuns, stopLanes, withRetry } from "./ratchet.mjs";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { stopInstances } from "./js-bench.mjs";
 
 const over = (key, tier = "exact") => ({ tier, key, ceiling: 1, value: 2, kind: "over" });
@@ -56,23 +58,43 @@ test("the one-tab session never shares a label, app copy or report with the big 
 });
 
 test("lanes never share a test-server port or a remote-debugging port, however many runs a lane has", () => {
-  for (const runsPerLane of [1, 8, 21, 40]) {
-    const plan = portPlan({ port: 47831, cdpPort: 9700, lanes: 4, runsPerLane });
+  for (const counts of [[1, 1], [2, 2, 2, 2], [21, 21, 20, 20], [40]]) {
+    const plan = portPlan({ port: 47831, cdpPort: 9700, counts });
     const used = new Set();
-    for (const { port, cdpPort } of plan) {
-      for (const p of [port, ...Array.from({ length: runsPerLane }, (_, r) => cdpPort + r)]) {
-        assert.ok(!used.has(p), `port ${p} used twice with ${runsPerLane} runs a lane`);
+    plan.forEach(({ port, cdpPort }, lane) => {
+      for (const p of [port, ...Array.from({ length: counts[lane] }, (_, r) => cdpPort + r)]) {
+        assert.ok(!used.has(p), `port ${p} used twice with ${counts}`);
         used.add(p);
       }
-    }
+    });
   }
 });
 
+test("remote-debugging ports are reserved for the runs each lane has, and the one-at-a-time one-tab phase reuses them", () => {
+  const plan = portPlan({ port: 47831, cdpPort: 9700, counts: [2, 2, 2, 2], serialRuns: 8 });
+  assert.deepEqual(plan.map((p) => p.cdpPort), [9700, 9702, 9704, 9706]);
+  assert.deepEqual(plan.serial, { port: 47831, cdpPort: 9700, capacity: 8 });
+  assert.doesNotThrow(() => portPlan({ port: 47831, cdpPort: 65528, counts: [2, 2, 2, 2], serialRuns: 8 }));
+});
+
 test("ports outside 1024..65535 or a test server inside the remote-debugging range fail before anything launches", () => {
-  assert.doesNotThrow(() => portPlan({ port: 64000, cdpPort: 9700, lanes: 4, runsPerLane: 8 }));
-  assert.throws(() => portPlan({ port: 65534, cdpPort: 9700, lanes: 4, runsPerLane: 1 }), /outside 1024..65535/);
-  assert.throws(() => portPlan({ port: 47831, cdpPort: 65530, lanes: 4, runsPerLane: 8 }), /outside 1024..65535/);
-  assert.throws(() => portPlan({ port: 9705, cdpPort: 9700, lanes: 2, runsPerLane: 8 }), /falls in the remote-debugging ports/);
+  assert.doesNotThrow(() => portPlan({ port: 64000, cdpPort: 9700, counts: [2, 2, 2, 2] }));
+  assert.throws(() => portPlan({ port: 65534, cdpPort: 9700, counts: [1, 1, 1, 1] }), /outside 1024..65535/);
+  assert.throws(() => portPlan({ port: 47831, cdpPort: 65530, counts: [8, 8, 8, 8] }), /outside 1024..65535/);
+  assert.throws(() => portPlan({ port: 47831, cdpPort: 65530, counts: [1], serialRuns: 8 }), /outside 1024..65535/);
+  assert.throws(() => portPlan({ port: 9705, cdpPort: 9700, counts: [8, 8] }), /falls in the remote-debugging ports/);
+});
+
+test("--runs and --lanes take positive whole numbers only", () => {
+  assert.equal(positiveInteger("8", "--runs"), 8);
+  assert.equal(positiveInteger(4, "--lanes"), 4);
+  for (const bad of ["2.5", "0", "-1", "abc", "1e3", "9007199254740993"]) assert.throws(() => positiveInteger(bad, "--lanes"), /--lanes must be a positive whole number/);
+});
+
+test("baseline refuses a fractional --lanes before it runs anything", () => {
+  const r = spawnSync(process.execPath, [new URL("./ratchet.mjs", import.meta.url).pathname, "baseline", "--runs", "8", "--lanes", "2.5", "--app", "/nonexistent/Ardia.app", "--bundle", "/nonexistent.jsbundle", "--out", mkdtempSync(join(tmpdir(), "ratchet-lanes-"))], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--lanes must be a positive whole number, got 2.5/);
 });
 
 const report = (dir, name, seed, results) => {
@@ -160,4 +182,57 @@ test("an instance opened but not yet found by pid is still quit when js-bench is
   let looks = 0;
   await stopInstances({ pids: new Set(), binaries: new Set(["/x/Ardia"]), find: () => (++looks < 3 ? [] : [42]), stop: async (pid) => quit.push(pid), waitMs: 2000 });
   assert.deepEqual(quit, [42]);
+});
+
+test("stopping the bundling lane stops the bundler's own child too", { timeout: 20_000 }, async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "ratchet-group-")), "pid");
+  const grandchild = `require("fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  const lane = `require("child_process").execFileSync(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" });`;
+  const running = spawnAsync(process.execPath, ["-e", lane], { group: true }).catch(() => {});
+  for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 50));
+  const pid = Number(readFileSync(file, "utf8"));
+  await stopLanes();
+  await running;
+  await new Promise((r) => setTimeout(r, 200));
+  let alive = true;
+  try {
+    process.kill(pid, 0);
+    process.kill(pid, "SIGKILL");
+  } catch {
+    alive = false;
+  }
+  assert.equal(alive, false, "the bundler's child outlived the stopped lane");
+});
+
+const realCeilings = JSON.parse(readFileSync(new URL("./ratchet.json", import.meta.url), "utf8"));
+const checkCli = (...args) => spawnSync(process.execPath, [new URL("./ratchet.mjs", import.meta.url).pathname, "check", ...args], { encoding: "utf8" });
+
+test("check --retry reproduces run's verdict from the saved reports, and keeps judging the scenarios the retry didn't rerun", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-check-retry-"));
+  const hover = realCeilings.exact["hover.commits"];
+  const idle = realCeilings.exact["idle.commits"];
+  const rev = { benchRevision: Number(realCeilings.revisions.bench) };
+  const write = (name, results) => {
+    const file = join(dir, `${name}.json`);
+    writeFileSync(file, JSON.stringify({ label: name, seed: "big", ...rev, results: results.map((r) => ({ probeRevision: Number(realCeilings.revisions.probe), ...r })) }));
+    return file;
+  };
+  const first = write("first", [{ hover: stats(hover + 1), idle: stats(idle) }]);
+  const again = write("again", [{ hover: stats(hover) }]);
+  assert.equal(checkCli(first).status, 1);
+  assert.equal(checkCli(first, "--retry", again).status, 0);
+  const idleOver = write("idle-over", [{ hover: stats(hover + 1), idle: stats(idle + 1) }]);
+  const result = checkCli(idleOver, "--retry", again);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /idle\.commits/);
+});
+
+test("lower --retry sees the retry's runs, as run judged them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-lower-retry-"));
+  const first = report(dir, "first", "big", [{ hover: stats(20), idle: stats(0) }]);
+  const again = report(dir, "again", "big", [{ hover: stats(24) }]);
+  const { values, ran } = collectWithRetry([first], [again]);
+  assert.deepEqual(values["hover.commits"], [20, 24]);
+  assert.deepEqual(values["idle.commits"], [0]);
+  assert.ok(ran.has("idle"));
 });

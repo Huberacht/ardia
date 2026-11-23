@@ -141,6 +141,12 @@ export function retryPlan(rows) {
   return { big: last > 0 ? JOURNEYS.slice(0, last + 1) : null, small: small ? SMALL_JOURNEYS : null };
 }
 
+export function positiveInteger(value, name) {
+  const n = Number(value);
+  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(n) || n < 1) throw new Error(`${name} must be a positive whole number, got ${value}`);
+  return n;
+}
+
 export function splitRuns(runs, lanes) {
   const n = Math.max(1, Math.min(lanes, runs));
   return Array.from({ length: n }, (_, lane) => Math.floor(runs / n) + (lane < runs % n ? 1 : 0)).filter((count) => count > 0);
@@ -150,10 +156,12 @@ export const laneLabel = (name, seed) => (seed === "small" ? `${name}-small` : n
 
 const portOk = (port) => Number.isInteger(port) && port >= 1024 && port <= 65535;
 
-export function portPlan({ port, cdpPort, lanes, runsPerLane }) {
-  const plan = Array.from({ length: lanes }, (_, lane) => ({ port: port + lane, cdpPort: cdpPort + lane * runsPerLane }));
+export function portPlan({ port, cdpPort, counts, serialRuns = 0 }) {
+  let next = cdpPort;
+  const plan = counts.map((capacity, lane) => ({ port: port + lane, cdpPort: (next += capacity) - capacity, capacity }));
+  plan.serial = { port, cdpPort, capacity: serialRuns };
+  const lastCdp = cdpPort + Math.max(next - cdpPort, serialRuns) - 1;
   const servers = plan.map((p) => p.port);
-  const lastCdp = cdpPort + lanes * runsPerLane - 1;
   const bad = [...servers, cdpPort, lastCdp].find((p) => !portOk(p));
   if (bad !== undefined) throw new Error(`port ${bad} is outside 1024..65535: pick another --port or --cdp-port`);
   const clash = servers.find((p) => p >= cdpPort && p <= lastCdp);
@@ -209,7 +217,7 @@ function table(rows) {
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
-  const multi = new Set(["micro"]);
+  const multi = new Set(["micro", "retry"]);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith("--")) {
       const name = argv[i].slice(2);
@@ -263,17 +271,19 @@ function printCheck({ rows, notes, ran, counts, runs }, ceilings, { quiet = fals
   return !failed;
 }
 
-function check(files, micro, instr) {
+function check(files, micro, instr, retryFiles = []) {
   const ceilings = readCeilings();
-  return printCheck(evaluate(ceilings, { files, micro, instr }), ceilings);
+  return printCheck(evaluate(ceilings, { files, retryFiles, micro, instr }), ceilings);
 }
+
+export const collectWithRetry = (files, retryFiles = []) => (retryFiles.length ? withRetry(collect(files.map(readJson)), collect(retryFiles.map(readJson))) : collect(files.map(readJson)));
 
 const serialize = (c) => {
   const section = (o) => (Object.keys(o).length ? `{\n${Object.keys(o).sort().map((k) => `    ${JSON.stringify(k)}: ${o[k]}`).join(",\n")}\n  }` : "{}");
   return `{\n  "about": ${JSON.stringify(c.about)},\n  "baseline": ${JSON.stringify(c.baseline)},\n  "revisions": ${JSON.stringify(c.revisions)},\n  "exact": ${section(c.exact)},\n  "noisy": ${section(c.noisy)},\n  "micro": ${section(c.micro)},\n  "instr": ${section(c.instr)}\n}`;
 };
 
-function lower(files, micro, instr) {
+function lower(files, micro, instr, retryFiles = []) {
   const ceilings = readCeilings();
   const diff = [];
   const set = (tier, key, ceiling, value) => {
@@ -281,7 +291,7 @@ function lower(files, micro, instr) {
     diff.push({ tier, key, ceiling, value });
   };
   if (files.length) {
-    const { values, ran } = collect(files.map(readJson));
+    const { values, ran } = collectWithRetry(files, retryFiles);
     for (const [key, ceiling] of Object.entries(ceilings.exact)) {
       if (!ran.has(scenarioOf(key))) continue;
       const worst = Math.max(...(values[key] ?? [0]));
@@ -388,11 +398,11 @@ function census(files) {
 
 const running = new Map();
 
-export function spawnAsync(cmd, args, { cwd, env, capture = false } = {}) {
+export function spawnAsync(cmd, args, { cwd, env, capture = false, group = false } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env, stdio: ["ignore", capture ? "pipe" : "ignore", "inherit"] });
+    const child = spawn(cmd, args, { cwd, env, detached: group, stdio: ["ignore", capture ? "pipe" : "ignore", "inherit"] });
     const closed = new Promise((done) => child.once("close", done));
-    running.set(child, closed);
+    running.set(child, { closed, group });
     closed.then(() => running.delete(child));
     let out = "";
     if (capture) child.stdout.setEncoding("utf8").on("data", (d) => (out += d));
@@ -402,8 +412,11 @@ export function spawnAsync(cmd, args, { cwd, env, capture = false } = {}) {
 }
 
 export function stopLanes() {
-  const waiting = [...running.entries()].map(([child, closed]) => {
-    child.kill("SIGTERM");
+  const waiting = [...running.entries()].map(([child, { closed, group }]) => {
+    try {
+      if (group) process.kill(-child.pid, "SIGTERM");
+      else child.kill("SIGTERM");
+    } catch {}
     return closed;
   });
   return Promise.all(waiting);
@@ -439,22 +452,22 @@ function newestApp() {
   throw new Error("no dist/<version>/export/Ardia.app: pass --app");
 }
 
-async function jsSetup(flags, out, mark, { lanes, runsPerLane }) {
+async function jsSetup(flags, out, mark, { counts, serialRuns = 0 }) {
   const app = flags.app ? resolve(flags.app) : newestApp();
   let jsbundle = flags.bundle ? resolve(flags.bundle) : join(app, "Contents/Resources/main.jsbundle");
   if (!flags.own && !flags.bundle) {
     const bundle = join(out, "bundle");
     mark("bundling the tree");
-    await spawnAsync(process.execPath, [join(here, "js-bench.mjs"), "bundle", bundle]);
+    await spawnAsync(process.execPath, [join(here, "js-bench.mjs"), "bundle", bundle], { group: true });
     jsbundle = join(bundle, "main.jsbundle");
   }
   const libs = [flags.lib ? resolve(flags.lib) : join(here, "bench-app.js"), join(here, "ratchet-app.js")].join(",");
   const label = flags.label ?? "ratchet";
-  const ports = portPlan({ port: Number(flags.port ?? DEFAULT_PORT), cdpPort: Number(flags["cdp-port"] ?? DEFAULT_CDP_PORT), lanes, runsPerLane });
+  const ports = portPlan({ port: Number(flags.port ?? DEFAULT_PORT), cdpPort: Number(flags["cdp-port"] ?? DEFAULT_CDP_PORT), counts, serialRuns });
   const lane = ({ seed = "big", runs = 1, scenarios = seed === "small" ? SMALL_JOURNEYS : JOURNEYS, name = label, slot = 0 }) => {
     const labelled = laneLabel(name, seed);
-    if (runs > runsPerLane) throw new Error(`lane ${slot} has ${runs} runs, more than the ${runsPerLane} remote-debugging ports it was given`);
-    const { port, cdpPort } = ports[slot];
+    const { port, cdpPort, capacity } = slot === "serial" ? ports.serial : ports[slot];
+    if (runs > capacity) throw new Error(`lane ${slot} has ${runs} runs, more than the ${capacity} remote-debugging ports it was given`);
     const args = [join(here, "js-bench.mjs"), "run", "--app", app, "--bundle", jsbundle, "--label", labelled, "--runs", String(runs), "--port", String(port), "--cdp-port", String(cdpPort), "--out", out, "--scenarios", scenarios.join(","), "--options", OPTIONS];
     args.push(...(seed === "small" ? ["--seed", "small"] : ["--probe", "selectors"]), "--lib", libs);
     return { report: join(out, `${labelled}.json`), run: () => spawnAsync(process.execPath, args) };
@@ -468,7 +481,7 @@ async function run(flags) {
   mkdirSync(out, { recursive: true });
   const mark = (what) => console.error(`[ratchet +${((Date.now() - started) / 1000).toFixed(0)}s] ${what}`);
   const ceilings = readCeilings();
-  const setup = flags["skip-js"] ? null : await jsSetup(flags, out, mark, { lanes: 2, runsPerLane: 1 });
+  const setup = flags["skip-js"] ? null : await jsSetup(flags, out, mark, { counts: [1, 1] });
   const big = setup?.lane({ seed: "big", slot: 0 });
   const small = setup?.lane({ seed: "small", slot: 1 });
   if (setup) mark(`running ${JOURNEYS.join(",")} and the one-tab launch side by side on ${setup.app}`);
@@ -488,6 +501,7 @@ async function run(flags) {
     ].filter(Boolean);
     await allFinished(retry.map((l) => l.run()));
     result = evaluate(ceilings, { files, retryFiles: retry.map((l) => l.report), micro, instr });
+    console.error(`[ratchet] the same verdict from the saved reports: ratchet.mjs check ${files.join(" ")} ${retry.map((l) => `--retry ${l.report}`).join(" ")}`);
   }
   const ok = printCheck(result, ceilings, { quiet: true });
   console.error(`[ratchet] ${((Date.now() - started) / 1000).toFixed(0)}s`);
@@ -499,12 +513,12 @@ async function baseline(flags) {
   const out = resolve(flags.out ?? join(process.env.TMPDIR ?? "/tmp", "ac-ratchet-baseline"));
   mkdirSync(out, { recursive: true });
   const mark = (what) => console.error(`[ratchet baseline +${((Date.now() - started) / 1000).toFixed(0)}s] ${what}`);
-  const runs = Number(flags.runs ?? 8);
-  const split = splitRuns(runs, Number(flags.lanes ?? BASELINE_LANES));
-  const setup = await jsSetup(flags, out, mark, { lanes: split.length, runsPerLane: runs });
+  const runs = positiveInteger(flags.runs ?? 8, "--runs");
+  const split = splitRuns(runs, positiveInteger(flags.lanes ?? BASELINE_LANES, "--lanes"));
+  const setup = await jsSetup(flags, out, mark, { counts: split, serialRuns: runs });
   const name = flags.label ?? "ratchet";
   const lanes = split.map((count, slot) => setup.lane({ seed: "big", runs: count, name: `${name}-${slot}`, slot }));
-  const small = setup.lane({ seed: "small", runs, name, slot: 0 });
+  const small = setup.lane({ seed: "small", runs, name, slot: "serial" });
   mark(`running ${JOURNEYS.join(",")} ${runs} times on ${setup.app}, ${lanes.length} instances at once`);
   const counting = flags["measure-only"] ? null : allFinished([microCountsAsync(), microCountsAsync()]);
   await allFinished([...lanes.map((l) => l.run()), counting]);
@@ -552,15 +566,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     if (command === "run" || command === "baseline") stopLanesOnSignals();
     if (command === "run") await run(flags);
     else if (command === "baseline") await baseline(flags);
-    else if (command === "check") process.exit(check(positional, micro, instr) ? 0 : 1);
-    else if (command === "lower") lower(positional, micro, instr);
+    else if (command === "check") process.exit(check(positional, micro, instr, flags.retry ?? []) ? 0 : 1);
+    else if (command === "lower") lower(positional, micro, instr, flags.retry ?? []);
     else if (command === "init") {
       const microRuns = flags.micro ? flags.micro.map(readJson) : [microCounts(), microCounts()];
       init(positional, microRuns, flags["no-instr"] ? null : Math.max(instrPerRound(), instrPerRound(), instrPerRound()), { adopt: !!flags.adopt });
     }
     else if (command === "census") census(positional);
     else {
-      console.error("usage: ratchet.mjs run | baseline | check <report.json> | lower <report.json> | init <report.json…> | census <report.json…>  (see the header)");
+      console.error("usage: ratchet.mjs run | baseline | check <report.json…> [--retry <report.json>]… | lower <report.json…> [--retry <report.json>]… | init <report.json…> | census <report.json…>  (see the header)");
       process.exit(64);
     }
   } catch (error) {

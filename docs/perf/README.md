@@ -218,7 +218,8 @@ node apps/browser/scripts/perf/ratchet.mjs run            # about 2 minutes: bun
 node apps/browser/scripts/perf/ratchet.mjs run --instr    # the same, plus the instruction counter
 node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<v>-rc/export/Ardia.app   # a release candidate's own bundle
 node apps/browser/scripts/perf/ratchet.mjs check <report.json>          # a js-bench report you already have (several runs: the median run)
-node apps/browser/scripts/perf/ratchet.mjs lower <report.json>          # lock in the counts a change cut; prints the diff
+node apps/browser/scripts/perf/ratchet.mjs check <reports> --retry <retry report>   # a run's verdict again, its retry merged per scenario as run does
+node apps/browser/scripts/perf/ratchet.mjs lower <report.json>          # lock in the counts a change cut; prints the diff (takes --retry too)
 node apps/browser/scripts/perf/ratchet.mjs baseline       # rebuild ratchet.json (8 runs of each session in 4 hidden instances at once, about 5 minutes; --lanes <n>)
 node apps/browser/scripts/perf/ratchet.mjs baseline --measure-only   # the runs only; then `init <the reports it prints> --adopt` merges them without raising a ceiling
 ```
@@ -226,19 +227,22 @@ node apps/browser/scripts/perf/ratchet.mjs baseline --measure-only   # the runs 
 `run` bundles the tree (about 6 s), then runs three things at once: the ten journeys in one hidden instance, the one-tab
 launch in a second (its own test-server port, remote-debugging port, data folder, app copy and report,
 `<label>-small.json`), and the Node counts. Test-server ports start at `--port` (default 47831) and remote-debugging
-ports at `--cdp-port` (default 9700), one per run per instance; both are checked before anything launches. ⌃C or a
-SIGTERM stops every instance and waits for it to quit.
+ports at `--cdp-port` (default 9700), one per run each instance actually makes; both are checked before anything
+launches. ⌃C or a SIGTERM stops every lane (the bundler with its whole process group) and waits for each instance to
+quit.
 The instruction counter (`--instr`) runs after them, alone. It exits 1 and prints a table of the counts over their
 ceiling. A count over in the first run gets one more run, and only a count over in both fails: a real regression is in
 both, a pointer moving over the hidden window or the window deactivating mid-scenario is in one. The second run is the
 journeys in order up to the last one with a count over, not that scenario alone: a scenario's counts depend on the
 ones before it (`openClose` straight after `startup` mounts 6 fewer components on close, `ContextMenuArea` included, than
 after `pageLoad`, and `pageLoad` alone runs about 12% more tasks and timers). The one-tab launch runs again only when one
-of its own counts is over, and `nodeChurn` never does: its worst run decides. A report of several runs is judged by its
-median run. Against the old serial flow (median of 3, interleaved, `--bundle` given): a run 143 → 126 s, and one with
+of its own counts is over, and `nodeChurn` never does: its worst run decides. After a retry, `run` prints the `check
+… --retry …` line that gives the same verdict from the saved reports; passing the retry report as a plain report instead
+would drop the scenarios it didn't rerun. A report of several runs is judged by its median run. Against the old serial flow (median of 3, interleaved, `--bundle` given): a run 143 → 126 s, and one with
 a `pageLoad` count over 281 → 223 s; a count over in `launch` reruns only `startup,launch`.
 
-`baseline` spreads the journeys' 8 launches over 4 hidden instances (`--lanes`, default 4; each lane has its own label,
+`baseline` spreads the journeys' 8 launches (`--runs`) over 4 hidden instances (`--lanes`, default 4; both positive whole
+numbers; each lane has its own label,
 ports and data folders) and counts the Node hot paths alongside, then runs the 8 one-tab launches one at a time, alone,
 and the instruction counts after. Journeys side by side don't move each other's counts: over 8 serial and 8
 four-at-once runs (#3737), all 50 exact group totals were the same in every run and every gated count's range
@@ -247,8 +251,8 @@ every serial run, so it isn't sampled in parallel.
 
 Before a scenario measures, `settleWindow` (`bench-app.js`) saves the session and waits for it to land
 (`ac.persistence.sessionSaved`: every changed document written, held pins landed; a bundle without it flushes
-synchronously; a save that reports failure, throws or doesn't answer in 5 s fails the run rather than measuring on top
-of it), then waits for 3 s with no document write and then for a 1 s window with no new one-shot timer (or the
+synchronously; a save that reports failure or throws fails the run rather than measuring on top of it, and a slow one
+is bounded by the scenario's own deadline), then waits for 3 s with no document write and then for a 1 s window with no new one-shot timer (or the
 same ones as the window before). Those waits, and the short sleeps the scenarios take before them, stay as long as they
 were: shorter ones change what is counted. With 500 ms windows, or one 2 s wait, the reader-mode check
 (`state/reader/reader.ts`: 250 ms after a tab shows, again 1.5 s later) for tabs the warm-up switches left unchecked ran

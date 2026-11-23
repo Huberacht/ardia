@@ -303,10 +303,12 @@ idle, command bar, tab switch, navigate, scroll, hover and native-node churn sce
 one-tab launch in a second one beside it (report `ratchet-small.json`). A count over its ceiling gets one more run of
 the journeys up to that scenario, and a one-tab count gets its own one-tab rerun (a stray window event isn't a
 regression; a count over in both is). Native nodes left behind by the churn are never rerun: one run with any left
-fails. A failure is a real regression
+fails. After a retry, check the saved reports with the line it prints (`ratchet.mjs check <reports> --retry <retry
+reports>`), not by listing the retry report as a plain one: that drops the scenarios it didn't rerun. A failure is a real regression
 (find the commit that added the commit, render, store update or timer, and fix it) or an intended increase: raise that
 one ceiling by hand in `apps/browser/scripts/perf/ratchet.json` and say why in the commit and the release report. When
-the release made counts go down, run `ratchet.mjs lower <the run's report>` (`$TMPDIR/ac-ratchet/ratchet.json`; under
+the release made counts go down, run `ratchet.mjs lower <the run's report>` (`$TMPDIR/ac-ratchet/ratchet.json`, plus `--retry
+$TMPDIR/ac-ratchet/ratchet-again.json` when it retried; under
 `gate.sh`, `TMPDIR` is the gate's scratch folder, `/tmp/ac-gate.XXXXXX`, named in its output), commit
 the lowered ceilings, and say which counts dropped. The wall-clock gate is a separate step: `docs/perf/README.md`.
 

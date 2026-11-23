@@ -100,9 +100,8 @@ test("a save that fails rejects the sample", async () => {
   await assert.rejects(bench.settleWindow(fast), /session didn't save/);
 });
 
-test("a save that never lands rejects the sample at its deadline instead of hanging", { timeout: 15_000 }, async () => {
-  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => new Promise(() => {}) } });
-  const started = Date.now();
-  await assert.rejects(bench.settleWindow(fast), /session didn't save/);
-  assert.ok(Date.now() - started < 8000);
+
+test("a healthy save that takes longer than 5 s still counts: only the scenario's own deadline bounds it", { timeout: 20_000 }, async () => {
+  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => new Promise((r) => setTimeout(() => r(true), 5100)) } });
+  assert.equal((await bench.settleWindow(fast)).flushed, true);
 });

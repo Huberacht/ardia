@@ -78,8 +78,15 @@ macTest("the injection entitlements still force a re-sign", () => {
   assert.match(execFileSync("codesign", ["-d", "--entitlements", "-", "--xml", copy], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), /disable-library-validation/);
 });
 
-macTest("untouchedCopy: only an unchanged release bundle without missing entitlements skips the re-sign", () => {
-  const { app, own, other } = fakeApp();
+test("untouchedCopy: only an unchanged release bundle without missing entitlements skips the re-sign", () => {
+  const dir = mkdtempSync(join(tmpdir(), "app-copy-plain-"));
+  const app = join(dir, "Plain.app");
+  mkdirSync(join(app, "Contents/Resources"), { recursive: true });
+  writeFileSync(join(app, "Contents/Resources/main.jsbundle"), "shipped");
+  const own = join(dir, "own.jsbundle");
+  writeFileSync(own, "shipped");
+  const other = join(dir, "other.jsbundle");
+  writeFileSync(other, "the tree");
   const granted = "<plist><dict></dict></plist>";
   assert.equal(untouchedCopy({ source: app, bundle: null, granted, missing: [] }), true);
   assert.equal(untouchedCopy({ source: app, bundle: own, granted, missing: [] }), true);
@@ -95,4 +102,13 @@ macTest("a cached copy whose resources were changed after cloning is cloned agai
   const second = prepareApp(app, join(dir, "out"), { bundle: own });
   assert.equal(readFileSync(join(second, "Contents/Resources/main.jsbundle"), "utf8"), "shipped");
   execFileSync("codesign", ["--verify", "--strict", second]);
+});
+
+macTest("a reused clone must hold the bundle this run asks for, even when the source's bundle was edited without re-signing", () => {
+  const { dir, app, own } = fakeApp();
+  prepareApp(app, join(dir, "out"), { bundle: own });
+  writeFileSync(join(app, "Contents/Resources/main.jsbundle"), "edited in place");
+  writeFileSync(own, "edited in place");
+  const copy = prepareApp(app, join(dir, "out"), { bundle: own });
+  assert.equal(readFileSync(join(copy, "Contents/Resources/main.jsbundle"), "utf8"), "edited in place");
 });

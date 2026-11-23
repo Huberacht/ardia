@@ -256,6 +256,7 @@ export function writeSwitches(dataDir, text) {
 }
 
 export async function launch(app, dataDir, port, extraEnv = {}) {
+  if (stopping) throw new Error("js-bench is stopping: not launching another instance");
   const binary = binaryOf(realpathSync(app));
   writeSwitches(dataDir, process.env.ARDIA_SWITCHES);
   if (pidsOf(binary).length) throw new Error(`an instance of ${app} is already running`);
@@ -284,6 +285,7 @@ export async function launch(app, dataDir, port, extraEnv = {}) {
 
 const launched = new Set();
 const starting = new Set();
+const quitting = new Map();
 
 export async function stopInstances({ pids = launched, binaries = starting, find = pidsOf, stop = quit, waitMs = 10_000 } = {}) {
   const end = Date.now() + waitMs;
@@ -295,27 +297,43 @@ export async function stopInstances({ pids = launched, binaries = starting, find
     }
     for (const pid of found) pids.add(pid);
   }
-  for (const pid of [...pids]) await stop(pid).catch(() => {});
+  for (const pid of new Set([...pids, ...quitting.keys()])) await stop(pid).catch(() => {});
 }
 
 let stopping = null;
 
-export function quitOnSignals(...closers) {
-  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
-    process.once(sig, async () => {
-      process.stderr.write(`js-bench: ${sig}: quitting ${launched.size + starting.size} instance(s)\n`);
-      stopping ??= stopInstances().then(() => Promise.all(closers.map((close) => Promise.resolve().then(close).catch(() => {}))));
-      await stopping;
-      process.exit(code);
-    });
+export function stopEverything(closers = []) {
+  stopping ??= stopInstances().then(() => Promise.all(closers.map((close) => Promise.resolve().then(close).catch(() => {}))));
+  return stopping;
 }
 
-export async function quit(pid) {
-  launched.delete(pid);
-  if (!alive(pid)) return;
-  process.kill(pid, "SIGTERM");
-  for (let i = 0; i < 150 && alive(pid); i++) await sleep(100);
-  if (alive(pid)) process.kill(pid, "SIGKILL");
+export function quitOnSignals(closers = [], { exit = (code) => process.exit(code) } = {}) {
+  const handlers = [["SIGINT", 130], ["SIGTERM", 143]].map(([sig, code]) => {
+    const handler = async () => {
+      process.stderr.write(`js-bench: ${sig}: quitting ${launched.size + starting.size + quitting.size} instance(s)\n`);
+      await stopEverything(closers);
+      exit(code);
+    };
+    process.on(sig, handler);
+    return [sig, handler];
+  });
+  return () => handlers.forEach(([sig, handler]) => process.off(sig, handler));
+}
+
+export function quit(pid) {
+  if (!quitting.has(pid)) {
+    const done = (async () => {
+      if (!alive(pid)) return;
+      process.kill(pid, "SIGTERM");
+      for (let i = 0; i < 150 && alive(pid); i++) await sleep(100);
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    })().finally(() => {
+      quitting.delete(pid);
+      launched.delete(pid);
+    });
+    quitting.set(pid, done);
+  }
+  return quitting.get(pid);
 }
 
 let evalSeq = 0;
@@ -376,7 +394,7 @@ async function run() {
   const version = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print CFBundleShortVersionString", join(clone, "Contents/Info.plist")], { encoding: "utf8" }).trim();
   const origin = `http://127.0.0.1:${port}`;
   const server = await startServer(Number(port));
-  quitOnSignals(() => server.close());
+  quitOnSignals([() => server.close()]);
   const libs = (flags.lib ? flags.lib.split(",") : [join(here, "bench-app.js")]).map((file) => readFileSync(file, "utf8"));
   const results = [];
   try {
