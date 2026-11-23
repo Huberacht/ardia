@@ -339,7 +339,7 @@ function preflightStep() {
   return body.split("\n").map((line) => line.slice(10)).join("\n");
 }
 
-function runPreflightStep({ dryRun, published, alreadyReleased, version = "1.2.3-nightly.2", latest = "v1.2.2" }) {
+function runPreflightStep({ dryRun, published, alreadyReleased, version = "1.2.3-nightly.2", latest = "v1.2.2", outage = "" }) {
   const dir = mkdtempSync(join(tmpdir(), "ac-preflight-step-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -348,7 +348,7 @@ function runPreflightStep({ dryRun, published, alreadyReleased, version = "1.2.3
   mkdirSync(join(dir, "engine"));
   const stub = (path, body) => { writeFileSync(path, `#!/usr/bin/env bash\n${body}\n`); chmodSync(path, 0o755); };
   stub(join(dir, "engine/engine-key.sh"), "echo 0123456789abcdef0123");
-  stub(join(bin, "gh"), `case "$*" in *--json*) echo "${latest}"; exit 0 ;; esac\nexit ${published ? 0 : 1}`);
+  stub(join(bin, "gh"), `case "$*" in ${outage || "never-matches"}) echo "HTTP 503: Service Unavailable (https://api.github.com/repos/ardia-browser/ardia/releases)" >&2; exit 1 ;; esac\ncase "$*" in *--json*) echo "${latest}"; exit 0 ;; esac\n${published ? "exit 0" : 'echo "release not found" >&2; exit 1'}`);
   stub(join(bin, "node"), `out=""; while [ $# -gt 0 ]; do [ "$1" = --values-out ] && out="$2"; shift; done; printf 'release_build=41\\nalready_released=${alreadyReleased}\\n' > "$out"`);
   const result = spawnSync("bash", ["-c", preflightStep()], {
     cwd: dir,
@@ -394,4 +394,15 @@ test("a feed that doesn't parse fails the preflight as not a whole appcast, befo
   const body = LIVE.replace("</channel>", `${"<item>".repeat(200_000)}</channel>`);
   const result = await run({ version: "1.2.3", root: fixture(), mode: "dry-run", responses: [{ status: 200, body }] });
   assert.match(result.fails.join("\n"), /isn't a whole Sparkle appcast as appcast.py reads one/);
+});
+
+test("a GitHub outage while looking a release up stops the preflight job instead of counting as no release", () => {
+  const tag = runPreflightStep({ dryRun: true, published: false, alreadyReleased: "none", outage: "*v1.2.3-nightly.2*" });
+  assert.notEqual(tag.status, 0);
+  assert.match(tag.output, /::error::couldn't ask GitHub whether v1.2.3-nightly.2 is published, so this stops rather than guess: HTTP 503/);
+  const latest = runPreflightStep({ dryRun: true, published: false, alreadyReleased: "none", version: "1.2.3", outage: "*--json*" });
+  assert.notEqual(latest.status, 0);
+  assert.match(latest.output, /::error::couldn't ask GitHub for the latest release, so this stops rather than guess: HTTP 503/);
+  const absent = runPreflightStep({ dryRun: false, published: false, alreadyReleased: "none", version: "1.2.3" });
+  assert.equal(absent.status, 0, absent.output);
 });

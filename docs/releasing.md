@@ -180,7 +180,7 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
    stable in it (`publish.sh` would refuse it), or the build number isn't above every other build in it, stable or
    nightly. The feed is one request with a 4-second limit and an 8 MB cap (counted in bytes as it streams, and on a feed file), parsed
    with Python's ElementTree (no DTD, one plain `<channel>` with its items directly in it, as `appcast.py` reads it). Every later step takes the version, build number and
-   minimum macOS from the values it checked. Then it stops if if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
+   minimum macOS from the values it checked. Then it stops if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
    framework is older than the tree's ArdiaCore sources or the Chromium tree differs from `engine/ardiacore`
    (`apply.sh --check`), or (outside `--rc`) if `prebuilt-engines.tsv` lists no
    published engine for HEAD's `engine/` tree. Then it runs the stages in `scripts/release/` (`archive.sh`,
@@ -220,29 +220,7 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      `CODE_SIGN_ENTITLEMENTS` switched to that file),
    - launches the app once in the background (throwaway data dir), waits for uBlock's rulesets to be indexed,
      quits it and checks the signature again: the app must never write into its own bundle,
-   - notarizes and staples the app and the DMG. Each submission id is kept in `dist/.notary/` (outside
-     `dist/<version>`, so it survives the next run's wipe; `NOTARY_STATE_DIR` moves it): the app's under its code's
-     CDHash, which signing the same code again keeps although the zip's bytes change, the DMG's under the CDHash of the
-     app it packs and a hash of the packing inputs (the commit, `package.sh`, `scripts/dmg/background.tiff` and `DS_Store`,
-     `ARDIA_DMG_CHUNK`). The DMG it submits is a copy in the state directory, named by its own sha256
-     (`<key>.<sha256>.dmg`), so the bytes hashed are the bytes uploaded even if the DMG is packed again meanwhile; the
-     record (id, that sha256, and `complete` once stapled) is written through a temporary file and a rename, and the
-     previous image goes only after it. Stapling works on a private copy that then replaces the DMG, so the kept image
-     is never rewritten: a retry after a later step failed (the appcast, the launch check) staples it again instead of
-     uploading. Pruning removes only images of `complete` records, and images no record names, untouched for three
-     days. One `notarize.sh` runs per state directory: it holds a kernel lock on `<state>/.lock` (`flock` through perl)
-     for the whole run, the OS frees it when the process dies, and a second run waits `NOTARY_LOCK_SECONDS` (default
-     600) and stops. A kept copy is used only when its sha256 is the one recorded and its signature
-     verifies against the packed app's team and it mounts as exactly the volume `package.sh` makes, holding an app with
-     the same CDHash; anything else is discarded and the new DMG submitted. An upload that fails leaves the old record
-     beside its own image, never beside the new one; a packing input that can't be hashed keys the DMG by its own bytes. A
-     retry asks Apple about that id before uploading: Accepted staples, In Progress waits, Invalid or Rejected prints
-     Apple's log and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist
-     submits fresh, and when notarytool can't answer, or answers a status the script doesn't know, it stops with the
-     record kept. An `.app` Apple already holds a
-     ticket for is stapled without any upload. When Apple has accepted an id but stapler can't fetch its ticket, it stops
-     with the record kept rather than uploading again (delete the record if the ticket really isn't that file's). Polling Apple stops after `NOTARY_WAIT_SECONDS` (default 4 h; the
-     upload, `info` and stapling come on top) with the id recorded,
+   - notarizes and staples the app and the DMG,
    - packages the DMG (lzma in 4 MB chunks, `udif-chunk-size=8192`, hdiutil's largest; `ARDIA_DMG_CHUNK=off` goes back
      to its 1 MB default) and the zip, and signs `appcast.xml` (`generate_appcast` names the feed after the app's
      `SUFeedURL`, so release.sh passes it `-o`) with the Sparkle key. It starts from the
@@ -342,7 +320,8 @@ the engine if `engine/` changed (below).
   `publish.sh --dry-run` accepts that one and refuses an already released stable. The tag check follows the same rule:
   a published `v<version>` only warns in a dry run when the preflight confirmed exactly that (`already_released=nightly-newest`
   in its `--values-out`); with a feed that answers 404, or for anything else, it fails. A stable must also be above the
-  latest stable release's tag (`gh release view`), which catches the order `publish.sh` checks even when there's no feed. So a dry run on a commit catches
+  latest stable release's tag (`gh release view`), which catches the order `publish.sh` checks even when there's no feed. Both lookups tell GitHub's "release not
+  found" from a failed request, and a failed one stops the job instead of passing for "not published". So a dry run on a commit catches
   whatever would stop the real run on it.
 - **checks**: `pnpm typecheck`, `pnpm test`, `pnpm shaders:check`.
 - **build**, on the `xcode-27` runner (Xcode 27.1, the same build as here), with no secrets: fetches the engine for
@@ -351,15 +330,7 @@ the engine if `engine/` changed (below).
   `apps/browser/official-plugins.json`, fetched and SHA-256 checked by `scripts/release/official-plugins.py bundle`)
   and uploads them as one tar. Caches: pnpm, Pods with Hermes, uBO, the engine and Xcode's
   compilation cache (per Xcode build and month).
-- **sign** installs nothing and restores no cache but the notarization state, so no dependency code runs next to the
-  keys. That cache (`notary-<version>-<commit>-<run>-<attempt>`, restored before the keys are set up from the newest one
-  for the same version and commit, and saved after they're removed) holds submission ids named by CDHash or file
-  hash, and the kept DMG (a few hundred MB): data, never code. `notarize.sh` refuses a
-  symlinked state directory, writes through `mktemp` and a rename, takes nothing but a UUID from a record, acts on it
-  only as far as Apple confirms it and checks a kept DMG as above before using it. Polling is capped at 45 minutes per
-  file (`NOTARY_WAIT_SECONDS`), which leaves the 150-minute job time for the upload, stapling and the save on a normal
-  run; a job Apple keeps longer than that can still hit its deadline before the save, and its re-run then submits
-  again. Re-running a sign job that failed waiting on Apple resumes both submissions instead of uploading again. A dry run's sign step runs the preflight as `--mode dry-run` (`RELEASE_PREFLIGHT_MODE`), not as a local
+- **sign** installs nothing and restores no cache, so no dependency code runs next to the keys. A dry run's sign step runs the preflight as `--mode dry-run` (`RELEASE_PREFLIGHT_MODE`), not as a local
   candidate, so a feed it can't read fails it there too. The step no
   longer probes the feed with `curl -I`: `RELEASE_FEED_MAY_BE_MISSING=1` lets only a 404 mean there's no feed yet, so a
   network error fails instead of building the appcast from nothing. It
