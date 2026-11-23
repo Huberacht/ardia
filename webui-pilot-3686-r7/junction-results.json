@@ -1,0 +1,134 @@
+{
+    "handle-semantics no access":  {
+                                       "detail":  "a folder held open with no access, share read and write but not delete: rename renamed",
+                                       "ok":  true
+                                   },
+    "handle-semantics FILE_LIST_DIRECTORY | SYNCHRONIZE":  {
+                                                               "detail":  "a folder held open with FILE_LIST_DIRECTORY | SYNCHRONIZE, share read and write but not delete: rename refused",
+                                                               "ok":  true
+                                                           },
+    "handle-with-real-access-blocks-rename":  {
+                                                  "detail":  "zero-access handle lets the rename through: True; FILE_LIST_DIRECTORY | SYNCHRONIZE handle refuses it: True",
+                                                  "ok":  true
+                                              },
+    "junction-app-data-to-react-native":  {
+                                              "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                              "ok":  true
+                                          },
+    "switch-spelling \u0027--ARDIA-SHELL=webui\u0027 with the junction":  {
+                                                                              "detail":  "C:\\pilot\\app\\chrome.exe --ARDIA-SHELL=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                              "ok":  true
+                                                                          },
+    "switch-spelling \u0027-ardia-shell=webui\u0027 with the junction":  {
+                                                                             "detail":  "C:\\pilot\\app\\chrome.exe -ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                             "ok":  true
+                                                                         },
+    "switch-spelling \u0027/ardia-shell=webui\u0027 with the junction":  {
+                                                                             "detail":  "C:\\pilot\\app\\chrome.exe /ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                             "ok":  true
+                                                                         },
+    "switch-spelling \u0027--Ardia-Shell=webui\u0027 with the junction":  {
+                                                                              "detail":  "C:\\pilot\\app\\chrome.exe --Ardia-Shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                              "ok":  true
+                                                                          },
+    "switch-spelling \u0027 --ardia-shell=webui \u0027 with the junction":  {
+                                                                                "detail":  "C:\\pilot\\app\\chrome.exe \" --ardia-shell=webui \": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                                "ok":  true
+                                                                            },
+    "switch-spelling \u0027--SINGLE-ARGUMENT --ardia-shell=webui\u0027 with the junction":  {
+                                                                                                "detail":  "C:\\pilot\\app\\chrome.exe --SINGLE-ARGUMENT --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                                                "ok":  true
+                                                                                            },
+    "junction-profile-to-react-native":  {
+                                             "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                             "ok":  true
+                                         },
+    "own-tree link: junction at depth 1 to the React Native profile":  {
+                                                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                           "ok":  true
+                                                                       },
+    "own-tree link: directory symlink at depth 1 to the React Native profile":  {
+                                                                                    "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                                    "ok":  true
+                                                                                },
+    "own-tree link: junction at depth 3 to React Native storage":  {
+                                                                       "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                       "ok":  true
+                                                                   },
+    "own-tree link: directory symlink at depth 3 to React Native storage":  {
+                                                                                "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                                "ok":  true
+                                                                            },
+    "own-tree link: junction at depth 2 to an unrelated folder":  {
+                                                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                      "ok":  true
+                                                                  },
+    "own-tree link: file symlink to the React Native Local State":  {
+                                                                        "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                        "ok":  true
+                                                                    },
+    "own-tree link: junction in the app-data folder beside Chromium":  {
+                                                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                                                           "ok":  true
+                                                                       },
+    "user-data-dir-into-react-native":  {
+                                            "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                            "ok":  true
+                                        },
+    "user-data-dir-spelled-long-path":  {
+                                            "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=\\\\?\\C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                            "ok":  true
+                                        },
+    "user-data-dir-spelled-8.3":  {
+                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui --user-data-dir=C:\\pilot\\runs\\59FE51~1\\local\\Ardia\\USERDA~1: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                      "ok":  true
+                                  },
+    "user-data-dir-spelled-unc":  {
+                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=\\\\localhost\\C$\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                      "ok":  true
+                                  },
+    "ardia-data-dir-at-react-native":  {
+                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui with ARDIA_DATA_DIR=C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                           "ok":  true
+                                       },
+    "uncreatable-webui-folder":  {
+                                     "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                     "ok":  true
+                                 },
+    "pin-alone-blocks-rename":  {
+                                    "detail":  "paused right after the pin: 1 engine process, chrome.dll loaded False; renaming Ardia WebUI\\Chromium refused, renaming Ardia WebUI refused; window after the pause True",
+                                    "ok":  true
+                                },
+    "relocated-react-native-profile":  {
+                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                           "ok":  true
+                                       },
+    "control-starts-in-webui-folder":  {
+                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui: argv as intended True, window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                           "ok":  true
+                                       },
+    "control-switch-spelling-uppercase":  {
+                                              "detail":  "C:\\pilot\\app\\chrome.exe --ARDIA-SHELL=webui: argv as intended True, window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                              "ok":  true
+                                          },
+    "control-switch-spelling-single-dash":  {
+                                                "detail":  "C:\\pilot\\app\\chrome.exe -ardia-shell=webui: argv as intended True, window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                                "ok":  true
+                                            },
+    "control-user-data-dir-with-a-space":  {
+                                               "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia WebUI\\Chromium\": argv as intended True, window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                               "ok":  true
+                                           },
+    "react-native-fixture-intact":  {
+                                        "detail":  "every React Native fixture file has the size and time it was written with",
+                                        "ok":  true
+                                    },
+    "account-folders-untouched":  {
+                                      "detail":  "the account\u0027s own LOCALAPPDATA lists the same entries before and after",
+                                      "ok":  true
+                                  },
+    "run-folder-removed-by-marker":  {
+                                         "detail":  "C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08 removed after its .pilot-run marker matched",
+                                         "ok":  true
+                                     }
+}

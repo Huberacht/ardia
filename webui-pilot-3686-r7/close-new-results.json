@@ -1,0 +1,54 @@
+{
+    "cycle 1 (ArdiaShell.closeWindow)":  {
+                                             "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                             "ok":  true
+                                         },
+    "cycle 2 (WM_CLOSE)":  {
+                               "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                               "ok":  true
+                           },
+    "cycle 3 (ArdiaShell.closeWindow)":  {
+                                             "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                             "ok":  true
+                                         },
+    "cycle 4 (WM_CLOSE)":  {
+                               "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                               "ok":  true
+                           },
+    "cycle 5 (ArdiaShell.closeWindow)":  {
+                                             "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                             "ok":  true
+                                         },
+    "cycle 6 (WM_CLOSE)":  {
+                               "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                               "ok":  true
+                           },
+    "cycle 7 (ArdiaShell.closeWindow)":  {
+                                             "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                             "ok":  true
+                                         },
+    "cycle 8 (WM_CLOSE)":  {
+                               "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                               "ok":  true
+                           },
+    "cycle 9 (ArdiaShell.closeWindow)":  {
+                                             "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                             "ok":  true
+                                         },
+    "cycle 10 (WM_CLOSE)":  {
+                                "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                "ok":  true
+                            },
+    "cycle 11 (ArdiaShell.closeWindow)":  {
+                                              "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                              "ok":  true
+                                          },
+    "cycle 12 (WM_CLOSE)":  {
+                                "detail":  "page \u0027shown\u0027, pass-through active before close True, exit 0x00000000, crash dumps 0, teardown logged True, processes left 0",
+                                "ok":  true
+                            },
+    "close-new-all-cycles-clean":  {
+                                       "detail":  "12 of 12 closes with pass-through regions active exited 0 with no crash dump; 12 had regions set; 12 logged the teardown",
+                                       "ok":  true
+                                   }
+}

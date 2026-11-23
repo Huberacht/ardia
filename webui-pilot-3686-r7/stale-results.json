@@ -16,7 +16,7 @@
                                        "ok":  true
                                    },
     "new-document-answers":  {
-                                 "detail":  "new document (time origin 1795429056108.4 -\u003e 1795429076187.3) answers \u0027main\u0027",
+                                 "detail":  "new document (time origin 1795451931866 -\u003e 1795451952708.2) answers \u0027main\u0027",
                                  "ok":  true
                              },
     "retired-document-makes-no-page":  {
@@ -24,11 +24,11 @@
                                            "ok":  true
                                        },
     "retired-document-loads-no-profile":  {
-                                              "detail":  "WebUI shell: page creation dropped before its profile loaded: shell document 6 is not the live one (8); C:\\pilot\\runs\\885bfda45761421e8ba2d9ee23c23410\\data\\Chromium\\Ardia orphanprofile on disk: False",
+                                              "detail":  "WebUI shell: page creation dropped before its profile loaded: shell document 6 is not the live one (8); C:\\pilot\\runs\\ac420606311342c7afa4ec50db84bf32\\data\\Chromium\\Ardia orphanprofile on disk: False",
                                               "ok":  true
                                           },
     "live-document-still-loads-that-profile":  {
-                                                   "detail":  "the live document\u0027s tab.create answered \u0027made\u0027; C:\\pilot\\runs\\885bfda45761421e8ba2d9ee23c23410\\data\\Chromium\\Ardia orphanprofile on disk: True",
+                                                   "detail":  "the live document\u0027s tab.create answered \u0027made\u0027; C:\\pilot\\runs\\ac420606311342c7afa4ec50db84bf32\\data\\Chromium\\Ardia orphanprofile on disk: True",
                                                    "ok":  true
                                                }
 }
