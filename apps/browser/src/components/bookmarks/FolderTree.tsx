@@ -132,7 +132,7 @@ function FolderTreeRow({
             flexDirection: "row",
             alignItems: "center",
             paddingLeft: folderTree.inset + row.depth * folderTree.indent,
-            paddingRight: space.m,
+            paddingRight: soft ? folderTree.checkInset : space.m,
             backgroundColor: selected ? (soft ? theme.rowSelected : theme.formAccent) : hovered ? theme.rowHover : undefined,
           }}
         >
@@ -156,7 +156,7 @@ function FolderTreeRow({
             ) : null}
           </Pressable>
           <Symbol name="folder" size={folderTree.folderIcon} color={filled ? theme.onAccent : theme.icon} style={FOLDER_ICON} />
-          <Text lines={1} tone={filled ? "onAccent" : "textPrimary"} style={TITLE}>
+          <Text lines={1} tone={filled ? "onAccent" : "textPrimary"} ardiaCentersCapitals style={TITLE}>
             {row.title}
           </Text>
           {soft && selected ? <Symbol name="checkmark" size={folderTree.check} weight="semibold" color={theme.textPrimary} style={CHECK} /> : null}
@@ -185,7 +185,7 @@ export function FolderTreeAction({ title, icon, height, onPress }: { title: stri
             }}
           >
             <Symbol name={icon} size={folderTree.plus} weight="medium" color={theme.textSecondary} style={FOLDER_ICON} />
-            <Text lines={1} tone="textSecondary" style={TITLE}>
+            <Text lines={1} tone="textSecondary" ardiaCentersCapitals style={TITLE}>
               {title}
             </Text>
           </View>

@@ -2,7 +2,7 @@ import { capsule, radius, space } from "../ui/tokens";
 
 export const folderTreeInk = { selectedChevron: "#FFFFFFCC" } as const;
 
-export const folderTree = { indent: 16, inset: space.xs, chevronBox: 16, chevron: 9, folderIcon: 13, folderBox: 18, check: 11, checkBox: 14, plus: 11 } as const;
+export const folderTree = { indent: 16, inset: space.xs, chevronBox: 16, chevron: 9, folderIcon: 13, folderBox: 18, check: 11, checkBox: 14, checkInset: space.s, plus: 11 } as const;
 
 export const folderPicker = { row: 28, rowGap: space.xxs, shownRows: 6.5 } as const;
 
