@@ -338,11 +338,14 @@ test("Little Ardia direct command dispatch ignores Browser Layout commands", asy
   runCommand({ command: "setTabLayout", arg: "top", windowId: small });
   runCommand({ command: "setTabLayout", arg: "sidebarRight", windowId: small });
   runCommand({ command: "toggleCompactToolbar", arg: null, windowId: small });
+  runCommand({ command: "toggleFullUrl", arg: null, windowId: small });
   runCommand({ command: "togglePinnedFold", arg: null, windowId: small });
   runCommand({ command: "toggleMinimalism", arg: null, windowId: small });
+  assert.ok(menuState(S()).disabled.includes("toggleFullUrl"));
   assert.equal(model.tabLayoutOf(S(), main), "sidebar");
   assert.equal(S().settings.sidebarSide, "left");
   assert.equal(S().settings.compactToolbar, false);
+  assert.equal(S().settings.showFullUrl, false);
   assert.equal(S().settings.minimalismMode, false);
   assert.equal(!!S().profiles.default.pinnedCollapsed, false);
 });

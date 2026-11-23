@@ -77,6 +77,7 @@ const LITTLE_ARDIA_BLOCKED_LAYOUT: ReadonlySet<string> = new Set([
   "toggleSidebar",
   "toggleAddressBar",
   "toggleCompactToolbar",
+  "toggleFullUrl",
   "toggleMinimalism",
   "setBookmarksBar",
   "toggleBookmarksBar",

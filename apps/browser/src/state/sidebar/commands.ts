@@ -26,7 +26,7 @@ function hasCollapsiblePinned(s: BrowserState, w: BrowserState["windows"][string
     const t = s.tabs[id];
     if (!t || t.profileId !== w.profileId) continue;
     if (isPinnedRow(t)) return true;
-    if (!t.pin && rootGroups.get(id)?.pinned && (!hideEmpty || !hiddenEmptyCard(s, t))) return true;
+    if (!t.pin && rootGroups.get(id)?.pinned && !t.liveItem && (!hideEmpty || !hiddenEmptyCard(s, t))) return true;
   }
   return false;
 }
