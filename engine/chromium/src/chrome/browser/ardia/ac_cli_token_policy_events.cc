@@ -77,8 +77,7 @@ bool TokenClient::FilterEvent(std::string& message) {
         view.substr(kEvent.size(), end - kEvent.size());
     if (method == "Target.attachedToTarget" ||
         method == "Target.detachedFromTarget" ||
-        method == "Target.targetDestroyed" ||
-        method == "Inspector.targetCrashed" || method == "Inspector.detached") {
+        method == "Target.targetDestroyed") {
       NoteTargetEvent(method, message);
     }
     return true;
@@ -145,18 +144,6 @@ void TokenClient::NoteTargetEvent(std::string_view method,
   }
   const base::DictValue* params = event->FindDict("params");
   const std::string* event_session = event->FindString("sessionId");
-  if (method == "Inspector.targetCrashed") {
-    ForgetSession(event_session ? *event_session : std::string());
-    return;
-  }
-  if (method == "Inspector.detached") {
-    if (event_session) {
-      ForgetSessionTree(*event_session);
-    } else {
-      ForgetSession(std::string());
-    }
-    return;
-  }
   if (!params) {
     return;
   }
