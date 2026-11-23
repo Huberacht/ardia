@@ -6,6 +6,7 @@ on:
       - "engine/patches/**"
       - "engine/chromium/**"
       - "engine/ardiacore/apply.sh"
+      - "engine/ardiacore/src/ardia/core/**"
       - "engine/ardiacore-linux/apply.sh"
       - "engine/ardiacore-linux/copies.tsv"
       - "packages/ardiacore/ios/page_script.js"
@@ -64,10 +65,13 @@ jobs:
         env:
           BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: |
-          if [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]] && git fetch -q --depth=1 origin "$BEFORE"; then
+          if [[ -z "$BEFORE" || "$BEFORE" == 0000000000000000000000000000000000000000 ]]; then
+            echo "ref=HEAD^" >> "$GITHUB_OUTPUT"
+          elif git fetch -q --depth=1 origin "$BEFORE"; then
             echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=HEAD^" >> "$GITHUB_OUTPUT"
+            echo "::error::couldn't fetch $BEFORE, the commit this push starts from, so its edited patches can't be named"
+            exit 1
           fi
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:

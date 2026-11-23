@@ -13,13 +13,21 @@ import tarfile
 REPO = pathlib.Path(__file__).resolve().parents[2]
 BUILD = REPO / "engine/patches/build"
 TABLE = REPO / "scripts/engine/series-bases.tsv"
-TABLE_FIELDS = ("platform", "cpu", "chromium", "helium_chromium", "helium_platform", "tag", "asset", "sha256")
+IDENTITY = ("platform", "cpu", "chromium", "helium_chromium", "helium_platform", "inputs")
+TABLE_FIELDS = IDENTITY + ("tag", "asset", "sha256")
 DEFAULT_CPU = {"mac": "arm64", "linux": "x64"}
 PLATFORM_HELIUM = {"mac": "helium-macos", "linux": "helium-linux"}
-BRANDING_INPUTS = ("03-helium.py", "ardia_namesub.py", "ardia_resources.txt", "domsub-keep-store.txt", "ardia-icons")
+STEP3_FILES = ("03-helium.py", "ardia_namesub.py", "ardia_resources.txt", "domsub-keep-store.txt", "helium-pins.ini",
+               "env.sh", "target_config.py")
+STEP3_STAGES = ("patches", "fixups", "domsub", "namesub", "brand-namesub", "version", "resources")
 MANIFEST = "manifest.json"
 FILES_ROOT = "src/"
-FORMAT = 1
+FORMAT = 2
+MAX_ARCHIVE_BYTES = 64 << 20
+MAX_EXPANDED_BYTES = 512 << 20
+MAX_MEMBER_BYTES = 64 << 20
+MAX_MANIFEST_BYTES = 16 << 20
+MAX_MEMBERS = 20000
 
 
 class Problem(Exception):
@@ -51,12 +59,38 @@ def pins(build=BUILD):
     return out
 
 
-def identity(platform, cpu=None, build=BUILD):
+def resource_pairs(build=BUILD):
+    pairs = []
+    listing = pathlib.Path(build, "ardia_resources.txt")
+    for number, line in enumerate(listing.read_text().splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 2 or not all(safe_relative(part) for part in parts):
+            raise Problem(f"{listing}:{number}: expected `<source> <dest>`, both relative")
+        pairs.append((parts[0], parts[1]))
+    return pairs
+
+
+def step3_digest(build=BUILD, repo=REPO):
+    entries = [(f"engine/patches/build/{name}", pathlib.Path(build, name)) for name in STEP3_FILES]
+    entries += [(source, pathlib.Path(repo, source)) for source, _ in resource_pairs(build)]
+    digest = hashlib.sha256()
+    for name, path in sorted(set(entries)):
+        if not path.is_file():
+            raise Problem(f"step 3 reads {name}, which is missing")
+        digest.update(name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
+def identity(platform, cpu=None, build=BUILD, repo=REPO):
     if platform not in DEFAULT_CPU:
         raise Problem(f"unknown platform {platform}")
     pinned = pins(build)
     return {"platform": platform, "cpu": cpu or DEFAULT_CPU[platform], "chromium": pinned["chromium"],
-            "helium_chromium": pinned["helium-chromium"], "helium_platform": pinned[PLATFORM_HELIUM[platform]]}
+            "helium_chromium": pinned["helium-chromium"], "helium_platform": pinned[PLATFORM_HELIUM[platform]],
+            "inputs": step3_digest(build, repo)}
 
 
 def tag_name(ident):
@@ -65,7 +99,7 @@ def tag_name(ident):
 
 def asset_prefix(ident):
     return (f"series-base-{ident['chromium']}-{ident['helium_chromium'][:12]}-{ident['platform']}-"
-            f"{ident['helium_platform'][:12]}-{ident['cpu']}-")
+            f"{ident['helium_platform'][:12]}-{ident['cpu']}-{ident['inputs'][:12]}-")
 
 
 def content_revision(manifest):
@@ -75,17 +109,6 @@ def content_revision(manifest):
 
 def asset_name(ident, revision):
     return f"{asset_prefix(ident)}{revision}.tar.xz"
-
-
-def branding_digest(build=BUILD):
-    digest = hashlib.sha256()
-    for name in BRANDING_INPUTS:
-        root = pathlib.Path(build, name)
-        paths = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else [root]
-        for path in paths:
-            digest.update(path.relative_to(build).as_posix().encode() + b"\0")
-            digest.update(hashlib.sha256(path.read_bytes()).digest() if path.exists() else b"absent")
-    return digest.hexdigest()
 
 
 def sha256_file(path):
@@ -101,38 +124,91 @@ def safe_relative(path):
         all(part not in ("", ".", "..") for part in path.split("/"))
 
 
-def deleted_paths(step):
-    if step.kind != "chromium":
-        return []
-    out, old = [], None
-    for line in pathlib.Path(step.patch).read_text(encoding="utf-8", errors="surrogateescape").splitlines():
-        if line.startswith("--- "):
-            match = re.match(r"^--- (?:a/)?(\S+)", line)
-            old = match.group(1) if match else None
-        elif line.startswith("+++ ") and line.split()[1] == "/dev/null" and old and old != "/dev/null":
-            out.append(old)
-    return out
+def split_hunks(text):
+    files, current, lines, index = [], None, text.splitlines(keepends=True), 0
+    while index < len(lines):
+        line = lines[index]
+        hunk = re.match(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
+        if hunk and current is not None:
+            old = int(hunk.group(1)) if hunk.group(1) is not None else 1
+            new = int(hunk.group(2)) if hunk.group(2) is not None else 1
+            body = [line]
+            current["starts"].append(index)
+            index += 1
+            while index < len(lines) and (old > 0 or new > 0 or lines[index].startswith("\\")):
+                body_line = lines[index]
+                if body_line.startswith("\\"):
+                    pass
+                elif body_line.startswith("-"):
+                    old -= 1
+                elif body_line.startswith("+"):
+                    new -= 1
+                else:
+                    old, new = old - 1, new - 1
+                body.append(body_line)
+                index += 1
+            current["hunks"].append(body)
+            continue
+        if line.startswith("diff ") or (line.startswith("--- ") and (current is None or current["hunks"])):
+            current = {"header": [], "hunks": [], "starts": [], "path": None, "old": None, "new": None,
+                       "kind": "modify"}
+            files.append(current)
+            git = re.match(r"^diff --git a/(\S+) b/(\S+)\s*$", line)
+            if git:
+                current["old"], current["new"] = git.group(1), git.group(2)
+        if current is not None and not current["hunks"]:
+            current["header"].append(line)
+            read_header_line(current, line.rstrip("\n"))
+        index += 1
+    for entry in files:
+        entry["path"] = entry["new"] or entry["old"]
+    return files
+
+
+def read_header_line(entry, line):
+    side = re.match(r"^(---|\+\+\+) (\S+)", line)
+    if side:
+        path = side.group(2)
+        key = "old" if side.group(1) == "---" else "new"
+        if path == "/dev/null":
+            entry[key] = None
+            entry["kind"] = "create" if key == "old" else "delete"
+        else:
+            entry[key] = path[2:] if path.startswith(("a/", "b/")) else path
+    elif line.startswith("new file mode "):
+        entry["old"], entry["kind"] = None, "create"
+    elif line.startswith("deleted file mode "):
+        entry["new"], entry["kind"] = None, "delete"
+    for verb in ("rename", "copy"):
+        moved = re.match(rf"^{verb} (from|to) (\S+)$", line)
+        if moved:
+            entry["old" if moved.group(1) == "from" else "new"] = moved.group(2)
+            entry["kind"] = verb
+
+
+def patch_sections(step):
+    text = pathlib.Path(step.patch).read_text(encoding="utf-8", errors="surrogateescape")
+    return [(entry["old"], entry["new"], entry["kind"]) for entry in split_hunks(text)]
 
 
 def base_paths(steps):
-    created = set()
+    required, optional, created = {}, {}, set()
+    later = []
     for step in steps:
-        created |= step.created()
-    required, optional, created_before = {}, {}, set()
-    for step in steps:
-        for path in deleted_paths(step):
-            if path not in created_before:
-                required.setdefault(path, step.name)
-        created_before |= step.created()
+        if step.kind != "chromium":
+            later.append(step)
+            continue
+        for old, new, kind in patch_sections(step):
+            if old and old not in created:
+                required.setdefault(old, step.name)
+            if new and kind in ("create", "rename", "copy"):
+                created.add(new)
+            if kind in ("delete", "rename") and old:
+                created.discard(old)
+    for step in later:
         for path, is_dir in step.paths():
-            if is_dir or path in created:
-                continue
-            if step.kind == "chromium":
-                required.setdefault(path, step.name)
-            else:
+            if not is_dir and path not in created and path not in required:
                 optional.setdefault(path, step.name)
-    for path in required:
-        optional.pop(path, None)
     return required, optional
 
 
@@ -150,9 +226,6 @@ def read_table(table=TABLE):
     return rows
 
 
-IDENTITY = ("platform", "cpu", "chromium", "helium_chromium", "helium_platform")
-
-
 def find_row(ident, table=TABLE):
     for row in read_table(table):
         if all(row[key] == ident[key] for key in IDENTITY):
@@ -161,7 +234,7 @@ def find_row(ident, table=TABLE):
 
 
 def write_row(row, table=TABLE):
-    rows = [r for r in read_table(table) if any(r[key] != row[key] for key in IDENTITY)] + [row]
+    rows = [r for r in read_table(table) if (r["platform"], r["cpu"]) != (row["platform"], row["cpu"])] + [row]
     rows.sort(key=lambda r: (r["chromium"], r["platform"], r["cpu"], r["asset"]))
     pathlib.Path(table).write_text("".join("\t".join(r[k] for k in TABLE_FIELDS) + "\n" for r in rows))
 
@@ -203,14 +276,35 @@ def write_tarball(base, paths, manifest_fields, out):
     return manifest, out
 
 
+def check_archive_size(tarball):
+    size = os.path.getsize(tarball)
+    if size > MAX_ARCHIVE_BYTES:
+        raise Problem(f"{tarball} is {size} bytes, over the {MAX_ARCHIVE_BYTES} a series base may be")
+
+
+def members(tar, tarball):
+    count = total = 0
+    for member in tar:
+        count += 1
+        total += max(member.size, 0)
+        if count > MAX_MEMBERS:
+            raise Problem(f"{tarball} has over {MAX_MEMBERS} entries")
+        if member.size > MAX_MEMBER_BYTES or total > MAX_EXPANDED_BYTES:
+            raise Problem(f"{tarball} expands past its limits ({member.name}: {member.size} bytes, {total} in all)")
+        yield member
+
+
 def read_manifest(tarball):
+    check_archive_size(tarball)
     try:
         with tarfile.open(tarball, "r:xz") as tar:
-            member = tar.getmember(MANIFEST)
-            if not member.isfile():
-                raise Problem(f"{tarball}: {MANIFEST} isn't a file")
-            manifest = json.loads(tar.extractfile(member).read())
-    except (OSError, KeyError, ValueError, tarfile.TarError) as error:
+            member = next((m for m in members(tar, tarball) if m.name == MANIFEST), None)
+            if member is None or not member.isfile():
+                raise Problem(f"{tarball} isn't a series base archive: it has no {MANIFEST} file")
+            if member.size > MAX_MANIFEST_BYTES:
+                raise Problem(f"{tarball}: {MANIFEST} is {member.size} bytes, over {MAX_MANIFEST_BYTES}")
+            manifest = json.loads(tar.extractfile(member).read(MAX_MANIFEST_BYTES + 1))
+    except (OSError, KeyError, ValueError, EOFError, tarfile.TarError) as error:
         raise Problem(f"{tarball} isn't a series base archive: {error}")
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT or \
             not isinstance(manifest.get("files"), dict) or not isinstance(manifest.get("absent"), list):
@@ -225,32 +319,35 @@ def extract(tarball, dest):
     dest = os.path.realpath(dest)
     if os.listdir(dest):
         raise Problem(f"{dest} isn't empty")
-    with tarfile.open(tarball, "r:xz") as tar:
-        for member in tar:
-            if member.name == MANIFEST:
-                continue
-            if not member.name.startswith(FILES_ROOT):
-                raise Problem(f"{tarball}: unexpected entry {member.name!r}")
-            path = member.name[len(FILES_ROOT):]
-            if not safe_relative(path) or path not in files or path in seen:
-                raise Problem(f"{tarball}: entry {member.name!r} isn't in its manifest, or is unsafe or repeated")
-            if not member.isfile():
-                raise Problem(f"{tarball}: {path} isn't a regular file")
-            seen.add(path)
-            parent = dest
-            for part in path.split("/")[:-1]:
-                parent = os.path.join(parent, part)
-                if os.path.islink(parent) or (os.path.exists(parent) and not os.path.isdir(parent)):
-                    raise Problem(f"{tarball}: {path} goes through something that isn't a directory")
-                if not os.path.exists(parent):
-                    os.mkdir(parent)
-            data = tar.extractfile(member).read()
-            if hashlib.sha256(data).hexdigest() != files[path].get("sha256"):
-                raise Problem(f"{tarball}: {path} doesn't match its manifest's sha256")
-            target = os.path.join(dest, path)
-            with open(target, "xb") as handle:
-                handle.write(data)
-            os.chmod(target, int(files[path].get("mode", "644"), 8) & 0o755)
+    try:
+        with tarfile.open(tarball, "r:xz") as tar:
+            for member in members(tar, tarball):
+                if member.name == MANIFEST:
+                    continue
+                if not member.name.startswith(FILES_ROOT):
+                    raise Problem(f"{tarball}: unexpected entry {member.name!r}")
+                path = member.name[len(FILES_ROOT):]
+                if not safe_relative(path) or path not in files or path in seen:
+                    raise Problem(f"{tarball}: entry {member.name!r} isn't in its manifest, or is unsafe or repeated")
+                if not member.isfile():
+                    raise Problem(f"{tarball}: {path} isn't a regular file")
+                seen.add(path)
+                parent = dest
+                for part in path.split("/")[:-1]:
+                    parent = os.path.join(parent, part)
+                    if os.path.islink(parent) or (os.path.exists(parent) and not os.path.isdir(parent)):
+                        raise Problem(f"{tarball}: {path} goes through something that isn't a directory")
+                    if not os.path.exists(parent):
+                        os.mkdir(parent)
+                data = tar.extractfile(member).read(member.size)
+                if hashlib.sha256(data).hexdigest() != files[path].get("sha256"):
+                    raise Problem(f"{tarball}: {path} doesn't match its manifest's sha256")
+                target = os.path.join(dest, path)
+                with open(target, "xb") as handle:
+                    handle.write(data)
+                os.chmod(target, int(files[path].get("mode", "644"), 8) & 0o755)
+    except (OSError, EOFError, tarfile.TarError) as error:
+        raise Problem(f"{tarball} can't be read: {error}")
     missing = sorted(set(files) - seen)
     if missing:
         raise Problem(f"{tarball}: its manifest lists {len(missing)} files it doesn't hold, e.g. {missing[0]}")

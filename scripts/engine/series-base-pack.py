@@ -6,14 +6,25 @@
 
 pack runs on the builder, read-only on its tree. It takes from the series base (AC_SERIES_BASE, default
 ~/chromium-build/series-base for mac/arm64 and ~/chromium-build/series-base-<os>-<cpu> otherwise) only the files the
-platform's series touches and writes series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>-<rev12>.tar.xz
-(rev12: the digest of the files it holds, so a re-pack after capture-base gets a new name and the old archive stays
-for the checkouts that pin it) into --dest (default: a new temporary directory), its .sha256, and its manifest: each
-file's sha256, the pins, the
-branding inputs' digest and the commit of this checkout (or, for a plain copy, of <copy>.commit). First it checks
-that the tree is at the pins in engine/patches/build/env.sh and helium-pins.ini (chrome/VERSION, and the Helium
-checkouts beside it when present) and that `series.py check` reproduces the tree from the base; --no-verify skips
-both. A file a patch changes that the base lacks stops it: run `series.py capture-base` first.
+platform's series needs and writes series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>-<inputs12>-
+<rev12>.tar.xz into --dest (default: a new temporary directory), with its .sha256 and its manifest. inputs12 is the
+digest of what step 3 reads from this checkout (its scripts, helium-pins.ini, env.sh and every source
+ardia_resources.txt names), so a change to any of them needs a new base. rev12 is the digest of the files the archive
+holds, so a re-pack after capture-base gets a new name, and the old archive stays for the checkouts that pin it.
+
+Before packing it checks, and records in the manifest, that:
+- chrome/VERSION is the pinned Chromium;
+- both Helium checkouts beside the tree exist, are clean and sit at the pinned commits;
+- the tree's step-3 marker shows every mutating stage for this platform;
+- every resource ardia_resources.txt names is byte for byte in the base, or in the tree when the series doesn't
+  touch it;
+- ardia_namesub.py --check-only finds no Helium left in the tree's strings;
+- `series.py check` reproduces the tree from the base.
+Changes to 03-helium.py's logic or domsub-keep-store.txt can't be read back from a tree. The input digest still
+forces a re-pack for them, after the builders' trees run step 3 again. --no-verify skips the checks, and publish
+refuses its archive. A file the series needs that the base lacks stops it: run `series.py capture-base` first, or, for
+a file a patch renames, copies or only changes the mode of (capture-base doesn't record those), copy it into the
+base from a tree step 3 just left.
 
 publish runs where gh is signed in. It creates the prerelease series-base-<chromium>-<helium12> if needed, uploads
 the archive, its .sha256 and manifest (each one already there must match; an archive of the same files packed
@@ -59,29 +70,75 @@ def git_head(path):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-resources", "brand-namesub", "series-check")
+
+
+def run_checked(command, what, env=None):
+    result = subprocess.run(command, env=env, capture_output=True, text=True)
+    if result.returncode:
+        print((result.stdout + result.stderr).strip()[-4000:], file=sys.stderr)
+        series_base.die(what)
+    return (result.stdout + result.stderr).strip().splitlines()[-1:] or [""]
+
+
+def verify_helium(checkout, pinned, key):
+    if not os.path.isdir(os.path.join(checkout, ".git")) and not os.path.isfile(os.path.join(checkout, ".git")):
+        series_base.die(f"no git checkout at {checkout}: the base can't be tied to the {key} pin")
+    head = git_head(checkout)
+    if head != pinned:
+        series_base.die(f"{checkout} is at {head}, but helium-pins.ini pins {pinned}")
+    dirty = subprocess.run(["git", "-C", checkout, "status", "--porcelain", "--ignored=no"], capture_output=True,
+                           text=True).stdout.strip()
+    if dirty:
+        series_base.die(f"{checkout} has changes git doesn't record at {pinned[:12]}:\n{dirty[:2000]}")
+
+
+def verify_stages(src, platform):
+    marker = pathlib.Path(os.path.dirname(src), f".helium-stages-{os.path.basename(src)}")
+    if not marker.is_file():
+        series_base.die(f"no {marker}: step 3 never ran on {src}")
+    recorded = set(marker.read_text().split()[1:])
+    missing = [stage for stage in series_base.STEP3_STAGES if stage not in recorded]
+    if missing or f"platform={platform}" not in recorded:
+        series_base.die(f"{marker} doesn't show a whole step 3 for {platform} (missing {missing or ['platform=' + platform]})")
+
+
+def verify_resources(src, base):
+    wrong = []
+    for source, dest in series_base.resource_pairs():
+        expected = (series_base.REPO / source).read_bytes()
+        in_base = os.path.join(base, dest)
+        actual_path = in_base if os.path.isfile(in_base) else os.path.join(src, dest)
+        if not os.path.isfile(actual_path) or pathlib.Path(actual_path).read_bytes() != expected:
+            wrong.append(f"{dest} ({'base' if actual_path == in_base else 'tree'}) isn't {source}")
+    if wrong:
+        series_base.die("step 3 ran with other resources than this checkout's ardia_resources.txt names:\n  " +
+                        "\n  ".join(wrong))
+
+
 def verify_tree(ident, src, base, platform, cpu):
     version = tree_version(src)
     if version != ident["chromium"]:
         series_base.die(f"{src} is Chromium {version}, but the pins say {ident['chromium']}")
     helium_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(src))))
+    helium = os.path.join(helium_root, "helium")
     for name, key in (("helium", "helium_chromium"), (series_base.PLATFORM_HELIUM[platform], "helium_platform")):
-        checkout = os.path.join(helium_root, name)
-        head = git_head(checkout) if os.path.isdir(checkout) else None
-        if head is None:
-            print(f"note: no git checkout at {checkout}; trusting the pins for {key}")
-        elif head != ident[key]:
-            series_base.die(f"{checkout} is at {head}, but helium-pins.ini pins {ident[key]}")
+        verify_helium(os.path.join(helium_root, name), ident[key], key)
+    verify_stages(src, platform)
+    verify_resources(src, base)
     marker = pathlib.Path(base, ".ardia-series-target")
     if marker.exists() and json.loads(marker.read_text()) != {"platform": platform, "cpu": cpu}:
         series_base.die(f"{base} is the base for {marker.read_text().strip()}, not {platform}/{cpu}")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    last = run_checked([sys.executable, str(series_base.BUILD / "ardia_namesub.py"), "--tree", src, "--helium", helium,
+                        "--check-only"], "ardia_namesub.py --check-only finds Helium left in the tree's strings", env)
+    print(f"brand-namesub: {last[0]}")
+    verify_helium(helium, ident["helium_chromium"], "helium_chromium")
     env = dict(os.environ, CHROMIUM_SRC=src, AC_SERIES_BASE=base)
-    result = subprocess.run([sys.executable, str(series_base.REPO / "engine/patches/series.py"), "check",
-                             "--platform", platform, "--cpu", cpu], env=env, capture_output=True, text=True)
-    tail = (result.stdout + result.stderr).strip().splitlines()[-1:] or [""]
-    if result.returncode:
-        print((result.stdout + result.stderr).strip(), file=sys.stderr)
-        series_base.die("series.py check doesn't reproduce the tree from this base; fix that before packing it")
-    print(f"series.py check: {tail[0]}")
+    last = run_checked([sys.executable, str(series_base.REPO / "engine/patches/series.py"), "check", "--platform",
+                        platform, "--cpu", cpu], "series.py check doesn't reproduce the tree from this base", env)
+    print(f"series.py check: {last[0]}")
+    return list(VERIFIED)
 
 
 def source_commit():
@@ -98,8 +155,7 @@ def cmd_pack(args):
     if not os.path.isdir(base):
         series_base.die(f"no series base at {base}: run `series.py capture-base --platform {args.platform}` on a tree "
                         "Helium and the branding just left (docs/engine-build.md)")
-    if not args.no_verify:
-        verify_tree(ident, src, base, args.platform, cpu)
+    verified = [] if args.no_verify else verify_tree(ident, src, base, args.platform, cpu)
     series = series_base.load_series()
     steps = series.read_series(args.platform)
     required, optional = series_base.base_paths(steps)
@@ -112,7 +168,7 @@ def cmd_pack(args):
     commit = source_commit()
     dest = os.path.abspath(args.dest or tempfile.mkdtemp(prefix="ac-series-base-"))
     os.makedirs(dest, exist_ok=True)
-    fields = dict(ident, branding=series_base.branding_digest(), series_commit=commit,
+    fields = dict(ident, verified=verified, series_commit=commit,
                   packed_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   steps=len(steps))
     manifest, out = series_base.write_tarball(base, set(required) | set(optional), fields, dest)
@@ -121,8 +177,8 @@ def cmd_pack(args):
     pathlib.Path(out + ".manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
     print(f"packed {len(manifest['files'])} files ({len(manifest['absent'])} layer paths absent from the base)")
     print(out)
-    print("\t".join([ident["platform"], ident["cpu"], ident["chromium"], ident["helium_chromium"],
-                     ident["helium_platform"], series_base.tag_name(ident), os.path.basename(out), digest]))
+    print("\t".join([ident[key] for key in series_base.IDENTITY] + [series_base.tag_name(ident), os.path.basename(out),
+                                                                   digest]))
 
 
 def gh(*args, check=True):
@@ -148,7 +204,13 @@ def download(tag, repo, name, directory):
 def cmd_publish(args):
     archive = os.path.abspath(args.archive)
     manifest = series_base.read_manifest(archive)
+    if manifest.get("verified") != list(VERIFIED):
+        series_base.die(f"{archive} was packed without every builder check ({manifest.get('verified')}): pack it again "
+                        "without --no-verify")
     ident = {key: manifest[key] for key in series_base.IDENTITY}
+    current = series_base.identity(ident["platform"], ident["cpu"])
+    if current != ident:
+        series_base.die(f"{archive} is for {ident}, but this checkout's pins and step-3 inputs give {current}")
     name = series_base.asset_name(ident, series_base.content_revision(manifest))
     if os.path.basename(archive) != name:
         series_base.die(f"{archive} should be named {name} for its manifest")

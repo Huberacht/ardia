@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import pathlib
 import subprocess
 import sys
@@ -16,6 +17,9 @@ import series_base  # noqa: E402
 spec = importlib.util.spec_from_file_location("series_zero_fuzz", ENGINE / "series-zero-fuzz.py")
 checker = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(checker)
+spec = importlib.util.spec_from_file_location("series_base_pack", ENGINE / "series-base-pack.py")
+packer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(packer)
 
 ORIGINAL = "".join(f"line {n}\n" for n in range(1, 41))
 
@@ -221,6 +225,7 @@ class Archive(unittest.TestCase):
         pathlib.Path(self.base, "chrome/run.sh").write_text("#!/bin/sh\n")
         os.chmod(os.path.join(self.base, "chrome/run.sh"), 0o755)
         self.ident = {"platform": "linux", "cpu": "x64", "chromium": "1.2.3.4", "helium_chromium": "a" * 40,
+                      "inputs": "c" * 64,
                       "helium_platform": "b" * 40}
         self.out = os.path.join(self.dir, "archive.tar.xz")
 
@@ -311,9 +316,39 @@ class Pins(unittest.TestCase):
         ident = series_base.identity("linux")
         self.assertEqual(ident["cpu"], "x64")
         self.assertRegex(ident["helium_platform"], r"^[0-9a-f]{40}$")
+        self.assertRegex(ident["inputs"], r"^[0-9a-f]{64}$")
         self.assertEqual(series_base.asset_name(ident, "0123456789ab"),
                          f"series-base-{ident['chromium']}-{ident['helium_chromium'][:12]}-linux-"
-                         f"{ident['helium_platform'][:12]}-x64-0123456789ab.tar.xz")
+                         f"{ident['helium_platform'][:12]}-x64-{ident['inputs'][:12]}-0123456789ab.tar.xz")
+
+    def test_a_step3_input_or_a_resource_it_copies_changes_the_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            build = pathlib.Path(root, "engine/patches/build")
+            build.mkdir(parents=True)
+            for name in series_base.STEP3_FILES:
+                (build / name).write_text(name)
+            (build / "ardia_resources.txt").write_text("# listing\nart/logo.png chrome/logo.png\n")
+            pathlib.Path(root, "art").mkdir()
+            pathlib.Path(root, "art/logo.png").write_bytes(b"one")
+            first = series_base.step3_digest(build, root)
+            pathlib.Path(root, "art/logo.png").write_bytes(b"two")
+            second = series_base.step3_digest(build, root)
+            (build / "domsub-keep-store.txt").write_text("changed")
+            third = series_base.step3_digest(build, root)
+            self.assertEqual(len({first, second, third}), 3)
+            pathlib.Path(root, "art/logo.png").unlink()
+            with self.assertRaises(series_base.Problem):
+                series_base.step3_digest(build, root)
+
+    def test_a_base_for_old_step3_inputs_fails_with_its_own_message(self):
+        ident = series_base.identity("linux")
+        with tempfile.TemporaryDirectory() as root:
+            table = pathlib.Path(root, "table.tsv")
+            series_base.write_row(dict(ident, inputs="0" * 64, tag="t", asset="a", sha256="f" * 64), table)
+            self.assertIsNone(series_base.find_row(ident, table))
+            self.assertIn("step 3's inputs changed", checker.stale_message(ident, table))
+            table.write_text("")
+            self.assertIn("the pins moved", checker.stale_message(ident, table))
 
     def test_mismatched_pins_are_refused(self):
         with tempfile.TemporaryDirectory() as build:
@@ -324,7 +359,7 @@ class Pins(unittest.TestCase):
 
     def test_every_table_row_names_its_pins(self):
         for row in series_base.read_table():
-            ident = {k: row[k] for k in ("platform", "cpu", "chromium", "helium_chromium", "helium_platform")}
+            ident = {k: row[k] for k in series_base.IDENTITY}
             self.assertTrue(row["asset"].startswith(series_base.asset_prefix(ident)), row["asset"])
             self.assertRegex(row["asset"][len(series_base.asset_prefix(ident)):], r"^[0-9a-f]{12}\.tar\.xz$")
             self.assertEqual(row["tag"], series_base.tag_name(ident))
@@ -334,6 +369,196 @@ class Pins(unittest.TestCase):
         for platform in ("linux", "mac"):
             self.assertIsNotNone(series_base.find_row(series_base.identity(platform)),
                                  f"no series-bases.tsv row for {platform} at the current pins: run series-base-pack.py")
+
+
+def git_patch(directory, *commands):
+    repo = os.path.join(directory, "repo")
+    os.makedirs(repo, exist_ok=True)
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"]
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        subprocess.run(git + ["init", "-q"], cwd=repo, env=env, check=True)
+        os.makedirs(os.path.join(repo, "chrome"))
+        pathlib.Path(repo, "chrome/f.cc").write_text(ORIGINAL)
+        subprocess.run(git + ["add", "-A"], cwd=repo, env=env, check=True)
+        subprocess.run(git + ["commit", "-qm", "base"], cwd=repo, env=env, check=True)
+    for command in commands:
+        subprocess.run(command, cwd=repo, env=env, check=True, shell=True)
+    subprocess.run(git + ["add", "-A"], cwd=repo, env=env, check=True)
+    diff = subprocess.run(git + ["diff", "--cached", "-M", "-C", "--find-copies-harder", "HEAD"], cwd=repo, env=env,
+                          capture_output=True, text=True, check=True).stdout
+    path = os.path.join(directory, "step.patch")
+    pathlib.Path(path).write_text(diff)
+    return FakeStep("step.patch", path)
+
+
+class GitForms(Fixture):
+    def assert_needs_and_applies(self, step, expected):
+        required, _ = series_base.base_paths([step])
+        self.assertEqual(sorted(required), expected)
+        self.write_tree(ORIGINAL)
+        [result] = self.run_tree([step])
+        self.assertTrue(result.ok, result.problems)
+        for leftover in pathlib.Path(self.tree).rglob("*"):
+            if leftover.is_file():
+                leftover.unlink()
+        [missing] = self.run_tree([step])
+        self.assertFalse(missing.ok)
+
+    def test_a_mode_only_patch_needs_its_file(self):
+        step = git_patch(self.dir, "chmod +x chrome/f.cc")
+        self.assertNotIn("+++", pathlib.Path(step.patch).read_text())
+        self.assert_needs_and_applies(step, ["chrome/f.cc"])
+
+    def test_a_rename_only_patch_needs_its_source(self):
+        step = git_patch(self.dir, "git mv chrome/f.cc chrome/g.cc")
+        self.assertIn("rename from chrome/f.cc", pathlib.Path(step.patch).read_text())
+        self.assert_needs_and_applies(step, ["chrome/f.cc"])
+        self.assertEqual(series_base.patch_sections(step), [("chrome/f.cc", "chrome/g.cc", "rename")])
+
+    def test_a_copy_only_patch_needs_its_source(self):
+        step = git_patch(self.dir, "cp chrome/f.cc chrome/copy.cc")
+        self.assertIn("copy from chrome/f.cc", pathlib.Path(step.patch).read_text())
+        self.assert_needs_and_applies(step, ["chrome/f.cc"])
+
+    def test_a_file_a_rename_creates_needs_no_base_later(self):
+        rename = git_patch(self.dir, "git mv chrome/f.cc chrome/g.cc")
+        later = self.patch("edits-g", path="chrome/g.cc")
+        required, _ = series_base.base_paths([rename, later])
+        self.assertEqual(sorted(required), ["chrome/f.cc"])
+
+
+class ChangedPatches(unittest.TestCase):
+    def test_nested_patch_names_stay_relative_to_the_series(self):
+        with tempfile.TemporaryDirectory() as repo:
+            env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+            subprocess.run(git + ["init", "-q"], cwd=repo, env=env, check=True)
+            os.makedirs(os.path.join(repo, "engine/patches/nested"))
+            pathlib.Path(repo, "engine/patches/top.patch").write_text("a\n")
+            pathlib.Path(repo, "engine/patches/nested/test.patch").write_text("a\n")
+            subprocess.run(git + ["add", "-A"], cwd=repo, env=env, check=True)
+            subprocess.run(git + ["commit", "-qm", "one"], cwd=repo, env=env, check=True)
+            pathlib.Path(repo, "engine/patches/nested/test.patch").write_text("b\n")
+            subprocess.run(git + ["commit", "-qam", "two"], cwd=repo, env=env, check=True)
+            self.assertEqual(checker.changed_patches("HEAD^", repo), {"nested/test.patch"})
+
+
+class Limits(unittest.TestCase):
+    def test_a_download_stops_at_the_cap(self):
+        class Source(io.BytesIO):
+            headers = {}
+        sink = io.BytesIO()
+        with self.assertRaises(series_base.Problem):
+            checker.copy_capped(Source(b"x" * 100), sink, 50)
+        checker.copy_capped(Source(b"x" * 50), io.BytesIO(), 50)
+
+    def test_a_declared_length_over_the_cap_is_refused_before_reading(self):
+        class Source(io.BytesIO):
+            headers = {"Content-Length": "999"}
+        with self.assertRaises(series_base.Problem):
+            checker.copy_capped(Source(b""), io.BytesIO(), 50)
+
+    def test_archives_past_the_size_or_entry_limits_are_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            out = os.path.join(root, "big.tar.xz")
+            manifest = {"format": series_base.FORMAT, "files": {}, "absent": []}
+            body = json.dumps(manifest).encode()
+            with tarfile.open(out, "w:xz") as tar:
+                info = tarfile.TarInfo("manifest.json")
+                info.size = len(body)
+                tar.addfile(info, io.BytesIO(body))
+                for n in range(5):
+                    entry = tarfile.TarInfo(f"src/f{n}")
+                    entry.size = 1000
+                    tar.addfile(entry, io.BytesIO(b"\0" * 1000))
+            saved = (series_base.MAX_ARCHIVE_BYTES, series_base.MAX_MEMBERS, series_base.MAX_EXPANDED_BYTES)
+            try:
+                series_base.MAX_ARCHIVE_BYTES = 10
+                with self.assertRaises(series_base.Problem):
+                    series_base.read_manifest(out)
+                series_base.MAX_ARCHIVE_BYTES = saved[0]
+                series_base.MAX_MEMBERS = 3
+                with self.assertRaises(series_base.Problem):
+                    series_base.extract(out, tempfile.mkdtemp(dir=root))
+                series_base.MAX_MEMBERS = saved[1]
+                series_base.MAX_EXPANDED_BYTES = 2500
+                with self.assertRaises(series_base.Problem):
+                    series_base.extract(out, tempfile.mkdtemp(dir=root))
+            finally:
+                series_base.MAX_ARCHIVE_BYTES, series_base.MAX_MEMBERS, series_base.MAX_EXPANDED_BYTES = saved
+
+
+class Packer(unittest.TestCase):
+    def test_step3_stages_must_all_have_run_for_the_platform(self):
+        with tempfile.TemporaryDirectory() as root:
+            src = os.path.join(root, "src")
+            os.makedirs(src)
+            marker = pathlib.Path(root, ".helium-stages-src")
+            marker.write_text("tree-inode=1\n" + "\n".join(series_base.STEP3_STAGES) + "\nplatform=mac\n")
+            packer.verify_stages(src, "mac")
+            with self.assertRaises(SystemExit):
+                packer.verify_stages(src, "linux")
+            marker.write_text("tree-inode=1\npatches\nplatform=mac\n")
+            with self.assertRaises(SystemExit):
+                packer.verify_stages(src, "mac")
+
+    def test_a_missing_or_dirty_helium_checkout_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(SystemExit):
+                packer.verify_helium(os.path.join(root, "helium"), "0" * 40, "helium_chromium")
+            env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+            subprocess.run(git + ["init", "-q"], cwd=root, env=env, check=True)
+            pathlib.Path(root, "a").write_text("a")
+            subprocess.run(git + ["add", "a"], cwd=root, env=env, check=True)
+            subprocess.run(git + ["commit", "-qm", "a"], cwd=root, env=env, check=True)
+            head = packer.git_head(root)
+            packer.verify_helium(root, head, "helium_chromium")
+            with self.assertRaises(SystemExit):
+                packer.verify_helium(root, "0" * 40, "helium_chromium")
+            pathlib.Path(root, "a").write_text("changed")
+            with self.assertRaises(SystemExit):
+                packer.verify_helium(root, head, "helium_chromium")
+
+    def test_publish_refuses_an_archive_packed_without_the_builder_checks(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = os.path.join(root, "base")
+            os.makedirs(os.path.join(base, "chrome"))
+            pathlib.Path(base, "chrome/f.cc").write_text(ORIGINAL)
+            ident = series_base.identity("linux")
+            _, out = series_base.write_tarball(base, {"chrome/f.cc"}, dict(ident, verified=[]), root)
+            args = type("Args", (), {"archive": out, "repo": "nobody/nothing"})()
+            with self.assertRaises(SystemExit):
+                packer.cmd_publish(args)
+
+
+class Workflow(unittest.TestCase):
+    def test_every_input_of_the_layers_starts_the_workflow(self):
+        text = (series_base.REPO / ".github/workflows/engine-series.yml").read_text()
+        block = text.split("paths: &series\n", 1)[1]
+        globs = []
+        for line in block.splitlines():
+            if not line.startswith("      - "):
+                break
+            globs.append(line.strip()[2:].strip('"'))
+
+        def covered(path):
+            for glob in globs:
+                pattern = "^" + "".join(".*" if part == "**" else part.replace(".", "\\.").replace("*", "[^/]*")
+                                        for part in re.split(r"(\*\*)", glob)) + "$"
+                if re.match(pattern, path):
+                    return True
+            return False
+
+        inputs = ["engine/patches/series", "engine/patches/series.py", "engine/patches/build/env.sh",
+                  "engine/patches/build/helium-pins.ini", "engine/chromium/apply.sh", "engine/ardiacore/apply.sh",
+                  "engine/ardiacore-linux/apply.sh", "engine/ardiacore-linux/copies.tsv"]
+        copies = (series_base.REPO / "engine/ardiacore-linux/copies.tsv").read_text().splitlines()
+        inputs += [line.split("\t")[0] for line in copies if line.strip()]
+        inputs += [source for source, _ in series_base.resource_pairs()]
+        missing = [path for path in inputs if not covered(path)]
+        self.assertEqual(missing, [], "add these to engine-series.yml's paths")
 
 
 class RealSeries(unittest.TestCase):

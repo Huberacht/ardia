@@ -76,43 +76,7 @@ def parse_offsets(output):
     return found
 
 
-def split_hunks(text):
-    files, current, lines, index = [], None, text.splitlines(keepends=True), 0
-    while index < len(lines):
-        line = lines[index]
-        hunk = re.match(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
-        if hunk and current is not None:
-            old = int(hunk.group(1)) if hunk.group(1) is not None else 1
-            new = int(hunk.group(2)) if hunk.group(2) is not None else 1
-            body = [line]
-            current["starts"].append(index)
-            index += 1
-            while index < len(lines) and (old > 0 or new > 0 or lines[index].startswith("\\")):
-                body_line = lines[index]
-                if body_line.startswith("\\"):
-                    pass
-                elif body_line.startswith("-"):
-                    old -= 1
-                elif body_line.startswith("+"):
-                    new -= 1
-                else:
-                    old, new = old - 1, new - 1
-                body.append(body_line)
-                index += 1
-            current["hunks"].append(body)
-            continue
-        if line.startswith("diff ") or (line.startswith("--- ") and (current is None or current["hunks"])):
-            current = {"header": [], "hunks": [], "starts": [], "path": None, "new": False}
-            files.append(current)
-        if current is not None and not current["hunks"]:
-            current["header"].append(line)
-            target = re.match(r"^\+\+\+ (?:b/)?(\S+)", line)
-            if line.startswith("--- "):
-                current["new"] = line.strip() == "--- /dev/null"
-            if target and target.group(1) != "/dev/null":
-                current["path"] = target.group(1)
-        index += 1
-    return files
+split_hunks = series_base.split_hunks
 
 
 def failing_hunks(patch, tree):
@@ -126,8 +90,8 @@ def failing_hunks(patch, tree):
                 result = run_git_apply(["--check", "--verbose"], single, tree)
                 start = re.match(r"^@@ -(\d+)", hunk[0])
                 where = f"{entry['path']} hunk #{number} (at line {start.group(1) if start else '?'})"
-                if not entry["new"] and entry["path"] and not os.path.lexists(os.path.join(tree, entry["path"])):
-                    out.append(f"{where}: {entry['path']} isn't in the scratch tree")
+                if entry["old"] and not os.path.lexists(os.path.join(tree, entry["old"])):
+                    out.append(f"{where}: {entry['old']} isn't in the scratch tree")
                     break
                 if result.returncode:
                     out.append(f"{where}: doesn't apply without fuzz")
@@ -237,12 +201,25 @@ def describe(verdict):
             for path, number, where in verdict]
 
 
-def changed_patches(ref):
-    result = subprocess.run(["git", "-C", str(series_base.REPO), "diff", "--name-only", ref, "HEAD", "--",
+def changed_patches(ref, repo=series_base.REPO):
+    result = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", ref, "HEAD", "--",
                              "engine/patches/*.patch"], capture_output=True, text=True)
     if result.returncode:
         raise series_base.Problem(f"git diff {ref} HEAD: {result.stderr.strip()}")
-    return {os.path.basename(line) for line in result.stdout.splitlines() if line}
+    prefix = "engine/patches/"
+    return {line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)}
+
+
+def copy_capped(source, sink, limit):
+    length = source.headers.get("Content-Length") if hasattr(source, "headers") else None
+    if length and length.isdigit() and int(length) > limit:
+        raise series_base.Problem(f"the download is {length} bytes, over the {limit} a series base may be")
+    total = 0
+    for chunk in iter(lambda: source.read(1 << 20), b""):
+        total += len(chunk)
+        if total > limit:
+            raise series_base.Problem(f"the download passed {limit} bytes, more than a series base may be")
+        sink.write(chunk)
 
 
 def fetch(row, cache, repo):
@@ -255,20 +232,36 @@ def fetch(row, cache, repo):
     os.close(handle)
     try:
         with urllib.request.urlopen(url, timeout=120) as response, open(partial, "wb") as handle:
-            shutil.copyfileobj(response, handle)
+            copy_capped(response, handle, series_base.MAX_ARCHIVE_BYTES)
+    except series_base.Problem:
+        os.unlink(partial)
+        raise
     except OSError as error:
-        if shutil.which("gh") and subprocess.run(["gh", "release", "download", row["tag"], "-R", repo, "-p", row["asset"],
-                                                   "-O", partial, "--clobber"], capture_output=True).returncode == 0:
-            pass
-        else:
-            os.unlink(partial)
-            raise series_base.Problem(f"couldn't download {url}: {error}")
+        os.unlink(partial)
+        raise series_base.Problem(f"couldn't download {url}: {error}")
+    try:
+        series_base.check_archive_size(partial)
+    except series_base.Problem:
+        os.unlink(partial)
+        raise
     got = series_base.sha256_file(partial)
     if got != row["sha256"]:
         os.unlink(partial)
         raise series_base.Problem(f"{row['asset']} has sha256 {got}, but series-bases.tsv pins {row['sha256']}")
     os.replace(partial, path)
     return path
+
+
+def stale_message(ident, table=series_base.TABLE):
+    same_pins = [row for row in series_base.read_table(table)
+                 if all(row[key] == ident[key] for key in series_base.IDENTITY if key != "inputs")]
+    where = (f"{ident['platform']}/{ident['cpu']} at Chromium {ident['chromium']}, Helium {ident['helium_chromium'][:12]} + "
+             f"{ident['helium_platform'][:12]}")
+    if same_pins:
+        return (f"step 3's inputs changed since the series base for {where} was packed (inputs "
+                f"{same_pins[0]['inputs'][:12]}, now {ident['inputs'][:12]}): rebuild the builders' trees through step "
+                f"3, then {REPACK} and publish it")
+    return f"no series base for {where} in scripts/engine/series-bases.tsv: the pins moved, so {REPACK} and publish it"
 
 
 def tarball_for(tarballs, platform):
@@ -285,19 +278,16 @@ def stage_base(args, ident, scratch):
             if os.path.lexists(source):
                 os.makedirs(os.path.dirname(os.path.join(scratch, path)), exist_ok=True)
                 shutil.copy2(source, os.path.join(scratch, path), follow_symlinks=False)
-        return {"source": args.base, "files": {}, "branding": None}
+        return {"source": args.base, "files": {}}
     if args.tarball:
         tarball = tarball_for(args.tarball, ident["platform"])
     else:
         row = series_base.find_row(ident)
         if row is None:
-            raise series_base.Problem(
-                f"no series base for {ident['platform']}/{ident['cpu']} at Chromium {ident['chromium']}, Helium "
-                f"{ident['helium_chromium'][:12]} + {ident['helium_platform'][:12]} in scripts/engine/series-bases.tsv: "
-                f"the pins moved, so {REPACK} and publish it")
+            raise series_base.Problem(stale_message(ident))
         tarball = fetch(row, args.cache, args.repo)
     manifest = series_base.extract(tarball, scratch)
-    for key in ("platform", "cpu", "chromium", "helium_chromium", "helium_platform"):
+    for key in series_base.IDENTITY:
         if manifest.get(key) != ident[key]:
             raise series_base.Problem(f"{tarball} is for {key} {manifest.get(key)}, not {ident[key]}")
     return dict(manifest, source=tarball)
@@ -320,9 +310,6 @@ def check_platform(args, platform):
             print(f"error: {error}")
             return 2, []
         print(f"base: {manifest['source']}")
-        if manifest.get("branding") and manifest["branding"] != series_base.branding_digest():
-            print("note: step 3's branding inputs changed since this base was packed; a failure in a branding-adjacent "
-                  f"patch may come from that: {REPACK}")
         present = set(manifest["files"]) if not args.base else \
             {p for p in series_base.base_paths(steps)[0] if os.path.lexists(os.path.join(scratch, p))}
         missing = missing_from_base(steps, present)
