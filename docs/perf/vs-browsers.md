@@ -135,6 +135,11 @@ sends the navigation to the engine (`platform/earlyNavigate.ts`) instead of the 
 after React re-renders, and the request leaves 5 ms after Enter instead of 24 (uBO's webRequest round trip used to
 queue behind the New Tab page's teardown on the main thread). First paint 46 against 51 ms. What's left there is that
 teardown: the response is handled only once React Native's ~14 ms of view updates on Enter are done.
+Update (2026-11-22, #3719): Enter now hides the New Tab page (transparent, no input, focus to the page) and removes it
+once the page's load has ended (+100 ms, at most 1.5 s). native-bench `--only navigate --seed big`, one Release app with
+each side's bundle, interleaved, 3 runs × 10 (load average 22 against 31): Enter → commit 63 → 54 ms (p75 79 → 63),
+→ first contentful paint 92 → 81 ms (p75 117 → 93); main thread busy between Enter and commit 53 → 45 ms, its longest
+run-loop iteration there 44 → 37 ms (acframes).
 
 **Memory at 10 and 20 tabs (+71 / +264 MB).** Every browser has the same process count, 1 renderer per tab: Ardia 25
 processes at 20 tabs, Chrome 27. GPU (142 against 291 MB) and network/storage are smaller in Ardia; the browser
