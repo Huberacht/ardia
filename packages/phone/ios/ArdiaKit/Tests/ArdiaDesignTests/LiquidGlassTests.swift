@@ -114,28 +114,40 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.rimStops(dark: false).count == 25)
   }
 
-  @Test func `the path follows Android's choice`() {
-    func path(classic: Bool = false, metal: Bool = true, flat: Bool = false, lensFailed: Bool = false, hasSource: Bool = true, insideSource: Bool = false, holdsPage: Bool = false, pageLive: Bool = false, onScreen: Bool = true) -> LiquidGlassRules.Choice {
-      LiquidGlassRules.choose(classic: classic, metal: metal, flat: flat, lensFailed: lensFailed, rimFailed: false, hasSource: hasSource, insideSource: insideSource, holdsPage: holdsPage, pageLive: pageLive, onScreen: onScreen)
+  @Test func `every glass refracts what is under it, falling back only for classic, Metal, budget or the lab`() {
+    func path(classic: Bool = false, metal: Bool = true, flat: Bool = false, lensFailed: Bool = false, holdsPage: Bool = false, solidPageAsked: Bool = false, overBudget: Bool = false, onScreen: Bool = true) -> LiquidGlassRules.Choice {
+      LiquidGlassRules.choose(classic: classic, metal: metal, flat: flat, lensFailed: lensFailed, rimFailed: false, holdsPage: holdsPage, solidPageAsked: solidPageAsked, overBudget: overBudget, onScreen: onScreen)
     }
     #expect(path().path == .live)
     #expect(path().lens && path().rim)
+    #expect(path(holdsPage: true).path == .live)
+    #expect(path(holdsPage: true).lens)
     #expect(path(classic: true).path == .classic)
     #expect(!path(classic: true).rim)
     #expect(path(metal: false).path == .fallback)
     #expect(!path(metal: false).rim)
-    #expect(path(hasSource: false).path == .fallback)
-    #expect(path(hasSource: false).rim)
-    #expect(path(insideSource: true).path == .fallback)
-    #expect(path(holdsPage: true).path == .solid)
-    #expect(path(holdsPage: true, pageLive: true).path == .live)
     #expect(path(onScreen: false).path == .fallback)
+    #expect(path(overBudget: true).path == .fallback)
+    #expect(path(overBudget: true, holdsPage: true).path == .solid)
+    #expect(path(overBudget: true).rim)
+    #expect(path(holdsPage: true, solidPageAsked: true).path == .solid)
+    #expect(path(solidPageAsked: true).path == .live)
     #expect(path(flat: true).path == .live)
     #expect(!path(flat: true).lens && !path(flat: true).rim)
     #expect(!path(lensFailed: true).lens && path(lensFailed: true).rim)
-    #expect(LiquidGlassRules.pageLive(classic: false, overPageAsked: true))
-    #expect(!LiquidGlassRules.pageLive(classic: true, overPageAsked: true))
-    #expect(!LiquidGlassRules.pageLive(classic: false, overPageAsked: false))
+  }
+
+  @Test func `glass outside its source draws the source, and glass inside it or without one draws what is beneath it`() {
+    #expect(LiquidGlassRules.backdrop(hasSource: true, insideSource: false) == .source)
+    #expect(LiquidGlassRules.backdrop(hasSource: true, insideSource: true) == .beneath)
+    #expect(LiquidGlassRules.backdrop(hasSource: false, insideSource: false) == .beneath)
+  }
+
+  @Test func `a capture is over budget when its median of the last 30 passes 4 ms`() {
+    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 9, count: 29)))
+    #expect(LiquidGlassRules.overBudget(captureMs: Array(repeating: 4.5, count: 30)))
+    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 1, count: 16) + Array(repeating: 20, count: 14)))
+    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 4, count: 30)))
   }
 
   @Test func `the render reported at launch is the best the phone can draw`() {

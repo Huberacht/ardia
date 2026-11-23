@@ -122,6 +122,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["glass_shaders_failed"],
       },
       {
+        text: "In the same daily counts, on iPhone: how often drawing what is under the Liquid Glass took too long, so that glass showed a plain fill until you came back to the app. Counts only",
+        fields: ["glass_captures_over_budget"],
+      },
+      {
         text: "In the same daily counts, on Android: how often you tapped the Ardia logo on the start page to search. Counts only, and never while browsing privately",
         fields: ["start_logo_taps"],
       },

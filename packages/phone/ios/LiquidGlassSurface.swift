@@ -18,12 +18,17 @@ final class LiquidGlassSurface: UIView {
   private let fillLayer = CALayer()
   private let lensLayer = CAMetalLayer()
   private let bound = LiquidGlassSurfaceBound()
-  private(set) var choice = LiquidGlassRules.choose(classic: false, metal: false, flat: false, lensFailed: false, rimFailed: false, hasSource: false, insideSource: false, holdsPage: false, pageLive: false)
+  enum Backdrop {
+    case source(FrostSourceView)
+    case beneath(UIView)
+  }
+
+  private(set) var choice = LiquidGlassRules.choose(classic: false, metal: false, flat: false, lensFailed: false, rimFailed: false, holdsPage: false)
+  private(set) var backdrop: Backdrop?
   private var drawnUniforms: [Float]?
   private var drawnGeneration = -1
   private var drawnSize: CGSize = .zero
   private var reportedPath: String?
-  private(set) weak var foundSource: FrostSourceView?
   private var batching = 0
   private var batchedPath = false
   private var batchedInvalidate = false
@@ -85,7 +90,15 @@ final class LiquidGlassSurface: UIView {
     return followsPresentation && (hasRunningAnimations || lensLayer.bounds.size != bounds.size)
   }
 
-  var wantsPathChecks: Bool { window != nil && !classic && source != nil && !wantsFrames }
+  var wantsPathChecks: Bool { window != nil && !classic && !wantsFrames }
+
+  var captureKey: ObjectIdentifier? {
+    switch backdrop {
+    case .source(let source): ObjectIdentifier(source)
+    case .beneath: ObjectIdentifier(self)
+    case nil: nil
+    }
+  }
 
   var isShownOnScreen: Bool {
     guard window != nil else { return false }
@@ -130,18 +143,20 @@ final class LiquidGlassSurface: UIView {
     }
     let metal = GlassMetal.shared
     let found = GlassSources.find(source)
-    foundSource = found
     let inside = found.map { isDescendant(of: $0) } ?? false
+    switch LiquidGlassRules.backdrop(hasSource: found != nil, insideSource: inside) {
+    case .source: backdrop = found.map(Backdrop.source)
+    case .beneath: backdrop = window.map(Backdrop.beneath)
+    }
     let next = LiquidGlassRules.choose(
       classic: classic,
       metal: metal.hasMetal,
       flat: GlassLaunch.flat,
       lensFailed: metal.failures > 0,
       rimFailed: metal.failures > 0,
-      hasSource: found != nil,
-      insideSource: inside,
       holdsPage: found.map(GlassSources.holdsPage) ?? false,
-      pageLive: LiquidGlassRules.pageLive(classic: classic, overPageAsked: GlassLaunch.overPage),
+      solidPageAsked: GlassLaunch.solidPage,
+      overBudget: GlassFrames.shared.isOverBudget(captureKey),
       onScreen: window != nil
     )
     let changed = next != choice
@@ -175,25 +190,25 @@ final class LiquidGlassSurface: UIView {
     if shown != lensLayer.bounds.size { layoutLayers(size: shown) }
   }
 
-  func regionInSource(_ source: UIView) -> CGRect? {
+  func region(in space: UIView) -> CGRect? {
     let shown = CGRect(origin: .zero, size: lensLayer.bounds.size)
     let region: CGRect
-    if let mine = layer.presentation(), let theirs = source.layer.presentation() {
+    if let mine = layer.presentation(), let theirs = space.layer.presentation() {
       region = mine.convert(shown, to: theirs)
     } else {
-      region = layer.convert(shown, to: source.layer)
+      region = layer.convert(shown, to: space.layer)
     }
     return region.isNull || region.isEmpty ? nil : region
   }
 
-  func draw(with capture: GlassCapture?, source: UIView?, into buffer: MTLCommandBuffer) {
+  func draw(with capture: GlassCapture?, space: UIView?, into buffer: MTLCommandBuffer) {
     guard let pipeline = GlassMetal.shared.pipeline else { return }
     let size = lensLayer.bounds.size
     guard size.width > 0, size.height > 0 else { return }
     var uv = (left: 0.0, top: 0.0, width: 1.0, height: 1.0)
     var live = false
     var texture: MTLTexture?
-    if let capture, let source, let captured = capture.texture, isShownOnScreen, let region = regionInSource(source), !capture.rect.isNull {
+    if let capture, let space, let captured = capture.texture, isShownOnScreen, let region = region(in: space), !capture.rect.isNull {
       let rect = capture.rect
       uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
       live = true
@@ -230,7 +245,7 @@ final class LiquidGlassSurface: UIView {
 
   private func drawStill() {
     guard GlassMetal.shared.isReady, !classic, let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else { return }
-    draw(with: nil, source: nil, into: buffer)
+    draw(with: nil, space: nil, into: buffer)
     buffer.commit()
   }
 

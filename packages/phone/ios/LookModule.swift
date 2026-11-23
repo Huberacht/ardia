@@ -24,7 +24,10 @@ public final class LookModule: Module {
 
     OnAppEntersForeground {
       DispatchQueue.main.async {
-        MainActor.assumeIsolated { GlassMetal.shared.retryFailed() }
+        MainActor.assumeIsolated {
+          GlassMetal.shared.retryFailed()
+          GlassFrames.shared.retryBudget()
+        }
       }
     }
 

@@ -121,16 +121,24 @@ public enum LiquidGlassRules {
     return .lens
   }
 
+  public enum Backdrop: String, Sendable {
+    case source
+    case beneath
+  }
+
+  public static func backdrop(hasSource: Bool, insideSource: Bool) -> Backdrop {
+    hasSource && !insideSource ? .source : .beneath
+  }
+
   public static func choose(
     classic: Bool,
     metal: Bool,
     flat: Bool,
     lensFailed: Bool,
     rimFailed: Bool,
-    hasSource: Bool,
-    insideSource: Bool,
     holdsPage: Bool,
-    pageLive: Bool,
+    solidPageAsked: Bool = false,
+    overBudget: Bool = false,
     onScreen: Bool = true
   ) -> Choice {
     let rim = metal && !classic && !flat && !rimFailed
@@ -139,15 +147,21 @@ public enum LiquidGlassRules {
     }
     if classic { return pick(.classic, "classic or reduce transparency") }
     if !metal { return pick(.fallback, "no Metal") }
-    if !onScreen { return pick(.fallback, "off screen: nothing to blur until it is seen") }
-    if !hasSource { return pick(.fallback, "no source") }
-    if insideSource { return pick(.fallback, "inside its own source") }
-    if holdsPage, !pageLive { return pick(.solid, "page under the glass, solid page mode") }
-    if holdsPage { return pick(.live, "page under the glass, captured every frame") }
+    if !onScreen { return pick(.fallback, "off screen: nothing to refract until it is seen") }
+    if overBudget { return pick(holdsPage ? .solid : .fallback, "capture over budget") }
+    if holdsPage, solidPageAsked { return pick(.solid, "page under the glass, solid page asked in the lab") }
+    if holdsPage { return pick(.live, "page under the glass, captured as it changes") }
     return pick(.live, "no page under the glass")
   }
 
-  public static func pageLive(classic: Bool, overPageAsked: Bool) -> Bool { overPageAsked && !classic }
+  public static let budgetSamples = 30
+  public static let captureBudgetMs = 4.0
+
+  public static func overBudget(captureMs: [Double]) -> Bool {
+    guard captureMs.count >= budgetSamples else { return false }
+    let sorted = captureMs.sorted()
+    return sorted[sorted.count / 2] > captureBudgetMs
+  }
 
   public static func bezel(_ params: LiquidGlassParams = .defaults, width: Double, height: Double) -> Double {
     min(params.bezel, max(min(width, height), 0) * bezelShareOfShortSide)

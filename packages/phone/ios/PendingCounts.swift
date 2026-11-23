@@ -26,6 +26,7 @@ enum UsageConsent {
 
 enum PendingCounts {
   static let glassShadersFailed = "glass_shaders_failed"
+  static let glassCapturesOverBudget = "glass_captures_over_budget"
   private static let suite = "ardia-pending-counts"
   private static let defaults = UserDefaults(suiteName: suite) ?? .standard
 
