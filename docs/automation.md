@@ -17,7 +17,34 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   A second instance that can't take the lock serves nothing and disturbs nothing.
 - **Both ends check the peer.** The server refuses a peer whose uid (`getpeereid`) isn't its own; the CLI checks the
   server's uid on the connected socket (`LOCAL_PEERCRED`) before sending anything. A pathname check alone is not
-  authentication. No token: the bar is the user's own account, as for the token file.
+  authentication. No token: the bar is the user's own account, as for the token file, and on macOS the program's
+  code identity on top (next point).
+- **Who the program is (macOS).** After the uid check the server reads the peer's audit token (`LOCAL_PEERTOKEN`, so
+  a reused pid can't stand in for it: a token whose process has gone resolves to nothing) and resolves its code with
+  Security.framework off the socket queue (`ControlPeerCore/ControlPeer.swift`): Team ID, signing identifier, path,
+  cdhash, hardened runtime, and whether the signature is valid against an Apple anchor. A hardened program signed with
+  Ardia's own Team ID (the bundled `ardia` and its runtime, signed by the release's `sign` job) is the owner, as before.
+  Any other program waits, unread, while Ardia rings a **doorbell**: a sheet on the last focused window, "Allow “name”
+  to control Ardia?", naming who signed it and its path, with Allow Once, Allow for 30 Minutes, Always Allow and Don't
+  Allow (Return does nothing and Escape is Don't Allow, so a keystroke meant for a page never lets a program in).
+  Approvals are keyed by Team ID + identifier for a program signed by an identified developer, `apple:` + identifier
+  for one of macOS's own, and path + cdhash for anything else; a program with no cdhash can only be allowed once.
+  They live in `<data dir>/ArdiaControlApprovals.json` (0600, read only if it's a private regular file of the user's,
+  written by an `O_EXCL` temp file and a rename), are listed in Settings › Advanced › Command line and automation ›
+  Programs you let in, and removing one there closes its open connections; a 30-minute one also closes them when it
+  runs out. One doorbell shows at a time; connections from the same program share it. A waiting connection is
+  refused (a `{"id": null, "error": {"code": "refused", …}}` line, then close) when you choose Don't Allow, after 60 s,
+  when nobody can see the question (no window on screen, or a background instance), or when control goes off; it's
+  dropped without a word if the program leaves. After Don't Allow or a timeout the same program is refused without
+  asking for 30 s. At most 8 connections wait and 8 resolve at once.
+  What it doesn't stop: a process of the user's can still run the bundled `ardia` (or its signed runtime) itself and
+  get in as it does, and can still read `ArdiaControl.json` for the token connection (`docs/cli.md`). The doorbell is
+  so a program never drives Ardia without the user seeing its name, not a wall against malware running as the user.
+- **Test instances keep the old rule.** A test instance (a build not signed for distribution with a scratch
+  `ARDIA_DATA_DIR`, `docs/agent-brief.md` › Launch variables) admits every process of the user, as before, so agents'
+  and tests' clients keep working against hidden instances. `ARDIA_TEST controlDoorbell` gives one the doorbell to
+  test it; with `appDialog` too, the doorbell is written to `dialog.json` and answered from `dialog.json.pick` (a
+  choice's title or its index). Release builds have no such switch.
 - A path longer than `sun_path` allows (103 bytes plus the terminator) is refused with a logged line and an error
   status; the CLI says so instead of hanging.
 - **Turning it off.** Turning `cliControl` off, or quitting, closes every connection, drops what is queued and removes

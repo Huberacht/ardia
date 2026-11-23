@@ -1,4 +1,5 @@
 import AppKit
+import ArdiaCore
 import Darwin
 import Foundation
 
@@ -9,6 +10,7 @@ final class ControlSocket {
   static let maxConnections = 16
   static let maxPathBytes = 103
   static let acceptsPerCallback = 8
+  static let maxResolving = 8
 
   typealias Sink = (_ name: String, _ body: [String: Any]) -> Void
 
@@ -23,6 +25,20 @@ final class ControlSocket {
   private var nextConnection = 0
   private var generation = 0
   private var quitObserver: NSObjectProtocol?
+  private var resolving: [Int: Int32] = [:]
+  private var approvalKeys: [Int: String] = [:]
+  private let resolver = DispatchQueue(label: "ardia.control.peers", qos: .userInitiated, attributes: .concurrent)
+  private lazy var doorbell = ControlDoorbell(
+    queue: queue,
+    open: { [weak self] connection, fd, key in self?.open(connection, fd: fd, key: key) },
+    send: { [weak self] name, body in
+      guard let sink = self?.sink else { return false }
+      sink.send(name, body)
+      return true
+    })
+  private lazy var policy = ControlPeerPolicy(
+    ownTeam: ControlPeerPolicy.ownTeam(of: ControlPeer.resolveSelf()),
+    sameUserIsEnough: LaunchConfig.shared.testInstance && !LaunchConfig.shared.testFlag("controlDoorbell"))
 
   func attach(_ owner: AnyObject, send: @escaping Sink) {
     let id = ObjectIdentifier(owner)
@@ -72,6 +88,51 @@ final class ControlSocket {
       for id in targets {
         if kept { connections[id]?.send(data) } else { connections[id]?.event(data) }
       }
+    }
+  }
+
+  func answerPeer(_ ask: Int, _ outcome: String, _ done: @escaping (Bool) -> Void) {
+    queue.async { [self] in
+      guard let outcome = ControlDoorbell.Outcome(rawValue: outcome) else { return done(false) }
+      done(doorbell.answer(ask, outcome, approvals: approvalStore()))
+    }
+  }
+
+  func approvals(_ done: @escaping ([String: Any]) -> Void) {
+    queue.async { [self] in
+      guard let store = approvalStore() else { return done(["approvals": [], "problem": "Ardia has no data folder."]) }
+      let list = store.load().map(\.dictionary)
+      var out: [String: Any] = ["approvals": list, "doorbell": !policy.sameUserIsEnough]
+      if let problem = store.problem { out["problem"] = problem }
+      done(out)
+    }
+  }
+
+  func revokeApproval(_ key: String, _ done: @escaping (Bool) -> Void) {
+    queue.async { [self] in
+      let removed = approvalStore()?.revoke(key) ?? false
+      retireApproved { $0 == key }
+      done(removed)
+    }
+  }
+
+  private func approvalStore() -> ControlApprovals? {
+    guard let dir = try? DocumentStore.url(Self.socketName).deletingLastPathComponent().path else { return nil }
+    return ControlApprovals(directory: dir)
+  }
+
+  private func retireApproved(_ matches: (String) -> Bool) {
+    for (id, key) in approvalKeys where matches(key) {
+      connections[id]?.retire()
+    }
+  }
+
+  private func expireLater(_ key: String) {
+    queue.asyncAfter(deadline: .now() + ControlPeerDecision.halfHourSeconds + 1) { [weak self] in
+      guard let self, let store = self.approvalStore() else { return }
+      let now = Date()
+      guard !store.load(now: now).contains(where: { $0.key == key && $0.live(at: now) }) else { return }
+      self.retireApproved { $0 == key }
     }
   }
 
@@ -165,6 +226,10 @@ final class ControlSocket {
     for connection in Array(connections.values) { connection.retire() }
     connections.removeAll()
     peerFinished.removeAll()
+    approvalKeys.removeAll()
+    for fd in resolving.values { Darwin.close(fd) }
+    resolving.removeAll()
+    doorbell.stop()
     acceptSource?.cancel()
     acceptSource = nil
     listenFd = -1
@@ -182,31 +247,68 @@ final class ControlSocket {
       if fd < 0 { return }
       var uid: uid_t = 0
       var gid: gid_t = 0
-      guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid(), connections.count < Self.maxConnections else {
+      guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid(), connections.count < Self.maxConnections, resolving.count < Self.maxResolving,
+        let token = ControlPeer.auditToken(of: fd)
+      else {
         Darwin.close(fd)
         continue
       }
       Self.prepare(fd)
       nextConnection += 1
+      let id = nextConnection
+      if policy.sameUserIsEnough {
+        open(id, fd: fd, key: nil)
+        continue
+      }
+      resolving[id] = fd
       let generation = generation
-      let connection = ControlConnection(
-        id: nextConnection, fd: fd, queue: queue,
-        onLine: { [weak self] connection, line in
-          self?.sink?.send("onRequest", ["connection": connection.id, "generation": generation, "line": line])
-        },
-        onClose: { [weak self] connection in
-          guard let self, self.connections.removeValue(forKey: connection.id) != nil else { return }
-          guard self.peerFinished.remove(connection.id) == nil else { return }
-          self.sink?.send("onClose", ["connection": connection.id])
-        },
-        onWritten: { [weak self] tickets in self?.sink?.send("onWritten", ["tickets": tickets]) },
-        onPeerFinished: { [weak self] connection in
-          guard let self, self.connections[connection.id] != nil, self.peerFinished.insert(connection.id).inserted else { return }
-          self.sink?.send("onClose", ["connection": connection.id])
-        })
-      connections[connection.id] = connection
-      connection.open()
+      resolver.async { [weak self] in
+        let peer = ControlPeer.resolve(token)
+        self?.queue.async { self?.resolved(id, peer, generation) }
+      }
     }
+  }
+
+  private func resolved(_ id: Int, _ peer: ControlPeer, _ generation: Int) {
+    guard let fd = resolving.removeValue(forKey: id) else { return }
+    guard bound != nil, generation == self.generation else { return Darwin.close(fd) }
+    let store = approvalStore()
+    switch policy.verdict(peer, approvals: store?.load() ?? [], now: Date()) {
+    case .ardia, .sameUser:
+      open(id, fd: fd, key: nil)
+    case let .approved(key):
+      open(id, fd: fd, key: key)
+    case let .ask(key):
+      NSLog("[control] asking whether %@ (%@) may control Ardia", peer.name, peer.signedBy)
+      doorbell.ring(connection: id, fd: fd, peer: peer, key: key)
+    }
+  }
+
+  private func open(_ id: Int, fd: Int32, key: String?) {
+    guard bound != nil, connections.count < Self.maxConnections else { return Darwin.close(fd) }
+    let generation = generation
+    let connection = ControlConnection(
+      id: id, fd: fd, queue: queue,
+      onLine: { [weak self] connection, line in
+        self?.sink?.send("onRequest", ["connection": connection.id, "generation": generation, "line": line])
+      },
+      onClose: { [weak self] connection in
+        guard let self, self.connections.removeValue(forKey: connection.id) != nil else { return }
+        self.approvalKeys[connection.id] = nil
+        guard self.peerFinished.remove(connection.id) == nil else { return }
+        self.sink?.send("onClose", ["connection": connection.id])
+      },
+      onWritten: { [weak self] tickets in self?.sink?.send("onWritten", ["tickets": tickets]) },
+      onPeerFinished: { [weak self] connection in
+        guard let self, self.connections[connection.id] != nil, self.peerFinished.insert(connection.id).inserted else { return }
+        self.sink?.send("onClose", ["connection": connection.id])
+      })
+    connections[id] = connection
+    if let key {
+      approvalKeys[id] = key
+      if let approval = approvalStore()?.load().first(where: { $0.key == key }), approval.until != nil { expireLater(key) }
+    }
+    connection.open()
   }
 
   private static func prepare(_ fd: Int32) {
