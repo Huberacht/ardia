@@ -912,3 +912,23 @@ test(
     assert.match(refused.stderr, /excluded must name paths inside a declared tree, not engine\/chromium\/src/)
   }),
 )
+
+test(
+  'a resource list is a required Windows key input that cannot be excluded',
+  withFixture(({ root, git, run, write, keys, change }) => {
+    const before = keys()
+    assertKeys(before, change(`${win}/ardia_resources_win.txt`, 'apps/browser/windows/Ardia/Ardia.ico chrome/app/other.ico\n'), { macos: false, linux: false, win: true })
+    git('rm', '-q', `${win}/ardia_resources_win.txt`)
+    git('commit', '-q', '-m', 'no resource list')
+    const missing = run(['--platform', 'win'])
+    assert.notEqual(missing.status, 0)
+    assert.match(missing.stderr, /reads scripts\/windows\/engine\/ardia_resources_win\.txt, which is not there/)
+    write(`${win}/ardia_resources_win.txt`, 'apps/browser/windows/Ardia/Ardia.ico chrome/app/theme/chromium/win/chromium.ico\n')
+    declare(root, write, (declared) => declared.excluded.push(`${win}/ardia_resources_win.txt`))
+    git('add', '-A')
+    git('commit', '-q', '-m', 'exclude the resource list')
+    const excluded = run(['--platform', 'win'])
+    assert.notEqual(excluded.status, 0)
+    assert.match(excluded.stderr, /reads scripts\/windows\/engine\/ardia_resources_win\.txt, which the key inputs exclude/)
+  }),
+)

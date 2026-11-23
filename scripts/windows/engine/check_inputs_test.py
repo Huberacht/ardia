@@ -23,6 +23,10 @@ class AcceptTest(unittest.TestCase):
         shutil.copytree(os.path.join(REPO, 'engine'), os.path.join(self.root, 'engine'), symlinks=True)
         shutil.copytree(HERE, os.path.join(self.root, 'scripts', 'windows', 'engine'), symlinks=True,
                         ignore=shutil.ignore_patterns('__pycache__'))
+        app = os.path.join(self.root, 'apps', 'browser', 'windows', 'Ardia')
+        os.makedirs(app)
+        for name in ('EngineApi.h', 'Ardia.ico'):
+            shutil.copyfile(os.path.join(REPO, 'apps', 'browser', 'windows', 'Ardia', name), os.path.join(app, name))
         self.engine = os.path.join(self.root, 'scripts', 'windows', 'engine')
 
     def tearDown(self):
@@ -85,7 +89,8 @@ class AcceptTest(unittest.TestCase):
 
     def declare(self, edit):
         path = os.path.join(self.engine, 'key-inputs.json')
-        declared = json.load(open(path))
+        with open(path) as f:
+            declared = json.load(f)
         edit(declared)
         with open(path, 'w') as f:
             json.dump(declared, f)
@@ -94,10 +99,12 @@ class AcceptTest(unittest.TestCase):
         before = self.accepted()
         self.declare(lambda declared: declared.update(
             trees=[tree for tree in declared['trees'] if tree != 'scripts/windows/engine'] + ['scripts/windows/engine/src'],
-            files=declared['files'] + ['scripts/windows/engine/ardia-layer-win.patch']))
+            files=declared['files'] + ['scripts/windows/engine/ardia-layer-win.patch'],
+            excluded=['engine/patches/build/tests'], excluded_patterns=[]))
         result = self.accept()
         self.assertNotEqual(result.returncode, 0)
-        for path in ('series_win.py', 'series-win', 'scripts/windows/engine/patches,'):
+        for path in ('sources scripts/windows/engine/series_win.py', 'sources scripts/windows/engine/04-series.sh',
+                     'sources scripts/windows/engine/gn_defines.sh'):
             self.assertIn(path, result.stdout)
         self.assertEqual(self.accepted(), before)
 
@@ -105,7 +112,31 @@ class AcceptTest(unittest.TestCase):
         self.declare(lambda declared: declared['excluded'].append('engine/chromium/src/chrome/browser/ardia'))
         result = self.accept()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('excluded names engine/chromium/src/chrome/browser/ardia', result.stdout)
+        self.assertIn('series_win.py reads engine/chromium/src/chrome/browser/ardia/BUILD.gn, which the Windows key does not hash',
+                      result.stdout)
+
+    def test_an_exclusion_spelled_with_dot_is_judged_as_the_key_reads_it(self):
+        self.declare(lambda declared: declared['excluded'].append('./scripts/windows/engine/src'))
+        result = self.accept()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('series_win.py reads scripts/windows/engine/src/ardia/win/', result.stdout)
+
+    def test_excluding_a_script_a_build_step_sources_is_refused(self):
+        self.declare(lambda declared: declared['excluded'].extend(
+            ['engine/patches/build/game-resource.sh', 'scripts/windows/engine/gn_defines.sh']))
+        result = self.accept()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('runs or sources engine/patches/build/game-resource.sh', result.stdout)
+        self.assertIn('runs or sources scripts/windows/engine/gn_defines.sh', result.stdout)
+
+    def test_a_new_file_series_win_reads_must_be_in_the_key(self):
+        self.edit('scripts/windows/engine/series_win.py', 'def launch_switches_source():\n',
+                  'def launch_switches_source():\n    open(os.path.join(REPO, "README.md")).close()\n')
+        with open(os.path.join(self.root, 'README.md'), 'w') as f:
+            f.write('readme\n')
+        result = self.accept()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('series_win.py reads README.md, which the Windows key does not hash', result.stdout)
 
 
 if __name__ == '__main__':

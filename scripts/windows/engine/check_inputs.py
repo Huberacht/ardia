@@ -8,8 +8,12 @@ series_win.py takes them, and lists every problem with the file and line it come
 - the layer's BUILD.gn has what the Windows build file is made from, the sources Windows compiles from it are
   accepted-layer-sources.txt and all exist, and every engine call in the Windows call table is defined in one of them;
 - engine/ardiacore's ac_launch_switches.cc still has what launch_switches_source() turns into the Windows copy;
-- key-inputs.json, the Windows engine key's inputs, declares every file this build reads: the patch lists and tags, the
-  ArdiaCore files it copies, the app's EngineApi.h, the layers, the Mac build scripts and the offline game.
+- the Windows engine key (engine/engine-key.sh --platform win, from key-inputs.json) hashes every repository file this
+  build reads. It is observed, not listed: series_win.py apply runs against an empty tree with its patching stubbed
+  out, under an audit hook that records each file it opens, each folder it lists and each path it hands a subprocess
+  (the patches series-win skips, read only for the report, aside), and the build steps (0?-*, toolchain.sh,
+  debuggers.sh) are followed through what they source and run. Each path is judged by engine-key.py's own plan, so
+  the declaration is normalized and excluded exactly as the key does it.
 
 A change to an accepted list is accepted on purpose: run with --accept and commit the lists. --accept writes
 nothing and fails when any input can't be read.
@@ -18,7 +22,6 @@ Usage: check_inputs.py [--accept]
 """
 import argparse
 import difflib
-import fnmatch
 import json
 import os
 import re
@@ -48,7 +51,7 @@ def attempt(problems, step):
 
 
 def read_list(path):
-    return [line.strip() for line in open(path)] if os.path.isfile(path) else []
+    return [line.strip() for line in build.read_file(path).splitlines()] if os.path.isfile(path) else []
 
 
 def compare(problems, path, accepted, actual, what):
@@ -85,7 +88,7 @@ def layer_sources(problems):
         defined = set()
         for rel in sources:
             if rel.endswith('.cc') and os.path.isfile(os.path.join(work, rel)):
-                defined.update(CALL.findall(open(os.path.join(work, rel), encoding='utf-8').read()))
+                defined.update(CALL.findall(build.read_file(os.path.join(work, rel), encoding='utf-8')))
         for name in attempt(problems, lambda: build.engine_calls(work)) or []:
             if name not in defined:
                 problems.append(f'{build.LAYER_BUILD}: the Windows call table names `{name}`, which no source Windows compiles defines')
@@ -96,52 +99,157 @@ def under(path, prefix):
     return path == prefix or path.startswith(prefix + '/')
 
 
+STEP_SCRIPT = re.compile(r'^(0\d-.+\.(sh|py)|toolchain\.sh|debuggers\.sh)$')
+SCRIPT_REFERENCE = re.compile(
+    r'\$\{?(AC_MAC_BUILD_DIR|AC_WIN_BUILD_DIR|AC_REPO)(?::-[^}]*)?\}?/([A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*)'
+    r'|\$\(dirname "\$(?:0|\{BASH_SOURCE\[0\][^}]*\})"\)/([A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*)'
+    r'|\b(HERE|MAC_DIR|REPO_ROOT|REPO)\s*/\s*[\'"]([^\'"]+)[\'"]')
+SCRIPT_ROOTS = {'AC_MAC_BUILD_DIR': 'engine/patches/build', 'AC_WIN_BUILD_DIR': 'scripts/windows/engine', 'AC_REPO': '',
+                'MAC_DIR': 'engine/patches/build', 'REPO_ROOT': '', 'REPO': ''}
+
+
+def repo_rel(path):
+    full = os.path.realpath(path)
+    root = os.path.realpath(build.REPO)
+    if full != root and not full.startswith(root + os.sep):
+        return None
+    return os.path.relpath(full, root).replace(os.sep, '/')
+
+
+def script_inputs():
+    here = os.path.relpath(build.HERE, build.REPO).replace(os.sep, '/')
+    pending = [f'{here}/{name}' for name in sorted(os.listdir(build.HERE)) if STEP_SCRIPT.match(name)]
+    found = set()
+    while pending:
+        script = pending.pop()
+        if script in found:
+            continue
+        found.add(script)
+        if not script.endswith(('.sh', '.py')) or not os.path.isfile(build.checkout_path(script)):
+            continue
+        with open(build.checkout_path(script), encoding='utf-8', errors='replace') as f:
+            text = f.read()
+        folder = os.path.dirname(script)
+        for match in SCRIPT_REFERENCE.finditer(text):
+            variable, path, sibling, python_root, python_path = match.groups()
+            if variable:
+                base, rest = SCRIPT_ROOTS[variable], path
+            elif sibling:
+                base, rest = folder, sibling
+            else:
+                base, rest = (folder if python_root == 'HERE' else SCRIPT_ROOTS[python_root]), python_path
+            target = repo_rel(os.path.join(build.REPO, base, rest.rstrip('/.')))
+            if target and target != '.' and os.path.exists(build.checkout_path(target)):
+                pending.append(target)
+    return found
+
+
+def observe_build():
+    tree = tempfile.mkdtemp(prefix='series-win-observed-')
+    owned = os.path.join('chrome', 'browser', 'ardia')
+    for rel in build.files_under(os.path.join(build.REPO, 'engine/chromium/src')):
+        if rel != owned and not rel.startswith(owned + os.sep):
+            target = os.path.join(tree, 'src', rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            open(target, 'w').close()
+    files, folders = set(), set()
+
+    def note(path, into):
+        if isinstance(path, (str, bytes, os.PathLike)) and os.path.isabs(os.fsdecode(path)):
+            rel = repo_rel(os.fsdecode(path))
+            if rel is not None and rel != '.':
+                into.add(rel)
+
+    def hook(event, args):
+        if event == 'open':
+            path, mode, flags = args
+            writes = (mode is not None and any(c in mode for c in 'wax+')) or \
+                (mode is None and isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR))
+            if not writes:
+                note(path, files)
+        elif event in ('os.listdir', 'os.scandir') and args:
+            note(args[0], folders)
+        elif event == 'shutil.copytree':
+            note(args[0], folders)
+        elif event == 'subprocess.Popen':
+            command, cwd = args[1], args[2]
+            for arg in command if isinstance(command, (list, tuple)) else [command]:
+                if isinstance(arg, (str, bytes, os.PathLike)) and os.path.isabs(os.fsdecode(arg)) and os.path.exists(arg):
+                    note(arg, folders if os.path.isdir(arg) else files)
+            if cwd is not None:
+                note(cwd, folders)
+
+    build.apply_one = lambda path, tree: ('clean', '')
+    os.environ['CHROMIUM_SRC'] = os.path.join(tree, 'src')
+    report = os.path.join(tree, 'report.tsv')
+    os.chdir(tree)
+    sys.addaudithook(hook)
+    with open(os.devnull, 'w') as quiet:
+        stdout, sys.stdout = sys.stdout, quiet
+        try:
+            build.cmd_apply(argparse.Namespace(report=report))
+        finally:
+            sys.stdout = stdout
+    print(json.dumps({'files': sorted(files), 'folders': sorted(folders)}))
+    return 0
+
+
+def observed_reads(problems):
+    run = __import__('subprocess').run(
+        [sys.executable, '-I', os.path.abspath(__file__), '--observe'], capture_output=True, text=True,
+        env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+    if run.returncode != 0:
+        problems.append(f'series_win.py apply, run against an empty tree to see what it reads, failed: '
+                        f'{(run.stderr or run.stdout).strip()[-600:]}')
+        return None
+    return json.loads(run.stdout.strip().splitlines()[-1])
+
+
+def engine_key_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('engine_key', os.path.join(build.REPO, 'engine', 'engine-key.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def declared_inputs(problems):
     where = os.path.relpath(build.KEY_INPUTS, build.REPO)
+    key = engine_key_module()
     try:
-        with open(build.KEY_INPUTS) as f:
-            declared = json.load(f)
-    except (OSError, ValueError) as error:
-        problems.append(f'{where}: {error}')
+        with open(build.KEY_INPUTS, 'rb') as f:
+            declared = key.normalized_declarations(f.read(), where)
+        plan = key.WinPlan(key.WorkTree())
+    except key.Problem as problem:
+        problems.append(str(problem))
         return
     for field, wanted in (('series', build.SERIES_REL), ('series_win', build.SERIES_WIN_REL),
                           ('win_patches', build.WIN_PATCHES_REL), ('series_tags', list(build.WINDOWS_TAGS))):
-        if declared.get(field) != wanted:
-            problems.append(f'{where}: {field} is {declared.get(field)!r}, but series_win.py reads {wanted!r}')
-    files, trees = declared.get('files', []), declared.get('trees', [])
-    rel = lambda path: os.path.relpath(path, build.REPO).replace(os.sep, '/')
-    copied = [f'engine/ardiacore/src/{header}' for header in build.HOOK_HEADERS]
-    copied += [f'engine/ardiacore/src/{build.LAUNCH_SWITCHES}{ext}' for ext in ('.cc', '.h')] + [build.ENGINE_API_REL]
-    for path in copied:
-        if path not in files:
-            problems.append(f'{where}: the Windows build copies {path}, which files does not list')
-    read_whole = ['engine/chromium/src', 'scripts/windows/engine/src', 'apps/browser/assets/offline-game',
-                  'apps/browser/assets/offline-game-pipeline']
-    read = read_whole + [rel(build.ARDIA_LAYER), build.LAYER_BUILD, rel(build.LAYER_PATCH), rel(build.LAYER_OVERLAY),
-                         rel(os.path.join(build.HERE, 'series_win.py')), build.SERIES_WIN_REL, build.WIN_PATCHES_REL,
-                         'engine/patches/series.py', 'engine/patches/build'] + copied
-    for path in read:
-        if path not in files and not any(under(path, tree) for tree in trees):
-            problems.append(f'{where}: the Windows build reads {path}, which no tree or file covers')
-    for out in declared.get('excluded', []):
-        if any(under(out, whole) or under(whole, out) for whole in read_whole) or any(under(path, out) for path in read):
-            problems.append(f'{where}: excluded names {out}, but the Windows build reads what is there')
-    for pattern in declared.get('excluded_patterns', []):
-        hits = [path for path in read if fnmatch.fnmatchcase(path, pattern)]
-        for whole in read_whole:
-            for folder, _, names in os.walk(os.path.join(build.REPO, whole)):
-                hits += [rel(os.path.join(folder, name)) for name in names if fnmatch.fnmatchcase(rel(os.path.join(folder, name)), pattern)]
-        if hits:
-            problems.append(f'{where}: excluded_patterns has {pattern}, which leaves out {", ".join(sorted(hits)[:3])} that the Windows build reads')
-    for listing in ('engine/patches/build/ardia_resources.txt', 'scripts/windows/engine/ardia_resources_win.txt'):
-        if listing not in declared.get('resource_lists', []):
-            problems.append(f'{where}: the Windows build brands with {listing}, which resource_lists does not name')
+        if declared[field] != wanted:
+            problems.append(f'{where}: {field} is {declared[field]!r}, but series_win.py reads {wanted!r}')
+    hashed = lambda path: path in plan.series or plan.counts(path)
+    for script in sorted(script_inputs()):
+        if not hashed(script):
+            problems.append(f'{where}: a Windows build step runs or sources {script}, which the Windows key does not hash')
+    observed = observed_reads(problems)
+    if observed is None:
+        return
+    report_only = {f'engine/patches/{name}' for name in build.skipped()}
+    for path in observed['files']:
+        if path not in report_only and not hashed(path):
+            problems.append(f'{where}: series_win.py reads {path}, which the Windows key does not hash')
+    for folder in observed['folders']:
+        if not hashed(folder):
+            problems.append(f'{where}: series_win.py lists {folder}, which no Windows key tree covers')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--accept', action='store_true')
+    parser.add_argument('--observe', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.observe:
+        return observe_build()
     problems = []
     patches = patch_names(problems)
     sources = layer_sources(problems)

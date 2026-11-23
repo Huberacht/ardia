@@ -287,6 +287,10 @@ def win_declarations(tree, rev):
         if not path.is_file():
             raise Problem(f'{rev} has no {WIN_DECLARATIONS}, and {WIN_DECLARATIONS_V1}, the first Windows plan, is not in this checkout')
         raw, origin, first = path.read_bytes(), WIN_DECLARATIONS_V1, True
+    return normalized_declarations(raw, origin), origin, first
+
+
+def normalized_declarations(raw, origin):
     try:
         data = json.loads(raw)
     except ValueError as error:
@@ -303,7 +307,7 @@ def win_declarations(tree, rev):
     unknown = [tag for tag in data['series_tags'] if tag not in SERIES_SELECTORS]
     if unknown:
         raise Problem(f'{origin}: series_tags names {", ".join(unknown)}; the series knows {", ".join(SERIES_SELECTORS)}')
-    return data, origin, first
+    return data
 
 
 def chromium_names(text, origin, tags):
@@ -379,7 +383,7 @@ class WinPlan:
             resources += resource_sources(text_of(tree, listing), f'{rev}:{listing}')
         tree.load(sorted(set(resources)))
         applied = set(self.patches)
-        self.listed = frozenset({*data['files'], *self.patches, *resources})
+        self.listed = frozenset({*data['files'], *data['resource_lists'], *self.patches, *resources})
         files = set(tree.files()) | tracked_under(tree, data['trees'])
         excluded = set(data['excluded'])
         excluded |= {path for path in files if under(path, data['win_patches']) and path not in applied}

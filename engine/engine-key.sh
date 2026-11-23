@@ -24,8 +24,9 @@
 # (engine/patches/series' `all` and `mac` lines less series-win's skips, then series-win's own), its trees
 # (engine/chromium/src, engine/patches/build, the offline game, scripts/windows/engine less its checks, tests and
 # prebuilt.json), its files (series.py, the ArdiaCore headers and launch switches it copies, the app's EngineApi.h) and
-# the sources its resource lists name. A commit without key-inputs.json is keyed with engine/engine-key.win-v1.json, the
-# first declaration, which keys main from 991f98e9e on. A symlinked input has no key.
+# the resource lists, required and never excluded, with the sources they name. A commit without key-inputs.json is
+# keyed with engine/engine-key.win-v1.json, the first declaration, which keys main from 991f98e9e on. A symlinked input
+# has no key.
 #
 # --platform defaults to AC_TARGET_OS (mac or linux), else this OS; the Windows build sets AC_TARGET_OS=mac for the Mac
 # steps it reuses, so a Windows key always needs --platform win.

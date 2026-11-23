@@ -56,19 +56,28 @@ def where(path, line):
     return f'{os.path.relpath(path, REPO)}:{line}'
 
 
+def read_file(path, mode='r', **options):
+    with open(path, mode, **options) as f:
+        return f.read()
+
+
 def checkout_path(rel):
     return os.path.join(REPO, *rel.split('/'))
 
 
 def checkout_text(rel):
     path = checkout_path(rel)
-    return open(path).read() if os.path.isfile(path) else None
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return f.read()
 
 
 def chromium_lines(path, tags=WINDOWS_TAGS):
     if not os.path.isfile(path):
         return []
-    return series_lines(open(path).read(), path, tags)
+    with open(path) as f:
+        return series_lines(f.read(), path, tags)
 
 
 def series_lines(text, path, tags=WINDOWS_TAGS):
@@ -91,7 +100,7 @@ def series_lines(text, path, tags=WINDOWS_TAGS):
 
 def patch_files(path):
     files = []
-    for line in open(path, encoding='utf-8', errors='surrogateescape'):
+    for line in read_file(path, encoding='utf-8', errors='surrogateescape').splitlines(True):
         m = re.match(r'^\+\+\+ (?:b/)?(\S+)', line)
         if m and m.group(1) != '/dev/null' and m.group(1) not in files:
             files.append(m.group(1))
@@ -144,8 +153,8 @@ def layers(tree):
 
 
 def copy_if_changed(source, target):
-    data = open(source, 'rb').read()
-    if os.path.isfile(target) and open(target, 'rb').read() == data:
+    data = read_file(source, 'rb')
+    if os.path.isfile(target) and read_file(target, 'rb') == data:
         return 0
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, 'wb') as f:
@@ -190,7 +199,7 @@ def chromium_layer(tree):
 
 def write_if_changed(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if os.path.isfile(path) and open(path, encoding='utf-8').read() == text:
+    if os.path.isfile(path) and read_file(path, encoding='utf-8') == text:
         return 0
     with open(path, 'w', encoding='utf-8') as f:
         f.write(text)
@@ -215,7 +224,7 @@ def patched_layer(work):
 
 
 def build_text():
-    return open(os.path.join(REPO, LAYER_BUILD), encoding='utf-8').read()
+    return read_file(os.path.join(REPO, LAYER_BUILD), encoding='utf-8')
 
 
 def line_of(text, needle):
@@ -295,7 +304,7 @@ def windows_sources(text):
     return found
 
 def launch_switches_source():
-    text = open(os.path.join(REPO, 'engine/ardiacore/src', LAUNCH_SWITCHES + '.cc'), encoding='utf-8').read()
+    text = read_file(os.path.join(REPO, 'engine/ardiacore/src', LAUNCH_SWITCHES + '.cc'), encoding='utf-8')
     signed = re.compile(r'bool SignedForDistribution\(\) \{\n.*?\n\}\n', re.S)
     mock = ('  if (!CommandLine().HasSwitch(os_crypt::switches::kUseMockKeychain)) {\n'
             '    return "not on the mock keychain";\n  }\n')
@@ -321,7 +330,7 @@ def engine_calls(layer):
             path = os.path.join(layer, rel)
             if not os.path.isfile(path):
                 raise InputError(f'{LAYER_BUILD}: Windows compiles `{rel}`, which is not in the layer')
-            text = open(path, encoding='utf-8').read()
+            text = read_file(path, encoding='utf-8')
             names.update(re.findall(r'^AC_(?:PROFILE|ARGS|ENGINE)_CALL\((ac_\w+)', text, re.M))
     return sorted(names)
 
@@ -351,7 +360,7 @@ def win_layer(tree):
     for rel, path in wanted.items():
         dst = os.path.join(target, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if not os.path.isfile(dst) or open(dst, 'rb').read() != open(path, 'rb').read():
+        if not os.path.isfile(dst) or read_file(dst, 'rb') != read_file(path, 'rb'):
             shutil.copyfile(path, dst)
             copied += 1
     names = engine_calls(os.path.join(tree, 'chrome', 'browser', 'ardia'))
@@ -398,7 +407,7 @@ def state_path(tree):
 
 def read_state(tree):
     path = state_path(tree)
-    return set(open(path).read().split()) if os.path.isfile(path) else set()
+    return set(read_file(path).split()) if os.path.isfile(path) else set()
 
 
 def record(tree, name):
