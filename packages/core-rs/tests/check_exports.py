@@ -6,7 +6,7 @@ import sys
 
 CORE = pathlib.Path(__file__).resolve().parents[1]
 LIBRARIES = [('ardia_core', 'ardia_', 15), ('ardia_update', 'ardia_update_', 5),
-             ('ardia_import', 'ardia_import_', 3)]
+             ('ardia_import', 'ardia_import_', 4)]
 DARWIN = platform.system() == 'Darwin'
 FORBIDDEN = re.compile(r'nonce|fixture', re.I)
 
