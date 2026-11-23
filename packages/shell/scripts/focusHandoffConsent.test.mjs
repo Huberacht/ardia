@@ -9,7 +9,7 @@ test("every focus hand-off outcome is counted under the consent epoch its hand-o
   const calls = source.match(/outcomes\.(?:add|delivered)\(.*\)$/gm) ?? [];
   assert.ok(calls.length >= 5, `found ${calls.length} outcome calls`);
   for (const call of calls) assert.match(call, /since: /, call);
-  assert.match(read("../ios/FocusModule.swift"), /Function\("setConsentEpoch"\)/);
+  assert.match(read("../ios/FocusModule.swift"), /^\s*Self\.setConsentEpochFunction$/m);
 });
 
 test("the consent epoch is an opaque string, and outcomes are kept per epoch so JS sends only the current one's and keeps the rest locally", () => {
@@ -24,7 +24,7 @@ test("the consent epoch is an opaque string, and outcomes are kept per epoch so 
 
 test("one setConsentEpoch call moves ArdiaCore's epoch, the hand-off counts and forgets earlier presses", () => {
   const module = read("../ios/FocusModule.swift");
-  const call = module.match(/Function\("setConsentEpoch"\) \{ \(epoch: String\) in([^}]*)\}/)?.[1];
+  const call = module.match(/static func setConsentEpoch\(_ epoch: String\) \{([^}]*)\}/)?.[1];
   assert.ok(call, "setConsentEpoch takes a String");
   assert.match(call, /ArdiaEvents\.consentEpoch = epoch/);
   assert.match(call, /FocusHandoff\.shared\.setConsentEpoch\(epoch\)/);

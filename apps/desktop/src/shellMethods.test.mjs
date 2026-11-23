@@ -55,17 +55,31 @@ function members(body) {
     .filter((member) => member.name !== "addListener");
 }
 
+const generatedNative = readFileSync(new URL("generated/native.ts", SHELL_SOURCES), "utf8");
+const MAC_ONLY_HOOKS = new Set([
+  "ArdiaReport.devRenderCost", "ArdiaReport.devSnapshotPill", "ArdiaReport.devRecordingPages", "ArdiaReport.devPlaceWindow", "ArdiaReport.devWindowServerAlpha",
+  "ArdiaReport.devPages", "ArdiaFieldGlow.show", "ArdiaFieldGlow.progress", "ArdiaFieldGlow.finish", "ArdiaFieldGlow.reset",
+]);
+
 function moduleMap(type) {
-  const body = typeBody(readFileSync(new URL("nativeModules.ts", SHELL_SOURCES), "utf8"), type);
-  assert.ok(body, `packages/shell/src/nativeModules.ts no longer declares ${type}`);
+  const body = typeBody(generatedNative, type);
+  assert.ok(body, `packages/shell/src/generated/native.ts no longer declares ${type}`);
   return [...body.matchAll(/(\w+): (\w+);/g)].map(([, module, typeName]) => {
-    const declared = shellSources.map((source) => typeBody(source, typeName)).find((found) => found !== null);
-    assert.ok(declared !== undefined, `${typeName} for ${module} is not declared in packages/shell/src`);
-    return { module, methods: members(declared).filter((member) => member.method).map((member) => member.name) };
+    const declared = typeBody(generatedNative, typeName);
+    assert.ok(declared !== null, `${typeName} for ${module} is not declared in packages/shell/src/generated/native.ts`);
+    return { module, methods: members(declared).filter((member) => member.method && !MAC_ONLY_HOOKS.has(`${module}.${member.name}`)).map((member) => member.name) };
   });
 }
 
-const REQUIRED = moduleMap("ShellNativeModules");
+const REQUIRED = moduleMap("ShellModules");
+
+test("each Mac-only hook left out of the Linux audit is still a schema function only the Mac serves", () => {
+  const modules = JSON.parse(read("../../../packages/ardiacore/src/engine/generated/manifest.json")).modules.shell.modules;
+  for (const name of MAC_ONLY_HOOKS) {
+    const [module, method] = name.split(".");
+    assert.deepEqual(modules[module]?.functions[method] && ["mac", "desktop", "windows"].map((host) => modules[module].functions[method][host]), ["custom", "absent", "absent"], name);
+  }
+});
 
 const FORMERLY_TRACKED_IN_305 = [
   "ArdiaApp.updaterState", "ArdiaApp.checkForUpdates", "ArdiaApp.setAutomaticUpdateChecks", "ArdiaApp.setAutomaticUpdateDownloads",

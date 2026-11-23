@@ -155,11 +155,12 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   checks they're current and that Linux's `kRoutes` and `EventName`, the Mac's `ForwardedTopics` and Windows'
   `forwarded.json` agree with the schema; those tables stay hand-written until the desktop host generates them.
   A domain Windows has no module for (`webKit`) is absent there call by call and never named in `forwarded.json`.
-  **Module domains** (positional Expo functions, piloted with `shaders`) are listed in the schema's `moduleDomains`
+  **Module domains** (positional Expo functions: `shaders`, `shell`, `sync`, `import`) are listed in the schema's `moduleDomains`
   through `defineModuleDomain`: the package, then per Expo module (`ArdiaWindowBackdrop`) its functions, each with
   positional `args` (`[name, type]`, plus a Swift type when the TS one isn't a primitive), `result`, `async`, optional
-  `promise`/`queue`, and explicit `mac` (`custom`/`absent`), `desktop` (`custom`, `host` or `absent`) and `windows`
-  (`custom`/`absent`) bindings, and its module events. The generator writes `<package>/src/generated/native.ts`
+  `promise`/`queue`, `optional`, `swiftAsync`/`throws`, `instance` (`strong`, or `weak` with a `fallback`) and `debug`, and
+  explicit `mac` (`custom`/`absent`), `desktop` (`custom`, `adapted` when the UI answers in front of the host's own
+  dispatch, `host` or `absent`) and `windows` (`custom`/`absent`) bindings, plus its `constants` and module events. The generator writes `<package>/src/generated/native.ts`
   (`<Name>Native` per module, `<Domain>Modules` for all of them; the package calls `requireNativeModule` through
   them), `<package>/ios/<Domain>Native.swift` (a protocol of the Mac module's static functions, plus
   `moduleName`, `<fn>Function` and `eventsDefinition` definitions), and the domain's entry under the manifest's

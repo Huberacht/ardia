@@ -36,7 +36,9 @@ const isRecord = (value) => value !== null && typeof value === "object" && !Arra
 const MODULE_NAME = /^Ardia[A-Z][A-Za-z]*$/;
 const PACKAGE = /^packages\/[a-z][a-z0-9-]*$/;
 const PARAMETER = /^[a-z][a-zA-Z0-9]*$/;
-const MODULE_BINDINGS = { mac: new Set(["custom", "absent"]), desktop: new Set(["custom", "host", "absent"]), windows: new Set(["custom", "absent"]) };
+const MODULE_BINDINGS = { mac: new Set(["custom", "absent"]), desktop: new Set(["custom", "adapted", "host", "absent"]), windows: new Set(["custom", "absent"]) };
+const MODULE_QUEUES = { main: ".main", module: "Self.queue", userInitiated: "DispatchQueue.global(qos: .userInitiated)", utility: "DispatchQueue.global(qos: .utility)" };
+const INSTANCES = new Set(["strong", "weak"]);
 const SWIFT_TYPES = { string: "String", boolean: "Bool", number: "Double", void: "Void", "string[]": "[String]", "number[]": "[Double]", "boolean[]": "[Bool]" };
 const RESERVED = new Set([
   "as", "associatedtype", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "defer", "deinit", "delete", "do", "else", "enum", "export", "extends", "extension",
@@ -79,6 +81,8 @@ const packageDependencies = (pkg) => {
   return new Set(Object.keys(JSON.parse(readFileSync(at, "utf8")).dependencies ?? {}));
 };
 export const swiftTypeOf = (type, explicit) => explicit ?? SWIFT_TYPES[type];
+const parameterOf = ([name, type, swift]) => ({ name: name.endsWith("?") ? name.slice(0, -1) : name, written: name, optional: name.endsWith("?"), type, swift });
+const constantsOf = (entry) => entry.constants ?? {};
 
 export function validateModuleDomain(name, domain) {
   const fail = (message) => {
@@ -115,6 +119,7 @@ export function validateModuleDomain(name, domain) {
     if (!MODULE_NAME.test(module)) fail(`module ${module} is an Expo module name, Ardia followed by UpperCamelCase letters`);
     declare(nativeTypeOf(module), "module");
     if (!isRecord(entry) || !isRecord(entry.functions) || !isRecord(entry.events)) fail(`module ${module} is { functions, events }`);
+    if (entry.constants !== undefined && !isRecord(entry.constants)) fail(`module ${module}'s constants map names to { type, mac, desktop, windows }`);
     if (Object.keys(entry.events).length) declare(`${nativeTypeOf(module)}Events`, "module events");
     for (const [fn, row] of Object.entries(entry.functions)) validateModuleFunction(fail, `${module}.${fn}`, fn, row);
     for (const [event, row] of Object.entries(entry.events)) {
@@ -125,13 +130,15 @@ export function validateModuleDomain(name, domain) {
       validateModuleBindings(fail, `event ${at}`, row);
       if (event === "event") fail(`event ${at} would generate send${capitalized(event)}, which is Expo's own Module.sendEvent`);
     }
-    const members = new Map([["moduleName", "the module's name"], ["eventsDefinition", "the module's events"]]);
-    for (const fn of Object.keys(entry.functions)) {
-      for (const member of [fn, `${fn}Function`]) {
-        if (members.has(member)) fail(`function ${module}.${fn} generates the Swift member ${member}, which ${members.get(member)} already generates`);
-        members.set(member, `function ${module}.${fn}`);
-      }
-    }
+    for (const [constant, row] of Object.entries(constantsOf(entry))) validateModuleConstant(fail, `${module}.${constant}`, constant, row);
+    const members = new Map([["moduleName", "the module's name"], ["eventsDefinition", "the module's events"], ["addListener", "the module's event listener"]]);
+    if (Object.values(entry.functions).some((row) => row.queue === "module")) members.set("queue", "the module's own queue");
+    const generates = (what, member) => {
+      if (members.has(member)) fail(`${what} generates the Swift member ${member}, which ${members.get(member)} already generates`);
+      members.set(member, what);
+    };
+    for (const fn of Object.keys(entry.functions)) for (const member of [fn, `${fn}Function`]) generates(`function ${module}.${fn}`, member);
+    for (const constant of Object.keys(constantsOf(entry))) for (const member of [constant, `${constant}Constant`]) generates(`constant ${module}.${constant}`, member);
   }
 }
 
@@ -142,29 +149,53 @@ function validateModuleBindings(fail, what, row) {
   }
 }
 
+function validateModuleConstant(fail, at, constant, row) {
+  if (!NAME.test(constant)) fail(`constant ${at} is lowerCamelCase letters`);
+  if (!isRecord(row)) fail(`constant ${at} is { type, mac, desktop, windows }`);
+  if (typeof row.type !== "string" || !row.type.trim() || row.type === "void") fail(`constant ${at} names its type`);
+  if (row.swift !== undefined && (typeof row.swift !== "string" || !row.swift.trim())) fail(`constant ${at}.swift is a Swift type`);
+  if (row.optional !== undefined && row.optional !== true) fail(`constant ${at}.optional is true or left out`);
+  if (row.mac === "custom" && swiftTypeOf(row.type, row.swift) === undefined) fail(`constant ${at} says its Swift type: ${row.type} isn't one of ${Object.keys(SWIFT_TYPES).filter((t) => t !== "void").join(", ")}`);
+  validateModuleBindings(fail, `constant ${at}`, row);
+}
+
 function validateModuleFunction(fail, at, fn, row) {
   if (!NAME.test(fn)) fail(`function ${at} is lowerCamelCase letters`);
   if (!isRecord(row)) fail(`function ${at} is { args, result, async, mac, desktop, windows }`);
   if (!Array.isArray(row.args)) fail(`function ${at} lists its positional args as [name, type] or [name, type, swift]`);
+  const onMac = row.mac === "custom";
   const names = new Set();
+  let optionalSeen = false;
   for (const arg of row.args) {
     if (!Array.isArray(arg) || (arg.length !== 2 && arg.length !== 3) || !arg.every((part) => typeof part === "string" && part.trim())) fail(`function ${at}'s args are [name, type] or [name, type, swift]`);
-    const [param, type, swift] = arg;
-    if (!PARAMETER.test(param) || RESERVED.has(param)) fail(`function ${at}'s arg ${param} is a lowerCamelCase name neither TypeScript nor Swift reserves`);
+    const { name: param, optional, type, swift } = parameterOf(arg);
+    if (!PARAMETER.test(param) || RESERVED.has(param)) fail(`function ${at}'s arg ${param} is a lowerCamelCase name neither TypeScript nor Swift reserves, with a trailing ? when it may be left out`);
     if (names.has(param)) fail(`function ${at} names arg ${param} twice`);
     names.add(param);
+    if (optionalSeen && !optional) fail(`function ${at}'s arg ${param} follows an arg that may be left out, so it may be left out too`);
+    optionalSeen ||= optional;
     if (type === "void") fail(`function ${at}'s arg ${param} has a type`);
-    if (swiftTypeOf(type, swift) === undefined) fail(`function ${at}'s arg ${param} says its Swift type: ${type} isn't one of ${Object.keys(SWIFT_TYPES).filter((t) => t !== "void").join(", ")}`);
+    if (onMac && swiftTypeOf(type, swift) === undefined) fail(`function ${at}'s arg ${param} says its Swift type: ${type} isn't one of ${Object.keys(SWIFT_TYPES).filter((t) => t !== "void").join(", ")}`);
+    if (onMac && optional && !swiftTypeOf(type, swift).endsWith("?")) fail(`function ${at}'s arg ${param} may be left out, so its Swift type is optional`);
   }
   if (typeof row.result !== "string" || !row.result.trim()) fail(`function ${at} names its result type`);
   if (typeof row.async !== "boolean") fail(`function ${at} says whether it's async: true for a Promise, false for a synchronous value`);
   if (row.promise !== undefined && row.promise !== true) fail(`function ${at}.promise is true or left out`);
   if (row.promise && !row.async) fail(`function ${at} resolves a Promise itself, so it's async`);
-  if (row.queue !== undefined && row.queue !== "main") fail(`function ${at}.queue is main or left out`);
+  if (row.optional !== undefined && row.optional !== true) fail(`function ${at}.optional is true or left out`);
+  if (row.queue !== undefined && !Object.hasOwn(MODULE_QUEUES, row.queue)) fail(`function ${at}.queue is one of ${Object.keys(MODULE_QUEUES).join(", ")} or left out`);
   if (row.queue !== undefined && !row.async) fail(`function ${at} runs on a queue only when it's async`);
   if (row.swiftResult !== undefined && (typeof row.swiftResult !== "string" || !row.swiftResult.trim())) fail(`function ${at}.swiftResult is a Swift type`);
   if (row.promise && row.swiftResult !== undefined) fail(`function ${at} resolves a Promise itself, so its Swift body returns nothing and has no swiftResult`);
-  if (!row.promise && swiftTypeOf(row.result, row.swiftResult) === undefined) fail(`function ${at} says its swiftResult: ${row.result} isn't one of ${Object.keys(SWIFT_TYPES).join(", ")}`);
+  if (onMac && !row.promise && swiftTypeOf(row.result, row.swiftResult) === undefined) fail(`function ${at} says its swiftResult: ${row.result} isn't one of ${Object.keys(SWIFT_TYPES).join(", ")}`);
+  for (const flag of ["swiftAsync", "throws", "debug"]) if (row[flag] !== undefined && row[flag] !== true) fail(`function ${at}.${flag} is true or left out`);
+  if (row.swiftAsync && !row.async) fail(`function ${at}'s Swift body is async, so it's async`);
+  if (row.instance !== undefined && !INSTANCES.has(row.instance)) fail(`function ${at}.instance is strong or weak: how its definition holds the module`);
+  for (const key of ["swiftAsync", "throws", "instance", "fallback", "queue", "debug"]) if (row[key] !== undefined && !onMac) fail(`function ${at}.${key} says how the Mac's Swift body runs, so it goes only with mac: custom`);
+  const returns = !row.promise && onMac && swiftTypeOf(row.result, row.swiftResult) !== "Void";
+  if (row.fallback !== undefined && (typeof row.fallback !== "string" || !row.fallback.trim())) fail(`function ${at}.fallback is a Swift expression`);
+  if (row.fallback !== undefined && (row.instance !== "weak" || !returns)) fail(`function ${at}.fallback answers once the module is gone, so it goes only with instance: weak and a result`);
+  if (row.instance === "weak" && returns && row.fallback === undefined) fail(`function ${at} holds its module weakly and returns ${row.result}, so it says its fallback`);
   validateModuleBindings(fail, `function ${at}`, row);
 }
 
@@ -307,8 +338,9 @@ function swiftCalls(name, domain) {
 
 const moduleSignature = (fn, row) => {
   const result = row.async ? `Promise<${row.result}>` : row.result;
-  return `${fn}(${row.args.map(([param, type]) => `${param}: ${type}`).join(", ")}): ${result};`;
+  return `${fn}${row.optional ? "?" : ""}(${row.args.map(parameterOf).map(({ written, type }) => `${written}: ${type}`).join(", ")}): ${result};`;
 };
+const listenerSignature = (module, event, row) => `addListener(name: "${event}", listener: (${row.payload.trim() === "void" ? "" : `event: ${nativeTypeOf(module)}Events["${event}"]`}) => void): { remove(): void };`;
 
 function moduleTypescript(name, domain) {
   const lines = [];
@@ -320,8 +352,9 @@ function moduleTypescript(name, domain) {
   for (const [type, body] of Object.entries(domain.types ?? {})) lines.push(`export type ${type} = ${body};`, "");
   const block = (typeName, rows) => (rows.length ? [`export type ${typeName} = {`, ...rows.map((row) => `  ${row}`), "};", ""] : [`export type ${typeName} = {};`, ""]);
   for (const [module, entry] of Object.entries(domain.modules)) {
-    lines.push(...block(nativeTypeOf(module), Object.entries(entry.functions).map(([fn, row]) => moduleSignature(fn, row))));
     const events = Object.entries(entry.events);
+    const constants = Object.entries(constantsOf(entry)).map(([constant, row]) => `${constant}${row.optional ? "?" : ""}: ${row.type};`);
+    lines.push(...block(nativeTypeOf(module), [...constants, ...Object.entries(entry.functions).map(([fn, row]) => moduleSignature(fn, row)), ...events.map(([event, row]) => listenerSignature(module, event, row))]));
     if (events.length) lines.push(...block(`${nativeTypeOf(module)}Events`, events.map(([event, row]) => `${event}: ${row.payload};`)));
   }
   lines.push(...block(`${capitalized(name)}Modules`, Object.keys(domain.modules).map((module) => `${module}: ${nativeTypeOf(module)};`)));
@@ -329,24 +362,46 @@ function moduleTypescript(name, domain) {
 }
 
 const onMac = (row) => row.mac === "custom";
-const macModules = (domain) => Object.entries(domain.modules).filter(([, entry]) => Object.values(entry.functions).some(onMac) || Object.values(entry.events).some(onMac));
+const macModules = (domain) => Object.entries(domain.modules).filter(([, entry]) => [entry.functions, constantsOf(entry), entry.events].some((rows) => Object.values(rows).some(onMac)));
+
+const swiftEffects = (row) => `${row.swiftAsync ? " async" : ""}${row.throws ? " throws" : ""}`;
+const swiftResultOf = (row) => (row.promise ? "Void" : swiftTypeOf(row.result, row.swiftResult));
 
 function swiftRequirement(fn, row) {
-  const params = [...row.args.map(([param, type, swift]) => `_ ${param}: ${swiftTypeOf(type, swift)}`), ...(row.promise ? ["_ promise: Promise"] : [])];
-  const result = row.promise ? "Void" : swiftTypeOf(row.result, row.swiftResult);
-  return `  static func ${swiftName(fn)}(${params.join(", ")})${result === "Void" ? "" : ` -> ${result}`}`;
+  const params = [...row.args.map(parameterOf).map(({ name, type, swift }) => `_ ${name}: ${swiftTypeOf(type, swift)}`), ...(row.promise ? ["_ promise: Promise"] : [])];
+  const result = swiftResultOf(row);
+  return `  ${row.instance ? "" : "static "}func ${swiftName(fn)}(${params.join(", ")})${swiftEffects(row)}${result === "Void" ? "" : ` -> ${result}`}`;
 }
 
 function swiftDefinition(fn, row) {
-  const params = [...row.args.map(([param, type, swift]) => `${param}: ${swiftTypeOf(type, swift)}`), ...(row.promise ? ["promise: Promise"] : [])];
-  const result = row.promise ? "Void" : swiftTypeOf(row.result, row.swiftResult);
-  const forwarded = [...row.args.map(([param]) => param), ...(row.promise ? ["promise"] : [])].join(", ");
-  const closure = `{ (${params.join(", ")})${result === "Void" ? "" : ` -> ${result}`} in Self.${swiftName(fn)}(${forwarded}) }`;
+  const params = [...row.args.map(parameterOf).map(({ name, type, swift }) => `${name}: ${swiftTypeOf(type, swift)}`), ...(row.promise ? ["promise: Promise"] : [])];
+  const result = swiftResultOf(row);
+  const forwarded = [...row.args.map((arg) => parameterOf(arg).name), ...(row.promise ? ["promise"] : [])].join(", ");
+  const owner = row.instance === "weak" ? "self?" : row.instance === "strong" ? "self" : "Self";
+  const call = `${row.throws ? "try " : ""}${row.swiftAsync ? "await " : ""}${owner}.${swiftName(fn)}(${forwarded})${row.fallback === undefined ? "" : ` ?? ${row.fallback}`}`;
+  const closure = `{ ${row.instance === "weak" ? "[weak self] " : ""}(${params.join(", ")})${swiftEffects(row)}${result === "Void" ? "" : ` -> ${result}`} in ${call} }`;
   return [
-    `  static var ${fn}Function: AnyDefinition {`,
-    `    ${row.async ? "AsyncFunction" : "Function"}("${fn}") ${closure}${row.queue === "main" ? ".runOnQueue(.main)" : ""}`,
+    `  ${row.instance ? "" : "static "}var ${fn}Function: AnyDefinition {`,
+    `    ${row.async ? "AsyncFunction" : "Function"}("${fn}") ${closure}${row.queue === undefined ? "" : `.runOnQueue(${MODULE_QUEUES[row.queue]})`}`,
     "  }",
   ];
+}
+
+function debugGuarded(rows, render, separate) {
+  const lines = [];
+  let open = false;
+  for (const row of rows) {
+    const debug = row[1].debug === true;
+    if (debug !== open) {
+      if (open) lines.push("  #endif");
+      if (separate) lines.push("");
+      if (debug) lines.push("  #if DEBUG");
+      open = debug;
+    } else if (separate) lines.push("");
+    lines.push(...render(row));
+  }
+  if (open) lines.push("  #endif");
+  return lines;
 }
 
 function moduleSwift(domain) {
@@ -354,16 +409,29 @@ function moduleSwift(domain) {
   for (const [module, entry] of macModules(domain)) {
     const protocol = nativeTypeOf(module);
     const functions = Object.entries(entry.functions).filter(([, row]) => onMac(row));
+    const constants = Object.entries(constantsOf(entry)).filter(([, row]) => onMac(row));
     const events = Object.keys(entry.events).filter((event) => onMac(entry.events[event]));
-    lines.push("", functions.length ? `protocol ${protocol} {` : `protocol ${protocol} {}`);
-    if (functions.length) lines.push(...functions.map(([fn, row]) => swiftRequirement(fn, row)), "}");
+    const requirements = [
+      ...(functions.some(([, row]) => row.queue === "module") ? ["  static var queue: DispatchQueue { get }"] : []),
+      ...constants.map(([constant, row]) => `  static var ${swiftName(constant)}: ${swiftTypeOf(row.type, row.swift)} { get }`),
+      ...debugGuarded(functions, ([fn, row]) => [swiftRequirement(fn, row)], false),
+    ];
+    lines.push("", requirements.length ? `protocol ${protocol} {` : `protocol ${protocol} {}`);
+    if (requirements.length) lines.push(...requirements, "}");
     lines.push("", `extension ${protocol} {`, `  static var moduleName: String { "${module}" }`);
     if (events.length) lines.push("", "  static var eventsDefinition: AnyDefinition {", `    Events(${events.map((event) => `"${event}"`).join(", ")})`, "  }");
-    for (const [fn, row] of functions) lines.push("", ...swiftDefinition(fn, row));
+    for (const [constant, row] of constants) {
+      const type = swiftTypeOf(row.type, row.swift);
+      lines.push("", `  static var ${constant}Constant: AnyDefinition {`, `    Constant("${constant}") { () -> ${type} in Self.${swiftName(constant)} }`, "  }");
+    }
+    lines.push(...debugGuarded(functions.filter(([, row]) => !row.instance), ([fn, row]) => swiftDefinition(fn, row), true));
     lines.push("}");
-    if (events.length) {
+    const instanceFunctions = functions.filter(([, row]) => row.instance);
+    if (events.length || instanceFunctions.length) {
       lines.push("", `extension ${protocol} where Self: Module {`);
-      lines.push(...events.map((event) => `  func send${capitalized(event)}(_ payload: [String: Any?]) { sendEvent("${event}", payload) }`), "}");
+      lines.push(...events.map((event) => `  func send${capitalized(event)}(_ payload: [String: Any?]) { sendEvent("${event}", payload) }`));
+      lines.push(...debugGuarded(instanceFunctions, ([fn, row]) => swiftDefinition(fn, row), true).slice(events.length ? 0 : 1));
+      lines.push("}");
     }
   }
   return `${lines.join("\n")}\n`;
@@ -378,7 +446,8 @@ function moduleManifest(name, domain) {
   for (const [module, entry] of Object.entries(domain.modules)) {
     modules[module] = {
       native: nativeTypeOf(module),
-      functions: Object.fromEntries(Object.entries(entry.functions).map(([fn, row]) => [fn, { args: row.args.map(([param]) => param), async: row.async, ...moduleBindings(row) }])),
+      functions: Object.fromEntries(Object.entries(entry.functions).map(([fn, row]) => [fn, { args: row.args.map((arg) => parameterOf(arg).name), async: row.async, ...moduleBindings(row) }])),
+      ...(Object.keys(constantsOf(entry)).length ? { constants: Object.fromEntries(Object.entries(constantsOf(entry)).map(([constant, row]) => [constant, moduleBindings(row)])) } : {}),
       events: Object.fromEntries(Object.entries(entry.events).map(([event, row]) => [event, moduleBindings(row)])),
     };
   }

@@ -317,6 +317,8 @@ const moduleDomains = Object.entries(manifest.modules);
 const filesUnder = (dir, pattern) => readdirSync(ROOT + dir, { recursive: true }).filter((file) => pattern.test(file)).map((file) => `${dir}${file}`.replaceAll("\\", "/")).sort();
 const moduleFunctions = moduleDomains.flatMap(([domain, entry]) => Object.entries(entry.modules).flatMap(([module, row]) => Object.entries(row.functions).map(([fn, binding]) => ({ domain, module, fn, binding }))));
 const moduleEvents = moduleDomains.flatMap(([domain, entry]) => Object.entries(entry.modules).flatMap(([module, row]) => Object.entries(row.events).map(([event, binding]) => ({ domain, module, event, binding }))));
+const moduleConstants = moduleDomains.flatMap(([domain, entry]) => Object.entries(entry.modules).flatMap(([module, row]) => Object.entries(row.constants ?? {}).map(([constant, binding]) => ({ domain, module, constant, binding }))));
+const reachesLinuxHost = (binding) => binding.desktop === "host" || binding.desktop === "adapted";
 
 function skipQuoted(text, at) {
   const quote = text[at];
@@ -438,9 +440,13 @@ export function linuxModuleDispatch(sources) {
   for (const written of sources) {
     const code = stripCppComments(written);
     const masked = maskCppLiterals(code);
-    for (const match of masked.matchAll(/\bSendEvent\(\s*"/g)) {
-      const call = /^SendEvent\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/.exec(code.slice(match.index));
+    for (const match of masked.matchAll(/\b(?:Send)?Event\(\s*"/g)) {
+      const call = /^(?:Send)?Event\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/.exec(code.slice(match.index));
       if (call) events.add(`${call[1]}.${call[2]}`);
+    }
+    for (const row of masked.matchAll(/\{\s*"/g)) {
+      const entry = /^\{\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*,\s*Route::k\w+\s*\}/.exec(code.slice(row.index));
+      if (entry) methods.add(entry[1]);
     }
     const functions = cppFunctions(masked);
     for (const branch of masked.matchAll(/\bif\s*\((?=\s*(?:method|name)\s*==)/g)) {
@@ -528,14 +534,16 @@ export function swiftRegistrations(source, className) {
   const statements = topLevelStatements(body);
   const name = statements.filter((statement) => /^Name\s*\(\s*Self\s*\.\s*moduleName\s*\)$/.test(statement));
   const rest = statements.filter((statement) => !name.includes(statement));
+  const generatedMember = (kind) => rest.map((statement) => new RegExp(`^(?:(?:Self|self)\\s*\\.\\s*)?([a-z]\\w*)${kind}$`).exec(statement)?.[1]).filter(Boolean);
   return {
-    generated: rest.map((statement) => /^Self\s*\.\s*(\w+)Function$/.exec(statement)?.[1]).filter(Boolean),
+    generated: generatedMember("Function"),
+    constants: generatedMember("Constant"),
     events: rest.some((statement) => /^Self\s*\.\s*eventsDefinition$/.test(statement)),
     name: name.length === 1,
     handWritten: [
       ...[...rest.join("\n").matchAll(/\b(Name|Function|AsyncFunction|Events|Property|Constant|Constants)\s*\(/g)].map((match) => match[1]),
       ...name.slice(1).map(() => "Name"),
-      ...rest.filter((statement) => /\bSelf\s*\.\s*(?:\w+Function|eventsDefinition)\b/.test(statement) && !/^Self\s*\.\s*(?:\w+Function|eventsDefinition)$/.test(statement)),
+      ...rest.filter((statement) => /\b(?:Self|self)\s*\.\s*(?:\w+(?:Function|Constant)|eventsDefinition)\b/.test(statement) && !/^(?:(?:Self|self)\s*\.\s*)?(?:\w+(?:Function|Constant))$|^Self\s*\.\s*eventsDefinition$/.test(statement)),
     ],
   };
 }
@@ -771,14 +779,16 @@ export function macModuleProblems(domain, entry, read, swiftFiles) {
   const problems = [];
   const generated = entry.swift === null ? null : read(entry.swift);
   const sources = swiftFiles.filter((path) => path !== entry.swift).map((path) => [path, stripComments(read(path))]);
-  const listed = JSON.parse(read(`${entry.package}/expo-module.config.json`)).apple?.modules ?? [];
+  let listed;
+  const registeredModules = () => (listed ??= JSON.parse(read(`${entry.package}/expo-module.config.json`)).apple?.modules ?? []);
   for (const [module, row] of Object.entries(entry.modules)) {
     const onMac = (binding) => binding.mac === "custom";
     const functions = Object.keys(row.functions).filter((fn) => onMac(row.functions[fn]));
+    const constants = Object.keys(row.constants ?? {}).filter((constant) => onMac(row.constants[constant]));
     const events = Object.keys(row.events).filter((event) => onMac(row.events[event]));
     const conforming = sources.flatMap(([path, text]) => [...text.matchAll(new RegExp(`\\bclass (\\w+)\\s*:\\s*Module\\s*,\\s*${row.native}\\b`, "g"))].map((match) => ({ path, text, name: match[1] })));
     for (const [path, text] of sources) if (new RegExp(`Name\\s*\\(\\s*"${module}"\\s*\\)`).test(text)) problems.push(`${path} names ${module} itself instead of Name(Self.moduleName)`);
-    if (!functions.length && !events.length) {
+    if (!functions.length && !constants.length && !events.length) {
       if (conforming.length) problems.push(`${module} has nothing on the Mac, yet ${conforming.map(({ name }) => name).join(", ")} conforms to ${row.native}`);
       continue;
     }
@@ -792,10 +802,11 @@ export function macModuleProblems(domain, entry, read, swiftFiles) {
       continue;
     }
     const [{ path, text, name }] = conforming;
-    if (!listed.includes(name)) problems.push(`${entry.package}/expo-module.config.json doesn't register ${name}`);
+    if (!registeredModules().includes(name)) problems.push(`${entry.package}/expo-module.config.json doesn't register ${name}`);
     const registered = swiftRegistrations(text, name);
     if (!registered.name) problems.push(`${path}: ${name} doesn't take its name from ${row.native}`);
     if (registered.generated.sort().join() !== [...functions].sort().join()) problems.push(`${path}: ${name} registers ${registered.generated.join(", ") || "no"} generated functions, not ${functions.join(", ")}`);
+    if (registered.constants.sort().join() !== [...constants].sort().join()) problems.push(`${path}: ${name} registers ${registered.constants.join(", ") || "no"} generated constants, not ${constants.join(", ")}`);
     if (registered.events !== events.length > 0) problems.push(`${path}: ${name} ${events.length ? "doesn't declare" : "declares"} its events from ${row.native}`);
     if (registered.handWritten.length) problems.push(`${path}: ${name} registers ${registered.handWritten.join(", ")} by hand`);
   }
@@ -822,6 +833,15 @@ test("a module domain with nothing on the Mac has no generated Swift, and the Ma
   assert.match(macModuleProblems("quiet", entry, readFile, ["packages/quiet/ios/Quiet.swift"]).join("\n"), /has nothing on the Mac, yet QuietModule conforms to QuietNative/);
   const onMac = { ...entry, modules: { ArdiaQuiet: { ...entry.modules.ArdiaQuiet, functions: { probe: { ...entry.modules.ArdiaQuiet.functions.probe, mac: "custom" } } } } };
   assert.match(macModuleProblems("quiet", onMac, readFile, []).join("\n"), /names no generated Swift/);
+  delete files["packages/quiet/expo-module.config.json"];
+  assert.deepEqual(macModuleProblems("quiet", entry, readFile, ["packages/quiet/ios/Other.swift"]), [], "a Windows-only package with no expo-module.config.json is never read for one");
+  const constantOnly = { ...entry, swift: "packages/quiet/ios/QuietNative.swift", modules: { ArdiaQuiet: { ...entry.modules.ArdiaQuiet, constants: { level: { mac: "custom", desktop: "absent", windows: "absent" } } } } };
+  files["packages/quiet/ios/QuietNative.swift"] = "protocol QuietNative {\n  static var level: Int { get }\n}\n";
+  files["packages/quiet/expo-module.config.json"] = '{"apple":{"modules":["QuietModule"]}}';
+  files["packages/quiet/ios/Quiet.swift"] = "public class QuietModule: Module, QuietNative {\n  static var level: Int { 1 }\n  public func definition() -> ModuleDefinition {\n    Name(Self.moduleName)\n  }\n}\n";
+  assert.match(macModuleProblems("quiet", constantOnly, readFile, ["packages/quiet/ios/Quiet.swift"]).join("\n"), /registers no generated constants, not level/);
+  files["packages/quiet/ios/Quiet.swift"] = files["packages/quiet/ios/Quiet.swift"].replace("Name(Self.moduleName)\n", "Name(Self.moduleName)\n    Self.levelConstant\n");
+  assert.deepEqual(macModuleProblems("quiet", constantOnly, readFile, ["packages/quiet/ios/Quiet.swift"]), []);
 });
 
 test("a module domain's package reaches each of its Expo modules only through the generated types", () => {
@@ -831,7 +851,7 @@ test("a module domain's package reaches each of its Expo modules only through th
     let imported = false;
     for (const [path, text] of sources) {
       walk(parseTs(path, text), (node) => {
-        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === "./generated/native") imported = true;
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && /^\.\/generated\/native(?:\.ts)?$/.test(node.moduleSpecifier.text)) imported = true;
       });
       const found = nativeModuleTypingProblems(text, domain, entry.modules, path);
       assert.deepEqual(found.problems, [], path);
@@ -842,16 +862,17 @@ test("a module domain's package reaches each of its Expo modules only through th
   }
 });
 
-test("the Linux host dispatches a module function and sends a module event exactly when its desktop binding is host", () => {
+test("the Linux host dispatches a module function or constant exactly when its desktop binding is host or adapted, and sends a module event under its own name exactly when it is host", () => {
   const linux = linuxModuleDispatch(linuxSources());
-  for (const { module, fn, binding } of moduleFunctions) assert.equal(linux.methods.has(`${module}.${fn}`), binding.desktop === "host", `${module}.${fn} is ${binding.desktop} on the desktop host`);
+  for (const { module, fn, binding } of moduleFunctions) assert.equal(linux.methods.has(`${module}.${fn}`), reachesLinuxHost(binding), `${module}.${fn} is ${binding.desktop} on the desktop host`);
+  for (const { module, constant, binding } of moduleConstants) assert.equal(linux.methods.has(`${module}.${constant}`), reachesLinuxHost(binding), `constant ${module}.${constant} is ${binding.desktop} on the desktop host`);
   for (const { module, event, binding } of moduleEvents) assert.equal(linux.events.has(`${module}.${event}`), binding.desktop === "host", `event ${module}.${event} is ${binding.desktop} on the desktop host`);
 });
 
 test("Windows serves a module function as a native method, a JS member or a default, and sends a module event, exactly when its windows binding is custom", () => {
   const native = windowsNativeModules(filesUnder("apps/browser/windows/Ardia/", /\.h$/).map(read));
   const js = windowsJsModules(read, exists);
-  for (const { module, fn, binding } of moduleFunctions) {
+  for (const { module, fn, binding } of [...moduleFunctions, ...moduleConstants.map(({ module, constant, binding }) => ({ module, fn: constant, binding }))]) {
     const served = native.methods.get(module)?.has(fn) || js.members.get(module)?.().has(fn) || js.defaults.get(module)?.has(fn) || false;
     assert.equal(served, binding.windows === "custom", `${module}.${fn} is ${binding.windows} on Windows`);
   }
@@ -894,6 +915,16 @@ test("the Linux scan counts an if that dispatches inside a function that isn't a
   assert.equal(maskCppLiterals('f("a{b", R"x(})x", 1\'0, \'}\')'), 'f("   ", R"     ", 1\'0, \' \')');
 });
 
+test("the Linux scan counts a row of a method route table as a dispatched module function, never one inside a comment or a literal", () => {
+  const source = 'inline constexpr Method kMethods[] = {\n    {"ArdiaSync.chooseFolder", Route::kChooseFolder},\n    // {"ArdiaSync.ghost", Route::kCore},\n    {"ArdiaSync.core",\n     Route::kCore},\n};\nconst char* kText = "{\\"ArdiaSync.fake\\", Route::kCore}";\n';
+  assert.deepEqual([...linuxModuleDispatch([source]).methods].sort(), ["ArdiaSync.chooseFolder", "ArdiaSync.core"]);
+});
+
+test("the Linux event scan reads a module event sent by name through SendEvent or a host's Event, never one inside a literal", () => {
+  const source = 'void Host::Run() {\n  host->Event("ArdiaImport", "onImportEvent", base::Value());\n  Event("ArdiaShell", "onOpenURLs", base::Value());\n  SendEvent("ArdiaShell", "shell", base::Value());\n  Log("Event(\\"ArdiaFake\\", \\"onGhost\\")");\n  sink_.Run(caller, "onChange", base::Value());\n}\n';
+  assert.deepEqual([...linuxModuleDispatch([source]).events].sort(), ["ArdiaImport.onImportEvent", "ArdiaShell.onOpenURLs", "ArdiaShell.shell"]);
+});
+
 test("the Windows native scan counts only REACT_METHOD entries of the header's own module and EmitEvent calls", () => {
   const native = windowsNativeModules(['REACT_MODULE(Demo, L"ArdiaDemo")\n  REACT_METHOD(hold)\n  REACT_METHOD(remove, L"delete")\n  REACT_SYNC_METHOD(peek)\n  EmitEvent(context, L"ArdiaDemo", L"tone", payload);', 'std::wstring note = L"ArdiaDemo.missing";\n// REACT_MODULE(Gone, L"ArdiaGone")']);
   assert.deepEqual([...native.methods.get("ArdiaDemo")], ["hold", "delete", "peek"]);
@@ -934,12 +965,12 @@ test("the Windows JS scan reads a module's members from the TypeScript syntax tr
 
 test("the Mac registration scan counts only a generated definition that stands as its own statement, across lines, and sees a hand-written registration however it's spaced", () => {
   const module = (definition) => `public class DemoModule: Module, DemoNative {\n  static func hold(_ on: Bool) {}\n\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
-  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    View(DemoView.self) {\n      Prop("on") { (view: DemoView, on: Bool) in view.on = on }\n      Events("onTone")\n    }'), "DemoModule"), { generated: ["hold"], events: false, name: true, handWritten: [] });
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    View(DemoView.self) {\n      Prop("on") { (view: DemoView, on: Bool) in view.on = on }\n      Events("onTone")\n    }'), "DemoModule"), { generated: ["hold"], constants: [], events: false, name: true, handWritten: [] });
   assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    AsyncFunction("extra") { () in }'), "DemoModule").handWritten, ["AsyncFunction"]);
   assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Events("tone")\n    Self.holdFunction'), "DemoModule").handWritten, ["Events"]);
-  assert.deepEqual(swiftRegistrations(module('    Name("ArdiaDemo")\n    Self.holdFunction'), "DemoModule"), { generated: ["hold"], events: false, name: false, handWritten: ["Name"] });
+  assert.deepEqual(swiftRegistrations(module('    Name("ArdiaDemo")\n    Self.holdFunction'), "DemoModule"), { generated: ["hold"], constants: [], events: false, name: false, handWritten: ["Name"] });
   const assigned = swiftRegistrations(module('    Name(Self.moduleName)\n    let _ = Self.holdFunction\n    Function ("extra") { 1 }'), "DemoModule");
-  assert.deepEqual(assigned, { generated: [], events: false, name: true, handWritten: ["Function", "let _ = Self.holdFunction"] });
+  assert.deepEqual(assigned, { generated: [], constants: [], events: false, name: true, handWritten: ["Function", "let _ = Self.holdFunction"] });
   const split = swiftRegistrations(module("    Name(Self.moduleName)\n    let _ =\n      Self.holdFunction"), "DemoModule");
   assert.deepEqual(split.generated, []);
   assert.deepEqual(split.handWritten, ["let _ =\n      Self.holdFunction"]);
@@ -949,8 +980,12 @@ test("the Mac registration scan counts only a generated definition that stands a
   }
   const chained = swiftRegistrations(module("    Name(Self.moduleName)\n    Self.holdFunction\n      .runOnQueue(.main)\n    Self.peekFunction"), "DemoModule");
   assert.deepEqual(chained.generated, ["peek"]);
-  assert.deepEqual(swiftRegistrations(module("    Name (Self.moduleName)\n    Self.holdFunction; Self.eventsDefinition\n    AsyncFunction\n      (\"late\") { () in }"), "DemoModule"), { generated: ["hold"], events: true, name: true, handWritten: ["AsyncFunction"] });
+  assert.deepEqual(swiftRegistrations(module("    Name (Self.moduleName)\n    Self.holdFunction; Self.eventsDefinition\n    AsyncFunction\n      (\"late\") { () in }"), "DemoModule"), { generated: ["hold"], constants: [], events: true, name: true, handWritten: ["AsyncFunction"] });
   assert.deepEqual(swiftRegistrations(module("    Name(Self.moduleName)\n    Name(Self.moduleName)\n    Self.holdFunction"), "DemoModule").handWritten, ["Name"]);
+  const instance = swiftRegistrations(module("    Name(Self.moduleName)\n    claimFunction\n    self.watchFunction\n    Self.apiVersionConstant\n    let _ = claimFunction\n    _ = self.coreConstant"), "DemoModule");
+  assert.deepEqual(instance.generated, ["claim", "watch"]);
+  assert.deepEqual(instance.constants, ["apiVersion"]);
+  assert.deepEqual(instance.handWritten, ["_ = self.coreConstant"]);
 });
 
 test("the typing scan reads the TypeScript syntax tree: it refuses a wrapper typed any, a hand-typed literal, and any cast past the generated type however it's wrapped or spread", () => {
@@ -1063,7 +1098,7 @@ test("the typing scan follows a block-bodied wrapper, a function declaration or 
 
 test("the Mac registration scan takes Self and its generated member split across lines, and still refuses one that is assigned or discarded", () => {
   const module = (definition) => `public class DemoModule: Module, DemoNative {\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
-  assert.deepEqual(swiftRegistrations(module("    Name(\n      Self\n        .moduleName\n    )\n    Self\n      .holdFunction\n    Self\n      .eventsDefinition"), "DemoModule"), { generated: ["hold"], events: true, name: true, handWritten: [] });
+  assert.deepEqual(swiftRegistrations(module("    Name(\n      Self\n        .moduleName\n    )\n    Self\n      .holdFunction\n    Self\n      .eventsDefinition"), "DemoModule"), { generated: ["hold"], constants: [], events: true, name: true, handWritten: [] });
   const discarded = swiftRegistrations(module("    Name(Self.moduleName)\n    let _ =\n      Self\n      .holdFunction\n    _ = Self\n      .eventsDefinition"), "DemoModule");
   assert.deepEqual(discarded.generated, []);
   assert.equal(discarded.events, false);

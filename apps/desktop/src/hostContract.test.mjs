@@ -56,24 +56,41 @@ test("every call of a schema-generated domain reaches a host that serves it unde
   }
 });
 
+const LEFT_OUT_BY_THE_UI = new Set(["ArdiaSync.takeFileCounts"]);
+const SYNC_VOID_PROMISED_BY_THE_UI = new Set(["ArdiaShell.startDictation", "ArdiaShell.copyURL", "ArdiaSystem.hapticTick"]);
+
 async function checkModuleFunction(module, fn, row) {
   const name = `${module}.${fn}`;
   const args = row.args.map((_, index) => `arg${index}`);
   const { host, requests } = fixture();
   const resolved = resolveHostModule(host, module, fn);
+  const answeredByTheUi = row.desktop === "custom" || row.desktop === "adapted";
+  if (LEFT_OUT_BY_THE_UI.has(name)) {
+    assert.equal(row.desktop, "absent", `${name} is left out on the desktop`);
+    assert.equal(resolved, null, `${name} resolves to nothing, so callers skip it`);
+    return;
+  }
   assert.equal(typeof resolved, "function", `${name} resolves to a function`);
-  assert.equal(reachesNativeHostUnchecked(resolved), row.desktop !== "custom", row.desktop === "custom" ? `${name} is answered by the desktop UI` : `${name} goes to the native host, which serves it only when its binding is host`);
-  const answer = resolved(...args);
-  const promised = row.desktop === "absent" || row.async;
-  assert.equal(answer instanceof Promise, promised, row.desktop === "absent" ? `${name} has no desktop implementation, so the host fallback answers it with a Promise the host settles` : `${name} answers ${row.async ? "with a Promise" : "synchronously"}, as the schema's async says`);
-  await answer;
-  assert.deepEqual(requests, row.desktop === "custom" ? [] : [{ method: name, args: { args } }], row.desktop === "custom" ? `${name} never reaches the host` : `${name} reaches the host with its positional arguments`);
+  assert.equal(reachesNativeHostUnchecked(resolved), !answeredByTheUi, answeredByTheUi ? `${name} is answered by the desktop UI${row.desktop === "adapted" ? ", in front of the native host's own dispatch" : ""}` : `${name} goes to the native host, which serves it only when its binding is host`);
+  let answer;
+  try {
+    answer = resolved(...args);
+  } catch (error) {
+    assert.ok(answeredByTheUi && !row.async, `${name} throws only as a synchronous answer of the desktop UI: ${error}`);
+    return;
+  }
+  const promised = !answeredByTheUi || row.async || SYNC_VOID_PROMISED_BY_THE_UI.has(name);
+  assert.equal(answer instanceof Promise, promised, !answeredByTheUi ? `${name} goes to the native host, so the host fallback answers it with a Promise the host settles` : `${name} answers ${row.async ? "with a Promise" : "synchronously"}, as the schema's async says`);
+  await Promise.resolve(answer).catch(() => {});
+  if (row.desktop === "custom") assert.equal(requests.some((request) => request.method === name || request.name === name), false, `${name} never reaches the host under its own name`);
+  if (!answeredByTheUi) assert.deepEqual(requests, [{ method: name, args: { args } }], `${name} reaches the host with its positional arguments`);
 }
 
 test("every function of a schema module domain is answered by the desktop UI when its desktop binding is custom, and otherwise reaches the native host with its positional arguments, as a Promise exactly when it is async or left to the host", async () => {
   const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
   const functions = Object.values(manifest.modules).flatMap((domain) => Object.entries(domain.modules).flatMap(([module, entry]) => Object.entries(entry.functions).map(([fn, row]) => ({ module, fn, row }))));
   assert.ok(functions.some(({ module, fn }) => module === "ArdiaWindowBackdrop" && fn === "holdKeyLook"), "the scan found the shaders pilot");
+  for (const name of [...LEFT_OUT_BY_THE_UI, ...SYNC_VOID_PROMISED_BY_THE_UI]) assert.ok(functions.some(({ module, fn }) => `${module}.${fn}` === name), `${name} is still a schema function`);
   for (const { module, fn, row } of functions) await checkModuleFunction(module, fn, row);
 });
 
@@ -82,6 +99,8 @@ test("a Mac-only synchronous module function, which the desktop leaves to the ho
   await checkModuleFunction("ArdiaDemoOnMac", "measure", { args: ["dir"], async: true, mac: "custom", desktop: "absent", windows: "absent" });
   await assert.rejects(checkModuleFunction("ArdiaWindowBackdrop", "holdKeyLook", { args: ["on"], async: false, mac: "custom", desktop: "custom", windows: "absent" }), /answers synchronously/);
   await assert.rejects(checkModuleFunction("ArdiaWindowBackdrop", "holdKeyLook", { args: ["on"], async: true, mac: "custom", desktop: "absent", windows: "absent" }), /goes to the native host/);
+  await assert.rejects(checkModuleFunction("ArdiaShell", "copyText", { args: ["text"], async: false, mac: "custom", desktop: "adapted", windows: "custom" }), /is answered by the desktop UI, in front of the native host's own dispatch/);
+  await checkModuleFunction("ArdiaDemoOnMac", "size", { args: [], async: false, mac: "custom", desktop: "absent", windows: "absent" });
 });
 
 test("engine errors and bad replies reject with stable codes, profiles never retry", async () => {
