@@ -146,8 +146,9 @@ export function workspaceProjects(root, workspaceYaml) {
 function listDirs(dir) {
   try {
     return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  } catch {
-    return [];
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return [];
+    throw new Error(`can't read ${dir} (${error.code}); fix its permissions or move it away`);
   }
 }
 
@@ -569,7 +570,16 @@ export function setupWorktree(worktreeArg, options = {}) {
   const guardPartial = path.join(worktree, `${GUARD_FILE}.${process.pid}.partial`);
   fs.writeFileSync(guardPartial, GUARD_SOURCE, { flag: "wx" });
   fs.renameSync(guardPartial, path.join(worktree, GUARD_FILE));
-  const { record, sourceRoot, marker, markerFile, links, warnings } = withKernelLock(registryLock(cacheRoot), () => {
+  const firstSetup = previous === null;
+  const linkUnderLock = (action) => {
+    try {
+      return withKernelLock(registryLock(cacheRoot), action);
+    } catch (error) {
+      if (firstSetup && markerState(worktree).absent) error.message += `; to give up on this worktree, delete ${path.join(worktree, GUARD_FILE)} by hand`;
+      throw error;
+    }
+  };
+  const { record, sourceRoot, marker, markerFile, links, warnings } = linkUnderLock(() => {
     const stamp = path.join(final, CACHE_STAMP);
     if (!fs.existsSync(stamp)) throw new Error(`${final} isn't built (or was just pruned); run worktree-setup again`);
     fs.utimesSync(stamp, new Date(), new Date());
@@ -668,6 +678,8 @@ export function markerState(dir) {
   const valid =
     marker !== null &&
     typeof marker === "object" &&
+    marker.version === MARKER_VERSION &&
+    (marker.state === "linking" || marker.state === "linked") &&
     typeof marker.key === "string" &&
     /^[0-9a-f]{16}$/.test(marker.key) &&
     typeof marker.root === "string" &&

@@ -1001,3 +1001,43 @@ test("CR27: prune deletes only folders it can prove are its own caches", () => {
   assert.ok(fs.existsSync(path.join(cacheRoot, "reports", CACHE_STAMP)));
   assert.ok(fs.existsSync(path.join(cacheRoot, "fedcba9876543210", CACHE_STAMP)));
 });
+
+test("CR28: a marker with an unsupported version or state stops setup and undo", () => {
+  const { setup } = harness();
+  for (const change of [{ version: 99 }, { state: "done" }, { version: undefined }]) {
+    const worktree = makeWorktree();
+    setup(worktree);
+    const markerFile = path.join(worktree, "node_modules", MARKER);
+    fs.writeFileSync(markerFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(markerFile, "utf8")), ...change }));
+    const before = snapshot(path.join(worktree, "node_modules"));
+    assert.deepEqual(markerState(worktree), { unknown: true }, JSON.stringify(change));
+    assert.throws(() => undoWorktree(worktree, { log: quiet }), /is corrupt or isn't valid/);
+    assert.throws(() => setup(worktree, { replace: true }), /is corrupt or isn't valid/);
+    assert.equal(snapshot(path.join(worktree, "node_modules")), before);
+  }
+});
+
+test("CR29: an unreadable workspace folder fails setup instead of dropping its manifests", { skip: process.getuid?.() === 0 && "root reads anything" }, () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  fs.chmodSync(path.join(worktree, "packages"), 0o000);
+  try {
+    assert.throws(() => setup(worktree), /can't read .*packages/);
+  } finally {
+    fs.chmodSync(path.join(worktree, "packages"), 0o755);
+  }
+});
+
+test("CR30: a first setup that fails after publishing the guard says how to recover", () => {
+  const { cacheRoot, setup } = harness();
+  setup(makeWorktree());
+  const worktree = makeWorktree();
+  const lockFile = path.join(cacheRoot, ".registry.lock");
+  fs.rmSync(lockFile, { force: true });
+  fs.mkdirSync(lockFile);
+  try {
+    assert.throws(() => setup(worktree), /delete .*\.pnpmfile\.cjs by hand/);
+  } finally {
+    fs.rmdirSync(lockFile);
+  }
+});
