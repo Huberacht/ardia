@@ -51,7 +51,8 @@ async function fieldDataAfterTrace(ask: ReturnType<typeof checkFieldDataAsk>, ta
   } catch {
     return { skipped: "The tab no longer shows a web page." };
   }
-  if (tracedUrl && fieldDataOrigin(tracedUrl) !== origin) return { skipped: "The page changed origin during the trace, so field data wouldn't match it." };
+  if (!tracedUrl) return { skipped: "The trace has no page load to tie field data to; record with reload." };
+  if (fieldDataOrigin(tracedUrl) !== origin) return { skipped: "The page changed origin during the trace, so field data wouldn't match it." };
   noteDevTools("field_data_requests", 1, consent);
   return fetchFieldData({ pageUrl, apiKey: ask.apiKey, formFactor: ask.formFactor });
 }
@@ -76,7 +77,10 @@ async function perfTrace(params: Record<string, unknown>, call: SocketCall) {
   const durationMs = (params.durationMs as number | undefined) ?? 5000;
   const ask = checkFieldDataAsk(params, tab.profileId);
   try {
-    const recording = await withInspection(tab.id, call.connection, (session) => recordTrace(session, { durationMs, reload, beforeReload: call.stillServing }));
+    const recording = await withInspection(tab.id, call.connection, (session) => {
+      call.stillServing();
+      return recordTrace(session, { durationMs, reload, beforeReload: call.stillServing });
+    });
     call.stillServing();
     const result = timed(() => analyzeTrace(recording.events), consent);
     noteDevTools("traces", 1, consent);

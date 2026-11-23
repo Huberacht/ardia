@@ -103,20 +103,24 @@ function shiftsOf(model: Model): Shift[] {
 }
 
 function worstWindow(shifts: Shift[]): { score: number; shifts: Shift[] } {
-  let best = { score: 0, shifts: [] as Shift[] };
-  let current: Shift[] = [];
+  let bestScore = 0;
+  let bestStart = 0;
+  let bestEnd = -1;
+  let start = 0;
   let sum = 0;
-  for (const shift of shifts) {
-    const last = current[current.length - 1];
-    if (!last || shift.ts - last.ts > SHIFT_GAP_US || shift.ts - current[0]!.ts > SHIFT_WINDOW_US) {
-      current = [];
+  for (const [i, shift] of shifts.entries()) {
+    if (i > start && (shift.ts - shifts[i - 1]!.ts > SHIFT_GAP_US || shift.ts - shifts[start]!.ts > SHIFT_WINDOW_US)) {
+      start = i;
       sum = 0;
     }
-    current.push(shift);
     sum += shift.score;
-    if (sum > best.score) best = { score: sum, shifts: [...current] };
+    if (sum > bestScore) {
+      bestScore = sum;
+      bestStart = start;
+      bestEnd = i;
+    }
   }
-  return best;
+  return { score: bestScore, shifts: shifts.slice(bestStart, bestEnd + 1) };
 }
 
 const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
@@ -149,7 +153,8 @@ type Interaction = { id: number; type: string | null; ts: number; durationMs: nu
 function interactionsOf(model: Model): Interaction[] {
   const byId = new Map<number, Interaction>();
   for (const ev of model.events) {
-    if (ev.name !== "EventTiming" || (ev.ph !== "b" && ev.ph !== "X")) continue;
+    if (ev.name !== "EventTiming" || (ev.ph !== "b" && ev.ph !== "X") || ev.ts < model.origin) continue;
+    if (model.mainPid !== null && ev.pid !== model.mainPid) continue;
     const data = ev.args.data;
     const frame = text(field(data, "frame"), 256);
     if (frame && model.mainFrame && frame !== model.mainFrame) continue;

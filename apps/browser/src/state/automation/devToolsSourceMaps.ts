@@ -1,6 +1,7 @@
 export const MAX_MAP_BYTES = 10 * 1024 * 1024;
 export const MAX_MAPS_PER_CALL = 16;
-const MAX_SEGMENTS = 4_000_000;
+const MAX_SEGMENTS = 1_000_000;
+const MAX_LINES = 200_000;
 const MAX_SECTIONS = 64;
 
 type Segment = [number, number, number, number, number];
@@ -17,11 +18,12 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(
 function decodeMappings(mappings: string): Segment[][] {
   const lines: Segment[][] = [];
   let line: Segment[] = [];
-  let source = 0, srcLine = 0, srcCol = 0, name = 0, count = 0;
+  let source = 0, srcLine = 0, srcCol = 0, name = 0, count = 0, lineCount = 0;
   let i = 0;
   while (i < mappings.length) {
     const c = mappings[i]!;
     if (c === ";") {
+      if (++lineCount > MAX_LINES) throw new Error("too many lines");
       lines.push(line);
       line = [];
       i++;
@@ -70,12 +72,14 @@ export function parseSourceMap(raw: unknown, depth = 0): ParsedMap | null {
   if (Array.isArray(value.sections)) {
     if (depth > 0) return null;
     const sections: NonNullable<ParsedMap["sections"]> = [];
-    for (const section of value.sections.slice(0, MAX_SECTIONS)) {
+    if (value.sections.length > MAX_SECTIONS) return null;
+    for (const section of value.sections) {
       const offset = isFields(section) && isFields(section.offset) ? section.offset : null;
       const map = isFields(section) ? parseSourceMap(section.map, depth + 1) : null;
-      const line = typeof offset?.line === "number" && Number.isSafeInteger(offset.line) ? offset.line : null;
-      const column = typeof offset?.column === "number" && Number.isSafeInteger(offset.column) ? offset.column : null;
-      if (map && line !== null && column !== null) sections.push({ line, column, map });
+      const line = typeof offset?.line === "number" && Number.isSafeInteger(offset.line) && offset.line >= 0 ? offset.line : null;
+      const column = typeof offset?.column === "number" && Number.isSafeInteger(offset.column) && offset.column >= 0 ? offset.column : null;
+      if (!map || line === null || column === null) return null;
+      sections.push({ line, column, map });
     }
     return { sources: [], names: [], lines: [], sections };
   }
@@ -144,15 +148,19 @@ export function generatedPositionFor(map: ParsedMap, wanted: string, line1: numb
   return best ? { line: best.line, column: best.column } : null;
 }
 
+const DIRECTIVE = /^\s*(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL=([^\s'"*]+(?:\*(?!\/)[^\s'"*]*)*)\s*(?:\*\/)?\s*$/;
+const COMMENT_ONLY = /^\s*(?:\/\/|\/\*|\*)/;
+
 export function sourceMapRefOf(script: string): string | null {
-  let at = script.length;
-  while (at > 0) {
-    const found = script.lastIndexOf("sourceMappingURL=", at - 1);
-    if (found < 2) return null;
-    const marker = script.slice(found - 2, found);
-    const match = /^([^\s'"]+)\s*(?:\*\/)?\s*$/.exec(script.slice(found + "sourceMappingURL=".length).split("\n")[0]!);
-    if ((marker === "# " || marker === "@ ") && match) return match[1]!;
-    at = found;
+  let end = script.length;
+  while (end > 0) {
+    const start = script.lastIndexOf("\n", end - 1) + 1;
+    const line = script.slice(start, end);
+    end = start - 1;
+    if (!line.trim()) continue;
+    const match = DIRECTIVE.exec(line);
+    if (match) return match[1]!;
+    if (!COMMENT_ONLY.test(line)) return null;
   }
   return null;
 }

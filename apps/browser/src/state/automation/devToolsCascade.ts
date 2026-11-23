@@ -22,13 +22,15 @@ export type Declaration = {
 export type OverriddenDeclaration = Declaration & { reason: string };
 export type PropertyCascade = { property: string; computed: string | null; winner: Declaration | null; overridden: OverriddenDeclaration[] };
 
-type Candidate = Declaration & { order: number; active: boolean; invalid: boolean; disabled: boolean };
+type Candidate = Declaration & { order: number; active: boolean; invalid: boolean; disabled: boolean; conditionActive: boolean; layerRank: number };
 
 const INHERITED = new Set([
   "color", "cursor", "direction", "visibility", "quotes", "white-space", "word-spacing", "letter-spacing", "line-height", "text-align", "text-indent", "text-transform", "text-shadow", "tab-size", "writing-mode",
   "hyphens", "overflow-wrap", "word-break", "list-style", "list-style-type", "list-style-position", "list-style-image", "caption-side", "border-collapse", "border-spacing", "empty-cells", "orphans", "widows",
   "font", "font-family", "font-size", "font-style", "font-weight", "font-variant", "font-stretch", "font-feature-settings", "font-kerning", "font-size-adjust", "font-synthesis", "font-optical-sizing", "font-variation-settings",
   "text-rendering", "-webkit-font-smoothing", "color-scheme", "accent-color", "caret-color", "pointer-events", "user-select", "image-rendering", "text-underline-position", "text-decoration-skip-ink", "paint-order",
+  "fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "marker", "marker-start", "marker-mid",
+  "marker-end", "clip-rule", "shape-rendering", "color-interpolation", "color-interpolation-filters", "color-rendering", "text-anchor", "glyph-orientation-vertical",
 ]);
 
 const isFields = (value: unknown): value is Fields => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -77,33 +79,42 @@ function sourceOf(style: unknown, prop: unknown, headers: ReadonlyMap<string, Sh
     styleSheetId,
     url: header?.url ?? null,
     line: line === null ? null : line + 1 + (header?.startLine ?? 0),
-    column: column === null ? null : column + 1,
+    column: column === null ? null : column + 1 + (line === 0 ? (header?.startColumn ?? 0) : 0),
     inline: inline || header?.isInline === true,
   };
 }
 
-type Entry = { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean };
+type Entry = { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean; layer: string | null; conditionActive: boolean };
+type Found = { prop: unknown; value: string; shorthand: string | null };
 
-function declarationsFor(style: unknown, property: string): { prop: unknown; value: string; shorthand: string | null }[] {
-  const direct: { prop: unknown; value: string; shorthand: string | null }[] = [];
-  const expanded: { prop: unknown; value: string; shorthand: string | null }[] = [];
-  for (const prop of list(field(style, "cssProperties"))) {
+function declarationsFor(style: unknown, property: string): Found[] {
+  const props = list(field(style, "cssProperties"));
+  const expandedHere = props.some((prop) => list(field(prop, "longhandProperties")).some((longhand) => propertyKey(text(field(longhand, "name"), 256) ?? "") === property));
+  const found: Found[] = [];
+  for (const prop of props) {
     const name = text(field(prop, "name"), 256);
     if (name === null) continue;
     if (propertyKey(name) === property) {
-      direct.push({ prop, value: text(field(prop, "value"), 2048) ?? "", shorthand: null });
+      if (!(expandedHere && field(prop, "implicit") === true)) found.push({ prop, value: text(field(prop, "value"), 2048) ?? "", shorthand: null });
       continue;
     }
     for (const longhand of list(field(prop, "longhandProperties"))) {
       const longName = text(field(longhand, "name"), 256);
-      if (longName !== null && propertyKey(longName) === property) expanded.push({ prop, value: text(field(longhand, "value"), 2048) ?? "", shorthand: propertyKey(name) });
+      if (longName !== null && propertyKey(longName) === property) found.push({ prop, value: text(field(longhand, "value"), 2048) ?? "", shorthand: propertyKey(name) });
     }
   }
-  return direct.length ? direct : expanded;
+  return found;
+}
+
+function layerRanks(styles: Entry[]): Map<string, number> {
+  const ranks = new Map<string, number>();
+  for (const [i, entry] of styles.entries()) if (entry.layer !== null && !ranks.has(entry.layer)) ranks.set(entry.layer, i);
+  return ranks;
 }
 
 function candidatesOf(styles: Entry[], property: string, headers: ReadonlyMap<string, SheetHeader>, inheritedFrom: number, start: number): Candidate[] {
   const out: Candidate[] = [];
+  const ranks = layerRanks(styles);
   let order = start;
   for (const entry of styles) {
     for (const { prop, value, shorthand } of declarationsFor(entry.style, property)) {
@@ -120,9 +131,11 @@ function candidatesOf(styles: Entry[], property: string, headers: ReadonlyMap<st
         inheritedFrom,
         shorthand,
         order,
-        active: !disabled && !invalid,
+        active: !disabled && !invalid && entry.conditionActive,
         invalid,
         disabled,
+        conditionActive: entry.conditionActive,
+        layerRank: entry.layer === null ? Infinity : (ranks.get(entry.layer) ?? Infinity),
       });
     }
   }
@@ -134,8 +147,9 @@ export function registeredInheritance(matched: unknown): Map<string, boolean> {
   for (const rule of list(field(matched, "cssPropertyRules")).slice(0, MAX_RULES)) {
     const name = text(field(field(rule, "propertyName"), "text"), 256);
     if (!name?.startsWith("--")) continue;
-    const inherits = list(field(field(rule, "style"), "cssProperties")).find((p) => text(field(p, "name"), 64) === "inherits");
-    registered.set(name, text(field(inherits, "value"), 16)?.trim() !== "false");
+    const descriptors = list(field(field(rule, "style"), "cssProperties")).filter((p) => text(field(p, "name"), 64) === "inherits");
+    const last = descriptors[descriptors.length - 1];
+    if (last !== undefined) registered.set(name, text(field(last, "value"), 16)?.trim() !== "false");
   }
   return registered;
 }
@@ -143,26 +157,36 @@ export function registeredInheritance(matched: unknown): Map<string, boolean> {
 const IMPORTANT_RANK: Readonly<Record<string, number>> = { "user-agent": 3, injected: 2, regular: 1, inspector: 1 };
 const importantRank = (origin: string) => IMPORTANT_RANK[origin] ?? 1;
 
+const isElementStyle = (c: Candidate) => c.source.inline && c.selector === "element.style";
+
+function beatsImportant(c: Candidate, winner: Candidate): boolean {
+  const rank = importantRank(c.origin) - importantRank(winner.origin);
+  if (rank) return rank > 0;
+  if (isElementStyle(c) !== isElementStyle(winner)) return isElementStyle(c);
+  if (c.layerRank !== winner.layerRank) return c.layerRank < winner.layerRank;
+  return c.order > winner.order;
+}
+
 function pickWinner(candidates: Candidate[]): Candidate | null {
   const active = candidates.filter((c) => c.active);
   const important = active.filter((c) => c.important);
   const pool = important.length ? important : active;
   let winner: Candidate | null = null;
-  for (const c of pool) {
-    if (!winner) winner = c;
-    else if (important.length ? importantRank(c.origin) > importantRank(winner.origin) || (importantRank(c.origin) === importantRank(winner.origin) && c.order > winner.order) : c.order > winner.order) winner = c;
-  }
+  for (const c of pool) if (!winner || (important.length ? beatsImportant(c, winner) : c.order > winner.order)) winner = c;
   return winner;
 }
 
 function reasonAgainst(loser: Candidate, winner: Candidate): string {
   if (loser.disabled) return "disabled";
   if (loser.invalid) return "invalid value";
+  if (!loser.conditionActive) return "its @media or @supports condition doesn't apply";
   if (winner.important && !loser.important) return "the winner is !important";
   if (loser.inheritedFrom > 0 && winner.inheritedFrom === 0) return "declared on the element itself";
   if (loser.inheritedFrom > winner.inheritedFrom) return "inherited from a closer ancestor";
   if (winner.source.inline && winner.selector === "element.style" && loser.selector !== "element.style") return "inline style wins";
   if (loser.important && winner.important && importantRank(winner.origin) > importantRank(loser.origin)) return "a higher-priority origin's !important";
+  if (loser.important && winner.important && winner.layerRank < loser.layerRank) return "an earlier @layer's !important wins";
+  if (!loser.important && !winner.important && winner.layerRank > loser.layerRank) return "a later @layer wins";
   if (loser.origin !== winner.origin && loser.origin === "user-agent") return "browser default overridden by the page";
   if (loser.specificity && winner.specificity && compareSpecificity(loser.specificity, winner.specificity) < 0) return "lower specificity";
   return "earlier in the cascade";
@@ -170,18 +194,39 @@ function reasonAgainst(loser: Candidate, winner: Candidate): string {
 
 const strip = (c: Candidate): Declaration => ({ value: c.value, important: c.important, origin: c.origin, selector: c.selector, specificity: c.specificity, source: c.source, inheritedFrom: c.inheritedFrom, shorthand: c.shorthand });
 
-function stylesOfLevel(level: unknown, withAttributes: boolean): { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean }[] {
-  const styles: { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean }[] = [];
+function conditionActive(rule: Fields): boolean {
+  for (const media of list(rule.media)) {
+    const queries = list(field(media, "mediaList"));
+    if (queries.length && !queries.some((q) => field(q, "active") !== false)) return false;
+  }
+  for (const supports of list(rule.supports)) if (field(supports, "active") === false) return false;
+  return true;
+}
+
+function layerOf(rule: Fields): string | null {
+  const names = list(rule.layers).map((layer) => text(field(layer, "text"), 256)).filter((name): name is string => name !== null && name !== "");
+  return names.length ? names.join(".") : null;
+}
+
+function stylesOfLevel(level: unknown, withAttributes: boolean): Entry[] {
+  const styles: Entry[] = [];
   const attributes = field(level, "attributesStyle");
-  if (withAttributes && isFields(attributes)) styles.push({ style: attributes, origin: "regular", selector: "presentational attributes", specificity: [0, 0, 0], inline: false });
+  const presentational: Entry | null = withAttributes && isFields(attributes) ? { style: attributes, origin: "regular", selector: "presentational attributes", specificity: [0, 0, 0], inline: false, layer: null, conditionActive: true } : null;
+  let placed = presentational === null;
   for (const match of list(field(level, "matchedCSSRules")).slice(0, MAX_RULES)) {
     const rule = field(match, "rule");
     if (!isFields(rule)) continue;
+    const origin = text(rule.origin, 32) ?? "regular";
+    if (!placed && origin !== "user-agent") {
+      styles.push(presentational!);
+      placed = true;
+    }
     const { selector, specificity } = specificityOf(rule, field(match, "matchingSelectors"));
-    styles.push({ style: rule.style, origin: text(rule.origin, 32) ?? "regular", selector, specificity, inline: false });
+    styles.push({ style: rule.style, origin, selector, specificity, inline: false, layer: layerOf(rule), conditionActive: conditionActive(rule) });
   }
+  if (!placed) styles.push(presentational!);
   const inline = field(level, "inlineStyle");
-  if (isFields(inline)) styles.push({ style: inline, origin: "regular", selector: "element.style", specificity: null, inline: true });
+  if (isFields(inline)) styles.push({ style: inline, origin: "regular", selector: "element.style", specificity: null, inline: true, layer: null, conditionActive: true });
   return styles;
 }
 
@@ -222,7 +267,7 @@ export function cascadeFor(matched: unknown, computed: unknown, properties: read
         if (winner) break;
       }
     }
-    const overridden = winner ? candidates.filter((c) => c !== winner).map((c) => ({ ...strip(c), reason: reasonAgainst(c, winner!) })) : candidates.map((c) => ({ ...strip(c), reason: c.disabled ? "disabled" : c.invalid ? "invalid value" : "not applied" }));
+    const overridden = winner ? candidates.filter((c) => c !== winner).map((c) => ({ ...strip(c), reason: reasonAgainst(c, winner!) })) : candidates.map((c) => ({ ...strip(c), reason: c.disabled ? "disabled" : c.invalid ? "invalid value" : !c.conditionActive ? "its @media or @supports condition doesn't apply" : "not applied" }));
     return { property, computed: computedValues.get(property) ?? null, winner: winner ? strip(winner) : null, overridden: overridden.reverse() };
   });
 }

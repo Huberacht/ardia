@@ -6,11 +6,14 @@ import { OpError } from "./workspaceTargets";
 export const MAX_EXPRESSION = 2000;
 export const MAX_LOGPOINTS_PER_CONNECTION = 50;
 export const SCRIPTS_SETTLE_MS = 250;
+export const MAX_HELD_SCRIPTS = 20_000;
+export const MAX_HELD_MAP_BYTES = 32 * 1024 * 1024;
 
 type Fields = Record<string, unknown>;
-type Script = { url: string; sourceMapURL: string | null };
+type Script = { url: string; sourceMapURL: string | null; frameId: string | null; contextId: number | null };
+type ScriptBook = { scripts: Map<string, Script>; frameContexts: Map<string, number>; mapBytes: number };
 type Logpoint = { id: string; tabId: string; breakpointId: string; url: string; line: number; column: number | null; original: { source: string; line: number; column: number | null } | null };
-type Held = { session: InspectionSession; scripts: Map<string, Script>; logpoints: Map<string, Logpoint>; pending: number; stop: () => void };
+type Held = { session: InspectionSession; book: ScriptBook; logpoints: Map<string, Logpoint>; pending: number; stop: () => void };
 
 const held = new Map<number, Map<string, Held>>();
 const opening = new Map<string, Promise<Held>>();
@@ -48,15 +51,11 @@ async function openHeld(connection: number, tabId: string): Promise<Held> {
   const session = await openInspection(tabId, connection);
   const own = held.get(connection) ?? new Map<string, Held>();
   held.set(connection, own);
-  const scripts = new Map<string, Script>();
+  const book = newScriptBook();
   const stop = session.on((method, params) => {
-    if (method !== "Debugger.scriptParsed" || scripts.size >= 20_000) return;
-    const scriptId = text(params.scriptId, 256);
-    const url = text(params.url);
-    if (!scriptId || !url) return;
-    scripts.set(scriptId, { url, sourceMapURL: text(params.sourceMapURL, 16 * 1024 * 1024) || null });
+    if (method === "Debugger.scriptParsed") recordScript(book, params);
   });
-  const entry: Held = { session, scripts, logpoints: new Map(), pending: 0, stop };
+  const entry: Held = { session, book, logpoints: new Map(), pending: 0, stop };
   own.set(tabId, entry);
   try {
     await session.send("Debugger.enable", { maxScriptsCacheSize: 0 });
@@ -67,6 +66,35 @@ async function openHeld(connection: number, tabId: string): Promise<Held> {
   }
   return entry;
 }
+
+export const newScriptBook = (): ScriptBook => ({ scripts: new Map(), frameContexts: new Map(), mapBytes: 0 });
+
+function forget(book: ScriptBook, scriptId: string) {
+  const script = book.scripts.get(scriptId);
+  if (!script) return;
+  book.mapBytes -= script.sourceMapURL?.length ?? 0;
+  book.scripts.delete(scriptId);
+}
+
+export function recordScript(book: ScriptBook, params: Fields) {
+  const scriptId = text(params.scriptId, 256);
+  const url = text(params.url);
+  if (!scriptId || !url) return;
+  const aux = isFields(params.executionContextAuxData) ? params.executionContextAuxData : {};
+  const frameId = text(aux.frameId, 256);
+  const contextId = typeof params.executionContextId === "number" ? params.executionContextId : null;
+  if (frameId && contextId !== null && aux.isDefault === true && book.frameContexts.get(frameId) !== contextId) {
+    for (const [id, script] of [...book.scripts]) if (script.frameId === frameId && script.contextId !== contextId) forget(book, id);
+    book.frameContexts.set(frameId, contextId);
+  }
+  forget(book, scriptId);
+  if (book.scripts.size >= MAX_HELD_SCRIPTS) return;
+  const offered = typeof params.sourceMapURL === "string" && params.sourceMapURL.startsWith("data:") ? params.sourceMapURL : null;
+  const sourceMapURL = offered !== null && book.mapBytes + offered.length <= MAX_HELD_MAP_BYTES ? offered : null;
+  book.mapBytes += sourceMapURL?.length ?? 0;
+  book.scripts.set(scriptId, { url, sourceMapURL, frameId, contextId });
+}
+
 
 async function release(connection: number, tabId: string, only?: Held) {
   const own = held.get(connection);
@@ -84,15 +112,17 @@ async function release(connection: number, tabId: string, only?: Held) {
   await entry.session.close();
 }
 
-function locate(entry: Held, url: string, line: number, column: number | null) {
-  const scripts = [...entry.scripts.entries()];
-  if (scripts.some(([, s]) => s.url === url)) return { url, line, column, original: null };
+type Target = { url: string; line: number; column: number | null; scriptId: string | null; original: { source: string; line: number; column: number | null } | null };
+
+export function locate(book: ScriptBook, url: string, line: number, column: number | null): Target | null {
+  const scripts = [...book.scripts.entries()];
+  if (scripts.some(([, s]) => s.url === url)) return { url, line, column, scriptId: null, original: null };
   const resolver = new SourceMapResolver();
-  for (const [scriptId, script] of scripts) {
-    if (!script.sourceMapURL?.startsWith("data:")) continue;
+  for (const [scriptId, script] of scripts.reverse()) {
+    if (!script.sourceMapURL) continue;
     const map = resolver.mapFor(`script:${scriptId}`, script.sourceMapURL);
     const position = map ? generatedPositionFor(map, url, line, column) : null;
-    if (position) return { url: script.url, line: position.line + 1, column: position.column + 1, original: { source: url, line, column } };
+    if (position) return { url: script.url, line: position.line + 1, column: position.column + 1, scriptId, original: { source: url, line, column } };
   }
   return null;
 }
@@ -112,21 +142,19 @@ export async function setLogpoint(request: SetLogpoint) {
     entry = await heldFor(request.connection, request.tabId);
     entry.pending++;
     if (!request.serving()) throw new OpError("failed", STOPPED);
-    const where = locate(entry, request.url, request.line, request.column);
+    const where = locate(entry.book, request.url, request.line, request.column);
     const id = `lp${++nextId}`;
-    const target = where ?? { url: request.url, line: request.line, column: request.column, original: null };
-    const reply = await entry.session.send("Debugger.setBreakpointByUrl", {
-      url: target.url,
-      lineNumber: target.line - 1,
-      ...(target.column !== null ? { columnNumber: target.column - 1 } : {}),
-      condition: logpointCondition(id, expression, condition),
-    });
+    const target: Target = where ?? { url: request.url, line: request.line, column: request.column, scriptId: null, original: null };
+    const conditionCode = logpointCondition(id, expression, condition);
+    const reply = target.scriptId
+      ? await entry.session.send("Debugger.setBreakpoint", { location: { scriptId: target.scriptId, lineNumber: target.line - 1, ...(target.column !== null ? { columnNumber: target.column - 1 } : {}) }, condition: conditionCode })
+      : await entry.session.send("Debugger.setBreakpointByUrl", { url: target.url, lineNumber: target.line - 1, ...(target.column !== null ? { columnNumber: target.column - 1 } : {}), condition: conditionCode });
     const breakpointId = text(reply.breakpointId, 1024);
     if (!breakpointId) throw new OpError("failed", "The tab didn't accept the logpoint.");
     const logpoint: Logpoint = { id, tabId: request.tabId, breakpointId, url: target.url, line: target.line, column: target.column, original: target.original };
     entry.logpoints.set(id, logpoint);
     if (!request.serving()) throw new OpError("failed", STOPPED);
-    const locations = Array.isArray(reply.locations) ? reply.locations.filter(isFields).length : 0;
+    const locations = isFields(reply.actualLocation) ? 1 : Array.isArray(reply.locations) ? reply.locations.filter(isFields).length : 0;
     return { ...publicView(logpoint), bound: locations > 0, pending: locations === 0, matchedScript: where !== null };
   } catch (error) {
     if (entry && !request.serving()) await release(request.connection, request.tabId, entry);
@@ -154,9 +182,9 @@ export async function clearLogpoint(connection: number, id: string | null) {
   for (const [tabId, entry] of [...own.entries()]) {
     for (const logpoint of [...entry.logpoints.values()]) {
       if (id !== null && logpoint.id !== id) continue;
+      if (!entry.session.isClosed) await entry.session.send("Debugger.removeBreakpoint", { breakpointId: logpoint.breakpointId });
       entry.logpoints.delete(logpoint.id);
       cleared++;
-      await entry.session.send("Debugger.removeBreakpoint", { breakpointId: logpoint.breakpointId }).catch(() => ({}));
     }
     if (!entry.logpoints.size && !entry.pending) await release(connection, tabId, entry);
   }

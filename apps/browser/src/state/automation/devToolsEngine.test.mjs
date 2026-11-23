@@ -363,7 +363,7 @@ test("a slow server makes TTFB the LCP phase the summary blames", () => {
   const start = 2_000_000_000;
   const events = [
     { name: "navigationStart", ph: "R", pid: 2, tid: 3, ts: start, args: { frame: "F", data: { documentLoaderURL: "https://slow.example/", isOutermostMainFrame: true, navigationId: "S" } } },
-    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "D", url: "https://slow.example/" } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "D", url: "https://slow.example/", frame: "F" } } },
     { name: "ResourceReceiveResponse", ph: "I", pid: 2, tid: 3, ts: start + 3_000_000, args: { data: { requestId: "D", statusCode: 200, mimeType: "text/html", timing: { requestTime: (start + 1000) / 1e6, receiveHeadersEnd: 2999 } } } },
     { name: "largestContentfulPaint::Candidate", ph: "R", pid: 2, tid: 3, ts: start + 3_100_000, args: { frame: "F", data: { candidateIndex: 1, navigationId: "S", type: "text", nodeId: 3 } } },
   ];
@@ -464,7 +464,7 @@ test("interactions from another frame or the previous document don't count towar
   trace.traceEvents.push(
     { name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: before, args: { data: { interactionId: 90, duration: 900, type: "click", frame: "F1", timeStamp: 1, processingStart: 2, processingEnd: 3 } } },
     { name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: 1_004_000_000, args: { data: { interactionId: 91, duration: 800, type: "click", frame: "F2", timeStamp: 1, processingStart: 2, processingEnd: 3 } } },
-    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_700_000, args: { data: { requestId: "R9", url: "https://shop.example/other.css", renderBlocking: "blocking" } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_700_000, args: { data: { requestId: "R9", url: "https://shop.example/other.css", renderBlocking: "blocking", frame: "F1" } } },
     { name: "ResourceFinish", ph: "I", pid: 2, tid: 3, ts: 1_000_850_000, args: { data: { requestId: "R9", finishTime: 1000.85 } } },
   );
   const result = analyzeTrace(trace);
@@ -487,4 +487,135 @@ test("a registered custom property that doesn't inherit isn't taken from an ance
   assert.equal(tone.winner.value, "dark");
   assert.deepEqual([top.winner.value, top.winner.shorthand], ["4px", "margin"]);
   assert.deepEqual([left.winner.value, left.winner.shorthand, left.overridden[0].value, left.overridden[0].shorthand], ["16px", null, "8px", "margin"]);
+});
+
+const logpointBook = await import("./devToolsLogpoints.ts");
+
+const navStart = (ts, frame, url, extra = {}) => ({ name: "navigationStart", ph: "R", pid: extra.pid ?? 2, tid: 3, ts, args: { frame, data: { documentLoaderURL: url, isLoadingMainFrame: true, isOutermostMainFrame: true, navigationId: extra.id ?? `nav-${ts}` } } });
+
+test("another tab's navigation and requests never enter this tab's insights", () => {
+  const trace = fixture("trace-load.json");
+  trace.traceEvents.push(
+    navStart(999_990_000, "OTHER", "https://elsewhere.example/", { pid: 7 }),
+    navStart(1_002_000_000, "OTHER", "https://elsewhere.example/b", { pid: 7 }),
+    { name: "ResourceSendRequest", ph: "I", pid: 7, tid: 1, ts: 1_000_690_000, args: { data: { requestId: "X1", url: "https://elsewhere.example/block.css", renderBlocking: "blocking", frame: "OTHER" } } },
+    { name: "ResourceFinish", ph: "I", pid: 7, tid: 1, ts: 1_000_990_000, args: { data: { requestId: "X1", finishTime: 1000.99 } } },
+  );
+  const result = analyzeTrace(trace);
+  assert.equal(result.navigation.url, "https://shop.example/");
+  assert.equal(result.metrics.tbt.ms, 170, "the other tab's navigation didn't cut this page's trace short");
+  assert.ok(!JSON.stringify(result).includes("elsewhere.example"));
+});
+
+test("the renderer process comes from the selected navigation, and a task crossing the next navigation is clipped", () => {
+  const start = 3_000_000_000;
+  const events = [
+    { name: "TracingStartedInBrowser", ph: "I", pid: 1, tid: 1, ts: start - 10, args: { data: { frames: [{ frame: "M", processId: 1, isOutermostMainFrame: true }] } } },
+    navStart(start, "M", "https://a.example/", { pid: 2 }),
+    { name: "firstContentfulPaint", ph: "R", pid: 2, tid: 3, ts: start + 100_000, args: { frame: "M" } },
+    { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: start + 200_000, dur: 1_000_000, args: {} },
+    { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: start + 1_900_000, dur: 1_000_000, args: {} },
+    navStart(start + 2_000_000, "M", "https://a.example/next", { pid: 2 }),
+  ];
+  const result = analyzeTrace(events);
+  assert.equal(result.metrics.tbt.ms, 950 + 50, "the first task counts in full, the second only up to the next navigation");
+  assert.equal(result.counts.longTasks, 2);
+});
+
+test("an interaction just before navigation start doesn't count toward INP", () => {
+  const trace = fixture("trace-load.json");
+  trace.traceEvents.push({ name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: 999_999_500, args: { data: { interactionId: 70, duration: 2000, type: "click", frame: "F1", timeStamp: 1, processingStart: 2, processingEnd: 3 } } });
+  assert.equal(analyzeTrace(trace).metrics.inp.ms, 320);
+});
+
+test("finding the worst layout-shift window stays linear on a huge burst", () => {
+  const events = [navStart(4_000_000_000, "M", "https://a.example/")];
+  for (let i = 0; i < 100_000; i++) events.push({ name: "LayoutShift", ph: "I", pid: 2, tid: 3, ts: 4_000_000_000 + i * 10, args: { frame: "M", data: { score: 0.00001, had_recent_input: false } } });
+  const started = Date.now();
+  const result = analyzeTrace(events);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  assert.equal(result.counts.layoutShifts, 100_000);
+});
+
+test("the logpoint script book drops a navigated frame's old scripts and caps retained map bytes", () => {
+  const map = (source) => `data:application/json;base64,${Buffer.from(JSON.stringify({ version: 3, sources: [source], names: [], mappings: "AAAA" })).toString("base64")}`;
+  const book = logpointBook.newScriptBook();
+  const parsed = (scriptId, url, context, sourceMapURL) => logpointBook.recordScript(book, { scriptId, url, sourceMapURL, executionContextId: context, executionContextAuxData: { frameId: "F", isDefault: true } });
+  parsed("1", "https://a.example/old.js", 1, map("src/app.ts"));
+  assert.equal(logpointBook.locate(book, "src/app.ts", 1, null).url, "https://a.example/old.js");
+  parsed("2", "https://a.example/new.js", 2, map("src/app.ts"));
+  assert.deepEqual([...book.scripts.keys()], ["2"], "the old document's scripts are gone");
+  assert.equal(logpointBook.locate(book, "src/app.ts", 1, null).url, "https://a.example/new.js");
+  const huge = `data:application/json;base64,${"A".repeat(logpointBook.MAX_HELD_MAP_BYTES)}`;
+  parsed("3", "https://a.example/huge.js", 2, huge);
+  assert.equal(book.scripts.get("3").sourceMapURL, null, "a map past the session's byte budget isn't kept");
+  assert.ok(book.mapBytes <= logpointBook.MAX_HELD_MAP_BYTES);
+});
+
+test("teardown finishes even when the transport stalls", async () => {
+  let closeCalled = false;
+  const stalled = { send: () => new Promise(() => {}), onEvent: () => () => {}, close: () => ((closeCalled = true), new Promise(() => {})) };
+  const session = new InspectionSession("tab-6", 906, stalled);
+  const hanging = session.send("DOM.enable");
+  hanging.catch(() => {});
+  const started = Date.now();
+  await session.close();
+  assert.ok(closeCalled, "close always reaches the transport");
+  assert.ok(Date.now() - started < sessions.TEARDOWN_WAIT_MS + sessions.CLEANUP_STEP_MS * 3, `took ${Date.now() - started} ms`);
+  assert.equal(sessions.liveInspectionSessions(), 0);
+});
+
+test("the cascade keeps declaration order between longhands and shorthands, the last inherits descriptor, and layer order for !important", () => {
+  const rule = (selector, props, extra = {}) => ({ rule: { origin: extra.origin ?? "regular", selectorList: { selectors: [{ text: selector, specificity: { a: 0, b: 1, c: 0 } }] }, style: { cssProperties: props }, ...extra.rule }, matchingSelectors: [0] });
+  const margin = { name: "margin", value: "4px", longhandProperties: [{ name: "margin-left", value: "4px" }] };
+  const [left] = cascadeFor({ matchedCSSRules: [rule(".x", [{ name: "margin-left", value: "16px" }, margin])] }, {}, ["margin-left"], new Map());
+  assert.deepEqual([left.winner.value, left.winner.shorthand], ["4px", "margin"]);
+  const [importantShorthand] = cascadeFor({ matchedCSSRules: [rule(".x", [{ name: "margin-left", value: "16px" }, { ...margin, important: true }])] }, {}, ["margin-left"], new Map());
+  assert.equal(importantShorthand.winner.value, "4px");
+  const registered = { inherited: [{ matchedCSSRules: [rule(".p", [{ name: "--gap", value: "1px" }])] }], cssPropertyRules: [{ propertyName: { text: "--gap" }, style: { cssProperties: [{ name: "inherits", value: "false" }, { name: "inherits", value: "true" }] } }] };
+  assert.equal(cascadeFor(registered, {}, ["--gap"], new Map())[0].winner.value, "1px", "the later inherits: true wins");
+  const layered = { matchedCSSRules: [rule(".x", [{ name: "color", value: "red", important: true }], { rule: { layers: [{ text: "a" }] } }), rule(".x", [{ name: "color", value: "blue", important: true }], { rule: { layers: [{ text: "b" }] } }), rule(".x", [{ name: "color", value: "green", important: true }])] };
+  const [color] = cascadeFor(layered, {}, ["color"], new Map());
+  assert.equal(color.winner.value, "red", "an earlier layer's !important beats a later layer's and unlayered !important");
+  assert.ok(color.overridden.some((o) => o.reason === "an earlier @layer's !important wins"));
+  const normal = { matchedCSSRules: [rule(".x", [{ name: "color", value: "red" }], { rule: { layers: [{ text: "a" }] } }), rule(".x", [{ name: "color", value: "blue" }])] };
+  assert.equal(cascadeFor(normal, {}, ["color"], new Map())[0].winner.value, "blue");
+});
+
+test("presentational attributes beat browser defaults, inactive conditions never win, SVG paint inherits, and inline sheets offset their first line", () => {
+  const rule = (selector, props, extra = {}) => ({ rule: { origin: extra.origin ?? "regular", styleSheetId: extra.sheet, selectorList: { selectors: [{ text: selector, specificity: { a: 0, b: 0, c: 1 } }] }, style: { styleSheetId: extra.sheet, cssProperties: props }, ...extra.rule }, matchingSelectors: [0] });
+  const th = { attributesStyle: { cssProperties: [{ name: "text-align", value: "left" }] }, matchedCSSRules: [rule("th", [{ name: "text-align", value: "-internal-center" }], { origin: "user-agent" })] };
+  assert.equal(cascadeFor(th, {}, ["text-align"], new Map())[0].winner.value, "left");
+  const media = { matchedCSSRules: [rule(".x", [{ name: "color", value: "red" }]), rule(".x", [{ name: "color", value: "blue", important: true }], { rule: { media: [{ text: "print", mediaList: [{ active: false, expressions: [] }] }] } })] };
+  const [color] = cascadeFor(media, {}, ["color"], new Map());
+  assert.equal(color.winner.value, "red");
+  assert.equal(color.overridden[0].reason, "its @media or @supports condition doesn't apply");
+  const svg = { matchedCSSRules: [], inherited: [{ inlineStyle: { cssProperties: [{ name: "fill", value: "red" }] }, matchedCSSRules: [] }] };
+  assert.equal(cascadeFor(svg, {}, ["fill"], new Map())[0].winner.value, "red");
+  const headers = new Map([["S", { url: "https://a.example/", origin: "regular", startLine: 9, startColumn: 40, isInline: true }]]);
+  const located = { matchedCSSRules: [rule(".x", [{ name: "color", value: "red", range: { startLine: 0, startColumn: 3 } }, { name: "margin", value: "0", range: { startLine: 2, startColumn: 3 } }], { sheet: "S" })] };
+  const [first, later] = cascadeFor(located, {}, ["color", "margin"], headers);
+  assert.deepEqual([first.winner.source.line, first.winner.source.column], [10, 44]);
+  assert.deepEqual([later.winner.source.line, later.winner.source.column], [12, 4]);
+});
+
+test("source maps refuse line floods, bad sections and find directives in linear time", () => {
+  const base = { version: 3, sources: ["a.ts"], names: [] };
+  assert.equal(parseSourceMap({ ...base, mappings: ";".repeat(300_000) }), null);
+  assert.equal(parseSourceMap({ version: 3, sections: [{ offset: { line: -1, column: 0 }, map: { ...base, mappings: "AAAA" } }] }), null);
+  assert.equal(parseSourceMap({ version: 3, sections: Array.from({ length: 65 }, (_, i) => ({ offset: { line: i, column: 0 }, map: { ...base, mappings: "AAAA" } })) }), null);
+  assert.equal(sourceMapRefOf("x()\n/*# sourceMappingURL=app.js.map*/"), "app.js.map");
+  assert.equal(sourceMapRefOf("x()\n//#sourceMappingURL=app.js.map\n"), "app.js.map");
+  assert.equal(sourceMapRefOf("x()\n//@ sourceMappingURL=old.map\n//# sourceURL=x.js"), "old.map");
+  const trap = `var s = "${"sourceMappingURL=".repeat(50_000)}";`;
+  const started = Date.now();
+  assert.equal(sourceMapRefOf(trap), null);
+  assert.ok(Date.now() - started < 200, `took ${Date.now() - started} ms`);
+});
+
+test("stack frames keep URLs with parentheses, primitive causes stay in the chain, and distinct CSP severities aren't merged", () => {
+  assert.deepEqual(framesOfStack("Error\n    at checkout (https://shop.example/app(1).js:10:20)").map((f) => [f.functionName, f.url, f.line]), [["checkout", "https://shop.example/app(1).js", 10]]);
+  assert.deepEqual(chainOf({ error: { name: "Error", message: "outer", cause: "root" } }).map((l) => l.message), ["outer", "root"]);
+  const csp = (reportOnly) => ({ issue: { code: "ContentSecurityPolicyIssue", details: { contentSecurityPolicyIssueDetails: { violatedDirective: "script-src", isReportOnly: reportOnly, contentSecurityPolicyViolationType: "kInlineViolation", sourceCodeLocation: { url: "https://a.example/", lineNumber: 1, columnNumber: 1 } } } } });
+  assert.deepEqual(describeIssues([csp(true), csp(false)]).issues.map((i) => i.severity), ["error", "warning"]);
 });

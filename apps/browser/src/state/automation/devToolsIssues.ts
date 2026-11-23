@@ -188,7 +188,7 @@ export function describeIssue(raw: unknown): DescribedIssue | null {
   return { code, ...describe(code, details), affected: affectedOf(details) };
 }
 
-const keyOf = (issue: DescribedIssue) => JSON.stringify([issue.code, issue.reasons, issue.affected]);
+const keyOf = (issue: DescribedIssue) => JSON.stringify([issue.code, issue.severity, issue.explanation, issue.reasons, issue.affected]);
 
 export function describeIssues(raw: readonly unknown[]): { issues: DescribedIssue[]; dropped: number; byKind: Record<string, number> } {
   const seen = new Set<string>();

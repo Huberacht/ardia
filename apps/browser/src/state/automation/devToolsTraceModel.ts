@@ -45,6 +45,7 @@ export type Model = {
   mainThreads: Set<string>;
   mainFrame: string | null;
   mainPid: number | null;
+  targetFrames: Set<string>;
   navigation: { ts: number; url: string; navigationId: string | null } | null;
   origin: number;
   end: number;
@@ -59,7 +60,31 @@ function isMainNavigation(ev: Ev, mainFrame: string | null): boolean {
   const data = ev.args.data;
   const url = text(field(data, "documentLoaderURL"));
   if (!url || !/^https?:/i.test(url)) return false;
-  return field(data, "isOutermostMainFrame") === true || field(data, "isLoadingMainFrame") === true || (mainFrame !== null && frameOf(ev) === mainFrame);
+  if (mainFrame !== null) return frameOf(ev) === mainFrame;
+  return field(data, "isOutermostMainFrame") === true || field(data, "isLoadingMainFrame") === true;
+}
+
+function targetFramesOf(events: Ev[], mainFrame: string | null): Set<string> {
+  const frames = new Set<string>();
+  if (mainFrame === null) return frames;
+  frames.add(mainFrame);
+  for (const ev of events) {
+    const data = ev.args.data;
+    if (ev.name === "TracingStartedInBrowser") {
+      const listed = field(data, "frames");
+      for (const frame of Array.isArray(listed) ? listed : []) {
+        const id = text(field(frame, "frame"), 256);
+        const parent = text(field(frame, "parent"), 256);
+        if (id && (parent === null ? id === mainFrame : frames.has(parent))) frames.add(id);
+      }
+    }
+    if (ev.name === "FrameCommittedInBrowser") {
+      const id = text(field(data, "frame"), 256);
+      const parent = text(field(data, "parent"), 256);
+      if (id && parent && frames.has(parent)) frames.add(id);
+    }
+  }
+  return frames;
 }
 
 export function buildModel(raw: unknown[]): Model {
@@ -89,22 +114,29 @@ export function buildModel(raw: unknown[]): Model {
     if (!isMainNavigation(ev, mainFrame) || !url || !/^https?:/i.test(url)) continue;
     navigation = { ts: ev.ts, url, navigationId: text(field(data, "navigationId"), 256) };
     if (mainFrame === null) mainFrame = frameOf(ev);
-    if (mainPid === null) mainPid = ev.pid;
+    mainPid = ev.pid;
     break;
   }
+  const targetFrames = targetFramesOf(events, mainFrame);
   if (navigation) {
     const startedAt = navigation.ts;
     const next = events.find((ev) => ev.name === "navigationStart" && ev.ts > startedAt && isMainNavigation(ev, mainFrame));
     const from = startedAt - NAVIGATION_SLACK_US;
-    events = events.filter((ev) => ev.ph === "M" || (ev.ts >= from && (!next || ev.ts < next.ts)));
+    const until = next ? next.ts : Infinity;
+    const kept: Ev[] = [];
+    for (const ev of events) {
+      if (ev.ph === "M") kept.push(ev);
+      else if (ev.ts >= from && ev.ts < until) kept.push(ev.ts + ev.dur > until ? { ...ev, dur: until - ev.ts } : ev);
+    }
+    events = kept;
   }
   const first = events.find((ev) => ev.ph !== "M");
   const origin = navigation?.ts ?? first?.ts ?? 0;
   const end = events.reduce((latest, ev) => Math.max(latest, ev.ts + ev.dur), origin);
-  return { events, mainThreads, mainFrame, mainPid, navigation, origin, end, requests: requestsOf(events) };
+  return { events, mainThreads, mainFrame, mainPid, targetFrames, navigation, origin, end, requests: requestsOf(events, targetFrames) };
 }
 
-export function requestsOf(events: Ev[]): Map<string, RequestRow> {
+export function requestsOf(events: Ev[], targetFrames: ReadonlySet<string> = new Set()): Map<string, RequestRow> {
   const requests = new Map<string, RequestRow>();
   for (const ev of events) {
     const data = ev.args.data;
@@ -113,6 +145,8 @@ export function requestsOf(events: Ev[]): Map<string, RequestRow> {
     if (ev.name === "ResourceSendRequest") {
       const url = text(field(data, "url"));
       if (!url || requests.has(requestId)) continue;
+      const frame = text(field(data, "frame"), 256);
+      if (targetFrames.size && (frame === null || !targetFrames.has(frame))) continue;
       requests.set(requestId, {
         requestId,
         url,

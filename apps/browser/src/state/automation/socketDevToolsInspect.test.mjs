@@ -22,7 +22,8 @@ const MAP = {
 };
 const INLINE_MAP = `data:application/json;base64,${Buffer.from(JSON.stringify(MAP)).toString("base64")}`;
 
-function scriptedTab() {
+function scriptedTab(traceEvents = TRACE.traceEvents) {
+  const control = { failRemove: false };
   const sent = [];
   const opened = [];
   let breakpoints = 0;
@@ -30,8 +31,8 @@ function scriptedTab() {
     switch (method) {
       case "Tracing.end":
         setTimeout(() => {
-          emit("Tracing.dataCollected", { value: TRACE.traceEvents.slice(0, 20) });
-          emit("Tracing.dataCollected", { value: TRACE.traceEvents.slice(20) });
+          emit("Tracing.dataCollected", { value: traceEvents.slice(0, 20) });
+          emit("Tracing.dataCollected", { value: traceEvents.slice(20) });
           emit("Tracing.tracingComplete", { dataLossOccurred: false });
         }, 0);
         return {};
@@ -55,7 +56,13 @@ function scriptedTab() {
       case "Debugger.enable":
         emit("Debugger.scriptParsed", { scriptId: "9", url: "https://shop.example/assets/app.min.js", sourceMapURL: INLINE_MAP, startLine: 0, endLine: 1 });
         emit("Debugger.scriptParsed", { scriptId: "10", url: "https://shop.example/plain.js", sourceMapURL: "" });
+        emit("Debugger.scriptParsed", { scriptId: "11", url: "https://shop.example/assets/app.min.js", sourceMapURL: "" });
         return { debuggerId: "d1" };
+      case "Debugger.setBreakpoint":
+        return { breakpointId: `bp-${++breakpoints}`, actualLocation: params.location };
+      case "Debugger.removeBreakpoint":
+        if (control.failRemove) throw new Error("No breakpoint for given id found");
+        return {};
       case "Debugger.setBreakpointByUrl":
         if (params.url.endsWith("refused.js")) throw new Error("bad location");
         return { breakpointId: `bp-${++breakpoints}`, locations: params.url.endsWith("app.min.js") ? [{ scriptId: "9", lineNumber: params.lineNumber, columnNumber: params.columnNumber ?? 0 }] : [] };
@@ -81,7 +88,7 @@ function scriptedTab() {
       },
     };
   };
-  return { sent, opened, opener, methods: () => sent.map((s) => s.method) };
+  return { sent, opened, opener, control, methods: () => sent.map((s) => s.method) };
 }
 
 let slowIds = 0;
@@ -240,8 +247,9 @@ test("logpoints go only on tabs the command opened, map original sources, and en
     const mapped = await slowOk(47, "devtools.logpoint", { tab, url: "src/cart.ts", line: 12, expression: "cart.total", condition: "cart.total > 0" });
     assert.deepEqual([mapped.url, mapped.line, mapped.column, mapped.bound, mapped.matchedScript], ["https://shop.example/assets/app.min.js", 1, 15, true, true]);
     assert.deepEqual(mapped.original, { source: "src/cart.ts", line: 12, column: null });
-    const set = scripted.sent.find((s) => s.method === "Debugger.setBreakpointByUrl");
-    assert.deepEqual([set.params.lineNumber, set.params.columnNumber], [0, 14]);
+    const set = scripted.sent.find((s) => s.method === "Debugger.setBreakpoint");
+    assert.deepEqual(set.params.location, { scriptId: "9", lineNumber: 0, columnNumber: 14 }, "bound to the mapped script, not every script sharing its URL");
+    assert.equal(scripted.sent.filter((s) => s.method === "Debugger.setBreakpointByUrl").length, 0);
     assert.match(set.params.condition, /return false; \}\)\(\)$/);
     const direct = await slowOk(47, "devtools.logpoint", { tab, url: "https://shop.example/plain.js", line: 3, expression: "1" });
     assert.equal(direct.pending, true);
@@ -249,6 +257,10 @@ test("logpoints go only on tabs the command opened, map original sources, and en
     assert.deepEqual((await client.ok("devtools.logpoints")).map((l) => l.id), [mapped.id, direct.id]);
     assert.deepEqual(await socketClient(48).ok("devtools.logpoints"), [], "another connection sees none of them");
     assert.equal((await socketClient(48).call("devtools.clearLogpoint", { id: mapped.id })).error.code, "bad_request");
+    scripted.control.failRemove = true;
+    assert.equal((await client.call("devtools.clearLogpoint", { id: mapped.id })).error.code, "failed", "a removal the tab refused isn't reported as cleared");
+    assert.ok((await client.ok("devtools.logpoints")).some((l) => l.id === mapped.id), "it stays listed so it can be retried");
+    scripted.control.failRemove = false;
     assert.deepEqual(await client.ok("devtools.clearLogpoint", { id: mapped.id }), { cleared: 1 });
     assert.equal((await slow(47, "devtools.logpoint", { tab, url: "x.js", line: 1, expression: "" })).error.code, "bad_request");
     assert.equal(heldLogpointSessions(), 1);
@@ -321,6 +333,22 @@ test("a refused first logpoint closes its session, and concurrent logpoints can'
     assert.equal(liveInspectionSessions(), 0);
   } finally {
     delete globalThis.acTestCliOwns;
+    setInspectionTransport(null);
+  }
+});
+
+test("field data is never asked for a trace with no page load to tie it to", async () => {
+  const { tab } = await freshWindow("https://shop.example/");
+  const scripted = scriptedTab(TRACE.traceEvents.filter((e) => e.name !== "navigationStart"));
+  setInspectionTransport(scripted.opener);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => assert.fail("no unattributed field data request");
+  try {
+    const result = await slowOk(53, "devtools.perfTrace", { tab, durationMs: 250, includeFieldData: true, fieldDataKey: "AIzaFixtureKey_123" });
+    assert.equal(result.navigation, null);
+    assert.match(result.fieldData.skipped, /no page load/);
+  } finally {
+    globalThis.fetch = realFetch;
     setInspectionTransport(null);
   }
 });

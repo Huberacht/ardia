@@ -794,18 +794,20 @@ results instead of raw protocol data. Every method is in `methods` with its sche
 | `devtools.stackTrace` | An error and its `Error.cause` chain with every frame mapped through source maps. Maps come only from what you pass: `sourceMaps` (a map, its JSON or a `data:` URL) or `scripts` (a script's text, whose inline `data:` map is read). Ardia fetches nothing |
 | `devtools.causeChainFunction` | A function declaration for `Runtime.callFunctionOn` on an error that answers its cause chain in the shape `devtools.stackTrace` takes |
 | `devtools.styles` | For the first element matching `selector`, which declaration wins each property (selector, specificity, origin, stylesheet line), each overridden one with why it lost, and the computed value |
-| `devtools.logpoint`, `devtools.logpoints`, `devtools.clearLogpoint` | Non-pausing logpoints on a tab the command opened; `url` may be an original source path named by a script's inline `data:` source map. The condition wraps the expression so it always answers `false`, so the page never pauses. The expression and condition are **not** a sandbox: they run as the page's own JavaScript where the line runs, with the page's privileges, and can change page state, so keep them to reads. At most 50 per connection; they end when the connection closes or control stops |
+| `devtools.logpoint`, `devtools.logpoints`, `devtools.clearLogpoint` | Non-pausing logpoints on a tab the command opened; `url` may be an original source path named by a script's inline `data:` source map, and then the logpoint binds to that one script (`Debugger.setBreakpoint` by script id), not to every script sharing its URL. A logpoint the tab won't remove stays listed so it can be cleared again. The condition wraps the expression so it always answers `false`, so the page never pauses. The expression and condition are **not** a sandbox: they run as the page's own JavaScript where the line runs, with the page's privileges, and can change page state, so keep them to reads. At most 50 per connection; they end when the connection closes or control stops |
+
+**Scope.** A trace counts only the inspected tab: its main frame's navigation, its frames' requests and its renderer process, from the selected navigation's start up to the next one.
 
 **Isolation.** `InspectionSession` (`state/automation/devToolsSession.ts`) sends only `INSPECTION_METHODS`, never an
 emulation, network or audit override, so it can't reset what the command or DevTools set. Each session belongs to the
 connection that opened it and ends when that connection closes or control stops, even mid-trace or while still
-opening; once it starts closing it refuses new commands and waits for the ones in flight before it cleans up. When it closes it removes its
+opening; once it starts closing it refuses new commands and waits for the ones in flight, for at most two seconds, before it cleans up; the transport is always closed, and an open still pending when its connection closes is abandoned at once. When it closes it removes its
 breakpoints, ends its trace and disables only the domains it enabled. Each trace is recorded into a buffer owned by
 that call and analysed into a model built for that call, so nothing carries over from one trace to the next.
 
 **Field data is opt-in.** `includeFieldData: true` with your `fieldDataKey` asks the public field-data service for
 real-user metrics of the traced page's origin, read from the tab after the trace ends: only the origin, never a path or
-query. When the page changed origin during the trace, `fieldData` is `{skipped}` instead. Nothing is sent without it,
+query. When the trace has no page load to tie it to (record with `reload`), or the page changed origin during the trace, `fieldData` is `{skipped}` instead. Nothing is sent without it,
 and never for a private window's page.
 
 **Engine.** The tab-reading methods need an event-capable inspection session from the engine (#3993); until it lands

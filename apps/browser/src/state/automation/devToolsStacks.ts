@@ -19,16 +19,45 @@ const field = (value: unknown, key: string): unknown => (isFields(value) && Obje
 const text = (value: unknown, max = MAX_TEXT): string | null => (typeof value === "string" ? value.slice(0, max) : null);
 const whole = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null);
 
-const FRAME_LINE = /^\s*at (?:(async) )?(?:(.+?) \()?((?:[a-z][\w+.-]*:)?[^\s()]+?):(\d+):(\d+)\)?\s*$/i;
+const LOCATION = /^((?:[a-z][\w+.-]*:)?\S+?):(\d+):(\d+)$/i;
+const FRAME_PREFIX = /^\s*at (?:(async) )?/;
+
+function frameOfLine(line: string): Frame | null {
+  const prefix = FRAME_PREFIX.exec(line);
+  if (!prefix) return null;
+  const body = line.slice(prefix[0].length).trimEnd();
+  let functionName: string | null = null;
+  let location = body;
+  if (body.endsWith(")")) {
+    const open = body.lastIndexOf(" (");
+    if (open > 0) {
+      functionName = body.slice(0, open);
+      location = body.slice(open + 2, -1);
+    } else if (body.startsWith("(")) location = body.slice(1, -1);
+  }
+  let match = LOCATION.exec(location);
+  if (!match && functionName !== null) {
+    const opens = [...body.matchAll(/ \(/g)].map((m) => m.index!);
+    for (const at of opens) {
+      match = LOCATION.exec(body.slice(at + 2, -1));
+      if (match) {
+        functionName = body.slice(0, at);
+        break;
+      }
+    }
+  }
+  if (!match) return null;
+  const lineNo = Number(match[2]), column = Number(match[3]);
+  if (!Number.isSafeInteger(lineNo) || !Number.isSafeInteger(column) || lineNo < 1 || column < 1) return null;
+  return { functionName: functionName ? functionName.slice(0, 512) : null, url: match[1]!.slice(0, 2048), line: lineNo, column, async: prefix[1] ? "await" : null };
+}
 
 export function framesOfStack(stack: string): Frame[] {
   const frames: Frame[] = [];
   for (const line of stack.split("\n").slice(0, 512)) {
-    const match = FRAME_LINE.exec(line);
-    if (!match) continue;
-    const lineNo = Number(match[4]), column = Number(match[5]);
-    if (!Number.isSafeInteger(lineNo) || !Number.isSafeInteger(column) || lineNo < 1 || column < 1) continue;
-    frames.push({ functionName: match[2] ? match[2].slice(0, 512) : null, url: match[3]!.slice(0, 2048), line: lineNo, column, async: match[1] ? "await" : null });
+    const frame = frameOfLine(line.slice(0, 4096));
+    if (!frame) continue;
+    frames.push(frame);
     if (frames.length >= MAX_FRAMES) break;
   }
   return frames;
@@ -82,7 +111,11 @@ function rawChainOf(input: unknown): ChainLink[] {
   const links: ChainLink[] = [];
   const seen = new Set<unknown>();
   let current: unknown = field(input, "error") ?? input;
-  while (isFields(current) && links.length < MAX_CAUSE_DEPTH && !seen.has(current)) {
+  while (current !== undefined && current !== null && links.length < MAX_CAUSE_DEPTH && !seen.has(current)) {
+    if (!isFields(current)) {
+      if (typeof current === "string" || typeof current === "number" || typeof current === "boolean" || typeof current === "bigint") links.push({ name: null, message: String(current).slice(0, MAX_TEXT), frames: [] });
+      break;
+    }
     seen.add(current);
     links.push(linkOf(current));
     current = field(current, "cause");

@@ -27,6 +27,7 @@ export const INSPECTION_METHODS: ReadonlySet<string> = new Set([
   "CSS.getComputedStyleForNode",
   "Debugger.enable",
   "Debugger.disable",
+  "Debugger.setBreakpoint",
   "Debugger.setBreakpointByUrl",
   "Debugger.removeBreakpoint",
   "Page.reload",
@@ -39,12 +40,23 @@ const DISABLE_OF: Readonly<Record<string, string>> = {
   "Debugger.enable": "Debugger.disable",
 };
 
+export const TEARDOWN_WAIT_MS = 2_000;
+export const CLEANUP_STEP_MS = 1_000;
+export const OPEN_TIMEOUT_MS = 10_000;
+
+function within<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<T>((resolve) => (timer = setTimeout(() => resolve(fallback), ms)));
+  return Promise.race([work.catch(() => fallback), deadline]).finally(() => clearTimeout(timer));
+}
+
 export const UNAVAILABLE = "This Ardia can't open a DevTools inspection session on a tab yet.";
 export const SESSION_ENDED = "The inspection session ended before it finished.";
 
 let opener: TransportOpener | null = null;
 const byConnection = new Map<number, Set<InspectionSession>>();
 const connectionEpochs = new Map<number, number>();
+const pendingOpens = new Map<number, Set<() => void>>();
 let controlEpoch = 0;
 
 export const setInspectionTransport = (next: TransportOpener | null) => void (opener = next);
@@ -88,7 +100,7 @@ export class InspectionSession {
       if (method === "Tracing.start") this.tracing = true;
       if (method === "Tracing.end") this.tracing = false;
       if (Object.hasOwn(DISABLE_OF, method) && !this.enabled.includes(method)) this.enabled.push(method);
-      if (method === "Debugger.setBreakpointByUrl" && typeof reply.breakpointId === "string") this.breakpoints.add(reply.breakpointId);
+      if ((method === "Debugger.setBreakpointByUrl" || method === "Debugger.setBreakpoint") && typeof reply.breakpointId === "string") this.breakpoints.add(reply.breakpointId);
       if (method === "Debugger.removeBreakpoint" && typeof params.breakpointId === "string") this.breakpoints.delete(params.breakpointId);
       return reply;
     });
@@ -134,20 +146,23 @@ export class InspectionSession {
   }
 
   private async shutDown() {
-    await Promise.allSettled([...this.inFlight]);
-    const quietly = (method: string, params: CdpParams = {}) => this.transport.send(method, params).catch(() => ({}));
-    if (this.tracing) await quietly("Tracing.end");
-    for (const breakpointId of this.breakpoints) await quietly("Debugger.removeBreakpoint", { breakpointId });
-    for (const enable of [...this.enabled].reverse()) await quietly(DISABLE_OF[enable]!);
-    this.tracing = false;
-    this.breakpoints.clear();
-    this.enabled = [];
-    this.listeners.clear();
-    this.unsubscribe();
-    const own = byConnection.get(this.connection);
-    own?.delete(this);
-    if (own && !own.size) byConnection.delete(this.connection);
-    await this.transport.close().catch(() => {});
+    try {
+      await within(Promise.allSettled([...this.inFlight]), TEARDOWN_WAIT_MS, []);
+      const quietly = (method: string, params: CdpParams = {}) => within(this.transport.send(method, params), CLEANUP_STEP_MS, {});
+      if (this.tracing) await quietly("Tracing.end");
+      for (const breakpointId of this.breakpoints) await quietly("Debugger.removeBreakpoint", { breakpointId });
+      for (const enable of [...this.enabled].reverse()) await quietly(DISABLE_OF[enable]!);
+    } finally {
+      this.tracing = false;
+      this.breakpoints.clear();
+      this.enabled = [];
+      this.listeners.clear();
+      this.unsubscribe();
+      const own = byConnection.get(this.connection);
+      own?.delete(this);
+      if (own && !own.size) byConnection.delete(this.connection);
+      await within(this.transport.close(), CLEANUP_STEP_MS, undefined);
+    }
   }
 }
 
@@ -157,12 +172,28 @@ export async function openInspection(tabId: string, connection: number): Promise
   if (!opener) throw new OpError("failed", UNAVAILABLE);
   const startedIn = epochOf(connection);
   const controlStartedIn = controlEpoch;
-  const transport = await opener(tabId);
+  const opening = opener(tabId);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel: () => void = () => {};
+  const timedOut = new Promise<"timed-out">((resolve) => (timer = setTimeout(() => resolve("timed-out"), OPEN_TIMEOUT_MS)));
+  const cancelled = new Promise<"cancelled">((resolve) => (cancel = () => resolve("cancelled")));
+  const waiting = pendingOpens.get(connection) ?? new Set<() => void>();
+  waiting.add(cancel);
+  pendingOpens.set(connection, waiting);
+  const outcome = await Promise.race([opening, timedOut, cancelled]).finally(() => {
+    clearTimeout(timer);
+    waiting.delete(cancel);
+    if (!waiting.size && pendingOpens.get(connection) === waiting) pendingOpens.delete(connection);
+  });
+  if (outcome === "timed-out" || outcome === "cancelled") {
+    void opening.then((late) => late.close()).catch(() => {});
+    throw new OpError("failed", outcome === "cancelled" ? STOPPED : "The tab didn't open an inspection session in time.");
+  }
   if (epochOf(connection) !== startedIn || controlEpoch !== controlStartedIn) {
-    await transport.close().catch(() => {});
+    await within(outcome.close(), CLEANUP_STEP_MS, undefined);
     throw new OpError("failed", STOPPED);
   }
-  return new InspectionSession(tabId, connection, transport);
+  return new InspectionSession(tabId, connection, outcome);
 }
 
 export async function withInspection<T>(tabId: string, connection: number, work: (session: InspectionSession) => Promise<T>): Promise<T> {
@@ -176,10 +207,12 @@ export async function withInspection<T>(tabId: string, connection: number, work:
 
 export async function closeInspectionsFor(connection: number) {
   connectionEpochs.set(connection, epochOf(connection) + 1);
+  for (const cancel of [...(pendingOpens.get(connection) ?? [])]) cancel();
   await Promise.all([...(byConnection.get(connection) ?? [])].map((session) => session.close()));
 }
 
 export async function closeAllInspections() {
   controlEpoch++;
+  for (const waiting of [...pendingOpens.values()]) for (const cancel of [...waiting]) cancel();
   await Promise.all([...byConnection.values()].flatMap((set) => [...set]).map((session) => session.close()));
 }
