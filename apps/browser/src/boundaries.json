@@ -1652,6 +1652,16 @@
     "D9"
    ],
    "detected": false
+  },
+  {
+   "id": "page-command:copyLink",
+   "source": "page",
+   "guard": "WebKit's page menu sends the link, image or media address the page holds; only a non-empty string is copied, and only after cleanUrlReport strips tracking parameters",
+   "checks": [
+    "apps/browser/src/state/site/pageLinkCopy.ts#copyLinkFromPageMenu",
+    "packages/ardiacore/ios/WebKitContextMenu.swift#copyAddress"
+   ],
+   "detected": false
   }
  ]
 }

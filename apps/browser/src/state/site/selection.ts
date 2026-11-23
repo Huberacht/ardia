@@ -1,6 +1,6 @@
 import { setSearchEngineName, setSelectionPopover, type SearchEngineIdentity } from "../../platform/pageOptions";
-import { chooseTextFragment, cleanUrl, searchUrl, withTextFragment, type SelectionContext } from "@ardia/core";
-import { copyText } from "../../platform/clipboard";
+import { chooseTextFragment, cleanUrl, cleanUrlReport, searchUrl, withTextFragment, type CleanedUrl, type SelectionContext } from "@ardia/core";
+import { copyLink } from "../../platform/clipboard";
 import { create } from "zustand";
 import { webviews } from "../../platform/webviews";
 import type { PageSelection } from "../../platform/tabs";
@@ -82,20 +82,20 @@ const SELECTION_CONTEXT = `(() => {
   }));
 })()`;
 
-async function linkToSelection(tabId: string): Promise<string | null> {
+async function linkToSelection(tabId: string): Promise<CleanedUrl | null> {
   const url = store().tabs[tabId]?.url;
   const web = webviews.get(tabId);
   if (!url || !/^https?:/.test(url) || !web) return null;
   const context = await web.evaluate<SelectionContext>(SELECTION_CONTEXT);
   const fragment = context && !("error" in context) ? chooseTextFragment(context) : null;
-  return fragment ? withTextFragment(cleanUrl(url), fragment) : null;
+  return fragment ? cleanUrl(withTextFragment(url, fragment)) : null;
 }
 
 export async function copyLinkToSelection(tabId: string) {
   const link = await linkToSelection(tabId);
   const windowId = store().tabs[tabId]?.windowId;
   if (!link || !windowId) return;
-  copyText(link);
+  copyLink(link);
   showToast(windowId, "Copied Quote Link", "Links directly to the selected text.", { icon: "quote.bubble.fill" });
 }
 
@@ -118,9 +118,9 @@ export async function copyPageUrl(tabId: string, confirmedUrl?: string) {
   const tab = store().tabs[tabId];
   const url = confirmedUrl ?? tab?.url;
   if (!tab || !url) return;
-  const clean = cleanUrl(url);
-  copyText(clean);
-  noteUrlCopied(awaitsFirstPage(tabId));
+  const { url: clean, removedTracker } = cleanUrlReport(url);
+  copyLink(clean);
+  noteUrlCopied(awaitsFirstPage(tabId), removedTracker);
   const title = clean !== url ? "Copied a clean link without trackers" : "Copied Current URL";
   const web = webviews.get(tabId);
   const selected = /^https?:/.test(tab.url) && web ? await web.evaluate<boolean>(HAS_SELECTION) : false;

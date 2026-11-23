@@ -40,6 +40,7 @@ import { endPageDocument, forgetPageDocument, notePageDocument } from "../../sta
 import { leftPage, pageAskedToClose, pageEnded } from "../../state/tabs/pageEvents";
 import { copyLinkToSelection, searchSelection, setPageSelection } from "../../state/site/selection";
 import { shareFromPage } from "../../state/site/share";
+import { copyLinkFromPageMenu } from "../../state/site/pageLinkCopy";
 import { useAutoPictureInPicture } from "../../state/media/pip";
 import { requestDisplayMedia } from "../../state/media/screenShare";
 import { setNowPlaying, setPictureInPictureState } from "../../state/media/media";
@@ -344,6 +345,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         if (command === "search") searchSelection(tabId, text, modifiers);
         else if (command === "share" && share) void shareFromPage(tab(), share, anchor);
         else if (command === "copyLinkToHighlight") void copyLinkToSelection(tabId);
+        else if (command === "copyLink") copyLinkFromPageMenu(text);
         else if (command === "escape") escapePressed(tabId, "page");
         else if (command === "hideElement" && point) void startHidingElement(tabId, point);
       }}

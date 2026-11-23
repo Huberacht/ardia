@@ -972,6 +972,7 @@ __define("packages/core/src/cleanUrl.ts", function (exports, __require) {
   __export(exports, "cleanUrlReport", () => cleanUrlReport);
   __export(exports, "cleanUrl", () => cleanUrl);
   __export(exports, "markdownLink", () => markdownLink);
+  __export(exports, "linkLines", () => linkLines);
 
 const GLOBAL_PARAMS = new Set([
   "gclid", "gclsrc", "dclid", "gbraid", "wbraid", "gad_source", "gad_campaignid", "_ga", "_gl", "srsltid",
@@ -1021,10 +1022,12 @@ function isTrackingParam(name        , hostname = "")          {
   return siteRules(hostname).some((r) => r.params.includes(key) || r.prefixes?.some((p) => key.startsWith(p)));
 }
 
-                                                                  
+                                                                               
+                                                                                                 
+                                                                          
 
-function cleanUrlReport(url        )             {
-  const unchanged = { url, removedTracker: false };
+function cleanUrlReport(url        )                 {
+  const unchanged = { url: url              , removedTracker: false };
   const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(url);
   if (!match?.[2]) return unchanged;
   let hostname = "";
@@ -1040,15 +1043,20 @@ function cleanUrlReport(url        )             {
   const tracks = (pair        ) => isTrackingParam(decodeName(pair.split("=")[0] ), hostname);
   const kept = pairs.filter((pair) => pair && !tracks(pair));
   if (kept.length === pairs.length) return unchanged;
-  return { url: `${base}${kept.length ? `?${kept.join("&")}` : ""}${hash}`, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) };
+  const cleaned = `${base}${kept.length ? `?${kept.join("&")}` : ""}${hash}`              ;
+  return { url: cleaned, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) };
 }
 
-function cleanUrl(url        )         {
+function cleanUrl(url        )             {
   return cleanUrlReport(url).url;
 }
 
-function markdownLink(title        , url        )         {
-  return `[${(title || url).replace(/([[\]])/g, "\\$1")}](${cleanUrl(url)})`;
+function markdownLink(title        , url        )           {
+  return `[${(title || url).replace(/([[\]])/g, "\\$1")}](${cleanUrl(url)})`            ;
+}
+
+function linkLines(lines                     , markdown         )           {
+  return (markdown && lines.length > 1 ? lines.map((line) => `- ${line}`).join("\n") : lines.join("\n"))            ;
 }
 
 });

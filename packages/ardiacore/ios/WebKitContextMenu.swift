@@ -78,10 +78,7 @@ struct WebKitMenuCommands {
 
   func copyAddress(_ url: URL?) {
     guard let url else { return }
-    let board = NSPasteboard.general
-    board.clearContents()
-    board.writeObjects([url as NSURL])
-    board.setString(url.absoluteString, forType: .string)
+    tab.emit("command", ["command": "copyLink", "text": url.absoluteString])
   }
 
   static let findMedia = """

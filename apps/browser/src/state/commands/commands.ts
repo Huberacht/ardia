@@ -1,5 +1,5 @@
 import { foreignWriteHooks } from "../browser/foreignWriteHooks";
-import { copyText } from "../../platform/clipboard";
+import { copyLink } from "../../platform/clipboard";
 import { openExternalURL } from "../../platform/app";
 import { pickFiles, prompt } from "../../platform/dialogs";
 import type { CommandEvent } from "../../platform/commands";
@@ -232,7 +232,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
     case "copyUrlAsMarkdown":
       if ((!targeted && copySelectedTabUrls(s, windowId, true)) || !page) return;
       noteUrlCopied(awaitsFirstPage(page.id));
-      return copyText(markdownLink(page.customTitle || page.title, page.url));
+      return copyLink(markdownLink(page.customTitle || page.title, page.url));
     case "findInPage":
       if (page) expectFocus(windowId, findFocus(page.id));
       return page ? openFind(page.id, { replace: false }) : undefined;

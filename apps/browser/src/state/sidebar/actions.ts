@@ -1,6 +1,6 @@
 import { foreignWriteHooks } from "../browser/foreignWriteHooks";
-import { cleanUrl, markdownLink } from "@ardia/core";
-import { copyText } from "../../platform/clipboard";
+import { cleanUrl, linkLines, markdownLink } from "@ardia/core";
+import { copyLink } from "../../platform/clipboard";
 import { prompt } from "../../platform/dialogs";
 import { updateFolder } from "../live/store";
 import { useBrowser } from "../browser/store";
@@ -127,7 +127,7 @@ export function copyUrls(ids: string[], markdown: boolean) {
   const tabs = ids.map((id) => store().tabs[id]).filter((t): t is Tab => !!t?.url);
   if (!tabs.length) return;
   const lines = tabs.map((t) => (markdown ? markdownLink(tabTitle(t), t.url) : cleanUrl(t.url)));
-  copyText(markdown && lines.length > 1 ? lines.map((l) => `- ${l}`).join("\n") : lines.join("\n"));
+  copyLink(linkLines(lines, markdown));
   for (const t of tabs) noteUrlCopied(awaitsFirstPage(t.id));
 }
 

@@ -1,4 +1,4 @@
-import { suggestionKey, type SearchScope } from "@ardia/core";
+import { cleanUrl, suggestionKey, type SearchScope } from "@ardia/core";
 import { useEffect, useMemo, type RefObject } from "react";
 import type { TextInput } from "react-native";
 import { fullUrlShown, previewText } from "./barText";
@@ -74,7 +74,7 @@ export function useBarItems({
     [scope, edited, previewing, typed, shownCompletion, windowId],
   );
   const shownUrl = fullUrlShown(value, current);
-  useEffect(() => void copyFieldAs(shownUrl && value, shownUrl), [value, shownUrl]);
+  useEffect(() => void copyFieldAs(shownUrl && value, shownUrl ? cleanUrl(shownUrl) : null), [value, shownUrl]);
   useEffect(() => () => void copyFieldAs(null, null), []);
   return { items, completion, via, inline, shownCompletion, value, selectedIndex, current, tabScope, previewing, rowsHover, rowsHeld: rows.held, releaseRows: rows.release, shownUrl };
 }

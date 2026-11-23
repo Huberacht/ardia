@@ -72,7 +72,7 @@ export type PageShare = {
   fileUrl?: string;
 };
 export type PageCommand = {
-  command: "search" | "ask" | "copyLinkToHighlight" | "escape" | "share" | "hideElement";
+  command: "search" | "ask" | "copyLinkToHighlight" | "copyLink" | "escape" | "share" | "hideElement";
   text: string;
   point?: [number, number];
   modifiers?: { metaKey?: boolean; shiftKey?: boolean; altKey?: boolean; middle?: boolean };
