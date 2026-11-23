@@ -18,6 +18,9 @@ public final class LookModule: Module {
         MainActor.assumeIsolated {
           GlassMetal.shared.onFailed = { PendingCounts.add(PendingCounts.glassShadersFailed) }
           GlassMetal.shared.prepare()
+          if PhoneTestBuild.isOn, let seconds = UserDefaults.standard.object(forKey: "ArdiaGlassScroll").flatMap({ Double(String(describing: $0)) }), seconds > 0 {
+            GlassLabScroll.start(after: 8, for: seconds)
+          }
           if PhoneTestBuild.flag("ArdiaGlassProbe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
               MainActor.assumeIsolated {
