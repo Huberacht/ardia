@@ -17,7 +17,7 @@ class FaviconTouchThrottleTests(unittest.TestCase):
             executable = pathlib.Path(directory) / "throttle"
             build = subprocess.run([
                 "clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-g",
-                "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-fno-omit-frame-pointer",
                 "-I", str(ROOT.parents[2]), str(SCENARIOS), "-o", str(executable),
             ], capture_output=True, text=True, timeout=180)
             self.assertEqual(build.returncode, 0, build.stderr)

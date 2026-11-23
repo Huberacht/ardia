@@ -97,16 +97,69 @@ void TenThousandIconsInADayStayBounded() {
   Expect(!throttle.Holds(Icon(kIcons - static_cast<int>(kCap))), "re-adding evicts the oldest kept icon");
 }
 
-void ClockGoingBackKeepsOrder() {
+void HotIconSurvivesColdChurn() {
+  Throttle throttle(kDay, kCap);
+  const Clock::time_point start{};
+  const Key hot{"/profile/Default", "https://hot.example/favicon.ico"};
+  Expect(throttle.ShouldTouch(hot, start), "the hot icon touches first");
+  constexpr int kCold = 3 * static_cast<int>(kCap);
+  for (int i = 0; i < kCold; ++i) {
+    const Clock::time_point now = start + std::chrono::seconds(i + 1);
+    if (throttle.ShouldTouch(hot, now)) {
+      Expect(false, "the hot icon stays throttled through cold churn");
+      break;
+    }
+    Expect(throttle.ShouldTouch(Icon(i), now), "each cold icon touches");
+    if (throttle.size() > kCap) {
+      Expect(false, "cold churn never passes the cap");
+      break;
+    }
+  }
+  Expect(throttle.Holds(hot), "the hot icon is still held");
+  Expect(throttle.size() == kCap, "cold churn settles at the cap");
+  Expect(!throttle.Holds(Icon(0)), "the first cold icon is evicted");
+  Expect(throttle.Holds(Icon(kCold - 1)), "the newest cold icon is kept");
+  Expect(throttle.ShouldTouch(hot, start + kDay), "the hot icon still touches once its day is up");
+}
+
+void BackwardClockKeepsEachEntrysOwnDay() {
   Throttle throttle(kDay, 3);
   const Clock::time_point start = Clock::time_point{} + kDay;
+  const Clock::time_point earlier = start - std::chrono::hours(1);
   Expect(throttle.ShouldTouch(Icon(1), start), "first touches");
-  Expect(throttle.ShouldTouch(Icon(2), start - std::chrono::hours(1)), "an earlier reading still touches a new icon");
+  Expect(throttle.ShouldTouch(Icon(2), earlier), "an earlier reading still touches a new icon");
   Expect(!throttle.ShouldTouch(Icon(1), start - std::chrono::hours(2)), "an earlier reading never re-touches");
+  Expect(!throttle.ShouldTouch(Icon(2), earlier + kDay - std::chrono::nanoseconds(1)), "the backward entry is throttled until its own day is up");
+  Expect(throttle.ShouldTouch(Icon(2), earlier + kDay), "the backward entry touches exactly a day after its own reading");
+  Expect(throttle.Holds(Icon(1)), "the later entry is not dropped early");
+  Expect(!throttle.ShouldTouch(Icon(1), start + kDay - std::chrono::nanoseconds(1)), "the later entry keeps its own day");
+  Expect(throttle.ShouldTouch(Icon(1), start + kDay), "the later entry touches at its own day");
+}
+
+void LeastRecentlyUsedIsEvictedFirst() {
+  Throttle throttle(kDay, 3);
+  const Clock::time_point start{};
+  Expect(throttle.ShouldTouch(Icon(1), start), "first touches");
+  Expect(throttle.ShouldTouch(Icon(2), start), "second touches");
   Expect(throttle.ShouldTouch(Icon(3), start), "third touches");
-  Expect(throttle.ShouldTouch(Icon(4), start), "fourth touches past the cap");
-  Expect(!throttle.Holds(Icon(1)) && throttle.Holds(Icon(2)), "the first-touched icon is evicted first");
+  Expect(!throttle.ShouldTouch(Icon(1), start + std::chrono::seconds(1)), "a throttled use of the first");
+  Expect(throttle.ShouldTouch(Icon(4), start + std::chrono::seconds(2)), "fourth touches past the cap");
+  Expect(throttle.Holds(Icon(1)) && !throttle.Holds(Icon(2)), "the least recently used icon is evicted, not the oldest touch");
   Expect(throttle.size() == 3, "cap of three holds");
+}
+
+void ExtremeClockReadingsDoNotOverflow() {
+  Throttle throttle(kDay, 4);
+  const Clock::time_point lowest = Clock::time_point::min();
+  const Clock::time_point highest = Clock::time_point::max();
+  Expect(throttle.ShouldTouch(Icon(1), lowest), "the lowest reading touches");
+  Expect(!throttle.ShouldTouch(Icon(1), lowest + kDay - std::chrono::nanoseconds(1)), "just under a day after the lowest is throttled");
+  Expect(throttle.ShouldTouch(Icon(2), highest), "the highest reading touches and drops the lowest");
+  Expect(!throttle.Holds(Icon(1)), "the lowest entry expired across the epoch");
+  Expect(!throttle.ShouldTouch(Icon(2), lowest), "a reading far behind never re-touches");
+  Expect(throttle.ShouldTouch(Icon(3), Clock::time_point{} - std::chrono::hours(1)), "a reading just before the epoch touches");
+  Expect(!throttle.ShouldTouch(Icon(3), Clock::time_point{} + kDay - std::chrono::hours(1) - std::chrono::nanoseconds(1)), "throttled across the epoch until its day is up");
+  Expect(throttle.ShouldTouch(Icon(3), Clock::time_point{} + kDay - std::chrono::hours(1)), "touches across the epoch at its day");
 }
 
 void ZeroCapStillBounded() {
@@ -122,7 +175,10 @@ int main() {
   ActiveEntriesStayThrottled();
   ExpiredEntriesAreEvictedAndRetouched();
   TenThousandIconsInADayStayBounded();
-  ClockGoingBackKeepsOrder();
+  HotIconSurvivesColdChurn();
+  BackwardClockKeepsEachEntrysOwnDay();
+  LeastRecentlyUsedIsEvictedFirst();
+  ExtremeClockReadingsDoNotOverflow();
   ZeroCapStillBounded();
   if (failures) {
     std::printf("%d failures\n", failures);
