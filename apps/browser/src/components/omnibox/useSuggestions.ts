@@ -3,7 +3,6 @@ import {
   createSuggestFetcher,
   engineById,
   findBang,
-  listsRoutesApart,
   prepareSuggestions,
   suggestRequestUrl,
   type RemoteSite,
@@ -12,8 +11,7 @@ import {
   type SuggestionResult,
 } from "@ardia/core";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { consentToken } from "../../state/telemetry/client";
-import { noteLateSuggestionsBelow, noteRoutesListed, noteSiteSuggestionShown } from "../../state/telemetry/inlineCompletionCounts";
+import { noteLateSuggestionsBelow, noteSiteSuggestionShown } from "../../state/telemetry/inlineCompletionCounts";
 import { bookmarksByUrl } from "../../state/bookmarks/bookmarks";
 import { useMenuBarRevision } from "../../state/commands/commandShortcuts";
 import { useSettings } from "../../state/browser/hooks";
@@ -183,10 +181,5 @@ export function useSuggestions({
   useEffect(() => {
     if (siteListed) noteSiteSuggestionShown();
   }, [siteListed, query]);
-  const routesApart = !scope && listsRoutesApart(result.items);
-  const seenUnder = useMemo(() => consentToken(), [result]);
-  useEffect(() => {
-    if (routesApart) noteRoutesListed(seenUnder);
-  }, [routesApart, query]);
   return result;
 }
