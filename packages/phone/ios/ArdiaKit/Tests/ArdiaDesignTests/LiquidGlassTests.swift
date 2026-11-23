@@ -313,6 +313,9 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 35)], now: 1.2, frameMs: frameMs))
     #expect(!LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 12)], now: 1.2, frameMs: frameMs))
     #expect(!LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 35)], now: 4, frameMs: frameMs), "it ages out of the window")
+    let cold = [LiquidGlassRules.CaptureSample(at: 1, ms: 45), LiquidGlassRules.CaptureSample(at: 1.02, ms: 3)]
+    #expect(!LiquidGlassRules.overBudget(cold, now: 1.1, frameMs: frameMs, warm: false), "a glass's first, cold capture warms up outside the limit")
+    #expect(LiquidGlassRules.overBudget(cold + [LiquidGlassRules.CaptureSample(at: 1.04, ms: 30)], now: 1.1, frameMs: frameMs, warm: false), "a slow one after it still counts")
   }
 
   @Test func `a changing backdrop is recaptured when its change ends, not a second later`() {
