@@ -202,6 +202,50 @@ test("only dumps newer than since come back, from every folder, newest five of e
   assert.deepEqual(kept, ["b2", "b3", "b4", "b5", "b6", "g2", "g3", "g4", "g5", "g6"]);
 });
 
+test("a browser dump older than a crash loop's helper dumps and damaged files still comes back", (t) => {
+  if (!gate(t)) return;
+  const loop = folder();
+  put(loop, "browser.dmp", sampleMinidump({ appVersion: "1.4.2" }), 1_700_000_000);
+  for (let index = 0; index < 10; index++) put(loop, `junk${index}.dmp`, Buffer.from("not a dump"), 1_700_000_100 + index);
+  for (let index = 0; index < 32; index++) put(loop, `g${index}.dmp`, sampleMinidump({ process: "gpu-process" }), 1_700_000_200 + index);
+  const kept = collect(0, loop).reports.map((report) => report.incidentId);
+  assert.deepEqual(kept, ["browser", "g27", "g28", "g29", "g30", "g31"]);
+});
+
+test("reading again from the time a report came back with never returns that dump again", (t) => {
+  if (!gate(t)) return;
+  const dir = folder();
+  put(dir, "older.dmp", sampleMinidump({ process: "gpu-process" }), 1_700_000_000.5);
+  put(dir, "newer.dmp", sampleMinidump({ process: "gpu-process" }), 1_700_000_001.25);
+  const first = collect(0, dir).reports;
+  assert.deepEqual(first.map((report) => report.incidentId), ["older", "newer"]);
+  for (let round = 0; round < 3; round++) {
+    assert.deepEqual(collect(Number(first[0].fileTime), dir).reports.map((report) => report.incidentId), ["newer"]);
+    assert.deepEqual(collect(Number(first[1].fileTime), dir).reports, []);
+  }
+});
+
+test("a faulting module whose name is not a module file name is reported as unknown", (t) => {
+  if (!gate(t)) return;
+  const base = 0x7ffa20000000;
+  const image = (path) => {
+    const dir = folder();
+    put(dir, "one.dmp", sampleMinidump({ process: "gpu-process", address: base + 0x10, modules: [{ base, size: 0x1000, path }] }));
+    return collect(0, dir).reports[0].frames[0].image;
+  };
+  const cases = {
+    "C:\\Windows\\plain demo text": "???",
+    "https://cache.internal.example/a-private-document.dll": "???",
+    "file:/private/a-private-document.dll": "???",
+    "x:/private/a-private-document.dll": "???",
+    "x://host/private/a-private-document.dll": "???",
+    "C:\\x\\library": "???",
+    "\\\\server\\share\\dxgi.dll": "dxgi.dll",
+    "C:\\x\\d3d11.DLL": "d3d11.DLL",
+  };
+  for (const [path, expected] of Object.entries(cases)) assert.equal(image(path), expected, path);
+});
+
 test("a file name that is not a plain dump name has no incident id and the fixture writer refuses it", (t) => {
   if (!gate(t)) return;
   const dir = folder();
@@ -210,7 +254,7 @@ test("a file name that is not a plain dump name has no incident id and the fixtu
   const name = (value) => execFileSync(probe, ["name", value], { encoding: "utf8" }).trim();
   assert.equal(name("a.dmp"), "1");
   assert.equal(name("A.DMP"), "1");
-  for (const bad of [".dmp", "a.txt", "..\\a.dmp", "../a.dmp", "C:a.dmp", "a/b.dmp", "a*.dmp", "..", "x".repeat(130) + ".dmp"]) assert.equal(name(bad), "0", bad);
+  for (const bad of [".dmp", "a.txt", "..\\a.dmp", "../a.dmp", "C:a.dmp", "a/b.dmp", "a*.dmp", "..", "x".repeat(130) + ".dmp", "CON.dmp", "nul.dmp", "com1.dmp", "LPT9.dmp", "a.b.dmp"]) assert.equal(name(bad), "0", bad);
   const hex = (value) => execFileSync(probe, ["hex", value], { encoding: "utf8" }).trim();
   assert.equal(hex("00ff10"), "3");
   assert.equal(hex("0g"), "none");

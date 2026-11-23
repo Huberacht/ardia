@@ -30,7 +30,6 @@ constexpr uint32_t kSimulatedCode = 0x517a7ed;
 constexpr uint32_t kAccessViolation = 0xC0000005;
 constexpr uint32_t kInPageError = 0xC0000006;
 constexpr size_t kPerKind = 5;
-constexpr size_t kReadAtMost = 16;
 constexpr size_t kMaxKey = 64;
 constexpr size_t kMaxValue = 256;
 constexpr size_t kMaxModuleName = 2048;
@@ -174,11 +173,12 @@ inline std::optional<std::map<uint32_t, Stream>> Streams(const Reader &reader) {
   return found;
 }
 
-inline std::vector<ModuleRecord> Modules(const Reader &reader, std::optional<uint32_t> rva) {
+inline std::vector<ModuleRecord> Modules(const Reader &reader, std::optional<Stream> stream) {
   std::vector<ModuleRecord> list;
-  if (!rva) return list;
+  if (!stream || stream->size < 4) return list;
+  std::optional<uint32_t> rva = stream->rva;
   auto count = reader.U32(*rva);
-  if (!count || *count > kMaxCount) return list;
+  if (!count || *count > kMaxCount || *count > (stream->size - 4) / 108) return list;
   for (uint32_t index = 0; index < *count; ++index) {
     uint64_t at = static_cast<uint64_t>(*rva) + 4 + static_cast<uint64_t>(index) * 108;
     auto base = reader.U64(at);
@@ -351,10 +351,35 @@ inline bool IsEngineVersion(const std::string &text) {
   return groups >= 2 && groups <= 4;
 }
 
+inline bool IsModuleFileName(const std::string &name) {
+  if (name.size() < 5 || name.size() > 80) return false;
+  for (char c : name) {
+    bool plain = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_' || c == '-' || c == '+';
+    if (!plain) return false;
+  }
+  std::string tail = name.substr(name.size() - 4);
+  for (char &c : tail)
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  return tail == ".dll" || tail == ".exe" || tail == ".sys" || tail == ".drv" || tail == ".ocx" || tail == ".cpl";
+}
+
+inline bool HasScheme(const std::string &path) {
+  size_t colon = path.find(':');
+  if (colon == std::string::npos || colon == 0) return false;
+  if (colon == 1 && path.size() > 2 && path[2] == '\\') return false;
+  for (size_t index = 0; index < colon; ++index) {
+    char c = path[index];
+    bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    if (!letter && (index == 0 || !((c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.'))) return false;
+  }
+  return true;
+}
+
 inline std::string BaseName(const std::string &path) {
+  if (HasScheme(path) || path.find("://") != std::string::npos) return "???";
   size_t cut = path.find_last_of("/\\");
   std::string base = cut == std::string::npos ? path : path.substr(cut + 1);
-  return base.empty() ? "???" : base;
+  return IsModuleFileName(base) ? base : "???";
 }
 
 inline std::optional<Report> Parse(const uint8_t *data, size_t size, std::string incidentId, double fileTime) {
@@ -386,7 +411,8 @@ inline std::optional<Report> Parse(const uint8_t *data, size_t size, std::string
   }
 
   auto info = found->find(kCrashpadInfo);
-  Annotations annotations = ReadAnnotations(reader, info == found->end() ? std::nullopt : std::optional<uint32_t>(info->second.rva));
+  bool infoWhole = info != found->end() && info->second.size >= 52;
+  Annotations annotations = ReadAnnotations(reader, infoWhole ? std::optional<uint32_t>(info->second.rva) : std::nullopt);
   report.process = ProcessOf(annotations);
   auto version = annotations.find("ver");
   if (report.process != "browser" && version != annotations.end() && IsEngineVersion(version->second)) report.engineVersion = version->second;
@@ -402,7 +428,7 @@ inline std::optional<Report> Parse(const uint8_t *data, size_t size, std::string
   }
 
   auto moduleList = found->find(kModuleList);
-  std::vector<ModuleRecord> modules = Modules(reader, moduleList == found->end() ? std::nullopt : std::optional<uint32_t>(moduleList->second.rva));
+  std::vector<ModuleRecord> modules = Modules(reader, moduleList == found->end() ? std::nullopt : std::optional<Stream>(moduleList->second));
   Frame frame;
   frame.image = "???";
   for (const ModuleRecord &module : modules) {
@@ -440,7 +466,13 @@ inline bool IsPlainFileName(std::string_view name) {
 }
 
 inline bool IsDumpFileName(std::string_view name) {
-  if (!IsPlainFileName(name) || name.size() <= 4) return false;
+  if (!IsPlainFileName(name) || name.size() <= 4 || name.size() > 68) return false;
+  for (char c : name.substr(0, name.size() - 4))
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '-')) return false;
+  std::string stem;
+  for (char c : name.substr(0, name.size() - 4)) stem.push_back(c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c);
+  if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL") return false;
+  if (stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem[3] >= '0' && stem[3] <= '9') return false;
   std::string_view tail = name.substr(name.size() - 4);
   const char *want = ".dmp";
   for (size_t index = 0; index < 4; ++index) {
@@ -476,7 +508,7 @@ struct Entry {
 };
 
 inline double UnixMilliseconds(std::filesystem::file_time_type stamp) {
-  auto moment = std::chrono::system_clock::now() + (stamp - std::filesystem::file_time_type::clock::now());
+  auto moment = std::filesystem::file_time_type::clock::to_sys(stamp);
   return static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(moment.time_since_epoch()).count());
 }
 
@@ -533,8 +565,6 @@ inline std::vector<Report> Collect(const std::vector<std::filesystem::path> &fol
   std::vector<Entry> entries;
   for (const std::filesystem::path &folder : folders)
     for (Entry &entry : List(folder, since)) entries.push_back(std::move(entry));
-  std::stable_sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) { return a.time < b.time; });
-  if (entries.size() > kReadAtMost) entries.erase(entries.begin(), entries.end() - static_cast<std::ptrdiff_t>(kReadAtMost));
   std::vector<Report> reports;
   for (const Entry &entry : entries) {
     auto bytes = ReadAll(entry.path);
