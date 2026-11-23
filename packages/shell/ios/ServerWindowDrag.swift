@@ -86,7 +86,9 @@ enum ServerWindowDrag {
   }
 
   private static func untilScrollQuiet(for window: NSWindow) -> CFTimeInterval {
-    inBand(window, pointer()) ? 0 : scrollQuiet - (CACurrentMediaTime() - scrolledAt)
+    let at = pointer()
+    let under = NSWindow.windowNumber(at: at, belowWindowWithWindowNumber: 0) == window.windowNumber
+    return under && inBand(window, at) ? 0 : scrollQuiet - (CACurrentMediaTime() - scrolledAt)
   }
 
   private static let pointerArrives: [Notification.Name] = [
