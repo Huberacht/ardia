@@ -153,11 +153,30 @@ export function outputs(domains) {
 }
 
 const generatedTypes = () => (existsSync(ROOT + GENERATED_TS) ? readdirSync(ROOT + GENERATED_TS).map((file) => GENERATED_TS + file) : []);
-const generatedSwift = () => {
-  if (!existsSync(ROOT + MANIFEST)) return [];
-  const previous = JSON.parse(readFileSync(ROOT + MANIFEST, "utf8"));
-  return Object.values(previous.domains ?? {}).map((domain) => domain.swift).filter((path) => typeof path === "string" && path.startsWith(SWIFT) && existsSync(ROOT + path));
-};
+function previousManifest() {
+  if (!existsSync(ROOT + MANIFEST)) return { domains: {} };
+  let previous;
+  try {
+    previous = JSON.parse(readFileSync(ROOT + MANIFEST, "utf8"));
+  } catch (error) {
+    throw new Error(`${MANIFEST} isn't valid JSON (${error.message}); restore it from git before regenerating`);
+  }
+  if (previous === null || typeof previous !== "object" || previous.domains === null || typeof previous.domains !== "object" || Array.isArray(previous.domains)) {
+    throw new Error(`${MANIFEST} has no domains object; restore it from git before regenerating`);
+  }
+  return previous;
+}
+
+function ownedSwift(name, entry, path) {
+  const owned = [`${SWIFT}${capitalized(name)}Module.swift`, `${SWIFT}${capitalized(name)}Calls.swift`];
+  if (!NAME.test(name) || entry === null || typeof entry !== "object" || !owned.includes(path) || !existsSync(ROOT + path)) return false;
+  if (entry.calls === null || typeof entry.calls !== "object" || Array.isArray(entry.calls) || !Array.isArray(entry.events ?? [])) return false;
+  const domain = { calls: entry.calls, events: Object.fromEntries((entry.events ?? []).map((event) => [event, ""])) };
+  const expected = path.endsWith("Module.swift") ? swiftModule(name, domain) : swiftCalls(name, domain);
+  return readFileSync(ROOT + path, "utf8") === expected;
+}
+
+const generatedSwift = () => Object.entries(previousManifest().domains).filter(([name, entry]) => ownedSwift(name, entry, entry?.swift)).map(([, entry]) => entry.swift);
 const retired = (files) => [...new Set([...generatedTypes(), ...generatedSwift()])].filter((path) => !files.has(path));
 
 export function stale(files) {
@@ -178,8 +197,14 @@ async function main(argv) {
     process.exit(2);
   }
   const files = outputs(await loadDomains());
+  try {
+    retired(files);
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
   if (mode === "--write") {
-    for (const path of retired(files)) rmSync(ROOT + path, { recursive: true });
+    for (const path of retired(files)) rmSync(ROOT + path);
     for (const [path, text] of files) {
       mkdirSync(dirname(ROOT + path), { recursive: true });
       writeFileSync(ROOT + path, text);
