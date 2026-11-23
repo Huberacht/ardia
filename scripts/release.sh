@@ -49,8 +49,15 @@ trap 'rm -rf "$work"' EXIT
 base_feed="$work/appcast.xml"
 preflight_mode=release
 [ "$rc" = 1 ] && preflight_mode=candidate
-node "$stages/preflight.mjs" "$version" --mode "$preflight_mode" --feed "${APPCAST_BASE:-$LATEST_DOWNLOAD_URL/appcast.xml}" --feed-out "$base_feed" \
-  || die "preflight stopped the release (above)"
+preflight_args=(--mode "$preflight_mode" --feed "${APPCAST_BASE:-$LATEST_DOWNLOAD_URL/appcast.xml}" --feed-out "$base_feed" --values-out "$work/values")
+[ "${RELEASE_FEED_MAY_BE_MISSING:-0}" = 1 ] && preflight_args+=(--allow-no-feed)
+node "$stages/preflight.mjs" "$version" "${preflight_args[@]}" || die "preflight stopped the release (above)"
+checked() { sed -n "s/^$1=//p" "$work/values"; }
+project_version="$(checked project_version)"
+release_build="$(checked release_build)"
+min_macos="$(checked min_macos)"
+version_settings=()
+[ "$project_version" = "$version" ] || version_settings=(MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$release_build")
 
 sparkle="${SPARKLE_BIN:-$macos/Pods/Sparkle/bin}"
 sparkle_key_file="${SPARKLE_KEY_FILE:-}"
@@ -78,17 +85,6 @@ framework_src="$chromium_framework"
 framework_engine="${ARDIACORE_FRAMEWORK_ENGINE:-}"
 provisioning_profile="${RELEASE_PROVISIONING_PROFILE:-}"
 read -r -a extra_build_settings <<<"${RELEASE_BUILD_SETTINGS:-}"
-
-pbx="$macos/Ardia.xcodeproj/project.pbxproj"
-project_version="$(sed -n 's/.*MARKETING_VERSION = "\{0,1\}\([^";]*\)"\{0,1\};/\1/p' "$pbx" | sort -u)"
-min_macos="$(sed -n 's/.*MACOSX_DEPLOYMENT_TARGET = \([0-9]*\)\.0;/\1/p' "$pbx" | sort -u)"
-project_build="$(sed -n 's/.*CURRENT_PROJECT_VERSION = \(.*\);/\1/p' "$pbx" | sort -u)"
-version_settings=()
-release_build="$project_build"
-if [ "$project_version" != "$version" ]; then
-  release_build="$((project_build + 1))"
-  version_settings=(MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$release_build")
-fi
 
 notes_body="$work/notes-body.md"
 notes="$root/docs/release-notes/$version.md"

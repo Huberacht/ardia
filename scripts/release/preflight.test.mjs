@@ -101,8 +101,9 @@ test("pbxSettings counts every configuration and quoted values", () => {
 });
 
 test("feedFacts reads the newest build of either channel and whether the version is listed", () => {
-  assert.deepEqual(feedFacts(LIVE, "1.2.2"), { newest: 41, listed: true, items: 3 });
-  assert.deepEqual(feedFacts(LIVE, "1.2.3"), { newest: 41, listed: false, items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.2"), { newest: 41, newestOther: 41, listed: true, items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.3-nightly.2"), { newest: 41, newestOther: 40, listed: true, items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.3"), { newest: 41, newestOther: 41, listed: false, items: 3 });
   assert.equal(feedFacts("<html>not found</html>", "1.2.3"), null);
 });
 
@@ -177,13 +178,51 @@ test("a .SRCINFO that drifted from its PKGBUILD fails", async () => {
   assert.match(result.fails.join("\n"), /Arch package: .*\.SRCINFO doesn't match its PKGBUILD/);
 });
 
-test("an already released version only warns in a dry run, and stops a real release", async () => {
+test("an already released nightly that is still the newest build only warns in a dry run, and stops a real release", async () => {
+  const root = fixture({ version: "1.2.3-nightly.2", builds: [41, 41] });
+  const dry = await run({ version: "1.2.3-nightly.2", root, mode: "dry-run" });
+  assert.deepEqual(dry.fails, []);
+  assert.match(dry.warns.join("\n"), /the feed already lists 1.2.3-nightly.2 \(a real release would stop here\)/);
+  const real = await run({ version: "1.2.3-nightly.2", root, mode: "release" });
+  assert.match(real.fails.join("\n"), /the feed already lists 1.2.3-nightly.2/);
+});
+
+test("an already released stable, or one with a newer build above it, fails a dry run, which publish.sh would refuse at its end", async () => {
   const root = fixture({ version: "1.2.2", builds: [40, 40] });
   const dry = await run({ version: "1.2.2", root, mode: "dry-run" });
-  assert.deepEqual(dry.fails, []);
-  assert.match(dry.warns.join("\n"), /the feed already lists 1.2.2 \(a real release would stop here\)/);
-  const real = await run({ version: "1.2.2", root, mode: "release" });
-  assert.match(real.fails.join("\n"), /the feed already lists 1.2.2/);
+  assert.match(dry.fails.join("\n"), /build number \(40\) must be above every build in the feed, nightly or stable \(newest: 41\)/);
+  assert.match(dry.fails.join("\n"), /already lists 1.2.2: publish.sh --dry-run refuses a stable/);
+  const candidate = await run({ version: "1.2.2", root, mode: "candidate" });
+  assert.match(candidate.fails.join("\n"), /build number \(40\)/);
+  const newest = feed([["1.2.2", 40]]);
+  const alone = await run({ version: "1.2.2", root, mode: "candidate", responses: [{ status: 200, body: newest }] });
+  assert.deepEqual(alone.fails, []);
+  assert.match(alone.warns.join("\n"), /already lists 1.2.2/);
+});
+
+test("an empty feed fails unless it's --feed none or a 404 with --allow-no-feed", async () => {
+  const root = fixture();
+  const empty = join(root, "empty.xml");
+  writeFileSync(empty, "");
+  for (const mode of ["release", "dry-run"]) {
+    const file = await run({ version: "1.2.3", root, mode, feed: empty });
+    assert.match(file.fails.join("\n"), /empty\.xml is empty: only --feed none/, mode);
+    const body = await run({ version: "1.2.3", root, mode, allowNoFeed: true, responses: [{ status: 200, body: "" }] });
+    assert.match(body.fails.join("\n"), /appcast\.xml is empty/, mode);
+  }
+});
+
+test("--values-out hands release.sh the values it checked, quotes and the .0 taken off", async () => {
+  const root = fixture({ builds: ['"42"', '"42"'] });
+  const pbx = join(root, PBX);
+  writeFileSync(pbx, readFileSync(pbx, "utf8").replaceAll("MACOSX_DEPLOYMENT_TARGET = 15.0;", 'MACOSX_DEPLOYMENT_TARGET = "15.0";'));
+  const valuesOut = join(root, "values");
+  const result = await run({ version: "1.2.3", root, valuesOut });
+  assert.deepEqual(result.fails, []);
+  assert.equal(readFileSync(valuesOut, "utf8"), "project_version=1.2.3\nproject_build=42\nrelease_build=42\nmin_macos=15\n");
+  const candidate = await run({ version: "1.2.4", root: fixture({ notes: null }), mode: "candidate", valuesOut });
+  assert.deepEqual(candidate.fails, []);
+  assert.equal(readFileSync(valuesOut, "utf8"), "project_version=1.2.3\nproject_build=42\nrelease_build=43\nmin_macos=15\n");
 });
 
 test("an unreadable feed stops a release and a dry run, while a candidate starts from nothing", async () => {

@@ -8,7 +8,7 @@ import { releaseNote } from "../lib/release-note.mjs";
 import { REPO } from "../lib/repo.mjs";
 
 const USAGE = `usage: scripts/release/preflight.mjs <version> [--mode release|dry-run|candidate] [--feed <url|path|none>]
-                                     [--feed-out <path>] [--allow-no-feed] [--github]
+                                     [--feed-out <path>] [--values-out <path>] [--allow-no-feed] [--github]
 
 Checks in a few seconds what would stop the release of <version> later, with one
 network request (the published appcast):
@@ -21,21 +21,25 @@ network request (the published appcast):
   is above every build in the feed, stable and nightly.
 
   --mode release     everything fails (the default)
-  --mode dry-run     everything fails except "this version is already released"
-  --mode candidate   release.sh --rc: as dry-run, and the notes may be missing and
-                     MARKETING_VERSION may differ (the candidate then takes the next
-                     build number)
+  --mode dry-run     everything fails except a nightly that is already released and
+                     still the newest build (publish.sh --dry-run takes that one; it
+                     refuses a stable that isn't above the latest stable)
+  --mode candidate   release.sh --rc: the version already being released only warns,
+                     the notes may be missing and MARKETING_VERSION may differ (the
+                     candidate then takes the next build number)
   --feed             the published appcast: a URL, a file or none (default
                      $APPCAST_BASE, else the latest release's appcast.xml)
   --feed-out         write the feed it read there (empty when there is none), for
                      release.sh to build the new appcast on
+  --values-out       write the checked project values there as key=value lines
+                     (project_version, project_build, release_build, min_macos)
   --allow-no-feed    a feed URL that answers 404 means no feed yet, not a failure
   --github           also print GitHub Actions ::error:: and ::warning:: lines`;
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DEFAULT_FEED = `https://github.com/${REPO}/releases/latest/download/appcast.xml`;
 const MODES = new Set(["release", "dry-run", "candidate"]);
-const FETCH_TIMEOUT_MS = 10_000;
+const FETCH_TIMEOUT_MS = 6_000;
 
 export function channelOf(version) {
   if (/^\d+\.\d+\.\d+-nightly\.\d+$/.test(version)) return "nightly";
@@ -59,17 +63,21 @@ export function feedFacts(xml, version) {
   if (!xml.includes("xmlns:sparkle") || !xml.includes("<channel>")) return null;
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
   let newest = null;
+  let newestOther = null;
   let listed = false;
   for (const item of items) {
     const build = /<sparkle:version>(\d+)<\/sparkle:version>/.exec(item);
-    if (build) newest = Math.max(newest ?? 0, Number(build[1]));
-    if (/<sparkle:shortVersionString>([^<]+)</.exec(item)?.[1] === version) listed = true;
+    const mine = /<sparkle:shortVersionString>([^<]+)</.exec(item)?.[1] === version;
+    if (mine) listed = true;
+    if (!build) continue;
+    newest = Math.max(newest ?? 0, Number(build[1]));
+    if (!mine) newestOther = Math.max(newestOther ?? 0, Number(build[1]));
   }
-  return { newest, listed, items: items.length };
+  return { newest, newestOther, listed, items: items.length };
 }
 
 async function readFeed(source, { fetchImpl, allowNoFeed }) {
-  if (source === "none") return { xml: "", note: "no feed (--feed none): this release starts it" };
+  if (source === "none") return { xml: "", none: true, note: "no feed (--feed none): this release starts it" };
   if (!/^https?:\/\//.test(source)) {
     if (!existsSync(source)) return { error: `no feed file at ${source}` };
     return { xml: readFileSync(source, "utf8") };
@@ -78,7 +86,7 @@ async function readFeed(source, { fetchImpl, allowNoFeed }) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const response = await fetchImpl(source, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (response.status === 404 && allowNoFeed) return { xml: "", note: `${source} answers 404: no feed yet, this release starts it` };
+      if (response.status === 404 && allowNoFeed) return { xml: "", none: true, note: `${source} answers 404: no feed yet, this release starts it` };
       if (!response.ok) return { error: `${source} answered HTTP ${response.status}` };
       return { xml: await response.text() };
     } catch (error) {
@@ -107,13 +115,12 @@ function archFacts(root, version) {
   }
 }
 
-export async function preflight({ version, mode = "release", feed, feedOut, allowNoFeed = false, root = ROOT, fetchImpl = globalThis.fetch }) {
+export async function preflight({ version, mode = "release", feed, feedOut, valuesOut, allowNoFeed = false, root = ROOT, fetchImpl = globalThis.fetch }) {
   const results = [];
   const soft = mode !== "release";
   const pass = (message) => results.push({ level: "pass", message });
   const fail = (message) => results.push({ level: "fail", message });
   const note = (message) => results.push({ level: "note", message });
-  const released = (message) => results.push(soft ? { level: "warn", message: `${message} (a real release would stop here)` } : { level: "fail", message });
 
   const channel = channelOf(version);
   if (!channel) {
@@ -157,7 +164,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, allo
   if (marketing.count && build.count && marketing.count !== build.count) {
     fail(`the macOS project sets MARKETING_VERSION in ${marketing.count} configurations but CURRENT_PROJECT_VERSION in ${build.count}`);
   }
-  if (minMacos !== null && !/^\d+\.0$/.test(minMacos)) fail(`MACOSX_DEPLOYMENT_TARGET isn't one whole macOS version: ${minMacos}`);
+  if (minMacos !== null && !/^[1-9]\d*\.0$/.test(minMacos)) fail(`MACOSX_DEPLOYMENT_TARGET isn't one whole macOS version: ${minMacos}`);
   if (projectBuild !== null && !/^[1-9]\d*$/.test(projectBuild)) fail(`CURRENT_PROJECT_VERSION is ${projectBuild}, not a whole number`);
   if (projectVersion !== null && projectBuild !== null && /^[1-9]\d*$/.test(projectBuild)) {
     if (projectVersion === version) {
@@ -192,9 +199,12 @@ export async function preflight({ version, mode = "release", feed, feedOut, allo
   if (read.error) {
     if (mode === "candidate") note(`${read.error}: the candidate's appcast starts from nothing`);
     else fail(`${read.error}: every release builds on the published appcast, or earlier versions and the other channel drop out of the feed`);
+  } else if (read.none) {
+    note(read.note);
+  } else if (!read.xml.trim()) {
+    fail(`${source} is empty: only --feed none, or a 404 with --allow-no-feed, means there is no feed yet`);
   } else {
     xml = read.xml;
-    if (read.note) note(read.note);
   }
   if (xml) {
     const facts = feedFacts(xml, version);
@@ -202,17 +212,26 @@ export async function preflight({ version, mode = "release", feed, feedOut, allo
       fail(`${source} isn't a Sparkle appcast`);
       xml = "";
     } else if (releaseBuild !== null) {
-      if (facts.listed) released(`the feed already lists ${version}`);
-      if (facts.newest === null || releaseBuild > facts.newest) {
-        pass(`build ${releaseBuild} is above every build in the feed (${facts.items} items, newest ${facts.newest ?? "none"})`);
-      } else if (!facts.listed) {
-        fail(`the build number (${releaseBuild}) must be above every build in the feed, nightly or stable (newest: ${facts.newest}): bump CURRENT_PROJECT_VERSION`);
+      if (facts.newestOther === null || releaseBuild > facts.newestOther) {
+        pass(`build ${releaseBuild} is above every other build in the feed (${facts.items} items, newest other ${facts.newestOther ?? "none"})`);
+      } else {
+        fail(`the build number (${releaseBuild}) must be above every build in the feed, nightly or stable (newest: ${facts.newestOther}): bump CURRENT_PROJECT_VERSION`);
+      }
+      if (facts.listed) {
+        const message = `the feed already lists ${version}`;
+        if (mode === "candidate" || (mode === "dry-run" && channel === "nightly")) results.push({ level: "warn", message: `${message} (a real release would stop here)` });
+        else if (mode === "dry-run") fail(`${message}: publish.sh --dry-run refuses a stable that isn't above the latest stable release, so this dry run would fail at its end`);
+        else fail(message);
       }
     }
   }
   if (feedOut) writeFileSync(feedOut, xml);
+  const ok = !results.some((result) => result.level === "fail");
+  if (valuesOut && ok) {
+    writeFileSync(valuesOut, `project_version=${projectVersion}\nproject_build=${projectBuild}\nrelease_build=${releaseBuild}\nmin_macos=${minMacos.split(".")[0]}\n`);
+  }
 
-  return { results, ok: !results.some((result) => result.level === "fail"), channel, releaseBuild };
+  return { results, ok, channel, releaseBuild };
 }
 
 function parseArgs(argv) {
@@ -228,6 +247,7 @@ function parseArgs(argv) {
     else if (arg === "--mode") options.mode = value();
     else if (arg === "--feed") options.feed = value();
     else if (arg === "--feed-out") options.feedOut = value();
+    else if (arg === "--values-out") options.valuesOut = value();
     else if (arg === "--allow-no-feed") options.allowNoFeed = true;
     else if (arg === "--github") options.github = true;
     else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}`);

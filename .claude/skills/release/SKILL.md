@@ -160,7 +160,7 @@ and run `scripts/release.sh <version>`: the version alone makes it a nightly.
 Before any of that, check the commit in about a second:
 
 ```bash
-scripts/release/preflight.mjs <version>    # --mode dry-run warns instead of failing on "already released"
+scripts/release/preflight.mjs <version>    # --mode dry-run as the CI dry run checks it
 ```
 
 It reads the published appcast once and fails on everything that would stop the release later: a version that fits
@@ -195,11 +195,14 @@ ends with "Notarized and stapled." If it says "NOT notarized.", the profile is g
 (`xcrun notarytool history --keychain-profile ardia` shows why): stop and tell the user rather than
 shipping an unnotarized build. Never store or re-create the credential yourself; that's the user's step.
 Notarization adds a few minutes per submission. A retry doesn't upload again: `notarize.sh` records each submission id
-under the SHA-256 of the exact file it sent (`dist/.notary/<sha256>`, which survives `rm -rf dist/<version>`;
-`NOTARY_STATE_DIR` moves it) and on the next run asks Apple about that id first: Accepted staples, In Progress waits,
-Invalid or Rejected prints Apple's log and stops (the same file gets the same answer), an id Apple doesn't know
-submits fresh. An app Apple already has a ticket for (the same code, signed again) is stapled with no upload at all.
-After a dropped `notarytool wait`, just run `scripts/release/notarize.sh <app or dmg> dist/<version>` again.
+in `dist/.notary/` (which survives `rm -rf dist/<version>`; `NOTARY_STATE_DIR` moves it), the app under its code's
+CDHash (the same code signed again keeps it, though the zip's bytes change) and the DMG under its SHA-256. On the
+next run it asks Apple about that id first: Accepted staples, In Progress waits, Invalid or Rejected prints Apple's log
+and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist submits fresh,
+and when notarytool can't answer at all it stops and keeps the record. An app Apple already has a ticket for is
+stapled with no upload at all. The wait stops after `NOTARY_WAIT_SECONDS` (4 h here, 45 min per file in CI). After a
+dropped or timed-out wait, run `scripts/release/notarize.sh <app or dmg> dist/<version>` again, or the whole
+`release.sh`: a rebuilt DMG is a new file and submits fresh, the app picks its submission up.
 
 ## 4. Smoke test the build
 
@@ -351,7 +354,8 @@ keys and deletes them before the launch check (`docs/releasing.md` › CI releas
 
 **Smoke-testing CI's build.** Commit the bump and the notes first, then dispatch with `dry_run=true` (the default):
 the same build as a release candidate (`release.sh --rc`, signed and notarized), published nowhere. Its preflight
-fails on everything a real run would, except that the version is already released, which only warns. If the sign job
+fails on everything a real run would, except a nightly that's already released and still the newest build, which
+only warns (`publish.sh --dry-run` refuses an already released stable anyway). If the sign job
 fails while waiting on Apple, re-run it: the notarization state is cached per version, so it picks the submission up. Download it and run the smoke test
 on it:
 

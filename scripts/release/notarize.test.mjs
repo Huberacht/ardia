@@ -48,6 +48,12 @@ case "$1 $2" in
 esac
 `;
 
+const CODESIGN = `#!/usr/bin/env bash
+echo "Executable=$4/Contents/MacOS/Ardia" >&2
+[ -f "$NOTARY_STUB/cdhash" ] && echo "CDHash=$(cat "$NOTARY_STUB/cdhash")" >&2
+exit 0
+`;
+
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), "ac-notarize-"));
   const bin = join(dir, "bin");
@@ -55,12 +61,14 @@ function scratch() {
   for (const d of [bin, stub, join(dir, "dist")]) mkdirSync(d);
   writeFileSync(join(bin, "xcrun"), XCRUN);
   chmodSync(join(bin, "xcrun"), 0o755);
+  writeFileSync(join(bin, "codesign"), CODESIGN);
+  chmodSync(join(bin, "codesign"), 0o755);
   const dmg = join(dir, "dist", "Ardia-1.2.3.dmg");
   writeFileSync(dmg, "a disk image");
   const state = join(dir, "state");
   const set = (name, lines) => writeFileSync(join(stub, name), lines.map((l) => `${l}\n`).join(""));
   const calls = () => (existsSync(join(stub, "calls")) ? readFileSync(join(stub, "calls"), "utf8").trim().split("\n").map((l) => l.split(" ").slice(0, 2).join(" ")) : []);
-  const notarize = (target = dmg) => {
+  const notarize = (target = dmg, extra = {}) => {
     const result = spawnSync("bash", [tool, target, join(dir, "dist")], {
       encoding: "utf8",
       env: {
@@ -72,6 +80,7 @@ function scratch() {
         NOTARY_KEY: join(dir, "AuthKey.p8"),
         NOTARY_KEY_ID: "KEYID",
         NOTARY_ISSUER: "issuer",
+        ...extra,
       },
     });
     return { ...result, output: result.stdout + result.stderr };
@@ -82,7 +91,7 @@ function scratch() {
 
 function sha256(path) {
   const out = spawnSync("bash", ["-c", 'if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi', "sha", path], { encoding: "utf8" });
-  return out.stdout.split(" ")[0];
+  return `sha256-${out.stdout.split(" ")[0]}`;
 }
 
 test("a first submission records its id under the file's sha256 before waiting, then staples", () => {
@@ -102,7 +111,7 @@ test("a retry after the wait gave up picks the same submission up and never uplo
   s.set(`wait-${FIRST}`, ["drop", "drop", "drop", "drop", "drop"]);
   const first = s.notarize();
   assert.notEqual(first.status, 0);
-  assert.match(first.output, /kept failing while waiting on 11111111.*pick it up where it left off/);
+  assert.match(first.output, /kept failing while waiting on 11111111.*running this again picks it up/);
   assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
   rmSync(join(s.dir, "dist"), { recursive: true });
   mkdirSync(join(s.dir, "dist"));
@@ -156,7 +165,7 @@ test("an id Apple doesn't know, a record that isn't an id, or new bytes each sub
   unknown.ticket();
   const a = unknown.notarize();
   assert.equal(a.status, 0, a.output);
-  assert.deepEqual(unknown.calls(), ["notarytool info", "notarytool info", "notarytool info", "notarytool submit", "notarytool wait", "stapler staple"]);
+  assert.deepEqual(unknown.calls(), ["notarytool info", "notarytool submit", "notarytool wait", "stapler staple"]);
   assert.deepEqual(unknown.records(), { [sha256(unknown.dmg)]: SECOND });
 
   const tampered = scratch();
@@ -212,4 +221,62 @@ test("an app Apple already has a ticket for is stapled with no upload at all", (
   assert.equal(run.status, 0, run.output);
   assert.match(run.output, /already notarized .*nothing uploaded/);
   assert.deepEqual(s.calls(), ["stapler staple"]);
+});
+
+test("when notarytool can't answer about a recorded id, it stops and keeps the record instead of uploading again", () => {
+  const s = scratch();
+  mkdirSync(s.state);
+  writeFileSync(join(s.state, sha256(s.dmg)), `${FIRST}\n`);
+  writeFileSync(join(s.stub, `status-${FIRST}`), "In Progress\n");
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('"notarytool info")', '"notarytool info")\n    echo "Error: HTTP status code: 503. Service Unavailable"; exit 1'));
+  const run = s.notarize();
+  assert.notEqual(run.status, 0);
+  assert.match(run.output, /couldn't ask Apple about submission 11111111.*stays recorded/);
+  assert.deepEqual(s.calls(), ["notarytool info", "notarytool info", "notarytool info"]);
+  assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
+});
+
+test("the wait stops at NOTARY_WAIT_SECONDS with the id recorded, so a job deadline can't lose it", () => {
+  const s = scratch();
+  s.set("submit", [FIRST]);
+  s.set(`wait-${FIRST}`, ["drop"]);
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('drop) echo', 'drop) sleep 4; echo'));
+  const run = s.notarize(s.dmg, { NOTARY_WAIT_SECONDS: "3" });
+  assert.notEqual(run.status, 0);
+  assert.match(run.output, /hasn't finished 11111111.* within NOTARY_WAIT_SECONDS \(3 s\).*waits on it instead of uploading/);
+  assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
+  assert.match(readFileSync(join(s.stub, "calls"), "utf8"), /notarytool wait 11111111-2222-4333-8444-555555555555 .*--timeout [1-3]$/m);
+});
+
+test("a symlinked state directory is refused", () => {
+  const s = scratch();
+  mkdirSync(join(s.dir, "elsewhere"));
+  spawnSync("ln", ["-s", join(s.dir, "elsewhere"), s.state]);
+  const run = s.notarize();
+  assert.notEqual(run.status, 0);
+  assert.match(run.output, /is a symlink/);
+  assert.deepEqual(s.calls(), []);
+});
+
+test("an app signed again, its zip's bytes changed, resumes the pending submission by its code's CDHash", { skip: process.platform !== "darwin" && "ditto is macOS's" }, () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+  writeFileSync(join(app, "Contents", "MacOS", "Ardia"), "signed at 10:00");
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  s.set("submit", [FIRST]);
+  s.set(`wait-${FIRST}`, ["drop", "drop", "drop", "drop", "drop"]);
+  const first = s.notarize(app);
+  assert.notEqual(first.status, 0);
+  assert.deepEqual(s.records(), { "cdhash-c0c480061bc60ca0bdb4e8a609fabb4168eebd52": FIRST });
+  writeFileSync(join(app, "Contents", "MacOS", "Ardia"), "signed again at 10:40, same code");
+  writeFileSync(join(s.stub, "calls"), "");
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('"stapler staple")', '"stapler staple")\n    [ "$(cat "$stub/status-11111111-2222-4333-8444-555555555555")" = Accepted ] && { echo ok; exit 0; }'));
+  const retry = s.notarize(app);
+  assert.equal(retry.status, 0, retry.output);
+  assert.deepEqual(s.calls().filter(Boolean), ["stapler staple", "notarytool info", "notarytool wait", "stapler staple"]);
+  assert.ok(!existsSync(join(s.dir, "dist", "notarize.zip")));
 });

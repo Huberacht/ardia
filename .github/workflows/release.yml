@@ -234,6 +234,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/sparkle"
           tar -xJf "$tarball" -C "$RUNNER_TEMP/sparkle" bin
           echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
+      - name: Notarization state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/notary-state
+          key: notary-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            notary-${{ inputs.version }}-${{ github.run_id }}-
+            notary-${{ inputs.version }}-
       - name: Signing
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -245,14 +253,6 @@ jobs:
           NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
           ALLOW_MISSING_NOTARY: ${{ inputs.dry_run && '1' || '0' }}
         run: .github/release/signing.sh setup
-      - name: Notarization state
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ runner.temp }}/notary-state
-          key: notary-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            notary-${{ inputs.version }}-${{ github.run_id }}-
-            notary-${{ inputs.version }}-
       - name: Sign, notarize, package
         id: sign
         env:
@@ -262,18 +262,9 @@ jobs:
           export RELEASE_BUILD_INPUT="$RUNNER_TEMP/build-in"
           args=("$VERSION" --phase sign)
           if [ "$DRY_RUN" = true ]; then args+=(--rc); fi
-          export NOTARY_STATE_DIR="$RUNNER_TEMP/notary-state"
+          export NOTARY_STATE_DIR="$RUNNER_TEMP/notary-state" NOTARY_WAIT_SECONDS=2700 RELEASE_FEED_MAY_BE_MISSING=1
           mkdir -p "$NOTARY_STATE_DIR"
-          if ! curl -fsIL -o /dev/null "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/appcast.xml"; then
-            export APPCAST_BASE=none
-          fi
           scripts/release.sh "${args[@]}"
-      - if: always() && steps.sign.outcome != 'skipped'
-        name: Keep the notarization state
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ runner.temp }}/notary-state
-          key: notary-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
       - if: always()
         name: Remove signing
         run: |
@@ -287,6 +278,12 @@ jobs:
             exit 1
           fi
           echo "signing keychain and key files removed"
+      - if: always() && steps.sign.outcome != 'skipped'
+        name: Keep the notarization state
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/notary-state
+          key: notary-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Checkout untouched
         run: |
           changed=$(git status --porcelain --untracked-files=all -- . ':!dist')
