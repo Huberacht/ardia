@@ -572,9 +572,8 @@ generation it was given and asks again when a connection is refused.
 - **Who gets it.** Only a connection the socket admitted. Native checks again on its own queue, before and after it
   reads the token, that the connection is still open and its approval still live, and a reply to a connection whose
   approval ran out meanwhile is dropped (`ControlSocket.admits`, `reply`). A 30-minute approval that runs out, or
-  one removed in Settings, closes the connection, so the client sees the stream end rather than a reply. Each time
-  the connection is ready to write, native checks the approval first, so a line queued behind a slow reader never
-  starts after it ends; a line already being written then is finished, as for every reply, and the token in it was
+  one removed in Settings, closes the connection, so the client sees the stream end rather than a reply. Before
+  starting each line, native checks the approval, so a line queued behind a slow reader never starts after it ends; a line already being written then is finished, as for every reply, and the token in it was
   given while the approval held.
 - **A token outlives the approval.** The engine checks only the token, not the doorbell, so a program that got it
   (even one allowed once) can use it until the token connection restarts: control off and on, or Ardia quitting.

@@ -147,11 +147,14 @@ final class ControlConnection {
   }
 
   private func flush() {
-    guard finishingLine || mayWrite(self) else { return }
-    let result = output.write(to: fd)
-    report(output.takeFinishedTickets())
+    var result = ControlOutput.WriteResult.lineDone
+    while result == .lineDone {
+      guard !closed, finishingLine || mayWrite(self) else { return }
+      result = output.write(to: fd, oneLine: true)
+      report(output.takeFinishedTickets())
+    }
     switch result {
-    case .drained:
+    case .drained, .lineDone:
       if finishingLine { return close() }
       disarmWrite()
       closeIfDrained()
