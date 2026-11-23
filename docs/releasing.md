@@ -170,11 +170,15 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
    `http://localhost:4321/release-notes#<version>`.
 3. Commit both ("Release <version>" or "Nightly <version>"), push, and dispatch the Release workflow ("CI releases"
    below), which runs the rest. Or run it here: `scripts/release.sh <version>` (a `-nightly.<n>`
-   version is a nightly). It stops right away if the notes file is missing or lacks its `date` and
-   `headline`, if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
+   version is a nightly). It starts with `scripts/release/preflight.mjs <version>` (about a second, one request for the
+   published appcast, which release.sh then builds the new feed on): it stops if the version fits no channel, the notes
+   file is missing, empty or lacks its `date` and `headline`, `MARKETING_VERSION` or `CURRENT_PROJECT_VERSION` has more
+   than one value across the project's configurations or the version isn't `<version>`, `Info.plist` doesn't take
+   `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)`, the Arch `pkgver` that `update-pkgbuild.sh` derives isn't
+   right or the committed `.SRCINFO` drifted, the feed can't be read, the version is already in it, or the build number
+   isn't above every build in it, stable or nightly. Then it stops if if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
    framework is older than the tree's ArdiaCore sources or the Chromium tree differs from `engine/ardiacore`
-   (`apply.sh --check`), if the version doesn't fit the channel or the notes' `channel`, if it can't read the published
-   appcast, if the build number isn't above every build in it, or (outside `--rc`) if `prebuilt-engines.tsv` lists no
+   (`apply.sh --check`), or (outside `--rc`) if `prebuilt-engines.tsv` lists no
    published engine for HEAD's `engine/` tree. Then it runs the stages in `scripts/release/` (`archive.sh`,
    `export-sign.sh`, `verify.sh`, `launch-check.sh`, `notarize.sh`, `package.sh`, `notes.sh`, `appcast.sh`; each
    prints its usage and runs alone). It writes `dist/<version>/`:
@@ -212,7 +216,12 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      `CODE_SIGN_ENTITLEMENTS` switched to that file),
    - launches the app once in the background (throwaway data dir), waits for uBlock's rulesets to be indexed,
      quits it and checks the signature again: the app must never write into its own bundle,
-   - notarizes and staples the app and the DMG,
+   - notarizes and staples the app and the DMG. Each submission id is kept under the SHA-256 of the exact file sent
+     (`dist/.notary/<sha256>`, outside `dist/<version>`, so it survives the next run's wipe; `NOTARY_STATE_DIR` moves
+     it). A retry asks Apple about that id before uploading: Accepted staples, In Progress waits, Invalid or Rejected
+     prints Apple's log and stops, an id Apple doesn't know submits fresh. An `.app` Apple already holds a ticket for
+     (the same code signed again) is stapled without any upload. The record is only trusted as far as the staple: an
+     Accepted id whose ticket doesn't fit the file is submitted again,
    - packages the DMG (lzma in 4 MB chunks, `udif-chunk-size=8192`, hdiutil's largest; `ARDIA_DMG_CHUNK=off` goes back
      to its 1 MB default) and the zip, and signs `appcast.xml` (`generate_appcast` names the feed after the app's
      `SUFeedURL`, so release.sh passes it `-o`) with the Sparkle key. It starts from the
@@ -226,7 +235,8 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
 
    `scripts/release.sh <version> --rc` builds a candidate into `dist/<version>-rc/` from the working tree, as
    `<version>` with the next build number, notarized but never published: no notes file or clean tree needed (it
-   lists the uncommitted files it included).
+   lists the uncommitted files it included). Its preflight runs as `--mode candidate`: the rest of the checks still
+   fail it, and the version already being in the feed only warns.
 4. Tag and publish (the Release workflow does this itself): `git tag v<version> && git push origin main v<version>`,
    then `.claude/skills/release/scripts/publish.sh <version>` (`--dry-run` prints what it would do). It merges the
    appcast onto the feed as published right now (`appcast.py merge`), creates the release (a stable one as latest, a
@@ -305,8 +315,10 @@ See [linux-ci.md](linux-ci.md) › Linux releases.
 releases the commit it runs on, so first commit and push the version bump and the notes (steps 1 and 2), and publish
 the engine if `engine/` changed (below).
 
-- **preflight** checks the version against the channel, `MARKETING_VERSION`, the notes file and that `v<version>` isn't
-  out yet.
+- **preflight**, on Ubuntu in a few seconds, runs `scripts/release/preflight.mjs` (above) and checks that `v<version>`
+  isn't out yet. A real run fails on any of it. A dry run fails on all of it too, except "already released" (the
+  version in the feed, the tag published), which only warns, so a dry run on a commit catches whatever would stop the
+  real run on it.
 - **checks**: `pnpm typecheck`, `pnpm test`, `pnpm shaders:check`.
 - **build**, on the `xcode-27` runner (Xcode 27.1, the same build as here), with no secrets: fetches the engine for
   this exact `engine/` tree (`fetch-engine.sh`), installs (pnpm, Pods), runs
@@ -314,7 +326,10 @@ the engine if `engine/` changed (below).
   `apps/browser/official-plugins.json`, fetched and SHA-256 checked by `scripts/release/official-plugins.py bundle`)
   and uploads them as one tar. Caches: pnpm, Pods with Hermes, uBO, the engine and Xcode's
   compilation cache (per Xcode build and month).
-- **sign** installs nothing and restores no cache, so no dependency code runs next to the keys. It
+- **sign** installs nothing and restores no cache but the notarization state, so no dependency code runs next to the
+  keys. That cache (`notary-<version>-<run>-<attempt>`, restored from the newest one for the version) holds only
+  submission ids named by file hash; `notarize.sh` takes nothing but a UUID from it and trusts it only as far as Apple
+  confirms it, so re-running a sign job that died waiting on Apple resumes the submission instead of uploading again. It
   treats the build as untrusted: `.github/release/unpack-build.py` unpacks it into a new directory outside the checkout
   only if every member is the archive, `provenance.txt` or a file or folder under `plugins/<name>/` (no symlinks there;
   `plugins/cli/plugin.json` must be there), with no absolute or `..` path, hard link, device or path through a symlink,
@@ -353,7 +368,8 @@ the engine if `engine/` changed (below).
   takes the same lock. The Homebrew tap needs a token that can push
   to `ardia-browser/homebrew-tap` (`HOMEBREW_TAP_TOKEN`); without it, run `update-tap.sh <version>` here afterwards.
 
-`dry_run` (on by default) builds a release candidate (`release.sh --rc`: the next build number, no notes needed),
+`dry_run` (on by default) builds a release candidate (`release.sh --rc`, after a preflight as strict as a real run's
+but for "already released"),
 signed and notarized like a release, and runs `publish.sh --dry-run`: nothing is tagged or published. The site's `VERSION`, the landing page and the stable perf gate stay local (the release skill); the
 site redeploys by itself when the notes are pushed (`.github/workflows/deploy.yml`).
 

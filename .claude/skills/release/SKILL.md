@@ -157,6 +157,20 @@ scripts/release.sh <version>     # ~15–25 min with notarization; run it in the
 For a nightly, set `MARKETING_VERSION` to `<version>` (`0.2.37-nightly.1`) the same way, commit as "Nightly <version>",
 and run `scripts/release.sh <version>`: the version alone makes it a nightly.
 
+Before any of that, check the commit in about a second:
+
+```bash
+scripts/release/preflight.mjs <version>    # --mode dry-run warns instead of failing on "already released"
+```
+
+It reads the published appcast once and fails on everything that would stop the release later: a version that fits
+no channel, missing, empty or unreadable notes, `MARKETING_VERSION` or `CURRENT_PROJECT_VERSION` with more than one
+value across the project's configurations or a version that isn't `<version>`, an `Info.plist` that stopped reading
+them from the build settings, an Arch `pkgver` that `update-pkgbuild.sh` wouldn't derive from `<version>`, and a
+build number that isn't above every build in the feed (stable and nightly share one feed). `release.sh` and the
+Release workflow's `preflight` job run it first, so a stale build number fails in seconds instead of after the engine
+fetch and `pod install`.
+
 `release.sh` checks everything first, then runs the stages in `scripts/release/` in order: `archive.sh`,
 `export-sign.sh`, `verify.sh`, `launch-check.sh`, `notarize.sh`, `package.sh`, `notes.sh`, `appcast.sh`. When one
 fails, read its log in `dist/<version>/` and rerun that stage alone (each prints its usage); `notes.sh` prints the
@@ -180,7 +194,12 @@ changes, or the engine framework is stale (`docs/releasing.md` lists what it che
 ends with "Notarized and stapled." If it says "NOT notarized.", the profile is gone or invalid
 (`xcrun notarytool history --keychain-profile ardia` shows why): stop and tell the user rather than
 shipping an unnotarized build. Never store or re-create the credential yourself; that's the user's step.
-Notarization adds a few minutes per submission.
+Notarization adds a few minutes per submission. A retry doesn't upload again: `notarize.sh` records each submission id
+under the SHA-256 of the exact file it sent (`dist/.notary/<sha256>`, which survives `rm -rf dist/<version>`;
+`NOTARY_STATE_DIR` moves it) and on the next run asks Apple about that id first: Accepted staples, In Progress waits,
+Invalid or Rejected prints Apple's log and stops (the same file gets the same answer), an id Apple doesn't know
+submits fresh. An app Apple already has a ticket for (the same code, signed again) is stapled with no upload at all.
+After a dropped `notarytool wait`, just run `scripts/release/notarize.sh <app or dmg> dist/<version>` again.
 
 ## 4. Smoke test the build
 
@@ -330,8 +349,10 @@ it refuses to run alongside another publish, local or CI, naming the holder; `--
 2 h left by a publish that died. The build job has no secrets; a separate sign job, which installs nothing, holds the
 keys and deletes them before the launch check (`docs/releasing.md` › CI releases).
 
-**Smoke-testing CI's build.** Dispatch with `dry_run=true` (the default): the same build as a release candidate
-(`release.sh --rc`: the next build number, signed and notarized), published nowhere. Download it and run the smoke test
+**Smoke-testing CI's build.** Commit the bump and the notes first, then dispatch with `dry_run=true` (the default):
+the same build as a release candidate (`release.sh --rc`, signed and notarized), published nowhere. Its preflight
+fails on everything a real run would, except that the version is already released, which only warns. If the sign job
+fails while waiting on Apple, re-run it: the notarization state is cached per version, so it picks the submission up. Download it and run the smoke test
 on it:
 
 ```bash
