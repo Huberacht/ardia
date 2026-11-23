@@ -123,13 +123,13 @@ const subscribe = (listener: () => void) => {
 };
 const currentTable = () => table;
 
-export function useBangs(typed: boolean, mayRefresh: boolean): BangTable | null {
+export function useBangs(typed: boolean): BangTable | null {
   const current = useSyncExternalStore(subscribe, currentTable);
   useEffect(() => {
     if (!typed) return;
     void loadBangs();
-    if (mayRefresh) void refreshBangsOnce();
-  }, [typed, mayRefresh]);
+    void refreshBangsOnce();
+  }, [typed]);
   return typed ? current : null;
 }
 

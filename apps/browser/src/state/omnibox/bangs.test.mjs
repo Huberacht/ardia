@@ -3,13 +3,12 @@ import { beforeEach, test } from "node:test";
 import { bangDocument } from "../../../../../packages/core/src/bangs.ts";
 import * as bundledList from "../../../../../packages/core/src/bangList.ts";
 import { bangListServer, docs, heldSaves } from "../../test-native/index.ts";
-import { mount } from "../../test-hooks.mjs";
 
 globalThis.require = (id) => {
   assert.equal(id, "@ardia/core/src/bangList.ts");
   return bundledList;
 };
-const { bangStatus, bangsFor, createBangSubmitter, loadBangs, mayBeBang, refreshBangs, refreshBangsOnce, resetBangsForTests, useBangs } = await import("./bangs.ts");
+const { bangStatus, bangsFor, createBangSubmitter, loadBangs, mayBeBang, refreshBangs, refreshBangsOnce, resetBangsForTests } = await import("./bangs.ts");
 
 const DAY = 86_400_000;
 const entries = (prefix) => [
@@ -215,19 +214,4 @@ test("a session refreshes once however many '!'s are typed", async () => {
   docs.delete("bangs-state.json");
   await refreshBangsOnce();
   assert.equal(calls.length, 1);
-});
-
-test("typing a bang in a private window uses the list it has and never asks Helium for a fresh one", async () => {
-  const calls = server([{ status: 304 }]);
-  const privateBar = mount(() => useBangs(true, false));
-  await loaded();
-  assert.ok(bangStatus().loaded, "the bundled list still answers bangs");
-  assert.deepEqual(calls, []);
-  assert.equal(bangStatus().refreshes.length, 0);
-  privateBar.unmount();
-  const normalBar = mount(() => useBangs(true, true));
-  await loaded();
-  for (let i = 0; i < 100 && !calls.length; i++) await flush();
-  assert.equal(calls.length, 1, "a normal window refreshes as before");
-  normalBar.unmount();
 });
