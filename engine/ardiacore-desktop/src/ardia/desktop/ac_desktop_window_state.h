@@ -1,10 +1,10 @@
-#ifndef ARDIA_LINUX_AC_LINUX_WINDOW_STATE_H_
-#define ARDIA_LINUX_AC_LINUX_WINDOW_STATE_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_WINDOW_STATE_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_WINDOW_STATE_H_
 
 #include <cstddef>
 #include <string_view>
 
-namespace ardia::linux_window_state {
+namespace ardia::desktop_window_state {
 
 inline constexpr char kWindowButtonLayoutCall[] = "ArdiaShell.windowButtonLayout";
 inline constexpr char kWindowStateCall[] = "ArdiaShell.windowState";

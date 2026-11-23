@@ -1,10 +1,10 @@
-#ifndef ARDIA_LINUX_AC_LINUX_PAGE_SWIPE_H_
-#define ARDIA_LINUX_AC_LINUX_PAGE_SWIPE_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_PAGE_SWIPE_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_PAGE_SWIPE_H_
 
 #include <optional>
 #include <string_view>
 
-namespace ardia::linux_swipe {
+namespace ardia::desktop_swipe {
 
 inline constexpr char kPageSwipeEvent[] = "onPageSwipe";
 

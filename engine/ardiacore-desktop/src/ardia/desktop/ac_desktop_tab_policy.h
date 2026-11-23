@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_TAB_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_TAB_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_TAB_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_TAB_POLICY_H_
 
 #include <cstdint>
 #include <optional>

@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_NOTIFICATIONS_CORE_H_
-#define ARDIA_LINUX_AC_LINUX_NOTIFICATIONS_CORE_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_NOTIFICATIONS_CORE_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_NOTIFICATIONS_CORE_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ardia::linux_notifications {
+namespace ardia::desktop_notifications {
 
 inline constexpr const char* kNotificationCapabilities[] = {
     "ArdiaApp.notificationPermission",

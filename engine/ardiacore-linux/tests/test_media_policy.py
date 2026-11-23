@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
+DESKTOP_SOURCE = SOURCE.parents[1] / 'ardiacore-desktop' / 'src'
 FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['media', 'tab_policy']]
 FIXTURE = ROOT / 'tests/fixtures/media.h'
 
@@ -24,7 +25,7 @@ class MediaPolicyTests(unittest.TestCase):
                 header.parent.mkdir(parents=True, exist_ok=True)
                 header.write_text(f'#include "{FIXTURE}"\n')
         cls.binary = directory / 'media-policy'
-        subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-no-pie', '-I', str(directory), '-I', str(SOURCE), '-I', str(ROOT / 'tests'), *map(str, FILES), str(ROOT / 'tests/media_policy_test.cc'), '-o', str(cls.binary)], check=True, text=True, timeout=120)
+        subprocess.run([os.environ.get('CXX', 'c++'), '-std=c++20', '-Wall', '-Wextra', '-Werror', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-no-pie', '-I', str(directory), '-I', str(SOURCE), '-I', str(DESKTOP_SOURCE), '-I', str(ROOT / 'tests'), *map(str, FILES), str(ROOT / 'tests/media_policy_test.cc'), '-o', str(cls.binary)], check=True, text=True, timeout=120)
 
     @classmethod
     def tearDownClass(cls):

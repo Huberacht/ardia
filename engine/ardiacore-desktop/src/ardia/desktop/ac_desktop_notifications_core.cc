@@ -1,9 +1,9 @@
-#include "ardia/linux/ac_linux_notifications_core.h"
+#include "ardia/desktop/ac_desktop_notifications_core.h"
 
 #include <algorithm>
 #include <utility>
 
-namespace ardia::linux_notifications {
+namespace ardia::desktop_notifications {
 
 namespace {
 

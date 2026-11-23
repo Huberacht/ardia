@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_SEARCH_ENGINE_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_SEARCH_ENGINE_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_SEARCH_ENGINE_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_SEARCH_ENGINE_POLICY_H_
 
 #include <cstddef>
 #include <optional>
@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ardiacore::linux_search_engines {
+namespace ardiacore::desktop_search_engines {
 
 inline constexpr char kOwnedEngineGuid[] = "5b8e2f4a-1c3d-4e6f-9a7b-0d2c4e6f8a1b";
 inline constexpr char16_t kOwnedEngineKeyword[] = u"ardia-default-search-engine";

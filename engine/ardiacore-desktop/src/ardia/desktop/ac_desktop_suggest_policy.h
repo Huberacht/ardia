@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_SUGGEST_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_SUGGEST_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_SUGGEST_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_SUGGEST_POLICY_H_
 
 #include <algorithm>
 #include <cstddef>
@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ardia::linux_suggest_policy {
+namespace ardia::desktop_suggest_policy {
 
 inline constexpr std::string_view kEndpoints[] = {
     "https://www.google.com/complete/search",

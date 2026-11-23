@@ -1,7 +1,7 @@
-#ifndef ARDIA_LINUX_AC_LINUX_SWITCHER_KEYS_H_
-#define ARDIA_LINUX_AC_LINUX_SWITCHER_KEYS_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_SWITCHER_KEYS_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_SWITCHER_KEYS_H_
 
-namespace ardia::linux_switcher {
+namespace ardia::desktop_switcher {
 
 inline constexpr int kEscapeKeyCode = 0x1B;
 inline constexpr int kLeftKeyCode = 0x25;

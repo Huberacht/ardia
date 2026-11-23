@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_FAVICON_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_FAVICON_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_FAVICON_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_FAVICON_POLICY_H_
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace ardiacore::linux_favicons {
+namespace ardiacore::desktop_favicons {
 
 inline constexpr int kPixels = 64;
 inline constexpr int64_t kMaxBytes = 2 * 1024 * 1024;

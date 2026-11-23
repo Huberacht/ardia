@@ -1,10 +1,10 @@
-#ifndef ARDIA_LINUX_AC_LINUX_TELEMETRY_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_TELEMETRY_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_TELEMETRY_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_TELEMETRY_POLICY_H_
 
 #include <cstddef>
 #include <string_view>
 
-namespace ardia::linux_telemetry_policy {
+namespace ardia::desktop_telemetry_policy {
 
 inline constexpr std::string_view kEndpoint = "https://ardia.dev/otel/v1/logs";
 inline constexpr size_t kMaxBodyBytes = 524288;

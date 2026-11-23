@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_REPORT_CORE_H_
-#define ARDIA_LINUX_AC_LINUX_REPORT_CORE_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_REPORT_CORE_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_REPORT_CORE_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace ardia::linux_report {
+namespace ardia::desktop_report {
 
 inline constexpr const char* kReportCapabilities[] = {"report.files", "report.send"};
 inline constexpr const char* kReportCalls[] = {

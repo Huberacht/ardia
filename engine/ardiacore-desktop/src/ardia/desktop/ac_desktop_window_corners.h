@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_WINDOW_CORNERS_H_
-#define ARDIA_LINUX_AC_LINUX_WINDOW_CORNERS_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_WINDOW_CORNERS_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_WINDOW_CORNERS_H_
 
 #include <algorithm>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <optional>
 #include <string_view>
 
-namespace ardia::linux_window_corners {
+namespace ardia::desktop_window_corners {
 
 inline constexpr float kPageCardRadius = 12.0f;
 inline constexpr char kWindowDecorationsCall[] = "ArdiaShell.windowDecorations";

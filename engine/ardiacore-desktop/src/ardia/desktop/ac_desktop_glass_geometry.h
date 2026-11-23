@@ -1,12 +1,12 @@
-#ifndef ARDIA_LINUX_AC_LINUX_GLASS_GEOMETRY_H_
-#define ARDIA_LINUX_AC_LINUX_GLASS_GEOMETRY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_GLASS_GEOMETRY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_GLASS_GEOMETRY_H_
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <optional>
 
-namespace ardia::linux_glass {
+namespace ardia::desktop_glass {
 
 inline constexpr size_t kMaxRegions = 64;
 inline constexpr double kMaxBlur = 64;

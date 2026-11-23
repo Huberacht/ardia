@@ -1,7 +1,7 @@
-#ifndef ARDIA_LINUX_AC_LINUX_PAGE_KEYS_H_
-#define ARDIA_LINUX_AC_LINUX_PAGE_KEYS_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_PAGE_KEYS_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_PAGE_KEYS_H_
 
-namespace ardia::linux_keys {
+namespace ardia::desktop_keys {
 
 inline constexpr char kUnhandledEscapeCapability[] = "tab.unhandledEscape";
 inline constexpr const char* kPageKeyCapabilities[] = {"tab.unhandledEscape"};

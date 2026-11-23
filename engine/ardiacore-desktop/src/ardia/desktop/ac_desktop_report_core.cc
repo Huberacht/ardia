@@ -1,11 +1,11 @@
-#include "ardia/linux/ac_linux_report_core.h"
+#include "ardia/desktop/ac_desktop_report_core.h"
 
 #include <algorithm>
 #include <memory>
 
 #include "third_party/zlib/zlib.h"
 
-namespace ardia::linux_report {
+namespace ardia::desktop_report {
 
 namespace {
 

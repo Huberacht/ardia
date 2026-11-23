@@ -1,10 +1,10 @@
-#ifndef ARDIA_LINUX_AC_LINUX_BANG_LIST_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_BANG_LIST_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_BANG_LIST_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_BANG_LIST_POLICY_H_
 
 #include <cstddef>
 #include <string_view>
 
-namespace ardia::linux_bang_list {
+namespace ardia::desktop_bang_list {
 
 inline constexpr char kCall[] = "ArdiaShell.fetchBangList";
 inline constexpr std::string_view kListUrl = "https://services.helium.imput.net/bangs.json";

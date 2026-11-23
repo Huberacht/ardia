@@ -1,10 +1,10 @@
-#ifndef ARDIA_LINUX_AC_LINUX_WINDOW_COMMANDS_H_
-#define ARDIA_LINUX_AC_LINUX_WINDOW_COMMANDS_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_WINDOW_COMMANDS_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_WINDOW_COMMANDS_H_
 
 #include <optional>
 #include <string_view>
 
-namespace ardia::linux_commands {
+namespace ardia::desktop_commands {
 
 inline constexpr char kToggleFullScreenCall[] = "ArdiaShell.toggleFullScreen";
 inline constexpr char kEditCapability[] = "tab.edit";

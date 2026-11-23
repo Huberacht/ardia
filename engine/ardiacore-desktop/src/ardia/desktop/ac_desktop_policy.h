@@ -1,11 +1,11 @@
-#ifndef ARDIA_LINUX_AC_LINUX_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_POLICY_H_
 
 #include <cerrno>
 #include <cstddef>
 #include <string_view>
 
-namespace ardia::linux_policy {
+namespace ardia::desktop_policy {
 
 inline constexpr size_t kDocumentLimit = 8 * 1024 * 1024;
 inline constexpr char kSyncStateDocument[] = "sync-state.nns";

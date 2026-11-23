@@ -1,5 +1,5 @@
-#ifndef ARDIA_LINUX_AC_LINUX_IDLE_POLICY_H_
-#define ARDIA_LINUX_AC_LINUX_IDLE_POLICY_H_
+#ifndef ARDIA_DESKTOP_AC_DESKTOP_IDLE_POLICY_H_
+#define ARDIA_DESKTOP_AC_DESKTOP_IDLE_POLICY_H_
 
 #include <algorithm>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace ardia::linux_idle {
+namespace ardia::desktop_idle {
 
 inline constexpr double kMinThresholdSeconds = 1;
 inline constexpr double kMaxThresholdSeconds = 24 * 60 * 60;
