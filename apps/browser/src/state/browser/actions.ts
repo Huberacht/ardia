@@ -34,6 +34,7 @@ import { noteTabClosedByUser } from "../sync/openTabCloses";
 import type { Drop } from "../drag/drops";
 import { movesAcrossProfiles } from "../windows/profileMoves";
 import { noteSidebarDrop } from "../telemetry/tabPresses";
+import { byUser } from "../tabs/closeActivation";
 
 const store = () => useBrowser.getState();
 
@@ -77,7 +78,7 @@ export async function closeTab(tabId: string, mayWrite?: () => boolean) {
     return closeWindowAnimated(w.id);
   }
   if (splitOf(now, tabId) && closeKind(now, tabId) === "close") noteSplit("splitPaneCloses", consent);
-  commit(() => store().closeTab(tabId));
+  commit(() => store().closeTab(tabId, byUser()));
 }
 
 export async function closeGroup(groupId: string, mayWrite?: () => boolean) {

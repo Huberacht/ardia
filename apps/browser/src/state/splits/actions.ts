@@ -11,6 +11,7 @@ import type { AdoptId } from "../browser/types";
 import { noteSplit } from "../telemetry/usage";
 import { returnFocusToPage } from "../sidebar/actions";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
+import { byUser } from "../tabs/closeActivation";
 
 const store = () => useBrowser.getState();
 
@@ -93,7 +94,7 @@ export function closeSplitView(splitId: string) {
   const split = store().splits[splitId];
   if (!split) return;
   noteSplit("splitViewCloses");
-  store().closeTabs(splitTabIds(split));
+  store().closeTabs(splitTabIds(split), byUser());
 }
 
 export function splitMenuItems(tabId: string): MenuItem[] {

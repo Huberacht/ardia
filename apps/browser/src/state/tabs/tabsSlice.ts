@@ -21,7 +21,6 @@ import { activated, apply, closingTabs, withNewTab, type CloseOptions, type NewT
 import { hasPage, loadedPage, navigationOf, renavigated, wakeOf, withWake } from "./pageSession";
 import { cancelOpening, gateOpening, isGatedUrl, settleOpening } from "./openingGate";
 import { drainLive, setLive, stageLive } from "./tabLive";
-import { consentToken } from "../telemetry/consentPeriod";
 
 
 export type TabsSlice = {
@@ -29,7 +28,7 @@ export type TabsSlice = {
   closedTabs: ClosedTab[];
 
   newTab(windowId: string, options?: NewTabOptions): string;
-  closeTab(id: string): void;
+  closeTab(id: string, options?: CloseOptions): void;
   closeTabs(ids: string[], options?: CloseOptions): void;
   activate(id: string): void;
   handOffPin(id: string): void;
@@ -107,12 +106,12 @@ export const createTabsSlice: StateCreator<BrowserState, [], [], TabsSlice> = (s
     return id;
   },
 
-  closeTab(id) {
-    get().closeTabs([id], { lastClosesWindow: true });
+  closeTab(id, options) {
+    get().closeTabs([id], { lastClosesWindow: true, ...options });
   },
 
   closeTabs(ids, options) {
-    const [next, closedWindows] = closingTabs(get(), ids, { consent: consentToken(), ...options });
+    const [next, closedWindows] = closingTabs(get(), ids, options);
     set(next);
     for (const windowId of closedWindows) get().closeWindow(windowId);
   },

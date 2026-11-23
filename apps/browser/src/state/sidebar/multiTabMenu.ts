@@ -6,8 +6,19 @@ import { groupOf } from "../pins/tabGrouping";
 import { bookmarkTabs, copyUrls, newGroupWithSelection } from "./actions";
 import { bookmarksShown } from "../bookmarks/visibility";
 import { bookmarkFolderItems, groupItems, hintWhen, profileItems, sections, windowItems, withAlternate, type Destination } from "./menuParts";
+import { byUser } from "../tabs/closeActivation";
+import { selectedTabIds } from "../pins/organize";
 
 const store = () => useBrowser.getState();
+
+export function closeSelectionByKey(windowId: string): number {
+  const s = store();
+  const ids = (s.selection[windowId]?.length ?? 0) > 1 ? selectedTabIds(s, windowId) : [];
+  if (ids.length < 2) return 0;
+  s.closeTabs(ids, byUser());
+  s.setSelection(windowId, []);
+  return ids.length;
+}
 
 export function multiTabMenuFacts(s: BrowserState, windowId: string, ids: string[]) {
   const tabs = ids.map((id) => s.tabs[id]!);
@@ -88,7 +99,7 @@ export async function openMultiMenu(windowId: string, shown: string[]) {
   else if (choice === "ungroup") s.removeTabsFromGroup(ids);
   else if (choice === "copy") copyUrls(ids, false);
   else if (choice === "copyMd") copyUrls(ids, true);
-  else if (choice === "close") s.closeTabs(ids);
-  else if (choice === "closeOthers") s.closeTabs(here(f.others));
+  else if (choice === "close") s.closeTabs(ids, byUser());
+  else if (choice === "closeOthers") s.closeTabs(here(f.others), byUser());
   if (choice !== "copy" && choice !== "copyMd") store().setSelection(windowId, []);
 }

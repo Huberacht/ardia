@@ -1,21 +1,20 @@
 import type { BrowserState } from "../browser/store";
-import { tabLayoutOf } from "../browser/model";
+import { activeTabId, isPinnedRow, tabLayoutOf } from "../browser/model";
 import { parseEntry } from "../sidebar/entryKey";
-import { groupEntries, keptEntries, sidebarEntries } from "../sidebar/entries";
+import { groupEntries, keptEntries, keptEntry, sidebarEntries } from "../sidebar/entries";
 import { splitRowPanes, splitTabIdsOf } from "../splits/splits";
+import { folderIdOfCell, tileFolderOf } from "../pins/tileFolders";
 import { noteCloseActivation } from "../telemetry/closeActivationCounts";
-import type { ConsentToken } from "../telemetry/consentPeriod";
+import { consentToken, type ConsentToken } from "../telemetry/consentPeriod";
 import { stripEntries, type StripMember } from "./stripEntries";
+import type { CloseOptions, ClosePickRules } from "./tabs";
 
-type Row = string[];
-
-export type CloseContext = { consent: ConsentToken | null };
-
-export type ActivationOptions = { close: CloseContext; shown: boolean; visibleFallback: boolean };
+export type VisibleSection = "topApps" | "pinned" | "regular";
+export type VisibleRow = { ids: string[]; section: VisibleSection };
 
 export const activatesTabAbove = (s: Pick<BrowserState, "settings">) => s.settings.afterClosingTab === "tabAbove";
 
-function entryRows(s: BrowserState, windowId: string, profileId: string, entry: string): Row[] {
+function entryRows(s: BrowserState, windowId: string, profileId: string, entry: string): string[][] {
   const { kind, id } = parseEntry(entry);
   if (kind === "tab") return s.tabs[id] ? [[id]] : [];
   if (kind === "split") {
@@ -27,62 +26,77 @@ function entryRows(s: BrowserState, windowId: string, profileId: string, entry: 
   return shown.flatMap((e) => entryRows(s, windowId, profileId, e));
 }
 
-function sidebarSections(s: BrowserState, windowId: string, profileId: string): Row[][] {
+function sidebarRows(s: BrowserState, windowId: string, profileId: string): VisibleRow[] {
+  const active = activeTabId(s, windowId, profileId);
   const { cells, pinned, list } = sidebarEntries(s, windowId, profileId);
-  const rows = (entries: string[]) => entries.flatMap((e) => entryRows(s, windowId, profileId, e));
-  return [cells.filter((cell) => s.tabs[cell]).map((id) => [id]), rows(pinned), rows(list)];
+  const tile = (cell: string): string[] => {
+    const folderId = folderIdOfCell(cell);
+    if (!folderId) return s.tabs[cell] ? [cell] : [];
+    return active && tileFolderOf(s.tabs[active])?.id === folderId ? [active] : [];
+  };
+  const shownPinned = s.profiles[profileId]?.pinnedCollapsed ? [keptEntry(s, windowId, profileId, pinned) ?? []].flat() : pinned;
+  const rows = (entries: string[], section: VisibleSection) => entries.flatMap((e) => entryRows(s, windowId, profileId, e)).map((ids) => ({ ids, section }));
+  return [...cells.map(tile).filter((ids) => ids.length).map((ids) => ({ ids, section: "topApps" as const })), ...rows(shownPinned, "pinned"), ...rows(list, "regular")];
 }
 
 const memberHolds = (m: StripMember, tabId: string) => (m.kind === "tab" ? m.id === tabId : m.tabIds.includes(tabId));
 
-function memberRows(m: StripMember, activeId: string): Row[] {
+function memberRows(m: StripMember, activeId: string): string[][] {
   if (m.kind === "tab") return [[m.id]];
   if (m.kind === "split") return [m.tabIds];
   return m.tabIds.includes(activeId) ? [[activeId]] : [];
 }
 
-function stripSections(s: BrowserState, windowId: string, profileId: string): Row[][] {
-  const activeId = s.windows[windowId]?.activeTabIds[profileId] ?? "";
-  const dock: Row[] = [];
-  const rows: Row[] = [];
+function stripRows(s: BrowserState, windowId: string, profileId: string): VisibleRow[] {
+  const activeId = activeTabId(s, windowId, profileId) ?? "";
+  const rows: VisibleRow[] = [];
   for (const e of stripEntries(s, windowId, profileId)) {
-    if (e.kind === "dock") dock.push(...e.ids.filter((id) => s.tabs[id]).map((id) => [id]));
-    else if (e.kind === "group") rows.push(...e.members.filter((m) => !e.collapsed || memberHolds(m, activeId)).flatMap((m) => memberRows(m, activeId)));
-    else rows.push(...memberRows(e, activeId));
+    if (e.kind === "dock") {
+      for (const id of e.ids) if (s.tabs[id]) rows.push({ ids: [id], section: isPinnedRow(s.tabs[id]) ? "pinned" : "topApps" });
+      continue;
+    }
+    const section: VisibleSection = e.kind === "group" && s.groups[e.id]?.pinned ? "pinned" : "regular";
+    const members = e.kind === "group" ? e.members.filter((m) => !e.collapsed || memberHolds(m, activeId)) : [e];
+    for (const m of members) for (const ids of memberRows(m, activeId)) rows.push({ ids, section });
   }
-  return [dock, rows];
+  return rows;
 }
 
-export function visibleSections(s: BrowserState, windowId: string, profileId: string): Row[][] {
-  return tabLayoutOf(s, windowId) === "top" ? stripSections(s, windowId, profileId) : sidebarSections(s, windowId, profileId);
+export function visibleRows(s: BrowserState, windowId: string, profileId: string): VisibleRow[] {
+  return tabLayoutOf(s, windowId) === "top" ? stripRows(s, windowId, profileId) : sidebarRows(s, windowId, profileId);
 }
 
 const latest = (s: BrowserState, ids: string[]) => ids.reduce<string | undefined>((best, id) => (!best || s.tabs[id]!.lastActiveAt > s.tabs[best]!.lastActiveAt ? id : best), undefined);
 
-export function tabAbove(s: BrowserState, windowId: string, closedId: string, closing: ReadonlySet<string>, eligible: (id: string) => boolean, visibleFallback = false): string | undefined {
-  const profileId = s.tabs[closedId]?.profileId;
-  if (!profileId) return undefined;
-  const sections = visibleSections(s, windowId, profileId);
-  const survivors = (row: Row) => row.filter((id) => !closing.has(id) && s.tabs[id]?.profileId === profileId && eligible(id));
-  const section = sections.find((rows) => rows.some((row) => row.includes(closedId)));
-  const top = section?.findIndex((row) => row.some((id) => closing.has(id))) ?? -1;
-  if (section && top >= 0) {
-    for (let i = top - 1; i >= 0; i--) {
-      const id = latest(s, survivors(section[i]!));
-      if (id) return id;
-    }
-    for (let i = top; i < section.length; i++) {
-      const id = latest(s, survivors(section[i]!));
-      if (id) return id;
-    }
+export function tabAbove(s: BrowserState, rows: VisibleRow[], closedId: string, closing: ReadonlySet<string>, eligible: (id: string) => boolean): string | undefined {
+  const section = rows.find((row) => row.ids.includes(closedId))?.section;
+  if (!section) return undefined;
+  const same = rows.filter((row) => row.section === section).map((row) => row.ids);
+  const top = same.findIndex((ids) => ids.some((id) => closing.has(id)));
+  const survivor = (ids: string[]) => latest(s, ids.filter((id) => !closing.has(id) && eligible(id)));
+  for (let i = top - 1; i >= 0; i--) {
+    const id = survivor(same[i]!);
+    if (id) return id;
   }
-  return visibleFallback ? latest(s, sections.flat().flatMap(survivors)) : undefined;
+  for (let i = Math.max(top, 0); i < same.length; i++) {
+    const id = survivor(same[i]!);
+    if (id) return id;
+  }
+  return undefined;
 }
 
-export function closeActivation(s: BrowserState, windowId: string, closedId: string, closing: ReadonlySet<string>, eligible: (id: string) => boolean, { close, shown, visibleFallback }: ActivationOptions): string | undefined {
-  if (!activatesTabAbove(s)) return undefined;
-  const adjacent = tabAbove(s, windowId, closedId, closing, eligible);
-  const picked = adjacent ?? (visibleFallback ? tabAbove(s, windowId, closedId, closing, eligible, true) : undefined);
-  if (shown) noteCloseActivation(close.consent, adjacent ? "above" : "fallback");
+export function pickAfterClose(s: BrowserState, windowId: string, closedId: string, closing: ReadonlySet<string>, rules: ClosePickRules, consent: ConsentToken | null): string | undefined {
+  const profileId = s.tabs[closedId]?.profileId;
+  if (!activatesTabAbove(s) || !profileId) return undefined;
+  const rows = visibleRows(s, windowId, profileId);
+  const own = (id: string) => s.tabs[id]?.profileId === profileId;
+  const adjacent = tabAbove(s, rows, closedId, closing, (id) => own(id) && rules.adjacent(id));
+  const picked = adjacent ?? latest(s, rows.flatMap((row) => row.ids).filter((id) => !closing.has(id) && own(id) && rules.fallback(id)));
+  if (rules.shown) noteCloseActivation(consent, adjacent ? "above" : "fallback");
   return picked;
+}
+
+export function byUser(options: CloseOptions = {}): CloseOptions {
+  const consent = consentToken();
+  return { ...options, userClose: { pick: (s, windowId, closedId, closing, rules) => pickAfterClose(s, windowId, closedId, closing, rules, consent) } };
 }

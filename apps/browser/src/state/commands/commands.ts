@@ -54,8 +54,6 @@ import { requestAutofill } from "../site/autofill";
 import { copyPageUrl, copySelectedTabUrls, jumpToSelection } from "../site/selection";
 import { shareTab } from "../site/share";
 import { groupOf } from "../pins/tabGrouping";
-import { selectedTabIds } from "../pins/organize";
-import { noteSelectionClosedByKey } from "../telemetry/usage";
 import { noteUrlCopied } from "../telemetry/urlCopies";
 import { newWindowProfile, originalProfile } from "../windows/small";
 import { openLittleArdia } from "../littleArdia/actions";
@@ -67,6 +65,8 @@ import { runHidingCommand } from "../site/hiddenElements";
 import { requestWindowClose } from "../windows/windowClose";
 import { commandTarget } from "./commandTarget";
 import { runLittleArdiaCommand } from "./littleArdiaCommands";
+import { closeSelectionByKey } from "../sidebar/multiTabMenu";
+import { noteSelectionClosedByKey } from "../telemetry/usage";
 
 const newOrId = (arg: string) => (arg === "new" ? null : arg);
 
@@ -200,15 +200,8 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
         return void closeTab(tabId, mayWrite);
       }
       if (ui?.panel.open) return tabId ? closePanelToHeroBar(windowId, tabId, "closeKey") : s.closePanel(windowId);
-      if ((s.selection[windowId]?.length ?? 0) > 1) {
-        const ids = selectedTabIds(s, windowId);
-        if (ids.length > 1) {
-          s.closeTabs(ids);
-          s.setSelection(windowId, []);
-          noteSelectionClosedByKey(ids.length);
-          return;
-        }
-      }
+      const closedSelection = closeSelectionByKey(windowId);
+      if (closedSelection) return void noteSelectionClosedByKey(closedSelection);
       return tabId ? void closeTab(tabId, mayWrite) : undefined;
     case "print":
       return void web?.print();

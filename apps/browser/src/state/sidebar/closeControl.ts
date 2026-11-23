@@ -5,6 +5,7 @@ import { useBrowserWhile } from "../tabs/tabWatch";
 import { rootOf } from "../groups/groups";
 import { closeIntent, closeKind, openPages } from "../tabs/tabs";
 import { middleClickTab } from "./clearTabs";
+import { byUser } from "../tabs/closeActivation";
 
 export type CloseControl = { icon: "xmark" | "minus"; tooltip: string };
 
@@ -46,14 +47,14 @@ export const useGroupCloseControlWhile = (groupId: string, live: boolean) => use
 export function pressGroupClose(groupId: string) {
   const s = useBrowser.getState();
   const control = groupCloseControl(s, groupId);
-  if (control === UNLOAD_GROUP) s.closeTabs(openMembers(s, groupId), { keepTopApps: false });
+  if (control === UNLOAD_GROUP) s.closeTabs(openMembers(s, groupId), byUser({ keepTopApps: false }));
   else if (control === CLOSE_GROUP) void closeGroup(groupId);
 }
 
 export function pressTabClose(tabId: string) {
   const s = useBrowser.getState();
   const intent = closeIntent(s, tabId);
-  if (intent.kind === "unload") s.closeTabs(intent.ids, { keepTopApps: false });
+  if (intent.kind === "unload") s.closeTabs(intent.ids, byUser({ keepTopApps: false }));
   else middleClickTab(tabId);
 }
 
