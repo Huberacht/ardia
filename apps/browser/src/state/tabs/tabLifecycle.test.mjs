@@ -491,3 +491,21 @@ test("a protection seen while sharing is off is still counted the first time it 
   S().updateLive(ids[1], { playingAudio: false });
   webviews.clear();
 });
+
+test("a closed tab's recent download navigation can't claim another tab's download of the same URL", async () => {
+  const { tabsOverBudget } = await import("./loadedTabBudget.ts");
+  const { noteNavigationDownload, noteDownloadChanged, clearTabDownloads } = await import("./tabDownloads.ts");
+  const now = Date.now() + 1800 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(3, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i * 60) * minute }));
+  clearTabDownloads();
+  noteNavigationDownload(ids[2], "https://files.example/u.zip", "", S().downloads, now);
+  S().closeTabs([ids[2]]);
+  noteNavigationDownload(ids[1], "https://files.example/u.zip", "", S().downloads, now + 2000);
+  const d = { id: "u", url: "https://files.example/u.zip", filename: "u", path: "/tmp/u", state: "downloading", paused: false, received: 1, total: 9, speed: 1, mimeType: "x", profile: "", startTime: now + 2000 };
+  S().upsertDownload(d);
+  noteDownloadChanged(d, now + 2000);
+  assert.ok(!tabsOverBudget(S(), [active, ids[1], ids[0]], { tabs: 1, hiddenMs: 30 * minute }, now).includes(ids[1]), "the download belongs to the open tab that started it");
+  S().removeDownload("u");
+  clearTabDownloads();
+});

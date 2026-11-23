@@ -15,9 +15,13 @@ const profileOf = (d: Pick<Download, "profile">) => d.profile ?? "";
 const startedAt = (d: Pick<Download, "startTime">, fallback: number) => d.startTime ?? fallback;
 
 function claim(d: Download, now: number): boolean {
+  const tabs = useBrowser.getState().tabs;
+  for (let i = recentNavigations.length - 1; i >= 0; i--) if (!tabs[recentNavigations[i]!.tabId]) recentNavigations.splice(i, 1);
   const near = recentNavigations.filter((p) => p.profile === profileOf(d) && Math.abs(startedAt(d, now) - p.at) <= LINK_WITHIN_MS);
   if (!near.length) return false;
-  const best = near.find((p) => p.url === d.url) ?? near.reduce((a, b) => (Math.abs(startedAt(d, now) - a.at) <= Math.abs(startedAt(d, now) - b.at) ? a : b));
+  const nearest = (list: Started[]) => list.reduce((a, b) => (Math.abs(startedAt(d, now) - a.at) <= Math.abs(startedAt(d, now) - b.at) ? a : b));
+  const sameUrl = near.filter((p) => p.url === d.url);
+  const best = nearest(sameUrl.length ? sameUrl : near);
   owners.set(d.id, best.tabId);
   recentNavigations.splice(recentNavigations.indexOf(best), 1);
   return true;
