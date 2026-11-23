@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import types
 
 ROOTS = ('engine', 'apps/browser/assets/offline-game', 'apps/browser/assets/offline-game-pipeline')
 TOOLING_PREFIXES = ('engine/engine-key.', 'engine/patches/build/tests/')
@@ -23,6 +24,7 @@ GN_PLATFORMS = {'is_mac': 'mac', 'is_linux': 'linux'}
 CHECKOUT = pathlib.Path(__file__).resolve().parents[1]
 WIN_ROOT = 'scripts/windows/engine'
 WIN_PLAN = 'scripts/windows/engine/series_win.py'
+WIN_PLAN_V1 = 'engine/engine-key.series-win-v1.py'
 
 
 class Problem(Exception):
@@ -261,15 +263,27 @@ class Plan:
         return not any(under(path, layer) for layer in self.skipped_layers)
 
 
-def series_win_module():
-    path = CHECKOUT / WIN_PLAN
-    if not path.is_file():
-        raise Problem(f'{WIN_PLAN}, the Windows build plan, is not in this checkout')
-    sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location('ardia_series_win', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def planner_module(name, source, origin):
+    module = types.ModuleType(name)
+    module.__file__ = str(CHECKOUT / WIN_PLAN)
+    try:
+        exec(compile(source, origin, 'exec'), module.__dict__)
+    except Exception as failure:
+        raise Problem(f'{origin} does not load: {failure}')
     return module
+
+
+def series_win_module(tree, rev):
+    source = tree.read(WIN_PLAN)
+    if source is None:
+        raise Problem(f'{rev} has no {WIN_PLAN}, the Windows build plan')
+    module = planner_module('ardia_series_win', source, f'{rev}:{WIN_PLAN}')
+    if hasattr(module, 'key_inputs'):
+        return module
+    first = CHECKOUT / WIN_PLAN_V1
+    if not first.is_file():
+        raise Problem(f'{rev}:{WIN_PLAN} has no key_inputs and {WIN_PLAN_V1}, the first Windows plan, is not in this checkout')
+    return planner_module('ardia_series_win_v1', first.read_bytes(), str(WIN_PLAN_V1))
 
 
 class WinPlan:
@@ -277,23 +291,30 @@ class WinPlan:
         tree.load((WIN_ROOT,))
         if not any(under(path, WIN_ROOT) for path in tree.files()):
             raise Problem(f'{rev} has no {WIN_ROOT}')
-        module = series_win_module()
+        module = series_win_module(tree, rev)
 
         def read(path):
             raw = tree.read(path)
             return None if raw is None else raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n')
 
-        try:
-            self.inputs = module.key_inputs(tree.files(), read)
-        except module.InputError as problem:
-            raise Problem(f'the Windows build plan is invalid: {problem}')
-        except SystemExit as stop:
-            raise Problem(f'the Windows build plan is invalid: {stop.code}')
-        self.steps = [('chromium', path) for path in self.inputs.patches]
-        self.outside = sorted({path for path in self.inputs.files if not in_roots(path) and not under(path, WIN_ROOT)})
-        if self.outside:
-            tree.load(self.outside)
-        missing = [path for path in self.inputs.files if path not in tree.entries]
+        def plan():
+            try:
+                return module.key_inputs(tree.files(), read)
+            except getattr(module, 'InputError', Problem) as problem:
+                raise Problem(f'the Windows build plan is invalid: {problem}')
+            except SystemExit as stop:
+                raise Problem(f'the Windows build plan is invalid: {stop.code}')
+
+        loaded = set(ROOTS) | {WIN_ROOT}
+        inputs = plan()
+        extra = sorted({path for path in list(inputs.trees) + list(inputs.files)
+                        if not any(under(path, root) for root in loaded)})
+        if extra:
+            tree.load(extra)
+            inputs = plan()
+        self.inputs = inputs
+        self.steps = [('chromium', path) for path in inputs.patches]
+        missing = [path for path in inputs.files if path not in tree.entries]
         if missing and complete:
             raise Problem(f'the Windows build reads {", ".join(missing)}, which is not there')
 

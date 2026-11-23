@@ -23,7 +23,8 @@
 # reads: the patches it applies, in order (engine/patches/series' `all` and `mac` lines less series-win's skips, then
 # series-win's own), engine/chromium/src, engine/patches/build, series.py, the ArdiaCore headers it copies, the offline
 # game, scripts/windows/engine (less its checks and prebuilt.json), the app's EngineApi.h and the resources it brands
-# with. The plan is read with this checkout's series_win.py, as series.py is for the other two.
+# with. The plan is the series_win.py of the commit keyed (--paths: of the working tree); a commit whose series_win.py has
+# no key_inputs, from before Windows had a key, is keyed with engine/engine-key.series-win-v1.py, the first plan.
 #
 # --platform defaults to AC_TARGET_OS (mac or linux), else this OS; the Windows build sets AC_TARGET_OS=mac for the Mac
 # steps it reuses, so a Windows key always needs --platform win.

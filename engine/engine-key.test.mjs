@@ -27,6 +27,7 @@ const real = [
   'engine/patches/build/target_config.py',
   'engine/ardiacore-linux/apply.sh',
   'scripts/windows/engine/series_win.py',
+  'engine/engine-key.series-win-v1.py',
 ]
 const win = 'scripts/windows/engine'
 
@@ -646,10 +647,21 @@ async function keyOf(script, platform, rev) {
 
 function frozenScript() {
   const scratch = mkdtempSync(join(tmpdir(), 'engine-key-frozen-'))
-  const source = execFileSync('git', ['show', `${frozenBase}:engine/engine-key.py`], { cwd: repo, encoding: 'utf8' })
-  const anchor = 'CHECKOUT = pathlib.Path(__file__).resolve().parents[1]\n'
-  assert.ok(source.includes(anchor))
-  writeFileSync(join(scratch, 'engine-key.py'), source.replace(anchor, `CHECKOUT = pathlib.Path(${JSON.stringify(repo)}).resolve()\n`))
+  const frozenFile = (path) => execFileSync('git', ['show', `${frozenBase}:${path}`], { cwd: repo, encoding: 'utf8' })
+  const anchors = [
+    ['CHECKOUT = pathlib.Path(__file__).resolve().parents[1]\n', `CHECKOUT = pathlib.Path(${JSON.stringify(repo)}).resolve()\n`],
+    ["    path = CHECKOUT / 'engine/patches/series.py'\n", `    path = pathlib.Path(${JSON.stringify(join(scratch, 'engine/patches/series.py'))})\n`],
+  ]
+  let source = frozenFile('engine/engine-key.py')
+  for (const [anchor, frozen] of anchors) {
+    assert.equal(source.split(anchor).length, 2, anchor)
+    source = source.replace(anchor, frozen)
+  }
+  for (const path of ['engine/patches/series.py', 'engine/patches/build/pathguard.py', 'engine/patches/build/target_config.py']) {
+    mkdirSync(dirname(join(scratch, path)), { recursive: true })
+    writeFileSync(join(scratch, path), frozenFile(path))
+  }
+  writeFileSync(join(scratch, 'engine-key.py'), source)
   return { script: join(scratch, 'engine-key.py'), cleanup: () => rmSync(scratch, { recursive: true, force: true }) }
 }
 
@@ -725,3 +737,46 @@ test('the real checkout has a Windows key and --paths scoped to the Windows buil
     if (skip) assert.ok(!specs.includes(`engine/patches/${skip[1]}`), `${skip[1]} is skipped on Windows`)
   }
 })
+
+test(
+  'a later Windows plan leaves the Windows key of an earlier commit alone',
+  withFixture(({ root, key, write, commit }) => {
+    const first = key('win')
+    const plan = join(root, win, 'series_win.py')
+    write(`${win}/series_win.py`, readFileSync(plan, 'utf8').replace("HOOK_HEADERS = ['ardia/core/ac_hooks.h'", "HOOK_HEADERS = ['ardia/core/ac_later_hooks.h', 'ardia/core/ac_hooks.h'"))
+    write('engine/ardiacore/src/ardia/core/ac_later_hooks.h', 'later\n')
+    const later = commit('a later plan')
+    assert.notEqual(later.win, first)
+    assert.equal(key('win', 'HEAD~1'), first)
+    write('engine/ardiacore/src/ardia/core/ac_later_hooks.h', 'changed\n')
+    assert.notEqual(commit('the header the later plan copies').win, later.win)
+  }),
+)
+
+test(
+  'a commit whose Windows plan predates key_inputs is keyed with the first plan',
+  withFixture(({ root, write, commit, change }) => {
+    const plan = join(root, win, 'series_win.py')
+    write(`${win}/series_win.py`, readFileSync(plan, 'utf8').replaceAll('key_inputs', 'not_a_planner'))
+    const old = commit('a plan without key_inputs')
+    assert.match(old.win, /^[0-9a-f]{40}$/)
+    const shared = change('engine/patches/chromium-shared.patch', 'changed shared\n')
+    assertKeys(old, shared, { macos: true, linux: true, win: true })
+    assertKeys(shared, change('engine/patches/chromium-linux-only.patch', 'changed linux\n'), { macos: false, linux: true, win: false })
+  }),
+)
+
+test(
+  'a tree the Windows plan declares counts in the Windows key and its --paths',
+  withFixture(({ root, write, commit, change, pathspecs }) => {
+    write('packages/winshared/core.cc', 'shared\n')
+    const before = commit('an undeclared tree')
+    assertKeys(before, change('packages/winshared/core.cc', 'before\n'), { macos: false, linux: false, win: false })
+    assert.ok(!pathspecs('win').includes('packages/winshared'))
+    const plan = join(root, win, 'series_win.py')
+    write(`${win}/series_win.py`, readFileSync(plan, 'utf8').replace("KEY_TREES = ('engine/chromium/src',", "KEY_TREES = ('packages/winshared', 'engine/chromium/src',"))
+    const declared = commit('declare a tree')
+    assert.ok(pathspecs('win').includes('packages/winshared'))
+    assertKeys(declared, change('packages/winshared/core.cc', 'after\n'), { macos: false, linux: false, win: true })
+  }),
+)

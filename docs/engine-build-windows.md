@@ -21,7 +21,11 @@ applies, in order (the `all` and `mac` lines of `engine/patches/series` less `se
 own), `engine/chromium/src`, `engine/patches/build` and `series.py`, the ArdiaCore headers and launch switches it
 copies, the offline game, `scripts/windows/engine` (less `check_inputs.py`, `*_test.py` and `prebuilt.json`), the app's
 `EngineApi.h` and the files the resource lists brand with. A Linux-only line, the Linux layer or the rest of
-`engine/ardiacore` leaves it alone. `prebuilt.json` pins it as `key` beside `source`, the commit the engine was built
+`engine/ardiacore` leaves it alone. The key of a commit is read with that commit's `series_win.py`, so a later plan
+never moves an older commit's key; a commit from before `key_inputs` existed is read with the first plan, frozen in
+`engine/engine-key.series-win-v1.py`. The key covers the toolchain's recipe (`toolchain.sh`, `env.sh`), not the
+toolchain itself: the Visual Studio tools and Windows SDK it downloads from Microsoft can change under the same
+recipe, so two builds under one key can still differ in the compiler they used. `prebuilt.json` pins it as `key` beside `source`, the commit the engine was built
 from (the release source archive still follows `source`); `prebuilt_test.py` checks that `key` is the Windows key of
 `source`. A new engine release sets both: `source` to the commit built and `key` to
 `engine/engine-key.sh --platform win <source>`. HEAD's key differing from the pinned one means the prebuilt is older
