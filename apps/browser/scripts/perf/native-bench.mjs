@@ -55,7 +55,12 @@
 //                               churn      leak check: open and close 10 tabs 5 times
 //                               loading    what a page that never finishes loading costs while it's the active tab (the
 //                                          toolbar's stop button breathing): --idle seconds with the seed tab loaded,
-//                                          then --idle seconds with a new active tab whose response never ends
+//                                          then --idle seconds with a new active tab whose response never ends.
+//                                          Against an app built before this phase or on another NATIVE_API_VERSION,
+//                                          give the control its own bench bundle: in a worktree of that revision run
+//                                          `native-bench.mjs --app <that app> --only prepare --out <dir>` and pass
+//                                          <dir>/<label>/bundle/main.jsbundle as --control-bundle. A bundle without
+//                                          ac.tabLive is checked through the page's document.readyState instead
 //                               sample     main-thread `sample`s, idle and while switching and scrolling
 //                               prepare    prepare the app copies and both templates, and exit (see --prepared); none
 //                                          of it is a timing, so it can run beside the smoke test and the ratchet
@@ -129,7 +134,9 @@
 //                                                        secs after the first page paints) and at 20
 //   active tab loading: …                   loadingRun  idleWindow() with the seed tab loaded, then with the active tab
 //                                                        on /hang (headers and a first chunk, never the end), checked
-//                                                        loading in the app (tabLive isLoading) before and after
+//                                                        loading before and after (tabLive isLoading, or the page's
+//                                                        readyState when the bundle has no ac.tabLive); only runs where
+//                                                        the same /hang tab is active and loading at both ends count
 //   JS heap / JS allocated (Hermes)         sessionRun  memory: HermesInternal.getInstrumentedStats() right after each
 //                                                        footprint: js_heapSize (the GC's capacity, in 4 MB segments) and
 //                                                        js_allocatedBytes
@@ -1177,8 +1184,16 @@ async function sessionRun(side, i, parts) {
   side.results.session.push(r);
 }
 
-const ACTIVE_LOADING = `(() => { const s = ac.store.getState(); const w = s.windows[${WINDOW}]; const id = w.activeTabIds[w.profileId];
-  return { id, url: s.tabs[id]?.url ?? null, loading: !!ac.tabLive.shownLiveOf(s, id).isLoading }; })()`;
+const ACTIVE_TAB = `(() => { const s = ac.store.getState(); const w = s.windows[${WINDOW}]; const id = w.activeTabIds[w.profileId];
+  return { id, url: s.tabs[id]?.url ?? null, appLoading: ac.tabLive ? !!ac.tabLive.shownLiveOf(s, id).isLoading : null }; })()`;
+
+async function activeLoading(app) {
+  const tab = await app.run(`return ${ACTIVE_TAB};`);
+  const target = tab.url?.includes("/hang") ? await app.cdp.find("id=load") : null;
+  const ready = target && (await app.cdp.send(target, "Runtime.evaluate", { expression: "document.readyState", returnByValue: true }))?.result?.value;
+  const pageLoading = ready ? ready === "loading" : null;
+  return { ...tab, pageLoading, loading: tab.appLoading ?? pageLoading ?? false };
+}
 
 async function loadingRun(side, i) {
   const secs = +opt.idle;
@@ -1188,16 +1203,16 @@ async function loadingRun(side, i) {
     await app.launch();
     await app.pageState("id=seed", 30_000, (s) => s.fcp);
     await sleep(30_000);
-    r.loadedBefore = await app.run(`return ${ACTIVE_LOADING};`);
+    r.loadedBefore = await activeLoading(app);
     r.loaded = await idleWindow(app, secs);
     await app.run(`ac.store.getState().newTab(${WINDOW}, { url: "${base()}/hang?id=load" }); return true;`);
     await app.pageState("id=load", 30_000, (s) => s.vis);
     let state = null;
-    for (const end = Date.now() + 20_000; Date.now() < end && !(state?.loading && state.url?.includes("/hang")); await sleep(100)) state = await app.run(`return ${ACTIVE_LOADING};`);
+    for (const end = Date.now() + 20_000; Date.now() < end && !(state?.loading && state.url?.includes("/hang")); await sleep(100)) state = await activeLoading(app);
     r.loadingBefore = state;
     await sleep(3000);
     r.loading = await idleWindow(app, secs);
-    r.loadingAfter = await app.run(`return ${ACTIVE_LOADING};`);
+    r.loadingAfter = await activeLoading(app);
     r.load.push(Math.round(loadavg()[0] * 10) / 10);
   } finally {
     for (const res of hanging) res.destroy();

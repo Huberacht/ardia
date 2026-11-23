@@ -315,7 +315,7 @@ async function sampleMemory(consent: ConsentToken | null) {
     const mainProcessWork = await takeMainProcessWork();
     const contentDrift = await takeContentDriftCounts();
     const coldTabHolds = await takeColdTabHoldCounts();
-    capture("perf_memory", { ...mainProcessWork, ...contentDrift, ...takeFreezeCounts(consent), ...coldTabHolds, ...takeStopBreathing(),
+    capture("perf_memory", { ...mainProcessWork, ...contentDrift, ...takeFreezeCounts(consent), ...coldTabHolds, ...(stillValid(consent) ? takeStopBreathing() : {}),
       total_mb: mb(total),
       browser_mb: mb(browser),
       gpu_mb: mb(gpu),

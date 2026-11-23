@@ -7,6 +7,9 @@ export const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
+export const loadingThroughout = (r) =>
+  !!(r.loadingBefore?.loading && r.loadingAfter?.loading && r.loadingBefore.id === r.loadingAfter.id && r.loadingAfter.url?.includes("/hang"));
+
 export function summary(res) {
   const rows = [];
   const add = (name, xs, unit, digits = 0) => {
@@ -40,16 +43,17 @@ export function summary(res) {
     add(`idle wakeups/s, ${t.slice(4)} tab(s) (renderers)`, S.map((r) => r.idle[t]?.kinds.renderer?.wakeups), "/s", 1);
   }
   const L = res.loading ?? [];
-  for (const [k, what] of [["loaded", "seed tab loaded"], ["loading", "active tab loading"]]) {
+  const heldLoading = L.filter(loadingThroughout);
+  for (const [k, what, runs] of [["loaded", "seed tab loaded", L], ["loading", "active tab loading", heldLoading]]) {
     if (!L.length) break;
-    add(`${what}: wakeups/s (browser process)`, L.map((r) => r[k]?.kinds.browser?.wakeups), "/s", 1);
-    add(`${what}: CPU (browser process)`, L.map((r) => r[k]?.kinds.browser?.cpu), "%", 2);
-    add(`${what}: wakeups/s (all processes)`, L.map((r) => r[k]?.total.wakeups), "/s", 1);
-    add(`${what}: CPU (all processes)`, L.map((r) => r[k]?.total.cpu), "%", 2);
-    add(`${what}: wakeups/s (GPU process)`, L.map((r) => r[k]?.kinds["gpu-process"]?.wakeups), "/s", 1);
+    add(`${what}: wakeups/s (browser process)`, runs.map((r) => r[k]?.kinds.browser?.wakeups), "/s", 1);
+    add(`${what}: CPU (browser process)`, runs.map((r) => r[k]?.kinds.browser?.cpu), "%", 2);
+    add(`${what}: wakeups/s (all processes)`, runs.map((r) => r[k]?.total.wakeups), "/s", 1);
+    add(`${what}: CPU (all processes)`, runs.map((r) => r[k]?.total.cpu), "%", 2);
+    add(`${what}: wakeups/s (GPU process)`, runs.map((r) => r[k]?.kinds["gpu-process"]?.wakeups), "/s", 1);
   }
   if (L.length) {
-    add("active tab loading: runs where the app saw it loading throughout", [L.filter((r) => r.loadingBefore?.loading && r.loadingAfter?.loading).length], "");
+    add("active tab loading: runs where the same tab was active and loading throughout (the rest are left out)", [heldLoading.length], "");
     add("active tab loading: someone used the Mac (s, per run)", L.map((r) => (r.loaded?.input?.inputSecs ?? NaN) + (r.loading?.input?.inputSecs ?? NaN)), "s", 2);
     add("active tab loading: 1-minute load average (start and end of each run)", L.flatMap((r) => r.load), "", 1);
   }
