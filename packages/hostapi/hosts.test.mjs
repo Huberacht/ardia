@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { MANIFEST, ROOT } from "./generate.mjs";
 
@@ -309,5 +309,114 @@ test("a domain the Mac serves partly or wholly by hand builds its module's table
     const module = read(entry.swift.replace(/Calls\.swift$/, "Module.swift"));
     assert.match(module, new RegExp(`static let calls = ${domain}CallTable\\(`), `${domain}'s module`);
     assert.doesNotMatch(module, /CallTable\(domain:/, `${domain}'s module lists no rows of its own`);
+  }
+});
+
+const moduleDomains = Object.entries(manifest.modules);
+const filesUnder = (dir, pattern) => readdirSync(ROOT + dir, { recursive: true }).filter((file) => pattern.test(file)).map((file) => `${dir}${file}`.replaceAll("\\", "/")).sort();
+const moduleFunctions = moduleDomains.flatMap(([domain, entry]) => Object.entries(entry.modules).flatMap(([module, row]) => Object.entries(row.functions).map(([fn, binding]) => ({ domain, module, fn, binding }))));
+
+export function classBody(source, name) {
+  const start = source.search(new RegExp(`\\bclass ${name}\\b`));
+  if (start < 0) throw new Error(`the source declares no class ${name}`);
+  const end = source.indexOf("\n}", start);
+  return source.slice(start, end < 0 ? source.length : end + 2);
+}
+
+export function windowsNativeMethods(sources) {
+  const served = new Map();
+  for (const source of sources) {
+    const modules = [...source.matchAll(/REACT_MODULE\(\s*\w+\s*,\s*L"([^"]+)"\s*\)/g)].map((match) => match[1]);
+    if (modules.length > 1) throw new Error(`one header registers ${modules.join(" and ")}; the scan reads one module per header`);
+    if (!modules.length) continue;
+    const methods = [...source.matchAll(/REACT_(?:SYNC_)?METHOD\(\s*(\w+)\s*(?:,\s*L"([^"]+)"\s*)?\)/g)].map((match) => match[2] ?? match[1]);
+    served.set(modules[0], new Set(methods));
+  }
+  return served;
+}
+
+export function windowsJsModules(modulesSource, defaultsSource) {
+  const writtenInJs = new Set([...between(stripComments(modulesSource), "const writtenInJs", "\n").matchAll(/\b(Ardia[A-Za-z]+):/g)].map((match) => match[1]));
+  const body = between(stripComments(defaultsSource), "export const moduleDefaults", "\n};");
+  const defaults = new Map();
+  const entries = [...body.matchAll(/^ {2}(Ardia[A-Za-z]+): /gm)];
+  entries.forEach((match, index) => {
+    const text = body.slice(match.index, entries[index + 1]?.index ?? body.length);
+    defaults.set(match[1], new Set([...text.matchAll(/\b([a-zA-Z]+)\s*:/g)].map((key) => key[1]).filter((key) => key !== match[1])));
+  });
+  return { writtenInJs, defaults };
+}
+
+test("the module-domain scans find the shaders pilot and the hosts' tables", () => {
+  assert.ok(moduleDomains.some(([domain]) => domain === "shaders"));
+  assert.ok(moduleFunctions.length >= 4);
+  assert.equal(classBody("class A: Module {\n  x\n}\nclass B {}", "A"), "class A: Module {\n  x\n}");
+  assert.deepEqual([...windowsNativeMethods(['REACT_MODULE(K, L"ArdiaKeychain")\n  REACT_METHOD(get)\n  REACT_METHOD(remove, L"delete")\n  REACT_SYNC_METHOD(peek)']).get("ArdiaKeychain")], ["get", "delete", "peek"]);
+  assert.throws(() => windowsNativeMethods(['REACT_MODULE(A, L"ArdiaA") REACT_MODULE(B, L"ArdiaB")']), /one module per header/);
+  const { writtenInJs, defaults } = windowsJsModules(read("packages/expo-windows/src/modules.ts"), read("packages/expo-windows/src/defaults.ts"));
+  assert.ok(writtenInJs.has("ArdiaUpdater") && writtenInJs.has("ArdiaSync"));
+  assert.ok(defaults.get("ArdiaCli")?.has("canInstallUnattended") && defaults.get("ArdiaTranslate")?.has("languageName"));
+});
+
+test("each Mac module of a module domain conforms to its generated protocol and takes its name, events and functions from it, defining none of its own", () => {
+  for (const [domain, entry] of moduleDomains) {
+    const generated = read(entry.swift);
+    const sources = filesUnder(`${entry.package}/ios/`, /\.swift$/).filter((path) => path !== entry.swift).map((path) => [path, stripComments(read(path))]);
+    const listed = JSON.parse(read(`${entry.package}/expo-module.config.json`)).apple?.modules ?? [];
+    for (const [module, row] of Object.entries(entry.modules)) {
+      const onMac = (binding) => binding.mac === "custom";
+      const functions = Object.keys(row.functions).filter((fn) => onMac(row.functions[fn]));
+      const events = Object.keys(row.events).filter((event) => onMac(row.events[event]));
+      const conforming = sources.flatMap(([path, text]) => [...text.matchAll(new RegExp(`\\bclass (\\w+): Module, ${row.native}\\b`, "g"))].map((match) => ({ path, text, name: match[1] })));
+      for (const [path, text] of sources) assert.doesNotMatch(text, new RegExp(`Name\\("${module}"\\)`), `${path} names ${module} itself instead of Name(Self.moduleName)`);
+      if (!functions.length && !events.length) {
+        assert.deepEqual(conforming, [], `${module} has nothing on the Mac, so no module conforms to ${row.native}`);
+        continue;
+      }
+      assert.match(generated, new RegExp(`protocol ${row.native}\\b`), `${entry.swift} declares ${row.native}`);
+      assert.equal(conforming.length, 1, `exactly one Mac module in ${entry.package}/ios conforms to ${row.native}`);
+      const [{ path, text, name }] = conforming;
+      assert.ok(listed.includes(name), `${entry.package}/expo-module.config.json registers ${name}`);
+      const body = classBody(text, name);
+      assert.match(body, /Name\(Self\.moduleName\)/, `${path}: ${name} takes its name from ${row.native}`);
+      assert.equal(body.includes("Self.eventsDefinition"), events.length > 0, `${path}: ${name} declares its events from ${row.native}`);
+      for (const fn of Object.keys(row.functions)) {
+        assert.equal(body.includes(`Self.${fn}Function`), functions.includes(fn), `${domain} ${module}.${fn} is ${row.functions[fn].mac} on the Mac`);
+        assert.doesNotMatch(body, new RegExp(`(?:Async)?Function\\("${fn}"`), `${path}: ${name} defines ${fn} by hand`);
+      }
+    }
+  }
+});
+
+test("a module domain's package reaches each of its Expo modules only through the generated types", () => {
+  for (const [domain, entry] of moduleDomains) {
+    const generated = new Set(entry.types ? [entry.types] : []);
+    const sources = filesUnder(`${entry.package}/src/`, /\.tsx?$/).filter((path) => !generated.has(path)).map((path) => [path, stripComments(read(path))]);
+    assert.ok(sources.some(([, text]) => text.includes('from "./generated/native"')), `${entry.package}/src imports its generated types`);
+    for (const [path, text] of sources) {
+      for (const match of text.matchAll(/require(?:Optional)?NativeModule(?:<([^(]*)>)?\(\s*"(Ardia[A-Za-z]+)"/g)) {
+        const [, type, module] = match;
+        const row = entry.modules[module];
+        if (!row) continue;
+        const capitalized = domain[0].toUpperCase() + domain.slice(1);
+        assert.ok(type === row.native || type === `${capitalized}Modules["${module}"]`, `${path} types ${module} as ${type ?? "nothing"} instead of the generated ${row.native}`);
+      }
+    }
+  }
+});
+
+test("the Linux host serves a module function natively exactly when its desktop binding is host", () => {
+  const linux = filesUnder(LINUX.replace(/[^/]+\/$/, ""), /\.(cc|h|mm|js)$/).map(read).map(stripComments).join("\n");
+  for (const { module, fn, binding } of moduleFunctions) {
+    assert.equal(linux.includes(`"${module}.${fn}"`), binding.desktop === "host", `${module}.${fn} is ${binding.desktop} on the desktop host`);
+  }
+});
+
+test("Windows serves a module function, natively or in JS, exactly when its windows binding is custom", () => {
+  const native = windowsNativeMethods(filesUnder("apps/browser/windows/Ardia/", /\.h$/).map((path) => stripComments(read(path))));
+  const { writtenInJs, defaults } = windowsJsModules(read("packages/expo-windows/src/modules.ts"), read("packages/expo-windows/src/defaults.ts"));
+  for (const { module, fn, binding } of moduleFunctions) {
+    const served = native.get(module)?.has(fn) || writtenInJs.has(module) || defaults.get(module)?.has(fn) || false;
+    assert.equal(served, binding.windows === "custom", `${module}.${fn} is ${binding.windows} on Windows`);
   }
 });

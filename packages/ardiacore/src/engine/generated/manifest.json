@@ -1246,5 +1246,67 @@
       },
       "events": {}
     }
+  },
+  "modules": {
+    "shaders": {
+      "kind": "module",
+      "package": "packages/shaders",
+      "types": "packages/shaders/src/generated/native.ts",
+      "swift": "packages/shaders/ios/ShadersNative.swift",
+      "modules": {
+        "ArdiaAreaLight": {
+          "native": "AreaLightNative",
+          "functions": {
+            "debugSnapshot": {
+              "args": [
+                "dir"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            }
+          },
+          "events": {}
+        },
+        "ArdiaWindowBackdrop": {
+          "native": "WindowBackdropNative",
+          "functions": {
+            "holdKeyLook": {
+              "args": [
+                "on"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            }
+          },
+          "events": {}
+        },
+        "ArdiaMeadow": {
+          "native": "MeadowNative",
+          "functions": {
+            "debugState": {
+              "args": [],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            },
+            "debugEval": {
+              "args": [
+                "script"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            }
+          },
+          "events": {}
+        }
+      }
+    }
   }
 }

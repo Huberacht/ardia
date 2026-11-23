@@ -133,7 +133,32 @@ A call's bindings default to `service` on every host; a host that needs code say
 
 Every engine domain but `media` is in the schema, including those no host passes any call of straight to an `ac_*` service (autofill, contentBlocker, passwords, profiles, webKit, webView, windows): they are still `engine` domains, JSON calls through the module's `call`, with each host's code named by its `custom` bindings, and a domain's desktop `custom` calls are checked against the Linux host's native dispatch lists. A payload type may come from a package `packages/ardiacore` depends on (`@ardia/core`) as well as a relative path. `media` stays hand-wired in `api.ts` and `MediaModule.swift` until the next PR that moves the Linux engine key anyway: `engine/ardiacore-linux/tests/test_cast.py` reads its cast rows from `api.ts`, and that test is a Linux key input.
 
-Later the schema gains `module` domains (positional Expo functions: shell, sync, import, shaders) that emit the TS `*Native` interfaces and the desktop invoke table, with Swift bodies behind a generated protocol. The Rust core's FFI surface is described in the same schema when sync and import calls move.
+**Module domains** describe positional Expo functions (shell, sync, import, shaders) and are listed apart from the engine domains, in `moduleDomains`, so the engine domains' generated files and manifest rows stay as they are:
+
+```ts
+export const shaders = defineModuleDomain({
+  kind: "module",
+  package: "packages/shaders",
+  imports: {},
+  types: {},
+  modules: {
+    ArdiaWindowBackdrop: {
+      functions: {
+        holdKeyLook: { args: [["on", "boolean"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "absent" },
+      },
+      events: {},
+    },
+  },
+});
+```
+
+An arg is `[name, type]`, with a third Swift type when the TypeScript type isn't a primitive (`string`, `number`, `boolean`, their arrays); a result likewise names `swiftResult`. `async` picks `AsyncFunction` (a Promise in TypeScript) or `Function`, `promise: true` hands the Swift body Expo's `Promise` to resolve later, and `queue: "main"` runs it on the main queue. Every function and event names all three bindings, none implied: `mac` is `custom` (a Swift body) or `absent`, `desktop` is `custom` (the desktop UI answers it), `host` (the native desktop host serves it) or `absent`, and `windows` is `custom` (an RNW module or JS on Windows) or `absent`. The generator emits:
+
+- **TS:** `<package>/src/generated/native.ts`, one `<Name>Native` type per Expo module (`WindowBackdropNative`), `<Name>NativeEvents` when it has events, and `<Domain>Modules` mapping each module name to its type; the package calls `requireNativeModule` through that map.
+- **Swift:** `<package>/ios/<Domain>Native.swift`, a protocol per Mac module listing its `custom` functions as static requirements, with an extension giving `moduleName`, one `<fn>Function` Expo definition per function and `eventsDefinition`, and `send<Event>` on modules. The hand-written module conforms (`class WindowBackdropModule: Module, WindowBackdropNative`), writes `Name(Self.moduleName)` and `Self.holdKeyLookFunction` in `definition()` beside its views, and implements the bodies, so a body that drifts from the schema doesn't compile.
+- **Manifest:** the domain under `modules` in `generated/manifest.json`, with each function's arg names, `async` and three bindings.
+
+`hosts.test.mjs` checks each Mac module conforms to its protocol, takes every Mac function from it and defines none by hand, that the package types each module through the generated map, that the Linux host serves a function exactly when it's `desktop: host`, and that Windows serves it exactly when it's `windows: custom`; `apps/desktop`'s `hostContract.test.mjs` checks the desktop UI answers exactly the `desktop: custom` functions and sends the rest to the host with their positional args. `shaders` is the pilot (`ArdiaAreaLight.debugSnapshot`, `ArdiaWindowBackdrop.holdKeyLook`, `ArdiaMeadow.debugState` and `debugEval`); its views stay hand-written. The desktop invoke table is generated once Track 2's desktop layer exists. The Rust core's FFI surface is described in the same schema when sync and import calls move.
 
 Generated files carry no header comment (the repo's no-comments rule); the `--check` test in `pnpm test` is the guard, and `checks.yml`'s `code` paths filter includes every generated target.
 
@@ -167,7 +192,7 @@ Each item is one PR closing one issue. Items on one line can run in parallel.
 The order is built around two integration proofs, the Windows WebUI pilot and the Rust GN link, which run early and in parallel with the tooling.
 
 1. **Design** (this doc). **Engine key: an additive Windows projection**, Mac and Linux keys and their history unchanged. **Rust core: workspace, `ardia-crypto`, `ardia-sync-core`, `ardia-ffi`, vectors and the divergence table**, plus CI for it and `plugin-broker`. **Host API: schema, generator, `history`**, zero behavior change.
-2. **Proof: Rust GN link.** The `boringssl` backend as a GN `rust_static_library`, running the vectors on Chromium's toolchain (Linux engine build; nothing switches yet). **Proof: Windows WebUI pilot** behind `--ardia-shell=webui` (Windows engine build). **Engine key: selector sets** (`linux,win`). **Host API: bookmarks, favicons**, then **the remaining service-backed domains** (downloads, engine, extensions, permissions, search, sites, tabs) with per-host event bindings and Linux route reply fields. **Host API: the custom-only engine domains** (autofill, contentBlocker, passwords, profiles, webKit, webView, windows) and package type imports; `media` follows with the next Linux engine key move.
+2. **Proof: Rust GN link.** The `boringssl` backend as a GN `rust_static_library`, running the vectors on Chromium's toolchain (Linux engine build; nothing switches yet). **Proof: Windows WebUI pilot** behind `--ardia-shell=webui` (Windows engine build). **Engine key: selector sets** (`linux,win`). **Host API: bookmarks, favicons**, then **the remaining service-backed domains** (downloads, engine, extensions, permissions, search, sites, tabs) with per-host event bindings and Linux route reply fields. **Host API: the custom-only engine domains** (autofill, contentBlocker, passwords, profiles, webKit, webView, windows) and package type imports; `media` follows with the next Linux engine key move. **Host API: module domains**, piloted with `shaders`, then `shell`, `sync` and `import`, one per PR.
 3. **macOS and iPhone link the Rust sync core** (Apple framework; Swift crypto and phrase deleted). **Linux links it** through GN (its C++ sync crypto and wordlist deleted). **`engine/ardiacore-desktop` layer**, extracted against both hosts, with `ac_desktop_platform.h` and the Linux and Win delegates.
 4. **Windows desktop host completed** (Win delegate, wording, Mica, snap, CI job). **Generated desktop routes. Ed25519 update manifests.** **`apps/linux` → `apps/desktop`**, when Windows needs the platform folders.
 5. **Windows cutover** after a verified installed upgrade and rollback, then **RNW deletion**.

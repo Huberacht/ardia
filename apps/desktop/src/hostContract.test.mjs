@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callHost } from "./host.ts";
 import { BOOKMARKS_EXPORT_CALL } from "./hostBookmarksExport.ts";
-import { resolveHostModule } from "./hostModules.ts";
+import { reachesNativeHostUnchecked, resolveHostModule } from "./hostModules.ts";
 import { createNativeEvents } from "./hostEvents.ts";
 import { hostLaunchConfig } from "./hostLaunchConfig.ts";
 import { HostTab } from "./hostTab.ts";
@@ -52,6 +52,28 @@ test("every call of a schema-generated domain reaches a host that serves it unde
       const reply = await call(verb, "default", '{"profile":"default"}');
       if (!reshaped) assert.equal(reply, "null", `${domain}.${verb}`);
       assert.deepEqual(requests.at(-1), { name: `${domain}.${verb}`, profile: "default", args: '{"profile":"default"}' });
+    }
+  }
+});
+
+test("every function of a schema module domain is answered by the desktop UI when its desktop binding is custom, and otherwise reaches the native host with its positional arguments", async () => {
+  const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
+  const functions = Object.values(manifest.modules).flatMap((domain) => Object.entries(domain.modules).flatMap(([module, entry]) => Object.entries(entry.functions).map(([fn, row]) => ({ module, fn, row }))));
+  assert.ok(functions.some(({ module, fn }) => module === "ArdiaWindowBackdrop" && fn === "holdKeyLook"), "the scan found the shaders pilot");
+  for (const { module, fn, row } of functions) {
+    const name = `${module}.${fn}`;
+    const args = row.args.map((_, index) => `arg${index}`);
+    const { host, requests } = fixture();
+    const resolved = resolveHostModule(host, module, fn);
+    assert.equal(typeof resolved, "function", `${name} resolves to a function`);
+    if (row.desktop === "custom") {
+      assert.equal(reachesNativeHostUnchecked(resolved), false, `${name} is answered by the desktop UI`);
+      await resolved(...args);
+      assert.deepEqual(requests, [], `${name} never reaches the host`);
+    } else {
+      assert.equal(reachesNativeHostUnchecked(resolved), true, `${name} goes to the native host, which serves it only when its binding is host`);
+      await resolved(...args);
+      assert.deepEqual(requests, [{ method: name, args: { args } }], `${name} reaches the host with its positional arguments`);
     }
   }
 });
