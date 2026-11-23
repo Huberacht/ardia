@@ -131,6 +131,24 @@ enum GlassSources {
   static func find(_ name: String?) -> FrostSourceView? {
     name.flatMap { sources.object(forKey: $0 as NSString) }
   }
+
+  private static var pages: [ObjectIdentifier: (holds: Bool, at: CFTimeInterval)] = [:]
+
+  static func holdsPage(_ source: FrostSourceView) -> Bool {
+    let now = CACurrentMediaTime()
+    let key = ObjectIdentifier(source)
+    if let known = pages[key], now - known.at < LiquidGlassRules.pageCheckInterval { return known.holds }
+    let holds = walkForPage(source)
+    pages[key] = (holds, now)
+    if pages.count > 16 { pages = pages.filter { now - $0.value.at < 1 } }
+    return holds
+  }
+
+  private static func walkForPage(_ view: UIView) -> Bool {
+    if view.isHidden || view.alpha <= 0 { return false }
+    if view is WKWebView { return view.bounds.width > 0 && view.bounds.height > 0 }
+    return view.subviews.contains(where: walkForPage)
+  }
 }
 
 @MainActor
@@ -138,7 +156,6 @@ final class GlassCapture {
   private(set) var texture: MTLTexture?
   private(set) var rect: CGRect = .null
   private(set) var generation = 0
-  private(set) var holdsPage = false
   private var signature: Int?
   private var settle = 0
   private var capturedAt: CFTimeInterval = 0
@@ -150,9 +167,7 @@ final class GlassCapture {
   func survey(_ source: FrostSourceView) {
     var hasher = Hasher()
     var budget = 4000
-    var page = false
-    Self.walk(source.layer, into: &hasher, budget: &budget, page: &page)
-    holdsPage = page
+    Self.walk(source.layer, into: &hasher, budget: &budget)
     let value = hasher.finalize()
     if value != signature {
       signature = value
@@ -253,7 +268,7 @@ final class GlassCapture {
     return output
   }
 
-  private static func walk(_ layer: CALayer, into hasher: inout Hasher, budget: inout Int, page: inout Bool) {
+  private static func walk(_ layer: CALayer, into hasher: inout Hasher, budget: inout Int) {
     guard budget > 0 else { return }
     budget -= 1
     let shown = layer.presentation() ?? layer
@@ -278,14 +293,11 @@ final class GlassCapture {
     if let contents = layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
     hasher.combine(layer.backgroundColor.map { CFHash($0) } ?? 0)
     if let web = layer.delegate as? WKWebView {
-      if web.bounds.width > 0, web.bounds.height > 0 {
-        page = true
-        hasher.combine(web.scrollView.contentOffset.x)
-        hasher.combine(web.scrollView.contentOffset.y)
-      }
+      hasher.combine(web.scrollView.contentOffset.x)
+      hasher.combine(web.scrollView.contentOffset.y)
       return
     }
-    for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget, page: &page) }
+    for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget) }
   }
 }
 
@@ -335,7 +347,7 @@ final class GlassFrames: NSObject {
     }
     let wantsSlow = attached.contains { $0.wantsPathChecks }
     if wantsSlow, slowTimer == nil {
-      let timer = Timer(timeInterval: LiquidGlassRules.idleRefresh, repeats: true) { _ in
+      let timer = Timer(timeInterval: LiquidGlassRules.pageCheckInterval, repeats: true) { _ in
         MainActor.assumeIsolated { GlassFrames.shared.checkPaths() }
       }
       RunLoop.main.add(timer, forMode: .common)
@@ -347,7 +359,7 @@ final class GlassFrames: NSObject {
   }
 
   private func checkPaths() {
-    for surface in surfaces.allObjects where surface.window != nil { surface.needsPath() }
+    for surface in surfaces.allObjects where surface.window != nil && surface.wantsPathChecks { surface.needsPath() }
     schedule()
   }
 
@@ -375,14 +387,16 @@ final class GlassFrames: NSObject {
       }
     }
     for (key, entry) in bySource {
-      let (source, members) = entry
+      let (source, everyone) = entry
+      let members = everyone.filter(\.isShownOnScreen)
+      guard !members.isEmpty else { continue }
       let capture = captures[key] ?? GlassCapture()
       captures[key] = capture
       capture.survey(source)
       var wanted = CGRect.null
       var sigma = 0.0
       var pixelsPerPoint: CGFloat = 1
-      for surface in members where surface.isShownOnScreen {
+      for surface in members {
         guard let region = surface.regionInSource(source) else { continue }
         wanted = wanted.union(region.insetBy(dx: -surface.marginPoints, dy: -surface.marginPoints))
         sigma = max(sigma, surface.blurSigma)
@@ -394,10 +408,7 @@ final class GlassFrames: NSObject {
           stats.noteCapture(ms: capture.lastMs)
         }
       }
-      for surface in members {
-        if capture.holdsPage != surface.sourceHoldsPage { surface.sourceHoldsPage = capture.holdsPage }
-        surface.draw(with: capture, source: source, into: buffer)
-      }
+      for surface in members { surface.draw(with: capture, source: source, into: buffer) }
     }
     for surface in unsourced { surface.draw(with: nil, source: nil, into: buffer) }
     buffer.commit()
@@ -452,8 +463,8 @@ final class LiquidGlassSurface: UIView {
   var capsule = true { didSet { if capsule != oldValue { setNeedsLayout() } } }
   var cornerRadius: CGFloat = 0 { didSet { if cornerRadius != oldValue { setNeedsLayout() } } }
   var dark: Bool? { didSet { if dark != oldValue { invalidate() } } }
-  var tint: UIColor? { didSet { if tint != oldValue { invalidate() } } }
-  var solidFill: UIColor? { didSet { if solidFill != oldValue { invalidate() } } }
+  var tint: UIColor? { didSet { if !Self.same(tint, oldValue) { invalidate() } } }
+  var solidFill: UIColor? { didSet { if !Self.same(solidFill, oldValue) { invalidate() } } }
   var classic = false { didSet { if classic != oldValue { needsPath() } } }
   var presentedRadius: (() -> CGFloat?)?
   var followsPresentation = false
@@ -468,7 +479,10 @@ final class LiquidGlassSurface: UIView {
   private var drawnSize: CGSize = .zero
   private var reportedPath: String?
   private(set) weak var foundSource: FrostSourceView?
-  var sourceHoldsPage = false { didSet { if sourceHoldsPage != oldValue { needsPath() } } }
+  private var batching = 0
+  private var batchedPath = false
+  private var batchedInvalidate = false
+  private var laidOut: (size: CGSize, scale: CGFloat)?
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -492,6 +506,8 @@ final class LiquidGlassSurface: UIView {
     super.didMoveToWindow()
     if window != nil {
       GlassFrames.shared.attach(self)
+      laidOut = nil
+      layoutLayers(size: bounds.size)
       needsPath()
     } else {
       GlassFrames.shared.detach(self)
@@ -503,12 +519,28 @@ final class LiquidGlassSurface: UIView {
     layoutLayers(size: bounds.size)
   }
 
-  var wantsFrames: Bool {
-    guard window != nil, !classic, GlassMetal.shared.isReady else { return false }
-    return choice.path == .live || (followsPresentation && (hasRunningAnimations || lensLayer.bounds.size != bounds.size))
+  func batch(_ changes: () -> Void) {
+    batching += 1
+    changes()
+    batching -= 1
+    guard batching == 0 else { return }
+    if batchedPath {
+      batchedPath = false
+      batchedInvalidate = false
+      needsPath(force: true)
+    } else if batchedInvalidate {
+      batchedInvalidate = false
+      invalidate()
+    }
   }
 
-  var wantsPathChecks: Bool { window != nil && !classic && source != nil && choice.path != .live }
+  var wantsFrames: Bool {
+    guard window != nil, !classic, GlassMetal.shared.isReady else { return false }
+    if choice.path == .live { return isShownOnScreen }
+    return followsPresentation && (hasRunningAnimations || lensLayer.bounds.size != bounds.size)
+  }
+
+  var wantsPathChecks: Bool { window != nil && !classic && source != nil && !wantsFrames }
 
   var isShownOnScreen: Bool {
     guard window != nil else { return false }
@@ -546,7 +578,11 @@ final class LiquidGlassSurface: UIView {
     return CGFloat(LiquidGlassRules.marginPixels(blurPixels: blurPixels, shiftPixels: shift * Double(scale))) / max(scale, 1)
   }
 
-  func needsPath() {
+  func needsPath(force: Bool = false) {
+    if batching > 0 {
+      batchedPath = true
+      return
+    }
     let metal = GlassMetal.shared
     let found = GlassSources.find(source)
     foundSource = found
@@ -559,25 +595,30 @@ final class LiquidGlassSurface: UIView {
       rimFailed: metal.failures > 0,
       hasSource: found != nil,
       insideSource: inside,
-      holdsPage: sourceHoldsPage || (found.map(Self.holdsPage) ?? false),
+      holdsPage: found.map(GlassSources.holdsPage) ?? false,
       pageLive: LiquidGlassRules.pageLive(classic: classic, overPageAsked: GlassLaunch.overPage),
       onScreen: window != nil
     )
-    if next != choice {
+    let changed = next != choice
+    if changed {
       choice = next
       drawnUniforms = nil
     }
     report()
     GlassFrames.shared.schedule()
-    invalidate()
+    if changed || force { invalidate() }
   }
 
   func metalChanged() {
     drawnUniforms = nil
-    needsPath()
+    needsPath(force: true)
   }
 
   func invalidate() {
+    if batching > 0 {
+      batchedInvalidate = true
+      return
+    }
     drawnUniforms = nil
     applyFallback()
     if !wantsFrames { drawStill() }
@@ -590,9 +631,13 @@ final class LiquidGlassSurface: UIView {
   }
 
   func regionInSource(_ source: UIView) -> CGRect? {
-    let mine = layer.presentation() ?? layer
-    let theirs = source.layer.presentation() ?? source.layer
-    let region = mine.convert(CGRect(origin: .zero, size: lensLayer.bounds.size), to: theirs)
+    let shown = CGRect(origin: .zero, size: lensLayer.bounds.size)
+    let region: CGRect
+    if let mine = layer.presentation(), let theirs = source.layer.presentation() {
+      region = mine.convert(shown, to: theirs)
+    } else {
+      region = layer.convert(shown, to: source.layer)
+    }
     return region.isNull || region.isEmpty ? nil : region
   }
 
@@ -629,8 +674,13 @@ final class LiquidGlassSurface: UIView {
     drawnUniforms = uniforms
     drawnGeneration = generation
     drawnSize = size
-    lensLayer.isHidden = false
-    fillLayer.isHidden = true
+    if lensLayer.isHidden || !fillLayer.isHidden {
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      lensLayer.isHidden = false
+      fillLayer.isHidden = true
+      CATransaction.commit()
+    }
   }
 
   private func drawStill() {
@@ -665,12 +715,14 @@ final class LiquidGlassSurface: UIView {
   }
 
   private func layoutLayers(size: CGSize) {
+    let scale = self.scale
+    if let laidOut, laidOut.size == size, laidOut.scale == scale { return }
+    laidOut = (size, scale)
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     let frame = CGRect(origin: .zero, size: size)
     fillLayer.frame = frame
     lensLayer.frame = frame
-    let scale = self.scale
     lensLayer.contentsScale = scale
     lensLayer.drawableSize = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
     lensLayer.device = GlassMetal.shared.device
@@ -705,10 +757,12 @@ final class LiquidGlassSurface: UIView {
     NSLog("PAGELAB look glass %@ %@ %@", label, NSCoder.string(for: bounds.size), line)
   }
 
-  private static func holdsPage(_ view: UIView) -> Bool {
-    if view.isHidden || view.alpha <= 0 { return false }
-    if view is WKWebView { return view.bounds.width > 0 && view.bounds.height > 0 }
-    return view.subviews.contains(where: holdsPage)
+  private static func same(_ one: UIColor?, _ other: UIColor?) -> Bool {
+    switch (one, other) {
+    case (nil, nil): true
+    case let (one?, other?): one.isEqual(other)
+    default: false
+    }
   }
 }
 

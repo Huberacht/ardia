@@ -340,12 +340,14 @@ final class GlassView: ExpoView {
   func render() {
     overrideUserInterfaceStyle = dark.map { $0 ? .dark : .light } ?? .unspecified
     let classic = isSolid
-    glass.label = accessibilityIdentifier ?? "-"
-    glass.source = source
-    glass.dark = dark
-    glass.tint = tint
-    glass.solidFill = classicChrome.fill
-    glass.classic = classic
+    glass.batch {
+      glass.label = accessibilityIdentifier ?? "-"
+      glass.source = source
+      glass.dark = dark
+      glass.tint = tint
+      glass.solidFill = classicChrome.fill
+      glass.classic = classic
+    }
     press.isEnabled = interactive && !classic
     if let applied, applied.tint == tint, applied.interactive == interactive, applied.classic == classic, applied.tinted == tinted, applied.shown == shown, applied.colors == colors, applied.source == source, applied.dark == dark {
       applyShape()
