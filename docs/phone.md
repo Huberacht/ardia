@@ -1325,7 +1325,9 @@ JavaScript re-renders can put a prop back, so apply a part on the settled deck a
 Android's glass is the native `Glass` (`GlassView.kt`), the default since 2026-11-23; the drawn `Frost` fallback in
 `look.tsx` stays only for a build without the native look module. Every glass surface goes through `ChromeSurface` or
 `LookGlass`: the page bar's circles and address capsule, the host pill, the deck's `···`, switcher and bottom bar, the
-start page's buttons, Reader's buttons, toasts and the Duo toolbar. Menus and confirmations stay Android's solid
+start page's buttons, Reader's buttons, toasts and the Duo toolbar; voice search's Done, Search and Browse for Me and
+its Cancel, which iPhone draws as the frost variant `glass` (SwiftUI's `glassEffect`), draw the native Glass too
+(`LookFrost` turns `variant="glass"` into `Glass`). Menus and confirmations stay Android's solid
 Material ("Decided by the owner (2026-11-19)"). The Compose `GlassCircleButton` (Settings pieces) keeps its solid
 look surface: it has no frost source to refract.
 
@@ -1333,21 +1335,43 @@ look surface: it has no frost source to refract.
   `surfaces` source that wraps the whole app, so until this change the native Glass logged
   `path=fallback (inside its own source)` and never blurred. `GlassSource` (`LookViews.tsx`) now names a source that
   holds what is under the glass and not the glass itself: the page bar and host pill sample `page` (the page stack),
-  the deck's chrome `deck` (its backdrop), the start page's buttons `start` (its spaces and mark). Anything else keeps
-  `surfaces`. A frost over a page in the solid page mode never asks its source to record, so the page under the bar
-  is never recorded without `ArdiaGlassOverPage` (it used to be asked once while the source had not drawn yet).
+  the deck's chrome `deck` (its backdrop), the start page's buttons `start` (its spaces and mark), Reader's buttons
+  `reader` (a source holding only Reader's background, beside its chrome: until #3949 they sat inside `surfaces` and
+  drew the fallback fill), voice search's buttons `voice`. Anything else keeps `surfaces`. A frost over a page in the
+  solid page mode never asks its source to record (it used to be asked once while the source had not drawn yet).
+  A native Glass left with no source, or inside the one it names, for a second is counted once in `glass_unsourced`.
   Known gap: the Duo layouts' toolbar and sidebar glass sit inside `surfaces` and so draw the solid fill and rim, never
   the lens.
+- **Over the deck's backdrop.** A Glass over the backdrop alone blurs and refracts it on Android 13+, as iPhone's glass
+  does, and the backdrop's scene frames redraw the live glasses over it. The tinted fill (a colour sampled from the
+  backdrop, no blur layer) stays for the frost variants, Android 12's glass, which has no lens to add, and a lens
+  the GPU refused (`LiquidGlassRules.samplesBackdrop`).
 - **The lens.** A port of liquid-dom's glass shader (MIT, Andras Prifer, https://github.com/AndrewPrifer/liquid-dom;
   `LiquidGlass.kt`, credited in NOTICE and the Licences page). Across a bezel (14 dp, at most 30 % of the shorter
   side) the surface rises on liquid-dom's convex squircle profile; its normal comes from the shape's distance field
   and that profile's slope (capped at 5.67, about 80°), and `refract()` bends a straight-down ray through it per
   colour channel (IOR 1.5, ± 0.04 dispersion for the colour fringe). The backdrop moves by the refracted ray's xy/z
   times the surface height (9 dp of glass plus the bezel's height), capped at the largest shift `maxShiftDp` finds,
-  about 8 dp. It is an AGSL `RuntimeShader` chained as a `RenderEffect` after the frost's blur and saturation on the
-  frost's downscaled layer, so it samples the blurred backdrop as liquid-dom does, and the layer's margin is at least
-  that shift. The effect is rebuilt only when the shape, size or margin changes. It runs wherever the glass is on the
-  frost's Live path: the start page's buttons and any glass over a live source.
+  about 8 dp. It is an AGSL `RuntimeShader` chained after the blur and saturation of the source's shared strip
+  (below), so it samples the blurred backdrop as liquid-dom does, and one pass refracts every glass of the strip: the
+  shader takes up to 12 shapes (box, corner radius, bezel and shift cap, in the strip's own downscaled pixels), finds
+  the one each pixel is in and bends the backdrop through that one. A thirteenth glass on one strip gets the plain
+  blur. The shader is built once per strip; a new effect is made only when a glass moves, resizes or comes and goes.
+  It runs wherever the glass is on the frost's Live path: the page bar and host pill, the deck's chrome, the start
+  page's buttons, Reader's buttons, voice search's buttons and toasts.
+- **One blur and one lens per source** (`FrostStrip`). Each live frost used to blur and refract its own copy of the
+  source: atrace on the F4 counted 33 GPU render passes a frame on the page with the bar's four glasses (`OpsTask`
+  25,303 in 748 frames) against 2 with the solid bar, and 31 a frame on the idle deck with its five, where every blob
+  frame then took 25 ms (p50) instead of 13. Each glass's lens cost 4 passes, and the glass's 12 dp blur, 5.5 px at a
+  fifth of the size, was just over the sigma of 4 past which Skia's GPU blur downsamples first. Now the frosts of one
+  source with the same blur, saturation and scale share one strip: the union of their bounds plus each one's margin,
+  clamped to the source, drawn at the blur's scale with lens(blur(saturation)) as its `RenderEffect`, recorded once a
+  frame by the first of them to draw. `FrostScale` picks the smallest scale that keeps the blur at 6 px or less in
+  the small layer (a sigma under 4) until it reaches an eighth, so the glass blurs at a sixth. The strip sits at its
+  own place in the source's scaled coordinates (its left and top on whole layer pixels), so a glass draws the strip
+  node translated to the source, with no layer or effect of its own, and no glass's backdrop moves when the strip
+  grows or shrinks. The memory line counts strips (`lookCounts().strips`, `stripRecords`), and a source that stops
+  recording drops them.
 - **The rim.** liquid-dom's white specular: two lights, from the top left and the opposite side, a 1.25 dp band fading
   inward, power 2, added at 50 % (35 % in dark). It is drawn at full resolution over the glass's clip, after the tint,
   as a second `RuntimeShader`, so it stays sharp, and it draws on every glass from Android 13, lens or not, except
@@ -1827,6 +1851,7 @@ Every count and timing the phone can send, for the owner to read as one set and 
 | `material_back_swiped` | a predictive back swipe on Android's Material sheets, dialogs, menus and library | Whether people swipe back out of Material surfaces; zero across Android testers after a release means the swipe stopped reaching them, or Back goes to the wrong surface |
 | `glass_shaders_failed` | Liquid Glass on Android (CodeRabbit on #3759: a lens refused mid-session still reported `lens` at launch) | Counted natively and drained with the pending counts: each time Android refused to build the lens or rim shader, so that glass drew plain frost until the app next came back to the foreground and tried again. `app_launched.glass_render` can't see this, since it's read before any glass draws. Any count on Android 13+ phones means a GPU or driver rejects the AGSL; compare it with the `lens` launches |
 | `drawn_menu_actions_chosen` | Android menu tap fix (#3463) | Watch Android selections against `drawn_menus_opened`. Steady opens and fewer selections can flag lost taps. Opens also include confirmations, so this is a trend, not a tap success rate |
+| `glass_unsourced` | Glass everywhere on Android (#3949: Reader's buttons sat inside their own source and drew the flat fill, unseen) | Counted natively and drained with the pending counts: a native Glass that, for a second after it settled, had no frost source or sat inside the one it names, so it drew the flat fill instead of glass. Counted once per glass. It should stay near zero; a rise after a release means a screen's glass lost its backdrop: look for `path=fallback (no source)` or `(inside its own source)` in the lab's `PAGELAB look frost` lines |
 | `night_shade_verdicts_reused`, `night_shade_verdicts_learned`, `night_shade_verdicts_corrected` | Night Shade's cached verdicts on Android (a tester's report: yahoo.com loaded white until half way) | Counted natively and drained with the pending counts, never for private tabs. `reused` is a page load, with Night Shade not off, whose site's verdict was already known, so the shade was decided before the first paint; `learned` is a site measured for the first time, whose first load can still shade late; `corrected` is a site whose verdict changed, so that load showed the old one until `DOMContentLoaded`. Read `reused` against `learned` for the hit rate, which should climb as testers revisit sites; a `corrected` share that grows means the measurement disagrees with itself between loads |
 
 ## What is left before the Expo app replaces both native apps
@@ -1980,7 +2005,7 @@ and drawn-menu usage counts; no new telemetry fields are sent.
 - One design on both phones: Android takes main's iPhone redesign too ("the same look on Android and iPhone … keep one design, not two"). Plan: flip Android to the redesign, run both suites and an Android phone pass, then delete the classic design and its tests in one commit, so there is never a third state. Where a platform has a native element it uses its own: on iPhone the system context menus with lift and blur and the action sheets, behind one JavaScript component. Android draws its menus instead ("Decided by the owner (2026-11-19)"). Android's native needs for the redesign are with the Android agent:
   - Done: Print (7b4330166), the sync-cycle flag (c095acaec), and the site permissions kept, listed and revoked (91d934628).
   - Done: the Downloads list, with preview, share and delete, refusing anything outside the app's own files in Download/ (76285c87c).
-  - Done: `Glass` with Classic, its shapes, tint and `shown` fade, and the Mac's synced look (045dea52d). Since 2026-11-23 it is Android's default glass, with a Liquid Glass lens and rim light on Android 13 and later (the owner: "port liquid-dom and add liquid glass for Android as well; switch the native liquid glass placeholder"); see "Liquid Glass on Android". The lab flag `ArdiaNativeGlass` is gone; `ArdiaFlatGlass` turns the lens and rim off and `ArdiaGlassOverPage` refracts the page under the bar, for comparison.
+  - Done: `Glass` with Classic, its shapes, tint and `shown` fade, and the Mac's synced look (045dea52d). Since 2026-11-23 it is Android's default glass, with a Liquid Glass lens and rim light on Android 13 and later (the owner: "port liquid-dom and add liquid glass for Android as well; switch the native liquid glass placeholder"); see "Liquid Glass on Android". The lab flag `ArdiaNativeGlass` is gone; `ArdiaFlatGlass` turns the lens and rim off, for comparison. Since #3949 every surface iPhone draws as glass refracts on Android 13+, the page bar over the live page included; `ArdiaGlassOverPage` is gone.
   - Done: the page under the bar, Android's way: the page stops at the bars and the page view paints the bands they cover in the bars' own colours, from iPhone's `obscuredInsets` and a new `obscuredColors` (177dfa936; "Deliberately different").
   - Done: every toolkit piece iPhone's Expo UI screens name, in Compose (ddec03ae1): `SettingsShortcuts`, `SpaceTitle`, `SpacePageDots`, `GlassCircleButton`, `PinnedTiles`, `FullScreenCover` and `FilterTextEditor`, the `spaceBackdrop`, `minListRowHeight` and `navigationBarBackButtonHidden` modifiers, and `spaceMenuSymbol`, `spaceSymbol` and `spaceColor`.
   - Undone: Android's own menus and confirmations behind `MenuTrigger` and `confirmInSheet`, a PopupMenu and an AlertDialog (e42837edd), were removed with the owner's decision of 2026-11-19; Android draws its menus and action sheets.
@@ -3088,7 +3113,7 @@ touch:
 - `ArdiaWithoutPrivatePages` (Android only) makes the page engine act as on a WebView without multi-profile support,
   so Incognito is refused with its "Update Android System WebView for Incognito" toast;
 - motion captures, demo only: `BrowsePagerFreeze <fraction>`, `BrowsePagerScript`, `BrowseLoadFreeze <progress>`;
-- the lab's own flags, such as `ArdiaOneContainerScroll`, `ArdiaOpeningCard`, `ArdiaFlatGlass` (Android's glass as plain frost, without the Liquid Glass lens and rim, for comparing the two), `ArdiaGlassOverPage` (the page bar's glass records and refracts the page, which costs the F4 about three times the janky frames) and `ArdiaRedesign` (Android draws the redesigned design, for checking the page under the bar before it becomes Android's default).
+- the lab's own flags, such as `ArdiaOneContainerScroll`, `ArdiaOpeningCard`, `ArdiaFlatGlass` (Android's glass as plain frost, without the Liquid Glass lens and rim, for comparing the two) and `ArdiaRedesign` (Android draws the redesigned design, for checking the page under the bar before it becomes Android's default).
 
 Flags take `--ez` (or any string but false, no and 0); everything else can be `--es`. The list is `LaunchArguments.kt`
 (`packages/phone/android/src/main/java/com/ardia/appmodel`).

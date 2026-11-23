@@ -1600,13 +1600,16 @@ internal class FrostStrip(val key: Key) {
         private set
     private var recordedAt = Long.MIN_VALUE
     private var effectSet = false
+    private var lensesApplied: LiquidGlassRules.LensField? = null
+    private var lensShader: android.graphics.RuntimeShader? = null
+    var lensed = 0
+        private set
 
     fun fresh(drawingTime: Long, area: Rect): Boolean = recordedAt == drawingTime && covers(area)
 
     fun covers(area: Rect): Boolean = width > 0 && height > 0 && area.left >= left && area.top >= top && area.right <= left + width && area.bottom <= top + height
 
-    fun record(source: RenderNode, area: Rect, sourceWidth: Int, sourceHeight: Int, drawingTime: Long) {
-        val placed = FrostStrip.place(area, sourceWidth, sourceHeight, key.scale)
+    fun record(source: RenderNode, placed: Rect, drawingTime: Long, lenses: LiquidGlassRules.LensField? = null) {
         left = placed.left
         top = placed.top
         width = placed.width()
@@ -1616,8 +1619,13 @@ internal class FrostStrip(val key: Key) {
         val scaledLeft = (left / key.scale).toInt()
         val scaledTop = (top / key.scale).toInt()
         node.setPosition(scaledLeft, scaledTop, scaledLeft + ceil(width / key.scale).toInt().coerceAtLeast(1), scaledTop + ceil(height / key.scale).toInt().coerceAtLeast(1))
-        if (!effectSet && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            node.setRenderEffect(FrostStrip.frosted(key.blurPx / key.scale, key.saturation))
+        val lensBack = lenses != null && lensed == 0 && !GlassShaders.lens.failed
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (!effectSet || lenses != lensesApplied || lensBack)) {
+            val frosted = FrostStrip.frosted(key.blurPx / key.scale, key.saturation)
+            val lens = if (lenses != null && Build.VERSION.SDK_INT >= LiquidGlassRules.LENS_MIN_SDK) GlassShaders.lensFor(lenses) { lensShader ?: LiquidGlassShaders.lens().also { lensShader = it } } else null
+            node.setRenderEffect(if (lens == null) frosted else RenderEffect.createChainEffect(lens, frosted))
+            lensed = if (lens == null) 0 else lenses?.lenses?.size ?: 0
+            lensesApplied = lenses
             effectSet = true
         }
         val recording = node.beginRecording()
@@ -1633,6 +1641,9 @@ internal class FrostStrip(val key: Key) {
     fun release() {
         node.discardDisplayList()
         recordedAt = Long.MIN_VALUE
+        effectSet = false
+        lensesApplied = null
+        lensed = 0
         width = 0
         height = 0
     }
@@ -1660,10 +1671,10 @@ internal class FrostStrip(val key: Key) {
 }
 
 internal object FrostScale {
-    const val MIN_LOW_RES_BLUR = 6f
+    const val MAX_LOW_RES_BLUR = 6f
     const val MAX_SCALE = 8f
 
-    fun of(blurPixels: Float): Float = (blurPixels / MIN_LOW_RES_BLUR).toInt().toFloat().coerceIn(1f, MAX_SCALE)
+    fun of(blurPixels: Float): Float = ceil(blurPixels / MAX_LOW_RES_BLUR).coerceIn(1f, MAX_SCALE)
 }
 
 internal object FrostRefresh {
@@ -1709,8 +1720,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         }
 
     private var blurNode: RenderNode? = null
-    private var lensApplied = false
-    private var effectLens: RenderEffect? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bounds = RectF()
     private val clip = Path()
@@ -1781,13 +1790,11 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     internal open fun solidFill(dark: Boolean): Int? = null
 
-    internal open fun lensEffect(marginPx: Float, scale: Float): RenderEffect? = null
+    internal open fun lensAt(xPx: Int, yPx: Int, scale: Float): LiquidGlassRules.StripLens? = null
 
     internal open fun forgetLayer() {
         blurNode?.discardDisplayList()
         blurNode = null
-        lensApplied = false
-        effectLens = null
         layerWidth = 0
         layerHeight = 0
     }
@@ -1846,7 +1853,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             val blur = style.blurRadius.value * density
             val scale = FrostScale.of(blur)
             val margin = LiquidGlassRules.marginPx(blur, lensReach())
-            applyLens(layerNode, lensEffect(margin, scale))
             val offset = offsetTo(from)
             lastOffset = offset
             val dx = (offset shr 32).toInt()
@@ -1946,14 +1952,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         }
     }
 
-    private fun applyLens(layerNode: RenderNode, lens: RenderEffect?) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        if (lensApplied && lens === effectLens) return
-        lensApplied = true
-        effectLens = lens
-        layerNode.setRenderEffect(lens)
-    }
-
     private val stripBox = Rect()
 
     private fun stripArea(x: Int, y: Int, margin: Float): Rect {
@@ -1972,17 +1970,29 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         return FrostStrip.Key(blur, style.saturation, FrostScale.of(blur))
     }
 
+    private fun lensIn(from: FrostSourceView, placed: Rect, scale: Float): LiquidGlassRules.StripLens? {
+        val offset = offsetTo(from)
+        return lensAt(-(offset shr 32).toInt() - placed.left, -offset.toInt() - placed.top, scale)
+    }
+
     private fun shareStrip(from: FrostSourceView, key: FrostStrip.Key, mine: Rect): FrostStrip {
         val strip = from.strip(key)
         val now = drawingTime
         if (strip.fresh(now, mine)) return strip
         val area = Rect(mine)
         val theirs = Rect()
+        val sharing = ArrayList<FrostView>()
+        sharing += this
         for (other in FrostSources.frostsOf(from)) {
             if (other === this) continue
-            if (other.stripNeed(from, theirs) == key) area.union(theirs)
+            if (other.stripNeed(from, theirs) == key) {
+                area.union(theirs)
+                sharing += other
+            }
         }
-        from.node?.let { strip.record(it, area, from.width, from.height, now) }
+        val placed = FrostStrip.place(area, from.width, from.height, key.scale)
+        val lenses = LiquidGlassRules.lensField(sharing.mapNotNull { it.lensIn(from, placed, key.scale) }, density, key.scale)
+        from.node?.let { strip.record(it, placed, now, lenses) }
         LookActivity.stripRecords += 1
         return strip
     }

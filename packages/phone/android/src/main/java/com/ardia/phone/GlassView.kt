@@ -8,7 +8,6 @@ import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.os.Build
 import android.view.View
@@ -139,11 +138,8 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     private val box = RectF()
     private val outlinePath = Path()
     private var radiusPx = 0f
-    private var lensShape: LiquidGlassRules.LensShape? = null
-    private var lens: RenderEffect? = null
     private var rimShader: RuntimeShader? = null
     private var rimDrawn: LiquidGlassRules.Rim? = null
-    private var lensThisDraw = false
     private val bound = LensBound()
     private val unsourced = UnsourcedWatch({ job, delay -> postDelayed(job, delay) }, { job -> removeCallbacks(job) }) { isAttachedToWindow && !isClassic && FrostPage.unsourced(lastChoice) }
 
@@ -177,31 +173,14 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
         return lensBound.shiftDp * density
     }
 
-    override fun lensEffect(marginPx: Float, scale: Float): RenderEffect? {
-        if (!lensOn || Build.VERSION.SDK_INT < LiquidGlassRules.LENS_MIN_SDK) {
-            lensThisDraw = false
-            return null
-        }
+    override fun lensAt(xPx: Int, yPx: Int, scale: Float): LiquidGlassRules.StripLens? {
+        if (!lensOn || Build.VERSION.SDK_INT < LiquidGlassRules.LENS_MIN_SDK || width <= 0 || height <= 0) return null
         val measured = lensBound
-        val wanted = LiquidGlassRules.lensShape(width, height, marginPx, scale, radiusPx, density, measured.bezelDp, measured.shiftDp)
-        if (wanted != lensShape || lens == null) {
-            lensShape = wanted
-            lens = GlassShaders.lens.attempt { (GlassShaders.makeLens ?: LiquidGlassShaders::lensEffect)(wanted) }
-        }
-        lensThisDraw = lens != null
-        return lens
+        val radius = GlassRules.radiusDp(shape, glassCornerRadius, width / density, height / density) * density
+        return LiquidGlassRules.stripLens(xPx, yPx, width, height, scale, radius, density, measured.bezelDp, measured.shiftDp)
     }
 
     override fun settled(choice: FrostPage.Choice) = unsourced.settled(choice)
-
-    override fun forgetLayer() {
-        super.forgetLayer()
-        lensShape = null
-        lens = null
-        lensThisDraw = false
-    }
-
-    internal val drawsLens: Boolean get() = lensThisDraw && lastChoice?.path == FrostPage.Path.Live
 
     private val drawsRim: Boolean get() = !GlassShaders.rim.failed && LiquidGlassRules.rimWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, blurs = !lookIsOff && !budgetDegraded)
 
@@ -265,7 +244,6 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     private fun drawGlass(canvas: Canvas) {
-        lensThisDraw = false
         super.drawLook(canvas)
         box.set(0f, 0f, width.toFloat(), height.toFloat())
         outlinePath.reset()

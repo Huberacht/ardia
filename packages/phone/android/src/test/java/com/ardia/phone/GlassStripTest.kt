@@ -56,6 +56,49 @@ class GlassStripTest {
         }
     }
 
+    private fun twoGlassesOverOneSource(): Triple<FrostSourceView, GlassView, GlassView> {
+        val root = FrameLayout(activity)
+        activity.setContentView(root)
+        val source = FrostSourceView(activity, appContext).apply { sourceId = "strip-test" }
+        source.addView(View(activity).apply { setBackgroundColor(Color.rgb(30, 120, 200)) })
+        val tabs = GlassView(activity, appContext).apply { this.source = "strip-test"; shape = "circle" }
+        val address = GlassView(activity, appContext).apply { this.source = "strip-test"; shape = "capsule" }
+        root.addView(source)
+        root.addView(tabs)
+        root.addView(address)
+        root.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(470, View.MeasureSpec.EXACTLY))
+        root.at(0, 0, 320, 470)
+        source.at(0, 0, 320, 470)
+        source.getChildAt(0).at(0, 0, 320, 470)
+        tabs.at(10, 400, 44, 44)
+        address.at(64, 400, 200, 44)
+        return Triple(source, tabs, address)
+    }
+
+    @Test
+    fun oneLensPassRefractsEveryGlassOfTheStrip() {
+        var built = 0
+        var shapes = 0
+        GlassShaders.makeLens = { field ->
+            built += 1
+            shapes = field.lenses.size
+            android.graphics.RenderEffect.createOffsetEffect(0f, 0f)
+        }
+        val (source, tabs, address) = twoGlassesOverOneSource()
+        onHardware(tabs)
+        onHardware(address)
+        onHardware(source)
+        onHardware(tabs)
+        onHardware(address)
+        val strip = source.stripsHeld.single()
+        assertEquals("both glasses' shapes go into the one lens", 2, shapes)
+        assertEquals(2, strip.lensed)
+        val before = built
+        onHardware(tabs)
+        onHardware(address)
+        assertEquals("a glass that hasn't moved doesn't rebuild the lens", before, built)
+    }
+
     @Test
     fun everyGlassOverOneSourceSharesOneBlurredStripThatCoversThemAll() {
         val root = FrameLayout(activity)
@@ -90,6 +133,7 @@ class GlassStripTest {
         assertTrue("and past the right one's edge", strip.left + strip.width >= 264)
         assertTrue("it stays a strip near the bar, not the whole page", strip.top >= 300)
         assertTrue(tabs.holdsLayer && address.holdsLayer)
+        assertEquals("the lens this test can't build leaves the plain shared blur", 0, strip.lensed)
         source.release()
         assertEquals("releasing the source drops its strips", 0, source.stripsHeld.size)
     }

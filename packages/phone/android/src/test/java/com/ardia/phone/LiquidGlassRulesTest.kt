@@ -120,22 +120,25 @@ class LiquidGlassRulesTest {
     }
 
     @Test
-    fun theShapeSitsInsideTheDownscaledLayerAfterItsMargin() {
+    fun eachGlassSitsInTheSharedStripAtItsOwnPlaceAndScale() {
         val density = 2.75f
         val bound = LensBound().measure(132, 132, density)
-        val shape = LiquidGlassRules.lensShape(widthPx = 132, heightPx = 132, marginPx = 66f, scale = 5f, radiusPx = 66f, density = density, bezelDp = bound.bezelDp, shiftDp = bound.shiftDp)
-        assertEquals(13.2f, shape.left, 0.001f)
-        assertEquals(13.2f, shape.top, 0.001f)
-        assertEquals(39.6f, shape.right, 0.001f)
-        assertEquals(39.6f, shape.bottom, 0.001f)
-        assertEquals(13.2f, shape.radius, 0.001f)
-        assertEquals(LiquidGlassRules.CIRCULAR_CORNER_EXPONENT, shape.exponent, 0f)
-        assertEquals(params.bezelDp * density / 5f, shape.bezel, 0.001f)
-        assertEquals(params.depthDp * density / 5f, shape.depth, 0.001f)
-        assertTrue("the shader's cap fits the margin", shape.maxShift <= shape.left)
+        val lens = LiquidGlassRules.stripLens(xPx = 66, yPx = 30, widthPx = 132, heightPx = 132, scale = 6f, radiusPx = 66f, density = density, bezelDp = bound.bezelDp, shiftDp = bound.shiftDp)
+        assertEquals(11f, lens.left, 0.001f)
+        assertEquals(5f, lens.top, 0.001f)
+        assertEquals(33f, lens.right, 0.001f)
+        assertEquals(27f, lens.bottom, 0.001f)
+        assertEquals(11f, lens.radius, 0.001f)
+        assertEquals(params.bezelDp * density / 6f, lens.bezel, 0.001f)
+        assertEquals(bound.shiftDp * density / 6f, lens.maxShift, 0.001f)
         val wide = LensBound().measure(800, 132, density)
-        val capsule = LiquidGlassRules.lensShape(widthPx = 800, heightPx = 132, marginPx = 66f, scale = 5f, radiusPx = 999f, density = density, bezelDp = wide.bezelDp, shiftDp = wide.shiftDp)
-        assertEquals("a radius past half the short side is a capsule", 13.2f, capsule.radius, 0.001f)
+        val capsule = LiquidGlassRules.stripLens(xPx = 0, yPx = 0, widthPx = 800, heightPx = 132, scale = 6f, radiusPx = 999f, density = density, bezelDp = wide.bezelDp, shiftDp = wide.shiftDp)
+        assertEquals("a radius past half the short side is a capsule", 11f, capsule.radius, 0.001f)
+        val field = LiquidGlassRules.lensField(List(LiquidGlassRules.MAX_LENSES + 3) { lens }, density, 6f)!!
+        assertEquals("the shader holds a fixed number of shapes", LiquidGlassRules.MAX_LENSES, field.lenses.size)
+        assertEquals(params.depthDp * density / 6f, field.depth, 0.001f)
+        assertEquals("no glass, no lens", null, LiquidGlassRules.lensField(emptyList(), density, 6f))
+        assertTrue("the shader's loop bound is the list's cap", LiquidGlassRules.LENS_SHADER.contains("i < ${LiquidGlassRules.MAX_LENSES}"))
     }
 
     @Test
@@ -159,8 +162,11 @@ class LiquidGlassRulesTest {
 
     @Test
     fun theShadersNameEveryUniformTheyAreGiven() {
-        for (name in listOf("backdrop", "box", "radius", "exponent", "bezel", "depth", "maxShift", "ior", "dispersion", "maxSlope")) {
-            assertTrue(name, LiquidGlassRules.LENS_SHADER.contains("uniform") && Regex("uniform \\w+ $name;").containsMatchIn(LiquidGlassRules.LENS_SHADER))
+        for (name in listOf("backdrop", "count", "exponent", "depth", "ior", "dispersion", "maxSlope")) {
+            assertTrue(name, Regex("uniform \\w+ $name;").containsMatchIn(LiquidGlassRules.LENS_SHADER))
+        }
+        for (name in listOf("boxes", "shapes")) {
+            assertTrue(name, Regex("uniform float4 $name\\[${LiquidGlassRules.MAX_LENSES}\\];").containsMatchIn(LiquidGlassRules.LENS_SHADER))
         }
         for (name in listOf("box", "radius", "exponent", "light", "band", "strength", "opposite", "falloff", "sharpness", "opacity")) {
             assertTrue(name, Regex("uniform \\w+ $name;").containsMatchIn(LiquidGlassRules.RIM_SHADER))
