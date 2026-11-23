@@ -299,7 +299,9 @@ struct PluginSandbox {
 
   static let toolFolders = ["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec", "/usr/local", "/opt/homebrew"]
 
-  static let toolStateFolders = ["/usr/local/var", "/opt/homebrew/var"]
+  static let toolPrivateFolders = ["/usr/local/var", "/usr/local/etc", "/opt/homebrew/var", "/opt/homebrew/etc"]
+
+  static let sharedTemporaryTrees = ["/private/tmp", "/private/var", "/tmp", "/var"]
 
   static let toolSystemFiles = [
     "/private/etc/passwd", "/private/etc/group", "/private/etc/protocols", "/private/etc/services", "/private/etc/shells", "/private/etc/localtime",
@@ -313,6 +315,8 @@ struct PluginSandbox {
   static let onlineSystemFiles = ["/private/etc/hosts", "/private/etc/resolv.conf", "/private/var/run/resolv.conf"]
 
   static let developerLink = "/private/var/db/xcode_select_link"
+
+  static let officialFolderName = "OfficialPlugins"
 
   static func developerFolder(link: String = developerLink) -> String? {
     guard let real = resolved(link), real.hasPrefix("/") else { return nil }
@@ -340,7 +344,7 @@ struct PluginSandbox {
         (allow process-fork)
         (allow process-exec file-map-executable \(any("subpath", toolFolders + [commandLineTools]))\(developerRule))
         (allow file-read* \(any("subpath", toolFolders + [commandLineTools] + toolSystemFolders)) \(any("literal", toolSystemFiles))\(developerRule))
-        (deny file-read* file-map-executable process-exec \(any("subpath", toolStateFolders)))
+        (deny file-read* file-map-executable process-exec \(any("subpath", toolPrivateFolders)))
         (allow file-read* file-write-data file-ioctl (literal "/dev/dtracehelper"))
         """
     }
@@ -420,6 +424,7 @@ struct PluginSandbox {
     let folder = (parent as NSString).lastPathComponent == "bin" ? (parent as NSString).deletingLastPathComponent : parent
     if folder == "/" || folder.split(separator: "/").count < 2 || protected.contains(where: { Self.overlaps($0, folder) }) { return program }
     if Self.unreadableTrees.contains(where: { Self.overlaps($0, folder) }) && !readable(folder) { return program }
+    if Self.sharedTemporaryTrees.contains(where: { Self.overlaps($0, folder) }) && !readable(folder) { return program }
     return folder
   }
 
@@ -456,10 +461,12 @@ struct PluginSandbox {
     }
     let pluginsRoot = (configFolder as NSString).appendingPathComponent("plugins")
     let inPluginsRoot = Self.isInside(pluginFolder, pluginsRoot) && pluginFolder != pluginsRoot
+    let officialRoot = (appData as NSString).appendingPathComponent(Self.officialFolderName)
+    let inOfficialStore = Self.isInside(pluginFolder, officialRoot) && pluginFolder.dropFirst(officialRoot.count + 1).split(separator: "/", omittingEmptySubsequences: false).count == 2
     if pluginFolder == "/" || [home, configFolder, appData].contains(where: { Self.isInside($0, pluginFolder) }) {
       throw Refusal.unsafe("its folder takes in Ardia's data, its settings or your home folder")
     }
-    if (Self.isInside(pluginFolder, configFolder) || Self.isInside(pluginFolder, appData)) && !inPluginsRoot {
+    if (Self.isInside(pluginFolder, configFolder) || Self.isInside(pluginFolder, appData)) && !inPluginsRoot && !inOfficialStore {
       throw Refusal.unsafe("its folder is in Ardia's data or config folder")
     }
     if !Self.isInside(program, pluginFolder) && (Self.isInside(program, appData) || Self.isInside(program, configFolder)) {

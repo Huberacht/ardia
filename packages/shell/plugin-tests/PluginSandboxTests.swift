@@ -60,6 +60,25 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertNotNil(refusal(sandbox(plugin: "/")))
   }
 
+  func testAnOfficialCopyInTheStoreIsAPluginFolderAndNothingAroundItIs() throws {
+    let copy = "\(data)/OfficialPlugins/example/\(String(repeating: "a", count: 64))"
+    XCTAssertNil(refusal(sandbox(plugin: copy)), "a verified copy starts")
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPlugins")))
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPlugins/example")))
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(copy)/bin")))
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPluginsX/example/copy")))
+    try FileManager.default.createDirectory(atPath: copy, withIntermediateDirectories: true)
+    try "{}".write(toFile: "\(copy)/plugin.json", atomically: true, encoding: .utf8)
+    let other = "\(data)/OfficialPlugins/other/\(String(repeating: "b", count: 64))"
+    try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
+    try "secret".write(toFile: "\(other)/plugin.json", atomically: true, encoding: .utf8)
+    let box = sandbox(plugin: copy)
+    XCTAssertEqual(try run(box, "cat '\(copy)/plugin.json'"), 0, "it reads its own copy")
+    XCTAssertNotEqual(try run(box, "cat '\(other)/plugin.json'"), 0, "not another official plugin's")
+    XCTAssertNotEqual(try run(box, "ls '\(data)/OfficialPlugins'"), 0, "nor list the store")
+    XCTAssertNotEqual(try run(box, "echo x > '\(copy)/written'"), 0, "and its copy stays read-only")
+  }
+
   func testAProgramInArdiasDataIsRefusedUnlessItIsThePluginsOwn() {
     XCTAssertNotNil(refusal(sandbox(program: "\(data)/Chromium/Default/Cookies")))
     XCTAssertNil(refusal(sandbox(program: "\(plugin)/helper")))
@@ -69,6 +88,9 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertEqual(sandbox(program: "/bin/sh").installFolder(), "/bin/sh")
     XCTAssertEqual(sandbox(program: "\(home)/bin/tool").installFolder(), "\(home)/bin/tool")
     XCTAssertEqual(sandbox(program: "/opt/homebrew/opt/node/bin/node").installFolder(), "/opt/homebrew/opt/node")
+    XCTAssertEqual(sandbox(program: "/private/tmp/shared/bin/tool").installFolder(), "/private/tmp/shared/bin/tool", "a shared temp folder isn't granted for the program in it")
+    XCTAssertEqual(sandbox(program: "/private/var/folders/x/T/tool").installFolder(), "/private/var/folders/x/T/tool")
+    XCTAssertEqual(sandbox(program: "\(plugin)/bin/tool").installFolder(), "\(plugin)/bin/tool", "its own folder is read through PLUGIN, not INSTALL")
   }
 
   func testPathsGoInAsParametersNeverIntoTheProfile() throws {

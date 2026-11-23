@@ -791,6 +791,38 @@ final class OfficialPluginsTests: XCTestCase {
     XCTAssertNil(OfficialArchive.verifiedPayloadDigest(archive: archive, sha: sha, top: "tool", scratch: root, limits: small), "verifying a kept copy holds to the same cap")
   }
 
+  func testFoldersAFileImpliesCountTowardTheEntryCap() throws {
+    var small = OfficialArchive.Limits.standard
+    small.entries = 40
+    let deep = (0..<5).map { file("tool/\($0)/a/b/c/d/e/f/g/h/i", Data("x".utf8)) }
+    let archive = try pluginArchive(manifest(), extra: deep)
+    let stage = try freshStage()
+    XCTAssertEqual(unpack(archive, into: stage, limits: small), "the archive has more than 40 entries", "9 headers, but 45 folders made")
+    XCTAssertNil(unpack(try pluginArchive(manifest(), extra: Array(deep.prefix(3))), into: try freshStage(), limits: small), "3 such files, 30 folders, fit")
+  }
+
+  func testTrailingBytesAfterTheGzipMemberAreRefused() throws {
+    let archive = try pluginArchive(manifest(), extra: [file("tool/zeros", Data(count: 3 << 20))])
+    let padded = "\(root)/padded.tar.gz"
+    var bytes = try Data(contentsOf: URL(fileURLWithPath: archive))
+    bytes.append(noise(4 << 20))
+    try bytes.write(to: URL(fileURLWithPath: padded))
+    XCTAssertEqual(unpack(padded, into: try freshStage()), "the download has data after its archive")
+    let twice = "\(root)/twice.tar.gz"
+    let original = try Data(contentsOf: URL(fileURLWithPath: archive))
+    try (original + original).write(to: URL(fileURLWithPath: twice))
+    XCTAssertEqual(unpack(twice, into: try freshStage()), "the download has data after its archive", "a second gzip member is refused too")
+    var corrupt = original
+    corrupt[corrupt.count - 6] ^= 0xff
+    let badCheck = "\(root)/bad-crc.tar.gz"
+    try corrupt.write(to: URL(fileURLWithPath: badCheck))
+    XCTAssertEqual(unpack(badCheck, into: try freshStage()), "the download is damaged", "the trailer's CRC is checked")
+  }
+
+  func testAnOutOfRangePaxRecordLengthIsRefusedNotTrapped() {
+    XCTAssertNil(OfficialArchive.paxPath(Data("9223372036854775807 path=x\n".utf8)))
+  }
+
   func testFoldersDeeperThanTheCapAreRefused() throws {
     let deepest = Array(repeating: "a", count: OfficialArchive.maxDepth - 1).joined(separator: "/")
     let fits = try pluginArchive(manifest(), extra: [file("tool/\(deepest)", Data("deep".utf8))])

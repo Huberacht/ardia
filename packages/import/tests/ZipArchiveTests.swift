@@ -1,6 +1,7 @@
 import Compression
 import Foundation
 import XCTest
+import zlib
 @testable import ArdiaImportCore
 
 final class ZipArchiveTests: XCTestCase {
@@ -10,6 +11,11 @@ final class ZipArchiveTests: XCTestCase {
     var deflate = true
     var symbolicLink = false
     var declaredSize: Int?
+    var declaredCRC: UInt32?
+  }
+
+  static func crc(_ data: Data) -> Int {
+    Int(data.withUnsafeBytes { raw in raw.isEmpty ? crc32(0, nil, 0) : crc32(0, raw.bindMemory(to: Bytef.self).baseAddress, uInt(raw.count)) })
   }
 
   static func deflated(_ data: Data) -> Data {
@@ -33,12 +39,13 @@ final class ZipArchiveTests: XCTestCase {
       let size = member.declaredSize ?? member.body.count
       let name = Array(member.name.utf8)
       let offset = file.count
-      file.append(contentsOf: le32(0x0403_4B50) + le16(20) + le16(0x800) + le16(member.deflate ? 8 : 0) + le16(0) + le16(0) + le32(0))
+      let check = member.declaredCRC.map(Int.init) ?? crc(member.body)
+      file.append(contentsOf: le32(0x0403_4B50) + le16(20) + le16(0x800) + le16(member.deflate ? 8 : 0) + le16(0) + le16(0) + le32(check))
       file.append(contentsOf: le32(stored.count) + le32(size) + le16(name.count) + le16(0) + name)
       file.append(stored)
       let madeBy = member.symbolicLink ? (3 << 8) | 20 : 20
       let external = member.symbolicLink ? 0o120777 << 16 : 0
-      directory.append(contentsOf: le32(0x0201_4B50) + le16(madeBy) + le16(20) + le16(0x800) + le16(member.deflate ? 8 : 0) + le16(0) + le16(0) + le32(0))
+      directory.append(contentsOf: le32(0x0201_4B50) + le16(madeBy) + le16(20) + le16(0x800) + le16(member.deflate ? 8 : 0) + le16(0) + le16(0) + le32(check))
       directory.append(contentsOf: le32(stored.count) + le32(size) + le16(name.count) + le16(0) + le16(0) + le16(0) + le16(0) + le32(external) + le32(offset) + name)
     }
     let count = declaredCount ?? members.count
@@ -101,6 +108,42 @@ final class ZipArchiveTests: XCTestCase {
   func testAStoredEntryWhoseSizesDisagreeIsDamaged() {
     let member = Member(name: "notes.csv", body: Data("a,b".utf8), deflate: false, declaredSize: 99)
     XCTAssertThrowsError(try ZipArchive(Self.zip([member]))) { XCTAssertEqual($0 as? ImportError, .unreadable("Damaged zip entry")) }
+  }
+
+  func testAnEntryDeclaredShorterThanItInflatesIsRefusedNotCut() throws {
+    let rows = Data("url,username,password\nhttps://a.example,me,one\nhttps://b.example,me,two\n".utf8)
+    let firstRow = rows.prefix(rows.count - 27)
+    let member = Member(name: "Passwords.csv", body: rows, declaredSize: firstRow.count, declaredCRC: UInt32(Self.crc(Data(firstRow))))
+    let archive = try ZipArchive(Self.zip([member]))
+    XCTAssertThrowsError(try archive.extract(archive.entries[0])) { XCTAssertEqual($0 as? ImportError, .unreadable("Couldn't inflate Passwords.csv")) }
+  }
+
+  func testAnEntryWhoseChecksumDisagreesIsDamaged() throws {
+    let archive = try ZipArchive(Self.zip([Member(name: "History.json", body: Data("{}".utf8), declaredCRC: 1), Member(name: "notes.csv", body: Data("a".utf8), deflate: false, declaredCRC: 1)]))
+    for entry in archive.entries {
+      XCTAssertThrowsError(try archive.extract(entry)) { XCTAssertEqual($0 as? ImportError, .unreadable("\(entry.name) is damaged")) }
+    }
+  }
+
+  func testDeflatedDataPastTheEndOfItsStreamIsRefused() throws {
+    var zip = Self.zip([Member(name: "History.json", body: Data("{}".utf8))])
+    let archive = try ZipArchive(zip)
+    XCTAssertEqual(try archive.extract(archive.entries[0]), Data("{}".utf8), "control")
+    let padded = Self.deflated(Data("{}".utf8)) + Data("tail".utf8)
+    zip = Self.zip([Member(name: "History.json", body: Data("{}".utf8))])
+    let directoryEntry = try XCTUnwrap(zip.range(of: Data([0x50, 0x4B, 0x01, 0x02])))
+    var rebuilt = Data()
+    rebuilt.append(zip[..<(30 + "History.json".utf8.count)])
+    rebuilt.append(padded)
+    var directory = Data(zip[directoryEntry.lowerBound...])
+    func put32(_ data: inout Data, _ at: Int, _ value: Int) { for i in 0..<4 { data[data.startIndex + at + i] = UInt8((value >> (8 * i)) & 0xff) } }
+    put32(&rebuilt, 18, padded.count)
+    put32(&directory, 20, padded.count)
+    let eocd = directory.count - 22
+    put32(&directory, eocd + 16, rebuilt.count)
+    rebuilt.append(directory)
+    let tampered = try ZipArchive(rebuilt)
+    XCTAssertThrowsError(try tampered.extract(tampered.entries[0])) { XCTAssertEqual($0 as? ImportError, .unreadable("Couldn't inflate History.json")) }
   }
 
   func testADeflatedEntryThatInflatesShortIsDamaged() throws {

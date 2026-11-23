@@ -1,7 +1,7 @@
-import Compression
 import CryptoKit
 import Darwin
 import Foundation
+import zlib
 
 enum OfficialArchive {
   struct Limits {
@@ -60,7 +60,7 @@ enum OfficialArchive {
 
   private static let block = 512
   private static let chunk = 1 << 20
-  private static let feed = 4 << 10
+  private static let step = 4 << 10
 
   static func sha256(file path: String) -> String? {
     let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
@@ -171,105 +171,68 @@ enum OfficialArchive {
     guard lseek(input, 0, SEEK_SET) == 0 else { return "the download couldn't be read" }
     var sized = stat()
     guard fstat(input, &sized) == 0 else { return "the download couldn't be read" }
+    var magic = [UInt8](repeating: 0, count: 3)
+    guard pread(input, &magic, 3, 0) == 3, magic == [0x1f, 0x8b, 8] else { return "the download isn't a gzip file" }
     let limit = limits.expandedAllowed(compressed: Int64(sized.st_size))
-    var data = Data()
-    var headerLength: Int?
-    while headerLength == nil {
-      var piece = [UInt8](repeating: 0, count: 64 * 1024)
-      let count = read(input, &piece, piece.count)
-      if count < 0 && errno == EINTR { continue }
-      guard count > 0 else { return "the download isn't a gzip file" }
-      data.append(piece, count: count)
-      switch gzipHeaderLength(data) {
-      case .some(.some(let length)): headerLength = length
-      case .some(.none): return "the download isn't a gzip file"
-      case .none: if data.count > 1 << 20 { return "the download isn't a gzip file" }
-      }
-    }
-    let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
-    defer { stream.deallocate() }
-    guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else { return "the download couldn't be unpacked" }
-    defer { compression_stream_destroy(stream) }
+    var stream = z_stream()
+    guard inflateInit2_(&stream, 15 + 16, zlibVersion(), Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return "the download couldn't be unpacked" }
+    defer { inflateEnd(&stream) }
     let source = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
     let target = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
     defer {
       source.deallocate()
       target.deallocate()
     }
-    var pending = Data(data.dropFirst(headerLength!))
-    var cursor = 0
-    var fed = Int64(headerLength!)
+    var fed: Int64 = 0
     var written: Int64 = 0
+    var buffered = 0
+    func flush() -> String? {
+      var offset = 0
+      while offset < buffered {
+        let count = write(output, target + offset, buffered - offset)
+        if count < 0 {
+          if errno == EINTR { continue }
+          return "the download couldn't be unpacked (\(String(cString: strerror(errno))))"
+        }
+        offset += count
+      }
+      buffered = 0
+      return nil
+    }
     var atEnd = false
-    var finished = false
-    while !finished {
-      if cursor == pending.count && !atEnd {
+    while true {
+      if stream.avail_in == 0 && !atEnd {
         let count = read(input, source, chunk)
         if count < 0 {
           if errno == EINTR { continue }
           return "the download couldn't be read"
         }
-        pending = count == 0 ? Data() : Data(bytes: source, count: count)
         atEnd = count == 0
-        cursor = 0
+        stream.next_in = source
+        stream.avail_in = uInt(count)
       }
-      let consumed: Int = pending.withUnsafeBytes { raw -> Int in
-        let given = min(raw.count - cursor, feed)
-        stream.pointee.src_ptr = raw.bindMemory(to: UInt8.self).baseAddress.map { UnsafePointer($0 + cursor) } ?? UnsafePointer(source)
-        stream.pointee.src_size = given
-        stream.pointee.dst_ptr = target
-        stream.pointee.dst_size = chunk
-        let status = compression_stream_process(stream, atEnd && given == raw.count - cursor ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0)
-        if status == COMPRESSION_STATUS_ERROR { return -1 }
-        if status == COMPRESSION_STATUS_END { finished = true }
-        return given - stream.pointee.src_size
-      }
-      guard consumed >= 0 else { return "the download is damaged" }
-      let produced = chunk - stream.pointee.dst_size
-      fed += Int64(consumed)
-      cursor += consumed
+      if buffered + step > chunk, let problem = flush() { return problem }
+      let before = stream.avail_in
+      stream.next_out = target + buffered
+      stream.avail_out = uInt(step)
+      let status = inflate(&stream, Z_NO_FLUSH)
+      let produced = step - Int(stream.avail_out)
+      fed += Int64(before - stream.avail_in)
       if produced > 0 {
+        buffered += produced
         written += Int64(produced)
         inflation.mark(produced: written, consumed: fed)
         guard written <= limits.expanded else { return "the download unpacks to more than \(limits.expanded >> 20) MB" }
         guard written <= limit else { return "the download unpacks to more than \(limits.ratio) times its size" }
-        var offset = 0
-        while offset < produced {
-          let count = write(output, target + offset, produced - offset)
-          if count < 0 {
-            if errno == EINTR { continue }
-            return "the download couldn't be unpacked (\(String(cString: strerror(errno))))"
-          }
-          offset += count
-        }
       }
-      if !finished && atEnd && cursor == pending.count && produced == 0 { return "the download ends too soon" }
+      if status == Z_STREAM_END { break }
+      if status == Z_BUF_ERROR && atEnd && stream.avail_in == 0 { return "the download ends too soon" }
+      guard status == Z_OK || status == Z_BUF_ERROR else { return "the download is damaged" }
     }
-    var info = stat()
-    guard fstat(input, &info) == 0, info.st_size >= 18 else { return "the download is damaged" }
-    var tail = [UInt8](repeating: 0, count: 8)
-    guard pread(input, &tail, 8, info.st_size - 8) == 8 else { return "the download couldn't be read" }
-    let size = UInt32(tail[4]) | UInt32(tail[5]) << 8 | UInt32(tail[6]) << 16 | UInt32(tail[7]) << 24
-    guard size == UInt32(truncatingIfNeeded: written) else { return "the download is damaged" }
+    if let problem = flush() { return problem }
+    var extra: UInt8 = 0
+    guard stream.avail_in == 0, fed == Int64(sized.st_size), read(input, &extra, 1) == 0 else { return "the download has data after its archive" }
     return nil
-  }
-
-  static func gzipHeaderLength(_ data: Data) -> Int?? {
-    let bytes = [UInt8](data.prefix(1 << 20))
-    guard bytes.count >= 10 else { return .none }
-    guard bytes[0] == 0x1f, bytes[1] == 0x8b, bytes[2] == 8, bytes[3] & 0xe0 == 0 else { return .some(nil) }
-    let flags = bytes[3]
-    var at = 10
-    if flags & 0x04 != 0 {
-      guard bytes.count >= at + 2 else { return .none }
-      at += 2 + Int(bytes[at]) + Int(bytes[at + 1]) << 8
-    }
-    for flag: UInt8 in [0x08, 0x10] where flags & flag != 0 {
-      guard let end = bytes[min(at, bytes.count)...].firstIndex(of: 0) else { return .none }
-      at = end + 1
-    }
-    if flags & 0x02 != 0 { at += 2 }
-    return bytes.count >= at ? .some(at) : .none
   }
 
   struct Header {
@@ -329,7 +292,7 @@ enum OfficialArchive {
     var at = 0
     while at < bytes.count {
       guard let space = bytes[at...].firstIndex(of: 0x20), let length = Int(String(decoding: bytes[at..<space], as: UTF8.self)), length > space - at + 1,
-        at + length <= bytes.count, bytes[at + length - 1] == 0x0a, let equals = bytes[(space + 1)..<(at + length)].firstIndex(of: 0x3d)
+        length <= bytes.count - at, bytes[at + length - 1] == 0x0a, let equals = bytes[(space + 1)..<(at + length)].firstIndex(of: 0x3d)
       else { return .none }
       let key = String(decoding: bytes[(space + 1)..<equals], as: UTF8.self)
       if key == "size" || key == "linkpath" { return .none }
@@ -461,6 +424,7 @@ enum OfficialArchive {
         path = path.isEmpty ? part : "\(path)/\(part)"
         if folders.contains(path) { continue }
         guard !files.contains(path) else { return "\(path) is both a file and a folder" }
+        guard folders.count + files.count <= limits.entries else { return "the archive has more than \(limits.entries) entries" }
         if let problem = folder(path) { return problem }
         folders.insert(path)
       }

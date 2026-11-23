@@ -1,5 +1,5 @@
-import Compression
 import Foundation
+import zlib
 
 struct ZipArchive {
   struct Entry {
@@ -8,6 +8,7 @@ struct ZipArchive {
     var compressedSize: Int
     var size: Int
     var localHeaderOffset: Int
+    var crc: UInt32 = 0
   }
 
   struct Limits {
@@ -67,7 +68,8 @@ struct ZipArchive {
       _ = h.skip(2)
       let flags = h.u16() ?? 0
       let method = h.u16() ?? 0
-      _ = h.skip(8)
+      _ = h.skip(4)
+      let crc = h.u32() ?? 0
       let csize = Int(h.u32() ?? 0)
       let usize = Int(h.u32() ?? 0)
       let nameLength = Int(h.u16() ?? 0)
@@ -89,7 +91,7 @@ struct ZipArchive {
       if method == 0, csize != usize { throw ImportError.unreadable("Damaged zip entry") }
       expanded += usize
       guard expanded <= limits.expanded else { throw ImportError.unsupported("The zip file unpacks to more than \(limits.expanded >> 20) MB") }
-      list.append(Entry(name: name, method: method, compressedSize: csize, size: usize, localHeaderOffset: local))
+      list.append(Entry(name: name, method: method, compressedSize: csize, size: usize, localHeaderOffset: local, crc: crc))
     }
     entries = list
   }
@@ -106,23 +108,37 @@ struct ZipArchive {
     let start = o + 30 + Int(h.u16() ?? 0) + Int(h.u16() ?? 0)
     guard start + entry.compressedSize <= data.count else { throw ImportError.unreadable("Damaged zip entry") }
     let body = data.subdata(in: start..<start + entry.compressedSize)
+    let out: Data
     switch entry.method {
     case 0:
-      return body
+      out = body
     case 8:
-      guard entry.size > 0 else { return Data() }
-      guard !body.isEmpty else { throw ImportError.unreadable("Couldn't inflate \(entry.name)") }
-      var out = Data(count: entry.size)
-      let written = out.withUnsafeMutableBytes { dst in
-        body.withUnsafeBytes { src in
-          compression_decode_buffer(dst.bindMemory(to: UInt8.self).baseAddress!, entry.size,
-                                    src.bindMemory(to: UInt8.self).baseAddress!, body.count, nil, COMPRESSION_ZLIB)
-        }
-      }
-      guard written == entry.size else { throw ImportError.unreadable("Couldn't inflate \(entry.name)") }
-      return out
+      out = try Self.inflated(body, size: entry.size, name: entry.name)
     default:
       throw ImportError.unsupported("Unsupported zip compression method \(entry.method)")
     }
+    let check = out.withUnsafeBytes { raw in raw.isEmpty ? crc32(0, nil, 0) : crc32(0, raw.bindMemory(to: Bytef.self).baseAddress, uInt(raw.count)) }
+    guard UInt32(check) == entry.crc else { throw ImportError.unreadable("\(entry.name) is damaged") }
+    return out
+  }
+
+  static func inflated(_ body: Data, size: Int, name: String) throws -> Data {
+    var out = Data(count: size + 1)
+    var stream = z_stream()
+    guard inflateInit2_(&stream, -15, zlibVersion(), Int32(MemoryLayout<z_stream>.size)) == Z_OK else { throw ImportError.unreadable("Couldn't inflate \(name)") }
+    defer { inflateEnd(&stream) }
+    let (status, left, room) = out.withUnsafeMutableBytes { dst in
+      body.withUnsafeBytes { src -> (Int32, uInt, uInt) in
+        stream.next_in = UnsafeMutablePointer(mutating: src.bindMemory(to: Bytef.self).baseAddress)
+        stream.avail_in = uInt(src.count)
+        stream.next_out = dst.bindMemory(to: Bytef.self).baseAddress
+        stream.avail_out = uInt(dst.count)
+        let status = inflate(&stream, Z_FINISH)
+        return (status, stream.avail_in, stream.avail_out)
+      }
+    }
+    guard status == Z_STREAM_END, left == 0, room == 1 else { throw ImportError.unreadable("Couldn't inflate \(name)") }
+    out.removeLast()
+    return out
   }
 }

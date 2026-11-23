@@ -124,8 +124,10 @@ is the only source of which version may be fetched.
     devices, `..`, absolute paths, duplicates or PAX `size`/`linkpath` overrides. The caps (`OfficialArchive.Limits`):
     512 MB downloaded, 1 GB unpacked, 20,000 entries, 32 levels deep, and no more than 100 times the download's size
     unpacked overall or 200 times its compressed size for any one file. Neither ratio applies below 4 MB, so small text
-    files that compress well are fine. The per-file ratio comes from how much of the gzip stream the decoder read while
-    that file came out, fed 4 KB at a time so it never reads far ahead. Verifying a kept copy applies the same caps.
+    files that compress well are fine. Folders a path implies count as entries. zlib reads the one gzip member,
+    checking its CRC and length; bytes after it (a second member, padding) are refused. The per-file ratio comes from
+    how much of the stream zlib consumed while that file came out, taken every 4 KB of output. Verifying a kept copy
+    applies the same caps.
   - requires the unpacked `plugin.json` to be the pinned name and version, claiming only programs the pin reserves
     for it.
   - trusts nothing but the pin, as VS Code does with its own extensions: no Developer ID signature or notarization is
@@ -522,12 +524,16 @@ Paths go in as `-D` parameters, never into the profile's text.
 - **A sidecar** may also fork and start programs: those in its own folder, the tools in `/bin`, `/sbin`, `/usr/bin`,
   `/usr/sbin`, `/usr/libexec`, `/usr/local` and `/opt/homebrew` (not their `var` folders), the Command Line Tools and
   the Xcode `xcode-select` points to, so `/usr/bin/python3` and `git` work. It reads those trees, `/etc/ssl` and a few
-  files programs look up (`passwd`, `group`, `services`, `localtime`, Xcode's license choice).
+  files programs look up (`passwd`, `group`, `services`, `localtime`, Xcode's license choice). An absolute program also
+  reads its own install folder (`/opt/homebrew/opt/node` for its `bin/node`), except in a shared temp folder, where it
+  reads only itself.
 - **main's host** may start nothing, not even a file in its own folder, and can't fork. It reads only the system, its own
   binary and the plugin's folder.
 - **With network** (a sidecar whose plugin is granted it), outbound and local IP, the resolver's socket, the
   `machAllowedOnline` services and `/etc/hosts` and `resolv.conf`. Without it, no IP at all: no loopback, no listening,
   no names. main's host is always offline.
+- **An official plugin's folder** is its verified, read-only copy, `OfficialPlugins/<name>/<sha256>/`, the one place in
+  Ardia's data folder a plugin may run from (exactly that deep). It can't read or list another copy.
 - **Never:** your home folder, Ardia's data and config folders, `/Users` and `/Volumes` (an absolute program elsewhere
   reads only itself), any other app's temp files, `/Applications`, `/etc` beyond the files above, pathname sockets,
   shared memory, IOKit, Apple Events, Launch Services, launchd jobs, preference writes and notifications.

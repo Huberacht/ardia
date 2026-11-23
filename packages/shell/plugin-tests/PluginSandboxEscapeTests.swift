@@ -358,7 +358,7 @@ final class PluginSandboxEscapeTests: XCTestCase {
           XCTAssertEqual(try sandboxed(probe, ["read", path], network: network, kind: kind).status, EPERM, "\(path) reads from inside (\(kind), network \(network))")
         }
       }
-      for folder in ["/Applications", "/private/var/folders", root, "/Library/Keychains", "/private/etc"] where try Self.run(probe, ["listdir", folder]).status == 0 {
+      for folder in ["/Applications", "/private/var/folders", root, "/Library/Keychains", "/private/etc", "/opt/homebrew/etc", "/opt/homebrew/var", "/usr/local/etc", "/usr/local/var"] where try Self.run(probe, ["listdir", folder]).status == 0 {
         XCTAssertEqual(try sandboxed(probe, ["listdir", folder], kind: kind).status, EPERM, "\(folder) lists from inside (\(kind))")
       }
       for path in ["/System/Library/CoreServices/SystemVersion.plist", "/usr/share/zoneinfo/UTC", "/dev/urandom", "\(plugin)/own.txt", "\(pluginData)/home/data.txt"] {

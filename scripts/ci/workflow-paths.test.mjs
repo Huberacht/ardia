@@ -202,6 +202,13 @@ test("Mac starts on the paths its jobs read, and its Swift tests run for the plu
     assert.ok(existsSync(join(REPO, path)), `${path} exists`);
     assert.ok(matched(filters.swift, path), `a change to ${path} runs the Swift tests`);
   }
+  const suites = filesUnder("packages/shell/plugin-tests", (name) => name.endsWith(".swift"));
+  const read = new Set();
+  for (const file of suites) {
+    for (const [, path] of readFileSync(join(REPO, file), "utf8").matchAll(/"(?:\.\.\/)+((?:scripts|apps|docs)\/[A-Za-z0-9_./-]+)"/g)) read.add(path);
+  }
+  assert.ok(read.size >= 3, "the plugin tests still name the repository files they read");
+  for (const path of read) assert.ok(matched(filters.swift, path), `a change to ${path}, which the plugin tests read, runs the Swift tests`);
   for (const name of ["app", "swift"]) {
     assert.ok(text.includes(`      ${name}: \${{ steps.filter.outcome != 'success' || steps.filter.outputs.${name} == 'true' }}`), `${name} falls back to running`);
     assert.match(text, new RegExp(`\\(needs\\.changes\\.result != 'success' \\|\\| needs\\.changes\\.outputs\\.${name} == 'true'\\)`), `${name} runs when the changes job failed`);

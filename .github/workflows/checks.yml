@@ -134,7 +134,7 @@ jobs:
               - "packages/sync/ios/Core/LegacyMigration.swift"
               - "packages/shell/ios/PluginCore/PluginSandbox.swift"
               - "packages/shell/ios/PluginProcess.swift"
-              - "packages/shell/plugin-tests/PluginSandboxEscapeTests.swift"
+              - "packages/shell/plugin-tests/**"
               - "packages/import/ios/Core/ZipArchive.swift"
               - "packages/ardiacore/ios/page_script.js"
               - "packages/ardiacore/prebuilt-engines.tsv"
