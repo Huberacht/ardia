@@ -67,6 +67,7 @@ export function check(root, promises) {
     const key = `${promise.file}\t${promise.test}`;
     const where = `#${promise.issue} ${promise.file} › "${promise.test}"`;
     if (seen.has(key)) problems.push(`${where}: locked twice`);
+    if (!LOCKABLE.test(promise.file)) problems.push(`${where}: only test files (*.test.*, *-test.mjs, *Tests.swift) can be locked`);
     seen.add(key);
     const found = locate(root, promise, cache);
     if (found.error) {
@@ -92,7 +93,10 @@ export function update(root, promises, issue) {
   });
 }
 
+export const LOCKABLE = /(?:^|\/)(?:[^/]+\.test\.[^/]+|[^/]+-test\.mjs|[^/]+Tests\.swift)$/;
+
 export function add(root, promises, issue, file, test) {
+  if (!LOCKABLE.test(file)) throw new Error(`${file}: only test files (*.test.*, *-test.mjs, *Tests.swift) can be locked, so Checks' repository job runs when they change`);
   if (promises.some((promise) => promise.file === file && promise.test === test)) throw new Error(`${file} › "${test}" is locked already`);
   const promise = { issue, file, test, hash: "" };
   const found = locate(root, promise);

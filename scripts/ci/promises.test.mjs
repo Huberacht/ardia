@@ -98,6 +98,8 @@ test("a guard or suite option that stops a test registering changes its hash, an
   assert.notEqual(hash(`while (!a)\n  ${plain}`, "t"), hash(`while (a)\n  ${plain}`, "t"));
   assert.notEqual(hash(`switch (2) { case 1: f()\ncase 3: f(); ${plain} }`, "t"), hash(`switch (2) { case 1: f()\ncase 2: f(); ${plain} }`, "t"));
   assert.notEqual(hash(`false ? {}\n  : ${plain}`, "t"), hash(`true ? {}\n  : ${plain}`, "t"));
+  assert.notEqual(hash(`switch (x) { case 3: prepare(); case 2: ${plain} }`, "t"), hash(`switch (x) { case 1: prepare(); case 2: ${plain} }`, "t"));
+  assert.equal(hash(`switch (x) { case 3: prepare(); break; case 2: ${plain} }`, "t"), hash(`switch (x) { case 1: prepare(); break; case 2: ${plain} }`, "t"));
   assert.notEqual(hash('describe(\n  "s",\n  { skip: true },\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"), hash('describe(\n  "s",\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"));
   assert.equal(hash(`import a from "a"\nimport "node:path"\n${group}`, "s › t"), hash(`import a from "a"\n${group}`, "s › t"));
   const loop = 'for (const o of [1]) {\n  test(`t ${o}`, () => { f(o); });\n}\n';
@@ -118,11 +120,17 @@ test("a regex opening an interpolation or after x++ is read right, and async bef
   assert.notEqual(hash("const of = 4; assert.equal(of / 2, 2);"), hash("const of = 4; assert.equal(of / 2, 3);"));
   assert.equal(findTests("x.test.mjs", 'test("t", () => { for (const x of /a/.exec(s)) f(x); });').length, 1);
   assert.notEqual(hash("async\nfunction f() {} await f();"), hash("async function f() {} await f();"));
+  assert.notEqual(hash("if (w) return\r assert.ok(1);"), hash("if (w) return assert.ok(1);"));
+  assert.notEqual(hash("if (w) return\u2028assert.ok(1);"), hash("if (w) return assert.ok(1);"));
+  assert.equal(findTests("x.test.mjs", 'test("t", () => { const s = "a\\\nb"; f(s); });').length, 1);
 });
 
 test("a test is found by its name with its whitespace changed, as a template title reformatted", () => {
   const tests = findTests("x.test.mjs", "test(`runs ${n + 1}`, () => {});");
   assert.equal(pickTest(tests, "runs ${n+1}").test?.name, "runs ${n + 1}");
+  assert.match(pickTest(findTests("x.test.mjs", 'test("open tabs", () => {});'), "opentabs").error, /no test called/);
+  assert.equal(findTests("x.test.mjs", 'test("opens\\x20tabs \\u{1F600}", () => {});')[0].name, "opens tabs \u{1F600}");
+  assert.deepEqual(findTests("x.swift", "@Test func `t`() { f() }\nprotocol Probe { func testRead() }\n").map((found) => found.name), ["t"]);
 });
 
 test("tests are found inside loops and describe blocks, by a template title and past regex and template braces", () => {
@@ -228,6 +236,7 @@ test("the lock is one header and one sorted, tab-separated line per promise, wit
   const one = add(root, [], 12, "a/x.test.mjs", "keeps the pins");
   assert.throws(() => add(root, one, 13, "a/x.test.mjs", "keeps the pins"), /locked already/);
   assert.throws(() => add(root, one, 13, "a/x.test.mjs", "is not there"), /no test called/);
+  assert.throws(() => add(root, one, 13, "a/x.spec.ts", "keeps the pins"), /only test files/);
   const unsorted = [{ ...one[0], issue: 30 }, { ...one[0], issue: 4, test: "a group › drops nothing", hash: hashes("x.test.mjs", JS)["a group › drops nothing"] }];
   assert.match(check(root, unsorted).join("\n"), /is sorted by issue/);
 });

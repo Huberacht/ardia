@@ -54,9 +54,16 @@ test("a test file named by its bare name, outside a code span, inside other code
   assert.match(check(ROOT, "| Row | `peek.test.mjs` |").problems[0], /not a file in the repo/);
   assert.match(check(ROOT, "| Row | `test_window_corners.py` |").problems[0], /not a file in the repo/);
   assert.deepEqual(check(ROOT, "| Row | `engine/ardiacore-linux/tests/test_window_corners.py` |").problems, []);
+  const outside = mkdtempSync(join(tmpdir(), "parity-outside-"));
+  mkdirSync(join(outside, "checkout/apps"), { recursive: true });
+  writeFileSync(join(outside, "escape.test.mjs"), "");
+  assert.match(check(join(outside, "checkout"), "| Row | `apps/../../escape.test.mjs` |").problems[0], /not a file in the repo/);
+  assert.deepEqual(citations("| Row | ``apps/a/peek.test.mjs#a `quoted` name`` |").found.map((citation) => citation.test), ["a `quoted` name"]);
+  assert.deepEqual(citations("| Row | ``apps/a/peek.test.mjs#a `quoted` name`` |").problems, []);
 });
 
 test("the windowDragPacing JS test the doc used to cite is gone and its row cites the Swift tests that replaced it", () => {
   assert.doesNotMatch(doc, /`windowDragPacing\.test\.mjs`/);
-  assert.match(doc, /`packages\/shell\/tests\/WindowDragPacingTests\.swift`/);
+  const row = citations(doc).found.filter((citation) => citation.row === "Drag window from chrome, double‑click to zoom");
+  assert.ok(row.some((citation) => citation.file === "packages/shell/tests/WindowDragPacingTests.swift"), "the drag-window row cites the Swift pacing tests");
 });

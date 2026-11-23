@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findTests, languageOf, pickTest } from "./test-source.mjs";
 
@@ -21,6 +21,15 @@ const CITED = new RegExp(`^(${TEST_FILE})(?:#(.+))?$`);
 const LOOSE = new RegExp(`(?<![A-Za-z0-9_./@-])${TEST_FILE}(?![A-Za-z0-9_])`, "g");
 const BARE_SWIFT = /^[A-Z][A-Za-z0-9]*Tests$/;
 
+const CODE_SPAN = /(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g;
+
+function spansOf(line) {
+  return [...line.matchAll(CODE_SPAN)].map((match) => {
+    const body = match[2];
+    return /^ .* $/.test(body) && body.trim() ? body.slice(1, -1) : body;
+  });
+}
+
 function rowOf(line) {
   if (!line.startsWith("|")) return null;
   const cell = line.split("|")[1]?.trim();
@@ -35,13 +44,13 @@ export function citations(text) {
     if (/^#{1,6} /.test(line)) heading = line.replace(/^#+ /, "");
     const at = `${DOC}:${index + 1}`;
     const row = rowOf(line) ?? heading;
-    for (const [, span] of line.matchAll(/`([^`]+)`/g)) {
+    for (const span of spansOf(line)) {
       const cited = CITED.exec(span);
       if (cited) found.push({ at, row, file: cited[1], test: cited[2] ?? null });
       else if (BARE_SWIFT.test(span)) problems.push(`${at}: \`${span}\` names a Swift test class; cite its file's repo path`);
       else if (new RegExp(TEST_FILE).test(span)) problems.push(`${at}: \`${span}\` holds a test file among other text; give it its own code span`);
     }
-    for (const [loose] of line.replace(/`[^`]+`/g, "").matchAll(LOOSE)) problems.push(`${at}: ${loose} is outside a code span; cite it as \`<repo path>\``);
+    for (const [loose] of line.replace(CODE_SPAN, "").matchAll(LOOSE)) problems.push(`${at}: ${loose} is outside a code span; cite it as \`<repo path>\``);
   });
   return { found, problems };
 }
@@ -51,7 +60,11 @@ export function check(root, text) {
   const cache = new Map();
   for (const { at, file, test } of found) {
     const path = join(root, file);
-    if (!file.includes("/") || !existsSync(path) || !statSync(path).isFile()) {
+    const inside = (target) => {
+      const offset = relative(realpathSync(root), realpathSync(target));
+      return offset && !offset.startsWith("..") && !isAbsolute(offset);
+    };
+    if (!file.includes("/") || isAbsolute(file) || resolve(root, file) !== path || !existsSync(path) || !statSync(path).isFile() || !inside(path)) {
       problems.push(`${at}: \`${file}\` is not a file in the repo; cite the test by its repo path`);
       continue;
     }

@@ -4,6 +4,7 @@ const JS_PUNCT = ["===", "!==", "**=", "...", "<<=", ">>=", ">>>", "=>", "==", "
 const REGEX_AFTER_WORD = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "yield", "await", "instanceof"]);
 const IDENT_START = /[A-Za-z_$\u0080-\uffff]/;
 const IDENT_PART = /[A-Za-z0-9_$\u0080-\uffff]/;
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
 const TYPE_PARAMETERS = /^<[A-Za-z_$][\w$]*\s*(?:,|extends\s)/;
 
 export function languageOf(path) {
@@ -132,7 +133,7 @@ function lexJs(source, from, untilBrace, jsx) {
     const char = source[at];
     const next = source[at + 1];
     if (/\s/.test(char)) {
-      if (char === "\n") newline = true;
+      if (LINE_TERMINATOR.test(char)) newline = true;
       at++;
       continue;
     }
@@ -143,15 +144,18 @@ function lexJs(source, from, untilBrace, jsx) {
     if (char === "/" && next === "*") {
       const end = source.indexOf("*/", at + 2);
       if (end < 0) throw new Error(`unterminated comment at ${at}`);
-      if (source.slice(at, end).includes("\n")) newline = true;
+      if (LINE_TERMINATOR.test(source.slice(at, end))) newline = true;
       at = end + 2;
       continue;
     }
     if (char === "'" || char === '"') {
       let index = at + 1;
       while (index < source.length && source[index] !== char) {
-        if (source[index] === "\\") index++;
-        if (source[index] === "\n") throw new Error(`unterminated string at ${at}`);
+        if (source[index] === "\\") {
+          index += source.startsWith("\r\n", index + 1) ? 3 : 2;
+          continue;
+        }
+        if (source[index] === "\n" || source[index] === "\r") throw new Error(`unterminated string at ${at}`);
         index++;
       }
       push("string", at, index + 1);
@@ -399,6 +403,7 @@ function ancestry(tokens, language) {
   };
   const inBlock = () => !stack.length || tokens[stack.at(-1).opener].text === "{";
   const labelEnds = new Map();
+  const ended = new Map();
   const inSwitch = () => {
     if (!stack.length) return false;
     const opener = stack.at(-1).opener;
@@ -418,7 +423,7 @@ function ancestry(tokens, language) {
     boundary[boundary.length - 1] = at;
   };
   const forget = (depth) => {
-    for (const map of [chains, labels, labelEnds]) for (const key of map.keys()) if (key > depth) map.delete(key);
+    for (const map of [chains, labels, labelEnds, ended]) for (const key of map.keys()) if (key > depth) map.delete(key);
   };
   const slice = (start, end) => [...(prepend.get(start) ?? []), ...tokens.slice(start, end)];
   return {
@@ -432,11 +437,14 @@ function ancestry(tokens, language) {
         } else if (token.text === "else") {
           prepend.set(index, [...(chains.get(depth) ?? [])]);
           setBoundary(index);
+        } else if (["break", "return", "throw", "continue"].includes(token.text) && inSwitch()) {
+          ended.set(depth, true);
         } else if ((token.text === "case" || token.text === "default") && inSwitch() && (token.newline || ["{", ";", ":", "}"].includes(tokens[index - 1]?.text))) {
           const end = labelEnd(tokens, index);
           if (end > index) {
-            const shared = labelEnds.get(depth) === index - 1;
-            labels.set(depth, [...(shared ? labels.get(depth) : []), ...tokens.slice(index, end + 1)]);
+            const shared = labelEnds.get(depth) === index - 1 || !ended.get(depth);
+            ended.set(depth, false);
+            labels.set(depth, [...(shared ? (labels.get(depth) ?? []) : []), ...tokens.slice(index, end + 1)]);
             labelEnds.set(depth, end);
             setBoundary(index);
           }
@@ -464,15 +472,21 @@ function ancestry(tokens, language) {
   };
 }
 
+const SIMPLE_ESCAPES = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", v: "\v", 0: "\0" };
+
+function decodeString(body) {
+  return body.replace(/\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]+)\}|u([0-9A-Fa-f]{4})|(\r\n|[\n\r\u2028\u2029])|([\s\S]))/g, (match, hex, codePoint, unit, continuation, other) => {
+    if (hex || unit) return String.fromCharCode(parseInt(hex || unit, 16));
+    if (codePoint) return String.fromCodePoint(parseInt(codePoint, 16));
+    if (continuation) return "";
+    return SIMPLE_ESCAPES[other] ?? other;
+  });
+}
+
 function stringValue(token) {
   if (token.type === "template") return token.head && token.closed ? token.text.slice(1, -1).replace(/\\`/g, "`") : null;
   if (token.type !== "string" || token.text.startsWith('"""')) return null;
-  const body = token.text.slice(1, -1);
-  try {
-    return JSON.parse(token.text.startsWith("'") ? `"${body.replace(/\\'/g, "'").replace(/(^|[^\\])"/g, '$1\\"')}"` : token.text);
-  } catch {
-    return body;
-  }
+  return decodeString(token.text.slice(1, -1));
 }
 
 function titleAt(source, tokens, at) {
@@ -558,10 +572,11 @@ function findSwiftTests(source) {
     const markedTest = tokens.slice(start, index).some((token) => token.text === "@Test");
     if (!markedTest && !/^test/.test(name)) continue;
     let open = index + 2;
-    while (open < tokens.length && tokens[open].text !== "{") {
+    while (open > 0 && open < tokens.length && !["{", "}"].includes(tokens[open].text) && !(tokens[open].text === "func" || (tokens[open].newline && /^(?:func|var|let|@|#)/.test(tokens[open].text)))) {
       if (tokens[open].text === "(") open = closing(tokens, open);
       open++;
     }
+    if (open <= 0 || tokens[open]?.text !== "{") continue;
     const end = closing(tokens, open);
     if (end < 0) throw new Error(`no closing brace for ${name}`);
     found.push({ name, path: name, language: "swift", context: [...directives, ...context.headers(index)], tokens: tokens.slice(start, end + 1) });
@@ -606,8 +621,8 @@ export function pickTest(tests, wanted) {
   if (byPath.length === 1) return { test: byPath[0] };
   const byName = tests.filter((test) => test.name === wanted);
   if (byName.length === 1) return { test: byName[0] };
-  const squeeze = (text) => text.replace(/\s+/g, "");
-  const loose = byPath.length + byName.length ? [] : tests.filter((test) => squeeze(test.path) === squeeze(wanted) || squeeze(test.name) === squeeze(wanted));
+  const squeeze = (text) => text.replace(/\$\{[^}]*\}/g, (part) => part.replace(/\s+/g, ""));
+  const loose = byPath.length + byName.length || !wanted.includes("${") ? [] : tests.filter((test) => squeeze(test.path) === squeeze(wanted) || squeeze(test.name) === squeeze(wanted));
   if (loose.length === 1) return { test: loose[0] };
   if (byPath.length + byName.length + loose.length > 1) return { error: `more than one test is called "${wanted}"; name it by its describe path (outer › inner)` };
   return { error: `no test called "${wanted}"` };
