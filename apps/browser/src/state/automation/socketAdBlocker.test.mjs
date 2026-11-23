@@ -8,6 +8,7 @@ const blocker = stub.contentBlockerSites;
 const reset = () => {
   blocker.enabled = true;
   blocker.unsupported = false;
+  blocker.unready = false;
   blocker.allowed.clear();
   blocker.written.length = 0;
   blocker.removed.length = 0;
@@ -78,6 +79,16 @@ test("an Ardia whose host can't check a site or take one entry out refuses both,
   }
   assert.deepEqual(blocker.written, []);
   assert.deepEqual([...blocker.allowed], ["applovin.com"]);
+});
+
+test("an ad blocker state Ardia couldn't read fails the call instead of answering from an empty list", async () => {
+  await freshWindow();
+  reset();
+  blocker.allowed.add("applovin.com");
+  blocker.unready = true;
+  assert.equal((await call("sites.adBlocker", {})).error?.code, "failed");
+  assert.equal((await call("sites.blockAds", { site: "applovin.com" })).error?.code, "failed");
+  assert.deepEqual(blocker.removed, []);
 });
 
 test("only a plain host name reaches the ad blocker's trusted list, for adding and taking out: every hostile input is refused before the sink", async () => {

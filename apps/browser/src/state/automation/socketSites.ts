@@ -123,6 +123,7 @@ async function uninstall(params: Record<string, unknown>, call: SocketCall) {
 async function adBlocker() {
   if (!PLATFORM_FEATURES.contentBlocker) throw new OpError("refused", "Ardia has no built-in ad blocker on this platform.");
   const state = await getContentBlocker();
+  if (state.stats?.ready === false) throw new OpError("failed", "Ardia couldn't read the ad blocker's state; try again in a moment.");
   return { enabled: state.enabled === true, allowedSites: [...state.allowedHosts].sort() };
 }
 

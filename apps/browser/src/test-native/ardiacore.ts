@@ -81,7 +81,7 @@ function registrableForTests(host: string): string {
   return `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}`;
 }
 
-export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[], removed: [] as string[], unsupported: false };
+export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[], removed: [] as string[], unsupported: false, unready: false };
 export const commitReports: boolean[] = [];
 export const commitReportFailures = { next: 0 };
 export const loadedEngineProfiles = new Set<string>([""]);
@@ -660,7 +660,7 @@ const fakeModules = {
       contentBlockerSites.removed.push(host);
       return { removed: contentBlockerSites.allowed.delete(host) };
     },
-    state: () => ({ enabled: contentBlockerSites.enabled, version: "test", lists: [], allowedHosts: [...contentBlockerSites.allowed], stats: { enabled: contentBlockerSites.enabled, ready: true, parseMs: 0, lookups: 0, averageLookupMicros: 0, maxLookupMicros: 0 } }),
+    state: () => ({ enabled: contentBlockerSites.enabled, version: "test", lists: [], allowedHosts: [...contentBlockerSites.allowed], stats: { enabled: contentBlockerSites.enabled, ready: !contentBlockerSites.unready, parseMs: 0, lookups: 0, averageLookupMicros: 0, maxLookupMicros: 0 } }),
   }),
   ArdiaHistory: domain("history", {
     query: ({ profile, ...args }) => {

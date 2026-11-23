@@ -518,7 +518,7 @@ NSArray<NSString *> *Strings(id value) {
   completion = [completion copy];
   Call(kProfile, ScriptWith(script, @[ host.lowercaseString ]), ^(id removed, NSString *error) {
     const BOOL done = !error && [removed isKindOfClass:NSNumber.class] && [removed boolValue];
-    if (done) Publish(@{@"host" : host.lowercaseString, @"allowed" : @NO});
+    if (done) Publish(@{@"host" : host.lowercaseString, @"allowed" : @NO, @"exact" : @YES});
     if (!done) return completion(NO, error);
     Changed(nil, ^(NSString *changedError) { completion(YES, changedError); });
   });
