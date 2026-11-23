@@ -20,9 +20,9 @@ export function rowsWithin(entries: readonly FoldRow[], heightOf: (key: string) 
 
 export function nextFoldMount(mount: FoldMount, collapsed: boolean, entries: readonly FoldRow[], heightOf: (key: string) => number, gap: number, reach: number, step = false): FoldMount {
   const had = Math.min(mount.shown, entries.length);
-  if (mount.collapsed !== collapsed) return { collapsed, shown: collapsed ? had : Math.max(had, rowsWithin(entries, heightOf, gap, reach)) };
+  if (mount.collapsed !== collapsed) return { collapsed, shown: collapsed ? had : had >= entries.length ? Infinity : Math.max(had, rowsWithin(entries, heightOf, gap, reach)) };
   if (!step || collapsed) return mount;
-  return { collapsed, shown: mount.shown + FOLD_ROWS_PER_FRAME >= entries.length ? Infinity : mount.shown + FOLD_ROWS_PER_FRAME };
+  return { collapsed, shown: mount.shown >= entries.length ? Infinity : Math.min(entries.length, mount.shown + FOLD_ROWS_PER_FRAME) };
 }
 
 export function foldRows(

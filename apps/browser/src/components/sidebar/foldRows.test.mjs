@@ -26,7 +26,14 @@ test("closing keeps every mounted row, so opening it again mounts nothing", () =
   let mount = nextFoldMount({ collapsed: false, shown: Infinity }, true, entries, height, GAP, 320);
   assert.deepEqual(mount, { collapsed: true, shown: 20 });
   assert.equal(nextFoldMount(mount, true, entries, height, GAP, 320, true), mount);
-  assert.deepEqual(nextFoldMount(mount, false, entries, height, GAP, 320), { collapsed: false, shown: 20 });
+  assert.deepEqual(nextFoldMount(mount, false, entries, height, GAP, 320), { collapsed: false, shown: Infinity });
+});
+
+test("the fill stops at the last entry for one frame before it calls itself done, so a group it mounts last still gets sliced", () => {
+  const entries = rows(10);
+  const last = nextFoldMount({ collapsed: false, shown: 8 }, false, entries, height, GAP, 320, true);
+  assert.deepEqual(last, { collapsed: false, shown: 10 });
+  assert.deepEqual(nextFoldMount(last, false, entries, height, GAP, 320, true), { collapsed: false, shown: Infinity });
 });
 
 test("rows not mounted yet stand in as one spacer of their height and gaps, so the fold is as tall as it will be", () => {

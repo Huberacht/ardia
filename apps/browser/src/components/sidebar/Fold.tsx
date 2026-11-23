@@ -148,7 +148,7 @@ export function Fold({
     });
     return () => open.removeListener(id);
   }, [revealing, open, gap]);
-  const unfilled = partial && !collapsed && now.shown < entries.length;
+  const unfilled = partial && !collapsed && now.shown !== Infinity;
   const growing = unfilled && !moving && !ancestorSettling;
   useEffect(() => {
     if (!growing) return;
