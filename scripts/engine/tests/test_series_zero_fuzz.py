@@ -213,6 +213,17 @@ class RefreshVerified(Fixture):
         self.assertTrue(any("another identical context" in p for p in problems), problems)
         self.assertEqual(pathlib.Path(step.patch).read_text(), original)
 
+    def test_an_interrupted_refresh_puts_every_patch_back(self):
+        step = self.patch("interrupted")
+        original = pathlib.Path(step.patch).read_text()
+
+        def interrupted():
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            checker.refresh_verified({step.patch: [("chrome/f.cc", 1, 22, 2)]}, interrupted, {})
+        self.assertEqual(pathlib.Path(step.patch).read_text(), original)
+
     def test_a_refresh_that_reproduces_every_tree_is_kept(self):
         step = self.patch("drifted")
         original = pathlib.Path(step.patch).read_text()

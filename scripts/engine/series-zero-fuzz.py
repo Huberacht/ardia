@@ -276,25 +276,29 @@ def tree_digests(tree):
 
 def refresh_verified(moves, recheck, trees_before):
     originals = {patch: pathlib.Path(patch).read_bytes() for patch in moves}
-    for patch, offsets in sorted(moves.items()):
-        refresh_offsets(patch, offsets)
-    codes, trees_after, failing = recheck()
-    problems = []
-    if max(codes, default=0):
-        problems.append("a platform's check fails with the rewritten headers")
-    for platform, tree in sorted(trees_before.items()):
-        if trees_after.get(platform) != tree:
-            changed = sorted(path for path in set(tree) | set(trees_after.get(platform, {}))
-                             if tree.get(path) != trees_after.get(platform, {}).get(path))
-            problems.append(f"on {platform} the rewritten headers change what the series produces "
-                            f"({', '.join(changed[:5]) or 'the tree'}): a hunk would land on another identical context")
-    if failing:
-        problems.append(f"{len(failing)} patches still land hunks at an offset on every platform")
-    if problems:
-        for patch, text in originals.items():
-            pathlib.Path(patch).write_bytes(text)
+    kept = False
+    try:
+        for patch, offsets in sorted(moves.items()):
+            refresh_offsets(patch, offsets)
+        codes, trees_after, failing = recheck()
+        problems = []
+        if max(codes, default=0):
+            problems.append("a platform's check fails with the rewritten headers")
+        for platform, tree in sorted(trees_before.items()):
+            after = trees_after.get(platform, {})
+            if after != tree:
+                changed = sorted(path for path in set(tree) | set(after) if tree.get(path) != after.get(path))
+                problems.append(f"on {platform} the rewritten headers change what the series produces "
+                                f"({', '.join(changed[:5]) or 'the tree'}): a hunk would land on another identical "
+                                "context")
+        if failing:
+            problems.append(f"{len(failing)} patches still land hunks at an offset on every platform")
+        kept = not problems
         return problems
-    return []
+    finally:
+        if not kept:
+            for patch, text in originals.items():
+                pathlib.Path(patch).write_bytes(text)
 
 
 def tarball_for(tarballs, platform):
