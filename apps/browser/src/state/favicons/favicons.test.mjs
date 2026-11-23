@@ -27,7 +27,7 @@ const { useBrowser } = await import("../browser/store.ts");
 const { engineProfile } = await import("../browser/model.ts");
 const { WindowContext } = await import("../browser/hooks.ts");
 const { webviews } = await import("../../platform/webviews.ts");
-const { useFaviconAccent, useFaviconAccents } = await import("./faviconAccent.ts");
+const { askFaviconAccent, useFaviconAccent, useFaviconAccents } = await import("./faviconAccent.ts");
 const { markAsked } = await import("./askedFavicons.ts");
 
 const waitFor = async (check) => {
@@ -540,6 +540,34 @@ test("a private window's close leaves a pending theme request alone, so a stale 
     assert.equal(useFavicons.getState().themes[uri], undefined, "nothing holds the private icon any more");
   } finally {
     delete globalThis.iconThemeForTest;
+    webviews.clear();
+    stop();
+  }
+});
+
+test("a theme or accent asked for after its private window closed is never requested or kept", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const uri = "data:image/png;base64,ASKEDTOOLATE";
+  const w = privateWindow("https://asked-too-late.test/");
+  webviews.set(w.tab, { downloadFavicon: () => Promise.resolve({ uri, width: 32, height: 32 }) });
+  const requested = [];
+  globalThis.iconThemeForTest = ({ uri: asked }) => (requested.push(asked), Promise.resolve({ kind: "full" }));
+  globalThis.iconAccentForTest = (asked) => (requested.push(asked), Promise.resolve("#abcdef"));
+  try {
+    noteFavicon(w.tab, "https://asked-too-late.test/a.ico");
+    await waitFor(() => resolveFavicon("https://asked-too-late.test/", null, w.profile)?.uri === uri);
+    useBrowser.getState().closeWindow(w.id);
+    await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
+    askFaviconTheme(uri);
+    askFaviconAccent(uri);
+    await settle();
+    assert.deepEqual(requested, []);
+    assert.equal(useFavicons.getState().themes[uri], undefined);
+    assert.equal(useFaviconAccents.getState().byUri[uri], undefined);
+  } finally {
+    delete globalThis.iconThemeForTest;
+    delete globalThis.iconAccentForTest;
     webviews.clear();
     stop();
   }

@@ -20,20 +20,24 @@ function remember(uri: string, accent: string | null) {
   useFaviconAccents.setState({ byUri: { ...Object.fromEntries(kept), [uri]: accent } });
 }
 
+export function askFaviconAccent(uri: string) {
+  if (asking.has(uri) || !faviconHeld(uri)) return;
+  const request = Symbol(uri);
+  asking.set(uri, request);
+  void iconAccent(uri)
+    .catch(() => null)
+    .then((found) => {
+      if (asking.get(uri) !== request) return;
+      asking.delete(uri);
+      if (faviconHeld(uri)) remember(uri, found ?? null);
+    });
+}
+
 export function useFaviconAccent(url: string, profileId?: string): string | null | undefined {
   const uri = useResolvedFaviconUri(url, null, profileId);
   const accent = useFaviconAccents((a) => (uri ? a.byUri[uri] : null));
   useEffect(() => {
-    if (!uri || accent !== undefined || asking.has(uri)) return;
-    const request = Symbol(uri);
-    asking.set(uri, request);
-    void iconAccent(uri)
-      .catch(() => null)
-      .then((found) => {
-        if (asking.get(uri) !== request) return;
-        asking.delete(uri);
-        if (faviconHeld(uri)) remember(uri, found ?? null);
-      });
+    if (uri && accent === undefined) askFaviconAccent(uri);
   }, [uri, accent]);
   return accent;
 }

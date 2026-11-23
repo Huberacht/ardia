@@ -324,7 +324,7 @@ export function onPrivateIconsDropped(listener: (unheld: (uri: string) => boolea
 }
 
 export function askFaviconTheme(uri: string) {
-  if (theming.has(uri)) return;
+  if (theming.has(uri) || !faviconHeld(uri)) return;
   const request = Symbol(uri);
   theming.set(uri, request);
   void iconTheme({ uri })
