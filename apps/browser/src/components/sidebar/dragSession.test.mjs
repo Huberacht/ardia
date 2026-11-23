@@ -386,3 +386,68 @@ test("a drag cancelled while it waits for a fold to finish doesn't go on to meas
   assert.equal(measured, 0);
   await D.settle();
 });
+
+test("R5-S1: a selected tab that a flush mounts joins the drag it starts", async () => {
+  const { fillingFold } = await import("./foldFlush.ts");
+  globalThis.requestAnimationFrame = (run) => setTimeout(() => run(Date.now()), 0);
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  c.windowId = "w-select";
+  const dKey = entryKey("tab", m.id.d);
+  const d = c.items.get(dKey);
+  c.items.delete(dKey);
+  const stop = fillingFold("w-select", () => {
+    c.items.set(dKey, d);
+    stop();
+  });
+  S().setSelection(m.w, [m.id.b, m.id.d]);
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  assert.deepEqual(c.session.sources.map((s) => s.key).sort(), [entryKey("tab", m.id.b), dKey].sort());
+  assert.equal(c.session.ghost.count, 2);
+  c.end(false);
+  S().setSelection(m.w, []);
+  await D.settle();
+});
+
+test("R5-S4: an older measuring pass that lands after a newer one keeps none of its frames", async () => {
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const dKey = entryKey("tab", m.id.d);
+  const d = c.items.get(dKey);
+  const calls = [];
+  let next = 600;
+  d.view = { measureInWindow: (done) => calls.push({ done, y: next }) };
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  await D.settle();
+  next = 900;
+  const again = c.remeasure(c.session);
+  await D.settle();
+  calls[1].done(6, calls[1].y, 180, 30);
+  await again;
+  calls[0].done(6, calls[0].y, 180, 30);
+  await begun;
+  assert.equal(d.frame.y, 900);
+  c.end(false);
+  await D.settle();
+});
+
+test("R5-S5: a landing measured for a row its fold withdrew meanwhile is dropped", async () => {
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  c.move(60, frameOf(m, entryKey("tab", m.id.d)).y + 2);
+  const ref = c.items.get(c.session.gapKey);
+  assert.ok(ref, "the drag opened a gap at a row");
+  ref.view.held = true;
+  const spot = c.landingSpot(c.session.drop);
+  c.items.delete(ref.key);
+  ref.held = (ref.held ?? 0) + 1;
+  ref.view.release();
+  assert.equal(await spot, null);
+  c.items.set(ref.key, ref);
+  c.end(false);
+  await D.settle();
+});

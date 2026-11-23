@@ -7,7 +7,7 @@ import { tabDragOutside } from "../../state/drag/tabDrag";
 import { dragMarksOf, markDrag, type SplitHalfMark } from "../../state/sidebar/dragMarks";
 import { folderPanel } from "../../state/sidebar/tileFolderUi";
 import { overPins, pinGrid, pinGridHeight } from "./pinZone";
-import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, pinnedBlock, spring } from "./dragModel";
+import { boxed, type Drop, EDGE, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, pinnedBlock, spring, tabCell } from "./dragModel";
 import { aimAt, type Pointing } from "./dragZones";
 import { DragGeometry } from "./dragGeometry";
 import { flushFolds, foldsFilling } from "./foldFlush";
@@ -63,7 +63,6 @@ export class DragTargeting extends DragGeometry {
 
   protected room: { progress: Animated.Value; listener: string; moves: { value: Animated.Value; from: number; to: number }[] } | null = null;
   windowId: string | null = null;
-  private heldAt = new WeakMap<Item, number>();
 
   protected foldsPending() {
     return foldsFilling(this.windowId);
@@ -74,14 +73,8 @@ export class DragTargeting extends DragGeometry {
     return current();
   }
 
-  protected heldItems(): Item[] {
-    const items = [...this.items.values()];
-    for (const i of items) this.heldAt.set(i, i.held ?? 0);
-    return items;
-  }
-
-  protected stillHeld(i: Item) {
-    return this.items.get(i.key) === i && (i.held ?? 0) === this.heldAt.get(i);
+  protected sourcesOf(item: Item, moving: string[]): Item[] {
+    return moving.length > 1 ? [...this.items.values()].filter((i) => tabCell(i) && i.tabIds.some((id) => moving.includes(id))) : [item];
   }
 
   releaseGap(item: Item) {
@@ -136,6 +129,22 @@ export class DragTargeting extends DragGeometry {
       hold.ready = target.key;
       this.retarget();
     }, FOLDER_HOLD_MS);
+  }
+
+  protected autoScroll(y: number | null) {
+    const session = this.drag;
+    const v = session.viewport;
+    const speed = !v || y === null ? 0 : y < v.y + EDGE ? -Math.ceil((v.y + EDGE - y) / 4) : y > v.y + v.h - EDGE ? Math.ceil((y - (v.y + v.h - EDGE)) / 4) : 0;
+    clearInterval(session.scrollTimer);
+    session.scrollTimer = undefined;
+    if (!speed || !this.scroll) return;
+    session.scrollTimer = setInterval(() => {
+      const next = Math.max(0, this.scrollY + speed);
+      if (next === this.scrollY) return;
+      this.scroll?.scrollTo({ y: next, animated: false });
+      this.scrollY = next;
+      this.retarget();
+    }, 16);
   }
 
   protected retarget() {
