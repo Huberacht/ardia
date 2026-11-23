@@ -127,7 +127,7 @@ is the only source of which version may be fetched.
     files that compress well are fine. Folders a path implies count as entries. zlib reads the one gzip member,
     checking its CRC and length; bytes after it (a second member, padding) are refused. The per-file ratio comes from
     how much of the stream zlib consumed while that file came out, taken every 4 KB of output. Verifying a kept copy
-    applies the same caps. A file's ratio is checked before any of it is written.
+    applies the same caps. A file's ratio is checked before its staged file is created.
   - requires the unpacked `plugin.json` to be the pinned name and version, claiming only programs the pin reserves
     for it.
   - trusts nothing but the pin, as VS Code does with its own extensions: no Developer ID signature or notarization is
