@@ -2,52 +2,63 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export const STAMP_VERSION = 1;
+export const STAMP_VERSION = 2;
 
-export const NATIVE_PATHSPECS = [
-  "apps/browser/macos",
-  "apps/browser/app.json",
-  "apps/browser/react-native.config.js",
-  "apps/browser/package.json",
-  "package.json",
-  "pnpm-workspace.yaml",
-  "pnpm-lock.yaml",
-  "patches",
-  "packages/*/ios/*",
-  "packages/*/package.json",
-  "packages/*/expo-module.config.json",
-  "packages/shell/docktile",
-  "packages/shell/plugin-host",
-  "packages/ardiacore/scripts/*.sh",
-  "packages/ardiacore/scripts/*.py",
-  "packages/ardiacore/scripts/signing",
-  "packages/ardiacore/scripts/first-run-resources.sha256",
-  "packages/ardiacore/extensions",
-  "engine/ardiacore/src/ardia/core/public",
-  "packages/core-rs",
+const NATIVE = [
+  /^apps\/browser\/macos\//,
+  /^apps\/browser\/(app\.json|react-native\.config\.js|package\.json)$/,
+  /^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|\.npmrc|\.pnpmfile\.cjs)$/,
+  /^patches\//,
+  /^packages\/[^/]+\/ios\//,
+  /^packages\/[^/]+\/(package\.json|expo-module\.config\.json)$/,
+  /^packages\/shell\/(docktile|plugin-host)\//,
+  /^packages\/ardiacore\/scripts\/([^/]+\.(sh|py)|signing\/.+|first-run-resources\.sha256)$/,
+  /^packages\/ardiacore\/extensions\//,
+  /^engine\/ardiacore\/src\/ardia\/core\/public\//,
+  /^packages\/core-rs\//,
+  /^scripts\/lib\/paths\.sh$/,
 ];
-
-export const DEPS_PATHSPECS = ["package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches", "apps/*/package.json", "packages/*/package.json"];
-
-export const PODS_PATHSPECS = [
-  ...DEPS_PATHSPECS,
-  "apps/browser/macos/Podfile",
-  "apps/browser/macos/Podfile.lock",
-  "apps/browser/macos/Podfile.properties.json",
-  "apps/browser/react-native.config.js",
-  "apps/browser/app.json",
-  "packages/*/ios/*.podspec",
-  "packages/*/expo-module.config.json",
+const DEPS = [/^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml|\.npmrc|\.pnpmfile\.cjs)$/, /^patches\//, /^(apps|packages)\/[^/]+\/package\.json$/];
+const PODS = [
+  ...DEPS,
+  /^apps\/browser\/macos\/(Podfile|Podfile\.lock|Podfile\.properties\.json)$/,
+  /^apps\/browser\/(app\.json|react-native\.config\.js)$/,
+  /^packages\/[^/]+\/ios\/.*\.podspec$/,
+  /^packages\/[^/]+\/expo-module\.config\.json$/,
 ];
+const POD_SOURCES = /^packages\/[^/]+\/ios\//;
+
+export const isNative = (rel) => NATIVE.some((r) => r.test(rel));
+export const isDeps = (rel) => DEPS.some((r) => r.test(rel));
+export const isPodsInput = (rel) => PODS.some((r) => r.test(rel));
+
+const BUILD_ENV = new RegExp(
+  "^(RCT_|EXPO_|USE_|HERMES_|COCOAPODS_|SWIFT_|CLANG_|GCC_|OTHER_|BUNDLE_|ARDIACORE_(STAGE|PREBUILT)|HSTS_|UBO_|UBOL_)|" +
+    "^(NODE_BINARY|NODE_OPTIONS|ENTRY_FILE|SKIP_BUNDLING|FORCE_BUNDLING|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|CONFIG_JSON|" +
+    "ARDIA_PRUNE|CHROMIUM_TAG|TOOLCHAINS|DEVELOPER_DIR|SDKROOT|MACOSX_DEPLOYMENT_TARGET|CC|CXX|LD|CPP|CFLAGS|CXXFLAGS|" +
+    "OBJCFLAGS|LDFLAGS|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|OBJC_INCLUDE_PATH|LIBRARY_PATH|CP_HOME_DIR|LANG|LC_ALL)$",
+);
+export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE"];
+
+export function envFingerprint(env = process.env) {
+  const blocked = UNFINGERPRINTABLE_ENV.filter((name) => env[name]);
+  const lines = Object.keys(env)
+    .filter((name) => BUILD_ENV.test(name))
+    .sort()
+    .map((name) => `env ${name}=${env[name]}`);
+  return { lines, blocked };
+}
 
 export const defaults = (env = process.env) => ({
   cacheRoot: env.AC_APP_CACHE || join(homedir(), "ardia-scratch/app-cache"),
   slotRoot: env.AC_BUILD_SLOTS || join(homedir(), "ardia-scratch/build-slots"),
   maxBytes: Number(env.AC_APP_CACHE_MAX_GB || 40) * 1024 ** 3,
   maxEntries: Number(env.AC_APP_CACHE_MAX_ENTRIES || 16),
+  keepEngines: Number(env.AC_APP_CACHE_MAX_ENGINES || 3),
   keepSlots: Number(env.AC_BUILD_SLOTS_KEEP || 3),
+  graceMs: Number(env.AC_APP_CACHE_GRACE_MIN || 15) * 60e3,
 });
 
 const sha256 = (data) => createHash("sha256").update(data).digest("hex");
@@ -55,17 +66,11 @@ const sha256 = (data) => createHash("sha256").update(data).digest("hex");
 export function contentId(path) {
   const st = fs.lstatSync(path);
   if (st.isSymbolicLink()) return `l:${sha256(fs.readlinkSync(path))}`;
-  const data = fs.readFileSync(path);
-  const mode = st.mode & 0o111 ? "x" : "f";
-  if (path.endsWith(".pbxproj")) {
-    const lines = data.toString("utf8").split("\n").map((l) => l.trimEnd()).filter(Boolean).sort();
-    return `${mode}:p:${sha256(lines.join("\n"))}`;
-  }
-  return `${mode}:${sha256(data)}`;
+  return `${st.mode & 0o111 ? "x" : "f"}:${sha256(fs.readFileSync(path))}`;
 }
 
-export function listFiles(repo, pathspecs) {
-  const out = execFileSync("git", ["-C", repo, "ls-files", "-co", "--exclude-standard", "-z", "--", ...pathspecs], {
+export function listFiles(repo) {
+  const out = execFileSync("git", ["-C", repo, "ls-files", "-co", "--exclude-standard", "-z"], {
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
   });
@@ -88,6 +93,8 @@ export function manifestOf(repo, files) {
   return manifest;
 }
 
+export const pick = (manifest, keep) => Object.fromEntries(Object.entries(manifest).filter(([rel]) => keep(rel)));
+
 export function hashManifest(manifest, extra = []) {
   const h = createHash("sha256");
   for (const rel of Object.keys(manifest).sort()) h.update(`${rel}\0${manifest[rel]}\n`);
@@ -95,47 +102,113 @@ export function hashManifest(manifest, extra = []) {
   return h.digest("hex");
 }
 
-export function frameworkIdentity(framework, engineKey) {
-  const prebuilt = framework?.match(/\/(?:prebuilt|engines)\/([0-9a-f]{12})\/Chromium Framework\.framework\/?$/);
-  if (prebuilt) return `prebuilt ${prebuilt[1]}`;
-  const binary = framework && join(framework, "Versions/Current/Chromium Framework");
-  if (binary && fs.existsSync(binary)) {
-    const st = fs.statSync(binary);
-    return `framework ${st.size} ${Math.floor(st.mtimeMs)}`;
+export function depsHash(manifest, env = process.env) {
+  return hashManifest(pick(manifest, isDeps), envFingerprint(env).lines);
+}
+
+export function podsHash(manifest, env = process.env) {
+  const sources = Object.keys(manifest).filter((rel) => POD_SOURCES.test(rel));
+  return hashManifest(pick(manifest, isPodsInput), [`deps ${depsHash(manifest, env)}`, ...sources.map((rel) => `source ${rel}`)]);
+}
+
+export class HashCache {
+  constructor(path) {
+    this.path = path;
+    this.dirty = false;
+    try {
+      this.map = new Map(Object.entries(JSON.parse(fs.readFileSync(path, "utf8"))));
+    } catch {
+      this.map = new Map();
+    }
   }
-  return `prebuilt ${String(engineKey).slice(0, 12)}`;
-}
-
-export function xcodeIdentity() {
-  try {
-    const developer = execFileSync("xcode-select", ["-p"], { encoding: "utf8" }).trim();
-    const plist = join(dirname(developer), "version.plist");
-    const text = fs.readFileSync(plist, "utf8");
-    return `xcode ${text.match(/<key>ProductBuildVersion<\/key>\s*<string>([^<]+)</)?.[1] ?? "unknown"}`;
-  } catch {
-    return "xcode unknown";
+  fileHash(path, st) {
+    const key = `${path}\0${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+    let hash = this.map.get(key);
+    if (!hash) {
+      hash = sha256(fs.readFileSync(path));
+      this.map.set(key, hash);
+      this.dirty = true;
+    }
+    return hash;
+  }
+  save(limit = 200000) {
+    if (!this.dirty || !this.path) return;
+    const entries = [...this.map.entries()].slice(-limit);
+    fs.mkdirSync(dirname(this.path), { recursive: true });
+    const tmp = `${this.path}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(entries)));
+    fs.renameSync(tmp, this.path);
+    this.dirty = false;
   }
 }
 
-export function engineKeyOf(repo) {
-  const r = spawnSync(join(repo, "engine/engine-key.sh"), ["--platform", "macos"], { encoding: "utf8" });
-  return r.status === 0 ? r.stdout.trim() : "unknown";
+export function treeDigest(root, cache = new HashCache(null)) {
+  const lines = [];
+  const walk = (rel) => {
+    const path = rel ? join(root, rel) : root;
+    for (const name of fs.readdirSync(path).sort()) {
+      const childRel = rel ? `${rel}/${name}` : name;
+      const child = join(path, name);
+      const st = fs.lstatSync(child, { bigint: true });
+      if (st.isSymbolicLink()) lines.push(`${childRel}\0l:${fs.readlinkSync(child)}`);
+      else if (st.isDirectory()) walk(childRel);
+      else lines.push(`${childRel}\0${Number(st.mode) & 0o111 ? "x" : "f"}:${cache.fileHash(child, st)}`);
+    }
+  };
+  walk("");
+  return sha256(lines.join("\n"));
 }
 
-export function stampOf({ manifest, config, signing = "default", framework, engineKey, xcode }) {
-  return hashManifest(manifest, [
+export function frameworkIdentity(framework, cache) {
+  if (!framework || !fs.existsSync(join(framework, "Versions/Current/Chromium Framework"))) return null;
+  return `framework ${treeDigest(framework, cache)}`;
+}
+
+export function toolchainIdentity() {
+  const run = (cmd, args) => {
+    const r = spawnSync(cmd, args, { encoding: "utf8" });
+    return r.status === 0 ? r.stdout.trim() : null;
+  };
+  const parts = [
+    run("xcodebuild", ["-version"]),
+    run("xcrun", ["--sdk", "macosx", "--show-sdk-version"]),
+    run("xcrun", ["--sdk", "macosx", "--show-sdk-build-version"]),
+    run("xcrun", ["--find", "clang"]),
+    run("xcrun", ["--find", "swiftc"]),
+  ];
+  if (parts.some((p) => p === null)) return null;
+  return `toolchain ${parts.join(" | ").replace(/\s+/g, " ")}`;
+}
+
+export function stampOf({ manifest, config, signing = "default", framework, toolchain, env, native = isNative }) {
+  return hashManifest(pick(manifest, native), [
     `stamp v${STAMP_VERSION}`,
     `config ${config}`,
     `signing ${signing}`,
-    `engine ${engineKey}`,
-    frameworkIdentity(framework, engineKey),
-    xcode,
+    framework,
+    toolchain,
+    ...env.lines,
   ]).slice(0, 32);
 }
 
-export function nativeStamp(repo, { config, signing, framework, engineKey = engineKeyOf(repo), xcode = xcodeIdentity() }) {
-  return stampOf({ manifest: manifestOf(repo, listFiles(repo, NATIVE_PATHSPECS)), config, signing, framework, engineKey, xcode });
+export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity() }) {
+  const fingerprint = envFingerprint(env);
+  if (fingerprint.blocked.length) return { blocked: `${fingerprint.blocked.join(", ")} set` };
+  const identity = frameworkIdentity(framework, hashCache);
+  if (!identity) return { blocked: `no engine framework at ${framework || "(none)"}` };
+  if (!toolchain) return { blocked: "the Xcode toolchain didn't answer" };
+  return { framework: identity, toolchain, env: fingerprint };
 }
+
+export function cloneTree(src, dst) {
+  const args = process.platform === "darwin" ? ["-Rc", src, dst] : ["-a", "--reflink=auto", src, dst];
+  return spawnSync("cp", args, { encoding: "utf8" });
+}
+
+const cloneOrThrow = (src, dst) => {
+  const r = cloneTree(src, dst);
+  if (r.status !== 0) throw new Error(`copying ${src} failed: ${r.stderr.trim()}`);
+};
 
 const readJson = (path, fallback = null) => {
   try {
@@ -151,9 +224,19 @@ const writeJsonAtomic = (path, value) => {
   fs.renameSync(tmp, path);
 };
 
-export function cacheEntryDir(cacheRoot, stamp) {
-  return join(cacheRoot, stamp);
+export function countEntries(root) {
+  let n = 0;
+  const walk = (path) => {
+    for (const entry of fs.readdirSync(path, { withFileTypes: true })) {
+      n++;
+      if (entry.isDirectory()) walk(join(path, entry.name));
+    }
+  };
+  walk(root);
+  return n;
 }
+
+export const cacheEntryDir = (cacheRoot, stamp) => join(cacheRoot, stamp);
 
 export function lookup(cacheRoot, stamp) {
   const dir = cacheEntryDir(cacheRoot, stamp);
@@ -179,21 +262,23 @@ export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measur
     touch(existing.dir);
     return existing;
   }
-  if (existing) {
-    const trash = join(cacheRoot, `.tmp-replaced-${process.pid}-${Date.now()}`);
-    fs.renameSync(existing.dir, trash);
-    fs.rmSync(trash, { recursive: true, force: true });
-  }
   fs.mkdirSync(cacheRoot, { recursive: true });
   const tmp = join(cacheRoot, `.tmp-${process.pid}-${Date.now()}`);
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp);
-  execFileSync("cp", ["-Rc", app, join(tmp, "Ardia.app")]);
-  if (hermesc && fs.existsSync(hermesc)) execFileSync("cp", ["-c", hermesc, join(tmp, "hermesc")]);
-  const full = { ...meta, stamp, created: new Date().toISOString(), bytes: measure(tmp) };
+  cloneOrThrow(app, join(tmp, "Ardia.app"));
+  if (hermesc && fs.existsSync(hermesc)) cloneOrThrow(hermesc, join(tmp, "hermesc"));
+  const full = { ...meta, stamp, created: new Date().toISOString(), files: countEntries(join(tmp, "Ardia.app")), bytes: measure(tmp) };
   fs.writeFileSync(join(tmp, "meta.json"), JSON.stringify(full, null, 1));
   touch(tmp);
   const dir = cacheEntryDir(cacheRoot, stamp);
+  if (existing) {
+    const trash = join(cacheRoot, `.tmp-replaced-${process.pid}-${Date.now()}`);
+    try {
+      fs.renameSync(dir, trash);
+      fs.rmSync(trash, { recursive: true, force: true });
+    } catch {}
+  }
   try {
     fs.renameSync(tmp, dir);
   } catch (e) {
@@ -203,36 +288,54 @@ export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measur
   return lookup(cacheRoot, stamp);
 }
 
-export function entries(cacheRoot) {
+export function cloneEntry(entry, dest) {
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dirname(dest), { recursive: true });
+  const r = cloneTree(entry.app, dest);
+  if (r.status !== 0 || !lookup(dirname(entry.dir), entry.meta.stamp)) return false;
+  try {
+    return !entry.meta.files || countEntries(dest) === entry.meta.files;
+  } catch {
+    return false;
+  }
+}
+
+function listDirs(root, keep) {
   let names;
   try {
-    names = fs.readdirSync(cacheRoot);
+    names = fs.readdirSync(root);
   } catch {
     return [];
   }
+  return names.filter((n) => !n.startsWith(".") && keep(n)).map((n) => join(root, n));
+}
+
+const usedAt = (dir) => {
+  try {
+    return fs.statSync(join(dir, ".used")).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+
+export function entries(cacheRoot) {
   const list = [];
-  for (const name of names) {
-    if (name.startsWith(".")) continue;
-    const dir = join(cacheRoot, name);
+  for (const dir of listDirs(cacheRoot, () => true)) {
     const meta = readJson(join(dir, "meta.json"));
     if (!meta) continue;
-    let usedAt = 0;
-    try {
-      usedAt = fs.statSync(join(dir, ".used")).mtimeMs;
-    } catch {}
-    list.push({ stamp: name, dir, bytes: meta.bytes ?? 0, usedAt, meta });
+    list.push({ stamp: dir.split("/").pop(), dir, bytes: meta.bytes ?? 0, usedAt: usedAt(dir), meta });
   }
   return list;
 }
 
-export function evictionPlan(list, { maxBytes, maxEntries, protect = [] }) {
+export function evictionPlan(list, { maxBytes, maxEntries, protect = [], graceMs = 0, now = Date.now() }) {
   const sorted = [...list].sort((a, b) => b.usedAt - a.usedAt);
   const keep = [];
   const evict = [];
   let bytes = 0;
   for (const e of sorted) {
-    const protectedEntry = protect.includes(e.stamp);
-    if (protectedEntry || (keep.length < maxEntries && bytes + e.bytes <= maxBytes)) {
+    const pinned = protect.includes(e.stamp) || now - e.usedAt < graceMs;
+    if (pinned || (keep.length < maxEntries && bytes + e.bytes <= maxBytes)) {
       keep.push(e);
       bytes += e.bytes;
     } else evict.push(e);
@@ -240,16 +343,32 @@ export function evictionPlan(list, { maxBytes, maxEntries, protect = [] }) {
   return { keep, evict, bytes };
 }
 
+function removeAtomically(root, dir) {
+  const trash = join(root, `.tmp-evict-${process.pid}-${Date.now()}-${dir.split("/").pop()}`);
+  try {
+    fs.renameSync(dir, trash);
+  } catch {
+    return;
+  }
+  fs.rmSync(trash, { recursive: true, force: true });
+}
+
 export function evict(cacheRoot, opts) {
   const plan = evictionPlan(entries(cacheRoot), opts);
-  for (const e of plan.evict) fs.rmSync(e.dir, { recursive: true, force: true });
-  try {
-    for (const name of fs.readdirSync(cacheRoot)) {
-      const path = join(cacheRoot, name);
-      if (name.startsWith(".tmp-") && Date.now() - fs.statSync(path).mtimeMs > 3600e3) fs.rmSync(path, { recursive: true, force: true });
-    }
-  } catch {}
-  return plan;
+  for (const e of plan.evict) removeAtomically(cacheRoot, e.dir);
+  const engines = join(cacheRoot, "engines");
+  const engineList = listDirs(engines, (n) => /^[0-9a-f]{12}$/.test(n)).map((dir) => ({ stamp: dir, dir, bytes: 0, usedAt: usedAt(dir) }));
+  const enginePlan = evictionPlan(engineList, { maxBytes: Infinity, maxEntries: opts.keepEngines ?? 3, graceMs: opts.graceMs, now: opts.now, protect: opts.protectEngines ?? [] });
+  for (const e of enginePlan.evict) removeAtomically(engines, e.dir);
+  for (const root of [cacheRoot, engines]) {
+    try {
+      for (const name of fs.readdirSync(root)) {
+        const path = join(root, name);
+        if (/^(\.tmp-|[0-9a-f]{12}\.tmp-)/.test(name) && Date.now() - fs.statSync(path).mtimeMs > 3600e3) fs.rmSync(path, { recursive: true, force: true });
+      }
+    } catch {}
+  }
+  return { ...plan, engines: enginePlan.evict.map((e) => e.dir) };
 }
 
 export function manifestDiff(from, to) {
@@ -263,8 +382,11 @@ export function manifestDiff(from, to) {
 export const slotTree = (slot) => join(slot, "ardia");
 export const slotDerivedData = (slot) => join(slotTree(slot), "apps/browser/build-slot");
 export const slotStatePath = (slot) => join(slot, "slot.json");
-export const readSlotState = (slot) => readJson(slotStatePath(slot), { manifest: {}, syncedAt: 0 });
-export const writeSlotState = (slot, state) => writeJsonAtomic(slotStatePath(slot), state);
+export const readSlotState = (slot) => readJson(slotStatePath(slot), { manifest: {}, pending: [], syncedAt: 0 });
+export const writeSlotState = (slot, state) => {
+  fs.mkdirSync(slot, { recursive: true });
+  writeJsonAtomic(slotStatePath(slot), state);
+};
 
 export function lockHolderPath(derivedData, root = process.env.AC_LOCK_ROOT || "/tmp") {
   const base = derivedData.replace(/\/+$/, "").split("/").pop();
@@ -272,7 +394,8 @@ export function lockHolderPath(derivedData, root = process.env.AC_LOCK_ROOT || "
   return join(root, `ac-xcodebuild-${base.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 40)}-${digest}.holder`);
 }
 
-const pidAlive = (pid) => {
+export const pidAlive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -281,10 +404,24 @@ const pidAlive = (pid) => {
   }
 };
 
+export function canonical(path) {
+  try {
+    return fs.realpathSync(path);
+  } catch {
+    try {
+      return join(fs.realpathSync(dirname(path)), path.split("/").pop());
+    } catch {
+      return path;
+    }
+  }
+}
+
 export function slotBusy(slot, { root } = {}) {
+  const reserved = Number(readJson(join(slot, "reserved.json"), {}).pid);
+  if (pidAlive(reserved)) return true;
   let holder;
   try {
-    holder = fs.readFileSync(lockHolderPath(slotDerivedData(slot), root), "utf8");
+    holder = fs.readFileSync(lockHolderPath(canonical(slotDerivedData(slot)), root), "utf8");
   } catch {
     return false;
   }
@@ -294,18 +431,7 @@ export function slotBusy(slot, { root } = {}) {
   return false;
 }
 
-export function listSlots(slotRoot) {
-  let names;
-  try {
-    names = fs.readdirSync(slotRoot);
-  } catch {
-    return [];
-  }
-  return names
-    .filter((n) => /^\d+$/.test(n))
-    .sort((a, b) => Number(a) - Number(b))
-    .map((n) => join(slotRoot, n));
-}
+export const listSlots = (slotRoot) => listDirs(slotRoot, (n) => /^\d+$/.test(n)).sort((a, b) => Number(a.split("/").pop()) - Number(b.split("/").pop()));
 
 export function rankSlots(slots, manifest, { busy = slotBusy, readState = readSlotState } = {}) {
   return slots
@@ -317,18 +443,29 @@ export function rankSlots(slots, manifest, { busy = slotBusy, readState = readSl
     .sort((a, b) => a.busy - b.busy || a.distance - b.distance || b.usedAt - a.usedAt);
 }
 
-export function nextSlotPath(slotRoot, slots = listSlots(slotRoot)) {
-  const used = new Set(slots.map((s) => Number(s.split("/").pop())));
-  let n = 1;
-  while (used.has(n)) n++;
-  return join(slotRoot, String(n));
+export function freeSlots(slotRoot, manifest, opts = {}) {
+  return rankSlots(listSlots(slotRoot), manifest, opts)
+    .filter((r) => !r.busy)
+    .map((r) => r.slot);
 }
 
-export function pickSlots(slotRoot, manifest, opts = {}) {
-  const ranked = rankSlots(listSlots(slotRoot), manifest, opts);
-  const free = ranked.filter((r) => !r.busy).map((r) => r.slot);
-  return [...free, nextSlotPath(slotRoot)];
+export function reserveSlot(slotRoot, owner) {
+  fs.mkdirSync(slotRoot, { recursive: true });
+  for (let n = 1; n < 10000; n++) {
+    const slot = join(slotRoot, String(n));
+    try {
+      fs.mkdirSync(slot);
+    } catch (e) {
+      if (e.code === "EEXIST") continue;
+      throw e;
+    }
+    writeJsonAtomic(join(slot, "reserved.json"), { pid: owner });
+    return slot;
+  }
+  throw new Error(`no free slot number under ${slotRoot}`);
 }
+
+export const releaseReservation = (slot) => fs.rmSync(join(slot, "reserved.json"), { force: true });
 
 export function slotsToEvict(slotRoot, { keep, busy = slotBusy, readState = readSlotState, protect = [] } = {}) {
   const idle = listSlots(slotRoot)
@@ -382,9 +519,7 @@ export function driftedPaths(tree, state) {
       drifted.push(rel);
       continue;
     }
-    if (st.mtimeMs > since || st.ctimeMs > since) {
-      if (contentId(join(tree, rel)) !== id) drifted.push(rel);
-    }
+    if ((st.mtimeMs > since || st.ctimeMs > since) && contentId(join(tree, rel)) !== id) drifted.push(rel);
   }
   return drifted;
 }
@@ -393,32 +528,75 @@ export function syncTree(srcRepo, slot, manifest, { now = new Date() } = {}) {
   const tree = slotTree(slot);
   fs.mkdirSync(tree, { recursive: true });
   const state = readSlotState(slot);
+  const prior = state.manifest ?? {};
+  const pending = new Set(state.pending ?? []);
   const drifted = new Set(driftedPaths(tree, state));
-  const base = { ...(state.manifest ?? {}) };
-  for (const rel of drifted) delete base[rel];
-  const { changed, removed } = manifestDiff(base, manifest);
+  const base = Object.fromEntries(Object.entries(prior).filter(([rel]) => !drifted.has(rel) && !pending.has(rel)));
+  const changed = Object.keys(manifest).filter((rel) => base[rel] !== manifest[rel]).sort();
+  const managed = new Set([...Object.keys(prior), ...pending]);
+  const removed = [...managed].filter((rel) => !(rel in manifest)).sort();
+  writeSlotState(slot, { ...state, pending: [...new Set([...pending, ...changed])] });
   for (const rel of removed) {
-    fs.rmSync(join(tree, rel), { force: true });
+    fs.rmSync(join(tree, rel), { force: true, recursive: true });
     pruneEmptyDirs(tree, rel);
   }
   for (const rel of changed) copyInto(srcRepo, tree, rel, now);
-  writeSlotState(slot, { ...state, manifest, syncedAt: Date.now() + 1 });
-  return { changed, removed, drifted: [...drifted] };
+  const mismatched = changed.filter((rel) => {
+    try {
+      return contentId(join(tree, rel)) !== manifest[rel];
+    } catch {
+      return true;
+    }
+  });
+  const settled = Object.fromEntries(Object.entries(manifest).filter(([rel]) => !mismatched.includes(rel)));
+  writeSlotState(slot, { ...state, manifest: settled, pending: mismatched, syncedAt: Date.now() + 1 });
+  return { changed, removed, drifted: [...drifted], mismatched };
 }
 
-export function linksOutside(dir) {
-  const nodeModules = join(dir, "node_modules");
-  try {
-    if (fs.lstatSync(nodeModules).isSymbolicLink()) return true;
-    for (const name of fs.readdirSync(nodeModules)) {
-      if (name.startsWith(".") || name.startsWith("@")) continue;
-      const path = join(nodeModules, name);
-      if (!fs.lstatSync(path).isSymbolicLink()) continue;
-      const target = fs.realpathSync(path);
-      if (!target.startsWith(fs.realpathSync(dir) + "/")) return true;
+const NODE_MODULES_ROOTS = (root) => [
+  "node_modules",
+  ...["apps", "packages"].flatMap((d) => {
+    try {
+      return fs.readdirSync(join(root, d)).map((n) => `${d}/${n}/node_modules`);
+    } catch {
+      return [];
     }
+  }),
+].filter((rel) => {
+  try {
+    fs.lstatSync(join(root, rel));
+    return true;
   } catch {
     return false;
   }
-  return false;
+});
+
+export function escapingLinks(root, { deep = false, limit = 5 } = {}) {
+  const found = [];
+  const base = resolve(root) + "/";
+  const check = (path) => {
+    const target = fs.readlinkSync(path);
+    if (isAbsolute(target) || !resolve(dirname(path), target).startsWith(base)) found.push(`${path.slice(base.length)} -> ${target}`);
+  };
+  const visit = (path, depth) => {
+    if (found.length >= limit) return;
+    let st;
+    try {
+      st = fs.lstatSync(path);
+    } catch {
+      return;
+    }
+    if (st.isSymbolicLink()) return check(path);
+    if (!st.isDirectory()) return;
+    if (!deep && depth > 1) return;
+    for (const name of fs.readdirSync(path)) {
+      const nextDepth = name.startsWith("@") || name === ".bin" ? depth : depth + 1;
+      visit(join(path, name), nextDepth);
+      if (found.length >= limit) return;
+    }
+  };
+  for (const rel of NODE_MODULES_ROOTS(root)) visit(join(root, rel), 0);
+  return found;
 }
+
+export const nodeModulesRoots = NODE_MODULES_ROOTS;

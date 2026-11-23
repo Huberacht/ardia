@@ -9,29 +9,36 @@
 #                    and it is passed to `locked` so a chromium take of yours covers the engine staging.
 # --config           Debug (default) or Release.
 # --force            build even when no native file changed, and skip the app cache.
-# --plain            build in this tree's own derived data (apps/browser/build-NAME), as before the cache and slots.
+# --plain            build in this tree's own derived data (apps/browser/build-NAME), as before the cache and slots:
+#                    no cache lookup.
 # --slot             build in a shared build slot even when this tree's own derived data holds a build.
 # --adhoc            sign ad hoc (no provisioning profile; entitlements without com.apple.developer.* and keychain
 #                    groups), for a Mac that isn't in the team's profile. Passkeys and keychain groups don't work in it.
+#                    A copy from the cache or a slot also gets Sparkle signed ad hoc so a Release one launches.
 # --bundle           Debug: embed this tree's JS (a dev bundle) and turn Metro off, so `ac launch --js none` runs it.
+#                    Kept apart from the Metro app (build-NAME/Prebuilt/Debug-bundle).
 # --prebuilt-engine  use the published engine for this tree's engine key (kept once per machine) instead of the local
-#                    ~/chromium-build framework.
+#                    ~/chromium-build framework. Without either, a Mac with no local framework uses the published one.
 # --wait SECS        how long to wait for a pod install, or for a busy derived data or slot (default 1500).
 #
 # How it gets an app, fastest first:
-# 1. JS-only (Debug): no native file differs from the last app this derived data got, so it prints
+# 1. JS-only (Debug, Metro): no native file differs from the last app this derived data got, so it prints
 #    "JS-only: Metro reloads it; no build needed" and that app. --force or --bundle goes on.
-# 2. The app cache (scripts/agent/build-cache): every slot build stores its app under its native stamp (every file that
-#    changes the binary, the engine, the config and the signing; never the JS). A tree whose stamp was built on this
-#    Mac, in any worktree, gets an APFS clone in a second or two at apps/browser/build-NAME/Prebuilt/<config>: Debug
-#    runs the JS Metro serves; Release (and --bundle) gets this tree's JS bundled and swapped in.
+# 2. The app cache (scripts/agent/build-cache; not with --plain or --force): every slot build publishes its app under
+#    its native stamp (the content of every file that changes the binary, every file of the engine framework, the
+#    config, the signing, the toolchain and SDK and the build-affecting environment; never the JS). A tree whose stamp
+#    was built on this Mac, in any worktree, gets an APFS clone in a second or two at build-NAME/Prebuilt/<config>:
+#    Debug runs the JS Metro serves; Release (and --bundle) gets this tree's JS bundled and swapped in. With
+#    XCODE_XCCONFIG_FILE set the build can't be fingerprinted, so nothing is reused or published.
 # 3. A build. With no earlier build in build-NAME (or with --slot) it builds in a build slot: a fixed-path copy of a
 #    tree (~/ardia-scratch/build-slots/<n>) with its own node_modules, Pods and derived data. Only the files that
 #    differ are written into it, so Xcode stays incremental across worktrees: a tree near the slot's last build
 #    compiles what changed, not all 1040 files. Each slot is its own `locked xcodebuild` lock; a busy one is skipped
-#    and a new slot made when none is free. Slot builds share Xcode's compilation cache (a CAS under the app cache,
-#    slot paths prefix-mapped), so a new slot or a settings change replays compiles instead of redoing them;
-#    AC_COMPILE_CACHE=0 turns it off. Otherwise (--plain, or build-NAME holds a build) it builds there as before.
+#    and a new slot reserved when none is free. You always get the app that slot build made; it is published to the
+#    cache only under the stamp of what was synced, so an edit made while waiting is never cached under the old one.
+#    Slot builds share Xcode's compilation cache (a CAS under the app cache, slot paths prefix-mapped), so a new slot
+#    or a settings change replays compiles instead of redoing them; AC_COMPILE_CACHE=0 turns it off. Otherwise
+#    (--plain, or build-NAME holds a build) it builds there as before.
 # Prints the errors (a failed build script with its last 30 lines), the warnings count, the result, the time and
 # `app: <path>` on its own line (scripts/agent/train reads it). The full log: <derived data>/build-app.log.
 # Run it with run_in_background. Exits 0 when built (or nothing to build), 1 when the build failed, 75 when a lock
@@ -76,44 +83,54 @@ cache_tool="$repo/scripts/agent/build-cache"
 app_dir="$repo/apps/browser"
 dd="$app_dir/build-$name"
 log="$dd/build-app.log"
-prebuilt_out="$dd/Prebuilt/$config"
-stamp_file="$dd/.ac-native-stamp-$config"
-app_file="$dd/.ac-app-$config"
+variant=$config
+[[ -n "$bundle" && $config == Debug ]] && variant=$config-bundle
+[[ $config == Release ]] && bundle=""
+prebuilt_out="$dd/Prebuilt/$variant"
+stamp_file="$dd/.ac-native-stamp-$variant"
+app_file="$dd/.ac-app-$variant"
 mkdir -p "$dd"
 
 prebuilt_engine() {
   ARDIACORE_FRAMEWORK=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
   export ARDIACORE_FRAMEWORK
 }
-[[ -n "$prebuilt_engine" ]] && prebuilt_engine
-framework=${ARDIACORE_FRAMEWORK:-}
-[[ -z "$framework" && -d "$chromium_framework" ]] && framework=$chromium_framework
+if [[ -n "$prebuilt_engine" ]]; then
+  prebuilt_engine
+elif [[ -z "${ARDIACORE_FRAMEWORK:-}" ]]; then
+  if [[ -d "$chromium_framework" ]]; then export ARDIACORE_FRAMEWORK=$chromium_framework; else prebuilt_engine; fi
+fi
 signing=default
 [[ -n "$adhoc" ]] && signing=adhoc
 
-stamp=$("$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$framework") ||
-  { echo "build-app: couldn't hash the native files" >&2; exit 1; }
-last_app=$(cat "$app_file" 2>/dev/null || echo "$dd/Build/Products/$config/Ardia.app")
-if [[ -z "$force$bundle" && $config == Debug && -d "$last_app" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]]; then
+stamp=$("$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" 2>"$log.stamp")
+case $? in
+  0) reuse=1 ;;
+  3) reuse="" stamp=""; echo "build-app: $(sed 's/^build-cache: //' "$log.stamp"); building without the app cache" ;;
+  *) cat "$log.stamp" >&2; echo "build-app: couldn't hash the native files" >&2; exit 1 ;;
+esac
+last_app=$(cat "$app_file" 2>/dev/null || { [[ $variant == "$config" ]] && echo "$dd/Build/Products/$config/Ardia.app"; })
+if [[ -n "$reuse" && -z "$force$bundle" && $config == Debug && -n "$last_app" && -d "$last_app" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]]; then
   echo "JS-only: Metro reloads it; no build needed (no native file changed since $last_app was built; --force builds anyway)"
   echo "app: $last_app"
   exit 0
 fi
 
 record() {
-  echo "$stamp" >"$stamp_file"
-  echo "$1" >"$app_file"
+  rm -f "$stamp_file" "$app_file"
+  [[ -n "$1" ]] && echo "$1" >"$stamp_file"
+  echo "$2" >"$app_file"
 }
 
 start=$(date +%s)
-if [[ -z "$force" ]]; then
-  restore_args=(restore --repo "$repo" --stamp "$stamp" --config "$config" --out "$prebuilt_out")
+if [[ -n "$reuse" && -z "$force" && $mode != plain ]]; then
+  restore_args=(restore --repo "$repo" --stamp "$stamp" --config "$config" --out "$prebuilt_out" --signing "$signing")
   [[ -n "$bundle" ]] && restore_args+=(--bundle)
   restored=$("$cache_tool" "${restore_args[@]}" 2>"$log.restore")
   status=$?
   if [[ $status -eq 0 ]]; then
     app=$(head -1 <<<"$restored")
-    record "$app"
+    record "$stamp" "$app"
     echo "CACHE HIT (stamp ${stamp:0:12}, $(sed -n 2p <<<"$restored")) in $(($(date +%s) - start))s"
     echo "app: $app"
     exit 0
@@ -148,7 +165,7 @@ if [[ $mode == auto ]]; then
   [[ -d "$dd/Build/Products/$config/Ardia.app" ]] && mode=plain
 fi
 
-slot=""
+slot="" built_stamp=$stamp
 if [[ $mode == plain ]]; then
   echo "build-app: $config into ${dd#"$repo"/} (log: ${log#"$repo"/})"
   (
@@ -160,21 +177,31 @@ if [[ $mode == plain ]]; then
   ) >"$log" 2>&1
   status=$?
   app="$dd/Build/Products/$config/Ardia.app"
+  if [[ $status -eq 0 && -n "$bundle" ]]; then
+    app=$("$cache_tool" finish --repo "$repo" --app "$app" --config "$config" --out "$prebuilt_out" --signing "$signing" --bundle 2>>"$log") || status=1
+  fi
 else
-  [[ -z "$framework" ]] && prebuilt_engine
   echo "build-app: $config in a build slot (log: ${log#"$repo"/})"
   candidates=()
   while IFS= read -r line; do candidates+=("$line"); done < <("$cache_tool" slots --repo "$repo")
-  [[ ${#candidates[@]} -gt 0 ]] || { echo "build-app: no build slot to use" >&2; exit 1; }
-  slot_args=()
+  slot_args=(--signing "$signing" --framework "$ARDIACORE_FRAMEWORK")
   [[ -n "$bundle" ]] && slot_args+=(--bundle)
-  last=$((${#candidates[@]} - 1))
-  for i in "${!candidates[@]}"; do
-    slot=${candidates[$i]}
+  [[ -n "$force" ]] && slot_args+=(--replace)
+  status=75 reserved=""
+  i=0
+  while :; do
+    if [[ $i -lt ${#candidates[@]} ]]; then
+      slot=${candidates[$i]}
+      try_wait=2
+    elif [[ -z "$reserved" ]]; then
+      slot=$("$cache_tool" reserve --owner $$) || { echo "build-app: couldn't make a build slot" >&2; exit 1; }
+      reserved=$slot try_wait=$wait
+    else
+      break
+    fi
+    i=$((i + 1))
     slot_dd="$slot/ardia/apps/browser/build-slot"
     mkdir -p "$slot_dd"
-    try_wait=2
-    [[ $i -eq $last ]] && try_wait=$wait
     compile_cache=()
     if [[ "${AC_COMPILE_CACHE:-1}" != 0 ]]; then
       compile_cache=(COMPILATION_CACHE_ENABLE_CACHING=YES "COMPILATION_CACHE_CAS_PATH=${AC_APP_CACHE:-$HOME/ardia-scratch/app-cache}/xcode-cas"
@@ -184,18 +211,22 @@ else
     (
       cd "$app_dir" &&
         "$repo/scripts/agent/locked" xcodebuild --wait "$try_wait" --as "$name" -- \
-          "$cache_tool" slot-run --repo "$repo" --slot "$slot" --stamp "$stamp" --config "$config" --out "$prebuilt_out" \
-          ${slot_args[@]+"${slot_args[@]}"} -- \
+          "$cache_tool" slot-run --repo "$repo" --slot "$slot" --stamp "${stamp:-none}" --config "$config" --out "$prebuilt_out" \
+          "${slot_args[@]}" -- \
           -workspace macos/Ardia.xcworkspace -scheme Ardia-macOS -derivedDataPath "$slot_dd" \
           -destination 'platform=macOS,arch=arm64' -configuration "$config" -hideShellScriptEnvironment \
           ${settings[@]+"${settings[@]}"} ${compile_cache[@]+"${compile_cache[@]}"} build
     ) >"$log" 2>&1
     status=$?
-    [[ $status -eq 75 && $i -lt $last ]] && continue
+    [[ $status -eq 75 && -z "$reserved" ]] && continue
     break
   done
+  [[ -n "$reserved" && $status -eq 75 ]] && rm -f "$reserved/reserved.json"
+  (nohup "$cache_tool" slot-evict --protect "$slot" >/dev/null 2>&1 &)
   app="$prebuilt_out/Ardia.app"
-  synced=$(grep -m1 '^build-cache: synced' "$log" | sed -E 's/.*: ([0-9]+) written, ([0-9]+) removed.*/\1 files written, \2 removed/')
+  built_stamp=$(sed -n 's/^build-cache: stamp \([0-9a-f]\{32\}\).*/\1/p' "$log" | tail -1)
+  grep -q '^build-cache: not cached' "$log" && echo "$(grep -m1 '^build-cache: not cached' "$log" | sed 's/^build-cache: //')"
+  synced=$(grep '^build-cache: synced' "$log" | tail -1 | sed -E 's/.*: ([0-9]+) written, ([0-9]+) removed.*/\1 files written, \2 removed/')
   echo "slot: $slot${synced:+ ($synced)}"
 fi
 elapsed=$(($(date +%s) - start))
@@ -245,8 +276,7 @@ PY
 warnings=$(grep -E '(^|[[:space:]])warning:' "$log" | grep -v MACOSX_DEPLOYMENT_TARGET | sort -u | wc -l | tr -d ' ')
 duration="$((elapsed / 60))m $((elapsed % 60))s"
 if [[ $status -eq 0 ]] && grep -q '\*\* BUILD SUCCEEDED \*\*' "$log" && [[ -d "$app" ]]; then
-  record "$app"
-  [[ -n "$slot" ]] && (nohup "$cache_tool" slot-evict --protect "$slot" >/dev/null 2>&1 &)
+  record "$built_stamp" "$app"
   echo "warnings: $warnings"
   echo "BUILD SUCCEEDED in $duration"
   echo "app: $app"

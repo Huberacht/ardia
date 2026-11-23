@@ -1,32 +1,41 @@
 #!/usr/bin/env node
 // The machine-wide app cache and build slots behind scripts/agent/build-app (logic: scripts/lib/build-cache.mjs).
 //
-//   scripts/agent/build-cache stamp   --repo R --config C [--signing default|adhoc] [--framework F]
-//   scripts/agent/build-cache restore --repo R --stamp S --config C --out DIR [--bundle]
-//   scripts/agent/build-cache engine  --repo R
-//   scripts/agent/build-cache slots   --repo R
-//   scripts/agent/build-cache slot-run --repo R --slot DIR --stamp S --config C --out DIR [--bundle] [--replace] -- <xcodebuild args…>
+//   scripts/agent/build-cache stamp    --repo R --config C --framework F [--signing default|adhoc]
+//   scripts/agent/build-cache restore  --repo R --stamp S --config C --out DIR [--signing S] [--bundle]
+//   scripts/agent/build-cache finish   --repo R --app APP --config C --out DIR [--signing S] [--bundle]
+//   scripts/agent/build-cache engine   --repo R
+//   scripts/agent/build-cache slots    --repo R
+//   scripts/agent/build-cache reserve  --owner PID
+//   scripts/agent/build-cache slot-run --repo R --slot DIR --stamp S --config C --framework F --out DIR [--signing S]
+//                                      [--bundle] [--replace] -- <xcodebuild args…>
 //   scripts/agent/build-cache slot-evict [--protect DIR]
 //   scripts/agent/build-cache status | evict
 //   scripts/agent/build-cache -h | --help
 //
-// stamp    the native stamp: every file that changes the app's binary (apps/browser/macos, packages/*/ios, the Pods'
-//          inputs, patches, pnpm-lock.yaml, packages/core-rs, the engine key and the framework staged), the config,
-//          the signing and the Xcode build. JS files are not in it. A .pbxproj is hashed by its sorted lines, so the
-//          reordering pod install does is not a change.
-// restore  on a cache hit, APFS-clones the cached app into DIR/Ardia.app (exit 0, prints the app), else exits 2.
-//          Release (or --bundle) swaps in this tree's JS: a fresh main.jsbundle (Hermes for Release, dev JS for Debug,
-//          which then ignores Metro) and its assets, and re-signs the copy. An ad hoc copy gets its team-signed frameworks
-//          (Sparkle) re-signed ad hoc and its app signed without the hardened runtime, which would refuse them.
+// stamp    the native stamp: the content of every file that changes the app's binary (apps/browser/macos,
+//          packages/*/ios, the Pods' inputs, patches, pnpm-lock.yaml, packages/core-rs, the ArdiaCore header,
+//          scripts/lib/paths.sh), every file of the engine framework staged, the config, the signing, the Xcode
+//          toolchain and SDK, and the build-affecting environment (RCT_*, EXPO_*, TOOLCHAINS, CC, …). JS files are
+//          not in it. Exits 3 (no reuse) when the build can't be fingerprinted: XCODE_XCCONFIG_FILE set, no framework,
+//          no toolchain.
+// restore  on a cache hit, APFS-clones the cached app into DIR/Ardia.app and checks the copy is whole (exit 0, prints
+//          the app); a miss, or an entry that vanished mid-copy, exits 2. Release (or --bundle) swaps in this tree's
+//          JS: a fresh main.jsbundle (Hermes for Release, dev JS for Debug, which then ignores Metro) and its assets.
+//          --signing adhoc re-signs, one by one with their own entitlements, the code of frameworks that carry a team
+//          ID (Sparkle), and signs the app ad hoc without the hardened runtime, which refuses them.
+// finish   the same bundling and ad hoc signing for an app built in place (build-app --plain --bundle).
 // engine   the prebuilt engine for this tree's engine key, kept once per machine under the cache (fetched on a miss).
-// slots    the build slots to try, best first: free slots with the fewest files differing from this tree, then a new one.
+// slots    the free build slots, best first (fewest files differing from this tree); `reserve` makes a new one.
 // slot-run run under `scripts/agent/locked xcodebuild` (the slot's derived data is its lock): syncs this tree into the
-//          slot (only changed files are written, so Xcode stays incremental), runs pnpm install and pod install there
-//          when their inputs changed, builds, stores the app in the cache (--replace: over an entry already there)
-//          and clones it into DIR. A node_modules that links outside its tree (symlinks into another checkout) is never
-//          copied into a slot, and pnpm never runs through one.
-// Cache: $AC_APP_CACHE (default ~/ardia-scratch/app-cache), at most $AC_APP_CACHE_MAX_GB (40) and
-// $AC_APP_CACHE_MAX_ENTRIES (16), least recently used evicted first. Slots: $AC_BUILD_SLOTS (default
+//          slot (only changed files are written, so Xcode stays incremental; a journal keeps an interrupted sync's
+//          files managed), runs pnpm install and pod install there when their inputs changed, builds, clones the fresh
+//          app into DIR, and only then publishes it to the cache, under the stamp of what was synced and staged, and
+//          only when that equals --stamp and the framework didn't change during the build. A node_modules with links
+//          that would leave the slot is never copied into one, and pnpm never runs through one.
+// Cache: $AC_APP_CACHE (default ~/ardia-scratch/app-cache): apps (at most $AC_APP_CACHE_MAX_GB 40 GB and
+// $AC_APP_CACHE_MAX_ENTRIES 16), engines ($AC_APP_CACHE_MAX_ENGINES 3) and Xcode's compilation cache; least recently
+// used evicted first, nothing used in the last $AC_APP_CACHE_GRACE_MIN (15) minutes. Slots: $AC_BUILD_SLOTS (default
 // ~/ardia-scratch/build-slots/<n>), $AC_BUILD_SLOTS_KEEP (3) idle ones kept.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -56,11 +65,16 @@ if (!command || command === "-h" || command === "--help") {
 }
 const cfg = lib.defaults();
 const repo = flags.repo ? resolve(flags.repo) : resolve(here, "../..");
+const signing = flags.signing || "default";
 const need = (...names) => {
   for (const n of names) if (!flags[n]) throw new Error(`${command} needs --${n}`);
 };
 const LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 const NO_METRO = "127.0.0.1:1";
+const hashCache = new lib.HashCache(join(cfg.cacheRoot, ".file-hashes.json"));
+const quiet = { stdio: ["ignore", "ignore", "inherit"] };
+
+class Miss extends Error {}
 
 function hermescFor(entryDir) {
   for (const path of [entryDir && join(entryDir, "hermesc"), join(repo, "apps/browser/macos/Pods/hermes-engine/destroot/bin/hermesc")]) {
@@ -87,70 +101,113 @@ function bundleInto(outDir, { dev, hermesc }) {
   if (r.status !== 0) throw new Error(`bundling the JS failed:\n${r.stderr.split("\n").slice(-30).join("\n")}`);
   const out = join(outDir, "main.jsbundle");
   if (dev) fs.renameSync(js, out);
-  else execFileSync(hermesc, ["-emit-binary", "-max-diagnostic-width=80", "-O", "-out", out, js], { stdio: ["ignore", "ignore", "inherit"] });
-  return out;
+  else execFileSync(hermesc, ["-emit-binary", "-max-diagnostic-width=80", "-O", "-out", out, js], quiet);
+  return outDir;
 }
 
-function resignOuter(app, scratchDir) {
-  const granted = execFileSync("codesign", ["-d", "--entitlements", "-", "--xml", app], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  const info = spawnSync("codesign", ["-dv", app], { encoding: "utf8" }).stderr;
-  fs.mkdirSync(scratchDir, { recursive: true });
-  const plist = join(scratchDir, "entitlements.plist");
-  fs.writeFileSync(plist, granted || '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict/></plist>');
-  const identity = signingIdentity(app);
-  const args = ["--force", "--sign", identity, "--timestamp=none", "--entitlements", plist];
-  if (identity !== "-" && hardened(info)) args.push("--options", "runtime");
-  execFileSync("codesign", [...args, app], { stdio: ["ignore", "ignore", "inherit"] });
-}
-
+const signInfo = (path) => spawnSync("codesign", ["-dv", path], { encoding: "utf8" }).stderr;
 const hardened = (info) => /flags=0x[0-9a-f]*\([^)]*runtime/.test(info);
 
-function adhocFrameworks(app) {
-  if (signingIdentity(app) !== "-") return false;
+function resign(path, scratch, { identity, runtime }) {
+  const granted = spawnSync("codesign", ["-d", "--entitlements", "-", "--xml", path], { encoding: "utf8" }).stdout;
+  const args = ["--force", "--sign", identity, "--timestamp=none"];
+  if (granted && granted.includes("<key>")) {
+    fs.mkdirSync(scratch, { recursive: true });
+    const plist = join(scratch, `entitlements-${Math.random().toString(36).slice(2)}.plist`);
+    fs.writeFileSync(plist, granted);
+    args.push("--entitlements", plist);
+  }
+  if (runtime) args.push("--options", "runtime");
+  execFileSync("codesign", [...args, path], quiet);
+}
+
+const MACHO = new Set(["feedfacf", "cffaedfe", "cafebabe", "bebafeca", "feedface", "cefaedfe"]);
+function isMachO(path) {
+  try {
+    const fd = fs.openSync(path, "r");
+    const buf = Buffer.alloc(4);
+    fs.readSync(fd, buf, 0, 4, 0);
+    fs.closeSync(fd);
+    return MACHO.has(buf.toString("hex"));
+  } catch {
+    return false;
+  }
+}
+
+function nestedCode(root) {
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        walk(path);
+        if (/\.(app|xpc|appex|framework|bundle)$/.test(entry.name)) found.push(path);
+      } else if (entry.isFile() && fs.statSync(path).mode & 0o111 && isMachO(path)) found.push(path);
+    }
+  };
+  walk(root);
+  return found.sort((a, b) => b.split("/").length - a.split("/").length);
+}
+
+function adhocSign(app, scratch) {
   const frameworks = join(app, "Contents/Frameworks");
-  let changed = false;
   for (const name of fs.existsSync(frameworks) ? fs.readdirSync(frameworks) : []) {
     if (!name.endsWith(".framework")) continue;
-    const path = join(frameworks, name);
-    const team = spawnSync("codesign", ["-dv", path], { encoding: "utf8" }).stderr.match(/^TeamIdentifier=(.+)$/m)?.[1];
+    const framework = join(frameworks, name);
+    const team = signInfo(framework).match(/^TeamIdentifier=(.+)$/m)?.[1];
     if (!team || team === "not set") continue;
-    execFileSync("codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", path], { stdio: ["ignore", "ignore", "inherit"] });
-    changed = true;
+    for (const code of [...nestedCode(framework), framework]) resign(code, scratch, { identity: "-", runtime: hardened(signInfo(code)) });
   }
-  return changed;
+  resign(app, scratch, { identity: "-", runtime: false });
 }
 
-function swapBundle(app, built, { dev }) {
-  const resources = join(app, "Contents/Resources");
-  fs.copyFileSync(join(built, "main.jsbundle"), join(resources, "main.jsbundle"));
-  const assets = join(built, "assets");
-  if (fs.existsSync(assets) && fs.readdirSync(assets).length) {
-    fs.rmSync(join(resources, "assets"), { recursive: true, force: true });
-    execFileSync("cp", ["-Rc", assets, join(resources, "assets")]);
+function prepare(source, out, { config, bundle, hermesc, entry }) {
+  const tmp = `${out}.tmp-${process.pid}`;
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const app = join(tmp, "Ardia.app");
+  if (entry) {
+    if (!lib.cloneEntry(entry, app)) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      throw new Miss("the cache entry went away while it was copied");
+    }
+  } else {
+    const r = lib.cloneTree(source, app);
+    if (r.status !== 0) throw new Error(`copying ${source} failed: ${r.stderr.trim()}`);
   }
-  if (dev) fs.writeFileSync(join(resources, "ip.txt"), `${NO_METRO}\n`);
-  resignOuter(app, built);
-}
-
-function cloneOut(entry, out, { config, bundle }) {
-  fs.rmSync(out, { recursive: true, force: true });
-  fs.mkdirSync(out, { recursive: true });
-  const app = join(out, "Ardia.app");
-  execFileSync("cp", ["-Rc", entry.app, app]);
-  const adhocHardened = signingIdentity(app) === "-" && hardened(spawnSync("codesign", ["-dv", app], { encoding: "utf8" }).stderr);
-  const resigned = adhocFrameworks(app);
-  if ((resigned || adhocHardened) && !bundle) resignOuter(app, join(out, ".sign"));
   if (bundle) {
     const dev = config !== "Release";
-    const built = bundleInto(join(out, ".bundle"), { dev, hermesc: dev ? null : hermescFor(entry.dir) });
-    swapBundle(app, dirname(built), { dev });
+    const built = bundleInto(join(tmp, ".bundle"), { dev, hermesc: dev ? null : hermesc() });
+    const resources = join(app, "Contents/Resources");
+    fs.copyFileSync(join(built, "main.jsbundle"), join(resources, "main.jsbundle"));
+    const assets = join(built, "assets");
+    if (fs.existsSync(assets) && fs.readdirSync(assets).length) {
+      fs.rmSync(join(resources, "assets"), { recursive: true, force: true });
+      const r = lib.cloneTree(assets, join(resources, "assets"));
+      if (r.status !== 0) throw new Error(`copying the assets failed: ${r.stderr.trim()}`);
+    }
+    if (dev) fs.writeFileSync(join(resources, "ip.txt"), `${NO_METRO}\n`);
+    fs.rmSync(built, { recursive: true, force: true });
   }
-  spawnSync(LSREGISTER, ["-u", app], { stdio: "ignore" });
-  return app;
+  if (signing === "adhoc") adhocSign(app, join(tmp, ".sign"));
+  else if (bundle) resign(app, join(tmp, ".sign"), { identity: signingIdentity(app), runtime: hardened(signInfo(app)) });
+  fs.rmSync(join(tmp, ".sign"), { recursive: true, force: true });
+  fs.rmSync(out, { recursive: true, force: true });
+  fs.renameSync(tmp, out);
+  const final = join(out, "Ardia.app");
+  spawnSync(LSREGISTER, ["-u", final], { stdio: "ignore" });
+  return final;
 }
 
-function stampFor(framework) {
-  return lib.nativeStamp(repo, { config: flags.config, signing: flags.signing || "default", framework: framework ?? flags.framework });
+function inputsFor(framework) {
+  const inputs = lib.stampInputs({ framework, hashCache });
+  hashCache.save();
+  return inputs;
+}
+
+function stampFor(manifest, inputs) {
+  return lib.stampOf({ manifest, config: flags.config, signing, ...inputs });
 }
 
 function sh(cmd, args, opts) {
@@ -164,69 +221,51 @@ function pnpmCommand() {
   return r.status === 0 ? [r.stdout.trim()] : ["corepack", "pnpm"];
 }
 
-function syncDeps(tree, state) {
-  const deps = lib.hashManifest(lib.manifestOf(repo, lib.listFiles(repo, lib.DEPS_PATHSPECS)));
-  const pods = lib.hashManifest(lib.manifestOf(repo, lib.listFiles(repo, lib.PODS_PATHSPECS)), [deps]);
+function removeNodeModules(tree) {
+  for (const rel of lib.nodeModulesRoots(tree)) fs.rmSync(join(tree, rel), { recursive: true, force: true });
+}
+
+function syncDeps(slot, state, manifest) {
+  const tree = lib.slotTree(slot);
+  const deps = lib.depsHash(manifest);
+  const pods = lib.podsHash(manifest);
   const next = { ...state };
-  if (state.deps !== deps || !fs.existsSync(join(tree, "node_modules/.modules.yaml"))) {
-    if (lib.linksOutside(tree)) {
-      console.log("build-cache: the slot's node_modules links outside it; reinstalling it from the pnpm store");
-      for (const d of ["node_modules", ...["apps", "packages"].flatMap((p) => {
-        try {
-          return fs.readdirSync(join(tree, p)).map((n) => `${p}/${n}/node_modules`);
-        } catch {
-          return [];
+  const escaping = lib.escapingLinks(tree);
+  if (escaping.length) {
+    console.log(`build-cache: the slot's node_modules links outside it (${escaping[0]}); reinstalling it from the pnpm store`);
+    removeNodeModules(tree);
+    next.deps = null;
+  }
+  if (next.deps !== deps || !fs.existsSync(join(tree, "node_modules/.modules.yaml"))) {
+    if (!fs.existsSync(join(tree, "node_modules")) && fs.existsSync(join(repo, "node_modules"))) {
+      const outside = lib.escapingLinks(repo, { deep: true, limit: 1 });
+      if (outside.length) console.log(`build-cache: not seeding node_modules from ${repo}: it links outside the tree (${outside[0]})`);
+      else {
+        const roots = lib.nodeModulesRoots(repo);
+        console.log(`build-cache: seeding node_modules from ${repo} (${roots.length} folders, APFS clones)`);
+        for (const rel of roots) {
+          const r = lib.cloneTree(join(repo, rel), join(tree, rel));
+          if (r.status !== 0) throw new Error(`seeding ${rel} failed: ${r.stderr.trim()}`);
         }
-      })]) fs.rmSync(join(tree, d), { recursive: true, force: true });
-    }
-    if (!fs.existsSync(join(tree, "node_modules")) && fs.existsSync(join(repo, "node_modules")) && !lib.linksOutside(repo)) {
-      const dirs = ["node_modules", ...["apps", "packages"].flatMap((d) => {
-        try {
-          return fs.readdirSync(join(repo, d)).map((n) => `${d}/${n}/node_modules`);
-        } catch {
-          return [];
-        }
-      })].filter((d) => fs.existsSync(join(repo, d)) && !fs.existsSync(join(tree, d)));
-      console.log(`build-cache: seeding node_modules from ${repo} (${dirs.length} folders, APFS clones)`);
-      for (const d of dirs) execFileSync("cp", ["-Rc", join(repo, d), join(tree, d)]);
+      }
     }
     const [pnpm, ...pre] = pnpmCommand();
     const base = [...pre, "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"];
     if (sh(pnpm, [...base, "--offline"], { cwd: tree }) !== 0 && sh(pnpm, base, { cwd: tree }) !== 0) {
       throw new Error("pnpm install failed in the slot");
     }
+    const after = lib.escapingLinks(tree, { deep: true, limit: 1 });
+    if (after.length) throw new Error(`the slot's node_modules links outside it after pnpm install (${after[0]})`);
     next.deps = deps;
     next.pods = null;
   }
   if (next.pods !== pods || !fs.existsSync(join(tree, "apps/browser/macos/Pods/Manifest.lock"))) {
+    next.pods = null;
+    lib.writeSlotState(slot, { ...lib.readSlotState(slot), deps: next.deps, pods: null });
     if (sh("pod", ["install"], { cwd: join(tree, "apps/browser/macos") }) !== 0) throw new Error("pod install failed in the slot");
     next.pods = pods;
   }
   return next;
-}
-
-function slotRun() {
-  need("slot", "stamp", "config", "out");
-  const slot = resolve(flags.slot);
-  const tree = lib.slotTree(slot);
-  const started = Date.now();
-  const manifest = lib.manifestOf(repo, lib.listFiles(repo, ["."]));
-  const { changed, removed, drifted } = lib.syncTree(repo, slot, manifest);
-  console.log(`build-cache: synced ${repo} into ${tree}: ${changed.length} written, ${removed.length} removed, ${drifted.length} drifted (${Date.now() - started} ms)`);
-  for (const rel of changed.slice(0, 20)) console.log(`  + ${rel}`);
-  const state = syncDeps(tree, lib.readSlotState(slot));
-  lib.writeSlotState(slot, { ...lib.readSlotState(slot), deps: state.deps, pods: state.pods, repo, head: headOf(repo) });
-  const build = spawnSync("xcodebuild", passthrough, { cwd: join(tree, "apps/browser"), stdio: "inherit" });
-  if (build.status !== 0) process.exit(build.status ?? 1);
-  const product = join(lib.slotDerivedData(slot), "Build/Products", flags.config, "Ardia.app");
-  const entry = lib.store(cfg.cacheRoot, flags.stamp, product, { config: flags.config, repo, head: headOf(repo), slot }, {
-    replace: !!flags.replace,
-    hermesc: join(tree, "apps/browser/macos/Pods/hermes-engine/destroot/bin/hermesc"),
-  });
-  lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, protect: [flags.stamp] });
-  const app = cloneOut(entry, resolve(flags.out), { config: flags.config, bundle: flags.bundle && flags.config !== "Release" });
-  console.log(`build-cache: cached ${entry.dir}`);
-  console.log(`build-cache: app ${app}`);
 }
 
 function headOf(dir) {
@@ -234,23 +273,82 @@ function headOf(dir) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
-function engine() {
-  const key = lib.engineKeyOf(repo).slice(0, 12);
-  const dir = join(cfg.cacheRoot, "engines", key);
-  const framework = join(dir, "Chromium Framework.framework");
-  if (fs.existsSync(join(dir, ".complete"))) return framework;
-  const fetched = execFileSync(join(repo, "packages/ardiacore/scripts/fetch-engine.sh"), { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
-  const tmp = `${dir}.tmp-${process.pid}`;
-  fs.rmSync(tmp, { recursive: true, force: true });
-  fs.mkdirSync(tmp, { recursive: true });
-  execFileSync("cp", ["-Rc", fetched, join(tmp, "Chromium Framework.framework")]);
-  fs.writeFileSync(join(tmp, ".complete"), "");
-  try {
-    fs.renameSync(tmp, dir);
-  } catch {
-    fs.rmSync(tmp, { recursive: true, force: true });
+function slotRun() {
+  need("slot", "stamp", "config", "out", "framework");
+  const slot = resolve(flags.slot);
+  const tree = lib.slotTree(slot);
+  lib.releaseReservation(slot);
+  let manifest;
+  for (let attempt = 1; ; attempt++) {
+    const started = Date.now();
+    manifest = lib.manifestOf(repo, lib.listFiles(repo));
+    const { changed, removed, drifted, mismatched } = lib.syncTree(repo, slot, manifest);
+    console.log(`build-cache: synced ${repo} into ${tree}: ${changed.length} written, ${removed.length} removed, ${drifted.length} drifted (${Date.now() - started} ms)`);
+    for (const rel of changed.slice(0, 20)) console.log(`  + ${rel}`);
+    if (!mismatched.length) break;
+    if (attempt === 3) throw new Error(`${mismatched.length} files kept changing while they were synced (${mismatched[0]})`);
   }
+  const state = syncDeps(slot, lib.readSlotState(slot), manifest);
+  lib.writeSlotState(slot, { ...lib.readSlotState(slot), deps: state.deps, pods: state.pods, repo, head: headOf(repo) });
+  const before = inputsFor(flags.framework);
+  const synced = before.blocked ? null : stampFor(manifest, before);
+  console.log(`build-cache: stamp ${synced ?? "none"}${before.blocked ? ` (${before.blocked})` : ""}`);
+  const build = spawnSync("xcodebuild", passthrough, { cwd: join(tree, "apps/browser"), stdio: "inherit" });
+  if (build.status !== 0) process.exit(build.status ?? 1);
+  const product = join(lib.slotDerivedData(slot), "Build/Products", flags.config, "Ardia.app");
+  const app = prepare(product, resolve(flags.out), {
+    config: flags.config,
+    bundle: flags.bundle && flags.config !== "Release",
+    hermesc: () => hermescFor(null),
+  });
+  console.log(`build-cache: app ${app}`);
+  const after = inputsFor(flags.framework);
+  const reason = !synced
+    ? before.blocked
+    : synced !== flags.stamp
+      ? `the synced tree's stamp ${synced.slice(0, 12)} isn't the requested ${flags.stamp.slice(0, 12)} (the tree changed while waiting)`
+      : after.framework !== before.framework
+        ? "the engine framework changed during the build"
+        : null;
+  if (reason) {
+    console.log(`build-cache: not cached: ${reason}`);
+    return;
+  }
+  const entry = lib.store(cfg.cacheRoot, synced, product, { config: flags.config, repo, head: headOf(repo), slot }, {
+    replace: !!flags.replace,
+    hermesc: join(tree, "apps/browser/macos/Pods/hermes-engine/destroot/bin/hermesc"),
+  });
+  lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, keepEngines: cfg.keepEngines, graceMs: cfg.graceMs, protect: [synced] });
+  console.log(`build-cache: cached ${entry.dir}`);
+}
+
+function engine() {
+  const key = engineKey();
+  const dir = join(cfg.cacheRoot, "engines", key.slice(0, 12));
+  const framework = join(dir, "Chromium Framework.framework");
+  if (!fs.existsSync(join(dir, ".complete"))) {
+    const fetched = execFileSync(join(repo, "packages/ardiacore/scripts/fetch-engine.sh"), { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+    const tmp = `${dir}.tmp-${process.pid}`;
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.mkdirSync(tmp, { recursive: true });
+    const r = lib.cloneTree(fetched, join(tmp, "Chromium Framework.framework"));
+    if (r.status !== 0) throw new Error(`copying the engine failed: ${r.stderr.trim()}`);
+    fs.writeFileSync(join(tmp, ".complete"), "");
+    try {
+      fs.renameSync(tmp, dir);
+    } catch {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  lib.touch(dir);
+  lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, keepEngines: cfg.keepEngines, graceMs: cfg.graceMs, protectEngines: [dir] });
   return framework;
+}
+
+function engineKey() {
+  const r = spawnSync(join(repo, "engine/engine-key.sh"), ["--platform", "macos"], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error("engine/engine-key.sh failed");
+  return r.stdout.trim();
 }
 
 function slotEvict() {
@@ -269,26 +367,38 @@ function slotEvict() {
 try {
   if (command === "stamp") {
     need("config");
-    console.log(stampFor());
+    const inputs = inputsFor(flags.framework);
+    if (inputs.blocked) {
+      console.error(`build-cache: no reuse: ${inputs.blocked}`);
+      process.exit(3);
+    }
+    console.log(stampFor(lib.manifestOf(repo, lib.listFiles(repo).filter(lib.isNative)), inputs));
   } else if (command === "restore") {
     need("stamp", "config", "out");
     const entry = lib.lookup(cfg.cacheRoot, flags.stamp);
     if (!entry) process.exit(2);
     lib.touch(entry.dir);
-    console.log(cloneOut(entry, resolve(flags.out), { config: flags.config, bundle: flags.bundle || flags.config === "Release" }));
+    const bundle = flags.bundle || flags.config === "Release";
+    console.log(prepare(null, resolve(flags.out), { config: flags.config, bundle, entry, hermesc: () => hermescFor(entry.dir) }));
     console.log(`from ${entry.meta.head?.slice(0, 10) ?? "?"} built ${entry.meta.created}`);
+  } else if (command === "finish") {
+    need("app", "config", "out");
+    console.log(prepare(resolve(flags.app), resolve(flags.out), { config: flags.config, bundle: !!flags.bundle && flags.config !== "Release", hermesc: () => hermescFor(null) }));
   } else if (command === "engine") {
     console.log(engine());
   } else if (command === "slots") {
-    const manifest = lib.manifestOf(repo, lib.listFiles(repo, ["."]));
-    for (const slot of lib.pickSlots(cfg.slotRoot, manifest)) console.log(slot);
+    const manifest = lib.manifestOf(repo, lib.listFiles(repo));
+    for (const slot of lib.freeSlots(cfg.slotRoot, manifest)) console.log(slot);
+  } else if (command === "reserve") {
+    need("owner");
+    console.log(lib.reserveSlot(cfg.slotRoot, Number(flags.owner)));
   } else if (command === "slot-run") {
     slotRun();
   } else if (command === "slot-evict") {
     slotEvict();
   } else if (command === "evict") {
-    const plan = lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries });
-    console.log(`kept ${plan.keep.length} (${(plan.bytes / 1024 ** 3).toFixed(1)} GB), evicted ${plan.evict.length}`);
+    const plan = lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, keepEngines: cfg.keepEngines, graceMs: cfg.graceMs });
+    console.log(`kept ${plan.keep.length} (${(plan.bytes / 1024 ** 3).toFixed(1)} GB), evicted ${plan.evict.length} apps and ${plan.engines.length} engines`);
   } else if (command === "status") {
     for (const e of lib.entries(cfg.cacheRoot)) {
       console.log(`app  ${e.stamp}  ${e.meta.config}  ${(e.bytes / 1024 ** 3).toFixed(2)} GB  ${e.meta.head?.slice(0, 10) ?? "?"}  used ${new Date(e.usedAt).toISOString()}`);
@@ -302,6 +412,10 @@ try {
     process.exit(64);
   }
 } catch (e) {
+  if (e instanceof Miss) {
+    console.error(`build-cache: ${e.message}`);
+    process.exit(2);
+  }
   console.error(`build-cache: error: ${e.message}`);
   process.exit(1);
 }
