@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { after, before, test } from "node:test";
 const { useBrowser } = await import("../browser/store.ts");
 const model = await import("../browser/model.ts");
-const { webviews } = await import("../../platform/webviews.ts");
+const { webviews, webviewRef } = await import("../../platform/webviews.ts");
 const { refreshShownTile } = await import("./actions.ts");
 const held = await import("./heldTabPress.ts");
 const { returnLiveTab } = await import("../live/engine.ts");
@@ -239,6 +239,83 @@ test("closing the tile's page between the clicks ends the pair: the click that w
     assert.deepEqual(reloads, []);
     assert.deepEqual(delta(from), { returns: 0, reloads: 0, fresh: 1, missed: 0 });
   }));
+
+test("closing the tile's page between the second press and its release never reloads the page it wakes", () =>
+  scenario(async ({ w, tile, reloads }) => {
+    click(w, tile, { gapMs: 2000 });
+    clock += 120;
+    const e = event();
+    const press = held.holdTabPress(w, tile, e);
+    S().closeTab(tile);
+    clock += 60;
+    held.clickHeldTabPress(w, tile, e, press, (wasShown) => refreshShownTile(w, tile, wasShown));
+    await settle();
+    assert.equal(model.activeTabId(S(), w), tile, "the release still shows it");
+    assert.deepEqual(reloads, []);
+  }));
+
+test("closing and reopening the tile's page between the clicks ends the pair", () =>
+  scenario(async ({ w, tile, other, reloads }) => {
+    click(w, tile, { gapMs: 2000 });
+    S().closeTab(tile);
+    S().activate(other);
+    S().activate(tile);
+    assert.notEqual(S().tabs[tile].page.kind, "asleep", "reopened");
+    click(w, tile);
+    await settle();
+    assert.deepEqual(reloads, []);
+  }));
+
+test("a page mounted again between the clicks ends the pair", () =>
+  scenario(async ({ w, tile, reloads }) => {
+    const handle = { reload: () => (reloads.push(tile), Promise.resolve()) };
+    webviewRef(tile)(handle);
+    click(w, tile, { gapMs: 2000 });
+    webviewRef(tile)(handle);
+    click(w, tile);
+    await settle();
+    assert.deepEqual(reloads, []);
+    doubleClick(w, tile);
+    await settle();
+    assert.deepEqual(reloads, [tile], "the same mount pairs as usual");
+  }));
+
+test("a pair across a shared pin's page swap still takes the tile back to its pinned URL, and never reloads", async () => {
+  S().hydrate({});
+  const a = S().createWindow({ url: "https://mail.com/" });
+  const [mail] = S().windows[a].tabIds;
+  S().newTab(a, { url: "https://a.com/" });
+  S().pinTabs([mail], true);
+  S().activate(mail);
+  const b = S().createWindow({ url: "https://b.com/" });
+  const copy = model.viewTabIds(S(), b).find((id) => S().tabs[id].pinnedUrl === "https://mail.com/");
+  S().activate(copy);
+  assert.equal(S().tabs[mail].windowId, b, "B holds the page");
+  go(mail, "https://mail.com/inbox/1");
+  const frozen = model.activeTabId(S(), a);
+  assert.equal(S().tabs[frozen].page.holderId, mail);
+  const reloads = [];
+  webviews.set(mail, { reload: () => (reloads.push(mail), Promise.resolve()) });
+  try {
+    click(a, frozen, { gapMs: 2000 });
+    assert.equal(model.activeTabId(S(), a), mail, "the first click pulled the page into A, so the tile is now the page's own tab");
+    assert.equal(S().tabs[mail].url, "https://mail.com/inbox/1");
+    click(a, mail);
+    await settle();
+    assert.equal(navigatedTo(mail), "https://mail.com/", "the pair still went back to the pinned URL");
+    assert.deepEqual(reloads, []);
+    go(mail, "https://mail.com/");
+    S().activate(model.viewTabIds(S(), a).find((id) => !S().tabs[id].pin));
+    S().activate(model.viewTabIds(S(), b).find((id) => S().tabs[id].pinnedUrl === "https://mail.com/"));
+    const shownInA = model.activeTabId(S(), a);
+    click(a, shownInA, { gapMs: 2000 });
+    click(a, model.activeTabId(S(), a));
+    await settle();
+    assert.deepEqual(reloads, [], "a pair at the pinned URL across the swap never reloads: the page changed under it");
+  } finally {
+    webviews.delete(mail);
+  }
+});
 
 test("keyboard activations, which carry no pointer, still switch tabs but never make a pair", () =>
   scenario(async ({ w, tile, other, reloads }) => {
