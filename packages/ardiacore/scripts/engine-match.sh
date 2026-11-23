@@ -2,7 +2,7 @@
 # Reads, resolves and acts on an engine record, the line fetch-engine.sh writes to engine-match beside the framework it
 # fetched. The record holds what doesn't change for an engine:
 #   match=exact|nearest|unknown key=<engine key> version=<release> source=<commit it was published from>
-#   public_hash=<content hash of engine/ardiacore/src/ardia/core/public as that engine was built>
+#   public_tree=<content hash of engine/ardiacore/src/ardia/core/public as that engine was built>
 # A framework with no record is match=local (an engine built here, or ARDIACORE_FRAMEWORK pointing at one); unknown is
 # an engine whose release couldn't be looked up.
 #
@@ -72,7 +72,7 @@ disk_entry() {
   fi
 }
 
-public_hash() {
+public_tree() {
   local root=$1 commit=${2:-}
   if [[ -n "$commit" ]]; then
     git -C "$root" ls-tree -r "$commit" -- "$public_dir" | awk -F '\t' '{ split($1, meta, " "); print $2 " " meta[1] " " meta[3] }'
@@ -86,9 +86,9 @@ resolve() {
   match=$(match_of "$line")
   [[ "$match" == local ]] && { echo "match=local"; return 0; }
   key=$(field key "$line")
-  want=$(field public_hash "$line")
+  want=$(field public_tree "$line")
   public=unknown
-  [[ -z "$want" ]] || { [[ "$(public_hash "$root")" == "$want" ]] && public=same || public=changed; }
+  [[ -z "$want" ]] || { [[ "$(public_tree "$root")" == "$want" ]] && public=same || public=changed; }
   if [[ "$match" != unknown && -n "$key" ]] && is_checkout "$root"; then
     current_key=$("$root/engine/engine-key.sh" --platform macos 2>/dev/null || true)
     key_paths=$("$root/engine/engine-key.sh" --platform macos --paths 2>/dev/null || true)
@@ -99,7 +99,7 @@ resolve() {
     fi
   fi
   [[ "$match" == exact && "$public" == changed ]] && match=nearest
-  echo "match=$match key=$key version=$(field version "$line") source=$(field source "$line") public_hash=$want public=$public"
+  echo "match=$match key=$key version=$(field version "$line") source=$(field source "$line") public_tree=$want public=$public"
 }
 
 check() {
@@ -143,7 +143,7 @@ plist() {
 
 case "${1:-}" in
   get) [[ $# -eq 3 ]] || die "usage: engine-match.sh get <field> <line>"; field "$2" "$3" ;;
-  public-hash) [[ $# -eq 2 || $# -eq 3 ]] || die "usage: engine-match.sh public-hash <root> [<commit>]"; public_hash "$2" "${3:-}" ;;
+  public-hash) [[ $# -eq 2 || $# -eq 3 ]] || die "usage: engine-match.sh public-hash <root> [<commit>]"; public_tree "$2" "${3:-}" ;;
   resolve) [[ $# -eq 3 ]] || die "usage: engine-match.sh resolve <root> <line>"; resolve "$2" "$3" ;;
   check) [[ $# -eq 2 ]] || die "usage: engine-match.sh check <line>"; check "$2" ;;
   plist) [[ $# -eq 3 ]] || die "usage: engine-match.sh plist <line> <Info.plist>"; plist "$2" "$3" ;;

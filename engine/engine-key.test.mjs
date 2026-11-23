@@ -591,7 +591,7 @@ test(
       const fetched = fetch({ ARDIACORE_PREBUILT_ASSETS: `file://${assets}` })
       assert.equal(fetched.status, 0, fetched.stderr)
       assert.equal(fetched.stdout.trim(), join(root, 'apps/browser/build-ardiacore/prebuilt', macos.slice(0, 12), 'Chromium Framework.framework'))
-      assert.match(readFileSync(join(root, 'apps/browser/build-ardiacore/prebuilt', macos.slice(0, 12), 'engine-match'), 'utf8'), new RegExp(`^match=exact key=${macos} version=${tag} source= public_hash=[0-9a-f]{64}\n$`))
+      assert.match(readFileSync(join(root, 'apps/browser/build-ardiacore/prebuilt', macos.slice(0, 12), 'engine-match'), 'utf8'), new RegExp(`^match=exact key=${macos} version=${tag} source= public_tree=[0-9a-f]{64}\n$`))
       appendFileSync(join(root, ardia, 'ac_external_apps_linux.cc'), 'uncommitted\n')
       const dirtyLinux = fetch()
       assert.equal(dirtyLinux.status, 0, dirtyLinux.stderr)

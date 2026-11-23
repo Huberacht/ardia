@@ -55,7 +55,7 @@ release_tag() {
 published_source() {
   local tag=$1 key=$2 may_ask_remote=$3 known recorded=0 listed
   known=$(cat "$store/${key:0:12}/engine-match" 2>/dev/null || true)
-  if [ "$("$match_script" get key "$known")" = "$key" ] && [ -n "$("$match_script" get public_hash "$known")" ]; then
+  if [ "$("$match_script" get key "$known")" = "$key" ] && [ -n "$("$match_script" get public_tree "$known")" ]; then
     recorded=1
     if [ -n "$("$match_script" get source "$known")" ]; then
       "$match_script" get source "$known"
@@ -73,7 +73,7 @@ entry=$(lookup "$tree")
 match=exact
 base=$(git -C "$root" rev-list -1 HEAD -- "${key_paths[@]}" 2>/dev/null || true)
 if [ -z "$entry" ] && [ "$offline" = 1 ]; then
-  echo "match=unknown key=$tree version= source= public_hash=$("$match_script" public-hash "$root" "$base")"
+  echo "match=unknown key=$tree version= source= public_tree=$("$match_script" public-hash "$root" "$base")"
   exit 0
 fi
 if [ -z "$entry" ]; then
@@ -107,7 +107,7 @@ short=${tree:0:12}
 dest="$store/$short"
 downloading=0
 [ "$describe" = 1 ] || [ -f "$dest/.complete" ] || downloading=1
-match_line="match=$match key=$tree version=$version source=$(published_source "$(release_tag "$version")" "$tree" "$downloading") public_hash=$("$match_script" public-hash "$root" "$base")"
+match_line="match=$match key=$tree version=$version source=$(published_source "$(release_tag "$version")" "$tree" "$downloading") public_tree=$("$match_script" public-hash "$root" "$base")"
 if [ "$describe" = 1 ]; then
   echo "$match_line"
   exit 0

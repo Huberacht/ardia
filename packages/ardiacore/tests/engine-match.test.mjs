@@ -88,8 +88,8 @@ test("an exact engine is recorded with its key, release, the commit it was publi
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), framework);
   assert.notEqual(published, base, "the release tag sits on a later commit than the last engine change");
-  assert.equal(record(store), `match=exact key=${key} version=${tag} source=${published} public_hash=${publicHashAt(root, base)}`);
-  assert.match(field(record(store), "public_hash"), /^[0-9a-f]{64}$/);
+  assert.equal(record(store), `match=exact key=${key} version=${tag} source=${published} public_tree=${publicHashAt(root, base)}`);
+  assert.match(field(record(store), "public_tree"), /^[0-9a-f]{64}$/);
 });
 
 test("the published source comes from the remote's tag only while downloading, and a miss is kept so a cached engine never asks again", () => {
@@ -206,7 +206,7 @@ test("--describe prints the record without downloading, and --offline never reac
   const missing = checkout({ row: false });
   const offline = fetchEngine(missing.root, ["--describe", "--offline"]);
   assert.equal(offline.status, 0, offline.stderr);
-  assert.equal(offline.stdout.trim(), `match=unknown key=${missing.key} version= source= public_hash=${publicHashAt(missing.root, missing.base)}`);
+  assert.equal(offline.stdout.trim(), `match=unknown key=${missing.key} version= source= public_tree=${publicHashAt(missing.root, missing.base)}`);
   assert.equal(fs.existsSync(join(missing.root, "curl-calls")), false);
   assert.notEqual(fetchEngine(root, ["--offline"]).status, 0);
 });
@@ -226,7 +226,7 @@ test("a cached engine with no record keeps its hit offline as unknown, and its c
   const r = engine();
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), join(dir, "Chromium Framework.framework"));
-  assert.equal(line(), `match=unknown key=${key} version= source= public_hash=${publicHashAt(root, base)}`);
+  assert.equal(line(), `match=unknown key=${key} version= source= public_tree=${publicHashAt(root, base)}`);
   assert.equal(fs.existsSync(join(root, "curl-calls")), false);
   const clean = resolve(root, line()).stdout.trim();
   assert.match(clean, /^match=unknown .* public=same$/);
@@ -238,7 +238,7 @@ test("a cached engine with no record and an uncommitted public header edit recov
   write(root, HEADER, "int api(int);\n");
   const { engine, line } = cachedEngine(root, key);
   assert.equal(engine().status, 0);
-  assert.equal(field(line(), "public_hash"), publicHashAt(root, base));
+  assert.equal(field(line(), "public_tree"), publicHashAt(root, base));
   const judged = resolve(root, line()).stdout.trim();
   assert.match(judged, /^match=unknown .* public=changed$/);
   const stopped = run(matchScript, ["check", judged]);
@@ -247,7 +247,7 @@ test("a cached engine with no record and an uncommitted public header edit recov
 });
 
 test("an engine whose headers nothing records fails closed unless overridden", () => {
-  const unrecorded = "match=unknown key=k version= source= public_hash= public=unknown";
+  const unrecorded = "match=unknown key=k version= source= public_tree= public=unknown";
   const stopped = run(matchScript, ["check", unrecorded]);
   assert.equal(stopped.status, 1);
   assert.match(stopped.stderr, /nothing records/);
@@ -266,7 +266,7 @@ test("a cached engine whose row is in the local table gets its full record offli
   const r = run(process.execPath, [join(repoRoot, "scripts/agent/build-cache"), "engine", "--repo", root], { env: envFor(root, { AC_APP_CACHE: cache }) });
   assert.equal(r.status, 0, r.stderr);
   const line = fs.readFileSync(join(dir, "engine-match"), "utf8").trim();
-  assert.match(line, new RegExp(`^match=exact key=${key} .*source=${published} public_hash=[0-9a-f]{64}$`));
+  assert.match(line, new RegExp(`^match=exact key=${key} .*source=${published} public_tree=[0-9a-f]{64}$`));
 });
 
 test("check passes exact, local, unknown and unchanged nearest engines and stops a changed one unless overridden", () => {
@@ -316,10 +316,10 @@ test("plist writes the engine keys into the app's Info.plist, and a local build 
   const plist = join(scratch(), "Info.plist");
   write(dirname(plist), "Info.plist", '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleName</key><string>Ardia</string></dict></plist>\n');
   const read = () => JSON.parse(execFileSync("plutil", ["-convert", "json", "-o", "-", plist], { encoding: "utf8" }));
-  const r = run(matchScript, ["plist", "match=nearest key=abc version=engine-abc source=0123 public_hash=ff public=same", plist]);
+  const r = run(matchScript, ["plist", "match=nearest key=abc version=engine-abc source=0123 public_tree=ff public=same", plist]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "nearest", ArdiaEngineKey: "abc", ArdiaEngineVersion: "engine-abc", ArdiaEngineSource: "0123" });
-  assert.equal(run(matchScript, ["plist", "match=unknown key=abc version= source= public_hash=ff public=same", plist]).status, 0);
+  assert.equal(run(matchScript, ["plist", "match=unknown key=abc version= source= public_tree=ff public=same", plist]).status, 0);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "unknown", ArdiaEngineKey: "abc" });
   assert.equal(run(matchScript, ["plist", "match=local", plist]).status, 0);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "local" });
@@ -351,4 +351,15 @@ test("an engine input changed after the first judgement changes the judged line,
   const lines = (match) => lib.envFingerprint({ ARDIACORE_ENGINE_MATCH: match }).lines;
   assert.deepEqual(lines(before), [`env ARDIACORE_ENGINE_MATCH=${before}`]);
   assert.notDeepEqual(lines(before), lines(uncommitted));
+});
+
+test("a cached record from before the header hash covered modes is rewritten offline, so a clean tree still builds", () => {
+  const { root, key, published } = checkout();
+  const { dir, engine, line } = cachedEngine(root, key);
+  write(dir, "engine-match", `match=exact key=${key} version=engine-x source=${published} public_hash=${"0".repeat(64)}\n`);
+  assert.equal(engine().status, 0);
+  assert.match(line(), /public_tree=[0-9a-f]{64}$/);
+  const judged = resolve(root, line()).stdout.trim();
+  assert.match(judged, /^match=exact .* public=same$/);
+  assert.equal(run(matchScript, ["check", judged]).status, 0);
 });

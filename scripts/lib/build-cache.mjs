@@ -283,7 +283,7 @@ export function stampInputs({ framework, env = process.env, hashCache, toolchain
 
 export function engineRecordComplete(path) {
   try {
-    return /(^| )public_hash=\S/.test(fs.readFileSync(path, "utf8"));
+    return /(^| )public_tree=\S/.test(fs.readFileSync(path, "utf8"));
   } catch {
     return false;
   }
