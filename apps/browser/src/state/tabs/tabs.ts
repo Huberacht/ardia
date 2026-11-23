@@ -3,7 +3,7 @@ import type { BrowserState } from "../browser/store";
 import { leaveGroups } from "../groups/groups";
 import { withShownTab } from "../groups/shownTabs";
 import { byRecentUse, inPinnedContainer, makeTab, navigationTo, newId, TILE_PIN, viewTabIds, without } from "../browser/model";
-import { closeSuccessor, forgetOpeners, insertionIndex } from "./openers";
+import { closeSuccessor, forgetOpeners, insertionIndex, sleepsNow } from "./openers";
 import { onUrlChange, pruneSelection } from "../pins/organize";
 import { isClosedPin } from "../pins/tabCleanup";
 import { adoptedPage, ASLEEP, frozenOn, hasOwnOrSharedPage, hasPage, isAsleep, isLazy, loadedPage, needsPage, withWake, wokenPage } from "./pageSession";
@@ -320,7 +320,8 @@ function lastRegularTab(s: BrowserState, w: BrowserWindow, id: string, closing: 
   const candidates = w.tabIds.filter((t) => !closing.has(t) && s.tabs[t]?.profileId === profileId && !inPinnedContainer(s, t));
   const panes = splitTabIdsOf(splitOf(s, id))?.filter((t) => candidates.includes(t)) ?? [];
   const pool = panes.length ? panes : candidates;
-  return pool.reduce<string | undefined>((best, t) => (!best || byRecentUse(s.tabs[t]!, s.tabs[best]!) < 0 ? t : best), undefined);
+  const awake = pool.filter((t) => !sleepsNow(s, t));
+  return (awake.length ? awake : pool).reduce<string | undefined>((best, t) => (!best || byRecentUse(s.tabs[t]!, s.tabs[best]!) < 0 ? t : best), undefined);
 }
 
 function lastLivePinnedTab(s: BrowserState, w: BrowserWindow, id: string, closing: Set<string>, skipTopApps: boolean): string | undefined {
@@ -329,7 +330,8 @@ function lastLivePinnedTab(s: BrowserState, w: BrowserWindow, id: string, closin
     const tab = s.tabs[t];
     return !closing.has(t) && tab?.profileId === profileId && inPinnedContainer(s, t) && hasPage(tab) && !(skipTopApps && keptWithTopApp(s, t));
   });
-  return live.reduce<string | undefined>((best, t) => (!best || byRecentUse(s.tabs[t]!, s.tabs[best]!) < 0 ? t : best), undefined);
+  const awake = live.filter((t) => !sleepsNow(s, t));
+  return (awake.length ? awake : live).reduce<string | undefined>((best, t) => (!best || byRecentUse(s.tabs[t]!, s.tabs[best]!) < 0 ? t : best), undefined);
 }
 
 export function withNewTab(s: BrowserState, windowId: string, o: NewTabOptions = {}): [BrowserState, string] {

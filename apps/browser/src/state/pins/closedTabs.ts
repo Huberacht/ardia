@@ -5,6 +5,7 @@ import { pendingRestore, restoreId } from "../tabs/adoptIds";
 import { activated, apply, removeTabs, withFallbackNewTab, withNewTab, type UserClose } from "../tabs/tabs";
 import { groupLabel, withGroup } from "./tabGrouping";
 import type { BrowserWindow, ClosedGroup, ClosedTab, ClosedWindow, NestedGroupSnapshot, Tab, TabGroup } from "../browser/types";
+import { sleepsNow } from "../tabs/openers";
 import { isAsleep } from "../tabs/pageSession";
 
 export const MAX_CLOSED_TABS = 50;
@@ -75,7 +76,8 @@ function aboveGroupPick(before: BrowserState, g: TabGroup): string | undefined {
   const order = viewTabIds(before, g.windowId, g.profileId).filter((id) => !inPinnedContainer(before, id));
   const at = order.indexOf(g.tabIds[0]!);
   const stays = (id: string) => !!before.tabs[id] && !g.tabIds.includes(id) && !isAsleep(before.tabs[id]);
-  return at < 0 ? order.find(stays) : (order.slice(0, at).reverse().find(stays) ?? order.slice(at).find(stays));
+  const nearest = (at < 0 ? order : [...order.slice(0, at).reverse(), ...order.slice(at)]).filter(stays);
+  return nearest.find((id) => !sleepsNow(before, id)) ?? nearest[0];
 }
 
 export function closingGroup(s: BrowserState, groupId: string, deleted = false, userClose?: UserClose): BrowserState {

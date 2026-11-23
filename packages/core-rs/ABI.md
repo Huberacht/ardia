@@ -82,7 +82,8 @@ under cargo and BoringSSL in Chromium's GN build.
 Password reads follow Swift exactly, because Swift wrote most existing vaults. Base64 decodes like Foundation's
 `Data(base64Encoded:)`: extra trailing `=` are accepted, and whitespace and missing padding are not. One leading U+FEFF
 is dropped from an opened password. Writes stay canonical. `tests/password-read-cases.json` and
-`tests/phrase-cases.json` record where Linux, Windows and Kotlin read differently today.
+`tests/phrase-cases.json` record where Windows and Kotlin read differently today, and where Linux, which splits phrase
+words itself before the core checks them, still does.
 
 ## Update manifests: `ardia_update`
 
@@ -118,16 +119,26 @@ manifest) and compares versions and channels, with the rules of the root helper 
 Ed25519 goes through `ardia-crypto`'s backend, RustCrypto under cargo and BoringSSL in Chromium.
 `tests/boringssl/check.sh` builds the same `ardia-crypto` and `ardia-update-core` sources against a pinned BoringSSL
 release under cargo and runs the crypto known answers and every update vector through the BoringSSL backend. It refuses small-order
-keys and `R` values and a non-canonical `S`. OpenSSL, which the helper uses, accepts a small-order key's trivial
-signature; that can't matter for a release, since installs pin `scripts/linux/linux-update.pem`, but it's recorded.
+keys and `R` values and a non-canonical `S`. OpenSSL, which the helper used before `ardia-update-verify`, accepts a
+small-order key's trivial signature; that can't matter for a release, since installs pin
+`scripts/linux/linux-update.pem`, but it's recorded.
+
+`crates/ardia-update-verify` is the command line the root helper calls today (`lib/ardia/ardia-update-verify`, built
+static for `x86_64-unknown-linux-musl` by `scripts/linux/update-verify.sh`): `version <V>`, `manifest` and
+`package` over `verify_linux_update`, with no rule of its own besides reading the key's PEM, capping and refusing
+to follow its inputs, and hashing the package. It links `ardia-update-core` as a Rust crate, not `libardia_update`,
+and nothing in `BUILD.gn` builds it, so no engine key moves.
 
 `tests/update-vectors.json` holds the shared vectors (`ARDIA_WRITE_UPDATE_VECTORS=1 cargo test -p ardia-update-core
 --test vectors` regenerates them from fixed test keys, and fails when they drift). Each manifest case records the full
 `outcome`, the unsigned `parse` the engine does before downloading, whether the signature verifies, and, where another
-implementation answers differently, that implementation's answer (`linuxPolicy`, `helper`, `openssl`).
-`tests/linux-update/test_linux_update.py` runs them against the engine's `ac_linux_self_update_policy.h`, the root
-helper's own bash functions, `openssl pkeyutl -verify -rawin`, Node's `crypto.verify` (which `sign-update.mjs` signs
-with) and the version rules in `apps/desktop/src/platform/linux/updateReleases.ts` and `apps/browser/src/lib/versions.ts`.
+implementation answers differently, that implementation's answer (`linuxPolicy`, `helper`, `openssl`; `helper` is
+the reason `ardia-update-verify` gives the root helper where it folds a core error into the helper's reasons).
+`tests/linux-update/test_linux_update.py` runs them against the engine's `ac_linux_self_update_policy.h`, the
+`ardia-update-verify` binary (with the shared hostile strings too), `openssl pkeyutl -verify -rawin`, Node's
+`crypto.verify` (which `sign-update.mjs` signs with) and the version rules in
+`apps/desktop/src/platform/linux/updateReleases.ts` and `apps/browser/src/lib/versions.ts`;
+`crates/ardia-update-verify/tests/cli.rs` runs them and the file-handling refusals through the binary under cargo.
 
 ## Chromium bookmarks import: `ardia_import`
 
