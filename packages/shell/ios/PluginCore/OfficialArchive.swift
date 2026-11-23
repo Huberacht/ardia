@@ -466,6 +466,7 @@ enum OfficialArchive {
         guard total <= limits.expanded else { return "the archive unpacks to more than \(limits.expanded >> 20) MB" }
         if relative.count > 1, let problem = makeFolders(Array(relative.dropLast())) { return problem }
         guard !folders.contains(joined) else { return "\(path) is both a file and a folder" }
+        guard folders.count + files.count <= limits.entries else { return "the archive has more than \(limits.entries) entries" }
         if let problem = file(joined, entry.size) { return problem }
         files.insert(joined)
         let start = position

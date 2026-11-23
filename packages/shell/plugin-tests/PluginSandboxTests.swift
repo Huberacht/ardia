@@ -32,8 +32,10 @@ final class PluginSandboxTests: XCTestCase {
     try? FileManager.default.removeItem(atPath: root)
   }
 
-  func sandbox(plugin: String? = nil, program: String = "/bin/sh", network: Bool = false) -> PluginSandbox {
-    PluginSandbox(home: home, appData: data, configFolder: config, pluginFolder: plugin ?? self.plugin, pluginData: pluginData, program: program, network: network)
+  func sandbox(plugin: String? = nil, program: String = "/bin/sh", network: Bool = false, officialCopy: String? = nil) -> PluginSandbox {
+    PluginSandbox(
+      home: home, appData: data, configFolder: config, pluginFolder: plugin ?? self.plugin, pluginData: pluginData, program: program, network: network,
+      officialCopy: officialCopy)
   }
 
   func refusal(_ box: PluginSandbox) -> String? {
@@ -62,17 +64,19 @@ final class PluginSandboxTests: XCTestCase {
 
   func testAnOfficialCopyInTheStoreIsAPluginFolderAndNothingAroundItIs() throws {
     let copy = "\(data)/OfficialPlugins/example/\(String(repeating: "a", count: 64))"
-    XCTAssertNil(refusal(sandbox(plugin: copy)), "a verified copy starts")
-    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPlugins")))
-    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPlugins/example")))
-    XCTAssertNotNil(refusal(sandbox(plugin: "\(copy)/bin")))
-    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPluginsX/example/copy")))
+    XCTAssertNil(refusal(sandbox(plugin: copy, officialCopy: copy)), "the verified copy starts")
+    XCTAssertNotNil(refusal(sandbox(plugin: copy)), "the same folder reached any other way, a linked local plugin say, doesn't")
+    XCTAssertNotNil(refusal(sandbox(plugin: copy, officialCopy: "\(data)/OfficialPlugins/example/\(String(repeating: "c", count: 64))")), "nor when another copy is the verified one")
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPlugins", officialCopy: "\(data)/OfficialPlugins")))
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPlugins/example", officialCopy: "\(data)/OfficialPlugins/example")))
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(copy)/bin", officialCopy: "\(copy)/bin")))
+    XCTAssertNotNil(refusal(sandbox(plugin: "\(data)/OfficialPluginsX/example/copy", officialCopy: "\(data)/OfficialPluginsX/example/copy")))
     try FileManager.default.createDirectory(atPath: copy, withIntermediateDirectories: true)
     try "{}".write(toFile: "\(copy)/plugin.json", atomically: true, encoding: .utf8)
     let other = "\(data)/OfficialPlugins/other/\(String(repeating: "b", count: 64))"
     try FileManager.default.createDirectory(atPath: other, withIntermediateDirectories: true)
     try "secret".write(toFile: "\(other)/plugin.json", atomically: true, encoding: .utf8)
-    let box = sandbox(plugin: copy)
+    let box = sandbox(plugin: copy, officialCopy: copy)
     XCTAssertEqual(try run(box, "cat '\(copy)/plugin.json'"), 0, "it reads its own copy")
     XCTAssertNotEqual(try run(box, "cat '\(other)/plugin.json'"), 0, "not another official plugin's")
     XCTAssertNotEqual(try run(box, "ls '\(data)/OfficialPlugins'"), 0, "nor list the store")
@@ -113,6 +117,8 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertFalse(script.contains("process-fork"))
     XCTAssertFalse(script.contains("/opt/homebrew"))
     XCTAssertFalse(script.contains("DEVELOPER"))
+    XCTAssertFalse(program.contains("(subpath \"/usr/local\")") || program.contains("(subpath \"/opt/homebrew\")"), "package prefixes are granted folder by folder")
+    XCTAssertTrue(program.contains("(subpath \"/opt/homebrew/Cellar\")"))
     XCTAssertEqual(PluginSandbox(home: home, appData: data, configFolder: config, pluginFolder: plugin, pluginData: pluginData, program: "/opt/homebrew/opt/node/bin/node", network: false, kind: .script).installFolder(), "/opt/homebrew/opt/node/bin/node")
   }
 

@@ -801,6 +801,16 @@ final class OfficialPluginsTests: XCTestCase {
     XCTAssertNil(unpack(try pluginArchive(manifest(), extra: Array(deep.prefix(3))), into: try freshStage(), limits: small), "3 such files, 30 folders, fit")
   }
 
+  func testAFileUnderAnExistingFolderCanStillCrossTheEntryCap() throws {
+    var small = OfficialArchive.Limits.standard
+    small.entries = 40
+    let deep = file("tool/" + Array(repeating: "a", count: 30).joined(separator: "/") + "/f", Data("x".utf8))
+    let more = (0..<10).map { file("tool/bin/extra\($0)", Data("x".utf8)) }
+    let archive = try pluginArchive(manifest(), extra: [deep] + more)
+    XCTAssertEqual(unpack(archive, into: try freshStage(), limits: small), "the archive has more than 40 entries", "15 headers, but the files in bin take the paths past 40")
+    XCTAssertNil(unpack(try pluginArchive(manifest(), extra: [deep] + Array(more.prefix(4))), into: try freshStage(), limits: small))
+  }
+
   func testTrailingBytesAfterTheGzipMemberAreRefused() throws {
     let archive = try pluginArchive(manifest(), extra: [file("tool/zeros", Data(count: 3 << 20))])
     let padded = "\(root)/padded.tar.gz"

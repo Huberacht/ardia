@@ -122,7 +122,7 @@ is the only source of which version may be fetched.
   - refuses the download unless its SHA-256 is the pinned one.
   - unpacks it with its own gzip and tar reader. Only files and folders are accepted, all under `<name>/`: no links,
     devices, `..`, absolute paths, duplicates or PAX `size`/`linkpath` overrides. The caps (`OfficialArchive.Limits`):
-    512 MB downloaded, 1 GB unpacked, 20,000 entries, 32 levels deep, and no more than 100 times the download's size
+    512 MB downloaded, 1 GB unpacked, 20,000 entries (files and folders, however they're named), 32 levels deep, and no more than 100 times the download's size
     unpacked overall or 200 times its compressed size for any one file. Neither ratio applies below 4 MB, so small text
     files that compress well are fine. Folders a path implies count as entries. zlib reads the one gzip member,
     checking its CRC and length; bytes after it (a second member, padding) are refused. The per-file ratio comes from
@@ -522,7 +522,8 @@ Paths go in as `-D` parameters, never into the profile's text.
   reading and writing `PluginData/<name>/`, descriptor 3 (the channel), `sysctl` reads, the Mach services on
   `machAllowed`, the global preferences domain, and inspecting or signalling only its own processes.
 - **A sidecar** may also fork and start programs: those in its own folder, the tools in `/bin`, `/sbin`, `/usr/bin`,
-  `/usr/sbin`, `/usr/libexec`, `/usr/local` and `/opt/homebrew` (not their `var` folders), the Command Line Tools and
+  `/usr/sbin`, `/usr/libexec`, the `bin`, `sbin`, `lib`, `libexec`, `opt`, `Cellar`, `Frameworks` and `share` folders of
+  `/usr/local` and `/opt/homebrew` (nothing else there, so no `etc`, `var` or a database beside them), the Command Line Tools and
   the Xcode `xcode-select` points to, so `/usr/bin/python3` and `git` work. It reads those trees, `/etc/ssl` and a few
   files programs look up (`passwd`, `group`, `services`, `localtime`, Xcode's license choice). An absolute program also
   reads its own install folder (`/opt/homebrew/opt/node` for its `bin/node`), except in a shared temp folder, where it
@@ -533,7 +534,8 @@ Paths go in as `-D` parameters, never into the profile's text.
   `machAllowedOnline` services and `/etc/hosts` and `resolv.conf`. Without it, no IP at all: no loopback, no listening,
   no names. main's host is always offline.
 - **An official plugin's folder** is its verified, read-only copy, `OfficialPlugins/<name>/<sha256>/`, the one place in
-  Ardia's data folder a plugin may run from (exactly that deep). It can't read or list another copy.
+  Ardia's data folder a plugin may run from: only the copy `OfficialTrust` just verified for that plugin, compared by
+  real path, so a local plugin linked to a folder there is refused. It can't read or list another copy.
 - **Never:** your home folder, Ardia's data and config folders, `/Users` and `/Volumes` (an absolute program elsewhere
   reads only itself), any other app's temp files, `/Applications`, `/etc` beyond the files above, pathname sockets,
   shared memory, IOKit, Apple Events, Launch Services, launchd jobs, preference writes and notifications.

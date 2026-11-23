@@ -146,6 +146,35 @@ final class ZipArchiveTests: XCTestCase {
     XCTAssertThrowsError(try tampered.extract(tampered.entries[0])) { XCTAssertEqual($0 as? ImportError, .unreadable("Couldn't inflate History.json")) }
   }
 
+  static func withDirectoryRecordTwice(_ zip: Data) throws -> Data {
+    let directory = try XCTUnwrap(zip.range(of: Data([0x50, 0x4B, 0x01, 0x02])))
+    let end = try XCTUnwrap(zip.range(of: Data([0x50, 0x4B, 0x05, 0x06])))
+    let record = zip[directory.lowerBound..<end.lowerBound]
+    var out = Data(zip[..<end.lowerBound])
+    out.append(record)
+    var eocd = Data(zip[end.lowerBound...])
+    func put(_ data: inout Data, _ at: Int, _ value: Int, _ width: Int) { for i in 0..<width { data[data.startIndex + at + i] = UInt8((value >> (8 * i)) & 0xff) } }
+    put(&eocd, 8, 2, 2)
+    put(&eocd, 10, 2, 2)
+    put(&eocd, 12, record.count * 2, 4)
+    out.append(eocd)
+    return out
+  }
+
+  func testMembersThatShareTheirBytesAreRefused() throws {
+    let single = Self.zip([Member(name: "History.json", body: Data(repeating: 0x61, count: 1 << 20))])
+    XCTAssertNoThrow(try ZipArchive(single))
+    let twice = try Self.withDirectoryRecordTwice(single)
+    XCTAssertThrowsError(try ZipArchive(twice)) { XCTAssertEqual($0 as? ImportError, .unreadable("Damaged zip file: its entries overlap")) }
+  }
+
+  func testAMemberWhoseBytesRunPastTheFileIsRefusedBeforeAnyCopy() throws {
+    var zip = Self.zip([Member(name: "History.json", body: Data("{}".utf8))])
+    let directory = try XCTUnwrap(zip.range(of: Data([0x50, 0x4B, 0x01, 0x02])))
+    for i in 0..<4 { zip[directory.lowerBound + 20 + i] = [0x00, 0x00, 0x00, 0x30][i] }
+    XCTAssertThrowsError(try ZipArchive(zip)) { XCTAssertEqual($0 as? ImportError, .unreadable("Damaged zip entry")) }
+  }
+
   func testADeflatedEntryThatInflatesShortIsDamaged() throws {
     let member = Member(name: "History.json", body: Data("{}".utf8), declaredSize: 64)
     let archive = try ZipArchive(Self.zip([member]))

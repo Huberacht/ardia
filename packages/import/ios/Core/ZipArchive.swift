@@ -9,6 +9,7 @@ struct ZipArchive {
     var size: Int
     var localHeaderOffset: Int
     var crc: UInt32 = 0
+    var dataOffset = 0
   }
 
   struct Limits {
@@ -58,6 +59,7 @@ struct ZipArchive {
     guard Int(count) <= limits.entries else { throw ImportError.unsupported("The zip file has more than \(limits.entries) entries") }
 
     var list: [Entry] = []
+    var ranges: [Range<Int>] = []
     var expanded = 0
     var offset = Int(dirOffset)
     for _ in 0..<count {
@@ -89,29 +91,40 @@ struct ZipArchive {
         throw ImportError.unsupported("\(name) in the zip file unpacks to more than \(limits.ratio) times its size")
       }
       if method == 0, csize != usize { throw ImportError.unreadable("Damaged zip entry") }
+      guard csize <= limits.entrySize else { throw ImportError.unsupported("\(name) in the zip file is over \(limits.entrySize >> 20) MB") }
       expanded += usize
       guard expanded <= limits.expanded else { throw ImportError.unsupported("The zip file unpacks to more than \(limits.expanded >> 20) MB") }
-      list.append(Entry(name: name, method: method, compressedSize: csize, size: usize, localHeaderOffset: local, crc: crc))
+      let start = try Self.dataOffset(in: data, local: local)
+      guard start <= data.count - csize else { throw ImportError.unreadable("Damaged zip entry") }
+      ranges.append(local..<(start + csize))
+      list.append(Entry(name: name, method: method, compressedSize: csize, size: usize, localHeaderOffset: local, crc: crc, dataOffset: start))
+    }
+    let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
+    for (earlier, later) in zip(sorted, sorted.dropFirst()) where later.lowerBound < earlier.upperBound {
+      throw ImportError.unreadable("Damaged zip file: its entries overlap")
     }
     entries = list
+  }
+
+  static func dataOffset(in data: Data, local: Int) throws -> Int {
+    guard local >= 0, local <= data.count - 30 else { throw ImportError.unreadable("Damaged zip entry") }
+    var h = ByteReader(data.subdata(in: local..<local + 30))
+    guard h.u32() == 0x0403_4B50 else { throw ImportError.unreadable("Damaged zip entry") }
+    _ = h.skip(22)
+    return local + 30 + Int(h.u16() ?? 0) + Int(h.u16() ?? 0)
   }
 
   func extract(_ entry: Entry) throws -> Data {
     guard entry.size <= limits.entrySize, !limits.inflatesTooFar(compressed: entry.compressedSize, size: entry.size) else {
       throw ImportError.unsupported("\(entry.name) in the zip file is too large")
     }
-    let o = entry.localHeaderOffset
-    guard o >= 0, o + 30 <= data.count else { throw ImportError.unreadable("Damaged zip entry") }
-    var h = ByteReader(data.subdata(in: o..<o + 30))
-    guard h.u32() == 0x0403_4B50 else { throw ImportError.unreadable("Damaged zip entry") }
-    _ = h.skip(22)
-    let start = o + 30 + Int(h.u16() ?? 0) + Int(h.u16() ?? 0)
-    guard start + entry.compressedSize <= data.count else { throw ImportError.unreadable("Damaged zip entry") }
-    let body = data.subdata(in: start..<start + entry.compressedSize)
+    let start = entry.dataOffset
+    guard start >= 0, entry.compressedSize >= 0, start <= data.count - entry.compressedSize else { throw ImportError.unreadable("Damaged zip entry") }
+    let body = data[(data.startIndex + start)..<(data.startIndex + start + entry.compressedSize)]
     let out: Data
     switch entry.method {
     case 0:
-      out = body
+      out = Data(body)
     case 8:
       out = try Self.inflated(body, size: entry.size, name: entry.name)
     default:

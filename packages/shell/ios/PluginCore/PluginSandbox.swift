@@ -10,6 +10,7 @@ struct PluginSandbox {
   let program: String
   let network: Bool
   var kind: Kind = .program
+  var officialCopy: String?
   var developer: String? = PluginSandbox.developerFolder()
 
   static let searchPath = ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"]
@@ -297,9 +298,11 @@ struct PluginSandbox {
 
   static let devicesReadable = ["/dev/random", "/dev/urandom", "/dev/autofs_nowait"]
 
-  static let toolFolders = ["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec", "/usr/local", "/opt/homebrew"]
+  static let packagePrefixes = ["/usr/local", "/opt/homebrew"]
 
-  static let toolPrivateFolders = ["/usr/local/var", "/usr/local/etc", "/opt/homebrew/var", "/opt/homebrew/etc"]
+  static let packageFolders = ["bin", "sbin", "lib", "libexec", "opt", "Cellar", "Frameworks", "share"]
+
+  static let toolFolders = ["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/libexec"] + packagePrefixes.flatMap { prefix in packageFolders.map { "\(prefix)/\($0)" } }
 
   static let sharedTemporaryTrees = ["/private/tmp", "/private/var", "/tmp", "/var"]
 
@@ -344,7 +347,6 @@ struct PluginSandbox {
         (allow process-fork)
         (allow process-exec file-map-executable \(any("subpath", toolFolders + [commandLineTools]))\(developerRule))
         (allow file-read* \(any("subpath", toolFolders + [commandLineTools] + toolSystemFolders)) \(any("literal", toolSystemFiles))\(developerRule))
-        (deny file-read* file-map-executable process-exec \(any("subpath", toolPrivateFolders)))
         (allow file-read* file-write-data file-ioctl (literal "/dev/dtracehelper"))
         """
     }
@@ -462,7 +464,8 @@ struct PluginSandbox {
     let pluginsRoot = (configFolder as NSString).appendingPathComponent("plugins")
     let inPluginsRoot = Self.isInside(pluginFolder, pluginsRoot) && pluginFolder != pluginsRoot
     let officialRoot = (appData as NSString).appendingPathComponent(Self.officialFolderName)
-    let inOfficialStore = Self.isInside(pluginFolder, officialRoot) && pluginFolder.dropFirst(officialRoot.count + 1).split(separator: "/", omittingEmptySubsequences: false).count == 2
+    let inOfficialStore = officialCopy == pluginFolder && Self.isInside(pluginFolder, officialRoot)
+      && pluginFolder.dropFirst(officialRoot.count + 1).split(separator: "/", omittingEmptySubsequences: false).count == 2
     if pluginFolder == "/" || [home, configFolder, appData].contains(where: { Self.isInside($0, pluginFolder) }) {
       throw Refusal.unsafe("its folder takes in Ardia's data, its settings or your home folder")
     }

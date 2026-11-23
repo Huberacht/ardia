@@ -394,6 +394,11 @@ final class PluginSandboxEscapeTests: XCTestCase {
     XCTAssertTrue(python.output.contains("ran"), python.output)
     let shell = try sandboxed("/bin/sh", ["-c", "echo $(/usr/bin/uname -s) > \"$0/home/uname\" && /bin/cat \"$0/home/uname\"", pluginData], network: false)
     XCTAssertEqual(shell.output.trimmingCharacters(in: .whitespacesAndNewlines), "Darwin", shell.output)
+    for brewed in ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"] {
+      guard let program = PluginSandbox.program(brewed, pluginFolder: plugin), program.hasPrefix("/opt/homebrew/") || program.hasPrefix("/usr/local/") else { continue }
+      let ran = try sandboxed(program, ["-I", "-c", "import json, ssl, sqlite3; print('ran')"], network: false)
+      XCTAssertTrue(ran.output.contains("ran"), "a Homebrew runtime still runs from its Cellar: \(ran.output)")
+    }
   }
 
   func testTheJavaScriptHostStartsAndAnswersOnItsChannelUnderItsProfile() throws {

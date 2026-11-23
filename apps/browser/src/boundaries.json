@@ -1617,7 +1617,7 @@
   {
    "id": "import:files",
    "source": "import",
-   "guard": "Native readers in packages/import (profile roots, ZIP sizes, extension metadata; C11, C12); a ZIP holds at most 10,000 entries, 1 GB an entry and 4 GB in all, no entry past 200 times its compressed size above 4 MB, and its links and traversing names are never read",
+   "guard": "Native readers in packages/import (profile roots, ZIP sizes, extension metadata; C11, C12); a ZIP holds at most 10,000 entries, 1 GB an entry and 4 GB in all, no entry past 200 times its compressed size above 4 MB, members that run past the file or share bytes are refused, every member is inflated exactly and its CRC checked, and its links and traversing names are never read",
    "checks": [
     "packages/import/ios/Core/Discovery.swift",
     "packages/import/ios/Core/ZipArchive.swift"
