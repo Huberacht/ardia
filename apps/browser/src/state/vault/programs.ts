@@ -48,7 +48,7 @@ export function signerLine(program: Program): string {
     case "app":
       return program.signer ? `Signed by ${program.signer}` : `Signed by team ${program.teamId}`;
     case "ardia":
-      return "The ardia command, so the program that runs it isn't known";
+      return "An agent asked through the ardia command. Ardia can't tell which agent it is.";
     case "interpreter":
       return program.signer ? `${program.name} runs scripts, so the script itself isn't known (${program.signer})` : `${program.name} runs scripts, so the script itself isn't known`;
     case "unsigned":

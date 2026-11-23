@@ -20,11 +20,13 @@ function VaultApprovalSheet({ request, checking }: { request: ApprovalRequest; c
   const [always, setAlways] = useState(false);
   useEffect(() => markApprovalShown(request.id), [request.id]);
   const name = programLabel(request.program);
+  const viaCommand = request.program.kind === "ardia";
+  const asker = viaCommand ? "The agent" : name;
   const deny = () => answerApproval(request.id, "deny");
   return (
     <Dialog width="m" animated backdropCloses={false} onDismiss={deny}>
       <DialogTitle icon={<Symbol name="key.horizontal.fill" size={20} color={theme.icon} style={TITLE_ICON} />} subtitle={signerLine(request.program)}>
-        {`Let ${name} sign in?`}
+        {viaCommand ? "Let an agent sign in?" : `Let ${name} sign in?`}
       </DialogTitle>
       <Box gap="m" pad="m">
         <Box gap="xs">
@@ -49,7 +51,7 @@ function VaultApprovalSheet({ request, checking }: { request: ApprovalRequest; c
           </Box>
         ) : null}
         <Text size="small" tone="textSecondary">
-          {`Ardia fills the saved login${request.profileName ? ` from ${request.profileName}` : ""} itself; ${name} never sees the password or the verification code. It lasts until the task ends.`}
+          {`Ardia signs in with the saved login${request.profileName ? ` from ${request.profileName}` : ""}. ${asker} never sees the password or the code. This lasts until the task ends.`}
         </Text>
         {request.program.claimed ? (
           <Text size="small" tone="textSecondary">{`It calls itself “${request.program.claimed}”, which Ardia can't check.`}</Text>
