@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -159,4 +159,5 @@ async function main(argv) {
   console.log(`up to date: ${files.size} files`);
 }
 
-if (import.meta.main) await main(process.argv.slice(2));
+const runAsScript = import.meta.main ?? (process.argv[1] !== undefined && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)));
+if (runAsScript) await main(process.argv.slice(2));
