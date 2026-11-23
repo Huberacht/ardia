@@ -56,7 +56,7 @@ def hidden(lines):
         fence = FENCE.match(line)
         if in_comment:
             inside[n] = 'an HTML comment'
-            in_comment = '-->' not in line
+            in_comment = comment_open_after(line, True)
         elif opener is not None:
             inside[n] = 'a code fence'
             if fence and fence.group(1)[0] == opener[0] and len(fence.group(1)) >= len(opener) \
@@ -65,10 +65,21 @@ def hidden(lines):
         elif fence:
             opener = fence.group(1)
             inside[n] = 'a code fence'
-        elif COMMENT_OPEN.match(line):
-            inside[n] = 'an HTML comment'
-            in_comment = '-->' not in line.split('<!--', 1)[1]
+        elif '<!--' in line:
+            if COMMENT_OPEN.match(line):
+                inside[n] = 'an HTML comment'
+            in_comment = comment_open_after(line, False)
     return inside
+
+
+def comment_open_after(line, open_at_start):
+    position, is_open = 0, open_at_start
+    while True:
+        marker = '-->' if is_open else '<!--'
+        found = line.find(marker, position)
+        if found < 0:
+            return is_open
+        position, is_open = found + len(marker), not is_open
 
 
 def is_delimiter(line, width):
@@ -291,6 +302,13 @@ class EngineChecker(unittest.TestCase):
     def test_a_comment_closing_later_on_a_text_line_still_hides_the_table(self):
         doc = '<!-- old inventory\n' + ENGINE_DOC_SAMPLE.replace('After.', 'After. -->')
         self.assertEqual(len(self.check(doc=doc)), 1)
+
+    def test_a_second_comment_opened_after_a_closing_marker_hides_the_table(self):
+        for opener in ('<!-- a --> <!--\n', 'text <!-- a --> more <!--\n', 'intro <!--\n'):
+            self.assertEqual(len(self.check(doc=opener + ENGINE_DOC_SAMPLE + '-->\n')), 1, opener)
+
+    def test_comments_that_all_close_on_their_line_hide_nothing(self):
+        self.assertEqual(self.check(doc='<!-- a --> text <!-- b -->\n' + ENGINE_DOC_SAMPLE), [])
 
     def test_a_one_line_comment_before_the_table_passes(self):
         self.assertEqual(self.check(doc='<!-- note -->\n' + ENGINE_DOC_SAMPLE), [])
