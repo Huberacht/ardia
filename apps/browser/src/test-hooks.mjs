@@ -76,6 +76,7 @@ export function mount(render, { props, contexts = [] } = {}) {
       if (s.ran && deps && sameDeps(s.deps, deps)) return;
       effects.push(() => {
         s.deps = deps;
+        s.effect = effect;
         s.cleanup?.();
         s.ran = true;
         const cleanup = effect();
@@ -136,6 +137,16 @@ export function mount(render, { props, contexts = [] } = {}) {
     rerender(next = current) {
       current = next;
       renderNow();
+      settle();
+      return value;
+    },
+    replayEffects() {
+      for (const s of slots) {
+        if (!s?.effect) continue;
+        s.cleanup?.();
+        const cleanup = s.effect();
+        s.cleanup = typeof cleanup === "function" ? cleanup : undefined;
+      }
       settle();
       return value;
     },

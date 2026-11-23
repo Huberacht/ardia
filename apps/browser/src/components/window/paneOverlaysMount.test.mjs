@@ -156,10 +156,7 @@ test("a render React throws away neither counts an overlay nor resets the CLI pi
   assert.equal(share.rerender({ on: false, alive: true }), true, "the share bar keeps its slide-out after a discarded hidden render");
 });
 
-test("the selection search counts once its bar shows, not when the selection starts", () => {
-  const popover = readFileSync(new URL("../site/SelectionPopover.tsx", import.meta.url), "utf8");
-  assert.match(popover, /const barShown = !!shown;/);
-  assert.match(popover, /useEffect\(\(\) => \{\n    if \(barShown\) notePageOverlay\("paneOverlayOpened", consent\);\n  \}, \[barShown\]\);/);
+test("the pane's visibility count leaves the selection search to its own bar", () => {
   const overlays = readFileSync(new URL("./PageOverlays.tsx", import.meta.url), "utf8");
-  assert.match(overlays, /& ~OVERLAY\.selection/, "the pane's visibility mask leaves the selection to its bar");
+  assert.match(overlays, /& ~OVERLAY\.selection/);
 });

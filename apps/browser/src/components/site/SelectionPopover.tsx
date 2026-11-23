@@ -25,21 +25,26 @@ export function SelectionPopover({ tabId }: { tabId: string }) {
     return () => clearTimeout(timer);
   }, [selection]);
   useEffect(() => () => setPageSelection(tabId, null), [tabId]);
-  const barShown = !!shown;
-  const consent = consentToken();
+  const counted = useRef(false);
   useEffect(() => {
-    if (barShown) notePageOverlay("paneOverlayOpened", consent);
-  }, [barShown]);
+    if (!shown) counted.current = false;
+  }, [shown]);
+  const consent = consentToken();
+  const noteShown = () => {
+    if (counted.current) return;
+    counted.current = true;
+    notePageOverlay("paneOverlayOpened", consent);
+  };
   if (!selection && !shown) return null;
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill} onLayout={(e) => setArea(e.nativeEvent.layout)}>
-      {shown && area.width > 0 && <Bar key={`${shown.rect.x},${shown.rect.y}`} tabId={tabId} selection={shown} zoom={zoom} area={area} />}
+      {shown && area.width > 0 && <SelectionBar key={`${shown.rect.x},${shown.rect.y}`} tabId={tabId} selection={shown} zoom={zoom} area={area} onShown={noteShown} />}
     </View>
   );
 }
 
-function Bar({ tabId, selection, zoom, area }: { tabId: string; selection: PageSelection; zoom: number; area: { width: number; height: number } }) {
+export function SelectionBar({ tabId, selection, zoom, area, onShown }: { tabId: string; selection: PageSelection; zoom: number; area: { width: number; height: number }; onShown: () => void }) {
   const [width, setWidth] = useState(0);
   const appear = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -48,7 +53,12 @@ function Bar({ tabId, selection, zoom, area }: { tabId: string; selection: PageS
   const r = selection.rect;
   const top = r.y * zoom;
   const bottom = (r.y + r.height) * zoom;
-  if (bottom < 0 || top > area.height) return null;
+  const inPane = bottom >= 0 && top <= area.height;
+  const visible = inPane && width > 0;
+  useEffect(() => {
+    if (visible) onShown();
+  }, [visible]);
+  if (!inPane) return null;
   const above = top - GAP - HEIGHT >= 4;
   const y = above ? top - GAP - HEIGHT : Math.min(bottom + GAP, area.height - HEIGHT - 4);
   const center = (r.x + r.width / 2) * zoom;
