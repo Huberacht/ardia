@@ -2,14 +2,14 @@ import type { HydrateData } from "../browser/store";
 import type { BrowserWindow, ClosedWindow, ParkedPins, Profile, SplitView, Tab } from "../browser/types";
 import { parseSaved, type Migrations, type SavedObject } from "../../lib/savedDocument";
 import { sessionWithCleanUpMinutes } from "../settings/cleanUpAfter";
-import { DEFAULT_PROFILE_ID, parseSettingsMeta, sessionWithNewTabLinksInLittleArdia, sessionWithSettingsMeta, sessionWithUnreadCountsOffByDefault } from "../settings/settings";
+import { parseSettingsMeta, sessionWithNewTabLinksInLittleArdia, sessionWithSettingsMeta, sessionWithUnreadCountsOffByDefault } from "../settings/settings";
 import { sessionWithOwnTabMutes } from "../tabs/mute";
 import { pinChoicesFromDisk, sessionWithPinChoiceStamps } from "../pins/pinChoices";
 import { isFields, isString, isStringList } from "../../lib/decode";
 import { pageFromDisk, pinFromDisk, splitsChecked, sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins, slotsFromDisk } from "./savedShapes";
 import { profilesKeepingLegacyDots } from "../profiles/switcherMark";
 import { profilesWithOwnLooks } from "../../lib/presetLook";
-import { isIncognitoProfile } from "../browser/model";
+import { layoutDrops } from "../browser/hydratedLayout";
 
 export const SESSION_VERSION = 11;
 export const SESSION_MIGRATIONS: Migrations = { 2: sessionWithCleanUpMinutes, 3: sessionWithOwnTabMutes, 4: sessionWithTabPages, 5: sessionWithTabPins, 6: sessionWithSplitSlots, 7: sessionWithSettingsMeta, 8: sessionWithPinChoiceStamps, 9: sessionWithNewTabLinksInLittleArdia, 10: sessionWithUnreadCountsOffByDefault };
@@ -95,22 +95,8 @@ const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 const keyed = (value: unknown) => (isFields(value) ? Object.keys(value).length : 0);
 const CLOSED_LISTS = ["closedTabs", "closedWindows", "closedGroups", "deletedGroups", "cleanedTabs"] as const;
 
-function hydrationDrops(session: SavedSession) {
-  const saved = Object.keys(session.profiles ?? {});
-  const profiles = new Set(saved.length ? saved : [DEFAULT_PROFILE_ID]);
-  const kept = new Map(
-    Object.values(session.tabs)
-      .filter((t) => Object.hasOwn(session.windows, t.windowId) && (profiles.has(t.profileId) || isIncognitoProfile(t.profileId)))
-      .map((t) => [t.id, t]),
-  );
-  const windows = Object.values(session.windows).filter((w) => w.tabIds.some((id) => kept.get(id)?.windowId === w.id));
-  const shown = new Set(windows.map((w) => w.id));
-  const tabs = [...kept.values()].filter((t) => shown.has(t.windowId));
-  return tabs.length < Object.keys(session.tabs).length || windows.length < Object.keys(session.windows).length;
-}
-
 export const droppedRows = (raw: SavedObject, session: SavedSession) =>
-  hydrationDrops(session) ||
+  layoutDrops(session) ||
   listed(raw.windows) > Object.keys(session.windows).length ||
   listed(raw.tabs) > Object.keys(session.tabs).length ||
   listed(raw.groups) > Object.keys(session.groups ?? {}).length ||

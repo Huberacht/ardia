@@ -42,11 +42,22 @@ enum DocumentStore {
   }
 
   static func exists(_ name: String) -> Bool {
-    guard let url = try? url(name) else { return false }
+    guard let url = try? url(name) else { return true }
     lock.lock()
     let pending = staged[url.lastPathComponent] != nil
     lock.unlock()
-    return pending || FileManager.default.fileExists(atPath: url.path)
+    return pending || !confirmedMissing(url)
+  }
+
+  private static func confirmedMissing(_ url: URL) -> Bool {
+    var info = stat()
+    if lstat(url.path, &info) == 0 { return false }
+    return errno == ENOENT
+  }
+
+  private static func regularFile(_ url: URL) -> Bool {
+    var info = stat()
+    return lstat(url.path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
   }
 
   static func write(_ name: String, _ contents: String, done: Done? = nil) throws {
@@ -85,31 +96,42 @@ enum DocumentStore {
     let waiters = staged.removeValue(forKey: url.lastPathComponent)?.waiters ?? []
     lock.unlock()
     queue.async {
-      try? FileManager.default.removeItem(at: url)
+      if regularFile(url) { unlink(url.path) }
       for waiter in waiters { waiter(nil) }
     }
   }
 
   static func list(_ prefix: String) -> [String] {
     guard let directory = try? url(prefix.isEmpty ? "documents" : prefix).deletingLastPathComponent() else { return [] }
-    lock.lock()
-    let pending = staged.keys.filter { $0.hasPrefix(prefix) }
-    lock.unlock()
     let stored = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-    return Array(Set(stored.filter { $0.hasPrefix(prefix) && !$0.hasPrefix(".") }).union(pending)).sorted()
+    return stored.filter { $0.hasPrefix(prefix) && !$0.hasPrefix(".") && regularFile(directory.appendingPathComponent($0)) }.sorted()
+  }
+
+  static func create(_ name: String, _ contents: String, done: @escaping Done) throws {
+    let target = try url(name)
+    queue.async {
+      let temporary = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
+      do {
+        try Data(contents.utf8).write(to: temporary, options: [.withoutOverwriting])
+        let handle = try FileHandle(forWritingTo: temporary)
+        try handle.synchronize()
+        try handle.close()
+      } catch {
+        try? FileManager.default.removeItem(at: temporary)
+        return done(error)
+      }
+      let linked = link(temporary.path, target.path) == 0
+      let failure = errno
+      unlink(temporary.path)
+      done(linked ? nil : CocoaError(failure == EEXIST ? .fileWriteFileExists : .fileWriteUnknown))
+    }
   }
 
   static func copy(_ name: String, to copyName: String, done: @escaping Done) throws {
     let source = try url(name)
     let target = try url(copyName)
     queue.async {
-      do {
-        _ = try FileManager.default.attributesOfItem(atPath: source.path)
-      } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-        return done(nil)
-      } catch {
-        return done(error)
-      }
+      if confirmedMissing(source) { return done(nil) }
       do {
         let staging = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
         try FileManager.default.copyItem(at: source, to: staging)

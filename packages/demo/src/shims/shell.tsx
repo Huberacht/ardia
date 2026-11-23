@@ -73,6 +73,10 @@ provideNativeModule("ArdiaDocuments", {
   writeDocument: (name: string, contents: string) => void documents.set(name, contents),
   saveDocument: async (name: string, contents: string) => void documents.set(name, contents),
   removeDocument: (name: string) => void documents.delete(name),
+  createDocument: async (name: string, contents: string) => {
+    if (documents.has(name)) throw new Error("exists");
+    documents.set(name, contents);
+  },
   listDocuments: (prefix: string) => [...documents.keys()].filter((name) => name.startsWith(prefix)),
   copyDocument: async (name: string, copyName: string) => {
     const contents = documents.get(name);

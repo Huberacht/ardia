@@ -234,6 +234,29 @@ inline DWORD CopyAtomically(std::filesystem::path const &from, std::filesystem::
   return failure;
 }
 
+inline DWORD CreateExclusively(std::filesystem::path const &target, std::string_view bytes) noexcept {
+  std::wstring temp = LongPath(std::filesystem::path(TempSibling(target)));
+  HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return GetLastError();
+  DWORD failure = ERROR_SUCCESS;
+  size_t offset = 0;
+  while (offset < bytes.size()) {
+    DWORD chunk = static_cast<DWORD>(std::min<size_t>(bytes.size() - offset, 1u << 20));
+    DWORD wrote = 0;
+    if (!WriteFile(file, bytes.data() + offset, chunk, &wrote, nullptr) || wrote == 0) {
+      failure = GetLastError();
+      if (failure == ERROR_SUCCESS) failure = ERROR_WRITE_FAULT;
+      break;
+    }
+    offset += wrote;
+  }
+  if (failure == ERROR_SUCCESS && !FlushFileBuffers(file)) failure = GetLastError();
+  CloseHandle(file);
+  if (failure == ERROR_SUCCESS && !MoveFileExW(temp.c_str(), LongPath(target).c_str(), MOVEFILE_WRITE_THROUGH)) failure = GetLastError();
+  if (failure != ERROR_SUCCESS) DeleteFileW(temp.c_str());
+  return failure;
+}
+
 inline bool RemoveFile(std::filesystem::path const &path) noexcept {
   if (DeleteFileW(path.c_str())) return true;
   DWORD error = GetLastError();
@@ -395,6 +418,30 @@ class DocumentStore {
     });
   }
 
+  static void Create(std::string_view name, std::string contents, Done done) noexcept {
+    auto url = Url(name);
+    if (!url) {
+      done(std::string("Invalid document name"));
+      return;
+    }
+    std::filesystem::path target = *url;
+    Queue().Async([target, contents = std::move(contents), done]() {
+      std::optional<std::string> message;
+      {
+        std::unique_lock<std::timed_mutex> writing(State().writing, std::chrono::seconds(10));
+        if (!writing.owns_lock()) {
+          message = std::string("The documents are busy");
+        } else if (DWORD failure = Files::CreateExclusively(target, contents); failure != ERROR_SUCCESS) {
+          message = Paths::Utf8(Files::ErrorText(failure));
+        }
+      }
+      try {
+        done(message);
+      } catch (...) {
+      }
+    });
+  }
+
   static std::vector<std::string> List(std::string_view prefix) noexcept {
     std::vector<std::string> names;
     try {
@@ -403,13 +450,13 @@ class DocumentStore {
       std::error_code error;
       std::filesystem::directory_iterator end;
       for (std::filesystem::directory_iterator it(Paths::DataDirectory(), error); !error && it != end; it.increment(error)) {
+        std::error_code kind;
+        if (!it->is_regular_file(kind) || kind || it->is_symlink(kind)) continue;
         std::wstring name = it->path().filename().wstring();
         if (!name.empty() && name[0] != L'.' && name.rfind(wanted, 0) == 0) found.insert(name);
       }
       {
         std::lock_guard<std::mutex> guard(State().mutex);
-        for (auto const &entry : State().staged)
-          if (entry.first.rfind(wanted, 0) == 0) found.insert(entry.first);
         for (auto const &entry : State().removing) found.erase(entry.first);
       }
       for (auto const &name : found) names.push_back(Paths::Utf8(name));
@@ -573,6 +620,11 @@ struct DocumentsModule {
   REACT_METHOD(documentSaved)
   void documentSaved(std::string name, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
     DocumentStore::WhenSaved(name, Settle(promise));
+  }
+
+  REACT_METHOD(createDocument)
+  void createDocument(std::string name, std::string contents, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
+    DocumentStore::Create(name, std::move(contents), Settle(promise));
   }
 
   REACT_SYNC_METHOD(listDocuments)

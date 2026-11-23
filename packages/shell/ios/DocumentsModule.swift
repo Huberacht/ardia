@@ -12,6 +12,11 @@ public class DocumentsModule: Module {
         if let error { promise.reject("ERR_SAVE_DOCUMENT", error.localizedDescription) } else { promise.resolve(nil) }
       }
     }
+    AsyncFunction("createDocument") { (name: String, contents: String, promise: Promise) in
+      try DocumentStore.create(name, contents) { error in
+        if let error { promise.reject("ERR_CREATE_DOCUMENT", error.localizedDescription) } else { promise.resolve(nil) }
+      }
+    }
     Function("listDocuments") { (prefix: String) -> [String] in DocumentStore.list(prefix) }
     Function("removeDocument") { (name: String) in try DocumentStore.remove(name) }
     AsyncFunction("copyDocument") { (name: String, copyName: String, promise: Promise) in

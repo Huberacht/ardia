@@ -9,4 +9,5 @@ export type DocumentsNative = {
   removeDocument(name: string): void;
   copyDocument(name: string, copyName: string): Promise<void>;
   listDocuments(prefix: string): string[];
+  createDocument(name: string, contents: string): Promise<void>;
 };

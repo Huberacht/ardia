@@ -24,10 +24,11 @@ const S = () => useBrowser.getState();
 const turn = () => new Promise((resolve) => setTimeout(resolve, 0));
 const noonOf = (day) => new Date(`${day}T12:00:00`).getTime();
 const putBackup = (day, json, offset = 0) => stub.docs.set(`${DAILY_BACKUP}${noonOf(day) + offset}.json`, backupJson(noonOf(day) + offset, json));
+const backupAtOf = (name) => JSON.parse(stub.docs.get(name)).backupAt;
 const backupsOf = (prefix) =>
   [...stub.docs.keys()]
     .filter((name) => name.startsWith(prefix))
-    .sort((a, b) => Number(b.slice(prefix.length, -5)) - Number(a.slice(prefix.length, -5)));
+    .sort((a, b) => backupAtOf(b) - backupAtOf(a) || Number(b.slice(prefix.length, -5)) - Number(a.slice(prefix.length, -5)));
 const newest = (prefix) => JSON.parse(stub.docs.get(backupsOf(prefix)[0]));
 async function settle() {
   flushPersistence();
@@ -575,7 +576,7 @@ test("the first save writes a backup only when none was made in the last 24 hour
   relaunch.afterSave(session(3), start + BACKUP_EVERY_MS + 1);
   await turn();
   assert.equal(backupsOf(DAILY_BACKUP).length, 2);
-  assert.equal(JSON.parse(stub.docs.get(`${DAILY_BACKUP}${start}.json`)).session.n, 0, "the earlier file is never rewritten");
+  assert.equal(JSON.parse(stub.docs.get(backupsOf(DAILY_BACKUP).find((name) => backupAtOf(name) === start))).session.n, 0, "the earlier file is never rewritten");
 });
 
 test("seven daily backups are kept, the oldest go, and nothing is pruned while recovering", async () => {
@@ -592,16 +593,16 @@ test("seven daily backups are kept, the oldest go, and nothing is pruned while r
   assert.equal(backupsOf(DAILY_BACKUP).length, 8, "a recovering launch prunes nothing");
 });
 
-test("pruning never removes the newest backup that loads whole, even when newer ones by stamp don't", async () => {
+test("pruning never removes the newest backup that loads whole, even when newer ones don't", async () => {
   clean();
   const start = noonOf("2026-05-03");
   putBackup("2026-05-02", session(1));
-  for (let i = 0; i < 8; i++) stub.docs.set(`${DAILY_BACKUP}${start + 10 * BACKUP_EVERY_MS + i}.json`, backupJson(start + 10 * BACKUP_EVERY_MS + i, session(100 + i)));
+  for (let i = 1; i <= 8; i++) putBackup("2026-05-02", session(100 + i), i * 3_600_000);
   backups({ whole: (value) => value?.n === 1 }).afterSave(session(2), start);
   await turn();
-  assert.ok(stub.docs.has(`${DAILY_BACKUP}${noonOf("2026-05-02")}.json`), "the newest whole backup survives though it is ninth by stamp");
-  assert.ok(stub.docs.has(`${DAILY_BACKUP}${start}.json`), "the one just written survives");
-  assert.equal(backupsOf(DAILY_BACKUP).length, 9);
+  assert.ok(stub.docs.has(`${DAILY_BACKUP}${noonOf("2026-05-02")}.json`), "the newest whole backup survives though it is the oldest");
+  assert.equal(newest(DAILY_BACKUP).session.n, 2, "the one just written survives");
+  assert.equal(backupsOf(DAILY_BACKUP).length, 8);
 });
 
 test("a clock that jumped back never replaces a backup: one stamped ahead stays, and a new one is written beside it", async () => {
@@ -778,4 +779,73 @@ test("telemetry counts the set-aside by reason and whether a backup came back, w
   } finally {
     setConsentPeriod(false, null);
   }
+});
+
+test("a group whose only tab is missing is damage hydration would drop: the file is kept aside, and such a backup ranks after an intact one", async () => {
+  const good = JSON.parse(realSession(["https://a.example/"]));
+  const w = good.windows[0];
+  const withGroup = { ...good, groups: [{ id: "g-lost", windowId: w.id, profileId: w.profileId, name: "Lost", tabIds: ["missing-tab"], icon: null, color: null }] };
+  stub.docs.set("session.json", JSON.stringify(withGroup));
+  let stop = startPersistence();
+  S().updateSettings({ appearance: "light" });
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(asideCopies()[0]), JSON.stringify(withGroup));
+  const older = realSession(["https://older.example/"]);
+  const newer = JSON.parse(realSession(["https://newer.example/"]));
+  putBackup("2026-01-03", older);
+  putBackup("2026-01-04", JSON.stringify({ ...newer, groups: withGroup.groups.map((g) => ({ ...g, windowId: newer.windows[0].id })) }));
+  stub.docs.set("session.json", "{");
+  stop = startPersistence();
+  await settle();
+  stop();
+  assert.deepEqual(tabUrls(), ["https://older.example/"]);
+});
+
+test("after a backup made with the clock 30 days ahead, a corrected clock still writes backups, and restore prefers the correctly dated one", async () => {
+  clean();
+  const now = noonOf("2026-05-03");
+  const rolling = backups();
+  rolling.afterSave(session(1), now + 30 * BACKUP_EVERY_MS);
+  await turn();
+  rolling.afterSave(session(2), now);
+  await turn();
+  assert.equal(backupsOf(DAILY_BACKUP).length, 2, "the corrected clock wrote its own backup");
+  const ordered = sessionBackups((doc) => doc, SESSION_VERSION, {}, now);
+  assert.equal(ordered[0].value.n, 2, "the correctly dated backup comes first");
+});
+
+test("snapshots made in the same millisecond get rising names that never reuse a pruned one, and restore orders them newest first", async () => {
+  clean();
+  const at = noonOf("2026-05-03");
+  const names = [];
+  for (let i = 1; i <= 5; i++) {
+    await backups().beforeMigration(session(i), at);
+    names.push(...backupsOf(MIGRATION_BACKUP).filter((name) => !names.includes(name)));
+  }
+  assert.equal(new Set(names).size, 5, "five distinct names");
+  assert.deepEqual(backupsOf(MIGRATION_BACKUP).map((name) => JSON.parse(stub.docs.get(name)).session.n), [5, 4, 3]);
+  assert.deepEqual(sessionBackups((doc) => doc, SESSION_VERSION, {}, at).map((b) => b.value.n), [5, 4, 3]);
+});
+
+test("a backup that is only staged, not on disk, doesn't count: a fresh one is written", async () => {
+  clean();
+  const at = noonOf("2026-05-03");
+  stub.stagedDocs.set(`${DAILY_BACKUP}1.json`, backupJson(at - 60_000, session(1)));
+  backups().afterSave(session(2), at);
+  await turn();
+  assert.equal(newest(DAILY_BACKUP).session.n, 2);
+});
+
+test("a failed pre-migration snapshot is retried under the one name it reserved", async () => {
+  clean();
+  const at = noonOf("2026-05-03");
+  const rolling = backups();
+  stub.refusedSaves.on = true;
+  await rolling.beforeMigration(session(1), at).catch(() => {});
+  await rolling.beforeMigration(session(1), at).catch(() => {});
+  stub.refusedSaves.on = false;
+  await rolling.beforeMigration(session(1), at);
+  await rolling.beforeMigration(session(1), at);
+  assert.equal(backupsOf(MIGRATION_BACKUP).length, 1);
 });
