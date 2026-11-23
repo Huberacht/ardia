@@ -209,7 +209,7 @@ export async function sendCurrentReport() {
   cancelled = false;
   const failed = s.upload.phase === "failed" ? s.upload : null;
   const sharing = isSharing();
-  const files = reportFiles(s);
+  let files = reportFiles(s);
   let restartedFor: RestartReason | null = failed ? restartReason(failed, files) : null;
   let resume = failed && !restartedFor ? failed.created : null;
   const endpoint = { url: feedbackEndpoint(), key: APP_INGEST_KEY, keyHeader: INGEST_KEY_HEADER };
@@ -226,6 +226,7 @@ export async function sendCurrentReport() {
     if (reason) {
       resume = null;
       restartedFor = reason;
+      files = reportFiles(currentReport());
       ({ shown, result } = await attempt());
     }
   }
