@@ -347,14 +347,15 @@ test("tabs the engine kept give their asks to tabs not kept yet, so a sweep wher
 
 test("a tab switched to 15 times stays loaded, and each kind of protection that kept a tab is counted once per tab", async (t) => {
   const { sleepTabsOverBudget, tabsOverBudget } = await import("./loadedTabBudget.ts");
-  const { countSwitches, clearSwitches } = await import("./tabSwitches.ts");
+  const { countSwitch, clearSwitches } = await import("./tabSwitches.ts");
+  const { onFrontTabChanged } = await import("../windows/frontTabs.ts");
   const { webviews } = await import("../../platform/webviews.ts");
   const { takeTabSleepCounts } = await import("../telemetry/tabSleepCounts.ts");
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const now = Date.now() + 480 * 60 * minute;
   const { ids, active } = windowOfHiddenTabs(4, now);
   clearSwitches();
-  const unsubscribe = useBrowser.subscribe((s, prev) => countSwitches(prev, s));
+  const unsubscribe = onFrontTabChanged((change) => countSwitch(change));
   for (let i = 0; i < 15; i++) {
     S().activate(ids[3]);
     S().activate(active);

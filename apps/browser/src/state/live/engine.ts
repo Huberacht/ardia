@@ -1,10 +1,11 @@
 import { onWindowEvent } from "../../platform/windows";
 import { everySlowly } from "../../platform/slowTimers";
 import { useBrowser, type BrowserState } from "../browser/store";
-import { activeTabId, inPinnedContainer, viewTabIds } from "../browser/model";
+import { inPinnedContainer, viewTabIds } from "../browser/model";
 import { awayFromPin } from "../pins/organize";
 import { pinnedGroupMembers } from "../browser/structure";
 import { shownTabIds } from "../tabs/shownTabs";
+import { onFrontTabChanged } from "../windows/frontTabs";
 import { repoKey } from "./rows";
 import { hideNewRepos } from "./repoFilter";
 import { SOURCES } from "./sources";
@@ -385,15 +386,11 @@ export function startLiveEngine() {
     if (m.pipOpen !== prev.pipOpen || m.sessions !== prev.sessions || m.tabShares !== prev.tabShares) closeCompletedTabs();
   });
 
-  useBrowser.subscribeTo(["windows"], (s, prev) => {
-    if (s.windows === prev.windows) return;
-    for (const windowId of s.windowOrder) {
-      const before = activeTabId(prev, windowId);
-      if (!before || before === activeTabId(s, windowId)) continue;
-      const folderId = s.tabs[before]?.liveItem?.folderId;
-      if (!folderId || Date.now() - (lastNudge.get(folderId) ?? 0) < 20_000) continue;
-      lastNudge.set(folderId, Date.now());
-      setTimeout(() => void refreshFolder(folderId), 3000);
-    }
+  onFrontTabChanged(({ windowId, before }, s) => {
+    if (!before || !s.windowOrder.includes(windowId)) return;
+    const folderId = s.tabs[before]?.liveItem?.folderId;
+    if (!folderId || Date.now() - (lastNudge.get(folderId) ?? 0) < 20_000) return;
+    lastNudge.set(folderId, Date.now());
+    setTimeout(() => void refreshFolder(folderId), 3000);
   });
 }
