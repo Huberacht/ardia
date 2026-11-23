@@ -46,8 +46,9 @@ const NOT_SHIPPED = [
   /(^|\/)(THIRD_PARTY_NOTICES|LICENSE|NOTICE)[^/]*$/,
 ];
 
-const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^127(\.\d+){3}$|^0\.0\.0\.0$|^(com|org|net)\./i;
-const URL_HOST = /\b(?:https?|wss?):\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi;
+const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^127(\.\d+){3}$|^0\.0\.0\.0$|^\[::1?\]$/i;
+const REVERSE_DNS = /^(com|org|net)\./i;
+const URL_AUTHORITY = /\b(?:https?|wss?):\/\/(?:[^\s/@"'`]*@)?(\[[0-9a-f:.]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)(?=[/?#"'`\s)\],;>|]|:\d|$)/giu;
 const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|co|me|tv|gov|edu|info|cloud|goog))["'`]/gi;
 const NATIVE = /\.(cc|cpp|h|mm|m|swift|rs|patch)$/;
 
@@ -78,10 +79,19 @@ function removedLines(path) {
     .join("\n");
 }
 
+function urlHost(authority) {
+  try {
+    return new URL(`https://${authority}/`).hostname;
+  } catch {
+    return authority.toLowerCase();
+  }
+}
+
 function hostsIn(path) {
   const text = shippedText(path);
-  const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)] : [];
-  return [...text.matchAll(URL_HOST), ...quoted].map((m) => m[1].toLowerCase()).filter((host) => !RESERVED.test(host));
+  const fromUrls = [...text.matchAll(URL_AUTHORITY)].map((m) => urlHost(m[1]));
+  const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !REVERSE_DNS.test(host)) : [];
+  return [...fromUrls, ...quoted].filter((host) => !RESERVED.test(host));
 }
 
 function section(doc, title) {
@@ -107,10 +117,11 @@ function tableRows(text) {
 const doc = read(DOC);
 const contacted = tableRows(section(doc, "Endpoints Ardia contacts"));
 const named = section(doc, "Hosts named in the source that Ardia doesn't contact");
+const singleLabel = named.split("\n").filter((line) => line.startsWith("- Single-label")).flatMap(ticked);
 const disabled = tableRows(section(doc, "Google and Chromium endpoints that are off"));
 
 test("every host hard-coded in Ardia's shipped sources, as a URL or as a quoted host in native and engine code, is listed in docs/privacy.md", () => {
-  const listed = new Set([...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost).map((h) => h.toLowerCase()));
+  const listed = new Set([...[...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost), ...singleLabel].map((h) => h.toLowerCase()));
   const files = shippedFiles();
   assert.ok(files.length > 1000, "the scan still finds the app's sources");
   const missing = new Map();
