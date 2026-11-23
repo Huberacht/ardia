@@ -1,3 +1,4 @@
+import type { CleanedUrl } from "@ardia/core";
 import type { AddressInput, SavedAddress, SavedCard } from "../autofill";
 import type { CastDialog, CastRoute, DeviceChooser } from "../media";
 import type { AddedFilterList, ContentBlockerState, ContentBlockerStats } from "../contentBlocker";
@@ -7,7 +8,7 @@ import type {
 } from "../extensions";
 import type { Download, DownloadSettings } from "../downloads";
 import type {
-  BatterySaverMode, BatterySaverState, CliControlStatus, CursorRestore, CliTabTarget, EngineComponent, EngineInfo, EngineTask, HoverLostEpisode, MemorySaverRequest, PressLoopLongReport, MemorySaverState, PopupProtectedMedia, SystemState, WindowUnpaintedRecord,
+  BatterySaverMode, BatterySaverState, ChildProcessCpu, CliControlStatus, CursorRestore, CliTabTarget, EngineComponent, EngineInfo, EngineTask, HoverLostEpisode, MemorySaverRequest, PressLoopLongReport, MemorySaverState, PopupProtectedMedia, SystemState, WindowUnpaintedRecord,
 } from "../engineDomain";
 import type { ExternalAppAllowance, PermissionRequest, PermissionResult } from "../permissions";
 import type { BrowsingDataType } from "../profiles";
@@ -30,6 +31,7 @@ export type EngineCalls = BookmarksCalls & FaviconsCalls & HistoryCalls & {
   "engine.info": [{}, EngineInfo];
   "engine.components": [{}, EngineComponent[]];
   "engine.tasks": [{}, EngineTask[]];
+  "engine.childProcessCpu": [{}, ChildProcessCpu[]];
   "engine.beginTracing": [{}, boolean];
   "engine.endTracing": [{ keep: boolean }, string | null];
   "engine.isTracing": [{}, boolean];
@@ -43,6 +45,7 @@ export type EngineCalls = BookmarksCalls & FaviconsCalls & HistoryCalls & {
   "engine.setCliControl": [{ on: boolean }, CliControlStatus];
   "engine.setCliActiveTab": [{ tabId: string | null }, CliControlStatus];
   "engine.cliTabTargets": [{ tabIds: string[] }, Record<string, CliTabTarget>];
+  "engine.setCliHeldTabs": [{ tabs: { tabId: string; until: number }[] }, { kept: number; marked: string[] }];
   "engine.cliOwnsTab": [{ tabId: string }, { owned: boolean; shown: boolean }];
   "engine.cliMoveOffscreen": [{ tabId: string }, { ok: boolean; reason?: string }];
   "engine.cliCloseOffscreenTabs": [{}, Done];
@@ -172,6 +175,7 @@ export type EngineCalls = BookmarksCalls & FaviconsCalls & HistoryCalls & {
   "contentBlocker.removeList": [{ id: string }, null];
   "contentBlocker.isAllowed": [{ host: string }, boolean];
   "contentBlocker.setAllowed": [{ host: string; allowed: boolean }, null];
+  "contentBlocker.removeAllowed": [{ host: string }, { removed: boolean }];
   "contentBlocker.hiddenElements": [{ profile: string }, string[]];
   "contentBlocker.hideElements": [{ profile: string; filters: string[] }, null];
   "contentBlocker.restoreElements": [{ profile: string; filters: string[] }, null];
@@ -205,6 +209,7 @@ export type EngineCalls = BookmarksCalls & FaviconsCalls & HistoryCalls & {
   "webKit.writeSiteData": [Profile & { set: PageCookie[]; remove: CookieRemoval[]; storage: Record<string, StorageChange> }, SiteDataWritten | null];
   "webKit.setZoom": [Profile & { host: string; zoom: number }, null];
   "webKit.setFraudWarnings": [{ enabled: boolean }, null];
+  "webKit.writeCopiedAddress": [{ request: number; url: CleanedUrl }, boolean];
   "webKit.devStoreExists": [Profile, boolean];
   "webKit.devTouchStore": [Profile, boolean];
   "webKit.devHoldStore": [Profile, null];
@@ -229,6 +234,7 @@ export type EngineEvents = BookmarksEvents & FaviconsEvents & HistoryEvents & {
   "permissions.requested": PermissionRequest;
   "permissions.dismissed": { id: string };
   "webKit.counted": { name: WebKitCount; epoch?: string };
+  "webKit.copyAddress": { url: string; request: number; epoch?: string };
   "webKit.siteDataWanted": { id: string; profile: string; origin: string; epoch?: string };
   "webKit.siteCookiesChanged": { profile: string; domains: string[]; epoch?: string };
   "webKit.notification": { profile: string; notification: WebNotification; epoch?: string };
