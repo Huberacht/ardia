@@ -592,3 +592,11 @@ test("a module whose functions or events would generate the same Swift member tw
   refused({}, { event: { payload: "Tone", mac: "custom", desktop: "absent", windows: "absent" } }, /Expo's own Module\.sendEvent/);
   assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn(), holdKey: fn(), moduleNames: fn() }, events: { tone: { payload: "Tone", mac: "custom", desktop: "absent", windows: "absent" } } } })));
 });
+
+test("a module domain's type or import may not shadow a TypeScript global the generated types use, such as an async function's Promise", () => {
+  for (const name of ["Promise", "Record", "Array"]) {
+    assert.throws(() => validateModuleDomain("demo", moduleDomain(undefined, { types: { [name]: "{ then(): void }" } })), new RegExp(`type ${name} would shadow TypeScript's own ${name}`));
+    assert.throws(() => validateModuleDomain("demo", moduleDomain(undefined, { imports: { "@ardia/core": [name] } })), new RegExp(`import ${name} would shadow`));
+  }
+  assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain(undefined, { types: { PromiseResult: "{ ok: boolean }" } })));
+});

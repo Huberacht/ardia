@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import ts from "typescript";
 import { MANIFEST, ROOT } from "./generate.mjs";
 
 const read = (path) => readFileSync(ROOT + path, "utf8");
@@ -324,51 +325,6 @@ function skipQuoted(text, at) {
   return end;
 }
 
-const REGEX_AFTER_WORD = /\b(?:return|typeof|instanceof|case|do|else|in|of|void|delete|new|throw|yield|await)\s*$/;
-const CONTROL_HEAD = /\b(?:if|while|for|with)\s*$/;
-
-export function stripJsComments(source) {
-  let out = "";
-  let previous = "";
-  const parens = [];
-  let closedControl = false;
-  for (let at = 0; at < source.length; ) {
-    const char = source[at];
-    const two = source.slice(at, at + 2);
-    if (two === "//") {
-      const end = source.indexOf("\n", at);
-      at = end < 0 ? source.length : end;
-    } else if (two === "/*") {
-      const end = source.indexOf("*/", at + 2);
-      if (end < 0) throw new Error("a block comment never closes");
-      out += " ";
-      at = end + 2;
-    } else if (char === '"' || char === "'" || char === "`") {
-      const end = skipQuoted(source, at);
-      out += source.slice(at, end + 1);
-      previous = char;
-      at = end + 1;
-    } else if (char === "/" && (previous === "" || /[(,=:[!&|?{};+\-*%<>~^]/.test(previous) || REGEX_AFTER_WORD.test(out) || (previous === ")" && closedControl))) {
-      let end = at + 1;
-      for (let inClass = false; end < source.length && (inClass || source[end] !== "/"); end++) {
-        if (source[end] === "\\") end++;
-        else if (source[end] === "[") inClass = true;
-        else if (source[end] === "]") inClass = false;
-      }
-      out += source.slice(at, end + 1);
-      previous = "/";
-      at = end + 1;
-    } else {
-      if (char === "(") parens.push(CONTROL_HEAD.test(out));
-      if (char === ")") closedControl = parens.pop() ?? false;
-      out += char;
-      if (/\S/.test(char)) previous = char;
-      at++;
-    }
-  }
-  return out;
-}
-
 export function skipCppLiteral(text, at) {
   if (text[at] === "'" && /[0-9A-Za-z]/.test(text[at - 1] ?? "") && /[0-9A-Za-z]/.test(text[at + 1] ?? "")) return at;
   const raw = text[at] === '"' && text[at - 1] === "R" ? /^"([^()\\\s]{0,16})\(/.exec(text.slice(at)) : null;
@@ -378,17 +334,6 @@ export function skipCppLiteral(text, at) {
     return end + raw[1].length + 1;
   }
   return skipQuoted(text, at);
-}
-
-export function cppLiteralStarts(text) {
-  const inside = new Uint8Array(text.length);
-  for (let at = 0; at < text.length; at++) {
-    if (text[at] !== '"' && text[at] !== "'") continue;
-    const end = skipCppLiteral(text, at);
-    inside.fill(1, at, end + 1);
-    at = end;
-  }
-  return inside;
 }
 
 export function stripCppComments(source) {
@@ -414,6 +359,20 @@ export function stripCppComments(source) {
   return out;
 }
 
+export function maskCppLiterals(code) {
+  let out = "";
+  for (let at = 0; at < code.length; at++) {
+    if (code[at] !== '"' && code[at] !== "'") {
+      out += code[at];
+      continue;
+    }
+    const end = skipCppLiteral(code, at);
+    out += end === at ? code[at] : `${code[at]}${" ".repeat(end - at - 1)}${code[end]}`;
+    at = end;
+  }
+  return out;
+}
+
 export function closing(text, open, skip = skipQuoted) {
   const pairs = { "(": ")", "{": "}", "[": "]" };
   const want = pairs[text[open]];
@@ -431,89 +390,135 @@ export function closing(text, open, skip = skipQuoted) {
   throw new Error("a group never closes");
 }
 
+const CPP_CONTROL = /^(?:else\s+)?(?:(?:if|for|while|switch|catch)\s*\(|(?:else|do|try)$)/;
+const CPP_FUNCTION_TAIL = /\)\s*(?:(?:const|override|final|noexcept|mutable|volatile|&&?)\s*)*(?:->\s*([^{;()]+?))?\s*$/;
+const CPP_BOOL_DECLARED = /^(?:(?:static|inline|constexpr|virtual|friend|explicit|\[\[[^\]]*\]\])\s+)*bool\s+[\w:~<>]+\s*\(/;
+
+export function cppFunctions(masked) {
+  const functions = [];
+  const frames = [];
+  let boundary = 0;
+  let parens = 0;
+  for (let at = 0; at < masked.length; at++) {
+    const char = masked[at];
+    if (char === '"' || char === "'") at = skipCppLiteral(masked, at);
+    else if (char === "(") parens++;
+    else if (char === ")") parens--;
+    else if (char === ";" && parens === 0) boundary = at + 1;
+    else if (char === "{") {
+      const header = masked.slice(boundary, at).trim();
+      const tail = CPP_FUNCTION_TAIL.exec(header);
+      const isFunction = tail !== null && !CPP_CONTROL.test(header);
+      frames.push({ open: at, header, isFunction, returns: tail?.[1]?.trim(), parens });
+      parens = 0;
+      boundary = at + 1;
+    } else if (char === "}") {
+      const frame = frames.pop();
+      if (!frame) continue;
+      parens = frame.parens;
+      boundary = at + 1;
+      if (!frame.isFunction) continue;
+      const body = masked.slice(frame.open + 1, at);
+      const returns = [...body.matchAll(/\breturn\b([^;]*);/g)].map((match) => match[1].trim());
+      const onlyBooleans = returns.length > 0 && returns.every((value) => value === "true" || value === "false");
+      const boolean = CPP_BOOL_DECLARED.test(frame.header) || frame.returns === "bool" || onlyBooleans;
+      functions.push({ open: frame.open, close: at, header: frame.header, boolean });
+    }
+  }
+  return functions;
+}
+
+export function linuxModuleDispatch(sources) {
+  const methods = new Set();
+  const events = new Set();
+  for (const written of sources) {
+    const code = stripCppComments(written);
+    const masked = maskCppLiterals(code);
+    for (const match of masked.matchAll(/\bSendEvent\(\s*"/g)) {
+      const call = /^SendEvent\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/.exec(code.slice(match.index));
+      if (call) events.add(`${call[1]}.${call[2]}`);
+    }
+    const functions = cppFunctions(masked);
+    for (const branch of masked.matchAll(/\bif\s*\((?=\s*(?:method|name)\s*==)/g)) {
+      const owner = functions.filter((fn) => fn.open < branch.index && branch.index < fn.close).at(-1);
+      if (!owner || owner.boolean) continue;
+      const open = branch.index + branch[0].length - 1;
+      const close = closing(masked, open, skipCppLiteral);
+      const names = code.slice(open + 1, close).split("||").map((part) => /^\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*$/.exec(part)?.[1]);
+      if (names.some((name) => name === undefined)) continue;
+      let at = close + 1;
+      while (/\s/.test(masked[at] ?? "")) at++;
+      const statement = masked[at] === "{" ? masked.slice(at + 1, closing(masked, at, skipCppLiteral)) : masked.slice(at, masked.indexOf(";", at) + 1);
+      if (/^\s*return\s+(?:true|false)\s*;\s*$/.test(statement)) continue;
+      for (const name of names) methods.add(name);
+    }
+  }
+  return { methods, events };
+}
+
+export function windowsNativeModules(sources) {
+  const methods = new Map();
+  const events = new Set();
+  for (const written of sources) {
+    const source = stripCppComments(written);
+    for (const match of source.matchAll(/\bEmitEvent\([^,]+,\s*L"(Ardia[A-Za-z]+)"\s*,\s*L"([a-zA-Z]+)"/g)) events.add(`${match[1]}.${match[2]}`);
+    const modules = [...source.matchAll(/REACT_MODULE\(\s*\w+\s*,\s*L"([^"]+)"\s*\)/g)].map((match) => match[1]);
+    if (modules.length > 1) throw new Error(`one header registers ${modules.join(" and ")}; the scan reads one module per header`);
+    if (!modules.length) continue;
+    methods.set(modules[0], new Set([...source.matchAll(/REACT_(?:SYNC_)?METHOD\(\s*(\w+)\s*(?:,\s*L"([^"]+)"\s*)?\)/g)].map((match) => match[2] ?? match[1])));
+  }
+  return { methods, events };
+}
+
+export function swiftBlock(text, open) {
+  const end = closing(text, open);
+  return { start: open, end: end + 1, body: text.slice(open + 1, end) };
+}
+
+const SWIFT_CONTINUES = /(?:[=:,([{+\-*/%&|^<>?!.]|->|\b(?:return|in|as|is|try|await|throw|let|var|where))\s*$/;
+const SWIFT_CONTINUATION = /^(?:[.?:=+\-*/%&|^<>,]|->|(?:as|is|in|where)\b)/;
+
 export function topLevelStatements(body) {
   const statements = [];
   let current = "";
-  const flush = () => {
+  const lineEnds = () => {
     const statement = current.trim();
-    if (statement && statement.startsWith(".") && statements.length) statements[statements.length - 1] += statement;
-    else if (statement) statements.push(statement);
+    if (!statement) return;
+    if (SWIFT_CONTINUES.test(statement)) return;
+    statements.push(statement);
     current = "";
   };
   for (let at = 0; at < body.length; at++) {
     const char = body[at];
-    if (char === '"' || char === "'" || char === "`" || "({[".includes(char)) {
-      const end = "({[".includes(char) ? closing(body, at) : skipQuoted(body, at);
+    if (char === '"' || "({[".includes(char)) {
+      const end = char === '"' ? skipQuoted(body, at) : closing(body, at);
       current += body.slice(at, end + 1);
       at = end;
-    } else if (char === "\n" || char === ";") flush();
-    else current += char;
+    } else if (char === ";") {
+      if (current.trim()) statements.push(current.trim());
+      current = "";
+    } else if (char === "\n") {
+      const rest = body.slice(at + 1).trimStart();
+      if (current.trim() && SWIFT_CONTINUATION.test(rest)) current += "\n";
+      else {
+        lineEnds();
+        if (current) current += "\n";
+      }
+    } else current += char;
   }
-  flush();
+  if (current.trim()) statements.push(current.trim());
   return statements;
-}
-
-export function topLevelReturnKeys(body) {
-  const keys = [];
-  for (let at = 0; at < body.length; at++) {
-    const char = body[at];
-    if (char === '"' || char === "'" || char === "`") at = skipQuoted(body, at);
-    else if ("({[".includes(char)) at = closing(body, at);
-    else if (/^return\b/.test(body.slice(at, at + 7)) && !/[\w$]/.test(body[at - 1] ?? "")) {
-      const returned = /^return\s*\{/.exec(body.slice(at));
-      if (returned) keys.push(...objectKeys(body, at + returned[0].length - 1));
-    }
-  }
-  return keys;
-}
-
-export function block(text, open) {
-  if (text[open] !== "{") throw new Error(`a block opens with {, not ${JSON.stringify(text.slice(open, open + 20))}`);
-  let depth = 0;
-  for (let at = open; at < text.length; at++) {
-    const char = text[at];
-    if (char === '"' || char === "'" || char === "`") at = skipQuoted(text, at);
-    else if (char === "{") depth++;
-    else if (char === "}" && --depth === 0) return { start: open, end: at + 1, body: text.slice(open + 1, at) };
-  }
-  throw new Error("a block never closes");
-}
-
-export function objectKeys(text, open) {
-  const { body } = block(text, open);
-  const keys = [];
-  let depth = 0;
-  let expectKey = true;
-  for (let at = 0; at < body.length; at++) {
-    const char = body[at];
-    if (char === '"' || char === "'" || char === "`") {
-      at = skipQuoted(body, at);
-      expectKey = false;
-    } else if ("({[".includes(char)) {
-      depth++;
-      expectKey = false;
-    } else if (")}]".includes(char)) {
-      depth--;
-    } else if (depth === 0 && char === ",") {
-      expectKey = true;
-    } else if (depth === 0 && expectKey && /\S/.test(char)) {
-      expectKey = false;
-      const key = /^(?:async\s+)?([A-Za-z_$][\w$]*)\s*[:(,]|^(?:async\s+)?([A-Za-z_$][\w$]*)\s*$/.exec(body.slice(at));
-      if (key && !body.startsWith("...", at)) keys.push(key[1] ?? key[2]);
-    }
-  }
-  return keys;
 }
 
 export function swiftRegistrations(source, className) {
   const declared = new RegExp(`\\bclass ${className}\\b[^{]*\\{`).exec(source);
   if (!declared) throw new Error(`the source declares no class ${className}`);
-  const classBody = block(source, declared.index + declared[0].length - 1).body;
+  const classBody = swiftBlock(source, declared.index + declared[0].length - 1).body;
   const definition = /\bfunc definition\(\)\s*->\s*ModuleDefinition\s*\{/.exec(classBody);
   if (!definition) throw new Error(`${className} has no definition()`);
-  let body = block(classBody, definition.index + definition[0].length - 1).body;
-  for (let view = /\bView\([^)]*\)\s*\{/.exec(body); view; view = /\bView\([^)]*\)\s*\{/.exec(body)) {
-    const { end } = block(body, view.index + view[0].length - 1);
+  let body = swiftBlock(classBody, definition.index + definition[0].length - 1).body;
+  for (let view = /\bView\s*\([^)]*\)\s*\{/.exec(body); view; view = /\bView\s*\([^)]*\)\s*\{/.exec(body)) {
+    const { end } = swiftBlock(body, view.index + view[0].length - 1);
     body = body.slice(0, view.index) + body.slice(end);
   }
   const statements = topLevelStatements(body);
@@ -531,96 +536,42 @@ export function swiftRegistrations(source, className) {
   };
 }
 
-export function nativeModuleCalls(source) {
-  const calls = [];
-  for (const match of source.matchAll(/\brequire(?:Optional)?NativeModule\b\s*/g)) {
-    let at = match.index + match[0].length;
-    let type;
-    if (source[at] === "<") {
-      let depth = 0;
-      const start = at;
-      for (; at < source.length; at++) {
-        if (source[at] === "<") depth++;
-        else if (source[at] === ">" && source[at - 1] !== "=" && --depth === 0) break;
-      }
-      type = source.slice(start + 1, at).trim();
-      at++;
-      while (/\s/.test(source[at] ?? "")) at++;
+const parseTs = (path, text) => ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+const isWrapper = (node) => ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node);
+const unwrap = (node) => {
+  while (node && isWrapper(node)) node = node.expression;
+  return node;
+};
+const isFunctionLike = (node) => ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node) || ts.isConstructorDeclaration(node) || ts.isClassLike(node);
+const keyOf = (property) => {
+  const named = ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property) || ts.isMethodDeclaration(property) || ts.isGetAccessorDeclaration(property);
+  return named && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ? property.name.text : undefined;
+};
+const objectMembers = (object) => object.properties.map(keyOf).filter(Boolean);
+
+function walk(node, visit, { intoFunctions = true } = {}) {
+  ts.forEachChild(node, (child) => {
+    if (visit(child) === false) return;
+    if (!intoFunctions && isFunctionLike(child)) return;
+    walk(child, visit, { intoFunctions });
+  });
+}
+
+export function ownReturnedObjects(fn) {
+  if (fn.body && !ts.isBlock(fn.body)) {
+    const value = unwrap(fn.body);
+    return value && ts.isObjectLiteralExpression(value) ? [value] : [];
+  }
+  const objects = [];
+  if (!fn.body) return objects;
+  walk(fn.body, (node) => {
+    if (ts.isReturnStatement(node) && node.expression) {
+      const value = unwrap(node.expression);
+      if (ts.isObjectLiteralExpression(value)) objects.push(value);
     }
-    if (source[at] !== "(") continue;
-    const close = closing(source, at);
-    calls.push({ whole: source.slice(match.index, close + 1), type, argument: source.slice(at + 1, close).trim(), end: close + 1 });
-  }
-  return calls;
+  }, { intoFunctions: false });
+  return objects;
 }
-
-export function nativeModuleTypingProblems(source, domain, modules) {
-  const map = `${domain[0].toUpperCase()}${domain.slice(1)}Modules`;
-  const problems = [];
-  let typed = 0;
-  for (const { whole, type, argument } of nativeModuleCalls(source)) {
-    const literal = /^(["'])(Ardia[A-Za-z]+)\1$/.exec(argument)?.[2];
-    if (literal !== undefined) {
-      if (!modules[literal]) continue;
-      if (type === modules[literal].native || type === `${map}["${literal}"]`) typed++;
-      else problems.push(`${whole} types ${literal} as ${type ?? "nothing"} instead of ${modules[literal].native}`);
-      continue;
-    }
-    const index = new RegExp(`^${map}\\[(\\w+)\\]$`).exec(type ?? "")?.[1];
-    if (index === undefined || !new RegExp(`<${index} extends keyof ${map}>\\s*\\(\\s*${argument.replace(/[^\w$]/g, "")}\\s*:\\s*${index}\\s*\\)`).test(source)) {
-      problems.push(`${whole} takes a module name without the generated ${map} type`);
-    } else typed++;
-  }
-  const wrappers = [...source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(?:<[^=]*?>\s*)?\([^)]*\)\s*(?::[^=]+)?=>\s*require(?:Optional)?NativeModule\b/g)].map((match) => match[1]);
-  const ends = [
-    ...nativeModuleCalls(source).map(({ whole, end }) => ({ whole, end })),
-    ...wrappers.flatMap((wrapper) => [...source.matchAll(new RegExp(`\\b${wrapper}\\s*\\(`, "g"))].map((match) => {
-      const end = closing(source, match.index + match[0].length - 1) + 1;
-      return { whole: source.slice(match.index, end), end };
-    })),
-  ];
-  for (const { whole, end } of ends) if (/^\s*as\s+(?:any|unknown)\b/.test(source.slice(end))) problems.push(`${whole} is cast past its generated type`);
-  return { problems, typed };
-}
-
-export function linuxModuleDispatch(sources) {
-  const methods = new Set();
-  const events = new Set();
-  for (const written of sources) {
-    const text = stripCppComments(written);
-    const literal = cppLiteralStarts(text);
-    for (const match of text.matchAll(/\bSendEvent\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/g)) if (!literal[match.index]) events.add(`${match[1]}.${match[2]}`);
-    for (const branch of text.matchAll(/\bif\s*\((?=\s*(?:method|name)\s*==)/g)) {
-      if (literal[branch.index]) continue;
-      const open = branch.index + branch[0].length - 1;
-      const close = closing(text, open, skipCppLiteral);
-      const names = text.slice(open + 1, close).split("||").map((part) => /^\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*$/.exec(part)?.[1]);
-      if (names.some((name) => name === undefined)) continue;
-      let at = close + 1;
-      while (/\s/.test(text[at] ?? "")) at++;
-      const statement = text[at] === "{" ? text.slice(at + 1, closing(text, at, skipCppLiteral)) : text.slice(at, text.indexOf(";", at) + 1);
-      if (/^\s*return\s+(?:true|false)\s*;\s*$/.test(statement)) continue;
-      for (const name of names) methods.add(name);
-    }
-  }
-  return { methods, events };
-}
-
-export function windowsNativeModules(sources) {
-  const methods = new Map();
-  const events = new Set();
-  for (const written of sources) {
-    const source = stripComments(written);
-    for (const match of source.matchAll(/\bEmitEvent\([^,]+,\s*L"(Ardia[A-Za-z]+)"\s*,\s*L"([a-zA-Z]+)"/g)) events.add(`${match[1]}.${match[2]}`);
-    const modules = [...source.matchAll(/REACT_MODULE\(\s*\w+\s*,\s*L"([^"]+)"\s*\)/g)].map((match) => match[1]);
-    if (modules.length > 1) throw new Error(`one header registers ${modules.join(" and ")}; the scan reads one module per header`);
-    if (!modules.length) continue;
-    methods.set(modules[0], new Set([...source.matchAll(/REACT_(?:SYNC_)?METHOD\(\s*(\w+)\s*(?:,\s*L"([^"]+)"\s*)?\)/g)].map((match) => match[2] ?? match[1])));
-  }
-  return { methods, events };
-}
-
-const WINDOWS_JS = "packages/expo-windows/src/";
 
 function resolveImport(from, path, exists) {
   const base = `${from.slice(0, from.lastIndexOf("/") + 1)}${path}`.split("/").reduce((parts, part) => (part === ".." ? parts.slice(0, -1) : part === "." ? parts : [...parts, part]), []).join("/");
@@ -632,84 +583,158 @@ function resolveImport(from, path, exists) {
 export function windowsJsMembers(name, path, read, exists, seen = new Set()) {
   if (seen.has(`${path}:${name}`)) throw new Error(`${name} in ${path} refers back to itself`);
   seen.add(`${path}:${name}`);
-  const source = stripJsComments(read(path));
-  const local = new RegExp(`\\bconst ${name}\\s*(?::[^=]+)?=\\s*([A-Za-z_$][\\w$]*)\\s*\\(`).exec(source);
-  if (local) return windowsJsMembers(local[1], path, read, exists, seen);
-  const imported = [...source.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)].find(([, names]) => names.split(",").some((entry) => entry.trim().split(/\s+as\s+/).at(-1) === name));
-  if (imported) {
-    const original = imported[1].split(",").map((entry) => entry.trim().split(/\s+as\s+/)).find((parts) => parts.at(-1) === name)[0];
-    return windowsJsMembers(original, resolveImport(path, imported[2], exists), read, exists, seen);
-  }
-  const constant = new RegExp(`\\bexport\\s+const\\s+${name}\\b[^=]*=\\s*\\{`).exec(source);
-  if (constant) return new Set(objectKeys(source, constant.index + constant[0].length - 1));
-  const fn = new RegExp(`\\bexport\\s+function\\s+${name}\\b`).exec(source);
-  if (fn) {
-    const opening = /\)\s*(?::[^{]+)?\{/g;
-    opening.lastIndex = fn.index;
-    const open = opening.exec(source);
-    const body = block(source, open.index + open[0].length - 1);
-    const returned = topLevelReturnKeys(body.body);
-    if (returned.length) return new Set(returned);
+  const file = parseTs(path, read(path));
+  const fromFunction = (fn) => {
+    const members = ownReturnedObjects(fn).flatMap(objectMembers);
+    if (!members.length) throw new Error(`${name} in ${path} returns no object the scan can read`);
+    return new Set(members);
+  };
+  const fromValue = (value) => {
+    const inner = unwrap(value);
+    if (ts.isObjectLiteralExpression(inner)) return new Set(objectMembers(inner));
+    if (ts.isArrowFunction(inner) || ts.isFunctionExpression(inner)) return fromFunction(inner);
+    if (ts.isIdentifier(inner)) return windowsJsMembers(inner.text, path, read, exists, seen);
+    if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression)) return windowsJsMembers(inner.expression.text, path, read, exists, seen);
+    throw new Error(`the scan can't read Windows' JS module ${name} in ${path}`);
+  };
+  for (const statement of file.statements) {
+    if (ts.isImportDeclaration(statement) && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
+      const element = statement.importClause.namedBindings.elements.find((entry) => entry.name.text === name);
+      if (element) return windowsJsMembers(element.propertyName?.text ?? name, resolveImport(path, statement.moduleSpecifier.text, exists), read, exists, seen);
+    }
+    if (ts.isVariableStatement(statement)) {
+      const declaration = statement.declarationList.declarations.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === name);
+      if (declaration?.initializer) return fromValue(declaration.initializer);
+    }
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) return fromFunction(statement);
   }
   throw new Error(`the scan can't read Windows' JS module ${name} in ${path}`);
 }
 
+const WINDOWS_JS = "packages/expo-windows/src/";
+
+function topLevelObject(file, name) {
+  for (const statement of file.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    const declaration = statement.declarationList.declarations.find((entry) => ts.isIdentifier(entry.name) && entry.name.text === name);
+    const value = declaration?.initializer && unwrap(declaration.initializer);
+    if (value && ts.isObjectLiteralExpression(value)) return value;
+  }
+  throw new Error(`${file.fileName} declares no object ${name}`);
+}
+
 export function windowsJsModules(read, exists) {
   const modulesPath = `${WINDOWS_JS}modules.ts`;
-  const modules = stripJsComments(read(modulesPath));
-  const written = between(modules, "const writtenInJs", "\n");
   const members = new Map();
-  for (const [, module, value] of written.matchAll(/\b(Ardia[A-Za-z]+):\s*([A-Za-z_$][\w$]*)/g)) members.set(module, () => windowsJsMembers(value, modulesPath, read, exists));
-  const defaultsSource = stripJsComments(read(`${WINDOWS_JS}defaults.ts`));
-  const declared = /\bexport const moduleDefaults\b[^=]*=\s*\{/.exec(defaultsSource);
+  walk(topLevelObject(parseTs(modulesPath, read(modulesPath)), "writtenInJs"), (node) => {
+    if (ts.isPropertyAssignment(node) && keyOf(node)?.startsWith("Ardia")) {
+      const value = node.initializer;
+      members.set(keyOf(node), () => {
+        const inner = unwrap(value);
+        const target = ts.isCallExpression(inner) && ts.isIdentifier(inner.expression) ? inner.expression.text : ts.isIdentifier(inner) ? inner.text : null;
+        if (target === null) throw new Error(`the scan can't read Windows' JS module ${keyOf(node)}`);
+        return windowsJsMembers(target, modulesPath, read, exists);
+      });
+      return false;
+    }
+  }, { intoFunctions: false });
+  const defaultsPath = `${WINDOWS_JS}defaults.ts`;
   const defaults = new Map();
-  const { body } = block(defaultsSource, declared.index + declared[0].length - 1);
-  for (const match of body.matchAll(/(?:^|\n)\s*(Ardia[A-Za-z]+):\s*\{/g)) defaults.set(match[1], new Set(objectKeys(body, match.index + match[0].length - 1)));
+  for (const property of topLevelObject(parseTs(defaultsPath, read(defaultsPath)), "moduleDefaults").properties) {
+    const value = ts.isPropertyAssignment(property) ? unwrap(property.initializer) : null;
+    if (keyOf(property)?.startsWith("Ardia") && value && ts.isObjectLiteralExpression(value)) defaults.set(keyOf(property), new Set(objectMembers(value)));
+  }
   const events = new Set();
   for (const path of filesUnder(WINDOWS_JS, /\.tsx?$/).filter((file) => !/\.test\./.test(file))) {
-    for (const match of stripJsComments(read(path)).matchAll(/\bemit(?:NativeEvent|WhenListened)\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/g)) events.add(`${match[1]}.${match[2]}`);
+    walk(parseTs(path, read(path)), (node) => {
+      if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || !["emitNativeEvent", "emitWhenListened"].includes(node.expression.text)) return;
+      const [module, event] = node.arguments;
+      if (module && event && ts.isStringLiteralLike(module) && ts.isStringLiteralLike(event)) events.add(`${module.text}.${event.text}`);
+    });
   }
   return { members, defaults, events };
 }
 
+const NATIVE_MODULE_CALLS = new Set(["requireNativeModule", "requireOptionalNativeModule"]);
+
+export function nativeModuleTypingProblems(source, domain, modules, path = "source.ts") {
+  const map = `${domain[0].toUpperCase()}${domain.slice(1)}Modules`;
+  const file = parseTs(path, source);
+  const problems = [];
+  let typed = 0;
+  const calls = [];
+  walk(file, (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && NATIVE_MODULE_CALLS.has(node.expression.text)) calls.push(node);
+  });
+  const enclosingFunction = (node) => {
+    for (let at = node.parent; at; at = at.parent) if (ts.isArrowFunction(at) || ts.isFunctionExpression(at) || ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) return at;
+    return null;
+  };
+  const wrappers = new Set();
+  for (const call of calls) {
+    const text = call.getText(file).replace(/\s+/g, " ");
+    const type = call.typeArguments?.[0];
+    const argument = call.arguments[0];
+    if (argument && ts.isStringLiteralLike(argument)) {
+      const row = modules[argument.text];
+      if (!row) continue;
+      const literalIndex = type && ts.isIndexedAccessTypeNode(type) && type.objectType.getText(file) === map && ts.isLiteralTypeNode(type.indexType) && ts.isStringLiteral(type.indexType.literal) && type.indexType.literal.text === argument.text;
+      if (type?.getText(file) === row.native || literalIndex) typed++;
+      else problems.push(`${text} types ${argument.text} as ${type?.getText(file) ?? "nothing"} instead of ${row.native}`);
+      continue;
+    }
+    const fn = enclosingFunction(call);
+    const index = type && ts.isIndexedAccessTypeNode(type) && type.objectType.getText(file) === map && ts.isTypeReferenceNode(type.indexType) ? type.indexType.typeName.getText(file) : null;
+    const parameter = fn?.typeParameters?.find((entry) => entry.name.text === index);
+    const constrained = parameter?.constraint && ts.isTypeOperatorNode(parameter.constraint) && parameter.constraint.operator === ts.SyntaxKind.KeyOfKeyword && parameter.constraint.type.getText(file) === map;
+    const passed = argument && ts.isIdentifier(argument) && fn?.parameters.some((entry) => ts.isIdentifier(entry.name) && entry.name.text === argument.text && entry.type?.getText(file) === index);
+    if (!constrained || !passed) {
+      problems.push(`${text} takes a module name without the generated ${map} type`);
+      continue;
+    }
+    typed++;
+    if (fn && ts.isArrowFunction(fn) && unwrap(fn.body) === call && ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)) wrappers.add(fn.parent.name.text);
+  }
+  const sites = [...calls];
+  walk(file, (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && wrappers.has(node.expression.text)) sites.push(node);
+  });
+  const bound = new Set();
+  for (const site of sites) {
+    let at = site;
+    while (at.parent && isWrapper(at.parent) && !ts.isAsExpression(at.parent) && !ts.isTypeAssertionExpression(at.parent)) at = at.parent;
+    if (ts.isVariableDeclaration(at.parent) && at.parent.initializer === at && ts.isIdentifier(at.parent.name)) bound.add(at.parent.name.text);
+  }
+  walk(file, (node) => {
+    if (ts.isIdentifier(node) && bound.has(node.text) && !ts.isVariableDeclaration(node.parent)) sites.push(node);
+  });
+  for (const site of sites) {
+    for (let at = site; at.parent && isWrapper(at.parent); at = at.parent) {
+      const cast = at.parent;
+      if ((ts.isAsExpression(cast) || ts.isTypeAssertionExpression(cast)) && cast.type.getText(file) !== "const") {
+        problems.push(`${cast.getText(file).replace(/\s+/g, " ")} casts a native module past its generated type`);
+        break;
+      }
+    }
+  }
+  return { problems, typed };
+}
+
 const exists = (path) => existsSync(ROOT + path);
+const linuxSources = () => filesUnder("engine/ardiacore-linux/src/", /\.(cc|h|mm)$/).map(read);
 
 test("the module-domain scans find the shaders pilot and read the hosts' real tables", () => {
   assert.ok(moduleDomains.some(([domain]) => domain === "shaders"));
   assert.ok(moduleFunctions.length >= 4);
-  assert.equal(stripJsComments('const a = /^\\/*x/s; // gone\nconst b = "/* kept */"; /* gone */ return /a\\/b/;'), 'const a = /^\\/*x/s; \nconst b = "/* kept */";   return /a\\/b/;');
-  assert.equal(stripJsComments("const half = width / 2; const third = 3 / 1;"), "const half = width / 2; const third = 3 / 1;");
-  assert.deepEqual(objectKeys('{ a: 1, b(x) { return { c: 2 }; }, async d() {}, e, ...f, "g": 3, h: { i: 4 } }', 0), ["a", "b", "d", "e", "h"]);
-  const linux = linuxModuleDispatch(filesUnder("engine/ardiacore-linux/src/", /\.(cc|h|mm)$/).map(read));
-  assert.ok(linux.methods.has("ArdiaCalendar.status") && linux.methods.has("ArdiaConfig.watch"));
+  const linux = linuxModuleDispatch(linuxSources());
+  for (const name of ["ArdiaCalendar.status", "ArdiaConfig.watch", "ArdiaConfig.readFile", "ArdiaAutomation.start"]) assert.ok(linux.methods.has(name), name);
   assert.ok(linux.events.has("ArdiaShell.shell"));
   const windowsNative = windowsNativeModules(filesUnder("apps/browser/windows/Ardia/", /\.h$/).map(read));
   assert.ok(windowsNative.methods.get("ArdiaKeychain")?.has("delete") && windowsNative.methods.get("ArdiaFocus")?.has("keyHoldCounts"));
   const js = windowsJsModules(read, exists);
-  assert.ok(js.members.get("ArdiaUpdater")().size > 0 && js.members.get("ArdiaSwipe")().size > 0 && js.members.get("ArdiaImport")().size > 0);
+  for (const module of ["ArdiaUpdater", "ArdiaSwipe", "ArdiaImport", "ArdiaSync", "ArdiaInlineCompletion"]) assert.ok(js.members.get(module)?.().size > 0, module);
   assert.ok(js.defaults.get("ArdiaCli")?.has("canInstallUnattended") && js.defaults.get("ArdiaTranslate")?.has("languageName"));
   assert.ok(js.events.has("ArdiaShell.onOpenURLs") && js.events.has("ArdiaImport.onImportEvent"));
-});
-
-test("the host scans count only real dispatch entries, callable members and emitted events, so a missing method or event fails", () => {
-  const linux = linuxModuleDispatch(['const char* kNote = "ArdiaDemo.hold";\nif (method == "ArdiaDemo.probe") return;\nSendEvent("ArdiaDemo", "tone", payload);\nLog("ArdiaDemo.missing");']);
-  assert.deepEqual([...linux.methods], ["ArdiaDemo.probe"]);
-  assert.deepEqual([...linux.events], ["ArdiaDemo.tone"]);
-  assert.equal(linuxModuleDispatch(['// if (method == "ArdiaDemo.probe")']).methods.size, 0);
-  const native = windowsNativeModules(['REACT_MODULE(Demo, L"ArdiaDemo")\n  REACT_METHOD(hold)\n  REACT_METHOD(remove, L"delete")\n  REACT_SYNC_METHOD(peek)\n  EmitEvent(context, L"ArdiaDemo", L"tone", payload);', 'std::wstring note = L"ArdiaDemo.missing";']);
-  assert.deepEqual([...native.methods.get("ArdiaDemo")], ["hold", "delete", "peek"]);
-  assert.deepEqual([...native.events], ["ArdiaDemo.tone"]);
-  assert.throws(() => windowsNativeModules(['REACT_MODULE(A, L"ArdiaA") REACT_MODULE(B, L"ArdiaB")']), /one module per header/);
-  const files = {
-    "w/modules.ts": 'import { demoOnWindows as demo } from "./demo";\nconst made = demoMaker();\nimport { demoMaker } from "./maker";\n',
-    "w/demo/index.ts": 'export const demoOnWindows = { hold: () => noteMissing("probe"), async peek() { return probe(); } };',
-    "w/maker.ts": "export function demoMaker(host = null) {\n  const probe = () => 1;\n  return { open, close: () => probe() };\n}",
-  };
-  const readFile = (path) => files[path];
-  const has = (path) => Object.hasOwn(files, path);
-  assert.deepEqual([...windowsJsMembers("demo", "w/modules.ts", readFile, has)], ["hold", "peek"]);
-  assert.deepEqual([...windowsJsMembers("made", "w/modules.ts", readFile, has)], ["open", "close"]);
-  assert.throws(() => windowsJsMembers("nowhere", "w/modules.ts", readFile, has), /can't read/);
 });
 
 test("each Mac module of a module domain conforms to its generated protocol and registers exactly its generated name, events and functions, with no hand-written ones beside its views", () => {
@@ -722,7 +747,7 @@ test("each Mac module of a module domain conforms to its generated protocol and 
       const functions = Object.keys(row.functions).filter((fn) => onMac(row.functions[fn]));
       const events = Object.keys(row.events).filter((event) => onMac(row.events[event]));
       const conforming = sources.flatMap(([path, text]) => [...text.matchAll(new RegExp(`\\bclass (\\w+): Module, ${row.native}\\b`, "g"))].map((match) => ({ path, text, name: match[1] })));
-      for (const [path, text] of sources) assert.doesNotMatch(text, new RegExp(`Name\\("${module}"\\)`), `${path} names ${module} itself instead of Name(Self.moduleName)`);
+      for (const [path, text] of sources) assert.doesNotMatch(text, new RegExp(`Name\\s*\\(\\s*"${module}"\\s*\\)`), `${path} names ${module} itself instead of Name(Self.moduleName)`);
       if (!functions.length && !events.length) {
         assert.deepEqual(conforming, [], `${module} has nothing on the Mac, so no module conforms to ${row.native}`);
         continue;
@@ -740,45 +765,26 @@ test("each Mac module of a module domain conforms to its generated protocol and 
   }
 });
 
-test("the Mac registration scan sees a hand-written function, event or name beside the generated ones, and ignores what a view declares", () => {
-  const module = (definition) => `public class DemoModule: Module, DemoNative {\n  static func hold(_ on: Bool) {}\n\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
-  const clean = swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    View(DemoView.self) {\n      Prop("on") { (view: DemoView, on: Bool) in view.on = on }\n      Events("onTone")\n    }'), "DemoModule");
-  assert.deepEqual(clean, { generated: ["hold"], events: false, name: true, handWritten: [] });
-  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    AsyncFunction("extra") { () in }'), "DemoModule").handWritten, ["AsyncFunction"]);
-  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    Function("extra") { () in 1 }'), "DemoModule").handWritten, ["Function"]);
-  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Events("tone")\n    Self.holdFunction'), "DemoModule").handWritten, ["Events"]);
-  assert.deepEqual(swiftRegistrations(module('    Name("ArdiaDemo")\n    Self.holdFunction'), "DemoModule"), { generated: ["hold"], events: false, name: false, handWritten: ["Name"] });
-});
-
 test("a module domain's package reaches each of its Expo modules only through the generated types", () => {
   for (const [domain, entry] of moduleDomains) {
-    const sources = filesUnder(`${entry.package}/src/`, /\.tsx?$/).filter((path) => path !== entry.types).map((path) => [path, stripJsComments(read(path))]);
-    assert.ok(sources.some(([, text]) => text.includes('from "./generated/native"')), `${entry.package}/src imports its generated types`);
+    const sources = filesUnder(`${entry.package}/src/`, /\.tsx?$/).filter((path) => path !== entry.types).map((path) => [path, read(path)]);
     let typed = 0;
+    let imported = false;
     for (const [path, text] of sources) {
-      const found = nativeModuleTypingProblems(text, domain, entry.modules);
+      walk(parseTs(path, text), (node) => {
+        if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === "./generated/native") imported = true;
+      });
+      const found = nativeModuleTypingProblems(text, domain, entry.modules, path);
       assert.deepEqual(found.problems, [], path);
       typed += found.typed;
     }
+    assert.ok(imported, `${entry.package}/src imports its generated types`);
     assert.ok(typed > 0, `${entry.package}/src reaches a module through its generated types`);
   }
 });
 
-test("the typing scan refuses a wrapper typed any, a literal typed by hand and a cast past the generated type", () => {
-  const modules = { ArdiaDemo: { native: "DemoNative" } };
-  const wrapper = (type) => `const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<${type}>(name);\nconst Backdrop = nativeModule("ArdiaDemo");`;
-  assert.deepEqual(nativeModuleTypingProblems(wrapper("DemoModules[Name]"), "demo", modules), { problems: [], typed: 1 });
-  assert.equal(nativeModuleTypingProblems(wrapper("any"), "demo", modules).problems.length, 1);
-  assert.equal(nativeModuleTypingProblems("const m = (name: string) => requireNativeModule<DemoModules[Name]>(name);", "demo", modules).problems.length, 1);
-  assert.equal(nativeModuleTypingProblems('requireNativeModule<{ hold(on: boolean): Promise<void> }>("ArdiaDemo");', "demo", modules).problems.length, 1);
-  assert.equal(nativeModuleTypingProblems('requireNativeModule("ArdiaDemo");', "demo", modules).problems.length, 1);
-  assert.deepEqual(nativeModuleCalls('requireNativeModule<{ run(cb: () => void): Promise<Map<string, number>> }>( "ArdiaDemo" )').map(({ type, argument }) => [type, argument]), [["{ run(cb: () => void): Promise<Map<string, number>> }", '"ArdiaDemo"']]);
-  assert.deepEqual(nativeModuleTypingProblems('requireNativeModule<DemoNative>("ArdiaDemo"); requireNativeModule<{}>("ArdiaElse");', "demo", modules), { problems: [], typed: 1 });
-  assert.equal(nativeModuleTypingProblems(`${wrapper("DemoModules[Name]")}\nconst loose = nativeModule("ArdiaDemo") as any;`, "demo", modules).problems.length, 1);
-});
-
 test("the Linux host dispatches a module function and sends a module event exactly when its desktop binding is host", () => {
-  const linux = linuxModuleDispatch(filesUnder("engine/ardiacore-linux/src/", /\.(cc|h|mm)$/).map(read));
+  const linux = linuxModuleDispatch(linuxSources());
   for (const { module, fn, binding } of moduleFunctions) assert.equal(linux.methods.has(`${module}.${fn}`), binding.desktop === "host", `${module}.${fn} is ${binding.desktop} on the desktop host`);
   for (const { module, event, binding } of moduleEvents) assert.equal(linux.events.has(`${module}.${event}`), binding.desktop === "host", `event ${module}.${event} is ${binding.desktop} on the desktop host`);
 });
@@ -796,76 +802,120 @@ test("Windows serves a module function as a native method, a JS member or a defa
   }
 });
 
-test("the Linux scan counts a comparison only when it is an if that dispatches, never a boolean helper, and reads raw strings and digit separators", () => {
-  const helper = [
+test("the Linux scan counts an if that dispatches inside a function that isn't a boolean helper, skips literals, and reads raw strings and digit separators", () => {
+  const helpers = [
     'bool HandlesHold(std::string_view method) { return method == "ArdiaDemo.hold"; }',
-    'bool Handles(std::string_view method) {\n  if (method == "ArdiaDemo.peek") return true;\n  if (method == "ArdiaDemo.look") { return false; }\n  return false;\n}',
-    'const bool held = name == "ArdiaDemo.held" ? Run() : false;',
-    'if (method == "ArdiaDemo.mixed" && ready) return Run();',
+    'bool Handles(std::string_view method) {\n  if (method == "ArdiaDemo.logged") {\n    LOG(INFO) << "handled";\n    return true;\n  }\n  return false;\n}',
+    'static inline bool Knows(const std::string& name) {\n  if (name == "ArdiaDemo.known") { Note(name); return true; }\n  return false;\n}',
+    'auto handles = [](std::string_view method) {\n  if (method == "ArdiaDemo.lambda") { Count(); return true; }\n  return false;\n};',
+    'auto typed = [](std::string_view method) -> bool {\n  if (method == "ArdiaDemo.typed") { Count(); return Check(); }\n  return Fallback();\n};',
+    'void Run(std::string_view method) {\n  if (method == "ArdiaDemo.peek") return true;\n  if (method == "ArdiaDemo.mixed" && ready) return Run();\n  const bool held = name == "ArdiaDemo.held" ? Go() : false;\n}',
+    'if (method == "ArdiaDemo.outside") Run();',
   ].join("\n");
-  assert.deepEqual([...linuxModuleDispatch([helper]).methods], []);
+  assert.deepEqual([...linuxModuleDispatch([helpers]).methods], []);
   const dispatching = [
-    'constexpr int kLimit = 5\'000;',
-    'const char* kPage = R"html(<a href="//x">)</a> if (method == "ArdiaDemo.inRaw") Run();)html";',
-    'void Invoke(std::string_view method, Done done) {',
+    "constexpr int kLimit = 5'000;",
+    'const char* kPage = R"html(<a href="//x">)</a> void F(std::string_view method) { if (method == "ArdiaDemo.inRaw") Run(); })html";',
+    "void Invoke(std::string_view method, Done done) {",
+    "  for (int i = 0; i < kLimit; i++) {}",
     '  if (method == "ArdiaDemo.probe" || name == "ArdiaDemo.peek") {',
-    '    return Probe(std::move(done));',
-    '  }',
+    "    LOG(INFO) << \"probing\";",
+    "    return Probe(std::move(done));",
+    "  }",
     '  if (method == "ArdiaDemo.open") return Open(kLimit);',
-    '}',
+    "  PostTask(base::BindOnce([](std::string_view method, Done done) {",
+    '    if (method == "ArdiaDemo.later") return Later(std::move(done));',
+    "  }, method, std::move(done)));",
+    "}",
+    'Outcome Core::Dispatch(std::string_view method) {\n  if (method == "ArdiaDemo.outcome") return Outcome::Ok();\n  return Outcome::Unknown();\n}',
   ].join("\n");
-  assert.deepEqual([...linuxModuleDispatch([dispatching]).methods].sort(), ["ArdiaDemo.open", "ArdiaDemo.peek", "ArdiaDemo.probe"]);
+  assert.deepEqual([...linuxModuleDispatch([dispatching]).methods].sort(), ["ArdiaDemo.later", "ArdiaDemo.open", "ArdiaDemo.outcome", "ArdiaDemo.peek", "ArdiaDemo.probe"]);
   assert.deepEqual([...linuxModuleDispatch(['const char* kHelp = "SendEvent(\\"ArdiaDemo\\", \\"tone\\")";\nSendEvent("ArdiaDemo", "real", payload);']).events], ["ArdiaDemo.real"]);
   assert.equal(stripCppComments('int a = 1\'000; // gone\nconst char* b = R"x(// kept)x"; /* gone */'), 'int a = 1\'000; \nconst char* b = R"x(// kept)x";  ');
+  assert.equal(maskCppLiterals('f("a{b", R"x(})x", 1\'0, \'}\')'), 'f("   ", R"     ", 1\'0, \' \')');
 });
 
-test("the Windows JS scan takes a factory's own returned object, never one a nested helper returns, and reads a regex right after a control statement's condition", () => {
+test("the Windows native scan counts only REACT_METHOD entries of the header's own module and EmitEvent calls", () => {
+  const native = windowsNativeModules(['REACT_MODULE(Demo, L"ArdiaDemo")\n  REACT_METHOD(hold)\n  REACT_METHOD(remove, L"delete")\n  REACT_SYNC_METHOD(peek)\n  EmitEvent(context, L"ArdiaDemo", L"tone", payload);', 'std::wstring note = L"ArdiaDemo.missing";\n// REACT_MODULE(Gone, L"ArdiaGone")']);
+  assert.deepEqual([...native.methods.get("ArdiaDemo")], ["hold", "delete", "peek"]);
+  assert.equal(native.methods.has("ArdiaGone"), false);
+  assert.deepEqual([...native.events], ["ArdiaDemo.tone"]);
+  assert.throws(() => windowsNativeModules(['REACT_MODULE(A, L"ArdiaA") REACT_MODULE(B, L"ArdiaB")']), /one module per header/);
+});
+
+test("the Windows JS scan reads a module's members from the TypeScript syntax tree: a factory's own returned objects, never a nested helper's, a regex or a string", () => {
   const files = {
-    "w/modules.ts": 'import { demoMaker } from "./maker";\n',
+    "w/modules.ts": 'import { demoOnWindows as demo } from "./demo";\nimport { demoMaker } from "./maker";\nconst made = demoMaker();\n',
+    "w/demo/index.ts": 'export const demoOnWindows = { hold: () => noteMissing("probe"), async peek() { return probe(); }, ...spread } satisfies object;',
     "w/maker.ts": [
-      "export function demoMaker() {",
+      "export function demoMaker(host = null) {",
       "  const helper = () => {",
       "    return { hold: () => 1 };",
       "  };",
       "  function inner() {",
       "    return { peek: 2 };",
       "  }",
-      "  if (helper()) { const ready = inner(); }",
-      "  return { open: () => helper() };",
+      "  if (/return { hidden: 1 }/.test(String(host))) helper();",
+      '  const text = "return { quoted: 1 }";',
+      "  if (!host) return { open: () => inner() };",
+      "  return ({ open() {}, close: () => helper() }) as const;",
       "}",
     ].join("\n"),
   };
-  assert.deepEqual([...windowsJsMembers("demoMaker", "w/modules.ts", (path) => files[path], (path) => Object.hasOwn(files, path))], ["open"]);
-  assert.deepEqual(topLevelReturnKeys("if (x) { return { gone: 1 }; }\nconst f = () => ({ also: 2 });\nreturn { kept: 3 };"), ["kept"]);
-  const regexAfterIf = "if (enabled) /[/*]/.test(value);\nwhile (more) /a\\/b/.test(next);\nconst half = (a + b) / 2 / c;";
-  assert.equal(stripJsComments(regexAfterIf), regexAfterIf);
-  assert.equal(stripJsComments("for (const x of list) /x/.test(x); // gone"), "for (const x of list) /x/.test(x); ");
-  assert.equal(stripJsComments("const y = typeof /x/; const z = f(a) / 2; /* gone */"), "const y = typeof /x/; const z = f(a) / 2;  ");
+  const read = (path) => files[path];
+  const has = (path) => Object.hasOwn(files, path);
+  assert.deepEqual([...windowsJsMembers("demo", "w/modules.ts", read, has)], ["hold", "peek"]);
+  assert.deepEqual([...windowsJsMembers("made", "w/modules.ts", read, has)], ["open", "close"]);
+  assert.throws(() => windowsJsMembers("nowhere", "w/modules.ts", read, has), /can't read/);
+  const regexOnly = { "w/modules.ts": "export function demoMaker(value) {\n  /return { hold: 1 }/.test(value);\n  if (/return { peek: 1 }/.test(value)) value = 1;\n  if (value) {\n    /[}]/.test(value);\n    const late = { lost: 1 };\n  }\n  return { open() {} };\n}" };
+  assert.deepEqual([...windowsJsMembers("demoMaker", "w/modules.ts", (path) => regexOnly[path], (path) => Object.hasOwn(regexOnly, path))], ["open"]);
+  const automaticSemicolon = { "w/modules.ts": "export function demoMaker() {\n  if (Math.random()) return\n  { hold: () => 1 }\n  return { open() {} };\n}" };
+  assert.deepEqual([...windowsJsMembers("demoMaker", "w/modules.ts", (path) => automaticSemicolon[path], (path) => Object.hasOwn(automaticSemicolon, path))], ["open"], "a return followed by a line break returns nothing, so the block after it isn't the module");
 });
 
-test("the Mac registration scan counts only a generated definition that stands as its own statement, and sees a hand-written registration however it's spaced", () => {
-  const module = (definition) => `public class DemoModule: Module, DemoNative {\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
-  const assigned = swiftRegistrations(module("    Name(Self.moduleName)\n    let _ = Self.holdFunction\n    Function (\"extra\") { 1 }"), "DemoModule");
-  assert.deepEqual(assigned.generated, []);
-  assert.deepEqual(assigned.handWritten, ["Function", "let _ = Self.holdFunction"]);
+test("the Mac registration scan counts only a generated definition that stands as its own statement, across lines, and sees a hand-written registration however it's spaced", () => {
+  const module = (definition) => `public class DemoModule: Module, DemoNative {\n  static func hold(_ on: Bool) {}\n\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    View(DemoView.self) {\n      Prop("on") { (view: DemoView, on: Bool) in view.on = on }\n      Events("onTone")\n    }'), "DemoModule"), { generated: ["hold"], events: false, name: true, handWritten: [] });
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    AsyncFunction("extra") { () in }'), "DemoModule").handWritten, ["AsyncFunction"]);
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Events("tone")\n    Self.holdFunction'), "DemoModule").handWritten, ["Events"]);
+  assert.deepEqual(swiftRegistrations(module('    Name("ArdiaDemo")\n    Self.holdFunction'), "DemoModule"), { generated: ["hold"], events: false, name: false, handWritten: ["Name"] });
+  const assigned = swiftRegistrations(module('    Name(Self.moduleName)\n    let _ = Self.holdFunction\n    Function ("extra") { 1 }'), "DemoModule");
+  assert.deepEqual(assigned, { generated: [], events: false, name: true, handWritten: ["Function", "let _ = Self.holdFunction"] });
+  const split = swiftRegistrations(module("    Name(Self.moduleName)\n    let _ =\n      Self.holdFunction"), "DemoModule");
+  assert.deepEqual(split.generated, []);
+  assert.deepEqual(split.handWritten, ["let _ =\n      Self.holdFunction"]);
+  for (const lead of ["let held:\n      AnyDefinition =", "_ = [", "print(", "return"]) {
+    const found = swiftRegistrations(module(`    Name(Self.moduleName)\n    ${lead}\n      Self.holdFunction${lead.endsWith("[") ? "]" : lead.endsWith("(") ? ")" : ""}`), "DemoModule");
+    assert.deepEqual(found.generated, [], lead);
+  }
+  const chained = swiftRegistrations(module("    Name(Self.moduleName)\n    Self.holdFunction\n      .runOnQueue(.main)\n    Self.peekFunction"), "DemoModule");
+  assert.deepEqual(chained.generated, ["peek"]);
   assert.deepEqual(swiftRegistrations(module("    Name (Self.moduleName)\n    Self.holdFunction; Self.eventsDefinition\n    AsyncFunction\n      (\"late\") { () in }"), "DemoModule"), { generated: ["hold"], events: true, name: true, handWritten: ["AsyncFunction"] });
   assert.deepEqual(swiftRegistrations(module("    Name(Self.moduleName)\n    Name(Self.moduleName)\n    Self.holdFunction"), "DemoModule").handWritten, ["Name"]);
-  assert.deepEqual(topLevelStatements("Name(Self.moduleName)\nAsyncFunction(\"a\") { (x: Int) in\n  x\n}\n  .runOnQueue(.main)\n"), ["Name(Self.moduleName)", 'AsyncFunction("a") { (x: Int) in\n  x\n}.runOnQueue(.main)']);
 });
 
-test("the typing scan sees a cast past the generated type after a native module call spread over several lines", () => {
+test("the typing scan reads the TypeScript syntax tree: it refuses a wrapper typed any, a hand-typed literal, and any cast past the generated type however it's wrapped or spread", () => {
   const modules = { ArdiaDemo: { native: "DemoNative" } };
-  const direct = 'const Demo = requireNativeModule<DemoNative>(\n  "ArdiaDemo"\n) as unknown as { hold(): void };';
-  assert.equal(nativeModuleTypingProblems(direct, "demo", modules).problems.length, 1);
-  const wrapped = 'const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<DemoModules[Name]>(name);\nconst Demo = nativeModule(\n  "ArdiaDemo"\n)\n  as any;';
-  assert.equal(nativeModuleTypingProblems(wrapped, "demo", modules).problems.length, 1);
-  const clean = 'const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<DemoModules[Name]>(name);\nconst Demo = nativeModule(\n  "ArdiaDemo"\n);\nconst asText = String(Demo) as string;';
-  assert.deepEqual(nativeModuleTypingProblems(clean, "demo", modules), { problems: [], typed: 1 });
-});
-
-test("the typing scan reads a module named in single quotes like one in double quotes", () => {
-  const modules = { ArdiaDemo: { native: "DemoNative" } };
-  assert.deepEqual(nativeModuleTypingProblems("const Demo = requireNativeModule<DemoNative>('ArdiaDemo');", "demo", modules), { problems: [], typed: 1 });
-  assert.equal(nativeModuleTypingProblems("const Demo = requireNativeModule<{ hold(): void }>('ArdiaDemo');", "demo", modules).problems.length, 1);
-  assert.equal(nativeModuleTypingProblems("const Demo = requireNativeModule('ArdiaDemo');", "demo", modules).problems.length, 1);
+  const problems = (source) => nativeModuleTypingProblems(source, "demo", modules).problems.length;
+  const wrapper = (type) => `const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<${type}>(name);\nconst Demo = nativeModule("ArdiaDemo");`;
+  assert.deepEqual(nativeModuleTypingProblems(wrapper("DemoModules[Name]"), "demo", modules), { problems: [], typed: 1 });
+  assert.equal(problems(wrapper("any")), 1);
+  assert.equal(problems("const m = (name: string) => requireNativeModule<DemoModules[Name]>(name);"), 1);
+  assert.equal(problems('requireNativeModule<{ run(cb: () => void): Promise<Map<string, number>> }>("ArdiaDemo");'), 1);
+  assert.equal(problems('requireNativeModule("ArdiaDemo");'), 1);
+  assert.deepEqual(nativeModuleTypingProblems('requireNativeModule<DemoNative>("ArdiaDemo"); requireNativeModule<DemoModules["ArdiaDemo"]>(\'ArdiaDemo\'); requireNativeModule<{}>("ArdiaElse");', "demo", modules), { problems: [], typed: 2 });
+  assert.equal(problems("const Demo = requireNativeModule<{ hold(): void }>('ArdiaDemo');"), 1);
+  for (const cast of [
+    'const Demo = (requireNativeModule<DemoNative>("ArdiaDemo")) as any;',
+    'const Demo = ((requireNativeModule<DemoNative>("ArdiaDemo")!)) as unknown as { hold(): void };',
+    'const Demo = requireNativeModule<DemoNative>(\n  "ArdiaDemo"\n) as unknown as { hold(): void };',
+    'const Demo = <any>requireNativeModule<DemoNative>("ArdiaDemo");',
+    'const Demo = requireNativeModule<DemoNative>("ArdiaDemo");\nconst loose = (Demo) as any;',
+    `${wrapper("DemoModules[Name]")}\nconst loose = (nativeModule(\n  "ArdiaDemo"\n)) as any;`,
+    `${wrapper("DemoModules[Name]")}\nconst loose = Demo as Record<string, unknown>;`,
+  ]) assert.equal(problems(cast), 1, cast);
+  assert.equal(problems('const Demo = requireNativeModule<DemoNative>("ArdiaDemo") satisfies DemoNative;\nconst label = "as any" + String(Demo as const);'), 0);
+  assert.equal(nativeModuleTypingProblems('const Demo = <any>requireNativeModule<DemoNative>("ArdiaDemo");', "demo", modules, "source.tsx").problems.length, 0, "in TSX, <any> opens JSX, not a cast");
+  assert.equal(problems(`${wrapper("DemoModules[Name]")}\nconst Loose = (nativeModule("ArdiaDemo"))\n  as any;`), 0, "TypeScript ends the statement before an as on the next line, so nothing is cast");
+  assert.equal(problems('const re = /requireNativeModule<any>("ArdiaDemo")/;\nconst text = "requireNativeModule<any>(\\"ArdiaDemo\\")";'), 0);
 });

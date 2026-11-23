@@ -52,6 +52,8 @@ const SWIFT_KEYWORDS = new Set([
 export const swiftName = (name) => (SWIFT_KEYWORDS.has(name) ? `\`${name}\`` : name);
 const digest = (text) => createHash("sha256").update(text).digest("hex");
 
+const TS_GLOBAL_TYPES = new Set(["Array", "Boolean", "Date", "Error", "Function", "Map", "Number", "Object", "Omit", "Partial", "Pick", "Promise", "PromiseLike", "Readonly", "ReadonlyArray", "Record", "Required", "Set", "String", "Symbol"]);
+
 const schema = () => import(new URL("./schema/index.ts", import.meta.url).href);
 
 export async function loadDomains() {
@@ -88,6 +90,7 @@ export function validateModuleDomain(name, domain) {
   if (dependencies === null) fail(`package ${domain.package} has no package.json`);
   const declared = new Set();
   const declare = (type, what) => {
+    if (TS_GLOBAL_TYPES.has(type)) fail(`${what} ${type} would shadow TypeScript's own ${type}, which the generated types use`);
     if (declared.has(type)) fail(`${what} ${type} is declared twice in the generated file`);
     declared.add(type);
   };
