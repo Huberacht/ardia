@@ -133,6 +133,9 @@ export function startDevHarness() {
     get tileFolders(): typeof import("../../state/pins/tileFolders") & typeof import("../../state/sidebar/tileFolderUi") {
       return { ...require("../../state/pins/tileFolders"), ...require("../../state/sidebar/tileFolderUi") };
     },
+    get launchRows(): typeof import("../../state/sidebar/launchRows") {
+      return require("../../state/sidebar/launchRows");
+    },
     get sidebarRows(): typeof import("../../state/sidebar/sidebarUi") {
       return require("../../state/sidebar/sidebarUi");
     },
@@ -159,6 +162,9 @@ export function startDevHarness() {
     },
     get settingsNav(): typeof import("../../state/settings/settingsWindows").useSettingsNav {
       return require("../../state/settings/settingsWindows").useSettingsNav;
+    },
+    get sync(): typeof import("../../state/sync/engine") & { native: typeof import("../../platform/sync").SyncNative } {
+      return { ...require("../../state/sync/engine"), native: require("../../platform/sync").SyncNative };
     },
     get preload(): typeof import("../../state/tabs/prewarm") {
       return require("../../state/tabs/prewarm");
