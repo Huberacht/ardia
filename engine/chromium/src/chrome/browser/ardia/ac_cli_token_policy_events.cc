@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 #include <string_view>
 #include <utility>
 
@@ -120,6 +121,22 @@ void TokenClient::ForgetSession(const std::string& session) {
   });
 }
 
+void TokenClient::ForgetSessionTree(const std::string& session) {
+  std::vector<std::string> pending = {session};
+  while (!pending.empty()) {
+    const std::string current = std::move(pending.back());
+    pending.pop_back();
+    for (const auto& [child, parent] : parents_) {
+      if (parent == current) {
+        pending.push_back(child);
+      }
+    }
+    targets_.erase(current);
+    parents_.erase(current);
+    ForgetSession(current);
+  }
+}
+
 void TokenClient::NoteTargetEvent(std::string_view method,
                                   const std::string& message) {
   std::optional<base::DictValue> event = ParseObject(message);
@@ -127,9 +144,17 @@ void TokenClient::NoteTargetEvent(std::string_view method,
     return;
   }
   const base::DictValue* params = event->FindDict("params");
-  if (method == "Inspector.targetCrashed" || method == "Inspector.detached") {
-    const std::string* session = event->FindString("sessionId");
-    ForgetSession(session ? *session : std::string());
+  const std::string* event_session = event->FindString("sessionId");
+  if (method == "Inspector.targetCrashed") {
+    ForgetSession(event_session ? *event_session : std::string());
+    return;
+  }
+  if (method == "Inspector.detached") {
+    if (event_session) {
+      ForgetSessionTree(*event_session);
+    } else {
+      ForgetSession(std::string());
+    }
     return;
   }
   if (!params) {
@@ -146,14 +171,14 @@ void TokenClient::NoteTargetEvent(std::string_view method,
     return;
   }
   if (method == "Target.detachedFromTarget") {
-    targets_.erase(*child);
-    ForgetSession(*child);
+    ForgetSessionTree(*child);
     return;
   }
   const base::DictValue* info = params->FindDict("targetInfo");
   const std::string* target_id = info ? info->FindString("targetId") : nullptr;
   if (target_id) {
     targets_[*child] = *target_id;
+    parents_[*child] = event_session ? *event_session : std::string();
   }
 }
 
