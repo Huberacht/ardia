@@ -184,6 +184,7 @@ function validateModuleFunction(fail, at, fn, row) {
   if (typeof row.async !== "boolean") fail(`function ${at} says whether it's async: true for a Promise, false for a synchronous value`);
   if (row.promise !== undefined && row.promise !== true) fail(`function ${at}.promise is true or left out`);
   if (row.promise && !row.async) fail(`function ${at} resolves a Promise itself, so it's async`);
+  if (onMac && row.promise && optionalSeen) fail(`function ${at} resolves a Promise itself, so Expo requires every arg and none may be left out`);
   if (row.optional !== undefined && row.optional !== true) fail(`function ${at}.optional is true or left out`);
   if (row.queue !== undefined && !Object.hasOwn(MODULE_QUEUES, row.queue)) fail(`function ${at}.queue is one of ${Object.keys(MODULE_QUEUES).join(", ")} or left out`);
   if (row.queue !== undefined && !row.async) fail(`function ${at} runs on a queue only when it's async`);
@@ -193,6 +194,7 @@ function validateModuleFunction(fail, at, fn, row) {
   for (const flag of ["swiftAsync", "throws", "debug"]) if (row[flag] !== undefined && row[flag] !== true) fail(`function ${at}.${flag} is true or left out`);
   if (row.swiftAsync && !row.async) fail(`function ${at}'s Swift body is async, so it's async`);
   if (row.swiftAsync && row.promise) fail(`function ${at} resolves a Promise itself, so its Swift body can't be async`);
+  if (row.swiftAsync && row.queue !== undefined) fail(`function ${at}'s Swift body is async, so Expo runs it concurrently without a queue`);
   if (row.instance !== undefined && !INSTANCES.has(row.instance)) fail(`function ${at}.instance is strong or weak: how its definition holds the module`);
   for (const key of ["swiftAsync", "throws", "instance", "fallback", "queue", "debug"]) if (row[key] !== undefined && !onMac) fail(`function ${at}.${key} says how the Mac's Swift body runs, so it goes only with mac: custom`);
   const returns = !row.promise && onMac && swiftTypeOf(row.result, row.swiftResult) !== "Void";
@@ -419,8 +421,14 @@ function moduleSwift(domain) {
     const functions = Object.entries(entry.functions).filter(([, row]) => onMac(row));
     const constants = Object.entries(constantsOf(entry)).filter(([, row]) => onMac(row));
     const events = Object.keys(entry.events).filter((event) => onMac(entry.events[event]));
+    const moduleQueued = functions.filter(([, row]) => row.queue === "module");
+    const queueRequirement = moduleQueued.length === 0
+      ? []
+      : moduleQueued.some(([, row]) => row.debug !== true)
+        ? ["  static var queue: DispatchQueue { get }"]
+        : ["  #if DEBUG", "  static var queue: DispatchQueue { get }", "  #endif"];
     const requirements = [
-      ...(functions.some(([, row]) => row.queue === "module") ? ["  static var queue: DispatchQueue { get }"] : []),
+      ...queueRequirement,
       ...constants.map(([constant, row]) => `  static var ${swiftName(constant)}: ${swiftTypeOf(row.type, row.swift)} { get }`),
       ...debugGuarded(functions, ([fn, row]) => [swiftRequirement(fn, row)], false),
     ];

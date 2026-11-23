@@ -115,9 +115,26 @@ const moduleFunctions = () => Object.values(moduleManifest).flatMap((domain) => 
 test("with the capabilities the Linux engine advertises, every module function is answered by the desktop UI exactly when its binding is custom or adapted, and otherwise reaches the native host with its positional arguments, as a Promise when it is async or left to the host", async () => {
   const functions = moduleFunctions();
   assert.ok(linuxAdvertised.length > 50, "the engine's bootstrap still advertises its capabilities");
+  for (const capability of ["ArdiaSync.status", "ArdiaCalendar.status", "ArdiaCalendar.requestAccess", "ArdiaLive.request"]) {
+    assert.ok(linuxAdvertised.includes(capability), `bootstrap helper capability ${capability} is parsed into the advertised fixture`);
+  }
   assert.ok(functions.some(({ module, fn }) => module === "ArdiaWindowBackdrop" && fn === "holdKeyLook"), "the scan found the shaders pilot");
   for (const name of LEFT_OUT_BY_THE_UI) assert.ok(functions.some(({ module, fn }) => `${module}.${fn}` === name), `${name} is still a schema function`);
   for (const { module, fn, row } of functions) await checkModuleFunction(module, fn, row);
+});
+
+test("advertised Calendar capabilities route ArdiaCalendar.requestAccess to the host on Linux instead of falling back locally", async () => {
+  const fallback = fixture();
+  fallback.host.bootstrap.capabilities = [];
+  await resolveHostModule(fallback.host, "ArdiaCalendar", "requestAccess")();
+  assert.deepEqual(fallback.requests, []);
+  const advertised = fixture();
+  advertised.host.bootstrap.capabilities = [...linuxAdvertised];
+  await resolveHostModule(advertised.host, "ArdiaCalendar", "requestAccess")();
+  assert.equal(
+    advertised.requests.some((request) => request.method === "ArdiaCalendar.requestAccess"),
+    process.env.ARDIA_DESKTOP_MODE !== "win",
+  );
 });
 
 test("on an engine that advertises nothing, every module function still resolves, and answers with a Promise when it is async or left to the host, synchronously otherwise unless its result type allows a Promise", async () => {

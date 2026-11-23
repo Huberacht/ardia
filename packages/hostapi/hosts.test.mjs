@@ -487,13 +487,15 @@ export function linuxModuleDispatch(sources) {
       if (entry) methods.add(entry[1]);
     }
     const functions = cppFunctions(masked);
+    const ownerOf = (pos) => functions.filter((fn) => fn.open < pos && pos < fn.close).sort((a, b) => a.close - a.open - (b.close - b.open))[0];
+    const ownedFlags = flags.map((entry) => ({ ...entry, owner: ownerOf(entry.at) }));
     for (const branch of masked.matchAll(/\bif\s*\((?=\s*(?:method|name)\s*==)/g)) {
-      const owner = functions.filter((fn) => fn.open < branch.index && branch.index < fn.close).sort((a, b) => a.close - a.open - (b.close - b.open))[0];
+      const owner = ownerOf(branch.index);
       if (!owner || owner.boolean) continue;
       const open = branch.index + branch[0].length - 1;
       const close = closing(masked, open, skipCppLiteral);
       const condition = code.slice(open + 1, close);
-      const flagIn = (part) => flags.find(({ flag, at }) => flag === part.trim() && owner.open < at && at < branch.index)?.method;
+      const flagIn = (part) => ownedFlags.find(({ flag, at, owner: flagOwner }) => flag === part.trim() && flagOwner === owner && at < branch.index)?.method;
       if (maskCppLiterals(condition).includes("&&")) continue;
       const parts = condition.split("||").map((part) => {
         const compare = /^\s*(?:method|name)\s*==\s*(?:"([^"]*)"|((?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*))\s*$/.exec(part);
@@ -968,7 +970,7 @@ test("the Linux scan counts a row of a method route table as a dispatched module
 
 test("the Linux scan resolves a method or event named by a string constant, through namespaces, aliases and a bool flag, and skips one it can't pin to a single value", () => {
   const header = 'namespace ardia::desktop_report {\ninline constexpr char kEvent[] = "onReport";\n}\nnamespace ardia::linux_hardware {\ninline constexpr char kHardwareInfoCall[] = "ArdiaApp.hardwareInfo";\n}\nnamespace one {\ninline constexpr char kCall[] = "ArdiaApp.first";\n}\nnamespace two {\ninline constexpr char kCall[] = "ArdiaApp.second";\n}\n';
-  const host = 'namespace hardware = ardia::linux_hardware;\nvoid Host::Run(std::string_view method) {\n  host->Event("ArdiaReport", ardia::desktop_report::kEvent, base::Value());\n  if (method == hardware::kHardwareInfoCall) return Reply();\n  const bool changing = method == "ArdiaSystem.setAsDefaultBrowser";\n  if (method == "ArdiaSystem.isDefaultBrowser" || changing) return Reply();\n  if (method == kCall) return Reply();\n  if (method == "ArdiaApp.gated" && ready) return Reply();\n  const bool other = method == "ArdiaSystem.otherFlag";\n}\nvoid Other::Run(std::string_view method) {\n  if (method == "ArdiaSystem.elsewhere" || other) return Reply();\n}\n';
+  const host = 'namespace hardware = ardia::linux_hardware;\nvoid Host::Run(std::string_view method) {\n  host->Event("ArdiaReport", ardia::desktop_report::kEvent, base::Value());\n  if (method == hardware::kHardwareInfoCall) return Reply();\n  auto nested = [](std::string_view method) {\n    const bool changing = method == "ArdiaSystem.nested";\n    return changing;\n  };\n  const bool changing = method == "ArdiaSystem.setAsDefaultBrowser";\n  if (method == "ArdiaSystem.isDefaultBrowser" || changing) return Reply();\n  if (method == kCall) return Reply();\n  if (method == "ArdiaApp.gated" && ready) return Reply();\n  const bool other = method == "ArdiaSystem.otherFlag";\n}\nvoid Other::Run(std::string_view method) {\n  if (method == "ArdiaSystem.elsewhere" || other) return Reply();\n}\n';
   const found = linuxModuleDispatch([header, host]);
   assert.deepEqual([...found.events], ["ArdiaReport.onReport"]);
   assert.deepEqual([...found.methods].sort(), ["ArdiaApp.hardwareInfo", "ArdiaSystem.elsewhere", "ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser"], "a flag declared in another function never names a method here");

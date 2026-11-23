@@ -808,6 +808,17 @@ test("the richer module forms keep to shapes both languages and every host take"
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { queue: fn(), seal: fn({ queue: "module" }) }, events: {} } })), /function ArdiaDemo\.queue generates the Swift member queue, which the module's own queue already generates/);
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { addListener: fn() }, events: {} } })), /the module's event listener/);
   refused({ swiftAsync: true, promise: true, result: "unknown" }, /resolves a Promise itself, so its Swift body can't be async/);
+  refused({ swiftAsync: true, queue: "main" }, /runs it concurrently without a queue/);
+  refused({ args: [["label?", "string | null", "String?"]], promise: true, result: "unknown" }, /Expo requires every arg and none may be left out/);
+  const debugQueued = outputs({}, {
+    demo: moduleDomain({
+      ArdiaDemo: {
+        functions: { trace: fn({ queue: "module", debug: true }) },
+        events: {},
+      },
+    }),
+  }).get("packages/shaders/ios/DemoNative.swift");
+  assert.match(debugQueued, /protocol DemoNative \{\n {2}#if DEBUG\n {2}static var queue: DispatchQueue \{ get \}\n {2}#endif\n {2}#if DEBUG\n {2}static func trace/);
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { sendOnChange: fn() }, events: { onChange: { payload: "void", mac: "custom", desktop: "absent", windows: "absent" } } } })), /event ArdiaDemo\.onChange generates the Swift member sendOnChange, which function ArdiaDemo\.sendOnChange already generates/);
   assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { sendOnChange: fn() }, events: { onChange: { payload: "void", mac: "absent", desktop: "custom", windows: "absent" } } } })));
 });
