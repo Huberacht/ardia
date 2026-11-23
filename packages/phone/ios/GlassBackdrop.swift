@@ -61,6 +61,7 @@ enum GlassBackdrop {
     }
   }
 
+  @MainActor
   private struct Walk {
     let root: CALayer
     let usesPresentation: Bool

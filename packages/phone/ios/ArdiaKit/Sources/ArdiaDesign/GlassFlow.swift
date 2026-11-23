@@ -89,7 +89,7 @@ public enum GlassFlowRules {
   }
 
   public static func canAcquireDrawable(outstanding: Int, maximum: Int) -> Bool {
-    outstanding <= maximum - 2
+    outstanding <= maximum - 3
   }
 
   public static func overFrame(captureMs: Double, frameMs: Double) -> Bool {

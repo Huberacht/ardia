@@ -423,7 +423,7 @@ final class GlassTarget {
     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     encoder.endEncoding()
     outstanding += 1
-    drawable.addPresentedHandler { [weak self] _ in
+    buffer.addCompletedHandler { [weak self] _ in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.presented() } }
     }
     buffer.present(drawable)

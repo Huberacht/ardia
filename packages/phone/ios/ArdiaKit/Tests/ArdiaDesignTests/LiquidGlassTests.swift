@@ -304,8 +304,8 @@ struct LiquidGlassTests {
     flight.finish()
     #expect(flight.inFlight == 0)
     #expect(GlassFlowRules.canAcquireDrawable(outstanding: 0, maximum: 3))
-    #expect(GlassFlowRules.canAcquireDrawable(outstanding: 1, maximum: 3))
-    #expect(!GlassFlowRules.canAcquireDrawable(outstanding: 2, maximum: 3), "one is on screen and two are queued")
+    #expect(!GlassFlowRules.canAcquireDrawable(outstanding: 1, maximum: 3), "one shown and one queued by the compositor, one still on the GPU")
+    #expect(GlassFlowRules.canAcquireDrawable(outstanding: 1, maximum: 4))
   }
 
   @Test func `one capture longer than a frame is over budget`() {
