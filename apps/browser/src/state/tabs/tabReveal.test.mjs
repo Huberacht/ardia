@@ -244,16 +244,44 @@ test("the native switch is off while a page popover is open: it names the page u
   assert.deepEqual(stub.nativeTabSwitches, [false, true]);
 });
 
-test("a press that selects a tab is remembered for that tab only, and only for the time given", async () => {
+const pressAt = (start, x = 10) => ({ nativeEvent: { identifier: "0", pageX: x, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: start }] } });
+
+test("a press that selects a tab holds back that tab's close only in its window, for the time given, and at the same point", async () => {
   const held = await import("../sidebar/heldTabPress.ts");
   setup();
-  held.holdTabPress("w1", "b", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9100 }] } });
-  assert.equal(held.switchedByPressWithin("b", 500), true);
-  assert.equal(held.switchedByPressWithin("c", 500), false, "another tab's close button is not held back");
-  assert.equal(held.switchedByPressWithin("b", 0), false, "past the time given");
-  held.holdTabPress("w1", "b", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9200 }] } });
-  held.clickHeldTabPress("w1", "b", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9200 }] } });
+  held.holdTabPress("w1", "b", pressAt(9100));
+  const here = { x: 12, y: 10 };
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, here), true, "a second click where the first landed");
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, { x: 40, y: 10 }), false, "a move to the close button is meant");
+  assert.equal(held.switchedByPressWithin("w1", "c", 500, here), false, "another tab's close button is not held back");
+  assert.equal(held.switchedByPressWithin("w2", "b", 500, here), false, "nor the same tab in another window");
+  assert.equal(held.switchedByPressWithin("w1", "b", 0, here), false, "past the time given");
+});
+
+test("a selection after the press ends the hold, so a keyboard switch back to the tab leaves its close button working", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup();
+  held.holdTabPress("w1", "b", pressAt(9200));
+  S().activate("b");
+  assert.equal(held.switchedByPressWithin("w1", "b", 500), true);
   S().activate("c");
-  held.holdTabPress("w1", "c", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9300 }] } });
-  assert.equal(held.switchedByPressWithin("c", 500), false, "a press on the tab already in front selects nothing");
+  S().activate("b");
+  assert.equal(held.switchedByPressWithin("w1", "b", 500), false);
+});
+
+test("a tab that moves to another window after the press is not held back there or here", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup(["a", "b", "c"], "a", { windows: { w2: win("w2", ["z"], "z") }, tabs: [tab("z", "w2", "https://z.com/")] });
+  held.holdTabPress("w1", "b", pressAt(9300));
+  S().activate("b");
+  S().updateTab("b", { windowId: "w2" });
+  assert.equal(held.switchedByPressWithin("w1", "b", 500), false);
+  assert.equal(held.switchedByPressWithin("w2", "b", 500), false);
+});
+
+test("a press on the tab already in front holds nothing back", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup(["a", "b", "c"], "c");
+  held.holdTabPress("w1", "c", pressAt(9400));
+  assert.equal(held.switchedByPressWithin("w1", "c", 500), false);
 });

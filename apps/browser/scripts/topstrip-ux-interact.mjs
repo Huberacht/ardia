@@ -167,6 +167,22 @@ export async function runInteractions(ctx) {
       record("backgroundTab", { selectedShift: after.detail.selSpan[0] - before.detail.selSpan[0], selInViewAfter: after.detail.selSpan[0] >= 0 ? 1 : 0, selTitleBefore: before.selTitlePt });
     }
 
+    if (want("groupEdgeDrag")) {
+      await prepare("c120", WIDTH, 0);
+      const group = await run(`const id = st().createGroup(["c120-t4", "c120-t5", "c120-t6", "c120-t7"], { name: "Edge" }); st().updateGroup(id, { collapsed: false }); return wait(1200).then(() => id);`);
+      const before = await run(`const p = globalThis.topStripPages["c120|default"]; const sc = p.scroll(); const first = p.chips().find((c) => c.id === "c120-t4");
+        return { x: Math.round(first.start - sc.x + 71 - 14), scroll: Math.round(sc.x), max: Math.round(sc.content - sc.viewport), at: st().windows.c120.tabIds.indexOf("c120-t4"), viewport: Math.round(sc.viewport) };`);
+      const edge = before.viewport + 60;
+      const pts = [[before.x, 21], [before.x, 21], [before.x + 12, 21], [before.x + 60, 21]];
+      for (let x = before.x + 60; x < edge; x += 60) pts.push([x, 21]);
+      for (let i = 0; i < 24; i++) pts.push([edge, 21]);
+      await run(`const w = st().windows.c120; return D.devSetWindowFrame("c120", [40 + Object.keys(st().windows).indexOf("c120") * 11, 60 + Object.keys(st().windows).indexOf("c120") * 7, w.frame[2], ${HEIGHT}]).then((frame) => nativeOf(frame))
+        .then((n) => ac.engine.call("windows.dev", { window: n, action: "drag:${pts.map((p) => p.join(",")).join(";")}" })).then(() => wait(${pts.length * 12 * 16 + 1500}));`, 120000);
+      const after = await run(`const p = globalThis.topStripPages["c120|default"]; return { scroll: Math.round(p.scroll().x), at: st().windows.c120.tabIds.indexOf("c120-t4") };`);
+      record("groupEdgeDrag", { fromIndex: before.at, toIndex: after.at, movedTabs: after.at - before.at, scrolledFrom: before.scroll, scrolledTo: after.scroll, max: before.max, grabX: before.x });
+      await run(`st().ungroup(${JSON.stringify(group)}); return wait(600);`);
+    }
+
     if (want("closeUnderPointer")) {
       for (const [id, width, at] of [["c60", WIDTH], ["c30", WIDTH], ["c15", 900], ["c15", 900, "left"], ["c15", 900, "right"], ["c15", 900, "selected"], ["c15", 1728], ["c15", 1728, "end"]]) {
         await prepare(id, width, "mid");

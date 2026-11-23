@@ -1,6 +1,6 @@
 import { takeTabLayoutCounts } from "./tabLayoutCounts";
 import { takeTabMotionCounts } from "./tabMotionCounts";
-import { onConsentPeriodChange } from "./choice";
+import { isSharing, onConsentPeriodChange } from "./choice";
 import { consentedCount, consentedMax } from "./consentedCount";
 import { countFor, type ConsentToken } from "./consentPeriod";
 
@@ -104,7 +104,9 @@ export function noteTabStripCloseAfterSelect() {
 }
 
 export function noteTabStripScrolled(strip: string, at: number) {
+  if (!isSharing()) return;
   const gap = at - (lastScrollAt.get(strip) ?? -Infinity);
+  if (gap > NEW_SCROLL_GAP_MS) for (const [key, when] of lastScrollAt) if (at - when > PICK_AFTER_SCROLL_MS) lastScrollAt.delete(key);
   lastScrollAt.set(strip, at);
   if (gap > NEW_SCROLL_GAP_MS) scrolls.note();
   else if (gap > STALL_GAP_MS) scrollStalls.note();

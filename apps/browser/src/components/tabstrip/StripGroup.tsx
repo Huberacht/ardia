@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Animated, Pressable, Text, View } from "react-native";
 import { currentGroup } from "../../state/browser/current";
 import { useGroup, usePageProfileId, useWindowId } from "../../state/browser/hooks";
@@ -16,6 +16,7 @@ import { hasVisibleMembers, dragGeometry, dropIndex, GROUP_MARGIN_LEFT, GROUP_MA
 import { CHIP_HAIRLINE, GAP, GROUP_CHIP_PAD, GROUP_DIVIDER_LENGTH, GROUP_TITLE_GAP, GROUP_TITLE_MAX, GROUP_TITLE_TIGHT, GROUP_TRAY_ALPHA, ITEM_HEIGHT, ITEM_TOP, MID, STRIP_COLORS, tabRadius, TOP_STRIP_HEIGHT } from "./tokens";
 import { noteTabStripGroupToggle } from "../../state/telemetry/tabStripCounts";
 import { useStripDrag } from "./useStripDrag";
+import { StripScrollContext } from "./stripScroll";
 import { nameKey } from "./model";
 import { setMeasuredWidth } from "../../state/windows/measuredWidths";
 import { useChipHover, useChipHovered, type ChipHover } from "./reachableHover";
@@ -34,6 +35,7 @@ export function StripGroup({
   memberWidth,
   folderMeasured,
   tightName,
+  clipMembers,
 }: {
   entry: StripGroupEntry;
   geometry: DragGeometry;
@@ -46,8 +48,10 @@ export function StripGroup({
   memberWidth: (m: StripMember) => number;
   folderMeasured: (groupId: string) => boolean;
   tightName: boolean;
+  clipMembers: boolean;
 }) {
   const theme = useTheme();
+  const scroll = useContext(StripScrollContext);
   const windowId = useWindowId();
   const profileId = usePageProfileId();
   const group = useGroup(entry.id, (g) => g);
@@ -110,6 +114,7 @@ export function StripGroup({
     from,
     width: 0,
     gap: 0,
+    scroll,
     axis: "x",
     local: true,
     drop: (dx) => {
@@ -133,6 +138,7 @@ export function StripGroup({
   return (
     <Animated.View
       ref={drag.ref}
+      removeClippedSubviews={clipMembers}
       style={{ width: size, height: TOP_STRIP_HEIGHT, marginLeft: GROUP_MARGIN_LEFT, marginRight: GROUP_MARGIN_RIGHT, zIndex: drag.style.zIndex, transform: drag.style.transform, opacity: chipWidth === undefined ? 0 : 1 }}
     >
       <GroupFill hover={hover} width={size} tint={tint} bare={bare} />

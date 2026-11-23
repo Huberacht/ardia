@@ -1,12 +1,12 @@
 import { memo, useContext, useLayoutEffect, useRef, type ReactNode } from "react";
-import { Animated, Pressable, StyleSheet, View } from "react-native";
+import { Animated, Pressable, StyleSheet, View, type GestureResponderEvent } from "react-native";
 import { toggleMute } from "../../state/browser/actions";
 import { useIsActiveTab, useSettings, useTab, useTabLive, useWindowId } from "../../state/browser/hooks";
 import { useMuteState, useTabGroupColor } from "../../state/tabs/hooks";
 import { muteTitle, type MuteState } from "../../state/tabs/mute";
 import { firstStaying } from "../../state/drag/drops";
 import { pressTabClose, useTabCloseControl } from "../../state/sidebar/closeControl";
-import { switchedByPressWithin } from "../../state/sidebar/heldTabPress";
+import { pressPoint, switchedByPressWithin } from "../../state/sidebar/heldTabPress";
 import { noteTabStripCloseAfterSelect } from "../../state/telemetry/tabStripCounts";
 import { currentMovingTabIds } from "../../state/tabs/topStrip";
 import { pressStripClose } from "../../state/tabs/stripPress";
@@ -31,6 +31,7 @@ import { SelectedTab } from "./SelectedTab";
 import { CELL_STEP, dragRange, leaveIndex, type DragGeometry } from "./stripGroups";
 import { AUDIO_BADGE, CHIP_LABEL_GAP, CHIP_PAD, CLOSE_AFTER_SELECT_MS, CLOSE_MIN_CHIP, FAVICON, GAP, ITEM_HEIGHT, ITEM_TOP, PINNED_CELL, tabRadius, TITLE_FADE_MAX, TITLE_FADE_MIN, TITLE_MIN_CHIP, TOP_STRIP_HEIGHT } from "./tokens";
 import { useStripDrag } from "./useStripDrag";
+import { useStripPick } from "./stripPick";
 import { StripScrollContext } from "./stripScroll";
 import { useStripSlide } from "./stripMotion";
 import { useStripCardHover } from "./StripHoverCard";
@@ -136,8 +137,8 @@ export const DraggableChip = memo(function DraggableChip({
 
 const tabStillOpen = (tabId: string) => !!workspaceSnapshot().tabs[tabId];
 
-function pressStripTabClose(windowId: string, tabId: string) {
-  if (switchedByPressWithin(tabId, CLOSE_AFTER_SELECT_MS)) noteTabStripCloseAfterSelect();
+function pressStripTabClose(windowId: string, tabId: string, press: GestureResponderEvent) {
+  if (switchedByPressWithin(windowId, tabId, CLOSE_AFTER_SELECT_MS, pressPoint(press))) noteTabStripCloseAfterSelect();
   else pressStripClose(windowId, tabId, () => pressTabClose(tabId), tabStillOpen);
 }
 
@@ -174,6 +175,7 @@ export const TabChip = memo(function TabChip({ tabId, width, drawn, tuck, dragge
   const mute = useMuteState(tabId);
   const { palette, band } = useWebsiteBand(tabId);
   const closeControl = useTabCloseControl(tabId);
+  const pick = useStripPick();
   const ownHover = useOwnChipHover();
   const chipHover = hover ?? ownHover;
   const unread = useTabUnread(tabId);
@@ -196,7 +198,7 @@ export const TabChip = memo(function TabChip({ tabId, width, drawn, tuck, dragge
         {dragged && !active && (
           <View pointerEvents="none" style={{ position: "absolute", left: 0, width, top: ITEM_TOP, height: ITEM_HEIGHT, borderRadius: tabRadius(), backgroundColor: theme.windowTint[0] }} />
         )}
-        <TabPressArea windowId={windowId} tab={tab} style={StyleSheet.absoluteFill} pressStyle={{ flex: 1 }}>
+        <TabPressArea windowId={windowId} tab={tab} onSwitch={pick} style={StyleSheet.absoluteFill} pressStyle={{ flex: 1 }}>
           {({ pressed }) => (
             <ChipRow
               hover={chipHover}
@@ -211,7 +213,7 @@ export const TabChip = memo(function TabChip({ tabId, width, drawn, tuck, dragge
                   size="xs"
                   weight="semibold"
                   color={onBand ? palette.icon : undefined}
-                  onPress={tuck ?? (() => pressStripTabClose(windowId, tab.id))}
+                  onPress={tuck ?? ((press: GestureResponderEvent) => pressStripTabClose(windowId, tab.id, press))}
                   tooltip={tuck ? "Hide in Group" : closeControl.tooltip}
                 />
               }

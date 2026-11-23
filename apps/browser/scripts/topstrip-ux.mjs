@@ -439,7 +439,8 @@ function analyse(img, scale, data, width) {
   const favOf = new Map(favs.map((f) => [f.tabId, f]));
   const lastTabRun = hitTabRuns.reduce((last, [a, b], i) => (favs.some((f) => f.full && f.x + 8 >= a && f.x + 8 < b) ? i : last), -1);
   const tabRuns = hitTabRuns.filter((_, i) => i <= lastTabRun);
-  const buttonRuns = [...hitButtonRuns, ...hitTabRuns.filter(([a, b], i) => i > lastTabRun && b - a >= 14)].sort((p, q) => p[0] - q[0]);
+  const tabButtonRuns = hitTabRuns.slice(lastTabRun + 1).slice(-2);
+  const buttonRuns = [...hitButtonRuns, ...tabButtonRuns.filter(([a, b]) => b - a >= 14)].sort((p, q) => p[0] - q[0]);
   const loose = data.loose;
   const withFav = loose.filter((t) => data.favicons[t] && !data.discarded.includes(t) && !sharedColour(t));
   const shown = withFav.filter((t) => favOf.get(t)?.full);
@@ -451,7 +452,6 @@ function analyse(img, scale, data, width) {
   const hardClips = favs.filter((f) => !f.full && f.count >= 16).length;
 
   const runOf = (x) => tabRuns.find(([a, b]) => x >= a && x < b);
-  const tabButtonRuns = hitTabRuns.filter((_, i) => i > lastTabRun);
   const scrollRuns = runs((c, x) => (c === "T" || c === "S") && !tabButtonRuns.some(([a, b]) => x >= a && x < b));
   const viewport = scrollRuns.length ? [Math.min(...scrollRuns.map((r) => r[0])), Math.max(...scrollRuns.map((r) => r[1]))] : [0, 0];
   const inkWidth = (a, b, startX) => {

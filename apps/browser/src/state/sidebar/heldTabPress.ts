@@ -36,9 +36,37 @@ export type TabPress = {
 };
 
 let heldPress: TabPress | null = null;
-let switchPress = { tabId: "", at: -Infinity };
 
-export const switchedByPressWithin = (tabId: string, ms: number) => switchPress.tabId === tabId && performance.now() - switchPress.at < ms;
+type SwitchPress = { windowId: string; tabId: string; at: number; point: TabPress["at"]; landed: boolean };
+const SWITCH_PRESS_KEPT_MS = 2000;
+let switchPress: SwitchPress | null = null;
+let stopWatchingSwitch = () => {};
+
+function forgetSwitchPress() {
+  switchPress = null;
+  stopWatchingSwitch();
+  stopWatchingSwitch = () => {};
+}
+
+function rememberSwitchPress(press: SwitchPress) {
+  forgetSwitchPress();
+  switchPress = press;
+  stopWatchingSwitch = useBrowser.subscribe((s) => {
+    const p = switchPress;
+    if (!p) return;
+    const inWindow = s.tabs[p.tabId]?.windowId === p.windowId;
+    const shown = inWindow && activeTabId(s, p.windowId) === p.tabId;
+    if (shown) p.landed = true;
+    if (!inWindow || (p.landed && !shown) || performance.now() - p.at > SWITCH_PRESS_KEPT_MS) forgetSwitchPress();
+  });
+}
+
+export function switchedByPressWithin(windowId: string, tabId: string, ms: number, point: TabPress["at"] = null) {
+  const p = switchPress;
+  if (!p || p.windowId !== windowId || p.tabId !== tabId || performance.now() - p.at >= ms) return false;
+  return !p.point || !point || Math.hypot(point.x - p.point.x, point.y - p.point.y) < TAB_CLICK_SLOP;
+}
+
 const pressEnds = new Set<{ windowId: string; listener: () => void }>();
 
 export const tabPressHeld = (windowId: string) => heldPress?.windowId === windowId;
@@ -67,6 +95,8 @@ const pointOf = (e: GestureResponderEvent) => {
   const { pageX, pageY } = e.nativeEvent;
   return Number.isFinite(pageX) && Number.isFinite(pageY) ? { x: pageX, y: pageY } : null;
 };
+
+export const pressPoint = pointOf;
 
 const windowIsKey = (windowId: string) => AppState.currentState === "active" && focusedWindowOf(useBrowser.getState()) === windowId;
 
@@ -112,7 +142,7 @@ export function holdTabPress(windowId: string, tabId: string, press: GestureResp
   heldPress = held;
   notePressStarted(switched, held.windowKey, held);
   if (switched) {
-    switchPress = { tabId, at: performance.now() };
+    rememberSwitchPress({ windowId, tabId, at: performance.now(), point: held.at, landed: false });
     dismissHover();
     switchingByPress(nativePress, () => clickTab(windowId, tabId));
   }

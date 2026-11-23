@@ -6,7 +6,7 @@ import { useShownTabIdFor, useStripEntries, useStripTitleNeeds } from "../../sta
 import { setMeasuredWidth, useMeasuredWidths } from "../../state/windows/measuredWidths";
 import { dismissStripHoverIn, stripPageOffstage } from "../../state/tabs/stripHover";
 import { onTabPressEnd, tabPressHeld } from "../../state/sidebar/heldTabPress";
-import { noteTabStripChipsMeasured, noteTabStripCompact, noteTabStripReadable, noteTabStripHeldClose, noteTabStripHeldCloseStretch, noteTabStripOverflow, noteTabStripPick, noteTabStripRevealAfterPress, noteTabStripRevealHeldForScroll, noteTabStripScrolled, noteTabStripTitledTabs } from "../../state/telemetry/tabStripCounts";
+import { noteTabStripChipsMeasured, noteTabStripCompact, noteTabStripReadable, noteTabStripHeldClose, noteTabStripHeldCloseStretch, noteTabStripOverflow, noteTabStripRevealAfterPress, noteTabStripRevealHeldForScroll, noteTabStripScrolled, noteTabStripTitledTabs } from "../../state/telemetry/tabStripCounts";
 import { Offstage } from "../ui/useHover";
 import { usePageStyle } from "../../state/windows/profilePager";
 import { ThemeScope } from "../window/ThemeScope";
@@ -27,6 +27,7 @@ import { devRegister } from "../dev/devRegister";
 import { StripScrollContext, type StripScroll } from "./stripScroll";
 import { StripMotionContext, useStripMotion } from "./stripMotion";
 import { StripGhosts } from "./StripGhosts";
+import { FIRST_REVEAL, firstOverflowReveal, selectionReveal } from "./stripRevealGate";
 import { COMPACT_CHIP, GROUP_TITLE_MAX, GROUP_TITLE_TIGHT, EDGE_FADE, EDGE_FADE_FLOOR, EDGE_FADE_ONSET, FLARE, GAP, NEW_TAB_ROOM, STRIP_SCROLL_ID } from "./tokens";
 
 type Wide = { tabId: string; slot: number };
@@ -196,7 +197,8 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const latestSpan = useRef(spanOf);
   latestSpan.current = spanOf;
   const revealed = useRef(activeId);
-  const shownOnce = useRef(false);
+  const firstReveal = useRef(FIRST_REVEAL);
+  const measuring = chipFrames.includes(undefined) || nameWidths.includes(undefined) || folderWidths.includes(undefined);
   const reveal = (tabId: string, animated: boolean) => {
     const span = latestSpan.current(tabId);
     const x = span && revealOffset(span[0] - flare, span[1], scrolled.current, viewport.current - flare, EDGE_FADE + GAP);
@@ -209,29 +211,40 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     else reveal(activeId, false);
   };
   const revealOnFirstOverflow = () => {
-    if (shownOnce.current || !current || !activeId || tabDragging() || content.current <= viewport.current + 0.5) return;
-    shownOnce.current = true;
-    latestReveal.current();
+    const step = firstOverflowReveal(firstReveal.current, {
+      current,
+      activeId,
+      dragging: tabDragging(),
+      overflows: content.current > viewport.current + 0.5,
+      measuring,
+      userScrollAt: userScrollAt.current,
+      now: performance.now(),
+    });
+    firstReveal.current = step.state;
+    if (step.reveal) latestReveal.current();
   };
   useEffect(revealOnFirstOverflow, [current]);
   useEffect(() => {
-    if (revealed.current === activeId || (held.current && closedTo.current === activeId)) return;
-    revealed.current = activeId;
-    if (!current || !activeId || tabDragging()) return;
+    const step = selectionReveal(revealed.current, activeId, !!held.current && closedTo.current === activeId, current, tabDragging());
+    if (step === "drop") revealed.current = activeId;
+    if (step !== "run") return;
     let frame = 0;
     let quiet: ReturnType<typeof setTimeout> | undefined;
     const now = () => {
-      if (!userScrolling()) return reveal(activeId, true);
+      if (!userScrolling()) {
+        revealed.current = activeId;
+        return reveal(activeId, true);
+      }
       noteTabStripRevealHeldForScroll();
       quiet = setTimeout(now, USER_SCROLL_QUIET_MS);
     };
     const later = () => void (frame = requestAnimationFrame(now));
     let unsubscribe = () => {};
     if (tabPressHeld(windowId)) {
-      noteTabStripPick(stripKey, performance.now());
       noteTabStripRevealAfterPress();
       unsubscribe = onTabPressEnd(windowId, () => {
-        if (!tabDragging()) later();
+        if (tabDragging()) revealed.current = activeId;
+        else later();
       });
     } else later();
     return () => {
@@ -333,6 +346,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
                               memberWidth={memberWidth}
                               folderMeasured={(groupId) => folderChip(groupId) !== undefined}
                               tightName={tightNames.current}
+                              clipMembers={!shownHeld}
                             />,
                           ];
                         if (e.kind === "split")
