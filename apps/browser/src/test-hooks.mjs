@@ -13,6 +13,7 @@ export function mount(render, { props, contexts = [] } = {}) {
   let alive = true;
   let renders = 0;
   let effects = [];
+  let discarding = false;
 
   const schedule = () => {
     if (alive) dirty = true;
@@ -59,6 +60,7 @@ export function mount(render, { props, contexts = [] } = {}) {
     useSyncExternalStore(subscribe, getSnapshot) {
       const s = slot(() => ({}));
       at++;
+      if (discarding) return getSnapshot();
       s.getSnapshot = getSnapshot;
       s.value = getSnapshot();
       if (s.subscribe !== subscribe) {
@@ -154,9 +156,11 @@ export function mount(render, { props, contexts = [] } = {}) {
       const previous = internals.H;
       internals.H = dispatcher;
       at = 0;
+      discarding = true;
       try {
         return render(next);
       } finally {
+        discarding = false;
         internals.H = previous;
         effects = [];
       }

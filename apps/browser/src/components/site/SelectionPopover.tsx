@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 import { useSettings } from "../../state/browser/hooks";
 import { useTabValue } from "../../state/tabs/tabWatch";
-import { consentToken } from "../../state/telemetry/client";
+import { consentToken, type ConsentToken } from "../../state/telemetry/client";
 import { notePageOverlay } from "../../state/telemetry/usage";
 import { defaultSearchEngine } from "../../state/settings/settings";
 import { POPOVER_MOTION, PopoverSurface, space } from "../ui";
@@ -17,11 +17,12 @@ export function SelectionPopover({ tabId }: { tabId: string }) {
   const zoom = useTabValue(tabId, (t) => t?.zoom ?? 1);
   const enabled = useSettings((st) => st.showSelectionSearch);
   const selection = usePageSelection((s) => (enabled ? (s[tabId] ?? null) : null));
-  const [shown, setShown] = useState<PageSelection | null>(null);
+  const [shown, setShown] = useState<{ selection: PageSelection; consent: ConsentToken | null } | null>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
   useEffect(() => {
     if (!selection) return setShown(null);
-    const timer = setTimeout(() => setShown(selection), selectionBar.showDelay);
+    const consent = consentToken();
+    const timer = setTimeout(() => setShown({ selection, consent }), selectionBar.showDelay);
     return () => clearTimeout(timer);
   }, [selection]);
   useEffect(() => () => setPageSelection(tabId, null), [tabId]);
@@ -29,17 +30,16 @@ export function SelectionPopover({ tabId }: { tabId: string }) {
   useEffect(() => {
     if (!shown) counted.current = false;
   }, [shown]);
-  const consent = consentToken();
   const noteShown = () => {
-    if (counted.current) return;
+    if (counted.current || !shown) return;
     counted.current = true;
-    notePageOverlay("paneOverlayOpened", consent);
+    notePageOverlay("paneOverlayOpened", shown.consent);
   };
   if (!selection && !shown) return null;
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill} onLayout={(e) => setArea(e.nativeEvent.layout)}>
-      {shown && area.width > 0 && <SelectionBar key={`${shown.rect.x},${shown.rect.y}`} tabId={tabId} selection={shown} zoom={zoom} area={area} onShown={noteShown} />}
+      {shown && area.width > 0 && <SelectionBar key={`${shown.selection.rect.x},${shown.selection.rect.y}`} tabId={tabId} selection={shown.selection} zoom={zoom} area={area} onShown={noteShown} />}
     </View>
   );
 }

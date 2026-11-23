@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { useSyncExternalStore } from "react";
 import { mount } from "../../test-hooks.mjs";
 const { usePanelsPresence } = await import("../ui/Popover.tsx");
 const { BEHIND_NEW_TAB, OVERLAY, nextShownOverlays, overlayBits, overlayCount, pageOverlays, useEligibleGate, useKeptOverlays, useKeptWhile, useShownOverlaysCount } = await import("./overlayGate.ts");
@@ -159,4 +160,19 @@ test("a render React throws away neither counts an overlay nor resets the CLI pi
 test("the pane's visibility count leaves the selection search to its own bar", () => {
   const overlays = readFileSync(new URL("./PageOverlays.tsx", import.meta.url), "utf8");
   assert.match(overlays, /& ~OVERLAY\.selection/);
+});
+
+test("a discarded render subscribes to and unsubscribes from no store", () => {
+  let subscribed = 0;
+  let unsubscribed = 0;
+  const storeOf = () => () => {
+    subscribed++;
+    return () => unsubscribed++;
+  };
+  const stores = { a: storeOf(), b: storeOf() };
+  const hook = mount(({ key }) => useSyncExternalStore(stores[key], () => key), { props: { key: "a" } });
+  assert.equal(hook.discard({ key: "b" }), "b", "it still reads the store");
+  assert.deepEqual([subscribed, unsubscribed], [1, 0]);
+  hook.rerender({ key: "b" });
+  assert.deepEqual([subscribed, unsubscribed], [2, 1], "a committed render moves the subscription");
 });

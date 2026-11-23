@@ -64,3 +64,23 @@ test("the selection search counts an opening only once its bar is laid out insid
     mock.timers.reset();
   }
 });
+
+test("a bar that became due while sharing was off isn't counted when sharing turns on before it lays out", async () => {
+  client.loadChoice();
+  client.setSharing(false, "settings");
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const popover = mount(() => SelectionPopover({ tabId: "due-off" }));
+    setPageSelection("due-off", { text: "words", rect: { x: 10, y: 200, width: 40, height: 12 } });
+    void popover.value;
+    mock.timers.tick(1000);
+    void popover.value;
+    client.setSharing(true, "onboarding");
+    await opens();
+    popover.value.props.onLayout({ nativeEvent: { layout: AREA } });
+    layOut(popover.value.props.children);
+    assert.equal(await opens(), 0, "the opening belongs to the moment its delay ended, when sharing was off");
+  } finally {
+    mock.timers.reset();
+  }
+});
