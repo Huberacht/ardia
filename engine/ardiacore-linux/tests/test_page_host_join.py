@@ -28,6 +28,7 @@ PRELUDE = r'''
 #include "fixtures/page_state.h"
 #include "ardia/linux/ac_linux_page_state.h"
 #include "ardia/linux/ac_linux_page_commits.h"
+#include "ardia/linux/ac_linux_tab_bindings.h"
 #include <set>
 #include <functional>
 #include <string_view>
@@ -147,6 +148,9 @@ class ShellHostView {
   void SetPresentations(const base::DictValue& args, std::function<void(bool, base::Value)> done);
   int layouts = 0;
   void LayoutPane(TabBinding*) { ++layouts; }
+  std::vector<TabBinding*> forgotten;
+  void ForgetClosedTab(TabBinding* binding) { forgotten.push_back(binding); }
+  void DropClosedTab(base::WeakPtr<TabBinding> binding);
   base::WeakPtrFactory<ShellHostView> weak_factory_{this};
 };
 '''
@@ -235,7 +239,7 @@ void Reclaim() {
   assert(!stale->Valid() && !ardiacore::EmitLinuxPageEvent(*stale, "find", base::Value()));
   w.host.sent.clear();
   w.first.reset();
-  assert(w.host.sent.empty());
+  assert(w.host.sent.empty() && w.host.forgotten.empty());
   assert(w.binding->page()->EmitNavigation() && w.host.sent.back().id == "9" && Text(w.host.sent.back().payload, "bindingGeneration") == Text(lease, "bindingGeneration"));
   auto old_command = base::DictValue().Set("id", 7).Set("claim", "claim");
   auto new_command = base::DictValue().Set("id", 9).Set("claim", "claim");
@@ -321,6 +325,67 @@ void DiscardedRebind() {
   assert(!Named(again.FindDict("snapshot")->Find("events")->GetList(), "discarded"));
 }
 
+void ClosedTabLeavesTheWindow() {
+  World w;
+  w.Claim();
+  w.host.devtools_had_focus_[7] = true;
+  w.host.devtools_had_focus_[9] = true;
+  auto weak = w.binding->GetWeakPtr();
+  w.browser.strip.tabs.clear();
+  w.first.reset();
+  assert(w.host.forgotten.size() == 1 && w.host.forgotten[0] == w.binding);
+  assert(w.host.Binding(7) == w.binding && !w.binding->contents());
+  w.host.DropClosedTab(weak);
+  assert(!weak && w.host.bindings_.empty());
+  assert(!w.host.devtools_had_focus_.contains(7) && w.host.devtools_had_focus_.contains(9));
+  w.host.DropClosedTab(weak);
+  w.host.DropClosedTab(base::WeakPtr<TabBinding>());
+  assert(w.host.bindings_.empty());
+}
+
+void ReboundOrLiveTabStays() {
+  World rebound;
+  auto weak = rebound.binding->GetWeakPtr();
+  rebound.browser.strip.tabs.clear();
+  rebound.first.reset();
+  rebound.binding->Rebind(rebound.second.get());
+  rebound.host.DropClosedTab(weak);
+  assert(weak && rebound.host.Binding(7) == rebound.binding && rebound.binding->contents() == rebound.second.get());
+  World live;
+  live.host.DropClosedTab(live.binding->GetWeakPtr());
+  assert(live.host.Binding(7) == live.binding);
+  World moved;
+  World other;
+  moved.browser.strip.tabs.clear();
+  moved.first.reset();
+  auto owned = std::move(moved.host.bindings_[7]);
+  moved.host.bindings_.erase(7);
+  other.host.DropClosedTab(owned->GetWeakPtr());
+  assert(owned && other.host.Binding(7) == other.binding);
+}
+
+void ClosingManyTabsKeepsBindingsBounded() {
+  Profile profile;
+  views::Widget widget;
+  BrowserWindowInterface browser{&profile};
+  content::WebContents shell{&profile};
+  ShellHostView host;
+  host.browser_ = &browser;
+  host.shell_contents = &shell;
+  host.widget = &widget;
+  for (int id = 100; id < 164; ++id) {
+    auto contents = std::make_unique<content::WebContents>(&profile);
+    Ids()[contents.get()] = id;
+    host.bindings_[id] = std::make_unique<TabBinding>(&host, contents.get(), "key" + std::to_string(id));
+    host.devtools_had_focus_[id] = id % 2;
+    auto weak = host.bindings_[id]->GetWeakPtr();
+    contents.reset();
+    host.DropClosedTab(weak);
+    assert(host.bindings_.empty() && host.devtools_had_focus_.empty() && !weak);
+  }
+  assert(host.forgotten.size() == 64);
+}
+
 int main(int argc, char** argv) {
   assert(argc == 2);
   std::string mode = argv[1];
@@ -330,6 +395,9 @@ int main(int argc, char** argv) {
   else if (mode == "presentations") Presentations();
   else if (mode == "failed-remount") FailedRemount();
   else if (mode == "discarded-rebind") DiscardedRebind();
+  else if (mode == "closed-tab") ClosedTabLeavesTheWindow();
+  else if (mode == "rebound-tab") ReboundOrLiveTabStays();
+  else if (mode == "many-closed-tabs") ClosingManyTabsKeepsBindingsBounded();
   else return 2;
 }
 '''
@@ -353,6 +421,7 @@ class PageHostJoinTests(unittest.TestCase):
         methods.append(body(host, 'std::unique_ptr<ardiacore::LinuxPageState> ShellHostView::MountPage('))
         methods.append(body(host, 'void ShellHostView::ReplaceTabContents('))
         methods.append(body(host, 'TabBinding* ShellHostView::ClaimedBinding('))
+        methods.append(body(host, 'void ShellHostView::DropClosedTab('))
         methods.append(body(host, 'void ShellHostView::SetPresentations(').replace(
             'base::OnceCallback<void(bool, base::Value)> done', 'std::function<void(bool, base::Value)> done').replace('std::move(done).Run(', 'done('))
         test = directory / 'join.cc'
@@ -385,6 +454,27 @@ class PageHostJoinTests(unittest.TestCase):
 
     def test_discard_swap_sends_discarded_in_the_rebind_snapshot(self):
         self.run_case('discarded-rebind')
+
+    def test_a_closed_tab_drops_its_binding_and_per_tab_state(self):
+        self.run_case('closed-tab')
+
+    def test_a_rebound_live_or_foreign_binding_is_never_dropped(self):
+        self.run_case('rebound-tab')
+
+    def test_closing_many_tabs_keeps_bindings_bounded(self):
+        self.run_case('many-closed-tabs')
+
+    def test_the_closed_tab_drop_is_posted_and_guarded_by_weak_pointers(self):
+        host = HOST.read_text()
+        destroyed = body(host, 'void TabBinding::WebContentsDestroyed(')
+        self.assertTrue(destroyed.rstrip('}').rstrip().endswith('owner_->ForgetClosedTab(this);'))
+        forget = body(host, 'void ShellHostView::ForgetClosedTab(')
+        self.assertIn('base::SequencedTaskRunner::HasCurrentDefault()', forget)
+        self.assertIn('base::BindOnce(&ShellHostView::DropClosedTab, GetWeakPtr(), binding->GetWeakPtr())', forget)
+        drop = body(host, 'void ShellHostView::DropClosedTab(')
+        self.assertLess(drop.index('if (!binding || binding->contents()) return;'), drop.index('TakeBinding('))
+        self.assertLess(drop.index('TakeBinding('), drop.index('owned.reset();'))
+        self.assertIn('"ac_linux_tab_bindings.h"', (SOURCE / 'ardia/linux/BUILD.gn').read_text())
 
 if __name__ == '__main__':
     unittest.main()
