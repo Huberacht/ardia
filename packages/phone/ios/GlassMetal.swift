@@ -8,6 +8,7 @@ import WebKit
 
 enum GlassLaunch {
   enum Capture: String {
+    case auto
     case hierarchy
     case layer
     case none
@@ -15,7 +16,7 @@ enum GlassLaunch {
 
   static let flat = PhoneTestBuild.flag("ArdiaFlatGlass")
   static let solidPage = PhoneTestBuild.flag("ArdiaGlassSolidPage")
-  static let capture: Capture = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassCapture").flatMap(Capture.init(rawValue:)) ?? .hierarchy) : .hierarchy
+  static let capture: Capture = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassCapture").flatMap(Capture.init(rawValue:)) ?? .auto) : .auto
 }
 
 enum GlassReport {

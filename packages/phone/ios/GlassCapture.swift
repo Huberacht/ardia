@@ -132,7 +132,7 @@ enum GlassBackdrop {
 
 @MainActor
 enum GlassProbe {
-  private static var ownAlpha: [GlassLaunch.Capture: Bool] = [.hierarchy: true, .layer: true]
+  private static var ownAlpha: [GlassLaunch.Capture: Bool] = [.hierarchy: true, .layer: true, .auto: true]
 
   static func appliesOwnAlpha(_ method: GlassLaunch.Capture) -> Bool { ownAlpha[method] ?? false }
 
@@ -281,7 +281,7 @@ final class GlassCapture {
     switch method {
     case .hierarchy:
       return view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
-    case .layer:
+    case .layer, .auto:
       view.layer.render(in: context)
       return true
     case .none:

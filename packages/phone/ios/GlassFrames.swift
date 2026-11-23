@@ -193,26 +193,39 @@ final class GlassFrames: NSObject {
     let web: WKWebView?
     if members[0].backdropMode == .beneath, let root = members[0].backdropRoot {
       pieces = GlassBackdrop.pieces(under: members[0], root: root, covering: wanted)
-      web = nil
+      web = method == .auto ? pieces.lazy.compactMap { $0.view.flatMap(GlassSources.page(in:)) }.first : nil
     } else {
       wanted = space.bounds
       pieces = [GlassLayerPiece(view: space, transform: .identity, bounds: space.bounds, radius: 0, fill: nil, alpha: 1, clips: [])]
-      web = method == .none ? nil : GlassSources.page(in: space)
+      web = method == .auto ? GlassSources.page(in: space) : nil
     }
     capture.survey(pieces, rect: wanted)
     if let web { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, signature: capture.signatureValue, now: now) }
     guard capture.wants(wanted, now: now) else { return }
+    let sourceWhole = members[0].backdropMode == .source
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
-      if let web {
+      if sourceWhole, let web {
         if let fill = space.layer.backgroundColor {
           context.setFillColor(fill)
           context.fill(space.bounds)
         }
         return capture.page.draw(web, transform: GlassBackdrop.transform(of: web.layer, to: space.layer), in: context)
       }
+      let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole ? .hierarchy : .layer) : method
       var drew = true
-      for piece in pieces where !GlassBackdrop.draw(piece, method: method, in: context) { drew = false }
+      for piece in pieces {
+        if !GlassBackdrop.draw(piece, method: pieceMethod, in: context) { drew = false }
+        if let web, let view = piece.view, web.isDescendant(of: view) {
+          context.saveGState()
+          for clip in piece.clips {
+            context.addPath(clip.path)
+            context.clip()
+          }
+          if !capture.page.draw(web, transform: GlassBackdrop.transform(of: web.layer, to: space.layer), in: context) { drew = false }
+          context.restoreGState()
+        }
+      }
       return drew
     }
     switch outcome {
