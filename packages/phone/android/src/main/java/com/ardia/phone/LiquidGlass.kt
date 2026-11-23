@@ -192,19 +192,19 @@ float pnorm(float2 v) {
 
 float shapeDistance(float2 p) {
     float2 centre = (box.xy + box.zw) * 0.5;
-    float2 half = (box.zw - box.xy) * 0.5;
-    float r = clamp(radius, 0.0, min(half.x, half.y));
-    float2 q = abs(p - centre) - half + float2(r);
+    float2 extent = (box.zw - box.xy) * 0.5;
+    float r = clamp(radius, 0.0, min(extent.x, extent.y));
+    float2 q = abs(p - centre) - extent + float2(r);
     return pnorm(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
 float2 shapeNormal(float2 p) {
     float2 centre = (box.xy + box.zw) * 0.5;
-    float2 half = (box.zw - box.xy) * 0.5;
-    float r = clamp(radius, 0.0, min(half.x, half.y));
+    float2 extent = (box.zw - box.xy) * 0.5;
+    float r = clamp(radius, 0.0, min(extent.x, extent.y));
     float2 local = p - centre;
     float2 side = float2(local.x < 0.0 ? -1.0 : 1.0, local.y < 0.0 ? -1.0 : 1.0);
-    float2 q = abs(local) - half + float2(r);
+    float2 q = abs(local) - extent + float2(r);
     if (q.x > 0.0 && q.y > 0.0) {
         float2 g = float2(pow(q.x, exponent - 1.0), pow(q.y, exponent - 1.0));
         return normalize(g) * side;
@@ -234,9 +234,9 @@ float2 shift(float3 ray, float height) {
 }
 
 half4 main(float2 p) {
-    float distance = shapeDistance(p);
-    if (distance > 1.0) return backdrop.eval(p);
-    float inward = max(-distance, 0.0);
+    float edge = shapeDistance(p);
+    if (edge > 1.0) return backdrop.eval(p);
+    float inward = max(-edge, 0.0);
     float progress = clamp(inward / bezel, 0.0, 1.0);
     float u = 1.0 - progress;
     float inside = max(1.0 - u * u * u * u, 0.0001);
@@ -262,9 +262,9 @@ uniform float sharpness;
 uniform float opacity;
 
 half4 main(float2 p) {
-    float distance = shapeDistance(p);
-    float inward = max(-distance, 0.0);
-    float outer = 1.0 - smoothstep(0.0, $EDGE_FEATHER_PX, distance);
+    float edge = shapeDistance(p);
+    float inward = max(-edge, 0.0);
+    float outer = 1.0 - smoothstep(0.0, $EDGE_FEATHER_PX, edge);
     float inner = 1.0 - smoothstep(band, band + $EDGE_FEATHER_PX, inward);
     float mask = outer * inner;
     if (mask <= 0.0) return half4(0.0);

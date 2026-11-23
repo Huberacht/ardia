@@ -115,6 +115,13 @@ class LiquidGlassRulesTest {
     }
 
     @Test
+    fun theShadersNeverNameAVariableAfterAnAgslType() {
+        val types = "float|float2|float3|float4|half|half2|half3|half4|int|bool|shader"
+        val reserved = Regex("\\b(?:$types)\\s+(?:$types)\\b")
+        for (source in listOf(LiquidGlassRules.LENS_SHADER, LiquidGlassRules.RIM_SHADER)) assertFalse(reserved.find(source)?.value, reserved.containsMatchIn(source))
+    }
+
+    @Test
     fun theShadersNameEveryUniformTheyAreGiven() {
         for (name in listOf("backdrop", "box", "radius", "exponent", "bezel", "depth", "maxShift", "ior", "dispersion", "maxSlope")) {
             assertTrue(name, LiquidGlassRules.LENS_SHADER.contains("uniform") && Regex("uniform \\w+ $name;").containsMatchIn(LiquidGlassRules.LENS_SHADER))
