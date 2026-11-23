@@ -586,7 +586,7 @@
     "pageLoad.timers.setInterval:anonymous": 0,
     "pageLoad.timers.setInterval:check": 0,
     "pageLoad.timers.setTimeout:lookUp": 3,
-    "pageLoad.timers.setTimeout:syncMenu": 22,
+    "pageLoad.timers.setTimeout:syncMenu": 7,
     "scroll.listenerCalls": 0,
     "scroll.selectorCalls": 0,
     "scroll.storeKeys": 0,
