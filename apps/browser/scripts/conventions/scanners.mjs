@@ -53,9 +53,8 @@ export function scanShell(src) {
     i++;
   };
   const backtick = () => {
-    const start = ++i;
-    while (i < n && src[i] !== "`") i += src[i] === "\\" ? 2 : 1;
-    strings.push({ start, end: Math.min(i, n), kind: "backtick" });
+    i++;
+    code("`");
     i++;
   };
   const arithmetic = () => {
@@ -85,9 +84,9 @@ export function scanShell(src) {
         }
         start = i;
       } else if (src[i] === "`") {
-        i++;
-        while (i < n && src[i] !== "`") i += src[i] === "\\" ? 2 : 1;
-        i++;
+        strings.push({ start, end: i, kind: "double" });
+        backtick();
+        start = i;
       } else i++;
     }
     strings.push({ start, end: Math.min(i, n), kind: "double" });
@@ -117,6 +116,7 @@ export function scanShell(src) {
     let depth = 0;
     while (i < n) {
       const c = src[i];
+      if (closer === "`" && c === "`") return;
       if (c === "\n") {
         if (heredocs.length) heredocBodies();
         i++;
@@ -459,10 +459,18 @@ function defaultsShells(lines) {
   return found;
 }
 
+function childIndent(lines, at) {
+  for (let k = at + 1; k < lines.length; k++) if (lines[k].text.trim()) return indentOf(lines[k].text);
+  return -1;
+}
+
 function jobOf(lines, at) {
-  for (let k = at; k >= 0; k--) {
+  const jobs = lines.findIndex((line) => /^jobs:\s*$/.test(line.text));
+  if (jobs < 0 || at <= jobs) return -1;
+  const jobIndent = childIndent(lines, jobs);
+  for (let k = at; k > jobs; k--) {
     const text = lines[k].text;
-    if (text.trim() && indentOf(text) === 2 && /^\s*[\w.-]+:\s*$/.test(text)) return k;
+    if (text.trim() && indentOf(text) === jobIndent && /^\s*[\w.-]+:\s*$/.test(text)) return k;
   }
   return -1;
 }
@@ -477,12 +485,15 @@ function defaultsShell(lines, at) {
 function runnerShell(lines, at) {
   const job = jobOf(lines, at);
   if (job < 0) return null;
+  const jobIndent = indentOf(lines[job].text);
+  const keyIndent = childIndent(lines, job);
   for (let k = job + 1; k < lines.length; k++) {
     const text = lines[k].text;
-    if (text.trim() && indentOf(text) <= 2) break;
-    if (/^\s{4}runs-on:.*\bwindows\b/i.test(text)) return "pwsh";
-    if (/^\s{4}runs-on:\s*$/.test(text)) {
-      for (let j = k + 1; j < lines.length && (!lines[j].text.trim() || indentOf(lines[j].text) > 4 || /^\s{4}-\s/.test(lines[j].text)); j++) if (/^\s*-\s*['"]?windows\b/i.test(lines[j].text)) return "pwsh";
+    if (text.trim() && indentOf(text) <= jobIndent) break;
+    if (indentOf(text) !== keyIndent) continue;
+    if (/^\s*runs-on:.*\bwindows\b/i.test(text)) return "pwsh";
+    if (/^\s*runs-on:\s*$/.test(text)) {
+      for (let j = k + 1; j < lines.length && (!lines[j].text.trim() || indentOf(lines[j].text) > keyIndent || (indentOf(lines[j].text) === keyIndent && /^\s*-\s/.test(lines[j].text))); j++) if (/^\s*-\s*['"]?windows\b/i.test(lines[j].text)) return "pwsh";
     }
   }
   return null;
@@ -627,10 +638,14 @@ export function scanYaml(src, { executable = true } = {}) {
       const quoted = /^(["'])(.*)\1$/.exec(value);
       if (quoted) {
         from++;
-        value = quoted[2].replace(quoted[1] === '"' ? /\\(["\\])/g : /''/g, (escaped) => (quoted[1] === '"' ? ` ${escaped[1]}` : " '"));
+        value =
+          quoted[1] === '"'
+            ? quoted[2].replace(/\\(.)/g, (_, ch) => (ch === "n" ? " \n" : ch === "t" ? "  " : ` ${ch}`))
+            : quoted[2].replace(/''/g, " '");
       }
       const lang = inline[3] === "script" ? "js" : (SHELL_LANGS[runShellOf(lines, k, keyIndent)] ?? "shell");
-      if (value) embedded.push({ lang, text: value, offsets: [start + from] });
+      const charMap = Array.from(value, (_, at) => start + from + at);
+      if (value) embedded.push({ lang, text: value, offsets: [start + from], charMap });
     }
   }
   return { comments, strings, embedded };
@@ -650,7 +665,7 @@ export function embeddedToSource({ text, offsets, charMap }, at) {
 }
 
 const MARKUP_COMMENT_OR_BLOCK = /<!--[\s\S]*?(?:-->|$)|<(script|style)\b([^>]*)>([\s\S]*?)<\/\1\s*>/gi;
-const NON_JS_SCRIPT = /\btype\s*=\s*["']?(?!module|text\/javascript|application\/javascript)[\w/+.-]+/i;
+const NON_JS_SCRIPT = /(?:^|\s)type\s*=\s*["']?(?!module|text\/javascript|application\/javascript)[\w/+.-]+/i;
 
 export function scanMarkup(src, lang) {
   const comments = [];

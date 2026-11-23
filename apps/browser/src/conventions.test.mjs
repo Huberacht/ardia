@@ -558,10 +558,12 @@ function helpPrintersOf(files) {
   return printers;
 }
 
+const isGenerated = (path, src) => !inStructuralScope(path) && GENERATED_MARK.test(src.slice(0, 300));
+
 function checkFile(path, src, add, markers, helpPrinters = new Set()) {
   const lang = languageOf(path, src);
   const structural = inStructuralScope(path);
-  if (lang && !structural && GENERATED_MARK.test(src.slice(0, 300))) return;
+  if (lang && isGenerated(path, src)) return;
   if (!lang) {
     if (ACCEPTED_RISK_LISTS.includes(path)) houseRules(path, src, null, [], add, markers);
     return;
@@ -786,7 +788,7 @@ if (process.argv.includes("--expired")) {
   for (const path of process.argv.slice(process.argv.indexOf("--show") + 1)) {
     const src = readFileSync(ROOT + path, "utf8");
     const lang = languageOf(path, src);
-    if (!lang) continue;
+    if (!lang || isGenerated(path, src)) continue;
     const sourced = new Set([...src.matchAll(SOURCES_HELP)].map((match) => match[1]).filter((name) => helpPrinters.has(name)));
     for (const [start, end] of scanFile(src, lang, { codeInStrings: inStructuralScope(path), helpPrinters: sourced, path }).stray) {
       const line = src.slice(0, start).split("\n").length;
@@ -1001,6 +1003,9 @@ if (process.argv.includes("--expired")) {
     assert.equal(house(".github/workflows/hello.yml", windows.replace("runs-on: windows-latest", "runs-on:\n      - windows-latest")).sleeps, 1);
     assert.equal(house(".github/workflows/hello.yml", windows.replace("runs-on: windows-latest", "runs-on:\n    - windows-latest")).sleeps, 1);
     assert.equal(house("tools/tasks.yml", "version: 1\nname: tool\nshell: bash\ntasks:\n  run: echo hi\n").sleeps, 0);
+    const wide = ["jobs:", "    a:", "        defaults:", "            run:", "                shell: pwsh", "        steps:", "            - run: Start-Sleep 1", ""].join("\n");
+    assert.equal(house(".github/workflows/hello.yml", wide).sleeps, 1);
+    assert.equal(house(".github/workflows/hello.yml", 'jobs:\n  a:\n    steps:\n      - run: "echo preparing\\nsleep 1"\n').sleeps, 1);
     const jobs = ["jobs:", "  a:", "    defaults:", "      run:", "        shell: pwsh", "    steps:", "      - run: Start-Sleep 1", "  b:", "    steps:", "      - run: Start-Sleep 1", ""].join("\n");
     assert.equal(house(".github/workflows/hello.yml", jobs).sleeps, 1);
   });
@@ -1022,6 +1027,7 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("apps/hello/a.css", "a { background: url(http://x/y.png); } /* c */\n").comments, 1);
     assert.equal(house("apps/hello/index.html", "<!-- c --><script>// js\nconst a = 1;</script><style>/* css */</style><script type=\"application/json\">{\"a\": \"//\"}</script>\n").comments, 3);
     assert.equal(house("apps/hello/index.html", "<!-- an example: <script>// inside</script> -->\n<p>hi</p>\n").comments, 1);
+    assert.equal(house("apps/hello/index.html", "<script data-type=\"application/json\">// js\n</script>\n").comments, 1);
     assert.equal(house("apps/hello/Page.astro", "---\n// front\nconst a = 1;\n---\n<div>{/* jsx */}</div>\n").comments, 2);
   });
   test("license headers, generated files, third-party copies and lockfiles are left alone", () => {
@@ -1044,6 +1050,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(shell('for target in alpha beta; do echo waiting for "$target"; done\nsleep 1'), 1);
     assert.equal(shell('for target in alpha beta; do echo What to do for "$target"; done\nsleep 1'), 1);
     assert.equal(shell('case "$mode" in retry) sleep 1;; esac'), 1);
+    assert.equal(shell("if sleep 1; then echo ready; fi\necho sleep 1"), 1);
+    assert.equal(shell('x=`sleep 1`\necho "`sleep 2`" \'`sleep 3`\''), 2);
     assert.equal(shell("while true; do\n  (( SECONDS > deadline )) && break\n  sleep 1\ndone"), 0);
     assert.equal(shell('sleep 10\necho "sleep 5" && x && sleep 2'), 2);
     assert.equal(house("scripts/agent/await", "#!/bin/bash\nwhile true; do sleep 1; done\n").sleeps, 0);
@@ -1061,6 +1069,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(js(`${helpers}for (let i = 0; i < 20 && !ready(); i++) await wait(10);`), 0);
     assert.equal(js(`${helpers}while (!ready()) await wait(10);`), 1);
     assert.equal(js(`${helpers}let i = 0;\nwhile (i < 5) await wait(10);`), 1);
+    assert.equal(js(`${helpers}while (true) {\n  if (Date.now() > end && ready()) break;\n  await wait(10);\n}`), 1);
+    assert.equal(js(`${helpers}while (true) {\n  if (Date.now() > end || ready()) break;\n  await wait(10);\n}`), 0);
     assert.equal(js(`${helpers}let i = 0;\nwhile (i < 5) {\n  await wait(10);\n  i++;\n}`), 0);
     assert.equal(js(`${helpers}while (true) {\n  ready({ timeout: 500 });\n  await wait(1);\n}`), 1);
     assert.equal(js(`${helpers}do {\n  ready();\n} while (retries-- > 0)\nawait wait(1);`), 1);
@@ -1073,6 +1083,7 @@ if (process.argv.includes("--expired")) {
     assert.equal(js(`${helpers}for (const name of names) it(name, async () => await wait(5));`), 1);
     assert.equal(js(`${helpers}test("a", async () => {\n  for (let i = 0; i < 5 && !ready(); i++) {\n    if (i) log(i);\n    await wait(5);\n  }\n});`), 0);
     assert.equal(house("scripts/hello.ps1", "for ($i = 0; $i -lt 10; $i++) { Start-Sleep -Seconds 1 }\nwhile ($true) { Start-Sleep 1 }\n").sleeps, 1);
+    assert.equal(house("scripts/hello.ps1", "Write-Output Start-Sleep\nGet-Help Start-Sleep\n").sleeps, 0);
     assert.equal(py("while True:\n    for attempt in range(3):\n        if attempt == 2:\n            break\n    time.sleep(1)"), 1);
     assert.equal(shell('out="$(sleep 1; date)"'), 1);
     assert.equal(js(`${helpers}const end = Date.now() + 500;\nwhile (!ready()) {\n  if (Date.now() > end) throw new Error("late");\n  await wait(10);\n}`), 0);
@@ -1120,6 +1131,7 @@ if (process.argv.includes("--expired")) {
     assert.equal(known([{ issue: 1, rule: "pins", owner: "@dana", expires: "2099-01-01", steps: [] }]), 0);
     assert.equal(known([{ issue: 1, rule: "pins", owner: "dana", expires: "2099-01-01", steps: [] }]), 1);
     assert.equal(known([null, 3]), 2);
+    assert.equal(known([{ issue: 1, owner: ["@dana"], expires: "2099-01-01" }]), 1);
     assert.equal(house("apps/browser/scripts/sim/known.json", "null").skips, 0);
     assert.equal(house("apps/browser/scripts/sim/known.json", '{"failing":{}}').skips, 1);
   });

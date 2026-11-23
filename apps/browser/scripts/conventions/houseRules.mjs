@@ -6,9 +6,15 @@ const DEADLINE =
   /\b(?:deadline|SECONDS|EPOCHSECONDS|Date\.now|performance\.now|monotonic|perf_counter|time\.time|hrtime|attempts?|tries|retries|[Ee]lapsed|waited|max_?wait|maxWait|give_?up|giveUp|budget|expired|ends?At)\b|date\s+\+%s|Get-Date|Stopwatch/;
 const GIVES_UP = /\b(?:break|exit|return|throw|raise|die|fail|Write-Error)\b/;
 
+const ALSO_NEEDS = /&&|\s-and\s|\band\b/;
+
 function boundedBody(body) {
   const lines = body.split("\n");
-  return lines.some((line, k) => DEADLINE.test(line) && GIVES_UP.test(lines.slice(k, k + 3).join("\n")));
+  return lines.some((line, k) => {
+    if (!DEADLINE.test(line) || !GIVES_UP.test(lines.slice(k, k + 3).join("\n"))) return false;
+    const condition = line.replace(/&&\s*\{?\s*(?:break|exit|return|throw|die|fail)\b[\s\S]*$/, "");
+    return !ALSO_NEEDS.test(condition);
+  });
 }
 const SHELL_COUNTED = /-(?:lt|le|gt|ge)\b|\(\([^)]*[<>]/;
 const COMPARISON = /[^=<>!-][<>]=?[^=>]/;
@@ -120,7 +126,7 @@ export function helpExempt(lang, src, scan, sourcedPrinters = new Set()) {
   return () => false;
 }
 
-const SHELL_PREFIX_WORDS = new Set(["do", "then", "else", "elif", "time", "!"]);
+const SHELL_PREFIX_WORDS = new Set(["do", "then", "else", "elif", "time", "!", "if", "while", "until"]);
 
 function commandWords(code) {
   const words = [];
@@ -191,7 +197,7 @@ export function shellSleeps(code) {
 export function powershellSleeps(code) {
   const loops = braceLoops(code, /\b(foreach|for|while|do|until)\b(?=\s*[({])/gi);
   let found = 0;
-  for (const match of code.matchAll(/\bStart-Sleep\b/gi)) {
+  for (const match of code.matchAll(/(?<=(?:^|[;{(|&])[ \t]*)Start-Sleep\b/gim)) {
     const loop = innermost(loops, match.index);
     if (!loop || !braceBounded(code, loop, loops)) found++;
   }
@@ -576,7 +582,7 @@ export function listMarkers(path, src) {
       if (found) at = found.index;
     }
     cursor = at + 1;
-    const dated = OWNER.test(entry.owner ?? "") && typeof entry.expires === "string";
+    const dated = typeof entry.owner === "string" && OWNER.test(entry.owner) && typeof entry.expires === "string";
     return { at, kind: "quarantine", owner: dated ? entry.owner.slice(1) : null, date: dated ? entry.expires : null, claimed: entry.expires === undefined ? null : String(entry.expires) };
   });
 }
