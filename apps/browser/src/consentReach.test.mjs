@@ -2,11 +2,11 @@ import { join, win32 } from "node:path";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import ts from "typescript";
-import { DESKTOP_MODES, analyze, compare, platformSeams, readBaseline, reachSinks, reachSinksAcross, scopeFiles, scoreboard, writeBaseline } from "../scripts/consentReach.mjs";
+import { DESKTOP_MODES, analyze, compare, desktopModuleSuffixes, platformSeams, readBaseline, reachSinks, reachSinksAcross, scopeFiles, scoreboard, writeBaseline } from "../scripts/consentReach.mjs";
 import { ROOT, isTelemetryBuffer, unstampedEmits } from "../scripts/consentStatic.mjs";
 
-function virtualProgram(sources, { root = ROOT, joinPath = join, paths } = {}) {
-  const options = { noLib: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true, ...(paths ? { paths } : {}) };
+function virtualProgram(sources, { root = ROOT, joinPath = join, paths, moduleSuffixes } = {}) {
+  const options = { noLib: true, noEmit: true, target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true, ...(paths ? { paths } : {}), ...(moduleSuffixes ? { moduleSuffixes } : {}) };
   const posix = (name) => name.split("\\").join("/");
   const texts = new Map(Object.entries(sources).map(([rel, text]) => [posix(joinPath(root, rel)), text]));
   const host = ts.createCompilerHost(options);
@@ -81,6 +81,25 @@ if (process.argv.includes("--write")) {
     assert.deepEqual(sinksOf(programs.win).sort(), ["noter:apps/desktop/src/platform/helper.win.ts:2", ...shared].sort());
     const both = reachSinksAcross(Object.values(programs), new Set()).sinks.map((s) => `${s.kind}:${s.rel}:${s.line}`).sort();
     assert.deepEqual(both, ["noter:apps/desktop/src/platform/helper.win.ts:2", ...shared].sort(), "each call counts once, however many modes reach it");
+  });
+
+  test("each desktop mode walks the shared UI's own twins, as its Vite build resolves them", () => {
+    const sources = {
+      "apps/browser/src/state/telemetry/usage.ts": "export function noteThing() {}",
+      "apps/browser/src/lib/feature.ts": "export function feature() {}",
+      "apps/browser/src/lib/feature.win.ts": 'import { noteThing } from "../state/telemetry/usage";\nexport function feature() { noteThing(); }',
+      "apps/browser/src/lib/feature.linux.ts": "export function feature() {}",
+      "apps/browser/src/state/x.ts": [
+        'import { feature } from "../lib/feature";',
+        "declare const p: { then(cb: () => void): void };",
+        "p.then(() => feature());",
+      ].join("\n"),
+    };
+    const sinksOf = (program) => reachSinks(program, scopeFiles(program), new Set()).sinks.map((s) => `${s.kind}:${s.rel}:${s.line}`);
+    assert.deepEqual(desktopModuleSuffixes("win"), [".win", ".desktop", ".web", ""]);
+    assert.deepEqual(sinksOf(virtualProgram(sources)), []);
+    assert.deepEqual(sinksOf(virtualProgram(sources, { moduleSuffixes: desktopModuleSuffixes("linux") })), []);
+    assert.deepEqual(sinksOf(virtualProgram(sources, { moduleSuffixes: desktopModuleSuffixes("win") })), ["noter:apps/browser/src/lib/feature.win.ts:2"]);
   });
 
   test("for await and awaits inside a call's arguments make the callee continuation work, unless the caller forwards its token", () => {

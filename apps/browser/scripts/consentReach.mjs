@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { ROOT, TELEMETRY, TEST_FILE, arrivalStamps, declOf, nativeEventSections, queueSection, relOf, unclearedCounters, walk } from "./consentStatic.mjs";
+import { DESKTOP_MODES, platformSuffixes } from "../../desktop/desktopModes.ts";
 
 const HELP = `Usage: node apps/browser/scripts/consentReach.mjs [--report | --write | --help]
 
@@ -32,17 +33,20 @@ const NOTER = /^(?:note|count|track)[A-Z]/;
 const SINK_NAME = /^(?:capture|queueLog|warnFor|errorFor|counted|stillValid|(?:note|count|track)[A-Z]\w*)$/;
 const CONSENT_TYPE = /\bConsentToken\b/;
 
-export const DESKTOP_MODES = ["linux", "win"];
+export { DESKTOP_MODES };
 
 export const platformSeams = (mode, platform = join(ROOT, "apps/desktop/src/platform")) => ({
-  "@platform/*": [`.${mode}.ts`, `.${mode}.tsx`, ".desktop.ts", ".desktop.tsx"].map((suffix) => `${platform}/*${suffix}`),
+  "@platform/*": platformSuffixes(mode).flatMap((suffix) => [`${platform}/*${suffix}.ts`, `${platform}/*${suffix}.tsx`]),
 });
 
-function buildProgram(mode) {
+export const desktopModuleSuffixes = (mode) => [...platformSuffixes(mode), ".web", ""];
+
+function buildProgram(mode, moduleSuffixes) {
   const dir = join(ROOT, "apps/browser");
   const config = ts.parseJsonConfigFileContent(ts.readConfigFile(join(dir, "tsconfig.json"), ts.sys.readFile).config, ts.sys, dir);
   const desktop = walk("apps/desktop/src", /\.tsx?$/).filter((rel) => !TEST_FILE.test(rel)).map((rel) => join(ROOT, rel));
-  return ts.createProgram([...config.fileNames, ...desktop], { ...config.options, paths: { ...config.options.paths, ...platformSeams(mode) }, noEmit: true });
+  const paths = { ...config.options.paths, ...platformSeams(mode) };
+  return ts.createProgram([...config.fileNames, ...desktop], { ...config.options, paths, ...(moduleSuffixes ? { moduleSuffixes } : {}), noEmit: true });
 }
 
 function activityListeners() {
@@ -228,7 +232,7 @@ export function reachSinksAcross(programs, listeners) {
 const bump = (section, key, n = 1) => void (section[key] = (section[key] ?? 0) + n);
 
 export function analyze() {
-  const programs = DESKTOP_MODES.map(buildProgram);
+  const programs = [buildProgram("linux"), ...DESKTOP_MODES.map((mode) => buildProgram(mode, desktopModuleSuffixes(mode)))];
   const [program] = programs;
   const files = scopeFiles(program);
   const found = Object.fromEntries(SECTIONS.map((s) => [s, {}]));
