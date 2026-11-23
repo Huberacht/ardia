@@ -477,3 +477,65 @@ test("DevTools issue codes and the styles method's property names refuse hostile
     assert.notEqual(schemaProblem(styles.params, { tab: "t", selector: "a", properties: [value] }, "params"), null, id);
   }
 });
+
+const { analyzeTrace } = await import("./state/automation/devToolsInsights.ts");
+const { cascadeFor, declaredProperties } = await import("./state/automation/devToolsCascade.ts");
+
+function assertBoundedTree(value, label, depth = 0) {
+  assert.ok(depth < 12, `${label}: nesting stays shallow`);
+  if (typeof value === "string") assert.ok(value.length <= 4096, `${label}: a string of ${value.length} characters`);
+  else if (typeof value === "number") assert.ok(Number.isFinite(value), `${label}: a finite number`);
+  else if (Array.isArray(value)) {
+    assert.ok(value.length <= 64, `${label}: a list of ${value.length}`);
+    value.forEach((item, i) => assertBoundedTree(item, `${label}[${i}]`, depth + 1));
+  } else if (value && typeof value === "object") for (const [key, item] of Object.entries(value)) assertBoundedTree(item, `${label}.${key}`, depth + 1);
+}
+
+test("every hostile value in a page's trace events gives a bounded, well-shaped analysis and pollutes nothing", () => {
+  const navigation = { name: "navigationStart", ph: "R", pid: 2, tid: 3, ts: 1_000_000, args: { frame: "F", data: { documentLoaderURL: "https://a.example/", isOutermostMainFrame: true, navigationId: "N" } } };
+  const control = analyzeTrace([navigation, { name: "LayoutShift", ph: "I", pid: 2, tid: 3, ts: 1_100_000, args: { frame: "F", data: { score: 0.2, had_recent_input: false } } }]);
+  assert.equal(control.metrics.cls.value, 0.2, "a real shift is measured, so the hostile runs aren't vacuous");
+  for (const { id, value } of HOSTILE_VALUES) {
+    const events = [
+      navigation,
+      { name: value, ph: value, ts: value, dur: value, pid: value, tid: value, args: value },
+      { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_100, args: { data: { requestId: value, url: value, frame: value, renderBlocking: value, priority: value } } },
+      { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_200, args: { data: { requestId: "R", url: typeof value === "string" ? `https://a.example/${value}` : value, frame: "F", renderBlocking: "blocking" } } },
+      { name: "ResourceFinish", ph: "I", pid: 2, tid: 3, ts: 1_000_300, args: { data: { requestId: "R", finishTime: value, encodedDataLength: value } } },
+      { name: "largestContentfulPaint::Candidate", ph: "R", pid: 2, tid: 3, ts: 1_200_000, args: { frame: "F", data: { candidateIndex: value, nodeId: value, type: value, url: value, navigationId: "N" } } },
+      { name: "LayoutShift", ph: "I", pid: 2, tid: 3, ts: 1_300_000, args: { frame: value, data: { score: value, weighted_score_delta: value, impacted_nodes: value } } },
+      { name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: 1_400_000, args: { data: { interactionId: value, duration: value, type: value, frame: value, timeStamp: value, processingStart: value, processingEnd: value } } },
+      { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: 1_500_000, dur: 90_000, args: {} },
+      { name: "EvaluateScript", ph: "X", pid: 2, tid: 3, ts: 1_500_100, dur: 80_000, args: { data: { url: value, functionName: value } } },
+      { name: "TracingStartedInBrowser", ph: "I", pid: 1, tid: 1, ts: 999_000, args: { data: { frames: value } } },
+      { name: "FrameCommittedInBrowser", ph: "I", pid: 1, tid: 1, ts: 1_000_050, args: { data: { frame: value, parent: value } } },
+    ];
+    for (const input of [events, { traceEvents: events }, value]) {
+      const result = analyzeTrace(input);
+      assertBoundedTree(JSON.parse(JSON.stringify(result)), id);
+      assert.equal(typeof result.metrics.cls.value, "number", id);
+      for (const insight of result.insights) assert.match(insight.id, /^[a-z-]+$/, id);
+    }
+  }
+  assert.equal({}.ardiaPolluted, undefined);
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("every hostile value in a page's matched styles gives a bounded cascade answer and pollutes nothing", () => {
+  const control = cascadeFor({ matchedCSSRules: [{ rule: { origin: "regular", selectorList: { selectors: [{ text: ".x" }] }, style: { cssProperties: [{ name: "color", value: "red" }] } }, matchingSelectors: [0] }] }, {}, ["color"], new Map());
+  assert.equal(control.winner?.value ?? control[0].winner.value, "red", "a real rule wins, so the hostile runs aren't vacuous");
+  for (const { id, value } of HOSTILE_VALUES) {
+    const prop = { name: value, value, important: value, disabled: value, parsedOk: value, implicit: value, range: value, longhandProperties: value };
+    const rule = { rule: { origin: value, styleSheetId: value, selectorList: { selectors: [{ text: value, specificity: value }], text: value }, style: { styleSheetId: value, cssProperties: [prop, { name: "color", value, longhandProperties: [{ name: value, value }] }] }, layers: value, media: value, supports: value }, matchingSelectors: value };
+    const matched = { inlineStyle: { cssProperties: [prop] }, attributesStyle: value, matchedCSSRules: [rule, value], inherited: [value, { matchedCSSRules: [rule] }], cssPropertyRules: [{ propertyName: { text: value }, style: { cssProperties: [{ name: "inherits", value }] } }, value] };
+    for (const input of [matched, value]) {
+      const properties = typeof value === "string" && value ? ["color", value] : ["color"];
+      const answer = cascadeFor(input, { computedStyle: [{ name: value, value }] }, properties, new Map([[typeof value === "string" ? value : "sheet", { url: value, origin: value, startLine: value, startColumn: value, isInline: value }]]));
+      assertBoundedTree(JSON.parse(JSON.stringify(answer)), id);
+      for (const entry of answer) for (const declaration of [entry.winner, ...entry.overridden].filter(Boolean)) assert.equal(typeof declaration.value, "string", id);
+      assertBoundedTree(declaredProperties(input), `${id} declared`);
+    }
+  }
+  assert.equal({}.ardiaPolluted, undefined);
+  assert.equal(Object.prototype.polluted, undefined);
+});

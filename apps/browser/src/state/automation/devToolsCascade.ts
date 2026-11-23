@@ -77,9 +77,9 @@ function sourceOf(style: unknown, prop: unknown, headers: ReadonlyMap<string, Sh
   const column = whole(field(range, "startColumn"));
   return {
     styleSheetId,
-    url: header?.url ?? null,
-    line: line === null ? null : line + 1 + (header?.startLine ?? 0),
-    column: column === null ? null : column + 1 + (line === 0 ? (header?.startColumn ?? 0) : 0),
+    url: text(header?.url, 2048) || null,
+    line: line === null ? null : line + 1 + (whole(header?.startLine) ?? 0),
+    column: column === null ? null : column + 1 + (line === 0 ? (whole(header?.startColumn) ?? 0) : 0),
     inline: inline || header?.isInline === true,
   };
 }
@@ -267,7 +267,7 @@ export function cascadeFor(matched: unknown, computed: unknown, properties: read
   const registered = registeredInheritance(matched);
   const inherits = (property: string) => registered.get(property) ?? isInherited(property);
   return properties.slice(0, MAX_PROPERTIES).map((raw) => {
-    const property = propertyKey(raw);
+    const property = propertyKey(raw.slice(0, 256));
     let candidates = candidatesOf(own, property, headers, 0, 0);
     let winner = pickWinner(candidates);
     if (!winner && inherits(property)) {
