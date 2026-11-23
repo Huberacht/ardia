@@ -113,6 +113,7 @@ function compareRun(seed: number, size: number) {
     preventInline: r.int(6) === 0,
     bangs: r.int(4) ? BANGS : null,
     switchToOpenTab: seed % 3 === 0,
+    remotePending: seed % 4 === 1,
   };
   const other = makeProfile(rng(seed + 100_000), size);
   let source: SuggestionSource = p;

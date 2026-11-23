@@ -16,7 +16,7 @@ import { actionRow, createRow, dedupeSuggestions, Output, pageSuggestion, sugges
 export type { CommandAction, Suggestion, SuggestionResult, SuggestionSource, SuggestionVia, SuggestOptions } from "./suggestion.ts";
 export { displayUrl } from "./pageText.ts";
 export { prepareSuggestions } from "./candidatePool.ts";
-export { suggestionKey } from "./suggestionRows.ts";
+export { dedupeSuggestions, suggestionKey } from "./suggestionRows.ts";
 
 const DAY = 86_400_000;
 const lowerOrigin = (url: string) => url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, (origin) => origin.toLowerCase());
@@ -152,7 +152,7 @@ export function buildSuggestions(raw: string, source: SuggestionSource, options:
     const scopedUrl = (text: string) => scopedSearchUrl(scope, text, engine);
     out.push({ kind: "search", query, url: scopedUrl(query), engine: scope.name });
     out.push(...remoteRows(scopedUrl, scope.name));
-    out.push(...onSite!.items.map((x) => pageSuggestion(x.c, x.tabId)));
+    if (!options.remotePending) out.push(...onSite!.items.map((x) => pageSuggestion(x.c, x.tabId)));
     return { items: out.items, completion: "" };
   }
 
@@ -197,8 +197,10 @@ export function buildSuggestions(raw: string, source: SuggestionSource, options:
   out.push(...remoteSites.map((site): Suggestion => known(site.url) ?? tag({ kind: "page", url: site.url, title: site.title, favicon: null }, "engine_site")));
   const providerAt = out.items.length;
   out.push(...remoteRows((text) => searchUrl(engine, text), engine.name));
-  out.push(...listed.filter((x) => !lead.includes(x)).map((x) => rowOf(x)));
-  const providerRows = options.providers?.length ? globalProviderRows(options.providers, out.items) : [];
+  const trailing = listed.filter((x) => !lead.includes(x));
+  const providerRows = options.providers?.length ? globalProviderRows(options.providers, [...out.items, ...trailing.filter((x) => x.tabId).map((x) => rowOf(x))]) : [];
+  const offered = new Set(providerRows.map((row) => pageKey(row.url)));
+  if (!options.remotePending) out.push(...trailing.filter((x) => x.tabId || !offered.has(pageKey(x.c.url))).map((x) => rowOf(x)));
   const items = providerRows.length ? [...out.items.slice(0, providerAt), ...providerRows, ...out.items.slice(providerAt)] : out.items;
   if (guessRow && out.items.includes(guessRow)) tag(guessRow, "spaced_address");
   const shownVia = via.size ? viaOf(items, via) : undefined;

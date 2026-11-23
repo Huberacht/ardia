@@ -46,6 +46,7 @@ export type SuggestOptions = {
   scope?: SearchScope | null;
   preventInline?: boolean;
   switchToOpenTab?: boolean;
+  remotePending?: boolean;
   bangs?: BangTable | null;
 };
 
@@ -442,7 +443,7 @@ export function buildSuggestions(raw: string, source: SuggestionSource, options:
     const scopedUrl = (text: string) => scopedSearchUrl(scope, text, engine);
     out.push({ kind: "search", query, url: scopedUrl(query), engine: scope.name });
     out.push(...remoteRows(scopedUrl, scope.name));
-    out.push(...onSite!.items.map((x) => pageSuggestion(x.c, x.tabId)));
+    if (!options.remotePending) out.push(...onSite!.items.map((x) => pageSuggestion(x.c, x.tabId)));
     return { items: out.items, completion: "" };
   }
 
@@ -490,7 +491,7 @@ export function buildSuggestions(raw: string, source: SuggestionSource, options:
   for (const t of tabsByMatch) if (lead.length < 5 && t.m >= bar && !lead.some((x) => x.c.text.key === t.c.text.key)) lead.push(t);
   out.push(...lead.map(rowOf));
   out.push(...remoteRows((text) => searchUrl(engine, text), engine.name));
-  out.push(...listed.filter((x) => !lead.includes(x)).map(rowOf));
+  if (!options.remotePending) out.push(...listed.filter((x) => !lead.includes(x)).map(rowOf));
   return { items: out.items, completion };
 }
 

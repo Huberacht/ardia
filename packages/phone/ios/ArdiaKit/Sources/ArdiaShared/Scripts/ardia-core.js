@@ -2796,6 +2796,7 @@ __define("packages/core/src/suggest.ts", function (exports, __require) {
   __export(exports, "buildSuggestions", () => buildSuggestions);
   __export(exports, "displayUrl", () => __require("packages/core/src/pageText.ts")["displayUrl"]);
   __export(exports, "prepareSuggestions", () => __require("packages/core/src/candidatePool.ts")["prepareSuggestions"]);
+  __export(exports, "dedupeSuggestions", () => __require("packages/core/src/suggestionRows.ts")["dedupeSuggestions"]);
   __export(exports, "suggestionKey", () => __require("packages/core/src/suggestionRows.ts")["suggestionKey"]);
 const { findBang } = __require("packages/core/src/bangs.ts");
 const { calculate } = __require("packages/core/src/calculator.ts");
@@ -2951,7 +2952,7 @@ function buildSuggestions(raw        , source                  , options        
     const scopedUrl = (text        ) => scopedSearchUrl(scope, text, engine);
     out.push({ kind: "search", query, url: scopedUrl(query), engine: scope.name });
     out.push(...remoteRows(scopedUrl, scope.name));
-    out.push(...onSite .items.map((x) => pageSuggestion(x.c, x.tabId)));
+    if (!options.remotePending) out.push(...onSite .items.map((x) => pageSuggestion(x.c, x.tabId)));
     return { items: out.items, completion: "" };
   }
 
@@ -2996,8 +2997,10 @@ function buildSuggestions(raw        , source                  , options        
   out.push(...remoteSites.map((site)             => known(site.url) ?? tag({ kind: "page", url: site.url, title: site.title, favicon: null }, "engine_site")));
   const providerAt = out.items.length;
   out.push(...remoteRows((text) => searchUrl(engine, text), engine.name));
-  out.push(...listed.filter((x) => !lead.includes(x)).map((x) => rowOf(x)));
-  const providerRows = options.providers?.length ? globalProviderRows(options.providers, out.items) : [];
+  const trailing = listed.filter((x) => !lead.includes(x));
+  const providerRows = options.providers?.length ? globalProviderRows(options.providers, [...out.items, ...trailing.filter((x) => x.tabId).map((x) => rowOf(x))]) : [];
+  const offered = new Set(providerRows.map((row) => pageKey(row.url)));
+  if (!options.remotePending) out.push(...trailing.filter((x) => x.tabId || !offered.has(pageKey(x.c.url))).map((x) => rowOf(x)));
   const items = providerRows.length ? [...out.items.slice(0, providerAt), ...providerRows, ...out.items.slice(providerAt)] : out.items;
   if (guessRow && out.items.includes(guessRow)) tag(guessRow, "spaced_address");
   const shownVia = via.size ? viaOf(items, via) : undefined;
@@ -3510,7 +3513,7 @@ const { parseRemoteSuggestions, suggestReplyJson, suggestRequestUrl } = __requir
                                                                                                                       
 
                               
-                                                                                                                     
+                                                                                                                                            
                  
   
 
@@ -3545,7 +3548,7 @@ function createSuggestFetcher({
 
   return {
     cancel,
-    request(engine, query, onResult) {
+    request(engine, query, onResult, onFailed) {
       cancel();
       const url = suggestRequestUrl(engine, query);
       if (!url) return;
@@ -3577,7 +3580,11 @@ function createSuggestFetcher({
                 onResult(suggestions.queries, suggestions.sites);
               }
             },
-            () => {},
+            () => {
+              if (controller.signal.aborted || current !== generation) return;
+              inFlight = undefined;
+              onFailed?.();
+            },
           );
       }, delay);
     },

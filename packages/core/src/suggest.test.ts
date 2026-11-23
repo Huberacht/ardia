@@ -825,3 +825,54 @@ test("a typed address switched to shows its own title, or the tab's custom name,
   const renamed = buildSuggestions("https://a.example.com/#/b", { tabs: [{ ...tab, customTitle: "My board" }], history: visited }, opts).items[0];
   assert.equal(renamed?.kind === "page" && renamed.title, "My board");
 });
+
+const PAGES_THEN_REMOTE = Array.from({ length: 8 }, (_, i) => ({ url: `https://docs.example.com/react-${i}`, title: `React guide ${i}`, favicon: null, visits: 30 - i, lastVisit: now - 1000 }));
+
+test("rows shown while search suggestions are on their way stay where they are when the suggestions land", () => {
+  const remote = ["react hooks", "react router", "react native", "react query"];
+  for (const preference of ["search", "website"] as const) {
+    const waiting = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, preference, remotePending: true }).items);
+    const landed = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, preference, remote }).items);
+    assert.deepEqual(landed.slice(0, waiting.length), waiting, `${preference}: ${waiting.join(", ")} → ${landed.join(", ")}`);
+    assert.ok(landed.some((x) => x.startsWith("suggest:")), `${preference}: the suggestions are listed below`);
+  }
+  const none = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, remote: [] }).items);
+  const waiting = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, remotePending: true }).items);
+  assert.deepEqual(none.slice(0, waiting.length), waiting, "an empty answer only adds rows below");
+  assert.ok(none.length > waiting.length, "and fills the list once it is in");
+});
+
+test("a request that fails says so, so the bar stops waiting for it", async () => {
+  const fetch: FetchLike = async () => {
+    throw new Error("suggestion request stopped");
+  };
+  const fetcher = createSuggestFetcher({ fetch, delay: 0 });
+  const got = await new Promise<string>((resolve) => fetcher.request(google, "maps", () => resolve("result"), () => resolve("failed")));
+  assert.equal(got, "failed");
+});
+
+test("in a site scope, its pages wait below the suggestions too", () => {
+  const scope = { kind: "site" as const, name: "Docs", host: "docs.example.com", url: "https://docs.example.com/search?q=%s" };
+  const remote = ["react hooks", "react router"];
+  const waiting = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, scope, remotePending: true }).items);
+  const landed = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, scope, remote }).items);
+  assert.deepEqual(landed.slice(0, waiting.length), waiting);
+  assert.ok(landed.some((x) => x.startsWith("https://docs.example.com/react")), "its pages come in below");
+});
+
+test("a provider row shown while suggestions are on their way stays when the held history rows come in", () => {
+  const providers = [{ id: "docs", title: "Docs", rows: [{ title: "React guide 6 (Docs)", url: "https://docs.example.com/react-6" }] }];
+  const waiting = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, remotePending: true, providers }).items);
+  const landed = rows(buildSuggestions("react", { tabs: [], history: PAGES_THEN_REMOTE }, { now, remote: [], providers }).items);
+  assert.deepEqual(landed.slice(0, waiting.length), waiting, `${waiting.join(", ")} → ${landed.join(", ")}`);
+});
+
+test("an open tab further down keeps its Switch to Tab row over a provider row for the same page, before and after the suggestions land", () => {
+  const providers = [{ id: "docs", title: "Docs", rows: [{ title: "React guide 6 (Docs)", url: "https://docs.example.com/react-6" }] }];
+  const tabs = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ id: `t${i}`, url: `https://docs.example.com/react-${i}`, title: `React guide ${i}`, favicon: null }));
+  for (const options of [{ remotePending: true }, { remote: [] }]) {
+    const listed = rows(buildSuggestions("react", { tabs, history: PAGES_THEN_REMOTE }, { now, limit: 12, providers, ...options }).items);
+    assert.ok(!listed.some((x) => x.startsWith("provider:")), listed.join(", "));
+    if (!options.remotePending) assert.ok(listed.includes("tab:https://docs.example.com/react-6"), listed.join(", "));
+  }
+});
