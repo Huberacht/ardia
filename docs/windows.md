@@ -1530,11 +1530,15 @@ Issue #3686, part of #3678 (Track 4 of the cross-platform design: Windows on the
 Windows can drop React Native Windows and run the Linux model: Chromium is the app, and the shared desktop UI
 (`apps/linux`, later `apps/desktop`) is served from `chrome://ardia/`. It proves the hard parts on one window before any
 Linux patch is widened or the host is moved. Proven on 2026-11-23 in a fresh Windows 11 guest (`dockurr/windows` on
-a Boat VM, 1920×1080) at 100% and 150% scaling, with a Windows x64 engine and UI bundle built from this change on
-`main` at `16bd298`: the real-input run (28 checks at each scale), the junction check (31, every launch's real
-argv checked), the bridge's hostile-input check (11 checks over 15 malformed requests, 6 bad arguments, 12 reserved
-tab URLs and 5 reserved navigations), the stale-document check (8), the close-cycle check (12 closes with
-pass-through regions active) and `install_static_unittests --gtest_filter=UserDataDir.ArdiaShell*` all passed.
+a Boat VM, 1920×1080) with a Windows x64 engine and UI bundle built from this change on `main` at `14db917`: the
+real-input run (28 checks; 28 at 150% on the previous engine of this change, which differs only in the folder checks
+below), the junction check (31, every launch's real argv checked), the bridge's hostile-input check (11 checks over
+15 malformed requests, 6 bad arguments, 12 reserved tab URLs and 5 reserved navigations), the stale-document check
+(8), the close-cycle check (8 closes with pass-through regions active), the policy and cleanup-race check
+(`profile-edges.ps1`: a `UserDataDir` policy refused with its folder never created, and 3 of 3 launches opening while
+20,000 folders in the profile were being deleted; the engine before this round wrote Crashpad files into the policy
+folder and refused all 3 launches), the concurrent-runs check (`ports.ps1`) and
+`install_static_unittests --gtest_filter=UserDataDir.ArdiaShell*:UserDataDir.WebUITree*` (6 tests) all passed.
 
 ### Selecting the shell and keeping real data out
 

@@ -64,25 +64,27 @@ if ($existing -or $hklm) {
 Clear-WebUI
 $churn = Join-Path $web 'Chromium\Default\Ardia Churn'
 $opened = 0
+$racing = 0
 for ($launch = 1; $launch -le $ChurnLaunches; $launch++) {
   New-Item -ItemType Directory -Force $churn | Out-Null
   for ($n = 0; $n -lt $ChurnFolders; $n++) { [IO.Directory]::CreateDirectory((Join-Path $churn ('d{0:D6}' -f $n))) | Out-Null }
   $deleter = Start-Process powershell -ArgumentList @('-NoProfile', '-Command', "Get-ChildItem -LiteralPath '$churn' -Directory | Sort-Object Name -Descending | ForEach-Object { [IO.Directory]::Delete(`$_.FullName) }") -PassThru -WindowStyle Hidden
   Wait-Until { @(Get-ChildItem -LiteralPath $churn -Directory -ErrorAction SilentlyContinue).Count -lt $ChurnFolders } 30 'the cleanup to start deleting' -NoThrow | Out-Null
   $id = Start-Pilot @('--ardia-shell=webui')
+  $busyAtStart = -not $deleter.HasExited
+  $leftAtStart = @(Get-ChildItem -LiteralPath $churn -Directory -ErrorAction SilentlyContinue).Count
   $exit = [Pilot]::WaitExit($id, 3000)
   $h = $null
   if ($exit -eq -1) { try { $h = Wait-Shell 60 } catch {} }
-  $remaining = @(Get-ChildItem -LiteralPath $churn -Directory -ErrorAction SilentlyContinue).Count
-  $deleterBusy = -not $deleter.HasExited
   $shown = ($h -ne $null) -and ($h -ne [IntPtr]::Zero)
   if ($shown) { $opened++ }
-  Log ("churn launch {0}: exit {1}, window {2}, deleter still running when the engine started {3}, folders left {4} of {5}" -f $launch, $(if ($exit -eq -1) { 'none (running)' } else { $exit }), $shown, $deleterBusy, $remaining, $ChurnFolders)
+  if ($busyAtStart) { $racing++ }
+  Log ("churn launch {0}: exit {1}, window {2}; just after the engine started the cleanup was still running {3} with {4} of {5} folders left" -f $launch, $(if ($exit -eq -1) { 'none (running)' } else { $exit }), $shown, $busyAtStart, $leftAtStart, $ChurnFolders)
   Stop-Engine
   $deleter.WaitForExit(120000) | Out-Null
   Clear-WebUI
 }
-Check 'cleanup-during-start-still-opens' ($opened -eq $ChurnLaunches) "$opened of $ChurnLaunches launches opened the window while $ChurnFolders folders in the profile were being deleted"
+Check 'cleanup-during-start-still-opens' (($opened -eq $ChurnLaunches) -and ($racing -eq $ChurnLaunches)) "$opened of $ChurnLaunches launches opened the window; the cleanup of $ChurnFolders folders in the profile was still running as $racing of them started"
 
 Remove-PilotRun $run
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\$Label-results.json"
