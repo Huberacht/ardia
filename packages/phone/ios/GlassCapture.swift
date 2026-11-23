@@ -213,6 +213,22 @@ final class GlassCapture {
 
   var isIdle: Bool { settle == 0 }
 
+  func surveyPage(_ web: WKWebView, in space: UIView) {
+    let place = GlassBackdrop.transform(of: web.layer.presentation() ?? web.layer, to: space.layer.presentation() ?? space.layer)
+    let values = [place.a, place.d, place.tx, place.ty, web.scrollView.contentOffset.x, web.scrollView.contentOffset.y, web.scrollView.zoomScale, web.bounds.width, web.bounds.height]
+    var placeHasher = Hasher()
+    values.forEach { placeHasher.combine($0) }
+    signatureValue = placeHasher.finalize()
+    var hasher = Hasher()
+    hasher.combine(signatureValue)
+    hasher.combine(page.generation)
+    let value = hasher.finalize()
+    if value != signature {
+      signature = value
+      settle = LiquidGlassRules.settleFrames
+    }
+  }
+
   func wants(_ wanted: CGRect, now: CFTimeInterval, gap: TimeInterval = 0) -> Bool {
     if now < retryAt { return false }
     if texture == nil || !rect.contains(wanted) || rect.width > wanted.width * 1.5 + 64 || rect.height > wanted.height * 1.5 + 64 { return true }
@@ -371,6 +387,7 @@ final class GlassPageShot {
   static let reach: CGFloat = 320
 
   private(set) var image: CGImage?
+  private(set) var generation = 0
   private var rect: CGRect = .null
   private var offset: CGPoint = .zero
   private var zoom: CGFloat = 1
@@ -381,7 +398,7 @@ final class GlassPageShot {
 
   func request(_ web: WKWebView, pixelsPerPoint: CGFloat, signature: Int, now: CFTimeInterval) {
     guard !pending else { return }
-    guard image == nil || signature != requestedSignature || now - requestedAt > LiquidGlassRules.idleRefresh else { return }
+    guard image == nil || signature != requestedSignature || now - requestedAt > LiquidGlassRules.pageRefresh else { return }
     pending = true
     requestedSignature = signature
     requestedAt = now
@@ -399,6 +416,7 @@ final class GlassPageShot {
         self.pending = false
         guard let picture = image?.cgImage else { return }
         self.image = picture
+        self.generation += 1
         self.rect = rect
         self.offset = offset
         self.zoom = zoom
