@@ -607,6 +607,22 @@ leaves out stay out, as before: `disable-download-quarantine` (Chrome quarantine
 `com.apple.quarantine` and its source URL in `kMDItemWhereFroms`), `prefs-always-prompt-for-download-directory`
 (Chrome's default, save to Downloads without asking, is Ardia's) and `enable-extra-locales`.
 
+### Tracking upstream
+
+The pins live in four files that have to agree: `env.sh` (`CHROMIUM_VERSION`, `HELIUM_TAG`, `HELIUM_MACOS_TAG`,
+`HELIUM_LINUX_TAG`), this folder's `helium-pins.ini` (macOS and Linux), `scripts/windows/engine/helium-pins.ini` and
+the `chromium` of `scripts/windows/engine/prebuilt.json`. `scripts/engine/upstream-pins.mjs --check` fails, offline,
+when they disagree on the Chromium version, the helium-chromium tag or commit, or a platform tag that isn't a release
+of the pinned helium-chromium; its test runs it in every pull request (Checks, "repository, vouch and stale tests").
+Bump them in one pull request, with the Windows engine published for the new `prebuilt.json` first.
+
+The Upstream pins workflow (`.github/workflows/upstream.yml`) runs every Monday and compares the pins with the latest
+releases of helium-chromium, helium-macos, helium-linux and helium-windows and with `chromium_version.txt` at the newest
+helium-chromium release, with Chromium stable from chromiumdash as context. While a platform is behind it keeps one
+open issue, labelled `todo`, up to date; once every pin is current it comments and closes it. Run it locally with
+`GITHUB_TOKEN=$(gh auth token) node scripts/engine/upstream-pins.mjs`, or dispatch the workflow with `dry_run` to see
+what it would change on the issue. None of these files is an engine key input.
+
 ### 0.21.1 → 0.21.2 (Chromium 157.0.8103.50, 2026-11-12)
 
 A Chromium patch release, through Helium 0.21.2 and helium-macos 0.21.2.1. What changed in Helium, and what we did:
