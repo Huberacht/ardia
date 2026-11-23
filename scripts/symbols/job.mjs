@@ -51,7 +51,8 @@ export function resolve(todo, maps, now, known = []) {
   const kept = new Map(known.filter((k) => k.symbol).map((k) => [frameKey(k.uuid, Number(k.offset)), k]));
   return todo.map((frame) => {
     const map = maps.get(frame.uuid);
-    const hit = map ? lookup(map, frame.offset) : null;
+    const found = map ? lookup(map, frame.offset) : null;
+    const hit = found?.name ? found : null;
     const previous = kept.get(frameKey(frame.uuid, frame.offset));
     if (!hit && previous) {
       return { uuid: frame.uuid, offset: frame.offset, image: frame.image, symbol: previous.symbol, symbol_offset: Number(previous.symbol_offset), source: previous.source, resolved_at: stamp(now) };
