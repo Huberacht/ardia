@@ -25,7 +25,8 @@
 # A Windows key (win, or windows) covers what scripts/windows/engine/key-inputs.json declares the Windows build reads, read
 # as data from the commit keyed (--paths: from the working tree), never run: the patches it applies, in order
 # (engine/patches/series' lines for every platform or naming mac or win, less series-win's skips, then series-win's
-# own; a series layer for win has no key until the Windows build runs series layers), its trees
+# own; a series layer Windows would select, untagged or naming win, has no key until the Windows build runs series
+# layers, engine/chromium aside, which it copies itself), its trees
 # (engine/chromium/src, engine/patches/build, the offline game, scripts/windows/engine less its checks, tests and
 # prebuilt.json), its files (series.py, the ArdiaCore headers and launch switches it copies, the app's EngineApi.h) and
 # the resource lists, required and never excluded, with the sources they name. A commit without key-inputs.json is

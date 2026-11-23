@@ -1099,3 +1099,53 @@ test(
     assert.notEqual(fx.dirty('win'), '')
   }),
 )
+
+test(
+  'a parenthesis inside a GN string or comment never hides a later block from the scan',
+  withFixture(({ root, write, commit, change }) => {
+    const units = ['ac_quoted.cc', 'ac_escaped.cc', 'ac_commented.cc']
+    for (const unit of units) write(`${ardia}/${unit}`, `${unit}\n`)
+    const blocks = [
+      'if (is_linux || is_win) {\n  ardia_sources += [ "ac_quoted.cc", "ac_escaped.cc", "ac_commented.cc" ]\n}\n',
+      'if (is_mac && marker == "(") {\n  ardia_sources += [ "ac_quoted.cc" ]\n}\n',
+      'if (is_mac && marker == "\\"(") {\n  ardia_sources += [ "ac_escaped.cc" ]\n}\n',
+      'if (is_mac  # (\n) {\n  ardia_sources += [ "ac_commented.cc" ]\n}\n',
+    ].join('\n')
+    write(`${ardia}/BUILD.gn`, readFileSync(join(root, ardia, 'BUILD.gn'), 'utf8').replace('source_set("ardia") {', `${blocks}\nsource_set("ardia") {`))
+    let before = commit('blocks with parentheses in strings and comments')
+    for (const unit of units) {
+      const after = change(`${ardia}/${unit}`, `${unit}, changed\n`)
+      assertKeys(before, after, { macos: true, linux: true, win: true })
+      before = after
+    }
+  }),
+)
+
+test(
+  'a BUILD.gn whose condition never closes counts every unit it names for every platform',
+  withFixture(({ write, commit, change, pathspecs }) => {
+    write(`${ardia}/lost/lost_linux.cc`, 'lost\n')
+    write(`${ardia}/lost/BUILD.gn`, 'if (is_linux) {\n  sources = [ "lost_linux.cc" ]\n}\n\nif (is_mac && (use_ozone\n')
+    const before = commit('a condition that never closes')
+    assert.ok(!pathspecs('macos').includes(`:(exclude)${ardia}/lost/lost_linux.cc`))
+    assertKeys(before, change(`${ardia}/lost/lost_linux.cc`, 'lost, changed\n'), { macos: true, linux: true, win: true })
+  }),
+)
+
+for (const line of ['layer engine/ardiacore-desktop', 'layer engine/ardiacore-desktop all', 'layer engine/ardiacore-desktop mac,linux,win', 'layer engine/ardiacore-desktop win']) {
+  test(
+    `\`${line}\` has no Windows key, since the Windows build runs no series layer but engine/chromium`,
+    withFixture(({ key, write, git, run }) => {
+      write('engine/ardiacore-desktop/apply.sh', '#!/usr/bin/env bash\n')
+      write('engine/ardiacore-desktop/src/ardia/desktop/host.cc', 'desktop host\n')
+      write('engine/patches/series', `${series}${line}\n`)
+      git('add', '-A')
+      git('commit', '-q', '-m', line)
+      const refused = run(['--platform', 'win'])
+      assert.notEqual(refused.status, 0)
+      assert.match(refused.stderr, /engine\/ardiacore-desktop` is a layer for win, and the Windows build runs no series layer yet but engine\/chromium/)
+      assert.match(key('macos'), /^[0-9a-f]{40}$/)
+      assert.match(key('linux'), /^[0-9a-f]{40}$/)
+    }),
+  )
+}

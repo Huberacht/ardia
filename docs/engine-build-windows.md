@@ -238,9 +238,11 @@ strictly with `git apply` and else with `patch`'s fuzz. It records a failure and
 `~/chromium-build-win/logs/series-win.tsv`. `series-win` today: three skips and 21 Windows-only patches ([Windows-only patches](#windows-only-patches)).
 A shared `chromium` line may end in a platform tag since the Linux port: untagged lines are for every platform, and
 Windows takes those and the `mac` ones (the set it started from), never `linux`. A tag can name several platforms
-joined by commas (`linux,win`); Windows takes a line whose platforms include `mac` or `win`. A `layer` line naming `win`
-is refused, here and by the Windows key, until `series_win.py` runs series layers. The layer's `BUILD.gn` conditions are
-read the same way: `is_mac`, `is_linux` and `is_win` joined by `!`, `&&`, `||` and parentheses.
+joined by commas (`linux,win`); Windows takes a line whose platforms include `mac` or `win`. A `layer` line Windows would
+select (untagged, `all`, or naming `win`) is refused, here and by the Windows key, until `series_win.py` runs series
+layers; `engine/chromium` is the exception, since `series_win.py` copies it itself. The layer's `BUILD.gn` conditions are
+read the same way: `is_mac`, `is_linux` and `is_win` joined by `!`, `&&`, `||` and parentheses, a condition wrapped over
+lines included; anything else stops the build.
 The layers:
 
 - `engine/chromium/apply.sh` runs as is. Its `chrome/browser/ardia` (the `ac_*` C API) then builds on Windows from a

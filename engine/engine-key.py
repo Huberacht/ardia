@@ -28,6 +28,7 @@ LEAVES_OUT = {'mac': 'linux', 'linux': 'mac', 'win': 'mac'}
 GN_PLATFORMS = {'is_mac': 'mac', 'is_linux': 'linux', 'is_win': 'win'}
 GN_TOKEN = r'\s*(\|\||&&|==|!=|<=|>=|[!()<>,\[\]]|"(?:[^"\\]|\\.)*"|[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)'
 GN_COMPARISONS = ('==', '!=', '<', '>', '<=', '>=')
+WINDOWS_OWN_LAYERS = ('engine/chromium',)
 CHECKOUT = pathlib.Path(__file__).resolve().parents[1]
 WIN_ROOT = 'scripts/windows/engine'
 WIN_DECLARATIONS = 'scripts/windows/engine/key-inputs.json'
@@ -260,7 +261,38 @@ def gn_engines(condition):
         return ENGINES
 
 
-def gn_strings(text):
+class GnLost(Exception):
+    pass
+
+
+def gn_string_end(text, index):
+    cursor = index + 1
+    while cursor < len(text) and text[cursor] != '"':
+        cursor += 2 if text[cursor] == '\\' else 1
+    return cursor
+
+
+def gn_condition_end(text, opening):
+    depth, cursor = 0, opening
+    while cursor < len(text):
+        char = text[cursor]
+        if char == '"':
+            cursor = gn_string_end(text, cursor)
+        elif char == '#':
+            end = text.find('\n', cursor)
+            cursor = len(text) if end < 0 else end
+            continue
+        elif char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth == 0:
+                return cursor
+        cursor += 1
+    raise GnLost(opening)
+
+
+def gn_strings(text, flat=False):
     stack, pending, index, length = [ENGINES], None, 0, len(text)
     while index < length:
         char = text[index]
@@ -283,17 +315,13 @@ def gn_strings(text):
         word = re.match(r'[A-Za-z_][A-Za-z0-9_]*', text[index:index + 64])
         if word and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] == '_')):
             name = word.group(0)
-            if name == 'if':
-                opening = text.find('(', index)
-                depth, cursor = 0, opening
-                while cursor < length:
-                    if text[cursor] == '(':
-                        depth += 1
-                    elif text[cursor] == ')':
-                        depth -= 1
-                        if depth == 0:
-                            break
-                    cursor += 1
+            if name == 'if' and not flat:
+                opening = index + len(name)
+                while opening < length and text[opening] in ' \t\r\n':
+                    opening += 1
+                if opening >= length or text[opening] != '(':
+                    raise GnLost(index)
+                cursor = gn_condition_end(text, opening)
                 pending = stack[-1] & gn_engines(text[opening + 1:cursor])
                 index = cursor + 1
                 continue
@@ -330,7 +358,12 @@ def foreign_units(tree, platform):
         if not path.startswith('engine/') or posixpath.basename(path) != 'BUILD.gn':
             continue
         base = posixpath.dirname(path)
-        for context, value in gn_strings(tree.read(path).decode('utf-8', 'surrogateescape')):
+        text = tree.read(path).decode('utf-8', 'surrogateescape')
+        try:
+            strings = list(gn_strings(text))
+        except GnLost:
+            strings = list(gn_strings(text, flat=True))
+        for context, value in strings:
             if not value.endswith(UNITS):
                 continue
             sources, ambiguous = gn_sources(value, base, roots, files)
@@ -434,9 +467,10 @@ def chromium_names(text, origin, tags):
             raise Problem(f'{origin}:{number}: unknown platform `{tag}`; the series knows all, or one or more of '
                           f'{", ".join(sorted(ENGINES))} joined by commas')
         if fields[0] == 'layer':
-            if tag != 'all' and 'win' in engines:
+            if 'win' in engines and fields[1] not in WINDOWS_OWN_LAYERS:
                 raise Problem(f'{origin}:{number}: `{fields[1]}` is a layer for win, and the Windows build runs no series '
-                              'layer yet: teach series_win.py to apply it before marking it win')
+                              f'layer yet but {", ".join(WINDOWS_OWN_LAYERS)}: teach series_win.py to apply it, or select '
+                              'platforms without win')
             continue
         if not safe_relative(fields[1]) or '/' in fields[1]:
             raise Problem(f'{origin}:{number}: `{fields[1]}` is not a patch file name')

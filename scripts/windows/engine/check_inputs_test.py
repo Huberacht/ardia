@@ -248,6 +248,35 @@ class SelectorTest(unittest.TestCase):
         with self.assertRaisesRegex(self.build.InputError, "can't tell whether it takes `if \\(is_win && use_ozone\\)`"):
             self.build.windows_sources(text.replace('is_linux || is_win', 'is_win && use_ozone'))
 
+    def test_windows_sources_read_a_condition_wrapped_over_lines(self):
+        block = 'if ({}) {{\n  ardia_sources += [\n    "{}",\n  ]\n}}\n\n'
+        text = ('ardia_sources = [\n  "shared.cc",\n]\n\n'
+                + block.format('is_mac ||\n    is_linux', 'posix.cc')
+                + block.format('is_linux ||\n    is_win', 'desktop.cc')
+                + block.format('!(is_mac ||\n      is_linux)', 'neither.cc')
+                + 'source_set("ardia") {\n  sources = ardia_sources\n}\n')
+        self.assertEqual(self.build.windows_sources(text), ['shared.cc', 'desktop.cc', 'neither.cc'])
+
+    def test_windows_sources_refuse_a_condition_they_cannot_place(self):
+        tail = 'source_set("ardia") {\n  sources = ardia_sources\n}\n'
+        for text, message in (
+                ('if (is_win) { ardia_sources += [ "x.cc" ] }\n', 'with the block on the lines below'),
+                ('if (is_win)\n{\n  ardia_sources += [\n    "x.cc",\n  ]\n}\n', 'with the block on the lines below'),
+                ('if (is_mac ||\n', "can't find where"),
+                ('if (is_mac && marker == "(" ||\n    is_win) {\n}\n', "can't find where")):
+            with self.subTest(text=text), self.assertRaisesRegex(self.build.InputError, message):
+                self.build.windows_sources(text + tail)
+
+    def test_series_lines_refuse_every_spelling_of_a_series_layer_for_windows(self):
+        for line in ('layer engine/extra', 'layer engine/extra all', 'layer engine/extra win', 'layer engine/extra linux,win',
+                     'layer engine/extra mac,linux,win'):
+            with self.subTest(line=line), self.assertRaisesRegex(self.build.InputError, 'runs no series layer yet but engine/chromium'):
+                self.build.series_lines(f'{line}\n', 'series')
+        for line in ('layer engine/chromium', 'layer engine/chromium all', 'layer engine/ardiacore mac',
+                     'layer engine/ardiacore-linux linux', 'layer engine/extra mac,linux'):
+            with self.subTest(line=line):
+                self.assertEqual(self.build.series_lines(f'{line}\n', 'series'), [])
+
 
 if __name__ == '__main__':
     unittest.main()

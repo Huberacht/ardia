@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Our series on a Windows tree: the `chromium` lines of engine/patches/series that are for every platform or whose
 platforms include `mac` or `win` (Windows started from the Mac's set; `linux` lines are never applied, `linux,win`
-lines are; a `layer` line for win is refused until this script runs series layers), then those of
+lines are; a `layer` line it would select, untagged or naming win, is refused until this script runs series layers,
+engine/chromium aside), then those of
 scripts/windows/engine/series-win (when it exists; its patches in scripts/windows/engine/patches,
 and its `skip <patch>` lines leave a patch of engine/patches/series out), each applied strictly (git apply), else with patch's fuzz.
 A patch that fails is recorded and the rest still run. Each patch that goes in is written to .series-win-applied beside
@@ -41,6 +42,9 @@ SERIES_TAGS = ('all',) + ENGINES
 WINDOWS_FROM_MAC_BLOCK = ('ac_reauth.cc',)
 GN_PLATFORMS = {'is_mac': False, 'is_linux': False, 'is_win': True}
 GN_TOKEN = re.compile(r'\s*(\|\||&&|[!()]|[A-Za-z_][A-Za-z0-9_]*)')
+WINDOWS_OWN_LAYERS = ('engine/chromium',)
+GN_IF = re.compile(r'^if\s*\(')
+GN_BLOCK = re.compile(r'^if \((.+)\) \{$')
 LAYER_ASSERT = re.compile(r'^assert\(is_mac( \|\| is_linux)?\)$', re.M)
 LAYER_BUILD = 'engine/chromium/src/chrome/browser/ardia/BUILD.gn'
 SERIES_REL = 'engine/patches/series'
@@ -106,9 +110,10 @@ def series_lines(text, path, tags=WINDOWS_TAGS):
             raise InputError(f'{where(path, n)}: unknown platform `{fields[2]}`; this script knows all, or one or more of '
                              f'{", ".join(ENGINES)} joined by commas')
         if fields[0] == 'layer':
-            if 'win' in line_tags:
+            if ('all' in line_tags or 'win' in line_tags) and fields[1] not in WINDOWS_OWN_LAYERS:
                 raise InputError(f'{where(path, n)}: `{fields[1]}` is a layer for win, and this script runs no series layer '
-                                 'yet: teach it to apply the layer before marking it win')
+                                 f'yet but {", ".join(WINDOWS_OWN_LAYERS)}: teach it to apply the layer, or select '
+                                 'platforms without win')
             continue
         if any(tag in tags for tag in line_tags):
             out.append(fields[1])
@@ -319,10 +324,28 @@ def windows_takes(condition):
     return value if at == len(tokens) else None
 
 
+def joined_conditions(text):
+    lines, joined, n = text.splitlines(), [], 0
+    while n < len(lines):
+        start, stripped = n + 1, lines[n].strip()
+        if GN_IF.match(stripped):
+            while stripped.count('(') != stripped.count(')'):
+                n += 1
+                if n >= len(lines) or '"' in stripped or '#' in stripped:
+                    raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), start)}: the Windows build can\'t find where '
+                                     f'the condition `{stripped}` ends')
+                stripped = f'{stripped} {lines[n].strip()}'
+            if not GN_BLOCK.match(stripped):
+                raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), start)}: the Windows build reads a condition as '
+                                 f'`if (...) {{` with the block on the lines below, not `{stripped}`')
+        joined.append((start, stripped))
+        n += 1
+    return joined
+
+
 def windows_sources(text):
     found, blocks, listing = [], [], None
-    for n, line in enumerate(text.splitlines(), 1):
-        stripped = line.strip()
+    for n, stripped in joined_conditions(text):
         if listing is not None:
             if stripped == ']':
                 listing = None
@@ -353,7 +376,7 @@ def windows_sources(text):
         if stripped == '}':
             blocks.pop()
             continue
-        condition = re.match(r'^if \((.+)\) \{$', stripped)
+        condition = GN_BLOCK.match(stripped)
         if condition:
             taken = windows_takes(condition.group(1))
             if taken is None:
