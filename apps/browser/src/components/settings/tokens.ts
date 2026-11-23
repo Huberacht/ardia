@@ -103,6 +103,7 @@ export const settingsLayout = { emptyTop: 40, sidebarWidth: 214, paneMaxWidth: 6
 
 export const choicePreview = {
   tabRows: [1, 0.85, 0.95, 0.7],
+  topTabRows: [1, 1, 1, 1],
   shortTabRows: [1, 0.8, 0.9],
   switcherCards: [false, true, false],
   resultLines: [0.9, 0.6],
