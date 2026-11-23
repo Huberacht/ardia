@@ -252,4 +252,43 @@ final class ControlDoorbellTests: XCTestCase {
     XCTAssertTrue(ControlDoorbell.peerLeft(fd))
     close(fd)
   }
+
+  func testAGrantSkipsOtherAsksWhosePeerHasGone() {
+    let store = ControlApprovals(directory: scratch.path)
+    let bell = doorbell()
+    queue.sync {
+      bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9))
+      bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey, token: token(10))
+    }
+    let gone = clients.last!
+    _ = "x".withCString { send(gone, $0, 1, 0) }
+    close(gone)
+    clients.removeAll { $0 == gone }
+    XCTAssertTrue(queue.sync { bell.answer(events[0].1["ask"] as! Int, .always, approvals: store) })
+    XCTAssertEqual(opened.map(\.0), [1])
+    XCTAssertEqual(queue.sync { bell.waitingCount }, 0)
+    XCTAssertEqual(events.filter { $0.0 == "onPeerAskEnded" }.map { $0.1["outcome"] as? String }, ["always", "left"])
+  }
+
+  func testDenyEndsTheSameProgramsOtherAsks() {
+    let bell = doorbell()
+    queue.sync {
+      bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9))
+      bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey, token: token(10))
+    }
+    let second = clients.last!
+    XCTAssertTrue(queue.sync { bell.answer(events[0].1["ask"] as! Int, .deny, approvals: nil) })
+    XCTAssertEqual(queue.sync { bell.waitingCount }, 0)
+    XCTAssertEqual(refusal(second), "refused")
+    XCTAssertEqual(queue.sync { bell.openAsks.count }, 0)
+  }
+
+  func testAnExpiredAskWithoutAKeyStillEndsOnAClick() {
+    let bell = doorbell(deadline: 5)
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: nil, token: token(9)) }
+    clock = clock.addingTimeInterval(6)
+    XCTAssertFalse(queue.sync { bell.answer(events[0].1["ask"] as! Int, .once, approvals: nil) })
+    XCTAssertEqual(queue.sync { bell.openAsks.count }, 0)
+    XCTAssertEqual(refusal(clients.last!), "refused")
+  }
 }

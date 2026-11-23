@@ -89,20 +89,20 @@ public final class ControlDoorbell {
     guard let ask = asks[id], [.once, .halfHour, .always, .deny, .unshown].contains(outcome) else { return false }
     let at = now()
     if ask.deadline <= at {
-      if let key = ask.key { quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal) }
       end(id, .timeout, admit: false)
+      quietAll(ask.key, .timeout, at: at)
       return false
     }
-    if outcome == .deny || outcome == .unshown {
-      if outcome == .deny, let key = ask.key { quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal) }
-      end(id, outcome, admit: false)
+    if outcome == .deny {
+      quietAll(ask.key, .deny, at: at)
+      end(id, .deny, admit: false)
       return true
     }
-    dropLeft(of: id)
-    guard let live = asks[id], !live.connections.isEmpty, let token = tokens[id], alive(token) else {
-      end(id, .left, admit: false)
-      return false
+    if outcome == .unshown {
+      end(id, .unshown, admit: false)
+      return true
     }
+    guard let live = stillLive(id, at: at) else { return false }
     guard capacity() > 0 else {
       end(id, .full, admit: false)
       return false
@@ -119,9 +119,30 @@ public final class ControlDoorbell {
     let until = approval.until.map { Date(timeIntervalSince1970: $0) }
     end(id, outcome, admit: true, key: key, until: until)
     for other in openAsks where other.key == key {
+      guard stillLive(other.id, at: at) != nil else { continue }
       end(other.id, outcome, admit: true, key: key, until: until)
     }
     return true
+  }
+
+  private func stillLive(_ id: Int, at: Date) -> Ask? {
+    guard let ask = asks[id] else { return nil }
+    if ask.deadline <= at {
+      end(id, .timeout, admit: false)
+      return nil
+    }
+    dropLeft(of: id)
+    guard let live = asks[id], !live.connections.isEmpty, let token = tokens[id], alive(token) else {
+      end(id, .left, admit: false)
+      return nil
+    }
+    return live
+  }
+
+  private func quietAll(_ key: String?, _ outcome: Outcome, at: Date) {
+    guard let key else { return }
+    quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal)
+    for ask in openAsks where ask.key == key { end(ask.id, outcome, admit: false) }
   }
 
   public func check() {
@@ -132,8 +153,8 @@ public final class ControlDoorbell {
       if ask.connections.isEmpty || !(tokens[ask.id].map(alive) ?? false) {
         end(ask.id, .left, admit: false)
       } else if ask.deadline <= at {
-        if let key = ask.key { quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal) }
         end(ask.id, .timeout, admit: false)
+        quietAll(ask.key, .timeout, at: at)
       }
     }
     if asks.isEmpty { disarm() }

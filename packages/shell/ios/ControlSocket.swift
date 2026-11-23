@@ -32,6 +32,7 @@ final class ControlSocket {
   private let resolver = DispatchQueue(label: "ardia.control.peers", qos: .userInitiated, attributes: .concurrent)
   private var resolverJobs = 0
   private var expiries: [String: DispatchWorkItem] = [:]
+  private var approvedUntil: [Int: Date] = [:]
   private lazy var doorbell = ControlDoorbell(
     queue: queue,
     capacity: { [weak self] in self.map { Self.maxConnections - $0.connections.count } ?? 0 },
@@ -136,6 +137,17 @@ final class ControlSocket {
     }
   }
 
+  private func stillApproved(_ connection: ControlConnection) -> Bool {
+    guard let until = approvedUntil[connection.id], until <= Date(), let key = approvalKeys[connection.id] else { return true }
+    let now = Date()
+    if let live = approvalStore()?.load(now: now).first(where: { $0.key == key && $0.live(at: now) }) {
+      approvedUntil[connection.id] = live.until.map { Date(timeIntervalSince1970: $0) }
+      return true
+    }
+    connection.retire()
+    return false
+  }
+
   private func expire(_ key: String, at until: Date) {
     guard expiries[key] == nil else { return }
     let item = DispatchWorkItem { [weak self] in
@@ -150,7 +162,7 @@ final class ControlSocket {
       self.retireApproved { $0 == key }
     }
     expiries[key] = item
-    queue.asyncAfter(deadline: .now() + max(0, until.timeIntervalSinceNow) + 0.5, execute: item)
+    queue.asyncAfter(wallDeadline: .now() + max(0, until.timeIntervalSinceNow) + 0.5, execute: item)
   }
 
   private static let decidePrefix = Data("{\"decide\":".utf8)
@@ -244,6 +256,7 @@ final class ControlSocket {
     connections.removeAll()
     peerFinished.removeAll()
     approvalKeys.removeAll()
+    approvedUntil.removeAll()
     for item in expiries.values { item.cancel() }
     expiries.removeAll()
     for fd in resolving.values { Darwin.close(fd) }
@@ -324,11 +337,13 @@ final class ControlSocket {
     let connection = ControlConnection(
       id: id, fd: fd, queue: queue,
       onLine: { [weak self] connection, line in
-        self?.sink?.send("onRequest", ["connection": connection.id, "generation": generation, "line": line])
+        guard let self, self.stillApproved(connection) else { return }
+        self.sink?.send("onRequest", ["connection": connection.id, "generation": generation, "line": line])
       },
       onClose: { [weak self] connection in
         guard let self, self.connections.removeValue(forKey: connection.id) != nil else { return }
         self.approvalKeys[connection.id] = nil
+        self.approvedUntil[connection.id] = nil
         guard self.peerFinished.remove(connection.id) == nil else { return }
         self.sink?.send("onClose", ["connection": connection.id])
       },
@@ -340,7 +355,10 @@ final class ControlSocket {
     connections[id] = connection
     if let key {
       approvalKeys[id] = key
-      if let until { expire(key, at: until) }
+      if let until {
+        approvedUntil[id] = until
+        expire(key, at: until)
+      }
     }
     connection.open()
     return true

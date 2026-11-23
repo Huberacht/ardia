@@ -37,7 +37,8 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   They live in `<data dir>/ArdiaControlApprovals.json` (0600, read only if it's a private regular file of the user's,
   written by an `O_EXCL` temp file and a rename), are listed in Settings › Advanced › Command line and automation ›
   Programs you let in, and removing one there closes its open connections; a 30-minute one also closes them when it
-  runs out, at the approval's own end time. One doorbell shows at a time. Connections share one only when they come
+  runs out, at the approval's own end time on the wall clock (sleep included), and a line it sends after that end isn't
+  run. One doorbell shows at a time. Connections share one only when they come
   from the same process (pid and pid version from the audit token) with the same identity; another process gets its
   own, and choosing Allow for 30 Minutes or Always Allow then lets in every waiting process with the same key. An
   answer counts only while the ask is live: a click after its deadline, or after the process has gone (its audit token
@@ -46,7 +47,8 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   refused (a `{"id": null, "error": {"code": "refused", …}}` line, then close) when you choose Don't Allow, after 60 s,
   when nobody can see the question (no window on screen, or a background instance), or when control goes off; it's
   dropped without a word if the program leaves. After Don't Allow or a timeout the same program is refused without
-  asking for 30 s. At most 8 connections wait and 8 identity look-ups run at once (counted until each look-up returns,
+  asking for 30 s, and its other pending asks end with it. A grant checks every other waiting ask it lets in the same
+  way as the one answered. At most 8 connections wait and 8 identity look-ups run at once (counted until each look-up returns,
   across stop and start); one that takes over 10 s is refused. When the JS bridge changes (a reload), its open asks
   end and Ardia takes their sheets away natively.
   What it doesn't stop: a process of the user's can still run the bundled `ardia` (or its signed runtime) itself and

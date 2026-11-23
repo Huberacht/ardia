@@ -94,9 +94,8 @@ public final class ControlApprovals {
     let fd = Darwin.open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { return false }
     let wrote = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, data.count) }
-    let synced = fsync(fd) == 0
     Darwin.close(fd)
-    guard wrote == data.count, synced, rename(temporary, path) == 0 else {
+    guard wrote == data.count, rename(temporary, path) == 0 else {
       unlink(temporary)
       return false
     }
