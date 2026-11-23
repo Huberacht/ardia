@@ -53,11 +53,13 @@ class TokenClient : public ArdiaDevToolsTokenClient {
 
  private:
   void ForgetSession(const std::string& session);
+  void ForgetSessionTree(const std::string& session);
   void NoteTargetEvent(std::string_view method, const std::string& message);
   bool FilterResponse(int id, const std::string& method, std::string& message);
 
   const raw_ptr<content::DevToolsAgentHostClient> client_;
   std::map<std::string, std::string> targets_;
+  std::map<std::string, std::string> parents_;
   std::map<std::pair<std::string, int>, std::string> outstanding_;
   bool wedged_ = false;
 };
