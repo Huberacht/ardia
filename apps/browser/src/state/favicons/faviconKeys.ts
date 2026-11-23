@@ -4,6 +4,7 @@ import { DEFAULT_PROFILE_ID } from "../settings/settings";
 import { profileOpened } from "../profiles/profileLoading";
 import type { ConsentToken } from "../telemetry/choice";
 import { notePrivateFaviconPeek } from "../telemetry/pageFaviconCounts";
+import { incognitoClosed } from "./privateLookups";
 
 export const cacheKey = (profileId: string) => (isIncognitoProfile(profileId) ? profileId : engineProfile(useBrowser.getState(), profileId));
 
@@ -19,7 +20,6 @@ export const privateViewer = (profileId?: string | null) => (profileId && isInco
 
 const BORROWED = ">";
 const borrowed = new Set<string>();
-const closedViewers = new Set<string>();
 
 export const isBorrowed = (key: string) => key.includes(BORROWED);
 export const viewerOf = (key: string) => key.split(BORROWED)[0]!;
@@ -31,7 +31,7 @@ export const askKey = (viewer: string | undefined, id: string) => (borrows(viewe
 export const keysFor = (viewer: string | undefined, id: string) => (borrows(viewer, id) ? [cacheKey(id), borrowedKey(viewer, id)] : [cacheKey(id)]);
 
 export function borrowFor(key: string): boolean {
-  if (closedViewers.has(viewerOf(key))) return false;
+  if (incognitoClosed(viewerOf(key))) return false;
   borrowed.add(key);
   return true;
 }
@@ -41,12 +41,10 @@ export const borrowersOf = (engine: string) => [...borrowed].filter((key) => sou
 export const anyBorrowed = () => borrowed.size > 0;
 export const pendingRetries = () => peekRetries.size;
 
-export function closeViewers(open: Set<string>, before: Iterable<string>): string[] {
-  for (const id of before) if (isIncognitoProfile(id) && !open.has(id)) closedViewers.add(id);
+export function closeViewers(open: Set<string>): string[] {
   const gone = [...borrowed].filter((key) => !open.has(viewerOf(key)));
   for (const key of gone) {
     borrowed.delete(key);
-    closedViewers.add(viewerOf(key));
     dropRetries((id) => id.startsWith(`${key}|`));
   }
   return gone;

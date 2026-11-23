@@ -132,7 +132,7 @@ function lookUpPages(key: string, list: string[]) {
     });
 }
 
-const retryPeek = (key: string) => (page: string) => void (watchers.has(page) && ask(key, page));
+const retryPeek = (key: string) => (page: string) => void ([...(watchers.get(page) ?? [])].some((w) => w.profileId === viewerOf(key)) && ask(key, page));
 
 const inflight = new Map<string, Promise<string | null>>();
 
@@ -362,6 +362,7 @@ export function startFavicons() {
         return { ...icons, pages: Object.fromEntries(Object.entries(icons.pages).filter(([page]) => !gone.has(page))) };
       });
     }
+    for (const page of gone) for (const w of [...(watchers.get(page) ?? [])]) ((w.known = undefined), check(w));
   });
   const opened = onProfilesOpened(() => {
     for (const set of [...watchers.values()])
@@ -376,7 +377,7 @@ export function startFavicons() {
     if (before && (changes.length || anyBorrowed() || before.some(isIncognitoProfile) || Object.keys(useFavicons.getState().profiles).some(isIncognitoProfile))) {
       const open = new Set(Object.values(s.windows).map((w) => w.profileId));
       for (const t of Object.values(s.tabs)) open.add(t.profileId);
-      for (const key of closeViewers(open, before)) {
+      for (const key of closeViewers(open)) {
         forgetAsked(key);
         queued.delete(key);
       }
