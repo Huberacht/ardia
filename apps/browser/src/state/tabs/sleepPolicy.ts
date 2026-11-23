@@ -1,3 +1,5 @@
+import { ENGINE_KEPT_CODES } from "./engineKeptCodes";
+
 export type MemoryPressure = "normal" | "warning" | "critical";
 export type SleepMode = "moderate" | "balanced" | "maximum";
 
@@ -112,8 +114,6 @@ export function tabsToSleep(awake: readonly TabSleepFacts[], now: number, rules:
   return plan;
 }
 
-export const ENGINE_KEPT = { postedDocument: 100, beforeUnload: 101, download: 102 } as const;
-
 const ENGINE_VETOES: Readonly<Record<number, SleepVeto>> = {
   [-1]: "notSleepable",
   4: "shown",
@@ -129,9 +129,7 @@ const ENGINE_VETOES: Readonly<Record<number, SleepVeto>> = {
   22: "shown",
   26: "typedInput",
   27: "typedInput",
-  [ENGINE_KEPT.postedDocument]: "postedDocument",
-  [ENGINE_KEPT.beforeUnload]: "beforeUnload",
-  [ENGINE_KEPT.download]: "download",
+  ...Object.fromEntries(ENGINE_KEPT_CODES.map((kept) => [kept.code, kept.veto])),
 };
 
 const ENGINE_ORDER: readonly SleepVeto[] = ["postedDocument", "beforeUnload", "typedInput", "download", "call", "pictureInPicture", "audible", "recentlyAudible", "recentlySeen", "shown", "notSleepable"];
