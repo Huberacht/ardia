@@ -196,13 +196,14 @@ ends with "Notarized and stapled." If it says "NOT notarized.", the profile is g
 shipping an unnotarized build. Never store or re-create the credential yourself; that's the user's step.
 Notarization adds a few minutes per submission. A retry doesn't upload again: `notarize.sh` records each submission id
 in `dist/.notary/` (which survives `rm -rf dist/<version>`; `NOTARY_STATE_DIR` moves it), the app under its code's
-CDHash (the same code signed again keeps it, though the zip's bytes change) and the DMG under its SHA-256. On the
+CDHash (the same code signed again keeps it, though the zip's bytes change), and the DMG under the CDHash of the app it
+packs, with a copy of the exact DMG it sent (packing again makes other bytes, so a retry swaps that copy back in). On the
 next run it asks Apple about that id first: Accepted staples, In Progress waits, Invalid or Rejected prints Apple's log
 and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist submits fresh,
 and when notarytool can't answer at all it stops and keeps the record. An app Apple already has a ticket for is
-stapled with no upload at all. The wait stops after `NOTARY_WAIT_SECONDS` (4 h here, 45 min per file in CI). After a
-dropped or timed-out wait, run `scripts/release/notarize.sh <app or dmg> dist/<version>` again, or the whole
-`release.sh`: a rebuilt DMG is a new file and submits fresh, the app picks its submission up.
+stapled with no upload at all. Polling Apple stops after `NOTARY_WAIT_SECONDS` (4 h here, 45 min per file in CI). After a
+dropped or timed-out wait, run `release.sh` again (or `scripts/release/notarize.sh <app> dist/<version>`, and
+`notarize.sh <dmg> dist/<version> <app>`): both pick their submissions up.
 
 ## 4. Smoke test the build
 

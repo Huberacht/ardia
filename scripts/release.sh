@@ -48,7 +48,7 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/ac-release-work.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 base_feed="$work/appcast.xml"
 preflight_mode=release
-[ "$rc" = 1 ] && preflight_mode=candidate
+[ "$rc" = 1 ] && preflight_mode="${RELEASE_PREFLIGHT_MODE:-candidate}"
 preflight_args=(--mode "$preflight_mode" --feed "${APPCAST_BASE:-$LATEST_DOWNLOAD_URL/appcast.xml}" --feed-out "$base_feed" --values-out "$work/values")
 [ "${RELEASE_FEED_MAY_BE_MISSING:-0}" = 1 ] && preflight_args+=(--allow-no-feed)
 node "$stages/preflight.mjs" "$version" "${preflight_args[@]}" || die "preflight stopped the release (above)"
@@ -186,7 +186,7 @@ if [ "$notarize" = 1 ]; then
   "$stages/notarize.sh" "$app" "$dist"
 fi
 "$stages/package.sh" "$dist" "$version" "$identity"
-[ "$notarize" = 1 ] && "$stages/notarize.sh" "$dist/Ardia-$version.dmg" "$dist"
+[ "$notarize" = 1 ] && "$stages/notarize.sh" "$dist/Ardia-$version.dmg" "$dist" "$app"
 
 echo "==> Release notes"
 notes_args=()

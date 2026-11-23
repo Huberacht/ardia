@@ -261,7 +261,7 @@ jobs:
         run: |
           export RELEASE_BUILD_INPUT="$RUNNER_TEMP/build-in"
           args=("$VERSION" --phase sign)
-          if [ "$DRY_RUN" = true ]; then args+=(--rc); fi
+          if [ "$DRY_RUN" = true ]; then args+=(--rc); export RELEASE_PREFLIGHT_MODE=dry-run; fi
           export NOTARY_STATE_DIR="$RUNNER_TEMP/notary-state" NOTARY_WAIT_SECONDS=2700 RELEASE_FEED_MAY_BE_MISSING=1
           mkdir -p "$NOTARY_STATE_DIR"
           scripts/release.sh "${args[@]}"

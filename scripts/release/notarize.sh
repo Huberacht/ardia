@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage="usage: scripts/release/notarize.sh <Ardia.app or .dmg> <log dir>  (notarizes it and staples the ticket to it; NOTARY_STATE_DIR keeps submission ids across retries, default dist/.notary; NOTARY_WAIT_SECONDS caps the wait, default 14400)"
+usage="usage: scripts/release/notarize.sh <Ardia.app or .dmg> <log dir> [<the Ardia.app the .dmg packs>]  (notarizes it and staples the ticket to it; NOTARY_STATE_DIR keeps submission ids across retries, default dist/.notary; NOTARY_WAIT_SECONDS caps the time spent polling Apple, default 14400)"
 target="${1:?$usage}"
 logs="${2:?$usage}"
+packed_app="${3:-}"
 . "$(dirname "$0")/lib.sh"
 load_notary_auth
 state="${NOTARY_STATE_DIR:-$root/dist/.notary}"
@@ -52,6 +53,8 @@ wait_for() {
     esac
     tries=$((tries + 1))
     [ "$tries" -lt 5 ] || { rm -f "$out"; die "notarytool kept failing while waiting on $id; it's recorded in $record, so running this again picks it up"; }
+    left=$((deadline - $(date +%s)))
+    [ "$left" -gt "$delay" ] || { rm -f "$out"; die "Apple hasn't finished $id within NOTARY_WAIT_SECONDS ($budget s); it's recorded in $record, so running this again waits on it instead of uploading"; }
     echo "notarytool wait ended without an answer ($(tail -1 "$out")); asking again ($tries/5)"
     sleep "$delay"
   done
@@ -81,11 +84,26 @@ resume() {
   esac
 }
 
+place() {
+  local tmp="$1" path="$2"
+  [ ! -L "$path" ] || rm -f "$path"
+  [ ! -e "$path" ] || [ -f "$path" ] || { rm -f "$tmp"; die "$path isn't a file: remove it"; }
+  mv -f "$tmp" "$path"
+  [ -f "$path" ] && [ ! -L "$path" ] || die "couldn't write $path"
+}
+
 record_id() {
   local id="$1" record="$2" tmp
   tmp="$(mktemp "$state/.record.XXXXXX")"
   printf '%s\n' "$id" > "$tmp"
-  mv -f "$tmp" "$record"
+  place "$tmp" "$record"
+}
+
+keep_payload() {
+  local saved="$1" tmp
+  tmp="$(mktemp "$state/.payload.XXXXXX")"
+  cp "$target" "$tmp"
+  place "$tmp" "$saved"
 }
 
 submit() {
@@ -108,7 +126,7 @@ submit() {
 }
 
 notarize() {
-  local file="$1" key="$2" log record id=""
+  local file="$1" key="$2" saved="${3:-}" log record id=""
   log="$logs/notary-$(basename "$target").log"
   record="$state/$key"
   echo "Notarizing $(basename "$target") ($key)"
@@ -117,12 +135,31 @@ notarize() {
     id="$(head -c 64 "$record" | tr -d '[:space:]')"
     valid_id "$id" || { echo "ignoring $record: '$id' isn't a submission id"; id=""; }
   fi
+  if [ -n "$id" ] && [ -n "$saved" ] && { [ ! -f "$saved" ] || [ -L "$saved" ]; }; then
+    echo "no kept copy of the file submission $id was made from; submitting this one"
+    id=""
+  fi
   if [ -n "$id" ] && resume "$id" "$log" "$record"; then
-    staple && return 0
+    if [ -n "$saved" ]; then
+      cp "$saved" "$target"
+      echo "$(basename "$target") is now the copy submission $id was made from (the same app, packed in an earlier run)"
+    fi
+    if staple; then
+      [ -z "$saved" ] || rm -f "$saved"
+      return 0
+    fi
     echo "Apple accepted $id but has no ticket for this file; submitting again"
   fi
+  [ -z "$saved" ] || keep_payload "$saved"
   submit "$file" "$log" "$record"
   staple || die "stapler couldn't staple $(basename "$target") after Apple accepted it"
+  [ -z "$saved" ] || rm -f "$saved"
+}
+
+cdhash_of() {
+  local hash
+  hash="$( { codesign -d -vvv "$1" 2>&1 || true; } | sed -n 's/^CDHash=//p' | head -1)"
+  [[ "$hash" =~ ^[0-9a-f]{40,64}$ ]] && echo "$hash"
 }
 
 case "$target" in
@@ -133,11 +170,16 @@ case "$target" in
     fi
     zip="$logs/notarize.zip"
     ditto -c -k --keepParent "$target" "$zip"
-    cdhash="$(codesign -d -vvv "$target" 2>&1 | sed -n 's/^CDHash=//p' | head -1)"
-    if [[ "$cdhash" =~ ^[0-9a-f]{40,64}$ ]]; then key="cdhash-$cdhash"; else key="sha256-$(sha256_of "$zip")"; fi
+    if cdhash="$(cdhash_of "$target")"; then key="cdhash-$cdhash"; else key="sha256-$(sha256_of "$zip")"; fi
     notarize "$zip" "$key"
     rm -f "$zip"
     ;;
-  *.dmg) notarize "$target" "sha256-$(sha256_of "$target")" ;;
+  *.dmg)
+    if [ -n "$packed_app" ] && cdhash="$(cdhash_of "$packed_app")"; then
+      notarize "$target" "dmg-of-cdhash-$cdhash" "$state/dmg-of-cdhash-$cdhash.dmg"
+    else
+      notarize "$target" "sha256-$(sha256_of "$target")"
+    fi
+    ;;
   *) die "$usage" ;;
 esac

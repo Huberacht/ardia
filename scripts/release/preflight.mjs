@@ -60,20 +60,23 @@ export function plistString(text, key) {
 }
 
 export function feedFacts(xml, version) {
-  if (!xml.includes("xmlns:sparkle") || !xml.includes("<channel>")) return null;
+  if (!xml.includes("xmlns:sparkle") || !/<channel>[\s\S]*<\/channel>\s*<\/rss>\s*$/.test(xml)) return null;
+  const opened = (xml.match(/<item>/g) ?? []).length;
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
+  if (opened !== items.length || (xml.match(/<\/item>/g) ?? []).length !== items.length) return null;
   let newest = null;
   let newestOther = null;
-  let listed = false;
+  const listedBuilds = [];
   for (const item of items) {
     const build = /<sparkle:version>(\d+)<\/sparkle:version>/.exec(item);
-    const mine = /<sparkle:shortVersionString>([^<]+)</.exec(item)?.[1] === version;
-    if (mine) listed = true;
-    if (!build) continue;
-    newest = Math.max(newest ?? 0, Number(build[1]));
-    if (!mine) newestOther = Math.max(newestOther ?? 0, Number(build[1]));
+    if (!build || !/<sparkle:shortVersionString>[^<]+</.test(item)) return null;
+    const number = Number(build[1]);
+    const mine = /<sparkle:shortVersionString>([^<]+)</.exec(item)[1] === version;
+    if (mine) listedBuilds.push(number);
+    newest = Math.max(newest ?? 0, number);
+    if (!mine) newestOther = Math.max(newestOther ?? 0, number);
   }
-  return { newest, newestOther, listed, items: items.length };
+  return { newest, newestOther, listed: listedBuilds.length > 0, listedBuilds, items: items.length };
 }
 
 async function readFeed(source, { fetchImpl, allowNoFeed }) {
@@ -209,7 +212,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
   if (xml) {
     const facts = feedFacts(xml, version);
     if (!facts) {
-      fail(`${source} isn't a Sparkle appcast`);
+      fail(`${source} isn't a whole Sparkle appcast (cut off, or an item without its version and build)`);
       xml = "";
     } else if (releaseBuild !== null) {
       if (facts.newestOther === null || releaseBuild > facts.newestOther) {
@@ -219,7 +222,9 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
       }
       if (facts.listed) {
         const message = `the feed already lists ${version}`;
-        if (mode === "candidate" || (mode === "dry-run" && channel === "nightly")) results.push({ level: "warn", message: `${message} (a real release would stop here)` });
+        const sameBuild = facts.listedBuilds.every((build) => build === releaseBuild);
+        if (mode === "candidate" || (mode === "dry-run" && channel === "nightly" && sameBuild)) results.push({ level: "warn", message: `${message} (a real release would stop here)` });
+        else if (mode === "dry-run" && channel === "nightly") fail(`${message} as build ${facts.listedBuilds.join(", ")}, not ${releaseBuild}: publish.sh --dry-run would keep both items and refuse the feed`);
         else if (mode === "dry-run") fail(`${message}: publish.sh --dry-run refuses a stable that isn't above the latest stable release, so this dry run would fail at its end`);
         else fail(message);
       }

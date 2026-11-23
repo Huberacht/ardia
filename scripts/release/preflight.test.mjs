@@ -101,9 +101,9 @@ test("pbxSettings counts every configuration and quoted values", () => {
 });
 
 test("feedFacts reads the newest build of either channel and whether the version is listed", () => {
-  assert.deepEqual(feedFacts(LIVE, "1.2.2"), { newest: 41, newestOther: 41, listed: true, items: 3 });
-  assert.deepEqual(feedFacts(LIVE, "1.2.3-nightly.2"), { newest: 41, newestOther: 40, listed: true, items: 3 });
-  assert.deepEqual(feedFacts(LIVE, "1.2.3"), { newest: 41, newestOther: 41, listed: false, items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.2"), { newest: 41, newestOther: 41, listed: true, listedBuilds: [40], items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.3-nightly.2"), { newest: 41, newestOther: 40, listed: true, listedBuilds: [41], items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.3"), { newest: 41, newestOther: 41, listed: false, listedBuilds: [], items: 3 });
   assert.equal(feedFacts("<html>not found</html>", "1.2.3"), null);
 });
 
@@ -232,7 +232,7 @@ test("an unreadable feed stops a release and a dry run, while a candidate starts
     assert.match(down.fails.join("\n"), /couldn't fetch .*socket hang up/, mode);
     assert.equal(down.calls.length, 2, "one retry");
     const html = await run({ version: "1.2.3", root, mode, responses: [{ status: 200, body: "<html></html>" }] });
-    assert.match(html.fails.join("\n"), /isn't a Sparkle appcast/);
+    assert.match(html.fails.join("\n"), /isn't a whole Sparkle appcast/);
     const missing = await run({ version: "1.2.3", root, mode, responses: [{ status: 404 }] });
     assert.match(missing.fails.join("\n"), /answered HTTP 404/);
   }
@@ -268,4 +268,23 @@ test("the CLI refuses a bad version and finishes the repo's own checks in under 
   const own = spawnSync(process.execPath, [tool, version, "--mode", "candidate", "--feed", "none"], { encoding: "utf8" });
   assert.equal(own.status, 0, own.stdout + own.stderr);
   assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
+});
+
+test("a feed cut off mid-item, or with an item missing its build, is refused before it reaches Sparkle", async () => {
+  const root = fixture();
+  const cut = LIVE.slice(0, LIVE.indexOf("</item>"));
+  const unclosed = LIVE.replace("</channel>", "        <item>\n            <title>half</title>\n    </channel>");
+  const buildless = LIVE.replace("<sparkle:version>40</sparkle:version>", "");
+  for (const body of [cut, unclosed, buildless]) {
+    const feedOut = join(root, "base.xml");
+    const result = await run({ version: "1.2.3", root, feedOut, mode: "dry-run", responses: [{ status: 200, body }] });
+    assert.match(result.fails.join("\n"), /isn't a whole Sparkle appcast/);
+    assert.equal(readFileSync(feedOut, "utf8"), "");
+  }
+});
+
+test("a dry run of a listed nightly whose build differs from the checkout's fails, as publish.sh would", async () => {
+  const live = feed([["1.2.4-nightly.1", 140, "nightly"], ["1.2.3", 138]]);
+  const result = await run({ version: "1.2.4-nightly.1", root: fixture({ version: "1.2.4-nightly.1", builds: [139, 139] }), mode: "dry-run", responses: [{ status: 200, body: live }] });
+  assert.match(result.fails.join("\n"), /already lists 1.2.4-nightly.1 as build 140, not 139/);
 });

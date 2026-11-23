@@ -50,8 +50,8 @@ esac
 
 const CODESIGN = `#!/usr/bin/env bash
 echo "Executable=$4/Contents/MacOS/Ardia" >&2
-[ -f "$NOTARY_STUB/cdhash" ] && echo "CDHash=$(cat "$NOTARY_STUB/cdhash")" >&2
-exit 0
+[ -f "$NOTARY_STUB/cdhash" ] || { echo "$4: code object is not signed at all" >&2; exit 1; }
+echo "CDHash=$(cat "$NOTARY_STUB/cdhash")" >&2
 `;
 
 function scratch() {
@@ -68,8 +68,8 @@ function scratch() {
   const state = join(dir, "state");
   const set = (name, lines) => writeFileSync(join(stub, name), lines.map((l) => `${l}\n`).join(""));
   const calls = () => (existsSync(join(stub, "calls")) ? readFileSync(join(stub, "calls"), "utf8").trim().split("\n").map((l) => l.split(" ").slice(0, 2).join(" ")) : []);
-  const notarize = (target = dmg, extra = {}) => {
-    const result = spawnSync("bash", [tool, target, join(dir, "dist")], {
+  const notarize = (target = dmg, extra = {}, more = []) => {
+    const result = spawnSync("bash", [tool, target, join(dir, "dist"), ...more], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -279,4 +279,52 @@ test("an app signed again, its zip's bytes changed, resumes the pending submissi
   assert.equal(retry.status, 0, retry.output);
   assert.deepEqual(s.calls().filter(Boolean), ["stapler staple", "notarytool info", "notarytool wait", "stapler staple"]);
   assert.ok(!existsSync(join(s.dir, "dist", "notarize.zip")));
+});
+
+test("a DMG packed again resumes the submission of the copy it kept, and swaps that copy in", () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  writeFileSync(s.dmg, "the first packing");
+  s.set("submit", [FIRST]);
+  s.set(`wait-${FIRST}`, ["drop", "drop", "drop", "drop", "drop"]);
+  const first = s.notarize(s.dmg, {}, [app]);
+  assert.notEqual(first.status, 0);
+  const key = "dmg-of-cdhash-c0c480061bc60ca0bdb4e8a609fabb4168eebd52";
+  assert.equal(s.records()[key], FIRST);
+  assert.equal(s.records()[`${key}.dmg`], "the first packing");
+  writeFileSync(s.dmg, "the second packing, other bytes");
+  writeFileSync(join(s.stub, "calls"), "");
+  s.ticket();
+  const retry = s.notarize(s.dmg, {}, [app]);
+  assert.equal(retry.status, 0, retry.output);
+  assert.deepEqual(s.calls().filter(Boolean), ["notarytool info", "notarytool wait", "stapler staple"]);
+  assert.equal(readFileSync(s.dmg, "utf8"), "the first packing");
+  assert.ok(!existsSync(join(s.state, `${key}.dmg`)), "the kept copy goes once it's stapled");
+});
+
+test("a record path that is a symlink to a directory is replaced by the record itself", () => {
+  const s = scratch();
+  mkdirSync(s.state);
+  mkdirSync(join(s.dir, "elsewhere"));
+  spawnSync("ln", ["-s", join(s.dir, "elsewhere"), join(s.state, sha256(s.dmg))]);
+  s.set("submit", [FIRST]);
+  s.ticket();
+  const run = s.notarize();
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
+  assert.deepEqual(readdirSync(join(s.dir, "elsewhere")), []);
+});
+
+test("an app codesign can't read falls back to its zip's hash instead of stopping", { skip: process.platform !== "darwin" && "ditto is macOS's" }, () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  s.set("submit", [FIRST]);
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('"stapler staple")', '"stapler staple")\n    [ -f "$stub/status-11111111-2222-4333-8444-555555555555" ] && { echo ok; exit 0; }'));
+  const run = s.notarize(app);
+  assert.equal(run.status, 0, run.output);
+  assert.match(Object.keys(s.records())[0], /^sha256-[0-9a-f]{64}$/);
 });
