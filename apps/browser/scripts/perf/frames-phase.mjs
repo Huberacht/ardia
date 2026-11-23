@@ -148,12 +148,20 @@ function interactions(c) {
     await run(`ac.store.getState().updateSettings({ addressBar: "${value}" }); return 1;`);
     await sleep(1500);
   };
+  const barOnNewTab = async (on) => {
+    const value = on ? "commandBar" : "page";
+    if ((await run(`return ac.store.getState().settings.newTabOpens;`)) === value) return;
+    await run(`ac.store.getState().updateSettings({ newTabOpens: "${value}" }); return 1;`);
+    await sleep(300);
+  };
   const ui = `ac.store.getState().windowUi[${W}]?.panel.open`;
   const win = `ac.store.getState().windows[${W}]`;
   return [
     { name: "idle (no interaction)", window: 1500, go: async () => Date.now() },
     { name: "new tab with the command bar (⌘T)", window: 600, verify: `const s = ac.store.getState(); return s.windows[${W}].tabIds.some((id) => !s.tabs[id].url);`, go: () => key("cmd+t"), after: async () => { await sleep(900); } },
     { name: "close the new tab (⌘W)", window: 600, before: () => key.open("cmd+t"), verify: `const s = ac.store.getState(); return !s.windows[${W}].tabIds.some((id) => !s.tabs[id].url);`, go: () => key("cmd+w"), after: reset },
+    { name: "command bar open (⌘T)", window: 600, verify: `return !!${ui};`, before: async () => { await reset(); await barOnNewTab(true); }, go: () => key("cmd+t"), after: async () => { await sleep(900); await reset(); await barOnNewTab(false); } },
+    { name: "command bar close (Esc)", window: 600, verify: `return !${ui};`, before: async () => { await reset(); await barOnNewTab(true); await key.open("cmd+t"); }, go: () => key("esc"), after: async () => { await reset(); await barOnNewTab(false); } },
     { name: "command bar open (⌘L)", window: 600, verify: `return !!${ui};`, before: reset, go: () => key("cmd+l"), after: async () => { await sleep(900); } },
     { name: "command bar close (Esc, from ⌘L)", window: 600, verify: `return !${ui};`, before: async () => { await reset(); await key.open("cmd+l"); }, go: () => key("esc"), after: reset },
     { name: "tab switch", window: 500, verify: `const s = ac.store.getState(); return s.windows[${W}].activeTabIds[s.windows[${W}].profileId] === globalThis.__frameTarget;`, before: reset, go: () => run(`globalThis.acPerf?.reset(); const t = ac.now(); const s = ac.store.getState(); const w = ${W};
