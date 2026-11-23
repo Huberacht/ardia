@@ -297,6 +297,42 @@ class SelectorTest(unittest.TestCase):
             with self.subTest(text=text), self.assertRaisesRegex(self.build.InputError, message):
                 self.build.windows_sources(text + tail)
 
+    def test_an_assignment_to_ardia_sources_replaces_the_list(self):
+        text = ('ardia_sources = [ "old.cc" ]\n'
+                'if (is_win) {\n  ardia_sources = [ "new.cc" ]\n}\n'
+                'if (is_mac) {\n  ardia_sources = [ "mac.cc" ]\n}\n'
+                'ardia_sources += [ "more.cc" ]\n'
+                'source_set("ardia") {\n  sources = ardia_sources\n  sources += [ "own.cc" ]\n}\n')
+        self.assertEqual(self.build.windows_sources(text), ['new.cc', 'more.cc', 'own.cc'])
+
+    def test_windows_sources_refuse_a_source_spelled_with_dollar_or_backslash(self):
+        tail = 'source_set("ardia") {\n  sources = ardia_sources\n}\n'
+        for text in ('ardia_sources = [ "desktop.c$0x63" ]\n', 'ardia_sources = [ "${stem}.cc" ]\n',
+                     'ardia_sources = [ "desk\\$top.cc" ]\n',
+                     'ardia_sources = []\nsource_set("x") {\n  sources += [ "$unit" ]\n}\n'):
+            with self.subTest(text=text), self.assertRaisesRegex(self.build.InputError, 'spelled with'):
+                self.build.windows_sources(text + tail)
+
+    def test_brackets_that_do_not_pair_fail_cleanly(self):
+        tail = 'source_set("ardia") {\n  sources = ardia_sources\n}\n'
+        for text in ('print([)\n', 'print({)\n', 'if (is_win && (is_mac]) {\n}\n'):
+            with self.subTest(text=text), self.assertRaisesRegex(self.build.InputError, 'to close a bracket'):
+                self.build.windows_sources(text + tail)
+
+    def test_the_windows_build_file_keeps_a_line_it_cannot_cut_to_one_entry(self):
+        real = self.build.build_text
+        line = 'if (is_win) { ardia_sources += [ "desktop.cc" ] } else { ardia_sources += [ "desktop.mm" ] }\n'
+        self.addCleanup(setattr, self.build, 'build_text', real)
+        self.build.build_text = lambda: real().replace('source_set("ardia") {\n', line + '\nsource_set("ardia") {\n', 1)
+        with self.assertRaisesRegex(self.build.InputError, 'this line holds more than one entry'):
+            self.build.ardia_build_file()
+        self.build.build_text = lambda: real().replace(
+            'source_set("ardia") {\n', 'if (is_win) {\n  ardia_sources += [ "desktop.cc" ]\n} else {\n  ardia_sources += [\n'
+            '    "desktop.mm",\n  ]\n}\n\nsource_set("ardia") {\n', 1)
+        generated = self.build.ardia_build_file()
+        self.assertNotIn('desktop.mm', generated)
+        self.assertIn('desktop.cc', self.build.windows_sources(generated))
+
     def test_series_lines_refuse_every_spelling_of_a_series_layer_for_windows(self):
         for line in ('layer engine/extra', 'layer engine/extra all', 'layer engine/extra win', 'layer engine/extra linux,win',
                      'layer engine/extra mac,linux,win'):

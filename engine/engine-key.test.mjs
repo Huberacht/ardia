@@ -1179,3 +1179,22 @@ test(
     assertKeys(before, change(`${ardia}/ac_desktop.cc`, 'desktop, changed\n'), { macos: false, linux: true, win: true })
   }),
 )
+
+for (const [name, interpolated, expected] of [
+  ['a suffix finished after the interpolation', '"${stem}c"', { macos: true, linux: true, win: true }],
+  ['a hex escape', '"ac_desktop.c$0x63"', { macos: true, linux: true, win: true }],
+  ['an interpolated directory and a unit name', '"$target_gen_dir/ac_generated.cc"', { macos: true, linux: true, win: true }],
+  ['a header after the interpolation', '"${stem}.h"', { macos: false, linux: true, win: true }],
+  ['a generated include', '"$target_gen_dir/ac_dispatch.inc"', { macos: false, linux: true, win: true }],
+]) {
+  test(
+    `an interpolated source under is_mac with ${name} ${expected.macos ? 'keeps' : 'leaves'} a linux,win unit ${expected.macos ? 'in' : 'out of'} the macOS key`,
+    withFixture(({ root, write, commit, change }) => {
+      write(`${ardia}/ac_desktop.cc`, 'desktop\n')
+      const blocks = `if (is_linux || is_win) {\n  ardia_sources += [ "ac_desktop.cc" ]\n}\n\nif (is_mac) {\n  ardia_sources += [ ${interpolated} ]\n}\n\n`
+      write(`${ardia}/BUILD.gn`, readFileSync(join(root, ardia, 'BUILD.gn'), 'utf8').replace('source_set("ardia") {', `${blocks}source_set("ardia") {`))
+      const before = commit('an interpolated mac source')
+      assertKeys(before, change(`${ardia}/ac_desktop.cc`, 'desktop, changed\n'), expected)
+    }),
+  )
+}

@@ -36,6 +36,8 @@ LAUNCH_SWITCHES = 'ardia/core/ac_launch_switches'
 LAYER_PATCH = os.path.join(HERE, 'ardia-layer-win.patch')
 LAYER_OVERLAY = os.path.join(HERE, 'src', 'chrome', 'browser', 'ardia')
 MAC_LAYER_LINE = re.compile(r'(\.mm"|"pip/|"ac_external_apps\.h")')
+LIST_ENTRY_LINE = re.compile(r'^\s*"[^"$\\]*",?\s*$')
+GN_PAIRS = {'(': ')', '[': ']', '{': '}'}
 ENGINES = ('mac', 'linux', 'win')
 WINDOWS_TAGS = ('all', 'mac', 'win')
 SERIES_TAGS = ('all',) + ENGINES
@@ -274,6 +276,10 @@ def ardia_build_file():
                          ('    "//ardia/core:launch_switches",\n', 'the launch switches dependency it replaces')):
         once(text, needle, what)
     text = LAYER_ASSERT.sub('assert(is_win)', text)
+    for number, line in enumerate(text.splitlines(), 1):
+        if MAC_LAYER_LINE.search(line) and not LIST_ENTRY_LINE.match(line):
+            raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), number)}: the Windows build drops Mac-only sources a list '
+                             f'entry at a time, and this line holds more than one entry: {line.strip()}')
     text = ''.join(line for line in text.splitlines(True) if not MAC_LAYER_LINE.search(line))
     text = text.replace('    "//ardia/core:hooks",\n', '')
     text = text.replace('    "//ardia/core:launch_switches",\n', '    "//ardia/win:launch_switches",\n')
@@ -327,7 +333,7 @@ def windows_takes(condition):
 
 class GnReader:
     def __init__(self, text):
-        self.text, self.tokens, self.at, self.found = text, [], 0, []
+        self.text, self.tokens, self.at, self.found, self.listed = text, [], 0, [], []
         index, line = 0, 1
         while index < len(text):
             match = GN_LEXEME.match(text, index)
@@ -404,14 +410,21 @@ class GnReader:
                 self.fail(line, f'`ardia_sources {operator}` with anything but a list of names; it can\'t follow sources '
                                 'taken out of the list')
             if active:
-                self.found.extend(value[1])
+                self.listed = self.names(value[1], line) if operator == '=' else self.listed + self.names(value[1], line)
         elif name == 'sources' and active:
             if operator == '=' and value == ('name', 'ardia_sources'):
+                self.found.extend(self.listed)
                 return
             if operator == '+=' and value[0] == 'list':
-                self.found.extend(value[1])
+                self.found.extend(self.names(value[1], line))
                 return
             self.fail(line, f'`sources {operator}` here: it only follows `sources = ardia_sources` and `sources += [...]`')
+
+    def names(self, listed, line):
+        spelled = [name for name in listed if '$' in name or '\\' in name]
+        if spelled:
+            self.fail(line, f'a source spelled with $ or \\ ({", ".join(spelled)}); name each source as it is')
+        return list(listed)
 
     def conditional(self, active, line):
         taken = self.condition(line)
@@ -444,9 +457,15 @@ class GnReader:
 
     def group(self, opening, closing):
         self.take(opening)
-        depth = 1
-        while depth:
-            depth += {opening: 1, closing: -1}.get(self.take()[0], 0)
+        waiting = [closing]
+        while waiting:
+            token, line, _, _ = self.take()
+            if token in GN_PAIRS:
+                waiting.append(GN_PAIRS[token])
+            elif token in GN_PAIRS.values():
+                expected = waiting.pop()
+                if token != expected:
+                    self.fail(line, f'`{token}` where it expected `{expected}` to close a bracket')
 
     def expression(self):
         value = self.unary()

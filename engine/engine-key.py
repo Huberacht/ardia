@@ -29,7 +29,7 @@ GN_PLATFORMS = {'is_mac': 'mac', 'is_linux': 'linux', 'is_win': 'win'}
 GN_TOKEN = r'\s*(\|\||&&|==|!=|<=|>=|[!()<>,\[\]]|"(?:[^"\\]|\\.)*"|[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)'
 GN_COMPARISONS = ('==', '!=', '<', '>', '<=', '>=')
 WINDOWS_OWN_LAYERS = ('engine/chromium',)
-GN_TRAILING_INTERPOLATION = r'\$(\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)$'
+GN_INTERPOLATION = r'\$(\{[^}]*\}|0x[0-9A-Fa-f]{2}|[A-Za-z_][A-Za-z0-9_]*)'
 CHECKOUT = pathlib.Path(__file__).resolve().parents[1]
 WIN_ROOT = 'scripts/windows/engine'
 WIN_DECLARATIONS = 'scripts/windows/engine/key-inputs.json'
@@ -352,7 +352,11 @@ def gn_sources(value, base, roots, files):
 
 
 def interpolated_unit(value):
-    return '$' in value and (value.endswith(UNITS) or re.search(GN_TRAILING_INTERPOLATION, value) is not None)
+    if '$' not in value:
+        return False
+    tail = re.split(GN_INTERPOLATION, value)[-1]
+    extension = re.search(r'\.[A-Za-z0-9_+-]+$', tail)
+    return extension is None or extension.group(0) in UNITS
 
 
 def foreign_units(tree, platform):
