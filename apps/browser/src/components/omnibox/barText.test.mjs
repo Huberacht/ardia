@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { barReducer, fullUrlShown, initialBar, previewText, selectionTracker } = await import("./barText.ts");
+const { barReducer, fullUrlShown, initialBar, pageUrlShown, previewText, selectionTracker } = await import("./barText.ts");
 
 const fresh = (text = "") => initialBar(null, text);
 const run = (state, ...events) => events.reduce(barReducer, state);
@@ -142,4 +142,13 @@ test("text that is not a page row's address, such as a search or a partial edit,
   assert.equal(fullUrlShown("example.com/doc", page), null);
   assert.equal(fullUrlShown("example.com/docs", { kind: "search", query: "example.com/docs", url: "https://google.com/search?q=x" }), null);
   assert.equal(fullUrlShown("example.com/docs", undefined), null);
+});
+
+test("the address ⌘L preselects, before any suggestion row exists, counts as the page's whole address, so copying it is cleaned", () => {
+  const page = "https://shop.example/item?id=7&utm_source=mail";
+  assert.equal(pageUrlShown(page, page), page);
+  assert.equal(pageUrlShown("shop.example/item?id=7&utm_source=mail", page), page);
+  assert.equal(pageUrlShown("shop.example/item", page), null);
+  assert.equal(pageUrlShown("", page), null);
+  assert.equal(pageUrlShown(page, ""), null);
 });

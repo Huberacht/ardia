@@ -1,7 +1,7 @@
 import { cleanUrl, suggestionKey, type SearchScope } from "@ardia/core";
 import { useEffect, useMemo, type RefObject } from "react";
 import type { TextInput } from "react-native";
-import { fullUrlShown, previewText } from "./barText";
+import { fullUrlShown, pageUrlShown, previewText } from "./barText";
 import { copyFieldAs } from "../../state/omnibox/textInput";
 import { offeredScope } from "../../state/omnibox/scopes";
 import { useDropdownStart, useOpenTabsStart } from "./dropdownStart";
@@ -73,7 +73,7 @@ export function useBarItems({
     () => (!scope && edited && !previewing ? offeredScope(typed, shownCompletion, windowId) : null),
     [scope, edited, previewing, typed, shownCompletion, windowId],
   );
-  const shownUrl = fullUrlShown(value, current);
+  const shownUrl = fullUrlShown(value, current) ?? pageUrlShown(value, currentUrl);
   useEffect(() => void copyFieldAs(shownUrl && value, shownUrl ? cleanUrl(shownUrl) : null), [value, shownUrl]);
   useEffect(() => () => void copyFieldAs(null, null), []);
   return { items, completion, via, inline, shownCompletion, value, selectedIndex, current, tabScope, previewing, rowsHover, rowsHeld: rows.held, releaseRows: rows.release, shownUrl };
