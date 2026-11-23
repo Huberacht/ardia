@@ -83,7 +83,8 @@ holds the rest.
   `main` save it, so pull requests add no caches. A newer push cancels the run before it, on `main` too.
 - `conventions.yml` runs the conventions check (`docs/conventions.md` › The check) on every pull request and every
   push to `main`, with no paths filter and no install, so a file in a folder no other workflow watches is checked
-  too. `expiring-skips.yml` runs its expiry part every Monday.
+  too. `expiring-skips.yml` runs its expiry part every Monday and lists skips past their date, as warnings, in the
+  run's summary.
 - When GitHub's runners are busy, the long jobs of `checks.yml`, `linux.yml` and `android.yml` move to Boat CI
   (`boat-large`); the `which checks run` job or a `route` job decides, and each run's summary says why
   ([ci-boat-overflow.md](ci-boat-overflow.md)).

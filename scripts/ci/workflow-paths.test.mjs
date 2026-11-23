@@ -222,10 +222,10 @@ test("the conventions check runs on every pull request and push to main, with no
   assert.doesNotMatch(text, /pnpm install|npm ci|paths:/);
 });
 
-test("the weekly expiry run checks dated skips without an install", () => {
+test("the weekly expiry run lists skips past their date in its summary, without an install", () => {
   const text = workflow("expiring-skips.yml");
   assert.match(text, /^  schedule:\n    - cron: "[^"]+"\n  workflow_dispatch:\n/m);
-  assert.match(text, /\n        run: node apps\/browser\/src\/conventions\.test\.mjs --expired\n/);
+  assert.match(text, /\n        run: node apps\/browser\/src\/conventions\.test\.mjs --expired --summary "\$GITHUB_STEP_SUMMARY"\n/);
   assert.doesNotMatch(text, /pnpm install|npm ci/);
 });
 

@@ -411,7 +411,7 @@ strings isn't scanned: there, those strings are test fixtures.
 | `comments` | a comment that isn't a license header or tool directive |
 | `file-names` | a file name breaking the PascalCase/camelCase rule |
 | `bare-sleep` | a sleep that no loop bounds by a count or a deadline: `sleep N` in shell (and in a workflow's `run:` block), `Start-Sleep`, `time.sleep`/`asyncio.sleep`, and in JS tests `await sleep(…)`, `await new Promise((r) => setTimeout(r, N))`, `timers/promises`' `setTimeout` or a local helper that waits its argument. A sleep inside a `for … in`/`for … of` loop, a loop whose header reads a deadline (`deadline`, `SECONDS`, `Date.now()`, `time.monotonic()`, `attempts`, …) or compares a counter that the loop's update clause or body advances, or a loop whose body reads one on a line that breaks, exits, returns or throws, is a bounded poll and doesn't count (`for ((;;))` and `while true` with no such line are open-ended); in JS a zero delay (`await sleep(0)`, `setTimeout(r, 0)`) is a tick, not a wait, and doesn't count. Wait on the condition instead: `scripts/agent/await` in shell, a deadline loop elsewhere. `scripts/agent/await` itself and `infra/` (services, whose sleep is a schedule) are exempt |
-| `expiring-skip` | an unconditional skip, `todo`, quarantine or accepted risk without an owner and an expiry (below), or any `.only` |
+| `expiring-skip` | an unconditional skip, `todo`, quarantine or accepted risk without an owner and an expiry (below), or any `.only`; a passed expiry only warns |
 
 `apps/browser/src/conventions-baseline.json` lists the violations that existed when the rules arrived, as
 `rule → file → count`. Since 2026-10-26 the original rules hold everywhere but for a few `size` and `naming`
@@ -432,7 +432,7 @@ higher than what the file has now, so fixes must lower their entries.
   edit near a violation; review catches a swap, and the count can only go down.
 - `--show <path>…` prints each comment the check counts in those files, with its line.
 
-### Skips and accepted risks expire
+### Skips and accepted risks carry an expiry
 
 A test that is skipped or marked `todo` whatever the machine, a quarantined case and an accepted risk each carry an
 owner and a date, in this form:
@@ -448,9 +448,12 @@ owner and a date, in this form:
 - A skip on a condition (`{ skip: !onMac && "needs a Mac" }`, `skipIf`, `.disabled(if:)`, `t.skip()` inside a test)
   names an environment, not a debt, and needs neither. `.only` never belongs in a commit.
 
-A missing owner or date counts against the baseline like any rule. A date that has passed (UTC), a claimed date that
-isn't one (`until 2099-02-30`, `"expires": "soon"`), and any `.only` fail the check outright, baseline or not: fix the case, or move the date with the owner's OK. `--expired` runs only that part, and
-`.github/workflows/expiring-skips.yml` runs it every Monday so a date fires even when no pull request runs the check.
+A missing owner or date counts against the baseline like any rule. A claimed date that isn't one (`until 2099-02-30`,
+`"expires": "soon"`) and any `.only` fail the check outright, baseline or not. A date that has passed (UTC) only
+warns, so the calendar never breaks an unrelated pull request: the check prints a `::warning` annotation for it (a
+diagnostic under `pnpm -C apps/browser test`) and passes. Fix the case, or move the date with the owner's OK.
+`--expired` runs only this part (`--summary <file>` appends a Markdown list), and
+`.github/workflows/expiring-skips.yml` runs it every Monday and shows the lapsed dates in the run's summary.
 
 React Compiler isn't enabled (`apps/browser/babel.config.js` uses `babel-preset-expo` alone), so the check has no
 bail-out rule.

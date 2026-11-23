@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   expiry:
-    name: no skip or accepted risk past its date
+    name: skips past their date, as warnings in the summary
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -25,4 +25,4 @@ jobs:
         with:
           node-version: 24
       - name: Skips, todos, quarantines and accepted risks still in date
-        run: node apps/browser/src/conventions.test.mjs --expired
+        run: node apps/browser/src/conventions.test.mjs --expired --summary "$GITHUB_STEP_SUMMARY"

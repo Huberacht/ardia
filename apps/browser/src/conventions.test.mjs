@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
@@ -709,15 +709,30 @@ function findViolations(files, markers = null) {
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 
-function expired(markers, today) {
+function breaches(markers) {
   return markers
-    .filter((marker) => marker.never || marker.invalid || marker.date < today)
-    .map((marker) => {
-      const where = `  ${marker.path}:${marker.line}`;
-      if (marker.never) return `${where} .only, which never belongs in a commit`;
-      if (marker.invalid) return `${where} ${marker.kind} until ${marker.invalid}, which isn't a date (YYYY-MM-DD) with an @owner`;
-      return `${where} ${marker.kind} for @${marker.owner} expired ${marker.date}`;
-    });
+    .filter((marker) => marker.never || marker.invalid)
+    .map((marker) =>
+      marker.never
+        ? `  ${marker.path}:${marker.line} .only, which never belongs in a commit`
+        : `  ${marker.path}:${marker.line} ${marker.kind} until ${marker.invalid}, which isn't a date (YYYY-MM-DD) with an @owner`,
+    );
+}
+
+function lapsed(markers, today) {
+  return markers
+    .filter((marker) => !marker.never && !marker.invalid && marker.date < today)
+    .map((marker) => ({ path: marker.path, line: marker.line, text: `${marker.kind} for @${marker.owner} expired ${marker.date}: fix it, or move the date with the owner's OK` }));
+}
+
+const annotation = ({ path, line, text }) => `::warning file=${path},line=${line}::${text}`;
+
+function expirySummary(failing, warnings) {
+  const lines = ["## Expiring skips", ""];
+  if (!failing.length && !warnings.length) lines.push("Every dated skip, todo, quarantine and accepted risk is in date.");
+  if (warnings.length) lines.push("Past their date (a warning, not a failure):", "", ...warnings.map(({ path, line, text }) => `- \`${path}:${line}\` ${text}`), "");
+  if (failing.length) lines.push("Failing (`.only`, or a date that isn't one):", "", ...failing.map((entry) => `- \`${entry.trim()}\``), "");
+  return lines.join("\n") + "\n";
 }
 
 const sorted = (found) =>
@@ -778,9 +793,14 @@ const fromHead = process.argv.includes("--from-head");
 if (process.argv.includes("--expired")) {
   const markers = [];
   findViolations(workingTreeFiles().filter(([path, src]) => ACCEPTED_RISK_LISTS.includes(path) || SKIP_HINT.test(src)), markers);
-  const late = expired(markers, todayUtc());
-  console.log(late.length ? `Past their date, not a date, or .only:\n${late.join("\n")}` : `No skip, todo, quarantine or accepted risk is past its date (${markers.length} dated).`);
-  process.exitCode = late.length ? 1 : 0;
+  const failing = breaches(markers);
+  const warnings = lapsed(markers, todayUtc());
+  for (const warning of warnings) console.log(annotation(warning));
+  if (failing.length) console.log(`Failing, .only or a date that isn't one:\n${failing.join("\n")}`);
+  if (!failing.length && !warnings.length) console.log(`No skip, todo, quarantine or accepted risk is past its date (${markers.length} dated).`);
+  const summaryAt = process.argv.indexOf("--summary");
+  if (summaryAt >= 0 && process.argv[summaryAt + 1]) appendFileSync(process.argv[summaryAt + 1], expirySummary(failing, warnings));
+  process.exitCode = failing.length ? 1 : 0;
 } else if (process.argv.includes("--write-baseline")) {
   writeBaseline(fromHead, process.argv.includes("--force"));
 } else if (process.argv.includes("--show")) {
@@ -1151,28 +1171,32 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("apps/browser/scripts/sim/known.json", "null").skips, 0);
     assert.equal(house("apps/browser/scripts/sim/known.json", '{"failing":{}}').skips, 1);
   });
-  test("a dated skip fails once its date has passed", () => {
+  test("a skip past its date warns and passes; .only and a date that isn't one fail", () => {
     const markers = [];
     const files = [
       ["apps/browser/src/state/hello/hello.test.mjs", 'test("a", { todo: "@alice until 2026-01-31: open" }, () => {});\ntest("b", { skip: "@bob until 2099-01-31: open" }, () => {});\n'],
       ["apps/browser/scripts/sim/known.json", JSON.stringify({ failing: [{ issue: 7, owner: "@dana", expires: "2026-02-01" }] })],
     ];
     findViolations(files, markers);
-    assert.deepEqual(expired(markers, "2026-02-01"), ["  apps/browser/src/state/hello/hello.test.mjs:1 todo for @alice expired 2026-01-31"]);
-    assert.equal(expired(markers, "2026-02-02").length, 2);
-    assert.equal(expired(markers, "2026-01-31").length, 0);
+    const late = (today) => lapsed(markers, today).map(({ path, line, text }) => `${path}:${line} ${text}`);
+    assert.deepEqual(late("2026-02-01"), ["apps/browser/src/state/hello/hello.test.mjs:1 todo for @alice expired 2026-01-31: fix it, or move the date with the owner's OK"]);
+    assert.equal(late("2026-02-02").length, 2);
+    assert.equal(late("2026-01-31").length, 0);
+    assert.deepEqual(breaches(markers), [], "a passed date never fails");
+    assert.equal(annotation(lapsed(markers, "2026-02-01")[0]), "::warning file=apps/browser/src/state/hello/hello.test.mjs,line=1::todo for @alice expired 2026-01-31: fix it, or move the date with the owner's OK");
+    assert.match(expirySummary([], lapsed(markers, "2026-02-01")), /^## Expiring skips\n\nPast their date \(a warning, not a failure\):\n\n- `apps\/browser\/src\/state\/hello\/hello\.test\.mjs:1` todo for @alice/);
     const impossible = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test("a", { skip: "@a until 2099-02-30: x" }, () => {});\n'], ["apps/browser/scripts/sim/known.json", '{"failing":[{"issue":1,"owner":"@d","expires":"soon"}]}']], impossible);
-    assert.equal(expired(impossible, "2026-01-01").length, 2);
+    assert.equal(breaches(impossible).length, 2);
     const scoped = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'describe("a", () => {\n  const reason = "@al until 2099-01-01: x";\n  test("a", { skip: reason }, fn);\n});\ndescribe("b", () => {\n  const reason = "@al until 2001-01-01: x";\n  test("b", { skip: reason }, fn);\n});\n']], scoped);
-    assert.deepEqual(expired(scoped, "2026-01-01"), ["  apps/browser/src/state/hello/hello.test.mjs:7 skip for @al expired 2001-01-01"]);
+    assert.deepEqual(lapsed(scoped, "2026-01-01").map(({ line, text }) => `${line} ${text.split(":")[0]}`), ["7 skip for @al expired 2001-01-01"]);
     const focused = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test.only("a", () => {});\n']], focused);
-    assert.deepEqual(expired(focused, "2026-01-01"), ["  apps/browser/src/state/hello/hello.test.mjs:1 .only, which never belongs in a commit"]);
+    assert.deepEqual(breaches(focused), ["  apps/browser/src/state/hello/hello.test.mjs:1 .only, which never belongs in a commit"]);
     const owners = [];
     findViolations([["apps/browser/scripts/sim/known.json", JSON.stringify({ failing: [{ issue: 1, expires: "2099-01-01" }, { issue: 2, owner: "@dana", expires: "" }, { issue: 3, owner: "@dana" }] })]], owners);
-    assert.deepEqual(expired(owners, "2026-01-01"), ['  apps/browser/scripts/sim/known.json:1 quarantine until "", which isn\'t a date (YYYY-MM-DD) with an @owner']);
+    assert.deepEqual(breaches(owners), ['  apps/browser/scripts/sim/known.json:1 quarantine until "", which isn\'t a date (YYYY-MM-DD) with an @owner']);
     assert.equal(house("apps/browser/scripts/sim/known.json", JSON.stringify({ failing: [{ issue: 1, expires: "2099-01-01" }] })).skips, 1);
     const twice = [];
     findViolations([["apps/browser/scripts/sim/known.json", '{"failing":[{"issue":7,"owner":"@dana","expires":"2026-01-01"},\n{"issue":7,"owner":"@dana","expires":"2026-01-02"}]}']], twice);
@@ -1188,9 +1212,14 @@ if (process.argv.includes("--expired")) {
       return result;
     };
   })();
-  test("no skip, todo, quarantine or accepted risk is past its date", () => {
-    const late = expired(scan().markers, todayUtc());
-    assert.equal(late.length, 0, `Past their date, or .only (docs/conventions.md, expiring-skip): fix them, or move the date with the owner's OK:\n${late.join("\n")}`);
+  test("no .only and no date that isn't one; a skip past its date only warns", (t) => {
+    const { markers } = scan();
+    for (const warning of lapsed(markers, todayUtc())) {
+      t.diagnostic(`warning: ${warning.path}:${warning.line} ${warning.text}`);
+      console.log(annotation(warning));
+    }
+    const failing = breaches(markers);
+    assert.equal(failing.length, 0, `.only, or an expiry that isn't a date (docs/conventions.md, expiring-skip):\n${failing.join("\n")}`);
   });
   test("conventions hold, except what the baseline lists", (t) => {
     const baseline = JSON.parse(readFileSync(ROOT + BASELINE_PATH, "utf8"));
