@@ -161,6 +161,25 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   agents' uncommitted work in the same file. Undo your own hunks by editing. A git worktree or a scratch clone is
   yours alone, so all of those are fine there (`scripts/agent/guard-git` lets them through); `~/chromium-build` is
   still shared, under `scripts/agent/locked chromium`.
+- **Set up a worktree's dependencies with `scripts/agent/worktree-setup <worktree>`** (`--help`), never by
+  copying or APFS-cloning `node_modules` or `Pods`: a `cp -Rc` of the JS dependencies writes about 93k inodes and
+  keeps fseventsd above 100% CPU for its length, and its deletion costs the same again. The script links each
+  `node_modules` folder entry by entry, in about 0.1 s, into one read-only pnpm install per lockfile under
+  `~/ardia-scratch/deps.noindex/<key>`. The first worktree on a new lockfile makes that install, about 6 s under
+  `locked pod`. `@ardia/*` links point at the worktree's own packages.
+  - In a linked worktree, never `pnpm install`: its `.pnpmfile.cjs` refuses, and the read-only tree stops a bypass.
+    `pnpm run` and `pnpm exec` print the refusal and still run, but calling tools directly is quieter:
+    `node_modules/.bin/tsrs -p .`, `node --import ./src/test-loader.mjs --test …` in `apps/browser`, or
+    `node node_modules/react-native/cli.js start --port <n>` there for Metro. `metro.config.js` reads the link
+    marker, so Metro, `js-bench.mjs bundle` and the Xcode bundle phase resolve through the links with no wrapper.
+  - Changing dependencies (a lockfile, a patch, `pnpm patch`) needs a real install: `--undo` first, then
+    `pnpm install` under `scripts/agent/locked pod`. After pulling a new lockfile, run the setup again;
+    `--status` says when a worktree no longer matches. `--prune` deletes cached installs no worktree uses.
+  - A native build needs the worktree's own `Pods`: `pod install` under `locked pod` works against the linked,
+    read-only `node_modules`. If a later build step must write into `node_modules`, it fails loudly on the
+    read-only tree rather than changing it: use a real install (`--undo`) for that worktree.
+  - The script drops `.metadata_never_index` into the worktree, the cache, `~/ardia-scratch` and `~/ardia-wt`. On
+    the Mac mini, run it there the same way, or `touch ~/ardia-scratch/.metadata_never_index` once.
 - **Commit your own work to `main`** from the shared checkout, or push a branch from your worktree (`git add -p`
   or explicit paths, only your hunks). Never commit another agent's work in progress. The index and the working
   tree are shared, and `git commit -- <paths>` (`--only`) takes the whole working-tree file, other agents' hunks included: check `git diff --cached --stat` lists only your
