@@ -180,7 +180,20 @@ changes, or the engine framework is stale (`docs/releasing.md` lists what it che
 ends with "Notarized and stapled." If it says "NOT notarized.", the profile is gone or invalid
 (`xcrun notarytool history --keychain-profile ardia` shows why): stop and tell the user rather than
 shipping an unnotarized build. Never store or re-create the credential yourself; that's the user's step.
-Notarization adds a few minutes per submission.
+Notarization adds a few minutes per submission. A retry doesn't upload again: `notarize.sh` records each submission id
+in `dist/.notary/` (which survives `rm -rf dist/<version>`; `NOTARY_STATE_DIR` moves it), the app under its code's
+CDHash (the same code signed again keeps it, though the zip's bytes change), and the DMG under the CDHash of the app it
+packs, with the exact DMG it sent kept as `<key>.<sha256>.dmg` (packing again makes other bytes, so a retry from the
+same commit and packing inputs staples a copy of that image and swaps it in, once it has checked the sha256, that it
+holds the same app and that it verifies as signed by the same team). One run at a time per state directory: a second
+waits `NOTARY_LOCK_SECONDS` (10 min) for the kernel lock on `<state>/.lock` and stops. On the
+next run it asks Apple about that id first: Accepted staples, In Progress waits, Invalid or Rejected prints Apple's log
+and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist submits fresh,
+and when notarytool can't answer, answers something unknown, or stapler can't fetch an accepted ticket, it stops and
+keeps the record. An app Apple already has a ticket for is
+stapled with no upload at all. Polling Apple stops after `NOTARY_WAIT_SECONDS` (4 h here, 45 min per file in CI). After a
+dropped or timed-out wait, run `release.sh` again (or `scripts/release/notarize.sh <app> dist/<version>`, and
+`notarize.sh <dmg> dist/<version> <app>`): both pick their submissions up.
 
 ## 4. Smoke test the build
 
@@ -331,7 +344,9 @@ it refuses to run alongside another publish, local or CI, naming the holder; `--
 keys and deletes them before the launch check (`docs/releasing.md` › CI releases).
 
 **Smoke-testing CI's build.** Dispatch with `dry_run=true` (the default): the same build as a release candidate
-(`release.sh --rc`: the next build number, signed and notarized), published nowhere. Download it and run the smoke test
+(`release.sh --rc`: the next build number, signed and notarized), published nowhere. If the sign job fails while
+waiting on Apple, re-run it: the notarization state is cached per version and commit, so it picks the submissions up.
+Download it and run the smoke test
 on it:
 
 ```bash
