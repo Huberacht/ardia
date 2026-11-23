@@ -486,7 +486,8 @@ off in the lab`.
       median.
     - From sync14 the deck bar's frosts, which sit over nothing but the backdrop, are fills tinted from the
       backdrop's colours under them, with no blur layer: the bar's colour follows the blobs, but the blobs are
-      not seen through it. Logcat has, at each deck build and for each frost, `PAGELAB look frost … path=… (why);
+      not seen through it. Since #3949 that holds for frost variants and Android 12 only: a Glass on Android 13+
+      blurs and refracts the backdrop and reads `path=live`, with the DECK source recording. Logcat has, at each deck build and for each frost, `PAGELAB look frost … path=… (why);
       source deck: …`, which says what the frost found in its source. For the bar it should read `path=tinted
       … source deck: only the deck backdrop shows: N view(s) under it hidden by it, M over it that draw
       nothing`. When it reads anything else, report the line: it names the view that kept the blur (sync14's
@@ -1365,13 +1366,18 @@ look surface: it has no frost source to refract.
   frame then took 25 ms (p50) instead of 13. Each glass's lens cost 4 passes, and the glass's 12 dp blur, 5.5 px at a
   fifth of the size, was just over the sigma of 4 past which Skia's GPU blur downsamples first. Now the frosts of one
   source with the same blur, saturation and scale share one strip: the union of their bounds plus each one's margin,
-  clamped to the source, drawn at the blur's scale with lens(blur(saturation)) as its `RenderEffect`, recorded once a
+  clamped to the source, drawn at the blur's scale with lens(blur) as its `RenderEffect` (the lens applies the
+  frost's saturation to what it returns; without a lens it is blur and a colour filter), recorded once a
   frame by the first of them to draw. `FrostScale` picks the smallest scale that keeps the blur at 6 px or less in
   the small layer (a sigma under 4) until it reaches an eighth, so the glass blurs at a sixth. The strip sits at its
   own place in the source's scaled coordinates (its left and top on whole layer pixels), so a glass draws the strip
   node translated to the source, with no layer or effect of its own, and no glass's backdrop moves when the strip
-  grows or shrinks. The memory line counts strips (`lookCounts().strips`, `stripRecords`), and a source that stops
-  recording drops them.
+  grows or shrinks. HWUI applies a layer's `RenderEffect` where the layer is drawn and reuses it only for the same
+  clip, so the strip is two nodes: one holds the source with the effect, and the compositing layer every glass draws
+  holds that one, filtered once a frame. When what's under the glasses moves (a scroll, a deck backdrop frame, the
+  page's refresh timer), only the strip is re-recorded, once a frame (`FrostSourceView.refreshStrips`); a glass
+  redraws only when it moves or changes. The memory line counts strips (`lookCounts().strips`, `stripRecords`), and
+  a source that stops recording drops them.
 - **The rim.** liquid-dom's white specular: two lights, from the top left and the opposite side, a 1.25 dp band fading
   inward, power 2, added at 50 % (35 % in dark). It is drawn at full resolution over the glass's clip, after the tint,
   as a second `RuntimeShader`, so it stays sharp, and it draws on every glass from Android 13, lens or not, except
@@ -1381,14 +1387,24 @@ look surface: it has no frost source to refract.
   can't be built the glass keeps the plain blur, if the rim can't it is skipped, and either is tried once per launch
   and logged once (`PAGELAB look glass … shader failed`). The rounded frost or fill always draws; LookView's square
   draw-safety fallback is no longer what a shader failure looks like.
-- **Over a page.** The page bar's glass keeps the solid page mode: it fills with the app's chrome fill (#FFFFFF, or
-  #1E1B1D in dark), tinted and rimmed, with nothing recorded. Recording the page live under the bar cost the F4 three
-  times the janky frames, and it was the recording, not the lens: ten swipes on a Wikipedia page, `dumpsys gfxinfo`,
-  before this change 3.05 and 3.16 % janky (p50 10 ms, p90 13 to 14, p99 25 to 26); the page recorded live with the
-  lens 9.0 and 10.2 % (p50 13 to 14, p90 24 to 25, p99 38 to 40); the same without the lens (`ArdiaFlatGlass`) 11.1 %;
-  the default now 2.96 % (10 / 14 / 27) on a warm run. The lab flag `ArdiaGlassOverPage` records the page live and
-  refracts it, for comparison. When it does, the page source draws through a compositing layer: without one the
-  bar's four glass layers each ran the WebView's draw again and the page went white.
+- **Over a page.** Since #3949 a Glass over a page records the page live on Android 13 and later and refracts it, with
+  no lab flag (`ArdiaGlassOverPage` is gone); a frost variant there (the search tray's thin frost) keeps the solid
+  page mode, Android 12's glass keeps it too, and a phone over the look budget draws the flat fill under every glass.
+  The page source draws through a compositing layer, which any glass over a WebView needs: without one each glass
+  ran the WebView's draw again and the page went white. What it costs on the F4 (Android 14, 120 Hz), ten swipes on
+  Wikipedia's Glass article with `dumpsys gfxinfo` after each fresh demo launch: the solid bar measured 4.0, 6.5,
+  8.9, 5.7 and 6.8 % janky (p50 9 to 10 ms, p90 14 to 20, p99 27 to 44); each glass with its own blur and lens (the
+  old lab flag) 7.2 and 6.8 % (p50 12 to 14, p90 21, p99 36 to 38) with 32 GPU passes a frame; the shipped strip
+  8.6 % (p50 14, p90 23, p99 48) with 10. Frame by frame the RenderThread issues 3.5 ms at the median against 2.8
+  with the solid bar (6.2 before the strip refreshed at 60 Hz) and the GPU takes 3.5 ms against 1.7: the page's
+  layer is what remains. A strip over a page re-records at most every 15 ms, so on a 120 Hz screen the blurred page
+  under the bar follows every other frame; the frames between redraw only the page's layer. The fold views' own
+  hardware layers (`renderToHardwareTextureAndroid` on `floatingBarFold` and `hostPillFold`) now redraw with the
+  strip, about 0.5 ms a frame; they stay for the fold's fade (b66c3bbdb).
+- **Over the deck, measured.** The idle deck on the F4 with its five glasses live: the look budget's own sample reads
+  20 % busy, median 11.6 ms of work a blob frame, against 24 % and 14.4 ms with the old tinted fill (limit 33 %).
+  The first strip build (each glass with its own lens, every glass redrawn on each blob frame) read 34 % and
+  would have turned the F4's look down.
 - **Left out of the port.** The smooth union between neighbouring shapes (each `Glass` is one shape), the refraction of
   content inside the glass, the reflection sample along the rim and liquid-dom's blurred displacement field. Corners
   stay circular, as the view's clip and outline are.
@@ -1396,8 +1412,11 @@ look surface: it has no frost source to refract.
   Reduce Transparency draw the solid Classic surface in the app's chrome fill; a phone over the look budget or with
   the look off draws the flat fill. `ArdiaFlatGlass` keeps the frost and drops the lens and rim.
   `app_launched.glass_render` reports the best of these the phone can draw at launch, not what each surface drew.
-- **Not seen yet.** The M3 (offline during this pass), Android 12 and 13 phones, TalkBack over the new sources, and
-  the Duo layouts.
+- **Not seen yet.** The M3 (offline during this pass), Android 12 and 13 phones, TalkBack over the new sources, the
+  Duo layouts, the lens during the bar's 0.26 s fold (the fold scales the bar while the strip's lens shapes stay at
+  the glasses' unscaled boxes), a deck grid with more than 12 glasses on one strip (the 13th gets the plain blur), a
+  toast over a page (it records the whole `surfaces` source while it shows), and the 60 Hz page strip on a fast
+  fling.
 
 ## The look's budget
 
