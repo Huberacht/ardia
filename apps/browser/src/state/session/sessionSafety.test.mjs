@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 
 const realNow = Date.now;
 const startedAt = realNow();
@@ -1023,4 +1023,22 @@ test("six occupied snapshot names that listing doesn't show are passed in one at
     stub.refusedSaves.on = false;
   }
   assert.deepEqual(backupsOf(MIGRATION_BACKUP), [`${MIGRATION_BACKUP}7.json`]);
+});
+
+test("stopping persistence cancels the save it had queued: session.json is not written afterwards", async () => {
+  const kept = realSession();
+  stub.docs.set("session.json", kept);
+  const stop = startPersistence();
+  await settle();
+  assert.equal(stub.docs.get("session.json"), kept);
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    S().createWindow({ profileId: Object.keys(JSON.parse(kept).profiles)[0] });
+    stop();
+    mock.timers.tick(60_000);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.equal(stub.docs.get("session.json"), kept, "the stopped instance wrote the session it had queued");
+  } finally {
+    mock.timers.reset();
+  }
 });

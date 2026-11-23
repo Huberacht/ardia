@@ -172,8 +172,10 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let due = 0;
   let cosmeticOnly = true;
+  let stopped = false;
 
   const schedule = (delay: number) => {
+    if (stopped) return;
     const at = Date.now() + delay;
     if (timer !== undefined && due <= at) return;
     clearTimeout(timer);
@@ -275,5 +277,11 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
     check(useBrowser.getState());
     save();
   };
-  return useBrowser.subscribe((s) => check(s));
+  const unsubscribe = useBrowser.subscribe((s) => check(s));
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+    timer = undefined;
+    unsubscribe();
+  };
 }
