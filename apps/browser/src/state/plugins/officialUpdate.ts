@@ -43,8 +43,10 @@ const grantsMainNothing = (p: PluginPermissions) => MAIN_USES.every((key) => p[k
 
 const firstMain = ({ approved, next }: Both) => FIRST_MAIN_POLICY.autoApprove && approved.main === null && next.main !== null;
 
-const runs = (programs: readonly ProgramSpec[], fallbackExample: string | null) =>
-  programs.map((p) => ({ name: p.name, path: p.path, afterUpdate: p.afterUpdate, example: p.example ?? fallbackExample }));
+const runs = (programs: readonly ProgramSpec[], fallbackExample: string | null) => ({
+  programs: programs.map((p) => ({ name: p.name, path: p.path, afterUpdate: p.afterUpdate })),
+  example: programs.find((p) => p.example)?.example ?? fallbackExample,
+});
 
 const programsWithin: Rule<ProgramSpec[]> = (a, b, { fallbackExample }) => (same(runs(a, fallbackExample), runs(b, fallbackExample)) ? null : "programs");
 
@@ -153,6 +155,7 @@ function compare(both: Both): UpdateVerdict {
     const reason = (MANIFEST_RULES[key] as Rule<unknown>)(approved[key], next[key], both);
     if (reason) return { ok: false, reason };
   }
-  const before = new Set(consentLines(approved).map((l) => l.text));
-  return { ok: true, added: consentLines(next).map((l) => l.text).filter((text) => !before.has(text)) };
+  const lines = (m: PluginManifest) => consentLines({ ...m, permissions: { ...m.permissions, network: Array.isArray(m.permissions.network) ? [...m.permissions.network].sort() : m.permissions.network } });
+  const before = new Set(lines(approved).map((l) => l.text));
+  return { ok: true, added: lines(next).map((l) => l.text).filter((text) => !before.has(text)) };
 }

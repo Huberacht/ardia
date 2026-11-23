@@ -47,6 +47,7 @@ const candidateOf = (text, folderId = PINNED.folderId) => ({ folderId, text, leg
 const RECORDS = (approved, extra = {}) => JSON.stringify({ version: 1, plugins: { cli: { enabled: true, approved, values: {}, applied: {}, installed: true, ...extra } } });
 
 appInfo.appVersion = "0.2.49";
+assert.equal(FIRST_MAIN_POLICY.autoApprove, false, "Ardia ships with a first main prompting");
 FIRST_MAIN_POLICY.autoApprove = true;
 setConsentPeriod(true, "test-epoch");
 lifecycle.PROMOTION_RETRY.delayMs = 20;
