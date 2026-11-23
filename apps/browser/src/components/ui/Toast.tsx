@@ -20,6 +20,8 @@ export function Toast({
   icon,
   action,
   onAction,
+  secondary,
+  onSecondary,
   closing = false,
   onClosed,
 }: {
@@ -28,6 +30,8 @@ export function Toast({
   icon?: string;
   action?: string;
   onAction?: () => void;
+  secondary?: string;
+  onSecondary?: () => void;
   closing?: boolean;
   onClosed?: () => void;
 }) {
@@ -41,7 +45,7 @@ export function Toast({
     return () => run.stop();
   }, [closing]);
   return (
-    <View pointerEvents={action && !closing ? "box-none" : "none"} style={DOCK}>
+    <View pointerEvents={(action || secondary) && !closing ? "box-none" : "none"} style={DOCK}>
       <Animated.View style={{ opacity: appear }}>
         <Panel fill={theme.toastFill} border={theme.popoverBorder} radius={radius.panel} shadow={shadow.card} material="hudWindow" style={BODY}>
           {icon ? <Symbol name={icon} size={15} color={theme.icon} style={ICON} /> : null}
@@ -53,6 +57,7 @@ export function Toast({
               </Text>
             ) : null}
           </View>
+          {secondary && onSecondary ? <Button variant="pill" tone="chip" title={secondary} onPress={onSecondary} /> : null}
           {action && onAction ? <Button variant="pill" tone="chip" title={action} onPress={onAction} /> : null}
         </Panel>
       </Animated.View>
