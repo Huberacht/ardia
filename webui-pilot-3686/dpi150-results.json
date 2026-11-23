@@ -1,0 +1,114 @@
+{
+    "window":  {
+                   "detail":  "dpi 144 frame 9,0 1902x999 outer 0,0 1920x1008",
+                   "ok":  true
+               },
+    "shell-ui":  {
+                     "detail":  "chrome://ardia/ text: Open a tab or file Go Clear New Tab New Tab New Tab",
+                     "ok":  true
+                 },
+    "hittest-left-edge":  {
+                              "detail":  "(6,500) -\u003e Chrome_WidgetWin_1:10, want 10",
+                              "ok":  true
+                          },
+    "hittest-right-edge":  {
+                               "detail":  "(1913,500) -\u003e Chrome_WidgetWin_1:11, want 11",
+                               "ok":  true
+                           },
+    "hittest-bottom-edge":  {
+                                "detail":  "(960,1001) -\u003e Chrome_WidgetWin_1:15, want 15",
+                                "ok":  true
+                            },
+    "hittest-top-edge":  {
+                             "detail":  "(960,1) -\u003e Chrome_RenderWidgetHostHWND:12, want 12",
+                             "ok":  true
+                         },
+    "hittest-bottom-right":  {
+                                 "detail":  "(1913,1001) -\u003e Chrome_WidgetWin_1:17, want 17",
+                                 "ok":  true
+                             },
+    "hittest-content":  {
+                            "detail":  "(960,500) -\u003e Chrome_RenderWidgetHostHWND:1, want 1",
+                            "ok":  true
+                        },
+    "hittest-maximize-button":  {
+                                    "detail":  "(1820,45) -\u003e Chrome_RenderWidgetHostHWND\u003eChrome_WidgetWin_1:9, want 9",
+                                    "ok":  true
+                                },
+    "shell-typing-navigates":  {
+                                   "detail":  "targets: file:///C:/pilot/form.html | chrome://ardia/",
+                                   "ok":  true
+                               },
+    "page-typing":  {
+                        "detail":  "page input value \u0027hello from SendInput\u0027 (viewport 190,50,1067,606.3333740234375)",
+                        "ok":  true
+                    },
+    "ctrl-l-to-shell":  {
+                            "detail":  "shell focus value \u0027shell\u0027, page still \u0027hello from SendInput\u0027",
+                            "ok":  true
+                        },
+    "back-to-page":  {
+                         "detail":  "page input value \u0027hello from SendInput!\u0027",
+                         "ok":  true
+                     },
+    "resize-right-edge":  {
+                              "detail":  "9,0 1902x999 -\u003e 9,0 1740x999",
+                              "ok":  true
+                          },
+    "resize-corner":  {
+                          "detail":  "9,0 1740x999 -\u003e 9,0 1638x917",
+                          "ok":  true
+                      },
+    "resize-top-edge":  {
+                            "detail":  "9,0 1638x917 -\u003e 9,79 1638x838",
+                            "ok":  true
+                        },
+    "caption-drag":  {
+                         "detail":  "from (161,679): 9,79 1638x838 -\u003e 144,166 1638x838",
+                         "ok":  true
+                     },
+    "caption-drag-to-edge-snaps":  {
+                                       "detail":  "0,0 960x1008",
+                                       "ok":  true
+                                   },
+    "drag-out-unsnaps":  {
+                             "detail":  "100,207 1638x838, size before snapping 144,166 1638x838",
+                             "ok":  true
+                         },
+    "snap-win-left":  {
+                          "detail":  "0,0 960x1008",
+                          "ok":  true
+                      },
+    "snap-win-right-restores":  {
+                                    "detail":  "100,207 1638x838",
+                                    "ok":  true
+                                },
+    "snap-win-up-maximizes":  {
+                                  "detail":  "zoomed True frame 0,0 1920x1008",
+                                  "ok":  true
+                              },
+    "snap-win-down-restores":  {
+                                   "detail":  "zoomed False frame 100,207 1638x838",
+                                   "ok":  true
+                               },
+    "maximize-button-click":  {
+                                  "detail":  "zoomed False -\u003e True -\u003e False",
+                                  "ok":  true
+                              },
+    "close-exits":  {
+                        "detail":  "engine processes gone after 0.6 s",
+                        "ok":  true
+                    },
+    "relaunch-reopens":  {
+                             "detail":  "window back; session tab restored: True; targets file:///C:/pilot/form.html | chrome://ardia/",
+                             "ok":  true
+                         },
+    "second-launch-reuses":  {
+                                 "detail":  "Ardia windows after a second launch: 1; foreground is the shell: True",
+                                 "ok":  true
+                             },
+    "alt-f4-exits":  {
+                         "detail":  "after relaunch",
+                         "ok":  true
+                     }
+}
