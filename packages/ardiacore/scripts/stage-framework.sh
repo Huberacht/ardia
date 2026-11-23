@@ -41,7 +41,7 @@ fi
 
 [[ -d "$src" ]] || { echo "error: no ArdiaCore framework at $src (engine/ardiacore/apply.sh, then build chrome_framework)" >&2; exit 1; }
 stamp="$dest/.stamp"
-engine_match=${ARDIACORE_ENGINE_MATCH:-$(cat "$(dirname "$src")/engine-match" 2>/dev/null || echo match=local)}
+engine_match=$("$here/engine-match.sh" resolve "$repo" "${ARDIACORE_ENGINE_MATCH:-$(cat "$(dirname "$src")/engine-match" 2>/dev/null || echo match=local)}") || exit 1
 "$here/engine-match.sh" check "$engine_match" || exit 1
 mkdir -p "$dest"
 if [[ "$(cat "$dest/engine-match" 2>/dev/null)" != "$engine_match" ]]; then

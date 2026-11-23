@@ -700,7 +700,7 @@ class MacDispatchTests(unittest.TestCase):
         self.assertIn('--arch linux-x86_64', bogus.stderr)
         self.assertNotEqual(run([script, '--arch']).returncode, 0)
         mac = run([script, '--bogus'])
-        self.assertEqual((mac.returncode, mac.stderr), (1, 'error: usage: fetch-engine.sh [--nearest] [--describe]\n'))
+        self.assertEqual((mac.returncode, mac.stderr), (1, 'error: usage: fetch-engine.sh [--nearest] [--describe [--offline]]\n'))
 
 
 if __name__ == '__main__':

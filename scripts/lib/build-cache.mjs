@@ -281,6 +281,20 @@ export function stampInputs({ framework, env = process.env, hashCache, toolchain
   return { framework: identity, toolchain, rust, env: fingerprint };
 }
 
+export function engineRecordComplete(path) {
+  try {
+    return /(^| )public_hash=\S/.test(fs.readFileSync(path, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+export function describeEngineOffline(fetchEngine, key) {
+  const r = spawnSync(fetchEngine, ["--describe", "--offline"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000 });
+  const line = r.status === 0 ? r.stdout.trim() : "";
+  return /^match=(exact|nearest|unknown) /.test(line) ? line : `match=unknown key=${key}`;
+}
+
 export function cloneTree(src, dst) {
   const args = process.platform === "darwin" ? ["-Rc", src, dst] : ["-a", "--reflink=auto", src, dst];
   return spawnSync("cp", args, { encoding: "utf8" });

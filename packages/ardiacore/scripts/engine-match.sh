@@ -1,13 +1,20 @@
 #!/bin/bash
-# Reads and acts on an engine match line, the one fetch-engine.sh writes to engine-match beside the framework it fetched:
-#   match=exact|nearest|local key=<engine key> version=<release> source=<commit> public=same|changed
-# exact: the engine published for this checkout's engine key; nearest: one published for an earlier key; local: a
-# framework with no such line (an engine built here, or ARDIACORE_FRAMEWORK pointing at one).
+# Reads, resolves and acts on an engine record, the line fetch-engine.sh writes to engine-match beside the framework it
+# fetched. The record holds what doesn't change for an engine:
+#   match=exact|nearest|unknown key=<engine key> version=<release> source=<commit it was published from>
+#   public_hash=<content hash of engine/ardiacore/src/ardia/core/public as that engine was built>
+# A framework with no record is match=local (an engine built here, or ARDIACORE_FRAMEWORK pointing at one); unknown is
+# an engine whose release couldn't be looked up.
 #
-#   engine-match.sh get <field> <line>        prints one field (match is local when the line has none)
-#   engine-match.sh check <line>              fails when a nearest engine's public headers differ from this checkout's
-#   engine-match.sh plist <line> <Info.plist> checks, then writes ArdiaEngineMatch, ArdiaEngineKey, ArdiaEngineVersion
-#                                             and ArdiaEngineSource into the built app's Info.plist
+#   engine-match.sh get <field> <line>             prints one field (match is local when the line has none)
+#   engine-match.sh public-hash <root> [<commit>]  the hash of the public headers in <root>'s files, or at <commit>
+#   engine-match.sh resolve <root> <line>          the record judged against the tree in <root>, as it is on disk:
+#                                                  match recomputed from its engine key when <root> is a git checkout,
+#                                                  plus public=same|changed|unknown
+#   engine-match.sh check <resolved line>          fails when a nearest engine's public headers differ from the tree's
+#   engine-match.sh plist <resolved line> <Info.plist>
+#                                                  checks, then writes ArdiaEngineMatch, ArdiaEngineKey,
+#                                                  ArdiaEngineVersion and ArdiaEngineSource into the app's Info.plist
 #
 # ARDIACORE_ALLOW_PUBLIC_MISMATCH=1 lets check and plist pass a mismatch: for engine work that builds against an
 # older engine on purpose, and for CI, which compiles anyway and fails after the build.
@@ -31,9 +38,48 @@ match_of() {
   local match
   match=$(field match "$1")
   case "$match" in
-    exact | nearest | local) echo "$match" ;;
-    *) die "engine match line has match=$match, not exact, nearest or local: $1" ;;
+    exact | nearest | local | unknown) echo "$match" ;;
+    *) die "engine match line has match=$match, not exact, nearest, local or unknown: $1" ;;
   esac
+}
+
+public_hash() {
+  local root=$1 commit=${2:-}
+  if [[ -n "$commit" ]]; then
+    git -C "$root" ls-tree -r "$commit" -- "$public_dir" | awk -F '\t' '{ split($1, meta, " "); print $2 " " meta[3] }'
+  else
+    [[ -d "$root/$public_dir" ]] || return 0
+    (cd "$root" && find "$public_dir" -type f ! -name '.*' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' file; do
+      printf '%s %s\n' "$file" "$(git hash-object --no-filters -- "$file")"
+    done)
+  fi | LC_ALL=C sort | shasum -a 256 | cut -c1-64
+}
+
+is_checkout() {
+  local top
+  top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
+  [[ "$(cd "$top" && pwd -P)" == "$(cd "$1" && pwd -P)" ]]
+}
+
+resolve() {
+  local root=$1 line=$2 match key want public current_key key_paths
+  match=$(match_of "$line")
+  [[ "$match" == local ]] && { echo "match=local"; return 0; }
+  key=$(field key "$line")
+  want=$(field public_hash "$line")
+  public=unknown
+  [[ -z "$want" ]] || { [[ "$(public_hash "$root")" == "$want" ]] && public=same || public=changed; }
+  if [[ "$match" != unknown && -n "$key" ]] && is_checkout "$root"; then
+    current_key=$("$root/engine/engine-key.sh" --platform macos 2>/dev/null || true)
+    key_paths=$("$root/engine/engine-key.sh" --platform macos --paths 2>/dev/null || true)
+    if [[ "$current_key" == "$key" && -z "$(cd "$root" && git status --porcelain -- $key_paths 2>/dev/null)" ]]; then
+      match=exact
+    else
+      match=nearest
+    fi
+  fi
+  [[ "$match" == exact && "$public" == changed ]] && match=nearest
+  echo "match=$match key=$key version=$(field version "$line") source=$(field source "$line") public_hash=$want public=$public"
 }
 
 check() {
@@ -43,23 +89,23 @@ check() {
   public=$(field public "$line")
   [[ "$public" == same ]] && return 0
   if [[ "${ARDIACORE_ALLOW_PUBLIC_MISMATCH:-}" == 1 ]]; then
-    echo "warning: building against $(field version "$line")'s engine, older than this checkout's, though $public_dir changed since (ARDIACORE_ALLOW_PUBLIC_MISMATCH=1)" >&2
+    echo "warning: building against $(field version "$line")'s engine, older than this tree's, though $public_dir changed since (ARDIACORE_ALLOW_PUBLIC_MISMATCH=1)" >&2
     return 0
   fi
-  echo "error: this checkout's $public_dir differs from that of $(field version "$line")'s engine (built from $(field source "$line" | cut -c1-10)), the nearest published Mac engine it was given, so the app can't match it." >&2
+  echo "error: this tree's $public_dir differs from that of $(field version "$line")'s engine (published from $(field source "$line" | cut -c1-10)), the nearest published Mac engine it was given, so the app can't match it." >&2
   echo "error: build the engine (docs/engine-build.md) and set ARDIACORE_FRAMEWORK to it, check out a commit with a published engine, or set ARDIACORE_ALLOW_PUBLIC_MISMATCH=1 to build anyway." >&2
   return 1
 }
 
 plist() {
-  local line=$1 file=$2 match name value
+  local line=$1 file=$2 match name value plist_key
   [[ -f "$file" ]] || die "no Info.plist at $file"
   check "$line"
   match=$(match_of "$line")
   plutil -replace ArdiaEngineMatch -string "$match" "$file"
   for name in key version source; do
     value=$(field "$name" "$line")
-    local plist_key="ArdiaEngine$(tr '[:lower:]' '[:upper:]' <<<"${name:0:1}")${name:1}"
+    plist_key="ArdiaEngine$(tr '[:lower:]' '[:upper:]' <<<"${name:0:1}")${name:1}"
     if [[ "$match" != local && -n "$value" ]]; then
       plutil -replace "$plist_key" -string "$value" "$file"
     else
@@ -70,8 +116,10 @@ plist() {
 
 case "${1:-}" in
   get) [[ $# -eq 3 ]] || die "usage: engine-match.sh get <field> <line>"; field "$2" "$3" ;;
+  public-hash) [[ $# -eq 2 || $# -eq 3 ]] || die "usage: engine-match.sh public-hash <root> [<commit>]"; public_hash "$2" "${3:-}" ;;
+  resolve) [[ $# -eq 3 ]] || die "usage: engine-match.sh resolve <root> <line>"; resolve "$2" "$3" ;;
   check) [[ $# -eq 2 ]] || die "usage: engine-match.sh check <line>"; check "$2" ;;
   plist) [[ $# -eq 3 ]] || die "usage: engine-match.sh plist <line> <Info.plist>"; plist "$2" "$3" ;;
   -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0" ;;
-  *) die "usage: engine-match.sh get|check|plist … (--help)" ;;
+  *) die "usage: engine-match.sh get|public-hash|resolve|check|plist … (--help)" ;;
 esac

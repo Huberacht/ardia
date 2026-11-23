@@ -360,7 +360,7 @@ function engine() {
     fs.mkdirSync(tmp, { recursive: true });
     const r = lib.cloneTree(fetched, join(tmp, "Chromium Framework.framework"));
     if (r.status !== 0) throw new Error(`copying the engine failed: ${r.stderr.trim()}`);
-    fs.copyFileSync(join(dirname(fetched), "engine-match"), join(tmp, "engine-match"));
+    if (fs.existsSync(join(dirname(fetched), "engine-match"))) fs.copyFileSync(join(dirname(fetched), "engine-match"), join(tmp, "engine-match"));
     fs.writeFileSync(join(tmp, ".complete"), "");
     try {
       fs.renameSync(tmp, dir);
@@ -371,11 +371,11 @@ function engine() {
       throw new Error(`the engine store ${dir} is incomplete after fetching`);
     }
   }
-  if (!fs.existsSync(join(dir, "engine-match"))) {
-    const line = execFileSync(fetchEngine, ["--describe"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+  const record = join(dir, "engine-match");
+  if (!lib.engineRecordComplete(record)) {
     const tmp = join(dir, `engine-match.tmp-${process.pid}`);
-    fs.writeFileSync(tmp, `${line}\n`);
-    fs.renameSync(tmp, join(dir, "engine-match"));
+    fs.writeFileSync(tmp, `${lib.describeEngineOffline(fetchEngine, key)}\n`);
+    fs.renameSync(tmp, record);
   }
   lib.touch(dir);
   lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, keepEngines: cfg.keepEngines, graceMs: cfg.graceMs, protectEngines: [dir] });

@@ -107,7 +107,7 @@ jobs:
           echo "ARDIACORE_FRAMEWORK=$framework" >> "$GITHUB_ENV"
           short=$(basename "$(dirname "$framework")")
           public=engine/ardiacore/src/ardia/core/public
-          line=$(cat "$(dirname "$framework")/engine-match")
+          line=$(packages/ardiacore/scripts/engine-match.sh resolve . "$(cat "$(dirname "$framework")/engine-match")")
           strict=true
           if [ "$(packages/ardiacore/scripts/engine-match.sh get match "$line")" = exact ]; then
             echo "### Mac engine $short (exact)" >> "$GITHUB_STEP_SUMMARY"

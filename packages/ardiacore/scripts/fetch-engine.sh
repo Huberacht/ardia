@@ -17,14 +17,17 @@ if [ "${1:-}" = --arch ]; then
 fi
 
 nearest=0 describe=0
+offline=0
 for arg in "$@"; do
   case "$arg" in
     --nearest) nearest=1 ;;
     --describe) describe=1 ;;
-    *) die "usage: fetch-engine.sh [--nearest] [--describe]" ;;
+    --offline) offline=1 ;;
+    *) die "usage: fetch-engine.sh [--nearest] [--describe [--offline]]" ;;
   esac
 done
-public_dir=engine/ardiacore/src/ardia/core/public
+[ "$offline" = 0 ] || [ "$describe" = 1 ] || die "--offline only goes with --describe"
+match_script="$here/engine-match.sh"
 
 key_script="$root/engine/engine-key.sh"
 key() { "$key_script" --platform macos "$@"; }
@@ -39,8 +42,8 @@ lookup() {
   local line
   [ -n "$1" ] || return 0
   line=$(awk -v t="$1" '$1 == t { print; exit }' "$table" 2>/dev/null || true)
-  if [ -z "$line" ]; then
-    [ -n "$remote_table" ] || remote_table=$(curl -fsL --retry 2 "https://raw.githubusercontent.com/$repo/main/packages/ardiacore/prebuilt-engines.tsv" || echo "#")
+  if [ -z "$line" ] && [ "$offline" = 0 ]; then
+    [ -n "$remote_table" ] || remote_table=$(curl -fsL --retry 2 --max-time 30 "https://raw.githubusercontent.com/$repo/main/packages/ardiacore/prebuilt-engines.tsv" || echo "#")
     line=$(awk -v t="$1" '$1 == t { print; exit }' <<<"$remote_table")
   fi
   echo "$line"
@@ -48,18 +51,34 @@ lookup() {
 release_tag() {
   case "$1" in engine-*) echo "$1" ;; *) echo "v$1" ;; esac
 }
+published_source() {
+  local tag=$1 key=$2 known listed
+  known=$(cat "$store/${key:0:12}/engine-match" 2>/dev/null || true)
+  if [ "$("$match_script" get key "$known")" = "$key" ] && [ -n "$("$match_script" get source "$known")" ] && [ -n "$("$match_script" get public_hash "$known")" ]; then
+    "$match_script" get source "$known"
+    return 0
+  fi
+  if git -C "$root" rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null; then return 0; fi
+  [ "$offline" = 0 ] || return 0
+  listed=$(GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote \
+    "${ARDIACORE_ENGINE_TAG_REMOTE:-https://github.com/$repo.git}" "refs/tags/$tag" "refs/tags/$tag^{}" 2>/dev/null || true)
+  awk -v deref="refs/tags/$tag^{}" -v tag="refs/tags/$tag" '$2 == deref { d = $1 } $2 == tag { t = $1 } END { print (d != "" ? d : t) }' <<<"$listed"
+}
 
 entry=$(lookup "$tree")
 match=exact
-source_commit=$(git -C "$root" rev-list -1 HEAD -- "${key_paths[@]}" 2>/dev/null || true)
-public=same
+base=$(git -C "$root" rev-list -1 HEAD -- "${key_paths[@]}" 2>/dev/null || true)
+if [ -z "$entry" ] && [ "$offline" = 1 ]; then
+  echo "match=unknown key=$tree"
+  exit 0
+fi
 if [ -z "$entry" ]; then
   skipped=0 found=""
   while read -r commit; do
     candidate_key=$(key "$commit" 2>/dev/null || true)
     [ "$candidate_key" != "$tree" ] || continue
     candidate=$(lookup "$candidate_key")
-    if [ -n "$candidate" ]; then found=$candidate source_commit=$commit; break; fi
+    if [ -n "$candidate" ]; then found=$candidate base=$commit; break; fi
     skipped=$((skipped + 1))
     [ "$skipped" -lt 200 ] || break
   done < <(git -C "$root" rev-list HEAD -- "${key_paths[@]}")
@@ -71,11 +90,10 @@ $(release_tag "$version"), or run packages/ardiacore/scripts/fetch-engine.sh --n
 $version's engine anyway, or build the engine"
   fi
   match=nearest
-  [ -z "$(git -C "$root" diff --no-renames --name-only "$source_commit" HEAD -- "$public_dir")" ] || public=changed
-  if [ "$public" = same ]; then
+  if [ "$("$match_script" public-hash "$root" "$base")" = "$("$match_script" public-hash "$root")" ]; then
     echo "warning: using $version's engine; the engine's sources changed in $skipped commits since, and the app may not match it" >&2
   else
-    echo "warning: using $version's engine; the engine's sources changed in $skipped commits since, $public_dir among them, so the app build stops unless ARDIACORE_ALLOW_PUBLIC_MISMATCH=1" >&2
+    echo "warning: using $version's engine; the engine's sources changed in $skipped commits since, engine/ardiacore/src/ardia/core/public among them, so the app build stops unless ARDIACORE_ALLOW_PUBLIC_MISMATCH=1" >&2
   fi
   entry=$found
 fi
@@ -83,7 +101,7 @@ read -r tree version sha built <<<"$entry"
 built=${built:-$tree}
 short=${tree:0:12}
 dest="$store/$short"
-match_line="match=$match key=$tree version=$version source=$source_commit public=$public"
+match_line="match=$match key=$tree version=$version source=$(published_source "$(release_tag "$version")" "$tree") public_hash=$("$match_script" public-hash "$root" "$base")"
 if [ "$describe" = 1 ]; then
   echo "$match_line"
   exit 0

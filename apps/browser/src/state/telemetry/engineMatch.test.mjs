@@ -4,7 +4,7 @@ const { engineMatchProperties } = await import("./engineMatch.ts");
 const { WHATS_SENT } = await import("./copy.ts");
 
 test("app_launched carries the engine match the build stamped, from its fixed list only", () => {
-  for (const match of ["exact", "nearest", "local"]) assert.deepEqual(engineMatchProperties(match), { engine_match: match });
+  for (const match of ["exact", "nearest", "local", "unknown"]) assert.deepEqual(engineMatchProperties(match), { engine_match: match });
 });
 
 test("a build with no stamp, or anything else in the stamp, adds nothing", () => {
@@ -17,4 +17,5 @@ test("What's Sent names the engine match beside launches", () => {
   assert.match(launches ?? "", /exact/);
   assert.match(launches ?? "", /nearest|older/);
   assert.match(launches ?? "", /built locally|local/);
+  assert.match(launches ?? "", /couldn't look up/);
 });
