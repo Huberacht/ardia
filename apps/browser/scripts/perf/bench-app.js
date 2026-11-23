@@ -75,10 +75,12 @@ async function persisted(persistence) {
   }
   let deadline;
   const late = new Promise((resolve) => (deadline = setTimeout(function benchSettleStep() {
-    resolve(false);
+    resolve(`no answer in ${FLUSH_DEADLINE_MS} ms`);
   }, FLUSH_DEADLINE_MS)));
-  await Promise.race([persistence.sessionSaved().catch(() => false), late]);
+  const saved = persistence.sessionSaved().then((ok) => (ok ? null : "it reported it didn't"), (error) => `it failed: ${error?.message ?? error}`);
+  const problem = await Promise.race([saved, late]);
   clearTimeout(deadline);
+  if (problem) throw new Error(`settle: the session didn't save (${problem}), so the sample could count its writes`);
   return true;
 }
 

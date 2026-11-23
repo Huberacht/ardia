@@ -10,23 +10,8 @@ const sum = (o) => Object.values(o ?? {}).reduce((a, b) => a + (typeof b === "nu
 const CHURN_OPEN_MS = 60;
 const CHURN_CLOSE_MS = 10;
 const CHURN_SWITCH_MS = 10;
-const NODES_POLL_MS = 25;
-const NODES_QUIET_MS = 750;
-
-async function nodesQuiet(quietMs, capMs) {
-  const end = Date.now() + capMs;
-  let last = P.nativeNodes();
-  let since = Date.now();
-  while (Date.now() < end) {
-    await sleep(NODES_POLL_MS);
-    const now = P.nativeNodes();
-    if (now.created !== last.created || now.dropped !== last.dropped) {
-      last = now;
-      since = Date.now();
-    } else if (Date.now() - since >= quietMs) return true;
-  }
-  return false;
-}
+const NODES_SETTLE_BEFORE_MS = 1500;
+const NODES_WATCH_AFTER_MS = 2500;
 
 const extra = {
   async nodeChurn({ origin, opens = 60, switches = 120 } = {}) {
@@ -37,7 +22,7 @@ const extra = {
     const visit = (n, gap) => Array.from({ length: n }).reduce((p, _, i) => p.then(() => S().activate(ids[(i * 7) % ids.length])).then(() => sleep(gap)), Promise.resolve());
     await visit(ids.length, 60);
     S().activate(ids[0]);
-    await nodesQuiet(NODES_QUIET_MS, 1500);
+    await sleep(NODES_SETTLE_BEFORE_MS);
     const start = P.nativeNodes().live;
     for (let i = 0; i < opens; i++) {
       const made = S().newTab(w, { url: `${origin}/p/churn-${i}-${Date.now()}` });
@@ -48,9 +33,9 @@ const extra = {
     }
     await visit(switches, CHURN_SWITCH_MS);
     S().activate(ids[0]);
-    const quiet = await nodesQuiet(NODES_QUIET_MS, 2500);
+    await sleep(NODES_WATCH_AFTER_MS);
     const end = P.nativeNodes().live;
-    return { start, end, left: end - start, quiet };
+    return { start, end, left: end - start };
   },
   async launch({ quietMs = 2500, timeoutMs = 30000 } = {}) {
     const state = () => {

@@ -85,3 +85,12 @@ test("untouchedCopy: only an unchanged release bundle without missing entitlemen
   assert.equal(untouchedCopy({ source: app, bundle: own, granted, missing: ["x"] }), false);
   assert.equal(untouchedCopy({ source: app, bundle: own, granted: "<key>com.apple.security.get-task-allow</key>", missing: [] }), false);
 });
+
+test("a cached copy whose resources were changed after cloning is cloned again, not reused", () => {
+  const { dir, app, own } = fakeApp();
+  const first = prepareApp(app, join(dir, "out"), { bundle: own });
+  writeFileSync(join(first, "Contents/Resources/main.jsbundle"), "tampered");
+  const second = prepareApp(app, join(dir, "out"), { bundle: own });
+  assert.equal(readFileSync(join(second, "Contents/Resources/main.jsbundle"), "utf8"), "shipped");
+  execFileSync("codesign", ["--verify", "--strict", second]);
+});

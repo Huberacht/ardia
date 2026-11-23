@@ -15,11 +15,8 @@ export const JOURNEYS = ["startup", "launch", "idle", "typing", "switchTabs", "s
 export const SMALL_JOURNEYS = ["startup", "launch"];
 const OPTIONS = '{"seconds":5}';
 const DEFAULT_PORT = 47831;
-const CDP_OFFSET = 2000;
-const CDP_PORTS_PER_LANE = 20;
+const DEFAULT_CDP_PORT = 9700;
 const BASELINE_LANES = 4;
-const BIG_RUN_WEIGHT = 6;
-const SMALL_RUN_WEIGHT = 1;
 
 const EXACT_SHARE = 1;
 const NOISY_SPREAD = 0.3;
@@ -144,23 +141,25 @@ export function retryPlan(rows) {
   return { big: last > 0 ? JOURNEYS.slice(0, last + 1) : null, small: small ? SMALL_JOURNEYS : null };
 }
 
-export function planLanes({ bigRuns, smallRuns, lanes, bigWeight = BIG_RUN_WEIGHT, smallWeight = SMALL_RUN_WEIGHT }) {
-  const plan = Array.from({ length: Math.max(1, lanes) }, (_, lane) => ({ lane, big: 0, small: 0, load: 0 }));
-  const lightest = () => plan.reduce((a, b) => (b.load < a.load ? b : a));
-  for (let i = 0; i < bigRuns; i++) {
-    const l = lightest();
-    l.big++;
-    l.load += bigWeight;
-  }
-  for (let i = 0; i < smallRuns; i++) {
-    const l = lightest();
-    l.small++;
-    l.load += smallWeight;
-  }
-  return plan.filter((l) => l.big || l.small);
+export function splitRuns(runs, lanes) {
+  const n = Math.max(1, Math.min(lanes, runs));
+  return Array.from({ length: n }, (_, lane) => Math.floor(runs / n) + (lane < runs % n ? 1 : 0)).filter((count) => count > 0);
 }
 
-export const lanePorts = (base, lane) => ({ port: base + lane, cdpPort: base + CDP_OFFSET + lane * CDP_PORTS_PER_LANE });
+export const laneLabel = (name, seed) => (seed === "small" ? `${name}-small` : name);
+
+const portOk = (port) => Number.isInteger(port) && port >= 1024 && port <= 65535;
+
+export function portPlan({ port, cdpPort, lanes, runsPerLane }) {
+  const plan = Array.from({ length: lanes }, (_, lane) => ({ port: port + lane, cdpPort: cdpPort + lane * runsPerLane }));
+  const servers = plan.map((p) => p.port);
+  const lastCdp = cdpPort + lanes * runsPerLane - 1;
+  const bad = [...servers, cdpPort, lastCdp].find((p) => !portOk(p));
+  if (bad !== undefined) throw new Error(`port ${bad} is outside 1024..65535: pick another --port or --cdp-port`);
+  const clash = servers.find((p) => p >= cdpPort && p <= lastCdp);
+  if (clash !== undefined) throw new Error(`test-server port ${clash} falls in the remote-debugging ports ${cdpPort}..${lastCdp}: pick another --port or --cdp-port`);
+  return plan;
+}
 
 const sorted = (xs) => [...xs].sort((a, b) => a - b);
 const lowerMedian = (xs) => sorted(xs)[(xs.length - 1) >> 1];
@@ -387,14 +386,38 @@ function census(files) {
   for (const r of wobbly.filter((r) => !isTotal(r.key)).sort((a, b) => a.key.localeCompare(b.key))) console.log(line(r));
 }
 
+const running = new Map();
+
 export function spawnAsync(cmd, args, { cwd, env, capture = false } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd, env, stdio: ["ignore", capture ? "pipe" : "ignore", "inherit"] });
+    const closed = new Promise((done) => child.once("close", done));
+    running.set(child, closed);
+    closed.then(() => running.delete(child));
     let out = "";
     if (capture) child.stdout.setEncoding("utf8").on("data", (d) => (out += d));
     child.once("error", reject);
     child.once("close", (code, signal) => (code === 0 ? resolve(out) : reject(new Error(`${basename(args[0] ?? cmd)} ${args.slice(1, 3).join(" ")} exited with ${code ?? signal}`))));
   });
+}
+
+export function stopLanes() {
+  const waiting = [...running.entries()].map(([child, closed]) => {
+    child.kill("SIGTERM");
+    return closed;
+  });
+  return Promise.all(waiting);
+}
+
+function stopLanesOnSignals() {
+  let stopping = null;
+  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
+    process.once(sig, async () => {
+      console.error(`[ratchet] ${sig}: stopping ${running.size} lane(s) and their instances`);
+      stopping ??= stopLanes();
+      await stopping;
+      process.exit(code);
+    });
 }
 
 export async function allFinished(tasks) {
@@ -416,7 +439,7 @@ function newestApp() {
   throw new Error("no dist/<version>/export/Ardia.app: pass --app");
 }
 
-async function jsSetup(flags, out, mark) {
+async function jsSetup(flags, out, mark, { lanes, runsPerLane }) {
   const app = flags.app ? resolve(flags.app) : newestApp();
   let jsbundle = flags.bundle ? resolve(flags.bundle) : join(app, "Contents/Resources/main.jsbundle");
   if (!flags.own && !flags.bundle) {
@@ -427,10 +450,11 @@ async function jsSetup(flags, out, mark) {
   }
   const libs = [flags.lib ? resolve(flags.lib) : join(here, "bench-app.js"), join(here, "ratchet-app.js")].join(",");
   const label = flags.label ?? "ratchet";
-  const base = Number(flags.port ?? DEFAULT_PORT);
+  const ports = portPlan({ port: Number(flags.port ?? DEFAULT_PORT), cdpPort: Number(flags["cdp-port"] ?? DEFAULT_CDP_PORT), lanes, runsPerLane });
   const lane = ({ seed = "big", runs = 1, scenarios = seed === "small" ? SMALL_JOURNEYS : JOURNEYS, name = label, slot = 0 }) => {
-    const labelled = seed === "small" ? `s${name.slice(1)}` : name;
-    const { port, cdpPort } = lanePorts(base, slot);
+    const labelled = laneLabel(name, seed);
+    if (runs > runsPerLane) throw new Error(`lane ${slot} has ${runs} runs, more than the ${runsPerLane} remote-debugging ports it was given`);
+    const { port, cdpPort } = ports[slot];
     const args = [join(here, "js-bench.mjs"), "run", "--app", app, "--bundle", jsbundle, "--label", labelled, "--runs", String(runs), "--port", String(port), "--cdp-port", String(cdpPort), "--out", out, "--scenarios", scenarios.join(","), "--options", OPTIONS];
     args.push(...(seed === "small" ? ["--seed", "small"] : ["--probe", "selectors"]), "--lib", libs);
     return { report: join(out, `${labelled}.json`), run: () => spawnAsync(process.execPath, args) };
@@ -444,7 +468,7 @@ async function run(flags) {
   mkdirSync(out, { recursive: true });
   const mark = (what) => console.error(`[ratchet +${((Date.now() - started) / 1000).toFixed(0)}s] ${what}`);
   const ceilings = readCeilings();
-  const setup = flags["skip-js"] ? null : await jsSetup(flags, out, mark);
+  const setup = flags["skip-js"] ? null : await jsSetup(flags, out, mark, { lanes: 2, runsPerLane: 1 });
   const big = setup?.lane({ seed: "big", slot: 0 });
   const small = setup?.lane({ seed: "small", slot: 1 });
   if (setup) mark(`running ${JOURNEYS.join(",")} and the one-tab launch side by side on ${setup.app}`);
@@ -475,21 +499,18 @@ async function baseline(flags) {
   const out = resolve(flags.out ?? join(process.env.TMPDIR ?? "/tmp", "ac-ratchet-baseline"));
   mkdirSync(out, { recursive: true });
   const mark = (what) => console.error(`[ratchet baseline +${((Date.now() - started) / 1000).toFixed(0)}s] ${what}`);
-  const setup = await jsSetup(flags, out, mark);
   const runs = Number(flags.runs ?? 8);
-  const plan = planLanes({ bigRuns: runs, smallRuns: runs, lanes: Number(flags.lanes ?? BASELINE_LANES) });
+  const split = splitRuns(runs, Number(flags.lanes ?? BASELINE_LANES));
+  const setup = await jsSetup(flags, out, mark, { lanes: split.length, runsPerLane: runs });
   const name = flags.label ?? "ratchet";
-  const lanes = plan.map((p) => ({
-    big: p.big ? setup.lane({ seed: "big", runs: p.big, name: `${name}-${p.lane}`, slot: p.lane }) : null,
-    small: p.small ? setup.lane({ seed: "small", runs: p.small, name: `${name}-${p.lane}`, slot: p.lane }) : null,
-  }));
-  mark(`running ${JOURNEYS.join(",")} ${runs} times and the one-tab launch ${runs} times on ${setup.app}, ${lanes.length} instances at once`);
+  const lanes = split.map((count, slot) => setup.lane({ seed: "big", runs: count, name: `${name}-${slot}`, slot }));
+  const small = setup.lane({ seed: "small", runs, name, slot: 0 });
+  mark(`running ${JOURNEYS.join(",")} ${runs} times on ${setup.app}, ${lanes.length} instances at once`);
   const counting = flags["measure-only"] ? null : allFinished([microCountsAsync(), microCountsAsync()]);
-  await allFinished([...lanes.map(async (l) => {
-    if (l.big) await l.big.run();
-    if (l.small) await l.small.run();
-  }), counting]);
-  const reports = lanes.flatMap((l) => [l.big?.report, l.small?.report]).filter(Boolean);
+  await allFinished([...lanes.map((l) => l.run()), counting]);
+  mark(`running the one-tab launch ${runs} times, one at a time`);
+  await small.run();
+  const reports = [...lanes.map((l) => l.report), small.report];
   if (flags["measure-only"]) return console.log(reports.join(" "));
   mark("counting instructions");
   init(reports, await counting, Math.max(instrPerRound(), instrPerRound(), instrPerRound()));
@@ -528,6 +549,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     const micro = command !== "init" && flags.micro?.length ? readJson(flags.micro[0]) : null;
     const instr = flags.instr !== undefined && command !== "run" ? Number(flags.instr) : null;
+    if (command === "run" || command === "baseline") stopLanesOnSignals();
     if (command === "run") await run(flags);
     else if (command === "baseline") await baseline(flags);
     else if (command === "check") process.exit(check(positional, micro, instr) ? 0 : 1);

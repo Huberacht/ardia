@@ -24,6 +24,8 @@ export function untouchedCopy({ source, bundle, granted, missing }) {
   return existsSync(shipped) && readFileSync(bundle).equals(readFileSync(shipped));
 }
 
+const sealIntact = (app) => spawnSync("codesign", ["--verify", "--strict", "--deep", app], { stdio: "ignore" }).status === 0;
+
 const cdhashOf = (app) => spawnSync("codesign", ["-dvvv", app], { encoding: "utf8" }).stderr.match(/^CDHash=(\w+)$/m)?.[1] ?? null;
 
 function reuseOrClone(source, dir, copy) {
@@ -31,7 +33,7 @@ function reuseOrClone(source, dir, copy) {
   const hash = cdhashOf(source);
   const stamp = `${source}\n${hash}\n`;
   copiesToUnregister.add(copy);
-  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash) return copy;
+  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash && sealIntact(copy)) return copy;
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   execFileSync("cp", ["-cR", source, copy]);

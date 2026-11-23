@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { allFinished, evaluate, JOURNEYS, lanePorts, planLanes, retryPlan, SMALL_JOURNEYS, spawnAsync, withRetry } from "./ratchet.mjs";
+import { allFinished, evaluate, JOURNEYS, laneLabel, portPlan, retryPlan, SMALL_JOURNEYS, spawnAsync, splitRuns, stopLanes, withRetry } from "./ratchet.mjs";
+import { stopInstances } from "./js-bench.mjs";
 
 const over = (key, tier = "exact") => ({ tier, key, ceiling: 1, value: 2, kind: "over" });
 
@@ -43,40 +44,35 @@ test("nodes left behind are never rerun: the worst run decides them, so a second
   assert.deepEqual(retryPlan([over("nodeChurn.nativeNodesLeft"), over("hover.commits")]).big, JOURNEYS.slice(0, JOURNEYS.indexOf("hover") + 1));
 });
 
-test("baseline lanes split the runs evenly and keep every run", () => {
-  const plan = planLanes({ bigRuns: 8, smallRuns: 8, lanes: 4 });
-  assert.equal(plan.length, 4);
-  assert.equal(plan.reduce((n, l) => n + l.big, 0), 8);
-  assert.equal(plan.reduce((n, l) => n + l.small, 0), 8);
-  assert.deepEqual(plan.map((l) => l.big), [2, 2, 2, 2]);
-  assert.deepEqual(plan.map((l) => l.small), [2, 2, 2, 2]);
+test("baseline splits the journeys' runs evenly over the lanes and keeps every run", () => {
+  assert.deepEqual(splitRuns(8, 4), [2, 2, 2, 2]);
+  assert.deepEqual(splitRuns(10, 4), [3, 3, 2, 2]);
+  assert.deepEqual(splitRuns(8, 1), [8]);
+  assert.deepEqual(splitRuns(2, 4), [1, 1]);
 });
 
-test("short one-tab runs fill the lanes the long runs left lightest", () => {
-  const plan = planLanes({ bigRuns: 3, smallRuns: 6, lanes: 4, bigWeight: 6, smallWeight: 1 });
-  assert.deepEqual(plan.map((l) => [l.big, l.small]), [[1, 0], [1, 0], [1, 0], [0, 6]]);
+test("the one-tab session never shares a label, app copy or report with the big one, whatever the label", () => {
+  for (const name of ["ratchet", "stable", "s", "x-again"]) assert.notEqual(laneLabel(name, "small"), laneLabel(name, "big"));
 });
 
-test("one lane runs everything serially", () => {
-  assert.deepEqual(planLanes({ bigRuns: 8, smallRuns: 8, lanes: 1 }).map((l) => [l.big, l.small]), [[8, 8]]);
-});
-
-test("no lane is left empty when there are more lanes than runs", () => {
-  const plan = planLanes({ bigRuns: 1, smallRuns: 1, lanes: 4 });
-  assert.deepEqual(plan.map((l) => [l.lane, l.big, l.small]), [[0, 1, 0], [1, 0, 1]]);
-});
-
-test("lanes never share a test server port or a remote-debugging port", () => {
-  const ports = new Set();
-  for (let lane = 0; lane < 4; lane++) {
-    const { port, cdpPort } = lanePorts(47831, lane);
-    for (let run = 0; run < 8; run++) {
-      assert.ok(!ports.has(cdpPort + run));
-      ports.add(cdpPort + run);
+test("lanes never share a test-server port or a remote-debugging port, however many runs a lane has", () => {
+  for (const runsPerLane of [1, 8, 21, 40]) {
+    const plan = portPlan({ port: 47831, cdpPort: 9700, lanes: 4, runsPerLane });
+    const used = new Set();
+    for (const { port, cdpPort } of plan) {
+      for (const p of [port, ...Array.from({ length: runsPerLane }, (_, r) => cdpPort + r)]) {
+        assert.ok(!used.has(p), `port ${p} used twice with ${runsPerLane} runs a lane`);
+        used.add(p);
+      }
     }
-    assert.ok(!ports.has(port));
-    ports.add(port);
   }
+});
+
+test("ports outside 1024..65535 or a test server inside the remote-debugging range fail before anything launches", () => {
+  assert.doesNotThrow(() => portPlan({ port: 64000, cdpPort: 9700, lanes: 4, runsPerLane: 8 }));
+  assert.throws(() => portPlan({ port: 65534, cdpPort: 9700, lanes: 4, runsPerLane: 1 }), /outside 1024..65535/);
+  assert.throws(() => portPlan({ port: 47831, cdpPort: 65530, lanes: 4, runsPerLane: 8 }), /outside 1024..65535/);
+  assert.throws(() => portPlan({ port: 9705, cdpPort: 9700, lanes: 2, runsPerLane: 8 }), /falls in the remote-debugging ports/);
 });
 
 const report = (dir, name, seed, results) => {
@@ -145,4 +141,23 @@ test("a failing lane fails the run only after the others have finished, so no in
 
 test("a lane's stdout is captured when asked", async () => {
   assert.equal(await spawnAsync(process.execPath, ["-e", "console.log('COUNTS {}')"], { capture: true }), "COUNTS {}\n");
+});
+
+test("stopping the ratchet stops its lanes and waits for each to clean up", async () => {
+  const { mkdtempSync, existsSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-stop-"));
+  const marker = join(dir, "cleaned");
+  const lane = `process.on("SIGTERM", () => setTimeout(() => { require("fs").writeFileSync(${JSON.stringify(marker)}, "1"); process.exit(0); }, 200)); setInterval(() => {}, 1000);`;
+  const running = spawnAsync(process.execPath, ["-e", lane]).catch(() => {});
+  await new Promise((r) => setTimeout(r, 300));
+  await stopLanes();
+  assert.ok(existsSync(marker), "stopLanes returned before the lane finished its cleanup");
+  await running;
+});
+
+test("an instance opened but not yet found by pid is still quit when js-bench is stopped", async () => {
+  const quit = [];
+  let looks = 0;
+  await stopInstances({ pids: new Set(), binaries: new Set(["/x/Ardia"]), find: () => (++looks < 3 ? [] : [42]), stop: async (pid) => quit.push(pid), waitMs: 2000 });
+  assert.deepEqual(quit, [42]);
 });

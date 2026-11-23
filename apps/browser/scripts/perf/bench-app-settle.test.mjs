@@ -78,19 +78,6 @@ test("an older bundle without sessionSaved still flushes, synchronously", async 
   assert.equal(seen.flushes, 1);
 });
 
-test("a save that never lands doesn't hang the settle", { timeout: 15_000 }, async () => {
-  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => new Promise(() => {}) } });
-  const started = Date.now();
-  const settled = await bench.settleWindow(fast);
-  assert.equal(settled.flushed, true);
-  assert.ok(Date.now() - started < 8000);
-});
-
-test("a failed save still lets the settle go on", async () => {
-  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => Promise.reject(new Error("disk")) } });
-  assert.equal((await bench.settleWindow(fast)).flushed, true);
-});
-
 test("idle's hold freezes persistence after the settle", async () => {
   const { bench, seen } = fakeApp({ windows: [quiet], persistence: saved });
   const settled = await bench.settleWindow({ hold: true, ...fast });
@@ -101,4 +88,21 @@ test("idle's hold freezes persistence after the settle", async () => {
 test("without persistence nothing is flushed", async () => {
   const { bench } = fakeApp({ windows: [quiet], persistence: null });
   assert.equal((await bench.settleWindow(fast)).flushed, false);
+});
+
+test("a save that reports it didn't land rejects the sample", async () => {
+  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => Promise.resolve(false) } });
+  await assert.rejects(bench.settleWindow(fast), /session didn't save/);
+});
+
+test("a save that fails rejects the sample", async () => {
+  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => Promise.reject(new Error("disk")) } });
+  await assert.rejects(bench.settleWindow(fast), /session didn't save/);
+});
+
+test("a save that never lands rejects the sample at its deadline instead of hanging", { timeout: 15_000 }, async () => {
+  const { bench } = fakeApp({ windows: [quiet], persistence: { sessionSaved: () => new Promise(() => {}) } });
+  const started = Date.now();
+  await assert.rejects(bench.settleWindow(fast), /session didn't save/);
+  assert.ok(Date.now() - started < 8000);
 });

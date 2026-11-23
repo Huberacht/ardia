@@ -83,7 +83,6 @@ const churn = { origin: "http://h", opens: 6, switches: 12 };
 test("a churn that leaves nothing behind reports zero", { timeout: 20_000 }, async () => {
   const result = await churnApp().run("nodeChurn", churn);
   assert.equal(result.left, 0);
-  assert.equal(result.quiet, true);
 });
 
 test("a node leaked on every open is counted once per open", { timeout: 20_000 }, async () => {
@@ -92,4 +91,12 @@ test("a node leaked on every open is counted once per open", { timeout: 20_000 }
 
 test("a node leaked half a second after the last switch is still caught: the tail waits for the counter to go quiet", { timeout: 20_000 }, async () => {
   assert.ok((await churnApp({ leakAfterLastSwitchMs: 500 }).run("nodeChurn", churn)).left >= 1);
+});
+
+test("a node leaked a full second after the last switch is still caught: the churn watches for the old 2.5 s", { timeout: 20_000 }, async () => {
+  assert.ok((await churnApp({ leakAfterLastSwitchMs: 1000 }).run("nodeChurn", churn)).left >= 1);
+});
+
+test("a node leaked two seconds after the last switch is still caught", { timeout: 20_000 }, async () => {
+  assert.ok((await churnApp({ leakAfterLastSwitchMs: 2000 }).run("nodeChurn", churn)).left >= 1);
 });

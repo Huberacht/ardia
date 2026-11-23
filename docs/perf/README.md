@@ -224,7 +224,10 @@ node apps/browser/scripts/perf/ratchet.mjs baseline --measure-only   # the runs 
 ```
 
 `run` bundles the tree (about 6 s), then runs three things at once: the ten journeys in one hidden instance, the one-tab
-launch in a second (its own test-server port, remote-debugging port, data folder and app copy), and the Node counts.
+launch in a second (its own test-server port, remote-debugging port, data folder, app copy and report,
+`<label>-small.json`), and the Node counts. Test-server ports start at `--port` (default 47831) and remote-debugging
+ports at `--cdp-port` (default 9700), one per run per instance; both are checked before anything launches. ⌃C or a
+SIGTERM stops every instance and waits for it to quit.
 The instruction counter (`--instr`) runs after them, alone. It exits 1 and prints a table of the counts over their
 ceiling. A count over in the first run gets one more run, and only a count over in both fails: a real regression is in
 both, a pointer moving over the hidden window or the window deactivating mid-scenario is in one. The second run is the
@@ -235,15 +238,17 @@ of its own counts is over, and `nodeChurn` never does: its worst run decides. A 
 median run. Against the old serial flow (median of 3, interleaved, `--bundle` given): a run 143 → 126 s, and one with
 a `pageLoad` count over 281 → 223 s; a count over in `launch` reruns only `startup,launch`.
 
-`baseline` spreads its 8 + 8 launches over 4 hidden instances (`--lanes`, default 4; each lane has its own label, ports
-and data folders) and counts the Node hot paths alongside; the instruction counts run after, alone. Instances side by
-side don't move each other's counts: over 8 serial and 8 four-at-once runs (#3737), all 50 exact group totals of the
-big session were the same in every run and every gated count's range overlapped; one of the 8 four-at-once one-tab
-launches touched 44 store keys instead of 43. `--lanes 1` runs them one at a time.
+`baseline` spreads the journeys' 8 launches over 4 hidden instances (`--lanes`, default 4; each lane has its own label,
+ports and data folders) and counts the Node hot paths alongside, then runs the 8 one-tab launches one at a time, alone,
+and the instruction counts after. Journeys side by side don't move each other's counts: over 8 serial and 8
+four-at-once runs (#3737), all 50 exact group totals were the same in every run and every gated count's range
+overlapped. The one-tab launch does move: sampled four at once, `small.launch.storeKeys` came out 43 to 49 against 43 in
+every serial run, so it isn't sampled in parallel.
 
 Before a scenario measures, `settleWindow` (`bench-app.js`) saves the session and waits for it to land
 (`ac.persistence.sessionSaved`: every changed document written, held pins landed; a bundle without it flushes
-synchronously), then waits for 3 s with no document write and then for a 1 s window with no new one-shot timer (or the
+synchronously; a save that reports failure, throws or doesn't answer in 5 s fails the run rather than measuring on top
+of it), then waits for 3 s with no document write and then for a 1 s window with no new one-shot timer (or the
 same ones as the window before). Those waits, and the short sleeps the scenarios take before them, stay as long as they
 were: shorter ones change what is counted. With 500 ms windows, or one 2 s wait, the reader-mode check
 (`state/reader/reader.ts`: 250 ms after a tab shows, again 1.5 s later) for tabs the warm-up switches left unchecked ran
@@ -263,10 +268,11 @@ of React Native's native animated nodes outlive a churn (20 tabs visited, then 6
 switches): the probe counts `createAnimatedNode` against `dropAnimatedNode` (`acPerf.nativeNodes`), and anything above 0
 is a node left behind for every tab or switch, for the life of the app. A tab stays open 60 ms (its 13 nodes are created
 about 12 ms after the open, 27 ms at worst on a loaded Mac); the gaps after a close and between switches are 10 ms (a
-close's drops land within about 13 ms, and the gap doesn't change what is left at the end). Before and after the churn
-it waits for 750 ms with no node created or dropped (at most the 1.5 s and 2.5 s it used to sleep through, during which
-the counter didn't move). A deliberate leak of one node per opened tab comes out the same before and after this trim
-(124 nodes left, 2 runs each), and one leaked half a second after the last switch is caught. The census behind `ratchet.json` is 8 launches of 0.2.27's Release app with the tree's
+close's drops land within about 13 ms, and the gap doesn't change what is left at the end). It still waits 1.5 s
+before reading the start count and 2.5 s after the last switch: a shorter wait before sampled the start count before 13
+late nodes of a cold launch arrived, and a shorter one after missed a node a deferred job leaks a second or two later. A
+deliberate leak of one node per opened tab, one per switch, or one 1 s after the last switch comes out the same with
+the old churn and this one. The census behind `ratchet.json` is 8 launches of 0.2.27's Release app with the tree's
 bundle.
 
 Group totals per scenario over the 16 baseline runs (two batches of 8): a bare number repeated in every run is gated

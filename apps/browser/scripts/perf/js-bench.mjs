@@ -265,26 +265,47 @@ export async function launch(app, dataDir, port, extraEnv = {}) {
     ...(process.env.ARDIA_SWITCHES ? { ARDIA_SWITCHES: process.env.ARDIA_SWITCHES } : {}),
     ...extraEnv,
   });
-  execFileSync("open", ["-g", "-n", ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]), app]);
-  for (let i = 0; i < 200; i++) {
-    const [pid] = pidsOf(binary);
-    if (pid) {
-      launched.add(pid);
-      return { pid, launchedAt };
+  starting.add(binary);
+  try {
+    execFileSync("open", ["-g", "-n", ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]), app]);
+    for (let i = 0; i < 200; i++) {
+      const [pid] = pidsOf(binary);
+      if (pid) {
+        launched.add(pid);
+        return { pid, launchedAt };
+      }
+      await sleep(50);
     }
-    await sleep(50);
+  } finally {
+    starting.delete(binary);
   }
   throw new Error("app did not start");
 }
 
 const launched = new Set();
+const starting = new Set();
+
+export async function stopInstances({ pids = launched, binaries = starting, find = pidsOf, stop = quit, waitMs = 10_000 } = {}) {
+  const end = Date.now() + waitMs;
+  for (const binary of [...binaries]) {
+    let found = find(binary);
+    while (!found.length && Date.now() < end) {
+      await sleep(100);
+      found = find(binary);
+    }
+    for (const pid of found) pids.add(pid);
+  }
+  for (const pid of [...pids]) await stop(pid).catch(() => {});
+}
+
+let stopping = null;
 
 export function quitOnSignals(...closers) {
   for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
     process.once(sig, async () => {
-      process.stderr.write(`js-bench: ${sig}: quitting ${launched.size} instance(s)\n`);
-      for (const pid of [...launched]) await quit(pid).catch(() => {});
-      for (const close of closers) await Promise.resolve(close()).catch(() => {});
+      process.stderr.write(`js-bench: ${sig}: quitting ${launched.size + starting.size} instance(s)\n`);
+      stopping ??= stopInstances().then(() => Promise.all(closers.map((close) => Promise.resolve().then(close).catch(() => {}))));
+      await stopping;
       process.exit(code);
     });
 }
