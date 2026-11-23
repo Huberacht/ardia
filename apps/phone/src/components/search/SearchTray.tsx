@@ -23,7 +23,7 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle } from "../../state/search/store";
+import { searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle } from "../../state/search/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
 import { useIncognito, useSelectedTab } from "../../state/tabs/hooks";
@@ -558,6 +558,7 @@ function StagedTray() {
       markSearchPhase("presented");
       setPresented(true);
       stagePresented();
+      searchPresented(searchState().session);
     });
   };
   const clearsPrefill = searchPanelShown(phoneLayout, command !== null);

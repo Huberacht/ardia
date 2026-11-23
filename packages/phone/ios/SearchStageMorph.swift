@@ -324,6 +324,7 @@ final class StageMorph {
   private var flight: UIViewPropertyAnimator?
   private var folding: [UIViewPropertyAnimator] = []
   private var fades: [UIViewPropertyAnimator] = []
+  private var landingLeft = 0
 
   private static let landedTolerance: CGFloat = 0.17
 
@@ -352,8 +353,9 @@ final class StageMorph {
     stage.addSubview(view)
   }
 
-  func fly(to target: CGRect, style: UIUserInterfaceStyle, carrying face: StageFace?, timing: UITimingCurveProvider, duration: TimeInterval, direct: Bool = false) {
-    guard !hasFlown else { return }
+  @discardableResult
+  func fly(to target: CGRect, style: UIUserInterfaceStyle, carrying face: StageFace?, timing: UITimingCurveProvider, duration: TimeInterval, direct: Bool = false) -> TimeInterval {
+    guard !hasFlown else { return 0 }
     hasFlown = true
     destination = target
     appear()
@@ -372,7 +374,7 @@ final class StageMorph {
       travel.startAnimation()
       flight = travel
       folding = []
-      return
+      return duration
     }
     let start = view.frame
     let radius = view.radius
@@ -393,6 +395,8 @@ final class StageMorph {
     narrow.startAnimation(afterDelay: Motion.stageFoldLag + Motion.stageFold.time(toReach: Motion.stageFoldBeforeNarrowing))
     flight = travel
     folding = [fold, narrow]
+    let narrowing = Motion.stageFoldLag + Motion.stageFold.time(toReach: Motion.stageFoldBeforeNarrowing)
+    return max(duration, narrowing + Motion.stageWiden.settlingDuration)
   }
 
   func vanish() {
@@ -404,18 +408,25 @@ final class StageMorph {
   }
 
   func handOff() {
-    if let destination {
-      flight?.stopAnimation(true)
-      folding.forEach { $0.stopAnimation(true) }
-      UIView.performWithoutAnimation {
-        view.shape(to: destination, radius: corners.anchor(height: destination.height))
-        view.alpha = 0
+    if destination != nil {
+      let landing = ([flight].compactMap { $0 } + folding).filter(\.isRunning)
+      landingLeft = landing.count
+      guard landingLeft > 0 else {
+        DispatchQueue.main.async { self.remove() }
+        return
       }
-      DispatchQueue.main.async { self.remove() }
+      for animator in landing {
+        animator.addCompletion { [weak self] _ in self?.landed() }
+      }
       return
     }
     let fade = Self.run(Motion.stageHandOff) { [view] in view.alpha = 0 }
     fade.addCompletion { _ in self.remove() }
+  }
+
+  private func landed() {
+    landingLeft -= 1
+    if landingLeft <= 0 { remove() }
   }
 
   func remove() {

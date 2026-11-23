@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet } from "react-native";
 import { ARRIVAL_COVER_ID, notePageHosted, OPENING_COVER_ID, pageCoverHidden, pageDrawn, pageOpenFailed, pageStateChanged, pageToneChanged, swipedPastHistory } from "../../state/browse/store";
-import { useArrivalCover, useNavigation, usePageArriving, usePageCovered, usePageTone, usePageVeiled } from "../../state/browse/hooks";
+import { useArrivalCover, useNavigation, useOpeningCover, usePageArriving, usePageCovered, usePageTone, usePageVeiled } from "../../state/browse/hooks";
 import { shownTone } from "../../lib/pageTone";
 import { registerPageHandle, type PageState, type PageTone } from "../../state/pages/store";
 import { tabSavedState } from "../../state/tabs/store";
@@ -21,6 +21,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
   const covered = usePageCovered(id);
   const arriving = usePageArriving(id);
   const arrivalCover = useArrivalCover();
+  const openingCover = useOpeningCover();
   const tone = usePageTone(id);
   const failed = useNavigation(id, (n) => n?.failure != null);
   const pageTone = failed ? null : shownTone(tone, tab.themeColorHex);
@@ -37,7 +38,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
   const onPageTone = useCallback((next: PageTone) => pageToneChanged(id, next), [id]);
   const onPageDrawn = useCallback(() => pageDrawn(id), [id]);
   const onPageError = useCallback((error: { code: string }) => pageOpenFailed(id, error.code), [id]);
-  const onPageCoverHidden = useCallback((reason: "drawn" | "cap", _found: boolean, cover?: string) => pageCoverHidden(id, reason, cover), [id]);
+  const onPageCoverHidden = useCallback((reason: "drawn" | "cap", found: boolean, cover?: string) => pageCoverHidden(id, reason, cover, found), [id]);
   const [setup] = useState(() => ({ url: tab.url, title: tab.title, saved: tabSavedState(id) ?? undefined }));
   useLayoutEffect(() => notePageHosted(id), [id]);
   useEffect(() => {
@@ -70,7 +71,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
       onPageTone={onPageTone}
       onPageDrawn={onPageDrawn}
       onPageError={onPageError}
-      coverNativeId={covered ? (arriving ? (arrivalCover ?? ARRIVAL_COVER_ID) : OPENING_COVER_ID) : undefined}
+      coverNativeId={covered ? (arriving ? (arrivalCover ?? ARRIVAL_COVER_ID) : (openingCover ?? OPENING_COVER_ID)) : undefined}
       onPageCoverHidden={onPageCoverHidden}
     />
   );

@@ -53,6 +53,7 @@ const sheetIn = (root: Root, testID: string) => {
   return anchor ? hosts(anchor, (props) => typeof props.isPresented === "boolean")[0]! : null;
 };
 const menuSheet = (root: Root) => sheetIn(root, "systemPageMenuSheet");
+const showing = () => usePageUi.getState().menuOpening;
 const titled = (node: ReactTestInstance, title: string) => hosts(node, (props) => Array.isArray(props.modifiers) && (props.modifiers as { $type: string; title?: string }[]).some((modifier) => modifier.$type === "navigationTitle" && modifier.title === title));
 
 function menu() {
@@ -77,9 +78,9 @@ onIos("the iPhone page menu mounts its rows once the page is quiet, before the f
   await act(async () => void openPageMenu());
   expect(menuSheet(root)!.props.isPresented).toBe(true);
   expect(menuRows(root)[0]).toBe(rows);
-  act(() => menuSheet(root)!.props.onIsPresentedChange({ nativeEvent: { isPresented: false } }));
+  act(() => menuSheet(root)!.props.onIsPresentedChange({ nativeEvent: { isPresented: false, token: showing() } }));
   expect(usePageUi.getState().menuOpen).toBe(false);
-  act(() => menuSheet(root)!.props.onDismiss({ nativeEvent: {} }));
+  act(() => menuSheet(root)!.props.onDismiss({ nativeEvent: { token: showing() } }));
   expect(menuSheet(root)!.props.isPresented).toBe(false);
   expect(menuRows(root)[0]).toBe(rows);
   unmount(root);
@@ -115,7 +116,7 @@ onIos("Print waits for the menu to be gone, runs once from the first of the shee
   act(() => printCurrentPage());
   expect(print).not.toHaveBeenCalled();
   act(() => pageMenuHidden());
-  act(() => menuSheet(root)!.props.onDismiss({ nativeEvent: {} }));
+  act(() => menuSheet(root)!.props.onDismiss({ nativeEvent: { token: showing() } }));
   await flush();
   expect(print).toHaveBeenCalledTimes(1);
   await act(async () => void openPageMenu());
@@ -173,7 +174,7 @@ onIos("History opens inside the page menu's own sheet at full height instead of 
   expect(sheetIn(root, "expoLibrarySheet")!.props.isPresented).toBe(false);
   expect(menuSheet(root)!.props.isPresented).toBe(true);
   expect(titled(menuSheet(root)!, "History")).not.toHaveLength(0);
-  act(() => menuSheet(root)!.props.onIsPresentedChange({ nativeEvent: { isPresented: false } }));
+  act(() => menuSheet(root)!.props.onIsPresentedChange({ nativeEvent: { isPresented: false, token: showing() } }));
   expect(usePageUi.getState().menuOpen).toBe(false);
   expect(useLibrary.getState().open).toBe(false);
   expect(sheetIn(root, "expoLibrarySheet")!.props.isPresented).toBe(false);
@@ -253,6 +254,14 @@ onIos("a late dismissal from an earlier showing of the sheet can't spend a follo
   act(() => pageMenuPresentation({ phase: "disappear", token: newer }));
   await flush();
   expect(print).toHaveBeenCalledTimes(1);
+});
+
+onIos("sheet reports without a known showing are dropped before they touch the menu", async () => {
+  page("https://unknown-token.example/", false);
+  await act(async () => void openPageMenu());
+  act(() => pageMenuPresentation({ phase: "release", token: 0 }));
+  act(() => pageMenuPresentation({ phase: "release", token: usePageUi.getState().menuOpening + 5 }));
+  expect(usePageUi.getState().menuOpen).toBe(true);
 });
 
 onIos("a swipe-down reported for an earlier showing of the sheet doesn't close the newer one", async () => {

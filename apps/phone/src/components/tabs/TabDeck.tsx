@@ -754,7 +754,7 @@ export const TabDeck = memo(function TabDeck() {
     stopDrawnWait.current = whenPageCoverHidden(id, COVER_LOST_MS, (reason) => {
       if (reason !== "drawn" && !tabs.get(id)?.isPrivate) countUsage("card_opens_waited");
       finishOpen(id);
-    });
+    }, useBrowse.getState().openingCover);
   };
   const openingCardGrowing = (id: string) => {
     if (openPath.current === "coveringCard") {

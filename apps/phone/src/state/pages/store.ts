@@ -133,6 +133,14 @@ export const settled = <T>(call: () => Promise<T>, fallback: T): Promise<T> =>
     .then(call)
     .catch(() => fallback);
 
+const settledSync = <T>(call: () => T, fallback: T): T => {
+  try {
+    return call();
+  } catch {
+    return fallback;
+  }
+};
+
 export function snapshotsCommitted(entries: Record<string, string>) {
   if (!Object.keys(entries).length) return;
   try {
@@ -143,6 +151,11 @@ export function snapshotsCommitted(entries: Record<string, string>) {
 }
 
 export function deletePageSnapshots(ids: readonly string[]) {
+  if (!ids.length) return;
+  if (settledSync(() => pages.deletesSnapshotsTogether(), false)) {
+    void settled(() => pages.deleteSnapshotsFor([...ids]), undefined);
+    return;
+  }
   for (const id of ids) void settled(() => pages.deleteSnapshots(id), undefined);
 }
 

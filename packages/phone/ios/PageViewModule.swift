@@ -134,15 +134,19 @@ public final class PageViewModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("endFind") { (pageID: String, promise: Promise) in
-      Self.main(promise) { await PhonePages.shared.endFind(pageID) }
+      Self.main(promise) {
+        FindPresentation.current?.cancel()
+        await PhonePages.shared.endFind(pageID)
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("presentSystemFind") { (pageID: String, text: String?) -> Bool in
       MainActor.assumeIsolated {
-        guard let page = PhonePages.shared.page(pageID), let interaction = page.webView?.findInteraction else { return false }
+        FindPresentation.current?.cancel()
+        guard let page = PhonePages.shared.page(pageID), let webView = page.webView, let interaction = webView.findInteraction else { return false }
         if let text { interaction.searchText = text }
         page.presentFindInPage()
-        if !interaction.isFindNavigatorVisible { PageViewModule.presentFindWhenUncovered(pageID) }
+        if !interaction.isFindNavigatorVisible { FindPresentation(pageID: pageID, webView: webView, interaction: interaction).watch() }
         return interaction.isFindNavigatorVisible
       }
     }.runOnQueue(.main)
@@ -261,6 +265,15 @@ public final class PageViewModule: Module {
       PageVisuals.shared.forget(pageID)
       Task {
         await PageSnapshots.delete(pageID, before: floor)
+        promise.resolve(nil)
+      }
+    }
+
+    AsyncFunction("deleteSnapshotsFor") { (pageIDs: [String], promise: Promise) in
+      let floor = PageSnapshots.deletionOrder()
+      for pageID in pageIDs { PageVisuals.shared.forget(pageID) }
+      Task {
+        await PageSnapshots.delete(pageIDs, before: floor)
         promise.resolve(nil)
       }
     }
@@ -610,27 +623,58 @@ public final class BlockingModule: Module {
   }
 }
 
-extension PageViewModule {
-  static let findUncoverFrames = 90
+@MainActor
+final class FindPresentation {
+  static var current: FindPresentation?
+  private static let uncoverFrames = 90
 
-  @MainActor
-  static func presentFindWhenUncovered(_ pageID: String) {
-    let started = CACurrentMediaTime()
-    Task { @MainActor in
-      for _ in 0..<PageViewModule.findUncoverFrames {
+  let pageID: String
+  private weak var webView: WKWebView?
+  private weak var interaction: UIFindInteraction?
+  private let document: URL?
+  private let started = CACurrentMediaTime()
+  private var task: Task<Void, Never>?
+
+  init(pageID: String, webView: WKWebView, interaction: UIFindInteraction) {
+    self.pageID = pageID
+    self.webView = webView
+    self.interaction = interaction
+    document = webView.url
+  }
+
+  func watch() {
+    FindPresentation.current = self
+    task = Task { @MainActor [weak self] in
+      for _ in 0..<FindPresentation.uncoverFrames {
         try? await Task.sleep(for: .milliseconds(16))
-        guard let page = PhonePages.shared.page(pageID), let webView = page.webView, let interaction = webView.findInteraction else { return }
-        let waited = Int((CACurrentMediaTime() - started) * 1000)
+        guard let self, !Task.isCancelled, FindPresentation.current === self else { return }
+        guard let page = PhonePages.shared.page(self.pageID), let webView = self.webView, page.webView === webView, webView.window != nil, webView.url == self.document, let interaction = self.interaction, webView.findInteraction === interaction else {
+          self.finish("dropped")
+          return
+        }
         if interaction.isFindNavigatorVisible {
-          NSLog("PAGELAB find navigator visible %ld ms after present", waited)
+          self.finish("visible")
           return
         }
         if webView.window?.rootViewController?.presentedViewController == nil {
           page.presentFindInPage()
-          NSLog("PAGELAB find navigator presented again once uncovered, %ld ms after present", waited)
+          self.finish("presented again once uncovered")
           return
         }
       }
+      self?.finish("gave up")
     }
+  }
+
+  func cancel() {
+    task?.cancel()
+    task = nil
+    if FindPresentation.current === self { FindPresentation.current = nil }
+  }
+
+  private func finish(_ outcome: String) {
+    NSLog("PAGELAB find navigator %@ %ld ms after present", outcome, Int((CACurrentMediaTime() - started) * 1000))
+    task = nil
+    if FindPresentation.current === self { FindPresentation.current = nil }
   }
 }

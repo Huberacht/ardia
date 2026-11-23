@@ -3,6 +3,7 @@ import { newUuid } from "../../lib/ids";
 import { deletePageSnapshots, endPages, endPrivateSession, savePageState, snapshotsCommitted } from "../pages/store";
 import { currentPreferences, setPreference } from "../settings/store";
 import {
+  archivedIdsAmong,
   commitTabChanges,
   countArchivedTabs,
   expiredArchivedIds,
@@ -38,7 +39,6 @@ import {
   runAutoArchive,
   selectTab,
   updateTab,
-  withArchive,
   withSpaces,
   type OpenRequest,
   type TabsChange,
@@ -119,6 +119,11 @@ function stageState(db: SqlDatabase, id: string, saved: string | null) {
   pendingWrites.set(db, batch);
 }
 
+const liveIds = () => {
+  const { open, privates } = data();
+  return new Set([...open, ...privates].map((tab) => tab.id));
+};
+
 function pendingArchived(db: SqlDatabase, row: BrowserTab): BrowserTab | null {
   const batch = pendingWrites.get(db);
   if (!batch) return row;
@@ -128,16 +133,36 @@ function pendingArchived(db: SqlDatabase, row: BrowserTab): BrowserTab | null {
   return batch.clearArchived ? null : row;
 }
 
-function archivedThroughPending(db: SqlDatabase, rows: readonly BrowserTab[], matches: (tab: BrowserTab) => boolean, limit: number): BrowserTab[] {
+const pendingOverfetch = (db: SqlDatabase) => {
   const batch = pendingWrites.get(db);
-  if (!batch) return [...rows];
+  return batch ? batch.remove.size + batch.put.size : 0;
+};
+
+function archiveView(db: SqlDatabase, read: (limit: number) => readonly BrowserTab[], matches: (tab: BrowserTab) => boolean, limit: number): BrowserTab[] {
+  const live = liveIds();
+  const rows = read(limit + pendingOverfetch(db) + live.size);
+  const batch = pendingWrites.get(db);
   const seen = new Set(rows.map((tab) => tab.id));
   const kept = rows.flatMap((row) => {
     const tab = pendingArchived(db, row);
     return tab ? [tab] : [];
   });
-  const queued = [...batch.put.values()].filter((tab) => tab.archivedAt !== null && !seen.has(tab.id) && matches(tab));
-  return [...kept, ...queued].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)).slice(0, limit);
+  const queued = batch ? [...batch.put.values()].filter((tab) => tab.archivedAt !== null && !seen.has(tab.id)) : [];
+  return [...kept, ...queued]
+    .filter((tab) => !live.has(tab.id) && matches(tab))
+    .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
+    .slice(0, limit);
+}
+
+function archivedCountThroughPending(db: SqlDatabase): number {
+  const batch = pendingWrites.get(db);
+  const committed = countArchivedTabs(db);
+  if (!batch) return committed;
+  const touched = [...new Set([...batch.put.keys(), ...batch.remove])];
+  const archivedNow = archivedIdsAmong(db, touched);
+  const queuedArchived = [...batch.put.values()].filter((tab) => tab.archivedAt !== null).length;
+  if (batch.clearArchived) return queuedArchived;
+  return committed - archivedNow.size + queuedArchived;
 }
 
 export const isTransientWriteFailure = (error: unknown) => /busy|locked/i.test(error instanceof Error ? error.message : String(error));
@@ -216,6 +241,7 @@ function apply(change: TabsChange, timing: WriteTiming = "now") {
   const db = tabDatabase();
   const hadPrivate = useTabs.getState().privates.length > 0;
   const listed = change.put.some((t) => !t.isPrivate) || change.remove.length > 0;
+  noteTabLives(data(), change);
   useTabs.setState((s) => ({ ...change.data, listing: listed ? s.listing + 1 : s.listing }));
   forgetPictures(change.remove);
   stageWrites(db, change);
@@ -238,8 +264,9 @@ const tabStillKept = (id: string) => {
 };
 
 async function saveAndEnd(id: string) {
+  const save = reserveStateSave(id);
   const saved = await savePageState(id);
-  if (saved && tabStillKept(id)) {
+  if (saved && tabStillKept(id) && stateSaveIsCurrent(save)) {
     stageState(tabDatabase(), id, saved);
     flushTabWrites();
   }
@@ -257,7 +284,41 @@ export function tabSavedState(id: string): string | null {
   return readTabState(db, id);
 }
 
-export function saveTabState(id: string, saved: string | null) {
+export type StateSave = { id: string; life: number; revision: number };
+
+const tabLives = new Map<string, number>();
+const acceptedStateRevision = new Map<string, number>();
+let stateRevisions = 0;
+
+const lifeOf = (id: string) => tabLives.get(id) ?? 0;
+
+function noteTabLives(before: TabsData, change: TabsChange) {
+  for (const tab of change.put) {
+    const was = findTab(before, tab.id);
+    if (!was || (was.archivedAt === null) !== (tab.archivedAt === null)) tabLives.set(tab.id, lifeOf(tab.id) + 1);
+  }
+  for (const id of change.remove) {
+    tabLives.set(id, lifeOf(id) + 1);
+    acceptedStateRevision.delete(id);
+  }
+}
+
+export function reserveStateSave(id: string): StateSave {
+  stateRevisions += 1;
+  return { id, life: lifeOf(id), revision: stateRevisions };
+}
+
+function stateSaveIsCurrent(save: StateSave) {
+  if (save.life !== lifeOf(save.id) || save.revision < (acceptedStateRevision.get(save.id) ?? 0)) return false;
+  acceptedStateRevision.set(save.id, save.revision);
+  return true;
+}
+
+export function saveTabState(id: string, saved: string | null, save: StateSave = reserveStateSave(id)) {
+  if (!stateSaveIsCurrent(save)) {
+    labTrace(`PAGELAB page state for ${id} dropped, a newer one or a restore came first`);
+    return;
+  }
   if (data().privates.some((t) => t.id === id)) {
     if (saved) privateStates.set(id, saved);
     else privateStates.delete(id);
@@ -273,10 +334,13 @@ export function pruneExpiredArchive() {
   const { open, privates } = data();
   const live = new Set([...open, ...privates].map((tab) => tab.id));
   const queued = pendingWrites.get(db)?.put;
-  const expired = expiredArchivedIds(db, now() - ARCHIVE_RETENTION_MS, ARCHIVE_LIMIT).filter((id) => !live.has(id) && queued?.get(id)?.archivedAt !== null);
+  const expired = expiredArchivedIds(db, now() - ARCHIVE_RETENTION_MS, ARCHIVE_LIMIT).filter((id) => !live.has(id) && queued?.get(id)?.archivedAt !== null && pendingWrites.get(db)?.remove.has(id) !== true);
   if (!expired.length) return 0;
+  const gone = new Set(expired);
   stageWrites(db, { put: [], remove: expired });
+  useTabs.setState((s) => ({ archive: s.archive?.filter((tab) => !gone.has(tab.id)) ?? null }));
   flushTabWrites();
+  useTabs.setState({ archivedCount: archivedCountThroughPending(db) });
   return expired.length;
 }
 
@@ -285,7 +349,7 @@ export function loadTabs() {
   const db = tabDatabase();
   pruneExpiredArchive();
   const stored = readOpenTabs(db);
-  const archivedCount = pendingWrites.has(db) ? archivedThroughPending(db, readArchivedTabs(db, ARCHIVE_LIMIT), () => true, ARCHIVE_LIMIT).length : countArchivedTabs(db);
+  const archivedCount = archivedCountThroughPending(db);
   useTabs.setState({ ...withSpaces(launchTabs(stored, archivedCount), data().spaces), incognito: false, listing: 0 });
   snapshotsCommitted(Object.fromEntries(stored.flatMap((tab) => (tab.snapshotFileName ? [[tab.id, tab.snapshotFileName]] : []))));
 }
@@ -365,6 +429,7 @@ export function setIncognito(incognito: boolean): boolean {
 }
 
 export function archivedTabById(id: string): BrowserTab | null {
+  if (liveIds().has(id)) return null;
   const db = tabDatabase();
   const queued = pendingWrites.get(db)?.put.get(id);
   if (queued) return queued.archivedAt !== null ? queued : null;
@@ -377,8 +442,9 @@ const sameArchive = (before: readonly BrowserTab[] | null, after: readonly Brows
 export function loadArchive() {
   const current = data();
   const db = tabDatabase();
-  const next = withArchive(current, archivedThroughPending(db, readArchivedTabs(db, ARCHIVE_LIMIT), () => true, ARCHIVE_LIMIT));
-  if (!sameArchive(current.archive, next.archive)) useTabs.setState(next);
+  const archive = archiveView(db, (limit) => readArchivedTabs(db, limit), () => true, ARCHIVE_LIMIT);
+  const archivedCount = archivedCountThroughPending(db);
+  if (!sameArchive(current.archive, archive) || current.archivedCount !== archivedCount) useTabs.setState({ archive, archivedCount });
 }
 
 const PREPARED_ARCHIVE_FRESH_MS = 2_000;
@@ -403,8 +469,7 @@ export function searchArchive(text: string): BrowserTab[] {
   const db = tabDatabase();
   const needle = query.toLowerCase();
   const matches = (tab: BrowserTab) => !needle || tab.title.toLowerCase().includes(needle) || tab.url.toLowerCase().includes(needle);
-  const rows = query ? searchArchivedTabs(db, query, ARCHIVE_SEARCH_LIMIT) : readArchivedTabs(db, ARCHIVE_SEARCH_LIMIT);
-  return archivedThroughPending(db, rows, matches, ARCHIVE_SEARCH_LIMIT);
+  return archiveView(db, (limit) => (query ? searchArchivedTabs(db, query, limit) : readArchivedTabs(db, limit)), matches, ARCHIVE_SEARCH_LIMIT);
 }
 
 export function restoreArchivedTab(tab: BrowserTab): boolean {
@@ -417,7 +482,12 @@ export function restoreArchivedTab(tab: BrowserTab): boolean {
   return true;
 }
 
-export const deleteArchivedTabsById = (ids: readonly string[]) => apply(deleteArchived(data(), ids));
+export function deleteArchivedTabsById(ids: readonly string[]): number {
+  const archived = ids.filter((id) => archivedTabById(id) !== null);
+  if (archived.length < ids.length) labTrace(`PAGELAB ${ids.length - archived.length} archive deletes ignored, their tabs are open again or gone`);
+  if (archived.length) apply(deleteArchived(data(), archived));
+  return archived.length;
+}
 
 export const clearArchivedTabs = () => apply(clearArchive(data()));
 

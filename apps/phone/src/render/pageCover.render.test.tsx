@@ -100,3 +100,17 @@ onIPhone("on iPhone a draw reported by the page's previous view doesn't lift a n
   expect(cover(root)).toBe(false);
   unmount(root);
 });
+
+onIPhone("on iPhone a page still loading without a frame keeps its picture past the four second limit, and lets it go once it draws", () => {
+  const tab = currentTabs().open[0]!;
+  updateTabById(tab.id, { snapshotFileName: "file:///snapshots/slow.jpg" });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
+  act(() => storeNavigation(tab.id, state(true, true)));
+  act(() => jest.advanceTimersByTime(6_000));
+  expect(cover(root)).toBe(true);
+  act(() => storeNavigation(tab.id, state(true, false)));
+  act(() => pageDrawn(tab.id));
+  act(() => jest.advanceTimersByTime(400));
+  expect(cover(root)).toBe(false);
+  unmount(root);
+});

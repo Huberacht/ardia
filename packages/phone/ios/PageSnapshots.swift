@@ -80,6 +80,10 @@ enum PageSnapshots {
     await SnapshotFiles.shared.delete(pageID, before: floor)
   }
 
+  static func delete(_ pageIDs: [String], before floor: Order) async {
+    await SnapshotFiles.shared.delete(pageIDs, before: floor)
+  }
+
   static func endPrivateBrowsing() {
     let retired = retirePrivateSession()
     Task { await SnapshotFiles.shared.removePrivateSession(retired) }
@@ -227,6 +231,22 @@ actor SnapshotFiles {
     for folder in folders {
       for file in PageSnapshots.filesOf(pageID, in: folder) where PageSnapshots.order(of: file, stem: stem) < floor {
         try? FileManager.default.removeItem(at: file)
+      }
+    }
+  }
+
+  func delete(_ pageIDs: [String], before floor: PageSnapshots.Order) {
+    var stems: Set<String> = []
+    for pageID in pageIDs {
+      deletedBefore[pageID] = max(deletedBefore[pageID] ?? floor, floor)
+      stems.insert(PageSnapshots.fileStem(pageID))
+    }
+    let manager = FileManager.default
+    for folder in [PageSnapshots.saved] + privateSessionFolders() {
+      let files = (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+      for file in files where file.pathExtension == "jpg" {
+        guard let stem = file.lastPathComponent.split(separator: "-").first.map(String.init), stems.contains(stem) else { continue }
+        if PageSnapshots.order(of: file, stem: stem) < floor { try? manager.removeItem(at: file) }
       }
     }
   }

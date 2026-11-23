@@ -62,7 +62,8 @@ let pasteReadIn: number | null = null;
 const currentSourcesKey = () => `${sourcesKey(useTabs.getState().listing, history().revision(), syncData().revision)}:${useTabs.getState().spaces.current}`;
 
 let clearsPagePrefill = false;
-let sourcesFrame: ReturnType<typeof requestAnimationFrame> | null = null;
+let refreshFallback: ReturnType<typeof setTimeout> | null = null;
+let pendingRefresh: (() => void) | null = null;
 let preparing: ReturnType<typeof setTimeout> | null = null;
 
 export const setSearchClearsPagePrefill = (clears: boolean) => {
@@ -70,24 +71,39 @@ export const setSearchClearsPagePrefill = (clears: boolean) => {
 };
 
 const SEARCH_WARM_AFTER_LAUNCH_MS = 1500;
+const REFRESH_WITHOUT_PRESENTATION_MS = 300;
+const IDLE_SCOPES_KEPT = 8;
 
-type IdleRows = { scope: string; revision: string; rows: TrayRow[] };
-let idleMade: IdleRows | null = null;
+type IdleRows = { revision: string; rows: TrayRow[] };
+const idleMade = new Map<string, IdleRows>();
 
 const idleScope = () => `${useTabs.getState().incognito}:${useTabs.getState().spaces.current}:${selectedProfile()?.syncId ?? ""}`;
 const idleRevision = () => `${history().revision()}:${syncData().revision}`;
-const idleIsCurrent = () => idleMade !== null && idleMade.scope === idleScope() && idleMade.revision === idleRevision();
+const idleIsCurrent = () => idleMade.get(idleScope())?.revision === idleRevision();
 
 function idleRowsNow(): TrayRow[] {
-  if (idleMade && idleIsCurrent()) return idleMade.rows;
+  const scope = idleScope();
+  const made = idleMade.get(scope);
+  if (made && made.revision === idleRevision()) return made.rows;
   const rows = useTabs.getState().incognito ? [] : idleRows(recentSearches(history().summary()), idleMacTabs(selectedProfile(), syncData().view.devices));
-  idleMade = { scope: idleScope(), revision: idleRevision(), rows };
+  idleMade.delete(scope);
+  idleMade.set(scope, { revision: idleRevision(), rows });
+  if (idleMade.size > IDLE_SCOPES_KEPT) idleMade.delete(idleMade.keys().next().value!);
   return rows;
 }
 
 function rowsAtPress(text: string): TrayRow[] {
-  if (text.trim() || !idleMade || idleMade.scope !== idleScope()) return rowsFor(text, []);
-  return withPasteRow(idleMade.rows, text, paste);
+  if (text.trim()) return rowsFor(text, []);
+  return withPasteRow(idleMade.get(idleScope())?.rows ?? [], text, paste);
+}
+
+export function searchPresented(session: number) {
+  if (useSearch.getState().session !== session) return;
+  const refresh = pendingRefresh;
+  pendingRefresh = null;
+  if (refreshFallback !== null) clearTimeout(refreshFallback);
+  refreshFallback = null;
+  refresh?.();
 }
 
 export function prepareSearch() {
@@ -110,9 +126,8 @@ function refreshAfterOpening(session: number) {
   const idleStale = !idleIsCurrent();
   if (!sourcesStale && !idleStale) return;
   const pressed = useSearch.getState().rows;
-  if (sourcesFrame !== null) cancelAnimationFrame(sourcesFrame);
-  sourcesFrame = requestAnimationFrame(() => {
-    sourcesFrame = null;
+  if (refreshFallback !== null) clearTimeout(refreshFallback);
+  pendingRefresh = () => {
     const state = useSearch.getState();
     if (!state.open || state.session !== session) return;
     const shown = useSearch.getState();
@@ -123,7 +138,8 @@ function refreshAfterOpening(session: number) {
     if (sourcesStale) feedSourcesQuietly();
     if (shown.text.trim()) useSearch.setState({ rows: suggestionsFor(shown.text, remote.text && shown.text.startsWith(remote.text) ? remote.values : []).rows });
     else useSearch.setState({ rows: rowsFor(shown.text, []) });
-  });
+  };
+  refreshFallback = setTimeout(() => searchPresented(session), REFRESH_WITHOUT_PRESENTATION_MS);
 }
 
 function feedSourcesQuietly() {
@@ -270,10 +286,8 @@ export function setSearchText(text: string) {
 }
 
 function catchUpSources() {
-  if (sourcesFrame === null) return;
-  cancelAnimationFrame(sourcesFrame);
-  sourcesFrame = null;
-  feedSources();
+  if (pendingRefresh === null) return;
+  feedSourcesQuietly();
 }
 
 export const searchState = () => useSearch.getState();

@@ -194,3 +194,23 @@ test("in a quick swipe there and back, the first arrival's late draw report can'
   expect(first).toBeDefined();
   unmount(root);
 });
+
+test("on iPhone an arrival is only handed over by a report that names it and says its card was hidden; a report that came before the wait still counts", () => {
+  const right = neighbour().id;
+  const root = renderSurface(<Page />);
+  swipeToNeighbour(root);
+  const cover = browse.useBrowse.getState().arrivalCover!;
+  act(() => browse.pageCoverHidden(right, "cap", cover, false));
+  if (Platform.OS === "ios") {
+    expect(browse.useBrowse.getState().arriving).toBe(right);
+    act(() => browse.pageCoverHidden(right, "drawn"));
+    expect(browse.useBrowse.getState().arriving).toBe(right);
+    act(() => browse.pageCoverHidden(right, "drawn", cover, true));
+  }
+  expect(browse.useBrowse.getState().arriving).toBeNull();
+  unmount(root);
+  let finished: string | null = null;
+  browse.pageCoverHidden("early-page", "drawn", "openingCover-early", true);
+  browse.whenPageCoverHidden("early-page", 400, (reason) => (finished = reason), "openingCover-early");
+  expect(finished).toBe("drawn");
+});

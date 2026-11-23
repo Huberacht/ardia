@@ -79,9 +79,9 @@ import { syncOffered } from "../../platform/system";
 export type Surface = "start" | "browsing" | "deck";
 export type Sheet = "archive" | "spaces" | null;
 
-type BrowseState = { surface: Surface; sheet: Sheet; deckEntrance: string | null; frozenOrder: string[] | null; opening: string | null; openingCardWidth: number | null; veiled: string | null; covered: string | null; arriving: string | null; arrivalCover: string | null; leaving: string | null };
+type BrowseState = { surface: Surface; sheet: Sheet; deckEntrance: string | null; frozenOrder: string[] | null; opening: string | null; openingCardWidth: number | null; veiled: string | null; covered: string | null; arriving: string | null; arrivalCover: string | null; openingCover: string | null; leaving: string | null };
 
-export const useBrowse = create<BrowseState>()(() => ({ surface: "start", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, openingCardWidth: null, veiled: null, covered: null, arriving: null, arrivalCover: null, leaving: null }));
+export const useBrowse = create<BrowseState>()(() => ({ surface: "start", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, openingCardWidth: null, veiled: null, covered: null, arriving: null, arrivalCover: null, openingCover: null, leaving: null }));
 
 const lastVisits = new Map<string, Visit>();
 
@@ -232,7 +232,9 @@ export function beginOpeningTab(id: string, veiled = false, cardWidth: number | 
   setIncognito(isPrivateTab(currentTabs(), id));
   selectTabById(id);
   cancelArrivalWait();
-  useBrowse.setState({ opening: id, openingCardWidth: cardWidth, veiled: veiled ? id : null, covered: veiled ? id : null, arriving: null, leaving: null });
+  openingSeq += 1;
+  earlyCoverHides.delete(id);
+  useBrowse.setState({ opening: id, openingCardWidth: cardWidth, veiled: veiled ? id : null, covered: veiled ? id : null, openingCover: veiled ? `${OPENING_COVER_ID}-${openingSeq}` : null, arriving: null, leaving: null });
 }
 
 export function unveilOpeningPage(id: string) {
@@ -298,6 +300,12 @@ type CoverWaiter = { cover: string | null; hidden: (reason: CoverHidden) => void
 const coverWaiters = new Map<string, CoverWaiter>();
 
 export function whenPageCoverHidden(id: string, capMs: number, then: (reason: CoverHidden) => void, cover: string | null = null): () => void {
+  const early = earlyCoverHides.get(id);
+  if (early && coverMatches(cover, early.cover, early.found)) {
+    earlyCoverHides.delete(id);
+    then(early.reason);
+    return () => undefined;
+  }
   let called = false;
   const stop = () => {
     called = true;
@@ -315,11 +323,29 @@ export function whenPageCoverHidden(id: string, capMs: number, then: (reason: Co
   return stop;
 }
 
-export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string) {
+const COVER_ACK_NEEDS_ID = Platform.OS === "ios";
+
+type EarlyCoverHide = { cover: string | undefined; reason: "drawn" | "cap"; found: boolean };
+
+const earlyCoverHides = new Map<string, EarlyCoverHide>();
+
+function coverMatches(expected: string | null, cover: string | undefined, found: boolean) {
+  if (expected === null) return true;
+  if (COVER_ACK_NEEDS_ID) return cover === expected && found;
+  return cover === undefined || cover === expected;
+}
+
+export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string, found = true) {
   const waiter = coverWaiters.get(id);
-  if (!waiter || (waiter.cover !== null && cover !== undefined && cover !== waiter.cover)) return;
+  if (!waiter) {
+    earlyCoverHides.set(id, { cover, reason, found });
+    return;
+  }
+  if (!coverMatches(waiter.cover, cover, found)) return;
   waiter.hidden(reason);
 }
+
+let openingSeq = 0;
 
 let arrivalSeq = 0;
 
@@ -767,6 +793,7 @@ export function arriveAtNeighbour(id: string) {
   useBrowse.setState({ frozenOrder: order });
   openTab(id);
   arrivalSeq += 1;
+  earlyCoverHides.delete(id);
   const cover = `${ARRIVAL_COVER_ID}-${arrivalSeq}`;
   useBrowse.setState({ covered: id, arriving: id, arrivalCover: cover });
   stopArrivalWait = whenPageCoverHidden(

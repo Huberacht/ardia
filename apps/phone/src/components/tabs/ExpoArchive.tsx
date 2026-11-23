@@ -9,7 +9,7 @@ import { eagerSections, LIST_PAGE_ROWS, sectionOverscan, sectionsWithin, sheetWa
 import { countUsage } from "../../state/telemetry/telemetry";
 import { haptics } from "../../state/app/haptics";
 import { closeArchive, useBrowse } from "../../state/browse/store";
-import { canShareTab, copyTabLink, deleteArchivedTab, openArchivedTab } from "../../state/browse/tabMenus";
+import { canShareTab, copyTabLink, deleteArchivedTab, deleteArchivedTabs, openArchivedTab } from "../../state/browse/tabMenus";
 import { display } from "../../state/search/omnibox";
 import { usePreferences } from "../../state/settings/hooks";
 import { useArchiveDays, useArchiveLoaded } from "../../state/tabs/hooks";
@@ -163,7 +163,7 @@ function ArchiveDaySection({ title, tabs, eager, onLast }: { title: string; tabs
 function ArchiveRows({ tabs, overscan }: { tabs: BrowserTab[]; overscan?: number }) {
   const row = useCallback(({ item }: { item: BrowserTab }) => <ArchiveRow tab={item} />, []);
   return (
-    <List.ForEach data={tabs} keyExtractor={(tab) => tab.id} onDelete={(indices) => indices.forEach((index) => tabs[index] && deleteArchivedTab(tabs[index]))} estimatedItemSize={60} overscanCount={overscan}>
+    <List.ForEach data={tabs} keyExtractor={(tab) => tab.id} onDelete={(indices) => deleteArchivedTabs(indices.flatMap((index) => (tabs[index] ? [tabs[index]] : [])))} estimatedItemSize={60} overscanCount={overscan}>
       {row}
     </List.ForEach>
   );

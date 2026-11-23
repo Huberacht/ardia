@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { Platform, StyleSheet, View, type ScrollViewInstance } from "react-native";
 import { BottomSheet, Button, ConfirmationDialog, Group, Host, RNHostView, Text, VStack } from "@expo/ui/swift-ui";
 import { ignoreSafeArea, presentationDetents, presentationDragIndicator } from "@expo/ui/swift-ui/modifiers";
-import { askTranslation, confirmTranslation, pageMenuHostGone, pageMenuPresentation, releaseTranslationAsk, type MenuPresentation } from "../../state/page/actions";
+import { askTranslation, confirmTranslation, isCurrentShowing, pageMenuHostGone, pageMenuPresentation, releaseTranslationAsk, type MenuPresentation } from "../../state/page/actions";
+import { usePageUi } from "../../state/page/store";
 import { useMenuModel, useMenuOpen, useMenuOpening, useMenuPage, usePageQuiet, useTranslationAsk } from "../../state/page/hooks";
 import { markMenuPhase } from "../../state/page/menuTiming";
 import { settingsUIAvailable } from "../ui";
@@ -37,8 +38,8 @@ export function SystemPageMenu({ tabId, open, shownToken, onPresentation }: Syst
     if (open) markMenuPhase("rendered");
   }, [open]);
   const presentation = (event: MenuPresentation) => {
-    if (event.phase === "appear" && shownToken) shownToken.current = event.token;
-    if (event.phase === "dismiss") scroll.current?.scrollTo({ y: 0, animated: false });
+    if (event.phase === "appear" && shownToken && event.token > 0) shownToken.current = event.token;
+    if (event.phase === "dismiss" && isCurrentShowing(event.token) && !usePageUi.getState().menuOpen) scroll.current?.scrollTo({ y: 0, animated: false });
     onPresentation(event);
   };
   return (

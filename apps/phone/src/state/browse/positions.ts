@@ -1,5 +1,5 @@
 import { pageScrollPosition, savePageState } from "../pages/store";
-import { currentTabs, saveTabState } from "../tabs/store";
+import { currentTabs, reserveStateSave, saveTabState } from "../tabs/store";
 import { findTab } from "../tabs/tabsState";
 import { SCROLL_MOVE_THRESHOLD, scrollSaveDecision, type ScrollWatch } from "../../lib/scrollSettle";
 
@@ -11,10 +11,11 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let checking = false;
 
 export async function saveTabPosition(id: string) {
+  const save = reserveStateSave(id);
   const at = await pageScrollPosition(id);
   const saved = await savePageState(id);
   if (!saved || !findTab(currentTabs(), id)) return;
-  saveTabState(id, saved);
+  saveTabState(id, saved, save);
   if (at) watches.set(id, { lastSeen: at.y, lastSaved: at.y });
 }
 

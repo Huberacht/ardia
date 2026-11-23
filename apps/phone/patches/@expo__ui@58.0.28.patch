@@ -57,56 +57,81 @@ index 74ef9a48ef6d8208dadb445b27283e559adca96f..b3ddc3933227005192cf552382cafa60
                      presentationBackground != null ? /*#__PURE__*/ _jsx(Slot, {
                          name: "presentationBackground",
 diff --git a/ios/BottomSheetView.swift b/ios/BottomSheetView.swift
-index b331018ac492033c951ab5d51add0a98292e0989..05411806b1ef96acff49c2199f17b250ac837025 100644
+index b331018ac492033c951ab5d51add0a98292e0989..56501bcb58d8869a4adc09e332c06f09756f6b39 100644
 --- a/ios/BottomSheetView.swift
 +++ b/ios/BottomSheetView.swift
-@@ -6,6 +6,11 @@ import ExpoModulesCore
+@@ -6,6 +6,17 @@ import ExpoModulesCore
  final class BottomSheetProps: UIBaseViewProps {
    @Field var isPresented: Bool = false
    @Field var fitToContents: Bool = false
 +  @Field var presentationToken: Double = 0
-+  var pendingToken: Double = 0
-+  var shownToken: Double = 0
++  var showing: BottomSheetShowing?
++  var shownTokens: [Double] = []
++  var wantedShowing: BottomSheetShowing? { isPresented ? BottomSheetShowing(id: presentationToken) : nil }
++  func show(_ next: BottomSheetShowing?) {
++    guard showing != next else { return }
++    objectWillChange.send()
++    showing = next
++  }
 +  var onPresentationAppear = EventDispatcher()
 +  var onPresentationDisappear = EventDispatcher()
    var onIsPresentedChange = EventDispatcher()
    var onDismiss = EventDispatcher()
  }
-@@ -114,22 +119,32 @@ struct BottomSheetView: ExpoSwiftUI.View {
+@@ -110,27 +121,38 @@ struct BottomSheetView: ExpoSwiftUI.View {
+       Color.clear.frame(width: 0, height: 0)
+     }
+   }
+-
    var body: some View {
      anchor
-       .sheet(isPresented: $isPresented, onDismiss: {
+-      .sheet(isPresented: $isPresented, onDismiss: {
 -        props.onDismiss()
-+        props.onDismiss(["token": props.shownToken])
-       }) {
+-      }) {
++      .sheet(item: Binding(get: { props.showing }, set: { next in
++        if next == nil, let gone = props.showing, props.isPresented {
++          props.onIsPresentedChange(["isPresented": false, "token": gone.id])
++        }
++        props.show(next)
++      }), onDismiss: {
++        let token = props.shownTokens.isEmpty ? 0 : props.shownTokens.removeFirst()
++        props.onDismiss(["token": token])
++      }) { showing in
          presentedContent
 +          .onAppear {
-+            props.shownToken = props.pendingToken
-+            props.onPresentationAppear(["token": props.shownToken])
++            props.shownTokens.append(showing.id)
++            props.onPresentationAppear(["token": showing.id])
 +          }
 +          .onDisappear {
-+            props.onPresentationDisappear(["token": props.shownToken])
++            props.onPresentationDisappear(["token": showing.id])
 +          }
        }
-       .onChange(of: isPresented, perform: { newIsPresented in
-         if props.isPresented == newIsPresented {
-           return
-         }
-         props.onIsPresentedChange([
+-      .onChange(of: isPresented, perform: { newIsPresented in
+-        if props.isPresented == newIsPresented {
+-          return
+-        }
+-        props.onIsPresentedChange([
 -          "isPresented": newIsPresented
-+          "isPresented": newIsPresented,
-+          "token": props.shownToken
-         ])
-       })
-       .onChange(of: props.isPresented) { newValue in
-+        if newValue { props.pendingToken = props.presentationToken }
-         isPresented = newValue
+-        ])
+-      })
+-      .onChange(of: props.isPresented) { newValue in
+-        isPresented = newValue
++      .onChange(of: props.isPresented) { _ in
++        props.show(props.wantedShowing)
++      }
++      .onChange(of: props.presentationToken) { _ in
++        props.show(props.wantedShowing)
        }
        .onAppear {
-+        props.pendingToken = props.presentationToken
-         isPresented = props.isPresented
+-        isPresented = props.isPresented
++        props.show(props.wantedShowing)
        }
    }
+ }
++
++struct BottomSheetShowing: Identifiable, Equatable {
++  let id: Double
++}
 diff --git a/src/swift-ui/BottomSheet/index.tsx b/src/swift-ui/BottomSheet/index.tsx
 index 3f111f57a556deae32d7a45ff2901dcf013d1eac..aa9c443bbb820f984b5c4a30973f709537a81da7 100644
 --- a/src/swift-ui/BottomSheet/index.tsx

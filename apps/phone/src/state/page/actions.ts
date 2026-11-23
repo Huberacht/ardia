@@ -216,30 +216,29 @@ function afterPageMenu(run: () => void) {
 
 export type MenuPresentation = { phase: "appear" | "disappear" | "release" | "dismiss"; token: number };
 
-const presentationOf = (token: number) => (token > 0 ? token : (opening?.id ?? null));
+export const isCurrentShowing = (token: number) => token > 0 && token === pageUi().menuOpening;
+
+const isKnownShowing = (token: number) => Number.isInteger(token) && token > 0 && token <= openings;
 
 export function pageMenuPresentation({ phase, token }: MenuPresentation) {
-  const presented = presentationOf(token);
+  if (!isKnownShowing(token)) return;
   if (phase === "appear") {
-    markMenuPhase("appeared");
+    if (isCurrentShowing(token)) markMenuPhase("appeared");
     return;
   }
   if (phase === "release") {
-    if (presented !== null && presented === opening?.id && pageUi().menuOpen) closePageMenu();
+    if (isCurrentShowing(token) && opening?.id === token && pageUi().menuOpen) closePageMenu();
     return;
   }
   if (phase === "disappear") {
-    markFindPhase("menuGone");
-    pageMenuHidden(presented);
+    if (isCurrentShowing(token)) markFindPhase("menuGone");
+    pageMenuHidden(token);
     return;
   }
-  pageMenuDismissed(presented);
-}
-
-export function pageMenuDismissed(token: number | null = null) {
-  pageMenuHidden(token ?? opening?.id ?? null);
+  pageMenuHidden(token);
+  if (!isCurrentShowing(token) || pageUi().menuOpen) return;
   endMenuTiming();
-  if (!pageUi().menuOpen && pageUi().menuPage === "library") usePageUi.setState({ menuPage: "main" });
+  if (pageUi().menuPage === "library") usePageUi.setState({ menuPage: "main" });
 }
 
 export function askTranslation() {

@@ -89,6 +89,7 @@ enum StageSettlePoll {
 
 @MainActor
 struct StageKeyboardGeometry: Equatable {
+  let window: ObjectIdentifier
   let windowSize: CGSize
   let orientation: UIInterfaceOrientation
 }
@@ -98,14 +99,20 @@ struct StageKeyboardMemory {
   let geometry: StageKeyboardGeometry
 }
 
+struct StageKeyboardMove {
+  let height: CGFloat
+  let duration: TimeInterval
+  let curve: UInt
+}
+
 final class StageKeyboardTracker {
   private let minimumHeight: CGFloat
-  private let onMove: (CGFloat) -> Void
+  private let onMove: (StageKeyboardMove) -> Void
   private let onUnchanged: (CGFloat) -> Void
   private var observers: [NSObjectProtocol] = []
   private var height: CGFloat = 0
 
-  init(minimumHeight: CGFloat, onMove: @escaping (CGFloat) -> Void, onUnchanged: @escaping (CGFloat) -> Void) {
+  init(minimumHeight: CGFloat, onMove: @escaping (StageKeyboardMove) -> Void, onUnchanged: @escaping (CGFloat) -> Void) {
     self.minimumHeight = minimumHeight
     self.onMove = onMove
     self.onUnchanged = onUnchanged
@@ -115,9 +122,12 @@ final class StageKeyboardTracker {
     guard observers.isEmpty else { return }
     for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardWillHideNotification] {
       let observer = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] notification in
-        let end = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        let info = notification.userInfo
+        let end = (info?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
         let hiding = notification.name == UIResponder.keyboardWillHideNotification
-        MainActor.assumeIsolated { self?.keyboardWillMove(overlap: hiding ? 0 : Self.overlap(of: end)) }
+        let duration = (info?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
+        let curve = (info?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? UInt(UIView.AnimationCurve.easeInOut.rawValue)
+        MainActor.assumeIsolated { self?.keyboardWillMove(overlap: hiding ? 0 : Self.overlap(of: end), duration: duration, curve: curve) }
       }
       observers.append(observer)
     }
@@ -139,14 +149,14 @@ final class StageKeyboardTracker {
     return max(0, window.bounds.maxY - local.minY)
   }
 
-  private func keyboardWillMove(overlap: CGFloat) {
+  private func keyboardWillMove(overlap: CGFloat, duration: TimeInterval, curve: UInt) {
     let target = overlap > minimumHeight ? overlap : 0
     guard target != height else {
       onUnchanged(target)
       return
     }
     height = target
-    onMove(target)
+    onMove(StageKeyboardMove(height: target, duration: duration, curve: curve))
   }
 }
 

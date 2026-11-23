@@ -14,7 +14,7 @@ import { snapshotPageTop } from "../../lib/shownSnapshots";
 import { accentGlowCss, barHeight, elevation, FadeView, Favicon, font, iPhoneOr, iconRoles, motionReportsNearEnd, MotionView, shadowCss, smoothCorners, space, Symbol, IncognitoSpecs, TabFace, tabsInk, tabsLayout, useDesign, usePageUnderBars, useTheme, isDarkColor, type MenuItem, type MotionCurve, type SymbolName } from "../ui";
 import { MenuTrigger, nativeMenus, spaceSystemImage, type MenuHandlers } from "../ui/MenuTrigger";
 import { hideArchiveCard } from "../../state/browse/archiveCard";
-import { OPENING_COVER_ID } from "../../state/browse/store";
+import { OPENING_COVER_ID, useBrowse } from "../../state/browse/store";
 import { canShareTab, copyTabLink, shareTab } from "../../state/browse/tabMenus";
 import { actionWords } from "../../lib/sharedWords";
 import { CARD_MENU_ACTION, CLOSE_TAB, tabCardAccess, tabCardTitle, tabCardTitleText, useIsActiveTab } from "./tabCard";
@@ -487,6 +487,7 @@ const deckCardFrame = (g: DeckGeometry): CoverFrame => ({ left: (g.width - g.car
 
 export function OpeningCard({ tab, geometry: g, centerX, centerY, growsAtMount = false, endsSquare = false, onGrowing, onLanded }: OpeningCardProps) {
   const [frame] = useState(() => (endsSquare ? coverFrame(g) : deckCardFrame(g)));
+  const openingCover = useBrowse((s) => s.openingCover);
   const inner = { ...g, cardWidth: frame.width, cardHeight: frame.height };
   const theme = useTheme();
   const design = useDesign();
@@ -519,7 +520,7 @@ export function OpeningCard({ tab, geometry: g, centerX, centerY, growsAtMount =
       to={to}
       motion={OPENING_CARD_MOTION}
       onMotionEnd={onLanded ? (finished) => finished && onLanded() : undefined}
-      {...(endsSquare && onLanded && motionReportsNearEnd() ? { nativeID: OPENING_COVER_ID, nearEndPx: COVER_NEAR_END_PX, onMotionNearEnd: () => onLanded() } : endsSquare ? { nativeID: OPENING_COVER_ID } : {})}
+      {...(endsSquare && onLanded && motionReportsNearEnd() ? { nativeID: openingCover ?? OPENING_COVER_ID, nearEndPx: COVER_NEAR_END_PX, onMotionNearEnd: () => onLanded() } : endsSquare ? { nativeID: openingCover ?? OPENING_COVER_ID } : {})}
       style={[styles.opening, endsSquare ? null : styles.openingEdge, { left: frame.left, top: frame.top, width: frame.width, height: frame.height, borderColor: theme.cardEdge, backgroundColor: tone.top ?? theme.canvas }]}
     >
       <MotionView testID="openingCardFace" style={StyleSheet.absoluteFill} from={growsAtMount ? { translateY: 0 } : undefined} to={{ translateY: grown ? deckStatusStrip(inner, 0, pageTop) : 0 }} motion={OPENING_CARD_MOTION}>

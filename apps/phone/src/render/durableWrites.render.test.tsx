@@ -5,8 +5,8 @@ import { tabDatabase } from "../state/store/database";
 import { pages } from "../platform/pages";
 import * as pageStore from "../state/pages/store";
 import { appBecameActive } from "../state/browse/store";
-import { archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, flushTabWrites, loadArchive, onTabWritesStalled, restoreArchivedTab, searchArchive, selectTabById, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
-import { withTabs } from "../../test/render/harness";
+import { ARCHIVE_RETENTION_MS, ARCHIVE_SEARCH_LIMIT, archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, deleteArchivedTabsById, flushTabWrites, loadArchive, onTabWritesStalled, pruneExpiredArchive, restoreArchivedTab, saveTabState, searchArchive, selectTabById, tabSavedState, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
+import { someTabs, withTabs } from "../../test/render/harness";
 
 beforeEach(() => {
   jest.useFakeTimers();
@@ -200,4 +200,91 @@ test("writes that stall tell the person once, and are tried again when the app c
   act(() => appBecameActive());
   expect(tabWritesPending()).toBe(false);
   onTabWritesStalled(() => undefined);
+});
+
+const archivedRows = (count: number) => someTabs(count).map((tab, index) => ({ ...tab, id: `arch${index}`, archivedAt: Date.now() - index }));
+
+for (const pending of [false, true]) {
+  test(`a Delete from an Archive row read before its tab was restored leaves the restored tab, its row and its state alone${pending ? ", while the restore still waits on a busy database" : ""}`, () => {
+    jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+    const id = currentTabs().open[0]!.id;
+    act(() => archiveTabById(id));
+    browserDatabase.writeTabState(tabDatabase(), id, "saved interaction state");
+    act(() => loadArchive());
+    const row = archivedTabById(id)!;
+    const removed = jest.spyOn(pageStore, "deletePageSnapshots");
+    if (pending) refuse(1, "SQLITE_BUSY");
+    expect(restoreArchivedTab(row)).toBe(true);
+    expect(deleteArchivedTabsById([row.id])).toBe(0);
+    act(() => jest.advanceTimersByTime(1_000));
+    expect(currentTabs().open.some((tab) => tab.id === id)).toBe(true);
+    expect(stored(id)).toBeDefined();
+    expect(browserDatabase.readTabState(tabDatabase(), id)).toBe("saved interaction state");
+    expect(removed.mock.calls.flatMap(([ids]) => ids)).not.toContain(id);
+  });
+}
+
+test("an expired archive row leaves the Archive and its count as soon as it is pruned", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  const id = currentTabs().open[0]!.id;
+  act(() => archiveTabById(id));
+  act(() => loadArchive());
+  expect(currentTabs().archive!.map((tab) => tab.id)).toEqual([id]);
+  jest.setSystemTime(Date.now() + ARCHIVE_RETENTION_MS + 1);
+  act(() => void pruneExpiredArchive());
+  act(() => loadArchive());
+  expect(currentTabs().archive).toEqual([]);
+  expect(currentTabs().archivedCount).toBe(0);
+});
+
+test("Archive search matches a waiting row by its new title, not the one the database still has", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  const id = currentTabs().open[0]!.id;
+  const oldTitle = currentTabs().open[0]!.title;
+  act(() => archiveTabById(id));
+  act(() => loadArchive());
+  refuse(1, "SQLITE_BUSY");
+  act(() => updateTabById(id, { title: "New name" }));
+  expect(searchArchive(oldTitle).map((tab) => tab.id)).not.toContain(id);
+  expect(searchArchive("New name").map((tab) => tab.id)).toEqual([id]);
+});
+
+test("a waiting removal doesn't leave the limited Archive search a row short, and the count follows the waiting changes", () => {
+  expect(flushTabWrites()).toBe(true);
+  const rows = archivedRows(ARCHIVE_SEARCH_LIMIT + 1);
+  browserDatabase.writeTabs(tabDatabase(), rows, []);
+  const before = browserDatabase.countArchivedTabs(tabDatabase());
+  refuse(1, "SQLITE_BUSY");
+  act(() => void deleteArchivedTabsById([rows[0]!.id]));
+
+  expect(searchArchive("Site").length).toBe(ARCHIVE_SEARCH_LIMIT);
+  act(() => loadArchive());
+  expect(currentTabs().archivedCount).toBe(before - 1);
+  act(() => jest.advanceTimersByTime(1_000));
+  browserDatabase.writeTabs(tabDatabase(), [], rows.map((tab) => tab.id));
+});
+
+test("Clear Archive removes hundreds of rows in one commit", () => {
+  const rows = archivedRows(1_200);
+  browserDatabase.writeTabs(tabDatabase(), rows, []);
+  act(() => clearArchivedTabs());
+  expect(browserDatabase.countArchivedTabs(tabDatabase())).toBe(0);
+});
+
+test("a page state captured before a restore can't overwrite the position saved after it", async () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  let resolve: (saved: string) => void = () => undefined;
+  jest.spyOn(pageStore, "savePageState").mockImplementation(() => new Promise<string | null>((done) => (resolve = done)));
+  const id = currentTabs().open[0]!.id;
+  act(() => archiveTabById(id));
+  expect(restoreArchivedTab(archivedTabById(id)!)).toBe(true);
+  saveTabState(id, "new position");
+  resolve("position before restoring");
+  await act(async () => {
+    await tick();
+    jest.advanceTimersByTime(50);
+  });
+  flushTabWrites();
+  expect(tabSavedState(id)).toBe("new position");
+  expect(browserDatabase.readTabState(tabDatabase(), id)).toBe("new position");
 });

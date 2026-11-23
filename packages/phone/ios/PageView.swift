@@ -59,6 +59,7 @@ final class PageView: ExpoView {
   }
   static let coverCap: Duration = .milliseconds(200)
   static let coverRetryGap: Duration = .milliseconds(16)
+  static let coverRetries = 12
   static let drawnProbeTries = 8
   static let flatProbesAccepted = 3
   static let drawnProbeGap: Duration = .milliseconds(50)
@@ -225,7 +226,7 @@ final class PageView: ExpoView {
 
   @MainActor
   private func probing(_ webView: WKWebView, of page: WebTab, navigation: Int, since generation: Int) -> Bool {
-    shows(webView, since: generation) && self.page === page && page.webView === webView && page.navigationGeneration == navigation && !isHidden && alpha > 0.01
+    shows(webView, since: generation) && self.page === page && page.webView === webView && page.navigationGeneration == navigation && (!page.isLoading || page.hasCommittedLoad) && PageSnapshots.isOnScreen(webView)
   }
 
   @MainActor
@@ -307,7 +308,7 @@ final class PageView: ExpoView {
     if hideCover(reason: reason) { return }
     let wanted = coverNativeID
     coverRetryTask = Task { @MainActor [weak self] in
-      while !Task.isCancelled {
+      for _ in 0..<PageView.coverRetries {
         try? await Task.sleep(for: PageView.coverRetryGap)
         guard !Task.isCancelled, let self, self.coverNativeID == wanted, !self.coverHandedOver else { return }
         if self.hideCover(reason: reason) {
@@ -315,6 +316,9 @@ final class PageView: ExpoView {
           return
         }
       }
+      guard !Task.isCancelled, let self, self.coverNativeID == wanted else { return }
+      self.coverRetryTask = nil
+      self.finishCover(reason: "cap", found: false)
     }
   }
 
@@ -346,7 +350,9 @@ final class PageView: ExpoView {
       hiddenCover = nil
       hiddenCoverID = nil
     }
-    guard let view = hiddenCover, hiddenCoverID != nil, view.isHidden else { return }
+    guard let view = hiddenCover, let id = hiddenCoverID, view.isHidden else { return }
+    let stillOurs = view.superview == nil || (view.responds(to: NSSelectorFromString(PageView.nativeIDKey)) && (view.value(forKey: PageView.nativeIDKey) as? String) == id)
+    guard stillOurs else { return }
     view.isHidden = hiddenCoverWasHidden
   }
 
@@ -477,6 +483,7 @@ final class PageView: ExpoView {
       MainActor.assumeIsolated {
         forgetHostedWebView()
         restoreHiddenCover()
+        coverHandedOver = false
         PhoneHandoff.withdraw(self)
         madePinchWatcher?.reset()
         dismissSummary(animated: false)

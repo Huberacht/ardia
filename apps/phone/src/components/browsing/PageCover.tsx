@@ -66,6 +66,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     let deadline: ReturnType<typeof setTimeout> | null = null;
     let settle: ReturnType<typeof setTimeout> | null = null;
     let paintDeadline: ReturnType<typeof setTimeout> | null = null;
+    let unpainted: ReturnType<typeof setTimeout> | null = null;
     const fade = () => {
       if (fading) return;
       fading = true;
@@ -79,10 +80,17 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       opacity.value = 0;
       coverGone(tab.id);
     };
+    const fadeUnlessStillLoading = () => {
+      if (pageNavigation(tab.id)?.isLoading && !pageWasDrawn(tab.id)) {
+        if (!unpainted) unpainted = setTimeout(fade, PAGE_COVER.unpaintedLoadMs - PAGE_COVER.deadlineMs);
+        return;
+      }
+      fade();
+    };
     const check = () => {
       if (fading) return;
       const shownAlone = useBrowse.getState().surface === "browsing";
-      if (shownAlone && !deadline) deadline = setTimeout(fade, PAGE_COVER.deadlineMs);
+      if (shownAlone && !deadline) deadline = setTimeout(WAITS_FOR_PAINT ? fadeUnlessStillLoading : fade, PAGE_COVER.deadlineMs);
       const page = pageNavigation(tab.id);
       if (!page?.isLive) return;
       if (page.isLoading) {
@@ -116,6 +124,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       if (deadline) clearTimeout(deadline);
       if (settle) clearTimeout(settle);
       if (paintDeadline) clearTimeout(paintDeadline);
+      if (unpainted) clearTimeout(unpainted);
     };
   }, []);
   const coverGone = (id: string) => {
