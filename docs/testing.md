@@ -70,15 +70,15 @@ holds the rest.
 
 - `checks.yml` starts only on the paths one of its jobs reads, and a `which checks run` job (`dorny/paths-filter`)
   picks the jobs from the change: `typecheck, tests and Mac bundle` (typecheck, the portable tests, the store
-  simulator and the Mac bundle, Metro then Hermes) for the workspace code; the browser's tests in three shares
-  (`--test-shard=I/3`) for what those tests read, which reaches past `apps/browser` into every package, the engine
+  simulator and the Mac bundle, Metro then Hermes) for the workspace code; the browser's tests in six shares
+  (`--test-shard=I/6`) for what those tests read, which reaches past `apps/browser` into every package, the engine
   sources, `apps/linux/src`, `scripts/{lib,security,windows}`, `tests/` and two docs; and `repository, vouch and
   stale tests` (`test:root`, no install) for `scripts/`, `engine/`, `.github/`, `.claude/`, the site and the release
   notes. A
   docs-only, phone-app, dashboard or videos change starts none of them. When the filter can't tell (an API error, a
   force push it can't diff, a pull request of 3,000 files or more) or the `which checks run` job fails, every job
   runs. `scripts/ci/workflow-paths.test.mjs` keeps the trigger paths and the filters in step, follows the meadow
-  check's site imports, and fails when a Linux fixture or a root test names a file its job doesn't start on. Each share restores the TSX it transpiled last time (`ardia-test-tsx-I-of-3-…`); only pushes to
+  check's site imports, and fails when a Linux fixture or a root test names a file its job doesn't start on. Each share restores the TSX it transpiled last time (`ardia-test-tsx-I-of-6-…`); only pushes to
   `main` save it, so pull requests add no caches. A newer push cancels the run before it, on `main` too.
 - When GitHub's runners are busy, the long jobs of `checks.yml`, `linux.yml` and `android.yml` move to Boat CI
   (`boat-large`); the `which checks run` job or a `route` job decides, and each run's summary says why
