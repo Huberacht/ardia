@@ -364,3 +364,23 @@ test("rows the launch lets in when a drag begins are measured once each: by the 
   c.end(false);
   await D.settle();
 });
+
+test("a row in a fixed section measured late keeps the position it was measured at, since targeting never scrolls it", async () => {
+  const { DragItems } = await import("./dragItems.ts");
+  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const items = new DragItems(c, true);
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  c.scrollY = 50;
+  const late = c.create("fm:late");
+  Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "folder" });
+  late.view = D.fakeView({ x: 6, y: 300, w: 180, h: 30 });
+  items.add(late.key, late);
+  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
+  assert.equal(late.frame?.y, 300);
+  c.scrollY = 0;
+  c.end(false);
+  await D.settle();
+});

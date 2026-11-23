@@ -335,3 +335,34 @@ test("a reveal the scroll view clamped, because a fold was still settling, runs 
   assert.equal(asked.length, 2, "a second later, a layout change no longer pulls the list back");
   stopRetry();
 });
+
+test("a reveal asked for again renews its retry, and a scroll by the user ends it", () => {
+  const ids = S().windows[w].tabIds;
+  const asked = [];
+  const at = { current: 0 };
+  const g = { current: { viewport: 300, regions: { pinnedGroups: 0, list: 0 }, newTabAtTop: false, tilesFixed: false } };
+  const stopRetry = startRevealTabs(w, { current: { scrollTo: (move) => asked.push(move) } }, at, g);
+  runFrames();
+  S().activate(ids[0]);
+  runFrames();
+  const now = Date.now;
+  let t = now();
+  Date.now = () => t;
+  asked.length = 0;
+  S().activate(ids[50]);
+  runFrames();
+  t += 900;
+  revealTab(w, ids[50]);
+  runFrames();
+  t += 600;
+  g.current.contentChanged(5000);
+  runFrames();
+  assert.equal(asked.length, 3, "the pill press renewed the retry, so the clamped reveal runs again 1.5 s after the switch");
+  at.current = 40;
+  t += 100;
+  g.current.contentChanged(6000);
+  runFrames();
+  assert.equal(asked.length, 3, "the user scrolled away, so a later layout change leaves the list where they put it");
+  Date.now = now;
+  stopRetry();
+});

@@ -66,3 +66,13 @@ test("a row measured while gaps are open is stored where it rests", async () => 
   const late = { key: "late", kind: "row", gap: value(5), frame: null };
   assert.equal(openGapsAbove(late, 200 + 33 + 5, [above, below, tile, late]), 38);
 });
+
+test("two dragged rows above a row measured late both come off, even when the lower one starts below where the row now shows", async () => {
+  const { sourcesClosedAbove } = await import("./dragModel.ts");
+  const closed = (y) => ({ kind: "row", section: "list", size: { __getValue: () => 0 }, frame: { x: 0, y, w: 180, h: 30 } });
+  const first = closed(100);
+  const second = closed(140);
+  const late = { key: "late", kind: "row", section: "list", frame: null };
+  assert.equal(sourcesClosedAbove([second, first], late, 200 - 66, 3), 66);
+  assert.equal(sourcesClosedAbove([second, first], late, 90, 3), 0);
+});

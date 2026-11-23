@@ -29,9 +29,13 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
     let atRest: string | null = null;
     let switchedIn: string | null = null;
     let again: { tabId: string; pill: boolean; until: number } | null = null;
+    let retrying = false;
+    let lastAsked: number | null = null;
+    let content = 0;
     const show = (row: { y: number; height: number }, pill: boolean) => {
       const { viewport, edgeLift } = geometry.current;
       const move = revealScrollFor(row, { top: scrollY.current ?? 0, viewport, edgeLift }, pill && !stillMotion());
+      lastAsked = move ? move.y : (scrollY.current ?? 0);
       if (move) scroll.current?.scrollTo(move);
     };
     const reveal = () => {
@@ -53,7 +57,8 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
       viaPill = false;
       if (!tabId) return;
       releaseLaunchRows(windowId, "reveal");
-      if (!again || again.tabId !== tabId) again = { tabId, pill, until: Date.now() + REVEAL_RETRY_MS };
+      if (!retrying || !again || again.tabId !== tabId) again = { tabId, pill, until: Date.now() + REVEAL_RETRY_MS };
+      retrying = false;
       const scroller = scroll.current;
       const from = scrollY.current ?? 0;
       const row = locateTab(windowId, tabId, geometry.current, scroller as ScrollView, () => scrollY.current ?? 0);
@@ -75,9 +80,14 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
       viaPill = pill;
       schedule();
     });
-    const contentChanged = () => {
+    const contentChanged = (height?: number) => {
+      const reachable = Math.max(0, content - (geometry.current.viewport ?? 0));
+      if (height !== undefined) content = height;
       if (!again || switched || opened) return;
       if (Date.now() > again.until) return void (again = null);
+      const at = scrollY.current ?? 0;
+      if (lastAsked !== null && Math.abs(at - lastAsked) > 1 && Math.abs(at - reachable) > 1) return void (again = null);
+      retrying = true;
       switched = again.tabId;
       switchedIn = windowProfileIn(windowId) ?? null;
       viaPill = again.pill;
