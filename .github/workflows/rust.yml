@@ -17,6 +17,16 @@ on:
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_self_update_policy.h"
       - "scripts/linux/ardia-update"
       - "scripts/linux/linux-update.pem"
+      - "scripts/linux/update-verify.sh"
+      - "scripts/linux/update-helper-test.sh"
+      - "scripts/linux/package.py"
+      - "scripts/linux/linux_formats.py"
+      - "scripts/linux/runtime_files.py"
+      - "scripts/linux/install.sh"
+      - "scripts/linux/sign-update.mjs"
+      - "scripts/linux/dev.ardia.linux.policy"
+      - "scripts/linux/arch/**"
+      - ".github/actions/linux-update-verify/**"
       - "apps/desktop/src/platform/linux/updateReleases.ts"
       - "apps/browser/src/lib/versions.ts"
       - "packages/import/ios/Core/**"
@@ -163,6 +173,28 @@ jobs:
         env:
           ARDIA_REQUIRE_IMPORT_CROSSCHECK: "rust,swift,windows"
         run: python3 -I tests/import-bookmarks/test_import_bookmarks.py -v
+
+  linux-update-helper:
+    name: Linux update helper and ardia-update-verify in Debian, Ubuntu and Arch
+    needs: gate
+    if: ${{ !cancelled() && (needs.gate.result == 'skipped' || (needs.gate.result == 'success' && needs.gate.outputs.run == 'true')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - uses: ./.github/actions/linux-update-verify
+      - name: Packaging tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends dpkg-dev binutils xz-utils openssl
+      - name: Install, upgrade and refuse in fresh containers
+        run: scripts/linux/update-helper-test.sh
 
   plugin-broker:
     needs: gate

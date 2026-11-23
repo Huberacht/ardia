@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const NOT_BUILT_BY_GN: [&str; 13] = [
+const NOT_BUILT_BY_GN: [&str; 14] = [
     "crates/ardia-crypto/src/rustcrypto.rs",
     "crates/ardia-sync-vectors/src/lib.rs",
     "crates/ardia-update-core/src/error.rs",
@@ -10,6 +10,7 @@ const NOT_BUILT_BY_GN: [&str; 13] = [
     "crates/ardia-update-core/src/manifest.rs",
     "crates/ardia-update-core/src/version.rs",
     "crates/ardia-update-ffi/src/lib.rs",
+    "crates/ardia-update-verify/src/main.rs",
     "crates/ardia-import-core/src/bookmark.rs",
     "crates/ardia-import-core/src/chromium_bookmarks.rs",
     "crates/ardia-import-core/src/error.rs",

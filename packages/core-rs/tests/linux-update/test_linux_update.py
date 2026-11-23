@@ -9,18 +9,17 @@ import tempfile
 import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
+CORE = HERE.parents[1]
 REPO = HERE.parents[3]
 LINUX = REPO / 'engine/ardiacore-linux/src'
 HELPER = REPO / 'scripts/linux/ardia-update'
+HOSTILE = REPO / 'scripts/security/hostile-inputs.mjs'
 VECTORS = json.loads((HERE.parent / 'update-vectors.json').read_text(encoding='utf-8'))
 REQUIRED = os.environ.get('ARDIA_REQUIRE_LINUX_CROSSCHECK') == '1'
 SPKI_PREFIX = bytes.fromhex('302a300506032b6570032100')
-HELPER_FUNCTIONS = ['note', 'finish', 'fail', 'version_parts', 'newer_than', 'parse_manifest']
-HELPER_SETTINGS = ['max_package', 'max_manifest', 'signature_size', 'version_pattern', 'version_line_pattern',
-                   'package_line_pattern']
 MANIFESTS = VECTORS['manifests']
 VERSIONS = VECTORS['versions']
-EMPTY_INPUT_REFUSALS = {'failed signature', 'failed manifest'}
+MAX_ARGUMENT = 65536
 
 
 def h(data):
@@ -64,62 +63,54 @@ def openssl3():
     return None
 
 
-def bash4():
-    for candidate in [os.environ.get('BASH4'), shutil.which('bash'), '/opt/homebrew/bin/bash', '/usr/local/bin/bash']:
-        if not candidate or not pathlib.Path(candidate).exists():
-            continue
-        major = subprocess.run([candidate, '-c', 'echo ${BASH_VERSINFO[0]}'], capture_output=True, text=True).stdout
-        if major.strip().isdigit() and int(major) >= 4:
-            return candidate
-    return None
+def rust_tool(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    installed = pathlib.Path.home() / '.cargo/bin' / name
+    return str(installed) if os.access(installed, os.X_OK) else None
 
 
-def helper_source():
-    text = HELPER.read_text(encoding='utf-8')
-    parts = []
-    for name in HELPER_SETTINGS:
-        found = re.search(rf'^{name}=.*$', text, re.M)
-        assert found, f'{name}= is no longer in {HELPER}'
-        parts.append(found.group(0))
-    for name in HELPER_FUNCTIONS:
-        found = re.search(rf'^{name}\(\) \{{.*?\}}$' if f'{name}() {{ ' in text else rf'^{name}\(\) \{{\n.*?^\}}$',
-                          text, re.M | re.S)
-        assert found, f'{name}() is no longer in {HELPER}'
-        parts.append(found.group(0))
-    return '\n'.join(parts)
+def verifier_binary():
+    cargo = rust_tool('cargo')
+    if cargo is None:
+        unavailable('cargo is unavailable to build ardia-update-verify')
+    built = subprocess.run([cargo, 'build', '--locked', '--release', '--quiet', '-p', 'ardia-update-verify'], cwd=CORE,
+                           capture_output=True, text=True, timeout=900)
+    if built.returncode != 0:
+        raise AssertionError(built.stderr)
+    return CORE / 'target/release' / ('ardia-update-verify.exe' if os.name == 'nt' else 'ardia-update-verify')
 
 
-HELPER_DRIVER = r'''
-set -uo pipefail
-run_case() {
-  local file=$1 named_version=$2 installed=$3 kind=$4 signature=$5 key=$6 signature_ok=$7
-  (
-    work=$(mktemp -d)
-    trap 'rm -rf -- "$work"' EXIT
-    current=$installed
-    version_parts "$current" >/dev/null || fail kind
-    version_parts "$named_version" >/dev/null || fail manifest
-    (($(wc -c <"$file") <= max_manifest)) || fail manifest
-    (($(wc -c <"$signature") == signature_size)) || fail signature
-    if [[ -n "$OPENSSL3" ]]; then
-      "$OPENSSL3" pkeyutl -verify -pubin -inkey "$key" -rawin -in "$file" -sigfile "$signature" >/dev/null 2>&1 \
-        || fail signature
-    else
-      [[ "$signature_ok" == 1 ]] || fail signature
-    fi
-    version="" package_name="" package_digest="" package_size=""
-    parse_manifest "$file"
-    [[ "$version" == "$named_version" ]] || fail manifest
-    newer_than "$version" "$current" || fail notNewer
-    [[ -n "$package_name" ]] || fail kind
-    finish "ok $package_name $package_digest $package_size"
-  ) 2>/dev/null
-}
-while IFS=$'\t' read -r file named installed kind signature key signature_ok; do
-  run_case "$file" "$named" "$installed" "$kind" "$signature" "$key" "$signature_ok" | tail -n 1
-done
-exit 0
+def verdict(binary, manifest, signature, key, version, installed, kind):
+    result = subprocess.run([str(binary), 'manifest', '--key', str(key), '--manifest', str(manifest), '--signature',
+                             str(signature), '--version', version, '--installed', installed, '--kind', kind],
+                            capture_output=True, timeout=60)
+    lines = result.stdout.decode('utf-8', 'replace').splitlines()
+    return (lines[-1] if lines else ''), result.returncode
+
+
+def passable(value):
+    if len(value) > MAX_ARGUMENT or '\0' in value:
+        return False
+    try:
+        os.fsencode(value)
+    except UnicodeError:
+        return False
+    return True
+
+
+SIGNING_DRIVER = r'''
+import { generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
+const manifests = JSON.parse(readFileSync(process.argv[2], "utf8")).map((hex) => Buffer.from(hex, "hex"));
+const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+console.log(JSON.stringify({
+  publicKey: publicKey.export({ format: "der", type: "spki" }).subarray(12).toString("hex"),
+  signatures: manifests.map((manifest) => sign(null, manifest, privateKey).toString("hex")),
+}));
 '''
+
 
 NODE_DRIVER = r'''
 import { createPublicKey, verify } from "node:crypto";
@@ -213,29 +204,84 @@ class LinuxUpdateParityTests(unittest.TestCase):
         for (a, b, want), line in zip(pairs, out):
             self.assertEqual(line, str(want), f'{a} vs {b}')
 
-    def test_the_root_helper_installs_or_refuses_every_manifest_as_recorded(self):
-        bash = bash4()
-        if bash is None:
-            unavailable('bash 4 or later is unavailable')
-        openssl = openssl3()
-        script = helper_source() + HELPER_DRIVER
-        rows = []
+    def verifier(self):
+        if not hasattr(type(self), 'binary'):
+            type(self).binary = verifier_binary()
+        return type(self).binary
+
+    def test_the_root_helper_leaves_every_manifest_check_to_ardia_update_verify(self):
+        text = HELPER.read_text(encoding='utf-8')
+        self.assertIn('verifier="$libdir/ardia-update-verify"', text)
+        self.assertIn('verify "$((left < small_copy_seconds ? left : small_copy_seconds))" manifest', text)
+        self.assertIn('verify "$left" package --package "$destination"', text)
+        for duplicated in ['openssl', 'pkeyutl', 'sha256sum', 'version_parts', 'parse_manifest', 'newer_than']:
+            self.assertNotIn(duplicated, text)
+
+    def test_the_root_helpers_verifier_installs_or_refuses_every_manifest_as_recorded(self):
+        binary = self.verifier()
         for case, (manifest, signature, key) in zip(MANIFESTS, self.files):
-            rows.append('\t'.join([str(manifest), case['version'], case['installed'], case['kind'], str(signature),
-                                   str(key), '1' if case.get('openssl', case['signatureValid']) else '0']))
-        result = subprocess.run([bash, '-c', script], input='\n'.join(rows) + '\n', capture_output=True, text=True,
-                                timeout=300, env={'PATH': os.environ['PATH'], 'LC_ALL': 'C', 'OPENSSL3': openssl or ''})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        out = result.stdout.splitlines()
-        self.assertEqual(len(out), len(MANIFESTS), result.stderr)
-        for case, line in zip(MANIFESTS, out):
+            line, status = verdict(binary, manifest, signature, key, case['version'], case['installed'], case['kind'])
             want = expected(case, 'helper', 'outcome')
-            if not case['manifest'] and openssl:
-                self.assertIn(line, EMPTY_INPUT_REFUSALS, case['name'])
-            elif 'error' not in want:
-                self.assertEqual(line, f'ok {want["name"]} {want["sha256"]} {want["size"]}', case['name'])
+            if 'error' in want:
+                self.assertEqual((line, status), (f'failed {want["error"]}', 1), case['name'])
             else:
-                self.assertEqual(line, f'failed {want["error"]}', case['name'])
+                self.assertEqual((line, status), (f'ok {want["name"]} {want["sha256"]} {want["size"]}', 0),
+                                 case['name'])
+
+    def test_no_hostile_string_passes_the_verifier(self):
+        node = shutil.which('node')
+        if node is None:
+            unavailable('node is unavailable to read scripts/security/hostile-inputs.mjs')
+        listed = subprocess.run([node, '--input-type=module', '-e',
+                                 f'import {{ HOSTILE_STRINGS }} from {json.dumps(HOSTILE.as_uri())};'
+                                 'process.stdout.write(JSON.stringify(HOSTILE_STRINGS));'],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        hostile = json.loads(listed.stdout)
+        self.assertGreater(len(hostile), 50)
+        base = next(case for case in MANIFESTS if case['name'] == 'deb install, all three formats')
+        deb = base['manifest'].split('\n')[2].split(' ')
+        forged = []
+        for entry in hostile:
+            value = entry['value']
+            forged += [
+                (entry['id'], 'version', base['manifest'].replace('0.2.48', value)),
+                (entry['id'], 'name', base['manifest'].replace(deb[1], value)),
+                (entry['id'], 'digest', base['manifest'].replace(deb[2], value)),
+                (entry['id'], 'size', base['manifest'].replace(f' {deb[3]}\n', f' {value}\n', 1)),
+                (entry['id'], 'kind', base['manifest'].replace('deb Ardia', f'{value} Ardia')),
+                (entry['id'], 'line', base['manifest'] + value + '\n'),
+            ]
+        encoded = [text.encode('utf-8', 'surrogatepass') for _, _, text in forged]
+        hexes = self.dir / 'hostile.json'
+        hexes.write_text(json.dumps([manifest.hex() for manifest in encoded]))
+        script = self.dir / 'sign.mjs'
+        script.write_text(SIGNING_DRIVER)
+        signed = subprocess.run([node, str(script), str(hexes)], capture_output=True, text=True, timeout=300)
+        self.assertEqual(signed.returncode, 0, signed.stderr)
+        signed = json.loads(signed.stdout)
+        key = self.dir / 'hostile.pem'
+        key.write_text(public_pem(signed['publicKey']))
+        binary = self.verifier()
+        manifest = self.dir / 'hostile.txt'
+        signature = self.dir / 'hostile.sig'
+        for (name, field, _), body, sig in zip(forged, encoded, signed['signatures']):
+            manifest.write_bytes(body)
+            signature.write_bytes(bytes.fromhex(sig))
+            self.assertEqual(verdict(binary, manifest, signature, key, '0.2.48', '0.2.47', 'deb'),
+                             ('failed manifest', 1), f'{name} as the {field}')
+        good = self.files[MANIFESTS.index(base)]
+        self.assertEqual(verdict(binary, *good, '0.2.48', '0.2.47', 'deb')[1], 0)
+        for entry in hostile:
+            value = entry['value']
+            if not passable(value):
+                continue
+            for field, args, want in [('--version', (value, '0.2.47', 'deb'), ('failed manifest', 1)),
+                                      ('--installed', ('0.2.48', value, 'deb'), ('failed kind', 1)),
+                                      ('--kind', ('0.2.48', '0.2.47', value), ('failed usage', 2))]:
+                self.assertEqual(verdict(binary, *good, *args), want, f'{entry["id"]} as {field}')
+            result = subprocess.run([str(binary), 'version', value], capture_output=True, timeout=60)
+            self.assertEqual((result.stdout, result.returncode), (b'failed version\n', 1), entry['id'])
 
     def test_openssl_pkeyutl_verifies_exactly_the_signatures_recorded_valid(self):
         openssl = openssl3()

@@ -622,8 +622,11 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   - `lib/ardia/ardia-ui`;
   - `lib/ardia/extensions/ublock`;
   - `lib/ardia/VERSION` (with `--version`), one line with the Ardia version (`0.2.44`, `0.2.44-nightly.3`);
-  - `lib/ardia/ardia-update` (mode 0755), the self-update helper, and `lib/ardia/linux-update.pem` (0644), the
-    Ed25519 public key it verifies release manifests with;
+  - `lib/ardia/ardia-update` (mode 0755), the self-update helper, `lib/ardia/ardia-update-verify` (0755, with
+    `--update-verify`), the static `ardia-update-core` verifier it checks every manifest and package with
+    (`scripts/linux/update-verify.sh` builds it for `x86_64-unknown-linux-musl`; a package without it reports
+    `unsupported noVerifier` and never updates itself), and `lib/ardia/linux-update.pem` (0644), the Ed25519 public
+    key the manifests are signed for;
   - `lib/ardia/cli/` (with `--cli`): `ardia-cli-install.sh` (`apps/cli/install.sh`, the pinned installer from
     ardia-browser/plugins; `scripts/release/official-plugins.py check` holds it to the pin, mode 0755),
     `ardia-cli-<version>-linux-x64.tar.gz` and `ardia-cli.sha256` (the digest is its first token), the `ardia`
@@ -665,7 +668,8 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
     Chromium loads them only on Qt desktops) maps to its Debian package with the 64-bit-time name first
     (`libasound2t64 | libasound2`), `libc6`'s minimum is the highest `GLIBC_` symbol version, and the list adds what
     Chromium loads at run time (GTK 3, libsecret, Liberation fonts, xdg-utils) and `curl`, which the bundled CLI
-    installer downloads with, and `openssl`, which the update helper verifies signatures with. A library with no
+    installer downloads with, and `openssl` (the update helper used it before `ardia-update-verify`; it stays until
+    the packaging fixtures under `engine/patches/build/tests` drop it). A library with no
     package in `SONAME_PACKAGES` fails the build, so a new engine dependency can't ship unnoticed. polkit, `pkexec`
     and Vulkan are `Recommends`;
   - it `Provides: www-browser`; `postinst` makes `chrome-sandbox` setuid root, copies the AppArmor profile to
@@ -707,8 +711,9 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
 - **Self-update helper.** `lib/ardia/ardia-update` (`scripts/linux/ardia-update`, bash) installs a release the
   browser downloaded. `ardia-update kind` prints one line: `appimage` (`$APPIMAGE` names a file whose folder the user
   can write, and when `$APPDIR` is set the helper runs from it), `managed` (pacman or rpm owns `lib/ardia/chrome`, or
-  a dpkg package other than `ardia`), `deb` (dpkg's `ardia` owns it), `tarball`, or `unsupported <reason>`: `noVersion`,
-  `noKey`, `noOpenssl` (no OpenSSL 3 with `pkeyutl -rawin`), and for deb and tarball `noPkexec` (no setuid pkexec) and
+  a dpkg package other than `ardia`), `deb` (dpkg's `ardia` owns it), `tarball`, or `unsupported <reason>`: `noVerifier`
+  (no `lib/ardia/ardia-update-verify` that runs here), `noVersion`, `noKey`, and for deb and tarball `noPkexec` (no
+  setuid pkexec) and
   `noPolicy` (the installed policy's update action doesn't name this helper, as for a tarball run in place).
   `ardia-update install <dir>` runs as root through `pkexec` for a `.deb` or tarball and as the user for an AppImage.
   It takes a lock (`/run/ardia-update.lock`, or the AppImage's folder), refuses a folder or file that isn't a regular,
@@ -716,11 +721,15 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   (64 bytes) into a fresh 0700 folder, read by `dd iflag=nofollow,nonblock` running as the calling user (`setpriv`), so
   root never opens a path the caller controls. That reader only gets a pipe that root's `head` empties into the copy,
   never the copy or the lock itself, so a process of the caller that traces it can't change a file after it is
-  verified. It verifies them with
-  `openssl pkeyutl -verify -rawin` against `lib/ardia/linux-update.pem`, parses the manifest strictly (it must
-  re-serialize byte for byte, and each package name must be exactly `Ardia-<V>-linux-x64.<deb|tar.xz|AppImage>`),
-  requires `<V>` to be newer than `lib/ardia/VERSION` (a nightly sorts before its stable), then copies its package
-  (at most the manifest's size, the same way) and checks size and sha256. Everything from its start to the post-install version check shares
+  verified. The helper parses nothing itself: `lib/ardia/ardia-update-verify manifest` (`packages/core-rs`'s
+  `ardia-update-verify`, a thin command line over `ardia-update-core`) verifies the Ed25519 signature against
+  `lib/ardia/linux-update.pem`, parses the manifest strictly (canonical format 1, each package name exactly
+  `Ardia-<V>-linux-x64.<deb|tar.xz|AppImage>` for the `<V>` the file name gives), requires `<V>` to be newer than
+  `lib/ardia/VERSION` (a nightly sorts before its stable) and a line for this kind, and answers one line,
+  `ok <name> <sha256> <size>` or `failed <reason>`. The helper then copies the package (at most that size, the same
+  way) and `ardia-update-verify package` checks the signature again and the copy's size and sha256. The verifier
+  opens nothing through a symbolic link and reads nothing past its cap; `lib/ardia/VERSION` is checked with
+  `ardia-update-verify version`, so no version rule lives in bash. Everything from its start to the post-install version check shares
   one 9-minute deadline, enforced with `timeout`, so the helper gives up before the browser's 10-minute deadline. Run
   through pkexec, it re-runs itself under a `timeout` watchdog 30 s past that deadline too, since the browser can't signal a root process,
   so a step outside that deadline (a `stat` that stalls) still ends. A `.deb` goes through `apt-get install --no-remove`, a
@@ -745,11 +754,13 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   `linux-sign` job signs the `linux` artifact with the `LINUX_UPDATE_ED_PRIVATE_KEY` secret (a PKCS#8 PEM from
   `openssl genpkey -algorithm ed25519`) in a job of its own, so the build never sees it; if it fails, the release
   ships without the manifest and warns. `node --test scripts/linux/sign-update.test.mjs` covers the script.
-- **Testing the helper.** `scripts/linux/update-helper-test.sh` builds two stand-in releases with package.py, signs
-  them with a throwaway key it swaps into each test install, and in `debian:13` and `ubuntu:24.04` containers checks
-  `kind` and its reasons, upgrades a `.deb`, a tarball (no `ardia.new`/`ardia.old` left, a process running from the old
-  tree survives) and an AppImage as a user, and every refusal; in `archlinux` it installs the PKGBUILD and checks
-  `kind` is `managed`.
+- **Testing the helper.** `scripts/linux/update-helper-test.sh` builds `ardia-update-verify` and two stand-in
+  releases with package.py, signs them with a throwaway key it swaps into each test install, and in `debian:13` and
+  `ubuntu:24.04` containers checks `kind` and its reasons (no OpenSSL needed, `noVerifier` without the verifier or
+  with one that doesn't run), upgrades a `.deb`, a tarball (no `ardia.new`/`ardia.old` left, a process running from
+  the old tree survives) and an AppImage as a user, and every refusal; in `archlinux` it installs the PKGBUILD and
+  checks `kind` is `managed`. The Rust workflow's `linux-update-helper` job runs it on every change to the helper,
+  the verifier or the packaging it reads.
 
 CI builds packages from a prebuilt engine instead of compiling Chromium; see [linux-ci.md](linux-ci.md).
 

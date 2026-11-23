@@ -123,6 +123,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ardia-update-verify"
+version = "0.1.0"
+dependencies = [
+ "ardia-crypto",
+ "ardia-update-core",
+ "base64",
+ "ed25519-dalek",
+ "libc",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

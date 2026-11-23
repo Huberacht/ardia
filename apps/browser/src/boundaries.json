@@ -8,7 +8,8 @@
   "plugin": "an approved plugin, within its manifest's permissions",
   "socket": "a same-user process on the control socket while Settings > Advanced > Let programs control Ardia is on",
   "native": "the browser's own native layer, relaying OS input",
-  "import": "a file or browser profile the user chose to import"
+  "import": "a file or browser profile the user chose to import",
+  "update": "a release manifest, its signature and the package the browser downloaded for the self-updater, trusted only once the release key's signature verifies"
  },
  "customEvents": {
   "ardia:media-element": "Page-world shim names a media element for the isolated world to track; only an HTMLMediaElement is taken, and only its own playback state is read",
@@ -1667,6 +1668,18 @@
    "checks": [
     "packages/core-rs/crates/ardia-import-core/src/chromium_bookmarks.rs",
     "packages/core-rs/tests/import-bookmarks/test_import_bookmarks.py"
+   ],
+   "detected": false
+  },
+  {
+   "id": "update:linux-manifest",
+   "source": "update",
+   "guard": "The Linux self-update helper copies the downloaded manifest (at most 4096 bytes), its signature (at most 64) and the package as the user, then lib/ardia/ardia-update-verify (ardia-update-core) refuses anything the release key didn't sign, any manifest that isn't canonical format 1 for the version its file name gives, any version not newer than lib/ardia/VERSION and any package whose size or SHA-256 differs; it opens nothing through a symbolic link and answers one fixed line, so no manifest byte reaches the shell; the shared hostile list runs through the binary",
+   "checks": [
+    "scripts/linux/ardia-update#verify()",
+    "packages/core-rs/crates/ardia-update-verify/src/main.rs#fn verify(",
+    "packages/core-rs/crates/ardia-update-core/src/manifest.rs#pub fn verify_linux_update",
+    "packages/core-rs/tests/linux-update/test_linux_update.py#test_no_hostile_string_passes_the_verifier"
    ],
    "detected": false
   },
