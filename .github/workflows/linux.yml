@@ -37,6 +37,7 @@ on:
       - "packages/shell/ios/WindowManager.swift"
       - "packages/sync/ios/Core/Wordlist.swift"
       - "packages/sync/tests/fixtures/**"
+      - "packages/core-rs/**"
       - "packages/ardiacore/prebuilt-engines-linux.tsv"
       - "packages/ardiacore/tests/ubo-scriptlets.test.mjs"
       - "packages/shaders/ios/Meadow/**"
@@ -186,6 +187,16 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/linux-setup
+      - name: The Rust sync core the host tests link
+        if: matrix.part == 'engine'
+        run: |
+          if ! command -v rustup >/dev/null && [ ! -x "$HOME/.cargo/bin/rustup" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          cd packages/core-rs
+          PATH="$HOME/.cargo/bin:$PATH" rustup toolchain install
+          PATH="$HOME/.cargo/bin:$PATH" cargo build --locked -p ardia-ffi
       - id: chromium
         name: A stock Chromium, on runners without GitHub's image
         if: runner.environment != 'github-hosted'

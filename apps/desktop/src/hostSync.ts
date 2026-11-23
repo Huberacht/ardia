@@ -31,6 +31,7 @@ export const SYNC_CAPABILITIES = [
   "ArdiaSync.savePassword",
   "ArdiaSync.claimAuthority",
   "ArdiaSync.releaseAuthority",
+  "ArdiaSync.takeOpenFailures",
 ] as const;
 
 export type SyncKeyStoreStatus = {
@@ -40,13 +41,17 @@ export type SyncKeyStoreStatus = {
   unlocked: boolean;
   unreadable: boolean;
   passwords: boolean;
+  core?: "rust" | "native";
 };
+
+export type SyncOpenFailure = "format" | "authentication" | "too_large" | "other";
 
 type AuthorityClaim = { granted: boolean; leaseMs: number };
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const FALLBACK_DEVICE_NAME = "Linux";
 const SYNC_METHODS: ReadonlySet<string> = new Set(SYNC_CAPABILITIES);
+const OPEN_FAILURES: readonly SyncOpenFailure[] = ["format", "authentication", "too_large", "other"];
 
 function base32(bytes: Uint8Array): string {
   let out = "";
@@ -382,8 +387,53 @@ export const releaseSyncAuthority = (host: ArdiaHost) => invokeHost<void>("Ardia
 const invoke = (host: ArdiaHost, method: string) => (...args: unknown[]) =>
   invokeHost(`ArdiaSync.${method}`, { args: args.map((arg) => (arg === undefined ? null : arg)) }, host);
 
+let openFailureEpoch: () => string = () => "";
+let openFailures: Partial<Record<SyncOpenFailure, number>> = {};
+let openFailuresIn = "";
+
+export function configureOpenFailureConsent(epoch: () => string) {
+  openFailureEpoch = epoch;
+}
+
+async function drainOpenFailures(host: ArdiaHost, startedIn: string) {
+  let taken: unknown;
+  try {
+    taken = await invoke(host, "takeOpenFailures")();
+  } catch {
+    return;
+  }
+  if (!startedIn || startedIn !== openFailureEpoch() || !taken || typeof taken !== "object") return;
+  if (openFailuresIn !== startedIn) {
+    openFailures = {};
+    openFailuresIn = startedIn;
+  }
+  for (const code of OPEN_FAILURES) {
+    const count = (taken as Record<string, unknown>)[code];
+    if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) openFailures[code] = (openFailures[code] ?? 0) + count;
+  }
+}
+
+export function takeOpenFailures(): Partial<Record<SyncOpenFailure, number>> {
+  const epoch = openFailureEpoch();
+  const taken = epoch && epoch === openFailuresIn ? openFailures : {};
+  openFailures = {};
+  return taken;
+}
+
+const failedOpen = (method: string, result: unknown) =>
+  method === "openLocal" ? result === null : Array.isArray((result as { damaged?: unknown } | null)?.damaged) && (result as { damaged: unknown[] }).damaged.length > 0;
+
 export function syncModuleMethod(host: ArdiaHost, name: string, method: string): unknown {
   if (name !== "ArdiaSync") return undefined;
+  if (method === "takeOpenFailures") return takeOpenFailures;
+  if (method === "read" || method === "openLocal") {
+    return async (...args: unknown[]) => {
+      const startedIn = openFailureEpoch();
+      const result = await invoke(host, method)(...args);
+      if (failedOpen(method, result)) void drainOpenFailures(host, startedIn);
+      return result;
+    };
+  }
   if (method === "newDeviceId") return () => newSyncDeviceId();
   if (method === "deviceName") return syncDeviceName;
   if (method === "readPasswords") {

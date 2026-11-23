@@ -5,12 +5,14 @@ import {
   HELD_LOGINS_DOCUMENT,
   SYNC_CAPABILITIES,
   configureHeldLogins,
+  configureOpenFailureConsent,
   createHeldLogins,
   keyringResumer,
   newSyncDeviceId,
   refreshSyncDocuments,
   whileResettingHeldLogins,
   syncModuleMethod,
+  takeOpenFailures,
 } from "./hostSync.ts";
 import { NO_AUTHORITY_MESSAGE, REMOTE_METHODS, startSyncAuthority } from "./syncAuthority.ts";
 
@@ -342,4 +344,44 @@ test("a forwarded sync.now checks its caller after the sync window's cycle ends,
   assert.equal(started, 0);
   assert.equal(await syncNowIfIdle(engineSyncNow), true);
   assert.equal(started, 1);
+});
+
+test("open failures are drained from the Rust core only after a failed open, and counted only in the consent period they began in", async () => {
+  let epoch = "e1";
+  configureOpenFailureConsent(() => epoch);
+  const listings = [
+    { files: [], pending: [], damaged: [], present: [] },
+    { files: [], pending: [], damaged: [{ id: "a", age: 0 }], present: ["a"] },
+  ];
+  const drained = [{ format: 1, authentication: 2, too_large: 0, other: 0 }, { format: 0, authentication: 0, too_large: 1, other: 1 }, { format: 5, authentication: 5, too_large: 5, other: 5 }];
+  const host = fakeHost((method) => {
+    if (method === "ArdiaSync.read") return listings.shift();
+    if (method === "ArdiaSync.openLocal") return null;
+    if (method === "ArdiaSync.takeOpenFailures") return drained.shift();
+    return null;
+  });
+  try {
+    assert.equal(typeof resolveHostModule(host, "ArdiaSync", "takeOpenFailures"), "function");
+    assert.deepEqual(takeOpenFailures(), {});
+    const read = resolveHostModule(host, "ArdiaSync", "read");
+    await read("/sync", "app", []);
+    await tick();
+    assert.equal(host.calls.filter((call) => call.method === "ArdiaSync.takeOpenFailures").length, 0, "a clean read asks the core for nothing");
+    await read("/sync", "app", []);
+    await tick();
+    await resolveHostModule(host, "ArdiaSync", "openLocal")("AAAA");
+    await tick();
+    assert.equal(host.calls.filter((call) => call.method === "ArdiaSync.takeOpenFailures").length, 2);
+    assert.deepEqual(resolveHostModule(host, "ArdiaSync", "takeOpenFailures")(), { format: 1, authentication: 2, too_large: 1, other: 1 });
+    assert.deepEqual(takeOpenFailures(), {}, "taking empties the tally");
+    const pending = resolveHostModule(host, "ArdiaSync", "openLocal")("AAAA");
+    epoch = "e2";
+    await pending;
+    await tick();
+    assert.deepEqual(takeOpenFailures(), {}, "a failure that began before the consent period changed isn't counted in the new one");
+    epoch = "";
+    assert.deepEqual(takeOpenFailures(), {});
+  } finally {
+    configureOpenFailureConsent(() => "");
+  }
 });

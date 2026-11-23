@@ -8,11 +8,12 @@ import { SyncNative } from "../../browser/src/platform/sync";
 import { ardiaHost, type ArdiaHost } from "./host";
 import { syncIdle, syncNowIfIdle, syncNowThrough } from "./syncForward";
 import { keyringMessage, presentSyncState, SYNC_KEY_NOT_SAVED } from "./syncKeyStore";
-import { consentToken } from "../../browser/src/state/telemetry/client";
+import { consentEpoch, consentToken } from "../../browser/src/state/telemetry/client";
 import { warnFor } from "../../browser/src/state/telemetry/logs";
 import {
   claimSyncAuthority,
   configureHeldLogins,
+  configureOpenFailureConsent,
   createHeldLogins,
   HeldLoginsResetError,
   enterPhraseBegins,
@@ -42,6 +43,8 @@ import {
 } from "./syncAuthority.ts";
 
 const KEYCHAIN_ERROR = "Couldn’t save the sync key in your Keychain.";
+
+configureOpenFailureConsent(consentEpoch);
 
 export const useSync = create<SyncUi>()(() => ({ ...engine.useSync.getState(), status: SyncNative ? "starting" : "unavailable" }));
 
@@ -350,7 +353,7 @@ function refreshSendTargets() {
 export const onTabsReceived = engine.onTabsReceived;
 export const takeSnapshotWrites = engine.takeSnapshotWrites;
 export const takeOpenTabSyncCounts = engine.takeOpenTabSyncCounts;
-export const syncCore = (): "rust" | "native" => "native";
+export const syncCore = (): "rust" | "native" => (keyStore?.core === "rust" ? "rust" : "native");
 
 export function sendTargets(profileId: string): SendTarget[] {
   return leading() ? engine.sendTargets(profileId) : relayedTargets[profileId] ?? [];

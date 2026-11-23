@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "ardia/linux/ac_linux_sync_crypto.h"
 #include "ardia/linux/ac_linux_sync_json.h"
+#include "ardia/linux/ac_linux_sync_keys.h"
 #include "ardia/linux/ac_linux_sync_keystore.h"
 
 namespace ardia::linux_sync {
@@ -62,6 +62,7 @@ inline constexpr Method kMethods[] = {
     {"ArdiaSync.savePassword", Route::kPasswords},
     {"ArdiaSync.claimAuthority", Route::kClaim},
     {"ArdiaSync.releaseAuthority", Route::kRelease},
+    {"ArdiaSync.takeOpenFailures", Route::kCore},
 };
 
 inline constexpr int64_t kAuthorityLeaseMs = 30000;
@@ -148,6 +149,16 @@ class DisclosureWindow {
   std::optional<int64_t> granted_ms_;
 };
 
+struct OpenFailureCounts {
+  void Note(OpenError error);
+  JsonValue Take();
+
+  double format = 0;
+  double authentication = 0;
+  double too_large = 0;
+  double other = 0;
+};
+
 struct CoreOptions {
   std::string default_folder;
   std::string device_name;
@@ -204,6 +215,7 @@ class SyncCore {
   std::string unreadable_account_;
   std::string unsaved_account_;
   int64_t next_held_key_save_ = 0;
+  OpenFailureCounts open_failures_;
 };
 
 inline constexpr char kPasswordManagerHintFormat[] = "x-kde-passwordManagerHint";

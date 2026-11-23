@@ -82,7 +82,8 @@ under cargo and BoringSSL in Chromium's GN build.
 Password reads follow Swift exactly, because Swift wrote most existing vaults. Base64 decodes like Foundation's
 `Data(base64Encoded:)`: extra trailing `=` are accepted, and whitespace and missing padding are not. One leading U+FEFF
 is dropped from an opened password. Writes stay canonical. `tests/password-read-cases.json` and
-`tests/phrase-cases.json` record where Linux, Windows and Kotlin read differently today.
+`tests/phrase-cases.json` record where Windows and Kotlin read differently today, and where Linux, which splits phrase
+words itself before the core checks them, still does.
 
 ## Update manifests: `ardia_update`
 

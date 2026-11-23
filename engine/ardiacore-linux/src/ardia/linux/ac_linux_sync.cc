@@ -71,6 +71,11 @@ std::string Parent(const std::string& path) {
   return path.substr(0, slash);
 }
 
+bool ChainExistsFor(const Bytes& entropy, const std::string& folder) {
+  const auto keys = SyncKeys::Make(entropy);
+  return keys && Vault(folder, *keys).ChainExists();
+}
+
 bool WriteFileAtomically(const std::string& path, const std::string& contents) {
   const std::string staging = path + ".ardia-staging";
   unlink(staging.c_str());
@@ -173,6 +178,34 @@ std::optional<Route> RouteOf(std::string_view method) {
   return std::nullopt;
 }
 
+void OpenFailureCounts::Note(OpenError error) {
+  switch (error) {
+    case OpenError::kNone:
+      return;
+    case OpenError::kFormat:
+      ++format;
+      return;
+    case OpenError::kAuthentication:
+      ++authentication;
+      return;
+    case OpenError::kTooLarge:
+      ++too_large;
+      return;
+    case OpenError::kOther:
+      ++other;
+      return;
+  }
+}
+
+JsonValue OpenFailureCounts::Take() {
+  JsonValue taken = JsonValue::Object({{"format", JsonValue::Number(format)},
+                                       {"authentication", JsonValue::Number(authentication)},
+                                       {"too_large", JsonValue::Number(too_large)},
+                                       {"other", JsonValue::Number(other)}});
+  *this = OpenFailureCounts();
+  return taken;
+}
+
 Outcome Outcome::Value(JsonValue value) {
   Outcome outcome;
   outcome.value = std::move(value);
@@ -222,11 +255,14 @@ void SyncCore::SetEntropy(std::optional<Bytes> entropy, std::string account) {
   key_account_.clear();
   unreadable_ = false;
   ++generation_;
-  if (entropy) {
-    entropy_ = std::move(*entropy);
-    keys_ = std::make_unique<SyncKeys>(entropy_);
-    key_account_ = std::move(account);
+  if (!entropy) return;
+  keys_ = SyncKeys::Make(*entropy);
+  if (!keys_) {
+    Wipe(*entropy);
+    return;
   }
+  entropy_ = std::move(*entropy);
+  key_account_ = std::move(account);
 }
 
 bool SyncCore::HoldsKeyFor(const std::string& account) const {
@@ -263,6 +299,7 @@ Outcome SyncCore::Dispatch(std::string_view method, const std::vector<JsonValue>
   if (method == "ArdiaSync.sealLocal") return SealLocal(args);
   if (method == "ArdiaSync.openLocal") return OpenLocal(args);
   if (method == "ArdiaSync.recoveryWords") return RecoveryWords();
+  if (method == "ArdiaSync.takeOpenFailures") return Outcome::Value(open_failures_.Take());
   return Outcome::Error("ERR_UNKNOWN_CALL", "Unknown sync operation");
 }
 
@@ -323,12 +360,7 @@ Outcome SyncCore::EnterPhrase(const std::vector<JsonValue>& args) {
     case PhraseProblem::Kind::kNone:
       break;
   }
-  bool matches = false;
-  {
-    const SyncKeys keys(entropy);
-    matches = Vault(*folder, keys).ChainExists();
-  }
-  if (!matches) {
+  if (!ChainExistsFor(entropy, *folder)) {
     Wipe(entropy);
     return Outcome::Value(JsonValue::Object({{"error", JsonValue::String(HasSyncData(*folder) ? "mismatch" : "noData")}}));
   }
@@ -359,12 +391,7 @@ Outcome SyncCore::ResumeFromKeyring(const std::string& account, const std::strin
     Wipe(entropy);
     return refuse();
   }
-  bool matches = false;
-  {
-    const SyncKeys keys(entropy);
-    matches = Vault(folder, keys).ChainExists();
-  }
-  if (!matches) {
+  if (!ChainExistsFor(entropy, folder)) {
     Wipe(entropy);
     return mismatch();
   }
@@ -442,6 +469,7 @@ Outcome SyncCore::Read(const std::vector<JsonValue>& args, int64_t now_seconds) 
   JsonValue files = JsonValue::Array();
   JsonValue damaged = JsonValue::Array();
   for (const auto& entry : listing.damaged) {
+    open_failures_.Note(entry.reason);
     damaged.Append(JsonValue::Object({{"id", JsonValue::String(entry.id)},
                                       {"age", JsonValue::Number(entry.age_seconds * 1000)}}));
   }
@@ -498,8 +526,10 @@ Outcome SyncCore::OpenLocal(const std::vector<JsonValue>& args) {
   auto data = Base64Decode(*sealed);
   if (!data) return Outcome::Value(JsonValue::Null());
   Bytes plain;
-  if (keys_->Open(*data, kLocalScopeTag, kLocalFileId, &plain) != OpenError::kNone)
+  if (const OpenError error = keys_->Open(*data, kLocalScopeTag, kLocalFileId, &plain); error != OpenError::kNone) {
+    open_failures_.Note(error);
     return Outcome::Value(JsonValue::Null());
+  }
   std::string text = LossyUtf8(plain);
   Wipe(plain);
   auto hidden = HideLegacyPasswords(text, *keys_);
@@ -524,6 +554,7 @@ Outcome SyncCore::Status() {
       {"unlocked", JsonValue::Bool(keys_ != nullptr)},
       {"unreadable", JsonValue::Bool(unreadable_)},
       {"passwords", JsonValue::Bool(true)},
+      {"core", JsonValue::String(kSyncCore)},
   }));
 }
 

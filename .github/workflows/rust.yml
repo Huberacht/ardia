@@ -10,9 +10,8 @@ on:
       - "packages/sync/ios/Core/Wordlist.swift"
       - "packages/phone/android/src/main/java/com/ardia/sync/core/Wordlist.kt"
       - "apps/browser/windows/Ardia/SyncWordlist.h"
-      - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_crypto.h"
-      - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_crypto.cc"
-      - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_wordlist.cc"
+      - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_keys.h"
+      - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_keys.cc"
       - "engine/ardiacore-linux/copies.tsv"
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_self_update_policy.h"
       - "scripts/linux/ardia-update"
@@ -123,13 +122,11 @@ jobs:
           "$RUNNER_TEMP/ardia-import-smoke"
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic -I include tests/cpp/import_smoke.cc target/release/libardia_import.a $extra -o "$RUNNER_TEMP/ardia-import-smoke-cpp"
           "$RUNNER_TEMP/ardia-import-smoke-cpp"
-      - name: Linux C++ sync against the shared vectors
+      - name: Linux's sync keys, linked to the core, against the shared vectors
         if: runner.os == 'Linux'
         env:
           ARDIA_REQUIRE_LINUX_CROSSCHECK: "1"
-        run: |
-          dpkg -s libssl-dev >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev)
-          python3 -I tests/linux-sync/test_linux_sync.py -v
+        run: python3 -I tests/linux-sync/test_linux_sync.py -v
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         if: runner.os == 'Linux'
         with:
