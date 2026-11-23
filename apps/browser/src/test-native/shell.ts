@@ -22,7 +22,7 @@ import { reportModule } from "./report";
 import { telemetryLocalModule } from "./telemetryLocal";
 import { windowGeometries, windowGeometryFakes } from "./windowGeometry";
 import officialPin from "../../official-plugins.json";
-import { sha256 } from "../lib/sha256";
+import { hexOf, sha256 } from "../lib/sha256";
 export { beginWindowControlTransition, finishStalledTransition, geometryWorld } from "./windowGeometry";
 
 type Modules = ShellNativeModules;
@@ -72,7 +72,7 @@ export const launch: LaunchConfig = {
   test: {},
 };
 
-export type FakeWindow = OpenWindowOptions & { title?: string; trafficLightsCenter?: [number, number] | null; trafficLightsTrailing?: boolean };
+type FakeWindow = OpenWindowOptions & { title?: string; trafficLightsCenter?: [number, number] | null; trafficLightsTrailing?: boolean };
 const shellEvents = nativeEvents();
 export const windows = {
   closeRequests: [] as string[],
@@ -84,8 +84,6 @@ export const windows = {
 };
 export const emitAppEvent = (event: AppEvent) => shellEvents.emit("onAppEvent", event);
 export const emitCommand = (event: CommandEvent) => shellEvents.emit("onCommand", event);
-export const emitOpenURLs = (urls: string[], pointer?: [number, number], source?: { bundleId: string | null; appName: string | null }) =>
-  shellEvents.emit("onOpenURLs", { urls, pointer, source });
 
 const shell: Modules["ArdiaShell"] = {
   addListener: shellEvents.addListener,
@@ -418,7 +416,7 @@ const calendar: Modules["ArdiaCalendar"] = {
   events: () => Promise.resolve([]),
 };
 
-export const keychainReads = { values: new Map<string, string>(), errors: new Map<string, string>() };
+const keychainReads = { values: new Map<string, string>(), errors: new Map<string, string>() };
 
 const keychain: Modules["ArdiaKeychain"] = {
   get: () => Promise.resolve(null),
@@ -451,7 +449,6 @@ const fileDrop: Modules["ArdiaFileDrop"] = {
   devDrag: () => unfaked("ArdiaFileDrop", "devDrag"),
   devLastFileDrag: () => Promise.resolve([]),
 };
-
 
 const cliEvents = nativeEvents();
 const cli: Modules["ArdiaCli"] = {
@@ -645,7 +642,6 @@ function derivedRegistry() {
     for (const program of plugin.reservedPrograms ?? []) if (declared[plugin.name]?.includes(program)) claims[program] ??= plugin.name;
   return { claims, failClosed: false, legacyOwners: [] };
 }
-const hexOf = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 export const officialLegacyHash = (text: string) => hexOf(sha256(`${text}\u0000bundled`));
 export function officialPinnedFromPin(): { name: string; version: string; folderId: string }[] {
   return (officialPin as { plugins: { name: string; version: string; artifacts: Record<string, { sha256?: string | null }> }[] }).plugins.flatMap((p) => {
