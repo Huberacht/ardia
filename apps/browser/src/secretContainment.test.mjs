@@ -418,7 +418,7 @@ test("Google's sign-in callback is consumed before tab state, events or recently
   assert.ok(token?.body.includes(encodeURIComponent(code)) && token.body.includes("code_verifier="), "positive control: the token request gets the code and verifier");
   const traces = [...seen, JSON.stringify(useBrowser.getState().closedTabs), JSON.stringify(useBrowser.getState().history ?? {})].join("\n");
   assert.ok(!traces.includes(callback) && !traces.includes("0AcanaryAuthorizationCode"), "no tab state, tab event or closed.list entry ever holds the callback");
-  assert.equal(consumedCallbackUrl(tabId, callback), false, "the consumer is gone once the callback is handled");
+  assert.equal(consumedCallbackUrl(tabId, callback), false, "the consumer is gone once the callback's tab is");
 });
 
 test("a superseded Google sign-in closes its tab unrecorded, and its late finish can't orphan the newer attempt", async () => {
@@ -448,6 +448,18 @@ test("a superseded Google sign-in closes its tab unrecorded, and its late finish
   assert.ok(!JSON.stringify(useBrowser.getState().closedTabs).includes(second.state), "and leaves no recently closed entry");
   useBrowser.getState().closeTab(third.tabId);
   assert.equal(await third.outcome, "Sign-in was cancelled");
+  const kept = start();
+  const keptTab = useBrowser.getState().tabs[kept.tabId];
+  const realClose = useBrowser.getState().closeTabs;
+  useBrowser.setState({ closeTabs: () => {} });
+  try {
+    start();
+    assert.equal(await kept.outcome, "Cancelled");
+    assert.ok(keptTab && useBrowser.getState().tabs[kept.tabId], "a sign-in page that stays loaded, like a kept Top App");
+    assert.equal(consumedCallbackUrl(kept.tabId, `http://127.0.0.1:53682/ardia-oauth?state=${kept.state}&code=4%2F0Alate`), true, "still has its callback taken while its tab lives");
+  } finally {
+    useBrowser.setState({ closeTabs: realClose });
+  }
 });
 
 test("TabWebView hands a navigation to a callback consumer before anything records it", () => {

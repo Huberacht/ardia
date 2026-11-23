@@ -48,13 +48,17 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
     const stopWatching = useBrowser.subscribe((s, prev) => {
       if (s.tabs !== prev.tabs && !s.tabs[tabId]) finish(new Error("Sign-in was cancelled"));
     });
+    const stopGuarding = useBrowser.subscribe((s, prev) => {
+      if (s.tabs === prev.tabs || s.tabs[tabId]) return;
+      stopGuarding();
+      stopConsuming();
+    });
     const stopConsuming = consumeCallbackUrls(tabId, (address) => {
       if (!address.startsWith(REDIRECT)) return false;
       if (settled) return true;
       const params = query(address);
       stopWatching();
       closeTab();
-      stopConsuming();
       if (params.get("state") !== state) {
         finish(new Error("Sign-in didn't match this request"));
         return true;
@@ -69,7 +73,6 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
       settled = true;
       stopWatching();
       closeTab();
-      stopConsuming();
       if (pending === attempt) pending = null;
       if (error) reject(error);
       else resolve();
