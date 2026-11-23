@@ -42,6 +42,10 @@ public class SyncModule: Module {
 
     Function("newDeviceId") { SyncKeys.newFileId() }
 
+    Constant("core") { SyncKeys.backend }
+
+    Function("takeOpenFailures") { SyncKeys.takeOpenFailures() }
+
     Function("deviceName") { Host.current().localizedName ?? "This Mac" }
 
     AsyncFunction("createPhrase") { (account: String) -> Bool in

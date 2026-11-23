@@ -5,6 +5,7 @@ import { useBrowser } from "../browser/store";
 import { keysOf } from "../browser/changes";
 import { takeOpenTabSyncCounts, takeSnapshotWrites, useSync } from "../sync/engine";
 import { takeSyncCodeCounts } from "../sync/recoveryKit";
+import { syncCore } from "./syncFileCounts";
 import { capture, consentNow, consentToken, counted, consentOrNow, countFor, endSession, fieldsOf, flush, isSharing, markSettingsSnapshot, settingsSnapshotDay, startClient, stillValid, watchConsentBoundary, withHourlyExtras, type ConsentToken } from "./usageClient";
 import { reportLocalStore, startLocalStore } from "./localStoreReport";
 import { watchExtensionInstalls } from "./extensionInstalls";
@@ -281,7 +282,7 @@ function watchSync() {
     const was = last;
     last = status;
     if (was === status) return;
-    if (was === "off" && status !== "unavailable") capture("sync_toggled", { on: true }, consentNow());
+    if (was === "off" && status !== "unavailable") capture("sync_toggled", { on: true, sync_core: syncCore() }, consentNow());
     else if (status === "off" && was !== "unavailable") capture("sync_toggled", { on: false }, consentNow());
   });
 }

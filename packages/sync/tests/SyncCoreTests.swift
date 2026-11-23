@@ -16,6 +16,30 @@ final class RecoveryPhraseTests: XCTestCase {
       XCTAssertEqual(try RecoveryPhrase.entropy(from: phrase), entropy)
     }
   }
+
+  func testProblemsNameWhatTheUserTyped() {
+    let words = RecoveryPhrase.words(for: Data(repeating: 0x7f, count: 32))
+    func problem(_ text: String) -> RecoveryPhrase.Problem? {
+      do {
+        _ = try RecoveryPhrase.entropy(from: text)
+        return nil
+      } catch {
+        return error as? RecoveryPhrase.Problem
+      }
+    }
+    var typo = words
+    typo[5] = "Sausagr"
+    XCTAssertEqual(problem("  " + typo.joined(separator: ",  ") + "\n"), .unknownWord("sausagr"))
+    var first = words
+    first[0] = "zzzz"
+    first[9] = "qqqq"
+    XCTAssertEqual(problem(first.joined(separator: " ")), .unknownWord("zzzz"))
+    XCTAssertEqual(problem(words.dropLast().joined(separator: " ")), .wordCount(23))
+    XCTAssertEqual(problem(""), .wordCount(0))
+    XCTAssertEqual(problem(Array(repeating: "zoo", count: 24).joined(separator: " ")), .checksum)
+    XCTAssertEqual(problem(String(repeating: "abandon ", count: 600)), .wordCount(600))
+    XCTAssertEqual(problem(words.map { String($0.prefix(4)) }.joined(separator: " ")), nil)
+  }
 }
 
 final class SyncCryptoTests: XCTestCase {
@@ -40,6 +64,17 @@ final class SyncCryptoTests: XCTestCase {
     let other = SyncKeys(entropy: RecoveryPhrase.generateEntropy())
     XCTAssertThrowsError(try other.open(sealed, scopeTag: "s", fileId: "f")) { XCTAssertEqual($0 as? SyncKeys.Failure, .authentication) }
     XCTAssertNotEqual(other.chainTag, keys.chainTag)
+  }
+
+  func testOpenFailuresAreCountedByCode() throws {
+    _ = SyncKeys.takeOpenFailures()
+    let sealed = try keys.seal(Data("bookmark".utf8), scopeTag: "s", fileId: "f")
+    _ = try? keys.open(sealed, scopeTag: "s", fileId: "g")
+    _ = try? keys.open(sealed, scopeTag: "t", fileId: "f")
+    _ = try? keys.open(Data(), scopeTag: "s", fileId: "f")
+    XCTAssertEqual(try keys.open(sealed, scopeTag: "s", fileId: "f"), Data("bookmark".utf8))
+    XCTAssertEqual(SyncKeys.takeOpenFailures(), ["authentication": 2, "format": 1])
+    XCTAssertEqual(SyncKeys.takeOpenFailures(), [:])
   }
 }
 
