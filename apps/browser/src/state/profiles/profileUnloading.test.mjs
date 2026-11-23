@@ -18,7 +18,7 @@ const { startCast } = await import("../media/cast.ts");
 const { startHistory } = await import("../history/engineSync.ts");
 const { takeTabSleepCounts } = await import("../telemetry/tabSleepCounts.ts");
 const { pageAskedToClose } = await import("../tabs/pageEvents.ts");
-const { cliHoldsClockForTests, holdForCli, releaseFromCli } = await import("../tabs/cliHolds.ts");
+const { cliHoldsClockForTests, holdForCli, releaseAllCliHolds, releaseFromCli } = await import("../tabs/cliHolds.ts");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
 
 const S = () => useBrowser.getState();
@@ -47,6 +47,7 @@ profileUnloadingForTests(() => clock);
 startProfileUnloading();
 
 function launch(settings = {}) {
+  releaseAllCliHolds();
   stub.docs.delete("switches-cache.json");
   stub.launch.switches = {};
   reloadLaunchConfigForTests();

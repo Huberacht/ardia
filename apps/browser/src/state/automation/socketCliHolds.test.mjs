@@ -88,3 +88,17 @@ test("turning the ardia command's control off ends every hold, and a hold sent a
   assert.ok(late.error, "the socket no longer takes holds");
   assert.ok(ids.every((id) => !heldByCli(id)));
 });
+
+test("a hold running out tells the profile tracker even when something read the holds first", async () => {
+  const { ids } = await hiddenTabs();
+  const { onCliHoldsChanged, tabsHeldByCli } = await import("../tabs/cliHolds.ts");
+  let told = 0;
+  const stop = onCliHoldsChanged(() => told++);
+  await ok("tabs.hold", { session: "a", tabs: [ids[0]], seconds: 1 });
+  told = 0;
+  leaseClock += 1_500;
+  assert.deepEqual(tabsHeldByCli(), [], "a read sees it ended");
+  await new Promise((r) => setTimeout(r, 1_100));
+  assert.equal(told, 1, "the expiry still told the listeners");
+  stop();
+});

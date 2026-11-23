@@ -20,8 +20,10 @@ export function onCliHoldsChanged(listener: () => void): () => void {
   return () => void listeners.delete(listener);
 }
 
-function prune(now: number): void {
-  for (const [session, lease] of leases) if (lease.until <= now) drop(session);
+function prune(now: number): boolean {
+  let dropped = false;
+  for (const [session, lease] of leases) if (lease.until <= now) dropped = drop(session) || dropped;
+  return dropped;
 }
 
 function drop(session: string): boolean {
@@ -69,8 +71,8 @@ export function heldByCli(tabId: string): boolean {
 }
 
 export function tabsHeldByCli(): string[] {
-  prune(clock());
-  return [...new Set([...leases.values()].flatMap((lease) => [...lease.tabs]))];
+  const now = clock();
+  return [...new Set([...leases.values()].flatMap((lease) => (lease.until > now ? [...lease.tabs] : [])))];
 }
 
 export function releaseAllCliHolds(): void {
