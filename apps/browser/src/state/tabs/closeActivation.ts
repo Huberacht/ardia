@@ -13,6 +13,7 @@ import { noteCloseActivation } from "../telemetry/closeActivationCounts";
 import type { ConsentToken } from "../telemetry/consentPeriod";
 import { hasPage } from "./pageSession";
 import { stripEntries, type StripMember } from "./stripEntries";
+import { withSharedFamily } from "../pins/pinShare";
 import { keptWithTopApp, successorKey, type CloseOptions, type Successor } from "./tabs";
 
 export type VisibleSection = "topApps" | "pinned" | "regular";
@@ -112,7 +113,9 @@ export function pickSuccessors(s: BrowserState, ids: string[], keepTopApps = s.s
   const out = new Map<string, Successor>();
   if (!activatesTabAbove(s)) return out;
   const requested = ids.filter((id) => s.tabs[id]);
-  const closing = new Set([...requested, ...withPinnedPanes(s, requested.filter((id) => inPinnedContainer(s, id)))]);
+  const pinned = requested.filter((id) => inPinnedContainer(s, id));
+  const leaving = keepTopApps ? withPinnedPanes(s, pinned.filter((id) => withPinnedPanes(s, [id]).some((pane) => s.tabs[pane]?.pin?.as === "tile"))) : [];
+  const closing = new Set([...requested, ...leaving, ...withSharedFamily(s, withPinnedPanes(s, pinned.filter((id) => !leaving.includes(id))))]);
   for (const w of Object.values(s.windows)) {
     for (const [profileId, activeId] of Object.entries(w.activeTabIds)) {
       if (!closing.has(activeId)) continue;

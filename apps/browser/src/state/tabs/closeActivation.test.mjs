@@ -749,3 +749,24 @@ test("a tab that joins the group while Close Group waits is never kept as the ne
   }
   S().updateSettings({ warnBeforeClosingTabGroup: true });
 });
+
+const { viewTabIds } = await import("../browser/model.ts");
+
+test("closing a shared pin also hands the other window, whose selected copy it unloads, the tab above", () => {
+  S().hydrate({});
+  S().updateSettings({ afterClosingTab: "tabAbove" });
+  const a = S().createWindow({ url: "https://mail.com/" });
+  const [mail] = S().windows[a].tabIds;
+  S().newTab(a, { url: "https://docs.com/" });
+  S().newTab(a, { url: "https://r.com/" });
+  const docs = S().windows[a].tabIds[1];
+  S().pinTabs([mail, docs], true);
+  S().activate(mail);
+  const b = S().createWindow({ url: "https://b.com/" });
+  const copyInB = viewTabIds(S(), b).find((id) => S().tabs[id].pin && S().tabs[id].pinnedUrl === "https://mail.com/");
+  S().activate(copyInB);
+  const frozenInA = activeTabId(S(), a);
+  assert.equal(S().tabs[frozenInA].page.holderId, mail, "A keeps the pin selected, frozen, while B holds its page");
+  close(mail);
+  assert.equal(shown(a), "docs", "A shows the Top App beside the unloaded copy");
+});
