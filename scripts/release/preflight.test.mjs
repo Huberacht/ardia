@@ -372,3 +372,10 @@ test("the preflight job lets a dry run past a published release only for the new
   }
   assert.equal(runPreflightStep({ dryRun: true, published: false, alreadyReleased: "none" }).status, 0);
 });
+
+test("a feed that isn't well-formed is refused before the item scan, so thousands of unclosed items cost nothing", async () => {
+  const body = LIVE.replace("</channel>", `${"<item>".repeat(200_000)}</channel>`);
+  const started = Date.now();
+  assert.equal(feedFacts(body, "1.2.3"), null);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+});

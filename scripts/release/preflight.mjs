@@ -96,8 +96,9 @@ export function feedFacts(xml, version) {
   if (Buffer.byteLength(xml, "utf8") > MAX_FEED_BYTES || !xml.includes("xmlns:sparkle") || /<!(?:DOCTYPE|ENTITY)/i.test(xml)) return null;
   if ((xml.match(/<channel>/g) ?? []).length !== 1 || (xml.match(/<\/channel>/g) ?? []).length !== 1) return null;
   const parsed = parsedItems(xml);
+  if (!parsed || parsed.length === 0) return null;
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-  if (!parsed || parsed.length === 0 || parsed.length !== items.length) return null;
+  if (parsed.length !== items.length) return null;
   if ((xml.match(/<item[\s>]/g) ?? []).length !== items.length || (xml.match(/<\/item\s*>/g) ?? []).length !== items.length) return null;
   let newest = null;
   let newestOther = null;
