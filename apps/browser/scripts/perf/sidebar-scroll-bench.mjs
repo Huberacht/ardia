@@ -274,7 +274,7 @@ class Frames {
     let last = null;
     let first = null;
     for (const r of records) {
-      if (r.k === "i" && r.th === "m" && r.a >= from && r.a < to) {
+      if (r.k === "i" && r.th === "m" && r.a < to && r.a + r.d > from) {
         out.mMax = Math.max(out.mMax, r.d);
         if (r.d > 8.3) {
           out.mOver++;
