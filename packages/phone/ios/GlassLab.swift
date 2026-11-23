@@ -32,7 +32,11 @@ final class GlassLabScroll: NSObject {
   }
 
   private static func pages(in view: UIView) -> [WKWebView] {
-    if let web = view as? WKWebView { return web.window != nil && !web.isHidden ? [web] : [] }
+    if view.isHidden || view.alpha <= 0.01 { return [] }
+    if let web = view as? WKWebView {
+      guard let window = web.window, web.convert(web.bounds, to: window).intersects(window.bounds) else { return [] }
+      return [web]
+    }
     return view.subviews.flatMap(pages)
   }
 

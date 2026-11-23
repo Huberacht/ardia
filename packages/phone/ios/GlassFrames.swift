@@ -269,7 +269,8 @@ final class GlassFrames: NSObject {
     mutating func report(now: CFTimeInterval, surfaces: Int) -> String? {
       if since == 0 { since = now }
       guard now - since >= 1, frames > 0 else { return nil }
-      let line = String(format: "PAGELAB glass frames method=%@ surfaces=%ld frames=%ld late=%ld dropped=%ld worst_frame_ms=%.1f captures=%ld failed=%ld snapshots=%ld snapshot_ms_p50=%.1f pieces_avg=%.1f capture_ms_p50=%.2f capture_ms_max=%.2f tick_ms_p50=%.2f tick_ms_max=%.2f", GlassLaunch.capture.rawValue, surfaces, frames, late, dropped, worstInterval * 1000, captures, failed, snapshotMs.count, LiquidGlassRules.median(snapshotMs), captures > 0 ? Double(pieces) / Double(captures) : 0, LiquidGlassRules.median(captureMs), captureMs.max() ?? 0, LiquidGlassRules.median(tickMs), tickMs.max() ?? 0)
+      func fixed(_ value: Double) -> String { String(format: "%.2f", value) }
+      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
       self = FrameStats()
       since = now
       return line
