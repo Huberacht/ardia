@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "ArdiaPiPThrowMath.h"
 
@@ -78,6 +79,55 @@ inline Result Zoom(Rect frame, double width, double aspect, double factor, Point
   x = KeptWithin(x, rw, frame.x, frame.w, visible.x, visible.maxX());
   y = KeptWithin(y, rh, frame.y, frame.h, visible.y, visible.maxY());
   return {{std::round(x), std::round(y), rw, rh}, w};
+}
+
+struct Window {
+  long number, standIn;
+  Rect frame;
+};
+
+inline bool Contains(Rect r, Point p) { return p.x >= r.x && p.x < r.maxX() && p.y >= r.y && p.y < r.maxY(); }
+
+inline long WindowUnder(const std::vector<Window> &frontToBack, Point pointer, long topmost) {
+  for (const Window &window : frontToBack) {
+    if (!Contains(window.frame, pointer)) continue;
+    if (!topmost || topmost == window.number || (window.standIn && topmost == window.standIn)) return window.number;
+  }
+  return 0;
+}
+
+enum class Phase { None, Began, Changed, Ended };
+
+struct PinchLock {
+  long window = 0;
+  bool owned = false, elsewhere = false;
+};
+
+struct PinchStep {
+  long window = 0;
+  bool consume = false, begin = false, apply = false, end = false, cancel = false;
+};
+
+inline PinchStep StepPinch(PinchLock &lock, Phase phase, long under, bool lockedZooms) {
+  if (phase == Phase::Began) {
+    lock = {under, under != 0, under == 0};
+    if (!under) return {};
+    return {under, true, true, true, false, false};
+  }
+  const bool ended = phase == Phase::Ended;
+  PinchStep step;
+  if (lock.owned) {
+    step.consume = true;
+    if (lock.window && lockedZooms) step = {lock.window, true, false, true, ended, false};
+    else if (lock.window) {
+      step = {lock.window, true, false, false, false, true};
+      lock.window = 0;
+    }
+  } else if (!lock.elsewhere && under) {
+    step = {under, true, false, true, ended, false};
+  }
+  if (ended) lock = {};
+  return step;
 }
 
 }

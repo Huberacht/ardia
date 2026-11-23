@@ -139,6 +139,71 @@ int main() {
     CHECK(KeptWithin(1500, 200, 1232, 480, 0, 1512) == 1412);
     CHECK(KeptWithin(-320, 200, -200, 480, 0, 1512) == -100);
   }
+  {
+    const Window pip{40, 0, {1000, 16, 480, 270}}, docPip{41, 0, {100, 600, 400, 300}};
+    const std::vector<Window> windows{pip, docPip};
+    CHECK(WindowUnder(windows, {1200, 100}, 40) == 40);
+    CHECK(WindowUnder(windows, {200, 700}, 41) == 41);
+    CHECK(WindowUnder(windows, {1200, 100}, 7) == 0);
+    CHECK(WindowUnder(windows, {700, 500}, 7) == 0);
+    CHECK(WindowUnder(windows, {1200, 100}, 0) == 40);
+    CHECK(WindowUnder(windows, {1480, 100}, 40) == 0);
+    CHECK(WindowUnder(windows, {1000, 16}, 40) == 40);
+    CHECK(WindowUnder({}, {1200, 100}, 40) == 0);
+    const std::vector<Window> pinching{{40, 90, {1000, 16, 480, 270}}};
+    CHECK(WindowUnder(pinching, {1200, 100}, 90) == 40);
+    CHECK(WindowUnder(pinching, {1200, 100}, 40) == 40);
+    CHECK(WindowUnder(pinching, {200, 100}, 90) == 0);
+    const std::vector<Window> overlapping{{50, 0, {1100, 50, 300, 200}}, pip};
+    CHECK(WindowUnder(overlapping, {1200, 100}, 50) == 50);
+    CHECK(WindowUnder(overlapping, {1200, 100}, 40) == 40);
+  }
+  {
+    PinchLock lock;
+    PinchStep began = StepPinch(lock, Phase::Began, 40, true);
+    CHECK(began.window == 40 && began.consume && began.begin && began.apply && !began.end);
+    PinchStep drifted = StepPinch(lock, Phase::Changed, 0, true);
+    CHECK(drifted.window == 40 && drifted.consume && drifted.apply && !drifted.begin && !drifted.end);
+    PinchStep elsewhere = StepPinch(lock, Phase::Changed, 41, true);
+    CHECK(elsewhere.window == 40);
+    PinchStep ended = StepPinch(lock, Phase::Ended, 0, true);
+    CHECK(ended.window == 40 && ended.consume && ended.apply && ended.end);
+    CHECK(lock.window == 0 && !lock.owned && !lock.elsewhere);
+  }
+  {
+    PinchLock lock;
+    PinchStep began = StepPinch(lock, Phase::Began, 0, false);
+    CHECK(!began.consume && began.window == 0);
+    PinchStep ontoPip = StepPinch(lock, Phase::Changed, 40, false);
+    CHECK(!ontoPip.consume && ontoPip.window == 0);
+    PinchStep ended = StepPinch(lock, Phase::Ended, 40, false);
+    CHECK(!ended.consume && ended.window == 0);
+    PinchStep next = StepPinch(lock, Phase::Began, 40, false);
+    CHECK(next.window == 40 && next.begin);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    PinchStep hidden = StepPinch(lock, Phase::Changed, 0, false);
+    CHECK(hidden.window == 40 && hidden.consume && hidden.cancel && !hidden.apply && !hidden.end);
+    PinchStep after = StepPinch(lock, Phase::Changed, 41, true);
+    CHECK(after.consume && after.window == 0 && !after.apply && !after.cancel);
+    PinchStep ended = StepPinch(lock, Phase::Ended, 41, true);
+    CHECK(ended.consume && ended.window == 0 && !ended.end);
+    CHECK(!lock.owned);
+  }
+  {
+    PinchLock lock;
+    PinchStep loose = StepPinch(lock, Phase::Changed, 40, false);
+    CHECK(loose.window == 40 && loose.consume && loose.apply && !loose.begin);
+    PinchStep none = StepPinch(lock, Phase::None, 0, false);
+    CHECK(!none.consume && none.window == 0);
+    PinchStep phaseless = StepPinch(lock, Phase::None, 40, false);
+    CHECK(phaseless.window == 40 && phaseless.apply && !phaseless.end);
+    StepPinch(lock, Phase::Began, 40, true);
+    PinchStep restarted = StepPinch(lock, Phase::Began, 41, true);
+    CHECK(restarted.window == 41 && restarted.begin && lock.window == 41);
+  }
   if (failures) return std::printf("%d failed\n", failures), 1;
   std::printf("pip-zoom: all passed\n");
   return 0;

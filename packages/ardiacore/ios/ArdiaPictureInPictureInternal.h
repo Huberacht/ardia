@@ -179,10 +179,15 @@ typedef NS_ENUM(NSInteger, ArdiaPiPEdge) { ArdiaPiPEdgeNone = 0, ArdiaPiPEdgeLef
 - (void)runButtonSelfTest:(NSString *)button;
 - (void)runHoverSelfTest;
 - (void)devMouse:(NSArray<NSString *> *)args;
+- (NSString *)devMagnify:(NSArray<NSString *> *)args;
 @end
 
 @interface ArdiaPiPZoom : NSObject
 + (BOOL)handle:(NSEvent *)event;
++ (BOOL)handleFromOtherApp:(NSEvent *)event;
++ (BOOL)anyShowing;
++ (BOOL)zooms:(NSWindow *)window;
++ (NSWindow *)windowUnder:(NSPoint)pointer;
 + (BOOL)beginEdgeResize:(NSWindow *)window event:(NSEvent *)event;
 + (BOOL)continueEdgeResize:(NSEvent *)event;
 + (void)devPinch:(NSWindow *)window args:(NSArray<NSString *> *)args;
@@ -211,6 +216,8 @@ void ActivateWithOnlyPictureInPicture(ArdiaPiPController *controller, BOOL move)
 BOOL ActiveOnlyForPictureInPicture();
 BOOL ThrowEnabled();
 NSPoint PointerOf(NSEvent *event);
+void PinchFromOtherApp(NSEvent *event);
+BOOL FollowsPinchesFromOtherApps();
 ardia_pip_throw::Rect ThrowRect(NSRect r);
 int ScreenIndex(NSScreen *screen);
 std::vector<ardia_pip_throw::Screen> ThrowScreens();
