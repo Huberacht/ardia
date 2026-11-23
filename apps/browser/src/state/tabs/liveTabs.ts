@@ -24,8 +24,7 @@ let rootGroupOfTab = new Map<string, TabGroup>();
 function rootGroupsByTab(groups: BrowserState["groups"]): Map<string, TabGroup> {
   if (groups === indexedGroups) return rootGroupOfTab;
   const innermost = new Map<string, { id: string; depth: number }>();
-  for (const id in groups) {
-    const g = groups[id]!;
+  for (const g of Object.values(groups)) {
     const depth = g.parentId ? depthOf(groups, g.id) : 0;
     for (const tabId of g.tabIds) {
       const best = innermost.get(tabId);
@@ -200,15 +199,18 @@ export function groupStep(s: BrowserState, strip: StripState, bound: GroupBindin
   const tokenOf = (id: string) => tokens.get(id);
   const strays = tabs.filter((t) => t.group && t.group !== (chromeGroupOf(s, t.key) ? tokenOf(chromeGroupOf(s, t.key)!.id) : undefined));
   if (strays.length) return { keys: strays.map((t) => t.key), group: null };
-  const members = new Map<TabGroup, Keyed[]>();
+  const roots = new Set<TabGroup>();
+  const members = new Map<string, Keyed[]>();
   for (const t of tabs) {
     const g = chromeGroupOf(s, t.key);
     if (!g) continue;
-    const list = members.get(g);
+    roots.add(g);
+    const list = members.get(g.id);
     if (list) list.push(t);
-    else members.set(g, [t]);
+    else members.set(g.id, [t]);
   }
-  for (const [g, inGroup] of members) {
+  for (const g of roots) {
+    const inGroup = members.get(g.id)!;
     const keys = inGroup.map((t) => t.key);
     const token = tokenOf(g.id);
     const look = { title: g.name, color: chromeColor(g.color), collapsed: g.collapsed };

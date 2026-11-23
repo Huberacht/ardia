@@ -125,3 +125,44 @@ test("groupStep reads each group's member list once per groups object, however m
   groupStep(counted, strip, bound);
   assert.equal(reads, first, "a second step over the same groups reads no member list again");
 });
+
+function fixture(n) {
+  S().hydrate({});
+  const w = S().createWindow({ url: "t0.com" });
+  for (let i = 1; i < n; i++) S().newTab(w, { url: `t${i}.com`, background: true });
+  return { w, s: S(), ids: S().windows[w].tabIds };
+}
+
+const group = (s, w, id, tabIds, extra = {}) => ({ id, name: id, icon: null, color: "blue", windowId: w, profileId: s.windows[w].profileId, collapsed: false, pinned: false, tabIds, createdAt: 0, ...extra });
+
+const stripOf = (s, w, groupOfKey, groups) => ({
+  strip: 1, window: 1, appWindow: w, profile: "", activePickedOnClose: false, groups,
+  tabs: s.windows[w].tabIds.map((key, index) => ({ key, browser: index + 1, index, active: index === 0, pinned: false, group: groupOfKey(key) })),
+});
+
+test("a tab in a nested group is placed by its root group, and a root member Chrome left out is sent back", () => {
+  const { w, s, ids } = fixture(6);
+  const groups = { outer: group(s, w, "outer", ids.slice(0, 4)), inner: group(s, w, "inner", ids.slice(1, 3), { parentId: "outer" }) };
+  const state = { ...s, groups };
+  const bound = new Map([["cg-outer", "outer"]]);
+  const look = [{ id: "cg-outer", title: "outer", color: "blue", collapsed: false }];
+  const strip = stripOf(state, w, (key) => (ids.slice(0, 4).includes(key) && key !== ids[2] ? "cg-outer" : null), look);
+  const step = groupStep(state, strip, bound);
+  assert.deepEqual(step, { keys: [ids[2]], group: "cg-outer" });
+  assert.deepEqual(step, referenceGroupStep(state, strip, bound));
+});
+
+test("distinct root groups that share an id gather their members by id, as the scan over every group did", () => {
+  const { w, s, ids } = fixture(4);
+  const groups = {
+    c1: group(s, w, "c1", [ids[1]], { parentId: "r1" }),
+    c2: group(s, w, "c2", [ids[2]], { parentId: "r2" }),
+    r1: group(s, w, "root", [ids[1]]),
+    r2: group(s, w, "root", [ids[2]]),
+  };
+  const state = { ...s, groups };
+  const strip = stripOf(state, w, () => null, []);
+  const step = groupStep(state, strip, new Map());
+  assert.deepEqual(step.keys, [ids[1], ids[2]]);
+  assert.deepEqual(step, referenceGroupStep(state, strip, new Map()));
+});
