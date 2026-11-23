@@ -1,6 +1,9 @@
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { withoutFragment } from "../../lib/url";
-import { keyedWatch, recordWatch, useKeyed } from "../browser/keyedWatch";
+import { keyedWatch, recordWatch, useKeyed, watchWindowRecord } from "../browser/keyedWatch";
+import { WindowContext } from "../browser/hooks";
+import { useBrowser } from "../browser/store";
+import { privateViewer } from "./faviconKeys";
 import { changedIds } from "../browser/changes";
 import type { IconTheme } from "../../platform/favicons";
 import { askFaviconTheme, EMPTY_ICONS, lookupOrder, resolveFavicon, useFavicons, watchMissingFavicon, type ResolvedFavicon } from "./favicons";
@@ -87,6 +90,11 @@ export function useFavicon(url: string, src?: string | null, profileId?: string)
   useEffect(() => (missing ? watchMissingFavicon({ url, src, profileId }) : undefined), [missing, order, profileId, url, src]);
   const split = key?.indexOf(" ") ?? -1;
   return key ? { profileId: key.slice(0, split), uri: key.slice(split + 1) } : null;
+}
+
+export function usePrivateViewer(): string | undefined {
+  const windowId = useContext(WindowContext) ?? "";
+  return useKeyed(watchWindowRecord, windowId, () => privateViewer(useBrowser.getState().windows[windowId]?.profileId));
 }
 
 export function useFaviconTheme(url: string, src?: string | null, profileId?: string): IconTheme | null | undefined {

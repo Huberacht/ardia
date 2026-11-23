@@ -984,7 +984,9 @@ is plain Chromium.
 `search.suggest`, `search.stopSuggest` and `extensions.loadHealth` are forwarded to the engine
 (`ac_search_suggest`, `ac_search_suggest_stop`, `ac_extensions_load_health`) since `windows-engine-20261112-2`. When the
 Mac forwards a call the shipped Windows engine lacks, `forwarded.json` lists it under `awaitingEngine` and Windows
-answers it in TypeScript until a new engine build has it; none waits now.
+answers it in TypeScript until a new engine build has it. `favicons.peek` (`ac_favicons_peek`, a private window's
+read-only lookup in a regular profile's icon store, #3837) waits now: until then Windows answers it with `ac_favicons_get`,
+which marks the icon used in that profile's favicon database as main did.
 
 Not in `forwarded.json` but also engine work: media next and previous track. The media controls send `mediaCommand`
 `next` or `previous` (`state/media/media.ts`), the Windows view passes it on as `tab.call`, and `MediaCommand` in
