@@ -22,6 +22,17 @@ function passwordManagerLines(m: PluginManifest, context: ConsentContext): Conse
   return lines;
 }
 
+const FULL_CONTROL_REACH = "every tab and page, your signed-in sites and their cookies, and the files you download and upload";
+
+export function fullControlLine(m: PluginManifest): ConsentLine | null {
+  if (m.permissions.control) return { icon: "hand.raised", text: `Lets any program you run fully control Ardia while control is on in Settings › Advanced: ${FULL_CONTROL_REACH}` };
+  if (!m.programs.length) return null;
+  const names = m.programs.map((p) => p.name).join(" and ");
+  return { icon: "hand.raised", text: `${names} ${m.programs.length === 1 ? "runs" : "run"} as you, so while control is on in Settings › Advanced ${m.programs.length === 1 ? "it" : "they"} can fully control Ardia: ${FULL_CONTROL_REACH}` };
+}
+
+export const FULL_CONTROL_SUMMARY = "Can fully control Ardia";
+
 function runtimeLines(m: PluginManifest): ConsentLine[] {
   const lines: ConsentLine[] = [];
   if (m.main) lines.push({ icon: "shippingbox", text: m.activationEvents.some((e) => e === "*" || e === "onStartupFinished" || e.startsWith("onEvent:")) ? "Runs its code in the background, in Ardia's plugin sandbox" : "Runs its code in Ardia's plugin sandbox, starting the first time you use it and stopping when you quit Ardia or turn the plugin off" });
@@ -46,7 +57,6 @@ function networkLines(m: PluginManifest): ConsentLine[] {
 function permissionLines(m: PluginManifest): ConsentLine[] {
   const p = m.permissions;
   const lines: ConsentLine[] = [];
-  if (p.control) lines.push({ icon: "hand.raised", text: "Lets any program you run drive your tabs and pages, with your logins, while control is on in Settings › Advanced" });
   lines.push(...networkLines(m));
   if (p.tabs) lines.push({ icon: "square.on.square", text: `${p.fullUrls ? "Sees the full address and title of your tabs" : "Sees the address (without what follows ? or #) and title of your tabs"}${p.tabs === "write" ? ", and can open, close and switch tabs" : ""}` });
   if (p.workspace) lines.push({ icon: "square.grid.2x2", text: "Sees and rearranges every window, tab and group: it can move, close and group your tabs" });
@@ -63,7 +73,8 @@ export type ConsentContext = { controlOff?: boolean; official?: boolean; movesPr
 export const CONTROL_OFF_LINE = "Control is off, as you set it, and installing this leaves it off. To let programs drive Ardia, turn on “Let programs control Ardia” in Settings › Advanced";
 
 export function consentLines(m: PluginManifest, context: ConsentContext = {}): ConsentLine[] {
-  const lines: ConsentLine[] = [...runtimeLines(m), ...permissionLines(m)];
+  const control = fullControlLine(m);
+  const lines: ConsentLine[] = [...(control ? [control] : []), ...runtimeLines(m), ...permissionLines(m)];
   if (m.permissions.control && context.controlOff) lines.push({ icon: "hand.raised.slash", text: CONTROL_OFF_LINE });
   const defaults = Object.keys(m.settings.defaults);
   if (defaults.length) lines.push({ icon: "slider.horizontal.3", text: `Changes these settings while it's on: ${defaults.join(", ")}` });

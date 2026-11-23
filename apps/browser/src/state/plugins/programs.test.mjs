@@ -382,12 +382,24 @@ test("a plugin you added has its programs removed with it", async () => {
 test("what the command line gets, as Settings shows it", () => {
   const texts = consentLines(readManifest(CLI).manifest).map((l) => l.text);
   assert.deepEqual(texts, [
+    "Lets any program you run fully control Ardia while control is on in Settings › Advanced: every tab and page, your signed-in sites and their cookies, and the files you download and upload",
     "Adds ardia to your PATH. It runs as you, outside Ardia's sandbox",
     "After updates, runs ardia skills install --auto, ardia skills refresh",
     "Adds ~/.local/bin to your PATH in your shell's login file",
-    "Lets any program you run drive your tabs and pages, with your logins, while control is on in Settings › Advanced",
-  ], "four honest lines: the program, what runs after updates, the PATH line and control");
+  ], "four honest lines, full control first: control, the program, what runs after updates and the PATH line");
   assert.ok(!texts.some((t) => t.includes("in the background")), "a program-only plugin runs nothing in the background");
+});
+
+test("a plugin whose programs run as you says first that they can fully control Ardia, without asking for control", async () => {
+  const { fullControlLine, FULL_CONTROL_SUMMARY } = await import("./consent.ts");
+  const other = readManifest(OTHER).manifest;
+  const lines = consentLines(other).map((l) => l.text);
+  assert.equal(lines[0], "other-tool runs as you, so while control is on in Settings › Advanced it can fully control Ardia: every tab and page, your signed-in sites and their cookies, and the files you download and upload");
+  assert.equal(fullControlLine(other)?.text, lines[0]);
+  assert.equal(FULL_CONTROL_SUMMARY, "Can fully control Ardia");
+  const sandboxed = readManifest(JSON.stringify({ manifest: 1, name: "boxed", title: "Boxed", main: "dist/index.js", permissions: { tabs: "read" } })).manifest;
+  assert.equal(fullControlLine(sandboxed), null, "a plugin that only runs in Ardia's sandbox can't read the control token");
+  assert.ok(!consentLines(sandboxed).some((l) => l.text.includes("fully control")));
 });
 
 test("the official catalogue, the onboarding picks and the anchor aliases come from the pin file", async () => {
