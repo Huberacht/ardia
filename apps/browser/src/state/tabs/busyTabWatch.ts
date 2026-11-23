@@ -151,7 +151,7 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
         const asked = consentToken();
         void stillBusyIn(pid, started, tabIds, asked, wanted).then(async (still) => {
           if (!still.length) return noteBusyTab("busy_tab_sleep_moot", asked);
-          const results = await Promise.all(still.map((id) => sleepAsked(id, wanted)));
+          const results = await Promise.all(still.map((id) => sleepAsked(id, () => wanted() && eligible(useBrowser.getState(), id, clock()))));
           if (results.every((r) => r.outcome === "dropped")) return noteBusyTab("busy_tab_sleep_moot", asked);
           const asleep = still.filter((_, i) => results[i]!.outcome === "asleep");
           const kept = still.filter((_, i) => results[i]!.outcome === "kept");
@@ -166,6 +166,8 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
       title: "Keep Running",
       run: () => {
         if (!wanted()) return;
+        const now = useBrowser.getState();
+        if (tabIds.some((id) => !hasTab(now, id) || siteToKeepActive(now.tabs[id]!.url) !== site)) return;
         noteBusyTab("busy_tab_kept_running", consentToken());
         if (!site) {
           for (const id of tabIds) keptTabs.add(id);

@@ -622,3 +622,37 @@ test("a tab counts as hidden from the first tick that saw it hidden, so it never
   assert.equal(globalThis.busyTest.toasts.length, 1, "warned once two full minutes from the first tick that saw it hidden have passed");
   webviews.clear();
 });
+
+test("a site kept active while Sleep waits on Chrome stops the fallback discard", async () => {
+  const start = Date.now() + 10000 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  let answer;
+  const calls = [];
+  webviews.set(hidden, { sleepIfHidden: () => (calls.push("sleepIfHidden"), new Promise((resolve) => (answer = resolve))), discard: async () => (calls.push("discard"), "discarded") });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 101, tabIds: [hidden] }];
+  await burn(start, 2, { 101: 1 });
+  globalThis.busyTest.toasts[0].action.run();
+  await settle();
+  assert.deepEqual(calls, ["sleepIfHidden"]);
+  S().updateSettings({ keepActiveSites: ["miner.example"] });
+  answer([25]);
+  await settle();
+  assert.deepEqual(calls, ["sleepIfHidden"], "the user protected the site meanwhile, so it isn't discarded past Chrome's automatic protection");
+  webviews.clear();
+});
+
+test("Keep Running does nothing once the warned tab has gone to another site", async () => {
+  const start = Date.now() + 10500 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 102, tabIds: [hidden] }];
+  await burn(start, 2, { 102: 1 });
+  const warning = globalThis.busyTest.toasts[0];
+  S().updateTab(hidden, { url: "https://elsewhere.example/" });
+  warning.secondary.run();
+  await settle();
+  assert.deepEqual(S().settings.keepActiveSites, [], "neither the old site, which the tab left, nor the new one is saved");
+  assert.equal(globalThis.busyTest.toasts.length, 1, "and nothing is confirmed");
+  webviews.clear();
+});
