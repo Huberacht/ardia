@@ -37,6 +37,12 @@ let mountedAt: number | null = null;
 let timers: ReturnType<typeof setTimeout>[] = [];
 let stops: (() => void)[] = [];
 let now = () => Date.now();
+let restored: string[] | null = null;
+let jsStart = jsStartedAt;
+
+export const noteRestoredWindows = (windowIds: string[]) => void (restored = [...windowIds]);
+
+export const noteRestoredWindowsNow = () => noteRestoredWindows(useBrowser.getState().windowOrder);
 
 export function releaseLaunchRows(windowId: string, by: LaunchRowsRelease | null) {
   if (!windows.delete(windowId)) return;
@@ -65,15 +71,15 @@ function watch() {
       const s = useBrowser.getState();
       for (const [windowId, held] of windows) {
         if (held.tab !== id) continue;
-        if (!s.windows[windowId] || s.tabs[id]?.windowId !== windowId) held.tab = null;
+        if (!s.windows[windowId] || s.tabs[id]?.windowId !== windowId) releaseLaunchRows(windowId, null);
         else if (live.isLoading) held.loading = true;
         else if (held.loading) releaseLaunchRows(windowId, "loaded");
       }
     }),
-    useBrowser.subscribeTo(["windows"], (s) => {
+    useBrowser.subscribeTo(["windows", "tabs"], (s) => {
       for (const [windowId, held] of windows) {
         const w = s.windows[windowId];
-        if (!w) releaseLaunchRows(windowId, null);
+        if (!w || (held.tab && s.tabs[held.tab]?.windowId !== windowId)) releaseLaunchRows(windowId, null);
         else if (w.profileId !== held.profileId) releaseLaunchRows(windowId, "profile");
       }
     }),
@@ -83,11 +89,11 @@ function watch() {
 export function startLaunchRows() {
   if (useLaunchRows.getState().started) return;
   startedAt = now();
-  const late = startedAt - jsStartedAt > LATE_MS;
+  const late = startedAt - jsStart > LATE_MS;
   const s = useBrowser.getState();
   const held: Record<string, true> = {};
   if (!late) {
-    for (const windowId of s.windowOrder) {
+    for (const windowId of restored ?? s.windowOrder) {
       const w = s.windows[windowId];
       if (!w || w.kind === "small") continue;
       const tab = launchTabOf(s, windowId);
@@ -145,6 +151,8 @@ export function resetLaunchRowsForTests(clock?: () => number) {
   startedAt = mountedAt = null;
   firstRelease = null;
   laterRows = growing = cancelled = 0;
+  restored = null;
   now = clock ?? (() => Date.now());
+  jsStart = now();
   useLaunchRows.setState({ started: false, held: {} });
 }

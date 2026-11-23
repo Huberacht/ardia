@@ -205,3 +205,31 @@ test("a restored window's list that mounts after the hold started still joins it
   rows.releaseLaunchRows("b", "scroll");
   assert.equal(rows.joinsLaunchRows("b"), false);
 });
+
+test("closing the watched tab while its window stays open lets the rows in at once, with no reason, even with no live change", () => {
+  hydrate({ urls: { a: undefined, b: undefined } });
+  rows.startLaunchRows();
+  S().closeTab("at0");
+  assert.equal(rows.launchRowsHolding("a"), false);
+  assert.equal(rows.launchRowsHolding("b"), true);
+  advance(rows.HOLD_MS);
+  assert.equal(rows.launchRowsReport().release, "deadline", "only the other window waited for the deadline");
+});
+
+test("the watched tab moving to another window lets its old window's rows in, with no reason", () => {
+  hydrate({ urls: { a: undefined, b: undefined } });
+  rows.startLaunchRows();
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, at0: { ...s.tabs.at0, windowId: "b" } } }));
+  assert.equal(rows.launchRowsHolding("a"), false);
+  assert.equal(rows.launchRowsReport().release, null);
+});
+
+test("only the windows the session restored can hold, even one created before the hold starts", () => {
+  hydrate({ urls: { a: undefined } });
+  rows.noteRestoredWindows(S().windowOrder);
+  const late = S().createWindow({ url: "https://late.example/" });
+  rows.startLaunchRows();
+  assert.equal(rows.launchRowsHolding("a"), true);
+  assert.equal(rows.launchRowsHolding(late), false);
+  assert.equal(rows.joinsLaunchRows(late), false);
+});

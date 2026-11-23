@@ -128,8 +128,8 @@ export function sceneLayout({ top = 200, x = LEFT, width = WIDTH } = {}) {
   return api;
 }
 
-export function mount({ entries, regions = {}, root = frameAt(0, 0, 200, 900), viewport = frameAt(0, 100, 200, 700), scrollY = 0, tilesFixed = true, tilesRoom = Infinity, splitHoldMs = 0, Controller = DragController }) {
-  const c = new Controller();
+export function mount({ entries, regions = {}, root = frameAt(0, 0, 200, 900), viewport = frameAt(0, 100, 200, 700), scrollY = 0, tilesFixed = true, tilesRoom = Infinity, splitHoldMs = 0 }) {
+  const c = new DragController();
   const ghosts = [];
   c.setGhost = (g) => ghosts.push(g);
   c.root = fakeView(root);

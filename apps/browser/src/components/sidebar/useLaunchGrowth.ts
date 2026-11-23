@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { View } from "react-native";
 import type { DragController } from "./dragController";
-import { RowAwareDragController } from "./rowAwareDragController";
 import { joinsLaunchRows, launchRowsHolding, launchRowsStarted, noteLaunchRowsCancelled, noteLaunchRowsDeferred, noteLaunchRowsMounted, releaseLaunchRows, startLaunchRows, useLaunchRowsHolding } from "../../state/sidebar/launchRows";
 
 type LaunchGrowthInput = { lazy: boolean; current: boolean; total: number; shownRows: number; controller: DragController | undefined };
@@ -33,7 +32,7 @@ export function useLaunchGrowth(windowId: string, { lazy, current, total, shownR
   }, []);
 
   useLayoutEffect(() => {
-    if (!(controller instanceof RowAwareDragController) || !holding) return;
+    if (!controller || !holding) return;
     const release = () => releaseLaunchRows(windowId, "drag");
     controller.beforeMeasure = release;
     return () => {
@@ -41,9 +40,6 @@ export function useLaunchGrowth(windowId: string, { lazy, current, total, shownR
     };
   }, [controller, holding, windowId]);
 
-  useEffect(() => {
-    if (launch && controller instanceof RowAwareDragController && controller.active) controller.rowsArrived();
-  }, [shownRows]);
 
   useEffect(() => {
     if (shownRows < total || !counted.current) return;
