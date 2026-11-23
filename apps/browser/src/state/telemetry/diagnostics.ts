@@ -86,7 +86,7 @@ export async function recordContext(): Promise<SavedContext | null> {
   if (!consent) return null;
   void controlStatus().then((status) => counted(consent, () => {
     noteDragsEnded(status.dragsEnded);
-    noteEngineCliTotals(status);
+    noteEngineCliTotals(status, consent);
   }), () => {});
   const epoch = contextEpoch;
   const [sample, pressure] = await Promise.all([diagnosticsSample().catch(() => ({ footprintMB: undefined, freeDiskGB: undefined })), memoryPressure()]);
