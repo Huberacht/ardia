@@ -94,8 +94,17 @@ fn webkit_dates_follow_swift_parsing_and_linux_range() {
     );
 }
 
+fn node_count(node: &Value) -> usize {
+    node["children"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|child| 1 + node_count(child))
+        .sum()
+}
+
 #[test]
-fn the_node_budget_counts_finished_nodes_like_linux() {
+fn the_node_budget_reserves_each_node_before_its_children() {
     let limits = Limits {
         max_nodes: 3,
         ..Limits::default()
@@ -109,10 +118,38 @@ fn the_node_budget_counts_finished_nodes_like_linux() {
     assert_eq!(
         tree(&node),
         json!({"type":"folder","title":"Bookmarks","children":[{"type":"folder","title":"Bookmarks Bar","role":"toolbar",
-            "children":[{"type":"folder","title":"F","children":[
-                {"type":"url","title":"","url":"https://1/"},{"type":"url","title":"","url":"https://2/"},
-                {"type":"url","title":"","url":"https://3/"}]}]}]})
+            "children":[{"type":"folder","title":"F","children":[{"type":"url","title":"","url":"https://1/"}]}]}]})
     );
+}
+
+#[test]
+fn the_node_budget_is_a_hard_ceiling_under_nested_folders() {
+    let mut text = String::from(r#"{"roots":{"bookmark_bar":{"type":"folder","children":["#);
+    let mut tail = String::from("]}}}");
+    for level in 0..10 {
+        for link in 0..5 {
+            text.push_str(&format!(r#"{{"type":"url","url":"https://{level}/{link}"}},"#));
+        }
+        text.push_str(r#"{"type":"folder","children":["#);
+        tail.insert_str(0, "]}");
+    }
+    text.push_str(r#"{"type":"url","url":"https://deepest/"}"#);
+    text.push_str(&tail);
+    for max_nodes in [2, 5, 6, 7, 13, 30, 60, 61, 62, 63, 100] {
+        let limits = Limits {
+            max_nodes,
+            ..Limits::default()
+        };
+        let node = chromium_bookmarks_with(ProfileFile::Bytes(text.as_bytes()), ProfileFile::Missing, &limits).unwrap();
+        let count = node_count(&tree(&node));
+        assert_eq!(count, max_nodes.min(62), "max_nodes {max_nodes}");
+    }
+    let lone_root = Limits {
+        max_nodes: 1,
+        ..Limits::default()
+    };
+    let node = chromium_bookmarks_with(ProfileFile::Bytes(text.as_bytes()), ProfileFile::Missing, &lone_root).unwrap();
+    assert_eq!(node_count(&tree(&node)), 0);
 }
 
 #[test]

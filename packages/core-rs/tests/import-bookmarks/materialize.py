@@ -33,8 +33,7 @@ def materialize(spec):
         data = links(spec['links']).encode()
     else:
         raise ValueError(f'unknown input {sorted(spec)}')
-    if spec.get('bom'):
-        data = BOM + data
+    data = BOM * int(spec.get('bom', 0)) + data
     if 'padTo' in spec:
         if len(data) > spec['padTo']:
             raise ValueError(f'input is already {len(data)} bytes, over padTo {spec["padTo"]}')

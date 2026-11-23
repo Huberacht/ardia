@@ -127,28 +127,31 @@ fn node(json: &Map<String, Value>, depth: usize, limits: &Limits, nodes: &mut us
     }
     let title = text(json, "name").unwrap_or_default();
     let date_added = text(json, "date_added").and_then(from_webkit);
-    let made = match text(json, "type") {
+    match text(json, "type") {
         Some("url") => {
             let url = text(json, "url").filter(|url| !url.is_empty())?;
-            BookmarkNode::link(title, url, date_added)
+            *nodes += 1;
+            Some(BookmarkNode::link(title, url, date_added))
         }
         Some("folder") => {
+            *nodes += 1;
             let mut children = Vec::new();
             if depth < limits.max_folder_depth {
                 if let Some(list) = json.get("children").and_then(Value::as_array) {
                     for child in list.iter().filter_map(Value::as_object) {
+                        if *nodes >= limits.max_nodes {
+                            break;
+                        }
                         if let Some(made) = node(child, depth + 1, limits, nodes) {
                             children.push(made);
                         }
                     }
                 }
             }
-            BookmarkNode::folder(title, children, date_added)
+            Some(BookmarkNode::folder(title, children, date_added))
         }
-        _ => return None,
-    };
-    *nodes += 1;
-    Some(made)
+        _ => None,
+    }
 }
 
 fn text<'a>(json: &'a Map<String, Value>, key: &str) -> Option<&'a str> {

@@ -61,9 +61,12 @@ pub fn materialize(spec: &Value) -> Vec<u8> {
     } else {
         panic!("unknown input {spec}");
     };
-    if spec.get("bom").and_then(Value::as_bool) == Some(true) {
-        data.splice(0..0, *b"\xEF\xBB\xBF");
-    }
+    let boms = match spec.get("bom") {
+        Some(Value::Bool(true)) => 1,
+        Some(count) => count.as_u64().unwrap_or(0) as usize,
+        None => 0,
+    };
+    data.splice(0..0, b"\xEF\xBB\xBF".repeat(boms));
     if let Some(size) = spec.get("padTo").and_then(Value::as_u64) {
         let size = size as usize;
         assert!(

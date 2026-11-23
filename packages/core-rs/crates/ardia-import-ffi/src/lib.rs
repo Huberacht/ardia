@@ -55,19 +55,18 @@ unsafe fn profile_file<'a>(file: *const ardia_import_bytes) -> Option<ProfileFil
     if file.is_null() {
         return Some(ProfileFile::Missing);
     }
-    let bytes = unsafe { file.read() };
-    if bytes.len > ARDIA_IMPORT_MAX_INPUT_BYTES {
+    let len = unsafe { ptr::addr_of!((*file).len).read() };
+    if len > ARDIA_IMPORT_MAX_INPUT_BYTES {
         return Some(ProfileFile::Oversized);
     }
-    if bytes.len == 0 {
+    if len == 0 {
         return Some(ProfileFile::Bytes(&[]));
     }
-    if bytes.ptr.is_null() {
+    let data = unsafe { ptr::addr_of!((*file).ptr).read() };
+    if data.is_null() {
         return None;
     }
-    Some(ProfileFile::Bytes(unsafe {
-        slice::from_raw_parts(bytes.ptr, bytes.len)
-    }))
+    Some(ProfileFile::Bytes(unsafe { slice::from_raw_parts(data, len) }))
 }
 
 fn hand_over(data: Vec<u8>) -> ardia_import_buf {

@@ -16,9 +16,9 @@ const textOf = (bytes) => {
   let body = bytes;
   if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) body = body.subarray(3);
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(body);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
   } catch {
-    return new TextDecoder("windows-1252").decode(body);
+    return new TextDecoder("windows-1252", { ignoreBOM: true }).decode(body);
   }
 };
 const host = {

@@ -151,6 +151,29 @@ fn an_over_cap_length_is_refused_before_the_pointer_is_read() {
 }
 
 #[test]
+fn the_pointer_field_is_not_read_for_empty_or_oversized_lengths() {
+    let cases = [
+        (0, false, ardia_import_status::Unreadable),
+        (ARDIA_IMPORT_MAX_INPUT_BYTES + 1, false, ardia_import_status::TooLarge),
+        (0, true, ardia_import_status::Ok),
+        (ARDIA_IMPORT_MAX_INPUT_BYTES + 1, true, ardia_import_status::Ok),
+    ];
+    for (len, as_account, want) in cases {
+        let mut file = MaybeUninit::<ardia_import_bytes>::uninit();
+        unsafe { ptr::addr_of_mut!((*file.as_mut_ptr()).len).write(len) };
+        let local = bytes(SIMPLE);
+        let (bookmarks, account) = match as_account {
+            true => (ptr::from_ref(&local), file.as_ptr()),
+            false => (file.as_ptr(), ptr::null()),
+        };
+        let mut out = MaybeUninit::<ardia_import_buf>::uninit();
+        let status = unsafe { ardia_import_chromium_bookmarks(bookmarks, account, out.as_mut_ptr()) };
+        assert_eq!(status, want, "len {len}, account {as_account}");
+        take(unsafe { out.assume_init() });
+    }
+}
+
+#[test]
 fn freeing_null_or_an_empty_slot_does_nothing() {
     unsafe { ardia_import_buf_free(ptr::null_mut()) };
     let mut empty = ardia_import_buf {

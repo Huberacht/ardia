@@ -60,19 +60,18 @@ fn the_committed_header_is_current_and_has_no_comments() {
 }
 
 #[test]
-fn every_import_name_is_prefixed_and_none_clashes_with_ardia_core() {
+fn every_import_name_is_prefixed_and_none_clashes_with_the_other_headers() {
     let import = identifiers(&include("ardia_import.h"));
-    let core = identifiers(&include("ardia_core.h"));
     let unprefixed: Vec<_> = import
         .iter()
         .filter(|name| !name.starts_with("ardia_import_") && !name.starts_with("ARDIA_IMPORT_"))
         .collect();
     assert!(unprefixed.is_empty(), "{unprefixed:?}");
-    let shared: Vec<_> = import.intersection(&core).collect();
-    assert!(
-        shared.is_empty(),
-        "ardia_import.h and ardia_core.h both define {shared:?}"
-    );
+    for other in ["ardia_core.h", "ardia_update.h"] {
+        let names = identifiers(&include(other));
+        let shared: Vec<_> = import.intersection(&names).collect();
+        assert!(shared.is_empty(), "ardia_import.h and {other} both define {shared:?}");
+    }
 }
 
 #[test]
