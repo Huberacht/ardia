@@ -509,7 +509,7 @@ NSArray<NSString *> *Strings(id value) {
   });
 }
 
-+ (void)removeAllowedHost:(NSString *)host completion:(void (^)(BOOL, NSString *))completion {
++ (void)removeAllowedHost:(NSString *)host completion:(void (^)(BOOL, BOOL, NSString *))completion {
   NSString *script = @"trusted().then((t) => {"
                       "  const host = %@;"
                       "  if (!t.whitelist.includes(host) || (t.whitelistDefault || []).includes(host)) return false;"
@@ -517,10 +517,12 @@ NSArray<NSString *> *Strings(id value) {
                       "})";
   completion = [completion copy];
   Call(kProfile, ScriptWith(script, @[ host.lowercaseString ]), ^(id removed, NSString *error) {
-    if (error) return completion(NO, error);
+    if (error) return completion(NO, NO, error);
     const BOOL done = [removed isKindOfClass:NSNumber.class] && [removed boolValue];
-    if (done) Publish(@{@"host" : host.lowercaseString, @"allowed" : @NO, @"exact" : @YES});
-    Changed(nil, ^(NSString *followError) { completion(done, followError); });
+    void (^followed)(NSString *) = ^(NSString *followError) { completion(done, followError != nil, followError); };
+    if (!done) return FollowDefault(nil, followed);
+    Publish(@{@"host" : host.lowercaseString, @"allowed" : @NO, @"exact" : @YES});
+    Changed(nil, followed);
   });
 }
 

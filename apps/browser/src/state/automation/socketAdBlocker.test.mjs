@@ -59,10 +59,13 @@ test("a removal another open profile didn't follow fails with a retry hint, and 
   const partial = await call("sites.blockAds", { site: "applovin.com" });
   assert.equal(partial.error?.code, "failed");
   assert.match(partial.error.message, /another open profile hasn't followed yet; run blockAds again/);
+  const failedAgain = await call("sites.blockAds", { site: "applovin.com" });
+  assert.equal(failedAgain.error?.code, "failed", "a retry the follower fails again still says to retry");
+  assert.match(failedAgain.error.message, /run blockAds again/);
   blocker.followerFails = false;
   const retry = await call("sites.blockAds", { site: "applovin.com" });
   assert.equal(retry.error?.code, "refused", "the default profile no longer lists it");
-  assert.deepEqual(blocker.removed, ["applovin.com", "applovin.com"], "the retry still asked the native call, which brings the other profiles in line");
+  assert.deepEqual(blocker.removed, ["applovin.com", "applovin.com", "applovin.com"], "every retry still asked the native call, which brings the other profiles in line");
 });
 
 test("a public suffix or IP address is refused, since it would trust sites run by others", async () => {

@@ -659,7 +659,7 @@ const fakeModules = {
       if (contentBlockerSites.unsupported) throw Object.assign(new Error("Unknown call"), { code: "ERR_UNKNOWN_CALL" });
       contentBlockerSites.removed.push(host);
       const removed = contentBlockerSites.allowed.delete(host);
-      if (contentBlockerSites.followerFails) throw Object.assign(new Error("a profile didn't follow"), { code: removed ? "ERR_PARTIAL" : "ERR_CONTENT_BLOCKER" });
+      if (contentBlockerSites.followerFails) throw Object.assign(new Error("a profile didn't follow"), { code: "ERR_PARTIAL" });
       return { removed };
     },
     state: () => ({ enabled: contentBlockerSites.enabled, version: "test", lists: [], allowedHosts: [...contentBlockerSites.allowed], stats: { enabled: contentBlockerSites.enabled, ready: !contentBlockerSites.unready, parseMs: 0, lookups: 0, averageLookupMicros: 0, maxLookupMicros: 0 } }),

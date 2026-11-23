@@ -34,8 +34,8 @@ public class ContentBlockerModule: Module {
       ArdiaContentBlocker.setAllowed(try args.bool("allowed"), host: try args.text("host"), completion: settled(reply))
     },
     "removeAllowed": { args, reply in
-      ArdiaContentBlocker.removeAllowed(host: try args.text("host")) { removed, error in
-        if let error { return reply.fail(removed ? "ERR_PARTIAL" : "ERR_CONTENT_BLOCKER", error) }
+      ArdiaContentBlocker.removeAllowed(host: try args.text("host")) { removed, followFailed, error in
+        if let error { return reply.fail(followFailed ? "ERR_PARTIAL" : "ERR_CONTENT_BLOCKER", error) }
         reply.ok(["removed": removed])
       }
     },
