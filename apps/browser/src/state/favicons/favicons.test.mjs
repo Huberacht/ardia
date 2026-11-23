@@ -29,6 +29,7 @@ const { WindowContext } = await import("../browser/hooks.ts");
 const { webviews } = await import("../../platform/webviews.ts");
 const { askFaviconAccent, useFaviconAccent, useFaviconAccents } = await import("./faviconAccent.ts");
 const { markAsked } = await import("./askedFavicons.ts");
+const { unheldIn } = await import("./privateLookups.ts");
 
 const waitFor = async (check) => {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -615,4 +616,17 @@ test("a private icon's pending theme and accent requests go at close, so a regul
     webviews.clear();
     stop();
   }
+});
+
+test("checking whether an icon is still held reuses one set until the icon caches change", () => {
+  const pages = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [`https://held-${i}.test/`, `data:image/png;base64,HELD${i}`]));
+  const profiles = Object.fromEntries(["a", "b", "c", "d"].map((id) => [id, { pages, srcs: {}, appearances: {} }]));
+  const first = unheldIn(profiles);
+  assert.equal(unheldIn(profiles), first, "the same cache state gives the same set");
+  const started = performance.now();
+  for (let i = 0; i < 300; i++) unheldIn(profiles)(`data:image/png;base64,HELD${i}`);
+  assert.ok(performance.now() - started < 50, "300 checks against 12,000 cached icons stay cheap");
+  assert.equal(first("data:image/png;base64,HELD7"), false);
+  assert.equal(first("data:image/png;base64,ELSEWHERE"), true);
+  assert.notEqual(unheldIn({ ...profiles }), first, "a new cache state is read again");
 });

@@ -14,7 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
-import { incognitoClosed, privateViewer, takeRequest, unheldBy } from "./privateLookups";
+import { incognitoClosed, privateViewer, takeRequest, unheldBy, unheldIn } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -316,7 +316,7 @@ export function watchMissingFavicon(w: Watcher) {
 const theming = new Map<string, symbol>();
 const privateIconListeners = new Set<(unheld: (uri: string) => boolean) => void>();
 
-export const faviconHeld = (uri: string) => !unheldBy(Object.values(useFavicons.getState().profiles))(uri);
+export const faviconHeld = (uri: string) => !unheldIn(useFavicons.getState().profiles)(uri);
 
 export function onPrivateIconsDropped(listener: (unheld: (uri: string) => boolean) => void) {
   privateIconListeners.add(listener);

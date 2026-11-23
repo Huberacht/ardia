@@ -18,6 +18,13 @@ export function unheldBy(kept: IconMaps[]): (uri: string) => boolean {
   return (uri) => !held.has(uri);
 }
 
+let lastHeld: { profiles: Record<string, IconMaps>; unheld: (uri: string) => boolean } | null = null;
+
+export function unheldIn(profiles: Record<string, IconMaps>): (uri: string) => boolean {
+  if (lastHeld?.profiles !== profiles) lastHeld = { profiles, unheld: unheldBy(Object.values(profiles)) };
+  return lastHeld.unheld;
+}
+
 export function takeRequest(pending: Map<string, symbol>, uri: string, request: symbol): boolean {
   if (pending.get(uri) !== request) return false;
   pending.delete(uri);
