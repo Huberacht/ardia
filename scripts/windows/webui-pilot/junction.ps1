@@ -56,8 +56,8 @@ function Refused([string]$name, [string[]]$arguments, [string]$dataDir = '') {
   $before = Snapshot
   $p = Start-Pilot $arguments $dataDir
   $code = [Pilot]::WaitExit($p.Id, 20000)
-  Start-Sleep -Seconds 2
-  $window = [Pilot]::FindShell('Ardia') -ne [IntPtr]::Zero
+  $window = -not (Never { [Pilot]::FindShell('Ardia') -ne [IntPtr]::Zero } 2)
+  Wait-Until { (Engine-Processes).Count -eq 0 } 10 'the refused launch to leave no process' -NoThrow | Out-Null
   $now = Snapshot
   $unchanged = $now -eq $before
   if (-not $unchanged) { Compare-Object ($before -split "`n") ($now -split "`n") | ForEach-Object { Log "changed $($_.SideIndicator) $($_.InputObject)" } }
@@ -69,8 +69,8 @@ function Opens([string]$name, [string[]]$arguments) {
   $before = Snapshot
   $p = Start-Pilot $arguments
   $h = $null
-  try { $h = Wait-Shell 60 } catch {}
-  Start-Sleep -Seconds 3
+  try { $h = Wait-ShellReady 60 } catch {}
+  Wait-Until { Test-Path -LiteralPath (Join-Path $web 'Chromium\Local State') } 30 'the WebUI profile to be written' -NoThrow | Out-Null
   $pinned = $false
   if ($h) {
     try { Rename-Item -LiteralPath $web -NewName 'Ardia WebUI moved' -ErrorAction Stop } catch { $pinned = $true }
@@ -171,7 +171,7 @@ Clear-WebUI
 
 $before = Snapshot
 $p = Start-Pilot @('--ardia-shell=webui') '' '15000'
-Start-Sleep -Seconds 4
+Wait-Until { Test-Path -LiteralPath (Join-Path $web 'Chromium') } 10 'install_static to create and pin the profile folder' -NoThrow | Out-Null
 $early = @(Engine-Processes)
 $modules = @((Get-Process -Id $p.Id -ErrorAction SilentlyContinue).Modules | ForEach-Object ModuleName)
 $chromeDll = $modules -contains 'chrome.dll'

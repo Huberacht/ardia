@@ -161,13 +161,68 @@ function Shot([string]$path) {
 function Shell-Window { [Pilot]::FindShell('Ardia') }
 
 function Wait-Shell([int]$seconds = 60) {
-  $end = (Get-Date).AddSeconds($seconds)
-  while ((Get-Date) -lt $end) {
+  $deadline = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $deadline) {
     $h = Shell-Window
     if ($h -ne [IntPtr]::Zero) { return $h }
     Start-Sleep -Milliseconds 300
   }
   throw "no Ardia WebUI window after $seconds s"
+}
+
+function Wait-Until([scriptblock]$Condition, [double]$Seconds = 10, [string]$What = 'a condition', [switch]$NoThrow) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  while ((Get-Date) -lt $deadline) {
+    $value = $null
+    try { $value = & $Condition } catch { $value = $null }
+    if ($value) { return $value }
+    Start-Sleep -Milliseconds 100
+  }
+  $value = $null
+  try { $value = & $Condition } catch { $value = $null }
+  if ($value) { return $value }
+  if ($NoThrow) { Log "gave up after $Seconds s waiting for $What"; return $null }
+  throw "timed out after $Seconds s waiting for $What"
+}
+
+function Never([scriptblock]$Condition, [double]$Seconds = 3) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  while ((Get-Date) -lt $deadline) {
+    $seen = $null
+    try { $seen = & $Condition } catch { $seen = $null }
+    if ($seen) { return $false }
+    Start-Sleep -Milliseconds 100
+  }
+  $true
+}
+
+function Wait-Settled([scriptblock]$Read, [double]$Seconds = 5, [int]$StableMilliseconds = 400) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  $last = "$(& $Read)"
+  $since = Get-Date
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 50
+    $now = "$(& $Read)"
+    if ($now -ne $last) { $last = $now; $since = Get-Date; continue }
+    if (((Get-Date) - $since).TotalMilliseconds -ge $StableMilliseconds) { return $now }
+  }
+  $last
+}
+
+function Hold([int]$Milliseconds) {
+  $deadline = (Get-Date).AddMilliseconds($Milliseconds)
+  while ((Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 20 }
+}
+
+function Shell-Lines { @(Get-Content "$($script:Data)\Chromium\chrome_debug.log" -ErrorAction SilentlyContinue | Select-String 'WebUI shell' | ForEach-Object { $_.Line.Substring($_.Line.IndexOf('WebUI shell')) }) }
+
+function Shell-Lines-Matching([string]$pattern, [int]$after = 0) { @(Shell-Lines | Select-Object -Skip $after | Where-Object { $_ -match $pattern }) }
+
+function Wait-ShellReady([int]$Seconds = 60, [int]$After = 0) {
+  $h = Wait-Shell $Seconds
+  Wait-Until { (Shell-Lines-Matching 'shell painted; the start is settled' $After).Count -ge 1 } $Seconds 'the shell to report it painted' | Out-Null
+  Wait-Until { (Cdp-Eval 'typeof window.__ardiaHost === "object" && !!document.querySelector(".ardia-window-controls") && document.getElementById("root").innerText.trim().length > 0') -eq $true } $Seconds 'the shell UI to render' | Out-Null
+  $h
 }
 
 function Rect-Text($r) { "$($r.Left),$($r.Top) $($r.Right - $r.Left)x$($r.Bottom - $r.Top)" }
@@ -184,7 +239,7 @@ function Cdp-Command([string]$method, $params, [string]$match = 'chrome://ardia/
   $body = @{ id = 1; method = $method; params = $params } | ConvertTo-Json -Depth 6 -Compress
   $bytes = [Text.Encoding]::UTF8.GetBytes($body)
   if (-not $ws.SendAsync([ArraySegment[byte]]$bytes, 'Text', $true, $deadline.Token).Wait(15000)) { $ws.Dispose(); throw "CDP send timed out" }
-  if ($NoReply) { Start-Sleep -Milliseconds 300; $ws.Dispose(); return $null }
+  if ($NoReply) { $ws.CloseOutputAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, '', $deadline.Token).Wait(3000) | Out-Null; $ws.Dispose(); return $null }
   $buffer = New-Object byte[] 1048576
   $text = ''
   do {
@@ -264,7 +319,7 @@ function Engine-Processes { @(Get-Process chrome -ErrorAction SilentlyContinue |
 
 function Stop-Engine {
   Engine-Processes | Stop-Process -Force -ErrorAction SilentlyContinue
-  Start-Sleep -Milliseconds 500
+  Wait-Until { (Engine-Processes).Count -eq 0 } 15 'the engine processes to exit' -NoThrow | Out-Null
 }
 
 function Start-Recording([string]$name, [int]$seconds) {

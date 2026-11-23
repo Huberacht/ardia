@@ -5,8 +5,7 @@ function Check([string]$name, [bool]$ok, [string]$detail) {
   $results[$name] = @{ ok = $ok; detail = $detail }
   Log ("{0} {1}: {2}" -f ($(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail))
 }
-function ShellLog { @(Get-Content "$Data\Chromium\chrome_debug.log" -ErrorAction SilentlyContinue | Select-String 'WebUI shell' | ForEach-Object { $_.Line.Substring($_.Line.IndexOf('WebUI shell')) }) }
-function PagesCreated { @(ShellLog | Where-Object { $_ -match 'page \d+ created' }).Count }
+function PagesCreated { (Shell-Lines-Matching 'page \d+ created').Count }
 function PageTargets { @(Cdp-List | Where-Object { $_.type -eq 'page' -and $_.url -notlike 'chrome://ardia/*' } | ForEach-Object { $_.url }) }
 function Js([string]$value) { $value | ConvertTo-Json -Compress }
 function Invoke-Host([string]$method, [string]$argsJson) {
@@ -16,12 +15,11 @@ function Profiles { @(Get-ChildItem -LiteralPath "$Data\Chromium" -Directory -Fi
 
 Stop-Engine
 Start-Shell -Fresh | Out-Null
-Wait-Shell 60 | Out-Null
-Start-Sleep -Seconds 10
+Wait-ShellReady 60 | Out-Null
 
 $made = Invoke-Host 'tab.create' '{ "key": "bridge-ok", "claim": "bridge-claim", "profile": "default", "url": "file:///C:/pilot/form.html?bridge" }' | ConvertFrom-Json
 $control = $made.r.browserId
-Start-Sleep -Seconds 3
+Wait-Until { ((PageTargets) -contains 'file:///C:/pilot/form.html?bridge') -and (PagesCreated) -ge 1 } 15 'the control page' -NoThrow | Out-Null
 $targets = PageTargets
 Check 'valid-create-reaches-the-sink' ($made.ok -and $control -and ($targets -contains 'file:///C:/pilot/form.html?bridge')) "tab.create answered $($made | ConvertTo-Json -Compress -Depth 6); pages: $($targets -join ' | ')"
 $baseCreated = PagesCreated
@@ -49,12 +47,12 @@ foreach ($case in $malformed.GetEnumerator()) {
   $sent = Cdp-Eval "(() => { try { $($case.Value); return 'sent'; } catch (e) { return 'threw ' + e.message; } })()"
   Log "malformed $($case.Key): $sent"
 }
-Start-Sleep -Seconds 4
+$identity = Cdp-Eval '__ardiaHost.invoke("ArdiaShell.windowIdentity", {})'
+$quiet = Never { (@(PageTargets | Where-Object { $_ -like '*malformed*' }).Count -gt 0) -or ((PagesCreated) -ne $baseCreated) } 2
 $targets = PageTargets
 $created = PagesCreated
 $leaked = @($targets | Where-Object { $_ -like '*malformed*' })
-Check 'malformed-requests-make-no-page' (($created -eq $baseCreated) -and ($leaked.Count -eq 0) -and ($targets.Count -eq 1)) "$($malformed.Count) malformed requests; pages created $baseCreated -> $created; pages: $($targets -join ' | ')"
-$identity = Cdp-Eval '__ardiaHost.invoke("ArdiaShell.windowIdentity", {})'
+Check 'malformed-requests-make-no-page' ($quiet -and ($created -eq $baseCreated) -and ($leaked.Count -eq 0) -and ($targets.Count -eq 1)) "$($malformed.Count) malformed requests, then a later request answered; pages created $baseCreated -> $created; pages: $($targets -join ' | ')"
 Check 'bridge-answers-after-malformed-requests' ($identity -eq 'main') "ArdiaShell.windowIdentity answered '$identity'"
 $refusals = [ordered]@{
   'key-missing'   = '{ "claim": "C", "profile": "default", "url": "file:///C:/pilot/form.html?refused-key" }'
@@ -70,9 +68,9 @@ foreach ($case in $refusals.GetEnumerator()) {
   Log "refusal $($case.Key) -> $($answer | ConvertTo-Json -Compress -Depth 6)"
   if (-not $answer.ok) { $refusedCount++ }
 }
-Start-Sleep -Seconds 2
+$quiet = Never { @(PageTargets | Where-Object { $_ -like '*refused*' }).Count -gt 0 } 2
 $targets = PageTargets
-Check 'bad-create-arguments-refused' (($refusedCount -eq $refusals.Count) -and ((PagesCreated) -eq $baseCreated) -and (@($targets | Where-Object { $_ -like '*refused*' }).Count -eq 0)) "$refusedCount of $($refusals.Count) refused with an answer; pages: $($targets -join ' | ')"
+Check 'bad-create-arguments-refused' ($quiet -and ($refusedCount -eq $refusals.Count) -and ((PagesCreated) -eq $baseCreated) -and (@($targets | Where-Object { $_ -like '*refused*' }).Count -eq 0)) "$refusedCount of $($refusals.Count) refused with an answer; pages: $($targets -join ' | ')"
 
 $reserved = @(
   'javascript:alert(1)', 'JavaScript:alert(1)', 'chrome://ardia/', 'CHROME://ARDIA/index.html', 'chrome://ardia./',
@@ -86,11 +84,11 @@ foreach ($url in $reserved) {
   Log "reserved tab.create $url -> $($answer | ConvertTo-Json -Compress -Depth 6)"
   $results["reserved-create $url"] = @{ ok = (-not $answer.ok); detail = "$($answer.e)" }
 }
-Start-Sleep -Seconds 3
+$quiet = Never { (Test-Path -LiteralPath "$Data\Chromium\Ardia reservedprofile") -or ((PageTargets).Count -ne 1) } 2
 $targets = PageTargets
 $refusedAll = @($reserved | Where-Object { $results["reserved-create $_"].ok }).Count
 $reservedProfile = Test-Path -LiteralPath "$Data\Chromium\Ardia reservedprofile"
-Check 'reserved-tab-urls-refused' (($refusedAll -eq $reserved.Count) -and ((PagesCreated) -eq $baseCreated) -and ($targets.Count -eq 1)) "$refusedAll of $($reserved.Count) refused; pages: $($targets -join ' | ')"
+Check 'reserved-tab-urls-refused' ($quiet -and ($refusedAll -eq $reserved.Count) -and ((PagesCreated) -eq $baseCreated) -and ($targets.Count -eq 1)) "$refusedAll of $($reserved.Count) refused; pages: $($targets -join ' | ')"
 Check 'reserved-url-loads-no-profile' ((-not $reservedProfile) -and (((Profiles) -join '|') -eq $baseProfiles)) "Ardia reservedprofile on disk: $reservedProfile; profile folders $baseProfiles -> $((Profiles) -join '|')"
 
 $navigations = @('javascript:document.title="owned"', 'chrome://ardia/', 'ArDiA://ardia/', 'view-source:chrome://ardia/', '')
@@ -101,20 +99,20 @@ foreach ($url in $navigations) {
 }
 $wrongClaim = Invoke-Host 'tab.command' "{ `"id`": $control, `"claim`": `"someone-else`", `"command`": `"loadUrl`", `"args`": [`"file:///C:/pilot/form.html?stolen`"] }" | ConvertFrom-Json
 $noArgs = Invoke-Host 'tab.command' "{ `"id`": $control, `"claim`": `"bridge-claim`", `"command`": `"loadUrl`", `"args`": `"file:///C:/pilot/form.html?scalar`" }" | ConvertFrom-Json
-Start-Sleep -Seconds 3
+$quiet = Never { (PageTargets) -notcontains 'file:///C:/pilot/form.html?bridge' } 2
 $targets = PageTargets
 $title = Cdp-Eval 'document.title' 'file:///C:/pilot/form.html'
 $refusedLoads = @($navigations | Where-Object { $results["reserved-load '$_'"].ok }).Count
-Check 'reserved-navigation-refused' (($refusedLoads -eq $navigations.Count) -and ($targets -contains 'file:///C:/pilot/form.html?bridge') -and ($title -ne 'owned')) "$refusedLoads of $($navigations.Count) refused; page still at $($targets -join ' | '), title '$title'"
+Check 'reserved-navigation-refused' ($quiet -and ($refusedLoads -eq $navigations.Count) -and ($targets -contains 'file:///C:/pilot/form.html?bridge') -and ($title -ne 'owned')) "$refusedLoads of $($navigations.Count) refused; page still at $($targets -join ' | '), title '$title'"
 Check 'wrong-claim-cannot-navigate' ((-not $wrongClaim.ok) -and ($targets -notcontains 'file:///C:/pilot/form.html?stolen')) "answer $($wrongClaim | ConvertTo-Json -Compress)"
 Check 'loadurl-without-a-list-does-nothing' ($targets -notcontains 'file:///C:/pilot/form.html?scalar') "answer $($noArgs | ConvertTo-Json -Compress); pages: $($targets -join ' | ')"
 
 $load = Invoke-Host 'tab.command' "{ `"id`": $control, `"claim`": `"bridge-claim`", `"command`": `"loadUrl`", `"args`": [`"file:///C:/pilot/form.html?loaded`"] }" | ConvertFrom-Json
-Start-Sleep -Seconds 3
+Wait-Until { (PageTargets) -contains 'file:///C:/pilot/form.html?loaded' } 15 'the page to load the new URL' -NoThrow | Out-Null
 $targets = PageTargets
 Check 'valid-navigation-reaches-the-sink' ($load.ok -and ($targets -contains 'file:///C:/pilot/form.html?loaded')) "answer $($load | ConvertTo-Json -Compress); pages: $($targets -join ' | ')"
 $second = Invoke-Host 'tab.create' '{ "key": "bridge-second", "claim": "bridge-claim-2", "profile": "default", "url": "file:///C:/pilot/form.html?second" }' | ConvertFrom-Json
-Start-Sleep -Seconds 3
+Wait-Until { ((PageTargets) -contains 'file:///C:/pilot/form.html?second') -and (PagesCreated) -eq $baseCreated + 1 } 15 'the second page' -NoThrow | Out-Null
 $targets = PageTargets
 Check 'valid-create-after-hostile-input' ($second.ok -and ($targets -contains 'file:///C:/pilot/form.html?second') -and ((PagesCreated) -eq $baseCreated + 1)) "pages: $($targets -join ' | ')"
 
