@@ -16,16 +16,11 @@ let listening = false;
 
 function wakeTab(id: string) {
   let listeners = watchers.get(id);
-  const called = new Set<() => void>();
   while (listeners) {
-    for (const listener of [...listeners]) {
-      if (called.has(listener)) continue;
-      called.add(listener);
-      listener();
-    }
-    const now = watchers.get(id);
-    if (now === listeners) return;
-    listeners = now;
+    for (const listener of [...listeners]) listener();
+    const remade = watchers.get(id);
+    if (remade === listeners) return;
+    listeners = remade;
   }
 }
 
