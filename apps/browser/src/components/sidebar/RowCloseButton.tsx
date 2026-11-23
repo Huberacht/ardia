@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Pressable, type GestureResponderEvent } from "react-native";
-import { iconButton, radius as radii, Symbol, useOffstage, useTooltip } from "../ui";
+import { drawnSymbol, iconButton, radius as radii, useOffstage, useTooltip } from "../ui";
 import { useTheme } from "../ui/theme";
 import { useTabCloseControlWhile } from "../../state/sidebar/closeControl";
 
@@ -36,7 +36,7 @@ export function RowCloseButton({
       accessibilityLabel={label}
       style={({ pressed }) => [{ width: box, height: box, borderRadius: radius, alignItems: "center", justifyContent: "center" }, pressed || hovered ? { backgroundColor: pressed ? theme.toolbarPressed : theme.toolbarHover } : null]}
     >
-      <Symbol name={control?.icon ?? icon ?? "xmark"} size={iconButton.s.glyph} weight="semibold" color={theme.icon} style={{ width: box, height: box }} />
+      {drawnSymbol({ name: control?.icon ?? icon ?? "xmark", size: iconButton.s.glyph, weight: "semibold", color: theme.icon, style: { width: box, height: box } })}
     </Pressable>
   );
 }

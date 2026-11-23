@@ -13,5 +13,7 @@ export const RowHoverFill = memo(function RowHoverFill({ cell, pressed, color, r
 
 export const RowCloseSlot = memo(function RowCloseSlot({ cell, tabId, renaming, children }: { cell: RowHoverCell; tabId: string; renaming: boolean; children?: ReactNode }) {
   const hovered = useCellHovered(cell) && !renaming;
-  return hoverSlotView({ hovered, reserve: "hover", hover: hovered ? <RowCloseButton tabId={tabId} onPress={() => pressTabClose(tabId)} /> : null, children });
+  const button = hovered ? <RowCloseButton tabId={tabId} onPress={() => pressTabClose(tabId)} /> : null;
+  if (children == null || children === false) return button;
+  return hoverSlotView({ hovered, reserve: "hover", hover: button, children });
 });
