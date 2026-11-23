@@ -198,7 +198,10 @@ final class GlassCapture {
     hasher.combine(wanted.height.rounded())
     for piece in pieces {
       for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
-      if let view = piece.view { Self.walk(view.layer, into: &hasher, budget: &budget) }
+      if let view = piece.view {
+        if let contents = view.layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
+        for sublayer in view.layer.sublayers ?? [] { Self.walk(sublayer, into: &hasher, budget: &budget) }
+      }
     }
     let value = hasher.finalize()
     signatureValue = value
@@ -210,10 +213,10 @@ final class GlassCapture {
 
   var isIdle: Bool { settle == 0 }
 
-  func wants(_ wanted: CGRect, now: CFTimeInterval) -> Bool {
+  func wants(_ wanted: CGRect, now: CFTimeInterval, gap: TimeInterval = 0) -> Bool {
     if now < retryAt { return false }
     if texture == nil || !rect.contains(wanted) || rect.width > wanted.width * 1.5 + 64 || rect.height > wanted.height * 1.5 + 64 { return true }
-    if settle > 0 { return true }
+    if settle > 0 { return now - capturedAt >= gap }
     return now - capturedAt > LiquidGlassRules.idleRefresh
   }
 

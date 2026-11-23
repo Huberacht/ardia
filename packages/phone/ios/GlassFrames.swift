@@ -201,8 +201,8 @@ final class GlassFrames: NSObject {
     }
     capture.survey(pieces, rect: wanted)
     if let web { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, signature: capture.signatureValue, now: now) }
-    guard capture.wants(wanted, now: now) else { return }
     let sourceWhole = members[0].backdropMode == .source
+    guard capture.wants(wanted, now: now, gap: sourceWhole && web == nil ? LiquidGlassRules.backdropRefresh : 0) else { return }
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
       if sourceWhole, let web {

@@ -1382,31 +1382,38 @@ can't drift apart, checks the uniform struct against the shader's, and compiles 
 Metal.
 
 - **What the lens samples.** iOS has no public way to read the pixels behind a view, and `CABackdropLayer` is private,
-  so each glass draws what it refracts itself, each frame from a `CADisplayLink` (`GlassFrames`), with
-  `drawHierarchy(in:afterScreenUpdates: false)` into an IOSurface-backed pixel buffer at Android's frost scale (a sixth
-  of the pixels for the 12 point glass frost), the strip under the glass plus the blur's and the lens's margin. MPS
-  blurs it (Android's radius-to-sigma), and the fragment shader refracts it per colour channel at full resolution,
-  then adds the frost tint, the 0.5 point edge, the profile tint and the rim.
-  - A glass outside the `FrostSource` it names draws that source: the page bar and host pill draw the page stack, the
-    WKWebView included; the deck's chrome its backdrop; the start page's buttons its spaces and mark. Glasses on one
-    source share one capture.
+  so each glass draws what it refracts itself, from a `CADisplayLink` (`GlassFrames`), into an IOSurface-backed pixel
+  buffer at Android's frost scale (a sixth of the pixels for the 12 point glass frost). MPS blurs it (Android's
+  radius-to-sigma), and the fragment shader refracts it per colour channel at full resolution, then adds the frost
+  tint, the 0.5 point edge, the profile tint and the rim (added onto what is behind, as Android's PLUS does).
+  - A glass outside the `FrostSource` it names draws that whole source, once, and again only when it changes, so a
+    glass moving over a still backdrop (the deck opening) only moves where it samples. The page bar and host pill
+    draw the page from WebKit's own `takeSnapshot` (the viewport plus 320 points above and below, at the capture's
+    scale), which runs off the main thread; while a newer snapshot is on its way, the last one is moved by how far the
+    page has scrolled since, so the strip stays lined up with the page. The deck's chrome draws its backdrop and the
+    start page's buttons its spaces and mark, with `drawHierarchy(afterScreenUpdates: false)`.
   - A glass inside its source, or with none (toasts, Reader's buttons, the Duo toolbar under `surfaces`, the search
-    morph), draws what lies beneath it in the window: going up from the glass, each ancestor's fill and every sibling
-    below it that overlaps the strip, back to front, starting from the topmost opaque one that covers it
-    (`GlassBackdrop`). Nothing above the glass, and never the glass itself.
+    morph), draws what lies beneath it in the window (`GlassBackdrop`): going up from the glass, each ancestor's fill
+    and each sibling drawn under it (by `zPosition`, then order) that overlaps the strip, with its real transform, its
+    ancestors' clips and corners and its opacity, starting from the topmost opaque piece that truly covers the strip.
+    Those pieces draw with `layer.render(in:)`, and a page among them with WebKit's snapshot.
   - The capture is redrawn only when a walk of the drawn layers changes (positions, bounds, scroll offsets, the
-    WKWebView's content offset, opacity, transforms, contents), for two frames after it settles, and every 0.5 s
-    otherwise. Glass that is hidden does no work.
+    WKWebView's content offset, opacity, transforms, contents), for two frames after it settles, and every 3 s
+    otherwise. Glass that is hidden or off screen does no work. A capture that fails or comes back blank drops the old
+    strip, shows the glass's fill and tries again after 50 ms, doubling up to 1 s.
+  - At most two GPU frames are in flight; a frame that would wait is dropped, never `nextDrawable()` on a busy main
+    thread. Capture buffers are released when the last glass stops, on background and on a memory warning.
 - **Where each path runs.** Every glass refracts by default. The flat fills are fallbacks only: Classic and Reduce
   Transparency keep the Classic surface, unchanged; a phone without Metal, or a shader that fails, draws the frost's
-  flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a capture whose median over its
-  last 30 passes takes more than 4 ms is over budget, and that glass draws the chrome fill over a page (#FFFFFF,
-  #1E1B1D in dark) or the flat fill elsewhere until the app next returns to the foreground
+  flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a capture that keeps the main
+  thread busy for more than 12 % of two seconds is over budget, and that glass draws the chrome fill over a page
+  (#FFFFFF, #1E1B1D in dark) or the flat fill elsewhere until the app next returns to the foreground
   (`glass_captures_over_budget`). Lab flags: `ArdiaFlatGlass` drops the lens and rim, `ArdiaGlassSolidPage` keeps the
-  chrome fill over a page, `ArdiaGlassCapture layer|none` swaps `drawHierarchy` for `layer.render(in:)` (which can't
-  see the WKWebView, a separate process) or for no capture, as the control. Each lab build logs
-  `PAGELAB look glass … path=…` and, once a second while any glass captures, `PAGELAB glass frames` with late frames,
-  pieces drawn per capture and the capture's median and worst times.
+  chrome fill over a page, `ArdiaGlassCapture auto|hierarchy|layer|none` picks the capture (`auto` is the default;
+  `none` is the control), `ArdiaGlassScroll <s>` scrolls the page on screen up and down for that long, and
+  `ArdiaGlassProbe` logs whether each capture applies a view's own alpha (both do). Each lab build logs
+  `PAGELAB look glass … path=…` and, once a second while any glass captures, `PAGELAB glass frames` with late and
+  dropped frames, failures, WebKit snapshots and their latency, pieces per capture and capture and tick times.
 - **SwiftUI.** `chromeSurface`, `LookFrost`'s glass variant and the glass button styles (Settings, the share sheet's
   close button, the action extension's Done) draw `LiquidGlassFill`: the flat frost fill, the edge and the rim as an
   angular gradient from the same rim maths. None of them has a source to refract.
