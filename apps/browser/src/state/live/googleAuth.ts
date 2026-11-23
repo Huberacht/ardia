@@ -1,5 +1,6 @@
 import { asSecret } from "@ardia/core";
 import { useBrowser } from "../browser/store";
+import { consumeCallbackUrls } from "../tabs/callbackUrls";
 import { endpoints, form } from "./net";
 import { connectGoogle } from "./sources";
 import { secureRandomHex } from "../../platform/secureRandom";
@@ -37,21 +38,32 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
     access_type: "offline",
     prompt: "consent",
   })}`;
+  const profileId = useBrowser.getState().windows[windowId]?.profileId ?? null;
   const tabId = useBrowser.getState().newTab(windowId, { url });
   return new Promise<void>((resolve, reject) => {
-    const stop = useBrowser.subscribe((s, prev) => {
-      if (s.tabs === prev.tabs) return;
-      const tab = s.tabs[tabId];
-      if (!tab) return finish(new Error("Sign-in was cancelled"));
-      if (!tab.url.startsWith(REDIRECT)) return;
-      const params = query(tab.url);
-      if (params.get("state") !== state) return finish(new Error("Sign-in didn't match this request"));
-      const code = params.get("code");
-      stop();
-      useBrowser.getState().closeTabs([tabId], { unrecorded: true });
-      if (!code) return finish(new Error("Google didn't grant access"));
-      connectGoogle(clientId.trim(), clientSecret.trim(), asSecret("oauthToken", code), verifier, REDIRECT).then(() => finish(), finish);
+    const stopWatching = useBrowser.subscribe((s, prev) => {
+      if (s.tabs !== prev.tabs && !s.tabs[tabId]) finish(new Error("Sign-in was cancelled"));
     });
+    const stopConsuming = consumeCallbackUrls(tabId, (address) => {
+      if (!address.startsWith(REDIRECT)) return false;
+      const params = query(address);
+      stopConsuming();
+      stopWatching();
+      useBrowser.getState().closeTabs([tabId], { unrecorded: true });
+      if (profileId) void useBrowser.getState().removeHistory(profileId, [address]).catch(() => {});
+      if (params.get("state") !== state) {
+        finish(new Error("Sign-in didn't match this request"));
+        return true;
+      }
+      const code = params.get("code");
+      if (!code) finish(new Error("Google didn't grant access"));
+      else connectGoogle(clientId.trim(), clientSecret.trim(), asSecret("oauthToken", code), verifier, REDIRECT).then(() => finish(), finish);
+      return true;
+    });
+    const stop = () => {
+      stopConsuming();
+      stopWatching();
+    };
     const finish = (error?: unknown) => {
       stop();
       pending = null;

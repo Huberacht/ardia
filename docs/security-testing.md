@@ -134,8 +134,9 @@ the canary, and must count the drop; a positive control checks each legitimate s
 token-shaped kinds are also checked once revealed. A provider that echoes a credential in an error body is driven
 through a real Live refresh into folder status, which `live.list` returns: Live errors carry only the status code or an
 app-owned message (GitHub's GraphQL errors keep at most a validated github.com settings link), and the status message
-goes through the token scrubber. Google's sign-in callback, whose address holds the authorization code, is closed
-without a recently closed entry, so `closed.list` never returns it. Its registry, read with the TypeScript parser so aliased and
+goes through the token scrubber. Google's sign-in callback, whose address holds the authorization code, is taken by a
+callback consumer (`state/tabs/callbackUrls.ts`) the moment the page reports it, before tab state, tab events, the
+omnibox or `closed.list` can see it; the tab closes without a recently closed entry and any history visit is removed. Its registry, read with the TypeScript parser so aliased and
 namespace imports count, fails when:
 
 - a kind in `SECRET_KINDS` has no source and canary in the test;

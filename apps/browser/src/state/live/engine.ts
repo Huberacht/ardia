@@ -188,7 +188,7 @@ async function run(folderId: string, interactive: boolean, allowed: () => boolea
 
 function describe(source: LiveSourceId, error: unknown) {
   if (error instanceof LiveError) return { kind: error.kind, message: scrubTokens(error.message), source };
-  return { kind: "other" as const, message: scrubTokens(String((error as Error)?.message ?? error)), source };
+  return { kind: "other" as const, message: "Something went wrong", source };
 }
 
 export function statusText(folderId: string, now = Date.now()): string {

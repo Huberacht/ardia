@@ -25,7 +25,11 @@ const keychain = new Map([
 const keychainWrites = [];
 globalThis.acTestNativeModules = {
   ArdiaKeychain: {
-    get: async (account) => keychain.get(account) ?? null,
+    get: async (account) => {
+      const value = keychain.get(account) ?? null;
+      if (heldKeychain) await heldKeychain;
+      return value;
+    },
     read: async (account) => (keychain.has(account) ? { status: "ok", value: keychain.get(account) } : { status: "missing" }),
     set: async (account, value) => (keychainWrites.push({ account, value }), keychain.set(account, value), !account.startsWith("ardia.plugin.refuse.")),
     delete: async (account) => keychain.delete(account),
@@ -40,6 +44,7 @@ const enteredPhrases = [];
 
 const posted = [];
 let heldGithub = null;
+let heldKeychain = null;
 globalThis.fetch = async (url, init = {}) => {
   if (heldGithub && String(url).includes("graphql")) {
     await heldGithub;
@@ -310,6 +315,17 @@ test("the legitimate sinks get the plaintext and nothing else does", async () =>
   assert.deepEqual(enteredPhrases, [CANARY.syncPhrase], "the native sync module gets the phrase");
 });
 
+test("a malformed answer from a provider fails with Ardia's own words, not the provider's", async () => {
+  const { request } = await import("./state/live/net.ts");
+  const saved = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, ok: true, headers: new Headers(), text: async () => "", json: async () => JSON.parse(`{"echo": ${CANARY.apiToken}`) });
+  try {
+    await assert.rejects(request("https://api.notion.com/v1/users/me"), (error) => error.kind === "other" && !String(error.message).includes(CANARY.apiToken));
+  } finally {
+    globalThis.fetch = saved;
+  }
+});
+
 test("a provider that echoes the credential back can't put it into a Live folder's status or the socket's live.list", async () => {
   const { createFolder, live } = await import("./state/live/store.ts");
   const { refreshFolder } = await import("./state/live/engine.ts");
@@ -348,25 +364,48 @@ test("GitHub tokens are held only while their work runs, the stored account's is
   assert.ok(Array.isArray(await refreshing), "positive control: the held refresh succeeds");
   assert.equal(githubAccountsHeld(), 0, "a refresh that settles after a disconnect lets the token go");
   keychain.set("github", CANARY.oauthToken);
+  let releaseRead;
+  heldKeychain = new Promise((resolve) => (releaseRead = resolve));
+  const reading = LIVE.github.fetch(folder, { interactive: true }).then(() => "fetched", (error) => error.kind);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await disconnect("github");
+  heldKeychain = null;
+  releaseRead();
+  assert.equal(await reading, "signedOut", "a token read before a disconnect isn't used after it");
+  assert.equal(githubAccountsHeld(), 0);
+  keychain.set("github", CANARY.oauthToken);
 });
 
-test("Google's sign-in callback hands its code to the token request and leaves no trace in recently closed tabs", async () => {
+test("Google's sign-in callback is consumed before tab state, events or recently closed tabs see its code", async () => {
   const { useBrowser } = await import("./state/browser/store.ts");
   const { connectGoogleDrive } = await import("./state/live/googleAuth.ts");
+  const { consumedCallbackUrl } = await import("./state/tabs/callbackUrls.ts");
   const code = "4/0AcanaryAuthorizationCode";
   const windowId = useBrowser.getState().createWindow({ url: "https://a.example/" });
   const before = new Set(Object.keys(useBrowser.getState().tabs));
+  const seen = [];
+  const stopSeeing = useBrowser.subscribe((s) => seen.push(JSON.stringify(Object.values(s.tabs).map((t) => t.url))));
   posted.length = 0;
   const signIn = connectGoogleDrive(windowId, "client-id", CANARY.oauthClientSecret).catch(() => null);
   const tabId = Object.keys(useBrowser.getState().tabs).find((id) => !before.has(id));
   const state = new URL(useBrowser.getState().tabs[tabId].url).searchParams.get("state");
-  useBrowser.getState().updateTab(tabId, { url: `http://127.0.0.1:53682/ardia-oauth?state=${state}&code=${encodeURIComponent(code)}` });
+  const callback = `http://127.0.0.1:53682/ardia-oauth?state=${state}&code=${encodeURIComponent(code)}`;
+  assert.equal(consumedCallbackUrl(tabId, "https://accounts.google.com/signin"), false, "other pages of the sign-in load as usual");
+  assert.equal(consumedCallbackUrl(tabId, callback, callback), true, "the page's report of the callback is taken before tab state");
   await signIn;
+  stopSeeing();
   assert.equal(useBrowser.getState().tabs[tabId], undefined, "the callback tab is closed");
   const token = posted.find((p) => p.url.includes("google/token") || p.url.includes("oauth2.googleapis.com"));
   assert.ok(token?.body.includes(encodeURIComponent(code)) && token.body.includes("code_verifier="), "positive control: the token request gets the code and verifier");
-  const closed = JSON.stringify(useBrowser.getState().closedTabs);
-  assert.ok(!closed.includes(code) && !closed.includes(encodeURIComponent(code)) && !closed.includes("ardia-oauth"), "closed.list never lists the callback");
+  const traces = [...seen, JSON.stringify(useBrowser.getState().closedTabs), JSON.stringify(useBrowser.getState().history ?? {})].join("\n");
+  assert.ok(!traces.includes(callback) && !traces.includes("0AcanaryAuthorizationCode"), "no tab state, tab event or closed.list entry ever holds the callback");
+  assert.equal(consumedCallbackUrl(tabId, callback), false, "the consumer is gone once the callback is handled");
+});
+
+test("TabWebView hands a navigation to a callback consumer before anything records it", () => {
+  const source = readFileSync(fileURLToPath(new URL("./components/window/TabWebView.tsx", import.meta.url)), "utf8");
+  const handler = source.slice(source.indexOf("onNavigationChange={("));
+  assert.match(handler.split("\n")[1] ?? "", /^\s*if \(consumedCallbackUrl\(tabId, reported, committedUrl\)\) return;$/);
 });
 
 test("an unreadable Google sign-in fails without echoing the stored value", () => {
@@ -407,6 +446,8 @@ const REVEAL_SINKS = {
   "apps/browser/src/state/sync/engine.ts": { calls: 2, why: "the native sync module unlocks with the recovery phrase" },
   "apps/browser/src/components/settings/panes/ProfilePasswords.tsx": { calls: 1, why: "the password sheet shows and edits the password the user unlocked" },
   "apps/browser/src/components/settings/panes/SyncSheets.tsx": { calls: 1, why: "Show Words displays the recovery phrase to the user" },
+  "apps/linux/src/importedPasswordSave.ts": { calls: 1, why: "Linux tells a CSV import handle, which its host resolves, from a typed password" },
+  "apps/linux/src/liveSources.ts": { calls: 2, why: "Linux's host exchanges Google's authorization code and PKCE verifier for tokens" },
   "apps/linux/src/syncAuthority.ts": { calls: 1, why: "a Linux window hands the recovery phrase to the window that runs sync, over the app's own channel, and it is branded again on arrival" },
 };
 
@@ -459,7 +500,16 @@ function secretUses(file, source) {
   };
   const namespaceMember = (node) => ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node;
   const visit = (node) => {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
+    if (ts.isImportDeclaration(node)) return;
+    if (ts.isExportDeclaration(node)) {
+      const local = !node.moduleSpecifier && node.exportClause && ts.isNamedExports(node.exportClause) ? node.exportClause.elements : [];
+      if (local.some((e) => bound.has((e.propertyName ?? e.name).text) || namespaces.has((e.propertyName ?? e.name).text))) uses.problems.push("re-exports asSecret or reveal");
+      return;
+    }
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const target = node.arguments[0];
+      if (!target || !ts.isStringLiteralLike(target) || CORE_MODULE.test(target.text)) uses.problems.push("imports the secret module dynamically");
+    }
     if (ts.isCallExpression(node)) {
       const name = trackedName(node.expression);
       if (name === "reveal") uses.reveals++;
@@ -515,8 +565,10 @@ test("the registry scan finds aliased, namespaced and value uses of asSecret and
     'const sneaky = core["reveal"](e);',
     "const { reveal: pulled } = core;",
     'export { reveal } from "@ardia/core";',
+    "export { open as opened };",
+    'const lazy = await import("@ardia/core");',
   ].join("\n"));
   assert.deepEqual([...uses.kinds].sort(), ["*", "password"]);
   assert.equal(uses.reveals, 2);
-  assert.deepEqual(uses.problems.sort(), ["namespace core used other than as namespace.member", "namespace core used other than as namespace.member", "re-exports asSecret or reveal", "reveal used as a value"].sort());
+  assert.deepEqual(uses.problems.sort(), ["imports the secret module dynamically", "namespace core used other than as namespace.member", "namespace core used other than as namespace.member", "re-exports asSecret or reveal", "re-exports asSecret or reveal", "reveal used as a value"].sort());
 });

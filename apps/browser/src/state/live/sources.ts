@@ -1,7 +1,7 @@
 import { CONFLUENCE_CQL, DRIVE_QUERY, mapBitbucket, mapConfluence, mapDrive, mapNotion, NOTION_SEARCH_BODY, type BitbucketPR, type BitbucketStatuses, type ConfluenceSearch, type DriveFiles, type NotionSearch, type NotionUsers } from "./documents";
 import { createGithubClient } from "./githubClient";
 import { asSecret, sameSecret } from "@ardia/core";
-import { basic, bearer, deleteSecret, endpoints, form, getSecret, googleTokensOf, request, setSecret, storedGoogleTokens, type GoogleTokens, type LiveToken } from "./net";
+import { basic, bearer, deleteSecret, endpoints, form, getSecret, googleTokensOf, request, setSecret as keychainSaveToken, storedGoogleTokens, type GoogleTokens, type LiveToken } from "./net";
 import { live, setAccount, updateConfig } from "./store";
 import { LiveError, type CompletionState, type LiveAccount, type LiveFolder, type LiveItem, type LiveSourceId } from "./types";
 import { symbolIcon } from "../../lib/customIcon";
@@ -42,13 +42,21 @@ function forgetGithubAccounts() {
   releaseGithubAccounts();
 }
 
-async function withGithubAccount<T>(token: LiveToken, stored: boolean, run: (scope: string) => Promise<T>): Promise<T> {
+async function withStoredGithubAccount<T>(run: (scope: string) => Promise<T>): Promise<T> {
+  const generation = githubGeneration;
+  const token = await secret("github");
+  if (generation !== githubGeneration) throw new LiveError("signedOut", "Not signed in");
+  return withGithubAccount(token, generation, run);
+}
+
+async function withGithubAccount<T>(token: LiveToken, storedGeneration: number | null, run: (scope: string) => Promise<T>): Promise<T> {
+  const stored = storedGeneration !== null;
   let account = [...githubAccounts.values()].find((a) => sameSecret(a.token, token));
   if (!account) {
     account = { scope: `github-account-${++githubAccountCount}`, token, busy: 0 };
     githubAccounts.set(account.scope, account);
   }
-  const generation = githubGeneration;
+  const generation = storedGeneration ?? githubGeneration;
   if (stored) keptGithubScope = account.scope;
   account.busy++;
   try {
@@ -58,6 +66,10 @@ async function withGithubAccount<T>(token: LiveToken, stored: boolean, run: (sco
     if (stored && generation !== githubGeneration && keptGithubScope === account.scope) keptGithubScope = null;
     releaseGithubAccounts();
   }
+}
+
+async function setSecret(source: LiveSourceId, token: LiveToken) {
+  if ((await keychainSaveToken(source, token)) === false) throw new LiveError("other", "The Keychain didn't save the sign-in");
 }
 
 function githubToken(scope: string): LiveToken {
@@ -78,11 +90,11 @@ const github: LiveSource = {
   kind: "pullRequests",
   site: "https://github.com",
   async fetch(folder, options) {
-    return withGithubAccount(await secret("github"), true, (scope) => githubClient.fetchFolder(scope, folder, !!options?.interactive));
+    return withStoredGithubAccount((scope) => githubClient.fetchFolder(scope, folder, !!options?.interactive));
   },
   async resolveGone(items, options) {
     if (!items.some((it) => it.source === "github")) return {};
-    return withGithubAccount(await secret("github"), true, (scope) => githubClient.resolveGone(scope, items, !!options?.interactive));
+    return withStoredGithubAccount((scope) => githubClient.resolveGone(scope, items, !!options?.interactive));
   },
   pausedUntil: () => githubClient.pausedUntil(),
   warning: () => githubClient.warning(),
@@ -172,7 +184,7 @@ async function googleAccessToken(): Promise<LiveToken> {
     body: form({ client_id: live().config.googleClientId, client_secret: stored.client_secret, refresh_token: stored.refresh_token, grant_type: "refresh_token" }),
   });
   const access = asSecret("oauthToken", json.access_token);
-  await setSecret("gdrive", storedGoogleTokens({ ...stored, access_token: access, expires_at: Date.now() + json.expires_in * 1000 }));
+  await keychainSaveToken("gdrive", storedGoogleTokens({ ...stored, access_token: access, expires_at: Date.now() + json.expires_in * 1000 }));
   return access;
 }
 
@@ -196,7 +208,7 @@ const account = (login: string, name: string | null, avatar: string | null): Liv
 
 export async function connectGithub(typed: string) {
   const token = asSecret("oauthToken", typed.trim());
-  const viewer = await withGithubAccount(token, false, (scope) => githubClient.viewer(scope));
+  const viewer = await withGithubAccount(token, null, (scope) => githubClient.viewer(scope));
   if (!viewer) throw new LiveError("signedOut", "GitHub didn't accept the token");
   await setSecret("github", token);
   forgetGithubAccounts();
@@ -277,10 +289,11 @@ export async function connectGoogle(clientId: string, typedClientSecret: string,
   setAccount("gdrive", account(about?.user?.emailAddress ?? "Google Drive", about?.user?.displayName ?? null, about?.user?.photoLink ?? null));
 }
 
-export async function disconnect(source: LiveSourceId) {
+export async function disconnect(source: LiveSourceId): Promise<boolean> {
   if (source === "github") forgetGithubAccounts();
-  await deleteSecret(source);
+  if ((await deleteSecret(source)) === false) return false;
   setAccount(source, null);
+  return true;
 }
 
 export function liveFolderIcon(folder: LiveFolder): { site: string; icon: string | null } {
