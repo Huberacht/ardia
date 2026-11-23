@@ -440,6 +440,16 @@ final class PluginSandboxEscapeTests: XCTestCase {
     let inside = try sandboxed("/bin/cat", [tokenFile])
     XCTAssertNotEqual(inside.status, 0)
     XCTAssertFalse(inside.output.contains(token))
+    XCTAssertEqual(try Self.run("/usr/bin/stat", ["-f", "%z", tokenFile]).status, 0, "control: it stats outside")
+    for kind in [PluginSandbox.Kind.program, .script] {
+      for network in [true, false] where kind == .program || !network {
+        let program = kind == .program ? "/usr/bin/stat" : probe
+        let arguments = kind == .program ? ["-f", "%z", tokenFile] : ["finderinfo", tokenFile]
+        let looked = try sandboxed(program, arguments, network: network, kind: kind)
+        XCTAssertNotEqual(looked.status, 0, "the token file can't even be looked at (\(kind), network \(network)): \(looked.output)")
+        XCTAssertTrue(looked.output.contains("Operation not permitted") || looked.output.contains("errno 1"), looked.output)
+      }
+    }
   }
 
   func testAnAppItWritesCannotBeLaunchedOutsideTheSandbox() throws {
