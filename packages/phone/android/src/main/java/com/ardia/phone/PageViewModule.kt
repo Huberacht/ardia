@@ -83,10 +83,11 @@ class PageViewModule : Module() {
 
         OnActivityEntersForeground {
             val activity = appContext.currentActivity
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                activity?.takeUnless { it.isFinishing || it.isDestroyed }?.let(PhonePages::attach)
-                PhonePages.permissionAsks.pump()
+            val main = android.os.Handler(android.os.Looper.getMainLooper())
+            ForegroundAttach.dispatch(android.os.Looper.myLooper() == android.os.Looper.getMainLooper(), main::post) {
+                if (activity != null && ForegroundAttach.stillHost(activity, appContext.currentActivity)) PhonePages.attach(activity)
             }
+            main.post { PhonePages.permissionAsks.pump() }
         }
 
         OnActivityDestroys {
