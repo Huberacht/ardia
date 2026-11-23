@@ -188,6 +188,7 @@ typedef NS_ENUM(NSInteger, ArdiaPiPEdge) { ArdiaPiPEdgeNone = 0, ArdiaPiPEdgeLef
 + (BOOL)enabled;
 + (BOOL)beginEdgeResize:(NSWindow *)window event:(NSEvent *)event;
 + (BOOL)continueEdgeResize:(NSEvent *)event;
++ (BOOL)edgeResizing;
 + (void)devPinch:(NSWindow *)window args:(NSArray<NSString *> *)args;
 + (NSDictionary *)devPinchStats:(NSWindow *)window;
 + (NSString *)devStandInWindow:(NSWindow *)window;
@@ -197,6 +198,8 @@ typedef NS_ENUM(NSInteger, ArdiaPiPEdge) { ArdiaPiPEdgeNone = 0, ArdiaPiPEdgeLef
 - (void)cancelStandIn;
 - (void)zoomBy:(double)factor at:(NSPoint)pointer ease:(BOOL)ease;
 - (NSInteger)standInNumber;
+- (NSInteger)pinchSession;
+- (NSRect)shownFrame;
 - (void)notePinchUnfocused:(BOOL)unfocused fromOtherApp:(BOOL)fromOtherApp;
 @end
 
@@ -205,7 +208,10 @@ typedef NS_ENUM(NSInteger, ArdiaPiPEdge) { ArdiaPiPEdgeNone = 0, ArdiaPiPEdgeLef
 + (BOOL)handleFromOtherApp:(NSEvent *)event;
 + (BOOL)anyZoomable;
 + (NSWindow *)windowUnder:(NSPoint)pointer;
++ (NSArray<NSDictionary *> *)devWindowsAt:(NSPoint)pointer;
 + (NSDictionary *)devLastPinch;
++ (void)yieldPinchOn:(NSWindow *)window;
++ (void)dropStandInOn:(NSWindow *)window;
 @end
 
 namespace ardia_pip {

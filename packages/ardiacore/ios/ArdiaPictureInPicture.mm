@@ -118,7 +118,7 @@ void InstallDragMonitor() {
 id gOtherAppPinchMonitor;
 
 void FollowPinchesFromOtherApps() {
-  const BOOL wanted = ardia_pip_zoom::WantsOtherAppPinches(NSApp.isActive, [ArdiaPiPZoom anyZoomable]);
+  const BOOL wanted = ardia_pip_zoom::WantsOtherAppPinches(NSApp.isActive, [ArdiaPiPZoom enabled], [ArdiaPiPZoom anyZoomable]);
   if (wanted == (gOtherAppPinchMonitor != nil)) return;
   if (!wanted) {
     [NSEvent removeMonitor:gOtherAppPinchMonitor];
@@ -143,10 +143,21 @@ void InstallZoomMonitor() {
       [center addObserverForName:name object:NSApp queue:nil usingBlock:^(NSNotification *) {
         FollowPinchesFromOtherApps();
       }];
-    for (NSNotificationName name in @[ NSWindowWillCloseNotification, NSWindowDidChangeOcclusionStateNotification ])
-      [center addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *) {
-        RefreshPinchesFromOtherApps();
-      }];
+    [center addObserverForName:NSWindowWillCloseNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
+      [ArdiaPiPZoom dropStandInOn:note.object];
+      RefreshPinchesFromOtherApps();
+    }];
+    [center addObserverForName:NSWindowDidChangeOcclusionStateNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
+      NSWindow *window = note.object;
+      if (!window.visible) [ArdiaPiPZoom dropStandInOn:window];
+      RefreshPinchesFromOtherApps();
+    }];
+    [center addObserverForName:NSApplicationDidHideNotification object:NSApp queue:nil usingBlock:^(NSNotification *) {
+      [ArdiaPiPZoom dropStandInOn:nil];
+    }];
+    [center addObserverForName:NSUserDefaultsDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *) {
+      RefreshPinchesFromOtherApps();
+    }];
   }
   FollowPinchesFromOtherApps();
 }
@@ -216,6 +227,17 @@ NSView *DevFindView(NSView *view, NSString *className) {
   for (NSView *subview in view.subviews)
     if (NSView *found = DevFindView(subview, className)) return found;
   return nil;
+}
+
+NSString *DevZoomSetting(NSString *value) {
+  if (!ArdiaLaunchConfig.shared.testInstance) return @"test instances only";
+  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+  NSMutableDictionary *arguments = [[defaults volatileDomainForName:NSArgumentDomain] mutableCopy] ?: [NSMutableDictionary dictionary];
+  if ([value isEqual:@"default"]) [arguments removeObjectForKey:kZoomDefault];
+  else arguments[kZoomDefault] = @([value isEqual:@"1"]);
+  [defaults setVolatileDomain:arguments forName:NSArgumentDomain];
+  FollowPinchesFromOtherApps();
+  return [ArdiaPiPZoom enabled] ? @"1" : @"0";
 }
 
 NSString *DevJSON(NSDictionary *object) {
@@ -351,7 +373,7 @@ BOOL ActivateApp(NSString *why) {
 void WatchZoom() { InstallZoomMonitor(); }
 
 void PinchFromOtherApp(NSEvent *event) {
-  if (!ardia_pip_zoom::WantsOtherAppPinches(NSApp.isActive, [ArdiaPiPZoom anyZoomable])) return FollowPinchesFromOtherApps();
+  if (!ardia_pip_zoom::WantsOtherAppPinches(NSApp.isActive, [ArdiaPiPZoom enabled], [ArdiaPiPZoom anyZoomable])) return FollowPinchesFromOtherApps();
   [ArdiaPiPZoom handleFromOtherApp:event];
 }
 
@@ -461,6 +483,12 @@ void DocumentEntered(ArdiaWebView *view, ArdiaConsentStamp *stamp) {
 
 + (NSString *)devPictureInPictureAction:(NSString *)action {
   if ([action isEqual:@"pinchMonitor"]) return FollowsPinchesFromOtherApps() ? @"1" : @"0";
+  if ([action hasPrefix:@"zoomSetting:"]) return DevZoomSetting([action substringFromIndex:12]);
+  if ([action isEqual:@"appHidden"]) {
+    if (!ArdiaLaunchConfig.shared.testInstance) return @"test instances only";
+    [NSNotificationCenter.defaultCenter postNotificationName:NSApplicationDidHideNotification object:NSApp];
+    return @"posted";
+  }
   ArdiaPiPController *controller = nil;
   for (NSWindow *window in NSApp.windows)
     if ([ArdiaPiPController forWindow:window] && window.visible) controller = [ArdiaPiPController forWindow:window];

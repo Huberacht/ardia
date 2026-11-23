@@ -304,6 +304,7 @@ using namespace ardia_pip;
     @"requestedEventWindow" : @(target),
     @"active" : @(NSApp.isActive),
     @"followsOtherApps" : @(FollowsPinchesFromOtherApps()),
+    @"windows" : [ArdiaPiPZoom devWindowsAt:pointer],
   };
   return [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:answer options:0 error:nil] encoding:NSUTF8StringEncoding];
 }

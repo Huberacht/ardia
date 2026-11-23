@@ -8,8 +8,9 @@ a stale zero aspect and crashed); a pinch over the window resizes it without a c
 gesture to the browser window, while a pinch beside it is left alone; a pinch whose end never arrives, or that a new
 pinch replaces, hands off its stand-in; the other-app pinch path and a queued ⌘-scroll route to the window while Ardia is
 in the background (routing only: a real gesture from another app is a manual check); the pinch monitor for other apps
-follows the window tucking, untucking, closing and reopening; and each gesture sends one pictureInPictureStandIn or
-pictureInPictureResized event.
+follows the window tucking, untucking, closing and reopening and the zoom setting; an edge drag that starts while a
+pinch with no end is pending isn't ended by that pinch's stall deadline; hiding the app drops a pinch's stand-in at
+once; and each gesture sends one pictureInPictureStandIn or pictureInPictureResized event.
 
   node apps/browser/scripts/pip-resize-test.mjs <Debug app> [--out DIR] [--keep]
   node apps/browser/scripts/pip-resize-test.mjs --attach [--out DIR]
@@ -331,7 +332,8 @@ try {
       if (answer !== (on ? "1" : "0")) throw new Error(`fakeAppActive: ${JSON.stringify(answer)}`);
     };
     const standInFlags = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureStandIn").map((e) => e.payload ?? e);
-    const activations = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureActivated").length;
+    const activationEvents = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureActivated");
+    const activations = async () => (await activationEvents()).length;
     const magnify = async (args) => JSON.parse(await pip(`magnify:${args}`));
     const lastPinch = async () => JSON.parse(await pip("lastPinch"));
     const monitor = async () => (await engine("tabs.devPictureInPictureAction", { action: "pinchMonitor" })) === "1";
@@ -418,7 +420,8 @@ try {
           if (shrunk.width > before.width * 0.9) problems.push(`the pinch left it ${size(shrunk)}`);
           if (scrolled.width <= shrunk.width) problems.push(`⌘-scroll left it ${size(scrolled)}`);
           if (flags.length !== count + 1 || !flags.at(-1).fromOtherApp) problems.push(`stand-in events ${JSON.stringify(flags.slice(count))}`);
-          if ((await activations()) !== asked) problems.push("it asked to activate Ardia");
+          const extra = (await activationEvents()).slice(asked).map((e) => e.payload ?? e);
+          if (extra.length) problems.push(`it asked to activate Ardia: ${JSON.stringify(extra)}`);
           if (problems.length) throw new Error(problems.join("; "));
           return { before: size(before), pinched: size(shrunk), scrolled: size(scrolled) };
         } finally {
@@ -433,6 +436,90 @@ try {
         if (routed.followsOtherApps) throw new Error("the monitor stayed on");
         if (after.width !== before.width) throw new Error(`a pinch from another app resized it to ${size(after)} while Ardia was active`);
         return size(after);
+      });
+      await r.check("an edge drag that starts while a pinch with no end is pending keeps going past the pinch's stall deadline", async () => {
+        const area = rect((await shown()).visibleFrame);
+        await pip(`frame:{{${Math.round(area[0] + area[2] / 2 - 240)}, ${Math.round(area[1] + area[3] / 2 - 135)}}, {480, 270}}`);
+        await sleep(800);
+        const before = await state();
+        const seenBefore = (await lastPinch()).events;
+        await magnify(`${middle(before)},1.1,12,main,noEnd`);
+        await until("the pinch's events", async () => (await lastPinch()).events >= seenBefore + 13, 3000);
+        const x = before.width - 2, y = Math.round(before.height / 2);
+        await pip(`mouse:down:${x},${y}`);
+        await sleep(60);
+        const handedTo = await lastPinch();
+        const by = 120, moves = 16;
+        let midDrag = null;
+        for (let i = 1; i <= moves; i++) {
+          await pip(`mouse:dragged:${Math.round(x + (by * i) / moves)},${y}`);
+          await sleep(100);
+          if (i === 14) midDrag = { standIn: await pip("standIn"), shown: rect(JSON.parse(await pip("pinchStats")).shown)[2] };
+        }
+        await pip(`mouse:up:${x + by},${y}`);
+        await until("the edge drag's hand-off", async () => !(await pip("standIn")), 5000);
+        const after = await state();
+        const problems = [];
+        if (handedTo.locked) problems.push(`the pinch kept window ${handedTo.locked} after the edge drag began`);
+        if (!midDrag?.standIn) problems.push("the edge drag's stand-in was gone 1.4 s in, after the pinch's stall deadline");
+        if (Math.abs(after.width - (before.width + by)) > 4) problems.push(`the edge drag left it ${size(after)}, expected width ${before.width + by}`);
+        if (problems.length) throw new Error(problems.join("; "));
+        return { before: size(before), after: size(after), midDragWidth: midDrag.shown };
+      });
+      await r.check("a new pinch that starts inside a pending pinch's stand-in, outside the window's old frame, takes the window", async () => {
+        const before = await state();
+        const seenBefore = (await lastPinch()).events;
+        await magnify(`${middle(before)},1.3,12,main,noEnd`);
+        await until("the pinch's events", async () => (await lastPinch()).events >= seenBefore + 13, 3000);
+        const grownTo = rect(JSON.parse(await pip("pinchStats")).shown);
+        const x = before.width + 30, y = Math.round(before.height / 2);
+        if (grownTo[2] < before.width + 70) throw new Error(`inconclusive: the stand-in only reached ${grownTo[2]} pt`);
+        const routed = await magnify(`${x},${y},1.05,8,main`);
+        await handOff();
+        const seen = await lastPinch();
+        const after = await state();
+        const problems = [];
+        const candidate = routed.windows?.find((w) => w.number === routed.pip);
+        if (!candidate?.standIn || !candidate.standInClear) problems.push(`the hit test didn't see an uncovered stand-in: ${JSON.stringify(routed.windows)}`);
+        else if (rect(candidate.frame)[0] + rect(candidate.frame)[2] > rect(routed.pointer)[0]) problems.push("inconclusive: the pointer was over the old frame");
+        if (seen.routedTo !== routed.pip || !seen.consumed) problems.push(`the new pinch went to ${JSON.stringify(seen)}`);
+        if (after.width <= before.width + 40) problems.push(`it ended at ${size(after)}`);
+        if (problems.length) throw new Error(problems.join("; "));
+        return { before: size(before), standIn: grownTo[2], after: size(after) };
+      });
+      await r.check("hiding the app takes a pinch's stand-in away at once, without waiting for the display link", async () => {
+        const before = await state();
+        await magnify(`${middle(before)},1.1,12,main,noEnd`);
+        await sleep(200);
+        const during = await pip("standIn");
+        await engine("tabs.devPictureInPictureAction", { action: "appHidden" });
+        await sleep(80);
+        const after = await pip("standIn");
+        const lock = await lastPinch();
+        await sleep(400);
+        if (!during) throw new Error("no stand-in during the pinch");
+        if (after) throw new Error(`the stand-in ${after} was still up after the app hid`);
+        if (lock.locked) throw new Error(`the pinch still held window ${lock.locked}`);
+        return { standIn: during };
+      });
+      await r.check("in the background, turning the pinch-to-zoom setting off removes the pinch monitor for other apps and turning it on brings it back", async () => {
+        const steps = {};
+        await appActive(false);
+        try {
+          await sleep(300);
+          steps.on = await monitor();
+          steps.offSetting = await engine("tabs.devPictureInPictureAction", { action: "zoomSetting:0" });
+          await sleep(200);
+          steps.off = await monitor();
+        } finally {
+          steps.backSetting = await engine("tabs.devPictureInPictureAction", { action: "zoomSetting:default" });
+          await sleep(200);
+          steps.back = await monitor();
+          await appActive(true).catch(() => null);
+        }
+        const expected = { on: true, offSetting: "0", off: false, backSetting: "1", back: true };
+        if (JSON.stringify(steps) !== JSON.stringify(expected)) throw new Error(`steps ${JSON.stringify(steps)}, expected ${JSON.stringify(expected)}`);
+        return steps;
       });
       await r.check("in the background, the pinch monitor for other apps goes when the window tucks or closes and comes back when it untucks or reopens", async () => {
         const page = await instance.page(url, { timeout: 5000 });

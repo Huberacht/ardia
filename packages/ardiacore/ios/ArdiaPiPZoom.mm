@@ -44,6 +44,7 @@ using namespace ardia_pip;
   std::vector<double> _appliedAt;
   BOOL _pinchUnfocused;
   BOOL _pinchFromOtherApp;
+  NSInteger _pinchSession;
 }
 
 static CALayer *LayerHostIn(CALayer *layer) {
@@ -139,6 +140,7 @@ static __weak ArdiaPiPZoom *gEdgeResizing;
   const NSInteger direction = [window _resizeDirectionForMouseLocation:event.locationInWindow];
   if (direction < 0 || direction > 7) return NO;
   ArdiaPiPZoom *zoom = [self forWindow:window];
+  [self yieldPinchOn:window];
   [zoom pinchBegan];
   if (!zoom->_standIn) return NO;
   zoom->_follow = 0;
@@ -169,6 +171,10 @@ static __weak ArdiaPiPZoom *gEdgeResizing;
   return YES;
 }
 
++ (BOOL)edgeResizing {
+  return gEdgeResizing != nil;
+}
+
 - (void)edgeResizeTo:(NSPoint)pointer {
   const NSRect start = _resizeStart;
   static const int kSides[8][2] = {{1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}};
@@ -192,6 +198,7 @@ static __weak ArdiaPiPZoom *gEdgeResizing;
 }
 
 - (void)pinchBegan {
+  _pinchSession++;
   _follow = ardia_pip_zoom::kPinchFollow;
   [_ease invalidate], _ease = nil, _target = 0;
   if (_standIn && _handingOff) {
@@ -400,6 +407,14 @@ static __weak ArdiaPiPZoom *gEdgeResizing;
   _outer = nil;
   _inner = nil;
   _host = nil;
+}
+
+- (NSRect)shownFrame {
+  return _standIn ? _shown : _window.frame;
+}
+
+- (NSInteger)pinchSession {
+  return _pinchSession;
 }
 
 - (NSInteger)standInNumber {

@@ -148,14 +148,25 @@ int main() {
     CHECK(WindowUnder(windows, {200, 700}, 41) == 41);
     CHECK(WindowUnder(windows, {1200, 100}, 7) == 0);
     CHECK(WindowUnder(windows, {700, 500}, 7) == 0);
-    CHECK(WindowUnder(windows, {1200, 100}, 0) == 40);
+    CHECK(WindowUnder(windows, {1200, 100}, 0) == 0);
+    CHECK(WindowUnder(windows, {200, 700}, 0) == 0);
     CHECK(WindowUnder(windows, {1480, 100}, 40) == 0);
     CHECK(WindowUnder(windows, {1000, 16}, 40) == 40);
     CHECK(WindowUnder({}, {1200, 100}, 40) == 0);
-    const std::vector<Window> pinching{{40, 90, {1000, 16, 480, 270}}};
+    const std::vector<Window> pinching{{40, 90, {1000, 16, 480, 270}, {1000, 16, 480, 270}, false}};
     CHECK(WindowUnder(pinching, {1200, 100}, 90) == 40);
     CHECK(WindowUnder(pinching, {1200, 100}, 40) == 40);
     CHECK(WindowUnder(pinching, {200, 100}, 90) == 0);
+    const Rect stale{1000, 16, 480, 270}, grown{900, 16, 680, 383};
+    const std::vector<Window> clear{{40, 90, stale, grown, true}}, covered{{40, 90, stale, grown, false}};
+    CHECK(WindowUnder(clear, {950, 300}, 7) == 40);
+    CHECK(WindowUnder(clear, {950, 300}, 0) == 40);
+    CHECK(WindowUnder(covered, {950, 300}, 7) == 0);
+    CHECK(WindowUnder(covered, {950, 300}, 40) == 40);
+    CHECK(WindowUnder(covered, {1200, 100}, 7) == 0);
+    CHECK(WindowUnder(clear, {850, 300}, 40) == 0);
+    const std::vector<Window> noStandIn{{40, 0, stale, grown, true}};
+    CHECK(WindowUnder(noStandIn, {950, 300}, 7) == 0);
     const std::vector<Window> overlapping{{50, 0, {1100, 50, 300, 200}}, pip};
     CHECK(WindowUnder(overlapping, {1200, 100}, 50) == 50);
     CHECK(WindowUnder(overlapping, {1200, 100}, 40) == 40);
@@ -255,9 +266,10 @@ int main() {
     CHECK(!KeepsStandIn(true, true, true));
     CHECK(!KeepsStandIn(true, false, false));
     CHECK(!KeepsStandIn(false, true, false));
-    CHECK(WantsOtherAppPinches(false, true));
-    CHECK(!WantsOtherAppPinches(true, true));
-    CHECK(!WantsOtherAppPinches(false, false));
+    CHECK(WantsOtherAppPinches(false, true, true));
+    CHECK(!WantsOtherAppPinches(true, true, true));
+    CHECK(!WantsOtherAppPinches(false, true, false));
+    CHECK(!WantsOtherAppPinches(false, false, true));
   }
   {
     const double nan = std::nan(""), inf = HUGE_VAL;
@@ -277,7 +289,74 @@ int main() {
     CHECK(MagnifyFactor(1e308) == kMostMagnifyFactor && MagnifyFactor(-1e308) == kLeastMagnifyFactor);
     CHECK(!UsablePointer({nan, 1}) && !UsablePointer({1, inf}) && !UsablePointer({-inf, 1}) && !UsablePointer({1e9, 1}));
     CHECK(UsablePointer({-1512, 945}) && UsablePointer({0, 0}));
-    CHECK(WindowUnder({{40, 0, {1000, 16, 480, 270}}}, {nan, nan}, 0) == 0);
+    CHECK(WindowUnder({{40, 0, {1000, 16, 480, 270}}}, {nan, nan}, 40) == 0);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    BindSession(lock, 40, 5);
+    PinchStep changed = StepPinch(lock, Phase::Changed, 0, true);
+    CHECK(changed.session == 5 && changed.apply);
+    PinchStep stalled = StallPinch(lock);
+    CHECK(stalled.end && stalled.session == 5);
+    CHECK(SameSession(stalled.session, 5) && !SameSession(stalled.session, 6) && SameSession(0, 6));
+    PinchStep resumed = StepPinch(lock, Phase::Changed, 0, true);
+    CHECK(resumed.begin && resumed.session == 0);
+    BindSession(lock, 40, 7);
+    PinchStep replaced = StepPinch(lock, Phase::Began, 41, true);
+    CHECK(replaced.finish == 40 && replaced.finishSession == 7 && replaced.session == 0);
+    BindSession(lock, 40, 9);
+    CHECK(lock.session == 0);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    BindSession(lock, 40, 5);
+    YieldPinch(lock, 40);
+    const long edgeDragSession = 6;
+    PinchStep timeout = StallPinch(lock);
+    CHECK(timeout.window == 0 && !timeout.end);
+    CHECK(!SameSession(5, edgeDragSession));
+    PinchStep late = StepPinch(lock, Phase::Changed, 40, true);
+    CHECK(late.consume && late.window == 0 && !late.apply && !late.begin);
+    PinchStep lateEnd = StepPinch(lock, Phase::Ended, 40, true);
+    CHECK(lateEnd.consume && lateEnd.window == 0 && !lateEnd.end);
+    CHECK(!lock.owned);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    YieldPinch(lock, 41);
+    CHECK(lock.window == 40);
+    YieldPinch(lock, 0);
+    CHECK(lock.window == 0 && lock.owned);
+    CHECK(StallPinch(lock).window == 0);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    BindSession(lock, 40, 3);
+    PinchStep pending = FinishPending(lock);
+    CHECK(pending.finish == 40 && pending.finishSession == 3 && pending.window == 0 && !pending.consume);
+    CHECK(lock.window == 0 && lock.owned);
+    PinchStep next = StepPinch(lock, Phase::Began, 40, true);
+    CHECK(next.finish == 0 && next.window == 40 && next.begin);
+    StallPinch(lock);
+    CHECK(FinishPending(lock).finish == 0);
+    PinchLock idle;
+    CHECK(FinishPending(idle).finish == 0);
+  }
+  {
+    PinchLock lock;
+    PinchStep began = HoldPinch(lock, Phase::Began);
+    CHECK(began.consume && began.window == 0 && !began.apply && lock.owned && lock.window == 0);
+    PinchStep changed = HoldPinch(lock, Phase::Changed);
+    CHECK(changed.consume && !changed.apply);
+    CHECK(StallPinch(lock).window == 0);
+    PinchStep afterResize = StepPinch(lock, Phase::Changed, 40, true);
+    CHECK(afterResize.consume && afterResize.window == 0 && !afterResize.apply);
+    PinchStep ended = HoldPinch(lock, Phase::Ended);
+    CHECK(ended.consume && !lock.owned);
   }
   if (failures) return std::printf("%d failed\n", failures), 1;
   std::printf("pip-zoom: all passed\n");

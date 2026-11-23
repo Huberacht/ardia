@@ -200,6 +200,7 @@ NSString *CornerName(int corner) {
 }
 
 - (void)detach {
+  [ArdiaPiPZoom dropStandInOn:_window];
   [ArdiaPiPController abandonSwipeOn:_window];
   for (id observer in _observers) [NSNotificationCenter.defaultCenter removeObserver:observer];
   [_observers removeAllObjects];
@@ -391,6 +392,7 @@ NSString *CornerName(int corner) {
 
 - (void)setStashedEdge:(ArdiaPiPEdge)edge {
   _stashedEdge = edge;
+  if (edge != ArdiaPiPEdgeNone) [ArdiaPiPZoom dropStandInOn:_window];
   RefreshPinchesFromOtherApps();
   ArdiaPiPHandle *handle = _overlay.handle;
   if (edge != ArdiaPiPEdgeNone) {

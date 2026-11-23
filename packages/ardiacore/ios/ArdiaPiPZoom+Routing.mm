@@ -48,23 +48,57 @@ static BOOL gSeenFromOtherApp, gSeenConsumed;
   return NO;
 }
 
-+ (std::vector<ardia_pip_zoom::Window>)zoomableWindows {
+static long StandInCoverAt(long own, long standIn, long topmost) {
+  if (!topmost) return -1;
+  if (topmost == own || topmost == standIn) return 0;
+  CFArrayRef above = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenAboveWindow, (CGWindowID)own);
+  if (!above) return -1;
+  long cover = 0;
+  for (NSDictionary *info in (__bridge NSArray *)above)
+    if ([info[(__bridge id)kCGWindowNumber] longValue] == topmost) {
+      cover = topmost;
+      break;
+    }
+  CFRelease(above);
+  return cover;
+}
+
++ (std::vector<ardia_pip_zoom::Window>)zoomableWindowsAt:(NSPoint)pointer topmost:(long)topmost {
   std::vector<ardia_pip_zoom::Window> windows;
   for (NSNumber *number in [NSWindow windowNumbersWithOptions:0]) {
     NSWindow *window = [NSApp windowWithWindowNumber:number.integerValue];
     if (!window || ![self zooms:window]) continue;
     ArdiaPiPZoom *zoom = objc_getAssociatedObject(window, kZoomKey);
-    const NSRect frame = window.frame;
-    windows.push_back({(long)window.windowNumber, (long)[zoom standInNumber], {NSMinX(frame), NSMinY(frame), NSWidth(frame), NSHeight(frame)}});
+    const NSRect frame = window.frame, shown = zoom ? [zoom shownFrame] : frame;
+    ardia_pip_zoom::Window entry{(long)window.windowNumber, (long)[zoom standInNumber], {NSMinX(frame), NSMinY(frame), NSWidth(frame), NSHeight(frame)},
+                                 {NSMinX(shown), NSMinY(shown), NSWidth(shown), NSHeight(shown)}, false};
+    if (entry.standIn && ardia_pip_zoom::Contains(entry.shown, {pointer.x, pointer.y}))
+      entry.standInClear = StandInCoverAt(entry.number, entry.standIn, topmost) == 0;
+    windows.push_back(entry);
   }
   return windows;
 }
 
++ (NSArray<NSDictionary *> *)devWindowsAt:(NSPoint)pointer {
+  NSMutableArray *list = [NSMutableArray array];
+  const long topmost = [NSWindow windowNumberAtPoint:pointer belowWindowWithWindowNumber:0];
+  for (const ardia_pip_zoom::Window &window : [self zoomableWindowsAt:pointer topmost:topmost])
+    [list addObject:@{
+      @"number" : @(window.number),
+      @"standIn" : @(window.standIn),
+      @"frame" : NSStringFromRect(NSMakeRect(window.frame.x, window.frame.y, window.frame.w, window.frame.h)),
+      @"shown" : NSStringFromRect(NSMakeRect(window.shown.x, window.shown.y, window.shown.w, window.shown.h)),
+      @"standInClear" : @(window.standInClear),
+      @"coveredBy" : @(window.standIn ? StandInCoverAt(window.number, window.standIn, topmost) : 0),
+    }];
+  return list;
+}
+
 + (NSWindow *)windowUnder:(NSPoint)pointer {
   if (!ardia_pip_zoom::UsablePointer({pointer.x, pointer.y})) return nil;
-  const std::vector<ardia_pip_zoom::Window> windows = [self zoomableWindows];
-  if (windows.empty()) return nil;
+  if (![self anyZoomable]) return nil;
   const long topmost = [NSWindow windowNumberAtPoint:pointer belowWindowWithWindowNumber:0];
+  const std::vector<ardia_pip_zoom::Window> windows = [self zoomableWindowsAt:pointer topmost:topmost];
   const long number = ardia_pip_zoom::WindowUnder(windows, {pointer.x, pointer.y}, topmost);
   return number ? [NSApp windowWithWindowNumber:number] : nil;
 }
@@ -99,6 +133,13 @@ static BOOL gSeenFromOtherApp, gSeenConsumed;
                                      : (phase & (NSEventPhaseEnded | NSEventPhaseCancelled)) ? ardia_pip_zoom::Phase::Ended
                                      : phase == NSEventPhaseNone ? ardia_pip_zoom::Phase::None
                                                                  : ardia_pip_zoom::Phase::Changed;
+  if ([self edgeResizing]) {
+    const ardia_pip_zoom::PinchStep held = ardia_pip_zoom::HoldPinch(gPinchLock, step);
+    [self watchForStall];
+    [self noteSeen:event routedTo:0 consumed:held.consume fromOtherApp:fromOtherApp];
+    return held.consume;
+  }
+  if (step == ardia_pip_zoom::Phase::Began) [self apply:ardia_pip_zoom::FinishPending(gPinchLock) magnification:0 at:pointer fromOtherApp:fromOtherApp];
   const BOOL looks = step == ardia_pip_zoom::Phase::Began || (!gPinchLock.owned && !gPinchLock.elsewhere);
   NSWindow *under = looks ? [self windowUnder:pointer] : nil;
   NSWindow *locked = gPinchLock.window ? [NSApp windowWithWindowNumber:gPinchLock.window] : nil;
@@ -106,27 +147,51 @@ static BOOL gSeenFromOtherApp, gSeenConsumed;
       ardia_pip_zoom::StepPinch(gPinchLock, step, under ? (long)under.windowNumber : 0, locked && [self zooms:locked]);
   [self apply:next magnification:event.magnification at:pointer fromOtherApp:fromOtherApp];
   [self watchForStall];
-  gSeenEventWindow = event.windowNumber;
-  gSeenRoutedTo = next.window;
-  gSeenFromOtherApp = fromOtherApp;
-  gSeenConsumed = next.consume;
-  gSeenPinches++;
+  [self noteSeen:event routedTo:next.window consumed:next.consume fromOtherApp:fromOtherApp];
   return next.consume;
 }
 
++ (void)noteSeen:(NSEvent *)event routedTo:(long)window consumed:(BOOL)consumed fromOtherApp:(BOOL)fromOtherApp {
+  gSeenEventWindow = event.windowNumber;
+  gSeenRoutedTo = window;
+  gSeenFromOtherApp = fromOtherApp;
+  gSeenConsumed = consumed;
+  gSeenPinches++;
+}
+
 + (void)apply:(ardia_pip_zoom::PinchStep)next magnification:(double)magnification at:(NSPoint)pointer fromOtherApp:(BOOL)fromOtherApp {
-  if (NSWindow *finished = next.finish ? [NSApp windowWithWindowNumber:next.finish] : nil) [[self forWindow:finished] pinchEnded];
+  if (NSWindow *finished = next.finish ? [NSApp windowWithWindowNumber:next.finish] : nil) {
+    ArdiaPiPZoom *previous = [self forWindow:finished];
+    if (ardia_pip_zoom::SameSession(next.finishSession, [previous pinchSession])) [previous pinchEnded];
+  }
   NSWindow *window = next.window ? [NSApp windowWithWindowNumber:next.window] : nil;
   if (!window) return;
   ArdiaPiPZoom *zoom = [self forWindow:window];
+  const BOOL ours = next.begin || ardia_pip_zoom::SameSession(next.session, [zoom pinchSession]);
+  if (!ours) return;
   if (next.cancel) [zoom cancelStandIn];
   if (next.begin) {
     const BOOL unfocused = fromOtherApp || !window.keyWindow;
     [zoom pinchBegan];
     [zoom notePinchUnfocused:unfocused fromOtherApp:fromOtherApp];
+    ardia_pip_zoom::BindSession(gPinchLock, (long)window.windowNumber, (long)[zoom pinchSession]);
   }
   if (next.apply) [zoom pinchBy:ardia_pip_zoom::MagnifyFactor(magnification) at:pointer];
   if (next.end) [zoom pinchEnded];
+}
+
++ (void)yieldPinchOn:(NSWindow *)window {
+  ardia_pip_zoom::YieldPinch(gPinchLock, window ? (long)window.windowNumber : 0);
+  [self watchForStall];
+}
+
++ (void)dropStandInOn:(NSWindow *)window {
+  if (window) {
+    [(ArdiaPiPZoom *)objc_getAssociatedObject(window, kZoomKey) cancelStandIn];
+  } else {
+    for (NSWindow *each in NSApp.windows) [(ArdiaPiPZoom *)objc_getAssociatedObject(each, kZoomKey) cancelStandIn];
+  }
+  [self yieldPinchOn:window];
 }
 
 + (void)watchForStall {
@@ -152,6 +217,7 @@ static BOOL gSeenFromOtherApp, gSeenConsumed;
     @"consumed" : @(gSeenConsumed),
     @"events" : @(gSeenPinches),
     @"locked" : @(gPinchLock.window),
+    @"session" : @(gPinchLock.session),
     @"stalled" : @(gPinchLock.stalled),
     @"stallTimer" : @(gPinchStall.valid),
   };
