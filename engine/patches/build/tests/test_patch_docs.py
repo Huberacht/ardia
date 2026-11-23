@@ -119,9 +119,18 @@ def duplicates(rows, where):
     return problems
 
 
+RENDERS_NOTHING = re.compile(r'<!--.*?-->|<br\s*/?>|&nbsp;', re.S)
+PLACEHOLDER = re.compile(r'^(todo|tbd|tbc|fixme|xxx|n/?a|none|-+|\?+|\.+)$', re.I)
+
+
+def rendered(cell):
+    return RENDERS_NOTHING.sub('', cell).replace('`', '').replace('*', '').replace('_', '').strip()
+
+
 def empty_cells(rows, columns, where):
     return [f'{where}:{line}: `{name}` has an empty {column}'
-            for name, row, line in rows for column in columns if not row[column]]
+            for name, row, line in rows for column in columns
+            if not rendered(row[column]) or PLACEHOLDER.match(rendered(row[column]))]
 
 
 def engine_problems(series_text, doc_text, patch_files, where='docs/engine-build.md'):
@@ -297,6 +306,11 @@ class EngineChecker(unittest.TestCase):
     def test_an_empty_removable_when_fails(self):
         self.assertEqual(self.check(doc=ENGINE_DOC_SAMPLE.replace('Upstream fixes a', '')),
                          ['doc:5: `chromium-a.patch` has an empty Removable when'])
+
+    def test_a_removable_when_that_renders_nothing_fails(self):
+        for blank in ('<!-- TODO -->', 'TODO', 'n/a', '-', '`` **  **', '<br>'):
+            self.assertEqual(self.check(doc=ENGINE_DOC_SAMPLE.replace('Upstream fixes a', blank)),
+                             ['doc:5: `chromium-a.patch` has an empty Removable when'], blank)
 
     def test_a_row_for_a_removed_patch_fails(self):
         self.assertEqual(self.check(series='chromium chromium-a.patch\n', files={'chromium-a.patch'}),

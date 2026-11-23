@@ -356,7 +356,7 @@ fails when a line has no row here, a row's Line doesn't match it, a Removable wh
 | `chromium-safe-storage-no-silent-reset.patch` | skip | Its context is helium-macos' `prevent-reset-on-keychain-unavailability`, which a Windows tree doesn't have. Windows still needs a counterpart: a DPAPI decrypt failure must not silently replace the key (`dpapi_key_provider.cc`, `os_crypt_win.cc`) | With the Mac patch; a Windows counterpart would be its own `series-win` line |
 | `chromium-extension-state-mirror-hooks.patch` | skip | Its hooks feed the WebKit replica of each extension, which is Mac only; BUILD.gn's `if (!is_win)` list keeps the replica's engine calls out of the Windows engine | With the Mac patch |
 | `chromium-win-rtl-unittest-domsub.patch` | chromium | Puts back the `base_unittests` literals Helium's domain substitution breaks | Helium's domain substitution leaves those literals alone |
-| `chromium-win-load-local-state-delegate.patch` | chromium | `chrome_main_delegate.cc` calls `LoadLocalState` with no delegate, as stock Chrome does; the parameter comes from `chromium-cef-carryover.patch`, whose caller (H5) is Mac only | The carryover's `LoadLocalState` delegate goes, or a Windows caller passes one |
+| `chromium-win-load-local-state-delegate.patch` | chromium | `chrome_main_delegate.cc` calls `LoadLocalState` with no delegate, as stock Chrome does; the parameter comes from `chromium-cef-carryover-mac.patch`, whose caller (H5) is Mac only | The carryover's `LoadLocalState` delegate goes, or a Windows caller passes one |
 | `chromium-win-ardia-layer-calls-mac-only.patch` | chromium | The two calls into `chrome/browser/ardia` that Windows doesn't build (`RegisterManagementPolicyProviders`, `NewArdiaVideoOverlayWindow`) become Mac only; Windows makes Chrome's own Picture in Picture window | Windows builds both: the layer's Mac block and `pip/` |
 | `chromium-win-mac-host-sdk-any-toolchain.patch` | chromium | `mac_sdk.gni` may be read from any toolchain when a Mac host builds for Windows; arm64 needs it ([ARM64](#arm64)) | Chromium reads `mac_sdk.gni` from any toolchain, or Windows engines stop being built on a Mac |
 | `chromium-win-app-message-pump.patch` | chromium | The UI message pump offers each message to the app first, so React Native's windows get their keys and accelerators | Never while React Native Windows runs in the browser process |
@@ -531,7 +531,7 @@ In the order they happened on 2026-11-10:
    `generate_bindings.py` ran at once, each with a worker per core loading the IDL database: 171 Python processes,
    13 GB of swap, load 127, and SSH stopped answering. `05-build.sh` now defaults to 8 local jobs. siso has no
    separate link pool (`SISO_LIMITS=link=…` is "unknown limits name"), so the job count bounds links too.
-9. **`chrome`: `chrome_main_delegate.cc` calls `LoadLocalState` with two arguments**: `chromium-cef-carryover.patch`
+9. **`chrome`: `chrome_main_delegate.cc` calls `LoadLocalState` with two arguments**: `chromium-cef-carryover-mac.patch`
    added a third, and on the Mac `engine/ardiacore/apply.sh` updates this call. Fixed by
    `chromium-win-load-local-state-delegate.patch`.
 10. **`chrome.dll` doesn't link: two undefined symbols** from `chrome/browser/ardia`, which only the Mac builds:
