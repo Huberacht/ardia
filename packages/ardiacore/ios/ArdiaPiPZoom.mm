@@ -140,7 +140,7 @@ static __weak ArdiaPiPZoom *gEdgeResizing;
   const NSInteger direction = [window _resizeDirectionForMouseLocation:event.locationInWindow];
   if (direction < 0 || direction > 7) return NO;
   ArdiaPiPZoom *zoom = [self forWindow:window];
-  [self yieldPinchOn:window];
+  [self finishPendingPinch];
   [zoom pinchBegan];
   if (!zoom->_standIn) return NO;
   zoom->_follow = 0;

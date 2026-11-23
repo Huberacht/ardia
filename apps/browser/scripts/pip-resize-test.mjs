@@ -437,7 +437,7 @@ try {
         if (after.width !== before.width) throw new Error(`a pinch from another app resized it to ${size(after)} while Ardia was active`);
         return size(after);
       });
-      await r.check("an edge drag that starts while a pinch with no end is pending keeps going past the pinch's stall deadline", async () => {
+      await r.check("an edge drag that starts while a pinch with no end is pending keeps the pinch's size and keeps going past the pinch's stall deadline", async () => {
         const area = rect((await shown()).visibleFrame);
         await pip(`frame:{{${Math.round(area[0] + area[2] / 2 - 240)}, ${Math.round(area[1] + area[3] / 2 - 135)}}, {480, 270}}`);
         await sleep(800);
@@ -449,6 +449,7 @@ try {
         await pip(`mouse:down:${x},${y}`);
         await sleep(60);
         const handedTo = await lastPinch();
+        const start = await state();
         const by = 120, moves = 16;
         let midDrag = null;
         for (let i = 1; i <= moves; i++) {
@@ -462,9 +463,10 @@ try {
         const problems = [];
         if (handedTo.locked) problems.push(`the pinch kept window ${handedTo.locked} after the edge drag began`);
         if (!midDrag?.standIn) problems.push("the edge drag's stand-in was gone 1.4 s in, after the pinch's stall deadline");
-        if (Math.abs(after.width - (before.width + by)) > 4) problems.push(`the edge drag left it ${size(after)}, expected width ${before.width + by}`);
+        if (start.width <= before.width + 20) problems.push(`the pending pinch was dropped, not finished: ${size(before)} became ${size(start)} at the press`);
+        if (Math.abs(after.width - (start.width + by)) > 4) problems.push(`the edge drag left it ${size(after)}, expected width ${start.width + by}`);
         if (problems.length) throw new Error(problems.join("; "));
-        return { before: size(before), after: size(after), midDragWidth: midDrag.shown };
+        return { before: size(before), pinched: size(start), after: size(after), midDragWidth: midDrag.shown };
       });
       await r.check("a new pinch that starts inside a pending pinch's stand-in, outside the window's old frame, takes the window", async () => {
         const before = await state();

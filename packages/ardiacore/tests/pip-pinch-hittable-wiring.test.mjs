@@ -35,8 +35,10 @@ const webView = read("../ios/ArdiaWebView+PictureInPicture.mm");
 test("a pinch or a ⌘-scroll finds the Picture in Picture window under the pointer, not the window macOS handed the gesture to", () => {
   assert.doesNotMatch(zoom + routing, /if \(event\.window\) return event\.window;/);
   const under = body(routing, "+ (NSWindow *)windowUnder:(NSPoint)pointer {");
-  assert.match(under, /if \(!ardia_pip_zoom::UsablePointer\(\{pointer\.x, pointer\.y\}\)\) return nil;/);
-  assert.match(under, /\[NSWindow windowNumberAtPoint:pointer belowWindowWithWindowNumber:0\]/);
+  assert.match(under, /const long topmost = \[self topmostAt:pointer\];\s*if \(!topmost\) return nil;/);
+  const topmost = body(routing, "+ (long)topmostAt:(NSPoint)pointer {");
+  assert.match(topmost, /if \(!ardia_pip_zoom::UsablePointer\(\{pointer\.x, pointer\.y\}\) \|\| !\[self anyZoomable\]\) return 0;/);
+  assert.match(topmost, /\[NSWindow windowNumberAtPoint:pointer belowWindowWithWindowNumber:0\]/);
   assert.match(under, /ardia_pip_zoom::WindowUnder\(/);
   const pinch = body(routing, "+ (BOOL)routePinch:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {");
   assert.match(pinch, /ardia_pip_zoom::StepPinch\(gPinchLock,/);
@@ -86,7 +88,7 @@ test("a stand-in goes at once when its window tucks, closes, hides or the app hi
   const drop = body(routing, "+ (void)dropStandInOn:(NSWindow *)window {");
   assert.match(drop, /cancelStandIn\];[\s\S]*cancelStandIn\];[\s\S]*\[self yieldPinchOn:window\];/);
   const edge = body(zoom, "+ (BOOL)beginEdgeResize:(NSWindow *)window event:(NSEvent *)event {");
-  assert.ok(edge.indexOf("[self yieldPinchOn:window];") >= 0 && edge.indexOf("[self yieldPinchOn:window];") < edge.indexOf("[zoom pinchBegan];"));
+  assert.ok(edge.indexOf("[self finishPendingPinch];") >= 0 && edge.indexOf("[self finishPendingPinch];") < edge.indexOf("[zoom pinchBegan];"));
   assert.match(body(zoom, "- (void)pinchBegan {"), /^- \(void\)pinchBegan \{\s*_pinchSession\+\+;/);
   const apply = body(routing, "+ (void)apply:(ardia_pip_zoom::PinchStep)next");
   assert.match(apply, /if \(ardia_pip_zoom::SameSession\(next\.finishSession, \[previous pinchSession\]\)\) \[previous pinchEnded\];/);
@@ -96,15 +98,16 @@ test("a stand-in goes at once when its window tucks, closes, hides or the app hi
 
 test("only a window that is the topmost under the pointer, or a stand-in nothing covers there, takes a pinch", () => {
   assert.match(math, /const bool named = topmost && \(topmost == window\.number \|\| \(window\.standIn && topmost == window\.standIn\)\);/);
-  assert.match(math, /if \(window\.standInClear \|\| named\) return window\.number;/);
+  assert.match(math, /if \(window\.standIn\) \{\s*if \(Contains\(window\.shown, pointer\) && \(window\.standInClear \|\| named\)\) return window\.number;\s*continue;\s*\}/);
   assert.match(math, /if \(Contains\(window\.frame, pointer\) && named\) return window\.number;/);
 });
 
-test("a pinch during an edge drag is held, and a new pinch finishes a pending one before it looks for the window under the pointer", () => {
+test("a pinch during an edge drag is held, and a new pinch looks for the window under the pointer before it finishes a pending one", () => {
   const pinch = body(routing, "+ (BOOL)routePinch:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {");
-  assert.match(pinch, /if \(\[self edgeResizing\]\) \{\s*const ardia_pip_zoom::PinchStep held = ardia_pip_zoom::HoldPinch\(gPinchLock, step\);/);
-  const finish = pinch.indexOf("ardia_pip_zoom::FinishPending(gPinchLock)");
-  assert.ok(finish > 0 && finish < pinch.indexOf("[self windowUnder:pointer]"), "the pending pinch finishes before the hit test");
+  assert.match(pinch, /if \(\[self edgeResizing\]\) \{\s*const ardia_pip_zoom::PinchStep held = ardia_pip_zoom::HoldPinch\(gPinchLock, step\);\s*\[self apply:held /);
+  assert.match(pinch, /const ardia_pip_zoom::PinchStart start = ardia_pip_zoom::StartPinch\(gPinchLock, windows,[^;]*;\s*\[self apply:start\.finish [^;]*;\s*\[self apply:start\.step /);
+  assert.doesNotMatch(pinch, /FinishPending/);
+  assert.match(math, /inline PinchStart StartPinch\([^)]*\) \{\s*const long under = WindowUnder\(frontToBack, pointer, topmost\);\s*PinchStart start;\s*start\.finish = FinishPending\(lock\);/);
 });
 
 test("while a stand-in shows, a pinch is hit-tested against the rectangle it shows, where the topmost window under the pointer must sit below the Picture in Picture window", () => {

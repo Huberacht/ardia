@@ -211,6 +211,7 @@ typedef NS_ENUM(NSInteger, ArdiaPiPEdge) { ArdiaPiPEdgeNone = 0, ArdiaPiPEdgeLef
 + (NSArray<NSDictionary *> *)devWindowsAt:(NSPoint)pointer;
 + (NSDictionary *)devLastPinch;
 + (void)yieldPinchOn:(NSWindow *)window;
++ (void)finishPendingPinch;
 + (void)dropStandInOn:(NSWindow *)window;
 @end
 

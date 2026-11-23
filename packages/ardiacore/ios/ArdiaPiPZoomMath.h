@@ -106,8 +106,8 @@ inline bool Contains(Rect r, Point p) { return p.x >= r.x && p.x < r.maxX() && p
 inline long WindowUnder(const std::vector<Window> &frontToBack, Point pointer, long topmost) {
   for (const Window &window : frontToBack) {
     const bool named = topmost && (topmost == window.number || (window.standIn && topmost == window.standIn));
-    if (window.standIn && Contains(window.shown, pointer)) {
-      if (window.standInClear || named) return window.number;
+    if (window.standIn) {
+      if (Contains(window.shown, pointer) && (window.standInClear || named)) return window.number;
       continue;
     }
     if (Contains(window.frame, pointer) && named) return window.number;
@@ -205,11 +205,23 @@ inline PinchStep FinishPending(PinchLock &lock) {
 }
 
 inline PinchStep HoldPinch(PinchLock &lock, Phase phase) {
+  PinchStep step = phase == Phase::Changed || phase == Phase::None ? PinchStep{} : FinishPending(lock);
   if (phase == Phase::Began) lock = {0, true, false, false, 0};
   else if (phase == Phase::Ended) lock = {};
-  PinchStep step;
   step.consume = lock.owned || phase == Phase::Ended;
   return step;
+}
+
+struct PinchStart {
+  PinchStep finish, step;
+};
+
+inline PinchStart StartPinch(PinchLock &lock, const std::vector<Window> &frontToBack, Point pointer, long topmost) {
+  const long under = WindowUnder(frontToBack, pointer, topmost);
+  PinchStart start;
+  start.finish = FinishPending(lock);
+  start.step = StepPinch(lock, Phase::Began, under, true);
+  return start;
 }
 
 }
