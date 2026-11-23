@@ -3569,6 +3569,75 @@ Traps for anyone repeating this:
 - A background job started from the Bash tool stops after two hours, the local page server with it.
 - `xctrace` can't see Simlock's device set; `sample <pid>` on the simulator's app process works and is symbolised.
 
+#### The instant pass (2026-11-23)
+
+The owner found the iPhone app "taped together": touches that waited, chrome that caught up late, and glass that flashed.
+This pass, on branch `t3/improve-iphone-performance`, went through five review rounds with GPT 6.2 Sol, which scored it 5, 6, 7, 7 and 7.5.
+The one blocker left after round five, a picture held over a live page, is fixed in 4d6467000.
+
+Measured on one iPhone 17 Pro simulator (iOS 27, Release, lab build) on the Mac. The baseline is main at 0de7c551a and
+the head is 3c4db2ed3. A scripted flow taps through the same steps on the demo tabs: deck, card, page menu, Find,
+search, Go, bar swipes, new tab and cancel. The flow is recorded with `agent-device record` and the touch times come from
+its gesture telemetry. The video clock is aligned to the host clock by two status-bar time overrides, and steps are read
+by frame difference. Each figure is the median of three runs. The "first" figures include 20–100 ms of XCTest tap
+injection, so the lab lines inside the app are the precise ones.
+
+| Step | First change | Settled | Longest frame gap |
+| --- | --- | --- | --- |
+| Tabs → deck | 193 → 11 ms | 456 → 384 ms | 122 → 62 ms |
+| Card → page | 51 → 62 ms | 319 → 327 ms | 113 → 58 ms |
+| ··· → page menu | 319 → 210 ms | 834 → 732 ms | 73 → 75 ms |
+| Find on Page | 41 → 135 ms | 952 → 644 ms | 192 → 83 ms |
+| Close Find | 211 → 176 ms | 441 → 413 ms | 48 → 43 ms |
+| Address → search | 229 → 209 ms | 690 → 659 ms | 72 → 50 ms |
+| Go (search submitted) | 73 → 93 ms | 413 → 297 ms | 27 → 32 ms |
+| Bar swipe → next tab | 10 → 31 ms | 643 → 454 ms | 228 → 35 ms |
+| Bar swipe → previous tab | 22 → 27 ms | 749 → 526 ms | 193 → 58 ms |
+| + → new tab | 195 → 193 ms | 649 → 639 ms | 63 → 33 ms |
+| Cancel search | 4 → 6 ms | 424 → 201 ms | 232 → 18 ms |
+
+In-app lab lines at the head:
+- **Page menu:** press to rendered 7–9 ms, to appeared 82–98 ms.
+- **Warm search:** press to present 12–17 ms, to presented 57–81 ms.
+- **Find:** press to navigator visible ~49 ms, keyboard shown ~187 ms.
+- **New Tab cancel:** the morph lands at ~295 ms, and the bar's capsule glass takes over as it arrives.
+
+`PAGELAB menu`, `PAGELAB search` and `PAGELAB find` print these phases in lab builds. `PAGELAB glass` and `PAGELAB stage`
+trace glass visibility and the search stage during a close.
+
+What changed, by area:
+- **Touch and motion:**
+  - Reanimated's iOS fast path for worklet styles is on.
+  - Presses dim on the UI thread, and over glass only the glyph dims.
+  - The bar folds in the scroll's own commit.
+  - One settle spring, one glass fade and one page↔card move are shared.
+  - Native glass animates hiding as well as showing.
+- **Menus and sheets:**
+  - The page menu stays mounted and opens with its switches already read. Its follow-ups are bound to the opening, tab and URL, and Find starts as the sheet leaves.
+  - History, Bookmarks and Downloads open inside the menu's sheet.
+  - The `@expo/ui` BottomSheet patch adds `keepsContentMounted` and an immutable item per showing.
+- **Search:**
+  - It presents in one commit, with no source rebuild on the press and no reveal hold.
+  - The keyboard height is predicted only for the Search field in its own window.
+  - A cancel hands the morph's glass to the bar as it arrives.
+- **Pages:**
+  - Quiet pictures use async `takeSnapshot` after a native scroll-settled event, instead of a 2 s poll.
+  - iPhone reports page draws, so bar swipes land early as on Android (#3411).
+  - Covers are handed over by id and lift when the current document draws.
+- **Data:**
+  - SQLite runs `synchronous=NORMAL` after import.
+  - Tab writes go through one ordered queue, which Clear Archive and restore share.
+  - Snapshot files are ordered by process and ticket, and private pictures are kept per session.
+
+Telemetry to watch:
+- `page_covers_capped` against `tabs_bar_swiped` on iPhone: a rise means the paint probe stopped certifying arrivals.
+- `tab_writes_stalled` should stay near zero.
+- `search_opens_cold` shows how often the first search has no remembered rows.
+
+Open, from the round-five review: sheet replacement during a swipe-down, Find across a same-URL reload, back-forward
+cache identity for paint proof, keyboard geometry with two scenes, Unicode case in archive search, and cold Search with a
+large History. All of these need a real iPhone: touch-to-screen latency, 120 Hz hitches and Find's keyboard.
+
 #### Measuring speed on a real iPhone
 
 What it needs, for a yes or no:
