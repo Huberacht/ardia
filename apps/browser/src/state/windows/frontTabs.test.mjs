@@ -46,3 +46,36 @@ test("every consumer of front tab changes shares one store subscription, and the
     useBrowser.subscribeTo = subscribeTo;
   }
 });
+
+test("a consumer that leaves and comes back while a change is being handed out hears that change once, and the store listener survives", async () => {
+  const subscribeTo = useBrowser.subscribeTo;
+  let subscriptions = 0;
+  let unsubscribed = 0;
+  useBrowser.subscribeTo = (keys, listener) => {
+    subscriptions++;
+    const stop = subscribeTo(keys, listener);
+    return () => (unsubscribed++, stop());
+  };
+  try {
+    const { onFrontTabChanged } = await import("./frontTabs.ts");
+    S().hydrate({});
+    const w = S().createWindow({ url: "https://a.example/" });
+    const second = S().newTab(w, { url: "https://b.example/", background: true });
+    const heard = [];
+    let stop = () => {};
+    const rejoin = (change) => {
+      heard.push(change.after);
+      stop();
+      stop = onFrontTabChanged(rejoin);
+    };
+    stop = onFrontTabChanged(rejoin);
+    S().activate(second);
+    assert.deepEqual(heard, [second], "one switch, heard once");
+    assert.equal(unsubscribed, 0, "the store listener isn't torn down mid-dispatch");
+    assert.equal(subscriptions, 1);
+    stop();
+    assert.equal(unsubscribed, 1);
+  } finally {
+    useBrowser.subscribeTo = subscribeTo;
+  }
+});

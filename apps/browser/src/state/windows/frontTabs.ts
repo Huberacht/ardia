@@ -22,18 +22,37 @@ export function frontTabChanges(prev: Fronts, next: Fronts): FrontTabChange[] {
   return changes;
 }
 
+export const tabsLeftInOpenWindows = (prev: Fronts, s: BrowserState) =>
+  frontTabChanges(prev, s).flatMap(({ windowId, before }) => (before && s.windowOrder.includes(windowId) ? [before] : []));
+
 const listeners = new Set<FrontTabListener>();
 let stopWatching: (() => void) | null = null;
+let dispatching = 0;
+
+const stopIfUnwatched = () => {
+  if (dispatching || listeners.size || !stopWatching) return;
+  stopWatching();
+  stopWatching = null;
+};
+
+function dispatch(s: BrowserState, prev: BrowserState) {
+  const changes = frontTabChanges(prev, s);
+  if (!changes.length) return;
+  const audience = [...listeners];
+  dispatching++;
+  try {
+    for (const change of changes) for (const each of audience) if (listeners.has(each)) each(change, s);
+  } finally {
+    dispatching--;
+    stopIfUnwatched();
+  }
+}
 
 export function onFrontTabChanged(listener: FrontTabListener): () => void {
   listeners.add(listener);
-  stopWatching ??= useBrowser.subscribeTo(["windows"], (s, prev) => {
-    for (const change of frontTabChanges(prev, s)) for (const each of listeners) each(change, s);
-  });
+  stopWatching ??= useBrowser.subscribeTo(["windows"], dispatch);
   return () => {
     listeners.delete(listener);
-    if (listeners.size || !stopWatching) return;
-    stopWatching();
-    stopWatching = null;
+    stopIfUnwatched();
   };
 }
