@@ -138,6 +138,7 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
         scrollEdgeBelow.measure({ offset: page.scrollY });
         selectedRow.judge();
         if (!page.owns) return;
+        sharedGeometry.current.scrolled?.();
         noteRowsScrolled(windowRef.current);
         onScrollY(page.scrollY);
       },

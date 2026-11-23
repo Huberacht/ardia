@@ -103,7 +103,7 @@ class ProfilePager {
     }
     const resting = !snapshot || atRest(snapshot);
     if (!resting && ++this.idleOffTarget < IDLE_OFF_TARGET_LOOKS) return;
-    if (resting && this.state.getState().held) notePagerRestSeenByWatch(this.holdConsent);
+    if (snapshot && resting && this.state.getState().held) notePagerRestSeenByWatch(this.holdConsent);
     this.release();
   };
 

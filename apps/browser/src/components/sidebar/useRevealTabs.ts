@@ -18,48 +18,64 @@ export function revealScrollFor(row: { y: number; height: number }, at: { top: n
 
 type Scroller = Pick<ScrollView, "scrollTo">;
 
+const OWN_SCROLL_MS = 150;
+
 export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | null>, scrollY: RefObject<number>, geometry: RefObject<SidebarGeometry>, stillMotion: () => boolean | null = reduceMotion) {
     let switched: string | null = null;
     let opened: string | null = null;
     let viaPill = false;
     let frame = 0;
     let reveals = 0;
+    let waiting = false;
+    let ownScrollUntil = 0;
     const show = (row: { y: number; height: number }, pill: boolean) => {
       const { viewport, edgeLift } = geometry.current;
       const move = revealScrollFor(row, { top: scrollY.current ?? 0, viewport, edgeLift }, pill && !stillMotion());
-      if (move) scroll.current?.scrollTo(move);
+      if (!move) return;
+      ownScrollUntil = performance.now() + OWN_SCROLL_MS;
+      scroll.current?.scrollTo(move);
     };
     const reveal = () => {
       frame = 0;
       if (!geometry.current.viewport || !scroll.current) return;
-      const target = switched ?? opened;
-      const shownEntries = geometry.current.entriesShown?.();
-      if (target && shownEntries !== undefined && entriesThroughTabNow(windowId, target) > shownEntries) return;
       const mine = ++reveals;
       const tabId = switched ?? opened;
+      const shownEntries = geometry.current.entriesShown?.();
+      waiting = !!tabId && shownEntries !== undefined && entriesThroughTabNow(windowId, tabId) > shownEntries;
+      if (waiting) return;
       const pill = viaPill;
       switched = opened = null;
       viaPill = false;
       if (!tabId) return;
-      const row = locateTab(windowId, tabId, geometry.current, scroll.current as ScrollView, () => scrollY.current ?? 0);
+      const scroller = scroll.current;
+      const row = locateTab(windowId, tabId, geometry.current, scroller as ScrollView, () => scrollY.current ?? 0);
       if (!row) return;
-      if ("then" in row) void row.then((found) => found && mine === reveals && show(found, pill));
+      if ("then" in row) void row.then((found) => found && mine === reveals && scroll.current === scroller && show(found, pill));
       else show(row, pill);
     };
     const schedule = () => {
       if ((switched || opened) && !frame) frame = requestAnimationFrame(reveal);
     };
-    const unsubscribe = watchRevealTargets(windowId, ({ switched: nowSwitched, opened: nowOpened }, pill) => {
+    const unsubscribe = watchRevealTargets(windowId, ({ switched: nowSwitched, opened: nowOpened, replaced }, pill) => {
+      reveals++;
+      if (replaced && switched && waiting) switched = replaced;
       if (nowSwitched) switched = nowSwitched;
       if (nowOpened) opened = nowOpened;
       viaPill = pill;
       schedule();
     });
     geometry.current.laidOut = schedule;
+    geometry.current.scrolled = () => {
+      if (!waiting || performance.now() < ownScrollUntil) return;
+      waiting = false;
+      switched = opened = null;
+      viaPill = false;
+    };
     return () => {
       cancelAnimationFrame(frame);
       unsubscribe();
       geometry.current.laidOut = undefined;
+      geometry.current.scrolled = undefined;
     };
 }
 

@@ -157,6 +157,17 @@ test("the watch counts a rest only when it saw one: an idle pager that never rea
   assert.equal(takePagerCounts().profile_pager_rests_seen_by_watch, 0);
 });
 
+test("a pager with no snapshot left lets go of the hold without counting a rest it never saw", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const { w, native, held } = threeProfiles();
+  native("tracking", 0, "began");
+  native("settling", 1, "selected", 0.4);
+  pagerSnapshots.delete(w);
+  t.mock.timers.tick(50);
+  assert.equal(held(), null);
+  assert.equal(takePagerCounts().profile_pager_rests_seen_by_watch, 0);
+});
+
 test("a profile switch from elsewhere during a hold lets the sidebar follow at once", () => {
   const { w, order, native, held } = threeProfiles();
   native("tracking", 0, "began");
