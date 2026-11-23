@@ -9,7 +9,7 @@ let pinsBackedUp = 0;
 let pinBackupFailures = 0;
 let pinBackupsBeside = 0;
 let pinChoiceRepairs = 0;
-const SET_ASIDE_REASONS = ["empty", "invalid", "shape", "newer", "unreadable"] as const;
+const SET_ASIDE_REASONS = ["empty", "invalid", "shape", "newer", "unreadable", "rows"] as const;
 type SetAsideReason = (typeof SET_ASIDE_REASONS)[number];
 const noneSetAside = () => Object.fromEntries(SET_ASIDE_REASONS.map((r) => [r, 0])) as Record<SetAsideReason, number>;
 let setAside = noneSetAside();

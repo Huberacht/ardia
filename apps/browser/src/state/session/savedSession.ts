@@ -87,3 +87,11 @@ export function sessionFromSaved(raw: SavedObject): SavedSession {
     cleanedTabs: rows(raw.cleanedTabs, closedTabOk),
   };
 }
+
+const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+
+export const droppedRows = (raw: SavedObject, session: SavedSession) =>
+  listed(raw.windows) > Object.keys(session.windows).length ||
+  listed(raw.tabs) > Object.keys(session.tabs).length ||
+  listed(raw.groups) > Object.keys(session.groups ?? {}).length ||
+  listed(raw.splits) > Object.keys(session.splits ?? {}).length;

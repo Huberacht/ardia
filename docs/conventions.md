@@ -208,14 +208,16 @@ writeDocument(DOC, versionedJson(data, VERSION));
   integer, a missing step, or anything that isn't a plain object reads as nothing (the document's defaults), and is
   overwritten on the next save. Downgrades aren't supported.
 - `session.json` and `downloads.json` are the exception (`state/session/sessionSafety.ts`). One that exists but is
-  empty, broken, of an unknown shape (its core lists aren't lists), newer than the app, or unreadable is never written
-  over until the store has copied it to `<name>-unreadable-<ms>-<n>.json`. `copyDocument` copies the bytes, or the JS
-  saves the text when the store can't copy. Every retry reuses the same name. An existence probe that fails counts as
-  present.
-- Until that copy lands, every write to the document waits. Quitting waits for each held document, and received
-  synced tabs wait too, so a receipt never outruns the disk. The session then comes back from the newest daily backup
+  empty, broken, of an unknown shape (no session field at all, or core lists that aren't lists), newer than the app, or
+  unreadable is never written over until the store has copied it to `<name>-unreadable-<ms>-<n>.json`. The same goes
+  for one whose rows the reader had to drop: it still loads what is whole, but it is kept aside first. `copyDocument` copies the bytes, or the JS
+  saves the text when the store can't copy. Every retry reuses the same name, and only one copy runs at a time. A slow
+  copy that succeeds late still opens the writes. An existence probe that fails counts as present.
+- Until that copy lands, every write to the document waits. Quitting retries a copy that is waiting to retry and
+  waits for each held document. Received synced tabs wait too, so a receipt never outruns the disk. The session then comes back from the newest daily backup
   that reads and hydrates, `session-backup-<sun…sat>.json` (one per weekday, so seven at most; each holds
-  `{backupDay, backupAt, session}`). A session that reads but throws while hydrating counts as damaged too. With no
+  `{backupDay, backupAt, session}`). A session that reads but throws while it is prepared or hydrated counts as damaged too, and the next
+  backup is tried. With no
   backup it starts fresh, and the download history still loads. A missing file is a first launch: nothing is restored.
 - `readSaved` tells these cases apart, where `parseSaved` returns null for all of them.
 - The first session save of each calendar day writes that day's backup, unless today's slot already holds a backup

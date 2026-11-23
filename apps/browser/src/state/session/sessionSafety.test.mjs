@@ -7,7 +7,7 @@ globalThis.setTimeout = (callback, ms, ...args) => {
   return ms >= 1_000 ? timer.unref() : timer;
 };
 const { useBrowser } = await import("../browser/store.ts");
-const { flushPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesHeld, startPersistence, SESSION_VERSION } = await import("./persist.ts");
+const { flushPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesBlocked, startPersistence, SESSION_VERSION } = await import("./persist.ts");
 const { finishQuitSaves } = await import("../app/quit.ts");
 const { BACKUP_RETRY_MS, backupJson, backupName, localDay, rollingBackups, sessionBackups, SESSION_BACKUPS } = await import("./sessionSafety.ts");
 const { parsePinBackups, PINS_BACKUP_DOCUMENT } = await import("./pinGuard.ts");
@@ -446,12 +446,12 @@ test("received tabs wait while the session can't be written, so sync doesn't cou
   stub.unreadableDocs.add("session.json");
   stub.heldCopies.on = true;
   const stop = startPersistence();
-  assert.equal(sessionWritesHeld(), true);
+  assert.equal(sessionWritesBlocked(), true);
   stub.heldCopies.on = false;
   for (const land of stub.heldCopies.queue.splice(0)) land();
   await settle();
   stop();
-  assert.equal(sessionWritesHeld(), false);
+  assert.equal(sessionWritesBlocked(), false);
 });
 
 test("every retry of a failed copy goes to the same file, so failed tries don't pile up", async () => {
@@ -481,6 +481,122 @@ test("a damaged backup in today's slot is replaced on the day's first save", asy
   const at = new Date(2026, 4, 3, 9).getTime();
   stub.docs.set(backupName(at), `{"backupDay":"${localDay(at)}","backupAt":1,"session":{"tabs":[`);
   rollingBackups().afterSave('{"version":11,"n":1}', at);
+  await turn();
+  assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
+});
+
+test("a backup that throws while being prepared (session restore off, a numeric pinned URL) is skipped for an older one", async () => {
+  const older = realSession(["https://older.example/"]);
+  const newest = JSON.parse(realSession(["https://newest.example/"], { pin: "https://pin.example/" }));
+  newest.settings = { ...newest.settings, restoreSession: false };
+  newest.tabs = newest.tabs.map((t) => (t.pin ? { ...t, pinnedUrl: 42 } : t));
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-03", 1, older));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify(newest)));
+  stub.docs.set("session.json", "{");
+  const stop = startPersistence();
+  await settle();
+  stop();
+  assert.deepEqual(tabUrls(), ["https://older.example/"]);
+});
+
+test("a download row with a numeric profile doesn't stop the launch; the good rows load", async () => {
+  stub.docs.set("session.json", realSession());
+  stub.docs.set("downloads.json", JSON.stringify({ version: 3, downloads: [{ id: "bad", state: "complete", profile: 5 }, { id: "good", url: "https://files.example/a.zip", filename: "a.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 0 }] }));
+  const stop = startPersistence();
+  await settle();
+  stop();
+  assert.deepEqual(S().downloads.map((d) => d.filename), ["a.zip"]);
+  assert.deepEqual(tabUrls(), ["https://kept.example/one", "https://kept.example/two"]);
+});
+
+test("a version stamp alone is not a session: it is kept aside and the backup restored", async () => {
+  const good = realSession();
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-05", 1, good));
+  const stamp = JSON.stringify({ version: SESSION_VERSION, hello: "world" });
+  stub.docs.set("session.json", stamp);
+  const stop = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://kept.example/one", "https://kept.example/two"]);
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(asideCopies()[0]), stamp);
+});
+
+test("a session whose rows the reader had to drop loads what is whole and keeps the original aside first", async () => {
+  const good = JSON.parse(realSession());
+  const damaged = JSON.stringify({ ...good, tabs: [...good.tabs, { id: "broken" }, 7] });
+  stub.docs.set("session.json", damaged);
+  setConsentPeriod(true, "epoch-session-rows");
+  takeSessionWrites();
+  try {
+    const stop = startPersistence();
+    assert.deepEqual(tabUrls(), ["https://kept.example/one", "https://kept.example/two"]);
+    await settle();
+    stop();
+    assert.equal(takeSessionWrites().session_set_aside_rows, 1);
+  } finally {
+    setConsentPeriod(false, null);
+  }
+  assert.equal(stub.docs.get(asideCopies()[0]), damaged);
+  assert.equal(JSON.parse(stub.docs.get("session.json")).tabs.length, 2);
+});
+
+test("quitting during a copy's retry wait tries the copy again at once and saves the pending download", async () => {
+  stub.docs.set("session.json", realSession());
+  stub.docs.set("downloads.json", "{\"version\":3,\"downloads\":[{");
+  stub.refusedCopies.on = true;
+  stub.refusedSaves.on = true;
+  const stop = startPersistence();
+  await settle();
+  stub.refusedCopies.on = false;
+  stub.refusedSaves.on = false;
+  S().upsertDownload({ id: "d1", url: "https://files.example/a.zip", filename: "a.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 0 });
+  flushPersistence({ final: true });
+  await finishQuitSaves(3_000);
+  stop();
+  resumePersistence();
+  assert.equal(JSON.parse(stub.docs.get("downloads.json")).downloads[0].filename, "a.zip");
+});
+
+test("a write gate runs one copy at a time and takes its success whenever it comes", async () => {
+  const { writeGate } = await import("./sessionSafety.ts");
+  let runs = 0;
+  let finish;
+  const gate = writeGate(() => (runs++, new Promise((resolve) => (finish = resolve))), () => {});
+  for (let i = 0; i < 5; i++) assert.equal(gate.check().hold, true);
+  gate.tryNow();
+  assert.equal(runs, 1);
+  finish();
+  await turn();
+  assert.equal(gate.open(), true);
+  assert.equal(gate.check().hold, false);
+});
+
+test("a failed pre-migration backup is retried on its own, without any local change, and then lets received tabs in", async () => {
+  const good = JSON.parse(realSession(["https://old-version.example/"]));
+  stub.docs.set("session.json", JSON.stringify({ ...good, version: 9 }));
+  stub.refusedSaves.on = true;
+  const stop = startPersistence();
+  await settle();
+  assert.equal(sessionWritesBlocked(), true);
+  stub.refusedSaves.on = false;
+  stub.stagedDocs.clear();
+  const now = Date.now;
+  Date.now = () => now() + 120_000;
+  try {
+    await settle();
+  } finally {
+    Date.now = now;
+  }
+  stop();
+  assert.equal(sessionWritesBlocked(), false);
+  assert.equal(JSON.parse(stub.docs.get(backupName(Date.now()))).session.version, 9);
+});
+
+test("today's slot holding a backup that parses but isn't a session is replaced", async () => {
+  clean();
+  const at = new Date(2026, 4, 3, 9).getTime();
+  stub.docs.set(backupName(at), JSON.stringify({ backupDay: localDay(at), backupAt: 1, session: { version: SESSION_VERSION, windows: "bad" } }));
+  rollingBackups(() => {}, (value) => value.windows !== "bad" && Array.isArray(value.windows)).afterSave('{"version":11,"windows":[],"tabs":[],"n":1}', at);
   await turn();
   assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
 });

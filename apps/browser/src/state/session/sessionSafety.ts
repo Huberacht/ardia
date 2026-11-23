@@ -2,7 +2,7 @@ import { copyDocument, documentExists, readDocument, saveDocument } from "../../
 import { isFields, isString } from "../../lib/decode";
 import { readSaved, readSavedValue, type Migrations, type SavedObject, type SavedProblem } from "../../lib/savedDocument";
 
-export type UnusableReason = SavedProblem | "unreadable";
+export type UnusableReason = SavedProblem | "unreadable" | "rows";
 export type FoundDocument =
   | { state: "missing" }
   | { state: "usable"; text: string; doc: SavedObject; from: number }
@@ -35,11 +35,20 @@ export function findDocument(name: string, version: number, migrations: Migratio
 const listOrAbsent = (value: unknown) => value === undefined || Array.isArray(value);
 const fieldsOrAbsent = (value: unknown) => value === undefined || isFields(value);
 
-export const wholeSession = (doc: SavedObject) =>
-  ["windows", "tabs", "groups", "splits", "windowOrder", "profileOrder", "closedTabs", "closedWindows"].every((key) => listOrAbsent(doc[key])) &&
-  ["profiles", "settings", "parkedPins"].every((key) => fieldsOrAbsent(doc[key]));
+const SESSION_LISTS = ["windows", "tabs", "groups", "splits", "windowOrder", "profileOrder", "closedTabs", "closedWindows"];
+const SESSION_OBJECTS = ["profiles", "settings", "parkedPins"];
 
-export const wholeDownloads = (doc: SavedObject) => listOrAbsent(doc.downloads);
+export const wholeSession = (doc: SavedObject) =>
+  [...SESSION_LISTS, ...SESSION_OBJECTS].some((key) => doc[key] !== undefined) &&
+  SESSION_LISTS.every((key) => listOrAbsent(doc[key])) &&
+  SESSION_OBJECTS.every((key) => fieldsOrAbsent(doc[key]));
+
+export const wholeDownloads = (doc: SavedObject) => Array.isArray(doc.downloads);
+
+export function usableSessionValue(value: unknown, version: number, migrations: Migrations): SavedObject | null {
+  const read = readSavedValue(value, version, migrations);
+  return "doc" in read && wholeSession(read.doc) ? read.doc : null;
+}
 
 let asideCount = 0;
 
@@ -55,42 +64,43 @@ export function keepCopy(name: string, copy: string, text: string | null): Promi
 }
 
 export type WriteCheck = { hold: false } | { hold: true; againIn: number | null };
-export type WriteGate = { check: () => WriteCheck; landing: () => Promise<void> | null; open: () => boolean };
+export type WriteGate = { check: () => WriteCheck; landing: () => Promise<void> | null; open: () => boolean; tryNow: () => void };
 
 export const GATE_RETRY_MS = 2_000;
 export const MAX_GATE_RETRY_MS = 60_000;
 export const GATE_TIMEOUT_MS = 30_000;
 const OPEN: WriteCheck = { hold: false };
 
-function withinTimeout(attempt: Promise<void>): Promise<void> {
+function bounded(attempt: Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out")), GATE_TIMEOUT_MS);
+  const waited = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, GATE_TIMEOUT_MS);
     (timer as { unref?: () => void }).unref?.();
   });
-  return Promise.race([attempt, late]).finally(() => clearTimeout(timer));
+  return Promise.race([attempt, waited]).finally(() => clearTimeout(timer));
 }
 
 export function writeGate(task: () => Promise<void>, saveAgain: (delay: number) => void, failed: () => void = () => {}): WriteGate {
   let open = false;
+  let running: Promise<void> | null = null;
   let landing: Promise<void> | null = null;
   let failures = 0;
   let againAt = 0;
   const start = () => {
     let attempt: Promise<void>;
     try {
-      attempt = withinTimeout(task());
+      attempt = task();
     } catch (error) {
       attempt = Promise.reject(error);
     }
-    landing = attempt.then(
+    const mine: Promise<void> = attempt.then(
       () => {
         open = true;
-        landing = null;
+        running = null;
         saveAgain(0);
       },
       () => {
-        landing = null;
+        running = null;
         failures++;
         failed();
         const delay = Math.min(MAX_GATE_RETRY_MS, GATE_RETRY_MS * 2 ** (failures - 1));
@@ -98,19 +108,27 @@ export function writeGate(task: () => Promise<void>, saveAgain: (delay: number) 
         saveAgain(delay);
       },
     );
+    running = mine;
+    const waiting: Promise<void> = bounded(mine).then(() => {
+      if (landing === waiting) landing = null;
+    });
+    landing = waiting;
   };
   start();
   return {
     check: () => {
       if (open) return OPEN;
-      if (landing) return { hold: true, againIn: null };
+      if (running) return { hold: true, againIn: null };
       const wait = againAt - Date.now();
       if (wait > 0) return { hold: true, againIn: wait };
       start();
       return { hold: true, againIn: null };
     },
-    landing: () => landing,
+    landing: () => (open ? null : landing),
     open: () => open,
+    tryNow: () => {
+      if (!open && !running) start();
+    },
   };
 }
 
@@ -175,11 +193,11 @@ export function sessionBackups<T>(parse: (doc: SavedObject) => T | null, version
   const today = dayNumber(localDay(now));
   const usable: RestoredBackup<T>[] = [];
   for (const backup of found) {
-    const read = readSavedValue(backup.session, version, migrations);
-    if (!("doc" in read) || !wholeSession(read.doc)) continue;
+    const doc = usableSessionValue(backup.session, version, migrations);
+    if (!doc) continue;
     let value: T | null = null;
     try {
-      value = parse(read.doc);
+      value = parse(doc);
     } catch {
       value = null;
     }
@@ -192,7 +210,7 @@ export const BACKUP_RETRY_MS = 5 * 60_000;
 
 export type RollingBackups = { afterSave: (sessionJson: string, now?: number) => void; beforeMigration: (sessionText: string, now?: number) => Promise<void> };
 
-export function rollingBackups(written: (beforeMigration: boolean) => void = () => {}): RollingBackups {
+export function rollingBackups(written: (beforeMigration: boolean) => void = () => {}, usable: (session: unknown) => unknown = () => true): RollingBackups {
   let doneDay: string | null = null;
   let writing = false;
   let retryAt = 0;
@@ -214,7 +232,7 @@ export function rollingBackups(written: (beforeMigration: boolean) => void = () 
   };
   const heldToday = (now: number, day: string) => {
     const held = readBackup(backupName(now));
-    return held?.day === day;
+    return held?.day === day && !!usable(held.session);
   };
   return {
     afterSave: (sessionJson, now = Date.now()) => {
