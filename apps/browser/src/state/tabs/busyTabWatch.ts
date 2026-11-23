@@ -298,6 +298,8 @@ export function presentTab(tabId: string): () => void {
 
 export const noteTabHidden = (tabId: string) => markHidden(tabId);
 
+export const noteTabLoaded = (tabId: string) => markHidden(tabId);
+
 function dropWork() {
   hiddenSince.clear();
   generation++;

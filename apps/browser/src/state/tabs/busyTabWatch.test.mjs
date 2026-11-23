@@ -37,6 +37,7 @@ const { webviews, webviewRef } = await import("../../platform/webviews.ts");
 const { readHeat, sustainedBusy, keptActive, siteToKeepActive, validReadings } = await import("./busyProcesses.ts");
 const { watchBusyTabs, startBusyTabWatch, toastName, presentTab, noteTabHidden } = await import("./busyTabWatch.ts");
 const { shownTabIds } = await import("./shownTabs.ts");
+const { noteReady } = await import("./tabLifecycle.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
 const { slowTimersForTests } = await import("../../platform/slowTimers.ts");
 const { setQuitting } = await import("../app/quit.ts");
@@ -399,6 +400,27 @@ test("#4031 S2: a holder that goes out of sight when the frozen copy showing it 
   webviews.clear();
   noteTabHidden(holder);
   assert.equal(timers.pending(), null, "and disarms again once nothing loaded is hidden");
+});
+
+test("#4031 r4672506169: a hidden tab whose page becomes loaded after its webview registered arms the watch when its page reports ready, with no store listener", () => {
+  const timers = slowTimersForTests(() => Date.now());
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [], busyTabWarnings: true });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const front = Object.keys(S().tabs)[0];
+  const later = S().newTab(w, { url: "https://later.example/", background: true });
+  useBrowser.setState((x) => ({ tabs: { ...x.tabs, [later]: { ...x.tabs[later], page: { kind: "idle" } } } }));
+  webviews.clear();
+  for (const id of [front, later]) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  startBusyTabWatch();
+  noteTabHidden(later);
+  assert.equal(timers.pending(), null, "its webview is there but its page isn't loaded, so nothing is hidden and loaded");
+  useBrowser.setState((x) => ({ tabs: { ...x.tabs, [later]: { ...x.tabs[later], page: { kind: "loaded", nav: { url: "https://later.example/", seq: 1 } } } } }));
+  assert.equal(timers.pending(), null, "the page loading in the store wakes nothing: there is no store listener");
+  noteReady(later);
+  assert.notEqual(timers.pending(), null, "the page reporting ready arms the watch");
+  webviews.clear();
+  noteTabHidden(later);
 });
 
 test("Warn about busy background tabs: off stops the watch and its reads, on arms it again; it persists, is counted, and is macOS only", async () => {
@@ -890,6 +912,7 @@ function hiddenBusyTab(start, pid, { title = "Busy Loop Page" } = {}) {
 }
 
 test("#4018: no store listener; a tab shown between ticks restarts its hidden time from what the tick can see or what its pane reports", async (t) => {
+  startBusyTabWatch();
   const start = Date.now() + 15000 * MINUTE;
   t.mock.timers.enable({ apis: ["Date"], now: start });
   const at = (sec) => t.mock.timers.setTime(start + sec * SECOND);
