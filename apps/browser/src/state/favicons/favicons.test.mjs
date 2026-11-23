@@ -28,6 +28,7 @@ const { adoptFavicons, askFaviconTheme, faviconFailed, faviconOutlived, noteFavi
 const { useFavicon, usePrivateViewer } = await import("./faviconHooks.ts");
 const { WindowContext } = await import("../browser/hooks.ts");
 const { lookupOrder, pendingRetries } = await import("./faviconKeys.ts");
+const { openProfile, useProfileLoading } = await import("../profiles/profileLoading.ts");
 const { seedFavicons } = await import("./launchFavicons.ts");
 const { adoptIconPage, dropOutlivedFavicon, noteIconPage } = await import("./iconPage.ts");
 const { useBrowser } = await import("../browser/store.ts");
@@ -325,6 +326,38 @@ test("a row inside a private window that names its profile shows that profile's 
   } finally {
     useFavicons.setState(before);
     S().closeWindow(windowId);
+  }
+});
+
+test("a private row whose own profile opens later asks it then, even with Default's icon showing meanwhile", async () => {
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  useBrowser.setState((s) => ({ profiles: { ...s.profiles, work: { ...s.profiles.default, id: "work", name: "Work" } }, profileOrder: [...s.profileOrder, "work"] }));
+  useProfileLoading.setState({ deferred: true, opened: { [engineProfile(S(), "default")]: true }, unloaded: {} });
+  const stop = startFavicons();
+  const page = "https://work-opens-later.test/";
+  const before = useFavicons.getState();
+  useFavicons.setState({ profiles: { ...before.profiles, [engineProfile(S(), "default")]: { pages: { [page]: "data:default" }, srcs: {}, appearances: {} } } });
+  const peeked = [];
+  globalThis.faviconsForTest = () => empty();
+  globalThis.peekFaviconsForTest = (profile, pages) => (peeked.push(profile), answering(profile === "work" ? { [page]: "data:work" } : {})(profile, pages));
+  const windowId = S().createWindow({ kind: "private", profileId: "default" });
+  const viewer = S().windows[windowId].profileId;
+  const row = mount(() => useFavicon(page, null, viewer, "work"));
+  try {
+    await settle();
+    assert.equal(peeked.includes("work"), false);
+    assert.equal(resolveFavicon(page, null, viewer, "work")?.uri, "data:default");
+    openProfile("work");
+    await waitFor(() => resolveFavicon(page, null, viewer, "work")?.uri === "data:work");
+  } finally {
+    row.unmount();
+    S().closeWindow(windowId);
+    stop();
+    useFavicons.setState(before);
+    useProfileLoading.setState({ deferred: false, opened: {}, unloaded: {} });
+    delete globalThis.faviconsForTest;
+    delete globalThis.peekFaviconsForTest;
   }
 });
 

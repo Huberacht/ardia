@@ -3,7 +3,7 @@ import { withoutFragment } from "../../lib/url";
 import { keyedWatch, recordWatch, useKeyed, watchWindowRecord } from "../browser/keyedWatch";
 import { WindowContext } from "../browser/hooks";
 import { useBrowser } from "../browser/store";
-import { askable, keysFor, privateViewer } from "./faviconKeys";
+import { keysFor, privateViewer } from "./faviconKeys";
 import { changedIds } from "../browser/changes";
 import type { IconTheme } from "../../platform/favicons";
 import { askFaviconTheme, EMPTY_ICONS, lookupOrder, resolveFavicon, useFavicons, watchMissingFavicon, type ResolvedFavicon } from "./favicons";
@@ -81,7 +81,7 @@ export const useResolvedFaviconUri = (url: string, src?: string | null, profileI
   useKeyed(watchFaviconPage, pageKey(url, src), () => resolveFavicon(url, src, profileId, source)?.uri ?? null);
 
 function sourceUnanswered(url: string, viewer: string | undefined, source: string | undefined): boolean {
-  if (!url || !source || !privateViewer(viewer) || source === viewer || !askable(source)) return false;
+  if (!url || !source || !privateViewer(viewer) || source === viewer) return false;
   const { profiles } = useFavicons.getState();
   return !keysFor(viewer, source).some((key) => profiles[key]?.pages[withoutFragment(url)] !== undefined);
 }
