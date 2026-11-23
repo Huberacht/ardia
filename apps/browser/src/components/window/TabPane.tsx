@@ -32,7 +32,8 @@ import { PageOverlays } from "./PageOverlays";
 import { useProfileTheme } from "./ThemeScope";
 import { markNewTabPane } from "../../state/omnibox/newTabMarks";
 import { useNewTabKeptForPage } from "../../state/tabs/newTabKeep";
-import { LINGERING_PANE } from "./lingeringPane";
+
+const LINGERING_PANE = "ardia.lingeringPane";
 
 export const TabPane = memo(function TabPane({
   tabId,
@@ -111,7 +112,7 @@ export const TabPane = memo(function TabPane({
     if (isNewTab) markNewTabPane(tabId, `visible ${visible} small ${small} split ${inSplit} card ${emptyCard}`);
   }, [visible, isNewTab, small, inSplit, emptyCard]);
   const newTabPageShown = visible && isNewTab && !small && !inSplit && !emptyCard;
-  const keptNewTab = useNewTabKeptForPage(tabId, newTabPageShown, visible && !isNewTab);
+  const keptNewTab = useNewTabKeptForPage(tabId, newTabPageShown, visible && !isNewTab && !own.appPage);
   const prewarmed = usePrewarm(visible && isNewTab && !emptyCard && !mounted && !small && !inSplit);
   const toolbar = chrome.kind !== "none";
   const bar = paneBar(chrome, { visible, fullscreen, lingering });
@@ -163,7 +164,7 @@ export const TabPane = memo(function TabPane({
             {(mounted || prewarmed) && <TabWebView tabId={tabId} visible={visible && !newTabShown && !isNewTab} selected={focused} warm={!!warm && !newTabShown && !isNewTab} />}
             {((visible && isNewTab && !small) || keptNewTab) && (
               <NewTabDropArea contentAreaOf={tabId} accepting={!keptNewTab && !covered && !lingering} kept={keptNewTab}>
-                {keptNewTab ? <NewTabPage key={tabId} tabId={tabId} toolbar={toolbar} /> : inSplit ? <SplitEmptyState tabId={tabId} focused={focused} /> : emptyCard ? <EmptyCard windowId={windowId} tabId={tabId} /> : <NewTabPage key={tabId} tabId={tabId} toolbar={toolbar} />}
+                {!keptNewTab && inSplit ? <SplitEmptyState tabId={tabId} focused={focused} /> : !keptNewTab && emptyCard ? <EmptyCard windowId={windowId} tabId={tabId} /> : <NewTabPage key={tabId} tabId={tabId} toolbar={toolbar} kept={keptNewTab} />}
               </NewTabDropArea>
             )}
             {visible && own.appPage && <InternalPage contentAreaOf={tabId} />}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { useBrowser } from "../browser/store";
 import { watchShownLive } from "../browser/hooks";
 import { consentToken } from "../telemetry/client";
@@ -45,7 +45,7 @@ export function useNewTabKeptForPage(tabId: string, newTabShown: boolean, pageSh
     setShownBefore(newTabShown);
     setKept(!newTabShown && pageShown);
   }
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!kept) return;
     const consent = consentToken();
     notePageOverlay("newTabKeptForPage", consent);

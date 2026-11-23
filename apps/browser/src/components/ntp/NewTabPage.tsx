@@ -49,7 +49,7 @@ export function barWidth(viewWidth: number) {
   return Math.min(content, viewWidth - 28);
 }
 
-export function NewTabPage({ tabId, toolbar = true }: { tabId: string; toolbar?: boolean }) {
+export function NewTabPage({ tabId, toolbar = true, kept = false }: { tabId: string; toolbar?: boolean; kept?: boolean }) {
   const theme = useTheme();
   const windowId = useWindowId();
   const incognito = useWindow(windowId, (w) => w?.kind === "private");
@@ -153,7 +153,7 @@ export function NewTabPage({ tabId, toolbar = true }: { tabId: string; toolbar?:
           />
         ))}
         <Surface fill={hex(theme.ntpBarSolid)} cornerRadius={NTP_BAR.radius} style={{ padding: NTP_BAR.contentInset }}>
-          {onboarding ? <View style={{ height: BAR_HEIGHT - 2 * NTP_BAR.contentInset }} /> : <Omnibox variant="hero" tabId={tabId} />}
+          {kept ? null : onboarding ? <View style={{ height: BAR_HEIGHT - 2 * NTP_BAR.contentInset }} /> : <Omnibox variant="hero" tabId={tabId} />}
           <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, borderRadius: NTP_BAR.radius, borderWidth: NTP_BAR.border, borderColor: theme.ntpBarBorder }} />
         </Surface>
       </View>
