@@ -72,6 +72,8 @@ export type LookCounts = {
   backdropFrames?: number;
   sourceRecordings?: number;
   blurLayerRenders?: number;
+  stripRecords?: number;
+  strips?: number;
   retints?: number;
   restingLayerHolds?: number;
   restingLayered?: number;

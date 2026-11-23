@@ -65,12 +65,47 @@ internal object GlassRules {
         !wasShown && shown && attached && durationMs > 0f && animatorsOn
 }
 
+internal object GlassCounts {
+    const val UNSOURCED_SETTLE_MS = 1000L
+
+    var onUnsourced: (() -> Unit)? = null
+}
+
+internal class UnsourcedWatch(private val schedule: (Runnable, Long) -> Unit, private val cancel: (Runnable) -> Unit, private val stillUnsourced: () -> Boolean) {
+    var counted = false
+        private set
+    private var waiting = false
+    private val check = Runnable {
+        waiting = false
+        if (!counted && stillUnsourced()) {
+            counted = true
+            GlassCounts.onUnsourced?.invoke()
+        }
+    }
+
+    fun settled(choice: FrostPage.Choice) {
+        if (counted) return
+        if (FrostPage.unsourced(choice)) {
+            if (!waiting) {
+                waiting = true
+                schedule(check, GlassCounts.UNSOURCED_SETTLE_MS)
+            }
+        } else if (waiting) {
+            waiting = false
+            cancel(check)
+        }
+    }
+
+    fun stop() {
+        if (!waiting) return
+        waiting = false
+        cancel(check)
+    }
+}
+
 internal object GlassLaunch {
     @Volatile
     var flat: Boolean = false
-
-    @Volatile
-    var overPage: Boolean = false
 }
 
 class GlassView(context: Context, appContext: AppContext) : FrostView(context, appContext) {
@@ -110,6 +145,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     private var rimDrawn: LiquidGlassRules.Rim? = null
     private var lensThisDraw = false
     private val bound = LensBound()
+    private val unsourced = UnsourcedWatch({ job, delay -> postDelayed(job, delay) }, { job -> removeCallbacks(job) }) { isAttachedToWindow && !isClassic && FrostPage.unsourced(lastChoice) }
 
     init {
         variant = "glass"
@@ -130,7 +166,9 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
 
     internal val lensBound: LensBound get() = bound.measure(width, height, density)
 
-    override fun pageLive(): Boolean = LiquidGlassRules.pageLive(Build.VERSION.SDK_INT, isClassic, GlassLaunch.overPage)
+    override fun pageLive(): Boolean = LiquidGlassRules.pageLive(Build.VERSION.SDK_INT, isClassic)
+
+    override fun blursBackdrop(): Boolean = LiquidGlassRules.samplesBackdrop(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, GlassShaders.lens.failed) || super.blursBackdrop()
 
     override fun solidFill(dark: Boolean): Int? = classicFill?.let { if (dark) it.second else it.first }
 
@@ -153,6 +191,8 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
         lensThisDraw = lens != null
         return lens
     }
+
+    override fun settled(choice: FrostPage.Choice) = unsourced.settled(choice)
 
     override fun forgetLayer() {
         super.forgetLayer()
@@ -184,6 +224,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     override fun onDetachedFromWindow() {
+        unsourced.stop()
         fader?.cancel()
         fader = null
         if (shown) surfaceAlpha = 1f

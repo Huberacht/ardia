@@ -38,6 +38,7 @@ class LookModule : Module() {
             readGlassLaunch()
             SystemMotion.note(systemLook.seed())
             GlassShaders.onFailed = PendingCounts.glassShaderFailures(context.applicationContext)
+            GlassCounts.onUnsourced = PendingCounts.glassUnsourced(context.applicationContext)
             systemLookObserver = SystemLookObserver(context.applicationContext) { systemLook.check() }.also { it.start() }
         }
 
@@ -115,6 +116,8 @@ class LookModule : Module() {
                 "backdropFrames" to LookActivity.backdropFrames,
                 "sourceRecordings" to LookActivity.sourceRecordings,
                 "blurLayerRenders" to LookActivity.blurLayerRenders,
+                "stripRecords" to LookActivity.stripRecords,
+                "strips" to counts.strips,
                 "retints" to LookActivity.retints,
                 "restingLayerHolds" to LookActivity.restingLayerHolds,
                 "restingLayered" to LookActivity.restingLayered,
@@ -270,7 +273,6 @@ class LookModule : Module() {
         val activity = appContext.currentActivity ?: return
         val arguments = LaunchExtras.arguments(LaunchExtras.of(activity.intent))
         GlassLaunch.flat = LiquidGlassRules.flatAsked(arguments)
-        GlassLaunch.overPage = LiquidGlassRules.overPageAsked(arguments)
     }
 
     companion object {

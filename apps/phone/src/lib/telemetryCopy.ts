@@ -130,6 +130,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["drawn_menu_actions_chosen"],
       },
       {
+        text: "In the same daily counts, on Android: how many glass buttons and bars found nothing under them to blur, so they drew a flat fill instead of glass. Counts only",
+        fields: ["glass_unsourced"],
+      },
+      {
         text: "In the same daily counts, on Android: how often you tapped the Ardia logo on the start page to search. Counts only, and never while browsing privately",
         fields: ["start_logo_taps"],
       },

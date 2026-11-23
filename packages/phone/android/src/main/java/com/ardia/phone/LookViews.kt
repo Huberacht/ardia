@@ -246,6 +246,8 @@ internal object LookActivity {
     @Volatile
     var blurLayerRenders = 0L
     @Volatile
+    var stripRecords = 0L
+    @Volatile
     var retints = 0L
     @Volatile
     var restingLayerHolds = 0L
@@ -1012,7 +1014,7 @@ class DeckBackdropView(context: Context, appContext: AppContext) : LookView(cont
         ownDrawPending = true
         holdRestingOnLayers()
         invalidate()
-        enclosingSource()?.let(FrostSources::retintFrostsOf)
+        enclosingSource()?.let(FrostSources::sceneChanged)
     }
 
     override fun onAttachedToWindow() {
@@ -1411,6 +1413,14 @@ internal object FrostSources {
         for (frost in frosts()) if (frost.lastChoice?.path == FrostPage.Path.Tinted && frost.source != null && find(frost.source) === source) frost.retint()
     }
 
+    fun sceneChanged(source: FrostSourceView) {
+        for (frost in frostsOf(source)) when (frost.lastChoice?.path) {
+            FrostPage.Path.Tinted -> frost.retint()
+            FrostPage.Path.Live -> frost.invalidate()
+            else -> Unit
+        }
+    }
+
     fun frostsOf(source: FrostSourceView): List<FrostView> = frosts().filter { it.source != null && find(it.source) === source }
 }
 
@@ -1459,9 +1469,17 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         if (before != null && before != finding) FrostSources.redrawFrostsOf(this)
     }
 
+    private val strips = HashMap<FrostStrip.Key, FrostStrip>()
+
+    internal fun strip(key: FrostStrip.Key): FrostStrip = strips.getOrPut(key) { FrostStrip(key) }
+
+    internal val stripsHeld: Collection<FrostStrip> get() = strips.values
+
     private fun stopRecording() {
         recorder?.discardDisplayList()
         recorder = null
+        strips.values.forEach(FrostStrip::release)
+        strips.clear()
     }
 
     internal fun release() {
@@ -1512,6 +1530,10 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
 internal object FrostPage {
     const val SOURCE_NOT_DRAWN = "source not drawn yet"
     const val OFF_SCREEN = "off screen: nothing to blur until it is seen"
+    const val NO_SOURCE = "no source"
+    const val INSIDE_SOURCE = "inside its own source"
+
+    fun unsourced(choice: Choice?): Boolean = choice?.path == Path.Fallback && (choice.reason == NO_SOURCE || choice.reason == INSIDE_SOURCE)
 
     fun holdsPage(view: View, sized: (View) -> Boolean = { it.width > 0 && it.height > 0 }): Boolean {
         if (view.visibility != View.VISIBLE) return false
@@ -1552,13 +1574,88 @@ internal object FrostPage {
         budgetDegraded -> Choice(Path.Fallback, "look budget: this phone measured over budget")
         hasSource && onlyBackdropUnder && (!blurOverBackdrop || !blurSupported) -> Choice(Path.Tinted, "only the backdrop under it: a fill tinted from the backdrop's colours, no blur")
         !blurSupported -> Choice(Path.Fallback, "below Android 12")
-        !hasSource -> Choice(Path.Fallback, "no source")
+        !hasSource -> Choice(Path.Fallback, NO_SOURCE)
         !hardware -> Choice(Path.Fallback, "software canvas")
-        insideSource -> Choice(Path.Fallback, "inside its own source")
+        insideSource -> Choice(Path.Fallback, INSIDE_SOURCE)
         holdsPage && pageMode == FrostSources.PageMode.Solid -> Choice(Path.Solid, "page under the frost, solid page mode")
         !sourceHasContent -> Choice(Path.Fallback, SOURCE_NOT_DRAWN)
         holdsPage -> Choice(Path.Live, "page under the frost, redrawn every frame")
         else -> Choice(Path.Live, "no page under the frost")
+    }
+}
+
+internal class FrostStrip(val key: Key) {
+    data class Key(val blurPx: Float, val saturation: Float, val scale: Float)
+
+    val node = RenderNode("ardiaFrostStrip")
+    var left = 0
+        private set
+    var top = 0
+        private set
+    var width = 0
+        private set
+    var height = 0
+        private set
+    var records = 0L
+        private set
+    private var recordedAt = Long.MIN_VALUE
+    private var effectSet = false
+
+    fun fresh(drawingTime: Long, area: Rect): Boolean = recordedAt == drawingTime && covers(area)
+
+    fun covers(area: Rect): Boolean = width > 0 && height > 0 && area.left >= left && area.top >= top && area.right <= left + width && area.bottom <= top + height
+
+    fun record(source: RenderNode, area: Rect, sourceWidth: Int, sourceHeight: Int, drawingTime: Long) {
+        val placed = FrostStrip.place(area, sourceWidth, sourceHeight, key.scale)
+        left = placed.left
+        top = placed.top
+        width = placed.width()
+        height = placed.height()
+        recordedAt = drawingTime
+        records += 1
+        val scaledLeft = (left / key.scale).toInt()
+        val scaledTop = (top / key.scale).toInt()
+        node.setPosition(scaledLeft, scaledTop, scaledLeft + ceil(width / key.scale).toInt().coerceAtLeast(1), scaledTop + ceil(height / key.scale).toInt().coerceAtLeast(1))
+        if (!effectSet && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            node.setRenderEffect(FrostStrip.frosted(key.blurPx / key.scale, key.saturation))
+            effectSet = true
+        }
+        val recording = node.beginRecording()
+        try {
+            recording.scale(1f / key.scale, 1f / key.scale)
+            recording.translate(-left.toFloat(), -top.toFloat())
+            recording.drawRenderNode(source)
+        } finally {
+            node.endRecording()
+        }
+    }
+
+    fun release() {
+        node.discardDisplayList()
+        recordedAt = Long.MIN_VALUE
+        width = 0
+        height = 0
+    }
+
+    val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4
+
+    companion object {
+        fun place(area: Rect, sourceWidth: Int, sourceHeight: Int, scale: Float): Rect {
+            val step = scale.toInt().coerceAtLeast(1)
+            val left = (area.left.coerceIn(0, sourceWidth) / step) * step
+            val top = (area.top.coerceIn(0, sourceHeight) / step) * step
+            val right = area.right.coerceIn(left, sourceWidth.coerceAtLeast(left))
+            val bottom = area.bottom.coerceIn(top, sourceHeight.coerceAtLeast(top))
+            return Rect(left, top, right, bottom)
+        }
+
+        @androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+        fun frosted(radius: Float, saturation: Float): RenderEffect {
+            val blur = RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
+            if (saturation == 1f) return blur
+            val matrix = android.graphics.ColorMatrix().apply { setSaturation(saturation) }
+            return RenderEffect.createChainEffect(RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(matrix)), blur)
+        }
     }
 }
 
@@ -1612,8 +1709,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         }
 
     private var blurNode: RenderNode? = null
-    private var effectRadius = -1f
-    private var effectSaturation = -1f
+    private var lensApplied = false
     private var effectLens: RenderEffect? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bounds = RectF()
@@ -1679,6 +1775,10 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     internal open fun pageLive(): Boolean = false
 
+    internal open fun blursBackdrop(): Boolean = LookSwitch.blurOverBackdrop(context)
+
+    internal open fun settled(choice: FrostPage.Choice) = Unit
+
     internal open fun solidFill(dark: Boolean): Int? = null
 
     internal open fun lensEffect(marginPx: Float, scale: Float): RenderEffect? = null
@@ -1686,8 +1786,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal open fun forgetLayer() {
         blurNode?.discardDisplayList()
         blurNode = null
-        effectRadius = -1f
-        effectSaturation = -1f
+        lensApplied = false
         effectLens = null
         layerWidth = 0
         layerHeight = 0
@@ -1698,7 +1797,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal fun wantsSource(): Boolean {
         if (!canBlur()) return false
         val from = FrostSources.find(source)
-        return FrostPage.wantsSource(lastChoice, onlyBackdropUnder = from?.holdsOnlyBackdrop == true, blurOverBackdrop = LookSwitch.blurOverBackdrop(context), holdsPage = from?.holdsPage == true, pageMode = effectivePageMode())
+        return FrostPage.wantsSource(lastChoice, onlyBackdropUnder = from?.holdsOnlyBackdrop == true, blurOverBackdrop = blursBackdrop(), holdsPage = from?.holdsPage == true, pageMode = effectivePageMode())
     }
 
     private var reportedFinding: String? = null
@@ -1706,9 +1805,11 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     private fun report(choice: FrostPage.Choice, found: String?) {
         if (choice == lastChoice && found == reportedFinding) return
         val wanted = wantsSource()
+        val changed = choice != lastChoice
         lastChoice = choice
         reportedFinding = found
         if (wantsSource() != wanted) FrostSources.sourceChanged(source)
+        if (changed) settled(choice)
         if (PhoneLab.isOn) {
             android.util.Log.i("PAGELAB", "PAGELAB look frost $logLabel ${width}x$height path=${choice.path.name.lowercase()} (${choice.reason}); source ${source ?: "none"}: ${found ?: "not found"}")
         }
@@ -1728,7 +1829,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             reduceTransparency = reduceTransparency,
             budgetDegraded = budgetDegraded,
             onlyBackdropUnder = from?.holdsOnlyBackdrop == true,
-            blurOverBackdrop = LookSwitch.blurOverBackdrop(context),
+            blurOverBackdrop = blursBackdrop(),
             hasSource = from != null,
             sourceHasContent = from?.hasContent == true,
             hardware = canvas.isHardwareAccelerated,
@@ -1745,20 +1846,20 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             val blur = style.blurRadius.value * density
             val scale = FrostScale.of(blur)
             val margin = LiquidGlassRules.marginPx(blur, lensReach())
-            applyEffect(layerNode, blur / scale, style.saturation, lensEffect(margin, scale))
+            applyLens(layerNode, lensEffect(margin, scale))
             val offset = offsetTo(from)
             lastOffset = offset
             val dx = (offset shr 32).toInt()
             val dy = offset.toInt()
+            val strip = shareStrip(from, FrostStrip.Key(blur, style.saturation, scale), stripArea(-dx, -dy, margin))
             layerWidth = ceil((width + margin * 2) / scale).toInt()
             layerHeight = ceil((height + margin * 2) / scale).toInt()
             layerNode.setPosition(0, 0, layerWidth, layerHeight)
             LookActivity.blurLayerRenders += 1
             val recording = layerNode.beginRecording()
             try {
-                recording.scale(1f / scale, 1f / scale)
-                recording.translate(dx + margin, dy + margin)
-                from.node?.let(recording::drawRenderNode)
+                recording.translate((dx + margin) / scale, (dy + margin) / scale)
+                recording.drawRenderNode(strip.node)
             } finally {
                 layerNode.endRecording()
             }
@@ -1845,20 +1946,45 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         }
     }
 
-    private fun applyEffect(layerNode: RenderNode, radius: Float, saturation: Float, lens: RenderEffect?) {
+    private fun applyLens(layerNode: RenderNode, lens: RenderEffect?) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        if (radius == effectRadius && saturation == effectSaturation && lens === effectLens) return
-        effectRadius = radius
-        effectSaturation = saturation
+        if (lensApplied && lens === effectLens) return
+        lensApplied = true
         effectLens = lens
-        val blur = RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
-        val frosted = if (saturation == 1f) {
-            blur
-        } else {
-            val matrix = android.graphics.ColorMatrix().apply { setSaturation(saturation) }
-            RenderEffect.createChainEffect(RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(matrix)), blur)
+        layerNode.setRenderEffect(lens)
+    }
+
+    private val stripBox = Rect()
+
+    private fun stripArea(x: Int, y: Int, margin: Float): Rect {
+        val reach = ceil(margin).toInt()
+        stripBox.set(x - reach, y - reach, x + width + reach, y + height + reach)
+        return stripBox
+    }
+
+    internal fun stripNeed(from: FrostSourceView, into: Rect): FrostStrip.Key? {
+        if (!isAttachedToWindow || !isShown || width <= 0 || height <= 0 || !canBlur()) return null
+        val style = LookRules.frost(variant, lookOrNull)
+        val blur = style.blurRadius.value * density
+        val margin = LiquidGlassRules.marginPx(blur, lensReach())
+        val offset = offsetTo(from)
+        into.set(stripArea(-(offset shr 32).toInt(), -offset.toInt(), margin))
+        return FrostStrip.Key(blur, style.saturation, FrostScale.of(blur))
+    }
+
+    private fun shareStrip(from: FrostSourceView, key: FrostStrip.Key, mine: Rect): FrostStrip {
+        val strip = from.strip(key)
+        val now = drawingTime
+        if (strip.fresh(now, mine)) return strip
+        val area = Rect(mine)
+        val theirs = Rect()
+        for (other in FrostSources.frostsOf(from)) {
+            if (other === this) continue
+            if (other.stripNeed(from, theirs) == key) area.union(theirs)
         }
-        layerNode.setRenderEffect(if (lens == null) frosted else RenderEffect.createChainEffect(lens, frosted))
+        from.node?.let { strip.record(it, area, from.width, from.height, now) }
+        LookActivity.stripRecords += 1
+        return strip
     }
 
     private fun offsetTo(from: View): Long {
@@ -1894,6 +2020,7 @@ internal object LookMemory {
         val layerNames: List<String> = emptyList(),
         val heldStill: Int = 0,
         val tinted: Int = 0,
+        val strips: Int = 0,
     )
 
     fun counts(): Counts {
@@ -1901,12 +2028,14 @@ internal object LookMemory {
         val frosts = FrostSources.frosts()
         val layered = frosts.filter { it.holdsLayer }
         val decks = DeckBackdrops.all()
+        val strips = sources.flatMap { it.stripsHeld }
         return Counts(
             sources = sources.size,
             recording = sources.count { it.isRecording },
             frosts = frosts.size,
             holdingLayers = layered.size,
-            layerBytes = layered.sumOf { it.layerWidth.toLong() * it.layerHeight * 4 },
+            layerBytes = layered.sumOf { it.layerWidth.toLong() * it.layerHeight * 4 } + strips.sumOf { it.bytes },
+            strips = strips.size,
             decks = decks.size,
             animating = decks.count { it.isAnimating && !it.heldStill },
             recordingNames = sources.filter { it.isRecording }.map { it.sourceId ?: "?" },
@@ -1920,7 +2049,7 @@ internal object LookMemory {
         val counts = counts()
         val largest = FrostSources.frosts().filter { it.holdsLayer }.maxByOrNull { it.layerWidth.toLong() * it.layerHeight }
         return "look ${if (LookSwitch.isOff(context)) "off" else "on"}: ${counts.recording} of ${counts.sources} frost source(s) recording ${counts.recordingNames}, " +
-            "${counts.holdingLayers} of ${counts.frosts} frost(s) holding a blur layer (${counts.tinted} tinted from the backdrop), about ${"%.1f".format(counts.layerBytes / MB)} MB" +
+            "${counts.holdingLayers} of ${counts.frosts} frost(s) holding a layer over ${counts.strips} shared blur strip(s) (${counts.tinted} tinted from the backdrop), about ${"%.1f".format(counts.layerBytes / MB)} MB" +
             (largest?.let { " (largest ${it.logLabel} ${it.layerWidth}x${it.layerHeight})" } ?: "") +
             ", ${counts.animating} of ${counts.decks} deck backdrop(s) animating (${counts.heldStill} held still while the screen moves), frosts with a layer ${counts.layerNames}"
     }

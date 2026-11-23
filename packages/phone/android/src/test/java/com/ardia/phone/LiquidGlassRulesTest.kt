@@ -30,14 +30,21 @@ class LiquidGlassRulesTest {
     }
 
     @Test
-    fun glassOverAPageRecordsThePageOnlyWhenTheLabAsksOnAndroid13() {
-        assertFalse("recording the page under the bar tripled the F4's janky frames", LiquidGlassRules.pageLive(sdk = 34, classic = false, overPageAsked = false))
-        assertTrue(LiquidGlassRules.pageLive(sdk = 34, classic = false, overPageAsked = true))
-        assertTrue(LiquidGlassRules.pageLive(sdk = 33, classic = false, overPageAsked = true))
-        assertFalse("Android 12 keeps the solid page mode the M3 needed", LiquidGlassRules.pageLive(sdk = 32, classic = false, overPageAsked = true))
-        assertFalse(LiquidGlassRules.pageLive(sdk = 34, classic = true, overPageAsked = true))
-        assertTrue(LiquidGlassRules.overPageAsked(mapOf("ArdiaGlassOverPage" to true)))
-        assertFalse(LiquidGlassRules.overPageAsked(LaunchExtras.arguments(mapOf("ArdiaGlassOverPage" to true), allowed = false)))
+    fun glassOverAPageRecordsThePageLiveFromAndroid13WithNoLabFlag() {
+        assertTrue("the page bar refracts the page by default since the shared strip made recording it cheap", LiquidGlassRules.pageLive(sdk = 34, classic = false))
+        assertTrue(LiquidGlassRules.pageLive(sdk = 33, classic = false))
+        assertFalse("Android 12 has no lens, so it keeps the solid page mode the M3 needed", LiquidGlassRules.pageLive(sdk = 32, classic = false))
+        assertFalse(LiquidGlassRules.pageLive(sdk = 34, classic = true))
+    }
+
+    @Test
+    fun theLensSamplesTheDeckBackdropWhereverItCanRun() {
+        assertTrue(LiquidGlassRules.samplesBackdrop(sdk = 34, classic = false, flat = false, lensFailed = false))
+        assertTrue(LiquidGlassRules.samplesBackdrop(sdk = 33, classic = false, flat = false, lensFailed = false))
+        assertFalse("Android 12's glass has no lens, so the tinted fill stands in for a blur of the soft backdrop", LiquidGlassRules.samplesBackdrop(sdk = 32, classic = false, flat = false, lensFailed = false))
+        assertFalse(LiquidGlassRules.samplesBackdrop(sdk = 34, classic = false, flat = true, lensFailed = false))
+        assertFalse(LiquidGlassRules.samplesBackdrop(sdk = 34, classic = true, flat = false, lensFailed = false))
+        assertFalse("a lens the GPU refused leaves nothing for the live layer to add over the tint", LiquidGlassRules.samplesBackdrop(sdk = 34, classic = false, flat = false, lensFailed = true))
     }
 
     @Test

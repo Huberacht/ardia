@@ -224,6 +224,21 @@ export function LookFrost({
       </View>
     );
   const shade = incognito || (dark ?? theme.dark);
+  if (variant === "glass" && glassIsNative())
+    return (
+      <Glass
+        source={source}
+        shape="rounded"
+        cornerRadius={cornerRadius}
+        interactive={false}
+        {...lookColors(look, incognito, shade)}
+        dark={shade}
+        reduceTransparency={reduceTransparency}
+        style={[style, { borderRadius: cornerRadius, backgroundColor: fill }]}
+      >
+        {children}
+      </Glass>
+    );
   return (
     <Frost
       source={source}
