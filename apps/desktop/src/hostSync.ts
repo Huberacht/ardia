@@ -388,7 +388,9 @@ const invoke = (host: ArdiaHost, method: string) => (...args: unknown[]) =>
   invokeHost(`ArdiaSync.${method}`, { args: args.map((arg) => (arg === undefined ? null : arg)) }, host);
 
 let startOpenFailureCount: () => OpenFailureCount = () => () => {};
-let reportedCore: "rust" | "native" | null = null;
+type SyncCore = "rust" | "native";
+let reportedCore: SyncCore | null = null;
+let coreLoad: Promise<SyncCore> | null = null;
 
 export function configureOpenFailureCount<Consent>(consent: () => Consent, note: (consent: Consent, failures: Partial<Record<SyncOpenFailure, number>>) => void) {
   startOpenFailureCount = () => {
@@ -397,14 +399,24 @@ export function configureOpenFailureCount<Consent>(consent: () => Consent, note:
   };
 }
 
-export async function loadSyncCore(host: ArdiaHost) {
-  try {
-    const core = await invokeHost<unknown>("ArdiaSync.core", { args: [] }, host);
-    if (core === "rust" || core === "native") reportedCore = core;
-  } catch {}
+export function loadSyncCore(host: ArdiaHost): Promise<SyncCore> {
+  reportedCore = null;
+  const load: Promise<SyncCore> = invokeHost<unknown>("ArdiaSync.core", { args: [] }, host).then(
+    (core) => (core === "rust" ? "rust" : "native"),
+    () => "native",
+  );
+  coreLoad = load;
+  void load.then((core) => {
+    if (coreLoad === load) reportedCore = core;
+  });
+  return load;
 }
 
-export const loadedSyncCore = (): "rust" | "native" => reportedCore ?? "native";
+export function whenSyncCore<Consent>(consent: Consent, emit: (core: SyncCore, consent: Consent) => void) {
+  const load = coreLoad;
+  if (reportedCore || !load) return emit(reportedCore ?? "native", consent);
+  void load.then((core) => emit(core, consent));
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 

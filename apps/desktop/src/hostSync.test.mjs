@@ -12,10 +12,11 @@ import {
   refreshSyncDocuments,
   whileResettingHeldLogins,
   loadSyncCore,
-  loadedSyncCore,
   syncModuleMethod,
+  whenSyncCore,
 } from "./hostSync.ts";
 import { NO_AUTHORITY_MESSAGE, REMOTE_METHODS, startSyncAuthority } from "./syncAuthority.ts";
+import { consentToken, setConsentPeriod, stillValid } from "../../browser/src/state/telemetry/consentPeriod.ts";
 
 const PHRASE = "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title";
 const fast = { set: (callback, ms) => setTimeout(callback, Math.min(ms, 15)), clear: (handle) => clearTimeout(handle) };
@@ -393,12 +394,64 @@ test("each read and openLocal counts its own open failures under the consent it 
   }
 });
 
-test("any window learns the engine's sync core, so a telemetry leader that isn't the sync authority still reports rust", async () => {
-  assert.equal(loadedSyncCore(), "native", "nothing reported yet");
-  await loadSyncCore(fakeHost(() => { throw new Error("an engine without ArdiaSync.core"); }));
-  assert.equal(loadedSyncCore(), "native");
-  const leader = fakeHost((method) => (method === "ArdiaSync.core" ? "rust" : null));
-  await loadSyncCore(leader);
-  assert.deepEqual(leader.calls, [{ method: "ArdiaSync.core", args: { args: [] } }], "no keyring status or authority claim is needed");
-  assert.equal(loadedSyncCore(), "rust");
+function pendingCore() {
+  let answer;
+  const host = fakeHost((method) => (method === "ArdiaSync.core" ? new Promise((resolve, reject) => (answer = { resolve, reject })) : null));
+  return { host, answer: () => answer };
+}
+
+function recordToggle(recorded) {
+  return (core, consent) => {
+    if (stillValid(consent)) recorded.push({ on: true, sync_core: core });
+  };
+}
+
+test("a sync toggle that reaches the telemetry leader while ArdiaSync.core is pending is recorded with the engine's answer, not native", async () => {
+  setConsentPeriod(true, "toggle-period");
+  const recorded = [];
+  const { host, answer } = pendingCore();
+  const loading = loadSyncCore(host);
+  await tick();
+  whenSyncCore(consentToken(), recordToggle(recorded));
+  assert.deepEqual(recorded, [], "nothing is recorded before the engine answers");
+  answer().resolve("rust");
+  await loading;
+  await tick();
+  assert.deepEqual(recorded, [{ on: true, sync_core: "rust" }]);
+  whenSyncCore(consentToken(), recordToggle(recorded));
+  assert.deepEqual(recorded.at(-1), { on: true, sync_core: "rust" }, "once settled, a toggle records at once");
+  assert.equal(host.calls.filter((call) => call.method === "ArdiaSync.core").length, 1, "no keyring status or authority claim is needed");
+  setConsentPeriod(false, null);
+});
+
+test("an engine without ArdiaSync.core, or one that fails it, records native once it answers", async () => {
+  setConsentPeriod(true, "older-engine");
+  const recorded = [];
+  const { host, answer } = pendingCore();
+  const loading = loadSyncCore(host);
+  await tick();
+  whenSyncCore(consentToken(), recordToggle(recorded));
+  answer().reject(new Error("ERR_UNKNOWN_CALL"));
+  assert.equal(await loading, "native");
+  await tick();
+  assert.deepEqual(recorded, [{ on: true, sync_core: "native" }]);
+  await loadSyncCore(fakeHost((method) => (method === "ArdiaSync.core" ? "something else" : null)));
+  whenSyncCore(consentToken(), recordToggle(recorded));
+  assert.deepEqual(recorded.at(-1), { on: true, sync_core: "native" });
+  setConsentPeriod(false, null);
+});
+
+test("a toggle whose consent ends while ArdiaSync.core is pending records nothing", async () => {
+  setConsentPeriod(true, "revoked-while-pending");
+  const recorded = [];
+  const { host, answer } = pendingCore();
+  const loading = loadSyncCore(host);
+  await tick();
+  whenSyncCore(consentToken(), recordToggle(recorded));
+  setConsentPeriod(true, "a-later-period");
+  answer().resolve("rust");
+  await loading;
+  await tick();
+  assert.deepEqual(recorded, []);
+  setConsentPeriod(false, null);
 });

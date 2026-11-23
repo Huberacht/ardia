@@ -3,7 +3,7 @@ import { currentAppIcon, listComponents, onAppEvent } from "../../platform/app";
 import { useTranslate } from "../site/translate";
 import { useBrowser } from "../browser/store";
 import { keysOf } from "../browser/changes";
-import { syncCore, takeOpenTabSyncCounts, takeSnapshotWrites, useSync } from "../sync/engine";
+import { takeOpenTabSyncCounts, takeSnapshotWrites, useSync, whenSyncCore } from "../sync/engine";
 import { takeSyncCodeCounts } from "../sync/recoveryKit";
 import { capture, consentNow, consentToken, counted, consentOrNow, countFor, endSession, flush, isSharing, markSettingsSnapshot, settingsSnapshotDay, startClient, stillValid, watchConsentBoundary, withHourlyExtras, type ConsentToken } from "./usageClient";
 import { reportLocalStore, startLocalStore } from "./localStoreReport";
@@ -280,7 +280,7 @@ function watchSync() {
     const was = last;
     last = status;
     if (was === status) return;
-    if (was === "off" && status !== "unavailable") capture("sync_toggled", { on: true, sync_core: syncCore() }, consentNow());
+    if (was === "off" && status !== "unavailable") whenSyncCore(consentNow(), (core, consent) => capture("sync_toggled", { on: true, sync_core: core }, consent));
     else if (status === "off" && was !== "unavailable") capture("sync_toggled", { on: false }, consentNow());
   });
 }

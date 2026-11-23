@@ -1671,7 +1671,9 @@ Linux reads calendars from Evolution Data Server, which GNOME Online Accounts, G
     token taken when that call began, into `syncFileCounts.ts`, which the hourly usage counts drain. No count lives in
     the engine, so nothing from before opting in can be claimed later.
   - Every window asks `ArdiaSync.core` once at start, so whichever window leads telemetry sends `sync_core: "rust"`
-    on `sync_toggled` even when another window holds sync.
+    on `sync_toggled` even when another window holds sync. A toggle that arrives while that answer is pending waits
+    for it (`whenSyncCore`) and is sent under the consent token taken at the toggle, so it is dropped if sharing ended
+    meanwhile; an engine without the call answers `native`.
   - HKDF-SHA256 key derivation.
   - `NNS1` files with AES-256-GCM and 1 KiB padding.
   - A 24-word BIP-39 phrase.

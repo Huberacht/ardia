@@ -22,7 +22,6 @@ import {
   whileResettingHeldLogins,
   KEYRING_RETRY_MS,
   keyringResumer,
-  loadedSyncCore,
   loadSyncCore,
   watchLockedSync,
   loadSyncDeviceName,
@@ -357,7 +356,7 @@ function refreshSendTargets() {
 export const onTabsReceived = engine.onTabsReceived;
 export const takeSnapshotWrites = engine.takeSnapshotWrites;
 export const takeOpenTabSyncCounts = engine.takeOpenTabSyncCounts;
-export const syncCore = loadedSyncCore;
+export { whenSyncCore } from "./hostSync.ts";
 
 export function sendTargets(profileId: string): SendTarget[] {
   return leading() ? engine.sendTargets(profileId) : relayedTargets[profileId] ?? [];
