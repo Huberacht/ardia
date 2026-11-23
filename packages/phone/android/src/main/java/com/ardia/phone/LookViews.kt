@@ -1587,7 +1587,8 @@ internal object FrostPage {
 internal class FrostStrip(val key: Key) {
     data class Key(val blurPx: Float, val saturation: Float, val scale: Float)
 
-    val node = RenderNode("ardiaFrostStrip")
+    val node = RenderNode("ardiaFrostStrip").apply { setUseCompositingLayer(true, null) }
+    private val filtered = RenderNode("ardiaFrostStripFiltered")
     var left = 0
         private set
     var top = 0
@@ -1618,21 +1619,30 @@ internal class FrostStrip(val key: Key) {
         records += 1
         val scaledLeft = (left / key.scale).toInt()
         val scaledTop = (top / key.scale).toInt()
-        node.setPosition(scaledLeft, scaledTop, scaledLeft + ceil(width / key.scale).toInt().coerceAtLeast(1), scaledTop + ceil(height / key.scale).toInt().coerceAtLeast(1))
+        val scaledWidth = ceil(width / key.scale).toInt().coerceAtLeast(1)
+        val scaledHeight = ceil(height / key.scale).toInt().coerceAtLeast(1)
+        node.setPosition(scaledLeft, scaledTop, scaledLeft + scaledWidth, scaledTop + scaledHeight)
+        filtered.setPosition(0, 0, scaledWidth, scaledHeight)
         val lensBack = lenses != null && lensed == 0 && !GlassShaders.lens.failed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (!effectSet || lenses != lensesApplied || lensBack)) {
             val frosted = FrostStrip.frosted(key.blurPx / key.scale, key.saturation)
             val lens = if (lenses != null && Build.VERSION.SDK_INT >= LiquidGlassRules.LENS_MIN_SDK) GlassShaders.lensFor(lenses) { lensShader ?: LiquidGlassShaders.lens().also { lensShader = it } } else null
-            node.setRenderEffect(if (lens == null) frosted else RenderEffect.createChainEffect(lens, frosted))
+            filtered.setRenderEffect(if (lens == null) frosted else RenderEffect.createChainEffect(lens, frosted))
             lensed = if (lens == null) 0 else lenses?.lenses?.size ?: 0
             lensesApplied = lenses
             effectSet = true
         }
-        val recording = node.beginRecording()
+        val recording = filtered.beginRecording()
         try {
             recording.scale(1f / key.scale, 1f / key.scale)
             recording.translate(-left.toFloat(), -top.toFloat())
             recording.drawRenderNode(source)
+        } finally {
+            filtered.endRecording()
+        }
+        val layer = node.beginRecording()
+        try {
+            layer.drawRenderNode(filtered)
         } finally {
             node.endRecording()
         }
@@ -1640,6 +1650,7 @@ internal class FrostStrip(val key: Key) {
 
     fun release() {
         node.discardDisplayList()
+        filtered.discardDisplayList()
         recordedAt = Long.MIN_VALUE
         effectSet = false
         lensesApplied = null
@@ -1648,7 +1659,7 @@ internal class FrostStrip(val key: Key) {
         height = 0
     }
 
-    val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4
+    val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4 * 2
 
     companion object {
         fun place(area: Rect, sourceWidth: Int, sourceHeight: Int, scale: Float): Rect {
