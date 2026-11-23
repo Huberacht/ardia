@@ -66,3 +66,23 @@ test("idle rows are made again after the search engine changes, so none carry th
   act(() => searchPresented(useSearch.getState().session));
   expect(idle).toHaveBeenCalled();
 });
+
+test("a remembered query row shown at the press already searches with the engine chosen since, before the panel has presented", () => {
+  const [first, second] = omnibox.searchEngines();
+  const realIdleRows = jest.requireActual<typeof omnibox>("../state/search/omnibox").idleRows;
+  const idle = jest.spyOn(omnibox, "idleRows").mockImplementation((_queries, macTabs) => realIdleRows(["otter facts"], macTabs));
+  setSearchEngine(first!.id);
+  act(() => useTabs.setState((state) => ({ listing: state.listing + 1 })));
+  act(() => presentSearch("home"));
+  act(() => searchPresented(useSearch.getState().session));
+  const firstUrl = omnibox.resolve("?otter facts")?.url;
+  expect(useSearch.getState().rows.find((row) => row.kind === "query")?.url).toBe(firstUrl);
+  act(() => dismissSearch());
+  setSearchEngine(second!.id);
+  const secondUrl = omnibox.resolve("?otter facts")?.url;
+  expect(secondUrl).not.toBe(firstUrl);
+  idle.mockClear();
+  act(() => presentSearch("home"));
+  expect(idle).not.toHaveBeenCalled();
+  expect(useSearch.getState().rows.find((row) => row.kind === "query")?.url).toBe(secondUrl);
+});

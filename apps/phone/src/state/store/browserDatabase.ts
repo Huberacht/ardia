@@ -124,6 +124,12 @@ export function deleteArchivedTabs(db: SqlDatabase): string[] {
   return removed;
 }
 
+export const archivedBefore = (db: SqlDatabase, cutoff: number): string[] =>
+  db.all<{ id: string }>("SELECT id FROM tabs WHERE archivedAt IS NOT NULL AND archivedAt < ?", [cutoff]).map((r) => r.id);
+
+export const archivedRankedFrom = (db: SqlDatabase, offset: number) =>
+  db.all<TabRow>(`SELECT ${TAB_COLUMNS} FROM tabs WHERE archivedAt IS NOT NULL ORDER BY archivedAt DESC LIMIT -1 OFFSET ?`, [offset]).map(tabOf);
+
 export function expiredArchivedIds(db: SqlDatabase, cutoff: number, keep: number): string[] {
   const old = db.all<{ id: string }>("SELECT id FROM tabs WHERE archivedAt IS NOT NULL AND archivedAt < ?", [cutoff]);
   const beyond = db.all<{ id: string }>("SELECT id FROM tabs WHERE archivedAt IS NOT NULL ORDER BY archivedAt DESC LIMIT -1 OFFSET ?", [keep]);

@@ -131,6 +131,14 @@ export function idleRows(queries: readonly string[], macTabs: readonly { url: st
   return rows.slice(0, IDLE_ROW_LIMIT);
 }
 
+export function withCurrentEngine(rows: readonly TrayRow[]): TrayRow[] {
+  return rows.flatMap((row): TrayRow[] => {
+    if (row.kind !== "query") return [row];
+    const url = mobileResolve(`?${row.query}`)?.url;
+    return url ? [{ ...row, url }] : [];
+  });
+}
+
 export const searchEngines = () => mobileEngines().map((engine) => ({ id: engine.id, name: engine.name, custom: engine.custom }));
 
 export const resolve = (text: string) => mobileResolve(text);

@@ -6,7 +6,7 @@ import { pages } from "../platform/pages";
 import * as pageStore from "../state/pages/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import { appBecameActive } from "../state/browse/store";
-import { ARCHIVE_RETENTION_MS, ARCHIVE_SEARCH_LIMIT, archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, deleteArchivedTabsById, flushTabWrites, loadArchive, onTabWritesStalled, pruneExpiredArchive, reserveStateSave, restoreArchivedTab, saveTabState, searchArchive, selectTabById, tabSavedState, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
+import { ARCHIVE_LIMIT, ARCHIVE_RETENTION_MS, ARCHIVE_SEARCH_LIMIT, archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, deleteArchivedTabsById, flushTabWrites, loadArchive, onTabWritesStalled, pruneExpiredArchive, reserveStateSave, restoreArchivedTab, saveTabState, searchArchive, selectTabById, tabSavedState, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
 import { someTabs, withTabs } from "../../test/render/harness";
 
 beforeEach(() => {
@@ -313,4 +313,22 @@ test("a page state that lost to a newer one says so, so its scroll position isn'
   expect(saveTabState(id, "at 200", newer)).toBe(true);
   expect(saveTabState(id, "at 100", older)).toBe(false);
   expect(tabSavedState(id)).toBe("at 200");
+});
+
+test("at the archive's limit, a restore still waiting on a busy database makes room, so the oldest archived tab isn't pruned; with nothing waiting the tab past the limit is", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  expect(flushTabWrites()).toBe(true);
+  browserDatabase.writeTabs(tabDatabase(), [], browserDatabase.readArchivedTabs(tabDatabase(), 10_000).map((tab) => tab.id));
+  const rows = archivedRows(ARCHIVE_LIMIT + 1);
+  browserDatabase.writeTabs(tabDatabase(), rows, []);
+  const oldest = rows[rows.length - 1]!.id;
+  refuse(3, "SQLITE_BUSY");
+  expect(restoreArchivedTab(archivedTabById(rows[0]!.id)!)).toBe(true);
+  expect(pruneExpiredArchive()).toBe(0);
+  act(() => jest.advanceTimersByTime(2_000));
+  expect(browserDatabase.readArchivedTab(tabDatabase(), oldest)).not.toBeNull();
+  browserDatabase.writeTabs(tabDatabase(), [{ ...rows[0]!, archivedAt: Date.now() + 1 }], []);
+  expect(pruneExpiredArchive()).toBe(1);
+  expect(browserDatabase.readArchivedTab(tabDatabase(), oldest)).toBeNull();
+  browserDatabase.writeTabs(tabDatabase(), [], rows.map((tab) => tab.id));
 });

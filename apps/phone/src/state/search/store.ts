@@ -5,7 +5,7 @@ import { currentPreferences } from "../settings/store";
 import { currentTabs, useTabs } from "../tabs/store";
 import { idleMacTabs, macTabIndex, mergeSyncedHistory, syncedBookmarks } from "../sync/spaces";
 import { selectedProfile, syncData } from "../sync/store";
-import { idleRows, remoteSuggestions, searchEngineRevision, setSearchEngine, setSources, setSyncedSearch, suggest, type SuggestContext, type TrayRow } from "./omnibox";
+import { idleRows, remoteSuggestions, searchEngineRevision, setSearchEngine, setSources, setSyncedSearch, suggest, withCurrentEngine, type SuggestContext, type TrayRow } from "./omnibox";
 import { withPasteRow, type PasteOffer } from "./pasteRow";
 import { clipboardOffer } from "../../platform/system";
 import { settled } from "../pages/store";
@@ -75,7 +75,7 @@ const SEARCH_WARM_AFTER_LAUNCH_MS = 1500;
 const REFRESH_WITHOUT_PRESENTATION_MS = 300;
 const IDLE_SCOPES_KEPT = 8;
 
-type IdleRows = { revision: string; rows: TrayRow[] };
+type IdleRows = { revision: string; engine: number; rows: TrayRow[] };
 const idleMade = new Map<string, IdleRows>();
 
 const idleScope = () => `${useTabs.getState().incognito}:${useTabs.getState().spaces.current}:${selectedProfile()?.syncId ?? ""}`;
@@ -88,14 +88,16 @@ function idleRowsNow(): TrayRow[] {
   if (made && made.revision === idleRevision()) return made.rows;
   const rows = useTabs.getState().incognito ? [] : idleRows(recentSearches(history().summary()), idleMacTabs(selectedProfile(), syncData().view.devices));
   idleMade.delete(scope);
-  idleMade.set(scope, { revision: idleRevision(), rows });
+  idleMade.set(scope, { revision: idleRevision(), engine: searchEngineRevision(), rows });
   if (idleMade.size > IDLE_SCOPES_KEPT) idleMade.delete(idleMade.keys().next().value!);
   return rows;
 }
 
 function rowsAtPress(text: string): TrayRow[] {
   if (text.trim()) return rowsFor(text, []);
-  return withPasteRow(idleMade.get(idleScope())?.rows ?? [], text, paste);
+  const made = idleMade.get(idleScope());
+  const rows = !made ? [] : made.engine === searchEngineRevision() ? made.rows : withCurrentEngine(made.rows);
+  return withPasteRow(rows, text, paste);
 }
 
 export function searchPresented(session: number) {

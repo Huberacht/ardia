@@ -3,7 +3,9 @@ import { newUuid } from "../../lib/ids";
 import { deletePageSnapshots, endPages, endPrivateSession, savePageState, snapshotsCommitted } from "../pages/store";
 import { currentPreferences, setPreference } from "../settings/store";
 import {
+  archivedBefore,
   archivedIdsAmong,
+  archivedRankedFrom,
   commitTabChanges,
   countArchivedTabs,
   expiredArchivedIds,
@@ -333,6 +335,15 @@ export function saveTabState(id: string, saved: string | null, save: StateSave =
   return true;
 }
 
+function expiredThroughPending(db: SqlDatabase, cutoff: number, live: ReadonlySet<string>): string[] {
+  const shift = pendingOverfetch(db) + live.size;
+  const tail = archivedRankedFrom(db, Math.max(0, ARCHIVE_LIMIT - shift));
+  const overflow = tail.length ? new Set(tail.map((tab) => tab.id)) : null;
+  const kept = overflow ? new Set(archiveView(db, (limit) => readArchivedTabs(db, limit), () => true, ARCHIVE_LIMIT).map((tab) => tab.id)) : null;
+  const beyond = overflow && kept ? [...overflow].filter((id) => !kept.has(id)) : [];
+  return [...new Set([...archivedBefore(db, cutoff), ...beyond])];
+}
+
 export function pruneExpiredArchive() {
   const db = tabDatabase();
   const { open, privates } = data();
@@ -345,7 +356,7 @@ export function pruneExpiredArchive() {
     if (!queued) return true;
     return queued.archivedAt !== null && queued.archivedAt < cutoff;
   };
-  const expired = expiredArchivedIds(db, cutoff, ARCHIVE_LIMIT).filter(stillExpired);
+  const expired = batch ? expiredThroughPending(db, cutoff, live).filter(stillExpired) : expiredArchivedIds(db, cutoff, ARCHIVE_LIMIT).filter(stillExpired);
   if (!expired.length) return 0;
   const gone = new Set(expired);
   stageWrites(db, { put: [], remove: expired });
