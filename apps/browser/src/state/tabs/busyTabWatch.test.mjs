@@ -279,14 +279,19 @@ test("hostile task rows and page titles reach neither the toast nor Sleep", asyn
   webviews.clear();
 });
 
-test("query rules match as Chrome's filters do: a trailing * is a prefix, repeated keys match any value", () => {
+test("query rules match as Chrome's allow filters do: every occurrence of a key must hold, a trailing * is a prefix", () => {
   const t = (url, rule) => matchesSiteRule(url, rule);
   assert.ok(t("https://example.com/?q=workday", "example.com/?q=work*"));
   assert.ok(!t("https://example.com/?q=play", "example.com/?q=work*"));
-  assert.ok(t("https://example.com/?a=1&a=2", "example.com/?a=2"), "any value of a repeated key");
-  assert.ok(t("https://example.com/?a=1&a=2", "example.com/?a=1&a=2"));
-  assert.ok(!t("https://example.com/?a=1", "example.com/?a=1&a=2"), "every token must hold");
+  assert.ok(!t("https://example.com/?q=workday&q=play", "example.com/?q=work*"), "a repeated key: every value must match (url_util.cc MATCH_ALL for allow lists)");
+  assert.ok(!t("https://example.com/?a=1&a=2", "example.com/?a=2"));
+  assert.ok(t("https://example.com/?a=2&b=1", "example.com/?a=2"));
+  assert.ok(t("https://example.com/?a=2&a=2", "example.com/?a=2"));
+  assert.ok(!t("https://example.com/?a=1&a=2", "example.com/?a=1&a=2"), "each token on its own must hold for every a");
   assert.ok(t("https://example.com/?a=1&b=2", "example.com/?b=2&a=1"), "token order doesn't matter");
+  assert.ok(!t("https://example.com/?b=2", "example.com/?a=1"), "a key that isn't there doesn't match");
+  assert.ok(t("https://example.com/?debug", "example.com/?debug") && !t("https://example.com/?debug=1", "example.com/?debug"), "a bare key matches only the bare key");
+  assert.ok(t("https://example.com/?debugger=1", "example.com/?debug*"), "a key with * matches any key it starts");
 });
 
 test("Sleep does nothing once the process has calmed down below the threshold", async () => {
@@ -435,4 +440,74 @@ test("Warn about busy background tabs: off stops the watch and its reads, on arm
   } finally {
     PLATFORM_FEATURES.busyTabWatch = true;
   }
+});
+
+test("turning warnings off while Sleep waits on Chrome stops it before the next native call: no discard, no confirmation", async () => {
+  const start = Date.now() + 7000 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  let answer;
+  const calls = [];
+  webviews.set(hidden, { sleepIfHidden: () => (calls.push("sleepIfHidden"), new Promise((resolve) => (answer = resolve))), discard: async () => (calls.push("discard"), "discarded") });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 61, tabIds: [hidden] }];
+  await burn(start, 2, { 61: 1 });
+  const warning = globalThis.busyTest.toasts[0];
+  warning.action.run();
+  await settle();
+  assert.deepEqual(calls, ["sleepIfHidden"]);
+  S().updateSettings({ busyTabWarnings: false });
+  answer([25]);
+  await settle();
+  S().updateSettings({ busyTabWarnings: true });
+  assert.deepEqual(calls, ["sleepIfHidden"], "Chrome kept it only from automatic sleep, but warnings went off, so it isn't discarded past that");
+  assert.equal(globalThis.busyTest.toasts.length, 1);
+  webviews.clear();
+});
+
+test("a CPU read that fails after warnings went off and on again doesn't stop the new watch", async () => {
+  const start = Date.now() + 7200 * MINUTE;
+  windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  let fail;
+  const pending = watchBusyTabs(start, () => new Promise((_, reject) => (fail = reject)));
+  await settle();
+  S().updateSettings({ busyTabWarnings: false });
+  S().updateSettings({ busyTabWarnings: true });
+  fail(new Error("engine.childProcessCpu isn't there"));
+  await pending;
+  let reads = 0;
+  await watchBusyTabs(start + 10 * SECOND, async () => (reads++, []));
+  assert.equal(reads, 1, "the next tick still reads");
+  webviews.clear();
+});
+
+test("a Keep Running whose site check is still pending when warnings go off saves nothing", async () => {
+  const start = Date.now() + 7400 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 62, tabIds: [hidden] }];
+  await burn(start, 2, { 62: 1 });
+  let answer;
+  globalThis.busyTest.validate = () => new Promise((resolve) => (answer = resolve));
+  try {
+    globalThis.busyTest.toasts[0].secondary.run();
+    await settle();
+    S().updateSettings({ busyTabWarnings: false });
+    answer(true);
+    await settle();
+    assert.deepEqual(S().settings.keepActiveSites, []);
+  } finally {
+    globalThis.busyTest.validate = null;
+    S().updateSettings({ busyTabWarnings: true });
+  }
+  webviews.clear();
+});
+
+test("the CPU read needs native API 94, so an older build refuses this JavaScript instead of showing a setting it can't serve", () => {
+  const js = readFileSync(new URL("../../platform/nativeApi.ts", import.meta.url), "utf8");
+  const swift = readFileSync(new URL("../../../../../packages/shell/ios/AppModule.swift", import.meta.url), "utf8");
+  const version = Number(/export const NATIVE_API_VERSION = (\d+);/.exec(js)?.[1]);
+  assert.ok(version >= 94, `NATIVE_API_VERSION is ${version}`);
+  assert.equal(Number(/Constant\("apiVersion"\) \{ \(\) -> Int in (\d+) \}/.exec(swift)?.[1]), version);
+  assert.match(readFileSync(new URL("../../../../../packages/ardiacore/ios/EngineModule.swift", import.meta.url), "utf8"), /"childProcessCpu":/);
 });

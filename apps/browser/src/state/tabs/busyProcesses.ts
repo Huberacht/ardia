@@ -54,18 +54,27 @@ export function sustainedBusy(heat: ReadonlyMap<number, ProcessHeat>): number[] 
 const DEFAULT_PORTS: Readonly<Record<string, string>> = { http: "80", https: "443" };
 const SITE_RULE = /^(?:([a-z][a-z0-9+.-]*):\/\/)?([^/:?#]*)(?::(\*|\d{1,5}))?(\/[^?#]*)?(?:\?([^#]*))?$/i;
 
-function queryHolds(url: URL, query: string): boolean {
-  const pairs = [...url.searchParams].map(([key, value]) => `${key}=${value}`);
-  for (const token of query.split("&")) {
-    if (!token) continue;
-    const prefix = token.endsWith("*");
-    const raw = prefix ? token.slice(0, -1) : token;
-    const eq = raw.indexOf("=");
-    const wanted = eq < 0 ? decodeURIComponent(raw) : `${decodeURIComponent(raw.slice(0, eq))}=${decodeURIComponent(raw.slice(eq + 1))}`;
-    const holds = prefix ? pairs.some((pair) => pair.startsWith(wanted)) : eq < 0 ? url.searchParams.has(wanted) : pairs.includes(wanted);
-    if (!holds) return false;
+function tokenHolds(query: string, token: string): boolean {
+  const eq = token.indexOf("=");
+  let key = eq < 0 ? token : token.slice(0, eq);
+  let value = eq < 0 ? "" : token.slice(eq + 1);
+  let prefix = false;
+  if (!value && key.endsWith("*")) [key, prefix] = [key.slice(0, -1), true];
+  else if (value.endsWith("*")) [value, prefix] = [value.slice(0, -1), true];
+  const head = value ? `&${key}=` : `&${key}`;
+  const tail = prefix ? value : `${value}&`;
+  if (!tail) return query.includes(head);
+  let found = 0;
+  for (let at = query.indexOf(head); at >= 0; at = query.indexOf(head, at + head.length + tail.length - 1)) {
+    if (!query.startsWith(tail, at + head.length)) return false;
+    found++;
   }
-  return true;
+  return found > 0;
+}
+
+function queryHolds(url: URL, rule: string): boolean {
+  const query = `&${url.search.slice(1)}&`;
+  return rule.split("&").every((token) => !token || tokenHolds(query, token));
 }
 
 export function matchesSiteRule(address: string, rule: string): boolean {

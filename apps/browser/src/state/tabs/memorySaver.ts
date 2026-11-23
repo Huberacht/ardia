@@ -39,10 +39,10 @@ export function keepActiveSiteOf(typed: string): string {
   return `${scheme.toLowerCase()}${host.toLowerCase()}${rest === "/" ? "" : rest}`;
 }
 
-export async function keepSiteActive(typed: string): Promise<string | null> {
+export async function keepSiteActive(typed: string, stillWanted: () => boolean = () => true): Promise<string | null> {
   const site = keepActiveSiteOf(typed);
   if (!site || /\s/.test(site) || !(await isKeepActiveSiteValid(site).catch(() => false))) return "Enter a site, like youtube.com.";
-  if (isQuitting()) return null;
+  if (isQuitting() || !stillWanted()) return null;
   const sites = store().settings.keepActiveSites;
   if (!sites.includes(site)) store().updateSettings({ keepActiveSites: [...sites, site] });
   return null;
