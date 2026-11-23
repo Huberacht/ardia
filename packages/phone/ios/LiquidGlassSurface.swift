@@ -438,4 +438,3 @@ final class GlassTarget {
     outstanding = max(outstanding - 1, 0)
   }
 }
-
