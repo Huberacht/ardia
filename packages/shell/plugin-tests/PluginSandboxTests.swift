@@ -80,6 +80,34 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertTrue(arguments.contains("PROGRAM=\(quoted)/bin/tool"))
   }
 
+  func testTheProfileStartsFromDenyAndOnlyProgramsMayStartOthers() throws {
+    let program = try sandbox().arguments()[1]
+    let script = try PluginSandbox(home: home, appData: data, configFolder: config, pluginFolder: plugin, pluginData: pluginData, program: "/bin/sh", network: true, kind: .script).arguments()[1]
+    for profile in [program, script] {
+      XCTAssertTrue(profile.contains("(deny default)"))
+      XCTAssertFalse(profile.contains("(allow default)"))
+    }
+    XCTAssertTrue(program.contains("(allow process-fork)"))
+    XCTAssertFalse(script.contains("process-fork"))
+    XCTAssertFalse(script.contains("/opt/homebrew"))
+    XCTAssertFalse(script.contains("DEVELOPER"))
+    XCTAssertEqual(PluginSandbox(home: home, appData: data, configFolder: config, pluginFolder: plugin, pluginData: pluginData, program: "/opt/homebrew/opt/node/bin/node", network: false, kind: .script).installFolder(), "/opt/homebrew/opt/node/bin/node")
+  }
+
+  func testTheDeveloperFolderIsTheSelectedXcodeOrNothingUnderTheUsersFolders() throws {
+    let xcode = "\(root)/Xcode.app/Contents/Developer"
+    try FileManager.default.createDirectory(atPath: xcode, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(atPath: "\(root)/xcode-link", withDestinationPath: xcode)
+    XCTAssertEqual(PluginSandbox.developerFolder(link: "\(root)/xcode-link"), "\(root)/Xcode.app")
+    try FileManager.default.createSymbolicLink(atPath: "\(root)/tools-link", withDestinationPath: "\(root)")
+    XCTAssertEqual(PluginSandbox.developerFolder(link: "\(root)/tools-link"), root)
+    XCTAssertNil(PluginSandbox.developerFolder(link: "\(root)/missing"))
+    try FileManager.default.createSymbolicLink(atPath: "\(root)/root-link", withDestinationPath: "/")
+    XCTAssertNil(PluginSandbox.developerFolder(link: "\(root)/root-link"))
+    try FileManager.default.createSymbolicLink(atPath: "\(root)/users-link", withDestinationPath: "/Users")
+    XCTAssertNil(PluginSandbox.developerFolder(link: "\(root)/users-link"))
+  }
+
   func run(_ box: PluginSandbox, _ script: String) throws -> Int32 {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
