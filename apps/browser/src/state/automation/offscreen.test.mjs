@@ -103,3 +103,23 @@ test("offscreen: the 5 s close asks the engine first, so a connection JS hasn't 
     delete globalThis.acTestCliControl;
   }
 });
+
+test("offscreen: when the engine's status can't be read, the 5 s close still runs", async () => {
+  const { noteCliConnections } = await import("./offscreen.ts");
+  let closes = 0;
+  globalThis.acTestCliCloseOffscreen = () => void closes++;
+  globalThis.acTestCliControl = () => Promise.reject(new Error("engine gone"));
+  try {
+    mockTimers.enable({ apis: ["setTimeout"] });
+    noteCliConnections(1);
+    noteCliConnections(0);
+    mockTimers.tick(5000);
+    mockTimers.reset();
+    for (let i = 0; i < 20; i++) await tick();
+    assert.equal(closes, 1);
+  } finally {
+    mockTimers.reset();
+    delete globalThis.acTestCliCloseOffscreen;
+    delete globalThis.acTestCliControl;
+  }
+});

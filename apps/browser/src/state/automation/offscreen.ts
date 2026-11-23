@@ -48,13 +48,13 @@ export function noteCliConnections(connections: number) {
   const epoch = connectedEpoch;
   closing = setTimeout(() => {
     closing = null;
+    const closeUnlessReconnected = (live: number) => {
+      if (live > 0 || epoch !== connectedEpoch || closing) return;
+      served = false;
+      return controlCloseOffscreenTabs();
+    };
     void controlStatus()
-      .then((status) => {
-        const live = "connections" in status ? status.connections : 0;
-        if (live > 0 || epoch !== connectedEpoch || closing) return;
-        served = false;
-        return controlCloseOffscreenTabs();
-      })
+      .then((status) => closeUnlessReconnected("connections" in status ? status.connections : 0), () => closeUnlessReconnected(0))
       .catch(() => {});
   }, CLOSE_AFTER_MS);
 }
