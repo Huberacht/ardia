@@ -145,6 +145,12 @@ enum GlassSources {
     return holds
   }
 
+  static let pageSource = "page"
+
+  static func holdsPage(in source: UIView) -> Bool {
+    (source as? FrostSourceView).map(holdsPage) ?? false
+  }
+
   static func page(in view: UIView) -> WKWebView? {
     if view.isHidden || view.alpha <= 0 { return nil }
     if let web = view as? WKWebView { return web.bounds.width > 0 && web.bounds.height > 0 ? web : nil }

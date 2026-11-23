@@ -95,6 +95,8 @@ final class LiquidGlassSurface: UIView {
     return followsPresentation && (hasRunningAnimations || lensLayer.bounds.size != bounds.size)
   }
 
+  var waitsForPage: Bool { source == GlassSources.pageSource }
+
   var wantsPathChecks: Bool { window != nil && !classic && !wantsFrames }
 
   var captureOwner: AnyObject? {

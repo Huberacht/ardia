@@ -30,10 +30,16 @@ final class GlassCapture {
   private var quiet = 0
   let page = GlassPageShot()
 
-  func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs) }
+  private var warmed = false
+  var wholeMethod: GlassLaunch.Capture = .layer
 
-  func noteMainThread(ms: Double, now: CFTimeInterval) {
-    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms)]
+  func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, warm: warmed) }
+
+  func noteMainThread(ms: Double, now: CFTimeInterval, captured: Bool) {
+    let recent = LiquidGlassRules.recentSamples(samples, now: now)
+    if recent.isEmpty, !warmed, !captured { return }
+    samples = recent + [LiquidGlassRules.CaptureSample(at: now, ms: ms)]
+    if captured, samples.count > 1 { warmed = true }
   }
 
   var isChanging: Bool { settle > 0 }

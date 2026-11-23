@@ -195,9 +195,10 @@ final class GlassFrames: NSObject {
 
   private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, into buffer: MTLCommandBuffer, now: CFTimeInterval, frameMs: Double) {
     let started = CACurrentMediaTime()
+    var capturedNow = false
     defer {
       let spent = (CACurrentMediaTime() - started) * 1000
-      capture.noteMainThread(ms: spent, now: now)
+      capture.noteMainThread(ms: spent, now: now, captured: capturedNow)
       if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
       if capture.overBudget(now: now, frameMs: frameMs), !overBudget.contains(owner) {
         overBudget.add(owner)
@@ -223,6 +224,10 @@ final class GlassFrames: NSObject {
     let web: WKWebView?
     if sourceWhole {
       web = method == .auto ? GlassSources.page(in: space) : nil
+      if method == .auto, web == nil, GlassSources.holdsPage(in: space) || members.contains(where: \.waitsForPage) {
+        capture.showFill()
+        return
+      }
       wanted = web == nil ? space.bounds : strip
       pieces = GlassBackdrop.pieces(of: space, covering: wanted, web: web)
     } else if let root = members[0].backdropRoot {
@@ -242,7 +247,7 @@ final class GlassFrames: NSObject {
       capture.showFill()
       return
     }
-    let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole && web == nil ? .hierarchy : .layer) : method
+    let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole && web == nil ? capture.wholeMethod : .layer) : method
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
       var drew = true
@@ -251,6 +256,7 @@ final class GlassFrames: NSObject {
     }
     switch outcome {
     case .captured:
+      capturedNow = true
       if PhoneTestBuild.isOn {
         stats.noteCapture(ms: capture.lastMs, pieces: pieces.count)
         stats.snapshotMs += capture.page.takeLatencies()
@@ -259,6 +265,11 @@ final class GlassFrames: NSObject {
         stats.uncovered += counts.uncovered
       }
     case .failed:
+      capturedNow = true
+      if method == .auto, sourceWhole, web == nil, capture.wholeMethod == .layer {
+        capture.wholeMethod = .hierarchy
+        if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ backdrop is blank to the layer tree; drawing its view hierarchy instead", members.map(\.label).joined(separator: ",")) }
+      }
       if PhoneTestBuild.isOn {
         stats.failed += 1
         if capture.failures == 1 { NSLog("PAGELAB look glass capture failed: %@ shows its fill and tries again", members.map(\.label).joined(separator: ",")) }

@@ -1385,12 +1385,21 @@ Metal.
   so each glass draws what it refracts itself, from a `CADisplayLink` (`GlassFrames`), into an IOSurface-backed pixel
   buffer at Android's frost scale (a sixth of the pixels for the 12 point glass frost). MPS blurs it (Android's
   radius-to-sigma), and the fragment shader refracts it per colour channel at full resolution, then adds the frost
-  tint, the 0.5 point edge, the profile tint and the rim (added onto what is behind, as Android's PLUS does).
+  tint, the 0.5 point edge and the profile tint. The rim is its own pass in its own layer, premultiplied white
+  composited with `plusL`, so it adds onto the glass and whatever is behind it in all four channels, as Android's PLUS
+  does.
   - A glass outside the `FrostSource` it names draws that whole source, once, and again only when it changes, so a
-    glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that keeps changing is redrawn at most once a second. The page bar and host pill
+    glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that keeps changing is redrawn at most once a second, and again two frames after it stops changing
+    (the end of the deck's Incognito crossfade). The page bar and host pill
     draw the page from WebKit's own `takeSnapshot` (the viewport plus 320 points above and below, at the capture's
     scale), which runs off the main thread; while a newer snapshot is on its way, the last one is moved by how far the
-    page has scrolled since, so the strip stays lined up with the page. The deck's chrome draws its backdrop and the
+    page has scrolled since, so the strip stays lined up with the page. The snapshot sits at the web view's own place
+    among the source's views, under anything that covers it (the arriving tab's cover), with its clips and opacity. A
+    snapshot belongs to one web view and one navigation (`WebTab.navigationGeneration`): another tab or document drops
+    it and the strip, and a late answer to an older request is refused. A snapshot that fails, comes back blank, is
+    from another zoom, or no longer covers the strip once moved (a fling past its 320 points) shows the glass's fill
+    until a good one arrives; requests come at most 20 times a second while scrolling, twice a second when still, and
+    back off after failures. The deck's chrome draws its backdrop and the
     start page's buttons its spaces and mark, with `drawHierarchy(afterScreenUpdates: false)`.
   - A glass inside its source, or with none (toasts, Reader's buttons, the Duo toolbar under `surfaces`, the search
     morph), draws what lies beneath it in the window (`GlassBackdrop`): going up from the glass, each ancestor's fill
@@ -1401,12 +1410,14 @@ Metal.
     WKWebView's content offset, opacity, transforms, contents), for two frames after it settles, and every 3 s
     otherwise. Glass that is hidden or off screen does no work. A capture that fails or comes back blank drops the old
     strip, shows the glass's fill and tries again after 50 ms, doubling up to 1 s.
-  - At most two GPU frames are in flight; a frame that would wait is dropped, never `nextDrawable()` on a busy main
-    thread. Capture buffers are released when the last glass stops, on background and on a memory warning.
+  - At most two GPU frames are in flight, the slot taken before any capture work, and a glass that falls back during
+    a frame draws into that frame's buffer. A drawable is taken only when none of that layer's is still on the GPU
+    (three per layer: one shown, one queued), so `nextDrawable()` doesn't wait. Capture buffers are released when the last glass stops, on background and on a memory warning.
 - **Where each path runs.** Every glass refracts by default. The flat fills are fallbacks only: Classic and Reduce
   Transparency keep the Classic surface, unchanged; a phone without Metal, or a shader that fails, draws the frost's
-  flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a capture that keeps the main
-  thread busy for more than 12 % of two seconds is over budget, and that glass draws the chrome fill over a page
+  flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a glass whose main-thread work
+  (the walk, the snapshot request and the capture, failed ones included) takes longer than one frame once, or more
+  than 12 % of the main thread over two seconds, is over budget, and that glass draws the chrome fill over a page
   (#FFFFFF, #1E1B1D in dark) or the flat fill elsewhere until the app next returns to the foreground
   (`glass_captures_over_budget`). Lab flags: `ArdiaFlatGlass` drops the lens and rim, `ArdiaGlassSolidPage` keeps the
   chrome fill over a page, `ArdiaGlassCapture auto|hierarchy|layer|none` picks the capture (`auto` is the default;
