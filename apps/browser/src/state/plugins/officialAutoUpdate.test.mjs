@@ -233,7 +233,7 @@ test("the plugin page says it updated by itself, says plainly when it added code
   assert.deepEqual(autoUpdateNote({ from: "0.4.0", to: "0.6.0", added: ["Adds to the command bar: Command Line: Show Status"], runtime: true }), {
     title: "Updated by itself to 0.6.0",
     description:
-      "It added its own code, which runs in Ardia's sandbox, offline, only when you use one of its commands in the command bar. Its permissions didn't change. New since 0.4.0: Adds to the command bar: Command Line: Show Status.",
+      "It added its own code, which runs in Ardia's sandbox, offline, and first starts when you use one of its commands in the command bar. Its permissions didn't change. New since 0.4.0: Adds to the command bar: Command Line: Show Status.",
   });
   assert.equal(parsePluginRecords(RECORDS(PY_RECEIPT, { updated: { from: "0.4.0", to: "0.6.0", added: [], runtime: true } })).cli.updated.runtime, true);
   assert.equal(parsePluginRecords(RECORDS(PY_RECEIPT, { updated: { from: "0.4.0", to: "0.6.0", added: [], runtime: "yes" } })).cli.updated.runtime, undefined);

@@ -188,8 +188,8 @@ is the only source of which version may be fetched.
       The boundary row is `plugin-update:official-auto`.
     - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, the consent lines that are
       new, and `runtime` when it added a first `main`). While that copy is the one installed, the plugin's page shows
-      "Updated by itself to 0.6.0", "It added its own code, which runs in Ardia's sandbox, offline, only when you
-      use one of its commands in the command bar" when it did, "Its permissions didn't change", and those lines.
+      "Updated by itself to 0.6.0", "It added its own code, which runs in Ardia's sandbox, offline, and first starts
+      when you use one of its commands in the command bar" when it did, "Its permissions didn't change", and those lines.
       `official_updates_auto` counts the switch once it took.
       Approving any later update by hand drops the note.
   - Otherwise it waits, and the plugin's row offers **Update…**, which shows the consent sheet for the new copy. It

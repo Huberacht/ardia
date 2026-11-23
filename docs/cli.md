@@ -44,7 +44,7 @@ it off until the next launch. An install you approved moves to the version this 
 for nothing you hadn't approved (`docs/plugins.md` › Official plugins, #3868), and Command Line's page in Settings ›
 Plugins then says "Updated by itself" and lists what's new. Python 0.4.0 to Bun 0.6.0 is such a move, and so is any later
 pin with the same surface: the same control and `ardia` with the same after-update steps, plus a sandboxed, offline
-`main` that only the Show Status command reaches. Its note says it added that code. The 0.4.0 daemon keeps running
+`main` that first starts from the Show Status command. Its note says it added that code. The 0.4.0 daemon keeps running
 beside the new one until Ardia quits (#3472). An `ardia` installed the old way (`~/Library/Application Support/Ardia/CLI/current`) that was never approved
 in Ardia isn't adopted by itself: there's no approval to compare with. It stays on PATH, untouched, and Command Line
 shows as available, its row in Settings › Plugins saying "An older ardia is installed. Install Command Line to update
