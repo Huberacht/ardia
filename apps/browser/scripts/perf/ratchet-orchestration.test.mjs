@@ -197,7 +197,6 @@ test("lower --retry sees the retry's runs, as run judged them", () => {
 });
 
 const ratchetUrl = new URL("./ratchet.mjs", import.meta.url).href;
-const jsBenchUrl = new URL("./js-bench.mjs", import.meta.url).href;
 const STUBBORN = `process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`;
 const isAlive = (pid) => {
   try {
@@ -216,41 +215,57 @@ const waitForFile = async (file) => {
   return Number(readFileSync(file, "utf8"));
 };
 
-test("a signal to the ratchet kills every lane's process group, what the lanes started, and the browsers they recorded, then exits with the first signal's code", { timeout: 30_000 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ratchet-hard-stop-"));
-  const grandchildFile = join(dir, "grandchild");
-  const browserFile = join(dir, "browser");
-  const grandchild = `require("fs").writeFileSync(${JSON.stringify(grandchildFile)}, String(process.pid)); ${STUBBORN}`;
-  const bundlerLane = `require("child_process").execFileSync(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" });`;
-  const benchLane = `
-    import { spawn } from "node:child_process";
-    import { writeFileSync } from "node:fs";
-    import { trackInstance } from ${JSON.stringify(jsBenchUrl)};
-    const browser = spawn(process.execPath, ["-e", ${JSON.stringify(STUBBORN)}], { detached: true, stdio: "ignore" });
-    browser.unref();
-    trackInstance(browser.pid);
-    writeFileSync(${JSON.stringify(browserFile)}, String(browser.pid));
-    setInterval(() => {}, 1000);`;
+function ratchetHarness(lanes, { deadlineMs = 20_000 } = {}) {
+  const spawns = lanes.map(({ script, lane }) => `spawnAsync(process.execPath, ["-e", ${JSON.stringify(script)}], { lane: ${lane} }).catch(() => {});`).join("\n");
   const ratchet = spawn(process.execPath, ["--input-type=module", "-e", `
-    import { hardStopOnSignals, spawnAsync } from ${JSON.stringify(ratchetUrl)};
-    hardStopOnSignals();
-    spawnAsync(process.execPath, ["-e", ${JSON.stringify(bundlerLane)}]).catch(() => {});
-    spawnAsync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(benchLane)}]).catch(() => {});
+    import { stopOnSignals, spawnAsync } from ${JSON.stringify(ratchetUrl)};
+    stopOnSignals({ deadlineMs: ${deadlineMs} });
+    ${spawns}
     setInterval(() => {}, 1000);`], { stdio: "ignore" });
   const exited = new Promise((resolve) => ratchet.once("exit", (code, signal) => resolve(code ?? signal)));
+  return { ratchet, exited };
+}
+
+test("a signal is forwarded to each lane, which finishes its own cleanup before the ratchet exits with the first signal's code, and the bundler is killed outright", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-forward-"));
+  const ready = join(dir, "ready");
+  const cleaned = join(dir, "cleaned");
+  const grandchildFile = join(dir, "grandchild");
+  const lane = `require("fs").writeFileSync(${JSON.stringify(ready)}, String(process.pid)); process.on("SIGINT", () => setTimeout(() => { require("fs").writeFileSync(${JSON.stringify(cleaned)}, "1"); process.exit(130); }, 300)); setInterval(() => {}, 1000);`;
+  const grandchild = `require("fs").writeFileSync(${JSON.stringify(grandchildFile)}, String(process.pid)); ${STUBBORN}`;
+  const bundler = `require("child_process").execFileSync(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" });`;
+  const { ratchet, exited } = ratchetHarness([{ script: lane, lane: true }, { script: bundler, lane: false }]);
+  const lanePid = await waitForFile(ready);
   const grandchildPid = await waitForFile(grandchildFile);
-  const browserPid = await waitForFile(browserFile);
   ratchet.kill("SIGINT");
-  ratchet.kill("SIGINT");
+  ratchet.kill("SIGTERM");
   assert.equal(await exited, 130);
+  assert.ok(existsSync(cleaned), "the ratchet exited before the lane finished its cleanup");
+  assert.ok(await gone(lanePid));
   assert.ok(await gone(grandchildPid), "the bundler's child survived");
-  assert.ok(await gone(browserPid), "a recorded browser survived");
+});
+
+test("a lane that doesn't exit by the deadline is killed with its whole process group", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-deadline-"));
+  const ready = join(dir, "ready");
+  const childFile = join(dir, "child");
+  const inner = `require("fs").writeFileSync(${JSON.stringify(childFile)}, String(process.pid)); ${STUBBORN}`;
+  const lane = `process.on("SIGTERM", () => {}); require("child_process").spawn(process.execPath, ["-e", ${JSON.stringify(inner)}], { stdio: "ignore" }); require("fs").writeFileSync(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  const { ratchet, exited } = ratchetHarness([{ script: lane, lane: true }], { deadlineMs: 500 });
+  const lanePid = await waitForFile(ready);
+  const childPid = await waitForFile(childFile);
+  const signalled = Date.now();
+  ratchet.kill("SIGTERM");
+  assert.equal(await exited, 143);
+  assert.ok(Date.now() - signalled < 5000);
+  assert.ok(await gone(lanePid), "the stuck lane survived");
+  assert.ok(await gone(childPid), "the stuck lane's child survived");
 });
 
 test("a SIGTERM while the instruction counter runs stops it at once and exits 143 instead of finishing and passing", { timeout: 60_000 }, async () => {
   const ratchet = spawn(process.execPath, ["--input-type=module", "-e", `
-    import { hardStopOnSignals, instrPerRound } from ${JSON.stringify(ratchetUrl)};
-    hardStopOnSignals();
+    import { stopOnSignals, instrPerRound } from ${JSON.stringify(ratchetUrl)};
+    stopOnSignals();
     console.log("started");
     await instrPerRound();
     console.log("finished");

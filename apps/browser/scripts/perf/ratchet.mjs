@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isHarnessTimer, killInstances } from "./js-bench.mjs";
+import { isHarnessTimer } from "./js-bench.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = process.env.RATCHET_APP_DIR ? resolve(process.env.RATCHET_APP_DIR) : resolve(here, "../..");
@@ -398,52 +397,46 @@ function census(files) {
   for (const r of wobbly.filter((r) => !isTotal(r.key)).sort((a, b) => a.key.localeCompare(b.key))) console.log(line(r));
 }
 
-const groups = new Set();
-const instancesDir = mkdtempSync(join(tmpdir(), "ratchet-instances-"));
-process.on("exit", () => rmSync(instancesDir, { recursive: true, force: true }));
+const children = new Map();
+const LANE_STOP_DEADLINE_MS = 20_000;
 
-export function spawnAsync(cmd, args, { cwd, env = process.env, capture = false, captureErr = false } = {}) {
+export function spawnAsync(cmd, args, { cwd, env, capture = false, captureErr = false, lane = false } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env: { ...env, ARDIA_BENCH_INSTANCES: instancesDir }, detached: true, stdio: ["ignore", capture ? "pipe" : "ignore", captureErr ? "pipe" : "inherit"] });
-    groups.add(child.pid);
+    const child = spawn(cmd, args, { cwd, env, detached: true, stdio: ["ignore", capture ? "pipe" : "ignore", captureErr ? "pipe" : "inherit"] });
+    const closed = new Promise((done) => child.once("close", done));
+    children.set(child, { closed, lane });
     let out = "";
     let err = "";
     if (capture) child.stdout.setEncoding("utf8").on("data", (d) => (out += d));
     if (captureErr) child.stderr.setEncoding("utf8").on("data", (d) => (err += d));
     child.once("error", reject);
     child.once("close", (code, signal) => {
-      groups.delete(child.pid);
+      children.delete(child);
       if (code === 0) resolve(captureErr ? { out, err } : out);
       else reject(new Error(`${basename(args[0] ?? cmd)} ${args.slice(1, 3).join(" ")} exited with ${code ?? signal}`));
     });
   });
 }
 
-function recordedInstances() {
-  const all = { pids: [], binaries: [] };
-  for (const file of existsSync(instancesDir) ? readdirSync(instancesDir) : []) {
-    try {
-      const { pids = [], binaries = [] } = readJson(join(instancesDir, file));
-      all.pids.push(...pids);
-      all.binaries.push(...binaries);
-    } catch {}
-  }
-  return all;
-}
+const killGroup = (child) => {
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {}
+};
 
-let stoppedWith = null;
-
-export function hardStopOnSignals() {
+export function stopOnSignals({ deadlineMs = LANE_STOP_DEADLINE_MS } = {}) {
+  let stopping = false;
   for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
-    process.on(sig, () => {
-      if (stoppedWith !== null) return;
-      stoppedWith = code;
-      for (const pgid of groups) {
-        try {
-          process.kill(-pgid, "SIGKILL");
-        } catch {}
-      }
-      killInstances(recordedInstances());
+    process.on(sig, async () => {
+      if (stopping) return;
+      stopping = true;
+      const lanes = [...children].filter(([, c]) => c.lane);
+      for (const [child, c] of children) if (!c.lane) killGroup(child);
+      for (const [child] of lanes) child.kill(sig);
+      let timer;
+      await Promise.race([Promise.all(lanes.map(([, c]) => c.closed)), new Promise((r) => (timer = setTimeout(r, deadlineMs)))]);
+      clearTimeout(timer);
+      for (const [child] of lanes) if (children.has(child)) killGroup(child);
       process.exit(code);
     });
 }
@@ -485,7 +478,7 @@ async function jsSetup(flags, out, mark, { counts, serialRuns = 0 }) {
     if (runs > capacity) throw new Error(`lane ${slot} has ${runs} runs, more than the ${capacity} remote-debugging ports it was given`);
     const args = [join(here, "js-bench.mjs"), "run", "--app", app, "--bundle", jsbundle, "--label", labelled, "--runs", String(runs), "--port", String(port), "--cdp-port", String(cdpPort), "--out", out, "--scenarios", scenarios.join(","), "--options", OPTIONS];
     args.push(...(seed === "small" ? ["--seed", "small"] : ["--probe", "selectors"]), "--lib", libs);
-    return { report: join(out, `${labelled}.json`), run: () => spawnAsync(process.execPath, args) };
+    return { report: join(out, `${labelled}.json`), run: () => spawnAsync(process.execPath, args, { lane: true }) };
   };
   return { app, lane };
 }
@@ -585,7 +578,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const micro = command !== "init" && flags.micro?.length ? readJson(flags.micro[0]) : null;
     if (command !== "run" && flags.instr === true) throw new Error("--instr needs a value outside run");
     const instr = flags.instr !== undefined && command !== "run" ? Number(flags.instr) : null;
-    if (command === "run" || command === "baseline" || command === "init") hardStopOnSignals();
+    if (command === "run" || command === "baseline" || command === "init") stopOnSignals();
     if (command === "run") await run(flags);
     else if (command === "baseline") await baseline(flags);
     else if (command === "check") process.exit(check(positional, micro, instr, flags.retry ?? []) ? 0 : 1);

@@ -228,9 +228,9 @@ node apps/browser/scripts/perf/ratchet.mjs baseline --measure-only   # the runs 
 launch in a second (its own test-server port, remote-debugging port, data folder, app copy and report,
 `<label>-small.json`), and the Node counts. Test-server ports start at `--port` (default 47831) and remote-debugging
 ports at `--cdp-port` (default 9700), one per run each instance actually makes; both are checked before anything
-launches. Every lane, the bundler and the instruction counter run in their own process group, and each js-bench
-records the instances it opened; ⌃C or a SIGTERM SIGKILLs all of them at once and exits 130 or 143 (the instances are
-throwaway hidden apps on scratch data). A run that ends normally still quits each instance gracefully.
+launches. On ⌃C or a SIGTERM the ratchet passes the signal to each js-bench, which quits the instances it opened as it
+does on its own, waits up to 20 s for them, then SIGKILLs whatever is left of each js-bench's process group and exits
+130 or 143. The bundler and the Node and instruction counters are killed at once.
 The instruction counter (`--instr`) runs after them, alone. It exits 1 and prints a table of the counts over their
 ceiling. A count over in the first run gets one more run, and only a count over in both fails: a real regression is in
 both, a pointer moving over the hidden window or the window deactivating mid-scenario is in one. The second run is the

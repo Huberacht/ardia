@@ -265,80 +265,36 @@ export async function launch(app, dataDir, port, extraEnv = {}) {
     ...(process.env.ARDIA_SWITCHES ? { ARDIA_SWITCHES: process.env.ARDIA_SWITCHES } : {}),
     ...extraEnv,
   });
-  starting.add(binary);
-  recordInstances();
-  try {
-    execFileSync("open", ["-g", "-n", ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]), app]);
-    for (let i = 0; i < 200; i++) {
-      const [pid] = pidsOf(binary);
-      if (pid) {
-        trackInstance(pid);
-        return { pid, launchedAt };
-      }
-      await sleep(50);
+  execFileSync("open", ["-g", "-n", ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]), app]);
+  for (let i = 0; i < 200; i++) {
+    const [pid] = pidsOf(binary);
+    if (pid) {
+      launched.add(pid);
+      return { pid, launchedAt };
     }
-  } finally {
-    starting.delete(binary);
-    recordInstances();
+    await sleep(50);
   }
   throw new Error("app did not start");
 }
 
 const launched = new Set();
-const starting = new Set();
-const instancesFile = process.env.ARDIA_BENCH_INSTANCES ? join(process.env.ARDIA_BENCH_INSTANCES, `${process.pid}.json`) : null;
 
-function recordInstances() {
-  if (!instancesFile) return;
-  try {
-    if (launched.size || starting.size) writeFileSync(instancesFile, JSON.stringify({ pids: [...launched], binaries: [...starting] }));
-    else rmSync(instancesFile, { force: true });
-  } catch {}
-}
-
-export function trackInstance(pid) {
-  launched.add(pid);
-  recordInstances();
-}
-
-const killNow = (pid) => {
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {}
-};
-
-export function killInstances({ pids = [], binaries = [] }, find = pidsOf) {
-  for (const binary of binaries) for (const pid of find(binary)) killNow(pid);
-  for (const pid of pids) killNow(pid);
-}
-
-let stoppedWith = null;
-
-export function hardStopOnSignals(scratch = () => []) {
+export function quitOnSignals(...closers) {
   for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
-    process.on(sig, () => {
-      if (stoppedWith !== null) return;
-      stoppedWith = code;
-      killInstances({ pids: launched, binaries: starting });
-      for (const dir of scratch()) rmSync(dir, { recursive: true, force: true });
-      if (instancesFile) rmSync(instancesFile, { force: true });
+    process.once(sig, async () => {
+      process.stderr.write(`js-bench: ${sig}: quitting ${launched.size} instance(s)\n`);
+      for (const pid of [...launched]) await quit(pid).catch(() => {});
+      for (const close of closers) await Promise.resolve(close()).catch(() => {});
       process.exit(code);
     });
 }
 
 export async function quit(pid) {
-  try {
-    if (!alive(pid)) return;
-    process.kill(pid, "SIGTERM");
-    for (let i = 0; i < 150 && alive(pid); i++) await sleep(100);
-    if (!alive(pid)) return;
-    process.kill(pid, "SIGKILL");
-    for (let i = 0; i < 20 && alive(pid); i++) await sleep(100);
-    if (alive(pid)) throw new Error(`cleanup failed: instance ${pid} is still running 2 s after SIGKILL`);
-  } finally {
-    launched.delete(pid);
-    recordInstances();
-  }
+  launched.delete(pid);
+  if (!alive(pid)) return;
+  process.kill(pid, "SIGTERM");
+  for (let i = 0; i < 150 && alive(pid); i++) await sleep(100);
+  if (alive(pid)) process.kill(pid, "SIGKILL");
 }
 
 let evalSeq = 0;
@@ -399,13 +355,12 @@ async function run() {
   const version = execFileSync("/usr/libexec/PlistBuddy", ["-c", "Print CFBundleShortVersionString", join(clone, "Contents/Info.plist")], { encoding: "utf8" }).trim();
   const origin = `http://127.0.0.1:${port}`;
   const server = await startServer(Number(port));
-  let dataDir = null;
-  hardStopOnSignals(() => (dataDir ? [dataDir] : []));
+  quitOnSignals(() => server.close());
   const libs = (flags.lib ? flags.lib.split(",") : [join(here, "bench-app.js")]).map((file) => readFileSync(file, "utf8"));
   const results = [];
   try {
     for (let r = 0; r < Number(runs); r++) {
-      dataDir = join(out, "data", `${label}-${flags.append ? `${Date.now()}-` : ""}${r}`);
+      const dataDir = join(out, "data", `${label}-${flags.append ? `${Date.now()}-` : ""}${r}`);
       rmSync(dataDir, { recursive: true, force: true });
       writeSeed(dataDir, origin, version, { tabsOrigin: `http://[::1]:${port}`, activeDelayMs: ACTIVE_PAGE_DELAY_MS });
       if (flags.seed === "small") smallSession(dataDir);
@@ -427,7 +382,6 @@ async function run() {
         }
         result.probeRevision = await evaluate(dataDir, pid, `return acPerf.revision ?? ("commitTasks" in acPerf.read() ? 2 : 1);`);
       } finally {
-        process.stderr.write(`[${label} ${r}] quit\n`);
         await quit(pid);
       }
       results.push(result);

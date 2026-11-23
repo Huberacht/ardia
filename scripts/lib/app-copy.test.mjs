@@ -19,6 +19,7 @@ function fakeApp({ debug = false, bundle = true } = {}) {
   writeFileSync(join(app, "Contents/Info.plist"), PLIST);
   copyFileSync("/usr/bin/true", join(app, "Contents/MacOS/Fake"));
   if (bundle) writeFileSync(join(app, "Contents/Resources/main.jsbundle"), "shipped");
+  writeFileSync(join(app, "Contents/Resources/strings.txt"), "sealed");
   const plist = join(dir, "ent.plist");
   writeFileSync(plist, entitlements(debug ? ["com.apple.security.get-task-allow"] : []));
   execFileSync("codesign", ["--force", "--sign", "-", "--entitlements", plist, app], { stdio: "ignore" });
@@ -118,4 +119,11 @@ macTest("a source with no bundle of its own, run without one, is reused rather t
   const first = prepareApp(app, join(dir, "out"));
   const made = inodeOf(join(first, "Contents/Info.plist"));
   assert.equal(inodeOf(join(prepareApp(app, join(dir, "out")), "Contents/Info.plist")), made);
+});
+
+macTest("a cached copy isn't reused when any sealed resource of the source changed without a re-sign, not only its bundle", () => {
+  const { dir, app, own } = fakeApp();
+  prepareApp(app, join(dir, "out"), { bundle: own });
+  writeFileSync(join(app, "Contents/Resources/strings.txt"), "edited in place");
+  assert.throws(() => prepareApp(app, join(dir, "out"), { bundle: own }), /re-sign the source app/);
 });

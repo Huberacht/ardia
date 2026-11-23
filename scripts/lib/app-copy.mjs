@@ -35,16 +35,21 @@ function sameBundle(copy, wanted) {
   return readFileSync(held).equals(readFileSync(wanted));
 }
 
+const resignNeeded = (source) => new Error(`${source}'s signature doesn't cover its contents (was a resource edited without re-signing?): re-sign the source app`);
+
 function reuseOrClone(source, dir, copy, bundle) {
   const stampFile = join(dir, "source.txt");
   const hash = cdhashOf(source);
   const stamp = `${source}\n${hash}\n`;
   copiesToUnregister.add(copy);
-  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash && sameBundle(copy, bundle ?? join(source, SHIPPED_BUNDLE)) && sealIntact(copy)) return copy;
+  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash && sameBundle(copy, bundle ?? join(source, SHIPPED_BUNDLE)) && sealIntact(copy)) {
+    if (!sealIntact(source)) throw resignNeeded(source);
+    return copy;
+  }
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   execFileSync("cp", ["-cR", source, copy]);
-  if (!sealIntact(copy)) throw new Error(`${source}'s signature doesn't cover its contents (was its main.jsbundle edited without re-signing?): re-sign the source app`);
+  if (!sealIntact(copy)) throw resignNeeded(source);
   writeFileSync(stampFile, stamp);
   return copy;
 }
