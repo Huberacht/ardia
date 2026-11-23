@@ -1060,7 +1060,8 @@ function markdownDestination(url        )         {
 
 function markdownLink(title        , url        )           {
   const clean = cleanUrl(url);
-  const label = !title || title === url ? clean : title;
+  const oneLine = title.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
+  const label = !oneLine || title === url ? clean : oneLine;
   return `[${label.replace(/([[\]\\])/g, "\\$1")}](${markdownDestination(clean)})`            ;
 }
 

@@ -344,3 +344,30 @@ test("a cleaner report can't be rewritten after the fact, and link lists are bul
   assert.equal(linkLines([one, two], false), "https://a.example/\n[B](https://b.example/)");
   assert.equal(linkLines([two], true), "[B](https://b.example/)");
 });
+
+function readMarkdownLink(markdown: string): { label: string; destination: string } {
+  const link = /^\[((?:\\.|[^\\\]])*)\]\((<(?:\\.|[^\\>\n])*>|(?:\\.|[^\\()\s])*)\)$/.exec(markdown);
+  assert.ok(link, `not one CommonMark inline link: ${JSON.stringify(markdown)}`);
+  const label = link[1]!.replace(/\\(.)/g, "$1");
+  const raw = link[2]!;
+  const destination = (raw.startsWith("<") ? raw.slice(1, -1) : raw).replace(/\\([()<>\\])/g, "$1").replace(/&amp;/g, "&");
+  return { label, destination };
+}
+
+test("every Markdown link reads back as one link whose destination is the clean address and whose label sits on one line", () => {
+  const titles = ["Line one\n\nLine two", "A\r\nB\u2028C\u2029D", "\n\n", "Shop [sale] \\o/", "", "Plain"];
+  const urls = [
+    "https://e.example/a?utm_source=x",
+    "https://e.example/doc(1)?token=abc(123)&gclid=x",
+    "https://e.example/p (1)?q=fish&copy;&x=1",
+    "https://e.example/<x>?a=1&#38;b",
+    "https://e.example/a\\b?fbclid=1",
+  ];
+  for (const title of titles)
+    for (const url of urls) {
+      const { label, destination } = readMarkdownLink(markdownLink(title, url));
+      assert.equal(destination, cleanUrl(url), `${JSON.stringify(title)} ${url}`);
+      assert.doesNotMatch(label, /[\r\n\u2028\u2029]/, JSON.stringify(title));
+      assert.ok(label.length > 0, JSON.stringify(title));
+    }
+});

@@ -366,14 +366,14 @@ test("a WebKit page menu address reaches the clipboard only as a string the clea
   try {
     for (const { id, value } of HOSTILE_VALUES) {
       copied.length = 0;
-      copyLinkFromPageMenu(value);
+      copyLinkFromPageMenu(value, null, null);
       if (typeof value !== "string" || !value) assert.deepEqual(copied, [], id);
       else assert.deepEqual(copied, [cleanUrl(value)], id);
     }
     for (const s of strings) {
       for (const address of [s, `https://a.example/?utm_source=${s}&q=1`, `https://a.example/${s}?fbclid=1`]) {
         copied.length = 0;
-        copyLinkFromPageMenu(address);
+        copyLinkFromPageMenu(address, null, null);
         assert.equal(copied.length, address ? 1 : 0, show(address));
         if (address) assert.equal(copied[0], cleanUrl(address), show(address));
       }

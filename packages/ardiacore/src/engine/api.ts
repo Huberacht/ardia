@@ -229,6 +229,7 @@ export type EngineEvents = BookmarksEvents & FaviconsEvents & HistoryEvents & {
   "permissions.requested": PermissionRequest;
   "permissions.dismissed": { id: string };
   "webKit.counted": { name: WebKitCount; epoch?: string };
+  "webKit.copyAddress": { url: string; changeCount?: number; epoch?: string };
   "webKit.siteDataWanted": { id: string; profile: string; origin: string; epoch?: string };
   "webKit.siteCookiesChanged": { profile: string; domains: string[]; epoch?: string };
   "webKit.notification": { profile: string; notification: WebNotification; epoch?: string };

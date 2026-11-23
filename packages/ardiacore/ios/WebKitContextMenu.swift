@@ -78,7 +78,7 @@ struct WebKitMenuCommands {
 
   func copyAddress(_ url: URL?) {
     guard let url else { return }
-    tab.emit("command", ["command": "copyLink", "text": url.absoluteString])
+    ArdiaEvents.emit("webKit.copyAddress", data: ArdiaConsentStamp.begin().onto(["url": url.absoluteString, "changeCount": NSPasteboard.general.changeCount]))
   }
 
   static let findMedia = """

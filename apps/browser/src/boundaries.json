@@ -1654,9 +1654,9 @@
    "detected": false
   },
   {
-   "id": "page-command:copyLink",
+   "id": "webkit-event:copyAddress",
    "source": "page",
-   "guard": "WebKit's page menu sends the link, image or media address the page holds; only a non-empty string is copied, and only after cleanUrlReport strips tracking parameters",
+   "guard": "WebKit's page menu sends the link, image or media address the page holds as an app-wide event; only a non-empty string is copied, after cleanUrlReport strips tracking parameters, and only an integer pasteboard count is passed on, so a late copy never overwrites a newer one",
    "checks": [
     "apps/browser/src/state/site/pageLinkCopy.ts#copyLinkFromPageMenu",
     "packages/ardiacore/ios/WebKitContextMenu.swift#copyAddress"

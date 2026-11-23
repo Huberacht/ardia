@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { barReducer, fullUrlShown, initialBar, pageUrlShown, previewText, selectionTracker } = await import("./barText.ts");
+const { barReducer, initialBar, previewText, selectionTracker } = await import("./barText.ts");
 
 const fresh = (text = "") => initialBar(null, text);
 const run = (state, ...events) => events.reduce(barReducer, state);
@@ -125,30 +125,3 @@ test("a highlighted row shows its query or address in the field, other rows keep
   assert.equal(previewText(undefined), null);
 });
 
-test("copying a visited page shown without its scheme copies the page's full address, like Arc and Dia", () => {
-  const page = { kind: "page", url: "https://setu.atlassian.net/wiki/spaces/ENG/pages/1/TDD", title: "TDD" };
-  assert.equal(fullUrlShown("setu.atlassian.net/wiki/spaces/ENG/pages/1/TDD", page), page.url);
-  assert.equal(fullUrlShown("example.com", { kind: "page", url: "http://www.example.com/" }), "http://www.example.com/");
-});
-
-test("a typed address with its scheme that matches the page row also counts as the whole address, so copying it is cleaned", () => {
-  const page = { kind: "page", url: "https://shop.example/item?id=7&utm_source=mail" };
-  assert.equal(fullUrlShown("https://shop.example/item?id=7&utm_source=mail", page), page.url);
-  assert.equal(fullUrlShown("https://shop.example/item?id=7", page), null);
-});
-
-test("text that is not a page row's address, such as a search or a partial edit, is copied as typed", () => {
-  const page = { kind: "page", url: "https://example.com/docs" };
-  assert.equal(fullUrlShown("example.com/doc", page), null);
-  assert.equal(fullUrlShown("example.com/docs", { kind: "search", query: "example.com/docs", url: "https://google.com/search?q=x" }), null);
-  assert.equal(fullUrlShown("example.com/docs", undefined), null);
-});
-
-test("the address ⌘L preselects, before any suggestion row exists, counts as the page's whole address, so copying it is cleaned", () => {
-  const page = "https://shop.example/item?id=7&utm_source=mail";
-  assert.equal(pageUrlShown(page, page), page);
-  assert.equal(pageUrlShown("shop.example/item?id=7&utm_source=mail", page), page);
-  assert.equal(pageUrlShown("shop.example/item", page), null);
-  assert.equal(pageUrlShown("", page), null);
-  assert.equal(pageUrlShown(page, ""), null);
-});

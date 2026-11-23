@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import ts from "typescript";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const SKIP = new Set(["node_modules", "dist", "build", "ios", "android", "macos", "windows", "Pods"]);
@@ -42,8 +43,75 @@ test("only the downloads menu copies an address without cleaning it, since downl
   assert.deepEqual(callersOf(/\bcopyUncleanedUrl\(/), ["apps/browser/src/state/downloads/downloadMenu.ts"]);
 });
 
-test("a cleaned address or link text is only ever made by the cleaner", () => {
-  assert.deepEqual(callersOf(/\bas (CleanedUrl|LinkText)\b|<(CleanedUrl|LinkText)>/), ["packages/core/src/cleanUrl.ts"]);
+const BRANDS = new Set(["CleanedUrl", "LinkText"]);
+
+function brandCasts(path, text) {
+  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, path.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const names = new Set(BRANDS);
+  const namespaces = new Set();
+  const aliases = [];
+  const visitDeclarations = (node) => {
+    if (ts.isImportDeclaration(node) && node.importClause) {
+      const bindings = node.importClause.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings))
+        for (const element of bindings.elements) if (BRANDS.has((element.propertyName ?? element.name).text)) names.add(element.name.text);
+    }
+    if (ts.isTypeAliasDeclaration(node)) aliases.push(node);
+    ts.forEachChild(node, visitDeclarations);
+  };
+  visitDeclarations(source);
+  const mentionsBrand = (typeNode) => {
+    let found = false;
+    const look = (node) => {
+      if (ts.isTypeReferenceNode(node)) {
+        const name = node.typeName;
+        if (ts.isIdentifier(name) && names.has(name.text)) found = true;
+        if (ts.isQualifiedName(name) && BRANDS.has(name.right.text) && ts.isIdentifier(name.left) && namespaces.has(name.left.text)) found = true;
+      }
+      if (!found) ts.forEachChild(node, look);
+    };
+    look(typeNode);
+    return found;
+  };
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const alias of aliases) if (!names.has(alias.name.text) && mentionsBrand(alias.type)) grew = !!names.add(alias.name.text);
+  }
+  const casts = [];
+  const visitCasts = (node) => {
+    if ((ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) && mentionsBrand(node.type)) casts.push(node.getText(source));
+    ts.forEachChild(node, visitCasts);
+  };
+  visitCasts(source);
+  return casts;
+}
+
+test("a cleaned address or link text is only ever made by the cleaner, whatever name the brand is imported or aliased under", () => {
+  const casting = files.filter((f) => !FIXTURES.has(f.path) && brandCasts(f.path, f.text).length).map((f) => f.path).sort();
+  assert.deepEqual(casting, ["packages/core/src/cleanUrl.ts"]);
+});
+
+test("the cast check sees renamed imports, type aliases and namespace imports", () => {
+  const sample = `import type { CleanedUrl as Clean, LinkText } from "@ardia/core";
+import * as core from "@ardia/core";
+type Mine = Clean | null;
+type Text = LinkText;
+const a = "x" as Clean;
+const b = "x" as Mine;
+const c = <Text>"x";
+const d = "x" as core.CleanedUrl;
+const e = "x" as unknown as string;`;
+  assert.deepEqual(brandCasts("sample.ts", sample), ['"x" as Clean', '"x" as Mine', '<Text>"x"', '"x" as core.CleanedUrl']);
+});
+
+test("only the platform clipboard modules call the native copy bridge, so app code can't hand it a raw address", () => {
+  assert.deepEqual(callersOf(/\.copy(?:Text|URL)\??\.?\(/), [
+    "apps/browser/src/platform/clipboard.ts",
+    "packages/expo-windows/src/selfCheck/shell.ts",
+    "packages/expo-windows/src/shellClipboard.ts",
+  ]);
+  assert.deepEqual(callersOf(/\bsetStringAsync\(/), ["apps/phone/src/platform/system.ts"]);
 });
 
 test("plain text copies and shares never take an address: links go through copyLink and the link sinks", () => {

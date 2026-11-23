@@ -1,4 +1,4 @@
-import { classifyPaste, cleanUrlReport, markdownLink, sanitizePaste, searchUrl, type PasteAction } from "@ardia/core";
+import { classifyPaste, markdownLink, sanitizePaste, searchUrl, type CleanUrlReport, type PasteAction } from "@ardia/core";
 import { copyAddress, copyLink, copyText, readText } from "../../platform/clipboard";
 import { showMenu, type MenuItem } from "../../platform/menus";
 import { menuSections, withOptionAlternate, type MenuKey } from "../app/menuSections";
@@ -63,20 +63,20 @@ export function fieldMenuItems({ paste, hasSelection, hasText }: { paste: PasteA
 
 export type FieldMenuPick = { kind: "go"; url: string } | { kind: "edit"; text: string; caret: number } | { kind: "selectAll" } | null;
 
-export function copyFieldSelection(value: string, start: number, end: number, fullUrl: string | null, consent: ConsentToken | null) {
-  if (!fullUrl || start !== 0 || end !== value.length) return copyText(value.slice(start, end));
-  const { url, removedTracker } = cleanUrlReport(fullUrl);
+export function copyFieldSelection(value: string, start: number, end: number, fieldCopy: CleanUrlReport | null, consent: ConsentToken | null) {
+  if (!fieldCopy || start !== 0 || end !== value.length) return copyText(value.slice(start, end));
+  const { url, removedTracker } = fieldCopy;
   copyAddress(url);
   noteLinkCopiedFrom("addressField", removedTracker, consent);
 }
 
-export async function showFieldMenu(value: string, selection: { current: { start: number; end: number } }, fullUrl: string | null = null): Promise<FieldMenuPick> {
+export async function showFieldMenu(value: string, selection: { current: { start: number; end: number } }, fieldCopy: CleanUrlReport | null = null): Promise<FieldMenuPick> {
   const consent = consentToken();
   const paste = await clipboardPasteAction();
   const { start, end } = selection.current;
   const choice = await showMenu(fieldMenuItems({ paste, hasSelection: end > start, hasText: !!value }));
   if (choice === "pasteAndGo" && paste) return { kind: "go", url: pasteTarget(paste) };
-  if (choice === "copy" || choice === "cut") copyFieldSelection(value, start, end, fullUrl, consent);
+  if (choice === "copy" || choice === "cut") copyFieldSelection(value, start, end, fieldCopy, consent);
   if (choice === "cut" || choice === "paste") {
     const insert = choice === "paste" ? sanitizePaste(await readText()) : "";
     return { kind: "edit", text: value.slice(0, start) + insert + value.slice(end), caret: start + insert.length };

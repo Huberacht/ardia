@@ -1,7 +1,8 @@
-import { cleanUrl, suggestionKey, type SearchScope } from "@ardia/core";
+import { suggestionKey, type SearchScope } from "@ardia/core";
 import { useEffect, useMemo, type RefObject } from "react";
 import type { TextInput } from "react-native";
-import { fullUrlShown, pageUrlShown, previewText } from "./barText";
+import { previewText } from "./barText";
+import { addressFieldCopy } from "../../state/omnibox/addressCopy";
 import { copyFieldAs } from "../../state/omnibox/textInput";
 import { offeredScope } from "../../state/omnibox/scopes";
 import { useDropdownStart, useOpenTabsStart } from "./dropdownStart";
@@ -73,8 +74,13 @@ export function useBarItems({
     () => (!scope && edited && !previewing ? offeredScope(typed, shownCompletion, windowId) : null),
     [scope, edited, previewing, typed, shownCompletion, windowId],
   );
-  const shownUrl = fullUrlShown(value, current) ?? pageUrlShown(value, currentUrl);
-  useEffect(() => void copyFieldAs(shownUrl && value, shownUrl ? cleanUrl(shownUrl) : null), [value, shownUrl]);
+  const rowUrl = current?.kind === "page" ? current.url : null;
+  const fieldCopy = useMemo(
+    () => addressFieldCopy({ value, rowUrl, pageUrl: currentUrl, untouched: !edited && !scope, scoped: !!scope }),
+    [value, rowUrl, currentUrl, edited, scope],
+  );
+  const copiedAddress = fieldCopy?.url ?? null;
+  useEffect(() => void copyFieldAs(copiedAddress && value, copiedAddress), [value, copiedAddress]);
   useEffect(() => () => void copyFieldAs(null, null), []);
-  return { items, completion, via, inline, shownCompletion, value, selectedIndex, current, tabScope, previewing, rowsHover, rowsHeld: rows.held, releaseRows: rows.release, shownUrl };
+  return { items, completion, via, inline, shownCompletion, value, selectedIndex, current, tabScope, previewing, rowsHover, rowsHeld: rows.held, releaseRows: rows.release, fieldCopy };
 }
