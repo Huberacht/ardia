@@ -139,7 +139,7 @@ kept_matches() {
   [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || return 1
   codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"$team\"" "$saved" >/dev/null 2>&1 || return 1
   mnt="$(mktemp -d "${TMPDIR:-/tmp}/ac-notary-kept.XXXXXX")"
-  hdiutil attach "$saved" -readonly -nobrowse -noautoopen -noverify -mountpoint "$mnt" >/dev/null 2>&1 || { rmdir "$mnt"; return 1; }
+  hdiutil attach "$saved" -readonly -nobrowse -noautoopen -noverify -mountpoint "$mnt" >/dev/null 2>&1 || { rmdir "$mnt"; return 2; }
   [ "$(cd "$mnt" && ls -A | sort | tr '\n' ' ')" = ".DS_Store .VolumeIcon.icns .background.tiff .fseventsd Applications Ardia.app " ] || ok=0
   [ "$(readlink "$mnt/Applications")" = /Applications ] || ok=0
   [ "$(cdhash_of "$mnt/Ardia.app")" = "$expected" ] || ok=0
@@ -162,10 +162,16 @@ notarize() {
     if [ ! -f "$saved" ] || [ -L "$saved" ]; then
       echo "no kept copy of the file submission $id was made from; submitting this one"
       id=""
-    elif ! kept_matches "$saved" "$expected"; then
-      echo "the kept copy for submission $id isn't this app packed by this team (another app, another signer or other files); submitting this one"
-      rm -f "$saved"
-      id=""
+    else
+      local verdict=0
+      kept_matches "$saved" "$expected" || verdict=$?
+      if [ "$verdict" = 2 ]; then
+        die "hdiutil couldn't mount $saved, the kept copy submission $id was made from, to check it; it and $record stay as they are, so run this again once it mounts"
+      elif [ "$verdict" != 0 ]; then
+        echo "the kept copy for submission $id isn't this app packed by this team (another app, another signer or other files); submitting this one"
+        rm -f "$saved"
+        id=""
+      fi
     fi
   fi
   if [ -n "$id" ] && resume "$id" "$log" "$record"; then

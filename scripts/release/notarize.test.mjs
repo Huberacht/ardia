@@ -66,7 +66,8 @@ echo "TeamIdentifier=$team" >&2
 
 const HDIUTIL = `#!/usr/bin/env bash
 case "$1" in
-  attach) mnt="$(printf '%s\\n' "$@" | awk 'prev == "-mountpoint" { print } { prev = $0 }')"; cp -R "$NOTARY_STUB/volume/." "$mnt/" ;;
+  attach) [ -f "$NOTARY_STUB/attach-fails" ] && { echo "hdiutil: attach failed - Resource temporarily unavailable" >&2; exit 1; }
+    mnt="$(printf '%s\\n' "$@" | awk 'prev == "-mountpoint" { print } { prev = $0 }')"; cp -R "$NOTARY_STUB/volume/." "$mnt/" ;;
   detach) find "$2" -mindepth 1 -delete ;;
 esac
 `;
@@ -476,4 +477,27 @@ test("a packing input that can't be hashed keys the DMG by its own bytes instead
   const run = s.notarize(s.dmg, {}, [app]);
   assert.equal(run.status, 0, run.output);
   assert.deepEqual(Object.keys(s.records()), [sha256(s.dmg)]);
+});
+
+test("a kept DMG hdiutil can't mount stops with the record and the copy kept, never uploading again", () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  writeFileSync(s.dmg, "the first packing");
+  s.set("submit", [FIRST]);
+  s.set(`wait-${FIRST}`, ["drop", "drop", "drop", "drop", "drop"]);
+  assert.notEqual(s.notarize(s.dmg, {}, [app]).status, 0);
+  const key = Object.keys(s.records()).find((name) => !name.endsWith(".dmg"));
+  writeFileSync(s.dmg, "the second packing, other bytes");
+  writeFileSync(join(s.stub, "calls"), "");
+  writeFileSync(join(s.stub, "attach-fails"), "");
+  s.set("submit", [SECOND]);
+  s.ticket();
+  const retry = s.notarize(s.dmg, {}, [app]);
+  assert.notEqual(retry.status, 0);
+  assert.match(retry.output, /couldn't mount .*stay as they are/);
+  assert.deepEqual(s.calls().filter(Boolean), []);
+  assert.equal(s.records()[key], FIRST);
+  assert.equal(s.records()[`${key}.dmg`], "the first packing");
 });
