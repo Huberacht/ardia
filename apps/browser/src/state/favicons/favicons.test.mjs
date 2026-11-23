@@ -441,3 +441,26 @@ test("a miss in one profile doesn't stop a private window asking a profile that 
     stop();
   }
 });
+
+test("closing a private window while its row still waits after a miss leaves no asked marker", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const s = () => useBrowser.getState();
+  const page = "https://closed-while-shown.test/";
+  const incognito = s().createWindow({ kind: "private", url: page });
+  const privateProfile = s().windows[incognito].profileId;
+  const source = engineProfile(s(), "default");
+  globalThis.faviconsForTest = (profile, pages) => empty();
+  try {
+    const row = mount(() => useFavicon(page, null, privateProfile));
+    await waitFor(() => useFavicons.getState().profiles[privateProfile]?.pages[page] === null);
+    s().closeWindow(incognito);
+    await settle();
+    row.unmount();
+    assert.equal(useFavicons.getState().profiles[privateProfile], undefined);
+    assert.equal(markAsked(`${privateProfile}|${source}`, page), true, "no marker came back after the close");
+  } finally {
+    delete globalThis.faviconsForTest;
+    stop();
+  }
+});

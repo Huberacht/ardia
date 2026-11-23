@@ -84,7 +84,7 @@ const wrote = (key: string, page: string) => {
 let lookupTimer: ReturnType<typeof setTimeout> | undefined;
 
 function ask(source: string, page: string, into = source) {
-  if (isIncognitoProfile(source) || !markAsked(askedAs(source, into), page)) return;
+  if (isIncognitoProfile(source) || incognitoClosed(into) || !markAsked(askedAs(source, into), page)) return;
   if (source !== into) notePrivateAsker(into);
   const id = `${into}\n${source}`;
   let batch = queued.get(id);
