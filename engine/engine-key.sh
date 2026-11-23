@@ -19,12 +19,13 @@
 # The files a layer of this platform copies in (its copies.tsv, source and target per line) count even when they live in
 # the other platform's layer or outside engine/.
 #
-# A Windows key (win, or windows) covers what scripts/windows/engine/series_win.py's key_inputs says the Windows build
-# reads: the patches it applies, in order (engine/patches/series' `all` and `mac` lines less series-win's skips, then
-# series-win's own), engine/chromium/src, engine/patches/build, series.py, the ArdiaCore headers it copies, the offline
-# game, scripts/windows/engine (less its checks and prebuilt.json), the app's EngineApi.h and the resources it brands
-# with. The plan is the series_win.py of the commit keyed (--paths: of the working tree); a commit whose series_win.py has
-# no key_inputs, from before Windows had a key, is keyed with engine/engine-key.series-win-v1.py, the first plan.
+# A Windows key (win, or windows) covers what scripts/windows/engine/key-inputs.json declares the Windows build reads, read
+# as data from the commit keyed (--paths: from the working tree), never run: the patches it applies, in order
+# (engine/patches/series' `all` and `mac` lines less series-win's skips, then series-win's own), its trees
+# (engine/chromium/src, engine/patches/build, the offline game, scripts/windows/engine less its checks, tests and
+# prebuilt.json), its files (series.py, the ArdiaCore headers and launch switches it copies, the app's EngineApi.h) and
+# the sources its resource lists name. A commit without key-inputs.json is keyed with engine/engine-key.win-v1.json, the
+# first declaration, which keys main from 991f98e9e on. A symlinked input has no key.
 #
 # --platform defaults to AC_TARGET_OS (mac or linux), else this OS; the Windows build sets AC_TARGET_OS=mac for the Mac
 # steps it reuses, so a Windows key always needs --platform win.

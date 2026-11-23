@@ -16,14 +16,18 @@ fetched under, so a new file there would make Mac or Linux builds miss their pre
 (`AC_CHROMIUM_BUILD`, which every Windows script defaults to); the Mac's `~/chromium-build` is never touched.
 
 The Windows engine has its own key, `engine/engine-key.sh --platform win` (`windows` too), beside the Mac's and Linux's,
-which it leaves as they were. It hashes what `series_win.py`'s `key_inputs` says this build reads: the patches it
-applies, in order (the `all` and `mac` lines of `engine/patches/series` less `series-win`'s skips, then `series-win`'s
-own), `engine/chromium/src`, `engine/patches/build` and `series.py`, the ArdiaCore headers and launch switches it
-copies, the offline game, `scripts/windows/engine` (less `check_inputs.py`, `*_test.py` and `prebuilt.json`), the app's
-`EngineApi.h` and the files the resource lists brand with. A Linux-only line, the Linux layer or the rest of
-`engine/ardiacore` leaves it alone. The key of a commit is read with that commit's `series_win.py`, so a later plan
-never moves an older commit's key; a commit from before `key_inputs` existed is read with the first plan, frozen in
-`engine/engine-key.series-win-v1.py`. The key covers the toolchain's recipe (`toolchain.sh`, `env.sh`), not the
+which it leaves as they were. It hashes what `scripts/windows/engine/key-inputs.json` declares this build reads: the
+patches it applies, in order (the `all` and `mac` lines of `engine/patches/series` less `series-win`'s skips, then
+`series-win`'s own), `engine/chromium/src`, `engine/patches/build` and `series.py`, the ArdiaCore headers and launch
+switches it copies, the offline game, `scripts/windows/engine` (less `check_inputs.py`, `*_test.py` and
+`prebuilt.json`), the app's `EngineApi.h` and the files the resource lists brand with. A Linux-only line, the Linux
+layer or the rest of `engine/ardiacore` leaves it alone. `check_inputs.py` fails when `series_win.py` reads a file the
+declaration doesn't cover. `engine-key.sh` reads the declaration of the commit it keys as data and runs nothing from
+that commit, so a later declaration never moves an older commit's key. A commit without `key-inputs.json` is read with
+the first declaration, frozen in `engine/engine-key.win-v1.json`. That keys main from `991f98e9e`, the first commit
+with `scripts/windows/engine`, on; older commits, and side-branch commits such as `5ecc45e58` from before the app's
+`EngineApi.h`, have no Windows key. An input that is a symlink has no key either, since the build copies what it
+points at. The key covers the toolchain's recipe (`toolchain.sh`, `env.sh`), not the
 toolchain itself: the Visual Studio tools and Windows SDK it downloads from Microsoft can change under the same
 recipe, so two builds under one key can still differ in the compiler they used. `prebuilt.json` pins it as `key` beside `source`, the commit the engine was built
 from (the release source archive still follows `source`); `prebuilt_test.py` checks that `key` is the Windows key of

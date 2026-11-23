@@ -43,13 +43,8 @@ LAYER_BUILD = 'engine/chromium/src/chrome/browser/ardia/BUILD.gn'
 SERIES_REL = 'engine/patches/series'
 SERIES_WIN_REL = 'scripts/windows/engine/series-win'
 WIN_PATCHES_REL = 'scripts/windows/engine/patches'
-ARDIACORE_SRC_REL = 'engine/ardiacore/src'
 ENGINE_API_REL = 'apps/browser/windows/Ardia/EngineApi.h'
-RESOURCE_LISTS = ('engine/patches/build/ardia_resources.txt', 'scripts/windows/engine/ardia_resources_win.txt')
-KEY_TREES = ('engine/chromium/src', 'engine/patches/build', 'apps/browser/assets/offline-game',
-             'apps/browser/assets/offline-game-pipeline', 'scripts/windows/engine')
-KEY_FILES = ('engine/patches/series.py',)
-KEY_TOOLING = ('engine/patches/build/tests', 'scripts/windows/engine/check_inputs.py', 'scripts/windows/engine/prebuilt.json')
+KEY_INPUTS = os.path.join(HERE, 'key-inputs.json')
 MAC_FILE = re.compile(r'(\.mm$|_mac(_[a-z]+)?\.(cc|h)$|/mac/|cocoa|_apple\.(cc|h|mm)$|/apple/|keychain|\.icns$|\.car$)')
 
 
@@ -395,51 +390,6 @@ def plan_patches(read):
 
 def names():
     return [(n, checkout_path(rel)) for n, rel in plan_patches(checkout_text)]
-
-
-def resource_sources(text, rel):
-    sources = []
-    for n, line in enumerate((text or '').splitlines(), 1):
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        parts = line.split()
-        if len(parts) != 2:
-            raise InputError(f'{rel}:{n}: expected `<source> <dest>`')
-        sources.append(parts[0])
-    return sources
-
-
-def under(path, prefix):
-    return path == prefix or path.startswith(prefix + '/')
-
-
-class KeyInputs:
-    def __init__(self, patches, files, excluded):
-        self.patches, self.files, self.excluded = patches, files, excluded
-        self.trees, self.series, self.listed = KEY_TREES, (SERIES_REL, SERIES_WIN_REL), frozenset(files)
-
-    def counts(self, path):
-        if path in self.series:
-            return False
-        if path in self.listed:
-            return True
-        return any(under(path, tree) for tree in self.trees) and not any(under(path, out) for out in self.excluded)
-
-
-def key_inputs(files, read):
-    patches = [rel for _, rel in plan_patches(read)]
-    applied = set(patches)
-    listed = set(KEY_FILES) | {ENGINE_API_REL}
-    listed |= {f'{ARDIACORE_SRC_REL}/{rel}' for rel in HOOK_HEADERS}
-    listed |= {f'{ARDIACORE_SRC_REL}/{LAUNCH_SWITCHES}{ext}' for ext in ('.cc', '.h')}
-    listed |= applied
-    for listing in RESOURCE_LISTS:
-        listed.update(resource_sources(read(listing), listing))
-    excluded = set(KEY_TOOLING)
-    excluded |= {path for path in files if under(path, WIN_PATCHES_REL) and path not in applied}
-    excluded |= {path for path in files if under(path, 'scripts/windows/engine') and path.endswith('_test.py')}
-    return KeyInputs(patches, sorted(listed), sorted(excluded))
 
 
 def state_path(tree):

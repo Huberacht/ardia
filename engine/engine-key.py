@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import fnmatch
 import hashlib
+import json
 import importlib.util
 import os
 import pathlib
@@ -9,7 +11,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import types
 
 ROOTS = ('engine', 'apps/browser/assets/offline-game', 'apps/browser/assets/offline-game-pipeline')
 TOOLING_PREFIXES = ('engine/engine-key.', 'engine/patches/build/tests/')
@@ -23,8 +24,12 @@ OTHER = {'mac': 'linux', 'linux': 'mac'}
 GN_PLATFORMS = {'is_mac': 'mac', 'is_linux': 'linux'}
 CHECKOUT = pathlib.Path(__file__).resolve().parents[1]
 WIN_ROOT = 'scripts/windows/engine'
-WIN_PLAN = 'scripts/windows/engine/series_win.py'
-WIN_PLAN_V1 = 'engine/engine-key.series-win-v1.py'
+WIN_DECLARATIONS = 'scripts/windows/engine/key-inputs.json'
+WIN_DECLARATIONS_V1 = 'engine/engine-key.win-v1.json'
+WIN_FIRST = '991f98e9e7d382e41eee9646b94d937834bee0d2'
+WIN_FIELDS = {'series': str, 'series_win': str, 'win_patches': str, 'series_tags': list, 'trees': list, 'files': list,
+              'resource_lists': list, 'excluded': list, 'excluded_patterns': list}
+SERIES_SELECTORS = ('all', 'mac', 'linux')
 
 
 class Problem(Exception):
@@ -263,27 +268,79 @@ class Plan:
         return not any(under(path, layer) for layer in self.skipped_layers)
 
 
-def planner_module(name, source, origin):
-    module = types.ModuleType(name)
-    module.__file__ = str(CHECKOUT / WIN_PLAN)
+def repo_path(value):
+    if not isinstance(value, str) or not value or value.startswith('/') or '\\' in value:
+        return None
+    parts = [part for part in value.split('/') if part not in ('', '.')]
+    return '/'.join(parts) if parts and '..' not in parts else None
+
+
+def text_of(tree, path):
+    raw = tree.read(path)
+    return None if raw is None else raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n')
+
+
+def win_declarations(tree, rev):
+    raw, origin, first = tree.read(WIN_DECLARATIONS), f'{rev}:{WIN_DECLARATIONS}', False
+    if raw is None:
+        path = CHECKOUT / WIN_DECLARATIONS_V1
+        if not path.is_file():
+            raise Problem(f'{rev} has no {WIN_DECLARATIONS}, and {WIN_DECLARATIONS_V1}, the first Windows plan, is not in this checkout')
+        raw, origin, first = path.read_bytes(), WIN_DECLARATIONS_V1, True
     try:
-        exec(compile(source, origin, 'exec'), module.__dict__)
-    except Exception as failure:
-        raise Problem(f'{origin} does not load: {failure}')
-    return module
+        data = json.loads(raw)
+    except ValueError as error:
+        raise Problem(f'{origin} is not JSON: {error}')
+    if not isinstance(data, dict) or set(data) != set(WIN_FIELDS):
+        raise Problem(f'{origin}: expected exactly the fields {", ".join(sorted(WIN_FIELDS))}')
+    for name, kind in WIN_FIELDS.items():
+        value = data[name]
+        values = value if kind is list else [value]
+        paths = [repo_path(item) for item in values] if isinstance(value, kind) else [None]
+        if None in paths:
+            raise Problem(f'{origin}: {name} must be {"a list of relative paths" if kind is list else "a relative path"} without ..')
+        data[name] = paths if kind is list else paths[0]
+    unknown = [tag for tag in data['series_tags'] if tag not in SERIES_SELECTORS]
+    if unknown:
+        raise Problem(f'{origin}: series_tags names {", ".join(unknown)}; the series knows {", ".join(SERIES_SELECTORS)}')
+    return data, origin, first
 
 
-def series_win_module(tree, rev):
-    source = tree.read(WIN_PLAN)
-    if source is None:
-        raise Problem(f'{rev} has no {WIN_PLAN}, the Windows build plan')
-    module = planner_module('ardia_series_win', source, f'{rev}:{WIN_PLAN}')
-    if hasattr(module, 'key_inputs'):
-        return module
-    first = CHECKOUT / WIN_PLAN_V1
-    if not first.is_file():
-        raise Problem(f'{rev}:{WIN_PLAN} has no key_inputs and {WIN_PLAN_V1}, the first Windows plan, is not in this checkout')
-    return planner_module('ardia_series_win_v1', first.read_bytes(), str(WIN_PLAN_V1))
+def chromium_names(text, origin, tags):
+    names = []
+    for number, raw in enumerate((text or '').split('\n'), 1):
+        fields = raw.split('#', 1)[0].split()
+        if not fields or fields[0] != 'chromium':
+            continue
+        if len(fields) not in (2, 3):
+            raise Problem(f'{origin}:{number}: expected `chromium <patch> [{"|".join(SERIES_SELECTORS)}]`: {raw.strip()}')
+        tag = fields[2] if len(fields) == 3 else 'all'
+        if tag not in SERIES_SELECTORS:
+            raise Problem(f'{origin}:{number}: unknown platform `{tag}`; the series knows {", ".join(SERIES_SELECTORS)}')
+        if not safe_relative(fields[1]) or '/' in fields[1]:
+            raise Problem(f'{origin}:{number}: `{fields[1]}` is not a patch file name')
+        if tag in tags:
+            names.append(fields[1])
+    return names
+
+
+def skip_names(text):
+    return {line.split(None, 1)[1].strip() for line in (raw.split('#', 1)[0].strip() for raw in (text or '').split('\n'))
+            if line.startswith('skip ')}
+
+
+def resource_sources(text, origin):
+    sources = []
+    for number, line in enumerate((text or '').splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split()
+        source = repo_path(parts[0]) if len(parts) == 2 else None
+        if source is None:
+            raise Problem(f'{origin}:{number}: expected `<source> <dest>`, a relative source without ..')
+        sources.append(source)
+    return sources
 
 
 class WinPlan:
@@ -291,40 +348,55 @@ class WinPlan:
         tree.load((WIN_ROOT,))
         if not any(under(path, WIN_ROOT) for path in tree.files()):
             raise Problem(f'{rev} has no {WIN_ROOT}')
-        module = series_win_module(tree, rev)
-
-        def read(path):
-            raw = tree.read(path)
-            return None if raw is None else raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n')
-
-        def plan():
-            try:
-                return module.key_inputs(tree.files(), read)
-            except getattr(module, 'InputError', Problem) as problem:
-                raise Problem(f'the Windows build plan is invalid: {problem}')
-            except SystemExit as stop:
-                raise Problem(f'the Windows build plan is invalid: {stop.code}')
-
-        loaded = set(ROOTS) | {WIN_ROOT}
-        inputs = plan()
-        extra = sorted({path for path in list(inputs.trees) + list(inputs.files)
-                        if not any(under(path, root) for root in loaded)})
-        if extra:
-            tree.load(extra)
-            inputs = plan()
-        self.inputs = inputs
-        self.steps = [('chromium', path) for path in inputs.patches]
-        missing = [path for path in inputs.files if path not in tree.entries]
+        data, origin, first = win_declarations(tree, rev)
+        self.trees = tuple(data['trees'])
+        self.series = (data['series'], data['series_win'])
+        tree.load(sorted({*data['trees'], *data['files'], *data['resource_lists'], *self.series, data['win_patches']}))
+        series_win = text_of(tree, data['series_win'])
+        skips = skip_names(series_win)
+        shared = [name for name in chromium_names(text_of(tree, data['series']), f'{rev}:{data["series"]}', data['series_tags'])
+                  if name not in skips]
+        own = chromium_names(series_win, f'{rev}:{data["series_win"]}', data['series_tags'])
+        self.patches = [f'{posixpath.dirname(data["series"])}/{name}' for name in shared] + [f'{data["win_patches"]}/{name}' for name in own]
+        resources = []
+        for listing in data['resource_lists']:
+            resources += resource_sources(text_of(tree, listing), f'{rev}:{listing}')
+        tree.load(sorted(set(resources)))
+        applied = set(self.patches)
+        self.listed = frozenset({*data['files'], *self.patches, *resources})
+        files = tree.files()
+        excluded = set(data['excluded'])
+        excluded |= {path for path in files if under(path, data['win_patches']) and path not in applied}
+        excluded |= {path for path in files if any(fnmatch.fnmatchcase(path, pattern) for pattern in data['excluded_patterns'])}
+        self.excluded = sorted(excluded)
+        clash = sorted(path for path in self.listed if any(under(path, out) for out in excluded)
+                       or any(fnmatch.fnmatchcase(path, pattern) for pattern in data['excluded_patterns']))
+        if clash:
+            raise Problem(f'{origin}: the Windows build reads {", ".join(clash)}, which the key inputs exclude')
+        self.steps = [('chromium', path) for path in self.patches]
+        modes = tree.entries if isinstance(tree.entries, dict) else {}
+        linked = sorted(path for path, (mode, _) in modes.items() if mode == '120000' and self.counts(path))
+        if linked:
+            raise Problem(f'{rev}: the Windows key inputs {", ".join(linked)} are symlinks; the build copies what they point at, '
+                          'which the key would not hash: commit the file itself')
+        missing = sorted(path for path in self.listed if path not in tree.entries)
         if missing and complete:
+            if first:
+                raise Problem(f'{rev} predates {WIN_DECLARATIONS}; the first Windows plan ({WIN_DECLARATIONS_V1}) keys commits '
+                              f'from {WIN_FIRST[:9]} on, and {rev} lacks {", ".join(missing)}')
             raise Problem(f'the Windows build reads {", ".join(missing)}, which is not there')
 
     def counts(self, path):
-        return self.inputs.counts(path)
+        if path in self.series:
+            return False
+        if path in self.listed:
+            return True
+        return any(under(path, tree) for tree in self.trees) and not any(under(path, out) for out in self.excluded)
 
     def pathspecs(self):
-        specs = list(self.inputs.trees) + list(self.inputs.series)
-        specs += [path for path in self.inputs.files if not any(under(path, tree) for tree in self.inputs.trees)]
-        return specs + [f':(exclude){path}' for path in self.inputs.excluded]
+        specs = list(self.trees) + list(self.series)
+        specs += sorted(path for path in self.listed if not any(under(path, tree) for tree in self.trees))
+        return specs + [f':(exclude){path}' for path in self.excluded]
 
 
 def key(platform, rev):

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { availableParallelism, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
@@ -27,7 +27,8 @@ const real = [
   'engine/patches/build/target_config.py',
   'engine/ardiacore-linux/apply.sh',
   'scripts/windows/engine/series_win.py',
-  'engine/engine-key.series-win-v1.py',
+  'scripts/windows/engine/key-inputs.json',
+  'engine/engine-key.win-v1.json',
 ]
 const win = 'scripts/windows/engine'
 
@@ -253,6 +254,7 @@ const cases = [
   ['a Windows build script', `${win}/env.sh`, { macos: false, linux: false, win: true }],
   ['the Windows accepted patch list', `${win}/accepted-patches.txt`, { macos: false, linux: false, win: true }],
   ['series_win.py, the Windows build plan', `${win}/series_win.py`, { macos: false, linux: false, win: true }],
+  ['key-inputs.json, the Windows key inputs', `${win}/key-inputs.json`, { macos: false, linux: false, win: true }],
   ['the Windows input check', `${win}/check_inputs.py`, { macos: false, linux: false, win: false }],
   ['a Windows test', `${win}/prebuilt_test.py`, { macos: false, linux: false, win: false }],
   ['the Windows prebuilt pin', `${win}/prebuilt.json`, { macos: false, linux: false, win: false }],
@@ -266,7 +268,7 @@ const cases = [
   ['the shared layer apply.sh, which Windows never runs', 'engine/chromium/apply.sh', { macos: true, linux: true, win: false }],
 ]
 
-const appendable = new Set(['engine/patches/series.py', 'engine/engine-key.py', `${win}/series_win.py`, 'engine/ardiacore-linux/apply.sh', 'engine/ardiacore-linux/copies.tsv', `${ardia}/BUILD.gn`])
+const appendable = new Set(['engine/patches/series.py', 'engine/engine-key.py', `${win}/series_win.py`, `${win}/key-inputs.json`, 'engine/ardiacore-linux/apply.sh', 'engine/ardiacore-linux/copies.tsv', `${ardia}/BUILD.gn`])
 
 for (const [name, path, expected] of cases) {
   test(
@@ -738,45 +740,134 @@ test('the real checkout has a Windows key and --paths scoped to the Windows buil
   }
 })
 
+const declarationsPath = `${win}/key-inputs.json`
+
+function declare(root, write, edit) {
+  const declared = JSON.parse(readFileSync(join(root, declarationsPath), 'utf8'))
+  edit(declared)
+  write(declarationsPath, `${JSON.stringify(declared, null, 2)}\n`)
+}
+
 test(
-  'a later Windows plan leaves the Windows key of an earlier commit alone',
+  'later Windows key inputs leave the Windows key of an earlier commit alone',
   withFixture(({ root, key, write, commit }) => {
     const first = key('win')
-    const plan = join(root, win, 'series_win.py')
-    write(`${win}/series_win.py`, readFileSync(plan, 'utf8').replace("HOOK_HEADERS = ['ardia/core/ac_hooks.h'", "HOOK_HEADERS = ['ardia/core/ac_later_hooks.h', 'ardia/core/ac_hooks.h'"))
+    declare(root, write, (declared) => declared.files.push('engine/ardiacore/src/ardia/core/ac_later_hooks.h'))
     write('engine/ardiacore/src/ardia/core/ac_later_hooks.h', 'later\n')
-    const later = commit('a later plan')
+    const later = commit('later inputs')
     assert.notEqual(later.win, first)
     assert.equal(key('win', 'HEAD~1'), first)
     write('engine/ardiacore/src/ardia/core/ac_later_hooks.h', 'changed\n')
-    assert.notEqual(commit('the header the later plan copies').win, later.win)
+    assert.notEqual(commit('a file the later inputs list').win, later.win)
   }),
 )
 
 test(
-  'a commit whose Windows plan predates key_inputs is keyed with the first plan',
-  withFixture(({ root, write, commit, change }) => {
-    const plan = join(root, win, 'series_win.py')
-    write(`${win}/series_win.py`, readFileSync(plan, 'utf8').replaceAll('key_inputs', 'not_a_planner'))
-    const old = commit('a plan without key_inputs')
+  'a commit without key-inputs.json is keyed with the first plan, which needs EngineApi.h',
+  withFixture(({ root, git, run, write, commit, change }) => {
+    git('rm', '-q', declarationsPath)
+    const old = commit('no key inputs')
     assert.match(old.win, /^[0-9a-f]{40}$/)
     const shared = change('engine/patches/chromium-shared.patch', 'changed shared\n')
     assertKeys(old, shared, { macos: true, linux: true, win: true })
     assertKeys(shared, change('engine/patches/chromium-linux-only.patch', 'changed linux\n'), { macos: false, linux: true, win: false })
+    git('rm', '-q', 'apps/browser/windows/Ardia/EngineApi.h')
+    git('commit', '-q', '-m', 'no engine api')
+    const refused = run(['--platform', 'win'])
+    assert.notEqual(refused.status, 0)
+    assert.match(refused.stderr, /keys commits from 991f98e9e on, and HEAD lacks apps\/browser\/windows\/Ardia\/EngineApi\.h/)
+    write('apps/browser/windows/Ardia/EngineApi.h', 'engine api\n')
   }),
 )
 
 test(
-  'a tree the Windows plan declares counts in the Windows key and its --paths',
+  'a tree key-inputs.json declares counts in the Windows key and its --paths, and a manifest inside it declares nothing',
   withFixture(({ root, write, commit, change, pathspecs }) => {
     write('packages/winshared/core.cc', 'shared\n')
-    const before = commit('an undeclared tree')
+    write('packages/winshared/scripts/windows/engine/key-inputs.json', '{"trees": ["packages/winnested"]}\n')
+    write('packages/winnested/deep.cc', 'nested\n')
+    const before = commit('undeclared trees')
     assertKeys(before, change('packages/winshared/core.cc', 'before\n'), { macos: false, linux: false, win: false })
     assert.ok(!pathspecs('win').includes('packages/winshared'))
-    const plan = join(root, win, 'series_win.py')
-    write(`${win}/series_win.py`, readFileSync(plan, 'utf8').replace("KEY_TREES = ('engine/chromium/src',", "KEY_TREES = ('packages/winshared', 'engine/chromium/src',"))
+    declare(root, write, (declared) => declared.trees.push('packages/winshared'))
     const declared = commit('declare a tree')
-    assert.ok(pathspecs('win').includes('packages/winshared'))
-    assertKeys(declared, change('packages/winshared/core.cc', 'after\n'), { macos: false, linux: false, win: true })
+    const specs = pathspecs('win')
+    assert.ok(specs.includes('packages/winshared'))
+    assert.ok(!specs.some((spec) => spec.includes('winnested')))
+    const edited = change('packages/winshared/core.cc', 'after\n')
+    assertKeys(declared, edited, { macos: false, linux: false, win: true })
+    assertKeys(edited, change('packages/winnested/deep.cc', 'changed\n'), { macos: false, linux: false, win: false })
+  }),
+)
+
+test(
+  'the Windows key never runs code from the revision it keys',
+  withFixture(({ root, key, write, commit, pathspecs }) => {
+    const marker = join(root, '..', `${relative(dirname(root), root)}-ran`)
+    const hostile = `open(${JSON.stringify(marker)}, 'w').write('ran')\n`
+    write(`${win}/series_win.py`, hostile + readFileSync(join(root, win, 'series_win.py'), 'utf8'))
+    write(`${win}/key_inputs.py`, hostile)
+    commit('a plan that writes a file when it is run')
+    key('win')
+    key('win', 'HEAD~1')
+    pathspecs('win')
+    assert.ok(!existsSync(marker), 'engine-key ran a file from the keyed revision')
+    const source = readFileSync(join(repo, 'engine/engine-key.py'), 'utf8')
+    assert.doesNotMatch(source, /\b(exec|eval|compile|__import__)\s*\(/)
+    assert.deepEqual(source.match(/spec_from_file_location\([^)]*\)/g), ["spec_from_file_location('ardia_series', path)"])
+    assert.match(source, /path = CHECKOUT \/ 'engine\/patches\/series\.py'/)
+  }),
+)
+
+for (const [name, edit, message] of [
+  ['a path with ..', (declared) => declared.trees.push('../outside'), /trees must be a list of relative paths/],
+  ['an absolute path', (declared) => declared.files.push('/etc/passwd'), /files must be a list of relative paths/],
+  ['an unknown field', (declared) => Object.assign(declared, { run: 'x' }), /expected exactly the fields/],
+  ['a file under an excluded path', (declared) => declared.files.push('engine/patches/build/tests/test_tooling.py'), /reads engine\/patches\/build\/tests\/test_tooling\.py, which the key inputs exclude/],
+  ['a file an excluded pattern matches', (declared) => declared.files.push(`${win}/prebuilt_test.py`), /which the key inputs exclude/],
+]) {
+  test(
+    `key-inputs.json with ${name} has no Windows key`,
+    withFixture(({ root, git, run, write }) => {
+      declare(root, write, edit)
+      git('add', '-A')
+      git('commit', '-q', '-m', name)
+      const refused = run(['--platform', 'win'])
+      assert.notEqual(refused.status, 0)
+      assert.match(refused.stderr, message)
+      assert.notEqual(run(['--platform', 'win', '--paths']).status, 0)
+    }),
+  )
+}
+
+test('the first plan engine-key falls back to is the key-inputs.json Windows keys began with', () => {
+  const first = JSON.parse(readFileSync(join(repo, 'engine/engine-key.win-v1.json'), 'utf8'))
+  assert.deepEqual(Object.keys(first).sort(), ['excluded', 'excluded_patterns', 'files', 'resource_lists', 'series', 'series_tags', 'series_win', 'trees', 'win_patches'])
+  assert.ok(first.files.includes('apps/browser/windows/Ardia/EngineApi.h'))
+})
+
+test(
+  'a resource spelled with ./ counts as the file it names, as 03-helium.py copies it',
+  withFixture(({ root, write, commit, change, pathspecs }) => {
+    write(`${win}/ardia_resources_win.txt`, './apps/browser/windows/Ardia/Ardia.ico chrome/app/theme/chromium/win/chromium.ico\n')
+    const dotted = commit('a ./ resource')
+    assert.ok(pathspecs('win').includes('apps/browser/windows/Ardia/Ardia.ico'))
+    assertKeys(dotted, change('apps/browser/windows/Ardia/Ardia.ico', 'new icon\n'), { macos: false, linux: false, win: true })
+    write(`${win}/ardia_resources_win.txt`, 'apps/../apps/browser/windows/Ardia/Ardia.ico chrome/app/theme/chromium/win/chromium.ico\n')
+    assert.throws(() => commit('a resource with ..'))
+  }),
+)
+
+test(
+  'a symlinked Windows key input has no key, since the build copies what it points at',
+  { skip: process.platform === 'win32' && 'needs symlinks' },
+  withFixture(({ root, git, run }) => {
+    rmSync(join(root, 'apps/browser/windows/Ardia/Ardia.ico'))
+    symlinkSync('EngineApi.h', join(root, 'apps/browser/windows/Ardia/Ardia.ico'))
+    git('add', '-A')
+    git('commit', '-q', '-m', 'a symlinked icon')
+    const refused = run(['--platform', 'win'])
+    assert.notEqual(refused.status, 0)
+    assert.match(refused.stderr, /apps\/browser\/windows\/Ardia\/Ardia\.ico are symlinks/)
   }),
 )

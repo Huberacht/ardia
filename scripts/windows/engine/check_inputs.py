@@ -7,7 +7,9 @@ series_win.py takes them, and lists every problem with the file and line it come
 - ardia-layer-win.patch applies to engine/chromium/src/chrome/browser/ardia without fuzz;
 - the layer's BUILD.gn has what the Windows build file is made from, the sources Windows compiles from it are
   accepted-layer-sources.txt and all exist, and every engine call in the Windows call table is defined in one of them;
-- engine/ardiacore's ac_launch_switches.cc still has what launch_switches_source() turns into the Windows copy.
+- engine/ardiacore's ac_launch_switches.cc still has what launch_switches_source() turns into the Windows copy;
+- key-inputs.json, the Windows engine key's inputs, declares every file this build reads: the patch lists and tags, the
+  ArdiaCore files it copies, the app's EngineApi.h, the layers, the Mac build scripts and the offline game.
 
 A change to an accepted list is accepted on purpose: run with --accept and commit the lists. --accept writes
 nothing and fails when any input can't be read.
@@ -16,6 +18,7 @@ Usage: check_inputs.py [--accept]
 """
 import argparse
 import difflib
+import json
 import os
 import re
 import sys
@@ -88,6 +91,40 @@ def layer_sources(problems):
     return sorted(sources)
 
 
+def under(path, prefix):
+    return path == prefix or path.startswith(prefix + '/')
+
+
+def declared_inputs(problems):
+    where = os.path.relpath(build.KEY_INPUTS, build.REPO)
+    try:
+        with open(build.KEY_INPUTS) as f:
+            declared = json.load(f)
+    except (OSError, ValueError) as error:
+        problems.append(f'{where}: {error}')
+        return
+    for field, wanted in (('series', build.SERIES_REL), ('series_win', build.SERIES_WIN_REL),
+                          ('win_patches', build.WIN_PATCHES_REL), ('series_tags', list(build.WINDOWS_TAGS))):
+        if declared.get(field) != wanted:
+            problems.append(f'{where}: {field} is {declared.get(field)!r}, but series_win.py reads {wanted!r}')
+    files, trees = declared.get('files', []), declared.get('trees', [])
+    rel = lambda path: os.path.relpath(path, build.REPO).replace(os.sep, '/')
+    copied = [f'engine/ardiacore/src/{header}' for header in build.HOOK_HEADERS]
+    copied += [f'engine/ardiacore/src/{build.LAUNCH_SWITCHES}{ext}' for ext in ('.cc', '.h')] + [build.ENGINE_API_REL]
+    for path in copied:
+        if path not in files:
+            problems.append(f'{where}: the Windows build copies {path}, which files does not list')
+    read = ['engine/chromium/src', rel(build.ARDIA_LAYER), build.LAYER_BUILD, rel(build.LAYER_PATCH), rel(build.LAYER_OVERLAY),
+            'scripts/windows/engine/src/ardia/win', 'engine/patches/series.py', 'engine/patches/build',
+            'apps/browser/assets/offline-game', 'apps/browser/assets/offline-game-pipeline']
+    for path in read:
+        if path not in files and not any(under(path, tree) for tree in trees):
+            problems.append(f'{where}: the Windows build reads {path}, which no tree or file covers')
+    for listing in ('engine/patches/build/ardia_resources.txt', 'scripts/windows/engine/ardia_resources_win.txt'):
+        if listing not in declared.get('resource_lists', []):
+            problems.append(f'{where}: the Windows build brands with {listing}, which resource_lists does not name')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--accept', action='store_true')
@@ -96,6 +133,7 @@ def main():
     patches = patch_names(problems)
     sources = layer_sources(problems)
     attempt(problems, build.launch_switches_source)
+    declared_inputs(problems)
     if args.accept:
         if problems or sources is None:
             for problem in problems:
