@@ -1442,6 +1442,10 @@ void ShellWindow::Invoke(const std::string& method,
             std::move(done)));
     return;
   }
+  if (method == "ArdiaShell.testOpenExternalSink" && ardiacore::TestInstance()) {
+    return std::move(done).Run(
+        true, base::Value(base::DictValue().Set("calls", ExternalOpenCount())));
+  }
   if (method == "ArdiaShell.testWindowDecorations" && ardiacore::TestInstance()) {
     return std::move(done).Run(true, base::Value(DecorationReport()));
   }

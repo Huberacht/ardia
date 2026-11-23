@@ -18,6 +18,7 @@ $Spawned = @('msedge', 'mshta', 'calc', 'CalculatorApp', 'msdt', 'explorer', 'Sy
 function Spawned { @(Get-Process -Name $Spawned -ErrorAction SilentlyContinue | ForEach-Object Id) }
 function Named([int[]]$ids) { @($ids | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.Name)#$_ parent $((Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction SilentlyContinue).ParentProcessId)" } }) -join ', ' }
 
+$edgeWasRunning = [bool](Get-Process -Name msedge -ErrorAction SilentlyContinue)
 Stop-Engine
 Start-Shell -Fresh | Out-Null
 Wait-ShellReady 60 | Out-Null
@@ -25,36 +26,41 @@ Wait-ShellReady 60 | Out-Null
 $decorations = (Invoke-Host 'ArdiaShell.testWindowDecorations' '{}').r
 Check 'mica-corners-dark-title' ($decorations.backdropSet -and $decorations.cornersSet -and $decorations.darkTitleSet -and $decorations.backdrop -eq 2 -and $decorations.darkTitle -eq $decorations.systemDark) ($decorations | ConvertTo-Json -Compress)
 
+$rnwSync = Join-Path $env:LOCALAPPDATA 'Ardia\Sync'
+function Rnw-Keys { @(Get-ChildItem -LiteralPath $rnwSync -Filter 'sync-key-*' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.Length) $($_.LastWriteTimeUtc.Ticks)" }) -join '|' }
+$rnwKeysBefore = Rnw-Keys
 $secret = (Invoke-Host 'ArdiaShell.testSecretRoundTrip' '{}').r
 $underData = $secret.directory -like "$Data*"
 Check 'dpapi-secret-roundtrip' ($secret.opened -and $secret.kind -eq 'dpapi' -and $secret.probe -and $secret.saved -and $secret.same -and $secret.hidden -and $secret.boundToPurpose -and $secret.apartFromOtherInstances -and $secret.rejectsPathAccount -and $secret.deleted -and $underData) ($secret | ConvertTo-Json -Compress)
-$rnwSync = Join-Path $env:LOCALAPPDATA 'Ardia\Sync'
-$leftovers = @(Get-ChildItem -LiteralPath (Join-Path $Data 'Sync') -Filter 'sync-key-self-check-*' -ErrorAction SilentlyContinue).Count + @(Get-ChildItem -LiteralPath $rnwSync -Filter 'sync-key-self-check-*' -ErrorAction SilentlyContinue).Count
-Check 'dpapi-leaves-nothing-and-skips-rnw' ($leftovers -eq 0) "self-check keys left: $leftovers"
+Check 'dpapi-case-distinct-accounts' ($secret.caseIndependent -and $secret.caseFiles.lower -and $secret.caseFiles.upper -and $secret.caseFiles.lower.ToLowerInvariant() -ne $secret.caseFiles.upper.ToLowerInvariant()) ($secret.caseFiles | ConvertTo-Json -Compress)
+$leftovers = @(Get-ChildItem -LiteralPath (Join-Path $Data 'Sync') -Filter 'sync-key-*' -ErrorAction SilentlyContinue).Count
+Check 'dpapi-leaves-nothing-and-skips-rnw' (($leftovers -eq 0) -and ((Rnw-Keys) -eq $rnwKeysBefore)) "test keys left: $leftovers; RNW Sync keys unchanged: $((Rnw-Keys) -eq $rnwKeysBefore)"
 
-$hostile = @(
-  'javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'file:///C:/Windows/System32/calc.exe', 'file://host/share/x.exe',
-  'ms-msdt:/id PCWDiagnostic', 'search-ms:query=calc', 'ms-settings:privacy', 'shell:startup', 'vbscript:msgbox(1)',
-  'data:text/html,<script>1</script>', 'view-source:https://example.com', 'chrome://settings', 'mk:@MSITStore:x',
-  'ms-officecmd:x', 'ms-appinstaller:?source=https://example.com/x.appinstaller', "https://example.com/`r`nx",
-  'https://example.com/"x', 'https:', 'not a url', ('https://example.com/' + ('a' * 33000)), 'C:\Windows\System32\calc.exe',
-  '\\host\share\x.exe'
-)
-$before = Spawned
-$refused = 0
-foreach ($url in $hostile) {
-  $answer = Invoke-Host 'ArdiaApp.openExternalURL' "{ `"args`": [$(Js $url)] }"
-  if ($answer.ok -and $answer.r -eq $false) { $refused++ } else { Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($url.Substring(0, [Math]::Min(60, $url.Length)))" }
+$corpus = Get-Content -LiteralPath 'C:\pilot\hostile-corpus.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+function Sink-Calls { (Invoke-Host 'ArdiaShell.testOpenExternalSink' '{}').r.calls }
+function Open-With([string]$argsExpression) {
+  Cdp-Eval "(() => { try { return __ardiaHost.invoke('ArdiaApp.openExternalURL', { args: $argsExpression }).then(r => JSON.stringify({ ok: true, r }), e => JSON.stringify({ ok: false, e: String(e && e.message || e) })); } catch (e) { return JSON.stringify({ ok: false, e: 'threw ' + e.message }); } })()" | ConvertFrom-Json
 }
-$shapes = @('{ "args": [] }', '{ "args": [5] }', '{ "args": ["https://example.com", "x"] }', '{ "args": [{ "href": "https://example.com" }] }')
-$shapeRefused = @($shapes | Where-Object { -not (Invoke-Host 'ArdiaApp.openExternalURL' $_).ok }).Count
+$before = Spawned
+$sinkBefore = Sink-Calls
+$opened = @()
+foreach ($case in $corpus.cases) {
+  $answer = Open-With "[$($case.expression)]"
+  if ($answer -and $answer.ok -and $answer.r -ne $false) { $opened += $case.id; Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($case.id)" }
+}
+foreach ($shape in $corpus.shapes) {
+  $answer = Open-With $shape.expression
+  if ($answer -and $answer.ok -and $answer.r -eq $true) { $opened += $shape.id; Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($shape.id)" }
+}
 Hold 2000
+$sinkAfter = Sink-Calls
 $fresh = @(Spawned | Where-Object { $before -notcontains $_ })
-Check 'open-external-refuses-hostile' (($refused -eq $hostile.Count) -and ($shapeRefused -eq $shapes.Count) -and ($fresh.Count -eq 0)) "$refused of $($hostile.Count) URLs refused, $shapeRefused of $($shapes.Count) bad shapes refused, new processes: $(Named $fresh)"
-$valid = Invoke-Host 'ArdiaApp.openExternalURL' '{ "args": ["https://example.com/ardia-open-external"] }'
-$opened = Wait-Until { @(Spawned | Where-Object { $before -notcontains $_ }).Count -gt 0 } 15 'a browser for the valid link' -NoThrow
-Check 'open-external-valid-reaches-shell' ($valid.ok -and $valid.r -eq $true -and $opened) "answer $($valid | ConvertTo-Json -Compress)"
-Get-Process -Name msedge -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
+Check 'open-external-refuses-shared-corpus' (($opened.Count -eq 0) -and ($sinkAfter -eq $sinkBefore) -and ($fresh.Count -eq 0)) "$($corpus.cases.Count) corpus values and $($corpus.shapes.Count) bad shapes; opened: $($opened -join ', '); ShellExecuteExW calls $sinkBefore -> $sinkAfter; new processes: $(Named $fresh)"
+$valid = Open-With "[$(Js $corpus.control)]"
+$sinkControl = Sink-Calls
+$launched = Wait-Until { @(Spawned | Where-Object { $before -notcontains $_ }).Count -gt 0 } 15 'a browser for the valid link' -NoThrow
+Check 'open-external-control-reaches-sink' ($valid.ok -and $valid.r -eq $true -and $sinkControl -eq $sinkAfter + 1 -and $launched) "answer $($valid | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkAfter -> $sinkControl"
+if (-not $edgeWasRunning) { Get-Process -Name msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 
 $rnwBefore = Run-Value 'Ardia'
 $status0 = Invoke-Host 'ArdiaSystem.launchAtLoginStatus' '{ "args": [] }'
@@ -81,4 +87,10 @@ Check 'bridge-answers-after-platform-calls' ($identity -eq 'main') "windowIdenti
 Stop-Engine
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\platform-results.json"
 Remove-PilotRun $RunRoot
+$failed = @($results.Keys | Where-Object { -not $results[$_].ok })
+if ($failed.Count) {
+  "FAILED platform: $($failed -join ', ')"
+  exit 1
+}
 "DONE platform"
+exit 0

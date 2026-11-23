@@ -35,6 +35,10 @@ bool ExternalUrlAllowed(std::string_view text);
 
 bool SecretAccountAllowed(std::string_view account);
 
+std::string SecretFileName(std::string_view account);
+
+int ExternalOpenCount();
+
 std::optional<std::wstring> LoginItemCommand(const base::FilePath& executable);
 
 base::FilePath SecretDirectory();

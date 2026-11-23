@@ -7,6 +7,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -30,7 +31,9 @@
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_observer.h"
 #include "base/rand_util.h"
+#include "base/containers/span.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -66,14 +69,9 @@ constexpr size_t kSecretLimit = 4096;
 constexpr size_t kSealedLimit = 64 * 1024;
 constexpr base::TimeDelta kPowerSampleInterval = base::Seconds(10);
 
-constexpr std::string_view kDeniedSchemes[] = {
-    "about",         "afp",          "applescript",  "blob",          "chrome",        "chrome-extension",
-    "chrome-search", "chrome-untrusted", "data",     "devtools",      "disk",          "disks",
-    "file",          "filesystem",   "hcp",          "ie.http",       "its",           "javascript",
-    "mk",            "ms-appinstaller", "ms-cxh",    "ms-cxh-full",   "ms-help",       "ms-its",
-    "ms-msdt",       "ms-officecmd", "ms-search",    "ms-settings",   "msdt",          "mhtml",
-    "nntp",          "res",          "search",       "search-ms",     "shell",         "vbscript",
-    "view-source",   "vnd.ms.radio", "wsh"};
+constexpr std::string_view kExternalSchemes[] = {"http", "https", "mailto"};
+
+std::atomic<int> g_external_opens{0};
 
 void Fail(PlatformReply done, std::string_view code, std::string_view message) {
   std::move(done).Run(false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
@@ -220,7 +218,7 @@ class DpapiSecretStore final : public ardia::desktop::SecretStore {
   }
 
   base::FilePath PathFor(std::string_view account) const {
-    return directory_.Append(L"sync-key-" + base::UTF8ToWide(account) + L".dpapi");
+    return directory_.Append(base::UTF8ToWide(SecretFileName(account)));
   }
 
   static std::string Purpose(std::string_view account) { return PurposeFor(account, ardiacore::TestInstance()); }
@@ -365,7 +363,10 @@ void InvokeOpenExternal(const base::ListValue& args, PlatformReply done) {
     return std::move(done).Run(true, base::Value(false));
   }
   ShellWorker()->PostTaskAndReplyWithResult(
-      FROM_HERE, base::BindOnce(&OpenWithShell, base::UTF8ToWide(url.spec())),
+      FROM_HERE, base::BindOnce([](std::wstring target) {
+        g_external_opens.fetch_add(1, std::memory_order_relaxed);
+        return OpenWithShell(std::move(target));
+      }, base::UTF8ToWide(url.spec())),
       base::BindOnce([](PlatformReply done, bool opened) { std::move(done).Run(true, base::Value(opened)); },
                      std::move(done)));
 }
@@ -552,9 +553,20 @@ bool ExternalUrlAllowed(std::string_view text) {
   }
   for (const char c : text) {
     const unsigned char byte = static_cast<unsigned char>(c);
-    if (byte < 0x20 || byte == 0x7f || c == '"') {
+    if (byte <= 0x20 || byte == 0x7f || c == '"' || c == '\'' || c == '\\') {
       return false;
     }
+  }
+  if (!base::IsStringUTF8(text)) {
+    return false;
+  }
+  const std::u16string wide = base::UTF8ToUTF16(text);
+  if (std::ranges::any_of(wide, [](char16_t c) {
+        return (c >= 0x80 && c <= 0xa0) || c == 0xad || c == 0x1680 || c == 0x180e || (c >= 0x2000 && c <= 0x200f) ||
+               (c >= 0x2028 && c <= 0x202f) || (c >= 0x205f && c <= 0x206f) || c == 0x3000 || c == 0xfeff ||
+               (c >= 0xfff0 && c <= 0xffff);
+      })) {
+    return false;
   }
   const GURL url(text);
   if (!url.is_valid() || url.spec().size() > kExternalUrlLimit) {
@@ -564,11 +576,18 @@ bool ExternalUrlAllowed(std::string_view text) {
   if (scheme.empty() || scheme.size() > 64) {
     return false;
   }
-  if (std::ranges::any_of(kDeniedSchemes, [&scheme](std::string_view denied) { return scheme == denied; })) {
+  if (std::ranges::none_of(kExternalSchemes, [&scheme](std::string_view allowed) { return scheme == allowed; })) {
     return false;
   }
-  if (url.SchemeIsHTTPOrHTTPS() && !url.has_host()) {
+  if (url.SchemeIsHTTPOrHTTPS() && (!url.has_host() || url.has_username() || url.has_password())) {
     return false;
+  }
+  if (url.SchemeIsHTTPOrHTTPS()) {
+    const std::string raw = base::ToLowerASCII(text);
+    const size_t after = scheme.size() + 3;
+    if (raw.compare(0, after, scheme + "://") != 0 || raw.size() <= after || raw[after] == '/') {
+      return false;
+    }
   }
   const std::string host(url.host());
   const std::string path(url.path());
@@ -576,6 +595,14 @@ bool ExternalUrlAllowed(std::string_view text) {
     return false;
   }
   return true;
+}
+
+std::string SecretFileName(std::string_view account) {
+  return "sync-key-x" + base::ToLowerASCII(base::HexEncode(base::as_byte_span(account))) + ".dpapi";
+}
+
+int ExternalOpenCount() {
+  return g_external_opens.load(std::memory_order_relaxed);
 }
 
 bool SecretAccountAllowed(std::string_view account) {
@@ -626,6 +653,21 @@ base::DictValue SecretRoundTrip() {
   const bool rejects_path = store->Save("..\\escape", secret) == SecretStatus::kUnavailable;
   const SecretStatus deleted = store->Delete(account);
   const bool gone = !base::PathExists(dpapi->PathFor(account));
+  std::vector<uint8_t> lower_secret = base::RandBytesAsVector(32);
+  std::vector<uint8_t> upper_secret = base::RandBytesAsVector(32);
+  std::vector<uint8_t> lower_read;
+  std::vector<uint8_t> upper_read;
+  const bool both_saved = store->Save("caseTest", lower_secret) == SecretStatus::kOk &&
+                          store->Save("CaseTest", upper_secret) == SecretStatus::kOk;
+  const bool both_read = store->Load("caseTest", &lower_read) == SecretStatus::kOk && lower_read == lower_secret &&
+                         store->Load("CaseTest", &upper_read) == SecretStatus::kOk && upper_read == upper_secret;
+  const bool lower_deleted = store->Delete("caseTest") == SecretStatus::kOk;
+  Wipe(upper_read);
+  const bool upper_survives = store->Load("CaseTest", &upper_read) == SecretStatus::kOk && upper_read == upper_secret &&
+                              store->Load("caseTest", &lower_read) == SecretStatus::kNotFound;
+  const bool upper_deleted = store->Delete("CaseTest") == SecretStatus::kOk;
+  const bool case_independent = both_saved && both_read && lower_deleted && upper_survives && upper_deleted &&
+                                dpapi->PathFor("caseTest") != dpapi->PathFor("CaseTest");
   base::DictValue report = base::DictValue()
       .Set("opened", true)
       .Set("kind", std::string(store->kind()))
@@ -637,11 +679,19 @@ base::DictValue SecretRoundTrip() {
       .Set("boundToPurpose", bound)
       .Set("apartFromOtherInstances", apart)
       .Set("rejectsPathAccount", rejects_path)
-      .Set("deleted", deleted == SecretStatus::kOk && gone);
+      .Set("deleted", deleted == SecretStatus::kOk && gone)
+      .Set("caseIndependent", case_independent)
+      .Set("caseFiles", base::DictValue()
+                            .Set("lower", SecretFileName("caseTest"))
+                            .Set("upper", SecretFileName("CaseTest")));
   Wipe(secret);
   Wipe(loaded);
   Wipe(other);
   Wipe(sealed);
+  Wipe(lower_secret);
+  Wipe(upper_secret);
+  Wipe(lower_read);
+  Wipe(upper_read);
   return report;
 }
 
