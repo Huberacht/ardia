@@ -20,7 +20,7 @@ function Resolve-Folder([string]$path, [string]$what, [string]$marker) {
 }
 
 $engineRoot = Resolve-Folder $Engine "The engine" $engineLauncher
-$uiRoot = Resolve-Folder $Ui "The desktop UI build (apps/linux/dist)" "index.html"
+$uiRoot = Resolve-Folder $Ui "The desktop UI build (apps/desktop/dist/linux)" "index.html"
 if (Test-Path -LiteralPath (Join-Path $engineRoot "ArdiaApp.dll")) { throw "The engine '$Engine' holds the React Native app; the WebUI shell is assembled from a bare engine" }
 if (Test-Path -LiteralPath $Out) {
   if (Get-ChildItem -LiteralPath $Out -Force | Select-Object -First 1) { throw "'$Out' is not empty" }
