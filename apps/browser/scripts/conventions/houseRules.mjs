@@ -91,7 +91,16 @@ function printsItself(src, context) {
     const stripsMarkers = /\.split\(/.test(after) && /["'\x60]\/\/|\\\/\\\//.test(after);
     return stripsMarkers && PRINTS.test(context.slice(context.lastIndexOf("\n", at) + 1, at + 400)) && HELP_CONTEXT.test(context.slice(Math.max(0, at - 600), at + 400));
   };
-  return reads.some((pattern) => [...context.matchAll(pattern)].some((match) => printsHelp(match.index)));
+  for (const pattern of reads) {
+    for (const match of context.matchAll(pattern)) {
+      if (!printsHelp(match.index)) continue;
+      const chain = /\.split\([^)]*\)\s*(?:\[(\d+)\]|\.slice\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\))?/.exec(context.slice(match.index, match.index + 400));
+      if (chain?.[1] !== undefined) return (line) => line === Number(chain[1]) + 1;
+      if (chain?.[2] !== undefined) return (line) => line > Number(chain[2]) && (chain[3] === undefined || line <= Number(chain[3]));
+      return () => true;
+    }
+  }
+  return null;
 }
 
 function leadingBlock(src, marker) {
@@ -103,9 +112,13 @@ function leadingBlock(src, marker) {
 
 export function helpExempt(lang, src, scan, sourcedPrinters = new Set()) {
   if (lang === "js") {
-    if (!printsItself(src, scan.codeAndStrings ?? src)) return () => false;
+    const printed = printsItself(src, scan.codeAndStrings ?? src);
+    if (!printed) return () => false;
     const lines = leadingBlock(src, /^\/\//);
-    return (range) => lines.has(lineOf(src, range[0]));
+    return (range) => {
+      const line = lineOf(src, range[0]);
+      return lines.has(line) && printed(line);
+    };
   }
   if (lang === "shell") {
     const lines = sourcedPrinters.size ? leadingBlock(src, /^\s*#/) : shellHelpLines(src, scan.strings, scan.codeAndStrings ?? src);
@@ -161,8 +174,10 @@ function shellLoops(code) {
 const NOT_COUNTERS = new Set(["for", "while", "until", "do", "if", "in", "of", "let", "const", "var", "true", "false", "null", "undefined", "length", "test", "and", "or", "not", "is", "None", "True", "False"]);
 
 function advances(header, body) {
-  const names = [...new Set([...header.matchAll(/\$?\{?([A-Za-z_][\w]*)/g)].map((match) => match[1]))].filter((name) => !NOT_COUNTERS.has(name));
-  const text = `${header}\n${body}`;
+  const clauses = header.split(";");
+  const condition = clauses.length >= 3 ? clauses[1] : header;
+  const names = [...new Set([...condition.matchAll(/\$?\{?([A-Za-z_][\w]*)/g)].map((match) => match[1]))].filter((name) => !NOT_COUNTERS.has(name));
+  const text = `${clauses.length >= 3 ? clauses.slice(2).join(";") : header}\n${body}`;
   return names.some((name) =>
     new RegExp(String.raw`(?:\+\+|--)\s*\$?${name}\b|(?<![\w.])\$?${name}\s*(?:\+\+|--|[-+*/]?=(?!=))|\blet\s+${name}\b|\b(?:read|shift)\b[^\n]*\b${name}\b`).test(text),
   );
@@ -466,11 +481,20 @@ function nodeTestShorthands(codeAndStrings) {
   return names;
 }
 
-function constantString(codeAndStrings, strings, src, name) {
-  const binding = new RegExp(String.raw`\b(?:const|let|var)\s+${name.replace(/\$/g, "\\$")}\s*(?::\s*[\w$.<>|\s]+?)?=\s*(?=["'\x60])`).exec(codeAndStrings);
-  if (!binding) return null;
-  const literal = strings.find((s) => s.start === binding.index + binding[0].length + 1);
-  return literal ? src.slice(literal.start, literal.end) : null;
+function constantValue(code, codeAndStrings, strings, src, name, at) {
+  const pattern = new RegExp(String.raw`\b(?:const|let|var)\s+${name.replace(/\$/g, "\\$")}\s*(?::\s*[\w$.<>|\s]+?)?=\s*`, "g");
+  let best = null;
+  for (const binding of codeAndStrings.matchAll(pattern)) {
+    const scope = unmatchedOpen(code, binding.index);
+    const scopeEnd = scope < 0 ? code.length : balanced(code, scope, "{", "}");
+    if (at < scope || at > scopeEnd) continue;
+    if (best && (scope < best.scope || (scope === best.scope && binding.index < best.index))) continue;
+    best = { scope, index: binding.index, valueAt: binding.index + binding[0].length };
+  }
+  if (!best) return null;
+  if (/^true\b/.test(code.slice(best.valueAt, best.valueAt + 5))) return { truthy: true, reason: null };
+  const literal = strings.find((s) => s.start === best.valueAt + 1);
+  return literal && literal.end > literal.start ? { truthy: true, reason: src.slice(literal.start, literal.end) } : null;
 }
 
 const TRUE_VALUE = /true\s*[,}]/y;
@@ -481,10 +505,11 @@ export function jsSkipMarkers(src, code, strings, codeAndStrings) {
   const calleePattern = new RegExp(String.raw`^(?:[\w$]+\.)?(?:${callees})$`);
   const inString = (at) => strings.some((s) => at >= s.start && at < s.end);
   const holder = String.raw`(?:\s*\.\s*(?:test|it|describe|suite)|\s*\[\s*(["'\x60])(?:test|it|describe|suite)\1\s*\])?`;
-  const methods = new RegExp(String.raw`(?<![\w$.])(?:${callees})${holder}(?:\s*\.\s*(only|skip|todo)|\s*\[\s*(["'\x60])(only|skip|todo)\3\s*\])\s*\(`, "g");
+  const methods = new RegExp(String.raw`(?<![\w$.])(?:${callees})${holder}(?:\s*\.\s*(only|skip|todo)|\s*\[\s*(["'\x60])(only|skip|todo)\3\s*\])(\s*\()?`, "g");
   for (const match of codeAndStrings.matchAll(methods)) {
     if (inString(match.index)) continue;
     const kind = match[2] ?? match[4];
+    if (kind !== "only" && !match[5]) continue;
     markers.push({ at: match.index, kind, reason: null, never: kind === "only" });
   }
   for (const [name, kind] of nodeTestShorthands(codeAndStrings)) {
@@ -514,8 +539,14 @@ export function jsSkipMarkers(src, code, strings, codeAndStrings) {
       continue;
     }
     const named = /^([A-Za-z_$][\w$]*)\s*[,}]/.exec(code.slice(valueAt, valueAt + 80));
-    const reason = named && named[1] !== "undefined" && named[1] !== "false" ? constantString(codeAndStrings, strings, src, named[1]) : null;
+    const reason = named && named[1] !== "undefined" && named[1] !== "false" ? constantValue(code, codeAndStrings, strings, src, named[1], match.index)?.reason : null;
     if (reason) markers.push({ at: match.index, kind, reason });
+  }
+  for (const match of code.matchAll(/(?<=[{,]\s*)(skip|todo|only)(?=\s*[,}])/g)) {
+    if (!calleePattern.test(optionBagCallee(code, match.index)) && !passedToTest(boundObjectName(code, match.index))) continue;
+    const value = constantValue(code, codeAndStrings, strings, src, match[1], match.index);
+    if (!value?.truthy) continue;
+    markers.push({ at: match.index, kind: match[1], reason: value.reason, never: match[1] === "only" });
   }
   return markers;
 }
@@ -532,7 +563,7 @@ export function pythonSkipMarkers(src, code, strings) {
     const argsAt = match.index + match[0].length;
     const close = balanced(code, argsAt - 1, "(", ")");
     const args = code.slice(argsAt, close);
-    if (kind === "xfail" && !/^\s*(?:$|[rbuf]{0,2}['"]|reason\s*=|(?:condition\s*=\s*)?True\s*(?:[,)]|$))/.test(args)) continue;
+    if (kind === "xfail" && !/^\s*(?:$|reason\s*=|(?:condition\s*=\s*)?True\s*(?:[,)]|$))/.test(args)) continue;
     markers.push({ at: match.index, kind, reason: stringAfter(strings, src, argsAt - 1, close) });
   }
   return markers;

@@ -334,7 +334,7 @@ export function scanPython(src) {
   return { comments, strings, docstrings };
 }
 
-const RUBY_HEREDOC = /^<<([~-]?)(['"`]?)([A-Z_][A-Z0-9_]*)\2/;
+const RUBY_HEREDOC = /^<<([~-]?)(['"`]?)([A-Za-z_]\w*)\2/;
 
 const SIMPLE_HASH = {
   toml: { quotes: ['"""', "'''", '"', "'"], escapes: { '"': true, '"""': true } },
@@ -378,7 +378,7 @@ export function scanHashSimple(src, lang) {
     }
     if (rubyBlocks) {
       const heredoc = RUBY_HEREDOC.exec(src.slice(i, i + 80));
-      if (heredoc) {
+      if (heredoc && (heredoc[1] || heredoc[2] || /^[A-Z_][A-Z0-9_]*$/.test(heredoc[3]))) {
         const word = heredoc[3];
         const squiggly = heredoc[1] !== "";
         let at = lineEndAt(src, i) + 1;
@@ -394,7 +394,9 @@ export function scanHashSimple(src, lang) {
         continue;
       }
       const percent = /^%[qQwWiIrs]?([^\w\s])/.exec(src.slice(i, i + 4));
-      if (percent && !/[\w)\]}]/.test(src.slice(Math.max(0, i - 40), i).trimEnd().slice(-1))) {
+      const typed = /^%[qQwWiIrs]/.test(src.slice(i, i + 2));
+      const afterValue = /[\w)\]}]/.test(src.slice(Math.max(0, i - 40), i).trimEnd().slice(-1));
+      if (percent && (typed ? !/[\w)\]}]$/.test(src.slice(Math.max(0, i - 1), i)) : !afterValue)) {
         const open = percent[1];
         const close = { "(": ")", "[": "]", "{": "}", "<": ">" }[open] ?? open;
         let depth = 1;
@@ -530,6 +532,35 @@ function siblingShell(lines, at, keyIndent) {
   return /^['"]?(\w+)/.exec(siblingValue(lines, at, keyIndent, "shell") ?? "")?.[1] ?? null;
 }
 
+function isStepKey(lines, at, keyIndent) {
+  let dashAt = -1;
+  let dashIndent = -1;
+  const own = /^(\s*)-\s+/.exec(lines[at].text);
+  if (own && own[0].length === keyIndent) {
+    dashAt = at;
+    dashIndent = own[1].length;
+  } else {
+    for (let k = at - 1; k >= 0; k--) {
+      const text = lines[k].text;
+      if (!text.trim() || indentOf(text) > keyIndent) continue;
+      const dash = /^(\s*)-\s+/.exec(text);
+      if (dash && dash[0].length === keyIndent) {
+        dashAt = k;
+        dashIndent = dash[1].length;
+        break;
+      }
+      if (indentOf(text) < keyIndent) return false;
+    }
+  }
+  if (dashAt < 0) return false;
+  for (let k = dashAt - 1; k >= 0; k--) {
+    const text = lines[k].text;
+    if (!text.trim() || indentOf(text) > dashIndent || (indentOf(text) === dashIndent && /^\s*-\s/.test(text))) continue;
+    return /^\s*steps:\s*$/.test(text);
+  }
+  return false;
+}
+
 function runsGithubScript(lines, at, keyIndent) {
   for (let k = at - 1; k >= 0; k--) {
     const text = lines[k].text;
@@ -577,7 +608,7 @@ export function scanYaml(src, { executable = true } = {}) {
         }
         if (last > k) {
           const bodyLines = lines.slice(k + 1, last + 1);
-          const lang = !executable ? null : key === "run" ? (SHELL_LANGS[runShellOf(lines, k, keyIndent)] ?? "shell") : key === "script" && runsGithubScript(lines, k, keyIndent) ? "js" : null;
+          const lang = !executable ? null : key === "run" && isStepKey(lines, k, keyIndent) ? (SHELL_LANGS[runShellOf(lines, k, keyIndent)] ?? "shell") : key === "script" && runsGithubScript(lines, k, keyIndent) ? "js" : null;
           if (lang) {
             const offsets = bodyLines.map((line) => line.start + Math.min(indent, line.text.length));
             const pieces = bodyLines.map((line) => line.text.slice(indent));
@@ -625,13 +656,14 @@ export function scanYaml(src, { executable = true } = {}) {
         commentAt = c;
         break;
       }
-      if ((ch === "'" || ch === '"') && /(?:^\s*|[:?-]\s+|[[{,]\s*)$/.test(text.slice(0, c))) {
+      if ((ch === "'" || ch === '"') && /(?:^\s*|[:?-]\s+|[[{,]\s*)(?:[&!]\S*\s+)*$/.test(text.slice(0, c))) {
         quote = ch;
         quoteStart = start + c + 1;
       }
     }
     const inline = new RegExp(String.raw`^(\s*)(-\s+)?(run|script):[ \t]+${SCALAR_PROPERTIES}(?=[^\s|>])`).exec(text);
-    if (inline && !quote && executable && (inline[3] === "run" || runsGithubScript(lines, k, inline[1].length + (inline[2]?.length ?? 0)))) {
+    const inlineIndent = inline ? inline[1].length + (inline[2]?.length ?? 0) : 0;
+    if (inline && !quote && executable && (inline[3] === "run" ? isStepKey(lines, k, inlineIndent) : runsGithubScript(lines, k, inlineIndent))) {
       const keyIndent = inline[1].length + (inline[2]?.length ?? 0);
       let from = inline[0].length;
       let value = text.slice(from, commentAt).replace(/\s+$/, "");

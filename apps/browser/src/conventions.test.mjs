@@ -939,6 +939,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("scripts/hello.sh", wide).comments, 1);
     const bytes = ["#!/usr/bin/env node", "// Not help", 'import { readFileSync } from "node:fs";', 'if (process.argv.includes("--help")) console.log(readFileSync(new URL(import.meta.url), "utf8").length);', ""].join("\n");
     assert.equal(house("scripts/hello.mjs", bytes).comments, 1);
+    const sliced = ["#!/usr/bin/env node", "// Usage: hello", "// not printed", 'import { readFileSync } from "node:fs";', 'if (process.argv.includes("--help")) console.log(readFileSync(new URL(import.meta.url), "utf8").split("\\n").slice(1, 2).map((l) => l.replace(/^\\/\\/ ?/, "")).join("\\n"));', ""].join("\n");
+    assert.equal(house("scripts/hello.mjs", sliced).comments, 1);
     const commented = ["#!/usr/bin/env node", "// Not help", 'import { readFileSync } from "node:fs";', 'if (process.argv.includes("--help")) {', '  // console.log(readFileSync(import.meta.filename, "utf8"));', '  console.log("usage: hello");', "}", ""].join("\n");
     assert.equal(house("scripts/hello.mjs", commented).comments, 2);
     const pyCommented = ["#!/usr/bin/env python3", "# Not help", "import sys", "if '--help' in sys.argv:", "    # print(open(__file__).read())", "    print('usage: hello')", ""].join("\n");
@@ -994,6 +996,8 @@ if (process.argv.includes("--expired")) {
     const later = ["jobs:", "  a:", "    steps:", "      - run: Start-Sleep -Seconds 1", "      - run: \"sleep 1\"", "      - uses: actions/github-script@0000000000000000000000000000000000000000", "        with:", "          script: return 1; // why", "defaults:", "  run:", "    shell: pwsh", ""].join("\n");
     assert.deepEqual(house(".github/workflows/hello.yml", later), { comments: 1, sleeps: 1, skips: 0 });
     assert.equal(house("apps/hello/config.yml", "description: &help |\n  # payload text\nother: !tag >\n  # more payload\n").comments, 0);
+    assert.deepEqual(house(".github/workflows/hello.yml", 'jobs:\n  a:\n    steps:\n      - name: x\n        env:\n          run: sleep 1\n        run: echo hi\nbody: &body "a # literal fragment"\n'), { comments: 0, sleeps: 0, skips: 0 });
+    assert.equal(house(".github/workflows/hello.yml", "jobs:\n  a:\n    steps:\n      - name: x\n        run: sleep 1\n").sleeps, 1);
     assert.deepEqual(house("apps/hello/config.yml", "script: |\n  // a literal\nrun: sleep 1\n"), { comments: 0, sleeps: 0, skips: 0 });
     assert.equal(house(".github/workflows/hello.yml", "jobs:\n  a:\n    steps:\n      - with:\n          script: |\n            // not github-script\n").comments, 0);
     const folded = ["jobs:", "  a:", "    steps:", "      - run: >", "          echo hello", "          sleep 1", ""].join("\n");
@@ -1014,6 +1018,7 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("engine/hello/BUILD.gn", 'deps = [ "//a:b#c" ]  # why\n').comments, 1);
     assert.equal(house("apps/hello/Podfile", 's.sub(/"\\$\\{X\\}\\/)a/) { "#{$1}b" } # why\n').comments, 1);
     assert.equal(house("apps/hello/tool.rb", "x = <<~TEXT\n  # sample output\nTEXT\ny = %q{#abcdef} # why\nz = %w[a#b c]\n").comments, 1);
+    assert.equal(house("apps/hello/tool.rb", "x = <<~'usage'\n  # sample\nusage\nwarn %q{# Example}\n").comments, 0);
     assert.equal(house("apps/hello/a.xml", "<a><![CDATA[ <!-- not a comment --> ]]></a><!-- real -->\n").comments, 1);
     assert.equal(house("infra/hello/Dockerfile", "# syntax=docker/dockerfile:1\nFROM node\n# a note\nRUN echo a#b\n").comments, 1);
   });
@@ -1046,6 +1051,7 @@ if (process.argv.includes("--expired")) {
     assert.equal(shell("until [ \"$(date +%s)\" -ge \"$end\" ]; do sleep 1; done"), 0);
     assert.equal(shell("for ((;;)); do sleep 1; done"), 1);
     assert.equal(shell("for ((i = 0; i < 5; i++)); do sleep 1; done"), 0);
+    assert.equal(shell("for ((i=0; i<5;)); do sleep 1; done"), 1);
     assert.equal(shell("while true; do echo timeout; sleep 1; done"), 1);
     assert.equal(shell('for target in alpha beta; do echo waiting for "$target"; done\nsleep 1'), 1);
     assert.equal(shell('for target in alpha beta; do echo What to do for "$target"; done\nsleep 1'), 1);
@@ -1069,6 +1075,7 @@ if (process.argv.includes("--expired")) {
     assert.equal(js(`${helpers}for (let i = 0; i < 20 && !ready(); i++) await wait(10);`), 0);
     assert.equal(js(`${helpers}while (!ready()) await wait(10);`), 1);
     assert.equal(js(`${helpers}let i = 0;\nwhile (i < 5) await wait(10);`), 1);
+    assert.equal(js(`${helpers}for (let i = 0; i < 5;) await wait(1);`), 1);
     assert.equal(js(`${helpers}while (true) {\n  if (Date.now() > end && ready()) break;\n  await wait(10);\n}`), 1);
     assert.equal(js(`${helpers}while (true) {\n  if (Date.now() > end || ready()) break;\n  await wait(10);\n}`), 0);
     assert.equal(js(`${helpers}let i = 0;\nwhile (i < 5) {\n  await wait(10);\n  i++;\n}`), 0);
@@ -1111,6 +1118,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(js('import * as nodeTest from "node:test";\nnodeTest.only("a", fn);\nnodeTest.test.skip("b", fn);'), 2);
     assert.equal(js('test["only"]("a", fn);\ndescribe[\'skip\']("b", fn);\nconst text = "test[\'only\'](";'), 2);
     assert.equal(js('const opts = { only: true };\ntest("a", opts, fn);\nconst data = { skip: true };\nuse(data);'), 1);
+    assert.equal(js('const run = test.only;\nrun("x", fn);\nconst helper = test.skip;'), 1);
+    assert.equal(js('const only = true;\ntest("x", { only }, fn);\nconst skip = "flaky";\ntest("y", { skip }, fn);\nconst todo = false;\ntest("z", { todo }, fn);'), 2);
     assert.equal(house("apps/browser/src/state/hello/hello.test.ts", 'const REASON: string = "flaky";\ntest("a", { skip: REASON }, fn);\n').skips, 1);
     assert.equal(js('test.only("a", () => {});\ndescribe("b", { only: true }, () => {});'), 2);
     assert.equal(js('test.skip("a", () => {});\nit.todo("b");'), 2);
@@ -1123,6 +1132,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(py("@pytest.mark.xfail(reason='x')\ndef test_a(): pass"), 1);
     assert.equal(py("@pytest.mark.xfail(True, reason='x')\ndef test_a(): pass"), 1);
     assert.equal(py("@pytest.mark.xfail(condition=True, reason='x')\ndef test_a(): pass"), 1);
+    assert.equal(py("@pytest.mark.xfail(\"sys.platform == 'win32'\", reason='flaky')\ndef test_a(): pass"), 0);
+    assert.equal(py("@pytest.mark.xfail(True, reason='@bob until 2099-01-01: flaky')\ndef test_a(): pass"), 0);
     assert.equal(house("packages/hello/Tests/HelloTests.swift", '@Test(.disabled("flaky")) func a() {}\n@Test(.disabled(if: onCI)) func b() {}\n').skips, 1);
     assert.equal(house("packages/hello/src/lib.rs", '#[test]\n#[ignore]\nfn a() {}\n#[ignore = "@carol until 2099-01-01: needs network"]\nfn b() {}\n').skips, 1);
     assert.equal(house("packages/hello/android/src/test/java/HelloTest.kt", '@Ignore("flaky")\n@Test fun a() {}\n').skips, 1);
@@ -1148,6 +1159,9 @@ if (process.argv.includes("--expired")) {
     const impossible = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test("a", { skip: "@a until 2099-02-30: x" }, () => {});\n'], ["apps/browser/scripts/sim/known.json", '{"failing":[{"issue":1,"owner":"@d","expires":"soon"}]}']], impossible);
     assert.equal(expired(impossible, "2026-01-01").length, 2);
+    const scoped = [];
+    findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'describe("a", () => {\n  const reason = "@al until 2099-01-01: x";\n  test("a", { skip: reason }, fn);\n});\ndescribe("b", () => {\n  const reason = "@al until 2001-01-01: x";\n  test("b", { skip: reason }, fn);\n});\n']], scoped);
+    assert.deepEqual(expired(scoped, "2026-01-01"), ["  apps/browser/src/state/hello/hello.test.mjs:7 skip for @al expired 2001-01-01"]);
     const focused = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test.only("a", () => {});\n']], focused);
     assert.deepEqual(expired(focused, "2026-01-01"), ["  apps/browser/src/state/hello/hello.test.mjs:1 .only, which never belongs in a commit"]);
