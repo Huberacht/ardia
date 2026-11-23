@@ -14,11 +14,11 @@ import { groupLabel, groupOf } from "../pins/tabGrouping";
 import type { Tab } from "../browser/types";
 import { awaitsFirstPage } from "../tabs/pendingAddress";
 import { noteUrlCopied } from "../telemetry/urlCopies";
-import { noteRangeSelect, noteTileDoubleClick } from "../telemetry/tabPresses";
+import { noteRangeSelect, noteTileDoubleClick, type TileDoubleClick } from "../telemetry/tabPresses";
 import { samePage } from "../../lib/url";
-import { shownLiveOf } from "../tabs/tabLive";
+import { liveOf, shownLiveOf } from "../tabs/tabLive";
 import { withLivePage } from "../tabs/livePage";
-import { consentToken, stillValid } from "../telemetry/client";
+import { consentToken } from "../telemetry/client";
 import { noteTextOnlyRow } from "../telemetry/tabStripCounts";
 import { NO_ROW_ICON } from "../pins/rowIcons";
 import type { BookmarkFolderChoice } from "./menuParts";
@@ -60,7 +60,16 @@ export function refreshShownTile(windowId: string, tabId: string, wasShown: bool
   }
   if (!wasShown || !tab.url || shownLiveOf(s, tabId).isLoading) return noteTileDoubleClick("fresh");
   const consent = consentToken();
-  void withLivePage(tabId, (page) => page.reload()).then((reloaded) => stillValid(consent) && noteTileDoubleClick(reloaded ? "reload" : "missed"));
+  const outcome = (what: TileDoubleClick) => noteTileDoubleClick(what, consent);
+  void withLivePage(tabId, (page, pageId) => {
+    if (liveOf(pageId).isLoading) return outcome("fresh");
+    return Promise.resolve()
+      .then(() => page.reload())
+      .then(
+        () => outcome("reload"),
+        () => outcome("missed"),
+      );
+  }).then((reached) => reached || outcome("missed"));
 }
 
 export async function startRename(windowId: string, target: Target) {

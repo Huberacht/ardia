@@ -213,6 +213,97 @@ test("an outcome that lands after sharing went off isn't counted", () =>
     client.setSharing(true, "settings");
   }));
 
+test("a late press after a drag never counts as the first click of a pair", () =>
+  scenario(async ({ w, tile, reloads }) => {
+    clock += 2000;
+    const e = event();
+    const press = held.holdTabPress(w, tile, e);
+    held.endHeldTabPress([tile], null);
+    clock += 60;
+    held.clickHeldTabPress(w, tile, e, press, (wasShown) => refreshShownTile(w, tile, wasShown));
+    click(w, tile);
+    await settle();
+    assert.deepEqual(reloads, []);
+  }));
+
+test("closing the tile's page between the clicks ends the pair: the click that wakes it doesn't reload it", () =>
+  scenario(async ({ w, tile, reloads }) => {
+    click(w, tile, { gapMs: 2000 });
+    S().closeTab(tile);
+    assert.equal(S().tabs[tile].page.kind, "asleep");
+    const from = counts();
+    click(w, tile);
+    await settle();
+    assert.equal(model.activeTabId(S(), w), tile, "the click woke and showed it");
+    assert.equal(shownLiveOf(S(), tile).isLoading, false);
+    assert.deepEqual(reloads, []);
+    assert.deepEqual(delta(from), { returns: 0, reloads: 0, fresh: 1, missed: 0 });
+  }));
+
+test("keyboard activations, which carry no pointer, still switch tabs but never make a pair", () =>
+  scenario(async ({ w, tile, other, reloads }) => {
+    const key = () => ({ nativeEvent: { identifier: "0" }, touchHistory: { touchBank: [{ startTimeStamp: ++start }] } });
+    const press = (tabId) => {
+      clock += 100;
+      const e = key();
+      const p = held.holdTabPress(w, tabId, e);
+      held.clickHeldTabPress(w, tabId, e, p, (wasShown) => refreshShownTile(w, tabId, wasShown));
+    };
+    press(other);
+    assert.equal(model.activeTabId(S(), w), other, "a keyboard press still switches");
+    press(tile);
+    assert.equal(model.activeTabId(S(), w), tile);
+    press(tile);
+    press(tile);
+    clock += 2000;
+    const e = event();
+    const p = held.holdTabPress(w, tile, e);
+    held.clickHeldTabPress(w, tile, e, p, (wasShown) => refreshShownTile(w, tile, wasShown));
+    press(tile);
+    await settle();
+    assert.deepEqual(reloads, []);
+  }));
+
+test("a reload the engine rejects counts one miss, no reload and no unhandled rejection", () =>
+  scenario(async ({ w, tile }) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      webviews.set(tile, { reload: () => Promise.reject(new Error("no tab")) });
+      const from = counts();
+      doubleClick(w, tile);
+      await settle();
+      await settle();
+      assert.deepEqual(delta(from), { returns: 0, reloads: 0, fresh: 0, missed: 1 });
+      webviews.set(tile, {
+        reload: () => {
+          throw new Error("gone");
+        },
+      });
+      doubleClick(w, tile);
+      await settle();
+      await settle();
+      assert.deepEqual(delta(from), { returns: 0, reloads: 0, fresh: 0, missed: 2 });
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  }));
+
+test("a reload counts only once the engine accepts it", () =>
+  scenario(async ({ w, tile }) => {
+    let accept;
+    webviews.set(tile, { reload: () => new Promise((done) => (accept = done)) });
+    const from = counts();
+    doubleClick(w, tile);
+    await settle();
+    assert.deepEqual(delta(from), { returns: 0, reloads: 0, fresh: 0, missed: 0 });
+    accept();
+    await settle();
+    assert.deepEqual(delta(from), { returns: 0, reloads: 1, fresh: 0, missed: 0 });
+  }));
+
 test("a tile that isn't shown when the action runs does nothing", () =>
   scenario(async ({ w, tile, other, reloads }) => {
     S().activate(other);

@@ -102,3 +102,31 @@ test("Back on a frozen copy is dropped for good if its pull-back is cancelled, e
   assert.deepEqual(calls, [], "the cancelled Back never runs");
   webviews.delete(mail);
 });
+
+test("a double-click refresh on a frozen tile skips the reload when the page starts loading during the hand-off", async () => {
+  const { refreshShownTile } = await import("../sidebar/actions.ts");
+  const { devTabPresses } = await import("../telemetry/tabPresses.ts");
+  const client = await import("../telemetry/client.ts");
+  client.setSharing(true, "settings");
+  try {
+    const { a, b, mail } = twoWindows();
+    webviewRef(mail)(page([]));
+    S().activate(tileOf(b, "https://mail.com"));
+    assert.ok(await until(() => S().tabs[mail].windowId === b));
+    const frozen = S().windows[a].activeTabIds.default;
+    assert.equal(S().tabs[frozen].page.holderId, mail);
+    const before = devTabPresses();
+    refreshShownTile(a, frozen, true);
+    assert.ok(await until(() => S().tabs[mail].windowId === a), "the page comes back to A");
+    S().updateLive(mail, { isLoading: true });
+    const calls = [];
+    webviewRef(mail)(page(calls));
+    assert.ok(await until(() => devTabPresses().tile_double_fresh > before.tile_double_fresh), "it counts the page as fresh");
+    await advance(100);
+    assert.deepEqual(calls, [], "and never reloads it");
+    assert.equal(devTabPresses().tile_double_reloads, before.tile_double_reloads);
+    webviews.delete(mail);
+  } finally {
+    client.setSharing(false, "settings");
+  }
+});

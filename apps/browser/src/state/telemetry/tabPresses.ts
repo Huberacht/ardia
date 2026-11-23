@@ -2,6 +2,7 @@ import { pressesWithoutRelease, pressRepeated } from "../../platform/focus";
 import { capture, consentToken, stillValid, onConsentPeriodChange, type ConsentToken } from "./client";
 import { takeHoverCardCounts } from "./hoverCardCounts";
 import { percentile } from "./transport";
+import { consentOrNow, countFor } from "./countFor";
 
 type TabPressEnd = "click" | "dragClick" | "drag";
 
@@ -189,7 +190,7 @@ export type TileDoubleClick = "return" | "reload" | "fresh" | "missed";
 
 const TILE_DOUBLE_FIELD = { return: "tile_double_returns", reload: "tile_double_reloads", fresh: "tile_double_fresh", missed: "tile_double_missed" } as const;
 
-export const noteTileDoubleClick = (what: TileDoubleClick) => void tally[TILE_DOUBLE_FIELD[what]]++;
+export const noteTileDoubleClick = (what: TileDoubleClick, consent?: ConsentToken | null) => countFor(consentOrNow(consent), () => void tally[TILE_DOUBLE_FIELD[what]]++);
 
 export const notePagePressRefused = () => void tally.page_refused++;
 
