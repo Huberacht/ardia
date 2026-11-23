@@ -11,8 +11,12 @@
 #                                                  <commit>, or on disk: the files git tracks or shows as untracked
 #                                                  (every file there when <root> has no git, as in a build slot)
 #   engine-match.sh resolve <root> <line>          the record judged against the tree in <root>, as it is on disk:
-#                                                  match recomputed from its engine key when <root> is a git checkout,
-#                                                  plus public=same|changed|unknown
+#                                                  match recomputed when <root> is a git checkout, all from one pinned
+#                                                  commit (refused if HEAD moves meanwhile), plus
+#                                                  public=same|changed|unknown
+#   engine-match.sh record-of <framework>          the record beside the framework's real path (symlinks followed);
+#                                                  match=local only for a framework outside the prebuilt stores, and
+#                                                  match=unknown with nothing recorded for one inside them
 #   engine-match.sh check <resolved line>          fails unless the engine is local or its public headers match the
 #                                                  tree's (an engine whose headers nothing records fails too)
 #   engine-match.sh plist <resolved line> <Info.plist>
@@ -85,29 +89,46 @@ public_tree() {
 }
 
 resolve() {
-  local root=$1 line=$2 match key want public pinned current_key pathspec
+  local root=$1 line=$2 match key want public pinned current_key pathspec clean
   local -a key_paths=()
   match=$(match_of "$line")
   [[ "$match" == local ]] && { echo "match=local"; return 0; }
   key=$(field key "$line")
   want=$(field public_tree "$line")
-  public=unknown
-  [[ -z "$want" ]] || { [[ "$(public_tree "$root")" == "$want" ]] && public=same || public=changed; }
   if [[ "$match" != unknown && -n "$key" ]] && is_checkout "$root"; then
-    pinned=$(git -C "$root" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)
-    current_key=""
-    [[ -z "$pinned" ]] || current_key=$("$root/engine/engine-key.sh" --platform macos "$pinned" 2>/dev/null || true)
+    pinned=$(git -C "$root" rev-parse --verify 'HEAD^{commit}') || die "$root has no commit to judge the engine against"
+    current_key=$("$root/engine/engine-key.sh" --platform macos "$pinned" 2>/dev/null || true)
     while IFS= read -r pathspec; do
       [[ -z "$pathspec" ]] || key_paths+=("$pathspec")
     done < <("$root/engine/engine-key.sh" --platform macos --paths 2>/dev/null || true)
-    if [[ -n "$current_key" && "$current_key" == "$key" && ${#key_paths[@]} -gt 0 && -z "$(git -C "$root" status --porcelain -z -- "${key_paths[@]}" 2>/dev/null)" ]]; then
-      match=exact
-    else
-      match=nearest
+    clean=0
+    if [[ ${#key_paths[@]} -gt 0 ]] && git -C "$root" diff --quiet --no-ext-diff "$pinned" -- "${key_paths[@]}" 2>/dev/null &&
+      [[ -z "$(git -C "$root" ls-files -z --others --exclude-standard -- "${key_paths[@]}" 2>/dev/null)" ]]; then
+      clean=1
     fi
+    [[ -n "$current_key" && "$current_key" == "$key" && "$clean" == 1 ]] && match=exact || match=nearest
+  fi
+  public=unknown
+  [[ -z "$want" ]] || { [[ "$(public_tree "$root")" == "$want" ]] && public=same || public=changed; }
+  if [[ -n "${pinned:-}" && "$(git -C "$root" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" != "$pinned" ]]; then
+    die "$root moved off ${pinned:0:10} while its engine was judged; run the build again"
   fi
   [[ "$match" == exact && "$public" == changed ]] && match=nearest
   echo "match=$match key=$key version=$(field version "$line") source=$(field source "$line") public_tree=$want public=$public"
+}
+
+record_of() {
+  local framework=$1 real cache
+  real=$(cd "$framework" 2>/dev/null && pwd -P) || { echo "match=local"; return 0; }
+  if [[ -f "$(dirname "$real")/engine-match" ]]; then
+    head -n 1 "$(dirname "$real")/engine-match"
+    return 0
+  fi
+  cache=$(cd "${AC_APP_CACHE:-$HOME/ardia-scratch/app-cache}" 2>/dev/null && pwd -P || true)
+  case "$real/" in
+    */build-ardiacore/prebuilt/*) echo "match=unknown key=" ;;
+    *) if [[ -n "$cache" && "$real/" == "$cache/"* ]]; then echo "match=unknown key="; else echo "match=local"; fi ;;
+  esac
 }
 
 check() {
@@ -152,9 +173,10 @@ plist() {
 case "${1:-}" in
   get) [[ $# -eq 3 ]] || die "usage: engine-match.sh get <field> <line>"; field "$2" "$3" ;;
   public-hash) [[ $# -eq 2 || $# -eq 3 ]] || die "usage: engine-match.sh public-hash <root> [<commit>]"; public_tree "$2" "${3:-}" ;;
+  record-of) [[ $# -eq 2 ]] || die "usage: engine-match.sh record-of <framework>"; record_of "$2" ;;
   resolve) [[ $# -eq 3 ]] || die "usage: engine-match.sh resolve <root> <line>"; resolve "$2" "$3" ;;
   check) [[ $# -eq 2 ]] || die "usage: engine-match.sh check <line>"; check "$2" ;;
   plist) [[ $# -eq 3 ]] || die "usage: engine-match.sh plist <line> <Info.plist>"; plist "$2" "$3" ;;
   -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0" ;;
-  *) die "usage: engine-match.sh get|public-hash|resolve|check|plist … (--help)" ;;
+  *) die "usage: engine-match.sh get|public-hash|record-of|resolve|check|plist … (--help)" ;;
 esac

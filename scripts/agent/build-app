@@ -119,7 +119,7 @@ if [[ -z "${AC_BUILD_APP_LOCKER:-}" ]]; then
   else
     source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
   fi
-  AC_ENGINE_RECORD=$(cat "$(dirname "$source_framework")/engine-match" 2>/dev/null || echo match=local)
+  AC_ENGINE_RECORD=$("$repo/packages/ardiacore/scripts/engine-match.sh" record-of "$source_framework") || exit 1
   export AC_ENGINE_RECORD
   judge_engine || exit 1
   ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework" --as "$name" --wait "$wait") ||

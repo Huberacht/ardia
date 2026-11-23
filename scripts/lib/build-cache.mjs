@@ -298,6 +298,30 @@ export function engineRecordComplete(path, key) {
   return engineRecordField(line, "key") === key && engineRecordField(line, "public_tree") !== "";
 }
 
+export function engineRecordNamesAnotherKey(path, key) {
+  let line;
+  try {
+    line = fs.readFileSync(path, "utf8");
+  } catch {
+    return false;
+  }
+  const recorded = engineRecordField(line, "key");
+  return recorded !== "" && recorded !== key;
+}
+
+export function judgeSyncedEngine(repo, recorded, manifest) {
+  const matchScript = join(repo, "packages/ardiacore/scripts/engine-match.sh");
+  const judged = spawnSync(matchScript, ["resolve", repo, recorded], { encoding: "utf8" });
+  if (judged.status !== 0) throw new Error(`judging the engine against the synced tree failed: ${judged.stderr.trim()}`);
+  const line = judged.stdout.trim();
+  if (hashManifest(manifestOf(repo, listFiles(repo))) !== hashManifest(manifest)) {
+    throw new Error("the tree changed while its engine was judged after syncing; build again");
+  }
+  const checked = spawnSync(matchScript, ["check", line], { encoding: "utf8" });
+  if (checked.status !== 0) throw new Error(checked.stderr.trim());
+  return line;
+}
+
 export function describeEngineOffline(fetchEngine, key, commit) {
   const r = spawnSync(fetchEngine, ["--describe", "--offline"], {
     encoding: "utf8",

@@ -438,3 +438,91 @@ test("a tag lookup that never answers ends at its deadline and leaves no helper 
     server.close();
   }
 });
+
+test("resolve takes the key, the dirty check and the headers from one commit, and refuses when HEAD moves meanwhile", () => {
+  const { root, store } = checkout();
+  assert.equal(fetchEngine(root).status, 0);
+  const line = record(store);
+  const start = git(root, "rev-parse", "HEAD");
+  const moved = withHeadMovingTo(root);
+  const r = run(matchScript, ["resolve", root, line], { env: { MOVE_HEAD_TO: moved } });
+  assert.ok(fs.existsSync(join(root, "moved-head")), "HEAD did move during the judgement");
+  assert.notEqual(r.status, 0, r.stdout);
+  assert.match(r.stderr, /moved off .* while its engine was judged/);
+  git(root, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", start);
+  assert.match(resolve(root, line).stdout.trim(), /^match=exact /);
+  write(root, "engine/patch.txt", "staged\n");
+  git(root, "add", "engine/patch.txt");
+  assert.match(resolve(root, line).stdout.trim(), /^match=nearest /, "a staged engine change is judged against the pinned commit");
+});
+
+test("a build slot stamps the engine judged after syncing, and refuses a tree that changed while it was judged", async () => {
+  const lib = await import(join(repoRoot, "scripts/lib/build-cache.mjs"));
+  const { root, store } = checkout();
+  assert.equal(fetchEngine(root).status, 0);
+  const beforeSync = resolve(root, record(store)).stdout.trim();
+  assert.match(beforeSync, /^match=exact /);
+  commitFile(root, "engine/patch.txt", "changed after build-app judged\n");
+  const synced = lib.manifestOf(root, lib.listFiles(root));
+  const judged = lib.judgeSyncedEngine(root, record(store), synced);
+  assert.match(judged, /^match=nearest .* public=same$/, "the synced files' engine, not the earlier exact");
+  assert.notDeepEqual(lib.envFingerprint({ ARDIACORE_ENGINE_MATCH: judged }).lines, lib.envFingerprint({ ARDIACORE_ENGINE_MATCH: beforeSync }).lines);
+  write(root, "engine/patch.txt", "changed after the sync\n");
+  assert.throws(() => lib.judgeSyncedEngine(root, record(store), synced), /tree changed while its engine was judged/);
+});
+
+test("stage-framework refuses when the engine it judges differs from the one build-app judged for this build", { skip: !isMac }, () => {
+  const { root, store, framework } = checkout();
+  assert.equal(fetchEngine(root).status, 0);
+  const judged = resolve(root, record(store)).stdout.trim();
+  commitFile(root, "engine/patch.txt", "changed while building\n");
+  const stopped = run(join(root, "packages/ardiacore/scripts/stage-framework.sh"), [], {
+    env: { ARDIACORE_FRAMEWORK: framework, ARDIACORE_STAGE_DIR: join(root, "stage"), ARDIACORE_STAGE_CACHE: join(root, "cache"), ARDIACORE_ENGINE_MATCH: judged },
+  });
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /the tree changed meanwhile/);
+});
+
+test("a cached engine recorded for another key is discarded and fetched again, never re-recorded", () => {
+  const { root, key, assets } = checkout({ archive: true });
+  const cache = scratch();
+  const dir = join(cache, "engines", key.slice(0, 12));
+  write(dir, "Chromium Framework.framework/Versions/Current/Chromium Framework", "another engine's bytes");
+  write(dir, ".complete", "");
+  write(dir, "engine-match", `match=exact key=${"b".repeat(64)} version=engine-bbbbbbbbbbbb source= public_tree=${"0".repeat(64)}\n`);
+  const r = run(process.execPath, [join(repoRoot, "scripts/agent/build-cache"), "engine", "--repo", root], {
+    env: envFor(root, { AC_APP_CACHE: cache, ARDIACORE_PREBUILT_ASSETS: `file://${assets}` }),
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /recorded for another key/);
+  assert.equal(fs.readFileSync(join(dir, "Chromium Framework.framework/Versions/Current/Chromium Framework"), "utf8"), "binary");
+  assert.equal(field(fs.readFileSync(join(dir, "engine-match"), "utf8").trim(), "key"), key);
+});
+
+test("a framework reached through a symlink is judged by the record at its real path", { skip: !isMac }, () => {
+  const { root, store, framework } = checkout();
+  assert.equal(fetchEngine(root).status, 0);
+  const link = join(scratch(), "Chromium Framework.framework");
+  fs.symlinkSync(framework, link);
+  assert.equal(run(matchScript, ["record-of", link]).stdout.trim(), record(store));
+  commitFile(root, HEADER, "int api(int);\n");
+  const stopped = run(join(root, "packages/ardiacore/scripts/stage-framework.sh"), [], {
+    env: { ARDIACORE_FRAMEWORK: link, ARDIACORE_STAGE_DIR: join(root, "stage"), ARDIACORE_STAGE_CACHE: join(root, "cache") },
+  });
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /differs from that of/);
+});
+
+test("a framework in a prebuilt store with no record is unknown, never local; one elsewhere is local", () => {
+  const { root, store, framework } = checkout();
+  assert.equal(run(matchScript, ["record-of", framework]).stdout.trim(), "match=unknown key=");
+  const cache = scratch();
+  write(cache, "engines/abc/Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
+  assert.equal(run(matchScript, ["record-of", join(cache, "engines/abc/Chromium Framework.framework")], { env: { AC_APP_CACHE: cache } }).stdout.trim(), "match=unknown key=");
+  const elsewhere = scratch();
+  write(elsewhere, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
+  assert.equal(run(matchScript, ["record-of", join(elsewhere, "Chromium Framework.framework")]).stdout.trim(), "match=local");
+  assert.equal(run(matchScript, ["check", resolve(root, "match=unknown key=").stdout.trim()]).status, 1);
+  assert.ok(store);
+});
+
