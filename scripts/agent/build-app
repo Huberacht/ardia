@@ -130,7 +130,8 @@ case $? in
 esac
 last_app=$(cat "$app_file" 2>/dev/null)
 [[ $mode == plain && "$(cat "$kind_file" 2>/dev/null)" != plain ]] && last_app=""
-if [[ -n "$reuse" && -z "$force" && $variant == Debug && -n "$last_app" && -d "$last_app" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]]; then
+if [[ -n "$reuse" && -z "$force" && $variant == Debug && -n "$last_app" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]] &&
+  "$cache_tool" runnable --app "$last_app"; then
   echo "JS-only: Metro reloads it; no build needed (no native file changed since $last_app was built; --force builds anyway)"
   echo "app: $last_app"
   exit 0

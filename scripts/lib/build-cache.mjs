@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const STAMP_VERSION = 6;
 
@@ -538,8 +538,9 @@ export function evict(cacheRoot, opts) {
   const evictedEngines = [];
   for (const [sub, pattern] of [["engines", /^[0-9a-f]{12}$/], ["engine-copies", /^[0-9a-f]{32}$/]]) {
     const root = join(cacheRoot, sub);
-    const list = listDirs(root, (n) => pattern.test(n)).map((dir) => ({ stamp: dir, dir, bytes: 0, usedAt: usedAt(dir) }));
-    const enginePlan = evictionPlan(list, { maxBytes: Infinity, maxEntries: opts.keepEngines ?? 3, graceMs: opts.graceMs, now: opts.now, protect: opts.protectEngines ?? [] });
+    const list = listDirs(root, (n) => pattern.test(n)).map((dir) => ({ stamp: basename(dir), dir, bytes: 0, usedAt: usedAt(dir) }));
+    const protect = (opts.protectEngines ?? []).map((p) => basename(resolve(p)));
+    const enginePlan = evictionPlan(list, { maxBytes: Infinity, maxEntries: opts.keepEngines ?? 3, graceMs: opts.graceMs, now: opts.now, protect });
     for (const e of enginePlan.evict) removeAtomically(root, e.dir);
     evictedEngines.push(...enginePlan.evict.map((e) => e.dir));
   }
@@ -676,6 +677,24 @@ export function reserveSlot(slotRoot, owner) {
   throw new Error(`no free slot number under ${slotRoot}`);
 }
 
+export function appRunnable(app) {
+  try {
+    const plist = fs.readFileSync(join(app, "Contents/Info.plist"), "utf8");
+    const exe = plist.match(/<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/)?.[1];
+    if (!exe) return false;
+    const st = fs.statSync(join(app, "Contents/MacOS", exe));
+    return st.isFile() && (st.mode & 0o111) !== 0;
+  } catch {
+    return false;
+  }
+}
+
+export function slotDroppable(slot) {
+  if (pidAlive(Number(readJson(join(slot, "reserved.json"), {}).pid))) return false;
+  if (fs.existsSync(slotGroupFile(slot)) && groupAlive(slotGroup(slot))) return false;
+  return true;
+}
+
 export const releaseReservation = (slot) => fs.rmSync(join(slot, "reserved.json"), { force: true });
 
 export function slotsToEvict(slotRoot, { keep, busy = slotBusy, readState = readSlotState, protect = [] } = {}) {
@@ -721,6 +740,20 @@ function pruneEmptyDirs(root, rel) {
   }
 }
 
+export function linkedAncestor(tree, rel) {
+  const parts = rel.split("/").slice(0, -1);
+  let path = tree;
+  for (const part of parts) {
+    path = join(path, part);
+    try {
+      if (fs.lstatSync(path).isSymbolicLink()) return path;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export function driftedPaths(tree, state) {
   const drifted = [];
   const since = state.syncedAt ?? 0;
@@ -732,7 +765,8 @@ export function driftedPaths(tree, state) {
       drifted.push(rel);
       continue;
     }
-    if ((st.mtimeMs > since || st.ctimeMs > since) && contentId(join(tree, rel)) !== id) drifted.push(rel);
+    if (st.isDirectory()) drifted.push(rel);
+    else if ((st.mtimeMs > since || st.ctimeMs > since) && contentId(join(tree, rel)) !== id) drifted.push(rel);
   }
   return drifted;
 }
@@ -753,10 +787,15 @@ export function syncTree(srcRepo, slot, manifest, { now = new Date() } = {}) {
   const removed = [...managed].filter((rel) => !(rel in manifest)).sort();
   writeSlotState(slot, { ...state, pending: [...new Set([...pending, ...changed])] });
   for (const rel of removed) {
+    if (linkedAncestor(tree, rel)) continue;
     fs.rmSync(join(tree, rel), { force: true, recursive: true });
     pruneEmptyDirs(tree, rel);
   }
-  for (const rel of changed) copyInto(srcRepo, tree, rel, now, scratchDir);
+  for (const rel of changed) {
+    const link = linkedAncestor(tree, rel);
+    if (link) throw new Error(`${link} is a symlink in the slot where ${rel} needs a folder`);
+    copyInto(srcRepo, tree, rel, now, scratchDir);
+  }
   const mismatched = changed.filter((rel) => {
     try {
       return contentId(join(tree, rel)) !== manifest[rel];
@@ -773,12 +812,16 @@ const NODE_MODULES_ROOTS = (root) => [
   "node_modules",
   ...["apps", "packages"].flatMap((d) => {
     try {
+      if (fs.lstatSync(join(root, d)).isSymbolicLink()) throw new Error(`${join(root, d)} is a symlink: its node_modules aren't this tree's`);
       return fs.readdirSync(join(root, d)).map((n) => `${d}/${n}/node_modules`);
-    } catch {
-      return [];
+    } catch (e) {
+      if (e.code === "ENOENT") return [];
+      throw e;
     }
   }),
 ].filter((rel) => {
+  const link = linkedAncestor(root, rel);
+  if (link) throw new Error(`${link} is a symlink: its node_modules aren't this tree's`);
   try {
     fs.lstatSync(join(root, rel));
     return true;

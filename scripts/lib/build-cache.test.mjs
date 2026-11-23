@@ -668,3 +668,101 @@ test("the per-stamp lock waits for a live holder and reclaims a dead one", () =>
   assert.deepEqual(lib.withLock(lock, () => 2, { timeoutMs: 200 }), { locked: true, value: 2 });
   assert.equal(fs.existsSync(lock), false);
 });
+
+test("sync never deletes or writes through a symlinked folder in the slot", () => {
+  const src = repo();
+  const slot = join(scratch(), "1");
+  const tree = lib.slotTree(slot);
+  const outside = scratch();
+  write(outside, "keep.txt", "not the slot's");
+  fs.mkdirSync(join(tree, "packages/base"), { recursive: true });
+  fs.symlinkSync(outside, join(tree, "packages/base/ios"));
+  lib.writeSlotState(slot, { manifest: {}, pending: ["packages/base/ios/keep.txt"], syncedAt: 0 });
+  assert.throws(() => lib.syncTree(src, slot, lib.manifestOf(src, lib.listFiles(src))), /is a symlink in the slot/);
+  assert.equal(fs.readFileSync(join(outside, "keep.txt"), "utf8"), "not the slot's");
+  const manifest = lib.manifestOf(src, lib.listFiles(src));
+  delete manifest[POD_SOURCE];
+  lib.writeSlotState(slot, { manifest: {}, pending: ["packages/base/ios/keep.txt"], syncedAt: 0 });
+  lib.syncTree(src, slot, manifest);
+  assert.equal(fs.readFileSync(join(outside, "keep.txt"), "utf8"), "not the slot's");
+});
+
+test("dependency roots under a symlinked apps or packages folder are refused, not scanned or removed", () => {
+  const other = scratch();
+  write(other, "web/node_modules/pkg/index.js", "theirs");
+  const root = scratch();
+  write(root, "node_modules/a/index.js", "");
+  fs.symlinkSync(other, join(root, "apps"));
+  assert.throws(() => lib.nodeModulesRoots(root), /is a symlink/);
+  assert.throws(() => lib.escapingLinks(root), /is a symlink/);
+  const nested = scratch();
+  fs.mkdirSync(join(nested, "packages"));
+  fs.symlinkSync(join(other, "web"), join(nested, "packages/web"));
+  assert.throws(() => lib.nodeModulesRoots(nested), /is a symlink/);
+  assert.deepEqual(lib.nodeModulesRoots(scratch()), []);
+});
+
+test("an app is runnable only with its bundle executable in place", () => {
+  const app = join(scratch(), "Ardia.app");
+  write(app, "Contents/Info.plist", "<plist><dict><key>CFBundleExecutable</key>\n<string>Ardia</string></dict></plist>");
+  assert.equal(lib.appRunnable(app), false);
+  write(app, "Contents/MacOS/Ardia", "bin", 0o755);
+  assert.equal(lib.appRunnable(app), true);
+  fs.chmodSync(join(app, "Contents/MacOS/Ardia"), 0o644);
+  assert.equal(lib.appRunnable(app), false);
+  assert.equal(lib.appRunnable(join(scratch(), "None.app")), false);
+});
+
+test("a slot taken after the eviction list was made is not dropped", async () => {
+  const { spawn } = await import("node:child_process");
+  const slot = scratch();
+  assert.equal(lib.slotDroppable(slot), true);
+  fs.writeFileSync(join(slot, "reserved.json"), JSON.stringify({ pid: process.pid }));
+  assert.equal(lib.slotDroppable(slot), false);
+  fs.rmSync(join(slot, "reserved.json"));
+  const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  fs.writeFileSync(lib.slotGroupFile(slot), JSON.stringify({ pgid: child.pid }));
+  try {
+    assert.equal(lib.slotDroppable(slot), false);
+  } finally {
+    process.kill(-child.pid, "SIGKILL");
+  }
+  await new Promise((r) => child.on("exit", r));
+  assert.equal(lib.slotDroppable(slot), true);
+});
+
+test("an engine protected by its full path survives eviction with no room and no grace", () => {
+  const cache = scratch();
+  for (const key of ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]) write(cache, `engines/${key}/.complete`, "");
+  lib.evict(cache, { maxBytes: 100, maxEntries: 10, keepEngines: 0, graceMs: 0, protectEngines: [`${join(cache, "engines", "aaaaaaaaaaaa")}/`] });
+  assert.deepEqual(fs.readdirSync(join(cache, "engines")), ["aaaaaaaaaaaa"]);
+});
+
+test("a folder where the slot had a file counts as drift instead of failing the sync", () => {
+  const src = repo();
+  const slot = join(scratch(), "1");
+  lib.syncTree(src, slot, lib.manifestOf(src, lib.listFiles(src)));
+  const path = join(lib.slotTree(slot), POD_SOURCE);
+  fs.rmSync(path);
+  fs.mkdirSync(path);
+  write(path, "inner.txt", "x");
+  assert.deepEqual(lib.driftedPaths(lib.slotTree(slot), lib.readSlotState(slot)), [POD_SOURCE]);
+  const r = lib.syncTree(src, slot, lib.manifestOf(src, lib.listFiles(src)));
+  assert.ok(r.changed.includes(POD_SOURCE));
+  assert.equal(fs.readFileSync(path, "utf8"), "struct Base {}\n");
+});
+
+test("a Release restore in a tree without node_modules is a miss, so build-app builds instead", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const cache = scratch();
+  const app = join(scratch(), "Ardia.app");
+  write(app, "Contents/MacOS/Ardia", "bin", 0o755);
+  lib.store(cache, S1, app, { config: "Release" }, { measure: one });
+  const tree = scratch();
+  const cli = new URL("../agent/build-cache", import.meta.url).pathname;
+  const r = spawnSync(process.execPath, [cli, "restore", "--repo", tree, "--stamp", S1, "--config", "Release", "--out", join(scratch(), "out")], {
+    encoding: "utf8",
+    env: { ...process.env, AC_APP_CACHE: cache },
+  });
+  assert.equal(r.status, 2, r.stderr);
+});

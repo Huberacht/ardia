@@ -98,7 +98,7 @@ function bundleInto(outDir, { dev, hermesc }) {
   const overrides = Object.keys(process.env).filter((name) => lib.BUNDLING_ENV.test(name));
   if (overrides.length) throw new Error(`${overrides.join(", ")} set: this bundling can't honour it; unset it or build without --bundle`);
   const rn = join(repo, "node_modules/react-native-macos");
-  if (!fs.existsSync(join(rn, "scripts/bundle.js"))) throw new Error(`${repo} has no node_modules: set the tree up before bundling its JS`);
+  if (!fs.existsSync(join(rn, "scripts/bundle.js"))) throw new Miss(`${repo} has no node_modules to bundle its JS with`);
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
   const js = join(outDir, "main.js");
@@ -165,6 +165,7 @@ function prepareIn(tmp, source, out, { config, bundle, hermesc, move = false }) 
   }
   if (bundle) {
     const dev = config !== "Release";
+    if (!fs.existsSync(join(repo, "node_modules/react-native-macos/scripts/bundle.js"))) throw new Miss(`${repo} has no node_modules to bundle its JS with`);
     const built = bundleInto(join(tmp, ".bundle"), { dev, hermesc: dev ? null : hermesc() });
     const resources = join(app, "Contents/Resources");
     fs.copyFileSync(join(built, "main.jsbundle"), join(resources, "main.jsbundle"));
@@ -384,7 +385,7 @@ function slotEvict() {
   const protect = flags.protect ? [resolve(flags.protect)] : [];
   for (const slot of lib.slotsToEvict(cfg.slotRoot, { keep: cfg.keepSlots, protect })) {
     const trash = join(cfg.slotRoot, `.trash-${process.pid}-${slot.split("/").pop()}`);
-    const r = spawnSync(locked, ["xcodebuild", "--wait", "2", "--", "sh", "-c", 'mv "$1" "$2"', "-", slot, trash, "-derivedDataPath", lib.slotDerivedData(slot)], { encoding: "utf8" });
+    const r = spawnSync(locked, ["xcodebuild", "--wait", "2", "--", process.execPath, fileURLToPath(import.meta.url), "slot-drop", "--slot", slot, "--trash", trash, "-derivedDataPath", lib.slotDerivedData(slot)], { encoding: "utf8" });
     if (r.status === 0 && fs.existsSync(trash)) {
       spawnSync("rm", ["-rf", trash]);
       console.log(`build-cache: dropped idle slot ${slot}`);
@@ -453,6 +454,14 @@ try {
     console.log(lib.reserveSlot(cfg.slotRoot, Number(flags.owner)));
   } else if (command === "slot-run") {
     slotRun();
+  } else if (command === "slot-drop") {
+    need("slot", "trash");
+    const slot = resolve(flags.slot);
+    const idle = lib.slotsToEvict(cfg.slotRoot, { keep: cfg.keepSlots, busy: (s) => !lib.slotDroppable(s) });
+    if (lib.slotDroppable(slot) && idle.includes(slot)) fs.renameSync(slot, resolve(flags.trash));
+  } else if (command === "runnable") {
+    need("app");
+    process.exit(lib.appRunnable(resolve(flags.app)) ? 0 : 1);
   } else if (command === "slot-evict") {
     slotEvict();
   } else if (command === "evict") {
