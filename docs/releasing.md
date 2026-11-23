@@ -222,8 +222,8 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      previous image goes only after it. Stapling works on a private copy that then replaces the DMG, so the kept image
      is never rewritten: a retry after a later step failed (the appcast, the launch check) staples it again instead of
      uploading. Pruning removes only images of `complete` records, and images no record names, untouched for three
-     days. One `notarize.sh` runs per state directory: it holds a kernel lock on `<state>/.lock` (`flock` through perl)
-     for the whole run, the OS frees it when the process dies, and a second run waits `NOTARY_LOCK_SECONDS` (default
+     days. One `notarize.sh` runs per state directory: a kernel lock (`flock`) on `<state>/.lock` is held for the whole
+     run by a small perl helper that exits as soon as `notarize.sh` does, so no tool it started can keep the lock, and a second run waits `NOTARY_LOCK_SECONDS` (default
      600) and stops. A kept copy is used only when its sha256 is the one recorded and its signature
      verifies against the packed app's team and it mounts as exactly the volume `package.sh` makes, holding an app with
      the same CDHash; anything else is discarded and the new DMG submitted. An upload that fails leaves the old record

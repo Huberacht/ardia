@@ -186,7 +186,8 @@ CDHash (the same code signed again keeps it, though the zip's bytes change), and
 packs, with the exact DMG it sent kept as `<key>.<sha256>.dmg` (packing again makes other bytes, so a retry from the
 same commit and packing inputs staples a copy of that image and swaps it in, once it has checked the sha256, that it
 holds the same app and that it verifies as signed by the same team). One run at a time per state directory: a second
-waits `NOTARY_LOCK_SECONDS` (10 min) for the kernel lock on `<state>/.lock` and stops. On the
+waits `NOTARY_LOCK_SECONDS` (10 min) for the kernel lock on `<state>/.lock` and stops; the lock goes with the run, even
+when it's killed. On the
 next run it asks Apple about that id first: Accepted staples, In Progress waits, Invalid or Rejected prints Apple's log
 and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist submits fresh,
 and when notarytool can't answer, answers something unknown, or stapler can't fetch an accepted ticket, it stops and

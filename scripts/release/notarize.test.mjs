@@ -635,3 +635,84 @@ test("a record the previous version wrote, with its copy at <key>.dmg, still res
   assert.equal(readFileSync(s.dmg, "utf8"), "the earlier packing");
   assert.equal(s.recordLine(key, 2), "complete");
 });
+
+test("a stapled copy that can't be moved into place fails the run and leaves the record unfinished, never marked complete", () => {
+  const real = spawnSync("bash", ["-c", "command -v mv"], { encoding: "utf8" }).stdout.trim();
+  const { s, app, key } = dmgScratch();
+  writeFileSync(join(s.dir, "bin", "mv"), `#!/usr/bin/env bash\n[ "\${@: -1}" = "$FAIL_MV_TO" ] && { echo "mv: Permission denied" >&2; exit 1; }\nexec ${real} "$@"\n`);
+  chmodSync(join(s.dir, "bin", "mv"), 0o755);
+  s.set("submit", [FIRST]);
+  s.ticket();
+  const run = s.notarize(s.dmg, { FAIL_MV_TO: s.dmg }, [app]);
+  assert.notEqual(run.status, 0);
+  assert.match(run.output, /couldn't put the stapled copy of submission 11111111.* in place of/);
+  assert.notEqual(s.recordLine(key, 2), "complete");
+  assert.equal(s.kept(key), "a disk image");
+});
+
+test("killing notarize.sh in the middle of a tool frees the lock at once, even while that tool runs on", async () => {
+  const { s, app } = dmgScratch();
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('  "notarytool wait")', '  "notarytool wait")\n    if [ ! -f "$stub/no-hang" ]; then sleep 30 & echo $! > "$stub/wait-pid"; wait; fi'));
+  s.set("submit", [FIRST]);
+  s.ticket();
+  const first = spawn("bash", [join(root, "scripts/release/notarize.sh"), s.dmg, join(s.dir, "dist"), app], {
+    env: { ...process.env, PATH: `${join(s.dir, "bin")}:${process.env.PATH}`, NOTARY_STUB: s.stub, NOTARY_STATE_DIR: s.state, NOTARY_RETRY_DELAY: "0", NOTARY_KEY: "k", NOTARY_KEY_ID: "KEYID", NOTARY_ISSUER: "issuer" },
+    stdio: "ignore",
+  });
+  const waitPid = join(s.stub, "wait-pid");
+  for (let i = 0; i < 100 && !existsSync(waitPid); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.ok(existsSync(waitPid), "notarytool wait started");
+  const tool = Number(readFileSync(waitPid, "utf8"));
+  first.kill("SIGKILL");
+  await new Promise((resolve) => first.once("exit", resolve));
+  try {
+    writeFileSync(join(s.stub, "no-hang"), "");
+    const started = Date.now();
+    const retry = s.notarize(s.dmg, { NOTARY_LOCK_SECONDS: "5" }, [app]);
+    assert.equal(retry.status, 0, retry.output);
+    assert.ok(Date.now() - started < 5000, `the retry waited ${Date.now() - started} ms for the lock`);
+    assert.doesNotThrow(() => process.kill(tool, 0), "the killed run's tool was still running");
+  } finally {
+    try { process.kill(tool, "SIGKILL"); } catch {}
+  }
+});
+
+test("an id notarytool printed is recorded even when the log can't take it or the submit pipeline then fails", () => {
+  const { s, app, key } = dmgScratch();
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('    printf \'In Progress\\n\' > "$stub/status-$id"', `    printf 'In Progress\\n' > "$stub/status-$id"\n    chmod 444 "${join(s.dir, "dist", "notary-Ardia-1.2.3.dmg.log")}"\n    exit 1`));
+  s.set("submit", [FIRST, SECOND, SECOND]);
+  s.ticket();
+  const run = s.notarize(s.dmg, {}, [app]);
+  assert.equal(run.status, 0, run.output);
+  assert.equal(s.records()[key], FIRST);
+  assert.equal(s.calls().filter((c) => c === "notarytool submit").length, 1, "one upload, not three");
+});
+
+test("a kept copy codesign can't vouch for stays with its record until the new submission is recorded", () => {
+  const { s, app, key } = dmgScratch();
+  const old = s.plant(key, FIRST, "the earlier packing");
+  writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
+  writeFileSync(join(s.stub, "dmg-team"), "ABCDE12345");
+  s.set("submit", ["", "", ""]);
+  const run = s.notarize(s.dmg, {}, [app]);
+  assert.notEqual(run.status, 0);
+  assert.ok(existsSync(old), "the old image is still there");
+  assert.equal(s.records()[key], FIRST, "and still paired with its record");
+});
+
+test("without a packed app the DMG's key comes from the copy it submits, so a DMG changing underneath can't split them", () => {
+  const real = spawnSync("bash", ["-c", "command -v shasum"], { encoding: "utf8" }).stdout.trim();
+  if (!real) return;
+  const s = scratch();
+  writeFileSync(join(s.stub, "repack-on-hash"), "");
+  writeFileSync(join(s.dir, "bin", "shasum"), `#!/usr/bin/env bash\nout="$(${real} "$@")"; status=$?\nif [ "\${@: -1}" = "${s.dmg}" ] && [ -f "$NOTARY_STUB/repack-on-hash" ]; then rm "$NOTARY_STUB/repack-on-hash"; printf 'repacked' > "${s.dmg}"; fi\nprintf '%s\\n' "$out"; exit $status\n`);
+  chmodSync(join(s.dir, "bin", "shasum"), 0o755);
+  s.set("submit", [FIRST]);
+  writeFileSync(join(s.stub, "ticket"), "Ardia-1.2.3.dmg\n");
+  const run = s.notarize();
+  assert.equal(run.status, 0, run.output);
+  const [key] = Object.keys(s.records());
+  assert.equal(key, `sha256-${s.keptSha(key)}`, "the key and the recorded digest are the same bytes");
+});
