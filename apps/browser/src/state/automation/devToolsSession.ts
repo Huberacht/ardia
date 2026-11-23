@@ -72,6 +72,7 @@ export class InspectionSession {
   private tracing = false;
   private listeners = new Set<CdpEventListener>();
   private inFlight = new Set<Promise<unknown>>();
+  private closeWaiters = new Set<() => void>();
   private unsubscribe: () => void;
   private closing: Promise<void> | null = null;
   private markEnded!: () => void;
@@ -107,10 +108,20 @@ export class InspectionSession {
     this.inFlight.add(work);
     const settled = () => void this.inFlight.delete(work);
     work.then(settled, settled);
-    const endedFirst = this.ended.then((): CdpParams => {
-      throw new OpError("failed", SESSION_ENDED);
+    return new Promise<CdpParams>((resolve, reject) => {
+      const abandon = () => reject(new OpError("failed", SESSION_ENDED));
+      this.closeWaiters.add(abandon);
+      work.then(
+        (reply) => {
+          this.closeWaiters.delete(abandon);
+          resolve(reply);
+        },
+        (error: unknown) => {
+          this.closeWaiters.delete(abandon);
+          reject(error);
+        },
+      );
     });
-    return Promise.race([work, endedFirst]);
   }
 
   on(listener: CdpEventListener): () => void {
@@ -144,6 +155,8 @@ export class InspectionSession {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.markEnded();
+    for (const abandon of [...this.closeWaiters]) abandon();
+    this.closeWaiters.clear();
     this.closing = this.shutDown();
     return this.closing;
   }

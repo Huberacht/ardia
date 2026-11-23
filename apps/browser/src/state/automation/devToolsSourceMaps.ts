@@ -1,5 +1,6 @@
 export const MAX_MAP_BYTES = 10 * 1024 * 1024;
 export const MAX_MAPS_PER_CALL = 16;
+export const MAX_SOURCE_PATH = 2048;
 const MAX_SEGMENTS = 1_000_000;
 const MAX_LINES = 200_000;
 const MAX_SECTIONS = 64;
@@ -84,9 +85,9 @@ export function parseSourceMap(raw: unknown, depth = 0): ParsedMap | null {
     return { sources: [], names: [], lines: [], sections };
   }
   if (typeof value.mappings !== "string") return null;
-  const root = typeof value.sourceRoot === "string" && value.sourceRoot ? value.sourceRoot.replace(/\/?$/, "/") : "";
+  const root = typeof value.sourceRoot === "string" && value.sourceRoot && value.sourceRoot.length <= MAX_SOURCE_PATH ? value.sourceRoot.replace(/\/?$/, "/") : "";
   try {
-    return { sources: strings(value.sources).map((s) => (root && !/^[a-z]+:/i.test(s) ? root + s : s)), names: strings(value.names), lines: decodeMappings(value.mappings), sections: null };
+    return { sources: strings(value.sources).map((s) => (root && !/^[a-z]+:/i.test(s) ? root + s : s).slice(0, MAX_SOURCE_PATH)), names: strings(value.names), lines: decodeMappings(value.mappings), sections: null };
   } catch {
     return null;
   }

@@ -774,3 +774,27 @@ test("a trace the browser reports as lossy comes back truncated", async () => {
     await session.close();
   }
 });
+
+test("a huge sourceRoot can't make source paths, and so the answer, balloon", () => {
+  const map = (sourceRoot) => parseSourceMap({ version: 3, sourceRoot, sources: ["a.ts"], names: [], mappings: "AAAA" });
+  assert.deepEqual(map("https://a.example/src").sources, ["https://a.example/src/a.ts"]);
+  assert.deepEqual(map("x".repeat(100_000)).sources, ["a.ts"], "an oversized root is ignored");
+  assert.ok(map("y".repeat(2040)).sources[0].length <= 2048, "a composed path is capped");
+});
+
+test("a long-lived session doesn't keep a close handler per finished command, and still rejects stalled ones", async () => {
+  const fake = fakeTransport();
+  const session = new InspectionSession("tab-10", 910, fake.transport);
+  for (let i = 0; i < 1000; i++) await session.send("DOM.getDocument");
+  assert.equal(session.closeWaiters.size, 0);
+  const stalled = new InspectionSession("tab-11", 911, { send: () => new Promise(() => {}), onEvent: () => () => {}, close: async () => {} });
+  const waiting = stalled.send("DOM.getDocument");
+  assert.equal(stalled.closeWaiters.size, 1);
+  await Promise.all([assert.rejects(waiting, /ended before it finished/), stalled.close(), session.close()]);
+});
+
+test("many directive prefixes on one line ending in a quote stay linear", () => {
+  const started = Date.now();
+  assert.equal(sourceMapRefOf(`${"//#sourceMappingURL=".repeat(8000)}"`), null);
+  assert.ok(Date.now() - started < 100, `took ${Date.now() - started} ms`);
+});
