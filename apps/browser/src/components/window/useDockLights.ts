@@ -35,7 +35,7 @@ export function useSidebarLights(
   const apply = useRef<() => void>(() => {});
   const sent = useRef<ReturnType<typeof slidingCenter> | undefined>(undefined);
   apply.current = () => {
-    const center = slidingCenter(liveWidth ? { ...o, width: currentValue(liveWidth) } : o, values.current.dock, values.current.slide);
+    const center = slidingCenter(o, values.current.dock, values.current.slide, liveWidth && currentValue(liveWidth));
     const last = sent.current;
     if ((last && last.join(",") === center.join(",")) || stillOffWindow(last, center)) return;
     sent.current = center;
@@ -74,7 +74,7 @@ export function useSidebarLights(
   useEffect(() => apply.current(), [o.width, o.peeking, o.fullscreen, o.lights, o.right, o.peekAt.left, o.peekAt.top]);
 }
 
-export function slidingCenter(o: SidebarLights, dock: number, slide: number) {
+export function slidingCenter(o: SidebarLights, dock: number, slide: number, edgeWidth: number = o.width) {
   const offset = o.fullscreen ? 0 : o.peeking ? (o.width + 12) * (1 - slide) - o.peekAt.left : o.width * (1 - dock);
-  return sidebarLightsCenter(o.right && !o.fullscreen, o.width, offset, o.peeking && !o.fullscreen ? o.peekAt.top : 0, o.lights);
+  return sidebarLightsCenter(o.right && !o.fullscreen, edgeWidth, offset, o.peeking && !o.fullscreen ? o.peekAt.top : 0, o.lights);
 }
