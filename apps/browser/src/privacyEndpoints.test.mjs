@@ -98,12 +98,13 @@ function urlHost(text) {
   return cut.replace(/\.$/, "") || null;
 }
 
-function hostsIn(path) {
-  const text = shippedText(path);
+function hostsInText(text, native) {
   const fromUrls = [...text.matchAll(URL_CANDIDATE)].map((m) => urlHost(trimUrl(m[0]))).filter((host) => host !== null);
-  const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !BUNDLE_IDS.has(host) && !FILE_SUFFIX.test(host)) : [];
+  const quoted = native ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !BUNDLE_IDS.has(host) && !FILE_SUFFIX.test(host)) : [];
   return [...fromUrls, ...quoted].filter((host) => !RESERVED.test(host));
 }
+
+const hostsIn = (path) => hostsInText(shippedText(path), NATIVE.test(path));
 
 function section(doc, title) {
   const start = doc.indexOf(`\n## ${title}\n`);
@@ -171,4 +172,19 @@ test("each disabled Google or Chromium endpoint cites a patch, switch or build a
     const removed = removedLines(paths[0]);
     for (const literal of removes) assert.ok(removed.includes(literal) && !shipped.includes(literal), `${paths[0]} still removes ${literal} (${row.Endpoint})`);
   }
+});
+
+test("the scan reads hosts the way URL does, brackets, encodings and native quoted names included", () => {
+  const cases = [
+    ['const dns = "https://[2001:4860:4860::8888]";', "[2001:4860:4860::8888]"],
+    ['fetch("https://[2001:db8::5]/x")', "[2001:db8::5]"],
+    ['"https://tracking%2Evendor.com/v1"', "tracking.vendor.com"],
+    ['"https://metrics\u3002vendor.com/v1"', "metrics.vendor.com"],
+    ['"https://user:pw@Leak.Example.org.io:8080/"', "leak.example.org.io"],
+    ['"https://trailing.vendor.io./x"', "trailing.vendor.io"],
+    ['"https://intranet/x"', "intranet"],
+  ];
+  for (const [text, host] of cases) assert.deepEqual(hostsInText(text, false), [host], text);
+  assert.deepEqual(hostsInText('@"tracker.vendor.network" @"api.service.co.uk" @"Ardia.app" @"com.google.chrome.dev"', true), ["tracker.vendor.network", "api.service.co.uk"]);
+  assert.deepEqual(hostsInText("`https://www.${input}.com` https://*.example.com https://127.0.0.1:8080/", false), []);
 });
