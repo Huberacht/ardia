@@ -144,7 +144,10 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
         completion(nil, NotificationIcon(status: "attachment_rejected", errorCode: (error as NSError).code))
       }
     }
-    if url.isFileURL { return make(url) }
+    if url.isFileURL {
+      guard (url.host ?? "").isEmpty || url.host == "localhost" else { return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil)) }
+      return make(url)
+    }
     guard url.scheme?.lowercased() == "data", url.absoluteString.lowercased().hasPrefix("data:image/") else {
       return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil))
     }

@@ -192,9 +192,9 @@ inline std::optional<std::wstring> DataUriIcon(std::string const &icon, std::str
 }
 
 inline std::optional<std::wstring> IconUrl(std::string const &icon, std::string const &id) noexcept {
-  if (icon.starts_with("file:")) return Paths::Wide(icon);
+  if (icon.starts_with("file:///") && !icon.starts_with("file:////")) return Paths::Wide(icon);
   if (icon.starts_with("data:image/")) return DataUriIcon(icon, id);
-  if (icon.size() > 2 && (icon[1] == ':' || icon.starts_with("\\\\"))) return FileUrlOf(Paths::Wide(icon));
+  if (icon.size() > 2 && icon[1] == ':' && (icon[2] == '\\' || icon[2] == '/')) return FileUrlOf(Paths::Wide(icon));
   return std::nullopt;
 }
 
