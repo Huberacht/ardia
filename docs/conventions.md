@@ -208,29 +208,34 @@ writeDocument(DOC, versionedJson(data, VERSION));
   integer, a missing step, or anything that isn't a plain object reads as nothing (the document's defaults), and is
   overwritten on the next save. Downgrades aren't supported.
 - `session.json` and `downloads.json` are the exception (`state/session/sessionSafety.ts`). One that exists but is
-  empty, broken, of an unknown shape (no session field at all, or core lists that aren't lists), newer than the app, or
-  unreadable is never written over until the store has copied it to `<name>-unreadable-<ms>-<n>.json`. The same goes
-  for one whose rows the reader had to drop (open windows, tabs, groups and splits, profiles, parked pins, and the
-  closed and cleaned lists), or whose tabs point at a window or profile that isn't there (loading would drop them): it
-  still loads what is whole, but it is kept aside first. Order and focus ids that name an Object property
-  (`constructor`, `__proto__`) are dropped while reading. A download row the reader rejects keeps
-  `downloads.json` aside the same way. `copyDocument` copies the bytes, or the JS
-  saves the text when the store can't copy. Every retry reuses the same name, and only one copy runs at a time. A slow
-  copy that succeeds late still opens the writes. An existence probe that fails counts as present.
+  empty, broken, of an unknown shape (no session field at all, or core lists that aren't lists), newer than the app,
+  or unreadable is never written over until the store has copied its bytes to `<name>-unreadable-<ms>-<n>.json`
+  (`copyDocument`; a copy rebuilt from the decoded text doesn't count). The same goes for one that loading would
+  partly drop: rows the reader rejects (windows, tabs, groups, splits, profiles, parked pins, the closed and cleaned
+  lists, or a closed list that isn't a list), or anything hydration's own rules discard (a tab whose window or
+  profile is missing, a window none of whose tabs it keeps). Such a file still loads what is whole, but it is kept
+  aside first. Order and focus ids that name an Object property (`constructor`, `__proto__`) are dropped while
+  reading. A download row the reader rejects keeps `downloads.json` aside the same way. Every retry reuses the same
+  copy name, only one copy runs at a time, and a slow copy that succeeds late still opens the writes. An existence
+  probe that fails counts as present.
 - Until that copy lands, every write to the document waits. Quitting retries a copy that is waiting to retry and
-  waits for each held document. Received synced tabs wait too, so a receipt never outruns the disk. The session then comes back from the newest daily backup
-  that reads and hydrates, `session-backup-<sun…sat>.json` (one per weekday, so seven at most; each holds
-  `{backupDay, backupAt, session}`). A session that reads but throws while it is prepared or hydrated counts as damaged too, and the next
-  backup is tried. Backups that load whole are tried before ones that would lose rows, and a backup a launch restored
-  with rows lost is itself copied aside before `session.json` is written again. The backups are read only when
-  the saved session can't be used. With no
-  backup it starts fresh, and the download history still loads. A missing file is a first launch: nothing is restored.
+  waits for each held document. Received synced tabs wait too, so a receipt never outruns the disk.
+- The session then comes back from a backup. A session that reads but throws while it is prepared or hydrated
+  counts as damaged too, and the next backup is tried. Backups that load whole are tried first, newest by `backupAt`,
+  then ones that would lose rows. The backups are read only when the saved session can't be used. With no backup it
+  starts fresh, and the download history still loads. A missing file is a first launch: nothing is restored.
 - `readSaved` tells these cases apart, where `parseSaved` returns null for all of them.
-- The first session save of each calendar day writes that day's backup, unless today's slot already holds a backup
-  that loads whole. A slot holding a backup from a newer Ardia is left alone. A failed backup is tried again five minutes later. A launch whose `session.json` still needs a migration
-  saves that day's backup first (to `session-backup-migration.json` when today's slot holds a newer Ardia's backup, or to
-  `session-backup-migration-<ms>.json` when that file holds one too), and the migrated session isn't written until that backup has landed. Each save adds
-  no other writes.
+- Backups are immutable files named by when they were made: `session-backup-<ms>.json` (daily) and
+  `session-premigration-<ms>.json`, each holding `{backupAt, session}`. No file is ever rewritten, and they are found
+  with `listDocuments(prefix)`.
+  - A session save writes a daily backup when no backup that loads whole was made within 24 hours of now (by
+    `backupAt`, not by weekday), so a clock that jumps back only adds a file. A failed backup is tried again five
+    minutes later.
+  - A launch whose `session.json` still needs a migration saves a pre-migration snapshot first, and the migrated
+    session isn't written until it has landed.
+  - The 7 newest daily backups and the 3 newest snapshots are kept. Pruning never removes the newest backup that
+    loads whole or the file just written, and nothing is pruned in a launch that is recovering a damaged session.
+  - Each ordinary save adds no other writes.
 - `versionedJson` writes the version last, so the payload can't override it. The reader still checks the payload it
   depends on: a version says which shape to expect, not that the data is valid.
 - The field is `version`, except in `sync.json` (`v`) and `ardia-cli.json` (`schemaVersion`; its `version` is the
@@ -240,7 +245,8 @@ writeDocument(DOC, versionedJson(data, VERSION));
   `default-browser-offer.json`, `sync.json`, `sync-extensions.json`, `live.json`, `shared-folders.json`, `ardia-cli.json`,
   `bangs-state.json`, `Scripts/status.json`, `link-sources.json` and `freeze-sends.json` (all 1).
 - Native code reads through `ArdiaSavedDocument` (packages/ardiacore/ios), with the same rules: `session.json` and
-  `onboarding.json` (any version up to the one JS writes; a test pins each) and `launch-layout.json` (5, written and
+  `onboarding.json` (any version up to the one JS writes; a test pins each). `ArdiaSavedSession` also reads nothing
+  when a field the early launch uses has the wrong type, so a malformed window falls back to the JS launch. and `launch-layout.json` (5, written and
   read by native code only, so any other version reads as nothing).
 - The sealed sync files carry their own `version` inside the sealed JSON, because they're written apart from
   `sync.json` and its `v` doesn't cover them: the `sync-state.nns` checkpoint (`{ covers, clock, scopes }`, 1; version 0

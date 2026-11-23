@@ -90,6 +90,15 @@ enum DocumentStore {
     }
   }
 
+  static func list(_ prefix: String) -> [String] {
+    guard let directory = try? url(prefix.isEmpty ? "documents" : prefix).deletingLastPathComponent() else { return [] }
+    lock.lock()
+    let pending = staged.keys.filter { $0.hasPrefix(prefix) }
+    lock.unlock()
+    let stored = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+    return Array(Set(stored.filter { $0.hasPrefix(prefix) && !$0.hasPrefix(".") }).union(pending)).sorted()
+  }
+
   static func copy(_ name: String, to copyName: String, done: @escaping Done) throws {
     let source = try url(name)
     let target = try url(copyName)

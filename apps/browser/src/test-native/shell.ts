@@ -254,6 +254,7 @@ const documents: Modules["ArdiaDocuments"] = {
     }),
   documentSaved: () => (refusedWrites.on || refusedWrites.landingFails ? Promise.reject(new Error("save refused")) : Promise.resolve()),
   removeDocument: (name) => void (docs.delete(name), stagedDocs.delete(name), unreadableDocs.delete(name)),
+  listDocuments: (prefix) => [...new Set([...docs.keys(), ...stagedDocs.keys(), ...unreadableDocs])].filter((name) => name.startsWith(prefix)),
   copyDocument: (name, copyName) => {
     copiedDocs.push([name, copyName]);
     if (refusedCopies.on || refusedCopies.of.has(name)) return Promise.reject(new Error("copy refused"));

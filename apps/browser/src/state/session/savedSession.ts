@@ -95,18 +95,26 @@ const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 const keyed = (value: unknown) => (isFields(value) ? Object.keys(value).length : 0);
 const CLOSED_LISTS = ["closedTabs", "closedWindows", "closedGroups", "deletedGroups", "cleanedTabs"] as const;
 
-function orphanedTabs(session: SavedSession) {
+function hydrationDrops(session: SavedSession) {
   const saved = Object.keys(session.profiles ?? {});
   const profiles = new Set(saved.length ? saved : [DEFAULT_PROFILE_ID]);
-  return Object.values(session.tabs).some((t) => !Object.hasOwn(session.windows, t.windowId) || (!profiles.has(t.profileId) && !isIncognitoProfile(t.profileId)));
+  const kept = new Map(
+    Object.values(session.tabs)
+      .filter((t) => Object.hasOwn(session.windows, t.windowId) && (profiles.has(t.profileId) || isIncognitoProfile(t.profileId)))
+      .map((t) => [t.id, t]),
+  );
+  const windows = Object.values(session.windows).filter((w) => w.tabIds.some((id) => kept.get(id)?.windowId === w.id));
+  const shown = new Set(windows.map((w) => w.id));
+  const tabs = [...kept.values()].filter((t) => shown.has(t.windowId));
+  return tabs.length < Object.keys(session.tabs).length || windows.length < Object.keys(session.windows).length;
 }
 
 export const droppedRows = (raw: SavedObject, session: SavedSession) =>
-  orphanedTabs(session) ||
+  hydrationDrops(session) ||
   listed(raw.windows) > Object.keys(session.windows).length ||
   listed(raw.tabs) > Object.keys(session.tabs).length ||
   listed(raw.groups) > Object.keys(session.groups ?? {}).length ||
   listed(raw.splits) > Object.keys(session.splits ?? {}).length ||
   keyed(raw.profiles) > Object.keys(session.profiles ?? {}).length ||
   keyed(raw.parkedPins) > Object.keys(session.parkedPins ?? {}).length ||
-  CLOSED_LISTS.some((key) => listed(raw[key]) > (session[key]?.length ?? 0));
+  CLOSED_LISTS.some((key) => (raw[key] !== undefined && !Array.isArray(raw[key])) || listed(raw[key]) > (session[key]?.length ?? 0));

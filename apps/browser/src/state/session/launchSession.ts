@@ -9,7 +9,7 @@ import { downloadSession, withoutRepeats } from "../downloads/downloadsSlice";
 import { noteSavedTopAppsMerged } from "../telemetry/topAppsSharing";
 import { unchanged, type Migrations, type SavedObject } from "../../lib/savedDocument";
 import { findDocument, sessionBackups, usableSessionValue, wholeDownloads, wholeSession, type FoundDocument, type RestoredBackup } from "./sessionSafety";
-import { isFields, isString } from "../../lib/decode";
+import { isString } from "../../lib/decode";
 import { droppedRows, rows, sessionFromSaved, SESSION_MIGRATIONS, SESSION_VERSION, type SavedSession } from "./savedSession";
 
 const downloadsWithStagingPathOnly = (doc: SavedObject): SavedObject => ({
@@ -106,8 +106,6 @@ export function wholeBackup(value: unknown): boolean {
     return false;
   }
 }
-
-export const newerBackup = (value: unknown) => isFields(value) && typeof value.version === "number" && value.version > SESSION_VERSION;
 
 const findSession = () => findDocument(SESSION_DOCUMENT, SESSION_VERSION, SESSION_MIGRATIONS, wholeSession);
 const findDownloads = () => findDocument(DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, DOWNLOADS_MIGRATIONS, wholeDownloads);

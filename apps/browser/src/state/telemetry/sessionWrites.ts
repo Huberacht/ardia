@@ -66,8 +66,8 @@ export function noteSessionSetAside(session: boolean, reason: SetAsideReason, re
 
 export const noteSessionSetAsideFailure = (session: boolean, consent?: ConsentToken | null) => countFor(consentOrNow(consent), () => void (session && setAsideFailures++));
 
-export function noteSessionBackup(beforeMigration: boolean) {
-  countFor(consentOrNow(undefined), () => {
+export function noteSessionBackup(beforeMigration: boolean, consent?: ConsentToken | null) {
+  countFor(consentOrNow(consent), () => {
     backups++;
     if (beforeMigration) backupsBeforeMigration++;
   });

@@ -28,4 +28,6 @@ test("the native reader takes each field it reads from the shape of the file's o
   const out = execFileSync(probe, [join(dir, "docs")], { encoding: "utf8" });
   assert.doesNotMatch(out, /^FAIL/m, out);
   assert.match(out, /a version 6 file reads pin/);
+  assert.match(out, /a malformed window \(case 6\) declines early launch/);
+  assert.match(out, /a well-typed session reads/);
 });

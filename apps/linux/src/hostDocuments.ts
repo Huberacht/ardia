@@ -59,6 +59,7 @@ export function createHostDocuments(host: ArdiaHost) {
       keep(documents, name, contents ?? undefined);
       return typeof contents === "string";
     },
+    list: (prefix: string) => [...documents.keys()].filter((name) => name.startsWith(prefix)),
     copy: async (name: string, copyName: string) => {
       if (name === "live.json" || name === "live.canonical.json") throw Object.assign(new Error("Canonical Live documents cannot be copied generically"), { code: "ERR_DOCUMENT_RESERVED" });
       await writes.catch(() => {});
