@@ -6,8 +6,8 @@
 # Chromium's GN build is the only other place the boringssl backend compiles. This builds BoringSSL at the pinned
 # release (with its Rust bindings) into target/boringssl-src and target/boringssl-build, then builds the same
 # crates/ardia-crypto and crates/ardia-update-core sources as tests/boringssl/{crypto,update} with the boringssl and
-# ed25519 features and runs their tests. Needs git, cmake, ninja, a C and C++ compiler, libclang and bindgen
-# (cargo install bindgen-cli). Nothing here is an engine key input.
+# ed25519 features and runs their tests. Needs git, CMake 3.27 or later, ninja, a C and C++ compiler, libclang and
+# bindgen 0.73.2 (cargo install --locked bindgen-cli --version 0.73.2). Nothing here is an engine key input.
 set -euo pipefail
 
 for arg in "$@"; do
@@ -15,6 +15,7 @@ for arg in "$@"; do
 done
 
 boringssl_commit=d3bf4795ad5b79d646cddf2fec687da5b9b502db
+bindgen_version=0.73.2
 here=$(cd "$(dirname "$0")" && pwd -P)
 core=$(cd "$here/../.." && pwd -P)
 source_dir="$core/target/boringssl-src"
@@ -23,6 +24,10 @@ build_dir="$core/target/boringssl-build"
 for tool in git cmake ninja bindgen cargo; do
   command -v "$tool" >/dev/null || { echo "check.sh: $tool is required" >&2; exit 1; }
 done
+if [[ "$(bindgen --version)" != "bindgen $bindgen_version" ]]; then
+  echo "check.sh: needs bindgen $bindgen_version, not $(bindgen --version): cargo install --locked bindgen-cli --version $bindgen_version" >&2
+  exit 1
+fi
 cmake_version=$(cmake --version | awk 'NR == 1 { print $3 }')
 if ! printf '3.27\n%s\n' "$cmake_version" | sort -V -C; then
   echo "check.sh: BoringSSL's Rust bindings need CMake 3.27 or later, not $cmake_version" >&2
