@@ -332,3 +332,21 @@ test("at the archive's limit, a restore still waiting on a busy database makes r
   expect(browserDatabase.readArchivedTab(tabDatabase(), oldest)).toBeNull();
   browserDatabase.writeTabs(tabDatabase(), [], rows.map((tab) => tab.id));
 });
+
+test("at the archive's limit, the oldest archived tab is pruned when a tab archived on a busy database pushes it past the limit, even with its own update still waiting", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  expect(flushTabWrites()).toBe(true);
+  browserDatabase.writeTabs(tabDatabase(), [], browserDatabase.readArchivedTabs(tabDatabase(), 10_000).map((tab) => tab.id));
+  const rows = archivedRows(ARCHIVE_LIMIT);
+  browserDatabase.writeTabs(tabDatabase(), rows, []);
+  const oldest = rows[rows.length - 1]!.id;
+  act(() => loadArchive());
+  refuse(3, "SQLITE_BUSY");
+  act(() => updateTabById(oldest, { title: "Renamed while busy" }));
+  act(() => archiveTabById(currentTabs().open[0]!.id));
+  expect(pruneExpiredArchive()).toBe(1);
+  act(() => jest.advanceTimersByTime(2_000));
+  expect(browserDatabase.readArchivedTab(tabDatabase(), oldest)).toBeNull();
+  expect(browserDatabase.readArchivedTabs(tabDatabase(), 10_000).length).toBe(ARCHIVE_LIMIT);
+  browserDatabase.writeTabs(tabDatabase(), [], browserDatabase.readArchivedTabs(tabDatabase(), 10_000).map((tab) => tab.id));
+});

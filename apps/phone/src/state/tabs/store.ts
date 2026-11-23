@@ -335,13 +335,13 @@ export function saveTabState(id: string, saved: string | null, save: StateSave =
   return true;
 }
 
-function expiredThroughPending(db: SqlDatabase, cutoff: number, live: ReadonlySet<string>): string[] {
+function expiredThroughPending(db: SqlDatabase, cutoff: number, live: ReadonlySet<string>): { byAge: string[]; byRank: string[] } {
   const shift = pendingOverfetch(db) + live.size;
   const tail = archivedRankedFrom(db, Math.max(0, ARCHIVE_LIMIT - shift));
   const overflow = tail.length ? new Set(tail.map((tab) => tab.id)) : null;
   const kept = overflow ? new Set(archiveView(db, (limit) => readArchivedTabs(db, limit), () => true, ARCHIVE_LIMIT).map((tab) => tab.id)) : null;
-  const beyond = overflow && kept ? [...overflow].filter((id) => !kept.has(id)) : [];
-  return [...new Set([...archivedBefore(db, cutoff), ...beyond])];
+  const byRank = overflow && kept ? [...overflow].filter((id) => !kept.has(id)) : [];
+  return { byAge: archivedBefore(db, cutoff), byRank };
 }
 
 export function pruneExpiredArchive() {
@@ -350,13 +350,18 @@ export function pruneExpiredArchive() {
   const live = new Set([...open, ...privates].map((tab) => tab.id));
   const batch = pendingWrites.get(db);
   const cutoff = now() - ARCHIVE_RETENTION_MS;
-  const stillExpired = (id: string) => {
+  const stillArchived = (id: string) => {
     if (live.has(id) || batch?.remove.has(id)) return false;
     const queued = batch?.put.get(id);
-    if (!queued) return true;
-    return queued.archivedAt !== null && queued.archivedAt < cutoff;
+    return !queued || queued.archivedAt !== null;
   };
-  const expired = batch ? expiredThroughPending(db, cutoff, live).filter(stillExpired) : expiredArchivedIds(db, cutoff, ARCHIVE_LIMIT).filter(stillExpired);
+  const stillExpired = (id: string) => {
+    if (!stillArchived(id)) return false;
+    const queued = batch?.put.get(id);
+    return !queued || (queued.archivedAt !== null && queued.archivedAt < cutoff);
+  };
+  const pending = batch ? expiredThroughPending(db, cutoff, live) : null;
+  const expired = pending ? [...new Set([...pending.byAge.filter(stillExpired), ...pending.byRank.filter(stillArchived)])] : expiredArchivedIds(db, cutoff, ARCHIVE_LIMIT).filter(stillExpired);
   if (!expired.length) return 0;
   const gone = new Set(expired);
   stageWrites(db, { put: [], remove: expired });
