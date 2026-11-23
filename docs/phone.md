@@ -1388,26 +1388,30 @@ Metal.
   tint, the 0.5 point edge and the profile tint. The rim is its own pass in its own layer, premultiplied white
   composited with `plusL`, so it adds onto the glass and whatever is behind it in all four channels, as Android's PLUS
   does.
-  - A glass outside the `FrostSource` it names draws that whole source, once, and again only when it changes, so a
-    glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that keeps changing is redrawn at most once a second, and again two frames after it stops changing
-    (the end of the deck's Incognito crossfade). The page bar and host pill
-    draw the page from WebKit's own `takeSnapshot` (the viewport plus 320 points above and below, at the capture's
-    scale), which runs off the main thread; while a newer snapshot is on its way, the last one is moved by how far the
-    page has scrolled since, so the strip stays lined up with the page. The snapshot sits at the web view's own place
-    among the source's views, under anything that covers it (the arriving tab's cover), with its clips and opacity. A
-    snapshot belongs to one web view and one navigation (`WebTab.navigationGeneration`): another tab or document drops
-    it and the strip, and a late answer to an older request is refused. A snapshot that fails, comes back blank, is
-    from another zoom, or no longer covers the strip once moved (a fling past its 320 points) shows the glass's fill
-    until a good one arrives; requests come at most 20 times a second while scrolling, twice a second when still, and
-    back off after failures. The deck's chrome draws its backdrop and the
-    start page's buttons its spaces and mark, with `drawHierarchy(afterScreenUpdates: false)`.
-  - A glass inside its source, or with none (toasts, Reader's buttons, the Duo toolbar under `surfaces`, the search
-    morph), draws what lies beneath it in the window (`GlassBackdrop`): going up from the glass, each ancestor's fill
+  - A glass outside the `FrostSource` it names draws that whole source with `layer.render(in:)` (or
+    `drawHierarchy(afterScreenUpdates: false)` if the layer tree comes back blank), once, and again only when it
+    changes, so a glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that
+    keeps changing is redrawn at most once a second, and again two frames after it stops changing (the end of the
+    deck's Incognito crossfade). This is how the deck's chrome draws its backdrop and the start page's buttons their
+    spaces and mark.
+  - The page bar and host pill draw the page from WebKit's own `takeSnapshot`, rendered by WebKit in its own process
+    (`afterScreenUpdates: true`; the visible-view path, `false`, blocked the main thread for up to 84 ms on the
+    simulator), of the strip around the glass plus 400 points above and below, at the capture's scale. A snapshot is
+    asked for when the page has scrolled 180 points since the last one, zoomed, or every half second, at most 20 times
+    a second, backing off after failures. The capture holds the strip plus 200 points above and below, and while the
+    page scrolls the glass samples it where the page now is (a uniform, not a new capture); it is redrawn when the
+    page has moved 120 points, a new snapshot arrives or anything over the page changes. The snapshot sits at the web
+    view's own place among the source's views, under anything that covers it (the arriving tab's cover), with its
+    clips and opacity. It belongs to one web view and one navigation (`WebTab.navigationGeneration`): another tab or
+    document drops it and the strip, and a late answer to an older request is refused. A snapshot that fails, comes
+    back blank, is from another zoom, or doesn't cover the strip once moved (a fast fling) shows the glass's fill until
+    a good one arrives. A page source whose page isn't there yet shows the fill.
+  - A glass inside its source, or with none (toasts, Reader's buttons, the Duo toolbar under `surfaces`), draws what lies beneath it in the window (`GlassBackdrop`): going up from the glass, each ancestor's fill
     and each sibling drawn under it (by `zPosition`, then order) that overlaps the strip, with its real transform, its
     ancestors' clips and corners and its opacity, starting from the topmost opaque piece that truly covers the strip.
     Those pieces draw with `layer.render(in:)`, and a page among them with WebKit's snapshot.
   - The capture is redrawn only when a walk of the drawn layers changes (positions, bounds, scroll offsets, the
-    WKWebView's content offset, opacity, transforms, contents), for two frames after it settles, and every 3 s
+    WKWebView's scroll in 120 point steps, opacity, transforms, contents), for two frames after it settles, and every 3 s
     otherwise. Glass that is hidden or off screen does no work. A capture that fails or comes back blank drops the old
     strip, shows the glass's fill and tries again after 50 ms, doubling up to 1 s.
   - At most two GPU frames are in flight, the slot taken before any capture work, and a glass that falls back during
@@ -1416,12 +1420,15 @@ Metal.
 - **Where each path runs.** Every glass refracts by default. The flat fills are fallbacks only: Classic and Reduce
   Transparency keep the Classic surface, unchanged; a phone without Metal, or a shader that fails, draws the frost's
   flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a glass whose main-thread work
-  (the walk, the snapshot request and the capture, failed ones included) takes longer than one frame once, or more
-  than 12 % of the main thread over two seconds, is over budget, and that glass draws the chrome fill over a page
+  (the walk, the snapshot request and the capture, failed ones included) takes longer than one frame once (a glass's
+  first capture, which sets up its buffers, aside), or more than 12 % of the main thread over two seconds, is over
+  budget, and that glass draws the chrome fill over a page
   (#FFFFFF, #1E1B1D in dark) or the flat fill elsewhere until the app next returns to the foreground
   (`glass_captures_over_budget`). Lab flags: `ArdiaFlatGlass` drops the lens and rim, `ArdiaGlassSolidPage` keeps the
   chrome fill over a page, `ArdiaGlassCapture auto|hierarchy|layer|none` picks the capture (`auto` is the default;
-  `none` is the control), `ArdiaGlassScroll <s>` scrolls the page on screen up and down for that long, and
+  `none` is the control), `ArdiaGlassScroll <s>` scrolls the page on screen up and down for that long (counting as a touch, so the bar
+  collapses; `ArdiaGlassScrollPeriod <s>` sets how fast), `ArdiaGlassSnapshotVisible` uses WebKit's visible-view
+  snapshot for comparison, and
   `ArdiaGlassProbe` logs whether each capture applies a view's own alpha (both do). Each lab build logs
   `PAGELAB look glass … path=…` and, once a second while any glass captures, `PAGELAB glass frames` with late and
   dropped frames, failures, WebKit snapshots and their latency, pieces per capture and capture and tick times.
@@ -1434,16 +1441,20 @@ Metal.
   (`PendingCounts.swift`, kept only while sharing is on, as Android's are), the glass draws the flat fill and edge with
   `CALayer`, and the compile is tried again when the app returns to the foreground. `glass_render` now reports `lens`,
   `frost` or `solid` on iPhone too.
-- **Seen on the simulator** (an iPhone 18 Pro simulator on the Mac, iOS 27.0, 2026-11-23, beside main's Apple glass):
-  the start page, the page bar over en.wikipedia.org (refracting the page as it scrolls), the deck, Reader's buttons, a
-  toast over a photo, the search morph and Settings, light and dark. Over 14 s of scrolling Wikipedia under the bar,
-  `auto` captured every frame at 1.5 ms (p50, 2.7 at most) on the main thread, WebKit's snapshots arrived 1.8 ms (p50)
-  after the request, and 2.1 % of frames were late against 0.2 % with `none`; `drawHierarchy` of the page costs 33 to
-  35 ms a capture and `layer.render(in:)` 13 to 20 ms (and can't see the page). Opening and scrolling the deck: 2.2 %
-  late with `auto` (backdrop captures at most once a second, about 35 ms each on the simulator), 0.8 % with `none`.
+- **The search morph** is not glass: the search panel's face is frost (`SEARCH_PANEL_FACE`), so its morph is the
+  system blur, on main and here.
+- **Seen on the simulator** (an iPhone 18 Pro simulator on the Mac, iOS 27.0, 2026-11-24): the start page, the page
+  bar collapsed and expanded and the host pill over en.wikipedia.org (refracting the page as it scrolls), the deck and
+  its Incognito crossfade, a tab arriving, tabs switched at the same scroll position, a fast fling, Reader's buttons,
+  a toast over a photo and Settings, light and dark. Scrolling Wikipedia under the bar for 14 s: 7.4 to 7.6 % late
+  frames with `auto` against 0.1 to 0.2 % with `none`, the glass's main-thread work 0.14 ms (p50, under 4 ms at most),
+  about six WebKit snapshots a second; the late frames are WebKit rendering those snapshots. Opening and scrolling the
+  deck: 1.9 % late against 1.3 % with `none`.
+- **Open decision.** The live lens over a scrolling page costs about seven points of late frames on the simulator,
+  all of it WebKit rendering snapshots in its own process; the main thread stays under a frame. Measure it on a phone
+  before shipping; `ArdiaGlassSolidPage` keeps the chrome fill over the page instead.
 - **Not seen yet.** A phone: the simulator's costs are not a phone's, and the 12 % budget is set from the simulator.
-  The collapsed bar and the host pill (the lab scroll moves the page without the touch that collapses the bar), the
-  press highlight, landscape and the Duo layouts.
+  The press highlight, landscape and the Duo layouts.
 
 ## The look's budget
 
