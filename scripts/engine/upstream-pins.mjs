@@ -492,7 +492,9 @@ export async function fetchUpstream({ client, fetchImpl = globalThis.fetch, preb
   if (prebuiltSource) {
     try {
       prebuilt = await fetchPrebuiltPins({ source: prebuiltSource, client, repo, readAtCommit });
-      if (!isVersion(prebuilt.heliumWindows)) throw new Error(`helium-windows tag ${JSON.stringify(prebuilt.heliumWindows)} is not a dotted numeric version`);
+      for (const [name, tag] of [["helium-chromium", prebuilt.heliumChromium], ["helium-windows", prebuilt.heliumWindows]]) {
+        if (!isVersion(tag)) throw new Error(`${name} tag ${JSON.stringify(tag)} is not a dotted numeric version`);
+      }
     } catch (error) {
       rethrowRateLimit(error);
       prebuilt = null;

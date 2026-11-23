@@ -389,6 +389,14 @@ test("the published engine's pins come from the local commit first, the API only
   assert.ok(!calls.some((call) => call.url.includes("/repos/o/r/contents")));
 });
 
+test("a published engine whose pin file lacks its helium-chromium tag is incomplete data", async () => {
+  const { impl } = fakeFetch([...RELEASES, [/chromium_version\.txt/, 200, "158.0.8127.36"]]);
+  const readAtCommit = () => windowsIni("0.22.1", "0.22.1.1").replace(/\[helium-chromium\][^[]*/, "");
+  const upstream = await fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl, prebuiltSource: SOURCE, repo: "o/r", readAtCommit });
+  assert.equal(upstream.prebuilt, null);
+  assert.ok(upstream.errors.some((error) => error.includes("helium-chromium tag null")), upstream.errors.join("\n"));
+});
+
 test("a missing latest release, a prerelease or a malformed tag is incomplete data, with no tag fallback", async () => {
   const { impl, calls } = fakeFetch([
     [/helium-chromium\/releases\/latest$/, 200, { tag_name: "0.22.3", draft: false, prerelease: false }],
