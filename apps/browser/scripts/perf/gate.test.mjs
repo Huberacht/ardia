@@ -306,9 +306,9 @@ const appGone = async (pid, ms = 5000) => {
   return !alive(pid);
 };
 
-function ownersArdia(s) {
-  const pidfile = join(s.dir, "owner.pid"), log = join(s.dir, "owner.signals");
-  spawnSync(process.execPath, ["-e", LAUNCHER, APP, pidfile, log], { env: { PATH: process.env.PATH, ARDIA_DATA_DIR: join(s.dir, "owner-data"), HOME: process.env.HOME }, stdio: "ignore" });
+function ownersArdia(s, name = "owner", dataDir = join(s.dir, "owner-data")) {
+  const pidfile = join(s.dir, `${name}.pid`), log = join(s.dir, `${name}.signals`);
+  spawnSync(process.execPath, ["-e", LAUNCHER, APP, pidfile, log], { env: { PATH: process.env.PATH, ARDIA_DATA_DIR: dataDir, HOME: process.env.HOME }, stdio: "ignore" });
   for (let i = 0; i < 300 && !(existsSync(pidfile) && readFileSync(pidfile, "utf8")); i++) spawnSync("sleep", ["0.02"]);
   const pid = +readFileSync(pidfile, "utf8");
   s.extra.push(pid);
@@ -321,10 +321,13 @@ for (const [how, act, code] of [
   ["a prep timeout", null, 12],
   ["a normal end", null, 0],
 ]) {
-  test(`through the real lock, after ${how} the app a bench launched like open is gone before the lock is free, and the owner's Ardia (same executable, its own data dir) is never signalled`, async () => {
+  test(`through the real lock, after ${how} the app a bench launched like open is gone before the lock is free, and no other instance is signalled: the owner's Ardia, one beside <out>, one inside <out> but outside the gate's folders`, async () => {
     const s = setup();
     try {
       const owner = ownersArdia(s);
+      const sibling = ownersArdia(s, "sibling", join(s.dir, "another-agent", "data", "launch-1"));
+      mkdirSync(join(s.out, "someone-else"), { recursive: true });
+      const insideOut = ownersArdia(s, "inside-out", join(s.out, "someone-else", "data"));
       const normal = code === 0;
       const env = { ...withRealLock(s), STUB_APP_prep: "1", STUB_SLEEP_prep: act ? "60000" : normal ? "1500" : "60000", STUB_SLEEP_smoke_SECS: act ? "60" : "0", STUB_SLEEP_ratchet: act ? "60000" : "0", GATE_APP_QUIT_SECS: "2", ...(code === 12 ? { GATE_PREP_TIMEOUT: "3" } : {}) };
       const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env, stdio: "ignore", detached: true });
@@ -346,8 +349,10 @@ for (const [how, act, code] of [
       assert.equal(unheld, 0);
       assert.ok(await appGone(app, 500));
       assert.ok(!held());
-      assert.ok(alive(owner.pid));
-      assert.deepEqual(owner.signals(), []);
+      for (const decoy of [owner, sibling, insideOut]) {
+        assert.ok(alive(decoy.pid));
+        assert.deepEqual(decoy.signals(), []);
+      }
       assert.deepEqual(readdirSync(s.out).filter((n) => n.startsWith(".run.")), []);
     } finally {
       s.done();

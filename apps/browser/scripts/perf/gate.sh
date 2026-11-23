@@ -20,9 +20,10 @@
 # benches quit their instances, then TERM, then KILL, each after a deadline. The lock stays held until they have all
 # exited, and it returns after that. Each run keeps its own folder, <out>/.run.XXXXXX (the worker's pid, each job's
 # group marker), removed at the end unless cleanup failed. The jobs run with TMPDIR set to a scratch folder of the
-# run's, /tmp/ac-gate.XXXXXX (its ratchet report is in ac-ratchet/ there), and the benches keep their data in <out>/prep
-# and each round's own folder, so every app instance they launch with `open` (outside every process group) has
-# ARDIA_DATA_DIR or HOME inside one of those. bench-sweep.mjs quits, then kills, exactly those, and checks they're gone before the lock is let go. The lock wrapper runs in a process group of its
+# run's, /tmp/ac-gate.XXXXXX (its ratchet report is in ac-ratchet/ there), and the benches keep their data in
+# <out>/prep/rc, <out>/prep/<previous> and each round's own folder, so every app instance they launch with `open`
+# (outside every process group) has ARDIA_DATA_DIR or HOME inside one of those. <out> itself is never one: anything
+# else under it, or beside it, is someone else's. bench-sweep.mjs quits, then kills, exactly those, and checks they're gone before the lock is let go. The lock wrapper runs in a process group of its
 # own and only the worker under it is signalled, so the wrapper waits for the worker before it lets go.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -137,7 +138,7 @@ if [ -z "${GATE_RUN:-}" ]; then
 fi
 GATE_TMP=$(mktemp -d "${GATE_TMP_ROOT:-/tmp}/ac-gate.XXXXXX") || exit 12
 out_abs=$(cd "$out" 2>/dev/null && pwd -P) || { mkdir -p "$out" && out_abs=$(cd "$out" && pwd -P); } || exit 12
-printf '%s\n' "$GATE_TMP" "$out_abs/prep" > "$GATE_RUN/markers"
+printf '%s\n' "$GATE_TMP" "$out_abs/prep/rc" "$out_abs/prep/$previous" > "$GATE_RUN/markers"
 export TMPDIR=$GATE_TMP AC_SCRATCH_TMP=$GATE_TMP
 groups=()
 stop_jobs() {

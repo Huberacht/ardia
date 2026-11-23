@@ -80,3 +80,16 @@ test("stop signals only marked processes: the owner's Ardia (same executable, it
   assert.ok(alive(owner.pid));
   assert.deepEqual(owner.signals(), []);
 }));
+
+test("a data dir spelled through a symlink still matches its marker, and a sibling of the marker never does", withDir(async (dir) => {
+  const { symlinkSync } = await import("node:fs");
+  const { canonical } = await import("./bench-sweep.mjs");
+  mkdirSync(join(dir, "real", "gate", "prep"), { recursive: true });
+  symlinkSync(join(dir, "real"), join(dir, "alias"));
+  const marker = join(dir, "real", "gate", "prep");
+  assert.equal(canonical(join(dir, "alias", "gate", "prep", "rc", "data", "not-yet")), join(canonical(join(dir, "real")), "gate", "prep", "rc", "data", "not-yet"));
+  assert.equal(markedBy({ ARDIA_DATA_DIR: join(dir, "alias", "gate", "prep", "rc", "data") }, [canonical(marker)]), true);
+  assert.equal(markedBy({ ARDIA_DATA_DIR: join(dir, "alias", "gate", "other-agent", "data") }, [canonical(marker)]), false);
+  assert.equal(markedBy({ ARDIA_DATA_DIR: join(dir, "alias", "gate") }, [canonical(marker)]), false);
+  assert.equal(markedBy({ ARDIA_DATA_DIR: "relative/path" }, [canonical(marker)]), false);
+}));

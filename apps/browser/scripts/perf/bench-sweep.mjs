@@ -15,7 +15,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -46,8 +46,24 @@ const forms = (dir) => {
 
 export const insideAny = (value, dirs) => dirs.some((d) => value === d || value.startsWith(`${d}/`));
 
+export function canonical(path) {
+  const rest = [];
+  let dir = resolve(path);
+  for (let i = 0; i < 256; i++) {
+    try {
+      return [realpathSync(dir), ...rest].join("/").replace(/\/+$/, "") || "/";
+    } catch {
+      const up = dirname(dir);
+      if (up === dir) return resolve(path);
+      rest.unshift(basename(dir));
+      dir = up;
+    }
+  }
+  return resolve(path);
+}
+
 export function markedBy(env, dirs) {
-  return MARKER_VARIABLES.some((name) => typeof env[name] === "string" && insideAny(env[name], dirs));
+  return MARKER_VARIABLES.some((name) => typeof env[name] === "string" && env[name].startsWith("/") && (insideAny(env[name], dirs) || insideAny(canonical(env[name]), dirs)));
 }
 
 function parsePsEnvironment(line) {
