@@ -432,7 +432,7 @@ function ancestry(tokens, language) {
         } else if (token.text === "else") {
           prepend.set(index, [...(chains.get(depth) ?? [])]);
           setBoundary(index);
-        } else if ((token.text === "case" || token.text === "default") && inSwitch() && ["{", ";", ":", "}"].includes(tokens[index - 1]?.text)) {
+        } else if ((token.text === "case" || token.text === "default") && inSwitch() && (token.newline || ["{", ";", ":", "}"].includes(tokens[index - 1]?.text))) {
           const end = labelEnd(tokens, index);
           if (end > index) {
             const shared = labelEnds.get(depth) === index - 1;
@@ -452,7 +452,7 @@ function ancestry(tokens, language) {
         if (!boundary.length) boundary.push(index + 1);
         forget(boundary.length);
         const next = tokens[index + 1];
-        if (token.text === "}" && next && inBlock() && (next.newline || next.type === "word")) setBoundary(index + 1);
+        if (token.text === "}" && next && inBlock() && (next.type === "word" || (next.newline && next.type !== "punct"))) setBoundary(index + 1);
       } else if (token.text === ";") setBoundary(index + 1);
     },
     headers(index) {

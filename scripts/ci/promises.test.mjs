@@ -96,6 +96,8 @@ test("a guard or suite option that stops a test registering changes its hash, an
   assert.equal(hash(`({})?.case; true ? 1 : 0;\n${plain}`, "t"), hash(`({})?.kind; true ? 1 : 0;\n${plain}`, "t"));
   assert.equal(hash(`do f(); while (false)\n${plain}`, "t"), hash(`do f(); while (0)\n${plain}`, "t"));
   assert.notEqual(hash(`while (!a)\n  ${plain}`, "t"), hash(`while (a)\n  ${plain}`, "t"));
+  assert.notEqual(hash(`switch (2) { case 1: f()\ncase 3: f(); ${plain} }`, "t"), hash(`switch (2) { case 1: f()\ncase 2: f(); ${plain} }`, "t"));
+  assert.notEqual(hash(`false ? {}\n  : ${plain}`, "t"), hash(`true ? {}\n  : ${plain}`, "t"));
   assert.notEqual(hash('describe(\n  "s",\n  { skip: true },\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"), hash('describe(\n  "s",\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"));
   assert.equal(hash(`import a from "a"\nimport "node:path"\n${group}`, "s › t"), hash(`import a from "a"\n${group}`, "s › t"));
   const loop = 'for (const o of [1]) {\n  test(`t ${o}`, () => { f(o); });\n}\n';

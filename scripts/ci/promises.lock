@@ -100,6 +100,7 @@ issue	hash	file	test
 1852	1ea9b98b2becec2b	apps/browser/src/components/ui/gated.test.mjs	closing the gate mid-animation pins the node to rest while the source keeps moving
 2000	5cbff522f423843e	apps/browser/src/state/airTraffic/airTraffic.test.mjs	a pattern without a scheme is a wildcard over the link
 2146	913a85054d5d4688	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	a site's CaptureController answers for the tab it shares, as Chrome's does, so Meet shows its presenter preview (#2146)
+2175	818d42ce1b4fc598	apps/browser/scripts/sim/sim.test.mjs	#2175 holds, and #3244, #3245 and #3246 still fail the way their issues describe until they are fixed
 2175	d6b508e688b36e0f	apps/browser/src/state/session/pinGuard.test.mjs	closing the only window that showed a profile keeps its pins on disk, and they come back after a relaunch (#2175)
 2175	1fad76de25a23588	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a profile handed to the open window keeps its pinned tabs and pinned folders (#2175)
 2245	73e18a6e4be80bc4	apps/browser/src/state/extensions/extensions.test.mjs	Add on an install prompt the engine no longer holds says so in the dialog, and Cancel on one rejects nothing

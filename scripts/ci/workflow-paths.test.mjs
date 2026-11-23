@@ -199,5 +199,7 @@ test("the path globs these tests use read like GitHub's", () => {
   assert.ok(matched(["**/*.test.*"], "example.test.mjs"));
   assert.ok(matched(["**/*.test.*"], "apps/browser/src/a/b.test.mjs"));
   assert.ok(!matched(["**/*.test.*"], "apps/browser/src/a/b.mjs"));
+  const repo = changeFilters(workflow("checks.yml")).repo;
+  for (const path of ["apps/phone/android/app/src/test/java/com/ardia/browser/android/ShareSheetTest.kt", "apps/phone/test/release/a.test.sh", "engine/x/tests/test_a.py", "packages/shell/tests/ATests.swift"]) assert.ok(matched(repo, path), `a change to ${path} runs the repository job`);
   assert.equal(relative(REPO, dirname(fileURLToPath(import.meta.url))), "scripts/ci");
 });

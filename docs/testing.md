@@ -341,9 +341,10 @@ deleted, renamed or its body changes. To change one on purpose:
 - it no longer holds (the feature went): delete its line and say why in the pull request.
 
 A fix for a bug adds its regression test with `node scripts/ci/promises.mjs --add <issue> <file> "<test name>"`
-once the issue closes. The seed (2026-11-22) is 167 tests for 85 closed bugs: the #857 rows above, every test
-whose name cites a closed bug's issue, and the tests a closing commit added for its bug, without the telemetry
-counts, perf harnesses and incidental tests those commits also brought. `node scripts/ci/promises.mjs` checks
+once the issue closes. The seed (2026-11-22) is 168 tests for 85 closed bugs: the #857 rows above, every test
+whose name cites a closed bug's issue (the store simulator's #2175 case too, whose body also pins three open bugs
+and so changes when they're fixed), and the tests a closing commit added for its bug, without the telemetry counts,
+perf harnesses and incidental tests those commits also brought. `node scripts/ci/promises.mjs` checks
 the lock in about 0.2 s.
 
 `docs/dia-feature-parity.md` cites tests the same checked way: a code span holding the test file's repo path, or
