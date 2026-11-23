@@ -92,17 +92,18 @@ async function checkModuleFunction(module, fn, row, { advertised = true } = {}) 
   const reachesHost = reachesNativeHostUnchecked(resolved);
   const answeredByTheUi = advertised ? row.desktop === "custom" || row.desktop === "adapted" : !reachesHost;
   if (advertised) assert.equal(reachesHost, !answeredByTheUi, answeredByTheUi ? `${name} is answered by the desktop UI${row.desktop === "adapted" ? ", in front of the native host's own dispatch" : ""}` : `${name} goes to the native host, which serves it only when its binding is host`);
+  const promised = !answeredByTheUi || row.async;
   let answer;
   try {
     answer = resolved(...args);
   } catch (error) {
-    assert.ok(answeredByTheUi && !row.async, `${name} throws only as a synchronous answer of the desktop UI: ${error}`);
+    assert.ok(answeredByTheUi && !promised, `${name} throws only as a synchronous answer of the desktop UI: ${error}`);
     return;
   }
   const isPromise = answer instanceof Promise;
   const label = advertised ? "" : " on an engine that advertises nothing";
-  if (!answeredByTheUi || row.async) assert.ok(isPromise, !answeredByTheUi ? `${name} goes to the native host${label}, so the host fallback answers it with a Promise the host settles` : `${name} answers with a Promise${label}, as the schema's async says`);
-  else if (isPromise) assert.ok(mayAnswerWithPromise(name), `${name} answers synchronously${label}, as the schema's async says, unless its result type allows a Promise`);
+  if (promised) assert.ok(isPromise, !answeredByTheUi ? `${name} goes to the native host${label}, so the host fallback answers it with a Promise the host settles` : `${name} answers with a Promise${label}, as the schema's async says`);
+  if (isPromise && !row.async && (answeredByTheUi || (advertised && row.desktop === "host"))) assert.ok(mayAnswerWithPromise(name), `${name} answers synchronously${label}, as the schema's async says, unless its result type allows a Promise`);
   await Promise.resolve(answer).catch(() => {});
   if (!advertised) return;
   if (row.desktop === "custom") assert.equal(requests.some((request) => request.method === name || request.name === name), false, `${name} never reaches the host under its own name`);

@@ -83,6 +83,7 @@ const packageDependencies = (pkg) => {
 export const swiftTypeOf = (type, explicit) => explicit ?? SWIFT_TYPES[type];
 const parameterOf = ([name, type, swift]) => ({ name: name.endsWith("?") ? name.slice(0, -1) : name, written: name, optional: name.endsWith("?"), type, swift });
 const constantsOf = (entry) => entry.constants ?? {};
+const eventSender = (event) => `send${capitalized(event)}`;
 
 export function validateModuleDomain(name, domain) {
   const fail = (message) => {
@@ -139,6 +140,7 @@ export function validateModuleDomain(name, domain) {
     };
     for (const fn of Object.keys(entry.functions)) for (const member of [fn, `${fn}Function`]) generates(`function ${module}.${fn}`, member);
     for (const constant of Object.keys(constantsOf(entry))) for (const member of [constant, `${constant}Constant`]) generates(`constant ${module}.${constant}`, member);
+    for (const [event, row] of Object.entries(entry.events)) if (row.mac === "custom") generates(`event ${module}.${event}`, eventSender(event));
   }
 }
 
@@ -190,6 +192,7 @@ function validateModuleFunction(fail, at, fn, row) {
   if (onMac && !row.promise && swiftTypeOf(row.result, row.swiftResult) === undefined) fail(`function ${at} says its swiftResult: ${row.result} isn't one of ${Object.keys(SWIFT_TYPES).join(", ")}`);
   for (const flag of ["swiftAsync", "throws", "debug"]) if (row[flag] !== undefined && row[flag] !== true) fail(`function ${at}.${flag} is true or left out`);
   if (row.swiftAsync && !row.async) fail(`function ${at}'s Swift body is async, so it's async`);
+  if (row.swiftAsync && row.promise) fail(`function ${at} resolves a Promise itself, so its Swift body can't be async`);
   if (row.instance !== undefined && !INSTANCES.has(row.instance)) fail(`function ${at}.instance is strong or weak: how its definition holds the module`);
   for (const key of ["swiftAsync", "throws", "instance", "fallback", "queue", "debug"]) if (row[key] !== undefined && !onMac) fail(`function ${at}.${key} says how the Mac's Swift body runs, so it goes only with mac: custom`);
   const returns = !row.promise && onMac && swiftTypeOf(row.result, row.swiftResult) !== "Void";
@@ -381,7 +384,9 @@ function swiftDefinition(fn, row) {
   const effects = `${row.throws ? "try " : ""}${row.swiftAsync ? "await " : ""}`;
   const call = row.instance === "weak" && row.promise
     ? `if let self { ${effects}self.${swiftName(fn)}(${forwarded}) } else { promise.resolve(nil) }`
-    : `${effects}${owner}.${swiftName(fn)}(${forwarded})${row.fallback === undefined ? "" : ` ?? ${row.fallback}`}`;
+    : row.fallback !== undefined
+      ? `guard let self else { return ${row.fallback} }; return ${effects}self.${swiftName(fn)}(${forwarded})`
+      : `${effects}${owner}.${swiftName(fn)}(${forwarded})`;
   const closure = `{ ${row.instance === "weak" ? "[weak self] " : ""}(${params.join(", ")})${swiftEffects(row)}${result === "Void" ? "" : ` -> ${result}`} in ${call} }`;
   return [
     `  ${row.instance ? "" : "static "}var ${fn}Function: AnyDefinition {`,
@@ -432,7 +437,7 @@ function moduleSwift(domain) {
     const instanceFunctions = functions.filter(([, row]) => row.instance);
     if (events.length || instanceFunctions.length) {
       lines.push("", `extension ${protocol} where Self: Module {`);
-      lines.push(...events.map((event) => `  func send${capitalized(event)}(_ payload: [String: Any?]) { sendEvent("${event}", payload) }`));
+      lines.push(...events.map((event) => `  func ${eventSender(event)}(_ payload: [String: Any?]) { sendEvent("${event}", payload) }`));
       lines.push(...debugGuarded(instanceFunctions, ([fn, row]) => swiftDefinition(fn, row), true).slice(events.length ? 0 : 1));
       lines.push("}");
     }

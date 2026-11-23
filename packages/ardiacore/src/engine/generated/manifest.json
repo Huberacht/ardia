@@ -1318,8 +1318,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "8664b572ce6b71c302ce396ba0d9dfde9213203ac473a7f51c4b0ce0ad2b3f02",
-        "swift": "24feda6d526675175cea171d97771768f5a7e0fd581522911a7fc2ccc624b058"
+        "types": "31c46539023fff5c6a5ebc31f0658a48a4986a4187856ad0eaf116bffc1ab6d4",
+        "swift": "f931f68b0f88d5ecedaee1222c97bc7efd94734c461f1cdeb524491a24399661"
       },
       "modules": {
         "ArdiaShell": {
@@ -4507,7 +4507,7 @@
       "types": "packages/import/src/generated/native.ts",
       "swift": "packages/import/ios/ImportNative.swift",
       "sha256": {
-        "types": "0bf1eab24513f91095998ce5f9262d28969fba7d40f19597b6d31fef97f56b2b",
+        "types": "df0b66cc3a7976ffefa9ff5c99e525639d8a46f2b041c4584d11ffd9e847bffe",
         "swift": "6874f3fa2b959284e86da09be93e11bc9b2dd773d12e8194c1affe72978a6023"
       },
       "modules": {

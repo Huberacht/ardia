@@ -271,7 +271,7 @@ extension FocusNative where Self: Module {
   }
 
   var switcherPointerMovedFunction: AnyDefinition {
-    Function("switcherPointerMoved") { [weak self] () -> Bool in self?.switcherPointerMoved() ?? true }
+    Function("switcherPointerMoved") { [weak self] () -> Bool in guard let self else { return true }; return self.switcherPointerMoved() }
   }
 }
 

@@ -29,7 +29,7 @@ export type ShellNative = {
   isDarkAppearance(): Promise<boolean>;
   startDictation(): void | Promise<void>;
   fetchBangList(etag: string | null): Promise<BangListReply>;
-  copyText(text: string): void;
+  copyText(text: string): void | Promise<void>;
   copyURL?(address: CleanedUrl): void | Promise<void>;
   readText(): Promise<string>;
   dictationAvailable?(): boolean;
@@ -203,13 +203,13 @@ export type ScriptingNativeEvents = {
 };
 
 export type DevNative = {
-  devCrash(kind?: "exception"): Promise<void>;
-  devBlockMain(ms: number): Promise<number>;
+  devCrash?(kind?: "exception"): Promise<void>;
+  devBlockMain?(ms: number): Promise<number>;
   devNotificationCenter?(actAsEngine: boolean): Promise<unknown>;
   devNotificationCategoryRace?(): Promise<unknown>;
-  devRenderIntroMusic(cues: IntroMusicCues, path: string): Promise<number | null>;
+  devRenderIntroMusic?(cues: IntroMusicCues, path: string): Promise<number | null>;
   devLittleArdiaHotKey?(press: boolean): Promise<Record<string, unknown>>;
-  devMenuCommand(command: string, arg: string | null): Promise<void>;
+  devMenuCommand?(command: string, arg: string | null): Promise<void>;
   devPostKey?(windowId: string, key: string, keyCode: number, modifiers: string[]): Promise<boolean>;
   devPostKeys?(windowId: string, presses: (Record<string, unknown>)[]): Promise<unknown>;
   devMenuItems?(title: string, perform: string[] | null, asTitleBar: boolean | null): Promise<(Record<string, unknown>)[]>;
@@ -217,31 +217,31 @@ export type DevNative = {
   devDragRegionRects?(windowId: string): Promise<number[][]>;
   devDragRegionState?(windowId: string): Promise<Record<string, unknown>>;
   devDragRegionPointer?(windowId: string, x: number, top: number, on: boolean): Promise<boolean>;
-  devReceiveURLsWhenDetached(urls: string[], timeoutMs: number): void;
-  devURLDelivery(): Promise<{ state?: "waiting" | "received" | "neverDetached"; waitedMs?: number; attachedAfter?: boolean }>;
-  devOpenURLDeliveries(): Promise<{ urls: string[]; pointer: [number, number]; source?: { bundleId: string | null; appName: string | null } }[]>;
-  devShortcutRecording(): Promise<boolean>;
+  devReceiveURLsWhenDetached?(urls: string[], timeoutMs: number): void;
+  devURLDelivery?(): Promise<{ state?: "waiting" | "received" | "neverDetached"; waitedMs?: number; attachedAfter?: boolean }>;
+  devOpenURLDeliveries?(): Promise<{ urls: string[]; pointer: [number, number]; source?: { bundleId: string | null; appName: string | null } }[]>;
+  devShortcutRecording?(): Promise<boolean>;
   devDragPreviewState?(): Promise<Record<string, unknown>>;
   devWindowMoveProbe?(id: string, probe: Record<string, number>): Promise<unknown>;
   devWindowResizeProbe?(id: string, probe: Record<string, number>): Promise<unknown>;
   devWindowReplayAfterMove?(id: string, rect: number[]): Promise<Record<string, unknown>>;
   devSetWindowFrame?(id: string, rect: number[]): Promise<number[]>;
-  devSnapshotWindow(windowId: string, path: string, transparent?: boolean): Promise<boolean>;
+  devSnapshotWindow?(windowId: string, path: string, transparent?: boolean): Promise<boolean>;
   devSnapshotBurst?(windowId: string, dir: string, rect: number[], durationMs: number): Promise<unknown>;
-  devSetPointer(windowId: string, x: number, y: number, on: boolean): Promise<boolean>;
-  devPointerSweep(windowId: string, sweep: PointerSweep): Promise<PointerSweepResult | null>;
-  devSidebarEdgePointer(windowId: string, x: number, y: number, on: boolean): Promise<boolean>;
-  devSidebarEdgeStats(reset: boolean): Promise<SidebarEdgeStats>;
-  devHoverStats(reset: boolean): Promise<{ passes?: number; log?: [string, number, number][]; registered?: number }>;
-  devSetMouseButtons(pressed: number): Promise<boolean>;
-  devTypeKeys(windowId: string, text: string, interval: number): Promise<KeyTiming[]>;
+  devSetPointer?(windowId: string, x: number, y: number, on: boolean): Promise<boolean>;
+  devPointerSweep?(windowId: string, sweep: PointerSweep): Promise<PointerSweepResult | null>;
+  devSidebarEdgePointer?(windowId: string, x: number, y: number, on: boolean): Promise<boolean>;
+  devSidebarEdgeStats?(reset: boolean): Promise<SidebarEdgeStats>;
+  devHoverStats?(reset: boolean): Promise<{ passes?: number; log?: [string, number, number][]; registered?: number }>;
+  devSetMouseButtons?(pressed: number): Promise<boolean>;
+  devTypeKeys?(windowId: string, text: string, interval: number): Promise<KeyTiming[]>;
   devFieldTrace?(on: boolean): Promise<{ at: number; text: string; start: number; end: number }[]>;
-  devKeyEquivalent(windowId: string, press: KeyPress): Promise<KeyPressResult>;
+  devKeyEquivalent?(windowId: string, press: KeyPress): Promise<KeyPressResult>;
   devMenuBar?(): Promise<(Record<string, unknown>)[]>;
   devKeyEquivalentTrace?(): Promise<string[]>;
   devFocusHandoffTrace?(): Promise<string[]>;
-  devClick(windowId: string, click: Click): Promise<ClickResult>;
-  devRunAppleScript(source: string): Promise<{ ok: boolean; result?: unknown; error?: string; number?: number }>;
+  devClick?(windowId: string, click: Click): Promise<ClickResult>;
+  devRunAppleScript?(source: string): Promise<{ ok: boolean; result?: unknown; error?: string; number?: number }>;
 };
 
 export type SystemNative = {
@@ -424,7 +424,7 @@ export type PluginsNativeEvents = {
 };
 
 export type SystemSignalsNative = {
-  watchIdle(thresholds: number[]): void;
+  watchIdle(thresholds: number[]): void | Promise<void>;
   holdsIncomingLinks(): boolean;
   setHoldIncomingLinks(hold: boolean, hooksStamp: string | null): void;
   setApprovedDownloadFolders(folders: string[]): void;

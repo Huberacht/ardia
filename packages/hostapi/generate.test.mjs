@@ -762,7 +762,7 @@ test("a module domain's Swift requires the module's queue and constants, holds t
     "  }",
     "",
     "  var movedFunction: AnyDefinition {",
-    '    Function("moved") { [weak self] () -> Bool in self?.moved() ?? true }',
+    '    Function("moved") { [weak self] () -> Bool in guard let self else { return true }; return self.moved() }',
     "  }",
     "",
     "  var watchFunction: AnyDefinition {",
@@ -807,4 +807,7 @@ test("the richer module forms keep to shapes both languages and every host take"
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { level: fn() }, constants: { level: { type: "number", mac: "custom", desktop: "absent", windows: "absent" } }, events: {} } })), /constant ArdiaDemo\.level generates the Swift member level, which function ArdiaDemo\.level already generates/);
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { queue: fn(), seal: fn({ queue: "module" }) }, events: {} } })), /function ArdiaDemo\.queue generates the Swift member queue, which the module's own queue already generates/);
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { addListener: fn() }, events: {} } })), /the module's event listener/);
+  refused({ swiftAsync: true, promise: true, result: "unknown" }, /resolves a Promise itself, so its Swift body can't be async/);
+  assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { sendOnChange: fn() }, events: { onChange: { payload: "void", mac: "custom", desktop: "absent", windows: "absent" } } } })), /event ArdiaDemo\.onChange generates the Swift member sendOnChange, which function ArdiaDemo\.sendOnChange already generates/);
+  assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { sendOnChange: fn() }, events: { onChange: { payload: "void", mac: "absent", desktop: "custom", windows: "absent" } } } })));
 });

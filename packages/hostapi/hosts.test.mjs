@@ -475,7 +475,7 @@ export function linuxModuleDispatch(sources) {
     const code = stripCppComments(written);
     const masked = maskCppLiterals(code);
     const aliases = cppNamespaceAliases(code);
-    const flags = new Map([...code.matchAll(/\bconst\s+bool\s+(\w+)\s*=\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*;/g)].map(([, flag, method]) => [flag, method]));
+    const flags = [...code.matchAll(/\bconst\s+bool\s+(\w+)\s*=\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*;/g)].map((match) => ({ flag: match[1], method: match[2], at: match.index }));
     const literalOrConstant = (literal, constant) => literal ?? (constant === undefined ? undefined : resolveCppConstant(constant, tables[index], tables, aliases));
     for (const match of masked.matchAll(/\b(?:Send)?Event\(\s*"/g)) {
       const call = /^(?:Send)?Event\(\s*"(Ardia[A-Za-z]+)"\s*,\s*(?:"([a-zA-Z]+)"|((?:::)?[A-Za-z_][\w]*(?:::[A-Za-z_]\w*)*))\s*[,)]/.exec(code.slice(match.index));
@@ -493,10 +493,11 @@ export function linuxModuleDispatch(sources) {
       const open = branch.index + branch[0].length - 1;
       const close = closing(masked, open, skipCppLiteral);
       const condition = code.slice(open + 1, close);
+      const flagIn = (part) => flags.find(({ flag, at }) => flag === part.trim() && owner.open < at && at < branch.index)?.method;
       if (maskCppLiterals(condition).includes("&&")) continue;
       const parts = condition.split("||").map((part) => {
         const compare = /^\s*(?:method|name)\s*==\s*(?:"([^"]*)"|((?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*))\s*$/.exec(part);
-        if (!compare) return flags.get(part.trim()) ?? (/\b(?:method|name)\b/.test(maskCppLiterals(part)) ? null : undefined);
+        if (!compare) return flagIn(part) ?? (/\b(?:method|name)\b/.test(maskCppLiterals(part)) ? null : undefined);
         const name = literalOrConstant(compare[1], compare[2]);
         return name !== undefined && MODULE_METHOD.test(name) ? name : null;
       });
@@ -967,10 +968,10 @@ test("the Linux scan counts a row of a method route table as a dispatched module
 
 test("the Linux scan resolves a method or event named by a string constant, through namespaces, aliases and a bool flag, and skips one it can't pin to a single value", () => {
   const header = 'namespace ardia::desktop_report {\ninline constexpr char kEvent[] = "onReport";\n}\nnamespace ardia::linux_hardware {\ninline constexpr char kHardwareInfoCall[] = "ArdiaApp.hardwareInfo";\n}\nnamespace one {\ninline constexpr char kCall[] = "ArdiaApp.first";\n}\nnamespace two {\ninline constexpr char kCall[] = "ArdiaApp.second";\n}\n';
-  const host = 'namespace hardware = ardia::linux_hardware;\nvoid Host::Run(std::string_view method) {\n  host->Event("ArdiaReport", ardia::desktop_report::kEvent, base::Value());\n  if (method == hardware::kHardwareInfoCall) return Reply();\n  const bool changing = method == "ArdiaSystem.setAsDefaultBrowser";\n  if (method == "ArdiaSystem.isDefaultBrowser" || changing) return Reply();\n  if (method == kCall) return Reply();\n  if (method == "ArdiaApp.gated" && ready) return Reply();\n}\n';
+  const host = 'namespace hardware = ardia::linux_hardware;\nvoid Host::Run(std::string_view method) {\n  host->Event("ArdiaReport", ardia::desktop_report::kEvent, base::Value());\n  if (method == hardware::kHardwareInfoCall) return Reply();\n  const bool changing = method == "ArdiaSystem.setAsDefaultBrowser";\n  if (method == "ArdiaSystem.isDefaultBrowser" || changing) return Reply();\n  if (method == kCall) return Reply();\n  if (method == "ArdiaApp.gated" && ready) return Reply();\n  const bool other = method == "ArdiaSystem.otherFlag";\n}\nvoid Other::Run(std::string_view method) {\n  if (method == "ArdiaSystem.elsewhere" || other) return Reply();\n}\n';
   const found = linuxModuleDispatch([header, host]);
   assert.deepEqual([...found.events], ["ArdiaReport.onReport"]);
-  assert.deepEqual([...found.methods].sort(), ["ArdiaApp.hardwareInfo", "ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser"]);
+  assert.deepEqual([...found.methods].sort(), ["ArdiaApp.hardwareInfo", "ArdiaSystem.elsewhere", "ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser"], "a flag declared in another function never names a method here");
   assert.equal(resolveCppConstant("two::kCall", new Map(), cppStringConstants([header])), "ArdiaApp.second");
 });
 
