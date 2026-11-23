@@ -155,3 +155,14 @@ test("a group header drag counts as a strip drag for the reveal gates", () => {
   assert.equal(firstOverflowReveal(FIRST_REVEAL, at({ dragging: true })).state, FIRST_REVEAL, "the first reveal waits for the drag to end");
   assert.equal(selectionReveal("a", "b", false, true, true), "drop");
 });
+
+test("a tab selected during a group header drag is revealed once the drag lets go", () => {
+  assert.equal(selectionReveal("t60", "t119", false, true, false, true), "wait", "kept pending while a strip drag holds, not marked done");
+  assert.equal(selectionReveal("t60", "t119", false, true, false, false), "run", "and run when the last hold is released");
+});
+
+test("a user scroll during a group header drag still cancels the reveal it kept pending", async () => {
+  const { userTookOver } = await import("./stripRevealGate.ts");
+  const took = userTookOver(FIRST_REVEAL, "t119");
+  assert.equal(selectionReveal(took.revealed, "t119", false, true, false, false), "none");
+});

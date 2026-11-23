@@ -144,7 +144,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const dragHeld = (held: boolean) => {
     stripDragging.current = held;
     setShownHeld(held);
-    if (!held) latestFirstReveal.current();
+    if (!held) void (latestFirstReveal.current(), release());
   };
   const [holdShown] = useState(() => shownHolds((held) => dragHeld(held)));
   const [scroller] = useState<StripScroll>(() => ({
@@ -247,7 +247,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   );
   useEffect(revealOnFirstOverflow, [current]);
   useEffect(() => {
-    const step = selectionReveal(revealed.current, activeId, !!held.current && closedTo.current === activeId, current, stripDrag());
+    const step = selectionReveal(revealed.current, activeId, !!held.current && closedTo.current === activeId, current, tabDragging(), stripDragging.current);
     if (step === "drop") revealed.current = activeId;
     if (step !== "run") return;
     let frame = 0;
@@ -255,7 +255,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     const pending = { tabId: activeId, scrolls: userScrolls.current };
     const now = () => {
       if (!revealStillWanted(pending, { tabId: latestActive.current, scrolls: userScrolls.current, current: onStage.current, dragging: stripDrag() })) {
-        if (onStage.current && latestActive.current === activeId) revealed.current = activeId;
+        if (onStage.current && latestActive.current === activeId && !stripDragging.current) revealed.current = activeId;
         return;
       }
       if (!userScrolling()) {
@@ -270,7 +270,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     if (tabPressHeld(windowId)) {
       noteTabStripRevealAfterPress();
       unsubscribe = onTabPressEnd(windowId, () => {
-        if (stripDrag()) revealed.current = activeId;
+        if (tabDragging()) revealed.current = activeId;
         else later();
       });
     } else later();

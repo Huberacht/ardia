@@ -1,9 +1,9 @@
 export type SelectionReveal = "none" | "drop" | "wait" | "run";
 
-export function selectionReveal(revealed: string, activeId: string, heldClose: boolean, current: boolean, dragging: boolean): SelectionReveal {
+export function selectionReveal(revealed: string, activeId: string, heldClose: boolean, current: boolean, dragging: boolean, holding = false): SelectionReveal {
   if (revealed === activeId || heldClose) return "none";
   if (!activeId || dragging) return "drop";
-  return current ? "run" : "wait";
+  return current && !holding ? "run" : "wait";
 }
 
 export type FirstReveal = { shown: boolean; at: number; settling: boolean };

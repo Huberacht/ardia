@@ -206,7 +206,7 @@ export async function runInteractions(ctx) {
       record("closeGhostScrolled", { seen: trials.filter((t) => t.ink > 40).length, of: trials.length, trials });
     }
 
-    if (want("groupEdgeDrag")) {
+    if (want("groupEdgeDrag")) for (const selectDuring of [false, true]) {
       await prepare("c120", WIDTH, 0);
       const group = await run(`const id = st().createGroup(["c120-t4", "c120-t5", "c120-t6", "c120-t7"], { name: "Edge" }); st().updateGroup(id, { collapsed: false }); return wait(1200).then(() => id);`);
       const before = await run(`const p = globalThis.topStripPages["c120|default"]; const sc = p.scroll(); const first = p.chips().find((c) => c.id === "c120-t4");
@@ -216,9 +216,10 @@ export async function runInteractions(ctx) {
       for (let x = before.x + 60; x < edge; x += 60) pts.push([x, 21]);
       for (let i = 0; i < 24; i++) pts.push([edge, 21]);
       await run(`const w = st().windows.c120; return D.devSetWindowFrame("c120", [40 + Object.keys(st().windows).indexOf("c120") * 11, 60 + Object.keys(st().windows).indexOf("c120") * 7, w.frame[2], ${HEIGHT}]).then((frame) => nativeOf(frame))
-        .then((n) => ac.engine.call("windows.dev", { window: n, action: "drag:${pts.map((p) => p.join(",")).join(";")}" })).then(() => wait(${pts.length * 12 * 16 + 1500}));`, 120000);
-      const after = await run(`const p = globalThis.topStripPages["c120|default"]; return { scroll: Math.round(p.scroll().x), at: st().windows.c120.tabIds.indexOf("c120-t4") };`);
-      record("groupEdgeDrag", { fromIndex: before.at, toIndex: after.at, movedTabs: after.at - before.at, scrolledFrom: before.scroll, scrolledTo: after.scroll, max: before.max, grabX: before.x });
+        .then((n) => { if (${selectDuring}) setTimeout(() => ac.actions.switchToTab("c120-t60"), 700); return ac.engine.call("windows.dev", { window: n, action: "drag:${pts.map((p) => p.join(",")).join(";")}" }); }).then(() => wait(${pts.length * 12 * 16 + 1500}));`, 120000);
+      const after = await run(`const p = globalThis.topStripPages["c120|default"]; const sc = p.scroll(); const chip = p.chips().find((c) => c.id === "c120-t60");
+        return { scroll: Math.round(sc.x), at: st().windows.c120.tabIds.indexOf("c120-t4"), active: st().windows.c120.activeTabIds.default.split("-").pop(), t60Shown: chip.start >= sc.x - 1 && chip.end <= sc.x + sc.viewport + 1 };`);
+      record(selectDuring ? "groupEdgeDragSelect" : "groupEdgeDrag", { fromIndex: before.at, toIndex: after.at, movedTabs: after.at - before.at, scrolledFrom: before.scroll, scrolledTo: after.scroll, max: before.max, grabX: before.x, ...(selectDuring ? { active: after.active, t60Shown: after.t60Shown } : {}) });
       await run(`st().ungroup(${JSON.stringify(group)}); return wait(600);`);
     }
 
