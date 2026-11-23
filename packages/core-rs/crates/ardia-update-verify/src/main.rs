@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use ardia_crypto::Backend;
@@ -138,13 +138,16 @@ fn text(value: OsString, flag: &str) -> Result<String, Refusal> {
 }
 
 fn absolute_path(value: String, flag: &str) -> Result<PathBuf, Refusal> {
-    if value.len() > MAX_PATH_BYTES || !value.starts_with('/') || value.contains('\n') {
+    let path = PathBuf::from(value);
+    let length = path.as_os_str().len();
+    let traverses = path.components().any(|component| component == Component::ParentDir);
+    if length > MAX_PATH_BYTES || !path.is_absolute() || traverses || path.to_string_lossy().contains('\n') {
         return Err(refuse(
             Reason::Usage,
-            format!("{flag} takes an absolute path of at most {MAX_PATH_BYTES} bytes"),
+            format!("{flag} takes an absolute path of at most {MAX_PATH_BYTES} bytes, without .."),
         ));
     }
-    Ok(PathBuf::from(value))
+    Ok(path)
 }
 
 fn parse(args: Vec<OsString>) -> Result<Command, Refusal> {
@@ -407,19 +410,24 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    const RELEASE_PEM: &str = include_str!("../../../../../scripts/linux/linux-update.pem");
+    const RELEASE_PEM_AS_CHECKED_OUT: &str = include_str!("../../../../../scripts/linux/linux-update.pem");
+
+    fn release_pem() -> String {
+        RELEASE_PEM_AS_CHECKED_OUT.replace("\r\n", "\n")
+    }
 
     #[test]
     fn the_release_pem_is_the_core_release_key() {
         assert_eq!(
-            public_key_from_pem(RELEASE_PEM.as_bytes()),
+            public_key_from_pem(release_pem().as_bytes()),
             Some(ardia_update_core::LINUX_UPDATE_PUBLIC_KEY)
         );
     }
 
     #[test]
     fn a_pem_must_be_exactly_one_ed25519_public_key() {
-        let body = RELEASE_PEM.lines().nth(1).unwrap();
+        let pem = release_pem();
+        let body = pem.lines().nth(1).unwrap();
         for pem in [
             String::new(),
             format!("{PEM_BEGIN}\n{body}\n"),
@@ -432,7 +440,7 @@ mod tests {
         ] {
             assert_eq!(public_key_from_pem(pem.as_bytes()), None, "{pem:?}");
         }
-        assert!(public_key_from_pem(RELEASE_PEM.trim_end().as_bytes()).is_some());
+        assert!(public_key_from_pem(pem.trim_end().as_bytes()).is_some());
     }
 
     #[test]

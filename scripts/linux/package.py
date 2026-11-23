@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -24,7 +25,12 @@ UBO_SEED = REPO / 'scripts/linux/ubo-seed.mjs'
 UPDATE_HELPER = REPO / 'scripts/linux/ardia-update'
 UPDATE_KEY = REPO / 'scripts/linux/linux-update.pem'
 UPDATE_VERIFY_TARGET = 'x86_64-unknown-linux-musl'
+ELF_IDENT_64_LE_V1 = b'\x7fELF\x02\x01\x01'
+ELF_HEADER_BYTES = 64
+ELF_PROGRAM_HEADER_BYTES = 56
+ELF_EXECUTABLE_TYPES = (2, 3)
 ELF_X86_64 = 0x3e
+PT_LOAD = 1
 PT_INTERP = 3
 CLI_PLATFORM = 'linux-x64'
 VERSION_PATTERN = re.compile(r'^[0-9]+\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?$')
@@ -102,18 +108,55 @@ def add_cli(runtime, tarball, digest, installer=CLI_INSTALLER):
     return digest
 
 
+def static_x86_64_executable_problem(data):
+    if len(data) < ELF_HEADER_BYTES or data[:7] != ELF_IDENT_64_LE_V1:
+        return 'is not a 64-bit little-endian ELF'
+    field = lambda offset, size: int.from_bytes(data[offset:offset + size], 'little')
+    if field(16, 2) not in ELF_EXECUTABLE_TYPES:
+        return 'is not an executable or position-independent executable ELF'
+    if field(18, 2) != ELF_X86_64 or field(20, 4) != 1:
+        return 'is not an x86-64 ELF'
+    if field(24, 8) == 0:
+        return 'has no entry point'
+    offset, count = field(32, 8), field(56, 2)
+    if field(52, 2) != ELF_HEADER_BYTES or field(54, 2) != ELF_PROGRAM_HEADER_BYTES or count == 0:
+        return 'has no program headers of the 64-bit size'
+    if offset < ELF_HEADER_BYTES or offset + count * ELF_PROGRAM_HEADER_BYTES > len(data):
+        return 'has program headers past the end of the file'
+    loads = 0
+    for index in range(count):
+        header = offset + index * ELF_PROGRAM_HEADER_BYTES
+        kind, start, size = field(header, 4), field(header + 8, 8), field(header + 32, 8)
+        if start + size > len(data):
+            return 'has a segment past the end of the file'
+        if kind == PT_INTERP:
+            return f'is dynamically linked: build it for {UPDATE_VERIFY_TARGET}, so it runs wherever Ardia does'
+        loads += kind == PT_LOAD
+    if loads == 0:
+        return 'has no loadable segment'
+    return None
+
+
+def runs_here():
+    return sys.platform.startswith('linux') and platform.machine() in ('x86_64', 'amd64')
+
+
 def check_update_verify(path):
     if not path.is_file() or not os.access(path, os.X_OK):
         raise ValueError(f'no executable ardia-update-verify at {path}')
-    data = path.read_bytes()
-    if data[:6] != b'\x7fELF\x02\x01' or int.from_bytes(data[18:20], 'little') != ELF_X86_64:
-        raise ValueError(f'{path} is not a 64-bit little-endian x86-64 ELF')
-    offset = int.from_bytes(data[0x20:0x28], 'little')
-    size = int.from_bytes(data[0x36:0x38], 'little')
-    count = int.from_bytes(data[0x38:0x3a], 'little')
-    for index in range(count):
-        if int.from_bytes(data[offset + index * size:offset + index * size + 4], 'little') == PT_INTERP:
-            raise ValueError(f'{path} is dynamically linked: build it for {UPDATE_VERIFY_TARGET}, so it runs wherever Ardia does')
+    problem = static_x86_64_executable_problem(path.read_bytes())
+    if problem:
+        raise ValueError(f'{path} {problem}')
+    if not runs_here():
+        return
+    env = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
+    for args, status, line in [(['version', '0.2.0'], 0, 'ok\n'), (['version', 'v0.2.0'], 1, 'failed version\n')]:
+        try:
+            result = subprocess.run([str(path), *args], capture_output=True, text=True, timeout=30, env=env)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ValueError(f'{path} does not run here: {error}') from error
+        if (result.returncode, result.stdout) != (status, line):
+            raise ValueError(f'{path} does not run here: version {args[1]} exited {result.returncode} with {result.stdout!r}')
 
 
 def normalize_modes(root):

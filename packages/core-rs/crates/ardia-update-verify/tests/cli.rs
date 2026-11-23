@@ -547,3 +547,41 @@ fn every_shared_vector_gets_the_helpers_recorded_answer() {
         expect(outcome, &line, status, name);
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_path_through_a_parent_folder_is_a_usage_error() {
+    let release = Release::new();
+    let folder = release.scratch.0.file_name().unwrap().to_str().unwrap().to_owned();
+    let around = format!("{}/../{folder}/key.pem", release.scratch.0.display());
+    let manifest = release.path("manifest");
+    let signature = release.path("signature");
+    let outcome = run(&[
+        "manifest",
+        "--key",
+        &around,
+        "--manifest",
+        &manifest,
+        "--signature",
+        &signature,
+        "--version",
+        "0.2.48",
+        "--installed",
+        "0.2.47",
+        "--kind",
+        "deb",
+    ]);
+    expect(outcome, "failed usage", 2, "a key path through ..");
+}
+
+#[test]
+fn native_absolute_paths_are_accepted() {
+    let release = Release::new();
+    assert!(Path::new(&release.path("key.pem")).is_absolute());
+    expect(
+        release.check("manifest", "0.2.48", "0.2.47", "deb"),
+        &release.ok_line(),
+        0,
+        "native paths",
+    );
+}

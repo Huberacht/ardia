@@ -1,10 +1,13 @@
 import base64
+import importlib.util
 import json
 import os
 import pathlib
 import re
 import shutil
+import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -98,6 +101,24 @@ def passable(value):
     except UnicodeError:
         return False
     return True
+
+
+def packaging_module():
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('ardia_linux_package', REPO / 'scripts/linux/package.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def elf(kind=2, machine=0x3e, segments=((1, 0, 120),), program_headers=None, entry=0x401000, length=None):
+    count = len(segments) if program_headers is None else program_headers
+    header = bytearray(b'\x7fELF\x02\x01\x01' + bytes(9))
+    header += struct.pack('<HHIQQQIHHHHHH', kind, machine, 1, entry, 64, 0, 0, 64, 56, count, 64, 0, 0)
+    for segment_kind, offset, size in segments:
+        header += struct.pack('<IIQQQQQQ', segment_kind, 5, offset, 0x400000, 0x400000, size, size, 0x1000)
+    body = bytes(header) + bytes(max(0, 512 - len(header)))
+    return body if length is None else body[:length]
 
 
 SIGNING_DRIVER = r'''
@@ -327,6 +348,74 @@ class LinuxUpdateParityTests(unittest.TestCase):
         outcomes = {c['outcome'].get('error', 'ok') for c in MANIFESTS}
         self.assertEqual(outcomes, {'ok', 'tooLarge', 'manifest', 'signature', 'notNewer', 'kind', 'version'})
         self.assertEqual({o['outcome'] for o in VECTORS['offers']}, {'ok', 'notNewer', 'channel', 'version'})
+
+
+class PackagedVerifierTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.packaging = packaging_module()
+        cls.scratch = tempfile.TemporaryDirectory(prefix='ardia-packaged-verifier-')
+        cls.dir = pathlib.Path(cls.scratch.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.scratch.cleanup()
+
+    def problem(self, data):
+        return self.packaging.static_x86_64_executable_problem(data)
+
+    def test_a_static_x86_64_executable_header_passes(self):
+        self.assertIsNone(self.problem(elf()))
+        self.assertIsNone(self.problem(elf(kind=3)))
+
+    def test_malformed_or_dynamic_elves_are_refused(self):
+        refused = {
+            'an empty file': b'',
+            'a truncated header': elf(length=40),
+            'a 32-bit ELF': b'\x7fELF\x01' + elf()[5:],
+            'a big-endian ELF': elf()[:5] + b'\x02' + elf()[6:],
+            'a relocatable object': elf(kind=1),
+            'a core dump': elf(kind=4),
+            'an arm64 ELF': elf(machine=0xb7),
+            'no entry point': elf(entry=0),
+            'no program headers': elf(segments=()),
+            'program headers past the end': elf(program_headers=40),
+            'a segment past the end': elf(segments=((1, 0, 1 << 20),)),
+            'a dynamic loader': elf(segments=((3, 0, 28), (1, 0, 120))),
+            'no loadable segment': elf(segments=((6, 0, 56),)),
+            'program headers cut off by truncation': elf(length=100),
+        }
+        for label, data in refused.items():
+            self.assertIsNotNone(self.problem(data), label)
+
+    def test_package_py_refuses_a_verifier_that_is_not_a_static_x86_64_executable(self):
+        for label, data in [('ET_REL', elf(kind=1)), ('PT_INTERP', elf(segments=((3, 0, 28), (1, 0, 120)))),
+                            ('truncated', elf(length=40))]:
+            binary = self.dir / f'{label}-verify'
+            binary.write_bytes(data)
+            binary.chmod(0o755)
+            with self.assertRaises(ValueError, msg=label):
+                self.packaging.check_update_verify(binary)
+
+    def test_package_py_runs_the_verifier_where_it_can(self):
+        binary = self.dir / 'header-only-verify'
+        binary.write_bytes(elf())
+        binary.chmod(0o755)
+        if self.packaging.runs_here():
+            with self.assertRaisesRegex(ValueError, 'does not run here'):
+                self.packaging.check_update_verify(binary)
+        else:
+            self.packaging.check_update_verify(binary)
+
+    def test_the_built_verifier_passes_the_packaging_check(self):
+        if rust_tool('cargo') is None or rust_tool('rustup') is None:
+            unavailable('cargo and rustup are unavailable to build the musl ardia-update-verify')
+        built = subprocess.run(['bash', str(REPO / 'scripts/linux/update-verify.sh')], capture_output=True, text=True,
+                               timeout=900)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        binary = pathlib.Path(built.stdout.strip())
+        self.assertIsNone(self.problem(binary.read_bytes()))
+        self.packaging.check_update_verify(binary)
 
 
 if __name__ == '__main__':
