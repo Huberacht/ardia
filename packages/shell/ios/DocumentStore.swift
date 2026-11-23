@@ -52,7 +52,16 @@ enum DocumentStore {
   private static func confirmedMissing(_ url: URL) -> Bool {
     var info = stat()
     if lstat(url.path, &info) == 0 { return false }
-    return errno == ENOENT
+    guard errno == ENOENT else { return false }
+    var parent = stat()
+    return stat(url.deletingLastPathComponent().path, &parent) == 0 && (parent.st_mode & S_IFMT) == S_IFDIR
+  }
+
+  private static func durable(_ path: String) -> Bool {
+    let fd = open(path, O_RDONLY)
+    guard fd >= 0 else { return false }
+    defer { Darwin.close(fd) }
+    return fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0
   }
 
   private static func regularFile(_ url: URL) -> Bool {
@@ -113,17 +122,19 @@ enum DocumentStore {
       let temporary = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
       do {
         try Data(contents.utf8).write(to: temporary, options: [.withoutOverwriting])
-        let handle = try FileHandle(forWritingTo: temporary)
-        try handle.synchronize()
-        try handle.close()
       } catch {
         try? FileManager.default.removeItem(at: temporary)
         return done(error)
       }
+      guard durable(temporary.path) else {
+        unlink(temporary.path)
+        return done(CocoaError(.fileWriteUnknown))
+      }
       let linked = link(temporary.path, target.path) == 0
       let failure = errno
       unlink(temporary.path)
-      done(linked ? nil : CocoaError(failure == EEXIST ? .fileWriteFileExists : .fileWriteUnknown))
+      guard linked else { return done(CocoaError(failure == EEXIST ? .fileWriteFileExists : .fileWriteUnknown)) }
+      done(durable(target.deletingLastPathComponent().path) ? nil : CocoaError(.fileWriteUnknown))
     }
   }
 
@@ -131,10 +142,13 @@ enum DocumentStore {
     let source = try url(name)
     let target = try url(copyName)
     queue.async {
-      if confirmedMissing(source) { return done(nil) }
       do {
         let staging = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
         try FileManager.default.copyItem(at: source, to: staging)
+        guard durable(staging.path) else {
+          try? FileManager.default.removeItem(at: staging)
+          throw CocoaError(.fileWriteUnknown)
+        }
         do {
           if FileManager.default.fileExists(atPath: target.path) {
             _ = try FileManager.default.replaceItemAt(target, withItemAt: staging)
@@ -145,6 +159,7 @@ enum DocumentStore {
           try? FileManager.default.removeItem(at: staging)
           throw error
         }
+        guard durable(target.deletingLastPathComponent().path) else { throw CocoaError(.fileWriteUnknown) }
         done(nil)
       } catch {
         done(error)

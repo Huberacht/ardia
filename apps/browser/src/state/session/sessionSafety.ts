@@ -70,6 +70,7 @@ export const GATE_RETRY_MS = 2_000;
 export const MAX_GATE_RETRY_MS = 60_000;
 export const GATE_TIMEOUT_MS = 30_000;
 const OPEN: WriteCheck = { hold: false };
+export const monotonicNow = () => performance.now();
 
 function bounded(attempt: Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -104,7 +105,7 @@ export function writeGate(task: () => Promise<void>, saveAgain: (delay: number) 
         failures++;
         failed();
         const delay = Math.min(MAX_GATE_RETRY_MS, GATE_RETRY_MS * 2 ** (failures - 1));
-        againAt = Date.now() + delay;
+        againAt = monotonicNow() + delay;
         saveAgain(delay);
       },
     );
@@ -119,7 +120,7 @@ export function writeGate(task: () => Promise<void>, saveAgain: (delay: number) 
     check: () => {
       if (open) return OPEN;
       if (running) return { hold: true, againIn: null };
-      const wait = againAt - Date.now();
+      const wait = againAt - monotonicNow();
       if (wait > 0) return { hold: true, againIn: wait };
       start();
       return { hold: true, againIn: null };
@@ -233,31 +234,43 @@ function createOnce(name: string, json: string): Promise<void> {
   }
 }
 
-async function createFresh(prefix: string, json: string): Promise<string> {
-  let seq = nextSeq(prefix);
-  for (let attempt = 1; ; attempt++, seq++) {
+export const nameTaken = (error: unknown) => isFields(error) && error.code === "ERR_DOCUMENT_EXISTS";
+
+async function createFresh(prefix: string, json: string, first = nextSeq(prefix)): Promise<string> {
+  let seq = first;
+  for (let attempt = 1; ; attempt++) {
     const name = `${prefix}${seq}.json`;
     try {
       await createOnce(name, json);
       return name;
     } catch (error) {
-      if (attempt >= CREATE_ATTEMPTS) throw error;
-      seq = Math.max(seq, nextSeq(prefix) - 1);
+      if (!nameTaken(error) || attempt >= CREATE_ATTEMPTS) throw error;
+      seq = Math.max(seq + 1, nextSeq(prefix));
     }
   }
+}
+
+function retentionOrder(prefix: string, now: number): BackupName[] {
+  const parsed = orderedBackups([prefix], now);
+  const seen = new Set(parsed.map((b) => b.name));
+  const malformed = backupNames(prefix)
+    .filter((b) => !seen.has(b.name))
+    .sort((a, b) => b.seq - a.seq);
+  return [...parsed, ...malformed];
 }
 
 export function rollingBackups(rules: BackupRules): RollingBackups {
   let writing = false;
   let nextCheckAt = 0;
   let lastNow = 0;
+  let epoch = 0;
   let retryAt = 0;
   let migration: { name: string; json: string } | null = null;
   const prune = (prefix: string, kept: number, written: string, now: number) => {
     if (rules.recovering()) return;
-    const ordered = orderedBackups([prefix], now);
-    const newestWhole = ordered.find((b) => plausible(b.at, now) && rules.whole(b.session))?.name ?? ordered.find((b) => rules.whole(b.session))?.name;
-    for (const { name } of ordered.slice(kept)) {
+    const parsed = orderedBackups([prefix], now);
+    const newestWhole = parsed.find((b) => plausible(b.at, now) && rules.whole(b.session))?.name ?? parsed.find((b) => rules.whole(b.session))?.name;
+    for (const { name } of retentionOrder(prefix, now).slice(kept)) {
       if (name === written || name === newestWhole) continue;
       try {
         removeDocument(name);
@@ -273,24 +286,33 @@ export function rollingBackups(rules: BackupRules): RollingBackups {
   };
   const failed = (error: unknown) => {
     writing = false;
-    retryAt = Date.now() + BACKUP_RETRY_MS;
+    retryAt = monotonicNow() + BACKUP_RETRY_MS;
     throw error;
   };
   return {
     afterSave: (sessionJson, now = Date.now()) => {
-      if (now < lastNow) nextCheckAt = 0;
+      if (now < lastNow) {
+        nextCheckAt = 0;
+        epoch++;
+      }
       lastNow = now;
-      if (writing || now < nextCheckAt || Date.now() < retryAt) return;
+      if (writing || now < nextCheckAt || monotonicNow() < retryAt) return;
       const recent = orderedBackups([DAILY_BACKUP], now).find((b) => Math.abs(now - b.at) < BACKUP_EVERY_MS && rules.whole(b.session));
       if (recent) {
         nextCheckAt = now + BACKUP_EVERY_MS - Math.abs(now - recent.at);
         return;
       }
       const consent = consentToken();
+      const started = epoch;
       writing = true;
       void createFresh(DAILY_BACKUP, backupJson(now, sessionJson))
         .then((name) => landed(DAILY_BACKUP, DAILY_BACKUPS_KEPT, name, now, false, consent), failed)
-        .then(() => void (nextCheckAt = now + BACKUP_EVERY_MS), () => {});
+        .then(
+          () => {
+            if (started === epoch) nextCheckAt = now + BACKUP_EVERY_MS;
+          },
+          () => {},
+        );
     },
     beforeMigration: (sessionText, now = Date.now()) => {
       const consent = consentToken();
@@ -303,8 +325,21 @@ export function rollingBackups(rules: BackupRules): RollingBackups {
       } catch {
         held = null;
       }
-      const attempt = held === json ? Promise.resolve() : createOnce(name, json);
-      return attempt.then(() => landed(MIGRATION_BACKUP, MIGRATION_BACKUPS_KEPT, name, now, true, consent), failed);
+      const reserved = migration;
+      const attempt =
+        held === json
+          ? Promise.resolve(name)
+          : createOnce(name, json).then(
+              () => name,
+              (error: unknown) => {
+                if (!nameTaken(error)) throw error;
+                return createFresh(MIGRATION_BACKUP, json, Math.max(Number(SEQ.exec(name.slice(MIGRATION_BACKUP.length))?.[1] ?? 0) + 1, nextSeq(MIGRATION_BACKUP))).then((fresh) => {
+                  reserved.name = fresh;
+                  return fresh;
+                });
+              },
+            );
+      return attempt.then((landedName) => landed(MIGRATION_BACKUP, MIGRATION_BACKUPS_KEPT, landedName, now, true, consent), failed);
     },
   };
 }

@@ -265,6 +265,8 @@ inline bool RemoveFile(std::filesystem::path const &path) noexcept {
 
 }
 
+inline constexpr char kDocumentExists[] = "ERR_DOCUMENT_EXISTS";
+
 class DocumentStore {
  public:
   using Done = std::function<void(std::optional<std::string> const &)>;
@@ -405,8 +407,7 @@ class DocumentStore {
         if (!writing.owns_lock()) {
           message = std::string("The documents are busy");
         } else if (GetFileAttributesW(Files::LongPath(from).c_str()) == INVALID_FILE_ATTRIBUTES) {
-          DWORD error = GetLastError();
-          if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) message = Paths::Utf8(Files::ErrorText(error));
+          message = Paths::Utf8(Files::ErrorText(GetLastError()));
         } else if (DWORD failure = Files::CopyAtomically(from, to); failure != ERROR_SUCCESS) {
           message = Paths::Utf8(Files::ErrorText(failure));
         }
@@ -431,7 +432,9 @@ class DocumentStore {
         std::unique_lock<std::timed_mutex> writing(State().writing, std::chrono::seconds(10));
         if (!writing.owns_lock()) {
           message = std::string("The documents are busy");
-        } else if (DWORD failure = Files::CreateExclusively(target, contents); failure != ERROR_SUCCESS) {
+        } else if (DWORD failure = Files::CreateExclusively(target, contents); failure == ERROR_ALREADY_EXISTS || failure == ERROR_FILE_EXISTS) {
+          message = std::string(kDocumentExists);
+        } else if (failure != ERROR_SUCCESS) {
           message = Paths::Utf8(Files::ErrorText(failure));
         }
       }
@@ -624,7 +627,13 @@ struct DocumentsModule {
 
   REACT_METHOD(createDocument)
   void createDocument(std::string name, std::string contents, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
-    DocumentStore::Create(name, std::move(contents), Settle(promise));
+    DocumentStore::Create(name, std::move(contents), [promise](std::optional<std::string> const &error) {
+      if (!error) return promise.Resolve();
+      winrt::Microsoft::ReactNative::ReactError failure;
+      failure.Code = *error == kDocumentExists ? kDocumentExists : "ERR_CREATE_DOCUMENT";
+      failure.Message = *error;
+      promise.Reject(failure);
+    });
   }
 
   REACT_SYNC_METHOD(listDocuments)

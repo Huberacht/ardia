@@ -5,6 +5,9 @@ const realNow = Date.now;
 const startedAt = realNow();
 const midday = new Date(2026, 4, 6, 12).getTime();
 Date.now = () => midday + (realNow() - startedAt);
+const realMonotonic = performance.now.bind(performance);
+let monotonicSkew = 0;
+performance.now = () => realMonotonic() + monotonicSkew;
 
 const setTimeoutHoldingExit = globalThis.setTimeout;
 globalThis.setTimeout = (callback, ms, ...args) => {
@@ -122,6 +125,7 @@ test("an unreadable session.json is never written over while the copy keeps fail
   stub.refusedCopies.on = false;
   const now = Date.now;
   Date.now = () => now() + 120_000;
+  monotonicSkew += 120_000;
   try {
     await settle();
   } finally {
@@ -197,6 +201,7 @@ test("a damaged downloads.json is kept aside, by the store or from its text, and
   stub.refusedSaves.on = false;
   const now = Date.now;
   Date.now = () => now() + 120_000;
+  monotonicSkew += 120_000;
   try {
     await settle();
   } finally {
@@ -340,6 +345,7 @@ test("every retry of a failed copy goes to the same file, so failed tries don't 
   try {
     for (let i = 0; i < 4; i++) {
       skew += 120_000;
+      monotonicSkew += 120_000;
       await settle();
     }
   } finally {
@@ -633,6 +639,7 @@ test("a failed backup write is tried again a few minutes later, not on every sav
   assert.equal(backupsOf(DAILY_BACKUP).length, 0);
   const now = Date.now;
   Date.now = () => now() + BACKUP_RETRY_MS + 1;
+  monotonicSkew += BACKUP_RETRY_MS + 1;
   try {
     rolling.afterSave(session(2), at + 2000);
     await turn();
@@ -684,6 +691,7 @@ test("when the pre-migration snapshot can't be saved, the migrated session isn't
   stub.stagedDocs.clear();
   const now = Date.now;
   Date.now = () => now() + 120_000;
+  monotonicSkew += 120_000;
   try {
     await settle();
   } finally {
@@ -848,4 +856,108 @@ test("a failed pre-migration snapshot is retried under the one name it reserved"
   await rolling.beforeMigration(session(1), at);
   await rolling.beforeMigration(session(1), at);
   assert.equal(backupsOf(MIGRATION_BACKUP).length, 1);
+});
+
+test("a group that keeps one tab but loses another reference, or a split that loses a pane, is damage too", async () => {
+  const good = JSON.parse(realSession(["https://a.example/", "https://b.example/"]));
+  const w = good.windows[0];
+  const [one] = good.tabs;
+  const variants = [
+    { groups: [{ id: "g", windowId: w.id, profileId: w.profileId, name: "G", tabIds: [one.id, "missing"], icon: null, color: null }] },
+    { splits: [{ id: "v", windowId: w.id, orientation: "horizontal", slots: [{ size: 0.5, tabId: one.id }, { size: 0.5, tabId: "missing" }] }] },
+  ];
+  const { wholeBackup } = await import("./launchSession.ts");
+  for (const extra of variants) {
+    const damaged = JSON.stringify({ ...good, ...extra });
+    assert.equal(wholeBackup(JSON.parse(damaged)), false, JSON.stringify(Object.keys(extra)));
+    clean();
+    stub.docs.set("session.json", damaged);
+    const stop = startPersistence();
+    S().updateSettings({ appearance: "light" });
+    await settle();
+    stop();
+    assert.equal(stub.docs.get(asideCopies()[0]), damaged);
+  }
+});
+
+test("a reserved snapshot name another writer took moves on to the next number instead of holding saves forever", async () => {
+  clean();
+  const at = noonOf("2026-05-03");
+  const rolling = backups();
+  stub.takenNames.add(`${MIGRATION_BACKUP}1.json`);
+  try {
+    await rolling.beforeMigration(session(1), at);
+  } finally {
+    stub.takenNames.clear();
+  }
+  assert.deepEqual(backupsOf(MIGRATION_BACKUP), [`${MIGRATION_BACKUP}2.json`]);
+});
+
+test("a failed backup made with the clock 30 days ahead is retried after the backoff, not 30 days later", async () => {
+  clean();
+  const now = noonOf("2026-05-03");
+  const rolling = backups();
+  stub.refusedSaves.on = true;
+  try {
+    rolling.afterSave(session(1), now + 30 * BACKUP_EVERY_MS);
+    await turn();
+  } finally {
+    stub.refusedSaves.on = false;
+  }
+  monotonicSkew += BACKUP_RETRY_MS + 1;
+  rolling.afterSave(session(2), now);
+  await turn();
+  assert.equal(newest(DAILY_BACKUP).session.n, 2);
+});
+
+test("a write in flight when the clock went back doesn't bring back the stale wait", async () => {
+  clean();
+  const now = noonOf("2026-05-03");
+  const rolling = backups();
+  stub.heldSaves.on = true;
+  try {
+    rolling.afterSave(session(1), now + 30 * BACKUP_EVERY_MS);
+    rolling.afterSave(session(2), now);
+    for (const land of stub.heldSaves.queue.splice(0)) land();
+    await turn();
+  } finally {
+    stub.heldSaves.on = false;
+  }
+  rolling.afterSave(session(3), now + 60_000);
+  await turn();
+  assert.equal(backupsOf(DAILY_BACKUP).length, 2);
+  assert.ok(backupsOf(DAILY_BACKUP).some((name) => JSON.parse(stub.docs.get(name)).session.n === 3), "the corrected clock wrote its own backup");
+});
+
+test("retention counts malformed numbered files too, and still never prunes the newest clean backup", async () => {
+  clean();
+  const start = noonOf("2026-05-03");
+  for (let i = 1; i <= 8; i++) stub.docs.set(`${DAILY_BACKUP}${100 + i}.json`, "{\"backupAt\":");
+  for (let i = 1; i <= 6; i++) stub.docs.set(`${DAILY_BACKUP}${i}.json`, backupJson(start - (8 - i) * BACKUP_EVERY_MS, session(i)));
+  backups().afterSave(session(7), start);
+  await turn();
+  const left = [...stub.docs.keys()].filter((name) => name.startsWith(DAILY_BACKUP));
+  assert.equal(left.length, 7);
+  assert.ok(left.every((name) => stub.docs.get(name).includes("session")), "every malformed file went");
+});
+
+test("a damaged session.json that vanishes before it can be copied isn't treated as gone: nothing is written", async () => {
+  realSession();
+  stub.docs.set("session.json", "{");
+  stub.refusedCopies.on = true;
+  const stop = startPersistence();
+  S().createWindow({ url: "https://new.example/" });
+  await settle();
+  stub.docs.delete("session.json");
+  stub.refusedCopies.on = false;
+  const now = Date.now;
+  Date.now = () => now() + 120_000;
+  monotonicSkew += 120_000;
+  try {
+    await settle();
+  } finally {
+    Date.now = now;
+  }
+  stop();
+  assert.ok(!stub.docs.has("session.json"), "the writes stay held");
 });

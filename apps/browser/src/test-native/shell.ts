@@ -42,6 +42,7 @@ export const unreadableDocs = new Set<string>();
 export const asyncExists = { on: false };
 export const copiedDocs: [string, string][] = [];
 export const refusedCopies = { on: false, of: new Set<string>() };
+export const takenNames = new Set<string>();
 export const heldCopies = { on: false, queue: [] as (() => void)[] };
 export const heldSaves = { on: false, queue: [] as (() => void)[] };
 export const refusedSaves = { on: false };
@@ -256,7 +257,7 @@ const documents: Modules["ArdiaDocuments"] = {
   removeDocument: (name) => void (docs.delete(name), stagedDocs.delete(name), unreadableDocs.delete(name)),
   listDocuments: (prefix) => [...new Set([...docs.keys(), ...unreadableDocs])].filter((name) => name.startsWith(prefix)),
   createDocument: (name, contents) => {
-    if (docs.has(name) || unreadableDocs.has(name)) return Promise.reject(new Error("exists"));
+    if (docs.has(name) || unreadableDocs.has(name) || takenNames.has(name)) return Promise.reject(Object.assign(new Error("exists"), { code: "ERR_DOCUMENT_EXISTS" }));
     if (refusedSaves.on) return Promise.reject(new Error("create refused"));
     return new Promise((resolve) => {
       const land = () => {
@@ -270,6 +271,7 @@ const documents: Modules["ArdiaDocuments"] = {
   copyDocument: (name, copyName) => {
     copiedDocs.push([name, copyName]);
     if (refusedCopies.on || refusedCopies.of.has(name)) return Promise.reject(new Error("copy refused"));
+    if (!unreadableDocs.has(name) && !docs.has(name)) return Promise.reject(new Error("nothing to copy"));
     const land = () => {
       if (unreadableDocs.has(name)) unreadableDocs.add(copyName);
       else if (docs.has(name)) docs.set(copyName, docs.get(name)!);

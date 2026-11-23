@@ -14,7 +14,9 @@ public class DocumentsModule: Module {
     }
     AsyncFunction("createDocument") { (name: String, contents: String, promise: Promise) in
       try DocumentStore.create(name, contents) { error in
-        if let error { promise.reject("ERR_CREATE_DOCUMENT", error.localizedDescription) } else { promise.resolve(nil) }
+        guard let error else { return promise.resolve(nil) }
+        let exists = (error as? CocoaError)?.code == .fileWriteFileExists
+        promise.reject(exists ? "ERR_DOCUMENT_EXISTS" : "ERR_CREATE_DOCUMENT", error.localizedDescription)
       }
     }
     Function("listDocuments") { (prefix: String) -> [String] in DocumentStore.list(prefix) }
