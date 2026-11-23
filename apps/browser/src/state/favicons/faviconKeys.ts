@@ -45,27 +45,38 @@ export function closeViewers(open: Set<string>, before: Iterable<string>): strin
   for (const key of gone) {
     borrowed.delete(key);
     closedViewers.add(viewerOf(key));
+    dropRetries((id) => id.startsWith(`${key}|`));
   }
   return gone;
 }
 
 const PEEK_RETRY_MS = [500, 2000, 8000];
-const peekRetries = new Map<string, number>();
+const peekRetries = new Map<string, { tries: number; timer?: ReturnType<typeof setTimeout> }>();
 
-function nextPeekRetry(id: string, key: string): number | undefined {
-  const tries = peekRetries.get(id) ?? 0;
-  if (tries >= PEEK_RETRY_MS.length || !stillBorrowed(key)) return void peekRetries.delete(id);
-  peekRetries.set(id, tries + 1);
-  return PEEK_RETRY_MS[tries];
+function dropRetries(match: (id: string) => boolean) {
+  for (const [id, entry] of peekRetries)
+    if (match(id)) {
+      clearTimeout(entry.timer);
+      peekRetries.delete(id);
+    }
 }
 
-export function settlePeek(key: string, pages: string[], failed: boolean, consent: ConsentToken | null, recheck: (page: string) => void): boolean {
+export function settlePeek(key: string, pages: string[], failed: boolean, consent: ConsentToken | null, retry: (page: string) => void): boolean {
   if (!isBorrowed(key)) return true;
   notePrivateFaviconPeek(failed, consent);
   for (const page of pages) {
     const id = `${key}|${page}`;
-    const retry = failed ? nextPeekRetry(id, key) : void peekRetries.delete(id);
-    if (retry !== undefined) setTimeout(() => recheck(page), retry);
+    if (!failed) {
+      dropRetries((other) => other === id);
+      continue;
+    }
+    const entry = peekRetries.get(id) ?? { tries: 0 };
+    peekRetries.set(id, entry);
+    if (entry.tries >= PEEK_RETRY_MS.length || entry.timer || !stillBorrowed(key)) continue;
+    entry.timer = setTimeout(() => {
+      entry.timer = undefined;
+      if (stillBorrowed(key)) retry(page);
+    }, PEEK_RETRY_MS[entry.tries++]);
   }
   return stillBorrowed(key);
 }

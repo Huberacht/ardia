@@ -111,7 +111,7 @@ function lookUpPages(key: string, list: string[]) {
   });
   void (isBorrowed(key) ? peekFavicons(sourceEngineOf(key), list) : faviconsFor(key, list))
     .then((found) => {
-      if (!settlePeek(key, list, false, consent, recheck)) return;
+      if (!settlePeek(key, list, false, consent, retryPeek(key))) return;
       update(key, (icons) => {
         const writes: [string, string | null][] = [];
         for (const [i, page] of list.entries()) {
@@ -124,13 +124,15 @@ function lookUpPages(key: string, list: string[]) {
     })
     .catch((error) => {
       for (const page of list) unmarkAsked(key, page);
-      settlePeek(key, list, true, consent, recheck);
+      settlePeek(key, list, true, consent, retryPeek(key));
       warnFor(consent, "[favicons] lookup failed", error);
     })
     .finally(() => {
       for (const { id, entry } of pending) if (--entry.lookups === 0) inFlight.delete(id);
     });
 }
+
+const retryPeek = (key: string) => (page: string) => void (watchers.has(page) && ask(key, page));
 
 const inflight = new Map<string, Promise<string | null>>();
 
@@ -268,7 +270,6 @@ function check(w: Watcher) {
   } else if (w.src && w.profileId && !resolveFavicon(w.url, w.src, w.profileId)) fetchMissing(w.profileId, w.url, w.src);
 }
 
-const recheck = (page: string) => [...(watchers.get(page) ?? [])].forEach((w) => ((w.known = undefined), check(w)));
 
 function onFavicons(f: Favicons, prev: Favicons) {
   if (f.profiles === prev.profiles || !watchers.size) return;

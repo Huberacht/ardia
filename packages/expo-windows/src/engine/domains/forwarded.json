@@ -41,11 +41,6 @@
       "lastTabPolicy": "ac_tabs_last_tab_policy"
     }
   },
-  "awaitingEngine": {
-    "favicons": {
-      "peek": "ac_favicons_peek"
-    }
-  },
   "missing": {
     "autofill": ["settings", "setSettings", "showSuggestions"],
     "contentBlocker": ["state", "setEnabled", "setListEnabled", "isAllowed", "setAllowed", "removeAllowed", "hiddenElements", "hideElements", "restoreElements", "addList", "removeList", "devFailNextMessage", "devDelayNextLoad"],

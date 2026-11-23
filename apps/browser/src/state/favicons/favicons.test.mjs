@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { mount } from "../../test-hooks.mjs";
 
 globalThis.__DEV__ = false;
@@ -231,6 +231,49 @@ test("an icon drawn for a regular profile inside a private window looks up as th
   } finally {
     for (const r of rows) r.unmount();
     S().closeWindow(windowId);
+    stop();
+    delete globalThis.faviconsForTest;
+    delete globalThis.peekFaviconsForTest;
+  }
+});
+
+test("a refused peek is asked again three times at most, and closing the window cancels what's left", async () => {
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const stop = startFavicons();
+  const peeked = [];
+  globalThis.faviconsForTest = () => empty();
+  globalThis.peekFaviconsForTest = (profile, pages) => (peeked.push(...pages), Promise.reject(new Error("favicons not loaded")));
+  const warn = console.warn;
+  console.warn = () => {};
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const advance = async (ms) => {
+    for (let left = ms; left > 0; left -= 100) {
+      mock.timers.tick(Math.min(100, left));
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+  const rows = [];
+  try {
+    const kept = S().createWindow({ kind: "private", profileId: "default" });
+    const keptViewer = S().windows[kept].profileId;
+    rows.push(mount(() => useFavicon("https://refused-kept.test/", null, keptViewer)));
+    await advance(20000);
+    assert.deepEqual(peeked, Array(4).fill("https://refused-kept.test/"));
+    await advance(20000);
+    assert.equal(peeked.length, 4);
+    const closing = S().createWindow({ kind: "private", profileId: "default" });
+    const closingViewer = S().windows[closing].profileId;
+    rows.push(mount(() => useFavicon("https://refused-closed.test/", null, closingViewer)));
+    await advance(200);
+    assert.equal(peeked.filter((page) => page === "https://refused-closed.test/").length, 1);
+    S().closeWindow(closing);
+    await advance(20000);
+    assert.equal(peeked.filter((page) => page === "https://refused-closed.test/").length, 1);
+  } finally {
+    mock.timers.reset();
+    console.warn = warn;
+    for (const row of rows) row.unmount();
     stop();
     delete globalThis.faviconsForTest;
     delete globalThis.peekFaviconsForTest;
