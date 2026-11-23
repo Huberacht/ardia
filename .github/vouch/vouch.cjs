@@ -1005,6 +1005,7 @@ async function applyRules(session, given, { dryRun = false, around = {}, readAga
 async function evaluatePullRules(session, number, options = {}) {
   const facts = await readRulePull(session, number);
   if (!facts || facts.state !== "open" || !createdSinceRules(facts.createdAt)) return null;
+  if (!RULED_TIERS.includes(await tierOf(session, facts.login, facts.association))) return null;
   await settleMergeable(session, [facts]);
   return applyRules(session, facts, options);
 }
@@ -1020,8 +1021,8 @@ async function evaluateAuthorRules(session, pull, { closed }) {
     const change = await evaluatePullRules(session, number, { around });
     if (change) changes.push(change);
   };
-  if (!closed && createdSinceRules(pull.created_at)) await evaluate(pull.number);
   const tier = login ? await tierOf(session, login, pull.author_association) : null;
+  if (!closed && createdSinceRules(pull.created_at) && RULED_TIERS.includes(tier || "outsider")) await evaluate(pull.number);
   if (tier === "outsider") {
     const others = (await openPullsOf(session)).filter(
       (other) =>
@@ -1324,6 +1325,12 @@ async function sweep(session, { dryRun }) {
   return report;
 }
 
+function onlyTitleEdited(payload) {
+  if (payload.action !== "edited" || !payload.changes || typeof payload.changes !== "object") return false;
+  const changed = Object.keys(payload.changes);
+  return changed.length > 0 && changed.every((key) => key === "title");
+}
+
 function isRecheck(payload) {
   const issue = payload.issue || {};
   const body = ((payload.comment || {}).body || "").trim();
@@ -1355,7 +1362,8 @@ async function run(args) {
   }
   if (eventName === "pull_request_target" && PULL_RULE_ACTIONS.includes(action)) {
     const pull = payload.pull_request;
-    if (pull.state !== "open" || !createdSinceRules(pull.created_at)) return null;
+    if (pull.state !== "open" || !createdSinceRules(pull.created_at) || onlyTitleEdited(payload)) return null;
+    if (!RULED_TIERS.includes(await tierOf(session, loginOf(pull), pull.author_association))) return null;
     return evaluatePullRules(session, pull.number);
   }
   if (eventName === "issues" && (action === "opened" || action === "reopened")) {
@@ -1399,8 +1407,10 @@ async function gate(args) {
   if (context.eventName !== "pull_request") {
     decision = { run: true, reason: `A ${context.eventName} run always builds.` };
   } else {
-    const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: context.payload.pull_request.number });
     const runAttempt = Number(env.GITHUB_RUN_ATTEMPT || 1);
+    const pr = runAttempt > 1
+      ? (await github.rest.pulls.get({ ...repo, pull_number: context.payload.pull_request.number })).data
+      : context.payload.pull_request;
     const actor = env.GITHUB_TRIGGERING_ACTOR || null;
     const status = await statusOf(session, loginOf(pr), pr.author_association);
     const labels = labelNames(pr);
