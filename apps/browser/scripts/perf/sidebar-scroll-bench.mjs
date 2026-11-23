@@ -44,6 +44,7 @@ events then); --post acperf posts them with acperf postscroll instead. Gestures:
                 fold<N>-close), toggled through the store with the list scrolled to the top
   foldsel<N>    the same, with its fourth tab selected before it closes, so that tab stays shown under the closed
                 header (the first tab is selected again after)
+  foldnest      open, then close, the collapsed group --nest N adds: two tabs and an expanded group of N inside it
 --folds 100,200 adds one collapsed group of each size right after the collapsed group of 4, so its header shows near the
 top of the list; the fixture keeps at least 20 loose tabs below them.
 --pointer over (default) parks the hover pointer (ac.shell.devSetPointer, Debug builds) over the sidebar under the
@@ -101,6 +102,7 @@ const profileCounts = flag("profiles", "1,2").split(",").map(Number);
 const reps = Number(flag("reps", "5"));
 const gestures = flag("gestures", "pan,pan-up,wheel,wheel-up").split(",");
 const folds = flag("folds", "").split(",").filter(Boolean).map(Number);
+const nest = Number(flag("nest", "0"));
 const pointerOver = flag("pointer", "over") !== "away";
 const tabLayout = flag("layout", "sidebar") === "top" ? "top" : "sidebar";
 const TAB_ACTIONS = new Set(["open", "close", "close-run"]);
@@ -199,8 +201,8 @@ function fixture(origin, count, profiles) {
     return id;
   };
   const many = (profileId, k, extra = () => ({})) => Array.from({ length: k }, (_, i) => tab(profileId, extra(i)));
-  const group = (profileId, name, ids, collapsed) => {
-    groups.push({ id: `g${groups.length + 1}`, windowId: "w1", profileId, name, icon: null, color: "blue", collapsed, pinned: false, tabIds: ids, createdAt: 1 });
+  const group = (profileId, name, ids, collapsed, parentId) => {
+    groups.push({ id: `g${groups.length + 1}`, windowId: "w1", profileId, name, icon: null, color: "blue", collapsed, pinned: false, tabIds: ids, createdAt: 1, ...(parentId ? { parentId } : {}) });
     return ids;
   };
   const special = { 3: { url: `${origin}/audio/a3`, muted: true }, 9: { url: `${origin}/audio/a9`, muted: true }, 6: { url: `${origin}/slow/s6` }, 12: { url: `${origin}/slow/s12` } };
@@ -214,6 +216,13 @@ function fixture(origin, count, profiles) {
   for (const size of folds) {
     personal.push(...group("default", `Fold ${size}`, many("default", size), true));
     foldGroups[size] = groups.at(-1).id;
+  }
+  if (nest) {
+    const outer = many("default", 2);
+    const inner = many("default", nest);
+    personal.push(...group("default", "Nest", [...outer, ...inner], true));
+    foldGroups.nest = groups.at(-1).id;
+    group("default", "Inner", inner, false, foldGroups.nest);
   }
   const looseFrom = personal.length;
   personal.push(...many("default", Math.max(folds.length ? 20 : 0, count - personal.length), (i) => special[i] ?? {}));
@@ -298,10 +307,10 @@ class Frames {
       if (gap > lateAfter) out.lateMoving++;
     }
     const wholeIterations = records.some((r) => r.k === "i");
-    let last = null;
     let first = null;
     const gaps = [];
     const refresh = 1000 / (records.find((r) => r.k === "info")?.maxFPS || 120);
+    let last = records.findLast((r) => r.k === "f" && r.ts < from)?.ts ?? null;
     for (const r of records) {
       if (r.k === "i" && r.th === "m" && r.a < to && r.a + r.d > from) {
         out.mMax = Math.max(out.mMax, r.d);
@@ -328,7 +337,7 @@ class Frames {
         if (r.th === "j" && r.d > 8.33) out.jOver8++;
       } else if (r.k === "l" && r.a >= from && r.a < to) out.layoutMs += r.d;
     }
-    const tick = Math.max(refresh, median(gaps) ?? refresh);
+    const tick = periods.length ? periods[periods.length >> 1] : refresh;
     out.maxGap = gaps.length ? Math.max(...gaps) : 0;
     out.late = gaps.reduce((n, g) => n + (g > tick * 1.5 ? Math.max(1, Math.round(g / tick) - 1) : 0), 0);
     return out;
@@ -439,12 +448,12 @@ async function foldStep(inst, frames, groupId, name, collapsed) {
   const c0 = await frames.counters();
   const cpu0 = cpuMs(inst.pid);
   const t0 = await inst.eval(`const t = Date.now(); ac.store.getState().updateGroup(${JSON.stringify(groupId)}, { collapsed: ${collapsed} }); return t;`);
-  await sleep(FOLD_WINDOW_MS + 150);
   const t1 = t0 + FOLD_WINDOW_MS;
+  await sleep(Math.max(0, t1 - Date.now()));
   const cpu1 = cpuMs(inst.pid);
   const c1 = await frames.counters();
   const probe = await readProbe(inst, false);
-  await sleep(120);
+  await sleep(150);
   const busy = frames.busy(t0, t1);
   const motion = frames.busy(t0, t0 + FOLD_MOTION_MS);
   const counter = (k) => (c0 && c1 ? c1[k] - c0[k] : null);
@@ -460,9 +469,9 @@ async function foldStep(inst, frames, groupId, name, collapsed) {
 
 async function fold(inst, frames, fx, name) {
   const selected = name.startsWith("foldsel");
-  const size = Number(name.slice(selected ? 7 : 4));
+  const size = name === "foldnest" ? "nest" : Number(name.slice(selected ? 7 : 4));
   const groupId = fx.foldGroups[size];
-  if (!groupId) throw new Error(`${name}: run with --folds ${size}`);
+  if (!groupId) throw new Error(`${name}: run with ${size === "nest" ? "--nest <N>" : `--folds ${size}`}`);
   await frames.scrollY(0);
   const open = await foldStep(inst, frames, groupId, `${name}-open`, false);
   if (selected) await inst.eval(`const s = ac.store.getState(); const ids = s.groups[${JSON.stringify(groupId)}].tabIds; s.activate(ids[3]); return 1;`);

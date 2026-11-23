@@ -1,7 +1,9 @@
+import { onConsentPeriodChange } from "./choice";
 import { consentToken, countFor } from "./consentPeriod";
 
 const STUTTER_GAP_MS = 34;
 const OVERRUN_MS = 50;
+const TIMED_FOR_MS = 1000;
 
 let folds = 0;
 let stutters = 0;
@@ -21,7 +23,7 @@ export function noteFoldMotion(plannedMs: number): FoldTiming {
     const now = Date.now();
     worstGap = Math.max(worstGap, now - last);
     last = now;
-    frame = requestAnimationFrame(tick);
+    frame = now - startedAt < TIMED_FOR_MS ? requestAnimationFrame(tick) : 0;
   });
   return {
     end: (finished) => {
@@ -37,10 +39,16 @@ export function noteFoldMotion(plannedMs: number): FoldTiming {
   };
 }
 
-export function takeFoldMotionCounts() {
-  const taken = { sidebar_folds: folds, sidebar_fold_stutters: stutters, sidebar_fold_overruns: overruns };
+function clearFoldMotionCounts() {
   folds = 0;
   stutters = 0;
   overruns = 0;
+}
+
+onConsentPeriodChange(clearFoldMotionCounts);
+
+export function takeFoldMotionCounts() {
+  const taken = { sidebar_folds: folds, sidebar_fold_stutters: stutters, sidebar_fold_overruns: overruns };
+  clearFoldMotionCounts();
   return taken;
 }

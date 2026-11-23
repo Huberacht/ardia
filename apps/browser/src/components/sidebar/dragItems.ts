@@ -1,6 +1,8 @@
 import type { DragController } from "./dragController";
 import type { Item } from "./dragModel";
 
+export type ShownSource = { away: () => boolean; subscribe: (changed: () => void) => () => void };
+
 export class DragItems {
   private readonly own = new Map<string, Item>();
   readonly controller: DragController;
@@ -13,10 +15,27 @@ export class DragItems {
 
   add(key: string, item: Item) {
     this.own.set(key, item);
-    if (this.live) this.controller.items.set(key, item);
+    if (this.live) {
+      this.controller.items.set(key, item);
+      if (this.controller.active) this.controller.measureLate(item);
+    }
     return () => {
       if (this.own.get(key) === item) this.own.delete(key);
       this.withdraw(key, item);
+    };
+  }
+
+  addWhileShown(key: string, item: Item, shown: ShownSource) {
+    let remove = shown.away() ? null : this.add(key, item);
+    const stop = shown.subscribe(() => {
+      if (shown.away()) {
+        remove?.();
+        remove = null;
+      } else remove ??= this.add(key, item);
+    });
+    return () => {
+      stop();
+      remove?.();
     };
   }
 

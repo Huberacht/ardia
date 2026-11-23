@@ -14,6 +14,7 @@ import { DragItems } from "./dragItems";
 import { onAppEvent } from "../../state/drag/dragNative";
 import { WindowDropGlow } from "../tabstrip/WindowDropGlow";
 import { dragGesture } from "./dragGesture";
+import { FoldedAway } from "./hoverController";
 
 const dropGlowPlace = perLook(() => ({ left: 5, right: 5, top: 44, bottom: 6, borderRadius: radius.chrome }));
 
@@ -107,10 +108,11 @@ export function useDragItem(key: string, spec: ItemSpec, clip: ClipSource | null
   const marks = controller?.marks ?? noDragMarks;
   const item = useMemo(() => controller?.create(key), [controller, key]);
   if (item) Object.assign(item, spec);
+  const folded = useContext(FoldedAway);
   useEffect(() => {
     if (!items || !item) return;
-    return items.add(key, item);
-  }, [items, item, key]);
+    return items.addWhileShown(key, item, folded);
+  }, [items, item, key, folded]);
 
   const responder = useMemo(
     () =>
