@@ -73,6 +73,7 @@ export const emitEvent = <E extends EventName>(name: E, data: EventData<E>) => {
 export const chromeWindowList: ChromeWindowState[] = [];
 export const pagerSnapshots = new Map<string, { sequence: number; selectionSequence: number; position: number; selected: number; phase: string; velocity: number; count: number; profileId?: string | null }>();
 export const engineCalls: { domain: string; verb: string; profile: string }[] = [];
+export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[] };
 export const commitReports: boolean[] = [];
 export const commitReportFailures = { next: 0 };
 export const loadedEngineProfiles = new Set<string>([""]);
@@ -635,8 +636,14 @@ const fakeModules = {
     setListEnabled: () => null,
     addList: ({ url }) => ({ id: url, custom: true, existed: false, filters: 1, failed: false }),
     removeList: () => null,
-    isAllowed: () => false,
-    setAllowed: () => null,
+    isAllowed: ({ host }) => contentBlockerSites.allowed.has(host),
+    setAllowed: ({ host, allowed }) => {
+      contentBlockerSites.written.push(host);
+      if (allowed) contentBlockerSites.allowed.add(host);
+      else contentBlockerSites.allowed.delete(host);
+      return null;
+    },
+    state: () => ({ enabled: contentBlockerSites.enabled, version: "test", lists: [], allowedHosts: [...contentBlockerSites.allowed], stats: { enabled: contentBlockerSites.enabled, ready: true, parseMs: 0, lookups: 0, averageLookupMicros: 0, maxLookupMicros: 0 } }),
   }),
   ArdiaHistory: domain("history", {
     query: ({ profile, ...args }) => {

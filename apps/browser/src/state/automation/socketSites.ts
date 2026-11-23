@@ -1,6 +1,8 @@
 import { engineProfile } from "../browser/model";
 import { clearSiteData, getSiteSettings, resetSiteSettings, setSiteSetting, setZoom, type SiteSettingType, type SiteSettingValue } from "../site/siteSettings";
 import { getSiteSettingsOrigins, getZoomLevels } from "../../platform/siteSettings";
+import { getContentBlocker, isContentBlockerAllowed, setContentBlockerAllowed } from "../../platform/contentBlocker";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { refreshExtensions, reload, removeExtension, setEnabled, setPinned, findExtension } from "../extensions/actions";
 import type { InstalledExtension } from "../extensions/store";
 import type { MethodSpec, SocketCall } from "./socketCatalog";
@@ -118,6 +120,21 @@ async function uninstall(params: Record<string, unknown>, call: SocketCall) {
   return { removed };
 }
 
+async function adBlocker() {
+  if (!PLATFORM_FEATURES.contentBlocker) throw new OpError("refused", "Ardia has no built-in ad blocker on this platform.");
+  const state = await getContentBlocker();
+  return { enabled: state.enabled === true, allowedSites: [...state.allowedHosts].sort() };
+}
+
+async function setAdsAllowed(params: Record<string, unknown>, call: SocketCall, allowed: boolean) {
+  const site = siteOf(params.site);
+  if (!(await adBlocker()).enabled) throw new OpError("refused", "The ad blocker is off in Settings › General, so it blocks nothing on any site.");
+  call.stillServing();
+  await setContentBlockerAllowed(site, allowed);
+  expect((await isContentBlockerAllowed(site)) === allowed, `ads on ${site} are still ${allowed ? "blocked" : "allowed"}.`);
+  return { site, adsAllowed: allowed, ...(await adBlocker()) };
+}
+
 const EXTENSION = { profile: PROFILE, id: id("An extension id from extensions.list") };
 const SITE = { profile: PROFILE, origin: { type: "string", pattern: ORIGIN, description: "An origin like https://example.com" } as const };
 
@@ -150,6 +167,23 @@ export const SITE_METHODS: MethodSpec[] = [
     params: obj({ profile: PROFILE, site: text("A host like example.com; the whole site it belongs to is cleared") }, ["site"]),
     result: "{site, cookies, storage}",
     run: clearData,
+  },
+  { name: "sites.adBlocker", mutates: false, description: "The built-in ad blocker (uBlock Origin): whether it's on and the sites it lets through", params: obj({}), result: "{enabled, allowedSites}", run: adBlocker },
+  {
+    name: "sites.allowAds",
+    mutates: true,
+    description: "Let a site through the built-in ad blocker, as turning off Block Ads & Trackers in Site Controls does; it covers the site's subdomains, in every profile, from the next page load",
+    params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
+    result: "{site, adsAllowed, enabled, allowedSites}",
+    run: (p, call) => setAdsAllowed(p, call, true),
+  },
+  {
+    name: "sites.blockAds",
+    mutates: true,
+    description: "Block ads on a site again; this also removes a broader entry that lets the site through, like its parent domain",
+    params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
+    result: "{site, adsAllowed, enabled, allowedSites}",
+    run: (p, call) => setAdsAllowed(p, call, false),
   },
   { name: "sites.zoomLevels", mutates: false, description: "Zoom per host", params: obj({ profile: PROFILE }), result: "{host: zoom}", run: (p) => getZoomLevels(engineOf(p)) },
   { name: "sites.setZoom", mutates: true, description: "Set a host's zoom (1 is 100%)", params: obj({ profile: PROFILE, host: text("A host like example.com"), zoom: { type: "number", minimum: 0.25, maximum: 5, description: "1 is 100%" } }, ["host", "zoom"]), result: "{host: zoom}", run: setSiteZoom },
