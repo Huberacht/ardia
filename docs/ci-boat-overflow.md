@@ -7,7 +7,7 @@ GitHub-hosted runners run our CI. When they are busy, the long jobs of three wor
 
 | Workflow | Jobs that can move | GitHub runner otherwise | Median time on GitHub |
 | - | - | - | - |
-| `checks.yml` | `typecheck, tests and Mac bundle`, the 6 `browser tests` shares | `ubuntu-latest` | 2.2 min, 4.8 min |
+| `checks.yml` | `typecheck, tests and Mac bundle`, the 6 `browser tests` shares | `ubuntu-latest` | 2.2 min, 4.8 min (with 3 shares) |
 | `linux.yml` | the 2 `checks` jobs, `package` | `ubuntu-24.04` | 2.5 and 4.0 min, 4.4 min |
 | `android.yml` | `app` | `ubuntu-latest` | 5.2 min |
 

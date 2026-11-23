@@ -301,7 +301,9 @@ test("Boat headroom needs every reserve left after this run's starts", () => {
   const starts = (window, remaining) => ({ starts: { ...limits().starts, [window]: { remaining } } });
   assert.equal(check(starts("day", 127)), "boat-ok");
   assert.equal(check(starts("day", 126)), "boat-low-day-starts");
+  assert.equal(check(starts("hour", 27)), "boat-ok");
   assert.equal(check(starts("hour", 26)), "boat-low-hour-starts");
+  assert.equal(check(starts("minute", 12)), "boat-ok");
   assert.equal(check(starts("minute", 11)), "boat-low-minute-starts");
   assert.equal(check(starts("minute", 11), 6), "boat-ok");
   assert.equal(check({ planIncluded: { vmHoursRemaining: 49.9 } }), "boat-low-vm-hours");
