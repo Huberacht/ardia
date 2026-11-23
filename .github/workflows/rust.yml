@@ -76,7 +76,7 @@ jobs:
           key: core-rs-${{ runner.os }}-${{ hashFiles('packages/core-rs/rust-toolchain.toml', 'packages/core-rs/Cargo.lock') }}
           restore-keys: core-rs-${{ runner.os }}-
       - name: Toolchain
-        run: rustup toolchain install && rustc --version && cargo --version
+        run: rustup toolchain install && rustup component add llvm-tools && rustc --version && cargo --version
       - name: Format
         run: cargo fmt --check
       - name: Clippy
@@ -85,7 +85,7 @@ jobs:
         run: cargo test --locked --all-features
       - name: Release static library
         run: cargo build --locked --release -p ardia-ffi
-      - name: The library exports exactly the header's functions in every build
+      - name: The shared and static libraries export exactly the header's functions in every build
         if: runner.os != 'Windows'
         run: |
           python3 -I tests/check_exports.py

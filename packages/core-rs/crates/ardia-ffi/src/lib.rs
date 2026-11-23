@@ -320,6 +320,9 @@ pub unsafe extern "C" fn ardia_phrase_from_entropy(
 ) -> ardia_status {
     unsafe {
         run(out, || {
+            if entropy_len != ARDIA_ENTROPY_BYTES || entropy.is_null() {
+                return Err(Failure::argument("argument"));
+            }
             let entropy: &[u8; ARDIA_ENTROPY_BYTES] = bytes(entropy, entropy_len, ARDIA_ENTROPY_BYTES)?
                 .try_into()
                 .map_err(|_| Failure::argument("argument"))?;

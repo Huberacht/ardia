@@ -81,6 +81,7 @@ dependencies = [
  "ardia-sync-core",
  "base64",
  "serde_json",
+ "zeroize",
 ]
 
 [[package]]

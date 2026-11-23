@@ -12,6 +12,6 @@ pub mod wordlist;
 pub use base32::{base32_encode, is_tag, TAG_LENGTH};
 pub use error::{Error, PhraseError};
 pub use keys::{
-    new_file_id, SyncKeys, LOCAL_SCOPE_TAG, MAGIC, NONCE_BYTES, PADDING, PASSWORD_PADDING, PASSWORD_VERSION, SALT,
-    TAG_BYTES,
+    new_file_id, SyncKeys, SyncKeysWith, LOCAL_SCOPE_TAG, MAGIC, NONCE_BYTES, PADDING, PASSWORD_PADDING,
+    PASSWORD_VERSION, SALT, TAG_BYTES,
 };

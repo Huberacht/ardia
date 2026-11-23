@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use ardia_crypto::{Backend, Crypto};
-use ardia_sync_core::{phrase, vault, wordlist, Error, SyncKeys, LOCAL_SCOPE_TAG};
+use ardia_sync_core::{phrase, vault, wordlist, Error, SyncKeys, SyncKeysWith, LOCAL_SCOPE_TAG};
 use serde_json::{json, Map, Value};
 use support::*;
 
@@ -21,8 +21,8 @@ impl Inputs {
         hex(self.0["entropies"][name].as_str().unwrap())
     }
 
-    fn keys(&self, name: &str) -> SyncKeys {
-        SyncKeys::new(&self.entropy(name))
+    fn keys(&self, name: &str) -> FixtureKeys {
+        FixtureKeys::new(&self.entropy(name))
     }
 
     fn payload(&self, name: &str) -> Vec<u8> {
@@ -53,7 +53,7 @@ fn nonce(text: &str) -> [u8; 12] {
     hex(text).try_into().unwrap()
 }
 
-fn path(keys: &SyncKeys, scope: &str, name: &str) -> String {
+fn path<C: Crypto>(keys: &SyncKeysWith<C>, scope: &str, name: &str) -> String {
     format!("vault/{}/{}/{name}", keys.chain_tag(), keys.scope_tag(scope))
 }
 
@@ -102,14 +102,14 @@ fn build(inputs: &Inputs) -> (Value, BTreeMap<String, Vec<u8>>) {
         .iter()
         .map(|state| {
             let keys = inputs.keys(str(state, "entropy"));
-            let sealed = keys
-                .seal_with_nonce(
-                    &inputs.payload(str(state, "payload")),
-                    LOCAL_SCOPE_TAG,
-                    str(state, "fileId"),
-                    &nonce(str(state, "nonce")),
-                )
-                .unwrap();
+            let sealed = seal_fixed(
+                &keys,
+                &inputs.payload(str(state, "payload")),
+                LOCAL_SCOPE_TAG,
+                str(state, "fileId"),
+                &nonce(str(state, "nonce")),
+            )
+            .unwrap();
             json!({
                 "entropy": state["entropy"],
                 "fileId": state["fileId"],
@@ -122,14 +122,14 @@ fn build(inputs: &Inputs) -> (Value, BTreeMap<String, Vec<u8>>) {
     for file in inputs.list("vaultFiles") {
         let keys = inputs.keys(str(file, "entropy"));
         let (scope, id) = (str(file, "scope"), str(file, "id"));
-        let sealed = keys
-            .seal_with_nonce(
-                &inputs.payload(str(file, "payload")),
-                &keys.scope_tag(scope),
-                id,
-                &nonce(str(file, "nonce")),
-            )
-            .unwrap();
+        let sealed = seal_fixed(
+            &keys,
+            &inputs.payload(str(file, "payload")),
+            &keys.scope_tag(scope),
+            id,
+            &nonce(str(file, "nonce")),
+        )
+        .unwrap();
         let path = path(&keys, scope, &vault::file_name(id));
         tree.insert(path.trim_start_matches("vault/").to_owned(), sealed);
         files.push(
@@ -140,14 +140,14 @@ fn build(inputs: &Inputs) -> (Value, BTreeMap<String, Vec<u8>>) {
     for file in inputs.list("damaged") {
         let keys = inputs.keys(str(file, "entropy"));
         let (scope, id) = (str(file, "scope"), str(file, "id"));
-        let mut sealed = keys
-            .seal_with_nonce(
-                &inputs.payload(str(file, "payload")),
-                &keys.scope_tag(scope),
-                id,
-                &nonce(str(file, "nonce")),
-            )
-            .unwrap();
+        let mut sealed = seal_fixed(
+            &keys,
+            &inputs.payload(str(file, "payload")),
+            &keys.scope_tag(scope),
+            id,
+            &nonce(str(file, "nonce")),
+        )
+        .unwrap();
         sealed[file["flipByte"].as_u64().unwrap() as usize] ^= 1;
         let path = path(&keys, scope, &vault::file_name(id));
         tree.insert(path.trim_start_matches("vault/").to_owned(), sealed);

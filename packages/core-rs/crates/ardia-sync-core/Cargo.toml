@@ -8,7 +8,6 @@ publish.workspace = true
 [features]
 default = ["rustcrypto"]
 rustcrypto = ["ardia-crypto/rustcrypto"]
-fixtures = []
 
 [dependencies]
 ardia-crypto.workspace = true

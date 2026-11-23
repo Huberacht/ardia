@@ -423,6 +423,52 @@ fn occupied_output_slots_are_refused_and_left_alone() {
 }
 
 #[test]
+fn a_wrong_entropy_length_is_an_invalid_argument_everywhere() {
+    let bytes = [7u8; 64];
+    for length in [0, 1, 31, 33, 64] {
+        let mut keys = ptr::null_mut();
+        assert_eq!(
+            unsafe { ardia_sync_keys_new(bytes.as_ptr(), length, &mut keys) },
+            ardia_status::InvalidArgument
+        );
+        assert!(keys.is_null());
+        let mut words = Buf::new();
+        let status = unsafe { ardia_phrase_from_entropy(bytes.as_ptr(), length, words.out()) };
+        assert_eq!(status, ardia_status::InvalidArgument, "{length} bytes");
+        assert_eq!(words.json()["code"], "argument");
+    }
+    let mut words = Buf::new();
+    assert_eq!(
+        unsafe { ardia_phrase_from_entropy(ptr::null(), 32, words.out()) },
+        ardia_status::InvalidArgument
+    );
+    let mut words = Buf::new();
+    assert_eq!(
+        unsafe { ardia_phrase_from_entropy(bytes.as_ptr(), 32, words.out()) },
+        ardia_status::Ok
+    );
+    let mut keys = ptr::null_mut();
+    assert_eq!(
+        unsafe { ardia_sync_keys_new(bytes.as_ptr(), 32, &mut keys) },
+        ardia_status::Ok
+    );
+    unsafe { ardia_sync_keys_free(keys) };
+}
+
+#[test]
+fn too_large_is_only_for_variable_length_inputs_over_their_cap() {
+    let byte = [b'a'; 1];
+    let mut out = Buf::new();
+    let status = unsafe { ardia_phrase_to_entropy(byte.as_ptr(), ARDIA_MAX_PHRASE_BYTES + 1, out.out()) };
+    assert_eq!(status, ardia_status::TooLarge);
+    assert_eq!(out.json()["code"], "tooLarge");
+    let at_cap = "a ".repeat(ARDIA_MAX_PHRASE_BYTES / 2);
+    let mut out = Buf::new();
+    let status = unsafe { ardia_phrase_to_entropy(at_cap.as_ptr(), at_cap.len(), out.out()) };
+    assert_eq!(status, ardia_status::Phrase);
+}
+
+#[test]
 fn phrase_problems_never_carry_phrase_text() {
     let words = "abandon ".repeat(23) + "zebrafish";
     let mut out = Buf::new();

@@ -6,32 +6,68 @@ import sys
 
 CORE = pathlib.Path(__file__).resolve().parents[1]
 HEADER = CORE / 'include/ardia_core.h'
+DARWIN = platform.system() == 'Darwin'
+FORBIDDEN = re.compile(r'nonce|fixture', re.I)
 
 
 def declared():
     return sorted(set(re.findall(r'^[A-Za-z0-9_ *]*?\b(ardia_[a-z0-9_]+)\(', HEADER.read_text(), re.M)))
 
 
-def exported(library):
-    if platform.system() == 'Darwin':
-        listing = subprocess.run(['nm', '-gU', str(library)], capture_output=True, text=True, check=True).stdout
-        names = [line.split()[-1].removeprefix('_') for line in listing.splitlines() if ' T ' in line]
-    else:
-        listing = subprocess.run(['nm', '-D', '--defined-only', str(library)], capture_output=True, text=True,
-                                 check=True).stdout
-        names = [line.split()[-1] for line in listing.splitlines() if ' T ' in line]
-    return sorted(name for name in names if name.startswith('ardia'))
+def llvm_nm():
+    sysroot = subprocess.run(['rustc', '--print', 'sysroot'], capture_output=True, text=True, check=True).stdout.strip()
+    host = re.search(r'^host: (\S+)$', subprocess.run(['rustc', '-vV'], capture_output=True, text=True,
+                                                       check=True).stdout, re.M).group(1)
+    tool = pathlib.Path(sysroot) / 'lib/rustlib' / host / 'bin/llvm-nm'
+    if not tool.exists():
+        raise SystemExit(f'{tool} is missing: run `rustup component add llvm-tools`')
+    return str(tool)
+
+
+def defined_globals(library, demangle):
+    command = [llvm_nm(), '--defined-only', '--extern-only', '--format=just-symbols']
+    if demangle:
+        command.append('--demangle')
+    if library.suffix == '.so':
+        command.append('--dynamic')
+    listing = subprocess.run([*command, str(library)], capture_output=True, text=True, check=True).stdout
+    names = []
+    for line in listing.splitlines():
+        name = line.strip()
+        if not name or name.endswith(':'):
+            continue
+        names.append(name[1:] if DARWIN and name.startswith('_') else name)
+    return names
+
+
+def c_exports(library):
+    return sorted(set(name for name in defined_globals(library, demangle=False) if name.startswith('ardia_')))
+
+
+def check(library, want):
+    problems = []
+    got = c_exports(library)
+    if got != want:
+        problems.append(f'{library.name} exports {got}, the header declares {want}')
+    forbidden = sorted(set(name for name in defined_globals(library, demangle=True) if FORBIDDEN.search(name)))
+    if forbidden:
+        problems.append(f'{library.name} defines fixture or nonce symbols: {forbidden}')
+    return problems
 
 
 def main():
-    suffix = 'dylib' if platform.system() == 'Darwin' else 'so'
-    library = CORE / f'target/release/libardia_core.{suffix}'
-    want, got = declared(), exported(library)
-    if len(want) != 15 or got != want:
-        print(f'header declares {want}', file=sys.stderr)
-        print(f'{library.name} exports {got}', file=sys.stderr)
+    want = declared()
+    if len(want) != 15:
+        print(f'the header declares {len(want)} functions, not 15: {want}', file=sys.stderr)
         return 1
-    print(f'{library.name} exports exactly the {len(want)} functions the header declares')
+    shared = CORE / ('target/release/libardia_core.dylib' if DARWIN else 'target/release/libardia_core.so')
+    static = CORE / 'target/release/libardia_core.a'
+    problems = check(shared, want) + check(static, want)
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if problems:
+        return 1
+    print(f'{shared.name} and {static.name} export exactly the {len(want)} header functions and no fixture or nonce symbol')
     return 0
 
 

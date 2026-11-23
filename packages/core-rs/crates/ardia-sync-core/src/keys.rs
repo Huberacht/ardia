@@ -1,6 +1,8 @@
 use ardia_crypto::{Backend, Crypto, KEY_BYTES};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use std::marker::PhantomData;
+
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::base32::base32_encode;
@@ -20,18 +22,22 @@ const LENGTH_BYTES: usize = 4;
 const BYTE_ORDER_MARK: &str = "\u{feff}";
 
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct SyncKeys {
+pub struct SyncKeysWith<C: Crypto> {
     file_key: [u8; KEY_BYTES],
     name_key: [u8; KEY_BYTES],
     password_key: [u8; KEY_BYTES],
     password_nonce_key: [u8; KEY_BYTES],
     #[zeroize(skip)]
     chain_tag: String,
+    #[zeroize(skip)]
+    crypto: PhantomData<fn() -> C>,
 }
 
-fn derive(entropy: &[u8], info: &str) -> [u8; KEY_BYTES] {
+pub type SyncKeys = SyncKeysWith<Backend>;
+
+fn derive<C: Crypto>(entropy: &[u8], info: &str) -> [u8; KEY_BYTES] {
     let mut key = [0u8; KEY_BYTES];
-    Backend::hkdf_sha256(entropy, SALT, info.as_bytes(), &mut key).expect("32 bytes is a valid HKDF-SHA256 length");
+    C::hkdf_sha256(entropy, SALT, info.as_bytes(), &mut key).expect("32 bytes is a valid HKDF-SHA256 length");
     key
 }
 
@@ -73,21 +79,22 @@ pub fn new_file_id() -> Result<String, Error> {
     Ok(base32_encode(&bytes))
 }
 
-impl SyncKeys {
+impl<C: Crypto> SyncKeysWith<C> {
     pub fn new(entropy: &[u8]) -> Self {
-        let name_key = derive(entropy, "name-key");
+        let name_key = derive::<C>(entropy, "name-key");
         let chain_tag = Self::tag_with(&name_key, "chain");
-        SyncKeys {
-            file_key: derive(entropy, "file-key"),
+        SyncKeysWith {
+            file_key: derive::<C>(entropy, "file-key"),
             name_key,
-            password_key: derive(entropy, "password-key"),
-            password_nonce_key: derive(entropy, "password-nonce-key"),
+            password_key: derive::<C>(entropy, "password-key"),
+            password_nonce_key: derive::<C>(entropy, "password-nonce-key"),
             chain_tag,
+            crypto: PhantomData,
         }
     }
 
     fn tag_with(name_key: &[u8; KEY_BYTES], label: &str) -> String {
-        base32_encode(&Backend::hmac_sha256(name_key, &[label.as_bytes()])[..16])
+        base32_encode(&C::hmac_sha256(name_key, &[label.as_bytes()])[..16])
     }
 
     pub fn chain_tag(&self) -> &str {
@@ -115,34 +122,18 @@ impl SyncKeys {
 
     pub fn seal(&self, payload: &[u8], scope_tag: &str, file_id: &str) -> Result<Vec<u8>, Error> {
         let mut nonce = [0u8; NONCE_BYTES];
-        Backend::fill_random(&mut nonce).map_err(|_| Error::Random)?;
-        self.seal_with(payload, scope_tag, file_id, &nonce)
-    }
-
-    #[cfg(any(test, feature = "fixtures"))]
-    pub fn seal_with_nonce(
-        &self,
-        payload: &[u8],
-        scope_tag: &str,
-        file_id: &str,
-        nonce: &[u8; NONCE_BYTES],
-    ) -> Result<Vec<u8>, Error> {
-        self.seal_with(payload, scope_tag, file_id, nonce)
-    }
-
-    fn seal_with(
-        &self,
-        payload: &[u8],
-        scope_tag: &str,
-        file_id: &str,
-        nonce: &[u8; NONCE_BYTES],
-    ) -> Result<Vec<u8>, Error> {
+        C::fill_random(&mut nonce).map_err(|_| Error::Random)?;
         let plain = framed(payload, PADDING)?;
-        let sealed = Backend::aes256gcm_seal(&self.file_key, nonce, &self.associated_data(scope_tag, file_id), &plain)
-            .map_err(|_| Error::Format)?;
+        let sealed = C::aes256gcm_seal(
+            &self.file_key,
+            &nonce,
+            &self.associated_data(scope_tag, file_id),
+            &plain,
+        )
+        .map_err(|_| Error::Format)?;
         let mut file = Vec::with_capacity(MAGIC.len() + NONCE_BYTES + sealed.len());
         file.extend_from_slice(MAGIC);
-        file.extend_from_slice(nonce);
+        file.extend_from_slice(&nonce);
         file.extend_from_slice(&sealed);
         Ok(file)
     }
@@ -152,7 +143,7 @@ impl SyncKeys {
             return Err(Error::Format);
         }
         let (nonce, sealed) = split_box(&file[MAGIC.len()..]);
-        let plain = Backend::aes256gcm_open(
+        let plain = C::aes256gcm_open(
             &self.file_key,
             &nonce,
             &self.associated_data(scope_tag, file_id),
@@ -185,10 +176,10 @@ impl SyncKeys {
         let plain = framed(password.as_bytes(), PASSWORD_PADDING)?;
         let aad = Self::password_associated_data(origin, username)?;
         let aad_length = length_prefix(aad.len())?;
-        let synthetic = Backend::hmac_sha256(&self.password_nonce_key, &[&aad_length, &aad, &plain]);
+        let synthetic = C::hmac_sha256(&self.password_nonce_key, &[&aad_length, &aad, &plain]);
         let mut nonce = [0u8; NONCE_BYTES];
         nonce.copy_from_slice(&synthetic[..NONCE_BYTES]);
-        let sealed = Backend::aes256gcm_seal(&self.password_key, &nonce, &aad, &plain).map_err(|_| Error::Format)?;
+        let sealed = C::aes256gcm_seal(&self.password_key, &nonce, &aad, &plain).map_err(|_| Error::Format)?;
         let mut data = Zeroizing::new(Vec::with_capacity(1 + NONCE_BYTES + sealed.len()));
         data.push(PASSWORD_VERSION);
         data.extend_from_slice(&nonce);
@@ -203,8 +194,7 @@ impl SyncKeys {
         }
         let (nonce, body) = split_box(&data[1..]);
         let aad = Self::password_associated_data(origin, username)?;
-        let plain =
-            Backend::aes256gcm_open(&self.password_key, &nonce, &aad, body).map_err(|_| Error::Authentication)?;
+        let plain = C::aes256gcm_open(&self.password_key, &nonce, &aad, body).map_err(|_| Error::Authentication)?;
         let password = std::str::from_utf8(unframed(&plain)?).map_err(|_| Error::Format)?;
         Ok(Zeroizing::new(
             password.strip_prefix(BYTE_ORDER_MARK).unwrap_or(password).to_owned(),
