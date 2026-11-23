@@ -245,6 +245,22 @@ test("a signal is forwarded to each lane, which finishes its own cleanup before 
   assert.ok(await gone(grandchildPid), "the bundler's child survived");
 });
 
+test("once a signal starts the shutdown, a lane exiting with the signal's code can't replace the ratchet's exit code", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-sole-exit-"));
+  const ready = join(dir, "ready");
+  const lane = `require("fs").writeFileSync(${JSON.stringify(ready)}, String(process.pid)); process.on("SIGTERM", () => process.exit(143)); setInterval(() => {}, 1000);`;
+  const ratchet = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { stopOnSignals, spawnAsync, finish } from ${JSON.stringify(ratchetUrl)};
+    stopOnSignals({ deadlineMs: 2000 });
+    try { await spawnAsync(process.execPath, ["-e", ${JSON.stringify(lane)}], { lane: true }); finish(0); }
+    catch { finish(2); }
+    setInterval(() => {}, 1000);`], { stdio: "ignore" });
+  const exited = new Promise((resolve) => ratchet.once("exit", (code, signal) => resolve(code ?? signal)));
+  await waitForFile(ready);
+  ratchet.kill("SIGTERM");
+  assert.equal(await exited, 143);
+});
+
 test("a lane that doesn't exit by the deadline is killed with its whole process group", { timeout: 30_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "ratchet-deadline-"));
   const ready = join(dir, "ready");

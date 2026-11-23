@@ -424,8 +424,13 @@ const killGroup = (child) => {
   } catch {}
 };
 
+let stopping = false;
+
+export function finish(code) {
+  if (!stopping) process.exit(code);
+}
+
 export function stopOnSignals({ deadlineMs = LANE_STOP_DEADLINE_MS } = {}) {
-  let stopping = false;
   for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
     process.on(sig, async () => {
       if (stopping) return;
@@ -517,7 +522,7 @@ async function run(flags) {
   console.error(`[ratchet] the same verdict from the saved reports: node ${shellQuote(join(here, "ratchet.mjs"))} check ${replayArgs({ files, retryFiles, microFile, instr }).map(shellQuote).join(" ")}`);
   const ok = printCheck(result, ceilings, { quiet: true });
   console.error(`[ratchet] ${((Date.now() - started) / 1000).toFixed(0)}s`);
-  process.exit(ok ? 0 : 1);
+  finish(ok ? 0 : 1);
 }
 
 async function baseline(flags) {
@@ -593,7 +598,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       process.exit(64);
     }
   } catch (error) {
-    console.error(String(error?.message ?? error));
-    process.exit(2);
+    if (!stopping) {
+      console.error(String(error?.message ?? error));
+      process.exit(2);
+    }
   }
 }
