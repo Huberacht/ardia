@@ -246,7 +246,7 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
     const shown = shownTabIds(s);
     for (const id of hiddenSince.keys()) if (!hasTab(s, id) || shown.has(id)) hiddenSince.delete(id);
     for (const id of webviews.keys()) if (hasTab(s, id) && !shown.has(id) && s.tabs[id]!.lastActiveAt >= (hiddenSince.get(id) ?? Infinity)) hiddenSince.delete(id);
-    for (const id of webviews.keys()) if (hasTab(s, id) && !shown.has(id) && !hiddenSince.has(id)) hiddenSince.set(id, now);
+    for (const id of webviews.keys()) if (hasTab(s, id) && !shown.has(id) && !presenters.get(id) && !hiddenSince.has(id)) hiddenSince.set(id, now);
     for (const [id, at] of quietUntil) if (at <= now) quietUntil.delete(id);
     for (const id of keptTabs) if (!hasTab(s, id)) keptTabs.delete(id);
     let raw: unknown;
@@ -271,12 +271,32 @@ const ownerMoved = (s: BrowserState, owner: Owner) => owner.tabIds.some((id) => 
 
 let rearm = () => {};
 
-export function noteTabVisibility(tabId: string, visible: boolean) {
+const presenters = new Map<string, number>();
+
+function markHidden(tabId: string) {
   if (!started || !watchOn(useBrowser.getState())) return;
-  if (visible) hiddenSince.delete(tabId);
-  else if (!hiddenSince.has(tabId)) hiddenSince.set(tabId, clock());
+  if (!presenters.get(tabId) && !hiddenSince.has(tabId)) hiddenSince.set(tabId, clock());
   rearm();
 }
+
+export function presentTab(tabId: string): () => void {
+  presenters.set(tabId, (presenters.get(tabId) ?? 0) + 1);
+  if (started && watchOn(useBrowser.getState())) {
+    hiddenSince.delete(tabId);
+    rearm();
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (presenters.get(tabId) ?? 1) - 1;
+    if (left > 0) presenters.set(tabId, left);
+    else presenters.delete(tabId);
+    markHidden(tabId);
+  };
+}
+
+export const noteTabHidden = (tabId: string) => markHidden(tabId);
 
 function dropWork() {
   hiddenSince.clear();

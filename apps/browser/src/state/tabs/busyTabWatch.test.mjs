@@ -35,7 +35,7 @@ registerHooks({
 const { useBrowser } = await import("../browser/store.ts");
 const { webviews, webviewRef } = await import("../../platform/webviews.ts");
 const { readHeat, sustainedBusy, keptActive, siteToKeepActive, validReadings } = await import("./busyProcesses.ts");
-const { watchBusyTabs, startBusyTabWatch, toastName, noteTabVisibility } = await import("./busyTabWatch.ts");
+const { watchBusyTabs, startBusyTabWatch, toastName, presentTab, noteTabHidden } = await import("./busyTabWatch.ts");
 const { shownTabIds } = await import("./shownTabs.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
 const { slowTimersForTests } = await import("../../platform/slowTimers.ts");
@@ -378,6 +378,29 @@ test("the watch has no timer while no loaded tab is hidden, wakes when a webview
   webviews.clear();
 });
 
+test("#4031 S2: a holder that goes out of sight when the frozen copy showing it closes arms the watch, with no store listener, webview or lifecycle change", () => {
+  const timers = slowTimersForTests(() => Date.now());
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [], busyTabWarnings: true });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const front = Object.keys(S().tabs)[0];
+  const holder = S().newTab(w, { url: "https://music.example/", background: true });
+  webviews.clear();
+  webviews.set(holder, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  S().activate(holder);
+  startBusyTabWatch();
+  noteTabHidden(front);
+  const frozenCopy = presentTab(holder);
+  assert.equal(timers.pending(), null, "the holder is the only loaded tab and it is shown");
+  S().activate(front);
+  assert.equal(timers.pending(), null, "the store moving it out of sight wakes nothing: there is no store listener");
+  frozenCopy();
+  assert.notEqual(timers.pending(), null, "the copy that showed it going away arms the watch");
+  webviews.clear();
+  noteTabHidden(holder);
+  assert.equal(timers.pending(), null, "and disarms again once nothing loaded is hidden");
+});
+
 test("Warn about busy background tabs: off stops the watch and its reads, on arms it again; it persists, is counted, and is macOS only", async () => {
   assert.equal(parseSettings({}).busyTabWarnings, true, "on by default");
   assert.equal(parseSettings({ busyTabWarnings: false }).busyTabWarnings, false, "a saved off is kept");
@@ -387,7 +410,7 @@ test("Warn about busy background tabs: off stops the watch and its reads, on arm
   const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
   reset();
   startBusyTabWatch();
-  noteTabVisibility(hidden, false);
+  noteTabHidden(hidden);
   assert.notEqual(timers.pending(), null, "armed: a loaded tab is hidden");
   S().updateSettings({ busyTabWarnings: false });
   assert.equal(timers.pending(), null, "off: no timer at all");
@@ -873,7 +896,8 @@ test("#4018: no store listener; a tab shown between ticks restarts its hidden ti
   const cases = [
     ["activation (tabs.ts sets lastActiveAt)", (busy) => S().updateTab(busy, { lastActiveAt: Date.now() })],
     ["a peek becoming the tab (peek.ts sets lastActiveAt)", (busy) => S().updateTab(busy, { lastActiveAt: Date.now() })],
-    ["a split pane, which reports being laid out and taken away", (busy) => (noteTabVisibility(busy, true), noteTabVisibility(busy, false))],
+    ["a split pane, which reports being laid out and taken away", (busy) => presentTab(busy)()],
+    ["a frozen pin in another window presenting the holder's page, then switched away from", (busy) => presentTab(busy)()],
   ];
   for (const [i, [name, showAndHide]] of cases.entries()) {
     const pid = 141 + i;
@@ -920,4 +944,37 @@ test("#4018: an owner tab that closes or navigates forces a fresh ownership look
     assert.equal(globalThis.busyTest.toasts.length, 1, `${name}: and the hidden tab left in the process is warned about`);
     webviews.clear();
   }
+});
+
+test("#4031 S1: a holder shown by a frozen pin and by its own pane stays shown until both stop, then its hidden time starts", async (t) => {
+  const start = Date.now() + 17000 * MINUTE;
+  t.mock.timers.enable({ apis: ["Date"], now: start });
+  const at = (sec) => t.mock.timers.setTime(start + sec * SECOND);
+  const pid = 161;
+  const { busy } = hiddenBusyTab(start, pid);
+  const tick = (sec) => (at(sec), watchBusyTabs(start + sec * SECOND, async () => [{ pid, started: 9, cpuMs: sec * 1000 }]));
+  const frozenCopy = presentTab(busy);
+  const ownPane = presentTab(busy);
+  for (let sec = 0; sec <= 100; sec += 10) await tick(sec);
+  at(105);
+  ownPane();
+  noteTabHidden(busy);
+  for (let sec = 110; sec <= 230; sec += 10) await tick(sec);
+  assert.equal(globalThis.busyTest.toasts.length, 0, "the frozen copy still shows it, so its own pane hiding doesn't start the clock");
+  at(235);
+  frozenCopy();
+  for (let sec = 240; sec <= 350; sec += 10) await tick(sec);
+  assert.equal(globalThis.busyTest.toasts.length, 0, "hidden only since 235 s");
+  await tick(360);
+  assert.equal(globalThis.busyTest.toasts.length, 1, "two minutes after the last presenter stopped");
+  webviews.clear();
+});
+
+test("#4031: FrozenPage presents the holder it shows, and the pane presents its own tab, with no new store subscription", () => {
+  const frozen = readFileSync(new URL("../../components/window/FrozenPage.tsx", import.meta.url), "utf8");
+  assert.match(frozen, /const holderId = useTab\(tabId, \(t\) => holderOfPage\(t\)\);/, "the existing useTab selector returns the holder instead of a flag");
+  assert.equal((frozen.match(/useTab\(/g) ?? []).length, 1);
+  assert.match(frozen, /useEffect\(\(\) => \(holderId \? presentTab\(holderId\) : undefined\), \[holderId\]\)/);
+  const pane = readFileSync(new URL("../../components/window/TabWebView.tsx", import.meta.url), "utf8");
+  assert.match(pane, /useEffect\(\(\) => \(visible \? presentTab\(tabId\) : noteTabHidden\(tabId\)\), \[tabId, visible\]\)/);
 });
