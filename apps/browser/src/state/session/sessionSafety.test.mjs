@@ -1042,3 +1042,23 @@ test("stopping persistence cancels the save it had queued: session.json is not w
     mock.timers.reset();
   }
 });
+
+test("stopping persistence while a copy retry is running keeps it from recreating session.json", async () => {
+  realSession();
+  stub.docs.set("session.json", "{");
+  stub.refusedCopies.on = true;
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const stop = startPersistence();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    stub.docs.delete("session.json");
+    stub.refusedCopies.on = false;
+    monotonicSkew += 120_000;
+    mock.timers.tick(60_000);
+    stop();
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    assert.equal(stub.docs.has("session.json"), false, "the stopped instance recreated session.json from its retry");
+  } finally {
+    mock.timers.reset();
+  }
+});
