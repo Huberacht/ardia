@@ -26,10 +26,12 @@ export const Favicon = memo(function Favicon({
 }) {
   const theme = useTheme();
   useAppearanceDark();
-  const viewer = usePrivateViewer() ?? profileId;
-  const cached = useFavicon(url, direct ? null : favicon, viewer);
+  const privateWindow = usePrivateViewer();
+  const viewer = privateWindow ?? profileId;
+  const source = privateWindow ? profileId : undefined;
+  const cached = useFavicon(url, direct ? null : favicon, viewer, source);
   const resolved = direct && favicon ? { uri: favicon, profileId: "" } : cached;
-  const shape = useFaviconTheme(theme.dark || direct ? "" : url, favicon, viewer);
+  const shape = useFaviconTheme(theme.dark || direct ? "" : url, favicon, viewer, source);
   const white = shape?.kind === "template" && !!shape.stroke;
   const [broken, setBroken] = useState<string | null>(null);
   if (!url && !resolved) return <NewTabIcon size={size} opacity={opacity} />;

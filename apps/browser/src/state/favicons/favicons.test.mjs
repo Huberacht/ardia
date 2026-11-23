@@ -27,6 +27,7 @@ registerHooks({
 const { adoptFavicons, askFaviconTheme, faviconFailed, faviconOutlived, noteFavicon, privateViewer, pruneEngineFavicons, resolveFavicon, startFavicons, useFavicons } = await import("./favicons.ts");
 const { useFavicon, usePrivateViewer } = await import("./faviconHooks.ts");
 const { WindowContext } = await import("../browser/hooks.ts");
+const { lookupOrder, pendingRetries } = await import("./faviconKeys.ts");
 const { seedFavicons } = await import("./launchFavicons.ts");
 const { adoptIconPage, dropOutlivedFavicon, noteIconPage } = await import("./iconPage.ts");
 const { useBrowser } = await import("../browser/store.ts");
@@ -277,6 +278,53 @@ test("a refused peek is asked again three times at most, and closing the window 
     stop();
     delete globalThis.faviconsForTest;
     delete globalThis.peekFaviconsForTest;
+  }
+});
+
+test("a peek refused after its window closed keeps nothing for a retry", async () => {
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const stop = startFavicons();
+  const held = [];
+  globalThis.faviconsForTest = () => empty();
+  globalThis.peekFaviconsForTest = () => new Promise((resolve, reject) => held.push(() => reject(new Error("favicons not loaded"))));
+  const warn = console.warn;
+  console.warn = () => {};
+  const windowId = S().createWindow({ kind: "private", profileId: "default" });
+  const viewer = S().windows[windowId].profileId;
+  const row = mount(() => useFavicon("https://refused-after-close.test/", null, viewer));
+  try {
+    await waitFor(() => held.length === 1);
+    S().closeWindow(windowId);
+    await settle();
+    held[0]();
+    await settle();
+    assert.equal(pendingRetries(), 0);
+  } finally {
+    console.warn = warn;
+    row.unmount();
+    stop();
+    delete globalThis.faviconsForTest;
+    delete globalThis.peekFaviconsForTest;
+  }
+});
+
+test("a row inside a private window that names its profile shows that profile's icon before Default's", () => {
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const page = "https://same-page-two-profiles.test/";
+  const windowId = S().createWindow({ kind: "private", profileId: "default" });
+  const viewer = S().windows[windowId].profileId;
+  assert.deepEqual(lookupOrder(viewer, "work").slice(0, 3), [viewer, "work", "default"]);
+  assert.deepEqual(lookupOrder(viewer, viewer).slice(0, 2), [viewer, "default"]);
+  const before = useFavicons.getState();
+  useFavicons.setState({ profiles: { ...before.profiles, [engineProfile(S(), "default")]: { pages: { [page]: "data:default" }, srcs: {}, appearances: {} }, work: { pages: { [page]: "data:work" }, srcs: {}, appearances: {} } } });
+  try {
+    assert.equal(resolveFavicon(page, null, viewer, "work")?.uri, "data:work");
+    assert.equal(resolveFavicon(page, null, viewer)?.uri, "data:default");
+  } finally {
+    useFavicons.setState(before);
+    S().closeWindow(windowId);
   }
 });
 

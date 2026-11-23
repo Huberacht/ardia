@@ -239,9 +239,9 @@ function lookupIn(key: string, url: string, src: string | null | undefined): str
   return (src ? icons.srcs[src] : undefined) ?? icons.pages[page] ?? undefined;
 }
 
-export function resolveFavicon(url: string, src?: string | null, profileId?: string): ResolvedFavicon | null {
+export function resolveFavicon(url: string, src?: string | null, profileId?: string, source?: string): ResolvedFavicon | null {
   if (!url) return null;
-  for (const id of lookupOrder(profileId))
+  for (const id of lookupOrder(profileId, source))
     for (const key of keysFor(profileId, id)) {
       const uri = lookupIn(key, url, src);
       if (uri) return { uri, profileId: isBorrowed(key) ? key : id };
@@ -251,22 +251,22 @@ export function resolveFavicon(url: string, src?: string | null, profileId?: str
 
 export const useAppearanceDark = () => useKeyed(watchAppDark, ALL, () => useBrowser.getState().ui.appDark);
 
-function answered(url: string, profileId?: string): boolean {
+function answered(url: string, profileId?: string, source?: string): boolean {
   const { profiles } = useFavicons.getState();
   const page = withoutFragment(url);
-  return lookupOrder(profileId).every((id) => !askable(id) || keysFor(profileId, id).some((key) => profiles[key]?.pages[page] !== undefined));
+  return lookupOrder(profileId, source).every((id) => !askable(id) || keysFor(profileId, id).some((key) => profiles[key]?.pages[page] !== undefined));
 }
 
 
-type Watcher = { url: string; src?: string | null; profileId?: string; known?: boolean };
+type Watcher = { url: string; src?: string | null; profileId?: string; source?: string; known?: boolean };
 const watchers = new Map<string, Set<Watcher>>();
 
 function check(w: Watcher) {
-  const known = answered(w.url, w.profileId);
+  const known = answered(w.url, w.profileId, w.source);
   if (known === w.known) return;
   w.known = known;
   if (!known) {
-    for (const id of lookupOrder(w.profileId)) if (askable(id)) ask(askKey(w.profileId, id), withoutFragment(w.url));
+    for (const id of lookupOrder(w.profileId, w.source)) if (askable(id)) ask(askKey(w.profileId, id), withoutFragment(w.url));
   } else if (w.src && w.profileId && !resolveFavicon(w.url, w.src, w.profileId)) fetchMissing(w.profileId, w.url, w.src);
 }
 
