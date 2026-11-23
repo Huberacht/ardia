@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +19,9 @@ Pins: engine/patches/build/env.sh, engine/patches/build/helium-pins.ini, scripts
 scripts/windows/engine/prebuilt.json, whose source commit's helium-pins.ini says which Helium the published Windows
 engine was built from. Upstream: the latest releases of imputnet/helium-chromium, helium-macos, helium-linux and
 helium-windows, chromium_version.txt at the newest helium-chromium release, and Chromium stable from chromiumdash for
-context. A run that can't read all of it exits 1 and changes no issue; a GitHub rate limit stops it cleanly.`;
+context. Pin files that disagree, or upstream it can't read in full, exit 1 and change no issue; a GitHub rate
+limit stops it cleanly. The tracking issue and its comments count only when github-actions[bot] wrote them, so --issue
+writes only from the workflow (GITHUB_ACTIONS=true); elsewhere it needs --dry-run.`;
 
 export const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const PIN_FILES = {
@@ -40,8 +43,7 @@ export const PLATFORMS = [
 ];
 export const ISSUE_TITLE = "Engine: Chromium or Helium upstream is ahead of our pins";
 export const ISSUE_MARKER = "<!-- ardia-upstream-pins -->";
-export const CLOSE_MARKER = "<!-- ardia-upstream-pins:closed -->";
-export const REOPEN_MARKER = "<!-- ardia-upstream-pins:reopened -->";
+export const WORKFLOW_BOT = "github-actions[bot]";
 export const ISSUE_LABEL = "todo";
 export const MAX_ISSUE_PAGES = 200;
 const DEFAULT_REPOSITORY = "ardia-browser/ardia";
@@ -221,25 +223,39 @@ function newestOf(...versions) {
   return [...versions].sort(compareVersions).at(-1);
 }
 
+function agreedPin(values) {
+  const distinct = [...new Set(values.map((value) => value ?? null))];
+  if (distinct.length === 1) return { pinned: distinct[0], disagree: false };
+  return { pinned: distinct.map((value) => value ?? "?").join(" ≠ "), disagree: true };
+}
+
 export function compare(pins, upstream) {
   const platformPins = {
-    macos: { chromium: pins.env.chromium, "helium-chromium": pins.env.heliumChromium, "helium-macos": pins.env.heliumMacos },
-    linux: { chromium: pins.env.chromium, "helium-chromium": pins.env.heliumChromium, "helium-linux": pins.env.heliumLinux },
+    macos: {
+      chromium: [pins.env.chromium, pins.macLinuxIni.chromium],
+      "helium-chromium": [pins.env.heliumChromium, pins.macLinuxIni.heliumChromium.tag],
+      "helium-macos": [pins.env.heliumMacos, pins.macLinuxIni.heliumMacos.tag],
+    },
+    linux: {
+      chromium: [pins.env.chromium, pins.macLinuxIni.chromium],
+      "helium-chromium": [pins.env.heliumChromium, pins.macLinuxIni.heliumChromium.tag],
+      "helium-linux": [pins.env.heliumLinux, pins.macLinuxIni.heliumLinux.tag],
+    },
     windows: {
-      chromium: pins.windowsIni.chromium,
-      "helium-chromium": pins.windowsIni.heliumChromium.tag,
-      "helium-windows": pins.windowsIni.heliumWindows.tag,
+      chromium: [pins.windowsIni.chromium, pins.windowsPrebuilt.chromium, pins.env.chromium],
+      "helium-chromium": [pins.windowsIni.heliumChromium.tag, pins.env.heliumChromium],
+      "helium-windows": [pins.windowsIni.heliumWindows.tag],
     },
   };
   const platforms = PLATFORMS.map(({ id, name, platformRepo }) => {
     const parts = ["helium-chromium", platformRepo, "chromium"].map((part) => {
-      const pinned = platformPins[id][part] ?? null;
+      const { pinned, disagree } = agreedPin(platformPins[id][part]);
       const latest = (part === "chromium" ? upstream.heliumChromiumChromium : upstream.latest[part]) ?? null;
-      return { part, pinned, upstream: latest, state: stateOf(pinned, latest) };
+      return { part, pinned, upstream: latest, state: disagree ? "unknown" : stateOf(pinned, latest) };
     });
     if (id === "windows") {
       const pinned = upstream.prebuilt?.heliumWindows ?? null;
-      const target = newestOf(platformPins.windows["helium-windows"], upstream.latest["helium-windows"]);
+      const target = newestOf(pins.windowsIni.heliumWindows.tag, upstream.latest["helium-windows"]);
       parts.push({ part: "windows-prebuilt", pinned, upstream: target, state: stateOf(pinned, target) });
     }
     const state = WORST.find((candidate) => parts.some((part) => part.state === candidate)) ?? "current";
@@ -247,17 +263,29 @@ export function compare(pins, upstream) {
   });
   const parts = platforms.flatMap((platform) => platform.parts);
   const errors = upstream.errors ?? [];
+  const pinProblems = checkPinConsistency(pins);
   return {
     platforms,
-    complete: errors.length === 0 && parts.every((part) => part.state !== "unknown"),
+    complete: errors.length === 0 && pinProblems.length === 0 && parts.every((part) => part.state !== "unknown"),
     behind: parts.some((part) => part.state === "behind"),
     ahead: parts.some((part) => part.state === "ahead"),
     chromiumStable: upstream.chromiumStable ?? null,
     heliumChromiumTag: upstream.latest["helium-chromium"] ?? null,
     prebuiltSource: pins.windowsPrebuilt.source ?? null,
+    pinProblems,
     errors,
   };
 }
+
+export function stateToken(report) {
+  const lines = report.platforms.flatMap((platform) => platform.parts.map((part) => `${platform.id} ${part.part} ${part.pinned} ${part.upstream} ${part.state}`));
+  return createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 12);
+}
+
+export const closeMarker = (token) => `<!-- ardia-upstream-pins:closed:${token} -->`;
+export const reopenMarker = (token) => `<!-- ardia-upstream-pins:reopened:${token} -->`;
+const CLOSE_PREFIX = "<!-- ardia-upstream-pins:closed:";
+const REOPEN_PREFIX = "<!-- ardia-upstream-pins:reopened:";
 
 const PART_LABELS = {
   chromium: "Chromium (helium-chromium's chromium_version.txt)",
@@ -285,6 +313,7 @@ export function renderReport(report) {
   if (report.chromiumStable) {
     out.push(`Chromium stable is ${report.chromiumStable} (context only; Helium decides which Chromium we can take).`);
   }
+  for (const problem of report.pinProblems ?? []) out.push(`Pin files disagree: ${problem}`);
   for (const error of report.errors) out.push(`Could not read: ${error}`);
   return out.join("\n").trimEnd();
 }
@@ -314,28 +343,55 @@ export function renderCloseComment(report) {
   const lead = ahead.length
     ? ["No engine pin is behind upstream any more, so this is done. These are ahead of upstream's latest release:", ...ahead]
     : ["Every engine pin matches upstream's latest release again, so this is done."];
-  return [CLOSE_MARKER, ...lead, "", renderReport(report)].join("\n");
+  return [closeMarker(stateToken(report)), ...lead, "", renderReport(report)].join("\n");
 }
 
-export function renderReopenComment() {
-  return [REOPEN_MARKER, "Upstream has moved past the engine's pins again; the description lists what is behind."].join("\n");
+export function renderReopenComment(report) {
+  return [reopenMarker(stateToken(report)), "Upstream has moved past the engine's pins again; the description lists what is behind."].join("\n");
 }
 
-export function planIssue(report, tracking) {
-  if (!report.complete) return { action: "fail", reason: "upstream or the published engine's pins could not be read completely, so no issue is changed" };
+export const isWorkflowBot = (user) => Boolean(user) && user.login === WORKFLOW_BOT && user.type === "Bot";
+
+export function commentHistory(comments) {
+  const own = comments.filter((comment) => isWorkflowBot(comment.user)).map((comment) => comment.body ?? "");
+  const lastClose = own.findLastIndex((body) => body.includes(CLOSE_PREFIX));
+  const lastReopen = own.findLastIndex((body) => body.includes(REOPEN_PREFIX));
+  return {
+    needsReopenComment: lastClose >= 0 && lastReopen < lastClose,
+    hasCloseComment: (token) => own.some((body, at) => at > lastReopen && body.includes(closeMarker(token))),
+  };
+}
+
+export function planIssue(report, tracking, comments = []) {
+  if (!report.complete) {
+    const reason = report.pinProblems?.length
+      ? "the pin files disagree, so no issue is changed"
+      : "upstream or the published engine's pins could not be read completely, so no issue is changed";
+    return { action: "fail", reason, steps: [] };
+  }
+  const history = commentHistory(comments);
   if (report.behind) {
     const body = renderIssueBody(report);
-    if (!tracking) return { action: "create", title: ISSUE_TITLE, body, labels: [ISSUE_LABEL] };
-    if (tracking.state !== "open") return { action: "reopen", number: tracking.number, body, comment: renderReopenComment() };
-    if ((tracking.body ?? "").replace(/\r\n/g, "\n") === body) return { action: "none", reason: `#${tracking.number} is already up to date` };
-    return { action: "update", number: tracking.number, body };
+    if (!tracking) return { action: "create", title: ISSUE_TITLE, body, labels: [ISSUE_LABEL], steps: [] };
+    const steps = [];
+    const reopening = tracking.state !== "open";
+    if (reopening) steps.push({ kind: "edit", fields: { state: "open", body } });
+    else if ((tracking.body ?? "").replace(/\r\n/g, "\n") !== body) steps.push({ kind: "edit", fields: { body } });
+    if (history.needsReopenComment) steps.push({ kind: "comment", body: renderReopenComment(report) });
+    if (!steps.length) return { action: "none", number: tracking.number, reason: `#${tracking.number} is already up to date`, steps };
+    return { action: reopening ? "reopen" : "update", number: tracking.number, steps };
   }
-  if (tracking?.state === "open") return { action: "close", number: tracking.number, comment: renderCloseComment(report) };
-  return { action: "none", reason: "nothing is behind and no tracking issue is open" };
+  if (tracking?.state === "open") {
+    const steps = [];
+    if (!history.hasCloseComment(stateToken(report))) steps.push({ kind: "comment", body: renderCloseComment(report) });
+    steps.push({ kind: "edit", fields: { state: "closed", state_reason: "completed" } });
+    return { action: "close", number: tracking.number, steps };
+  }
+  return { action: "none", reason: "nothing is behind and no tracking issue is open", steps: [] };
 }
 
 export function findTrackingIssue(issues) {
-  const tracking = issues.filter((issue) => !issue.pull_request && (issue.body ?? "").includes(ISSUE_MARKER));
+  const tracking = issues.filter((issue) => !issue.pull_request && isWorkflowBot(issue.user) && (issue.body ?? "").includes(ISSUE_MARKER));
   const open = tracking.filter((issue) => issue.state === "open").sort((a, b) => a.number - b.number);
   if (open.length) return open[0];
   return tracking.sort((a, b) => b.number - a.number)[0] ?? null;
@@ -456,26 +512,19 @@ export async function fetchUpstream({ client, fetchImpl = globalThis.fetch, preb
   return { latest, heliumChromiumChromium, chromiumStable, prebuilt, errors };
 }
 
-export async function listAllIssues(client, repo, maxPages = MAX_ISSUE_PAGES) {
-  const issues = [];
+async function listAll(client, path, what, maxPages) {
+  const items = [];
   for (let page = 1; ; page++) {
-    if (page > maxPages) throw new Error(`more than ${maxPages} pages of issues in ${repo}; refusing to guess whether the tracking issue exists`);
-    const batch = await client.request("GET", `/repos/${repo}/issues?state=all&per_page=100&page=${page}`);
-    if (!Array.isArray(batch)) throw new Error(`issues page ${page} of ${repo} is not a list`);
-    issues.push(...batch);
-    if (batch.length < 100) return issues;
+    if (page > maxPages) throw new Error(`more than ${maxPages} pages of ${what}; refusing to guess what is there`);
+    const batch = await client.request("GET", `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+    if (!Array.isArray(batch)) throw new Error(`page ${page} of ${what} is not a list`);
+    items.push(...batch);
+    if (batch.length < 100) return items;
   }
 }
 
-async function lastComment(client, repo, number) {
-  let last = null;
-  for (let page = 1; page <= MAX_ISSUE_PAGES; page++) {
-    const batch = await client.request("GET", `/repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`);
-    if (batch.length) last = batch.at(-1);
-    if (batch.length < 100) return last;
-  }
-  throw new Error(`more than ${MAX_ISSUE_PAGES} pages of comments on #${number}`);
-}
+export const listAllIssues = (client, repo, maxPages = MAX_ISSUE_PAGES) =>
+  listAll(client, `/repos/${repo}/issues?state=all`, `issues in ${repo}`, maxPages);
 
 export async function syncIssue({ client, repo, report, dryRun, log = console.log, maxPages = MAX_ISSUE_PAGES }) {
   if (!report.complete) {
@@ -484,7 +533,8 @@ export async function syncIssue({ client, repo, report, dryRun, log = console.lo
     return plan;
   }
   const tracking = findTrackingIssue(await listAllIssues(client, repo, maxPages));
-  const plan = planIssue(report, tracking);
+  const comments = tracking ? await listAll(client, `/repos/${repo}/issues/${tracking.number}/comments`, `comments on #${tracking.number}`, maxPages) : [];
+  const plan = planIssue(report, tracking, comments);
   const prefix = dryRun ? "[dry run] would " : "";
   if (plan.action === "none") {
     log(`Tracking issue: nothing to do (${plan.reason}).`);
@@ -496,21 +546,14 @@ export async function syncIssue({ client, repo, report, dryRun, log = console.lo
       const created = await client.request("POST", `/repos/${repo}/issues`, { body: { title: plan.title, body: plan.body, labels: plan.labels } });
       log(`Opened ${created.html_url}`);
     }
-  } else if (plan.action === "reopen") {
-    log(`Tracking issue: ${prefix}reopen #${plan.number} with the new list.`);
-    if (!dryRun) {
-      await client.request("PATCH", `/repos/${repo}/issues/${plan.number}`, { body: { state: "open", body: plan.body } });
-      await client.request("POST", `/repos/${repo}/issues/${plan.number}/comments`, { body: { body: plan.comment } });
-    }
-  } else if (plan.action === "update") {
-    log(`Tracking issue: ${prefix}update #${plan.number}.`);
-    if (!dryRun) await client.request("PATCH", `/repos/${repo}/issues/${plan.number}`, { body: { body: plan.body } });
-  } else if (plan.action === "close") {
-    const already = (await lastComment(client, repo, plan.number))?.body?.includes(CLOSE_MARKER) ?? false;
-    log(`Tracking issue: ${prefix}${already ? "close" : "comment on and close"} #${plan.number}.`);
-    if (!dryRun) {
-      if (!already) await client.request("POST", `/repos/${repo}/issues/${plan.number}/comments`, { body: { body: plan.comment } });
-      await client.request("PATCH", `/repos/${repo}/issues/${plan.number}`, { body: { state: "closed", state_reason: "completed" } });
+    return plan;
+  }
+  const described = plan.steps.map((step) => (step.kind === "comment" ? "comment" : Object.keys(step.fields).includes("state") ? `set ${step.fields.state}` : "update the description"));
+  log(`Tracking issue: ${prefix}${described.join(", then ")} on #${plan.number} (${plan.action}).`);
+  if (!dryRun) {
+    for (const step of plan.steps) {
+      if (step.kind === "comment") await client.request("POST", `/repos/${repo}/issues/${plan.number}/comments`, { body: { body: step.body } });
+      else await client.request("PATCH", `/repos/${repo}/issues/${plan.number}`, { body: step.fields });
     }
   }
   return plan;
@@ -524,15 +567,22 @@ async function main(argv) {
   }
   const pins = readPins();
   const problems = checkPinConsistency(pins);
+  if (problems.length) {
+    for (const problem of problems) console.error(`upstream-pins: ${problem}`);
+    console.error("upstream-pins: the pin files disagree; fix them first (docs/engine-build.md, “Tracking upstream”)");
+    return 1;
+  }
   if (args.has("--check")) {
-    if (problems.length) {
-      for (const problem of problems) console.error(`upstream-pins: ${problem}`);
-      return 1;
-    }
     console.log("upstream-pins: the pin files agree");
     return 0;
   }
-  for (const problem of problems) console.error(`upstream-pins: warning: ${problem}`);
+  const dryRun = args.has("--dry-run") || process.env.DRY_RUN === "true";
+  if (args.has("--issue")) {
+    if (!process.env.GITHUB_REPOSITORY) throw new Error("--issue needs GITHUB_REPOSITORY (owner/name)");
+    if (!dryRun && process.env.GITHUB_ACTIONS !== "true") {
+      throw new Error(`--issue writes only from the workflow, whose ${WORKFLOW_BOT} owns the tracking issue; add --dry-run to try it here`);
+    }
+  }
   const repo = process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
   const client = makeClient({ token: process.env.GITHUB_TOKEN || process.env.GH_TOKEN });
   try {
@@ -550,10 +600,7 @@ async function main(argv) {
       console.log(text);
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Upstream pins\n\n${text}\n`);
     }
-    if (args.has("--issue")) {
-      if (!process.env.GITHUB_REPOSITORY) throw new Error("--issue needs GITHUB_REPOSITORY (owner/name)");
-      await syncIssue({ client, repo, report, dryRun: args.has("--dry-run") || process.env.DRY_RUN === "true" });
-    }
+    if (args.has("--issue")) await syncIssue({ client, repo, report, dryRun });
     if (!report.complete) {
       console.error("upstream-pins: incomplete data, see the report");
       return 1;

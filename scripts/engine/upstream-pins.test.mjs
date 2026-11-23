@@ -4,13 +4,14 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  CLOSE_MARKER,
   ISSUE_LABEL,
   ISSUE_MARKER,
   ISSUE_TITLE,
-  REOPEN_MARKER,
   RateLimited,
+  WORKFLOW_BOT,
   checkPinConsistency,
+  closeMarker,
+  commentHistory,
   compare,
   compareVersions,
   fetchUpstream,
@@ -21,14 +22,19 @@ import {
   pinsFromFiles,
   planIssue,
   readPins,
+  renderIssueBody,
   renderReport,
+  reopenMarker,
   stateOf,
+  stateToken,
   syncIssue,
 } from "./upstream-pins.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./upstream-pins.mjs", import.meta.url));
 const HC = "f32f2c066787492b9ba112dc1be1ad230b53658a";
 const SOURCE = "38e436c33f5ff1174eb0e2125c189b6e241ed8d3";
+const BOT = { login: "github-actions[bot]", type: "Bot" };
+const HUMAN = { login: "someone", type: "User" };
 
 const windowsIni = (heliumChromium, heliumWindows, commit = HC) => `[chromium]
 version = 158.0.8127.36
@@ -211,22 +217,48 @@ test("an unreadable upstream value is unknown, never hidden behind a behind plat
   assert.equal(report.complete, false);
   assert.ok(report.platforms.every((p) => p.state === "unknown"));
   assert.equal(planIssue(report, null).action, "fail");
-  assert.equal(planIssue(report, { number: 9, state: "open", body: "x" }).action, "fail");
+  assert.equal(planIssue(report, { number: 9, state: "open", body: "x", user: BOT }).action, "fail");
 
   const noPrebuilt = compare(pins(), upstreamWith({ prebuilt: null }));
   assert.equal(partOf(noPrebuilt, "windows", "windows-prebuilt").state, "unknown");
   assert.equal(planIssue(noPrebuilt, null).action, "fail");
 });
 
+test("pin files that disagree fail the comparison even when env.sh matches upstream", () => {
+  const stale = pins((f) => ({ ...f, macLinuxIni: f.macLinuxIni.replace("[helium-macos]\ntag = 0.22.2.1", "[helium-macos]\ntag = 0.22.1.1") }));
+  const report = compare(stale, CURRENT);
+  assert.equal(report.complete, false);
+  assert.equal(partOf(report, "macos", "helium-macos").state, "unknown");
+  assert.equal(partOf(report, "macos", "helium-macos").pinned, "0.22.2.1 ≠ 0.22.1.1");
+  assert.ok(report.pinProblems.length > 0);
+  assert.match(renderReport(report), /Pin files disagree: helium-macos tag/);
+  const plan = planIssue(report, { number: 9, state: "open", body: "x", user: BOT });
+  assert.equal(plan.action, "fail");
+  assert.match(plan.reason, /pin files disagree/);
+
+  const staleWindows = compare(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "157.0.1.2", source: SOURCE }) })), CURRENT);
+  assert.equal(partOf(staleWindows, "windows", "chromium").state, "unknown");
+  assert.equal(staleWindows.complete, false);
+});
+
+test("a platform whose latest release is missing makes that pin unknown and fails the run", () => {
+  const report = compare(pins(), upstreamWith({ latest: { "helium-macos": null } }));
+  assert.equal(partOf(report, "macos", "helium-macos").state, "unknown");
+  assert.equal(report.platforms.find((p) => p.id === "macos").state, "unknown");
+  assert.equal(report.complete, false);
+  assert.equal(planIssue(report, null).action, "fail");
+});
+
 test("pins newer than the latest release read as ahead, and the close comment says so", () => {
   const report = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.1.1" } }));
   assert.equal(report.platforms.find((p) => p.id === "macos").state, "ahead");
   assert.equal(report.behind, false);
-  const close = planIssue(report, { number: 9, state: "open", body: "x" });
+  const close = planIssue(report, { number: 9, state: "open", body: "x", user: BOT });
   assert.equal(close.action, "close");
-  assert.doesNotMatch(close.comment, /Every engine pin/);
-  assert.match(close.comment, /No engine pin is behind upstream any more/);
-  assert.match(close.comment, /- macOS: helium-macos 0\.22\.2\.1 → 0\.22\.1\.1/);
+  const comment = close.steps.find((step) => step.kind === "comment").body;
+  assert.doesNotMatch(comment, /Every engine pin/);
+  assert.match(comment, /No engine pin is behind upstream any more/);
+  assert.match(comment, /- macOS: helium-macos 0\.22\.2\.1 → 0\.22\.1\.1/);
 });
 
 test("the issue is opened, updated, reopened, left alone or closed from the report", () => {
@@ -238,33 +270,67 @@ test("the issue is opened, updated, reopened, left alone or closed from the repo
   assert.ok(create.body.startsWith(ISSUE_MARKER));
   assert.match(create.body, /- Windows: helium-windows 0\.22\.2\.1 → 0\.22\.2\.3/);
 
-  assert.deepEqual(planIssue(behind, { number: 9, state: "open", body: create.body }), { action: "none", reason: "#9 is already up to date" });
-  assert.equal(planIssue(behind, { number: 9, state: "open", body: `${ISSUE_MARKER}\nold` }).action, "update");
-  const reopen = planIssue(behind, { number: 9, state: "closed", body: `${ISSUE_MARKER}\nold` });
+  const open = { number: 9, state: "open", body: create.body, user: BOT };
+  assert.equal(planIssue(behind, open).action, "none");
+  const update = planIssue(behind, { ...open, body: `${ISSUE_MARKER}\nold` });
+  assert.deepEqual(update.steps, [{ kind: "edit", fields: { body: create.body } }]);
+
+  const closedOnce = [{ user: BOT, body: `${closeMarker("aaaaaaaaaaaa")}\ndone` }];
+  const reopen = planIssue(behind, { ...open, state: "closed", body: `${ISSUE_MARKER}\nold` }, closedOnce);
   assert.equal(reopen.action, "reopen");
-  assert.ok(reopen.comment.startsWith(REOPEN_MARKER));
+  assert.deepEqual(reopen.steps[0], { kind: "edit", fields: { state: "open", body: create.body } });
+  assert.ok(reopen.steps[1].body.startsWith(reopenMarker(stateToken(behind))));
 
   const current = compare(pins(), CURRENT);
-  const close = planIssue(current, { number: 9, state: "open", body: create.body });
+  const close = planIssue(current, open);
   assert.equal(close.action, "close");
-  assert.ok(close.comment.startsWith(CLOSE_MARKER));
-  assert.match(close.comment, /Every engine pin matches upstream's latest release again/);
+  assert.ok(close.steps[0].body.startsWith(closeMarker(stateToken(current))));
+  assert.match(close.steps[0].body, /Every engine pin matches upstream's latest release again/);
+  assert.deepEqual(close.steps[1], { kind: "edit", fields: { state: "closed", state_reason: "completed" } });
   assert.equal(planIssue(current, null).action, "none");
-  assert.equal(planIssue(current, { number: 9, state: "closed", body: create.body }).action, "none");
+  assert.equal(planIssue(current, { ...open, state: "closed" }).action, "none");
 });
 
-test("the tracking issue is found by its marker, open first, never a pull request, whatever its labels", () => {
+test("the state token follows what is behind or ahead, not the run", () => {
+  const a = compare(pins(), upstreamWith({ latest: { "helium-windows": "0.22.2.3" } }));
+  const b = compare(pins(), upstreamWith({ latest: { "helium-windows": "0.22.2.3" }, chromiumStable: "160.0.1.1" }));
+  const c = compare(pins(), upstreamWith({ latest: { "helium-windows": "0.22.2.4" } }));
+  assert.match(stateToken(a), /^[0-9a-f]{12}$/);
+  assert.equal(stateToken(a), stateToken(b));
+  assert.notEqual(stateToken(a), stateToken(c));
+});
+
+test("only the workflow bot's issue counts: a human's issue carrying the marker is never written to", () => {
   const issues = [
-    { number: 1, state: "open", body: "unrelated", labels: [{ name: "todo" }] },
-    { number: 2, state: "open", body: `${ISSUE_MARKER} x`, pull_request: {} },
-    { number: 3, state: "closed", body: `${ISSUE_MARKER}\nold` },
-    { number: 4, state: "open", body: `${ISSUE_MARKER}\nbody`, labels: [] },
-    { number: 5, state: "closed", body: `${ISSUE_MARKER}\nnewer` },
+    { number: 1, state: "open", body: "unrelated", labels: [{ name: "todo" }], user: BOT },
+    { number: 2, state: "open", body: `${ISSUE_MARKER} x`, pull_request: {}, user: BOT },
+    { number: 3, state: "closed", body: `${ISSUE_MARKER}\nold`, user: BOT },
+    { number: 4, state: "open", body: `${ISSUE_MARKER}\nbody`, labels: [], user: BOT },
+    { number: 5, state: "closed", body: `${ISSUE_MARKER}\nnewer`, user: BOT },
+    { number: 6, state: "open", body: `${ISSUE_MARKER}\nquoted by a person`, user: HUMAN },
+    { number: 8, state: "open", body: `${ISSUE_MARKER}\nlookalike`, user: { login: WORKFLOW_BOT, type: "User" } },
   ];
   assert.equal(findTrackingIssue(issues).number, 4);
   assert.equal(findTrackingIssue(issues.filter((issue) => issue.number !== 4)).number, 5);
-  assert.equal(findTrackingIssue(issues.slice(0, 2)), null);
+  assert.equal(findTrackingIssue(issues.filter((issue) => ![3, 4, 5].includes(issue.number))), null);
 });
+
+test("comment history counts only the bot's markers", () => {
+  const forged = commentHistory([{ user: HUMAN, body: `${closeMarker("abc")}` }]);
+  assert.equal(forged.needsReopenComment, false);
+  assert.equal(forged.hasCloseComment("abc"), false);
+  const cycled = commentHistory([
+    { user: BOT, body: closeMarker("abc") },
+    { user: BOT, body: reopenMarker("def") },
+    { user: HUMAN, body: closeMarker("abc") },
+  ]);
+  assert.equal(cycled.needsReopenComment, false);
+  assert.equal(cycled.hasCloseComment("abc"), false);
+  const closedAgain = commentHistory([{ user: BOT, body: closeMarker("abc") }, { user: BOT, body: reopenMarker("def") }, { user: BOT, body: closeMarker("abc") }]);
+  assert.equal(closedAgain.needsReopenComment, true);
+  assert.equal(closedAgain.hasCloseComment("abc"), true);
+});
+
 
 function fakeFetch(routes) {
   const calls = [];
@@ -356,98 +422,148 @@ test("primary and secondary rate limits stop the run instead of reading as an er
 });
 
 const issuePages = (pages) => (url) => pages[Number(new URL(url).searchParams.get("page")) - 1] ?? [];
-const filler = (from, count) => Array.from({ length: count }, (_, at) => ({ number: from + at, state: "closed", body: "other", labels: [] }));
+const filler = (from, count) => Array.from({ length: count }, (_, at) => ({ number: from + at, state: "closed", body: "other", labels: [], user: HUMAN }));
+const writes = (calls) => calls.filter((call) => call.method !== "GET");
+const sync = (fake, report, extra = {}) =>
+  syncIssue({ client: makeClient({ token: "t", fetchImpl: fake.impl }), repo: "o/r", report, dryRun: false, log: () => {}, ...extra });
+const behindReport = () => compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
 
 test("syncIssue writes nothing in a dry run or on incomplete data, and opens the issue for real", async () => {
-  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
-  const quiet = () => {};
-
   const dry = fakeFetch([[/GET .*\/issues\?state=all/, 200, []]]);
-  await syncIssue({ client: makeClient({ token: "t", fetchImpl: dry.impl }), repo: "o/r", report: behind, dryRun: true, log: quiet });
-  assert.deepEqual(dry.calls.map((call) => call.method), ["GET"]);
+  await sync(dry, behindReport(), { dryRun: true });
+  assert.deepEqual(writes(dry.calls), []);
 
   const incomplete = fakeFetch([]);
-  const plan = await syncIssue({
-    client: makeClient({ token: "t", fetchImpl: incomplete.impl }),
-    repo: "o/r",
-    report: compare(pins(), upstreamWith({ heliumChromiumChromium: null })),
-    dryRun: false,
-    log: quiet,
-  });
+  const plan = await sync(incomplete, compare(pins(), upstreamWith({ heliumChromiumChromium: null })));
   assert.equal(plan.action, "fail");
   assert.deepEqual(incomplete.calls, []);
+
+  const disagreeing = fakeFetch([]);
+  const stale = pins((f) => ({ ...f, macLinuxIni: f.macLinuxIni.replace("[helium-macos]\ntag = 0.22.2.1", "[helium-macos]\ntag = 0.22.1.1") }));
+  assert.equal((await sync(disagreeing, compare(stale, CURRENT))).action, "fail");
+  assert.deepEqual(disagreeing.calls, []);
 
   const open = fakeFetch([
     [/GET .*\/issues\?state=all/, 200, []],
     [/POST .*\/repos\/o\/r\/issues$/, 201, { html_url: "https://github.com/o/r/issues/5" }],
   ]);
-  await syncIssue({ client: makeClient({ token: "t", fetchImpl: open.impl }), repo: "o/r", report: behind, dryRun: false, log: quiet });
+  await sync(open, behindReport());
   const created = open.calls.find((call) => call.method === "POST");
   assert.equal(created.body.title, ISSUE_TITLE);
   assert.deepEqual(created.body.labels, ["todo"]);
 });
 
+test("a human's issue carrying the marker is left alone and the bot opens its own", async () => {
+  const forged = { number: 6, state: "open", body: `${ISSUE_MARKER}\nquoted`, labels: [], user: HUMAN };
+  const behind = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [forged]],
+    [/POST .*\/repos\/o\/r\/issues$/, 201, { html_url: "https://github.com/o/r/issues/7" }],
+  ]);
+  await sync(behind, behindReport());
+  assert.deepEqual(writes(behind.calls).map((call) => call.url), ["https://api.github.com/repos/o/r/issues"]);
+
+  const current = fakeFetch([[/GET .*\/issues\?state=all/, 200, [forged]]]);
+  assert.equal((await sync(current, compare(pins(), CURRENT))).action, "none");
+  assert.deepEqual(writes(current.calls), []);
+});
+
 test("an open tracking issue past page 10 with its label removed is updated, not duplicated", async () => {
-  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
   const pages = Array.from({ length: 12 }, (_, page) => filler(page * 100 + 100, 100));
-  pages.push([{ number: 42, state: "open", body: `${ISSUE_MARKER}\nold`, labels: [] }]);
+  pages.push([{ number: 42, state: "open", body: `${ISSUE_MARKER}\nold`, labels: [], user: BOT }]);
   const run = fakeFetch([
     [/GET .*\/issues\?state=all/, 200, issuePages(pages)],
+    [/GET .*\/issues\/42\/comments/, 200, []],
     [/PATCH .*\/issues\/42$/, 200, {}],
   ]);
-  const plan = await syncIssue({ client: makeClient({ token: "t", fetchImpl: run.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {} });
+  const plan = await sync(run, behindReport());
   assert.equal(plan.action, "update");
-  assert.equal(run.calls.filter((call) => call.method === "GET").length, 13);
-  assert.ok(!run.calls.some((call) => call.method === "POST"));
+  assert.equal(run.calls.filter((call) => call.url.includes("state=all")).length, 13);
+  assert.deepEqual(writes(run.calls).map((call) => call.method), ["PATCH"]);
   assert.ok(run.calls.every((call) => !call.url.includes("labels=")));
 });
 
-test("a closed tracking issue is reopened with a comment instead of opening another", async () => {
-  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
-  const run = fakeFetch([
-    [/GET .*\/issues\?state=all/, 200, [{ number: 7, state: "closed", body: `${ISSUE_MARKER}\nold`, labels: [] }]],
-    [/PATCH .*\/issues\/7$/, 200, {}],
-    [/POST .*\/issues\/7\/comments$/, 201, {}],
-  ]);
-  await syncIssue({ client: makeClient({ token: "t", fetchImpl: run.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {} });
-  assert.deepEqual(run.calls.map((call) => call.method), ["GET", "PATCH", "POST"]);
-  assert.equal(run.calls[1].body.state, "open");
-  assert.ok(run.calls[2].body.body.startsWith(REOPEN_MARKER));
-});
-
 test("the issue scan fails rather than create when it can't reach the last page", async () => {
-  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
   const run = fakeFetch([[/GET .*\/issues\?state=all/, 200, (url) => filler(Number(new URL(url).searchParams.get("page")) * 100, 100)]]);
-  await assert.rejects(
-    syncIssue({ client: makeClient({ token: "t", fetchImpl: run.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {}, maxPages: 3 }),
-    /more than 3 pages of issues/,
-  );
-  assert.ok(!run.calls.some((call) => call.method === "POST"));
+  await assert.rejects(sync(run, behindReport(), { maxPages: 3 }), /more than 3 pages of issues/);
+  assert.deepEqual(writes(run.calls), []);
 
   const broken = fakeFetch([[/GET .*\/issues\?state=all/, 502, {}]]);
-  await assert.rejects(syncIssue({ client: makeClient({ token: "t", fetchImpl: broken.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {} }), /HTTP 502/);
-  assert.ok(!broken.calls.some((call) => call.method === "POST"));
+  await assert.rejects(sync(broken, behindReport()), /HTTP 502/);
+  assert.deepEqual(writes(broken.calls), []);
 });
 
-test("closing comments once: a retry after a failed close only closes", async () => {
+test("reopening: a retry after the reopen succeeded but its comment failed posts the comment once", async () => {
+  const report = behindReport();
+  const closed = { number: 7, state: "closed", body: `${ISSUE_MARKER}\nold`, labels: [], user: BOT };
+  const history = [{ user: BOT, body: `${closeMarker("aaaaaaaaaaaa")}\ndone` }];
+
+  const failing = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [closed]],
+    [/GET .*\/issues\/7\/comments/, 200, history],
+    [/PATCH .*\/issues\/7$/, 200, {}],
+    [/POST .*\/issues\/7\/comments$/, 502, {}],
+  ]);
+  await assert.rejects(sync(failing, report), /HTTP 502/);
+  assert.deepEqual(writes(failing.calls).map((call) => call.method), ["PATCH", "POST"]);
+  assert.equal(writes(failing.calls)[0].body.state, "open");
+
+  const reopened = { ...closed, state: "open", body: renderIssueBody(report) };
+  const retry = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [reopened]],
+    [/GET .*\/issues\/7\/comments/, 200, history],
+    [/POST .*\/issues\/7\/comments$/, 201, {}],
+  ]);
+  const plan = await sync(retry, report);
+  assert.equal(plan.action, "update");
+  assert.deepEqual(writes(retry.calls).map((call) => call.method), ["POST"]);
+  assert.ok(writes(retry.calls)[0].body.body.startsWith(reopenMarker(stateToken(report))));
+
+  const settled = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [reopened]],
+    [/GET .*\/issues\/7\/comments/, 200, [...history, { user: BOT, body: reopenMarker(stateToken(report)) }, { user: HUMAN, body: "thanks" }]],
+  ]);
+  assert.equal((await sync(settled, report)).action, "none");
+  assert.deepEqual(writes(settled.calls), []);
+});
+
+test("closing: a retry after the comment succeeded but the close failed only closes, even after someone else comments", async () => {
   const current = compare(pins(), CURRENT);
-  const existing = { number: 5, state: "open", body: `${ISSUE_MARKER}\nold`, labels: [] };
+  const token = stateToken(current);
+  const open = { number: 5, state: "open", body: `${ISSUE_MARKER}\nold`, labels: [], user: BOT };
 
   const first = fakeFetch([
-    [/GET .*\/issues\?state=all/, 200, [existing]],
-    [/GET .*\/issues\/5\/comments/, 200, [{ body: `${REOPEN_MARKER}\nagain` }]],
+    [/GET .*\/issues\?state=all/, 200, [open]],
+    [/GET .*\/issues\/5\/comments/, 200, [{ user: BOT, body: reopenMarker("bbbbbbbbbbbb") }]],
+    [/POST .*\/issues\/5\/comments$/, 201, {}],
+    [/PATCH .*\/issues\/5$/, 502, {}],
+  ]);
+  await assert.rejects(sync(first, current), /HTTP 502/);
+  assert.deepEqual(writes(first.calls).map((call) => call.method), ["POST", "PATCH"]);
+  assert.ok(writes(first.calls)[0].body.body.startsWith(closeMarker(token)));
+
+  const retry = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [open]],
+    [
+      /GET .*\/issues\/5\/comments/,
+      200,
+      [{ user: BOT, body: reopenMarker("bbbbbbbbbbbb") }, { user: BOT, body: `${closeMarker(token)}\ndone` }, { user: HUMAN, body: "nice" }],
+    ],
+    [/PATCH .*\/issues\/5$/, 200, {}],
+  ]);
+  await sync(retry, current);
+  assert.deepEqual(writes(retry.calls).map((call) => [call.method, call.body]), [["PATCH", { state: "closed", state_reason: "completed" }]]);
+
+  const forgedClose = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [open]],
+    [/GET .*\/issues\/5\/comments/, 200, [{ user: HUMAN, body: closeMarker(token) }]],
     [/POST .*\/issues\/5\/comments$/, 201, {}],
     [/PATCH .*\/issues\/5$/, 200, {}],
   ]);
-  await syncIssue({ client: makeClient({ token: "t", fetchImpl: first.impl }), repo: "o/r", report: current, dryRun: false, log: () => {} });
-  assert.deepEqual(first.calls.map((call) => call.method), ["GET", "GET", "POST", "PATCH"]);
-  assert.deepEqual(first.calls[3].body, { state: "closed", state_reason: "completed" });
+  await sync(forgedClose, current);
+  assert.deepEqual(writes(forgedClose.calls).map((call) => call.method), ["POST", "PATCH"]);
+});
 
-  const retry = fakeFetch([
-    [/GET .*\/issues\?state=all/, 200, [existing]],
-    [/GET .*\/issues\/5\/comments/, 200, [{ body: "someone" }, { body: `${CLOSE_MARKER}\ndone` }]],
-    [/PATCH .*\/issues\/5$/, 200, {}],
-  ]);
-  await syncIssue({ client: makeClient({ token: "t", fetchImpl: retry.impl }), repo: "o/r", report: current, dryRun: false, log: () => {} });
-  assert.deepEqual(retry.calls.map((call) => call.method), ["GET", "GET", "PATCH"]);
+test("--issue refuses to write outside the workflow", () => {
+  const env = { ...process.env, GITHUB_REPOSITORY: "o/r", GITHUB_ACTIONS: "", GITHUB_TOKEN: "", DRY_RUN: "" };
+  assert.throws(() => execFileSync(process.execPath, [SCRIPT, "--issue"], { encoding: "utf8", env, stdio: "pipe" }), /writes only from the workflow/);
 });
