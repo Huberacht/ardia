@@ -12,11 +12,11 @@ if ($Part -eq "input" -and $NoInput) { throw "-Part input drives the app with re
 $runsLaunch = $Part -in "all", "launch"
 $runsInput = $Part -in "all", "input"
 $runsGate = $Part -in "all", "gate"
+if ($Part -eq "input" -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $App).Path) "chrome.dll"))) { throw "-Part input drives pages, so it needs the app assembled with the engine; $App has no chrome.dll beside it" }
 . (Join-Path $PSScriptRoot "process-tree.ps1")
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 $testBuild = Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $App).Path) "Ardia.test-build"
 New-Item -ItemType File -Force -Path $testBuild | Out-Null
-if ($Part -eq "input" -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent (Resolve-Path -LiteralPath $App).Path) "chrome.dll"))) { throw "-Part input drives pages, so it needs the app assembled with the engine; $App has no chrome.dll beside it" }
 $log = Join-Path $Out "launch.log"
 $checkLog = Join-Path $Out "self-check.log"
 $shot = Join-Path $Out "window.png"
