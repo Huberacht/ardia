@@ -149,6 +149,7 @@ export function keepAsideGate(name: string, found: FoundDocument, saveAgain: (de
 
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 export const SESSION_BACKUPS = WEEKDAYS.map((day) => `session-backup-${day}.json`);
+export const MIGRATION_BACKUP = "session-backup-migration.json";
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const twoDigits = (n: number) => String(n).padStart(2, "0");
@@ -188,7 +189,7 @@ function readBackup(name: string): BackupFile | null {
 export type RestoredBackup<T> = { value: T; name: string; day: string; ageDays: number };
 
 export function sessionBackups<T>(parse: (doc: SavedObject) => T | null, version: number, migrations: Migrations, now = Date.now()): RestoredBackup<T>[] {
-  const found = SESSION_BACKUPS.map(readBackup).filter((b): b is BackupFile => b !== null);
+  const found = [...SESSION_BACKUPS, MIGRATION_BACKUP].map(readBackup).filter((b): b is BackupFile => b !== null);
   found.sort((a, b) => b.day.localeCompare(a.day) || b.at - a.at);
   const today = dayNumber(localDay(now));
   const usable: RestoredBackup<T>[] = [];
@@ -210,14 +211,19 @@ export const BACKUP_RETRY_MS = 5 * 60_000;
 
 export type RollingBackups = { afterSave: (sessionJson: string, now?: number) => void; beforeMigration: (sessionText: string, now?: number) => Promise<void> };
 
-export function rollingBackups(written: (beforeMigration: boolean) => void = () => {}, usable: (session: unknown) => unknown = () => true, kept: (session: unknown) => boolean = () => false): RollingBackups {
+export function rollingBackups(written: (beforeMigration: boolean) => void = () => {}, usable: (session: unknown) => unknown = () => true, kept: (name: string, session: unknown) => boolean = () => false): RollingBackups {
   let doneDay: string | null = null;
   let writing = false;
   let retryAt = 0;
+  const keptSlot = (now: number) => {
+    const held = readBackup(backupName(now));
+    return !!held && kept(held.name, held.session);
+  };
   const write = (sessionJson: string, now: number, beforeMigration: boolean) => {
     const day = localDay(now);
+    const name = beforeMigration && keptSlot(now) ? MIGRATION_BACKUP : backupName(now);
     writing = true;
-    return saveDocument(backupName(now), backupJson(day, now, sessionJson)).then(
+    return saveDocument(name, backupJson(day, now, sessionJson)).then(
       () => {
         writing = false;
         doneDay = day;
@@ -232,7 +238,7 @@ export function rollingBackups(written: (beforeMigration: boolean) => void = () 
   };
   const heldToday = (now: number, day: string) => {
     const held = readBackup(backupName(now));
-    return !!held && ((held.day === day && !!usable(held.session)) || kept(held.session));
+    return !!held && ((held.day === day && !!usable(held.session)) || kept(held.name, held.session));
   };
   return {
     afterSave: (sessionJson, now = Date.now()) => {

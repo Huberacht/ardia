@@ -20,7 +20,6 @@ export const rows = <T,>(v: unknown, ok: (o: SavedObject) => boolean): T[] => (A
 const byProfile = <T,>(v: unknown, ok: (o: SavedObject) => boolean = () => true): Record<string, T> =>
   (isFields(v) ? Object.fromEntries(Object.entries(v).filter(([, o]) => isFields(o) && ok(o))) : {}) as Record<string, T>;
 const byId = <T extends { id: string }>(list: T[]) => Object.fromEntries(list.map((x) => [x.id, x]));
-const nullableString = (v: unknown) => (isString(v) ? v : null);
 
 const windowOk = (o: SavedObject) => has(o, ["id", "profileId"]) && isStringList(o.tabIds) && isFields(o.activeTabIds) && Object.values(o.activeTabIds).every(isString);
 const tabOk = (o: SavedObject) => has(o, ["id", "windowId", "profileId", "url"]);
@@ -55,6 +54,9 @@ function windowsAgainstAutoHideTabs(settings: HydrateData["settings"], windows: 
   return windows.filter((w) => typeof w.autoHideTabs !== "boolean" && typeof w.sidebarOpen === "boolean" && w.sidebarOpen === hidden).length;
 }
 
+const notInherited = (id: string) => !(id in Object.prototype);
+const ownId = (value: unknown) => (isString(value) && notInherited(value) ? value : null);
+
 export function parseSession(json: string | null | undefined): SavedSession | null {
   const raw = parseSaved(json, SESSION_VERSION, SESSION_MIGRATIONS);
   return raw ? sessionFromSaved(raw) : null;
@@ -66,14 +68,14 @@ export function sessionFromSaved(raw: SavedObject): SavedSession {
   return {
     windowsAgainstAutoHideTabs: windowsAgainstAutoHideTabs(settings, savedWindowRows),
     profiles: profilesWithOwnLooks(profilesKeepingLegacyDots(byProfile<Profile>(raw.profiles, profileOk), raw.settings)),
-    profileOrder: strings(raw.profileOrder),
+    profileOrder: strings(raw.profileOrder).filter(notInherited),
     orphanedProfileData: strings(raw.orphanedProfileData),
     settings,
     settingsMeta: parseSettingsMeta(raw.settingsMeta),
     windows: byId(rows<Omit<BrowserWindow, "autoHideTabs"> & { incognito?: unknown; sidebarOpen?: unknown; autoHideTabs?: unknown }>(raw.windows, windowOk).map(({ incognito: _i, sidebarOpen: _s, autoHideTabs, ...w }): BrowserWindow => ({ ...w, kind: "main", ...(typeof autoHideTabs === "boolean" ? { autoHideTabs } : {}) }))),
-    windowOrder: strings(raw.windowOrder),
-    focusedWindowId: nullableString(raw.focusedWindowId),
-    lastProfileId: nullableString(raw.lastProfileId),
+    windowOrder: strings(raw.windowOrder).filter(notInherited),
+    focusedWindowId: ownId(raw.focusedWindowId),
+    lastProfileId: ownId(raw.lastProfileId),
     tabs: byId(rows<Tab>(raw.tabs, tabOk).map((t) => ({ ...t, page: pageFromDisk(t.page), pin: pinFromDisk(t.pin) }))),
     groups: byId(rows(raw.groups, groupOk)),
     splits: byId(rows<SplitView>(raw.splits, splitOk).map((v) => ({ ...v, slots: slotsFromDisk(v.slots)! }))),
@@ -90,11 +92,13 @@ export function sessionFromSaved(raw: SavedObject): SavedSession {
 }
 
 const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+const keyed = (value: unknown) => (isFields(value) ? Object.keys(value).length : 0);
+const CLOSED_LISTS = ["closedTabs", "closedWindows", "closedGroups", "deletedGroups", "cleanedTabs"] as const;
 
 function orphanedTabs(session: SavedSession) {
   const saved = Object.keys(session.profiles ?? {});
   const profiles = new Set(saved.length ? saved : [DEFAULT_PROFILE_ID]);
-  return Object.values(session.tabs).some((t) => !session.windows[t.windowId] || (!profiles.has(t.profileId) && !isIncognitoProfile(t.profileId)));
+  return Object.values(session.tabs).some((t) => !Object.hasOwn(session.windows, t.windowId) || (!profiles.has(t.profileId) && !isIncognitoProfile(t.profileId)));
 }
 
 export const droppedRows = (raw: SavedObject, session: SavedSession) =>
@@ -102,4 +106,7 @@ export const droppedRows = (raw: SavedObject, session: SavedSession) =>
   listed(raw.windows) > Object.keys(session.windows).length ||
   listed(raw.tabs) > Object.keys(session.tabs).length ||
   listed(raw.groups) > Object.keys(session.groups ?? {}).length ||
-  listed(raw.splits) > Object.keys(session.splits ?? {}).length;
+  listed(raw.splits) > Object.keys(session.splits ?? {}).length ||
+  keyed(raw.profiles) > Object.keys(session.profiles ?? {}).length ||
+  keyed(raw.parkedPins) > Object.keys(session.parkedPins ?? {}).length ||
+  CLOSED_LISTS.some((key) => listed(raw[key]) > (session[key]?.length ?? 0));

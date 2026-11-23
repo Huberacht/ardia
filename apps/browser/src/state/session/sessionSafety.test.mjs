@@ -9,7 +9,7 @@ globalThis.setTimeout = (callback, ms, ...args) => {
 const { useBrowser } = await import("../browser/store.ts");
 const { flushPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesBlocked, startPersistence, SESSION_VERSION } = await import("./persist.ts");
 const { finishQuitSaves } = await import("../app/quit.ts");
-const { BACKUP_RETRY_MS, backupJson, backupName, localDay, rollingBackups, sessionBackups, SESSION_BACKUPS } = await import("./sessionSafety.ts");
+const { BACKUP_RETRY_MS, backupJson, backupName, localDay, MIGRATION_BACKUP, rollingBackups, sessionBackups, SESSION_BACKUPS } = await import("./sessionSafety.ts");
 const { parsePinBackups, PINS_BACKUP_DOCUMENT } = await import("./pinGuard.ts");
 const { takeSessionWrites } = await import("../telemetry/sessionWrites.ts");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
@@ -342,16 +342,20 @@ test("a current-version session.json whose core lists aren't lists is kept aside
   assert.equal(stub.docs.get(asideCopies()[0]), bad);
 });
 
-test("a backup that parses but can't be hydrated is skipped for the next older one", async () => {
+test("an order entry naming an Object property (windowOrder [\"constructor\"]) is dropped while reading, so that backup restores, passes as today's, and loadSession agrees", async () => {
   const older = realSession(["https://older.example/"]);
   const newest = JSON.parse(realSession(["https://newest.example/"]));
+  const tampered = { ...newest, windowOrder: ["constructor"], profileOrder: ["toString"], focusedWindowId: "__proto__" };
   stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-03", 1, older));
-  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify({ ...newest, windowOrder: ["constructor"] })));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify(tampered)));
   stub.docs.set("session.json", "{");
+  assert.deepEqual(Object.values(loadSession().tabs).map((t) => t.url), ["https://newest.example/"]);
   const stop = startPersistence();
   await settle();
   stop();
-  assert.deepEqual(tabUrls(), ["https://older.example/"]);
+  assert.deepEqual(tabUrls(), ["https://newest.example/"]);
+  const { wholeBackup } = await import("./launchSession.ts");
+  assert.equal(wholeBackup(tampered), true);
 });
 
 test("when the store can't say whether an unread session.json exists, nothing is written over it", async () => {
@@ -641,7 +645,7 @@ test("a backup slot written by a newer Ardia is left alone by an older one", asy
   const newer = backupJson(localDay(at - 7 * DAY_MS), 1, JSON.stringify({ version: SESSION_VERSION + 1, windows: [], tabs: [] }));
   stub.docs.set(backupName(at), newer);
   const { newerBackup, wholeBackup } = await import("./launchSession.ts");
-  rollingBackups(() => {}, wholeBackup, newerBackup).afterSave('{"version":11,"windows":[],"tabs":[]}', at);
+  rollingBackups(() => {}, wholeBackup, (_, session) => newerBackup(session)).afterSave('{"version":11,"windows":[],"tabs":[]}', at);
   await turn();
   assert.equal(stub.docs.get(backupName(at)), newer);
 });
@@ -652,7 +656,7 @@ test("today's slot holding a backup that reads but can't be restored (a numeric 
   const at = new Date(2026, 4, 3, 9).getTime();
   stub.docs.set(backupName(at), backupJson(localDay(at), 1, JSON.stringify({ ...bad, tabs: bad.tabs.map((t) => (t.pin ? { ...t, pinnedUrl: 42 } : t)) })));
   const { newerBackup, wholeBackup } = await import("./launchSession.ts");
-  rollingBackups(() => {}, wholeBackup, newerBackup).afterSave('{"version":11,"windows":[],"tabs":[],"n":1}', at);
+  rollingBackups(() => {}, wholeBackup, (_, session) => newerBackup(session)).afterSave('{"version":11,"windows":[],"tabs":[],"n":1}', at);
   await turn();
   assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
 });
@@ -680,4 +684,48 @@ test("loadSession picks the same session launch does, skipping a backup that thr
   stub.docs.set("session.json", "{");
   const data = loadSession();
   assert.deepEqual(Object.values(data.tabs).map((t) => t.url), ["https://older.example/"]);
+});
+
+test("a pre-migration backup never replaces a newer Ardia's backup in today's slot; it goes to its own file and still gates the rewrite", async () => {
+  const good = JSON.parse(realSession(["https://v10.example/"]));
+  const newer = backupJson(localDay(Date.now()), 1, JSON.stringify({ ...good, version: SESSION_VERSION + 1 }));
+  stub.docs.set(backupName(Date.now()), newer);
+  const old = JSON.stringify({ ...good, version: 10 });
+  stub.docs.set("session.json", old);
+  const stop = startPersistence();
+  S().updateTab(Object.keys(S().tabs)[0], { title: "touched" });
+  flushPersistence();
+  assert.equal(stub.docs.get("session.json"), old, "held until the snapshot lands");
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(backupName(Date.now())), newer);
+  assert.equal(JSON.parse(stub.docs.get(MIGRATION_BACKUP)).session.version, 10);
+  assert.equal(JSON.parse(stub.docs.get("session.json")).version, SESSION_VERSION);
+});
+
+test("a partial backup that a launch restored from is copied aside before its slot is written again", async () => {
+  const good = JSON.parse(realSession(["https://loose.example/"], { pin: "https://pin.example/" }));
+  const partial = backupJson(localDay(Date.now()), 1, JSON.stringify({ ...good, tabs: good.tabs.map((t) => (t.pin ? { ...t, profileId: "gone-profile" } : t)) }));
+  stub.docs.set(backupName(Date.now()), partial);
+  stub.docs.set("session.json", "{");
+  const stop = startPersistence();
+  S().updateSettings({ appearance: "light" });
+  await settle();
+  stop();
+  const kept = [...stub.docs.entries()].find(([name]) => /^session-backup-\w+-unreadable-/.test(name));
+  assert.ok(kept, "the restored backup was kept aside");
+  assert.equal(kept[1], partial);
+  assert.ok(kept[1].includes("https://pin.example/"));
+});
+
+test("parked pins the reader has to discard keep session.json aside before the first save", async () => {
+  const good = JSON.parse(realSession(["https://a.example/"]));
+  const profileId = Object.keys(good.profiles)[0];
+  const damaged = JSON.stringify({ ...good, parkedPins: { [profileId]: { tabs: [{ id: "p", url: "https://parked.example/", profileId }], groups: "broken" } } });
+  stub.docs.set("session.json", damaged);
+  const stop = startPersistence();
+  S().updateSettings({ appearance: "light" });
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(asideCopies()[0]), damaged);
 });
