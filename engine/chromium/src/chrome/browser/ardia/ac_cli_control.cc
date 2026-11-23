@@ -63,8 +63,10 @@
 #include "net/socket/tcp_server_socket.h"
 
 #if BUILDFLAG(IS_MAC)
+#include <membership.h>
 #include <sys/acl.h>
 #include <sys/mount.h>
+#include <uuid/uuid.h>
 #endif
 
 namespace ardia {
@@ -128,12 +130,28 @@ AclState ExtendedAcl(int fd) {
     return errno == ENOENT || errno == ENOTSUP ? AclState::kNone
                                                : AclState::kUnknown;
   }
+  uuid_t owner;
+  const bool owner_known = mbr_uid_to_uuid(geteuid(), owner) == 0;
   AclState state = AclState::kDenyOnly;
   acl_entry_t entry;
   for (int id = ACL_FIRST_ENTRY; acl_get_entry(acl, id, &entry) == 0;
        id = ACL_NEXT_ENTRY) {
     acl_tag_t tag;
-    if (acl_get_tag_type(entry, &tag) != 0 || tag != ACL_EXTENDED_DENY) {
+    if (acl_get_tag_type(entry, &tag) != 0) {
+      state = AclState::kAllows;
+      break;
+    }
+    if (tag == ACL_EXTENDED_DENY) {
+      continue;
+    }
+    void* qualifier = acl_get_qualifier(entry);
+    const bool only_owner =
+        tag == ACL_EXTENDED_ALLOW && qualifier && owner_known &&
+        uuid_compare(*static_cast<uuid_t*>(qualifier), owner) == 0;
+    if (qualifier) {
+      acl_free(qualifier);
+    }
+    if (!only_owner) {
       state = AclState::kAllows;
       break;
     }
@@ -170,7 +188,7 @@ std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
   if (const AclState acl = ExtendedAcl(dir_fd);
       acl != AclState::kNone && acl != AclState::kDenyOnly) {
     return base::StrCat({dir.value(),
-                         " has an access list that lets other users in."});
+                         " has an access list that lets someone else in."});
   }
 #endif
   return std::string();
@@ -260,16 +278,20 @@ std::string WriteControlFile(const base::FilePath& path,
   return std::string();
 }
 
+void DeleteStaleControlFile(const base::FilePath& path) {
+  if (!path.empty() && unlink(path.value().c_str()) != 0 && errno != ENOENT &&
+      errno != EISDIR && errno != EPERM) {
+    PLOG(ERROR) << "[ardia] can't delete " << path;
+  }
+}
+
 void DeleteControlFile(const base::FilePath& path) {
-  if (path.empty()) {
+  base::ScopedFD published = std::move(PublishedFolder());
+  if (path.empty() || !published.is_valid()) {
     return;
   }
-  base::ScopedFD published = std::move(PublishedFolder());
-  const int result =
-      published.is_valid()
-          ? unlinkat(published.get(), path.BaseName().value().c_str(), 0)
-          : unlink(path.value().c_str());
-  if (result != 0 && errno != ENOENT && errno != EISDIR && errno != EPERM) {
+  if (unlinkat(published.get(), path.BaseName().value().c_str(), 0) != 0 &&
+      errno != ENOENT && errno != EISDIR && errno != EPERM) {
     PLOG(ERROR) << "[ardia] can't delete " << path;
   }
 }
@@ -303,8 +325,8 @@ class ControlServer {
                                       base::Unretained(this)));
     }
     if (!ServerStartedBySwitch()) {
-      FileRunner()->PostTask(FROM_HERE,
-                             base::BindOnce(&DeleteControlFile, file_path_));
+      FileRunner()->PostTask(
+          FROM_HERE, base::BindOnce(&DeleteStaleControlFile, file_path_));
     }
   }
 
