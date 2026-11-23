@@ -33,7 +33,7 @@ FORMAT JSONEachRow`;
 export function knownSql(db, uuids) {
   if (!IDENTIFIER.test(db)) throw new Error("the sandbox database must be a plain identifier");
   const list = uuids.filter((u) => UUID.test(u)).map((u) => `'${u}'`).join(", ");
-  return `SELECT uuid, offset, source, toUnixTimestamp64Milli(resolved_at) AS at FROM ${db}.${TABLE} FINAL WHERE uuid IN (${list || "''"}) FORMAT JSONEachRow`;
+  return `SELECT uuid, offset, source, symbol, symbol_offset, toUnixTimestamp64Milli(resolved_at) AS at FROM ${db}.${TABLE} FINAL WHERE uuid IN (${list || "''"}) FORMAT JSONEachRow`;
 }
 
 export function plan(wanted, known, now) {
@@ -47,10 +47,15 @@ export function plan(wanted, known, now) {
 
 const stamp = (ms) => new Date(ms).toISOString().replace("T", " ").replace("Z", "");
 
-export function resolve(todo, maps, now) {
+export function resolve(todo, maps, now, known = []) {
+  const kept = new Map(known.filter((k) => k.symbol).map((k) => [frameKey(k.uuid, Number(k.offset)), k]));
   return todo.map((frame) => {
     const map = maps.get(frame.uuid);
     const hit = map ? lookup(map, frame.offset) : null;
+    const previous = kept.get(frameKey(frame.uuid, frame.offset));
+    if (!hit && previous) {
+      return { uuid: frame.uuid, offset: frame.offset, image: frame.image, symbol: previous.symbol, symbol_offset: Number(previous.symbol_offset), source: previous.source, resolved_at: stamp(now) };
+    }
     return {
       uuid: frame.uuid,
       offset: frame.offset,
@@ -107,7 +112,7 @@ export async function run({ reader, sandbox, db = "sandbox", store, days = 14, d
   const todo = plan(wanted, known, now);
   log(`${todo.length} frames to name`);
   const maps = todo.length ? await store.maps([...new Set(todo.map((f) => f.uuid))]) : new Map();
-  const rows = resolve(todo, maps, now);
+  const rows = resolve(todo, maps, now, known);
   if (rows.length && !dryRun) {
     if (!sandbox) throw new Error("writing names needs the sandbox ClickHouse user (TRIAGE_CLICKHOUSE_PASSWORD), or pass --dry-run");
     for (let i = 0; i < rows.length; i += 5000) {

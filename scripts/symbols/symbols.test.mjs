@@ -152,6 +152,8 @@ test("a frame is named once, and one without symbols is tried again after a day"
   const rows = resolve([{ image: "Ardia", uuid: APP_UUID, offset: 0x1104 }, { image: "Ardia", uuid: APP_UUID, offset: 0x9000 }, { image: "Chromium Framework", uuid: ENGINE_UUID, offset: 5 }], new Map([[APP_UUID, map]]), 0);
   assert.deepEqual(rows.map((r) => [r.symbol, r.symbol_offset, r.source]), [["-[MenuTarget undo:]", 4, "dsym"], ["", 0, "outside"], ["", 0, "none"]]);
   assert.equal(rows[0].resolved_at, "1970-01-01 00:00:00.000");
+  const kept = resolve([{ image: "Ardia", uuid: ENGINE_UUID, offset: 9 }], new Map(), 5, [{ uuid: ENGINE_UUID, offset: "9", source: "match", symbol: "MenuTarget.undo(_:)", symbol_offset: "400", at: 0 }]);
+  assert.deepEqual(kept.map((r) => [r.symbol, r.symbol_offset, r.source]), [["MenuTarget.undo(_:)", 400, "match"]], "a recheck that finds nothing keeps the name it had");
 });
 
 test("release UUID lists are read strictly", () => {
@@ -336,6 +338,18 @@ test("a cached match map gives way to a dSYM a release publishes later, and stay
   const store = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch });
   store.saveMap(matched);
   assert.equal((await store.maps([APP_UUID])).get(APP_UUID).source, "match", "a failed dSYM download keeps the match map, and a missing manifest doesn't stop the index");
+  const pageTwoRefused = new SymbolStore({
+    cache: join(scratch, "page-two-cache"),
+    repo: "ardia-browser/ardia",
+    fetch: async (url) => {
+      const u = decodeURIComponent(String(url));
+      if (u.endsWith("page=1")) return new Response(JSON.stringify([{ tag_name: "v0.2.47", assets: [{ name: "Ardia-0.2.47-symbol-map.tsv.gz" }] }]), { status: 200 });
+      if (u.endsWith("Ardia-0.2.47-symbol-map.tsv.gz")) return new Response(gzipSync(serializeMap(matched)), { status: 200 });
+      return new Response("rate limited", { status: 403 });
+    },
+    log: () => {},
+  });
+  assert.equal((await pageTwoRefused.maps([APP_UUID])).get(APP_UUID)?.source, "match", "a map fetched before the listing fails is used in the same run");
   const offline = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch: async () => new Response("rate limited", { status: 403 }), log: () => {} });
   assert.equal((await offline.maps([APP_UUID])).get(APP_UUID).source, "match", "a release list GitHub refuses still leaves the cached map");
   serveArchive = true;

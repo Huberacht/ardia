@@ -176,8 +176,8 @@ export class SymbolStore {
         this.log(`couldn't list releases, using cached maps only: ${error.message}`);
       }
     }
+    for (const uuid of missing) if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
     if (index) {
-      for (const uuid of missing) if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
       const failed = new Set();
       for (let round = 0; round < 8; round++) {
         const byArchive = new Map();
