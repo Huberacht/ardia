@@ -312,7 +312,7 @@ const nativeOf = (frame) => ac.engine.call("windows.list").then((ws) => {
   return found ? found.window : null;
 });
 const classify = (h) => /_NSTheme/.test(h) ? "L" : /^ArdiaShell\\.WindowDragRegion/.test(h) ? "D" : /^(RCTScrollContentView|NSClipView)/.test(h) ? "S" : /^NativeWidgetMac/.test(h) ? "E"
-  : /FileDragView|^RCTView < RCTView < ArdiaShell\\.ContextMenuArea < /.test(h) ? "T" : /^(RCTView < )+ArdiaShell\\.ContextMenuArea < ArdiaShell\\.FileDropView/.test(h) ? "X" : "I";
+  : /^(RCTView < )+ArdiaShell\\.ContextMenuArea < ArdiaShell\\.FileDropView/.test(h) ? "X" : /FileDragView|^RCTView < RCTView < ArdiaShell\\.ContextMenuArea < /.test(h) ? "T" : "I";
 const hitRow = (n, width, y) => {
   const xs = []; for (let x = 0; x < width; x++) xs.push(x);
   const out = [];
@@ -451,7 +451,8 @@ function analyse(img, scale, data, width) {
   const hardClips = favs.filter((f) => !f.full && f.count >= 16).length;
 
   const runOf = (x) => tabRuns.find(([a, b]) => x >= a && x < b);
-  const scrollRuns = runs((c) => c === "T" || c === "S");
+  const tabButtonRuns = hitTabRuns.filter((_, i) => i > lastTabRun);
+  const scrollRuns = runs((c, x) => (c === "T" || c === "S") && !tabButtonRuns.some(([a, b]) => x >= a && x < b));
   const viewport = scrollRuns.length ? [Math.min(...scrollRuns.map((r) => r[0])), Math.max(...scrollRuns.map((r) => r[1]))] : [0, 0];
   const inkWidth = (a, b, startX) => {
     let first = -1, last = -1, maxInk = 0;

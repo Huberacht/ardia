@@ -58,6 +58,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const dockEntry = entries.find((e) => e.kind === "dock");
   const dock = useMemo(() => layoutDock(dockEntry), [dockEntry]);
   const pointerIn = useRef(false);
+  const stripKey = `${windowId}|${profileId}`;
   const held = useRef<Hold | null>(null);
   const last = useRef<Omit<Hold, "needsTitle" | "tailEdge"> & { count: number; pageWidth: number; lastSlot: string | undefined }>(null);
   const closedTo = useRef("");
@@ -177,7 +178,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
       dismissStripHoverIn(windowId);
       if (now > ownScrollUntil.current) {
         userScrollAt.current = now;
-        noteTabStripScrolled(now);
+        noteTabStripScrolled(stripKey, now);
       }
     }
     scrolled.current = e.nativeEvent.contentOffset.x;
@@ -207,6 +208,12 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     if (userScrolling()) noteTabStripRevealHeldForScroll();
     else reveal(activeId, false);
   };
+  const revealOnFirstOverflow = () => {
+    if (shownOnce.current || !current || !activeId || tabDragging() || content.current <= viewport.current + 0.5) return;
+    shownOnce.current = true;
+    latestReveal.current();
+  };
+  useEffect(revealOnFirstOverflow, [current]);
   useEffect(() => {
     if (revealed.current === activeId || (held.current && closedTo.current === activeId)) return;
     revealed.current = activeId;
@@ -221,7 +228,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     const later = () => void (frame = requestAnimationFrame(now));
     let unsubscribe = () => {};
     if (tabPressHeld(windowId)) {
-      noteTabStripPick(performance.now());
+      noteTabStripPick(stripKey, performance.now());
       noteTabStripRevealAfterPress();
       unsubscribe = onTabPressEnd(windowId, () => {
         if (!tabDragging()) later();
@@ -299,10 +306,7 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
                       onContentSizeChange={(width) => {
                         content.current = width;
                         keepInRange();
-                        if (!shownOnce.current && width > viewport.current + 0.5) {
-                          shownOnce.current = true;
-                          latestReveal.current();
-                        }
+                        revealOnFirstOverflow();
                       }}
                       onScroll={onScroll}
                       style={{ flex: 1 }}

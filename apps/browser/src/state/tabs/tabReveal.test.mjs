@@ -243,3 +243,17 @@ test("the native switch is off while a page popover is open: it names the page u
   setPopover("a", null);
   assert.deepEqual(stub.nativeTabSwitches, [false, true]);
 });
+
+test("a press that selects a tab is remembered for that tab only, and only for the time given", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup();
+  held.holdTabPress("w1", "b", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9100 }] } });
+  assert.equal(held.switchedByPressWithin("b", 500), true);
+  assert.equal(held.switchedByPressWithin("c", 500), false, "another tab's close button is not held back");
+  assert.equal(held.switchedByPressWithin("b", 0), false, "past the time given");
+  held.holdTabPress("w1", "b", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9200 }] } });
+  held.clickHeldTabPress("w1", "b", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9200 }] } });
+  S().activate("c");
+  held.holdTabPress("w1", "c", { nativeEvent: { identifier: "0", pageX: 10, pageY: 10 }, touchHistory: { touchBank: [{ startTimeStamp: 9300 }] } });
+  assert.equal(held.switchedByPressWithin("c", 500), false, "a press on the tab already in front selects nothing");
+});

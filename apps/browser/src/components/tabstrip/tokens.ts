@@ -29,6 +29,7 @@ export const TITLE_MIN_CHIP = 80;
 export const TITLE_FADE_MIN = 8;
 export const TITLE_FADE_MAX = 24;
 export const CLOSE_MIN_CHIP = 84;
+export const CLOSE_AFTER_SELECT_MS = 500;
 export const MAX_CHIP = 173;
 export const SELECTED_MIN_CHIP = MAX_CHIP;
 export const SELECTED_TIGHT_CHIP = 128;

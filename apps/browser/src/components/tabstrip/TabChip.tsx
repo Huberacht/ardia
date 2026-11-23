@@ -6,6 +6,8 @@ import { useMuteState, useTabGroupColor } from "../../state/tabs/hooks";
 import { muteTitle, type MuteState } from "../../state/tabs/mute";
 import { firstStaying } from "../../state/drag/drops";
 import { pressTabClose, useTabCloseControl } from "../../state/sidebar/closeControl";
+import { switchedByPressWithin } from "../../state/sidebar/heldTabPress";
+import { noteTabStripCloseAfterSelect } from "../../state/telemetry/tabStripCounts";
 import { currentMovingTabIds } from "../../state/tabs/topStrip";
 import { pressStripClose } from "../../state/tabs/stripPress";
 import { workspaceSnapshot } from "../../state/browser/current";
@@ -27,7 +29,7 @@ import { dropAt, type GroupOut, type StripDrag } from "./model";
 import { PinnedFace } from "./PinnedFace";
 import { SelectedTab } from "./SelectedTab";
 import { CELL_STEP, dragRange, leaveIndex, type DragGeometry } from "./stripGroups";
-import { AUDIO_BADGE, CHIP_LABEL_GAP, CHIP_PAD, CLOSE_MIN_CHIP, FAVICON, GAP, ITEM_HEIGHT, ITEM_TOP, PINNED_CELL, tabRadius, TITLE_FADE_MAX, TITLE_FADE_MIN, TITLE_MIN_CHIP, TOP_STRIP_HEIGHT } from "./tokens";
+import { AUDIO_BADGE, CHIP_LABEL_GAP, CHIP_PAD, CLOSE_AFTER_SELECT_MS, CLOSE_MIN_CHIP, FAVICON, GAP, ITEM_HEIGHT, ITEM_TOP, PINNED_CELL, tabRadius, TITLE_FADE_MAX, TITLE_FADE_MIN, TITLE_MIN_CHIP, TOP_STRIP_HEIGHT } from "./tokens";
 import { useStripDrag } from "./useStripDrag";
 import { StripScrollContext } from "./stripScroll";
 import { useStripSlide } from "./stripMotion";
@@ -134,6 +136,11 @@ export const DraggableChip = memo(function DraggableChip({
 
 const tabStillOpen = (tabId: string) => !!workspaceSnapshot().tabs[tabId];
 
+function pressStripTabClose(windowId: string, tabId: string) {
+  if (switchedByPressWithin(tabId, CLOSE_AFTER_SELECT_MS)) noteTabStripCloseAfterSelect();
+  else pressStripClose(windowId, tabId, () => pressTabClose(tabId), tabStillOpen);
+}
+
 export function useWebsiteBand(tabId: string) {
   const theme = useTheme();
   const extend = useSettings((s) => s.extendWebsiteColor && !s.minimalismMode);
@@ -204,7 +211,7 @@ export const TabChip = memo(function TabChip({ tabId, width, drawn, tuck, dragge
                   size="xs"
                   weight="semibold"
                   color={onBand ? palette.icon : undefined}
-                  onPress={tuck ?? (() => pressStripClose(windowId, tab.id, () => pressTabClose(tab.id), tabStillOpen))}
+                  onPress={tuck ?? (() => pressStripTabClose(windowId, tab.id))}
                   tooltip={tuck ? "Hide in Group" : closeControl.tooltip}
                 />
               }

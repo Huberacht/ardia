@@ -22,10 +22,11 @@ const revealsHeldForScroll = consentedCount();
 const scrollStalls = consentedCount();
 const commandsRefused = consentedCount();
 const toggleRemeasures = consentedCount();
-let lastScrollAt = -Infinity;
+const closesAfterSelect = consentedCount();
+const lastScrollAt = new Map<string, number>();
 let lastToggle = { windowId: "", at: -Infinity };
 onConsentPeriodChange(() => {
-  lastScrollAt = -Infinity;
+  lastScrollAt.clear();
   menuPicks = 0;
   lastToggle = { windowId: "", at: -Infinity };
 });
@@ -69,9 +70,9 @@ export function noteTabStripOverflow(tabs: number) {
   mostTabs.note(tabs);
 }
 
-export function noteTabStripPick(at: number) {
+export function noteTabStripPick(strip: string, at: number) {
   picks.note();
-  if (at - lastScrollAt < PICK_AFTER_SCROLL_MS) picksAfterScroll.note();
+  if (at - (lastScrollAt.get(strip) ?? -Infinity) < PICK_AFTER_SCROLL_MS) picksAfterScroll.note();
 }
 
 export function noteTabStripMenuPick(consent: ConsentToken | null) {
@@ -98,9 +99,13 @@ export function noteTabStripRevealHeldForScroll() {
   revealsHeldForScroll.note();
 }
 
-export function noteTabStripScrolled(at: number) {
-  const gap = at - lastScrollAt;
-  lastScrollAt = at;
+export function noteTabStripCloseAfterSelect() {
+  closesAfterSelect.note();
+}
+
+export function noteTabStripScrolled(strip: string, at: number) {
+  const gap = at - (lastScrollAt.get(strip) ?? -Infinity);
+  lastScrollAt.set(strip, at);
   if (gap > NEW_SCROLL_GAP_MS) scrolls.note();
   else if (gap > STALL_GAP_MS) scrollStalls.note();
 }
@@ -131,6 +136,7 @@ export function takeTabStripCounts() {
     tab_strip_scroll_stalls: scrollStalls.take(),
     tab_strip_reveals_held_for_scroll: revealsHeldForScroll.take(),
     tab_strip_commands_refused: commandsRefused.take(),
+    tab_strip_closes_after_select_ignored: closesAfterSelect.take(),
     ...takeTabLayoutCounts(),
     ...takeTabMotionCounts(),
   };

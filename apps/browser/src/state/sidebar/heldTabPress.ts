@@ -36,6 +36,9 @@ export type TabPress = {
 };
 
 let heldPress: TabPress | null = null;
+let switchPress = { tabId: "", at: -Infinity };
+
+export const switchedByPressWithin = (tabId: string, ms: number) => switchPress.tabId === tabId && performance.now() - switchPress.at < ms;
 const pressEnds = new Set<{ windowId: string; listener: () => void }>();
 
 export const tabPressHeld = (windowId: string) => heldPress?.windowId === windowId;
@@ -109,6 +112,7 @@ export function holdTabPress(windowId: string, tabId: string, press: GestureResp
   heldPress = held;
   notePressStarted(switched, held.windowKey, held);
   if (switched) {
+    switchPress = { tabId, at: performance.now() };
     dismissHover();
     switchingByPress(nativePress, () => clickTab(windowId, tabId));
   }

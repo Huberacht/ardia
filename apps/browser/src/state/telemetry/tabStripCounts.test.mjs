@@ -7,6 +7,7 @@ const client = await import("./client.ts");
 import { noteTabLayoutSwitch } from "./tabLayoutCounts.ts";
 import {
   noteTabStripChipsMeasured,
+  noteTabStripCloseAfterSelect,
   noteTabStripCommandRefused,
   noteTabStripCompact,
   noteTabStripReadable,
@@ -46,6 +47,7 @@ const ZERO = {
   tab_strip_scroll_stalls: 0,
   tab_strip_reveals_held_for_scroll: 0,
   tab_strip_commands_refused: 0,
+  tab_strip_closes_after_select_ignored: 0,
   tab_layout_switches_to_top: 0,
   tab_layout_switches_to_sidebar: 0,
   sidebar_tab_open_motions: 0,
@@ -107,7 +109,7 @@ test("closes that land in a held strip are counted, and the most tabs given titl
 });
 
 test("a scroll starts after a quarter second without one, and an update more than two frames after the last is a stall", () => {
-  for (const at of [1000, 1016, 1033, 1100, 1116, 2000, 2008]) noteTabStripScrolled(at);
+  for (const at of [1000, 1016, 1033, 1100, 1116, 2000, 2008]) noteTabStripScrolled("w|p", at);
   noteTabStripRevealHeldForScroll();
   assert.deepEqual(takeTabStripCounts(), { ...ZERO, tab_strip_scrolls: 2, tab_strip_scroll_stalls: 1, tab_strip_reveals_held_for_scroll: 1 });
   assert.deepEqual(takeTabStripCounts(), ZERO);
@@ -134,13 +136,14 @@ const EVERY_FIELD = [
   ["tab_strip_held_closes", () => noteTabStripHeldClose(), 1],
   ["tab_strip_held_close_stretches", () => noteTabStripHeldCloseStretch(), 1],
   ["tab_strip_most_titled_tabs", () => noteTabStripTitledTabs(6), 6],
-  ["tab_strip_picks", () => noteTabStripPick((clock += 60_000)), 1],
-  ["tab_strip_picks_after_scroll", () => (noteTabStripScrolled((clock += 60_000)), noteTabStripPick((clock += 2_000))), 1],
+  ["tab_strip_picks", () => noteTabStripPick("w|p", (clock += 60_000)), 1],
+  ["tab_strip_picks_after_scroll", () => (noteTabStripScrolled("w|p", (clock += 60_000)), noteTabStripPick("w|p", (clock += 2_000))), 1],
   ["tab_strip_menu_picks", () => noteTabStripMenuPick(client.consentToken()), 1],
-  ["tab_strip_scrolls", () => noteTabStripScrolled((clock += 10_000)), 1],
-  ["tab_strip_scroll_stalls", () => (noteTabStripScrolled((clock += 10_000)), noteTabStripScrolled((clock += 100))), 1],
+  ["tab_strip_scrolls", () => noteTabStripScrolled("w|p", (clock += 10_000)), 1],
+  ["tab_strip_scroll_stalls", () => (noteTabStripScrolled("w|p", (clock += 10_000)), noteTabStripScrolled("w|p", (clock += 100))), 1],
   ["tab_strip_reveals_held_for_scroll", () => noteTabStripRevealHeldForScroll(), 1],
   ["tab_strip_commands_refused", () => noteTabStripCommandRefused(), 1],
+  ["tab_strip_closes_after_select_ignored", () => noteTabStripCloseAfterSelect(), 1],
 ];
 
 test("every tab strip count stays at zero while sharing is off, counts once sharing is on, and turning sharing off drops what was counted", () => {
@@ -179,9 +182,19 @@ test("tab opens, closes, interrupts and overruns animated in the sidebar and the
 test("a tab picked in the strip counts as reached by scrolling only within ten seconds of the strip's last scroll", () => {
   sharing(true);
   takeTabStripCounts();
-  noteTabStripScrolled((clock += 60_000));
-  noteTabStripPick((clock += 9_000));
-  noteTabStripPick((clock += 2_000));
+  noteTabStripScrolled("w|p", (clock += 60_000));
+  noteTabStripPick("w|p", (clock += 9_000));
+  noteTabStripPick("w|p", (clock += 2_000));
+  const counts = takeTabStripCounts();
+  assert.deepEqual([counts.tab_strip_picks, counts.tab_strip_picks_after_scroll], [2, 1]);
+});
+
+test("a pick counts as reached by scrolling only in the strip that scrolled", () => {
+  sharing(true);
+  takeTabStripCounts();
+  noteTabStripScrolled("a|p", (clock += 60_000));
+  noteTabStripPick("b|p", (clock += 1_000));
+  noteTabStripPick("a|p", (clock += 1_000));
   const counts = takeTabStripCounts();
   assert.deepEqual([counts.tab_strip_picks, counts.tab_strip_picks_after_scroll], [2, 1]);
 });

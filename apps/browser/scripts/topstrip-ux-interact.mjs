@@ -5,6 +5,7 @@ import { session as sessionOf } from "../../../scripts/lib/instance.mjs";
 
 const WIDTH = 1280;
 const HEIGHT = 640;
+const DOUBLE_CLICK_GAP_MS = 200;
 
 function makeMeasure(ctx, inst, out) {
   let shot = 0;
@@ -167,11 +168,15 @@ export async function runInteractions(ctx) {
     }
 
     if (want("closeUnderPointer")) {
-      for (const [id, width, at] of [["c60", WIDTH], ["c30", WIDTH], ["c15", 900], ["c15", 1728], ["c15", 1728, "end"]]) {
+      for (const [id, width, at] of [["c60", WIDTH], ["c30", WIDTH], ["c15", 900], ["c15", 900, "left"], ["c15", 900, "right"], ["c15", 900, "selected"], ["c15", 1728], ["c15", 1728, "end"]]) {
         await prepare(id, width, "mid");
         const m0 = await measure(id, "cp0");
-        const visible = m0.detail.tabs.filter(([t, a, b]) => a > m0.detail.viewport[0] + 30 && b < m0.detail.viewport[1] - 30 && `${id}-${t}` !== m0.active);
-        const target = at === "end" ? m0.detail.tabs.filter(([t]) => `${id}-${t}` !== m0.active).at(-1) : visible[Math.floor(visible.length / 2)] ?? visible[0];
+        const visible = m0.detail.tabs.filter(([t, a, b]) => a > m0.detail.viewport[0] + 30 && b < m0.detail.viewport[1] - 30 && t !== m0.active.split("-").pop());
+        const selected = m0.detail.tabs.find(([t]) => t === m0.active.split("-").pop());
+        const side = (left) => visible.filter(([, a]) => (selected ? (left ? a < selected[1] : a > selected[1]) : false));
+        const middle = (list) => list[Math.floor(list.length / 2)] ?? list[0];
+        const target = at === "end" ? m0.detail.tabs.filter(([t]) => t !== m0.active.split("-").pop()).at(-1)
+          : at === "left" ? middle(side(true)) : at === "right" ? middle(side(false)) : at === "selected" ? selected : middle(visible);
         if (!target) {
           record(`closeUnderPointer.${id}`, { error: "no tab" });
           continue;
@@ -191,13 +196,39 @@ export async function runInteractions(ctx) {
               });
               return step(0).then(() => hitAt()).then((h) => { closes.push({ chain: h, sameAsClose: h === chain0, final: true }); return closes; });
             });`, 90000);
-        const isClose = !/FileDragView/.test(res[0].chain);
-        const landed = res.slice(1).filter((c, k) => isClose && c.sameAsClose && (res[k].closed ?? 0) > 0).length;
+        const isClose = (res[0].closed ?? 0) > 0;
+        const firstClose = res.findIndex((c) => (c.closed ?? 0) > 0);
+        const landed = firstClose < 0 ? 0 : res.slice(firstClose + 1).filter((c) => (c.closed ?? 0) > 0).length;
         const closed = res.reduce((n, c) => n + (c.closed ?? 0), 0);
         const mAfter = await measure(id, "cp1", { hits: false });
         savePng(ctx, mAfter.img, join(out, "frames", `close-under-pointer-${id}.png`));
-        record(`closeUnderPointer.${id}-${width}${at ? "-" + at : ""}`, { closedOf5: closed, landedOf5: landed, startedOnClose: isClose, target: target[0], x, steps: res.map((c) => [c.closed ?? null, c.chain.slice(0, 40)]) });
-        await run(`const id = ${JSON.stringify(id)}; return D.devSetPointer(id, ${width} / 2, 400, true).then(() => wait(700)).then(() => { const need = ${Number(id.slice(1))} - stripOrder(id).filter((t) => !st().tabs[t].pin).length; for (let i = 0; i < need; i++) st().newTab(id, { url: "http://127.0.0.1:${port}/page/" + id + "/" + (300 + i), background: true }); return wait(900); });`);
+        record(`closeUnderPointer.${id}-${width}${at ? "-" + at : ""}`, { closedOf5: closed, closesAfterFirst: landed, startedOnClose: isClose, target: target[0], x, steps: res.map((c) => [c.closed ?? null, c.chain.slice(0, 40)]) });
+        await run(`const id = ${JSON.stringify(id)}; return D.devSetPointer(id, ${width} / 2, 400, true).then(() => wait(700)).then(() => { const need = ${Number(id.slice(1))} - stripOrder(id).filter((t) => !st().tabs[t].pin).length; for (let i = 0; i < need; i++) ac.runCommand({ command: "reopenClosedTab", arg: null, windowId: id }); return wait(1500); });`);
+      }
+    }
+
+    if (want("doubleClickSelect")) {
+      for (const at of ["left", "right"]) {
+        await prepare("c15", 900, "mid");
+        const m0 = await measure("c15", "dc0");
+        const selected = m0.detail.tabs.find(([t]) => t === m0.active.split("-").pop());
+        const visible = m0.detail.tabs.filter(([t, a, b]) => a > m0.detail.viewport[0] + 30 && b < m0.detail.viewport[1] - 30 && t !== m0.active.split("-").pop() && b - a < 60);
+        const list = visible.filter(([, a]) => (selected ? (at === "left" ? a < selected[1] : a > selected[1]) : false));
+        const target = list[Math.floor(list.length / 2)];
+        if (!target) {
+          record(`doubleClickSelect.${at}`, { error: "no tab" });
+          continue;
+        }
+        const x = target[2] - 6 - 11;
+        const res = await run(`const id = "c15";
+          return D.devSetPointer(id, ${x}, 21, true).then(() => wait(450)).then(() => D.devSetWindowFrame(id, [40 + Object.keys(st().windows).indexOf(id) * 11, 60 + Object.keys(st().windows).indexOf(id) * 7, 900, ${HEIGHT}]))
+            .then((frame) => nativeOf(frame)).then((n) => {
+              const count = stripOrder(id).length;
+              const click = () => ac.engine.call("windows.dev", { window: n, action: "click:${x},21" });
+              return click().then(() => wait(${DOUBLE_CLICK_GAP_MS})).then(click).then(() => wait(900)).then(() => ({ closed: count - stripOrder(id).length, active: st().windows[id].activeTabIds.default }));
+            });`, 60000);
+        record(`doubleClickSelect.${at}`, { closed: res.closed, selected: res.active.split("-").pop(), target: target[0], x, gapMs: DOUBLE_CLICK_GAP_MS });
+        await run(`const id = "c15"; return D.devSetPointer(id, 450, 400, true).then(() => wait(700)).then(() => { const need = 15 - stripOrder(id).filter((t) => !st().tabs[t].pin).length; for (let i = 0; i < need; i++) ac.runCommand({ command: "reopenClosedTab", arg: null, windowId: id }); return wait(1500); });`);
       }
     }
 
@@ -334,11 +365,12 @@ export async function runInteractions(ctx) {
             return step(0).then(() => hitAt()).then((h) => { steps.push({ before: h, sameAsClose: h === chain0, final: true }); return { chain0, steps }; });
           });`, 90000);
         const closed = res.steps.reduce((a, c) => a + (c.closed ?? 0), 0);
-        const startedOnClose = !/FileDragView/.test(res.chain0);
-        const landed = res.steps.slice(1).filter((c, k) => startedOnClose && c.sameAsClose && (res.steps[k].closed ?? 0) > 0).length;
+        const startedOnClose = (res.steps[0].closed ?? 0) > 0;
+        const firstClose = res.steps.findIndex((c) => (c.closed ?? 0) > 0);
+        const landed = firstClose < 0 ? 0 : res.steps.slice(firstClose + 1).filter((c) => (c.closed ?? 0) > 0).length;
         const order = await run(`return stripOrder(${JSON.stringify(id)});`);
         const neighbourSelected = res.steps.filter((c) => c.closed).map((c) => c.selectedAfter);
-        record(`closeRun.${n}-${pos}`, { closedOf5: closed, landedOf5: landed, startedOnClose, selectedAfter: neighbourSelected.map((t) => t?.split("-").pop()), x, selRun: sel, steps: res.steps.map((c) => [c.closed ?? null, c.before.slice(0, 30), c.under, c.scroll, c.selectedAfter?.split("-").pop()]), orderAround: order.slice(Math.max(0, order.indexOf(activeId) - 3), order.indexOf(activeId) + 8).map((t) => t.split("-").pop()) });
+        record(`closeRun.${n}-${pos}`, { closedOf5: closed, closesAfterFirst: landed, startedOnClose, selectedAfter: neighbourSelected.map((t) => t?.split("-").pop()), x, selRun: sel, steps: res.steps.map((c) => [c.closed ?? null, c.before.slice(0, 30), c.under, c.scroll, c.selectedAfter?.split("-").pop()]), orderAround: order.slice(Math.max(0, order.indexOf(activeId) - 3), order.indexOf(activeId) + 8).map((t) => t.split("-").pop()) });
         await run(`const id = ${JSON.stringify(id)}; return D.devSetPointer(id, 640, 400, true).then(() => wait(600)).then(() => { const need = ${n} - stripOrder(id).filter((t) => !st().tabs[t].pin).length; for (let i = 0; i < need; i++) st().newTab(id, { url: "http://127.0.0.1:${port}/page/" + id + "/" + (200 + i), background: true }); return wait(900); });`);
       }
     }
