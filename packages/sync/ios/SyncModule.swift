@@ -278,7 +278,10 @@ public class SyncModule: Module {
         return nil
       }
       guard seen.insert("\(realm)\u{0}\(username)").inserted, let origin = Self.loginOrigin(realm) else { continue }
-      guard let seal = try? keys.sealPassword(password, origin: origin, username: username) else { return nil }
+      guard let seal = try? keys.sealPassword(password, origin: origin, username: username) else {
+        NSLog("[sync] reading passwords: one login couldn't be sealed; syncing the others")
+        continue
+      }
       sealed.append(["origin": origin, "username": username, "sealed": seal, "created": created])
     }
     return sealed

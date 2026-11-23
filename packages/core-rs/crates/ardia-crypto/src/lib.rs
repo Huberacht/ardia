@@ -14,6 +14,19 @@ pub enum CryptoError {
     Random,
 }
 
+pub fn wipe(bytes: &mut [u8]) {
+    bytes.fill(0);
+    std::hint::black_box(&*bytes);
+}
+
+pub struct Wiping(pub Vec<u8>);
+
+impl Drop for Wiping {
+    fn drop(&mut self) {
+        wipe(&mut self.0);
+    }
+}
+
 pub trait Crypto {
     fn sha256(data: &[u8]) -> [u8; DIGEST_BYTES];
 
@@ -34,6 +47,31 @@ pub trait Crypto {
         aad: &[u8],
         sealed: &[u8],
     ) -> Result<Zeroizing<Vec<u8>>, CryptoError>;
+
+    fn aes256gcm_seal_in_place(
+        key: &[u8; KEY_BYTES],
+        nonce: &[u8; NONCE_BYTES],
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+        start: usize,
+    ) -> Result<(), CryptoError> {
+        let sealed = Self::aes256gcm_seal(key, nonce, aad, &buffer[start..])?;
+        buffer.truncate(start);
+        buffer.extend_from_slice(&sealed);
+        Ok(())
+    }
+
+    fn aes256gcm_open_in_place(
+        key: &[u8; KEY_BYTES],
+        nonce: &[u8; NONCE_BYTES],
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), CryptoError> {
+        let plain = Self::aes256gcm_open(key, nonce, aad, buffer)?;
+        buffer.clear();
+        buffer.extend_from_slice(&plain);
+        Ok(())
+    }
 
     fn fill_random(out: &mut [u8]) -> Result<(), CryptoError>;
 

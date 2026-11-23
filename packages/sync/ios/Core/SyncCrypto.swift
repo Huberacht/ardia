@@ -40,6 +40,7 @@ public final class SyncKeys: @unchecked Sendable {
   }
 
   public func open(_ file: Data, scopeTag: String, fileId: String) throws -> Data {
+    let startedIn = Self.consentEpoch()
     do {
       return try CoreCall.data { out in
         CoreCall.bytes(file) { file, fileCount in
@@ -49,7 +50,7 @@ public final class SyncKeys: @unchecked Sendable {
         }
       }
     } catch let failure as CoreCall.Refused {
-      OpenFailures.note(failure.status)
+      OpenFailures.note(failure.status, startedIn: startedIn)
       throw failure.syncFailure
     }
   }
@@ -98,7 +99,7 @@ enum OpenFailures {
   private static var counts: [String: Int] = [:]
   private static var countedEpoch = ""
 
-  static func note(_ status: ardia_status) {
+  static func note(_ status: ardia_status, startedIn epoch: String) {
     let code: String
     switch status {
     case ARDIA_STATUS_FORMAT: code = "format"
@@ -106,8 +107,7 @@ enum OpenFailures {
     case ARDIA_STATUS_TOO_LARGE: code = "too_large"
     default: code = "other"
     }
-    let epoch = SyncKeys.consentEpoch()
-    guard !epoch.isEmpty else { return }
+    guard !epoch.isEmpty, epoch == SyncKeys.consentEpoch() else { return }
     lock.lock()
     defer { lock.unlock() }
     if epoch != countedEpoch {
@@ -153,12 +153,16 @@ enum CoreCall {
   static func data(_ call: (UnsafeMutablePointer<ardia_buf>) -> ardia_status) throws -> Data {
     var buffer = ardia_buf(ptr: nil, len: 0)
     let status = call(&buffer)
-    defer { ardia_buf_free(&buffer) }
-    let bytes = buffer.ptr.map { Data(bytes: $0, count: buffer.len) } ?? Data()
     guard status == ARDIA_STATUS_OK else {
-      throw Refused(status: status, detail: (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] ?? [:])
+      defer { ardia_buf_free(&buffer) }
+      let detail = buffer.ptr.map { Data(bytes: $0, count: buffer.len) } ?? Data()
+      throw Refused(status: status, detail: (try? JSONSerialization.jsonObject(with: detail)) as? [String: Any] ?? [:])
     }
-    return bytes
+    guard let bytes = buffer.ptr else { return Data() }
+    return Data(bytesNoCopy: bytes, count: buffer.len, deallocator: .custom { pointer, count in
+      var owned = ardia_buf(ptr: pointer.assumingMemoryBound(to: UInt8.self), len: count)
+      ardia_buf_free(&owned)
+    })
   }
 
   static func mapped(_ call: (UnsafeMutablePointer<ardia_buf>) -> ardia_status) throws -> Data {

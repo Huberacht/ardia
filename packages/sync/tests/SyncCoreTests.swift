@@ -128,10 +128,44 @@ final class SyncCryptoTests: XCTestCase {
     XCTAssertEqual(try legacy.open(fromRust, scopeTag: tag, fileId: "checkpoint"), payload)
   }
 
+  func testPasswordsOfAnyLengthSwiftSealedStillSealAndOpen() throws {
+    let legacy = LegacySwiftSeal(entropy: entropy)
+    for length in [65_535, 65_536, 100_000, 4 * 1024 * 1024] {
+      let password = String(repeating: "p", count: length)
+      let origin = "https://" + String(repeating: "o", count: length / 4) + ".example"
+      let fromSwift = try legacy.sealPassword(password, origin: origin, username: "ada")
+      XCTAssertEqual(try keys.openPassword(fromSwift, origin: origin, username: "ada"), password, "\(length)")
+      XCTAssertEqual(try keys.sealPassword(password, origin: origin, username: "ada"), fromSwift, "\(length)")
+    }
+  }
+
+  func testAFailedOpenCountsOnlyInThePeriodItStartedAndEndedIn() throws {
+    defer { SyncKeys.consentEpoch = { "" } }
+    _ = SyncKeys.takeOpenFailures()
+    var asked = 0
+    SyncKeys.consentEpoch = {
+      asked += 1
+      return asked == 1 ? "" : "period-1"
+    }
+    _ = try? keys.open(Data(), scopeTag: "s", fileId: "f")
+    XCTAssertEqual(SyncKeys.takeOpenFailures(), [:])
+    asked = 0
+    SyncKeys.consentEpoch = {
+      asked += 1
+      return asked == 1 ? "period-1" : "period-2"
+    }
+    _ = try? keys.open(Data(), scopeTag: "s", fileId: "f")
+    XCTAssertEqual(SyncKeys.takeOpenFailures(), [:])
+    SyncKeys.consentEpoch = { "period-2" }
+    _ = try? keys.open(Data(), scopeTag: "s", fileId: "f")
+    XCTAssertEqual(SyncKeys.takeOpenFailures(), ["format": 1])
+  }
+
   func testLongScopesAreTaggedLikeSwiftAndTooLongOnesThrow() throws {
     let legacy = LegacySwiftSeal(entropy: entropy)
-    for length in [511, 512, 513, 4096, 64 * 1024] {
-      let scope = String(repeating: "é", count: length / 2)
+    for length in [511, 512, 513, 4096, 64 * 1024 - 1, 64 * 1024] {
+      let scope = String(repeating: "é", count: length / 2) + (length % 2 == 1 ? "s" : "")
+      XCTAssertEqual(scope.utf8.count, length)
       XCTAssertEqual(try keys.scopeTag(scope), legacy.scopeTag(scope), "\(length)")
     }
     XCTAssertThrowsError(try keys.scopeTag(String(repeating: "s", count: 64 * 1024 + 1))) { XCTAssertEqual($0 as? SyncKeys.Failure, .format) }

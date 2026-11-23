@@ -11,6 +11,7 @@ struct LegacySwiftSeal {
   let fileKey: SymmetricKey
   let nameKey: SymmetricKey
   let passwordKey: SymmetricKey
+  let passwordNonceKey: SymmetricKey
 
   init(entropy: Data) {
     let ikm = SymmetricKey(data: entropy)
@@ -20,6 +21,7 @@ struct LegacySwiftSeal {
     fileKey = derive("file-key")
     nameKey = derive("name-key")
     passwordKey = derive("password-key")
+    passwordNonceKey = derive("password-nonce-key")
   }
 
   func tag(_ label: String) -> String {
@@ -64,11 +66,26 @@ struct LegacySwiftSeal {
     return Data(plain.dropFirst(4).prefix(length))
   }
 
+  static func passwordAssociatedData(origin: String, username: String) -> Data {
+    let originBytes = Data(origin.utf8)
+    return magic + Data("password/".utf8) + withUnsafeBytes(of: UInt32(originBytes.count).bigEndian) { Data($0) } + originBytes + Data(username.utf8)
+  }
+
+  func sealPassword(_ password: String, origin: String, username: String) throws -> String {
+    let payload = Data(password.utf8)
+    var plain = withUnsafeBytes(of: UInt32(payload.count).bigEndian) { Data($0) } + payload
+    plain.append(Data(count: (32 - plain.count % 32) % 32))
+    let aad = Self.passwordAssociatedData(origin: origin, username: username)
+    let synthetic = withUnsafeBytes(of: UInt32(aad.count).bigEndian) { Data($0) } + aad + plain
+    let nonce = try AES.GCM.Nonce(data: Data(HMAC<SHA256>.authenticationCode(for: synthetic, using: passwordNonceKey)).prefix(12))
+    let box = try AES.GCM.seal(plain, using: passwordKey, nonce: nonce, authenticating: aad)
+    return (Data([1]) + box.nonce + box.ciphertext + box.tag).base64EncodedString()
+  }
+
   func openPassword(_ sealed: String, origin: String, username: String) throws -> String {
     guard let data = Data(base64Encoded: sealed), data.count >= 33, data.first == 1 else { throw Failure.format }
     let body = data.dropFirst()
-    let originBytes = Data(origin.utf8)
-    let aad = Self.magic + Data("password/".utf8) + withUnsafeBytes(of: UInt32(originBytes.count).bigEndian) { Data($0) } + originBytes + Data(username.utf8)
+    let aad = Self.passwordAssociatedData(origin: origin, username: username)
     let box = try AES.GCM.SealedBox(nonce: AES.GCM.Nonce(data: body.prefix(12)), ciphertext: body.dropFirst(12).dropLast(16), tag: body.suffix(16))
     let plain = try AES.GCM.open(box, using: passwordKey, authenticating: aad)
     let length = plain.prefix(4).reduce(0) { $0 << 8 | Int($1) }

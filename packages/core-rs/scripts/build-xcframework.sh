@@ -34,7 +34,7 @@ inputs_hash() {
     cd "$core"
     {
       printf '%s\n' "${targets[@]}"
-      find Cargo.toml Cargo.lock rust-toolchain.toml include scripts/build-xcframework.sh \
+      find Cargo.toml Cargo.lock rust-toolchain.toml .cargo/config.toml include scripts/build-xcframework.sh \
         crates/ardia-crypto crates/ardia-sync-core crates/ardia-ffi \
         -type f ! -path '*/tests/*' -print | LC_ALL=C sort | while IFS= read -r file; do
         printf '%s %s\n' "$(shasum -a 256 < "$file" | cut -d' ' -f1)" "$file"
@@ -51,7 +51,7 @@ fi
 
 [ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"
 command -v rustup >/dev/null || { echo "build-xcframework: rustup isn't installed (https://rustup.rs)" >&2; exit 1; }
-unset SDKROOT RUSTC_WRAPPER CARGO_BUILD_TARGET
+unset SDKROOT RUSTC_WRAPPER CARGO_BUILD_TARGET RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
 cd "$core"
 if ! installing="$(rustup toolchain install --profile minimal --no-self-update 2>&1)"; then
   echo "$installing" >&2

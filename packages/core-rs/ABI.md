@@ -32,8 +32,9 @@ Only nulls, lengths and contents. Nothing more:
   so the cap wins over a `NULL` pointer: an over-cap length with a `NULL` pointer returns `ARDIA_STATUS_TOO_LARGE`.
 - The caps are there to refuse a wrong length, not to limit real data. A vault payload may be up to 1 GiB
   (`ARDIA_MAX_PAYLOAD_BYTES`) and a sealed file that much plus 4 KiB, because the Swift that wrote most vaults had no
-  cap and sync's checkpoint holds every scope in one file. Scopes and file ids may be up to 64 KiB
-  (`ARDIA_MAX_LABEL_BYTES`). A caller that can't show the user an error must still handle `ARDIA_STATUS_TOO_LARGE`:
+  cap and sync's checkpoint holds every scope in one file. A password, its origin and its username may each be that
+  large too (`ARDIA_MAX_PASSWORD_FIELD_BYTES`), and a sealed password half as much again, since Swift sealed and
+  opened passwords of any length. Scopes and file ids may be up to 64 KiB (`ARDIA_MAX_LABEL_BYTES`). A caller that can't show the user an error must still handle `ARDIA_STATUS_TOO_LARGE`:
   every refusal is a status, never an abort.
 - Entropy is a fixed-size input: exactly `ARDIA_ENTROPY_BYTES`. Any other length, shorter or longer, returns
   `ARDIA_STATUS_INVALID_ARGUMENT` in both `ardia_sync_keys_new` and `ardia_phrase_from_entropy`.
