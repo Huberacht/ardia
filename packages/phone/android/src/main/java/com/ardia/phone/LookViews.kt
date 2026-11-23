@@ -1416,7 +1416,7 @@ internal object FrostSources {
     fun sceneChanged(source: FrostSourceView) {
         for (frost in frostsOf(source)) when (frost.lastChoice?.path) {
             FrostPage.Path.Tinted -> frost.retint()
-            FrostPage.Path.Live -> frost.invalidate()
+            FrostPage.Path.Live -> frost.refreshFromSource()
             else -> Unit
         }
     }
@@ -1474,6 +1474,18 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
     internal fun strip(key: FrostStrip.Key): FrostStrip = strips.getOrPut(key) { FrostStrip(key) }
 
     internal val stripsHeld: Collection<FrostStrip> get() = strips.values
+
+    private var refreshedAt = Long.MIN_VALUE
+
+    internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis()): Boolean {
+        val content = recorder ?: return false
+        if (strips.isEmpty()) return false
+        if (frameTime == refreshedAt) return true
+        var all = true
+        for (strip in strips.values) all = strip.refresh(content) && all
+        if (all) refreshedAt = frameTime
+        return all
+    }
 
     private fun stopRecording() {
         recorder?.discardDisplayList()
@@ -1610,6 +1622,14 @@ internal class FrostStrip(val key: Key) {
 
     fun covers(area: Rect): Boolean = width > 0 && height > 0 && area.left >= left && area.top >= top && area.right <= left + width && area.bottom <= top + height
 
+    fun refresh(source: RenderNode): Boolean {
+        if (width <= 0 || height <= 0) return false
+        draw(source)
+        records += 1
+        LookActivity.stripRecords += 1
+        return true
+    }
+
     fun record(source: RenderNode, placed: Rect, drawingTime: Long, lenses: LiquidGlassRules.LensField? = null) {
         left = placed.left
         top = placed.top
@@ -1632,6 +1652,10 @@ internal class FrostStrip(val key: Key) {
             lensesApplied = lenses
             effectSet = true
         }
+        draw(source)
+    }
+
+    private fun draw(source: RenderNode) {
         val recording = filtered.beginRecording()
         try {
             recording.scale(1f / key.scale, 1f / key.scale)
@@ -1715,10 +1739,19 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     internal val logLabel: String get() = FrostRefresh.label(name, source, variant, number)
     private var scrolledAt = 0L
-    private val refresh = Runnable { invalidate() }
+    private val refresh = Runnable { refreshFromSource() }
     private val scrolled = ViewTreeObserver.OnScrollChangedListener {
         if (lastChoice?.path == FrostPage.Path.Live && FrostSources.find(source)?.holdsPage == true) {
             scrolledAt = SystemClock.uptimeMillis()
+            refreshFromSource()
+        }
+    }
+
+    internal fun refreshFromSource() {
+        val from = FrostSources.find(source)
+        if (lastChoice?.path == FrostPage.Path.Live && isShown && from != null && from.refreshStrips()) {
+            scheduleRefresh(from.holdsPage)
+        } else {
             invalidate()
         }
     }
@@ -1958,7 +1991,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         removeCallbacks(refresh)
         when (val delay = FrostRefresh.next(holdsPage, SystemClock.uptimeMillis() - scrolledAt)) {
             null -> Unit
-            0L -> postInvalidateOnAnimation()
+            0L -> postOnAnimation(refresh)
             else -> postDelayed(refresh, delay)
         }
     }

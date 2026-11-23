@@ -134,7 +134,14 @@ class GlassStripTest {
         assertTrue("it stays a strip near the bar, not the whole page", strip.top >= 300)
         assertTrue(tabs.holdsLayer && address.holdsLayer)
         assertEquals("the lens this test can't build leaves the plain shared blur", 0, strip.lensed)
+        val recorded = strip.records
+        assertTrue("a scroll or a backdrop frame re-records the strip without redrawing the glasses", source.refreshStrips(frameTime = 1_000L))
+        assertTrue(source.refreshStrips(frameTime = 1_000L))
+        assertEquals("once a frame however many glasses ask", recorded + 1, strip.records)
+        assertTrue(source.refreshStrips(frameTime = 1_008L))
+        assertEquals(recorded + 2, strip.records)
         source.release()
         assertEquals("releasing the source drops its strips", 0, source.stripsHeld.size)
+        assertEquals("a source with no strip asks its glasses to draw again", false, source.refreshStrips(frameTime = 1_016L))
     }
 }
