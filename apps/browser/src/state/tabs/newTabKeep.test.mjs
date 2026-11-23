@@ -70,21 +70,32 @@ test("a stopped watch never calls back", async () => {
 
 test("the New Tab page is kept only when its own tab goes on to a page, and shown again it is no longer kept", () => {
   const tab = aTab();
-  const pane = mount(({ shown, page }) => useNewTabKeptForPage(tab, shown, page), { props: { shown: true, page: false } });
+  const pane = mount(({ shown, page, app = false }) => useNewTabKeptForPage(tab, shown, page, app), { props: { shown: true, page: false } });
   assert.equal(pane.value, false);
   assert.equal(pane.rerender({ shown: false, page: true }), true, "Enter gave the tab an address");
   assert.equal(pane.rerender({ shown: true, page: false }), false, "back to the New Tab page");
-  assert.equal(pane.rerender({ shown: false, page: false }), false, "switched to another tab or an app page: nothing to wait for");
+  assert.equal(pane.rerender({ shown: false, page: false }), false, "switched to another tab: nothing to wait for");
+  assert.equal(pane.rerender({ shown: true, page: false }), false);
+  assert.equal(pane.rerender({ shown: false, page: true, app: true }), false, "straight to an app page: nothing loads, nothing is held");
   pane.unmount();
 });
 
 test("a kept New Tab page goes when its page's load ends", async () => {
   const tab = aTab();
-  const pane = mount(({ shown, page }) => useNewTabKeptForPage(tab, shown, page), { props: { shown: true, page: false } });
+  const pane = mount(({ shown, page, app = false }) => useNewTabKeptForPage(tab, shown, page, app), { props: { shown: true, page: false } });
   assert.equal(pane.rerender({ shown: false, page: true }), true);
   S().updateLive(tab, { isLoading: true });
   S().updateLive(tab, { isLoading: false });
   await wait(250);
   assert.equal(pane.value, false);
+  pane.unmount();
+});
+
+test("a hold ends at once when its tab goes on to an app page, and switching away keeps it", () => {
+  const tab = aTab();
+  const pane = mount(({ shown, page, app = false }) => useNewTabKeptForPage(tab, shown, page, app), { props: { shown: true, page: false } });
+  assert.equal(pane.rerender({ shown: false, page: true }), true, "Enter on a web address");
+  assert.equal(pane.rerender({ shown: false, page: false }), true, "switched to another tab while the page loads: still held");
+  assert.equal(pane.rerender({ shown: false, page: true, app: true }), false, "the tab then opened an app page");
   pane.unmount();
 });

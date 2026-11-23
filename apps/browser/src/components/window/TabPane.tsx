@@ -112,7 +112,7 @@ export const TabPane = memo(function TabPane({
     if (isNewTab) markNewTabPane(tabId, `visible ${visible} small ${small} split ${inSplit} card ${emptyCard}`);
   }, [visible, isNewTab, small, inSplit, emptyCard]);
   const newTabPageShown = visible && isNewTab && !small && !inSplit && !emptyCard;
-  const keptNewTab = useNewTabKeptForPage(tabId, newTabPageShown, visible && !isNewTab && !own.appPage);
+  const keptNewTab = useNewTabKeptForPage(tabId, newTabPageShown, visible && !isNewTab, own.appPage);
   const prewarmed = usePrewarm(visible && isNewTab && !emptyCard && !mounted && !small && !inSplit);
   const toolbar = chrome.kind !== "none";
   const bar = paneBar(chrome, { visible, fullscreen, lingering });

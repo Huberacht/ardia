@@ -38,13 +38,13 @@ export function watchPageDrawn(tabId: string, drawn: (timedOut: boolean) => void
   };
 }
 
-export function useNewTabKeptForPage(tabId: string, newTabShown: boolean, pageShown: boolean): boolean {
+export function useNewTabKeptForPage(tabId: string, newTabShown: boolean, pageShown: boolean, appPage: boolean): boolean {
   const [shownBefore, setShownBefore] = useState(newTabShown);
   const [kept, setKept] = useState(false);
   if (shownBefore !== newTabShown) {
     setShownBefore(newTabShown);
-    setKept(!newTabShown && pageShown);
-  }
+    setKept(!newTabShown && pageShown && !appPage);
+  } else if (kept && appPage) setKept(false);
   useLayoutEffect(() => {
     if (!kept) return;
     const consent = consentToken();
