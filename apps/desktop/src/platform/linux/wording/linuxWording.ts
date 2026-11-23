@@ -227,7 +227,7 @@ export function rewordForLinux(id: string, code: string): string | null {
   const path = sharedPath(id);
   const wording = path === null ? undefined : LINUX_WORDING.find((entry) => entry.file === path);
   if (!wording) return null;
-  let reworded = code;
+  let reworded = code.replaceAll("\r\n", "\n");
   for (const [from, to] of wording.replacements) {
     const found = reworded.includes(from) ? from : hasMacModifiers(from) && reworded.includes(linuxShortcutText(from)) ? linuxShortcutText(from) : null;
     if (found === null) throw new Error(`${path} no longer contains ${JSON.stringify(from.slice(0, 80))}; update apps/desktop/src/platform/linux/wording/linuxWording.ts`);

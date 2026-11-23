@@ -68,7 +68,7 @@ export function rewordCalendar(rawId: string, code: string): string | null {
   const path = id.slice(at + marker.length).split("?")[0];
   const wording = CALENDAR_WORDING.find((entry) => entry.file === path);
   if (!wording) return null;
-  let reworded = code;
+  let reworded = code.replaceAll("\r\n", "\n");
   for (const [from, to] of wording.replacements) {
     if (!reworded.includes(from)) throw new Error(`${path} no longer contains ${JSON.stringify(from.slice(0, 80))}; update apps/desktop/src/platform/linux/wording/calendarWording.ts`);
     reworded = reworded.replace(from, () => to);

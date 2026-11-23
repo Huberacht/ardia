@@ -12,7 +12,7 @@ import { PLATFORM_FEATURES as LINUX_FEATURES } from "../../../../../browser/src/
 import { PLATFORM_TERMS as LINUX_TERMS } from "../../../../../browser/src/lib/platformTerms.linux.ts";
 
 const shared = (path) => fileURLToPath(new URL(`../../../../../browser/src/${path}`, import.meta.url));
-const read = (path) => readFileSync(shared(path), "utf8");
+const read = (path) => readFileSync(shared(path), "utf8").replaceAll("\r\n", "\n");
 const strings = (code) => [...code.matchAll(/"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)].map((match) => match[0]);
 const whole = (code) => [code];
 const PIPELINE = [rewordCredentials, rewordForLinux, rewordCalendar, rewordSync];
@@ -117,6 +117,18 @@ test("open-tab sync telemetry describes this computer on Linux", () => {
   const copy = linuxCopy("state/telemetry/copy.ts");
   assert.match(copy, /how many tab changes this computer sent,/);
   assert.doesNotMatch(copy, /\bMacs?\b/);
+});
+
+test("a Windows checkout with CRLF line endings rewords every listed file the same as LF", () => {
+  const multiline = MODULES.flatMap(({ list }) => list.flatMap(({ replacements }) => replacements)).filter(([from]) => from.includes("\n"));
+  assert.ok(multiline.length > 0, "some listed replacements span lines");
+  for (const { name, list, reword } of MODULES) {
+    for (const { file } of list) {
+      const lf = read(file);
+      const reworded = reword(shared(file), lf);
+      assert.equal(reword(shared(file), lf.replaceAll("\n", "\r\n")), reworded, `${name}: ${file}`);
+    }
+  }
 });
 
 test("a shared copy change fails with 'no longer contains', and unlisted files pass through", () => {

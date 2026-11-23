@@ -2,7 +2,7 @@ import { defineConfig, transformWithEsbuild, type Plugin } from "vite";
 import { lazyComponentId, webShellConfig } from "./vite.shared";
 import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputAdapters";
 import { desktopMode, type DesktopMode } from "./desktopModes";
-import { posixFilePath, toPosixPath } from "./desktopPaths";
+import { keyedPaths, pathKey, pathKeys, posixFilePath, toPosixPath } from "./desktopPaths";
 import { linuxWordingPlugins } from "./src/platform/linux/wording/plugins";
 import { CONTROL_KEY_NAME as LINUX_CONTROL_KEY } from "./src/platform/keyNames.linux";
 import { CONTROL_KEY_NAME as WIN_CONTROL_KEY } from "./src/platform/keyNames.win";
@@ -70,6 +70,7 @@ const importerReplacements = new Map([
   [`${here("../browser/src/state/windows/layout.ts")}\0${here("../browser/src/components/sidebar/AddressBar.tsx")}`, here("./src/sidebarHeaderLayout.ts")],
 ]);
 const siteMeadow = here("../site/src/scripts/meadow/");
+const siteMeadowKey = pathKey(siteMeadow);
 const SITE_MEADOW_TSCONFIG = JSON.stringify({ compilerOptions: { target: "ESNext", verbatimModuleSyntax: true, strict: true } });
 
 function siteMeadowScripts(): Plugin {
@@ -78,14 +79,18 @@ function siteMeadowScripts(): Plugin {
     enforce: "pre",
     async transform(code, rawId) {
       const id = toPosixPath(rawId);
-      if (!id.startsWith(siteMeadow) || !id.endsWith(".ts")) return null;
+      if (!pathKey(id).startsWith(siteMeadowKey) || !id.endsWith(".ts")) return null;
       const result = await transformWithEsbuild(code, id, { loader: "ts", tsconfigRaw: SITE_MEADOW_TSCONFIG });
       return { code: result.code, map: null };
     },
   };
 }
 
-const adapters = new Set([...replacements.values(), ...importerReplacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
+const adapters = pathKeys([...replacements.values(), ...importerReplacements.values(), rawBookmarkAdapter.replacement, importedPasswordSave.replacement]);
+const replacementsByKey = keyedPaths(replacements);
+const importerReplacementsByKey = keyedPaths(importerReplacements);
+const passwordSaveSource = pathKey(importedPasswordSave.source);
+const passwordSaveImporters = pathKeys(importedPasswordSave.importers);
 
 const CONTROL_KEYS: Record<DesktopMode, string> = { linux: LINUX_CONTROL_KEY, win: WIN_CONTROL_KEY };
 const PLATFORM_WORDING: Record<DesktopMode, () => Plugin[]> = { linux: linuxWordingPlugins, win: () => [] };
@@ -103,15 +108,15 @@ function desktopComponents(mode: DesktopMode): Plugin {
     },
     async resolveId(source, rawImporter, options) {
       if (!rawImporter) return null;
-      const importer = toPosixPath(rawImporter);
+      const importer = pathKey(rawImporter);
       if (adapters.has(importer)) return null;
       const resolved = await this.resolve(source, rawImporter, { ...options, skipSelf: true });
       if (!resolved) return null;
-      const id = toPosixPath(resolved.id);
-      if (id === importedPasswordSave.source && importedPasswordSave.importers.has(importer)) return importedPasswordSave.replacement;
-      const scoped = importerReplacements.get(`${id}\0${importer}`);
+      const id = pathKey(resolved.id);
+      if (id === passwordSaveSource && passwordSaveImporters.has(importer)) return importedPasswordSave.replacement;
+      const scoped = importerReplacementsByKey.get(`${id}\0${importer}`);
       if (scoped) return scoped;
-      return resolveInputAdapter(id, importer) ?? replacements.get(id) ?? null;
+      return resolveInputAdapter(id, importer) ?? replacementsByKey.get(id) ?? null;
     },
   };
 }

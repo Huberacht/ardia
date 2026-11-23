@@ -1,4 +1,4 @@
-import { posixFilePath } from "./desktopPaths.ts";
+import { keyedPaths, pathKey, pathKeys, posixFilePath } from "./desktopPaths.ts";
 
 const here = (path: string) => posixFilePath(new URL(path, import.meta.url));
 export const inputAdapters = new Map([
@@ -18,5 +18,9 @@ export const rawBookmarkAdapter = {
   ]),
 };
 
+const adaptersByKey = keyedPaths(inputAdapters);
+const rawBookmarkSource = pathKey(rawBookmarkAdapter.source);
+const rawBookmarkImporters = pathKeys(rawBookmarkAdapter.importers);
+
 export const resolveInputAdapter = (source: string, importer: string) =>
-  source === rawBookmarkAdapter.source && rawBookmarkAdapter.importers.has(importer) ? rawBookmarkAdapter.replacement : inputAdapters.get(source);
+  pathKey(source) === rawBookmarkSource && rawBookmarkImporters.has(pathKey(importer)) ? rawBookmarkAdapter.replacement : adaptersByKey.get(pathKey(source));

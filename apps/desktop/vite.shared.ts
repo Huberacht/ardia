@@ -5,7 +5,7 @@ import react from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
 import type { Plugin, UserConfig } from "vite";
 import { outDirFor, platformSuffixes, type DesktopMode } from "./desktopModes";
-import { posixFilePath, toPosixPath } from "./desktopPaths";
+import { keyedPaths, pathKey, posixFilePath, toPosixPath } from "./desktopPaths";
 
 const here = (path: string) => posixFilePath(new URL(path, import.meta.url));
 const repo = here("../../");
@@ -24,12 +24,12 @@ const realPackages: Record<string, string> = {
 const ASSET = /\.(png|jpe?g|gif|webp|svg)$/;
 
 function commonJsRequires(): Plugin {
-  const scope = [`${repo}apps/browser/src/`, `${repo}packages/`];
+  const scope = [`${repo}apps/browser/src/`, `${repo}packages/`].map(pathKey);
   return {
     name: "ardia-desktop:requires",
     enforce: "pre",
     transform(code, rawId) {
-      const id = toPosixPath(rawId);
+      const id = pathKey(rawId);
       if (!/\.(t|j)sx?$/.test(id) || !scope.some((dir) => id.startsWith(dir)) || !code.includes("require(")) return null;
       const specs: string[] = [];
       const body = code.replace(/\brequire\((["'])([^"']+)\1\)/g, (_match, _quote, spec: string) => {
@@ -54,6 +54,7 @@ const LAZY_COMPONENTS: Record<string, string[]> = {
   [`${repo}apps/browser/src/components/bookmarks/EditBookmarkDialog.tsx`]: ["EditBookmarkDialog"],
   [`${repo}apps/browser/src/components/littleArdia/LittleArdiaWindow.tsx`]: ["LittleArdiaWindow"],
 };
+const LAZY_COMPONENTS_BY_KEY = keyedPaths(Object.entries(LAZY_COMPONENTS));
 
 const PLATFORM_PREFIX = "@platform/";
 
@@ -84,13 +85,13 @@ function lazyComponents(): Plugin {
       if (!importer || source.endsWith(EAGER_QUERY) || importer.startsWith(LAZY_PREFIX)) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
       const id = resolved && toPosixPath(resolved.id);
-      if (!id || !LAZY_COMPONENTS[id]) return null;
+      if (!id || !LAZY_COMPONENTS_BY_KEY.has(pathKey(id))) return null;
       return LAZY_PREFIX + id;
     },
     load(id) {
       if (!id.startsWith(LAZY_PREFIX)) return null;
       const file = id.slice(LAZY_PREFIX.length);
-      const names = LAZY_COMPONENTS[file]!;
+      const names = LAZY_COMPONENTS_BY_KEY.get(pathKey(file))!;
       const lines = [
         `import { createElement, lazy, Suspense } from "react";`,
         `const load = () => import(${JSON.stringify(file + EAGER_QUERY)});`,
