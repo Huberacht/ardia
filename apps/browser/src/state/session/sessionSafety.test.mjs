@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+
+const setTimeoutHoldingExit = globalThis.setTimeout;
+globalThis.setTimeout = (callback, ms, ...args) => {
+  const timer = setTimeoutHoldingExit(callback, ms, ...args);
+  return ms >= 1_000 ? timer.unref() : timer;
+};
 const { useBrowser } = await import("../browser/store.ts");
-const { flushPersistence, loadSession, sessionSaved, startPersistence, SESSION_VERSION } = await import("./persist.ts");
-const { backupJson, backupName, localDay, newestBackup, rollingBackups, SESSION_BACKUPS } = await import("./sessionSafety.ts");
+const { flushPersistence, loadSession, resumePersistence, sessionSaved, sessionWritesHeld, startPersistence, SESSION_VERSION } = await import("./persist.ts");
+const { finishQuitSaves } = await import("../app/quit.ts");
+const { BACKUP_RETRY_MS, backupJson, backupName, localDay, rollingBackups, sessionBackups, SESSION_BACKUPS } = await import("./sessionSafety.ts");
 const { parsePinBackups, PINS_BACKUP_DOCUMENT } = await import("./pinGuard.ts");
 const { takeSessionWrites } = await import("../telemetry/sessionWrites.ts");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
@@ -26,6 +33,8 @@ function clean() {
   stub.copiedDocs.length = 0;
   stub.refusedCopies.on = false;
   stub.refusedSaves.on = false;
+  stub.heldCopies.on = false;
+  stub.heldCopies.queue.length = 0;
   stub.asyncExists.on = false;
   S().hydrate({});
 }
@@ -159,7 +168,7 @@ test("restore picks the newest backup that reads, skipping damaged, newer and un
   stub.docs.set("session.json", "nonsense");
   S().hydrate(loadSession());
   assert.deepEqual(tabUrls(), ["https://newest.example/"]);
-  const picked = newestBackup((doc) => doc, SESSION_VERSION, {}, Date.UTC(2026, 0, 10, 12));
+  const [picked] = sessionBackups((doc) => doc, SESSION_VERSION, {}, Date.UTC(2026, 0, 10, 12));
   assert.equal(picked.day, "2026-01-04");
   assert.ok(picked.ageDays >= 5 && picked.ageDays <= 7);
 });
@@ -200,7 +209,7 @@ test("rolling backups: one per calendar day on the first save, seven kept, a day
   assert.deepEqual(Object.keys(Object.fromEntries(stub.docs)).filter((name) => name.startsWith("session-backup")).length, 7);
 });
 
-test("a failed backup write is tried again on a later save the same day", async () => {
+test("a failed backup write is tried again a few minutes later, not on every save", async () => {
   clean();
   const at = new Date(2026, 4, 3, 9).getTime();
   const backups = rollingBackups();
@@ -214,7 +223,16 @@ test("a failed backup write is tried again on a later save the same day", async 
   stub.stagedDocs.clear();
   backups.afterSave('{"version":11,"n":1}', at + 1000);
   await turn();
-  assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
+  assert.ok(!stub.docs.has(backupName(at)), "not tried again on every save");
+  const now = Date.now;
+  Date.now = () => now() + BACKUP_RETRY_MS + 1;
+  try {
+    backups.afterSave('{"version":11,"n":2}', at + 2000);
+    await turn();
+  } finally {
+    Date.now = now;
+  }
+  assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 2);
 });
 
 test("the first save of a launch writes today's backup of the session it saved", async () => {
@@ -234,8 +252,12 @@ test("a session.json that still needs migrating is backed up as it was before th
   const old = JSON.stringify({ ...good, version: 9 });
   stub.docs.set("session.json", old);
   const stop = startPersistence();
+  S().updateTab(Object.keys(S().tabs)[0], { title: "first" });
+  flushPersistence();
+  assert.equal(stub.docs.get("session.json"), old, "the migrated session waits for the backup");
+  await turn();
   const backup = stub.docs.get(backupName(Date.now()));
-  assert.ok(backup, "written at launch, ahead of any session write");
+  assert.ok(backup, "landed before any session write");
   assert.equal(JSON.parse(backup).session.version, 9);
   S().updateTab(Object.keys(S().tabs)[0], { title: "touched" });
   flushPersistence();
@@ -306,4 +328,159 @@ test("telemetry counts the set-aside by reason and whether a backup came back, w
   } finally {
     setConsentPeriod(false, null);
   }
+});
+
+test("a current-version session.json whose core lists aren't lists is kept aside and the backup restored, not hydrated empty and saved over", async () => {
+  const good = realSession();
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-05", 1, good));
+  const bad = JSON.stringify({ ...JSON.parse(good), windows: "x", tabs: "y" });
+  stub.docs.set("session.json", bad);
+  const stop = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://kept.example/one", "https://kept.example/two"]);
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(asideCopies()[0]), bad);
+});
+
+test("a backup that parses but can't be hydrated is skipped for the next older one", async () => {
+  const older = realSession(["https://older.example/"]);
+  const newest = JSON.parse(realSession(["https://newest.example/"]));
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-03", 1, older));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify({ ...newest, windowOrder: ["constructor"] })));
+  stub.docs.set("session.json", "{");
+  const stop = startPersistence();
+  await settle();
+  stop();
+  assert.deepEqual(tabUrls(), ["https://older.example/"]);
+});
+
+test("when the store can't say whether an unread session.json exists, nothing is written over it", async () => {
+  realSession();
+  stub.unreadableDocs.add("session.json");
+  stub.refusedCopies.on = true;
+  const documents = stub.shellNativeModules.ArdiaDocuments;
+  const exists = documents.documentExists;
+  documents.documentExists = () => {
+    throw new Error("probe failed");
+  };
+  try {
+    const stop = startPersistence();
+    S().createWindow({ url: "https://new.example/" });
+    await settle();
+    stop();
+  } finally {
+    documents.documentExists = exists;
+  }
+  assert.ok(stub.unreadableDocs.has("session.json"));
+  assert.ok(!stub.docs.has("session.json"), "held, not written over");
+});
+
+test("a damaged session with no backup keeps the download history", async () => {
+  realSession();
+  stub.docs.set("session.json", "{");
+  stub.docs.set("downloads.json", JSON.stringify({ version: 3, downloads: [{ id: "old", url: "https://files.example/old.zip", filename: "old.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 0 }] }));
+  const stop = startPersistence();
+  S().upsertDownload({ id: "d1", url: "https://files.example/new.zip", filename: "new.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 1 });
+  await settle();
+  stop();
+  assert.deepEqual(JSON.parse(stub.docs.get("downloads.json")).downloads.map((d) => d.filename).sort(), ["new.zip", "old.zip"]);
+});
+
+test("when the pre-migration backup can't be saved, the migrated session isn't written over the old one", async () => {
+  const good = JSON.parse(realSession(["https://old-version.example/"]));
+  const old = JSON.stringify({ ...good, version: 9 });
+  stub.docs.set("session.json", old);
+  stub.refusedSaves.on = true;
+  const stop = startPersistence();
+  S().updateTab(Object.keys(S().tabs)[0], { title: "touched" });
+  await settle();
+  assert.equal(stub.docs.get("session.json"), old);
+  stub.refusedSaves.on = false;
+  stub.stagedDocs.clear();
+  const now = Date.now;
+  Date.now = () => now() + 120_000;
+  try {
+    await settle();
+  } finally {
+    Date.now = now;
+  }
+  stop();
+  assert.equal(JSON.parse(stub.docs.get(backupName(Date.now()))).session.version, 9);
+  assert.equal(JSON.parse(stub.docs.get("session.json")).version, SESSION_VERSION);
+});
+
+test("when the store answers only later that an unread session.json exists, the newest backup still comes back", async () => {
+  const good = realSession();
+  stub.docs.set(SESSION_BACKUPS[2], backupJson("2026-01-05", 1, good));
+  stub.unreadableDocs.add("session.json");
+  stub.asyncExists.on = true;
+  const stop = startPersistence();
+  assert.deepEqual(tabUrls(), ["https://kept.example/one", "https://kept.example/two"]);
+  await settle();
+  stop();
+  assert.deepEqual(savedUrls(), ["https://kept.example/one", "https://kept.example/two"]);
+});
+
+test("quitting waits for a downloads.json copy still landing, then saves the pending download", async () => {
+  realSession();
+  stub.docs.set("session.json", realSession());
+  stub.docs.set("downloads.json", "{\"version\":3,\"downloads\":[{");
+  stub.unreadableDocs.add("downloads.json");
+  stub.heldCopies.on = true;
+  const stop = startPersistence();
+  S().upsertDownload({ id: "d1", url: "https://files.example/a.zip", filename: "a.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 0 });
+  flushPersistence({ final: true });
+  const quitting = finishQuitSaves(5_000);
+  await turn();
+  assert.ok(stub.unreadableDocs.has("downloads.json"), "not written while the copy is landing");
+  stub.heldCopies.on = false;
+  for (const land of stub.heldCopies.queue.splice(0)) land();
+  await quitting;
+  stop();
+  resumePersistence();
+  assert.equal(JSON.parse(stub.docs.get("downloads.json")).downloads[0].filename, "a.zip");
+});
+
+test("received tabs wait while the session can't be written, so sync doesn't count them delivered", async () => {
+  realSession();
+  stub.unreadableDocs.add("session.json");
+  stub.heldCopies.on = true;
+  const stop = startPersistence();
+  assert.equal(sessionWritesHeld(), true);
+  stub.heldCopies.on = false;
+  for (const land of stub.heldCopies.queue.splice(0)) land();
+  await settle();
+  stop();
+  assert.equal(sessionWritesHeld(), false);
+});
+
+test("every retry of a failed copy goes to the same file, so failed tries don't pile up", async () => {
+  realSession();
+  stub.docs.set("session.json", "{");
+  stub.refusedCopies.on = true;
+  stub.refusedSaves.on = true;
+  const stop = startPersistence();
+  const now = Date.now;
+  let skew = 0;
+  Date.now = () => now() + skew;
+  try {
+    for (let i = 0; i < 4; i++) {
+      skew += 120_000;
+      await settle();
+    }
+  } finally {
+    Date.now = now;
+  }
+  stop();
+  assert.ok(stub.copiedDocs.length >= 3);
+  assert.equal(new Set(stub.copiedDocs.map(([, to]) => to)).size, 1);
+});
+
+test("a damaged backup in today's slot is replaced on the day's first save", async () => {
+  clean();
+  const at = new Date(2026, 4, 3, 9).getTime();
+  stub.docs.set(backupName(at), `{"backupDay":"${localDay(at)}","backupAt":1,"session":{"tabs":[`);
+  rollingBackups().afterSave('{"version":11,"n":1}', at);
+  await turn();
+  assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
 });

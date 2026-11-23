@@ -42,6 +42,7 @@ export const unreadableDocs = new Set<string>();
 export const asyncExists = { on: false };
 export const copiedDocs: [string, string][] = [];
 export const refusedCopies = { on: false };
+export const heldCopies = { on: false, queue: [] as (() => void)[] };
 export const heldSaves = { on: false, queue: [] as (() => void)[] };
 export const refusedSaves = { on: false };
 export const refusedWrites = { on: false, returnsFalse: false, landingFails: false };
@@ -256,10 +257,12 @@ const documents: Modules["ArdiaDocuments"] = {
   copyDocument: (name, copyName) => {
     copiedDocs.push([name, copyName]);
     if (refusedCopies.on) return Promise.reject(new Error("copy refused"));
-    if (docs.has(copyName) || unreadableDocs.has(copyName)) return Promise.reject(new Error("copy exists"));
-    if (unreadableDocs.has(name)) unreadableDocs.add(copyName);
-    else if (docs.has(name)) docs.set(copyName, docs.get(name)!);
-    return Promise.resolve();
+    const land = () => {
+      if (unreadableDocs.has(name)) unreadableDocs.add(copyName);
+      else if (docs.has(name)) docs.set(copyName, docs.get(name)!);
+    };
+    if (!heldCopies.on) return Promise.resolve(land());
+    return new Promise<void>((resolve) => heldCopies.queue.push(() => (land(), resolve())));
   },
 };
 

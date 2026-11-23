@@ -94,9 +94,22 @@ enum DocumentStore {
     let source = try url(name)
     let target = try url(copyName)
     queue.async {
-      guard FileManager.default.fileExists(atPath: source.path) else { return done(nil) }
       do {
-        try FileManager.default.copyItem(at: source, to: target)
+        _ = try FileManager.default.attributesOfItem(atPath: source.path)
+      } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+        return done(nil)
+      } catch {
+        return done(error)
+      }
+      do {
+        let staging = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
+        try FileManager.default.copyItem(at: source, to: staging)
+        do {
+          _ = try FileManager.default.replaceItemAt(target, withItemAt: staging)
+        } catch {
+          try? FileManager.default.removeItem(at: staging)
+          throw error
+        }
         done(nil)
       } catch {
         done(error)

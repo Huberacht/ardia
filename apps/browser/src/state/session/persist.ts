@@ -19,7 +19,7 @@ import { saveBeforeQuit } from "../app/quit";
 import { landHeldPins, pinGuard, savedAfterPins } from "./pinGuard";
 import { noteSavedTopAppsMerged } from "../telemetry/topAppsSharing";
 import { unchanged, type Migrations, type SavedObject } from "../../lib/savedDocument";
-import { findDocument, keepAsideGate, newestBackup, rollingBackups, type FoundDocument, type RestoredBackup, type WriteGate } from "./sessionSafety";
+import { findDocument, keepAsideGate, rollingBackups, sessionBackups, wholeDownloads, wholeSession, writeGate, type FoundDocument, type RestoredBackup, type WriteGate } from "./sessionSafety";
 import { consentToken } from "../telemetry/consentPeriod";
 import { isRegularWindow } from "../windows/small";
 import { isString } from "../../lib/decode";
@@ -168,22 +168,59 @@ function closedForLaunch(session: SavedSession): HydrateData {
 export type LaunchOverrides = { restoreSession?: boolean };
 
 type LoadedSession = HydrateData & { windowsAgainstAutoHideTabs: number };
-type LaunchRead = { data: LoadedSession | null; session: FoundDocument; downloads: FoundDocument; restored: RestoredBackup<SavedSession> | null };
 
-function readLaunch({ restoreSession }: LaunchOverrides = {}): LaunchRead {
-  const found = findDocument(SESSION_DOCUMENT, SESSION_VERSION, SESSION_MIGRATIONS);
-  const downloadsFound = findDocument(DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, DOWNLOADS_MIGRATIONS);
-  const restored = found.state === "unusable" ? newestBackup(sessionFromSaved, SESSION_VERSION, SESSION_MIGRATIONS) : null;
-  const session = found.state === "usable" ? sessionFromSaved(found.doc) : restored?.value ?? null;
-  if (!session) return { data: null, session: found, downloads: downloadsFound, restored };
+const findSession = () => findDocument(SESSION_DOCUMENT, SESSION_VERSION, SESSION_MIGRATIONS, wholeSession);
+const findDownloads = () => findDocument(DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, DOWNLOADS_MIGRATIONS, wholeDownloads);
+const backupsOf = (found: FoundDocument) => (found.state === "unusable" || found.state === "unknown" ? sessionBackups(sessionFromSaved, SESSION_VERSION, SESSION_MIGRATIONS) : []);
+
+function launchData(session: SavedSession, downloadsFound: FoundDocument, { restoreSession }: LaunchOverrides): LoadedSession {
   const downloads = savedDownloads({ profiles: session.profiles ?? {} }, downloadsFound);
   const restore = restoreSession ?? session.settings?.restoreSession !== false;
   const data = restore ? session : closedForLaunch(session);
-  return { data: { ...data, downloads, windowsAgainstAutoHideTabs: restore ? session.windowsAgainstAutoHideTabs : 0 }, session: found, downloads: downloadsFound, restored };
+  return { ...data, downloads, windowsAgainstAutoHideTabs: restore ? session.windowsAgainstAutoHideTabs : 0 };
 }
 
 export function loadSession(overrides: LaunchOverrides = {}): LoadedSession | null {
-  return readLaunch(overrides).data;
+  const found = findSession();
+  const session = found.state === "usable" ? sessionFromSaved(found.doc) : backupsOf(found)[0]?.value;
+  return session ? launchData(session, findDownloads(), overrides) : null;
+}
+
+function hydrateWith(data: LoadedSession): boolean {
+  try {
+    noteSavedTopAppsMerged(data.topAppsMerged ?? "");
+    useBrowser.getState().hydrate(data);
+    return true;
+  } catch (error) {
+    console.warn("Couldn't restore a saved session", error);
+    return false;
+  }
+}
+
+function hydrateAtLaunch(overrides: LaunchOverrides) {
+  let session = findSession();
+  const downloads = findDownloads();
+  let loaded: LoadedSession | null = null;
+  let restored: RestoredBackup<SavedSession> | null = null;
+  if (session.state === "usable") {
+    const usable = session;
+    try {
+      const data = launchData(sessionFromSaved(usable.doc), downloads, overrides);
+      if (hydrateWith(data)) loaded = data;
+    } catch {
+      loaded = null;
+    }
+    if (!loaded) session = { state: "unusable", reason: "shape", text: usable.text };
+  }
+  for (const backup of loaded ? [] : backupsOf(session)) {
+    const data = launchData(backup.value, downloads, overrides);
+    if (!hydrateWith(data)) continue;
+    loaded = data;
+    restored = backup;
+    break;
+  }
+  if (!loaded) hydrateWith({ downloads: savedDownloads({ profiles: {} }, downloads), windowsAgainstAutoHideTabs: 0 });
+  return { loaded, session, downloads, restored };
 }
 
 let flush: () => void = () => {};
@@ -192,6 +229,9 @@ let pinsLanding: () => Promise<void> | null = () => null;
 let resume: () => void = () => {};
 let stageDownloads: () => void = () => {};
 let frozen = false;
+let sessionHeld: () => boolean = () => false;
+
+export const sessionWritesHeld = () => sessionHeld();
 
 export function flushPersistence({ final = false } = {}): boolean {
   const saving = !frozen;
@@ -230,22 +270,22 @@ export const sessionRestoredAtLaunch = () => restoredAtLaunch;
 export const windowsRealignedToAutoHideTabsAtLaunch = () => realignedAtLaunch;
 
 export function startPersistence(overrides: LaunchOverrides = {}) {
-  const launch = readLaunch(overrides);
-  const loaded = launch.data;
+  const launch = hydrateAtLaunch(overrides);
+  const loaded = launch.loaded;
   const consent = consentToken();
   if (launch.session.state === "unusable") noteSessionSetAside(true, launch.session.reason, launch.restored?.ageDays ?? null, consent);
   if (launch.downloads.state === "unusable") noteSessionSetAside(false, launch.downloads.reason, null, consent);
   restoredAtLaunch = !!loaded?.windowOrder?.length;
   realignedAtLaunch = loaded?.windowsAgainstAutoHideTabs ?? 0;
-  noteSavedTopAppsMerged(loaded?.topAppsMerged ?? "");
-  useBrowser.getState().hydrate(loaded ?? {});
   restoreLaunchLook();
 
   const keepDroppedPins = pinGuard(useBrowser.getState(), (delay) => unstaged() && schedule(delay));
   const gates = new Map<string, WriteGate>();
   const backups = rollingBackups(noteSessionBackup);
   pinsLanding = () => gates.get(SESSION_DOCUMENT)?.landing() ?? keepDroppedPins.landing();
-  saveBeforeQuit(() => landHeldPins(() => unstaged() && frozen, pinsLanding, () => ((frozen = false), save(), (frozen = true))));
+  sessionHeld = () => !(gates.get(SESSION_DOCUMENT)?.open() ?? true);
+  const anyLanding = () => [...gates.values()].map((g) => g.landing()).find((l) => l !== null) ?? keepDroppedPins.landing();
+  saveBeforeQuit(() => landHeldPins(() => dirty.size > 0 && frozen, anyLanding, () => ((frozen = false), save(), (frozen = true))));
   const lastSources = new Map<string, unknown[]>();
   const lastJson = new Map<string, string>();
   const dirty = new Set<Doc>();
@@ -328,9 +368,12 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
     const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) });
     if (gate) gates.set(name, gate);
   }
-  if (launch.session.state === "usable" && launch.session.from < SESSION_VERSION) backups.beforeMigration(launch.session.text);
+  if (launch.session.state === "usable" && launch.session.from < SESSION_VERSION) {
+    const old = launch.session.text;
+    gates.set(SESSION_DOCUMENT, writeGate(() => backups.beforeMigration(old), (delay) => schedule(delay)));
+  }
   check(useBrowser.getState(), true);
-  if (launch.session.state === "unusable") {
+  if (launch.session.state === "unusable" || launch.session.state === "unknown") {
     dirty.add(DOCS.find((d) => d.name === SESSION_DOCUMENT)!);
     cosmeticOnly = false;
   }

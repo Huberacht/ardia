@@ -354,7 +354,7 @@ class DocumentStore {
         } else if (GetFileAttributesW(from.c_str()) == INVALID_FILE_ATTRIBUTES) {
           DWORD error = GetLastError();
           if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) message = Paths::Utf8(Files::ErrorText(error));
-        } else if (!CopyFileW(from.c_str(), to.c_str(), TRUE)) {
+        } else if (!CopyFileW(from.c_str(), to.c_str(), FALSE)) {
           message = Paths::Utf8(Files::ErrorText(GetLastError()));
         }
       }
