@@ -14,6 +14,7 @@ const idle = (id, minutesAgo, extra = {}) => ({
   lastAudibleAt: 0,
   call: false,
   pictureInPicture: false,
+  download: false,
   loading: false,
   askAgainAt: 0,
   ...extra,
@@ -38,6 +39,7 @@ test("every protection vetoes on its own, read against the injected clock", () =
   assert.equal(veto({ shown: true }), "shown");
   assert.equal(veto({ call: true }), "call", "camera, microphone or screen share");
   assert.equal(veto({ pictureInPicture: true }), "pictureInPicture");
+  assert.equal(veto({ download: true }), "download", "a download it started is still running");
   assert.equal(veto({ audible: true }), "audible");
   assert.equal(veto({ lastAudibleAt: NOW - RECENTLY_AUDIBLE_MS + 1 }), "recentlyAudible", "sound stopped under a minute ago");
   assert.equal(veto({ lastAudibleAt: NOW - RECENTLY_AUDIBLE_MS }), null, "a minute after the sound stopped it may sleep");

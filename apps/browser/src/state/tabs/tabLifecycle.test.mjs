@@ -387,3 +387,21 @@ test("a tab switched to 15 times stays loaded, and each kind of protection that 
   webviews.clear();
   clearSwitches();
 });
+
+test("a tab whose navigation became a download stays loaded while that download runs, and may sleep once it ends", async () => {
+  const { tabsOverBudget } = await import("./loadedTabBudget.ts");
+  const { noteNavigationDownload, clearTabDownloads } = await import("./tabDownloads.ts");
+  const now = Date.now() + 600 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(3, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i * 60) * minute }));
+  clearTabDownloads();
+  noteNavigationDownload(ids[2], "https://files.example/big.zip");
+  const download = { id: "d1", url: "https://files.example/big.zip", filename: "big.zip", path: "/tmp/big.zip", state: "downloading", paused: false, received: 1, total: 10, speed: 1, mimeType: "application/zip" };
+  S().upsertDownload(download);
+  const over = () => tabsOverBudget(S(), [active, ...ids], { tabs: 1, hiddenMs: 30 * minute }, now);
+  assert.deepEqual(over(), [ids[1], ids[0]], "the tab running the download stays");
+  S().upsertDownload({ ...download, state: "finished", received: 10 });
+  assert.deepEqual(over(), [ids[2], ids[1], ids[0]], "once it finishes the tab is idle like the rest");
+  S().removeDownload("d1");
+  clearTabDownloads();
+});

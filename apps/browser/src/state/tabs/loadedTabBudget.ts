@@ -18,6 +18,7 @@ import { isSleeping } from "./sleepingTabs";
 import { engineVeto, MINUTE, sleepRules, tabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
 import { liveOf, onLiveChange } from "./tabLive";
 import { countSwitches, forgetSwitchesExcept, switchesOf } from "./tabSwitches";
+import { downloadingIn, forgetTabDownloadsExcept } from "./tabDownloads";
 
 export type LoadedTabBudget = Pick<SleepRules, "tabs" | "hiddenMs"> & Partial<SleepRules>;
 
@@ -60,6 +61,7 @@ export function sleepFacts(s: BrowserState, id: string, shown: ReadonlySet<strin
     lastAudibleAt: lastAudibleAt.get(id) ?? 0,
     call: capturing(id),
     pictureInPicture: !!useMedia.getState().pipOpen[id],
+    download: downloadingIn(s, id),
     loading: liveOf(id).isLoading,
     askAgainAt: askAgainAt.get(id) ?? 0,
   };
@@ -121,6 +123,7 @@ export async function sleepTabsOverBudget(budget: LoadedTabBudget | null, now = 
   for (const id of lastAudibleAt.keys()) if (!s.tabs[id]) lastAudibleAt.delete(id);
   for (const id of lastVeto.keys()) if (!s.tabs[id]) lastVeto.delete(id);
   forgetSwitchesExcept(s.tabs);
+  forgetTabDownloadsExcept(s.tabs);
   for (const [id, at] of askAgainAt) if (!s.tabs[id] || at <= now) askAgainAt.delete(id);
   for (const [id, at] of keptAt) if (!s.tabs[id] || now - at >= KEPT_RECENTLY_MS) keptAt.delete(id);
   const plan = planOverBudget(s, webviews.keys(), budget, now, seenAt, askAgainAt);
