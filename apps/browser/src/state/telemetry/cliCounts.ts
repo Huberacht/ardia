@@ -83,6 +83,11 @@ export function noteTokenCommands(totals: TokenCommandTotals | undefined) {
   }
 }
 
+export function noteEngineCliTotals(status: { windowlessPages?: { given: number; missed: number }; tokenCommands?: TokenCommandTotals }) {
+  noteWindowlessPages(status.windowlessPages);
+  noteTokenCommands(status.tokenCommands);
+}
+
 export function takeCliCounts() {
   const taken = counts;
   counts = { ...NONE };
