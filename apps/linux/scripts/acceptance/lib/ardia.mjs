@@ -186,10 +186,10 @@ export class ArdiaApp {
     return targetInfos;
   }
 
-  async connect(target, { deadline } = {}) {
+  async connect(target, { deadline, handshakeLimit = CDP_CONNECT_TIMEOUT } = {}) {
     const existing = this.connections.get(target.id);
     if (existing && !existing.closed) return existing;
-    const connectBudget = probeBudget(deadline, CDP_CONNECT_TIMEOUT);
+    const connectBudget = probeBudget(deadline, handshakeLimit);
     if (connectBudget <= 0) throw new Error(`no time left to connect to ${target.id}`);
     const session = await connectCdp(target.webSocketDebuggerUrl, { timeout: connectBudget });
     session.problems = [];
@@ -216,9 +216,8 @@ export class ArdiaApp {
     const targets = (await this.targets({ deadline })).filter((t) => t.url.startsWith(SHELL_PREFIX) && t.type === "page");
     const shells = [];
     for (const target of targets) {
-      const probeDeadline = Math.min(deadline ?? Infinity, Date.now() + PROBE_CONNECT_TIMEOUT);
-      if (probeDeadline <= Date.now()) break;
-      const session = await this.connect(target, { deadline: probeDeadline }).catch(() => null);
+      if (deadline !== undefined && deadline <= Date.now()) break;
+      const session = await this.connect(target, { deadline, handshakeLimit: PROBE_CONNECT_TIMEOUT }).catch(() => null);
       if (!session) continue;
       const evaluateBudget = probeBudget(deadline, PROBE_EVALUATE_TIMEOUT);
       if (evaluateBudget <= 0) break;
@@ -232,7 +231,7 @@ export class ArdiaApp {
   async shell(windowId, { timeout = 20000 } = {}) {
     const cached = this.shellCache.get(windowId);
     if (cached && !cached.session.closed) return cached;
-    const found = await until(async ({ deadline }) => (await this.shells({ deadline })).find((s) => s.ready && (windowId === undefined || s.windowId === windowId)), { timeout, label: `shell renderer ${windowId ?? "(any)"}`, abort: () => this.exitReason() });
+    const found = await until(async ({ deadline }) => (await this.shells({ deadline })).find((s) => s.ready && !s.session.closed && (windowId === undefined || s.windowId === windowId)), { timeout, label: `shell renderer ${windowId ?? "(any)"}`, abort: () => this.exitReason() });
     return this.cacheShell(found);
   }
 
@@ -245,11 +244,10 @@ export class ArdiaApp {
   }
 
   async mainShell(options) {
-    const shells = await until(async ({ deadline }) => {
-      const list = (await this.shells({ deadline })).filter((s) => s.ready && !s.utility);
-      return list.length ? list : false;
+    const chosen = await until(async ({ deadline }) => {
+      const list = (await this.shells({ deadline })).filter((s) => s.ready && !s.utility && !s.session.closed);
+      return list.find((s) => s.startup) ?? list.find((s) => s.windowId === "main") ?? list[0] ?? false;
     }, { timeout: options?.timeout ?? 25000, label: "a browser shell renderer", abort: () => this.exitReason() });
-    const chosen = shells.find((s) => s.startup) ?? shells.find((s) => s.windowId === "main") ?? shells[0];
     return this.cacheShell(chosen);
   }
 

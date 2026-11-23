@@ -335,3 +335,54 @@ describe("shell probes against renderers that never finish setup", () => {
     }
   });
 });
+
+describe("shell probes against slow or dropped renderers", () => {
+  it("gives setup commands their own time after a quick handshake", async () => {
+    const mock = await startMockCdp({
+      targets: [{ id: "shell-main", type: "page", url: "chrome://ardia/index.html" }],
+      handlers: {
+        "Runtime.enable": () => new Promise((resolve) => setTimeout(() => resolve({}), 5300)),
+        "Runtime.evaluate": () => ({ result: { type: "object", value: { windowId: "main", profileId: "default", pageProfile: null, startup: true, utility: null, privateWindow: false, ready: true } } }),
+      },
+    });
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "slow-setup" });
+    app.port = mock.port;
+    try {
+      const main = await app.mainShell({ timeout: 9000 });
+      assert.equal(main.windowId, "main");
+      assert.equal(main.session.closed, false);
+    } finally {
+      for (const session of app.connections.values()) await session.close().catch(() => {});
+      await mock.close();
+    }
+  });
+
+  it("skips a renderer whose socket closed during the scan", async () => {
+    let mock = null;
+    let dropped = false;
+    mock = await startMockCdp({
+      targets: [{ id: "shell-main", type: "page", url: "chrome://ardia/index.html" }, { id: "shell-second", type: "page", url: "chrome://ardia/index.html" }],
+      handlers: {
+        "Runtime.evaluate": async (params, { targetId }) => {
+          const windowId = targetId.replace("shell-", "");
+          if (windowId === "second" && !dropped) {
+            dropped = true;
+            mock.peers.find((peer) => peer.targetId === "shell-main").close();
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          return { result: { type: "object", value: { windowId, profileId: "default", pageProfile: null, startup: windowId === "main", utility: null, privateWindow: false, ready: true } } };
+        },
+      },
+    });
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "dropped" });
+    app.port = mock.port;
+    try {
+      const main = await app.mainShell({ timeout: 5000 });
+      assert.equal(main.session.closed, false);
+      assert.equal((await main.eval("1")).windowId, main.windowId);
+    } finally {
+      for (const session of app.connections.values()) await session.close().catch(() => {});
+      await mock.close();
+    }
+  });
+});
