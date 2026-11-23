@@ -297,9 +297,15 @@ writeDocument(DOC, versionedJson(data, VERSION));
   `packages/core/src/suggest.reference.ts`, the frozen spec the suggestion code was tuned against
   (`suggest.property.test.ts` holds the live code to it, `SUGGEST_BEFORE=1` benches it): it stays as written.
 - One type per native file, named after it.
-- No comments (AGENTS.md › Hard rules), including comments inside injected page JS and shader source held in strings.
-  Allowed: license headers, shebangs and tool directives (`@ts-expect-error`, `eslint-disable`, `#pragma`,
-  `swiftlint:`, `nogncheck`, `NOLINT`).
+- No comments (AGENTS.md › Hard rules), in any source, script or config file the repository owns, including comments
+  inside injected page JS and shader source held in strings. Allowed: license headers, shebangs, tool directives
+  (`@ts-expect-error`, `eslint-disable`, `#pragma`, `swiftlint:`, `nogncheck`, `NOLINT`, `/// <reference`,
+  `# shellcheck`, `# noqa`, `# type:`, `# yaml-language-server:`, `# syntax=`, `#Requires`, a lone `/** @type {…} */`),
+  and the header a script prints as its `--help` (next to a `help`, `usage`, `-h` or `exit 64`): the lines a `sed -n 'A,Bp' "$0"` or `head -n N "$0"` prints, the
+  leading `#` block an `awk … "$0"` prints or that `step-guard.sh` prints for the step sourcing it, the leading `//`
+  block of a script that reads itself (`readFileSync(… import.meta.url)`), a Python module docstring the script uses
+  as `__doc__`, and PowerShell comment-based help (`.SYNOPSIS`). Rust attributes (`#[…]`) aren't comments; Python
+  docstrings and Rust `///` doc comments are.
 
 ## Names
 
@@ -374,7 +380,16 @@ still counts:
 
 ## The check
 
-`apps/browser/src/conventions.test.mjs` runs in `pnpm -C apps/browser test` and checks, per file:
+`apps/browser/src/conventions.test.mjs` runs in `pnpm -C apps/browser test` and in `.github/workflows/conventions.yml`
+on every pull request and push to `main` (plain `node`, no install, no paths filter), and checks, per file. Every rule above `comments` covers `apps/browser/src`,
+`packages/*/{src,ios}` and `engine/{ardiacore,chromium}/src`. `comments`, `bare-sleep` and `expiring-skip` cover every
+file git tracks in a language the scanners read (`apps/browser/scripts/conventions/scanners.mjs`): JS/TS (and
+`tsconfig*.json`), Swift, C/C++/Objective-C/Mojo/Java, Kotlin and Gradle, Rust, CSS, shell (by extension or shebang),
+PowerShell, Python, YAML (a `run:` block as the shell that step uses, a `script:` block as JS), TOML, GN, Ruby
+(`Podfile`, `.podspec`), Dockerfiles, HTML, Astro and XML. Left out: `node_modules`, lockfiles, `gradlew`, `fixtures/`
+folders outside the scopes above, any folder holding its own `LICENSE` or `COPYING` (a third-party copy), files whose
+first lines say they are generated, and `packages/ardiacore/src/engine/generated`. Outside the first scope, JS held in
+strings isn't scanned: there, those strings are test fixtures.
 
 | Rule | What it counts |
 | --- | --- |
@@ -393,9 +408,13 @@ still counts:
 | `naming` | a `Cef`, `AC*`/app-side `ArdiaCore*`, `Netnyahoo` or `NN*` name |
 | `comments` | a comment that isn't a license header or tool directive |
 | `file-names` | a file name breaking the PascalCase/camelCase rule |
+| `bare-sleep` | a sleep that no loop bounds by a count or a deadline: `sleep N` in shell (and in a workflow's `run:` block), `Start-Sleep`, `time.sleep`/`asyncio.sleep`, and in JS tests `await sleep(…)`, `await new Promise((r) => setTimeout(r, N))`, `timers/promises`' `setTimeout` or a local helper that waits its argument. A sleep inside a `for … in`/`for … of` loop, a loop whose header compares a counter or reads a deadline (`deadline`, `SECONDS`, `Date.now()`, `time.monotonic()`, `attempts`, …), or a loop whose body reads one on a line that breaks, exits, returns or throws, is a bounded poll and doesn't count (`for ((;;))` and `while true` with no such line are open-ended); a zero delay is a tick and doesn't count. Wait on the condition instead: `scripts/agent/await` in shell, a deadline loop elsewhere. `scripts/agent/await` itself and `infra/` (services, whose sleep is a schedule) are exempt |
+| `expiring-skip` | an unconditional skip, `todo`, quarantine or accepted risk without an owner and an expiry (below), or any `.only` |
 
 `apps/browser/src/conventions-baseline.json` lists the violations that existed when the rules arrived, as
-`rule → file → count`. Since 2026-10-26 it is empty: every rule holds everywhere. It stays a ratchet: the test fails on any violation beyond the baseline, and on any baseline entry
+`rule → file → count`. Since 2026-10-26 the original rules hold everywhere but for a few `size` and `naming`
+entries; `comments`, `bare-sleep` and `expiring-skip` carry the debt the repository-wide scan found when they
+arrived, to be paid down file by file. It stays a ratchet: the test fails on any violation beyond the baseline, and on any baseline entry
 higher than what the file has now, so fixes must lower their entries.
 
 - `node apps/browser/src/conventions.test.mjs --report` prints every violation grouped per rule, and the difference
@@ -406,3 +425,27 @@ higher than what the file has now, so fixes must lower their entries.
   total grows. The one allowed growth: `imports` may grow while `layout` shrinks, because a file moved out of the old
   layout starts having its imports checked. Moving or renaming a file moves its entries under the new path.
 - Never add violations to the baseline by hand. `--force` overrides the refusal and needs the owner's OK.
+- `--show <path>…` prints each comment the check counts in those files, with its line.
+
+### Skips and accepted risks expire
+
+A test that is skipped or marked `todo` whatever the machine, a quarantined case and an accepted risk each carry an
+owner and a date, in this form:
+
+- A test's reason: `@<github login> until <YYYY-MM-DD>: <why, with the issue>`. In `node:test`, the options form
+  `test("…", { todo: "@mantrakp04 until 2027-01-31: C5 open, #3569" }, fn)` (also `skip:`, quoted or not, or a
+  `const` holding the string; only the options object passed straight to `test`, `it`, `describe`, `suite` or
+  `context` counts); `skip()`, `todo()` and `only()` imported from `node:test`, `test.skip(`,
+  `test.todo(`, `describe.skip(` and `skip: true` have no place for it and count. Python `@unittest.skip("…")`,
+  `@pytest.mark.skip(reason="…")` and an unconditional `@pytest.mark.xfail(reason="…")`, Swift Testing
+  `.disabled("…")`, JUnit `@Ignore("…")`/`@Disabled("…")` and Rust `#[ignore = "…"]` take the same string.
+- A list entry (`apps/browser/scripts/sim/known.json` › `failing`): `"owner": "@<login>", "expires": "<YYYY-MM-DD>"`.
+- A skip on a condition (`{ skip: !onMac && "needs a Mac" }`, `skipIf`, `.disabled(if:)`, `t.skip()` inside a test)
+  names an environment, not a debt, and needs neither. `.only` never belongs in a commit.
+
+A missing owner or date counts against the baseline like any rule. A date that has passed (UTC), and any `.only`,
+fail the check outright, baseline or not: fix the case, or move the date with the owner's OK. `--expired` runs only that part, and
+`.github/workflows/expiring-skips.yml` runs it every Monday so a date fires even when no pull request runs the check.
+
+React Compiler isn't enabled (`apps/browser/babel.config.js` uses `babel-preset-expo` alone), so the check has no
+bail-out rule.
