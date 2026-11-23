@@ -1,7 +1,8 @@
 import { Dimensions, Platform, StyleSheet } from "react-native";
 import { getAnimatedStyle } from "react-native-reanimated";
 import { act } from "react-test-renderer";
-import { getByGestureTestId } from "react-native-gesture-handler/jest-utils";
+import { State } from "react-native-gesture-handler";
+import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-handler/jest-utils";
 import { DeckBar } from "../components/tabs/DeckBar";
 import { IncognitoChip } from "../components/tabs/DeckChrome";
 import { TabDeck } from "../components/tabs/TabDeck";
@@ -410,6 +411,33 @@ test("with no Incognito tabs the switch shows an empty Incognito deck that says 
   act(() => jest.advanceTimersByTime(600));
   expect(hosts(root, "deckCard")).toHaveLength(9);
   expect(textOf(root)).not.toContain("No Incognito Tabs");
+  unmount(root);
+});
+
+test("on the material deck the Archive card a touch on the deck put away comes back after a switch to Incognito and back, as it does when the tabs reopen", () => {
+  withPrivateTabs(2);
+  const root = deck("material");
+  act(() => jest.advanceTimersByTime(600));
+  expect(host(root, "archiveCardPlace")).toBeDefined();
+  act(() =>
+    fireGestureHandler(getByGestureTestId("deckPan"), [
+      { state: State.BEGAN, x: 100, y: 400, absoluteX: 100, absoluteY: 400 },
+      { state: State.ACTIVE, x: 100, y: 400, absoluteX: 60, absoluteY: 400 },
+      { state: State.END, x: 100, y: 400, absoluteX: 60, absoluteY: 400 },
+    ]),
+  );
+  act(() => jest.advanceTimersByTime(600));
+  expect(host(root, "archiveCardPlace")).toBeUndefined();
+  const materialSwitch = () => root.root.findAll((node) => node.props.testID === "materialDeckIncognito" && typeof node.props.onPress === "function")[0]!;
+  act(() => materialSwitch().props.onPress());
+  act(() => jest.advanceTimersByTime(600));
+  expect(useTabs.getState().incognito).toBe(true);
+  expect(host(root, "archiveCardPlace")).toBeUndefined();
+  act(() => materialSwitch().props.onPress());
+  act(() => jest.advanceTimersByTime(600));
+  act(() => jest.advanceTimersByTime(200));
+  expect(useTabs.getState().incognito).toBe(false);
+  expect(host(root, "archiveCardPlace")).toBeDefined();
   unmount(root);
 });
 

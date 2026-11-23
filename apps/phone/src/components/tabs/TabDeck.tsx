@@ -523,6 +523,7 @@ export const TabDeck = memo(function TabDeck() {
       const kept = sideScrolls.current[side ? "incognito" : "normal"];
       showSide(ids, alive, kept === null ? initialDeckScroll(ids.length) : Math.min(Math.max(kept, 0), Math.max(ids.length - 1, 0)), sideLeaving.current);
       sideLeaving.current = false;
+      if (!side) offerArchiveAgain(ids.length);
       return;
     }
     const next = mergeDeckOrder(order, ids);
@@ -547,7 +548,11 @@ export const TabDeck = memo(function TabDeck() {
 
   const showNewSpace = (ids: string[], alive: ReadonlySet<string>) => {
     showSide(ids, alive, initialDeckScroll(ids.length));
-    if (!archiveOffered && !redesigned) offerArchiveCard(ids.length);
+    offerArchiveAgain(ids.length);
+  };
+
+  const offerArchiveAgain = (openTabs: number) => {
+    if (!archiveOffered && !redesigned) offerArchiveCard(openTabs);
   };
 
   const showSide = (ids: string[], alive: ReadonlySet<string>, to: number, faded = false) => {
