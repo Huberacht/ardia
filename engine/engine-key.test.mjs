@@ -628,18 +628,39 @@ function frozenScript() {
   return { script: join(scratch, 'engine-key.py'), cleanup: () => rmSync(scratch, { recursive: true, force: true }) }
 }
 
+function pinnedRevisions() {
+  const revisions = new Set()
+  for (const table of ['packages/ardiacore/prebuilt-engines.tsv', 'packages/ardiacore/prebuilt-engines-linux.tsv']) {
+    let commit = null
+    const log = execFileSync('git', ['log', '--format=commit %H', '-p', '--no-renames', '--', table], { cwd: repo, encoding: 'utf8', maxBuffer: 1 << 28 })
+    for (const line of log.split('\n')) {
+      const header = line.match(/^commit ([0-9a-f]{40})$/)
+      if (header) commit = header[1]
+      else if (commit && /^\+[0-9a-f]{40}\t/.test(line)) revisions.add(commit)
+    }
+  }
+  return [...revisions].sort()
+}
+
 test(
-  'the macOS and Linux keys of every revision a prebuilt row was added at are the ones the two-platform code gave',
+  'the macOS and Linux keys of every revision that added a prebuilt row are the ones the two-platform code gives',
   { skip: !inRepo(frozenBase) && `needs the history back to ${frozenBase.slice(0, 12)} (fetch-depth: 0)` },
   async () => {
-    const golden = readFileSync(join(repo, 'engine/engine-key.golden.tsv'), 'utf8').trim().split('\n').map((line) => line.split('\t'))
-    const absent = golden.filter(([rev]) => !inRepo(rev)).map(([rev]) => rev)
-    assert.deepEqual(absent, [], 'every golden revision is in this checkout')
-    const script = join(repo, 'engine/engine-key.py')
-    const jobs = golden.flatMap(([rev, macos, linux]) => [[rev, 'macos', macos], [rev, 'linux', linux]])
-    const got = await pool(jobs, availableParallelism(), ([rev, platform]) => keyOf(script, platform, rev))
-    const wrong = jobs.flatMap(([rev, platform, want], at) => (got[at] === want ? [] : [`${rev} ${platform}: ${want} -> ${got[at]}`]))
-    assert.deepEqual(wrong, [])
+    const revisions = pinnedRevisions()
+    assert.ok(revisions.length >= 100, `found ${revisions.length} revisions that added a prebuilt row`)
+    const frozen = frozenScript()
+    try {
+      const current = join(repo, 'engine/engine-key.py')
+      const jobs = revisions.flatMap((rev) => ['macos', 'linux'].flatMap((platform) => [[current, platform, rev], [frozen.script, platform, rev]]))
+      const got = await pool(jobs, availableParallelism(), ([script, platform, rev]) => keyOf(script, platform, rev))
+      const wrong = []
+      for (let at = 0; at < jobs.length; at += 2) {
+        if (got[at] !== got[at + 1]) wrong.push(`${jobs[at][2]} ${jobs[at][1]}: ${got[at + 1]} -> ${got[at]}`)
+      }
+      assert.deepEqual(wrong, [])
+    } finally {
+      frozen.cleanup()
+    }
   },
 )
 
