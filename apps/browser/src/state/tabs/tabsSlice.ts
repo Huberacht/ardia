@@ -21,6 +21,7 @@ import { activated, apply, closingTabs, withNewTab, type CloseOptions, type NewT
 import { hasPage, loadedPage, navigationOf, renavigated, wakeOf, withWake } from "./pageSession";
 import { cancelOpening, gateOpening, isGatedUrl, settleOpening } from "./openingGate";
 import { drainLive, setLive, stageLive } from "./tabLive";
+import { consentToken } from "../telemetry/consentPeriod";
 
 
 export type TabsSlice = {
@@ -111,7 +112,7 @@ export const createTabsSlice: StateCreator<BrowserState, [], [], TabsSlice> = (s
   },
 
   closeTabs(ids, options) {
-    const [next, closedWindows] = closingTabs(get(), ids, options);
+    const [next, closedWindows] = closingTabs(get(), ids, { consent: consentToken(), ...options });
     set(next);
     for (const windowId of closedWindows) get().closeWindow(windowId);
   },
