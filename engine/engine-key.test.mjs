@@ -1149,3 +1149,33 @@ for (const line of ['layer engine/ardiacore-desktop', 'layer engine/ardiacore-de
     }),
   )
 }
+
+for (const [name, interpolated] of [
+  ['a unit suffix', '"${prefix}.cc"'],
+  ['a bare variable', '"$unit"'],
+  ['a braced variable', '"${unit}"'],
+  ['a source-root path', '"//chrome/browser/ardia/${prefix}_mac.mm"'],
+]) {
+  test(
+    `a source named by interpolation with ${name} under is_mac keeps every unit in the macOS key`,
+    withFixture(({ root, write, commit, change }) => {
+      write(`${ardia}/ac_desktop.cc`, 'desktop\n')
+      const blocks = `if (is_linux || is_win) {\n  ardia_sources += [ "ac_desktop.cc" ]\n}\n\nif (is_mac) {\n  ardia_sources += [ ${interpolated} ]\n}\n\n`
+      write(`${ardia}/BUILD.gn`, readFileSync(join(root, ardia, 'BUILD.gn'), 'utf8').replace('source_set("ardia") {', `${blocks}source_set("ardia") {`))
+      const before = commit('an interpolated mac source')
+      assertKeys(before, change(`${ardia}/ac_desktop.cc`, 'desktop, changed\n'), { macos: true, linux: true, win: true })
+      assertKeys(before, change(`${ardia}/ac_external_apps_linux.cc`, 'linux external apps, changed\n'), { macos: true, linux: true, win: true })
+    }),
+  )
+}
+
+test(
+  'an interpolated path that cannot name a unit leaves the platform sets alone',
+  withFixture(({ root, write, commit, change }) => {
+    write(`${ardia}/ac_desktop.cc`, 'desktop\n')
+    const blocks = 'if (is_linux || is_win) {\n  ardia_sources += [ "ac_desktop.cc" ]\n}\n\nif (is_mac) {\n  outputs = [ "$target_gen_dir/ac_dispatch.inc", "${root_gen_dir}/ac_header.h" ]\n}\n\n'
+    write(`${ardia}/BUILD.gn`, readFileSync(join(root, ardia, 'BUILD.gn'), 'utf8').replace('source_set("ardia") {', `${blocks}source_set("ardia") {`))
+    const before = commit('generated outputs under is_mac')
+    assertKeys(before, change(`${ardia}/ac_desktop.cc`, 'desktop, changed\n'), { macos: false, linux: true, win: true })
+  }),
+)

@@ -29,6 +29,7 @@ GN_PLATFORMS = {'is_mac': 'mac', 'is_linux': 'linux', 'is_win': 'win'}
 GN_TOKEN = r'\s*(\|\||&&|==|!=|<=|>=|[!()<>,\[\]]|"(?:[^"\\]|\\.)*"|[A-Za-z_][A-Za-z0-9_.]*|-?[0-9]+)'
 GN_COMPARISONS = ('==', '!=', '<', '>', '<=', '>=')
 WINDOWS_OWN_LAYERS = ('engine/chromium',)
+GN_TRAILING_INTERPOLATION = r'\$(\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*)$'
 CHECKOUT = pathlib.Path(__file__).resolve().parents[1]
 WIN_ROOT = 'scripts/windows/engine'
 WIN_DECLARATIONS = 'scripts/windows/engine/key-inputs.json'
@@ -350,8 +351,12 @@ def gn_sources(value, base, roots, files):
     return [posixpath.normpath(posixpath.join(base, value))], False
 
 
+def interpolated_unit(value):
+    return '$' in value and (value.endswith(UNITS) or re.search(GN_TRAILING_INTERPOLATION, value) is not None)
+
+
 def foreign_units(tree, platform):
-    built_for = {}
+    built_for, anywhere = {}, NO_ENGINE
     files = set(tree.files())
     roots = source_roots(files)
     for path in sorted(files):
@@ -364,12 +369,15 @@ def foreign_units(tree, platform):
         except GnLost:
             strings = list(gn_strings(text, flat=True))
         for context, value in strings:
+            if interpolated_unit(value):
+                anywhere |= context
+                continue
             if not value.endswith(UNITS):
                 continue
             sources, ambiguous = gn_sources(value, base, roots, files)
             for source in sources:
                 built_for[source] = built_for.get(source, NO_ENGINE) | (ENGINES if ambiguous else context)
-    return {path for path, engines in built_for.items() if platform not in engines}
+    return {path for path, engines in built_for.items() if platform not in engines | anywhere}
 
 
 class Plan:

@@ -241,8 +241,9 @@ Windows takes those and the `mac` ones (the set it started from), never `linux`.
 joined by commas (`linux,win`); Windows takes a line whose platforms include `mac` or `win`. A `layer` line Windows would
 select (untagged, `all`, or naming `win`) is refused, here and by the Windows key, until `series_win.py` runs series
 layers; `engine/chromium` is the exception, since `series_win.py` copies it itself. The layer's `BUILD.gn` conditions are
-read the same way: `is_mac`, `is_linux` and `is_win` joined by `!`, `&&`, `||` and parentheses, a condition wrapped over
-lines included; anything else stops the build.
+read the same way: `is_mac`, `is_linux` and `is_win` joined by `!`, `&&`, `||` and parentheses, read token by token, so
+wrapped conditions, `else if` and `else`, and comments or strings holding braces are followed as GN reads them; any
+other condition, or `ardia_sources` changed by anything but a list of names, stops the build.
 The layers:
 
 - `engine/chromium/apply.sh` runs as is. Its `chrome/browser/ardia` (the `ac_*` C API) then builds on Windows from a

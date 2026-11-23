@@ -17,7 +17,9 @@
 #   - the translation units a BUILD.gn under engine/ lists only inside blocks this platform never builds: conditions on
 #     is_mac, is_linux and is_win joined by !, && and || are read as the platforms they can hold on (`if (is_linux ||
 #     is_win)` and `if (!is_mac)` leave the macOS key), any other name can hold anywhere, and an else block counts as the
-#     block around it;
+#     block around it. A source named by interpolation (`"${prefix}.cc"`, `"$unit"`) could be any unit, so it keeps
+#     every unit in the keys of the platforms its block holds on, and a BUILD.gn whose conditions can't be scanned
+#     counts every unit it names for every platform;
 #   - engine/engine-key.* and engine/patches/build/tests, tooling the build never reads.
 # The files a layer of this platform copies in (its copies.tsv, source and target per line) count even when they live in
 # the other platform's layer or outside engine/.

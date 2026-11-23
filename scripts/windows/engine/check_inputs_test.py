@@ -257,13 +257,43 @@ class SelectorTest(unittest.TestCase):
                 + 'source_set("ardia") {\n  sources = ardia_sources\n}\n')
         self.assertEqual(self.build.windows_sources(text), ['shared.cc', 'desktop.cc', 'neither.cc'])
 
-    def test_windows_sources_refuse_a_condition_they_cannot_place(self):
+    def test_windows_sources_read_any_layout_of_a_block(self):
+        tail = 'source_set("ardia") {\n  sources = ardia_sources\n}\n'
+        for text in ('if (is_win) { ardia_sources += [ "x.cc" ] }\n',
+                     'if (is_win)\n{\n  ardia_sources += [\n    "x.cc",\n  ]\n}\n',
+                     'if (is_win) {\n  ardia_sources += [ "x.cc" ]  # }\n}\n'):
+            with self.subTest(text=text):
+                self.assertEqual(self.build.windows_sources(text + tail), ['x.cc'])
+
+    def test_windows_sources_follow_else_branches_wrapped_after_a_closing_brace(self):
+        text = ('if (is_mac) {\n  ardia_sources += [ "mac.cc" ]\n}\n'
+                'else if (is_linux ||\n         is_mac) {\n  ardia_sources += [ "linux.cc" ]\n}\n'
+                'else {\n  ardia_sources += [ "other.cc" ]\n}\n\n'
+                'if (is_linux || is_win) {\n  ardia_sources += [ "desktop.cc" ]\n} else {\n  ardia_sources += [ "mac_only.cc" ]\n}\n\n'
+                'if (is_win) {\n  ardia_sources += [ "first.cc" ]\n} else if (!is_mac) {\n  ardia_sources += [ "second.cc" ]\n}\n\n'
+                'source_set("ardia") {\n  sources = ardia_sources\n}\n')
+        self.assertEqual(self.build.windows_sources(text), ['other.cc', 'desktop.cc', 'first.cc'])
+
+    def test_windows_sources_ignore_braces_and_quotes_in_comments_and_strings(self):
+        text = ('ardia_sources = [\n  "shared.cc",\n]\n\n'
+                'if (is_mac) {\n  # {\n  ardia_sources += [ "mac.cc" ]\n  marker = "{ ( \\" }"\n}\n\n'
+                'if (is_linux) {\n  # }\n  ardia_sources += [ "linux.cc" ]\n}\n\n'
+                'ardia_sources += [ "later.cc" ]\n\n'
+                'source_set("ardia") {\n  sources = ardia_sources\n}\n')
+        self.assertEqual(self.build.windows_sources(text), ['shared.cc', 'later.cc'])
+
+    def test_windows_sources_refuse_what_they_cannot_follow(self):
         tail = 'source_set("ardia") {\n  sources = ardia_sources\n}\n'
         for text, message in (
-                ('if (is_win) { ardia_sources += [ "x.cc" ] }\n', 'with the block on the lines below'),
-                ('if (is_win)\n{\n  ardia_sources += [\n    "x.cc",\n  ]\n}\n', 'with the block on the lines below'),
-                ('if (is_mac ||\n', "can't find where"),
-                ('if (is_mac && marker == "(" ||\n    is_win) {\n}\n', "can't find where")):
+                ('if (is_mac ||\n', 'the end of the file'),
+                ('if (is_win) {\n  ardia_sources += [ "x.cc" ]\n', 'a block that never closes'),
+                ('}\n', 'closes nothing'),
+                ('if (is_mac && marker == "(" ||\n    is_win) {\n}\n', "can't tell whether it takes `if \\(is_mac && marker == \"\\(\" \\|\\|\n    is_win\\)`"),
+                ('if (is_win) {\n} else if (use_ozone) {\n}\n', "can't tell whether it takes `if \\(use_ozone\\)`"),
+                ('ardia_sources += some_list\n', 'with anything but a list of names'),
+                ('ardia_sources -= [ "x.cc" ]\n', 'taken out of the list'),
+                ('else {\n}\n', 'a statement starting with `else`'),
+                ('marker = "unterminated\n', "a character it can't read")):
             with self.subTest(text=text), self.assertRaisesRegex(self.build.InputError, message):
                 self.build.windows_sources(text + tail)
 

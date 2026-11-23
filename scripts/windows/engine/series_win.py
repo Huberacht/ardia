@@ -43,8 +43,9 @@ WINDOWS_FROM_MAC_BLOCK = ('ac_reauth.cc',)
 GN_PLATFORMS = {'is_mac': False, 'is_linux': False, 'is_win': True}
 GN_TOKEN = re.compile(r'\s*(\|\||&&|[!()]|[A-Za-z_][A-Za-z0-9_]*)')
 WINDOWS_OWN_LAYERS = ('engine/chromium',)
-GN_IF = re.compile(r'^if\s*\(')
-GN_BLOCK = re.compile(r'^if \((.+)\) \{$')
+GN_LEXEME = re.compile(r'\s+|#[^\n]*|"(?:[^"\\\n]|\\.)*"|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|\+=|-=|==|!=|<=|>=|&&|\|\||[{}\[\](),.=<>!+-]')
+GN_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+GN_BINARY = ('+', '-', '==', '!=', '<', '>', '<=', '>=', '&&', '||')
 LAYER_ASSERT = re.compile(r'^assert\(is_mac( \|\| is_linux)?\)$', re.M)
 LAYER_BUILD = 'engine/chromium/src/chrome/browser/ardia/BUILD.gn'
 SERIES_REL = 'engine/patches/series'
@@ -324,69 +325,189 @@ def windows_takes(condition):
     return value if at == len(tokens) else None
 
 
-def joined_conditions(text):
-    lines, joined, n = text.splitlines(), [], 0
-    while n < len(lines):
-        start, stripped = n + 1, lines[n].strip()
-        if GN_IF.match(stripped):
-            while stripped.count('(') != stripped.count(')'):
-                n += 1
-                if n >= len(lines) or '"' in stripped or '#' in stripped:
-                    raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), start)}: the Windows build can\'t find where '
-                                     f'the condition `{stripped}` ends')
-                stripped = f'{stripped} {lines[n].strip()}'
-            if not GN_BLOCK.match(stripped):
-                raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), start)}: the Windows build reads a condition as '
-                                 f'`if (...) {{` with the block on the lines below, not `{stripped}`')
-        joined.append((start, stripped))
-        n += 1
-    return joined
+class GnReader:
+    def __init__(self, text):
+        self.text, self.tokens, self.at, self.found = text, [], 0, []
+        index, line = 0, 1
+        while index < len(text):
+            match = GN_LEXEME.match(text, index)
+            if not match:
+                self.fail(line, f'a character it can\'t read: {text[index:index + 20]!r}')
+            lexeme = match.group(0)
+            if not lexeme.isspace() and not lexeme.startswith('#'):
+                self.tokens.append((lexeme, line, index, match.end()))
+            line += lexeme.count('\n')
+            index = match.end()
+
+    def fail(self, line, what):
+        raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), line)}: the Windows build can\'t read {what}')
+
+    def peek(self, ahead=0):
+        at = self.at + ahead
+        return self.tokens[at][0] if at < len(self.tokens) else None
+
+    def line(self):
+        return self.tokens[min(self.at, len(self.tokens) - 1)][1] if self.tokens else 1
+
+    def take(self, expected=None):
+        if self.at >= len(self.tokens):
+            self.fail(self.line(), f'the end of the file where it expected {expected or "more"}')
+        token = self.tokens[self.at]
+        if expected is not None and token[0] != expected:
+            self.fail(token[1], f'`{token[0]}` where it expected `{expected}`')
+        self.at += 1
+        return token
+
+    def sources(self):
+        self.block(True, False)
+        return self.found
+
+    def block(self, active, closed):
+        while True:
+            token = self.peek()
+            if token is None:
+                if closed:
+                    self.fail(self.line(), 'a block that never closes')
+                return
+            if token == '}':
+                if not closed:
+                    self.fail(self.line(), 'a `}` that closes nothing')
+                self.take()
+                return
+            self.statement(active)
+
+    def statement(self, active):
+        name, line, _, _ = self.take()
+        if name == 'if':
+            return self.conditional(active, line)
+        if not GN_NAME.match(name) or name in ('else', 'true', 'false'):
+            self.fail(line, f'a statement starting with `{name}`')
+        if self.peek() == '(':
+            self.group('(', ')')
+            if self.peek() == '{':
+                self.take('{')
+                self.block(active, True)
+            return
+        while self.peek() in ('.', '['):
+            if self.take()[0] == '.':
+                self.take()
+            else:
+                self.expression()
+                self.take(']')
+        operator = self.peek()
+        if operator not in ('=', '+=', '-='):
+            self.fail(line, f'`{name}` followed by `{operator}`')
+        self.take()
+        value = self.expression()
+        if name == 'ardia_sources':
+            if operator == '-=' or value[0] != 'list':
+                self.fail(line, f'`ardia_sources {operator}` with anything but a list of names; it can\'t follow sources '
+                                'taken out of the list')
+            if active:
+                self.found.extend(value[1])
+        elif name == 'sources' and active:
+            if operator == '=' and value == ('name', 'ardia_sources'):
+                return
+            if operator == '+=' and value[0] == 'list':
+                self.found.extend(value[1])
+                return
+            self.fail(line, f'`sources {operator}` here: it only follows `sources = ardia_sources` and `sources += [...]`')
+
+    def conditional(self, active, line):
+        taken = self.condition(line)
+        self.take('{')
+        self.block(active and taken, True)
+        settled = taken
+        while self.peek() == 'else':
+            self.take()
+            if self.peek() == 'if':
+                branch_line = self.take()[1]
+                taken = self.condition(branch_line)
+                self.take('{')
+                self.block(active and not settled and taken, True)
+                settled = settled or taken
+                continue
+            self.take('{')
+            self.block(active and not settled, True)
+            return
+
+    def condition(self, line):
+        first = self.at + 1
+        self.group('(', ')')
+        inner = self.tokens[first:self.at - 1]
+        shown = self.text[inner[0][2]:inner[-1][3]] if inner else ''
+        taken = windows_takes(' '.join(token[0] for token in inner))
+        if taken is None:
+            raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), line)}: the Windows build can\'t tell whether it takes '
+                             f'`if ({shown})`; it reads {", ".join(GN_PLATFORMS)} joined by !, &&, || and parentheses')
+        return taken
+
+    def group(self, opening, closing):
+        self.take(opening)
+        depth = 1
+        while depth:
+            depth += {opening: 1, closing: -1}.get(self.take()[0], 0)
+
+    def expression(self):
+        value = self.unary()
+        while self.peek() in GN_BINARY:
+            self.take()
+            self.unary()
+            value = ('other',)
+        return value
+
+    def unary(self):
+        if self.peek() in ('!', '-'):
+            self.take()
+            self.unary()
+            return ('other',)
+        return self.primary()
+
+    def primary(self):
+        token, line, _, _ = self.take()
+        if token == '[':
+            names, plain = [], True
+            while self.peek() != ']':
+                item = self.expression()
+                if item[0] == 'string':
+                    names.append(item[1])
+                else:
+                    plain = False
+                if self.peek() == ',':
+                    self.take()
+                elif self.peek() != ']':
+                    self.fail(self.line(), f'`{self.peek()}` inside a list')
+            self.take(']')
+            return ('list', names) if plain else ('other',)
+        if token == '(':
+            self.expression()
+            self.take(')')
+            return ('other',)
+        if token == '{':
+            self.block(False, True)
+            return ('other',)
+        if token.startswith('"'):
+            return ('string', token[1:-1])
+        if token.isdigit():
+            return ('other',)
+        if not GN_NAME.match(token):
+            self.fail(line, f'`{token}` where it expected a value')
+        value = ('name', token)
+        while self.peek() in ('(', '.', '['):
+            if self.peek() == '(':
+                self.group('(', ')')
+            elif self.take()[0] == '.':
+                self.take()
+            else:
+                self.expression()
+                self.take(']')
+            value = ('other',)
+        return value
 
 
 def windows_sources(text):
-    found, blocks, listing = [], [], None
-    for n, stripped in joined_conditions(text):
-        if listing is not None:
-            if stripped == ']':
-                listing = None
-                continue
-            name = re.match(r'^"([^"]+)",?$', stripped)
-            if not name:
-                raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), n)}: a source list entry the Windows build can\'t read: {stripped}')
-            if listing:
-                found.append(name.group(1))
-            continue
-        if re.match(r'^ardia_sources \+?= \[$', stripped):
-            listing = all(blocks)
-            continue
-        if re.match(r'^ardia_sources\s*-=', stripped):
-            raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), n)}: the Windows build can\'t follow sources taken out '
-                             f'of the list: `{stripped}`')
-        assigned = re.match(r'^sources\s*(\+=|-=|=)\s*(.+)$', stripped)
-        if assigned and all(blocks):
-            operator, value = assigned.groups()
-            if operator == '+=' and value == '[':
-                listing = True
-                continue
-            if not (operator == '=' and value == 'ardia_sources'):
-                raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), n)}: the Windows build only follows '
-                                 f'`sources = ardia_sources` and `sources += [...]`, not `{stripped}`')
-        if stripped.startswith('}') and stripped != '}':
-            raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), n)}: the Windows build can\'t read `{stripped}`')
-        if stripped == '}':
-            blocks.pop()
-            continue
-        condition = GN_BLOCK.match(stripped)
-        if condition:
-            taken = windows_takes(condition.group(1))
-            if taken is None:
-                raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), n)}: the Windows build can\'t tell whether it takes '
-                                 f'`if ({condition.group(1)})`; it reads {", ".join(GN_PLATFORMS)} joined by !, &&, || and '
-                                 'parentheses')
-            blocks.append(taken)
-        elif stripped.endswith('{'):
-            blocks.append(True)
-    return found
+    return GnReader(text).sources()
+
 
 def launch_switches_source():
     text = read_file(os.path.join(REPO, 'engine/ardiacore/src', LAUNCH_SWITCHES + '.cc'), encoding='utf-8')
