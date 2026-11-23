@@ -82,8 +82,11 @@ class PageViewModule : Module() {
         }
 
         OnActivityEntersForeground {
-            appContext.currentActivity?.let(PhonePages::attach)
-            android.os.Handler(android.os.Looper.getMainLooper()).post { PhonePages.permissionAsks.pump() }
+            val activity = appContext.currentActivity
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                activity?.takeUnless { it.isFinishing || it.isDestroyed }?.let(PhonePages::attach)
+                PhonePages.permissionAsks.pump()
+            }
         }
 
         OnActivityDestroys {
