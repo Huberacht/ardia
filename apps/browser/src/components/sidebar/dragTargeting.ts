@@ -9,7 +9,7 @@ import { folderPanel } from "../../state/sidebar/tileFolderUi";
 import { overPins, pinGrid, pinGridHeight } from "./pinZone";
 import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, measure, openGapsAbove, pinnedBlock, spring } from "./dragModel";
 import { aimAt, type Pointing } from "./dragZones";
-import { DragGeometry } from "./dragGeometry";
+import { DragGeometry, type DragSession } from "./dragGeometry";
 import { reorderTick } from "../../state/drag/reorderTick";
 import { entryKey } from "../../state/sidebar/entryKey";
 import { previewPaneSlot } from "./splitPaneGeometry";
@@ -110,9 +110,19 @@ export class DragTargeting extends DragGeometry {
     }, FOLDER_HOLD_MS);
   }
 
+  private unmeasured = new Set<Item>();
+
+  protected markMeasured(session: DragSession) {
+    session.measured = true;
+    const waiting = [...this.unmeasured];
+    this.unmeasured.clear();
+    for (const item of waiting) this.measureLate(item);
+  }
+
   measureLate(item: Item) {
     const session = this.session;
-    if (!session?.measured) return;
+    if (!session) return;
+    if (!session.measured) return void this.unmeasured.add(item);
     requestAnimationFrame(() => {
       if (this.session !== session || this.items.get(item.key) !== item) return;
       void Promise.all([measure(item.view), measure(item.header)]).then(([frame, header]) => {

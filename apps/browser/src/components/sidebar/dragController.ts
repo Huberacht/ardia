@@ -100,7 +100,7 @@ export class DragController extends DragTargeting {
     this.setGhost(session.ghost);
     if (boxed(item) && !item.collapsed) markDrag(this.marks, { folded: item.key });
     this.moveRoom();
-    session.measured = true;
+    this.markMeasured(session);
     this.move(session.pointer.x, session.pointer.y);
   }
 
@@ -117,7 +117,7 @@ export class DragController extends DragTargeting {
     suppressHover(true);
     if (!(await this.measureAll(session, () => this.session === session))) return;
     this.setLanding(null);
-    session.measured = true;
+    this.markMeasured(session);
     this.move(session.pointer.x, session.pointer.y);
   }
 
@@ -196,7 +196,7 @@ export class DragController extends DragTargeting {
     session.closedInFrames = !!session.home && session.shown === session.home.profileId;
     const run = ++session.measures;
     if (!(await this.measureAll(session, () => this.session === session && session.measures === run))) return;
-    session.measured = true;
+    this.markMeasured(session);
     this.move(session.pointer.x, session.pointer.y);
   }
 

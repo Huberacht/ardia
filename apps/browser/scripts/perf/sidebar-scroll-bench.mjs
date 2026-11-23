@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { INJECTION_ENTITLEMENTS, prepareApp } from "../../../../scripts/lib/app-copy.mjs";
 import { attach, launch, session, sleep } from "../../../../scripts/lib/instance.mjs";
 import { framesLibrary } from "./frames-phase.mjs";
+import { windowGaps } from "./windowGaps.mjs";
 
 const HELP = `Sidebar scroll cost with real gestures: what one trackpad flick or wheel spin over the sidebar's tab list costs the
 app, at several tab counts, read while the screen may be locked.
@@ -308,9 +309,7 @@ class Frames {
     }
     const wholeIterations = records.some((r) => r.k === "i");
     let first = null;
-    const gaps = [];
     const refresh = 1000 / (records.find((r) => r.k === "info")?.maxFPS || 120);
-    let last = records.findLast((r) => r.k === "f" && r.ts < from)?.ts ?? null;
     for (const r of records) {
       if (r.k === "i" && r.th === "m" && r.a < to && r.a + r.d > from) {
         out.mMax = Math.max(out.mMax, r.d);
@@ -324,8 +323,6 @@ class Frames {
         if (r.mc >= 0 && first.mc >= 0) out.mainCpu = r.mc - first.mc;
         if (r.jc >= 0 && first.jc >= 0) out.jsCpu = r.jc - first.jc;
         out.frames++;
-        if (last !== null) gaps.push(r.ts - last);
-        last = r.ts;
       }
       if (r.k === "r" && r.a >= from && r.a < to) {
         out[r.th] += r.d;
@@ -337,11 +334,7 @@ class Frames {
         if (r.th === "j" && r.d > 8.33) out.jOver8++;
       } else if (r.k === "l" && r.a >= from && r.a < to) out.layoutMs += r.d;
     }
-    const after = records.find((r) => r.k === "f" && r.ts >= to);
-    if (after && last !== null) gaps.push(after.ts - last);
-    const tick = periods.length ? periods[periods.length >> 1] : refresh;
-    out.maxGap = gaps.length ? Math.max(...gaps) : 0;
-    out.late = gaps.reduce((n, g) => n + (g > tick * 1.5 ? Math.max(1, Math.round(g / tick) - 1) : 0), 0);
+    Object.assign(out, windowGaps(records.filter((r) => r.k === "f").map((r) => r.ts), from, to, periods.length ? periods[periods.length >> 1] : refresh));
     return out;
   }
   async op(op, args = {}, timeout = 5000) {

@@ -290,3 +290,25 @@ test("a drag let go with no place to drop is counted; a dropped, cancelled or re
   assert.deepEqual(await run({ viewport: offScreen, to: belowD, commit: false }), { drop: "none", counted: 0 });
   assert.deepEqual((await run({ to: (m, b) => ({ x: b.x + 20, y: b.y + 12 }) })).counted, 0, "let go where it started");
 });
+
+test("a row that registers while the drag's first measurement is still out is measured once it lands", async () => {
+  const { DragItems } = await import("./dragItems.ts");
+  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const items = new DragItems(c, true);
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  const late = c.create(entryKey("tab", m.id.d) + ":late");
+  Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "list" });
+  late.view = D.fakeView({ x: 6, y: 600, w: 180, h: 30 });
+  c.root.held = true;
+  const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  items.add(late.key, late);
+  c.root.release();
+  await begun;
+  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
+  assert.ok(late.frame, "the late row has a frame");
+  assert.deepEqual([late.frame.x, late.frame.w, late.frame.h], [6, 180, 30]);
+  c.end(false);
+  await D.settle();
+});
