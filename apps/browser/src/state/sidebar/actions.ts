@@ -14,7 +14,11 @@ import { groupLabel, groupOf } from "../pins/tabGrouping";
 import type { Tab } from "../browser/types";
 import { awaitsFirstPage } from "../tabs/pendingAddress";
 import { noteUrlCopied } from "../telemetry/urlCopies";
-import { noteRangeSelect } from "../telemetry/tabPresses";
+import { noteRangeSelect, noteTileDoubleClick } from "../telemetry/tabPresses";
+import { samePage } from "../../lib/url";
+import { shownLiveOf } from "../tabs/tabLive";
+import { withLivePage } from "../tabs/livePage";
+import { consentToken, stillValid } from "../telemetry/client";
 import { noteTextOnlyRow } from "../telemetry/tabStripCounts";
 import { NO_ROW_ICON } from "../pins/rowIcons";
 import type { BookmarkFolderChoice } from "./menuParts";
@@ -46,9 +50,18 @@ export function toggleBookmarkInWindow(windowId: string, page: { url: string; ti
   s.toggleBookmark(bookmarkProfileId(s, s.windows[windowId]), page);
 }
 
-export function returnShownTabToPinnedUrl(windowId: string, tabId: string) {
+export function refreshShownTile(windowId: string, tabId: string) {
   const s = store();
-  if (activeTabId(s, windowId) === tabId) s.returnToPinnedUrl(tabId);
+  const tab = s.tabs[tabId];
+  if (!tab || activeTabId(s, windowId) !== tabId) return;
+  if (tab.pinnedUrl && !samePage(tab.url, tab.pinnedUrl)) {
+    noteTileDoubleClick("return");
+    return s.returnToPinnedUrl(tabId);
+  }
+  if (!tab.url || shownLiveOf(s, tabId).isLoading) return noteTileDoubleClick("loading");
+  noteTileDoubleClick("reload");
+  const consent = consentToken();
+  void withLivePage(tabId, (page) => page.reload()).then((reloaded) => reloaded || (stillValid(consent) && noteTileDoubleClick("missed")));
 }
 
 export async function startRename(windowId: string, target: Target) {

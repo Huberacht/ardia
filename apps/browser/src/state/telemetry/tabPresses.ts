@@ -51,6 +51,10 @@ const empty = () => ({
   range_selects: 0,
   range_from_shown: 0,
   page_refused: 0,
+  tile_double_returns: 0,
+  tile_double_reloads: 0,
+  tile_double_loading: 0,
+  tile_double_missed: 0,
 });
 let tally = empty();
 let pending = false;
@@ -180,6 +184,12 @@ export function notePagePress(tabId: string) {
   const ms = Date.now() - last.at;
   if (ms >= 0 && ms < PAGE_CLICK_WINDOW_MS && toPageClick.length < MAX_SAMPLES) toPageClick.push(ms);
 }
+
+export type TileDoubleClick = "return" | "reload" | "loading" | "missed";
+
+const TILE_DOUBLE_FIELD = { return: "tile_double_returns", reload: "tile_double_reloads", loading: "tile_double_loading", missed: "tile_double_missed" } as const;
+
+export const noteTileDoubleClick = (what: TileDoubleClick) => void tally[TILE_DOUBLE_FIELD[what]]++;
 
 export const notePagePressRefused = () => void tally.page_refused++;
 

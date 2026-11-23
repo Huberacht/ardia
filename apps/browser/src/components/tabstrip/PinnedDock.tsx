@@ -21,6 +21,7 @@ import { useStripPick } from "./stripPick";
 import { useStripCardHover } from "./StripHoverCard";
 import { useChipHover, useChipHovered } from "./reachableHover";
 import { TabPressArea } from "../sidebar/TabPressArea";
+import { refreshShownTile } from "../../state/sidebar/actions";
 
 export function PinnedDock({ tabIds }: { tabIds: string[] }) {
   const theme = useTheme();
@@ -96,6 +97,7 @@ function PinnedCell({ tabId, geometry, from }: { tabId: string; geometry: DragGe
       <View
         {...drag.panHandlers}
         {...hover.hoverProps}
+        onDoubleClick={() => refreshShownTile(windowId, tabId)}
         style={{
           position: "absolute",
           left: PINNED_FACE_INSET,
