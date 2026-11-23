@@ -201,7 +201,7 @@ enum ServerWindowDrag {
       return event
     }
     scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-      scrolledAt = CACurrentMediaTime()
+      if let window = event.window, event.locationInWindow.y < window.frame.height - band(window) { scrolledAt = CACurrentMediaTime() }
       return event
     }
     NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in catchUpAll() }

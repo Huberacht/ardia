@@ -457,6 +457,7 @@ static void FindJSThread(void) {
   NSWindow *w = self.appWindow;
   if (!w) return [self answer:cid with:@{@"ok": @NO, @"error": @"no window"}];
   NSString *kind = cmd[@"kind"] ?: @"trackpad";
+  BOOL firstWatch = self.watched == nil;
   self.watched = [self tallestScrollView];
   double rate = [cmd[@"rate"] doubleValue] ?: 120;
   double sign = [cmd[@"reverse"] boolValue] ? -1 : 1;
@@ -490,6 +491,7 @@ static void FindJSThread(void) {
   };
   _driverOp = @"gesture";
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+    if (firstWatch) usleep(50000);
     double tick = 1 / rate, start = CACurrentMediaTime();
     __block double elapsed = 0;
     int events = 0;
