@@ -1480,7 +1480,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
     internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis()): Boolean {
         val content = recorder ?: return false
         if (strips.isEmpty()) return false
-        if (frameTime == refreshedAt) return true
+        if (frameTime == refreshedAt || frameTime - refreshedAt in 0 until FrostRefresh.stripGap(holdsPage)) return true
         var all = true
         for (strip in strips.values) all = strip.refresh(content) && all
         if (all) refreshedAt = frameTime
@@ -1645,9 +1645,9 @@ internal class FrostStrip(val key: Key) {
         filtered.setPosition(0, 0, scaledWidth, scaledHeight)
         val lensBack = lenses != null && lensed == 0 && !GlassShaders.lens.failed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (!effectSet || lenses != lensesApplied || lensBack)) {
-            val frosted = FrostStrip.frosted(key.blurPx / key.scale, key.saturation)
             val lens = if (lenses != null && Build.VERSION.SDK_INT >= LiquidGlassRules.LENS_MIN_SDK) GlassShaders.lensFor(lenses) { lensShader ?: LiquidGlassShaders.lens().also { lensShader = it } } else null
-            filtered.setRenderEffect(if (lens == null) frosted else RenderEffect.createChainEffect(lens, frosted))
+            val blur = key.blurPx / key.scale
+            filtered.setRenderEffect(if (lens == null) FrostStrip.frosted(blur, key.saturation) else RenderEffect.createChainEffect(lens, RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP)))
             lensed = if (lens == null) 0 else lenses?.lenses?.size ?: 0
             lensesApplied = lenses
             effectSet = true
@@ -1715,6 +1715,10 @@ internal object FrostScale {
 internal object FrostRefresh {
     const val IDLE_MILLIS = 250L
     const val AFTER_SCROLL_MILLIS = 300L
+
+    const val PAGE_STRIP_MILLIS = 15L
+
+    fun stripGap(holdsPage: Boolean): Long = if (holdsPage) PAGE_STRIP_MILLIS else 0L
 
     fun next(holdsPage: Boolean, millisSinceScroll: Long): Long? = when {
         !holdsPage -> null
@@ -2035,7 +2039,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             }
         }
         val placed = FrostStrip.place(area, from.width, from.height, key.scale)
-        val lenses = LiquidGlassRules.lensField(sharing.mapNotNull { it.lensIn(from, placed, key.scale) }, density, key.scale)
+        val lenses = LiquidGlassRules.lensField(sharing.mapNotNull { it.lensIn(from, placed, key.scale) }, density, key.scale, key.saturation)
         from.node?.let { strip.record(it, placed, now, lenses) }
         LookActivity.stripRecords += 1
         return strip

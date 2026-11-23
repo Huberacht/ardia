@@ -133,6 +133,7 @@ internal object LiquidGlassRules {
         val ior: Float,
         val dispersion: Float,
         val maxSlope: Float,
+        val saturation: Float,
     )
 
     fun stripLens(xPx: Int, yPx: Int, widthPx: Int, heightPx: Int, scale: Float, radiusPx: Float, density: Float, bezelDp: Float, shiftDp: Float): StripLens {
@@ -148,7 +149,7 @@ internal object LiquidGlassRules {
         )
     }
 
-    fun lensField(lenses: List<StripLens>, density: Float, scale: Float, params: Params = defaults): LensField? {
+    fun lensField(lenses: List<StripLens>, density: Float, scale: Float, saturation: Float = 1f, params: Params = defaults): LensField? {
         if (lenses.isEmpty()) return null
         return LensField(
             lenses = lenses.take(MAX_LENSES),
@@ -157,6 +158,7 @@ internal object LiquidGlassRules {
             ior = params.ior,
             dispersion = params.dispersion,
             maxSlope = params.maxSlope,
+            saturation = saturation,
         )
     }
 
@@ -237,6 +239,14 @@ uniform float depth;
 uniform float ior;
 uniform float dispersion;
 uniform float maxSlope;
+uniform float saturation;
+
+half4 saturated(half4 colour) {
+    if (colour.a <= 0.0) return colour;
+    half3 straight = colour.rgb / colour.a;
+    half grey = dot(straight, half3(0.213, 0.715, 0.072));
+    return half4(clamp(grey + (straight - grey) * half(saturation), 0.0, 1.0) * colour.a, colour.a);
+}
 
 float3 bend(float3 normal, float index) {
     return refract(float3(0.0, 0.0, -1.0), normal, 1.0 / max(index, 1.0001));
@@ -262,7 +272,7 @@ half4 main(float2 p) {
             }
         }
     }
-    if (edge > 1.0) return backdrop.eval(p);
+    if (edge > 1.0) return saturated(backdrop.eval(p));
     float bezel = shape.y;
     float maxShift = shape.z;
     float inward = max(-edge, 0.0);
@@ -270,14 +280,15 @@ half4 main(float2 p) {
     float u = 1.0 - progress;
     float inside = max(1.0 - u * u * u * u, 0.0001);
     float slope = inward > bezel ? 0.0 : min(2.0 * u * u * u / sqrt(inside), maxSlope);
-    if (slope <= 0.0) return backdrop.eval(p);
+    if (slope <= 0.0) return saturated(backdrop.eval(p));
     float height = depth + sqrt(inside) * bezel;
     float3 normal = normalize(float3(boxNormal(p, box, shape.x) * slope, 1.0));
     half4 green = backdrop.eval(p + shift(bend(normal, ior), height, maxShift));
     half red = backdrop.eval(p + shift(bend(normal, ior + dispersion), height, maxShift)).r;
     half blue = backdrop.eval(p + shift(bend(normal, max(ior - dispersion, 1.0001)), height, maxShift)).b;
     half coverage = green.a;
-    return half4(min(red, coverage), min(green.g, coverage), min(blue, coverage), coverage);
+    half4 lensed = half4(min(red, coverage), min(green.g, coverage), min(blue, coverage), coverage);
+    return saturated(lensed);
 }
 """
 
@@ -406,6 +417,7 @@ internal object LiquidGlassShaders {
         setFloatUniform("ior", field.ior)
         setFloatUniform("dispersion", field.dispersion)
         setFloatUniform("maxSlope", field.maxSlope)
+        setFloatUniform("saturation", field.saturation)
     }
 
     fun lensEffect(shader: RuntimeShader): RenderEffect = RenderEffect.createRuntimeShaderEffect(shader, "backdrop")
