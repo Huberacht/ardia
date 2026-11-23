@@ -53,7 +53,7 @@ fi
 command -v rustup >/dev/null || { echo "build-xcframework: rustup isn't installed (https://rustup.rs)" >&2; exit 1; }
 unset SDKROOT RUSTC_WRAPPER CARGO_BUILD_TARGET
 cd "$core"
-rustup toolchain install --profile minimal >/dev/null
+rustup toolchain install --profile minimal --no-self-update >/dev/null 2>&1
 installed="$(rustup target list --installed)"
 missing=()
 for target in "${targets[@]}"; do
@@ -64,9 +64,9 @@ done
 target_dir="${CARGO_TARGET_DIR:-$core/target}"
 headers="$target_dir/xcframework-headers"
 rm -rf "$headers"
-mkdir -p "$headers"
-cp include/ardia_core.h "$headers/ardia_core.h"
-printf 'module ArdiaCoreRS {\n  header "ardia_core.h"\n  export *\n}\n' > "$headers/module.modulemap"
+mkdir -p "$headers/ArdiaCoreRS"
+cp include/ardia_core.h "$headers/ArdiaCoreRS/ardia_core.h"
+printf 'module ArdiaCoreRS {\n  header "ardia_core.h"\n  export *\n}\n' > "$headers/ArdiaCoreRS/module.modulemap"
 args=()
 for target in "${targets[@]}"; do
   case "$target" in
