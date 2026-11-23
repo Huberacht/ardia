@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Our series on a Windows tree: the `chromium` lines of engine/patches/series that are for every platform or tagged
-`mac` (Windows started from the Mac's set; `linux` lines are never applied), then those of
+"""Our series on a Windows tree: the `chromium` lines of engine/patches/series that are for every platform or whose
+platforms include `mac` or `win` (Windows started from the Mac's set; `linux` lines are never applied, `linux,win`
+lines are; a `layer` line for win is refused until this script runs series layers), then those of
 scripts/windows/engine/series-win (when it exists; its patches in scripts/windows/engine/patches,
 and its `skip <patch>` lines leave a patch of engine/patches/series out), each applied strictly (git apply), else with patch's fuzz.
 A patch that fails is recorded and the rest still run. Each patch that goes in is written to .series-win-applied beside
@@ -34,10 +35,12 @@ LAUNCH_SWITCHES = 'ardia/core/ac_launch_switches'
 LAYER_PATCH = os.path.join(HERE, 'ardia-layer-win.patch')
 LAYER_OVERLAY = os.path.join(HERE, 'src', 'chrome', 'browser', 'ardia')
 MAC_LAYER_LINE = re.compile(r'(\.mm"|"pip/|"ac_external_apps\.h")')
-WINDOWS_TAGS = ('all', 'mac')
-SERIES_TAGS = ('all', 'mac', 'linux')
+ENGINES = ('mac', 'linux', 'win')
+WINDOWS_TAGS = ('all', 'mac', 'win')
+SERIES_TAGS = ('all',) + ENGINES
 WINDOWS_FROM_MAC_BLOCK = ('ac_reauth.cc',)
-WINDOWS_CONDITIONS = {'is_win': True, 'is_mac': False, 'is_linux': False, '!is_win': False, '!is_mac': True, '!is_linux': True}
+GN_PLATFORMS = {'is_mac': False, 'is_linux': False, 'is_win': True}
+GN_TOKEN = re.compile(r'\s*(\|\||&&|[!()]|[A-Za-z_][A-Za-z0-9_]*)')
 LAYER_ASSERT = re.compile(r'^assert\(is_mac( \|\| is_linux)?\)$', re.M)
 LAYER_BUILD = 'engine/chromium/src/chrome/browser/ardia/BUILD.gn'
 SERIES_REL = 'engine/patches/series'
@@ -80,20 +83,34 @@ def chromium_lines(path, tags=WINDOWS_TAGS):
         return series_lines(f.read(), path, tags)
 
 
+def selector_tags(selector):
+    if selector == 'all':
+        return ('all',)
+    names = selector.split(',')
+    return tuple(names) if len(set(names)) == len(names) and all(name in ENGINES for name in names) else None
+
+
 def series_lines(text, path, tags=WINDOWS_TAGS):
     if text is None:
         return []
     out = []
     for n, raw in enumerate(io.StringIO(text), 1):
         fields = raw.split('#', 1)[0].split()
-        if not fields or fields[0] != 'chromium':
+        if not fields or fields[0] not in ('chromium', 'layer'):
             continue
         if len(fields) not in (2, 3):
-            raise InputError(f'{where(path, n)}: expected `chromium <patch> [{"|".join(SERIES_TAGS)}]`: {raw.strip()}')
-        tag = fields[2] if len(fields) == 3 else 'all'
-        if tag not in SERIES_TAGS:
-            raise InputError(f'{where(path, n)}: unknown platform `{tag}`; this script knows {", ".join(SERIES_TAGS)}')
-        if tag in tags:
+            raise InputError(f'{where(path, n)}: expected `{fields[0]} <name> [all|<platform>[,<platform>…]]`, platforms '
+                             f'{", ".join(ENGINES)}: {raw.strip()}')
+        line_tags = selector_tags(fields[2] if len(fields) == 3 else 'all')
+        if line_tags is None:
+            raise InputError(f'{where(path, n)}: unknown platform `{fields[2]}`; this script knows all, or one or more of '
+                             f'{", ".join(ENGINES)} joined by commas')
+        if fields[0] == 'layer':
+            if 'win' in line_tags:
+                raise InputError(f'{where(path, n)}: `{fields[1]}` is a layer for win, and this script runs no series layer '
+                                 'yet: teach it to apply the layer before marking it win')
+            continue
+        if any(tag in tags for tag in line_tags):
             out.append(fields[1])
     return out
 
@@ -259,6 +276,49 @@ def ardia_build_file():
     return text[:text.index('config("exports_config")')].rstrip() + '\n'
 
 
+def windows_takes(condition):
+    tokens, index, condition = [], 0, condition.strip()
+    while index < len(condition):
+        match = GN_TOKEN.match(condition, index)
+        if not match:
+            return None
+        tokens.append(match.group(1))
+        index = match.end()
+
+    def either(at):
+        value, at = both(at)
+        while at < len(tokens) and tokens[at] == '||':
+            more, at = both(at + 1)
+            value = None if value is None or more is None else value or more
+        return value, at
+
+    def both(at):
+        value, at = negated(at)
+        while at < len(tokens) and tokens[at] == '&&':
+            more, at = negated(at + 1)
+            value = None if value is None or more is None else value and more
+        return value, at
+
+    def negated(at):
+        if at < len(tokens) and tokens[at] == '!':
+            value, at = negated(at + 1)
+            return None if value is None else not value, at
+        if at < len(tokens) and tokens[at] == '(':
+            value, at = either(at + 1)
+            if at >= len(tokens) or tokens[at] != ')':
+                raise ValueError(condition)
+            return value, at + 1
+        if at < len(tokens) and tokens[at] in GN_PLATFORMS:
+            return GN_PLATFORMS[tokens[at]], at + 1
+        raise ValueError(condition)
+
+    try:
+        value, at = either(0)
+    except ValueError:
+        return None
+    return value if at == len(tokens) else None
+
+
 def windows_sources(text):
     found, blocks, listing = [], [], None
     for n, line in enumerate(text.splitlines(), 1):
@@ -295,10 +355,12 @@ def windows_sources(text):
             continue
         condition = re.match(r'^if \((.+)\) \{$', stripped)
         if condition:
-            if condition.group(1) not in WINDOWS_CONDITIONS:
+            taken = windows_takes(condition.group(1))
+            if taken is None:
                 raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), n)}: the Windows build can\'t tell whether it takes '
-                                 f'`if ({condition.group(1)})`; known: {", ".join(WINDOWS_CONDITIONS)}')
-            blocks.append(WINDOWS_CONDITIONS[condition.group(1)])
+                                 f'`if ({condition.group(1)})`; it reads {", ".join(GN_PLATFORMS)} joined by !, &&, || and '
+                                 'parentheses')
+            blocks.append(taken)
         elif stripped.endswith('{'):
             blocks.append(True)
     return found

@@ -182,6 +182,72 @@ class AcceptTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(os.listdir(scratch), [])
 
+    def test_a_series_line_for_linux_and_win_still_reaches_windows(self):
+        before = self.accepted()
+        self.edit('engine/patches/series', 'chromium chromium-helium-branding.patch\n',
+                  'chromium chromium-helium-branding.patch linux,win\n')
+        result = self.accept()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.accepted(), before)
+
+    def test_a_series_line_for_linux_alone_leaves_windows(self):
+        self.edit('engine/patches/series', 'chromium chromium-helium-branding.patch\n',
+                  'chromium chromium-helium-branding.patch linux\n')
+        result = self.accept()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('chromium-helium-branding.patch', self.accepted()['accepted-patches.txt'].decode().split())
+
+    def test_a_series_layer_for_win_is_refused_until_windows_runs_series_layers(self):
+        before = self.accepted()
+        self.edit('engine/patches/series', 'layer engine/ardiacore-linux linux\n', 'layer engine/ardiacore-linux linux,win\n')
+        result = self.accept()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('runs no series layer', result.stdout)
+        self.assertEqual(self.accepted(), before)
+
+
+class SelectorTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, HERE)
+        cls.addClassCleanup(sys.path.remove, HERE)
+        import series_win
+        cls.build = series_win
+
+    def test_series_lines_take_all_mac_and_win_lines(self):
+        text = ''.join(f'chromium {name}.patch {tag}\n'.replace(' all\n', '\n') for name, tag in (
+            ('shared', 'all'), ('mac', 'mac'), ('linux', 'linux'), ('win', 'win'), ('desktop', 'linux,win'),
+            ('posix', 'mac,linux'), ('every', 'mac,linux,win')))
+        self.assertEqual(self.build.series_lines(text, 'series'),
+                         ['shared.patch', 'mac.patch', 'win.patch', 'desktop.patch', 'posix.patch', 'every.patch'])
+        self.assertEqual(len(self.build.series_lines(text, 'series', self.build.SERIES_TAGS)), 7)
+
+    def test_series_lines_refuse_a_selector_they_cannot_read(self):
+        for tag in ('windows', 'linux,', ',win', 'linux,linux', 'all,win', 'Linux'):
+            with self.subTest(tag=tag), self.assertRaisesRegex(self.build.InputError, 'unknown platform'):
+                self.build.series_lines(f'chromium x.patch {tag}\n', 'series')
+
+    def test_windows_takes_a_condition_by_the_platforms_it_names(self):
+        for condition, taken in (('is_win', True), ('is_mac', False), ('is_linux', False), ('!is_win', False),
+                                 ('!is_mac', True), ('!is_linux', True), ('is_linux || is_win', True),
+                                 ('is_mac || is_linux', False), ('!(is_mac || is_linux)', True), ('!is_mac && !is_linux', True),
+                                 ('is_win && !is_mac', True), ('is_linux && is_win', False), (' ( is_win ) ', True)):
+            with self.subTest(condition=condition):
+                self.assertIs(self.build.windows_takes(condition), taken)
+        for condition in ('use_ozone', 'is_win && use_ozone', 'is_win ||', '(is_win', 'is_win)', 'is_win == true', ''):
+            with self.subTest(condition=condition):
+                self.assertIsNone(self.build.windows_takes(condition))
+
+    def test_windows_sources_follow_platform_sets(self):
+        text = ('ardia_sources = [\n  "shared.cc",\n]\n\n'
+                'if (is_linux || is_win) {\n  ardia_sources += [\n    "desktop.cc",\n  ]\n}\n\n'
+                'if (!is_mac) {\n  ardia_sources += [\n    "not_mac.cc",\n  ]\n}\n\n'
+                'if (is_mac || is_linux) {\n  ardia_sources += [\n    "posix.cc",\n  ]\n}\n\n'
+                'source_set("ardia") {\n  sources = ardia_sources\n}\n')
+        self.assertEqual(self.build.windows_sources(text), ['shared.cc', 'desktop.cc', 'not_mac.cc'])
+        with self.assertRaisesRegex(self.build.InputError, "can't tell whether it takes `if \\(is_win && use_ozone\\)`"):
+            self.build.windows_sources(text.replace('is_linux || is_win', 'is_win && use_ozone'))
+
 
 if __name__ == '__main__':
     unittest.main()
