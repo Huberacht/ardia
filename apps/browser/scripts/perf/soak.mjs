@@ -16,6 +16,8 @@
 //     --hold 1             leave the instance running at the end (prints its pid and data folder)
 //     --history <n>        seed n history entries in Personal and n/2 in Work instead of 5000 and 800
 //     --idle-seconds <s>   the idle window of each sample (default 4; 16 holds a whole 15 s sync cycle)
+//     --quiet-seconds <s>  after the last round, leave both instances alone for s seconds and sample the first's idle
+//                          window alone (no tab actions before it), so it holds no cycle with fresh local or remote changes
 //     --sync 1             a second instance (<label>-peer, a third of the activity) paired with the first through a
 //                          scratch sync folder, every data type on; both are sampled
 //
@@ -116,14 +118,14 @@ async function soak() {
     const peer = flags.sync ? await start(`${label}-peer`, port + 2) : null;
     if (peer) await pair(main, peer, join(out, "data", `${label}-folder`));
     await main.eval("return new Promise((r) => setTimeout(() => r(1), 8000));", 20_000);
-    const takeSample = async (instance, roundsDone, roundStats, actions) => {
-      const sample = await instance.eval(`return acSoak.sample(${JSON.stringify({ origin, actions, idleMs: Number(flags["idle-seconds"] ?? 4) * 1000 })});`, 180_000);
+    const takeSample = async (instance, roundsDone, roundStats, actions, idleOnly = false) => {
+      const sample = await instance.eval(`return acSoak.sample(${JSON.stringify({ origin, actions, idleOnly, idleMs: Number(flags["idle-seconds"] ?? 4) * 1000 })});`, 180_000);
       Object.assign(sample, { rounds: roundsDone, rssMb: rssMb(instance.pid), children: childCount(instance.pid), round: roundStats });
       appendFileSync(instance.file, `${JSON.stringify(sample)}\n`);
       console.log(`[${instance.name} ${roundsDone}] ${line(sample)}${sample.round ? `  round lag p95 ${sample.round.lagP95} max ${sample.round.lagMax} gc ${sample.round.gcs}/${round1(sample.round.gcMs)}ms` : ""}${sample.sync?.enabled ? `  sync ${sample.sync.status} pending ${sample.sync.pending}` : ""}`);
     };
-    const sampleAll = async (r, stats) => {
-      await takeSample(main, r, stats[0], true);
+    const sampleAll = async (r, stats, idleOnly = false) => {
+      await takeSample(main, r, stats[0], true, idleOnly);
       if (peer) await takeSample(peer, r, stats[1], false);
     };
     await sampleAll(0, []);
@@ -138,6 +140,10 @@ async function soak() {
         await Promise.all(instances.map((i) => i.eval("return acSoak.closeMade();", 30_000)));
         await sampleAll(r, last);
       }
+    }
+    if (flags["quiet-seconds"]) {
+      await new Promise((resolve) => setTimeout(resolve, Number(flags["quiet-seconds"]) * 1000));
+      await sampleAll(`${rounds}+quiet`, [], true);
     }
   } finally {
     server.close();

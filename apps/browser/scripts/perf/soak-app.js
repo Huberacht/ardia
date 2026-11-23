@@ -115,6 +115,15 @@ function switchCandidates(w) {
   return win.tabIds.filter((id) => s.tabs[id] && s.tabs[id].profileId === win.profileId && !isPinned(s.tabs[id]));
 }
 
+async function idleWindow(idleMs) {
+  P.reset();
+  const idleGc = hermes();
+  const idleLag = lagMeter();
+  await sleep(idleMs);
+  const idle = P.read();
+  return { idleBusyMsPerS: busyMs(idle) / (idleMs / 1000), idleTop: top({ ...idle.taskMs, ...idle.timerMs }, 6), idleLag: idleLag(), idleGc: gcDelta(idleGc) };
+}
+
 async function probeActions(origin, idleMs) {
   const w = windowIds()[0];
   const ids = switchCandidates(w);
@@ -157,8 +166,8 @@ async function probeActions(origin, idleMs) {
 }
 
 globalThis.acSoak = {
-  async sample({ origin, actions = true, idleMs = 4000 } = {}) {
-    const timing = actions ? await probeActions(origin, idleMs) : null;
+  async sample({ origin, actions = true, idleMs = 4000, idleOnly = false } = {}) {
+    const timing = idleOnly ? await idleWindow(idleMs) : actions ? await probeActions(origin, idleMs) : null;
     const live = P.live ? P.live() : null;
     const liveTotals = live ? Object.fromEntries(Object.entries(live).map(([k, c]) => [k, sumCounter(c)])) : null;
     return {
