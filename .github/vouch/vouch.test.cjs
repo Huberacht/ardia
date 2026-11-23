@@ -798,6 +798,13 @@ test("the gate's first attempt reads the payload and calls no API; a re-run read
   assert.deepEqual(labelledSince.calls.map((call) => call.name), ["pulls.get"]);
 });
 
+test("a run-ci label in the event is confirmed live, so a maintainer who took it off is obeyed", async () => {
+  const removed = fakeGithub({ pulls: [pr(42, "stranger", { association: "CONTRIBUTOR" })] });
+  const { result } = await gateFor({ author: "stranger", association: "CONTRIBUTOR", payloadLabels: ["run-ci"], github: removed });
+  assert.equal(result.run, false);
+  assert.deepEqual(removed.calls.map((call) => call.name), ["pulls.get"]);
+});
+
 test("the gate passes a re-run started by a user with write or admin", async () => {
   for (const permission of ["write", "admin"]) {
     const { result } = await gateFor({ author: "stranger", attempt: 2, actor: "maint", permissions: { maint: permission } });
@@ -1108,18 +1115,6 @@ test("an outsider's push reads the pull request once and their open pull request
   const github = fakeGithub({ pulls: [pull], issues: [BUG] });
   await event(github, "synchronize", pull);
   assert.deepEqual(github.calls.map((call) => call.name), ["graphql.VouchRulePull", "pulls.list"]);
-});
-
-test("a title-only edit costs no API call; a body or base edit is checked", async () => {
-  const pull = fresh(64, "stranger", { association: "CONTRIBUTOR", linked: [] });
-  const titled = fakeGithub({ pulls: [pull] });
-  await event(titled, "edited", pull, { changes: { title: { from: "old" } } });
-  assert.deepEqual(titled.calls, []);
-  for (const changes of [{ body: { from: "" } }, { base: { ref: { from: "next" } } }, { title: { from: "old" }, body: { from: "" } }]) {
-    const github = fakeGithub({ pulls: [pull] });
-    await event(github, "edited", pull, { changes });
-    assert.ok(github.named("graphql.VouchRulePull").length === 1, JSON.stringify(changes));
-  }
 });
 
 test("a team pull request's opened event reads no rules for itself and never waits on mergeable", async () => {

@@ -42,6 +42,8 @@ query ClaPull($owner: String!, $repo: String!, $number: Int!, $signatures: Strin
     signatures: object(expression: $signatures) { ... on Blob { oid text isTruncated } }
     pullRequest(number: $number) {
       headRefOid
+      headRefName
+      headRepository { nameWithOwner }
       commits(first: ${PAGE}) { ${COMMIT_FIELDS} }
       comments(first: ${PAGE}) { ${COMMENT_FIELDS} }
     }
@@ -92,7 +94,8 @@ function committersOf(commits, number, allowlist = CONFIG.allowlist) {
     const user = { name: who.login || who.name, id: who.databaseId || "", pullRequestNo: number };
     if (!committers.some((known) => known.name === user.name)) committers.push(user);
   }
-  return committers.filter((committer) => committer.id !== GITHUB_ACTIONS_USER_ID).filter((committer) => committer && !allowlisted(committer.name, allowlist));
+  const exempt = (committer) => allowlisted(committer.name, allowlist) && (Boolean(committer.id) || committer.name.endsWith("[bot]"));
+  return committers.filter((committer) => committer.id !== GITHUB_ACTIONS_USER_ID && !exempt(committer));
 }
 
 function committerMap(committers, signedContributors) {
@@ -215,6 +218,8 @@ async function readPull(github, repo, number, config) {
   const comments = await readMore(github, MORE_COMMENTS_QUERY, variables, "comments", pull.comments);
   return {
     headSha: pull.headRefOid,
+    headRef: pull.headRefName,
+    headRepository: pull.headRepository ? pull.headRepository.nameWithOwner : null,
     commits: commits.map((node) => node.commit),
     comments: comments.map(commentFacts),
     file: await signatureFile(github, repo, data.repository.signatures, config),
@@ -253,15 +258,17 @@ async function writeSignatures(github, repo, file, newSigned, message, config) {
   }
 }
 
-async function rerunFailedCheck(github, repo, headSha, core, config) {
+async function rerunFailedCheck(github, repo, pull, core, config) {
   const { data } = await github.rest.actions.listWorkflowRuns({
     ...repo,
     workflow_id: config.workflowFile,
     event: "pull_request_target",
-    head_sha: headSha,
-    per_page: 1,
+    head_sha: pull.headSha,
+    per_page: 20,
   });
-  const newest = (data.workflow_runs || [])[0];
+  const ofThisPull = (run) =>
+    run.head_branch === pull.headRef && Boolean(run.head_repository) && run.head_repository.full_name === pull.headRepository;
+  const newest = (data.workflow_runs || []).find(ofThisPull);
   if (!newest || newest.conclusion !== "failure") return null;
   try {
     await github.rest.actions.reRunWorkflow({ ...repo, run_id: newest.id });
@@ -313,7 +320,7 @@ async function check({ github, context, core, config }) {
     return outcome;
   }
   core.info("All contributors have signed the CLA 📝 ✅ ");
-  if (context.eventName === "issue_comment") await rerunFailedCheck(github, repo, pull.headSha, core, config);
+  if (context.eventName === "issue_comment") await rerunFailedCheck(github, repo, pull, core, config);
   return outcome;
 }
 

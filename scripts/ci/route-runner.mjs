@@ -28,7 +28,7 @@ export const LIMITS_URL = "https://boat.dev/api/v1/limits";
 export const GITHUB_API = "https://api.github.com";
 export const REQUEST_TIMEOUT_MS = 5000;
 export const ROUTE_DEADLINE_MS = 25000;
-export const JOB_READS_AT_ONCE = 4;
+export const JOB_READS_FIRST = 4;
 
 export const DEFAULTS = {
   mode: "auto",
@@ -254,21 +254,20 @@ export async function githubPressure({ fetchJson, token, settings, ownRepo, ownR
     return data;
   };
   const runs = new Map();
-  for (const status of ["queued", "in_progress"]) {
-    for (const repo of settings.repos) {
+  for (const repo of settings.repos) {
+    for (const status of ["queued", "in_progress"]) {
       for (let page = 1; spend("listings"); page += 1) {
         const data = await read(repo, `/actions/runs?status=${status}&per_page=100&page=${page}`, "listings", "workflow_runs");
         for (const run of data.workflow_runs) {
           if (repo === ownRepo && String(run?.id) === String(ownRunId)) continue;
           if (!Number.isSafeInteger(run?.id)) throw new GithubReadError("malformed");
-          const key = `${repo}#${run.id}`;
-          if (!runs.has(key)) runs.set(key, { repo, id: run.id, queued: status === "queued", created: Date.parse(run.created_at) || 0 });
+          runs.set(`${repo}#${run.id}`, { repo, id: run.id, created: Date.parse(run.created_at) || 0 });
         }
         if (data.workflow_runs.length < 100) break;
       }
     }
   }
-  const order = [...runs.values()].sort((a, b) => Number(b.queued) - Number(a.queued) || b.created - a.created);
+  const newest = [...runs.values()].sort((a, b) => b.created - a.created);
   const jobsOf = async (run) => {
     const jobs = [];
     for (let page = 1; ; page += 1) {
@@ -286,12 +285,12 @@ export async function githubPressure({ fetchJson, token, settings, ownRepo, ownR
   const seen = new Map();
   const measured = () => pressureOf([...seen.values()], { now, queuedAge: settings.queuedAge });
   let inspected = 0;
-  for (let at = 0; at < order.length && !overflowOf(measured(), settings); at += JOB_READS_AT_ONCE) {
-    const batch = order.slice(at, at + JOB_READS_AT_ONCE).filter(() => spend("jobs"));
-    if (!batch.length) break;
+  const readJobs = async (batch) => {
     inspected += batch.length;
     for (const jobs of await Promise.all(batch.map(jobsOf))) for (const job of jobs) seen.set(job.id, job);
-  }
+  };
+  await readJobs(newest.slice(0, JOB_READS_FIRST).filter(() => spend("jobs")));
+  if (!overflowOf(measured(), settings)) await readJobs(newest.slice(JOB_READS_FIRST).filter(() => spend("jobs")));
   return { ...measured(), runs: runs.size, inspected };
 }
 

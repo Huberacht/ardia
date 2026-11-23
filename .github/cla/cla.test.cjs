@@ -62,7 +62,7 @@ function fakeGithub({ commits = [], comments = [], signed = [], fileMissing = fa
     return {
       repository: {
         signatures: blob(),
-        pullRequest: { headRefOid: "head1", commits: page(commits, null, 100), comments: page(comments, null, 100) },
+        pullRequest: { headRefOid: "head1", headRefName: "feature", headRepository: { nameWithOwner: "alice/ardia" }, commits: page(commits, null, 100), comments: page(comments, null, 100) },
       },
     };
   };
@@ -161,7 +161,7 @@ test("signing by comment records the signature, flips the comment and re-runs th
     commits: [commitBy(users.alice), commitBy(users.owner)],
     comments: [commentBy("github-actions[bot]", NOT_SIGNED_ONE, 501, { bot: true }), commentBy("alice", SIGN, 6400000001)],
     signed: [{ name: "torztomasz", id: 93620601, comment_id: 1, created_at: "2026-10-24T11:19:19Z", repoId: REPO_ID, pullRequestNo: 72 }],
-    runs: [{ id: 555, conclusion: "failure" }],
+    runs: [{ id: 555, conclusion: "failure", head_branch: "feature", head_repository: { full_name: "alice/ardia" } }],
   });
   const { core } = await runWith(github, commentEvent(SIGN));
   assert.equal(core.failed, null);
@@ -195,13 +195,13 @@ test("signing by comment records the signature, flips the comment and re-runs th
     workflow_id: "cla.yml",
     event: "pull_request_target",
     head_sha: "head1",
-    per_page: 1,
+    per_page: 20,
   });
   assert.equal(github.named("actions.reRunWorkflow")[0].params.run_id, 555);
 });
 
 test("a recheck on a signed pull request whose last run passed re-runs nothing", async () => {
-  const github = fakeGithub({ commits: [commitBy(users.alice)], signed: [{ name: "alice", id: 2002 }], runs: [{ id: 556, conclusion: "success" }] });
+  const github = fakeGithub({ commits: [commitBy(users.alice)], signed: [{ name: "alice", id: 2002 }], runs: [{ id: 556, conclusion: "success", head_branch: "feature", head_repository: { full_name: "alice/ardia" } }] });
   const { core } = await runWith(github, commentEvent("recheck"));
   assert.equal(core.failed, null);
   assert.deepEqual(github.names(), ["graphql.ClaPull", "actions.listWorkflowRuns"]);
@@ -233,6 +233,28 @@ test("a commit from no GitHub user can't be signed for, and the comment says so"
   assert.ok(core.failed);
   const body = github.named("issues.createComment")[0].params.body;
   assert.match(body, /\*\*Ghost Writer\*\* seems not to be a GitHub user\. You need a GitHub account to be able to sign the CLA\./);
+});
+
+test("an unlinked commit that only claims an allowlisted name still has to sign", async () => {
+  const github = fakeGithub({ commits: [commitBy(null, { name: "mantrakp04" })] });
+  const { core } = await runWith(github, pullEvent("opened"));
+  assert.ok(core.failed);
+  assert.match(github.named("issues.createComment")[0].params.body, /\*\*mantrakp04\*\* seems not to be a GitHub user/);
+  const linked = fakeGithub({ commits: [commitBy(users.owner)] });
+  assert.equal((await runWith(linked, pullEvent("opened"))).core.failed, null);
+});
+
+test("signing re-runs this pull request's failed run, not a run of another branch on the same commit", async () => {
+  const github = fakeGithub({
+    commits: [commitBy(users.alice)],
+    comments: [commentBy("github-actions[bot]", NOT_SIGNED_ONE, 501, { bot: true }), commentBy("alice", SIGN, 6400000002)],
+    runs: [
+      { id: 560, conclusion: "success", head_branch: "other", head_repository: { full_name: "alice/ardia" } },
+      { id: 561, conclusion: "failure", head_branch: "feature", head_repository: { full_name: "alice/ardia" } },
+    ],
+  });
+  await runWith(github, commentEvent(SIGN));
+  assert.deepEqual(github.named("actions.reRunWorkflow").map((call) => call.params.run_id), [561]);
 });
 
 test("two committers get the table the action wrote", () => {

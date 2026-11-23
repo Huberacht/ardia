@@ -1325,12 +1325,6 @@ async function sweep(session, { dryRun }) {
   return report;
 }
 
-function onlyTitleEdited(payload) {
-  if (payload.action !== "edited" || !payload.changes || typeof payload.changes !== "object") return false;
-  const changed = Object.keys(payload.changes);
-  return changed.length > 0 && changed.every((key) => key === "title");
-}
-
 function isRecheck(payload) {
   const issue = payload.issue || {};
   const body = ((payload.comment || {}).body || "").trim();
@@ -1362,7 +1356,7 @@ async function run(args) {
   }
   if (eventName === "pull_request_target" && PULL_RULE_ACTIONS.includes(action)) {
     const pull = payload.pull_request;
-    if (pull.state !== "open" || !createdSinceRules(pull.created_at) || onlyTitleEdited(payload)) return null;
+    if (pull.state !== "open" || !createdSinceRules(pull.created_at)) return null;
     if (!RULED_TIERS.includes(await tierOf(session, loginOf(pull), pull.author_association))) return null;
     return evaluatePullRules(session, pull.number);
   }
@@ -1408,21 +1402,25 @@ async function gate(args) {
     decision = { run: true, reason: `A ${context.eventName} run always builds.` };
   } else {
     const runAttempt = Number(env.GITHUB_RUN_ATTEMPT || 1);
-    const pr = runAttempt > 1
-      ? (await github.rest.pulls.get({ ...repo, pull_number: context.payload.pull_request.number })).data
-      : context.payload.pull_request;
-    const actor = env.GITHUB_TRIGGERING_ACTOR || null;
-    const status = await statusOf(session, loginOf(pr), pr.author_association);
-    const labels = labelNames(pr);
-    const rerunByAPerson = runAttempt > 1 && Boolean(actor) && !actor.endsWith("[bot]");
-    const actorDecides = status === "unknown" && !labels.includes(RUN_CI) && rerunByAPerson;
-    decision = gateDecision({
-      status,
-      labels,
-      runAttempt,
-      actor,
-      actorPermission: actorDecides ? await permissionOf(session, actor) : "none",
-    });
+    const decide = async (pr) => {
+      const actor = env.GITHUB_TRIGGERING_ACTOR || null;
+      const status = await statusOf(session, loginOf(pr), pr.author_association);
+      const labels = labelNames(pr);
+      const rerunByAPerson = runAttempt > 1 && Boolean(actor) && !actor.endsWith("[bot]");
+      const actorDecides = status === "unknown" && !labels.includes(RUN_CI) && rerunByAPerson;
+      const outcome = gateDecision({
+        status,
+        labels,
+        runAttempt,
+        actor,
+        actorPermission: actorDecides ? await permissionOf(session, actor) : "none",
+      });
+      return { ...outcome, byLabel: outcome.run && !TRUSTED_STATUSES.includes(status) };
+    };
+    const live = async () => (await github.rest.pulls.get({ ...repo, pull_number: context.payload.pull_request.number })).data;
+    let outcome = await decide(runAttempt > 1 ? await live() : context.payload.pull_request);
+    if (runAttempt === 1 && outcome.byLabel) outcome = await decide(await live());
+    decision = { run: outcome.run, reason: outcome.reason };
   }
   core.setOutput("run", decision.run ? "true" : "false");
   core.info(decision.reason);

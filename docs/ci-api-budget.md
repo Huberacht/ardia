@@ -14,16 +14,17 @@ No workflow uses a GitHub App token of its own. When the budget runs out, every 
 | `cla` | `recheck` | 1, plus 1 when it re-runs a failed check | 1 |
 | `cla` | merged | 1 (lock) | 0 |
 | `identity` (`windows.yml`) | pull_request | 0; 1 on a re-run | 0 |
-| `gate` (6 workflows, forks only) | pull_request | 0 on a first attempt; 1–2 on a re-run | 0 |
-| `vouch` | synchronize, edited, ready_for_review, converted_to_draft by the team or a bot, or a title-only edit | 0 | 0 |
+| `gate` (6 workflows, forks only) | pull_request | 0 on a first attempt, 1 when only the event's `run-ci` label lets it build (confirmed live); 1–2 on a re-run | 0 |
+| `vouch` | synchronize, edited, ready_for_review, converted_to_draft by the team or a bot | 0 | 0 |
 | `vouch` | the same by anyone else | 1 page of open pull requests, plus writes that change something | 1, plus up to 3 while `mergeable` is unknown |
 | `linked-issue` | opened, edited, reopened | 1, plus 1 per closing reference on a non-default base | 0 |
 | `stale` | anything on a pull request not labelled `stale` | 0 | 0 |
-| `route` (checks, linux, android) | same-repo team pull requests | 2 run lists per repo, then job lists until GitHub is proven busy; at most 30 | 0 |
+| `route` (checks, linux, android) | same-repo team pull requests | 2 run lists per repo, the newest 4 runs' jobs, and the rest of the budget only when those don't prove GitHub busy; at most 30 | 0 |
 
 ## Keeping it low
 - Read what the event already holds (`github.event.pull_request`: labels, author, association) before calling the API.
-  Read live only on a re-run (`GITHUB_RUN_ATTEMPT` > 1), where labels may have changed since the event.
+  Read live on a re-run (`GITHUB_RUN_ATTEMPT` > 1), where labels may have changed since the event, and before
+  anything the event alone would let through, such as a `run-ci` label a maintainer may have taken off since.
 - Decide who the author is (`TEAM.td`, a bot) before any read, and stop there when the rules don't apply to them.
 - Ask GraphQL for everything at once: `cla` reads the commits, the comments, the head and the signature file
   (`object(expression: "cla-signatures:signatures/cla-v1.json")`) in one query.

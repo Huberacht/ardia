@@ -33,8 +33,8 @@ unless every step below says Boat:
 3. **First attempt.** Any re-run goes to GitHub.
 4. **`boat-ci` label.** A team pull request with the label skips the busy check below (Boat headroom still applies).
 5. **GitHub is busy.** It reads queued and running runs in this repo and `ardia-browser/plugins`, then their jobs,
-   queued runs first, then newest first, four runs at a time. It stops reading as soon as the jobs read so far make
-   GitHub busy (more jobs can only add to the counts), so a busy GitHub costs a few calls, not the whole budget. It
+   newest runs first: the newest four first, and the rest of its budget at once only when those four don't already
+   make GitHub busy (more jobs can only add to the counts), so a busy GitHub costs a few calls, not the whole budget. It
    makes at most 30 API calls: up to 10 for run lists, the rest for job lists, page by page. These calls use the
    repo's `GITHUB_TOKEN`, whose 1,000 requests an hour every workflow shares, `cla` and `identity` included. It
    skips its own run and counts only jobs on a fixed list of GitHub-hosted labels: `ubuntu-latest`, `-24.04`,
