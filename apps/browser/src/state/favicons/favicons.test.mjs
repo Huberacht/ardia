@@ -572,3 +572,47 @@ test("a theme or accent asked for after its private window closed is never reque
     stop();
   }
 });
+
+test("a private icon's pending theme and accent requests go at close, so a regular window that gets the same icon asks afresh", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const uri = "data:image/png;base64,HANDEDOVER";
+  const s = () => useBrowser.getState();
+  const w = privateWindow("https://handed-over.test/");
+  const normalWindow = s().createWindow({ url: "https://handed-over.test/" });
+  const normalTab = s().windows[normalWindow].tabIds[0];
+  for (const tab of [w.tab, normalTab]) webviews.set(tab, { downloadFavicon: () => Promise.resolve({ uri, width: 32, height: 32 }) });
+  const themes = [];
+  const accents = [];
+  globalThis.iconThemeForTest = () => new Promise((resolve) => themes.push(resolve));
+  globalThis.iconAccentForTest = () => new Promise((resolve) => accents.push(resolve));
+  try {
+    noteFavicon(w.tab, "https://handed-over.test/a.ico");
+    await waitFor(() => resolveFavicon("https://handed-over.test/", null, w.profile)?.uri === uri);
+    askFaviconTheme(uri);
+    askFaviconAccent(uri);
+    await waitFor(() => themes.length === 1 && accents.length === 1);
+    s().closeWindow(w.id);
+    await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
+    noteFavicon(normalTab, "https://handed-over.test/a.ico");
+    await waitFor(() => resolveFavicon("https://handed-over.test/", null, "default")?.uri === uri);
+    askFaviconTheme(uri);
+    askFaviconAccent(uri);
+    await waitFor(() => themes.length === 2 && accents.length === 2);
+    themes[0](null);
+    accents[0](null);
+    await settle();
+    assert.equal(useFavicons.getState().themes[uri], undefined, "the private request's answer isn't kept");
+    assert.equal(useFaviconAccents.getState().byUri[uri], undefined);
+    themes[1]({ kind: "full" });
+    accents[1]("#0a0b0c");
+    await settle();
+    assert.deepEqual(useFavicons.getState().themes[uri], { kind: "full" });
+    assert.equal(useFaviconAccents.getState().byUri[uri], "#0a0b0c");
+  } finally {
+    delete globalThis.iconThemeForTest;
+    delete globalThis.iconAccentForTest;
+    webviews.clear();
+    stop();
+  }
+});

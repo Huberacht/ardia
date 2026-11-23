@@ -17,3 +17,9 @@ export function unheldBy(kept: IconMaps[]): (uri: string) => boolean {
   const held = new Set(kept.flatMap(urisOf));
   return (uri) => !held.has(uri);
 }
+
+export function takeRequest(pending: Map<string, symbol>, uri: string, request: symbol): boolean {
+  if (pending.get(uri) !== request) return false;
+  pending.delete(uri);
+  return true;
+}

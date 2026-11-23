@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { iconAccent } from "../../platform/favicons";
 import { useResolvedFaviconUri } from "./faviconHooks";
 import { faviconHeld, onPrivateIconsDropped } from "./favicons";
+import { takeRequest } from "./privateLookups";
 
 const KEPT = 64;
 
@@ -11,6 +12,7 @@ export const useFaviconAccents = create<{ byUri: Record<string, string | null> }
 const asking = new Map<string, symbol>();
 
 onPrivateIconsDropped((unheld) => {
+  for (const uri of [...asking.keys()].filter(unheld)) asking.delete(uri);
   const { byUri } = useFaviconAccents.getState();
   if (Object.keys(byUri).some(unheld)) useFaviconAccents.setState({ byUri: Object.fromEntries(Object.entries(byUri).filter(([uri]) => !unheld(uri))) });
 });
@@ -27,9 +29,7 @@ export function askFaviconAccent(uri: string) {
   void iconAccent(uri)
     .catch(() => null)
     .then((found) => {
-      if (asking.get(uri) !== request) return;
-      asking.delete(uri);
-      if (faviconHeld(uri)) remember(uri, found ?? null);
+      if (takeRequest(asking, uri, request) && faviconHeld(uri)) remember(uri, found ?? null);
     });
 }
 

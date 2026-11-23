@@ -14,7 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
-import { incognitoClosed, privateViewer, unheldBy } from "./privateLookups";
+import { incognitoClosed, privateViewer, takeRequest, unheldBy } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -330,9 +330,7 @@ export function askFaviconTheme(uri: string) {
   void iconTheme({ uri })
     .catch(() => null)
     .then((found) => {
-      if (theming.get(uri) !== request) return;
-      theming.delete(uri);
-      if (!faviconHeld(uri)) return;
+      if (!takeRequest(theming, uri, request) || !faviconHeld(uri)) return;
       queue((f) => (f.themes[uri] === (found ?? null) ? f : { ...f, themes: capped(f.themes, uri, found ?? null) }));
     });
 }
@@ -387,6 +385,7 @@ export function startFavicons() {
         if (!gone.length) return f;
         const profiles = Object.fromEntries(Object.entries(f.profiles).filter(([id]) => !gone.includes(id)));
         const unheld = unheldBy(Object.values(profiles));
+        for (const uri of [...theming.keys()].filter(unheld)) theming.delete(uri);
         for (const listener of privateIconListeners) listener(unheld);
         return { ...f, profiles, themes: Object.fromEntries(Object.entries(f.themes).filter(([uri]) => !unheld(uri))) };
       }, true);
