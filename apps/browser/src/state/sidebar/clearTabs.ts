@@ -5,11 +5,12 @@ import { cleanedTabsFor } from "../pins/closedTabs";
 import { canUndoClear, type ClearedTabs } from "../pins/tabCleanup";
 import { noteCleanUp } from "../telemetry/usage";
 import { showUndoToast } from "./undoToast";
+import type { CloseOptions } from "../tabs/tabs";
 
 const store = () => useBrowser.getState();
 
-export function closeAllTabs(windowId: string) {
-  const cleared = store().clearUnpinnedTabs(windowId);
+export function closeAllTabs(windowId: string, options?: CloseOptions) {
+  const cleared = store().clearUnpinnedTabs(windowId, options);
   if (cleared?.entries.length) showClearUndo(cleared, `Cleared ${plural(cleared.entries.length, "Tab")}`, "arrow.down");
 }
 
@@ -32,7 +33,7 @@ export function cleanUpWithUndo(windowId: string) {
 
 export function middleClickTab(tabId: string) {
   const removed = store().removeClosedPin(tabId);
-  if (!removed) return void closeTab(tabId);
+  if (!removed) return void closeTab(tabId, { user: true });
   if (removed.entries.length) showClearUndo(removed, "Removed Pinned Tab", "pin.slash");
 }
 

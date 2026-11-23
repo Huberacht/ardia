@@ -2,10 +2,10 @@ import type { BrowserState } from "../browser/store";
 import { ancestorIds, closedGroupInfo, descendantIds, innermostGroupOf, insertAll, nestGroups, orderSections, placeGroups, rejoinGroups, syncGroupOrder } from "../groups/groups";
 import { inPinnedContainer, newId, snapshotTab, viewTabIds } from "../browser/model";
 import { pendingRestore, restoreId } from "../tabs/adoptIds";
-import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
+import { activated, apply, removeTabs, withNewTab, type UserClose } from "../tabs/tabs";
 import { groupLabel, withGroup } from "./tabGrouping";
 import type { BrowserWindow, ClosedGroup, ClosedTab, ClosedWindow, NestedGroupSnapshot, Tab, TabGroup } from "../browser/types";
-import { isAsleep } from "../tabs/pageSession";
+import { hasPage, isAsleep } from "../tabs/pageSession";
 
 export const MAX_CLOSED_TABS = 50;
 export const MAX_CLOSED_WINDOWS = 10;
@@ -63,20 +63,23 @@ export function closeQuietly(s: BrowserState, ids: string[]): BrowserState {
   return removeTabs(s, ids, false);
 }
 
-function showAboveGroup(before: BrowserState, s: BrowserState, g: TabGroup): BrowserState {
+function showAboveGroup(before: BrowserState, s: BrowserState, g: TabGroup, userClose?: UserClose): BrowserState {
   const w = s.windows[g.windowId];
   const was = before.windows[g.windowId]?.activeTabIds[g.profileId];
   if (!w || !was || !g.tabIds.includes(was)) return s;
   const order = viewTabIds(before, g.windowId, g.profileId).filter((id) => !inPinnedContainer(before, id));
   const at = order.indexOf(g.tabIds[0]!);
   const stays = (id: string) => !!s.tabs[id] && !g.tabIds.includes(id) && !isAsleep(s.tabs[id]);
-  const pick = order.slice(0, at).reverse().find(stays) ?? order.slice(at).find(stays);
+  const survives = (id: string) => !!s.tabs[id] && !g.tabIds.includes(id);
+  const rules = { adjacent: survives, fallback: (id: string) => survives(id) && (!inPinnedContainer(before, id) || hasPage(s.tabs[id]!)), shown: w.profileId === g.profileId };
+  const picked = userClose?.pick(before, w.id, was, new Set(g.tabIds), rules);
+  const pick = picked ?? order.slice(0, at).reverse().find(stays) ?? order.slice(at).find(stays);
   if (!pick) return s;
   if (w.profileId === g.profileId) return apply(s, activated(s, pick));
   return { ...s, windows: { ...s.windows, [w.id]: { ...w, activeTabIds: { ...w.activeTabIds, [g.profileId]: pick } } } };
 }
 
-export function closingGroup(s: BrowserState, groupId: string, deleted = false): BrowserState {
+export function closingGroup(s: BrowserState, groupId: string, deleted = false, userClose?: UserClose): BrowserState {
   let g = s.groups[groupId];
   for (let p = g?.parentId ? s.groups[g.parentId] : undefined; g && p?.tabIds.length === g.tabIds.length; p = p.parentId ? s.groups[p.parentId] : undefined) g = p;
   const w = g && s.windows[g.windowId];
@@ -94,7 +97,7 @@ export function closingGroup(s: BrowserState, groupId: string, deleted = false):
     closedAt: Date.now(),
   };
   const recordable = w.kind !== "private" && entry.tabs.some((t) => t.url);
-  const next = showAboveGroup(s, closeQuietly(s, g.tabIds), g);
+  const next = showAboveGroup(s, closeQuietly(s, g.tabIds), g, userClose);
   if (!recordable) return next;
   if (deleted) return { ...next, deletedGroups: [...keptDeletedGroups(next.deletedGroups), entry] };
   return { ...next, closedGroups: [...next.closedGroups, entry].slice(-MAX_CLOSED_GROUPS) };

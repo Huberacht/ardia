@@ -86,7 +86,7 @@ const LITTLE_ARDIA_BLOCKED_LAYOUT: ReadonlySet<string> = new Set([
 
 export class NoCommandWindowError extends Error {}
 
-export function runCommand({ command, arg, windowId: given }: CommandEvent, { strictWindow = false, tabId: targetTab = null, mayWrite }: { strictWindow?: boolean; tabId?: string | null; mayWrite?: () => boolean } = {}) {
+export function runCommand({ command, arg, windowId: given }: CommandEvent, { strictWindow = false, tabId: targetTab = null, mayWrite, user = false }: { strictWindow?: boolean; tabId?: string | null; mayWrite?: () => boolean; user?: boolean } = {}) {
   if (isAppCommand(command)) return APP_COMMAND_HANDLERS[command](given);
   const s = useBrowser.getState();
   const target = commandTarget(s, command, given, targetTab);
@@ -174,7 +174,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
   const web = tabId ? webviews.get(tabId) : undefined;
   const ui = s.windowUi[windowId];
   if (page && (runHidingCommand(command, page.id) || runReaderCommand(command, page.id))) return;
-  if (!targeted && runSidebarCommand(command, arg, windowId)) return;
+  if (!targeted && runSidebarCommand(command, arg, windowId, user)) return;
 
   switch (command) {
     case "newTab":
@@ -193,16 +193,16 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return ui?.panel.open ? s.closePanel(windowId) : undefined;
     }
     case "closeTab":
-      if (targeted) return void closeTab(targeted, mayWrite);
+      if (targeted) return void closeTab(targeted, { mayWrite, user });
       if (ui?.panel.newTab) {
         closeNewTabBar(windowId);
         if (NEW_TAB_BAR_POLICY.closeTabKeyOnlyDismissesBar || !tabId) return;
-        return void closeTab(tabId, mayWrite);
+        return void closeTab(tabId, { mayWrite, user });
       }
       if (ui?.panel.open) return tabId ? closePanelToHeroBar(windowId, tabId, "closeKey") : s.closePanel(windowId);
-      const closedSelection = closeSelectionByKey(windowId);
+      const closedSelection = closeSelectionByKey(windowId, user);
       if (closedSelection) return void noteSelectionClosedByKey(closedSelection);
-      return tabId ? void closeTab(tabId, mayWrite) : undefined;
+      return tabId ? void closeTab(tabId, { mayWrite, user }) : undefined;
     case "print":
       return void web?.print();
     case "printWithSystemDialog":
@@ -306,7 +306,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return tab ? s.moveTabBy(tab.id, command === "moveTabDown" ? 1 : -1) : undefined;
     case "closeTabGroup": {
       const group = groupOf(s, tabId);
-      return group ? void closeGroup(group.id, mayWrite) : undefined;
+      return group ? void closeGroup(group.id, { mayWrite, user }) : undefined;
     }
     case "openProfileMenu":
       return s.windows[windowId]?.kind === "private" ? undefined : void openProfileMenu(windowId);

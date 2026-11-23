@@ -19,6 +19,7 @@ import { openSettings } from "../settings/settingsWindows";
 import { openIconPicker } from "./actions";
 import { activeTabId } from "../browser/model";
 import { hintWhen, sections, sep, withAlternate } from "./menuParts";
+import { byUser } from "../tabs/closeActivation";
 
 export function newLiveFolderMenuItem(): MenuItem {
   return {
@@ -198,7 +199,7 @@ export async function openLiveFolderMenu(windowId: string, folderId: string) {
   }
   else if (choice === "read") markRead(folderId);
   else if (choice === "settings") openSettings("automations");
-  else if (choice === "delete") deleteLiveFolder(folderId);
+  else if (choice === "delete") deleteLiveFolder(folderId, byUser());
 }
 
 export function liveItemMenuItems(windowId: string, folderId: string, item: LiveItem, tabId: string | null): MenuItem[] {
@@ -227,7 +228,7 @@ export async function openLiveItemMenu(windowId: string, folderId: string, item:
   else if (choice === "unread") {
     if (unread) markRead(folderId, [item.id]);
     else markUnread(folderId, item.id);
-  } else if (choice === "close" && tabId) void closeTab(tabId);
+  } else if (choice === "close" && tabId) void closeTab(tabId, { user: true });
 }
 
 const DISMISS_NOW = "cal:dismissNow:";

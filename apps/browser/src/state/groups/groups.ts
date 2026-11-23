@@ -12,6 +12,7 @@ import { withShownTab, withoutShownTabs } from "./shownTabs";
 import { pinnedGroupMembers } from "../browser/structure";
 import { newTabHome } from "../tabs/newTabHome";
 import { groupingOnto } from "../pins/placing";
+import type { CloseOptions } from "../tabs/tabs";
 
 export { ancestorIds, canNest, commonGroup, depthOf, depthsIn, descendantIds, groupPath, innermostGroupOf, nestGroups, reparent, rootOf, rootsIn, withParent } from "./groupNesting";
 
@@ -26,8 +27,8 @@ export type GroupsSlice = {
   removeTabsFromGroup(tabIds: string[]): void;
   ungroup(groupId: string): void;
   newNestedGroup(parentId: string): string;
-  closeGroup(groupId: string): void;
-  deleteGroup(groupId: string): void;
+  closeGroup(groupId: string, options?: CloseOptions): void;
+  deleteGroup(groupId: string, options?: CloseOptions): void;
   closedGroups: ClosedGroup[];
   deletedGroups: ClosedGroup[];
   groupTabs(ids: string[], options?: GroupTabsOptions): string;
@@ -260,12 +261,12 @@ export const createGroupsSlice: StateCreator<BrowserState, [], [], GroupsSlice> 
     return group.id;
   },
 
-  closeGroup(groupId) {
-    set(closingGroup(get(), groupId));
+  closeGroup(groupId, options) {
+    set(closingGroup(get(), groupId, false, options?.userClose));
   },
 
-  deleteGroup(groupId) {
-    set(closingGroup(get(), groupId, true));
+  deleteGroup(groupId, options) {
+    set(closingGroup(get(), groupId, true, options?.userClose));
   },
 
   groupTabs(ids, { pinned = true, name }: GroupTabsOptions = {}) {

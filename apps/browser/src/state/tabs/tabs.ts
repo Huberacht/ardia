@@ -165,8 +165,7 @@ export function removeTabs(s: BrowserState, ids: string[], record: boolean, clos
       const kept = new Set(left);
       const rules: ClosePickRules = { adjacent: (id) => kept.has(id), fallback: (id) => kept.has(id) && (!inPinnedContainer(s, id) || hasPage(s.tabs[id]!)), shown: profileId === w.profileId };
       const above = () => close?.pick(s, w.id, activeId, new Set([...gone, ...close.requested]), rules);
-      const panes = splitTabIdsOf(splitOf(s, activeId)) ?? [];
-      const beyondSplit = !!close && [...close.requested].some((id) => !panes.includes(id));
+      const beyondSplit = reachesPastSplit(s, activeId, close);
       const picked = beyondSplit ? (above() ?? otherPane(s, activeId, gone)) : (otherPane(s, activeId, gone) ?? above());
       const next = picked ?? closeSuccessor(s, activeId, before, left);
       if (next) activeTabIds[profileId] = next;
@@ -258,7 +257,9 @@ export function unloadPinnedTabs(s: BrowserState, requested: string[], keepTopAp
       const live = (id: string) => livePinnedTab(s, id, profileId, topApp ? keepTopApps : true);
       const regular = (id: string) => s.tabs[id]?.profileId === profileId && !inPinnedContainer(s, id);
       const above = () => close?.pick(s, w.id, activeId, closing, { adjacent: live, fallback: (id) => live(id) || regular(id), shown });
-      const nextRow = topApp ? (close ? (regularPane(s, w, activeId, closing) ?? above()) : undefined) : (otherPane(s, activeId, closing) ?? above() ?? lastLivePinnedTab(s, w, activeId, closing, true));
+      const pane = () => (topApp ? regularPane(s, w, activeId, closing) : otherPane(s, activeId, closing));
+      const ordered = reachesPastSplit(s, activeId, close) ? (above() ?? pane()) : (pane() ?? above());
+      const nextRow = topApp ? (close ? ordered : undefined) : (ordered ?? lastLivePinnedTab(s, w, activeId, closing, true));
       let replacement = nextRow ?? lastRegularTab(s, w, activeId, closing) ?? lastLivePinnedTab(s, w, activeId, closing, keepTopApps);
       if (!replacement) [next, replacement] = withNewTab(next, w.id, { profileId, background: !shown });
       if (shown) next = apply(next, activated(next, replacement));
@@ -276,6 +277,11 @@ function backToPin(s: BrowserState, t: Tab): Partial<Tab> {
   if (!home || !t.url || samePage(t.url, home)) return {};
   const entry = historyOf(s, t.profileId).find((h) => samePage(h.url, home));
   return { ...onUrlChange(s, t, home), url: home, ...(entry ? { title: entry.title, favicon: entry.favicon ?? t.favicon } : {}) };
+}
+
+function reachesPastSplit(s: BrowserState, activeId: string, close: CloseRun | undefined): boolean {
+  const panes = splitTabIdsOf(splitOf(s, activeId)) ?? [];
+  return !!close && [...close.requested].some((id) => !panes.includes(id));
 }
 
 function regularCandidates(s: BrowserState, w: BrowserWindow, id: string, closing: Set<string>): { candidates: string[]; panes: string[] } {

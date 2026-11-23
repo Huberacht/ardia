@@ -67,7 +67,7 @@ export function runBarAction(id: string, windowId: string) {
   const i = id.indexOf(":");
   const command = (i < 0 ? id : id.slice(0, i)) as BrowserCommand;
   const arg = i < 0 ? null : id.slice(i + 1);
-  runCommand({ command, arg, windowId });
+  runCommand({ command, arg, windowId }, { user: true });
 }
 
 export function runBarExtension(s: Extract<Suggestion, { kind: "extension" }>, windowId: string) {

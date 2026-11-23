@@ -87,7 +87,7 @@ export function dropTabOnRow(tabId: string, rowTabId: string, side: "left" | "ri
 }
 
 export function closePane(tabId: string) {
-  void closeTab(tabId);
+  void closeTab(tabId, { user: true });
 }
 
 export function closeSplitView(splitId: string) {

@@ -1,9 +1,13 @@
 import type { BrowserState } from "../browser/store";
 import { activeTabId, isPinnedRow, tabLayoutOf } from "../browser/model";
 import { parseEntry } from "../sidebar/entryKey";
-import { groupEntries, keptEntries, keptEntry, sidebarEntries } from "../sidebar/entries";
+import { groupEntries, keptEntries, sidebarEntries } from "../sidebar/entries";
+import { pinnedSequence } from "../sidebar/pinnedOrder";
+import { pinnedCollapsed, pinnedKept } from "../sidebar/pinnedFold";
+import { liveFolderTabRows } from "../sidebar/liveRows";
+import { live } from "../live/store";
 import { splitRowPanes, splitTabIdsOf } from "../splits/splits";
-import { folderIdOfCell, tileFolderOf } from "../pins/tileFolders";
+import { folderIdOfCell, shownFolderTab } from "../pins/tileFolders";
 import { noteCloseActivation } from "../telemetry/closeActivationCounts";
 import { consentToken, type ConsentToken } from "../telemetry/consentPeriod";
 import { stripEntries, type StripMember } from "./stripEntries";
@@ -17,6 +21,7 @@ export const activatesTabAbove = (s: Pick<BrowserState, "settings">) => s.settin
 function entryRows(s: BrowserState, windowId: string, profileId: string, entry: string): string[][] {
   const { kind, id } = parseEntry(entry);
   if (kind === "tab") return s.tabs[id] ? [[id]] : [];
+  if (kind === "live") return liveFolderTabRows(s, live(), windowId, profileId, id);
   if (kind === "split") {
     const panes = splitRowPanes(s, s.splits[id]);
     return [panes.length ? panes : (splitTabIdsOf(s.splits[id]) ?? [])];
@@ -27,14 +32,14 @@ function entryRows(s: BrowserState, windowId: string, profileId: string, entry: 
 }
 
 function sidebarRows(s: BrowserState, windowId: string, profileId: string): VisibleRow[] {
-  const active = activeTabId(s, windowId, profileId);
-  const { cells, pinned, list } = sidebarEntries(s, windowId, profileId);
+  const { cells, list } = sidebarEntries(s, windowId, profileId);
   const tile = (cell: string): string[] => {
     const folderId = folderIdOfCell(cell);
     if (!folderId) return s.tabs[cell] ? [cell] : [];
-    return active && tileFolderOf(s.tabs[active])?.id === folderId ? [active] : [];
+    return [shownFolderTab(s, windowId, profileId, folderId) ?? []].flat();
   };
-  const shownPinned = s.profiles[profileId]?.pinnedCollapsed ? [keptEntry(s, windowId, profileId, pinned) ?? []].flat() : pinned;
+  const sequence = pinnedSequence(s, live().folders, live().folderOrder, windowId, profileId);
+  const shownPinned = pinnedCollapsed(s, profileId) ? [pinnedKept(s, windowId, profileId, sequence) ?? []].flat() : sequence;
   const rows = (entries: string[], section: VisibleSection) => entries.flatMap((e) => entryRows(s, windowId, profileId, e)).map((ids) => ({ ids, section }));
   return [...cells.map(tile).filter((ids) => ids.length).map((ids) => ({ ids, section: "topApps" as const })), ...rows(shownPinned, "pinned"), ...rows(list, "regular")];
 }
@@ -95,6 +100,8 @@ export function pickAfterClose(s: BrowserState, windowId: string, closedId: stri
   if (rules.shown) noteCloseActivation(consent, adjacent ? "above" : "fallback");
   return picked;
 }
+
+export const asUser = (user: boolean, options: CloseOptions = {}): CloseOptions => (user ? byUser(options) : options);
 
 export function byUser(options: CloseOptions = {}): CloseOptions {
   const consent = consentToken();

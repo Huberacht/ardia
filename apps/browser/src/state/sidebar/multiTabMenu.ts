@@ -6,16 +6,16 @@ import { groupOf } from "../pins/tabGrouping";
 import { bookmarkTabs, copyUrls, newGroupWithSelection } from "./actions";
 import { bookmarksShown } from "../bookmarks/visibility";
 import { bookmarkFolderItems, groupItems, hintWhen, profileItems, sections, windowItems, withAlternate, type Destination } from "./menuParts";
-import { byUser } from "../tabs/closeActivation";
+import { asUser, byUser } from "../tabs/closeActivation";
 import { selectedTabIds } from "../pins/organize";
 
 const store = () => useBrowser.getState();
 
-export function closeSelectionByKey(windowId: string): number {
+export function closeSelectionByKey(windowId: string, user: boolean): number {
   const s = store();
   const ids = (s.selection[windowId]?.length ?? 0) > 1 ? selectedTabIds(s, windowId) : [];
   if (ids.length < 2) return 0;
-  s.closeTabs(ids, byUser());
+  s.closeTabs(ids, asUser(user));
   s.setSelection(windowId, []);
   return ids.length;
 }

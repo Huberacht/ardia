@@ -34,7 +34,7 @@ import { noteTabClosedByUser } from "../sync/openTabCloses";
 import type { Drop } from "../drag/drops";
 import { movesAcrossProfiles } from "../windows/profileMoves";
 import { noteSidebarDrop } from "../telemetry/tabPresses";
-import { byUser } from "../tabs/closeActivation";
+import { asUser } from "../tabs/closeActivation";
 
 const store = () => useBrowser.getState();
 
@@ -54,7 +54,9 @@ export function switchToTab(tabId: string) {
 
 export const writesFor = (mayWrite?: () => boolean) => (mayWrite ? (write: () => void) => write() : foreignWriteHooks.around);
 
-export async function closeTab(tabId: string, mayWrite?: () => boolean) {
+export type CloseRequest = { mayWrite?: () => boolean; user?: boolean };
+
+export async function closeTab(tabId: string, { mayWrite, user = false }: CloseRequest = {}) {
   const commit = writesFor(mayWrite);
   const consent = consentToken();
   const s = store();
@@ -78,10 +80,10 @@ export async function closeTab(tabId: string, mayWrite?: () => boolean) {
     return closeWindowAnimated(w.id);
   }
   if (splitOf(now, tabId) && closeKind(now, tabId) === "close") noteSplit("splitPaneCloses", consent);
-  commit(() => store().closeTab(tabId, byUser()));
+  commit(() => store().closeTab(tabId, asUser(user)));
 }
 
-export async function closeGroup(groupId: string, mayWrite?: () => boolean) {
+export async function closeGroup(groupId: string, { mayWrite, user = false }: CloseRequest = {}) {
   const commit = writesFor(mayWrite);
   const s = store();
   const group = s.groups[groupId];
@@ -102,7 +104,7 @@ export async function closeGroup(groupId: string, mayWrite?: () => boolean) {
     if (!confirmed) return;
     applyHeldReports();
   }
-  if (store().groups[groupId]) commit(() => store().closeGroup(groupId));
+  if (store().groups[groupId]) commit(() => store().closeGroup(groupId, asUser(user)));
 }
 
 export function toggleMute(tabId: string) {

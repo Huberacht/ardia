@@ -424,3 +424,149 @@ test("a batch reaching past the active split goes above its topmost closed tab; 
   close(one.ids[3]);
   assert.equal(shown(one.w), "c");
 });
+
+const { runCommand } = await import("../commands/commands.ts");
+const { useLive } = await import("../live/store.ts");
+const { deleteLiveFolder } = await import("../live/engine.ts");
+const { visibleRows } = await import("./closeActivation.ts");
+
+const liveTab = (w, folderId, itemId) => {
+  const id = S().newTab(w, { url: `https://${itemId}.com/`, background: true });
+  useBrowser.setState((s) => ({ tabs: { ...s.tabs, [id]: { ...s.tabs[id], liveItem: { folderId, itemId } } } }));
+  return id;
+};
+const liveFolder = (profileId, items, patch = {}) => {
+  useLive.setState({
+    folders: { lf: { id: "lf", profileId, kind: "documents", name: "Docs", icon: null, collapsed: false, sources: [], filters: { authored: true, reviewRequests: true }, groupStacks: false, showCompleted: true, hiddenRepos: [], showNewRepos: true, shownRepos: [], createdAt: 1, ...patch } },
+    folderOrder: ["lf"],
+    items: { lf: items.map((id) => ({ id, source: "drive", url: `https://${id}.com/`, title: id, subtitle: "", icon: null, updatedAt: 1 })) },
+    hidden: {},
+    repoHidden: {},
+    showAll: {},
+    expandedStacks: {},
+  });
+};
+const noLive = () => useLive.setState({ folders: {}, folderOrder: [], items: {}, hidden: {}, repoHidden: {} });
+const rowsOf = (w) => visibleRows(S(), w, S().windows[w].profileId).map((r) => `${r.section}:${r.ids.map(host).join("|")}`);
+
+test("a close from the socket, the CLI or launch actions never uses Tab above and counts nothing, even for a selection", async () => {
+  const client = await import("../telemetry/client.ts");
+  const { takeCloseActivationCounts } = await import("../telemetry/closeActivationCounts.ts");
+  client.loadChoice();
+  client.setSharing(true, "settings");
+  takeCloseActivationCounts();
+  for (const [user, expected] of [[false, "a"], [true, "b"]]) {
+    const { w, ids: [a, , c] } = windowWith("tabAbove", "a", "b", "c", "d");
+    S().activate(a);
+    S().activate(c);
+    runCommand({ command: "closeTab", arg: null, windowId: w }, user ? { user } : { mayWrite: () => true });
+    assert.equal(shown(w), expected, user ? "user" : "socket");
+  }
+  assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 1, close_tab_above_fallbacks: 0 }, "only the user close counts");
+  const { w, ids: [a, b, c, d] } = windowWith("tabAbove", "a", "b", "c", "d", "e");
+  S().activate(a);
+  S().activate(d);
+  S().setSelection(w, [c, d]);
+  runCommand({ command: "closeTab", arg: null, windowId: w }, { mayWrite: () => true });
+  assert.equal(shown(w), "a", "a socket selection close keeps today's pick");
+  assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 0, close_tab_above_fallbacks: 0 });
+  void b;
+  client.setSharing(false, "settings");
+});
+
+test("closing or deleting the group in front goes through Tab above and never shows a tab hidden in a collapsed group", () => {
+  for (const [action, user, expected] of [["closeGroup", true, "x"], ["deleteGroup", true, "x"], ["closeGroup", false, "h"]]) {
+    const { w, ids: [, h, g1] } = windowWith("tabAbove", "x", "h", "g1");
+    const hidden = S().createGroup([h], { name: "H" });
+    const g = S().createGroup([g1], { name: "G" });
+    S().activate(h);
+    S().activate(g1);
+    S().updateGroup(hidden, { collapsed: true });
+    S()[action](g, user ? byUser() : undefined);
+    assert.equal(shown(w), expected, `${action} ${user ? "by you" : "by Ardia"}`);
+  }
+});
+
+test("an open Live Folder's tabs are rows, so closing one shows the one above it in the folder", () => {
+  const { w, ids: [r] } = windowWith("tabAbove", "r");
+  const p = S().windows[w].profileId;
+  liveFolder(p, ["x", "y"]);
+  const x = liveTab(w, "lf", "x");
+  const y = liveTab(w, "lf", "y");
+  S().activate(r);
+  S().activate(y);
+  assert.deepEqual(rowsOf(w), ["pinned:x", "pinned:y", "regular:r"]);
+  close(y);
+  assert.equal(shown(w), "x");
+  void x;
+  noLive();
+});
+
+test("deleting a Live Folder from the sidebar goes through Tab above; from the socket it keeps today's pick", () => {
+  for (const [user, expected] of [[true, "q"], [false, "r"]]) {
+    const { w, ids: [q, r] } = windowWith("tabAbove", "q", "r");
+    const p = S().windows[w].profileId;
+    S().pinTabs([q], true, true);
+    liveFolder(p, ["x"]);
+    const x = liveTab(w, "lf", "x");
+    S().activate(q);
+    S().activate(r);
+    S().activate(x);
+    deleteLiveFolder("lf", user ? byUser() : undefined);
+    assert.equal(shown(w), expected, user ? "by you" : "by the socket");
+    noLive();
+  }
+});
+
+test("a batch closing two Top Apps, one split with a regular tab, goes above the topmost before the split pane", () => {
+  const { w, ids: [a, b, c, d] } = windowWith("tabAbove", "a", "b", "c", "d");
+  S().pinTabs([a, b, c], true);
+  S().createSplit([c, d]);
+  S().activate(a);
+  S().activate(b);
+  S().activate(c);
+  closeAll([b, c]);
+  assert.equal(shown(w), "a");
+});
+
+test("with Keep Top Apps running on, ⌘W on a Top App switches to a regular tab as before, so holding ⌘W never cycles through Top Apps", () => {
+  const { w, ids: [a, b, c] } = windowWith("tabAbove", "a", "b", "c");
+  S().pinTabs([a, b], true);
+  S().updateSettings({ keepTopAppsRunning: true });
+  S().activate(a);
+  S().activate(c);
+  S().activate(b);
+  close(b);
+  assert.equal(shown(w), "c");
+  S().updateSettings({ keepTopAppsRunning: false });
+});
+
+test("the visible rows follow what the sidebar draws: Top Apps and their folder tiles, pinned rows and Live Folders, collapsed pinned tabs, groups and folders", () => {
+  const { w, ids: [t1, t2, t3, p1, p2, a, g1, g2, n1] } = windowWith("tabAbove", "t1", "t2", "t3", "p1", "p2", "a", "g1", "g2", "n1");
+  const profile = S().windows[w].profileId;
+  S().pinTabs([t1, t2, t3], true);
+  useBrowser.setState((s) => folders.addToTileFolder(s, [t3], t2), true);
+  S().pinTabs([p1, p2], true, true);
+  const g = S().createGroup([g1, g2], { name: "G" });
+  const inner = S().groupTabs([n1], { pinned: false, name: "N" });
+  liveFolder(profile, ["x"]);
+  const x = liveTab(w, "lf", "x");
+  S().activate(a);
+  assert.deepEqual(rowsOf(w), ["topApps:t1", "pinned:p1", "pinned:p2", "pinned:x", "regular:a", "regular:g1", "regular:g2", "regular:n1"]);
+  S().activate(t3);
+  assert.deepEqual(rowsOf(w).slice(0, 2), ["topApps:t1", "topApps:t3"], "a folder tile counts as the Top App it shows");
+  S().activate(a);
+  S().updateGroup(g, { collapsed: true });
+  assert.deepEqual(rowsOf(w).filter((r) => r.startsWith("regular")), ["regular:a", "regular:n1"], "a collapsed group hides its tabs");
+  S().updateProfile(profile, { pinnedCollapsed: true });
+  S().activate(p2);
+  assert.deepEqual(rowsOf(w).filter((r) => r.startsWith("pinned")), ["pinned:p2"], "collapsed pinned tabs show only the one kept");
+  S().activate(x);
+  assert.deepEqual(rowsOf(w).filter((r) => r.startsWith("pinned")), ["pinned:x"], "or the Live Folder tab in front");
+  S().updateProfile(profile, { pinnedCollapsed: false });
+  useLive.setState((s) => ({ folders: { lf: { ...s.folders.lf, collapsed: true } } }));
+  S().activate(a);
+  assert.ok(!rowsOf(w).includes("pinned:x"), "a collapsed Live Folder hides its tabs");
+  void inner;
+  noLive();
+});

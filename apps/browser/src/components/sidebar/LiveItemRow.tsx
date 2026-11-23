@@ -134,7 +134,7 @@ const POSITION_CHIP = { marginLeft: space.xs } as const;
 type LiveRowControl = CloseControl & { press(): void };
 
 function liveRowControl(folderId: string, item: LiveItem, tabId: string | null, tabOpen: boolean, closeHint: string | undefined): LiveRowControl | null {
-  if (tabId) return { icon: "minus", tooltip: withShortcut("Close Tab", closeHint), press: () => void closeTab(tabId) };
+  if (tabId) return { icon: "minus", tooltip: withShortcut("Close Tab", closeHint), press: () => void closeTab(tabId, { user: true }) };
   if (item.pr && !tabOpen)
     return {
       icon: "xmark",

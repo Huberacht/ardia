@@ -9,6 +9,7 @@ import { setSidebarUi } from "./sidebarUi";
 import { cleanUpWithUndo, closeAllTabs } from "./clearTabs";
 import { sections, sep } from "./menuParts";
 import { clearableRecentlyClosed, closedWindowTitle } from "../windows/recentlyClosedList";
+import { byUser } from "../tabs/closeActivation";
 
 export { openTabMenu } from "./tabMenu";
 export { openGroupMenu } from "./groupMenu";
@@ -81,5 +82,5 @@ export async function openOverflowMenu(windowId: string, onOpenTabPicked?: () =>
   else if (choice === "restoreAll") s.restoreCleaned(undefined, windowId);
   else if (choice === "clearClosed") s.clearRecentlyClosed(windowId);
   else if (choice === "clean") cleanUpWithUndo(windowId);
-  else if (choice === "closeAll") closeAllTabs(windowId);
+  else if (choice === "closeAll") closeAllTabs(windowId, byUser());
 }
