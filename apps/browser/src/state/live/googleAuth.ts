@@ -45,11 +45,11 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
     const closeTab = () => {
       if (useBrowser.getState().tabs[tabId]) useBrowser.getState().closeTabs([tabId], { unrecorded: true });
     };
-    const stopWatching = useBrowser.subscribe((s, prev) => {
-      if (s.tabs !== prev.tabs && !s.tabs[tabId]) finish(new Error("Sign-in was cancelled"));
+    const stopWatching = useBrowser.subscribeTo(["tabs"], (s) => {
+      if (!s.tabs[tabId]) finish(new Error("Sign-in was cancelled"));
     });
-    const stopGuarding = useBrowser.subscribe((s, prev) => {
-      if (s.tabs === prev.tabs || s.tabs[tabId]) return;
+    const stopGuarding = useBrowser.subscribeTo(["tabs"], (s) => {
+      if (s.tabs[tabId]) return;
       stopGuarding();
       stopConsuming();
     });
