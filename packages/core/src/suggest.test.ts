@@ -423,7 +423,10 @@ test("a typed route of a hash-routed site opens as typed, whichever other routes
     const { items } = buildSuggestions(typed, source, { now });
     assert.deepEqual(items[0], { kind: "page", url: help, title: "", favicon: null }, `${typed}: a plain row for what was typed, no title, icon or tab borrowed from another route`);
     assert.equal(items.filter((i) => i.kind === "page" && i.tabId !== undefined).length, 0, `${typed}: nothing to switch to, the pins are other pages`);
+    assert.deepEqual(buildSuggestions(typed, source, { now, switchToOpenTab: true }).items[0], { kind: "page", url: help, title: "", favicon: null }, `${typed}: ⌘T opens it instead of switching to another route's pin`);
   }
+  const switched = buildSuggestions(roam("graph1111"), source, { now, switchToOpenTab: true }).items[0];
+  assert.equal(switched?.kind === "page" && switched.tabId, "t1", "⌘T on a pinned route still switches to its pin");
   const editing = buildSuggestions(help, source, { now, currentTabId: "t1", currentUrl: roam("graph1111") });
   assert.deepEqual(editing.items[0], { kind: "page", url: help, title: "", favicon: null }, "editing the current tab's address");
   assert.deepEqual(rows(buildSuggestions("roamresearch.com", { ...source, tabs: roamPins.slice(1) }, { now, currentTabId: "t1", currentUrl: roam("graph1111") }).items).filter((r) => r.startsWith("tab:")), [`tab:${roam("graph2222")}`], "the other pin stays a choice");
