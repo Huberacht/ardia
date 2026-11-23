@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export const STAMP_VERSION = 2;
+export const STAMP_VERSION = 3;
 
 const NATIVE = [
   /^apps\/browser\/macos\//,
@@ -41,9 +41,11 @@ const BUILD_ENV = new RegExp(
     "OBJCFLAGS|LDFLAGS|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|OBJC_INCLUDE_PATH|LIBRARY_PATH|CP_HOME_DIR|LANG|LC_ALL)$",
 );
 export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE"];
+const BUNDLING_ENV = /^(SKIP_BUNDLING|FORCE_BUNDLING|BUNDLE_[A-Z_]+|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|ENTRY_FILE|CONFIG_JSON|USE_HERMES|HERMES_CLI_PATH|SOURCEMAP_FILE)$/;
+export const UNFINGERPRINTABLE_FILES = ["apps/browser/macos/.xcode.env.local", "apps/browser/macos/.xcode.env.updates"];
 
 export function envFingerprint(env = process.env) {
-  const blocked = UNFINGERPRINTABLE_ENV.filter((name) => env[name]);
+  const blocked = [...UNFINGERPRINTABLE_ENV.filter((name) => env[name]), ...Object.keys(env).filter((name) => BUNDLING_ENV.test(name)).sort()];
   const lines = Object.keys(env)
     .filter((name) => BUILD_ENV.test(name))
     .sort()
@@ -159,6 +161,70 @@ export function treeDigest(root, cache = new HashCache(null)) {
   return sha256(lines.join("\n"));
 }
 
+const MACHO_THIN = new Map([
+  [0xfeedfacf, { le: false, header: 32 }],
+  [0xcffaedfe, { le: true, header: 32 }],
+  [0xfeedface, { le: false, header: 28 }],
+  [0xcefaedfe, { le: true, header: 28 }],
+]);
+
+function thinUuid(buf, base) {
+  const kind = MACHO_THIN.get(buf.readUInt32BE(base));
+  if (!kind) return null;
+  const u32 = (at) => (kind.le ? buf.readUInt32LE(at) : buf.readUInt32BE(at));
+  const ncmds = u32(base + 16);
+  let at = base + kind.header;
+  for (let i = 0; i < ncmds && at + 8 <= buf.length; i++) {
+    const cmd = u32(at);
+    const size = u32(at + 4);
+    if (cmd === 0x1b && at + 24 <= buf.length) return buf.subarray(at + 8, at + 24).toString("hex");
+    if (size < 8) return null;
+    at += size;
+  }
+  return null;
+}
+
+export function machoUuids(buf) {
+  if (buf.length < 8) return null;
+  const magic = buf.readUInt32BE(0);
+  if (magic === 0xcafebabe || magic === 0xcafebabf) {
+    const wide = magic === 0xcafebabf;
+    const count = buf.readUInt32BE(4);
+    const uuids = [];
+    for (let i = 0; i < count; i++) {
+      const entry = 8 + i * (wide ? 32 : 20);
+      const offset = wide ? Number(buf.readBigUInt64BE(entry + 8)) : buf.readUInt32BE(entry + 8);
+      const uuid = offset < buf.length ? thinUuid(buf, offset) : null;
+      if (!uuid) return null;
+      uuids.push(uuid);
+    }
+    return uuids.length ? uuids : null;
+  }
+  const uuid = MACHO_THIN.has(magic) ? thinUuid(buf, 0) : null;
+  return uuid ? [uuid] : null;
+}
+
+export function codeDigest(framework, cache = new HashCache(null)) {
+  const lines = [];
+  const walk = (rel) => {
+    const path = rel ? join(framework, rel) : framework;
+    for (const name of fs.readdirSync(path).sort()) {
+      if (name === "_CodeSignature" || name === "CodeResources") continue;
+      const childRel = rel ? `${rel}/${name}` : name;
+      const child = join(path, name);
+      const st = fs.lstatSync(child, { bigint: true });
+      if (st.isSymbolicLink()) lines.push(`${childRel}\0l:${fs.readlinkSync(child)}`);
+      else if (st.isDirectory()) walk(childRel);
+      else {
+        const uuids = machoUuids(fs.readFileSync(child));
+        lines.push(`${childRel}\0${uuids ? `u:${uuids.join(",")}` : `h:${cache.fileHash(child, st)}`}`);
+      }
+    }
+  };
+  walk("");
+  return sha256(lines.join("\n"));
+}
+
 export function frameworkIdentity(framework, cache) {
   if (!framework || !fs.existsSync(join(framework, "Versions/Current/Chromium Framework"))) return null;
   return `framework ${treeDigest(framework, cache)}`;
@@ -191,9 +257,30 @@ export function stampOf({ manifest, config, signing = "default", framework, tool
   ]).slice(0, 32);
 }
 
-export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity() }) {
+const GENERATED_ENV_LINE = /^export NODE_BINARY=[A-Za-z0-9_./@+-]+$/;
+
+export function localEnvLines(repo, files = UNFINGERPRINTABLE_FILES) {
+  const lines = [];
+  for (const rel of files) {
+    let text;
+    try {
+      text = fs.readFileSync(join(repo, rel), "utf8");
+    } catch {
+      continue;
+    }
+    const content = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (!content.every((l) => GENERATED_ENV_LINE.test(l))) return { blocked: `${rel} holds more than the NODE_BINARY line pod install writes` };
+    lines.push(...content.map((l) => `xcode-env ${rel} ${l}`));
+  }
+  return { lines };
+}
+
+export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity(), repo = null, localEnvFiles = UNFINGERPRINTABLE_FILES }) {
   const fingerprint = envFingerprint(env);
   if (fingerprint.blocked.length) return { blocked: `${fingerprint.blocked.join(", ")} set` };
+  const local = repo ? localEnvLines(repo, localEnvFiles) : { lines: [] };
+  if (local.blocked) return { blocked: local.blocked };
+  fingerprint.lines.push(...local.lines);
   const identity = frameworkIdentity(framework, hashCache);
   if (!identity) return { blocked: `no engine framework at ${framework || "(none)"}` };
   if (!toolchain) return { blocked: "the Xcode toolchain didn't answer" };
@@ -240,15 +327,26 @@ export const cacheEntryDir = (cacheRoot, stamp) => join(cacheRoot, stamp);
 
 export function lookup(cacheRoot, stamp) {
   const dir = cacheEntryDir(cacheRoot, stamp);
-  const meta = readJson(join(dir, "meta.json"));
-  if (!meta || meta.stamp !== stamp || !fs.existsSync(join(dir, "Ardia.app/Contents/MacOS"))) return null;
-  return { dir, app: join(dir, "Ardia.app"), meta };
+  let version;
+  try {
+    version = join(dir, fs.readlinkSync(join(dir, "current")));
+  } catch {
+    return null;
+  }
+  const meta = readJson(join(version, "meta.json"));
+  if (!meta || meta.stamp !== stamp || !fs.existsSync(join(version, "Ardia.app/Contents/MacOS"))) return null;
+  return { dir, version, app: join(version, "Ardia.app"), meta };
 }
 
 export function touch(dir, now = new Date()) {
-  const used = join(dir, ".used");
-  fs.writeFileSync(used, "");
-  fs.utimesSync(used, now, now);
+  try {
+    const used = join(dir, ".used");
+    fs.writeFileSync(used, "");
+    fs.utimesSync(used, now, now);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function duBytes(path) {
@@ -262,41 +360,45 @@ export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measur
     touch(existing.dir);
     return existing;
   }
-  fs.mkdirSync(cacheRoot, { recursive: true });
-  const tmp = join(cacheRoot, `.tmp-${process.pid}-${Date.now()}`);
-  fs.rmSync(tmp, { recursive: true, force: true });
-  fs.mkdirSync(tmp);
-  cloneOrThrow(app, join(tmp, "Ardia.app"));
-  if (hermesc && fs.existsSync(hermesc)) cloneOrThrow(hermesc, join(tmp, "hermesc"));
-  const full = { ...meta, stamp, created: new Date().toISOString(), files: countEntries(join(tmp, "Ardia.app")), bytes: measure(tmp) };
-  fs.writeFileSync(join(tmp, "meta.json"), JSON.stringify(full, null, 1));
-  touch(tmp);
   const dir = cacheEntryDir(cacheRoot, stamp);
-  if (existing) {
-    const trash = join(cacheRoot, `.tmp-replaced-${process.pid}-${Date.now()}`);
-    try {
-      fs.renameSync(dir, trash);
-      fs.rmSync(trash, { recursive: true, force: true });
-    } catch {}
-  }
+  fs.mkdirSync(dir, { recursive: true });
+  const nonce = `v-${process.pid}-${Date.now()}`;
+  const tmp = join(dir, `.tmp-${nonce}`);
+  fs.mkdirSync(tmp);
   try {
-    fs.renameSync(tmp, dir);
+    cloneOrThrow(app, join(tmp, "Ardia.app"));
+    if (hermesc && fs.existsSync(hermesc)) cloneOrThrow(hermesc, join(tmp, "hermesc"));
+    const full = { ...meta, stamp, nonce, hermesc: fs.existsSync(join(tmp, "hermesc")), created: new Date().toISOString(), files: countEntries(join(tmp, "Ardia.app")) };
+    full.bytes = measure(tmp);
+    fs.writeFileSync(join(tmp, "meta.json"), JSON.stringify(full, null, 1));
+    fs.renameSync(tmp, join(dir, nonce));
   } catch (e) {
     fs.rmSync(tmp, { recursive: true, force: true });
-    if (!lookup(cacheRoot, stamp)) throw e;
+    throw e;
+  }
+  const link = join(dir, `.current-${process.pid}`);
+  fs.rmSync(link, { force: true });
+  fs.symlinkSync(nonce, link);
+  fs.renameSync(link, join(dir, "current"));
+  touch(dir);
+  for (const name of fs.readdirSync(dir)) {
+    if (name.startsWith("v-") && name !== nonce) fs.rmSync(join(dir, name), { recursive: true, force: true });
   }
   return lookup(cacheRoot, stamp);
 }
 
-export function cloneEntry(entry, dest) {
+export function snapshotEntry(entry, dest) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dirname(dest), { recursive: true });
-  const r = cloneTree(entry.app, dest);
-  if (r.status !== 0 || !lookup(dirname(entry.dir), entry.meta.stamp)) return false;
+  if (cloneTree(entry.version, dest).status !== 0) return null;
   try {
-    return !entry.meta.files || countEntries(dest) === entry.meta.files;
+    const meta = readJson(join(dest, "meta.json"));
+    if (!meta || meta.stamp !== entry.meta.stamp || meta.nonce !== entry.meta.nonce) return null;
+    if (countEntries(join(dest, "Ardia.app")) !== meta.files) return null;
+    if (meta.hermesc && !fs.existsSync(join(dest, "hermesc"))) return null;
+    return { app: join(dest, "Ardia.app"), hermesc: meta.hermesc ? join(dest, "hermesc") : null, meta };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -320,10 +422,9 @@ const usedAt = (dir) => {
 
 export function entries(cacheRoot) {
   const list = [];
-  for (const dir of listDirs(cacheRoot, () => true)) {
-    const meta = readJson(join(dir, "meta.json"));
-    if (!meta) continue;
-    list.push({ stamp: dir.split("/").pop(), dir, bytes: meta.bytes ?? 0, usedAt: usedAt(dir), meta });
+  for (const dir of listDirs(cacheRoot, (n) => /^[0-9a-f]{32}$/.test(n))) {
+    const entry = lookup(cacheRoot, dir.split("/").pop());
+    list.push({ stamp: dir.split("/").pop(), dir, bytes: entry?.meta.bytes ?? 0, usedAt: entry ? usedAt(dir) : 0, meta: entry?.meta ?? {} });
   }
   return list;
 }
@@ -416,9 +517,23 @@ export function canonical(path) {
   }
 }
 
+export const slotGroupFile = (slot) => join(slot, "children.pgid");
+
+export function groupAlive(pgid) {
+  if (!Number.isInteger(pgid) || pgid <= 1) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+}
+
+export const slotGroup = (slot) => Number(readJson(slotGroupFile(slot), {}).pgid);
+
 export function slotBusy(slot, { root } = {}) {
   const reserved = Number(readJson(join(slot, "reserved.json"), {}).pid);
-  if (pidAlive(reserved)) return true;
+  if (pidAlive(reserved) || groupAlive(slotGroup(slot))) return true;
   let holder;
   try {
     holder = fs.readFileSync(lockHolderPath(canonical(slotDerivedData(slot)), root), "utf8");
@@ -476,12 +591,14 @@ export function slotsToEvict(slotRoot, { keep, busy = slotBusy, readState = read
   return idle.slice(Math.max(0, kept)).map((s) => s.slot);
 }
 
-function copyInto(srcRepo, dstRepo, rel, now) {
+export const slotScratch = (slot) => join(slot, "tmp");
+
+function copyInto(srcRepo, dstRepo, rel, now, scratchDir) {
   const src = join(srcRepo, rel);
   const dst = join(dstRepo, rel);
   fs.mkdirSync(dirname(dst), { recursive: true });
   const st = fs.lstatSync(src);
-  const tmp = `${dst}.ac-sync-${process.pid}`;
+  const tmp = join(scratchDir, `${process.pid}-${createHash("sha1").update(rel).digest("hex")}`);
   fs.rmSync(tmp, { force: true });
   if (st.isSymbolicLink()) {
     fs.symlinkSync(fs.readlinkSync(src), tmp);
@@ -527,6 +644,9 @@ export function driftedPaths(tree, state) {
 export function syncTree(srcRepo, slot, manifest, { now = new Date() } = {}) {
   const tree = slotTree(slot);
   fs.mkdirSync(tree, { recursive: true });
+  const scratchDir = slotScratch(slot);
+  fs.rmSync(scratchDir, { recursive: true, force: true });
+  fs.mkdirSync(scratchDir, { recursive: true });
   const state = readSlotState(slot);
   const prior = state.manifest ?? {};
   const pending = new Set(state.pending ?? []);
@@ -540,7 +660,7 @@ export function syncTree(srcRepo, slot, manifest, { now = new Date() } = {}) {
     fs.rmSync(join(tree, rel), { force: true, recursive: true });
     pruneEmptyDirs(tree, rel);
   }
-  for (const rel of changed) copyInto(srcRepo, tree, rel, now);
+  for (const rel of changed) copyInto(srcRepo, tree, rel, now, scratchDir);
   const mismatched = changed.filter((rel) => {
     try {
       return contentId(join(tree, rel)) !== manifest[rel];
@@ -573,10 +693,20 @@ const NODE_MODULES_ROOTS = (root) => [
 
 export function escapingLinks(root, { deep = false, limit = 5 } = {}) {
   const found = [];
-  const base = resolve(root) + "/";
+  let base;
+  try {
+    base = fs.realpathSync(root) + "/";
+  } catch {
+    return [`${root} -> (unresolvable)`];
+  }
   const check = (path) => {
-    const target = fs.readlinkSync(path);
-    if (isAbsolute(target) || !resolve(dirname(path), target).startsWith(base)) found.push(`${path.slice(base.length)} -> ${target}`);
+    let target;
+    try {
+      target = fs.realpathSync(path);
+    } catch {
+      target = null;
+    }
+    if (!target || !target.startsWith(base)) found.push(`${path} -> ${target ?? "(unresolvable)"}`);
   };
   const visit = (path, depth) => {
     if (found.length >= limit) return;

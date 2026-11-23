@@ -100,6 +100,16 @@ test("the environment fingerprint keeps build variables, drops the rest, and blo
   assert.deepEqual(fp.lines, ["env CC=clang", "env RCT_NEW_ARCH_ENABLED=0", "env TOOLCHAINS=x"]);
   assert.deepEqual(fp.blocked, []);
   assert.deepEqual(lib.envFingerprint({ XCODE_XCCONFIG_FILE: "/x.xcconfig" }).blocked, ["XCODE_XCCONFIG_FILE"]);
+  assert.deepEqual(lib.envFingerprint({ SKIP_BUNDLING: "1", BUNDLE_NAME: "x", FORCE_BUNDLING: "1" }).blocked, ["BUNDLE_NAME", "FORCE_BUNDLING", "SKIP_BUNDLING"]);
+  const withLocalEnv = scratch();
+  write(withLocalEnv, "apps/browser/fake-macos/.xcode.env.local", "export NODE_BINARY=/opt/node/bin/node\n");
+  const files = ["apps/browser/fake-macos/.xcode.env.local"];
+  const generated = lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: withLocalEnv, localEnvFiles: files });
+  assert.equal(generated.blocked, undefined);
+  assert.deepEqual(generated.env.lines, ["xcode-env apps/browser/fake-macos/.xcode.env.local export NODE_BINARY=/opt/node/bin/node"]);
+  write(withLocalEnv, "apps/browser/fake-macos/.xcode.env.local", "export NODE_BINARY=/opt/node/bin/node\nexport EXTRA=1\n");
+  assert.match(lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: withLocalEnv, localEnvFiles: files }).blocked, /\.xcode\.env\.local/);
+  assert.equal(lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: scratch() }).blocked, undefined);
   assert.match(lib.stampInputs({ framework: framework(), env: { XCODE_XCCONFIG_FILE: "/x" }, toolchain: "t" }).blocked, /XCODE_XCCONFIG_FILE/);
   assert.match(lib.stampInputs({ framework: "/nowhere", env: {}, toolchain: "t" }).blocked, /no engine framework/);
   assert.match(lib.stampInputs({ framework: framework(), env: {}, toolchain: null }).blocked, /toolchain/);
@@ -142,46 +152,65 @@ function fakeApp(root, marker = "app") {
   return app;
 }
 const one = () => 1;
+const S1 = "1".repeat(32);
+const S2 = "2".repeat(32);
+const appText = (entry) => fs.readFileSync(join(entry.app, "Contents/MacOS/Ardia"), "utf8");
 
 test("the cache is keyed by stamp: a miss, a store, then a hit", () => {
   const cache = scratch();
-  assert.equal(lib.lookup(cache, "s1"), null);
-  const stored = lib.store(cache, "s1", fakeApp(scratch(), "built"), { config: "Debug", head: "abc" }, { measure: () => 10 });
-  assert.equal(stored.meta.stamp, "s1");
+  assert.equal(lib.lookup(cache, S1), null);
+  const stored = lib.store(cache, S1, fakeApp(scratch(), "built"), { config: "Debug", head: "abc" }, { measure: () => 10 });
+  assert.equal(stored.meta.stamp, S1);
   assert.equal(stored.meta.files, 3);
-  const hit = lib.lookup(cache, "s1");
-  assert.equal(fs.readFileSync(join(hit.app, "Contents/MacOS/Ardia"), "utf8"), "built");
-  assert.equal(lib.lookup(cache, "s2"), null);
-  assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp")), []);
+  assert.equal(appText(lib.lookup(cache, S1)), "built");
+  assert.equal(lib.lookup(cache, S2), null);
+  assert.deepEqual(fs.readdirSync(join(cache, S1)).filter((n) => n.startsWith(".tmp") || n.startsWith(".current")), []);
 });
 
-test("store keeps the first app for a stamp unless asked to replace it", () => {
+test("store keeps the first app for a stamp unless asked to replace it, and a replacement is a new version", () => {
   const cache = scratch();
-  lib.store(cache, "s", fakeApp(scratch(), "first"), {}, { measure: one });
-  lib.store(cache, "s", fakeApp(scratch(), "second"), {}, { measure: one });
-  assert.equal(fs.readFileSync(join(lib.lookup(cache, "s").app, "Contents/MacOS/Ardia"), "utf8"), "first");
-  lib.store(cache, "s", fakeApp(scratch(), "third"), {}, { measure: one, replace: true });
-  assert.equal(fs.readFileSync(join(lib.lookup(cache, "s").app, "Contents/MacOS/Ardia"), "utf8"), "third");
-  assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp")), []);
+  const first = lib.store(cache, S1, fakeApp(scratch(), "first"), {}, { measure: one });
+  lib.store(cache, S1, fakeApp(scratch(), "second"), {}, { measure: one });
+  assert.equal(appText(lib.lookup(cache, S1)), "first");
+  const third = lib.store(cache, S1, fakeApp(scratch(), "third"), {}, { measure: one, replace: true });
+  assert.equal(appText(lib.lookup(cache, S1)), "third");
+  assert.notEqual(third.version, first.version);
+  assert.equal(fs.existsSync(first.version), false);
 });
 
-test("an entry without its app or with another stamp is a miss", () => {
+test("an entry without its app, its current version or with another stamp is a miss", () => {
   const cache = scratch();
-  write(cache, "s1/meta.json", JSON.stringify({ stamp: "s1" }));
-  assert.equal(lib.lookup(cache, "s1"), null);
-  write(cache, "s2/meta.json", JSON.stringify({ stamp: "other" }));
-  write(cache, "s2/Ardia.app/Contents/MacOS/Ardia", "x");
-  assert.equal(lib.lookup(cache, "s2"), null);
+  write(cache, `${S1}/meta.json`, JSON.stringify({ stamp: S1 }));
+  assert.equal(lib.lookup(cache, S1), null);
+  write(cache, `${S2}/v-1/meta.json`, JSON.stringify({ stamp: "other" }));
+  write(cache, `${S2}/v-1/Ardia.app/Contents/MacOS/Ardia`, "x");
+  fs.symlinkSync("v-1", join(cache, S2, "current"));
+  assert.equal(lib.lookup(cache, S2), null);
 });
 
-test("a clone of an entry that vanished or came out partial is refused", () => {
+test("a restore snapshot is one version: app and hermesc together, or nothing", () => {
   const cache = scratch();
-  const entry = lib.store(cache, "s", fakeApp(scratch()), {}, { measure: one });
-  const dest = join(scratch(), "out/Ardia.app");
-  assert.equal(lib.cloneEntry(entry, dest), true);
-  assert.equal(lib.cloneEntry({ ...entry, meta: { ...entry.meta, files: 99 } }, dest), false);
+  const hermesc = write(scratch(), "hermesc", "hermesc v1", 0o755);
+  const entry = lib.store(cache, S1, fakeApp(scratch(), "v1"), {}, { measure: one, hermesc });
+  const snap = lib.snapshotEntry(entry, join(scratch(), "snap"));
+  assert.equal(fs.readFileSync(join(snap.app, "Contents/MacOS/Ardia"), "utf8"), "v1");
+  assert.equal(fs.readFileSync(snap.hermesc, "utf8"), "hermesc v1");
+  lib.store(cache, S1, fakeApp(scratch(), "v2"), {}, { measure: one, replace: true, hermesc: write(scratch(), "hermesc", "hermesc v2") });
+  assert.equal(lib.snapshotEntry(entry, join(scratch(), "stale")), null);
+  const fresh = lib.lookup(cache, S1);
+  const again = lib.snapshotEntry(fresh, join(scratch(), "fresh"));
+  assert.equal(fs.readFileSync(join(again.app, "Contents/MacOS/Ardia"), "utf8"), "v2");
+  assert.equal(fs.readFileSync(again.hermesc, "utf8"), "hermesc v2");
+  fs.rmSync(join(fresh.version, "hermesc"));
+  assert.equal(lib.snapshotEntry(fresh, join(scratch(), "partial")), null);
+});
+
+test("touching an entry that eviction removed reports it instead of throwing", () => {
+  const cache = scratch();
+  const entry = lib.store(cache, S1, fakeApp(scratch()), {}, { measure: one });
   fs.rmSync(entry.dir, { recursive: true });
-  assert.equal(lib.cloneEntry(entry, join(scratch(), "again/Ardia.app")), false);
+  assert.equal(lib.touch(entry.dir), false);
+  assert.equal(lib.lookup(cache, S1), null);
 });
 
 test("eviction keeps the most recently used within both caps, the protected entry and anything used in the grace period", () => {
@@ -199,7 +228,8 @@ test("eviction keeps the most recently used within both caps, the protected entr
 
 test("evict removes the least recently used apps and engines on disk", () => {
   const cache = scratch();
-  for (const [i, s] of ["old", "mid", "new"].entries()) {
+  const stamps = ["a", "b", "c"].map((c) => c.repeat(32));
+  for (const [i, s] of stamps.entries()) {
     const e = lib.store(cache, s, fakeApp(scratch()), {}, { measure: () => 5 });
     lib.touch(e.dir, new Date(1e12 + i * 1000));
   }
@@ -208,8 +238,8 @@ test("evict removes the least recently used apps and engines on disk", () => {
     lib.touch(join(cache, "engines", key), new Date(1e12 + i * 1000));
   }
   const plan = lib.evict(cache, { maxBytes: 100, maxEntries: 2, keepEngines: 1 });
-  assert.deepEqual(plan.evict.map((e) => e.stamp), ["old"]);
-  assert.deepEqual(fs.readdirSync(cache).filter((n) => !n.startsWith(".")).sort(), ["engines", "mid", "new"]);
+  assert.deepEqual(plan.evict.map((e) => e.stamp), [stamps[0]]);
+  assert.deepEqual(fs.readdirSync(cache).filter((n) => !n.startsWith(".")).sort(), [stamps[1], stamps[2], "engines"]);
   assert.deepEqual(fs.readdirSync(join(cache, "engines")), ["bbbbbbbbbbbb"]);
 });
 
@@ -337,6 +367,8 @@ test("node_modules links that would leave the tree are found, scoped and nested 
   fs.mkdirSync(join(outside, "pkg"));
   const fine = scratch();
   write(fine, "node_modules/real/package.json", "{}");
+  write(fine, "node_modules/real/cli.js", "");
+  write(fine, "packages/base/package.json", "{}");
   fs.mkdirSync(join(fine, "node_modules/@scope"), { recursive: true });
   fs.symlinkSync("../../packages/base", join(fine, "node_modules/@scope/base"));
   fs.mkdirSync(join(fine, "node_modules/.bin"));
@@ -352,7 +384,10 @@ test("node_modules links that would leave the tree are found, scoped and nested 
   write(absoluteInside, "node_modules/real/package.json", "{}");
   fs.mkdirSync(join(absoluteInside, "apps/web/node_modules"), { recursive: true });
   fs.symlinkSync(join(absoluteInside, "node_modules/real"), join(absoluteInside, "apps/web/node_modules/real"));
-  assert.equal(lib.escapingLinks(absoluteInside).length, 1);
+  assert.equal(lib.escapingLinks(absoluteInside).length, 0);
+  const relocated = join(scratch(), "slot");
+  execFileSync("cp", ["-R", absoluteInside, relocated]);
+  assert.equal(lib.escapingLinks(relocated).length, 1);
 
   const nested = scratch();
   fs.mkdirSync(join(nested, "node_modules/a/node_modules"), { recursive: true });
@@ -378,4 +413,82 @@ test("a slot under a symlinked slot root is busy by the lock locked takes on its
   fs.writeFileSync(holder, `pid ${process.pid} since now\n`);
   assert.ok(lib.slotBusy(slot, { root: locks }));
   assert.notEqual(lib.lockHolderPath(lib.slotDerivedData(slot), locks), holder);
+});
+
+function machO(uuidByte, { fat = false, tail = "" } = {}) {
+  const thin = Buffer.alloc(32 + 24);
+  thin.writeUInt32LE(0xfeedfacf, 0);
+  thin.writeUInt32LE(1, 16);
+  thin.writeUInt32LE(24, 20);
+  thin.writeUInt32LE(0x1b, 32);
+  thin.writeUInt32LE(24, 36);
+  thin.fill(uuidByte, 40, 56);
+  const body = Buffer.concat([thin, Buffer.from(tail)]);
+  if (!fat) return body;
+  const header = Buffer.alloc(8 + 20);
+  header.writeUInt32BE(0xcafebabe, 0);
+  header.writeUInt32BE(1, 4);
+  header.writeUInt32BE(28, 8 + 8);
+  header.writeUInt32BE(body.length, 8 + 12);
+  return Buffer.concat([header, body]);
+}
+
+test("Mach-O UUIDs are read from thin and fat binaries, and nothing else counts as one", () => {
+  assert.deepEqual(lib.machoUuids(machO(0xab)), ["ab".repeat(16)]);
+  assert.deepEqual(lib.machoUuids(machO(0xcd, { fat: true })), ["cd".repeat(16)]);
+  assert.equal(lib.machoUuids(Buffer.from("not a binary at all")), null);
+});
+
+test("the engine code digest ignores re-signing but not a different build or resource", () => {
+  const make = (uuid, { sig = "sig", tail = "", resource = "pak" } = {}) => {
+    const dir = join(scratch(), "Chromium Framework.framework");
+    write(dir, "Versions/A/Chromium Framework", "");
+    fs.writeFileSync(join(dir, "Versions/A/Chromium Framework"), machO(uuid, { tail }));
+    write(dir, "Versions/A/_CodeSignature/CodeResources", sig);
+    write(dir, "Versions/A/Resources/resources.pak", resource);
+    return dir;
+  };
+  const source = lib.codeDigest(make(1));
+  assert.equal(lib.codeDigest(make(1, { sig: "re-signed", tail: "signature blob" })), source);
+  assert.notEqual(lib.codeDigest(make(2)), source);
+  assert.notEqual(lib.codeDigest(make(1, { resource: "other pak" })), source);
+});
+
+test("sync scratch files live in the slot's own folder, which the next sync clears", () => {
+  const src = repo();
+  const slot = join(scratch(), "1");
+  write(slot, "tmp/12345-left-by-a-killed-sync", "partial");
+  lib.syncTree(src, slot, lib.manifestOf(src, lib.listFiles(src)));
+  assert.deepEqual(fs.readdirSync(lib.slotScratch(slot)), []);
+  const leftovers = execFileSync("find", [lib.slotTree(slot), "-name", "*.ac-sync-*"], { encoding: "utf8" }).trim();
+  assert.equal(leftovers, "");
+});
+
+test("a relative node_modules link through another symlink is caught by its real path", () => {
+  const outside = scratch();
+  fs.mkdirSync(join(outside, "pkg"));
+  const root = scratch();
+  fs.mkdirSync(join(root, "node_modules"), { recursive: true });
+  fs.symlinkSync(outside, join(root, "hop"));
+  fs.symlinkSync("../hop/pkg", join(root, "node_modules/pkg"));
+  assert.equal(lib.escapingLinks(root).length, 1);
+  const dangling = scratch();
+  fs.mkdirSync(join(dangling, "node_modules"));
+  fs.symlinkSync("./missing", join(dangling, "node_modules/missing"));
+  assert.equal(lib.escapingLinks(dangling).length, 1);
+});
+
+test("a slot whose last owner left children running is busy until that process group is gone", async () => {
+  const { spawn } = await import("node:child_process");
+  const slot = scratch();
+  const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  fs.writeFileSync(lib.slotGroupFile(slot), JSON.stringify({ pgid: child.pid }));
+  try {
+    assert.ok(lib.groupAlive(child.pid));
+    assert.ok(lib.slotBusy(slot, { root: scratch() }));
+  } finally {
+    process.kill(-child.pid, "SIGKILL");
+  }
+  await new Promise((r) => child.on("exit", r));
+  assert.ok(!lib.slotBusy(slot, { root: scratch() }));
 });
