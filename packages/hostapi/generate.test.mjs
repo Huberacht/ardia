@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -122,6 +122,40 @@ test("a domain the Mac serves straight from the engine gets its whole Swift modu
   assert.equal(manifest.demo.swift, "packages/ardiacore/ios/DemoModule.swift");
   assert.equal(manifest.mixed.swift, "packages/ardiacore/ios/MixedCalls.swift");
   assert.equal("service" in manifest.mixed.calls.import, false);
+});
+
+test("the generated Swift compiles for an empty call table and for verbs Swift won't take as a bare label", () => {
+  const files = outputs({
+    quiet: domain({ probe: call({ mac: "absent", service: "ac_quiet_probe" }), keep: call({ mac: "custom", service: "ac_quiet_keep" }) }),
+    hollow: domain({ probe: call({ mac: "absent", service: "ac_hollow_probe" }) }),
+    empty: domain({}),
+    words: domain({ inout: call({ mac: "custom", service: "ac_words_inout" }), var: call({ mac: "custom", service: "ac_words_var" }), let: call({ mac: "custom", service: "ac_words_let" }), import: call({ mac: "custom", service: "ac_words_import" }) }),
+  });
+  assert.match(files.get("packages/ardiacore/ios/HollowCalls.swift"), /func hollowCallTable\(\) -> CallTable \{\n {2}CallTable\(domain: "hollow", handlers: \[:\]\)\n\}/);
+  assert.match(files.get("packages/ardiacore/ios/EmptyModule.swift"), /static let calls = CallTable\(domain: "empty", handlers: \[:\]\)/);
+  assert.match(files.get("packages/ardiacore/ios/WordsCalls.swift"), /\(`inout` inoutHandler: @escaping CallHandler, `var` varHandler: @escaping CallHandler, `let` letHandler: @escaping CallHandler, import importHandler: @escaping CallHandler\)/);
+  const swiftc = spawnSync("swiftc", ["--version"], { encoding: "utf8" });
+  if (swiftc.status !== 0) return;
+  const dir = mkdtempSync(join(tmpdir(), "hostapi-swift-"));
+  try {
+    const stubs = join(dir, "Stubs.swift");
+    writeFileSync(stubs, [
+      "typealias CallHandler = (String, String) -> Void",
+      "enum EngineCall { static func passing(_ name: String) -> CallHandler { { _, _ in } } }",
+      "struct CallTable { let domain: String; let handlers: [String: CallHandler]; var function: Int { 0 } }",
+      "struct Module {}",
+      "",
+    ].join("\n"));
+    const sources = [...files].filter(([path]) => path.endsWith(".swift")).map(([path, text]) => {
+      const at = join(dir, path.split("/").at(-1));
+      writeFileSync(at, text.replace("import ExpoModulesCore\n", ""));
+      return at;
+    });
+    const parsed = spawnSync("swiftc", ["-parse", stubs, ...sources], { encoding: "utf8" });
+    assert.equal(parsed.status, 0, parsed.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("a call may leave out its service only when every host serves it with its own code", () => {

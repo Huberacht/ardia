@@ -96,12 +96,18 @@ function swiftModule(name, domain) {
     "    Self.calls.function",
     "  }",
     "",
-    `  static let calls = CallTable(domain: "${name}", handlers: [`,
-    ...Object.entries(domain.calls ?? {}).map(([verb, call]) => `    "${verb}": EngineCall.passing("${call.service}"),`),
-    "  ])",
+    ...swiftHandlers("  static let calls = ", name, Object.entries(domain.calls ?? {}).map(([verb, call]) => `    "${verb}": EngineCall.passing("${call.service}"),`)),
     "}",
   ];
   return `${lines.join("\n")}\n`;
+}
+
+const SWIFT_UNLABELABLE = new Set(["inout", "var", "let"]);
+const swiftLabel = (verb) => (SWIFT_UNLABELABLE.has(verb) ? `\`${verb}\`` : verb);
+
+function swiftHandlers(prefix, name, rows) {
+  if (rows.length === 0) return [`${prefix}CallTable(domain: "${name}", handlers: [:])`];
+  return [`${prefix}CallTable(domain: "${name}", handlers: [`, ...rows, "  ])"];
 }
 
 function swiftCalls(name, domain) {
@@ -109,10 +115,8 @@ function swiftCalls(name, domain) {
   const lines = [
     "import ExpoModulesCore",
     "",
-    `func ${name}CallTable(${custom.map((verb) => `${verb} ${verb}Handler: @escaping CallHandler`).join(", ")}) -> CallTable {`,
-    `  CallTable(domain: "${name}", handlers: [`,
-    ...Object.entries(domain.calls ?? {}).map(([verb, call]) => swiftRow(verb, call)).filter((row) => row !== null),
-    "  ])",
+    `func ${name}CallTable(${custom.map((verb) => `${swiftLabel(verb)} ${verb}Handler: @escaping CallHandler`).join(", ")}) -> CallTable {`,
+    ...swiftHandlers("  ", name, Object.entries(domain.calls ?? {}).map(([verb, call]) => swiftRow(verb, call)).filter((row) => row !== null)),
     "}",
   ];
   return `${lines.join("\n")}\n`;
@@ -148,7 +152,8 @@ export function outputs(domains) {
   return files;
 }
 
-const retired = (files) => (existsSync(ROOT + GENERATED_TS) ? readdirSync(ROOT + GENERATED_TS).map((file) => GENERATED_TS + file).filter((path) => !files.has(path)) : []);
+const listed = (dir, keep) => (existsSync(ROOT + dir) ? readdirSync(ROOT + dir).filter(keep).map((file) => dir + file) : []);
+const retired = (files) => [...listed(GENERATED_TS, () => true), ...listed(SWIFT, (file) => file.endsWith("Calls.swift"))].filter((path) => !files.has(path));
 
 export function stale(files) {
   const problems = [];
