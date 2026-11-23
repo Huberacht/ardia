@@ -197,13 +197,11 @@ void OpenFailureCounts::Note(OpenError error) {
   }
 }
 
-JsonValue OpenFailureCounts::Take() {
-  JsonValue taken = JsonValue::Object({{"format", JsonValue::Number(format)},
-                                       {"authentication", JsonValue::Number(authentication)},
-                                       {"too_large", JsonValue::Number(too_large)},
-                                       {"other", JsonValue::Number(other)}});
-  *this = OpenFailureCounts();
-  return taken;
+JsonValue OpenFailureCounts::ToJson() const {
+  return JsonValue::Object({{"format", JsonValue::Number(format)},
+                            {"authentication", JsonValue::Number(authentication)},
+                            {"too_large", JsonValue::Number(too_large)},
+                            {"other", JsonValue::Number(other)}});
 }
 
 Outcome Outcome::Value(JsonValue value) {
@@ -299,7 +297,7 @@ Outcome SyncCore::Dispatch(std::string_view method, const std::vector<JsonValue>
   if (method == "ArdiaSync.sealLocal") return SealLocal(args);
   if (method == "ArdiaSync.openLocal") return OpenLocal(args);
   if (method == "ArdiaSync.recoveryWords") return RecoveryWords();
-  if (method == "ArdiaSync.takeOpenFailures") return Outcome::Value(open_failures_.Take());
+  if (method == "ArdiaSync.core") return Outcome::Value(JsonValue::String(kSyncCore));
   return Outcome::Error("ERR_UNKNOWN_CALL", "Unknown sync operation");
 }
 
@@ -468,8 +466,9 @@ Outcome SyncCore::Read(const std::vector<JsonValue>& args, int64_t now_seconds) 
   Listing listing = Vault(*folder, *keys_).Read(*scope, *known, now_seconds);
   JsonValue files = JsonValue::Array();
   JsonValue damaged = JsonValue::Array();
+  OpenFailureCounts failures;
   for (const auto& entry : listing.damaged) {
-    open_failures_.Note(entry.reason);
+    failures.Note(entry.reason);
     damaged.Append(JsonValue::Object({{"id", JsonValue::String(entry.id)},
                                       {"age", JsonValue::Number(entry.age_seconds * 1000)}}));
   }
@@ -484,10 +483,12 @@ Outcome SyncCore::Read(const std::vector<JsonValue>& args, int64_t now_seconds) 
     }
     files.Append(JsonValue::Object({{"id", JsonValue::String(file.id)}, {"payload", JsonValue::String(std::move(*hidden))}}));
   }
-  return Outcome::Value(JsonValue::Object({{"files", std::move(files)},
-                                           {"pending", Strings(listing.pending)},
-                                           {"damaged", std::move(damaged)},
-                                           {"present", Strings(listing.present)}}));
+  JsonValue result = JsonValue::Object({{"files", std::move(files)},
+                                        {"pending", Strings(listing.pending)},
+                                        {"damaged", std::move(damaged)},
+                                        {"present", Strings(listing.present)}});
+  if (!failures.empty()) result.Set("openFailures", failures.ToJson());
+  return Outcome::Value(std::move(result));
 }
 
 Outcome SyncCore::Remove(const std::vector<JsonValue>& args) {
@@ -526,10 +527,8 @@ Outcome SyncCore::OpenLocal(const std::vector<JsonValue>& args) {
   auto data = Base64Decode(*sealed);
   if (!data) return Outcome::Value(JsonValue::Null());
   Bytes plain;
-  if (const OpenError error = keys_->Open(*data, kLocalScopeTag, kLocalFileId, &plain); error != OpenError::kNone) {
-    open_failures_.Note(error);
-    return Outcome::Value(JsonValue::Null());
-  }
+  if (const OpenError error = keys_->Open(*data, kLocalScopeTag, kLocalFileId, &plain); error != OpenError::kNone)
+    return Outcome::Value(JsonValue::Object({{"openFailure", JsonValue::String(std::string(OpenFailureCode(error)))}}));
   std::string text = LossyUtf8(plain);
   Wipe(plain);
   auto hidden = HideLegacyPasswords(text, *keys_);
@@ -554,7 +553,6 @@ Outcome SyncCore::Status() {
       {"unlocked", JsonValue::Bool(keys_ != nullptr)},
       {"unreadable", JsonValue::Bool(unreadable_)},
       {"passwords", JsonValue::Bool(true)},
-      {"core", JsonValue::String(kSyncCore)},
   }));
 }
 

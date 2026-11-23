@@ -264,7 +264,7 @@ void Core(const std::string& scratch) {
   CHECK(core.Dispatch("ArdiaSync.savePassword", {S("default"), S("https://a.example"), S("u"), S("s"), JsonValue::Bool(false)}, now).code ==
         "ERR_UNKNOWN_CALL");
   CHECK(core.Dispatch("ArdiaSync.status", {}, now).value.Find("passwords")->flag);
-  CHECK(core.Dispatch("ArdiaSync.status", {}, now).value.Find("core")->text == "rust");
+  CHECK(core.Dispatch("ArdiaSync.core", {}, now).value.text == "rust");
   CHECK(core.Dispatch("ArdiaSync.nope", {}, now).code == "ERR_UNKNOWN_CALL");
 
   const std::string device = NewFileId();
@@ -289,16 +289,16 @@ void Core(const std::string& scratch) {
   CHECK(core.Dispatch("ArdiaSync.openLocal", {S(sealed.value.text)}, now).value.text == "{\"scopes\":{}}");
   std::string tampered = sealed.value.text;
   tampered[10] = tampered[10] == 'A' ? 'B' : 'A';
-  CHECK(core.Dispatch("ArdiaSync.openLocal", {S(tampered)}, now).value.type == JsonValue::Type::kNull);
+  auto tampered_open = core.Dispatch("ArdiaSync.openLocal", {S(tampered)}, now);
+  CHECK(tampered_open.ok && tampered_open.value.is_object() && tampered_open.value.Find("openFailure") &&
+        tampered_open.value.Find("openFailure")->text == "authentication");
   CHECK(!core.unreadable());
-  const auto failure_count = [](const Outcome& taken, std::string_view code) {
-    const JsonValue* value = taken.ok ? taken.value.Find(code) : nullptr;
+  const auto failure_count = [](const Outcome& read, std::string_view code) {
+    const JsonValue* counts = read.ok ? read.value.Find("openFailures") : nullptr;
+    const JsonValue* value = counts ? counts->Find(code) : nullptr;
     return value ? value->text : std::string("missing");
   };
-  auto drained = core.Dispatch("ArdiaSync.takeOpenFailures", {}, now);
-  CHECK(failure_count(drained, "authentication") == "1" && failure_count(drained, "format") == "0" &&
-        failure_count(drained, "too_large") == "0" && failure_count(drained, "other") == "0");
-  CHECK(failure_count(core.Dispatch("ArdiaSync.takeOpenFailures", {}, now), "authentication") == "0");
+  CHECK(!read.value.Find("openFailures"));
   Bytes core_entropy;
   CHECK(EntropyFromPhrase(phrase, &core_entropy).kind == PhraseProblem::Kind::kNone);
   const auto core_keys = Keys(core_entropy);
@@ -310,12 +310,11 @@ void Core(const std::string& scratch) {
   CHECK(huge >= 0 && ftruncate(huge, static_cast<off_t>(kMaxSyncFileBytes) + 1) == 0 && close(huge) == 0);
   auto with_damage = core.Dispatch("ArdiaSync.read", {S(folder), S("app"), JsonValue::Array({S(written.value.text)})}, now);
   CHECK(with_damage.ok && with_damage.value.Find("damaged")->items.size() == 2);
-  drained = core.Dispatch("ArdiaSync.takeOpenFailures", {}, now);
-  CHECK(failure_count(drained, "format") == "1" && failure_count(drained, "too_large") == "1" &&
-        failure_count(drained, "authentication") == "0" && failure_count(drained, "other") == "0");
+  CHECK(failure_count(with_damage, "format") == "1" && failure_count(with_damage, "too_large") == "1" &&
+        failure_count(with_damage, "authentication") == "0" && failure_count(with_damage, "other") == "0");
   core.Dispatch("ArdiaSync.remove", {S(folder), S("app"), JsonValue::Array({S(damaged_id), S(huge_id)})}, now);
-  CHECK(core.Dispatch("ArdiaSync.read", {S(folder), S("app"), JsonValue::Array({S(written.value.text)})}, now)
-            .value.Find("damaged")->items.empty());
+  auto healed = core.Dispatch("ArdiaSync.read", {S(folder), S("app"), JsonValue::Array({S(written.value.text)})}, now);
+  CHECK(healed.value.Find("damaged")->items.empty() && failure_count(healed, "format") == "missing");
 
   SyncCore joiner(MakeFileKeyStore(scratch + "/joiner-keys"), {folder, "Joiner"});
   const std::string joining = NewFileId();

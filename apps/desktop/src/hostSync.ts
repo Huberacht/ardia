@@ -31,7 +31,7 @@ export const SYNC_CAPABILITIES = [
   "ArdiaSync.savePassword",
   "ArdiaSync.claimAuthority",
   "ArdiaSync.releaseAuthority",
-  "ArdiaSync.takeOpenFailures",
+  "ArdiaSync.core",
 ] as const;
 
 export type SyncKeyStoreStatus = {
@@ -41,10 +41,10 @@ export type SyncKeyStoreStatus = {
   unlocked: boolean;
   unreadable: boolean;
   passwords: boolean;
-  core?: "rust" | "native";
 };
 
 export type SyncOpenFailure = "format" | "authentication" | "too_large" | "other";
+type OpenFailureCount = (failures: Partial<Record<SyncOpenFailure, number>>) => void;
 
 type AuthorityClaim = { granted: boolean; leaseMs: number };
 
@@ -387,51 +387,55 @@ export const releaseSyncAuthority = (host: ArdiaHost) => invokeHost<void>("Ardia
 const invoke = (host: ArdiaHost, method: string) => (...args: unknown[]) =>
   invokeHost(`ArdiaSync.${method}`, { args: args.map((arg) => (arg === undefined ? null : arg)) }, host);
 
-let openFailureEpoch: () => string = () => "";
-let openFailures: Partial<Record<SyncOpenFailure, number>> = {};
-let openFailuresIn = "";
+let startOpenFailureCount: () => OpenFailureCount = () => () => {};
+let reportedCore: "rust" | "native" | null = null;
 
-export function configureOpenFailureConsent(epoch: () => string) {
-  openFailureEpoch = epoch;
+export function configureOpenFailureCount<Consent>(consent: () => Consent, note: (consent: Consent, failures: Partial<Record<SyncOpenFailure, number>>) => void) {
+  startOpenFailureCount = () => {
+    const started = consent();
+    return (failures) => note(started, failures);
+  };
 }
 
-async function drainOpenFailures(host: ArdiaHost, startedIn: string) {
-  let taken: unknown;
+export async function loadSyncCore(host: ArdiaHost) {
   try {
-    taken = await invoke(host, "takeOpenFailures")();
-  } catch {
-    return;
-  }
-  if (!startedIn || startedIn !== openFailureEpoch() || !taken || typeof taken !== "object") return;
-  if (openFailuresIn !== startedIn) {
-    openFailures = {};
-    openFailuresIn = startedIn;
-  }
-  for (const code of OPEN_FAILURES) {
-    const count = (taken as Record<string, unknown>)[code];
-    if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) openFailures[code] = (openFailures[code] ?? 0) + count;
-  }
+    const core = await invokeHost<unknown>("ArdiaSync.core", { args: [] }, host);
+    if (core === "rust" || core === "native") reportedCore = core;
+  } catch {}
 }
 
-export function takeOpenFailures(): Partial<Record<SyncOpenFailure, number>> {
-  const epoch = openFailureEpoch();
-  const taken = epoch && epoch === openFailuresIn ? openFailures : {};
-  openFailures = {};
-  return taken;
+export const loadedSyncCore = (): "rust" | "native" => reportedCore ?? "native";
+
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+
+function settleRead(result: unknown, count: OpenFailureCount) {
+  if (!isRecord(result) || !("openFailures" in result)) return result;
+  const { openFailures, ...listing } = result;
+  if (isRecord(openFailures)) {
+    const failures: Partial<Record<SyncOpenFailure, number>> = {};
+    for (const code of OPEN_FAILURES) {
+      const value = openFailures[code];
+      if (typeof value === "number") failures[code] = value;
+    }
+    count(failures);
+  }
+  return listing;
 }
 
-const failedOpen = (method: string, result: unknown) =>
-  method === "openLocal" ? result === null : Array.isArray((result as { damaged?: unknown } | null)?.damaged) && (result as { damaged: unknown[] }).damaged.length > 0;
+function settleOpenLocal(result: unknown, count: OpenFailureCount) {
+  if (!isRecord(result)) return result;
+  const code = OPEN_FAILURES.find((failure) => failure === result.openFailure);
+  if (code) count({ [code]: 1 });
+  return null;
+}
 
 export function syncModuleMethod(host: ArdiaHost, name: string, method: string): unknown {
   if (name !== "ArdiaSync") return undefined;
-  if (method === "takeOpenFailures") return takeOpenFailures;
   if (method === "read" || method === "openLocal") {
     return async (...args: unknown[]) => {
-      const startedIn = openFailureEpoch();
+      const count = startOpenFailureCount();
       const result = await invoke(host, method)(...args);
-      if (failedOpen(method, result)) void drainOpenFailures(host, startedIn);
-      return result;
+      return method === "read" ? settleRead(result, count) : settleOpenLocal(result, count);
     };
   }
   if (method === "newDeviceId") return () => newSyncDeviceId();

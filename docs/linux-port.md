@@ -1665,9 +1665,13 @@ Linux reads calendars from Evolution Data Server, which GNOME Online Accounts, G
     checksum and its unknown-word index points at the word the user typed.
   - The host tests (`tests/test_sync.py`, `tests/test_live.py`) build the core with cargo (RustCrypto) and link it;
     without cargo they skip, and in CI (`CI` set) they fail.
-  - Every failed open is counted by reason, and the UI drains the counts after a read with damaged files or a failed
-    `openLocal` (`ArdiaSync.takeOpenFailures`), keeping them only under the consent period the read began in.
-    `ArdiaSync.status` reports `core: "rust"`, which becomes `sync_core` on `sync_toggled`.
+  - Failed opens travel back with the call that hit them: `ArdiaSync.read` adds `openFailures` (counts by reason)
+    when a file in it didn't open, and a failed `openLocal` answers `{ openFailure: <reason> }`. `hostSync.ts` strips
+    both before the shared engine sees the result (it gets the listing, or `null`) and counts them under the consent
+    token taken when that call began, into `syncFileCounts.ts`, which the hourly usage counts drain. No count lives in
+    the engine, so nothing from before opting in can be claimed later.
+  - Every window asks `ArdiaSync.core` once at start, so whichever window leads telemetry sends `sync_core: "rust"`
+    on `sync_toggled` even when another window holds sync.
   - HKDF-SHA256 key derivation.
   - `NNS1` files with AES-256-GCM and 1 KiB padding.
   - A 24-word BIP-39 phrase.

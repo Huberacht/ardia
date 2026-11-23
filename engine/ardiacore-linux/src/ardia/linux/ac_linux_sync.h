@@ -62,7 +62,7 @@ inline constexpr Method kMethods[] = {
     {"ArdiaSync.savePassword", Route::kPasswords},
     {"ArdiaSync.claimAuthority", Route::kClaim},
     {"ArdiaSync.releaseAuthority", Route::kRelease},
-    {"ArdiaSync.takeOpenFailures", Route::kCore},
+    {"ArdiaSync.core", Route::kCore},
 };
 
 inline constexpr int64_t kAuthorityLeaseMs = 30000;
@@ -151,7 +151,8 @@ class DisclosureWindow {
 
 struct OpenFailureCounts {
   void Note(OpenError error);
-  JsonValue Take();
+  bool empty() const { return format + authentication + too_large + other == 0; }
+  JsonValue ToJson() const;
 
   double format = 0;
   double authentication = 0;
@@ -215,7 +216,6 @@ class SyncCore {
   std::string unreadable_account_;
   std::string unsaved_account_;
   int64_t next_held_key_save_ = 0;
-  OpenFailureCounts open_failures_;
 };
 
 inline constexpr char kPasswordManagerHintFormat[] = "x-kde-passwordManagerHint";
