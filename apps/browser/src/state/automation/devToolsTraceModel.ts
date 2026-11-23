@@ -234,6 +234,11 @@ export function lcpOf(model: Model): Lcp | null {
 
 export function documentRequest(model: Model): RequestRow | null {
   if (!model.navigation) return null;
+  const loaderId = model.navigation.navigationId;
+  if (loaderId) {
+    const byLoader = model.requests.get(loaderId);
+    if (byLoader) return byLoader;
+  }
   const want = withoutFragment(model.navigation.url);
   let best: RequestRow | null = null;
   for (const row of model.requests.values()) if (withoutFragment(row.url) === want && row.sendTs >= model.origin - 1000 && (!best || row.sendTs < best.sendTs)) best = row;

@@ -12,7 +12,7 @@ export const MAX_HELD_FRAMES = 1_000;
 
 type Fields = Record<string, unknown>;
 type Script = { url: string; sourceMapURL: string | null; frameId: string | null; contextId: number | null };
-type ScriptBook = { scripts: Map<string, Script>; frameContexts: Map<string, number>; mapBytes: number };
+type ScriptBook = { scripts: Map<string, Script>; frames: Set<string>; frameContexts: Map<string, number>; mapBytes: number };
 type Logpoint = { id: string; tabId: string; breakpointId: string; url: string; line: number; column: number | null; original: { source: string; line: number; column: number | null } | null };
 type Held = { session: InspectionSession; book: ScriptBook; logpoints: Map<string, Logpoint>; pending: number; stop: () => void };
 
@@ -68,7 +68,7 @@ async function openHeld(connection: number, tabId: string): Promise<Held> {
   return entry;
 }
 
-export const newScriptBook = (): ScriptBook => ({ scripts: new Map(), frameContexts: new Map(), mapBytes: 0 });
+export const newScriptBook = (): ScriptBook => ({ scripts: new Map(), frames: new Set(), frameContexts: new Map(), mapBytes: 0 });
 
 let retainedMapBytes = 0;
 
@@ -88,6 +88,7 @@ export function discardScriptBook(book: ScriptBook) {
   book.mapBytes = 0;
   book.scripts.clear();
   book.frameContexts.clear();
+  book.frames.clear();
 }
 
 export function recordScript(book: ScriptBook, params: Fields) {
@@ -101,10 +102,11 @@ export function recordScript(book: ScriptBook, params: Fields) {
   if (newContext) for (const [id, script] of [...book.scripts]) if (script.frameId === frameId && script.contextId !== contextId) forget(book, id);
   forget(book, scriptId);
   if (book.scripts.size >= MAX_HELD_SCRIPTS) return;
-  if (newContext) {
-    if (!book.frameContexts.has(frameId) && book.frameContexts.size >= MAX_HELD_FRAMES) return;
-    book.frameContexts.set(frameId, contextId);
+  if (frameId !== null && !book.frames.has(frameId)) {
+    if (book.frames.size >= MAX_HELD_FRAMES) return;
+    book.frames.add(frameId);
   }
+  if (newContext) book.frameContexts.set(frameId, contextId);
   const offered = typeof params.sourceMapURL === "string" && isDataUrl(params.sourceMapURL) ? params.sourceMapURL : null;
   const sourceMapURL = offered !== null && retainedMapBytes + offered.length <= MAX_HELD_MAP_BYTES ? offered : null;
   const bytes = sourceMapURL?.length ?? 0;

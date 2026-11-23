@@ -228,7 +228,10 @@ function attribution(model: Model, task: Ev) {
 
 function longTaskInsight(model: Model, tasks: Ev[], fcp: Ev | null): { insight: Insight | null; tbt: number | null } {
   const from = fcp?.ts ?? model.origin;
-  const tbt = tasks.reduce((sum, task) => sum + Math.max(0, task.ts + task.dur - Math.max(task.ts + LONG_TASK_US, from)), 0);
+  const tbt = tasks.reduce((sum, task) => {
+    const clipped = Math.min(task.ts + task.dur, model.end) - Math.max(task.ts, from);
+    return sum + Math.max(0, clipped - LONG_TASK_US);
+  }, 0);
   if (!tasks.length) return { insight: null, tbt: model.events.length ? 0 : null };
   const top = [...tasks].sort((a, b) => b.dur - a.dur).slice(0, MAX_LISTED);
   const rating = rate(ms(tbt), THRESHOLDS.tbt);

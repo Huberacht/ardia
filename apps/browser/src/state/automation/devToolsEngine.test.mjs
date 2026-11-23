@@ -733,7 +733,7 @@ test("a long task that starts before FCP counts its blocking time after FCP", ()
     { name: "firstContentfulPaint", ph: "R", pid: 2, tid: 3, ts: start + 2_000_000, args: { frame: "M" } },
     { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: start + 1_990_000, dur: 1_000_000, args: {} },
   ];
-  assert.equal(analyzeTrace(events).metrics.tbt.ms, 950);
+  assert.equal(analyzeTrace(events).metrics.tbt.ms, 940, "only the 990 ms after FCP count, less the 50 ms threshold");
 });
 
 test("a document redirect that reuses its request id still gives TTFB for the final URL", () => {
@@ -797,4 +797,43 @@ test("many directive prefixes on one line ending in a quote stay linear", () => 
   const started = Date.now();
   assert.equal(sourceMapRefOf(`${"//#sourceMappingURL=".repeat(8000)}"`), null);
   assert.ok(Date.now() - started < 100, `took ${Date.now() - started} ms`);
+});
+
+test("the document request is found by its loader id even when a redirect changed its URL", () => {
+  const start = 9_000_000_000;
+  const events = [
+    navStart(start, "M", "https://a.example/old", { id: "LOADER" }),
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "LOADER", url: "https://a.example/old", frame: "M" } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 100_000, args: { data: { requestId: "LOADER", url: "https://a.example/new", frame: "M" } } },
+    { name: "ResourceReceiveResponse", ph: "I", pid: 2, tid: 3, ts: start + 400_000, args: { data: { requestId: "LOADER", statusCode: 200, timing: { requestTime: (start + 100_000) / 1e6, receiveHeadersEnd: 300 } } } },
+  ];
+  assert.equal(analyzeTrace(events).metrics.ttfb.ms, 400);
+});
+
+test("a task is clipped to the window after FCP before the 50 ms threshold comes off", () => {
+  const start = 10_000_000_000;
+  const events = [
+    navStart(start, "M", "https://a.example/"),
+    { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: start + 10_000, dur: 140_000, args: {} },
+    { name: "firstContentfulPaint", ph: "R", pid: 2, tid: 3, ts: start + 110_000, args: { frame: "M" } },
+  ];
+  assert.equal(analyzeTrace(events).metrics.tbt.ms, 0, "40 ms after FCP is under the threshold");
+});
+
+test("a sourceMappingURL line inside a template literal isn't a directive", () => {
+  assert.equal(sourceMapRefOf("const s = `\n//# sourceMappingURL=evil.map`;"), null);
+  assert.equal(sourceMapRefOf("const s = `\n//# sourceMappingURL=evil.map`"), null);
+  assert.equal(sourceMapRefOf("const s = `\n//# sourceMappingURL=evil.map\n`;"), null);
+  assert.equal(sourceMapRefOf("x();\n//# sourceMappingURL=data:application/json;base64,e30="), "data:application/json;base64,e30=");
+});
+
+test("the frame cap counts frames seen only in isolated worlds too", () => {
+  const book = logpointBook.newScriptBook();
+  for (let i = 0; i < logpointBook.MAX_HELD_FRAMES + 50; i++) logpointBook.recordScript(book, { scriptId: `iso${i}`, url: `https://a.example/${i}.js`, executionContextId: 5000 + i, executionContextAuxData: { frameId: `W${i}`, isDefault: false } });
+  assert.equal(book.frames.size, logpointBook.MAX_HELD_FRAMES);
+  assert.equal(book.scripts.size, logpointBook.MAX_HELD_FRAMES);
+  assert.equal(book.frameContexts.size, 0, "only default contexts drive navigation cleanup");
+  logpointBook.recordScript(book, { scriptId: "known", url: "https://a.example/again.js", executionContextId: 1, executionContextAuxData: { frameId: "W0", isDefault: true } });
+  assert.ok(book.scripts.has("known"), "a frame already counted still takes new scripts");
+  logpointBook.discardScriptBook(book);
 });

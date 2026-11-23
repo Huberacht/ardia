@@ -151,7 +151,7 @@ export function generatedPositionFor(map: ParsedMap, wanted: string, line1: numb
 
 const MARKER = "sourceMappingURL=";
 const DIRECTIVE_LEAD = /(?:\/\/|\/\*)[ \t]{0,16}[#@][ \t]{0,16}$/;
-const MAP_REF = /^[^\s'"]+$/;
+const MAP_REF = /^[^\s'"`]+$/;
 const COMMENT_ONLY = /^\s*(?:\/\/|\/\*|\*)/;
 
 function directiveOf(line: string): string | null {
