@@ -116,8 +116,19 @@ read -r tree version sha built <<<"$entry"
 built=${built:-$tree}
 short=${tree:0:12}
 dest="$store/$short"
+recorded=
+[ ! -f "$dest/engine-match" ] || recorded=$(sed -n '1s/^.* key=\([^ ]*\).*$/\1/p' "$dest/engine-match")
+stale=0
+if [ -f "$dest/.complete" ] && [ -n "$recorded" ] && [ "$recorded" != "$tree" ]; then
+  stale=1
+  if [ "$describe" != 1 ]; then
+    echo "the engine cached in $dest is recorded for ${recorded:0:12}, not $short; fetching $short's again" >&2
+    rm -rf "$dest"
+  fi
+fi
 downloading=0
 [ "$describe" = 1 ] || [ -f "$dest/.complete" ] || downloading=1
+[ "$stale" = 0 ] || downloading=1
 match_line="match=$match key=$tree version=$version source=$(published_source "$(release_tag "$version")" "$tree" "$downloading") public_tree=$("$match_script" public-hash "$root" "$base")"
 if [ "$describe" = 1 ]; then
   echo "$match_line"

@@ -499,6 +499,19 @@ test("a cached engine recorded for another key is discarded and fetched again, n
   assert.equal(field(fs.readFileSync(join(dir, "engine-match"), "utf8").trim(), "key"), key);
 });
 
+test("fetch-engine.sh refetches a cached engine recorded for another key instead of re-recording it", () => {
+  const { root, key, store, assets, framework } = checkout({ archive: true });
+  write(store, "Chromium Framework.framework/Versions/Current/Chromium Framework", "another engine's bytes");
+  write(store, ".complete", "");
+  write(store, "engine-match", `match=exact key=${"b".repeat(64)} version=engine-bbbbbbbbbbbb source= public_tree=${"0".repeat(64)}\n`);
+  const r = fetchEngine(root, [], { ARDIACORE_PREBUILT_ASSETS: `file://${assets}` });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), framework);
+  assert.match(r.stderr, /recorded for bbbbbbbbbbbb, not /);
+  assert.equal(fs.readFileSync(join(framework, "Versions/Current/Chromium Framework"), "utf8"), "binary");
+  assert.equal(field(record(store), "key"), key);
+});
+
 test("a framework reached through a symlink is judged by the record at its real path", { skip: !isMac }, () => {
   const { root, store, framework } = checkout();
   assert.equal(fetchEngine(root).status, 0);
@@ -525,4 +538,3 @@ test("a framework in a prebuilt store with no record is unknown, never local; on
   assert.equal(run(matchScript, ["check", resolve(root, "match=unknown key=").stdout.trim()]).status, 1);
   assert.ok(store);
 });
-
