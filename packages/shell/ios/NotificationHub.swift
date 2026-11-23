@@ -121,6 +121,9 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
         DispatchQueue.main.async { completion(result) }
       }
     }
+    if let raw = options.icon, raw.utf8.count > Self.maxIconDataUriBytes {
+      return deliver(NotificationIcon(status: "too_large", errorCode: nil))
+    }
     guard let icon = options.icon.flatMap(URL.init(string:)) else {
       return deliver(options.icon == nil ? .absent : NotificationIcon(status: "invalid_url", errorCode: nil))
     }
@@ -151,10 +154,14 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
       guard (url.host ?? "").isEmpty || url.host == "localhost" else { return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil)) }
       return make(url)
     }
-    guard url.scheme?.lowercased() == "data", url.absoluteString.lowercased().hasPrefix("data:image/") else {
+    guard url.scheme?.lowercased() == "data", url.absoluteString.prefix(11).lowercased() == "data:image/" else {
       return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil))
     }
-    guard url.absoluteString.utf8.count <= Self.maxIconDataUriBytes else {
+    let raw = url.absoluteString
+    let comma = raw.firstIndex(of: ",") ?? raw.endIndex
+    let payloadBytes = raw.utf8.count - raw[..<comma].utf8.count
+    let decodedBound = raw[..<comma].lowercased().hasSuffix(";base64") ? payloadBytes / 4 * 3 : payloadBytes
+    guard raw.utf8.count <= Self.maxIconDataUriBytes, decodedBound <= Self.maxIconBytes else {
       return completion(nil, NotificationIcon(status: "too_large", errorCode: nil))
     }
     guard let data = try? Data(contentsOf: url), !data.isEmpty else {
