@@ -53,6 +53,7 @@ on:
       - "docs/engine-build.md"
       - "docs/engine-build-windows.md"
       - "scripts/windows/engine/series-win"
+      - "scripts/windows/engine/series_win.py"
       - "scripts/windows/engine/patches/**"
       - "infra/feedback/lib/**"
       - "patches/**"
