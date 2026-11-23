@@ -60,9 +60,10 @@ type Diff = {
   snapshot: (entry: string) => EntrySnapshot | null;
   clipAfter: string[];
   start: number;
+  ghostSeen?: ((entry: string, y: number) => boolean) | null;
 };
 
-function buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail, snapshot, clipAfter, start }: Diff): Plan | null {
+function buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail, snapshot, clipAfter, start, ghostSeen }: Diff): Plan | null {
   const kept = new Set(after.list.slice(start));
   const had = new Set(before.list.slice(start));
   const moves: Move[] = [];
@@ -80,9 +81,10 @@ function buildPlan({ before, after, old, next, removed, added, slides, ghosts, t
   const gone = new Set(removed);
   for (const g of ghosts) if (g.anchor && gone.has(g.anchor)) g.anchor = anchorAfter(g.anchor);
   const born = removed.flatMap((e): Ghost[] => {
+    const y = old.at.get(e)! + shiftAt(slides.get(e), t);
+    if (ghostSeen && !ghostSeen(e, y)) return [];
     const shot = snapshot(e);
     if (!shot) return [];
-    const y = old.at.get(e)! + shiftAt(slides.get(e), t);
     return [{ key: `ghost:${++ghostIds}`, anchor: anchorAfter(e), y, snapshot: shot, opacity: new Animated.Value(1), until: 0 }];
   });
   const appears = added.filter((e) => next.at.has(e));
@@ -349,7 +351,9 @@ export function useListMotion(windowId: string, profileId: string, entries: stri
     const old = offsets(before.state, before.list, height, start, base);
     const next = offsets(after.state, after.list, now, start, base);
     const snapshot = (e: string) => snapshotEntry(before.state, windowId, profileId, e);
-    const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: true, snapshot, clipAfter: grown, start });
+    const band = shiftedBand(viewport?.band() ?? null, above);
+    const ghostSeen = (e: string, y: number) => seenSliding(y, height(before.state, e), 0, band);
+    const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: true, snapshot, clipAfter: grown, start, ghostSeen });
     return plan && onlySeen(plan, inView(after.state)(after.list), slides);
   };
   return useMotion({ devKey: windowId, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: true, inView: (list) => inView(workspaceSnapshot())(list) });

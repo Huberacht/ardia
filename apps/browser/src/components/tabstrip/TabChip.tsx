@@ -111,7 +111,7 @@ export const DraggableChip = memo(function DraggableChip({
   const drawn = useChipWidth(width, () => topLevel && !!strip?.current.animateWidths);
   const [slid, slidRef] = useStripSlide(topLevel ? tabId : null);
   return (
-    <Animated.View ref={drag.ref} {...drag.panHandlers} {...card} mouseDownCanMoveWindow={false} style={{ ...drag.style, zIndex: drag.dragging ? 10 : active ? 1 : 0 }}>
+    <Animated.View ref={drag.ref} {...drag.panHandlers} {...card} pointerEvents="box-none" mouseDownCanMoveWindow={false} style={{ ...drag.style, zIndex: drag.dragging ? 10 : active ? 1 : 0 }}>
       <View {...slid} ref={slidRef} style={[{ opacity: drag.crossed ? 0 : 1 }, slid.style as object]}>
         <TabChip tabId={tabId} width={width} drawn={drawn} tuck={tuck} dragged={drag.dragging} hover={hover} />
       </View>

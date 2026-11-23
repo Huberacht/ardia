@@ -61,7 +61,7 @@ export function SplitChip({ tabIds, width, paneWidths, geometry: givenGeometry, 
   const [slid, slidRef] = useStripSlide(!givenGeometry && !group ? tabIds[0]! : null);
   return (
     <ThemeOverride theme={theme}>
-      <Animated.View ref={drag.ref} {...drag.panHandlers} mouseDownCanMoveWindow={false} style={{ ...drag.style, zIndex: drag.dragging ? 10 : active ? 1 : 0 }}>
+      <Animated.View ref={drag.ref} {...drag.panHandlers} pointerEvents="box-none" mouseDownCanMoveWindow={false} style={{ ...drag.style, zIndex: drag.dragging ? 10 : active ? 1 : 0 }}>
         <View {...hover.hoverProps} {...slid} ref={slidRef} style={[{ width, height: TOP_STRIP_HEIGHT }, slid.style as object]}>
           {active && <SelectedTab width={width} band={band} opaque={drag.dragging} />}
           <ItemRow hovered={hovered && !active} pressed={false} padded={false}>
