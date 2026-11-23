@@ -582,3 +582,13 @@ test("--write deletes or overwrites a module domain's file only when it still ho
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a module whose functions or events would generate the same Swift member twice, or Expo's own, is refused", () => {
+  const refused = (functions, events, pattern) => assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions, events } })), pattern);
+  refused({ hold: fn(), holdFunction: fn() }, {}, /function ArdiaDemo\.holdFunction generates the Swift member holdFunction, which function ArdiaDemo\.hold already generates/);
+  refused({ holdFunction: fn(), hold: fn() }, {}, /function ArdiaDemo\.hold generates the Swift member holdFunction, which function ArdiaDemo\.holdFunction already generates/);
+  refused({ moduleName: fn() }, {}, /Swift member moduleName, which the module's name already generates/);
+  refused({ eventsDefinition: fn() }, {}, /Swift member eventsDefinition, which the module's events already generates/);
+  refused({}, { event: { payload: "Tone", mac: "custom", desktop: "absent", windows: "absent" } }, /Expo's own Module\.sendEvent/);
+  assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn(), holdKey: fn(), moduleNames: fn() }, events: { tone: { payload: "Tone", mac: "custom", desktop: "absent", windows: "absent" } } } })));
+});

@@ -324,9 +324,14 @@ function skipQuoted(text, at) {
   return end;
 }
 
+const REGEX_AFTER_WORD = /\b(?:return|typeof|instanceof|case|do|else|in|of|void|delete|new|throw|yield|await)\s*$/;
+const CONTROL_HEAD = /\b(?:if|while|for|with)\s*$/;
+
 export function stripJsComments(source) {
   let out = "";
   let previous = "";
+  const parens = [];
+  let closedControl = false;
   for (let at = 0; at < source.length; ) {
     const char = source[at];
     const two = source.slice(at, at + 2);
@@ -343,7 +348,7 @@ export function stripJsComments(source) {
       out += source.slice(at, end + 1);
       previous = char;
       at = end + 1;
-    } else if (char === "/" && (previous === "" || /[(,=:[!&|?{};+\-*%<>~^]/.test(previous) || /\breturn\s*$/.test(out))) {
+    } else if (char === "/" && (previous === "" || /[(,=:[!&|?{};+\-*%<>~^]/.test(previous) || REGEX_AFTER_WORD.test(out) || (previous === ")" && closedControl))) {
       let end = at + 1;
       for (let inClass = false; end < source.length && (inClass || source[end] !== "/"); end++) {
         if (source[end] === "\\") end++;
@@ -354,12 +359,112 @@ export function stripJsComments(source) {
       previous = "/";
       at = end + 1;
     } else {
+      if (char === "(") parens.push(CONTROL_HEAD.test(out));
+      if (char === ")") closedControl = parens.pop() ?? false;
       out += char;
       if (/\S/.test(char)) previous = char;
       at++;
     }
   }
   return out;
+}
+
+export function skipCppLiteral(text, at) {
+  if (text[at] === "'" && /[0-9A-Za-z]/.test(text[at - 1] ?? "") && /[0-9A-Za-z]/.test(text[at + 1] ?? "")) return at;
+  const raw = text[at] === '"' && text[at - 1] === "R" ? /^"([^()\\\s]{0,16})\(/.exec(text.slice(at)) : null;
+  if (raw) {
+    const end = text.indexOf(`)${raw[1]}"`, at + raw[0].length);
+    if (end < 0) throw new Error("a raw string never closes");
+    return end + raw[1].length + 1;
+  }
+  return skipQuoted(text, at);
+}
+
+export function cppLiteralStarts(text) {
+  const inside = new Uint8Array(text.length);
+  for (let at = 0; at < text.length; at++) {
+    if (text[at] !== '"' && text[at] !== "'") continue;
+    const end = skipCppLiteral(text, at);
+    inside.fill(1, at, end + 1);
+    at = end;
+  }
+  return inside;
+}
+
+export function stripCppComments(source) {
+  let out = "";
+  for (let at = 0; at < source.length; ) {
+    const two = source.slice(at, at + 2);
+    if (two === "//") {
+      const end = source.indexOf("\n", at);
+      at = end < 0 ? source.length : end;
+    } else if (two === "/*") {
+      const end = source.indexOf("*/", at + 2);
+      if (end < 0) throw new Error("a block comment never closes");
+      out += " ";
+      at = end + 2;
+    } else if (source[at] === '"' || source[at] === "'") {
+      const end = skipCppLiteral(source, at);
+      out += source.slice(at, end + 1);
+      at = end + 1;
+    } else {
+      out += source[at++];
+    }
+  }
+  return out;
+}
+
+export function closing(text, open, skip = skipQuoted) {
+  const pairs = { "(": ")", "{": "}", "[": "]" };
+  const want = pairs[text[open]];
+  if (!want) throw new Error(`a group opens with ( { or [, not ${JSON.stringify(text.slice(open, open + 20))}`);
+  const stack = [];
+  for (let at = open; at < text.length; at++) {
+    const char = text[at];
+    if (char === '"' || char === "'" || char === "`") at = skip(text, at);
+    else if (pairs[char]) stack.push(pairs[char]);
+    else if (char === stack.at(-1)) {
+      stack.pop();
+      if (!stack.length) return at;
+    }
+  }
+  throw new Error("a group never closes");
+}
+
+export function topLevelStatements(body) {
+  const statements = [];
+  let current = "";
+  const flush = () => {
+    const statement = current.trim();
+    if (statement && statement.startsWith(".") && statements.length) statements[statements.length - 1] += statement;
+    else if (statement) statements.push(statement);
+    current = "";
+  };
+  for (let at = 0; at < body.length; at++) {
+    const char = body[at];
+    if (char === '"' || char === "'" || char === "`" || "({[".includes(char)) {
+      const end = "({[".includes(char) ? closing(body, at) : skipQuoted(body, at);
+      current += body.slice(at, end + 1);
+      at = end;
+    } else if (char === "\n" || char === ";") flush();
+    else current += char;
+  }
+  flush();
+  return statements;
+}
+
+export function topLevelReturnKeys(body) {
+  const keys = [];
+  for (let at = 0; at < body.length; at++) {
+    const char = body[at];
+    if (char === '"' || char === "'" || char === "`") at = skipQuoted(body, at);
+    else if ("({[".includes(char)) at = closing(body, at);
+    else if (/^return\b/.test(body.slice(at, at + 7)) && !/[\w$]/.test(body[at - 1] ?? "")) {
+      const returned = /^return\s*\{/.exec(body.slice(at));
+      if (returned) keys.push(...objectKeys(body, at + returned[0].length - 1));
+    }
+  }
+  return keys;
 }
 
 export function block(text, open) {
@@ -411,11 +516,18 @@ export function swiftRegistrations(source, className) {
     const { end } = block(body, view.index + view[0].length - 1);
     body = body.slice(0, view.index) + body.slice(end);
   }
+  const statements = topLevelStatements(body);
+  const name = statements.filter((statement) => /^Name\s*\(\s*Self\.moduleName\s*\)$/.test(statement));
+  const rest = statements.filter((statement) => !name.includes(statement));
   return {
-    generated: [...body.matchAll(/\bSelf\.(\w+)Function\b/g)].map((match) => match[1]),
-    events: /\bSelf\.eventsDefinition\b/.test(body),
-    name: /\bName\(Self\.moduleName\)/.test(body),
-    handWritten: [...body.matchAll(/\b(Name|Function|AsyncFunction|Events|Property|Constant|Constants)\(/g)].map((match) => match[1]).filter((kind, index, all) => !(kind === "Name" && all.filter((k) => k === "Name").length === 1 && /\bName\(Self\.moduleName\)/.test(body))),
+    generated: rest.map((statement) => /^Self\.(\w+)Function$/.exec(statement)?.[1]).filter(Boolean),
+    events: rest.includes("Self.eventsDefinition"),
+    name: name.length === 1,
+    handWritten: [
+      ...[...rest.join("\n").matchAll(/\b(Name|Function|AsyncFunction|Events|Property|Constant|Constants)\s*\(/g)].map((match) => match[1]),
+      ...name.slice(1).map(() => "Name"),
+      ...rest.filter((statement) => /\bSelf\.(?:\w+Function|eventsDefinition)\b/.test(statement) && !/^Self\.(?:\w+Function|eventsDefinition)$/.test(statement)),
+    ],
   };
 }
 
@@ -436,8 +548,8 @@ export function nativeModuleCalls(source) {
       while (/\s/.test(source[at] ?? "")) at++;
     }
     if (source[at] !== "(") continue;
-    const close = source.indexOf(")", at);
-    calls.push({ whole: source.slice(match.index, close + 1), type, argument: source.slice(at + 1, close).trim() });
+    const close = closing(source, at);
+    calls.push({ whole: source.slice(match.index, close + 1), type, argument: source.slice(at + 1, close).trim(), end: close + 1 });
   }
   return calls;
 }
@@ -447,7 +559,7 @@ export function nativeModuleTypingProblems(source, domain, modules) {
   const problems = [];
   let typed = 0;
   for (const { whole, type, argument } of nativeModuleCalls(source)) {
-    const literal = /^"(Ardia[A-Za-z]+)"$/.exec(argument)?.[1];
+    const literal = /^(["'])(Ardia[A-Za-z]+)\1$/.exec(argument)?.[2];
     if (literal !== undefined) {
       if (!modules[literal]) continue;
       if (type === modules[literal].native || type === `${map}["${literal}"]`) typed++;
@@ -459,16 +571,39 @@ export function nativeModuleTypingProblems(source, domain, modules) {
       problems.push(`${whole} takes a module name without the generated ${map} type`);
     } else typed++;
   }
-  for (const [cast] of source.matchAll(/\b(?:require(?:Optional)?NativeModule|nativeModule)\b[^;\n]*\bas\s+(?:any|unknown)\b/g)) problems.push(`${cast} casts a native module past its generated type`);
+  const wrappers = [...source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(?:<[^=]*?>\s*)?\([^)]*\)\s*(?::[^=]+)?=>\s*require(?:Optional)?NativeModule\b/g)].map((match) => match[1]);
+  const ends = [
+    ...nativeModuleCalls(source).map(({ whole, end }) => ({ whole, end })),
+    ...wrappers.flatMap((wrapper) => [...source.matchAll(new RegExp(`\\b${wrapper}\\s*\\(`, "g"))].map((match) => {
+      const end = closing(source, match.index + match[0].length - 1) + 1;
+      return { whole: source.slice(match.index, end), end };
+    })),
+  ];
+  for (const { whole, end } of ends) if (/^\s*as\s+(?:any|unknown)\b/.test(source.slice(end))) problems.push(`${whole} is cast past its generated type`);
   return { problems, typed };
 }
 
 export function linuxModuleDispatch(sources) {
-  const text = sources.map(stripComments).join("\n");
-  return {
-    methods: new Set([...text.matchAll(/\b(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"/g)].map((match) => match[1])),
-    events: new Set([...text.matchAll(/\bSendEvent\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/g)].map((match) => `${match[1]}.${match[2]}`)),
-  };
+  const methods = new Set();
+  const events = new Set();
+  for (const written of sources) {
+    const text = stripCppComments(written);
+    const literal = cppLiteralStarts(text);
+    for (const match of text.matchAll(/\bSendEvent\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/g)) if (!literal[match.index]) events.add(`${match[1]}.${match[2]}`);
+    for (const branch of text.matchAll(/\bif\s*\((?=\s*(?:method|name)\s*==)/g)) {
+      if (literal[branch.index]) continue;
+      const open = branch.index + branch[0].length - 1;
+      const close = closing(text, open, skipCppLiteral);
+      const names = text.slice(open + 1, close).split("||").map((part) => /^\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*$/.exec(part)?.[1]);
+      if (names.some((name) => name === undefined)) continue;
+      let at = close + 1;
+      while (/\s/.test(text[at] ?? "")) at++;
+      const statement = text[at] === "{" ? text.slice(at + 1, closing(text, at, skipCppLiteral)) : text.slice(at, text.indexOf(";", at) + 1);
+      if (/^\s*return\s+(?:true|false)\s*;\s*$/.test(statement)) continue;
+      for (const name of names) methods.add(name);
+    }
+  }
+  return { methods, events };
 }
 
 export function windowsNativeModules(sources) {
@@ -513,7 +648,7 @@ export function windowsJsMembers(name, path, read, exists, seen = new Set()) {
     opening.lastIndex = fn.index;
     const open = opening.exec(source);
     const body = block(source, open.index + open[0].length - 1);
-    const returned = [...body.body.matchAll(/\breturn\s*\{/g)].flatMap((match) => objectKeys(body.body, match.index + match[0].length - 1));
+    const returned = topLevelReturnKeys(body.body);
     if (returned.length) return new Set(returned);
   }
   throw new Error(`the scan can't read Windows' JS module ${name} in ${path}`);
@@ -659,4 +794,78 @@ test("Windows serves a module function as a native method, a JS member or a defa
     const sent = native.events.has(`${module}.${event}`) || js.events.has(`${module}.${event}`);
     assert.equal(sent, binding.windows === "custom", `event ${module}.${event} is ${binding.windows} on Windows`);
   }
+});
+
+test("the Linux scan counts a comparison only when it is an if that dispatches, never a boolean helper, and reads raw strings and digit separators", () => {
+  const helper = [
+    'bool HandlesHold(std::string_view method) { return method == "ArdiaDemo.hold"; }',
+    'bool Handles(std::string_view method) {\n  if (method == "ArdiaDemo.peek") return true;\n  if (method == "ArdiaDemo.look") { return false; }\n  return false;\n}',
+    'const bool held = name == "ArdiaDemo.held" ? Run() : false;',
+    'if (method == "ArdiaDemo.mixed" && ready) return Run();',
+  ].join("\n");
+  assert.deepEqual([...linuxModuleDispatch([helper]).methods], []);
+  const dispatching = [
+    'constexpr int kLimit = 5\'000;',
+    'const char* kPage = R"html(<a href="//x">)</a> if (method == "ArdiaDemo.inRaw") Run();)html";',
+    'void Invoke(std::string_view method, Done done) {',
+    '  if (method == "ArdiaDemo.probe" || name == "ArdiaDemo.peek") {',
+    '    return Probe(std::move(done));',
+    '  }',
+    '  if (method == "ArdiaDemo.open") return Open(kLimit);',
+    '}',
+  ].join("\n");
+  assert.deepEqual([...linuxModuleDispatch([dispatching]).methods].sort(), ["ArdiaDemo.open", "ArdiaDemo.peek", "ArdiaDemo.probe"]);
+  assert.deepEqual([...linuxModuleDispatch(['const char* kHelp = "SendEvent(\\"ArdiaDemo\\", \\"tone\\")";\nSendEvent("ArdiaDemo", "real", payload);']).events], ["ArdiaDemo.real"]);
+  assert.equal(stripCppComments('int a = 1\'000; // gone\nconst char* b = R"x(// kept)x"; /* gone */'), 'int a = 1\'000; \nconst char* b = R"x(// kept)x";  ');
+});
+
+test("the Windows JS scan takes a factory's own returned object, never one a nested helper returns, and reads a regex right after a control statement's condition", () => {
+  const files = {
+    "w/modules.ts": 'import { demoMaker } from "./maker";\n',
+    "w/maker.ts": [
+      "export function demoMaker() {",
+      "  const helper = () => {",
+      "    return { hold: () => 1 };",
+      "  };",
+      "  function inner() {",
+      "    return { peek: 2 };",
+      "  }",
+      "  if (helper()) { const ready = inner(); }",
+      "  return { open: () => helper() };",
+      "}",
+    ].join("\n"),
+  };
+  assert.deepEqual([...windowsJsMembers("demoMaker", "w/modules.ts", (path) => files[path], (path) => Object.hasOwn(files, path))], ["open"]);
+  assert.deepEqual(topLevelReturnKeys("if (x) { return { gone: 1 }; }\nconst f = () => ({ also: 2 });\nreturn { kept: 3 };"), ["kept"]);
+  const regexAfterIf = "if (enabled) /[/*]/.test(value);\nwhile (more) /a\\/b/.test(next);\nconst half = (a + b) / 2 / c;";
+  assert.equal(stripJsComments(regexAfterIf), regexAfterIf);
+  assert.equal(stripJsComments("for (const x of list) /x/.test(x); // gone"), "for (const x of list) /x/.test(x); ");
+  assert.equal(stripJsComments("const y = typeof /x/; const z = f(a) / 2; /* gone */"), "const y = typeof /x/; const z = f(a) / 2;  ");
+});
+
+test("the Mac registration scan counts only a generated definition that stands as its own statement, and sees a hand-written registration however it's spaced", () => {
+  const module = (definition) => `public class DemoModule: Module, DemoNative {\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
+  const assigned = swiftRegistrations(module("    Name(Self.moduleName)\n    let _ = Self.holdFunction\n    Function (\"extra\") { 1 }"), "DemoModule");
+  assert.deepEqual(assigned.generated, []);
+  assert.deepEqual(assigned.handWritten, ["Function", "let _ = Self.holdFunction"]);
+  assert.deepEqual(swiftRegistrations(module("    Name (Self.moduleName)\n    Self.holdFunction; Self.eventsDefinition\n    AsyncFunction\n      (\"late\") { () in }"), "DemoModule"), { generated: ["hold"], events: true, name: true, handWritten: ["AsyncFunction"] });
+  assert.deepEqual(swiftRegistrations(module("    Name(Self.moduleName)\n    Name(Self.moduleName)\n    Self.holdFunction"), "DemoModule").handWritten, ["Name"]);
+  assert.deepEqual(topLevelStatements("Name(Self.moduleName)\nAsyncFunction(\"a\") { (x: Int) in\n  x\n}\n  .runOnQueue(.main)\n"), ["Name(Self.moduleName)", 'AsyncFunction("a") { (x: Int) in\n  x\n}.runOnQueue(.main)']);
+});
+
+test("the typing scan sees a cast past the generated type after a native module call spread over several lines", () => {
+  const modules = { ArdiaDemo: { native: "DemoNative" } };
+  const direct = 'const Demo = requireNativeModule<DemoNative>(\n  "ArdiaDemo"\n) as unknown as { hold(): void };';
+  assert.equal(nativeModuleTypingProblems(direct, "demo", modules).problems.length, 1);
+  const wrapped = 'const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<DemoModules[Name]>(name);\nconst Demo = nativeModule(\n  "ArdiaDemo"\n)\n  as any;';
+  assert.equal(nativeModuleTypingProblems(wrapped, "demo", modules).problems.length, 1);
+  const clean = 'const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<DemoModules[Name]>(name);\nconst Demo = nativeModule(\n  "ArdiaDemo"\n);\nconst asText = String(Demo) as string;';
+  assert.deepEqual(nativeModuleTypingProblems(clean, "demo", modules), { problems: [], typed: 1 });
+});
+
+test("the typing scan reads a module named in single quotes like one in double quotes", () => {
+  const modules = { ArdiaDemo: { native: "DemoNative" } };
+  assert.deepEqual(nativeModuleTypingProblems("const Demo = requireNativeModule<DemoNative>('ArdiaDemo');", "demo", modules), { problems: [], typed: 1 });
+  assert.equal(nativeModuleTypingProblems("const Demo = requireNativeModule<{ hold(): void }>('ArdiaDemo');", "demo", modules).problems.length, 1);
+  assert.equal(nativeModuleTypingProblems("const Demo = requireNativeModule('ArdiaDemo');", "demo", modules).problems.length, 1);
 });

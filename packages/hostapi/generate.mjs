@@ -118,6 +118,14 @@ export function validateModuleDomain(name, domain) {
       if (!isRecord(row)) fail(`event ${at} is { payload, mac, desktop, windows }`);
       if (typeof row.payload !== "string" || !row.payload.trim()) fail(`event ${at} names its payload type`);
       validateModuleBindings(fail, `event ${at}`, row);
+      if (event === "event") fail(`event ${at} would generate send${capitalized(event)}, which is Expo's own Module.sendEvent`);
+    }
+    const members = new Map([["moduleName", "the module's name"], ["eventsDefinition", "the module's events"]]);
+    for (const fn of Object.keys(entry.functions)) {
+      for (const member of [fn, `${fn}Function`]) {
+        if (members.has(member)) fail(`function ${module}.${fn} generates the Swift member ${member}, which ${members.get(member)} already generates`);
+        members.set(member, `function ${module}.${fn}`);
+      }
     }
   }
 }
