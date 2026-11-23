@@ -18,7 +18,8 @@ import {
   noteTabStripRevealAfterPress,
   noteTabStripRevealHeldForScroll,
   noteTabStripScrolled,
-  noteTabStripTabsInOverflow,
+  noteTabStripMenuPick,
+  noteTabStripPick,
   noteTabStripTitledTabs,
   noteTextOnlyRow,
   takeTabStripCounts,
@@ -38,7 +39,9 @@ const ZERO = {
   tab_strip_held_closes: 0,
   tab_strip_held_close_stretches: 0,
   tab_strip_most_titled_tabs: 0,
-  tab_strip_most_tabs_in_overflow: 0,
+  tab_strip_picks: 0,
+  tab_strip_picks_after_scroll: 0,
+  tab_strip_menu_picks: 0,
   tab_strip_scrolls: 0,
   tab_strip_scroll_stalls: 0,
   tab_strip_reveals_held_for_scroll: 0,
@@ -131,7 +134,9 @@ const EVERY_FIELD = [
   ["tab_strip_held_closes", () => noteTabStripHeldClose(), 1],
   ["tab_strip_held_close_stretches", () => noteTabStripHeldCloseStretch(), 1],
   ["tab_strip_most_titled_tabs", () => noteTabStripTitledTabs(6), 6],
-  ["tab_strip_most_tabs_in_overflow", () => noteTabStripTabsInOverflow(7), 7],
+  ["tab_strip_picks", () => noteTabStripPick((clock += 60_000)), 1],
+  ["tab_strip_picks_after_scroll", () => (noteTabStripScrolled((clock += 60_000)), noteTabStripPick((clock += 2_000))), 1],
+  ["tab_strip_menu_picks", () => noteTabStripMenuPick(client.consentToken()), 1],
   ["tab_strip_scrolls", () => noteTabStripScrolled((clock += 10_000)), 1],
   ["tab_strip_scroll_stalls", () => (noteTabStripScrolled((clock += 10_000)), noteTabStripScrolled((clock += 100))), 1],
   ["tab_strip_reveals_held_for_scroll", () => noteTabStripRevealHeldForScroll(), 1],
@@ -169,4 +174,26 @@ test("tab opens, closes, interrupts and overruns animated in the sidebar and the
   noteTabMotion(consentToken(), "strip", "overrun");
   assert.deepEqual(takeTabStripCounts(), { ...ZERO, sidebar_tab_open_motions: 2, sidebar_tab_close_motions: 1, sidebar_tab_motion_interrupts: 1, tab_strip_open_motions: 1, tab_strip_close_motions: 3, tab_strip_motion_interrupts: 1, tab_strip_motion_overruns: 1 });
   assert.deepEqual(takeTabStripCounts(), ZERO);
+});
+
+test("a tab picked in the strip counts as reached by scrolling only within ten seconds of the strip's last scroll", () => {
+  sharing(true);
+  takeTabStripCounts();
+  noteTabStripScrolled((clock += 60_000));
+  noteTabStripPick((clock += 9_000));
+  noteTabStripPick((clock += 2_000));
+  const counts = takeTabStripCounts();
+  assert.deepEqual([counts.tab_strip_picks, counts.tab_strip_picks_after_scroll], [2, 1]);
+});
+
+test("a pick from the open tabs menu counts under the consent taken when the menu opened, not the one when it was chosen", () => {
+  sharing(true);
+  takeTabStripCounts();
+  const opened = client.consentToken();
+  sharing(false);
+  sharing(true);
+  noteTabStripMenuPick(opened);
+  assert.equal(takeTabStripCounts().tab_strip_menu_picks, 0);
+  noteTabStripMenuPick(client.consentToken());
+  assert.equal(takeTabStripCounts().tab_strip_menu_picks, 1);
 });

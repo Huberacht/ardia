@@ -5,6 +5,7 @@ export type StripScroll = {
   offset(): number;
   max(): number;
   scrollTo(x: number): void;
+  holdShown(held: boolean): void;
   measure(done: (x: number, width: number) => void): void;
 };
 

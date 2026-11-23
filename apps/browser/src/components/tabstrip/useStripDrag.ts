@@ -59,10 +59,17 @@ export function useStripDrag(item: StripDrag) {
     raiseView(tag, latest.current.levels ?? (latest.current.groupId ? 1 : 0), on);
     raised.current = on ? tag : null;
   };
+  const shownHeld = useRef(false);
+  const releaseShown = () => {
+    if (!shownHeld.current) return;
+    shownHeld.current = false;
+    latest.current.scroll?.holdShown(false);
+  };
   const rest = () => {
     dx.setValue(0);
     setLook("rest");
     raise(false);
+    releaseShown();
   };
   const stopAutoScroll = () => {
     if (drag.current.frame) cancelAnimationFrame(drag.current.frame);
@@ -146,6 +153,10 @@ export function useStripDrag(item: StripDrag) {
       const step = autoScrollSpeed(now.moveX, view, at, scroll.max(), AUTO_SCROLL_ZONE, AUTO_SCROLL_MAX);
       if (!step) return;
       const next = Math.max(0, Math.min(scroll.max(), at + step));
+      if (!shownHeld.current) {
+        shownHeld.current = true;
+        scroll.holdShown(true);
+      }
       scroll.scrollTo(next);
       drag.current.scrolled += next - at;
       if (!moveTo(now)) autoScroll();
@@ -155,6 +166,7 @@ export function useStripDrag(item: StripDrag) {
     () => () => {
       stopAutoScroll();
       landSettle();
+      releaseShown();
       if (phase.current.kind !== "dragging") return;
       if (drag.current.crossed) latest.current.cross?.clear();
       settleRoom(latest.current.geometry);

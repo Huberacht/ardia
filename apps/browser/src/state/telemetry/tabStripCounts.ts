@@ -2,6 +2,7 @@ import { takeTabLayoutCounts } from "./tabLayoutCounts";
 import { takeTabMotionCounts } from "./tabMotionCounts";
 import { onConsentPeriodChange } from "./choice";
 import { consentedCount, consentedMax } from "./consentedCount";
+import { countFor, type ConsentToken } from "./consentPeriod";
 
 const groupToggles = consentedCount();
 const textOnlyRows = consentedCount();
@@ -13,7 +14,9 @@ const mostTabs = consentedMax();
 const heldCloses = consentedCount();
 const heldCloseStretches = consentedCount();
 const mostTitledTabs = consentedMax();
-const mostTabsInOverflow = consentedMax();
+const picks = consentedCount();
+const picksAfterScroll = consentedCount();
+let menuPicks = 0;
 const scrolls = consentedCount();
 const revealsHeldForScroll = consentedCount();
 const scrollStalls = consentedCount();
@@ -23,6 +26,7 @@ let lastScrollAt = -Infinity;
 let lastToggle = { windowId: "", at: -Infinity };
 onConsentPeriodChange(() => {
   lastScrollAt = -Infinity;
+  menuPicks = 0;
   lastToggle = { windowId: "", at: -Infinity };
 });
 
@@ -30,6 +34,7 @@ const TOGGLE_WINDOW_MS = 400;
 
 const NEW_SCROLL_GAP_MS = 250;
 const STALL_GAP_MS = 34;
+const PICK_AFTER_SCROLL_MS = 10000;
 
 export function noteTabStripGroupToggle(windowId: string, at: number) {
   groupToggles.note();
@@ -64,8 +69,13 @@ export function noteTabStripOverflow(tabs: number) {
   mostTabs.note(tabs);
 }
 
-export function noteTabStripTabsInOverflow(tabs: number) {
-  mostTabsInOverflow.note(tabs);
+export function noteTabStripPick(at: number) {
+  picks.note();
+  if (at - lastScrollAt < PICK_AFTER_SCROLL_MS) picksAfterScroll.note();
+}
+
+export function noteTabStripMenuPick(consent: ConsentToken | null) {
+  countFor(consent, () => void menuPicks++);
 }
 
 export function noteTabStripHeldClose() {
@@ -95,6 +105,12 @@ export function noteTabStripScrolled(at: number) {
   else if (gap > STALL_GAP_MS) scrollStalls.note();
 }
 
+function takeMenuPicks() {
+  const taken = menuPicks;
+  menuPicks = 0;
+  return taken;
+}
+
 export function takeTabStripCounts() {
   return {
     tab_strip_group_toggles: groupToggles.take(),
@@ -108,7 +124,9 @@ export function takeTabStripCounts() {
     tab_strip_held_closes: heldCloses.take(),
     tab_strip_held_close_stretches: heldCloseStretches.take(),
     tab_strip_most_titled_tabs: mostTitledTabs.take(),
-    tab_strip_most_tabs_in_overflow: mostTabsInOverflow.take(),
+    tab_strip_picks: picks.take(),
+    tab_strip_picks_after_scroll: picksAfterScroll.take(),
+    tab_strip_menu_picks: takeMenuPicks(),
     tab_strip_scrolls: scrolls.take(),
     tab_strip_scroll_stalls: scrollStalls.take(),
     tab_strip_reveals_held_for_scroll: revealsHeldForScroll.take(),
