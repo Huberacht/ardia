@@ -334,7 +334,23 @@ try {
     const standInFlags = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureStandIn").map((e) => e.payload ?? e);
     const activationEvents = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureActivated");
     const activations = async () => (await activationEvents()).length;
-    const magnify = async (args) => JSON.parse(await pip(`magnify:${args}`));
+    const whileHittable = async (send, delivered) => {
+      if ((await pip("hittable:1")) !== "1") throw new Error("couldn't make the window hittable");
+      try {
+        const answer = await send();
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline && !(await delivered())) await sleep(50);
+        return answer;
+      } finally {
+        await pip("hittable:0");
+      }
+    };
+    const magnify = async (args) => {
+      const parts = args.split(",");
+      const expected = 1 + Number(parts[3]) + (parts[5] === "noEnd" ? 0 : 1);
+      const seen = (await lastPinch()).events;
+      return whileHittable(async () => JSON.parse(await pip(`magnify:${args}`)), async () => (await lastPinch()).events >= seen + expected);
+    };
     const lastPinch = async () => JSON.parse(await pip("lastPinch"));
     const monitor = async () => (await engine("tabs.devPictureInPictureAction", { action: "pinchMonitor" })) === "1";
     const handOff = async () => {
@@ -343,11 +359,11 @@ try {
       await sleep(300);
     };
     const middle = (s) => `${Math.round(s.width / 2)},${Math.round(s.height / 2)}`;
-    const hittable = async () => {
+    const invisible = async () => {
       await pip("alpha:0");
-      if ((await pip("hittable:1")) !== "1") throw new Error("couldn't make the window hittable");
+      await pip("hittable:0");
     };
-    await hittable();
+    await invisible();
     try {
       await r.check("routing: a pinch macOS hands to the browser window, seen by the monitor with that window, resizes the PiP under the pointer; one beside it passes through", async () => {
         await appActive(true);
@@ -410,7 +426,8 @@ try {
           await handOff();
           const seen = await lastPinch();
           const shrunk = await state();
-          await pip("swipe:0,60,10,command");
+          const widthBefore = (await state()).width;
+          await whileHittable(() => pip("swipe:0,60,10,command"), async () => (await state()).width !== widthBefore);
           await sleep(900);
           const scrolled = await state();
           const flags = await standInFlags();
@@ -446,25 +463,27 @@ try {
         await magnify(`${middle(before)},1.1,12,main,noEnd`);
         await until("the pinch's events", async () => (await lastPinch()).events >= seenBefore + 13, 3000);
         const x = before.width - 2, y = Math.round(before.height / 2);
+        const pressed = { x: before.x + x, y: before.y + before.height - y };
         await pip(`mouse:down:${x},${y}`);
         await sleep(60);
         const handedTo = await lastPinch();
         const start = await state();
+        const local = (screenX, screenY) => `${Math.round(screenX - start.x)},${Math.round(start.y + start.height - screenY)}`;
         const by = 120, moves = 16;
         let midDrag = null;
         for (let i = 1; i <= moves; i++) {
-          await pip(`mouse:dragged:${Math.round(x + (by * i) / moves)},${y}`);
+          await pip(`mouse:dragged:${local(pressed.x + (by * i) / moves, pressed.y)}`);
           await sleep(100);
           if (i === 14) midDrag = { standIn: await pip("standIn"), shown: rect(JSON.parse(await pip("pinchStats")).shown)[2] };
         }
-        await pip(`mouse:up:${x + by},${y}`);
+        await pip(`mouse:up:${local(pressed.x + by, pressed.y)}`);
         await until("the edge drag's hand-off", async () => !(await pip("standIn")), 5000);
         const after = await state();
         const problems = [];
         if (handedTo.locked) problems.push(`the pinch kept window ${handedTo.locked} after the edge drag began`);
         if (!midDrag?.standIn) problems.push("the edge drag's stand-in was gone 1.4 s in, after the pinch's stall deadline");
         if (start.width <= before.width + 20) problems.push(`the pending pinch was dropped, not finished: ${size(before)} became ${size(start)} at the press`);
-        if (Math.abs(after.width - (start.width + by)) > 4) problems.push(`the edge drag left it ${size(after)}, expected width ${start.width + by}`);
+        if (Math.abs(after.width - (start.width + by)) > 2) problems.push(`the edge drag left it ${size(after)}, expected width ${start.width + by} (${by} pt of pointer travel in screen space)`);
         if (problems.length) throw new Error(problems.join("; "));
         return { before: size(before), pinched: size(start), after: size(after), midDragWidth: midDrag.shown };
       });
@@ -547,7 +566,7 @@ try {
           steps.reopened = await monitor();
         } finally {
           await appActive(true).catch(() => null);
-          await hittable().catch(() => null);
+          await invisible().catch(() => null);
         }
         const expected = { shown: true, tucked: false, untucked: true, closed: false, reopened: true };
         if (JSON.stringify(steps) !== JSON.stringify(expected)) throw new Error(`monitor ${JSON.stringify(steps)}, expected ${JSON.stringify(expected)}`);
