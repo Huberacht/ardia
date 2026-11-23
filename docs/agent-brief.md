@@ -138,7 +138,8 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   `ardia::OffTheRecord::kAllow`: the engine alone decides which calls serve a private session; (2) `scripts/agent/engine-build`; (3) call it with
   `ArdiaEngineBridge call:` (`callWithSecret:` for secrets); for JS, add the call to its domain's host API schema
   (below), which generates the Mac call table's `EngineCall.passing("ac_<domain>_<verb>")` row and the TS types.
-  **Host API schema:** every engine domain lives in `packages/hostapi/schema` and `api.ts` writes no row by hand; add
+  **Host API schema:** every engine domain but `media` lives in `packages/hostapi/schema`, and `api.ts` writes rows by
+  hand only for `media` (`engine/ardiacore-linux/tests/test_cast.py`, a Linux key input, reads them there); add
   the row there instead, with its `service`, its
   explicit `desktop` binding (`route`, `custom` or `absent`) and any `mac`/`windows` override (`custom` when that host
   serves it with its own code; a call no host passes straight through may leave out `service`). A Linux route that

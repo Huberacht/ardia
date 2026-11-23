@@ -11,9 +11,11 @@ const api = readApi().replace(/\r\n/g, "\n");
 const manifest = readManifest();
 const capitalized = (name) => name[0].toUpperCase() + name.slice(1);
 const sorted = (set) => [...set].sort();
-const GENERATED_EVENTS = "AutofillEvents & BookmarksEvents & ContentBlockerEvents & DownloadsEvents & EngineDomainEvents & ExtensionsEvents & FaviconsEvents & HistoryEvents & MediaEvents & PasswordsEvents & PermissionsEvents & ProfilesEvents & SearchEvents & SitesEvents & TabsEvents & WebKitEvents & WebViewEvents & WindowsEvents";
+const GENERATED_EVENTS = "AutofillEvents & BookmarksEvents & ContentBlockerEvents & DownloadsEvents & EngineDomainEvents & ExtensionsEvents & FaviconsEvents & HistoryEvents & PasswordsEvents & PermissionsEvents & ProfilesEvents & SearchEvents & SitesEvents & TabsEvents & WebKitEvents & WebViewEvents & WindowsEvents";
 const EVENTS_TYPE = `export type EngineEvents = ${GENERATED_EVENTS}`;
-const withRows = api.replace(`${EVENTS_TYPE};`, `${EVENTS_TYPE} & {\n  "reauth.sampled": { granted: boolean };\n};`);
+const HAND_WIRED = ["media"];
+const withoutRows = (source, type) => source.replace(new RegExp(`(export type ${type} = [^{;]*?) & \\{\\n[\\s\\S]*?\\n\\};`), "$1;");
+const withRows = api;
 
 test("api.ts takes each generated domain's calls and events from packages/hostapi and restates none of them", () => {
   const calls = typeRows(api, manifest, "EngineCalls");
@@ -28,12 +30,19 @@ test("api.ts takes each generated domain's calls and events from packages/hostap
   }
 });
 
-test("every engine call and event comes from the schema: api.ts hand-writes none", () => {
-  assert.deepEqual(typeRows(api, manifest, "EngineCalls").hand, []);
-  assert.deepEqual(typeRows(api, manifest, "EngineEvents").hand, []);
-  assert.ok(api.includes(`${EVENTS_TYPE};`));
-  assert.notEqual(withRows, api);
-  assert.deepEqual(typeRows(withRows, manifest, "EngineEvents").hand, ["reauth.sampled"]);
+test("every engine call and event but the hand-wired media domain's comes from the schema", () => {
+  for (const type of ["EngineCalls", "EngineEvents"]) {
+    const { hand } = typeRows(api, manifest, type);
+    assert.ok(hand.length > 0, `${type} still lists media's rows`);
+    assert.deepEqual([...new Set(hand.map((key) => key.split(".")[0]))], HAND_WIRED, `${type}'s hand-written rows`);
+    const generatedOnly = withoutRows(api, type);
+    assert.notEqual(generatedOnly, api);
+    assert.deepEqual(typeRows(generatedOnly, manifest, type).hand, [], `${type} composed from generated domains alone`);
+  }
+  for (const domain of HAND_WIRED) assert.equal(manifest.domains[domain], undefined, `${domain} is hand-wired, not in the schema`);
+  const extra = api.replace(`${EVENTS_TYPE} & {`, `${EVENTS_TYPE} & {\n  "sites.handWritten": unknown;`);
+  assert.notEqual(extra, api);
+  assert.notDeepEqual([...new Set(typeRows(extra, manifest, "EngineEvents").hand.map((key) => key.split(".")[0]))], HAND_WIRED);
 });
 
 test("a type composed from anything but generated domains and one row literal is refused, and every member of the literal is read as a row or refused, so no row escapes the parity checks", () => {

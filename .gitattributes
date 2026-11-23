@@ -7,7 +7,6 @@ packages/ardiacore/ios/EngineCalls.swift text eol=lf
 packages/ardiacore/ios/ExtensionsCalls.swift text eol=lf
 packages/ardiacore/ios/FaviconsCalls.swift text eol=lf
 packages/ardiacore/ios/HistoryModule.swift text eol=lf
-packages/ardiacore/ios/MediaCalls.swift text eol=lf
 packages/ardiacore/ios/PasswordsCalls.swift text eol=lf
 packages/ardiacore/ios/PermissionsCalls.swift text eol=lf
 packages/ardiacore/ios/ProfilesCalls.swift text eol=lf
