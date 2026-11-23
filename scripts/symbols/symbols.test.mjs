@@ -140,8 +140,12 @@ test("a frame is named once, and one without symbols is tried again after a day"
     { uuid: APP_UUID, offset: "1", source: "dsym", at: 0 },
     { uuid: APP_UUID, offset: 2, source: "none", at: now - 1000 },
     { uuid: APP_UUID, offset: 3, source: "none", at: now - RETRY_MISSING_MS },
+    { uuid: APP_UUID, offset: 4, source: "match", at: now - 1000 },
+    { uuid: APP_UUID, offset: 5, source: "match", at: now - RETRY_MISSING_MS },
+    { uuid: APP_UUID, offset: 6, source: "outside", at: now - RETRY_MISSING_MS },
   ];
-  assert.deepEqual(plan(wanted, known, now).map((f) => f.offset), [3, 4]);
+  const all = [...wanted, ...[5, 6, 7].map((offset) => ({ image: "Ardia", uuid: APP_UUID, offset }))];
+  assert.deepEqual(plan(all, known, now).map((f) => f.offset), [3, 5, 6, 7]);
   assert.match(knownSql("sandbox", [APP_UUID, "x'); DROP TABLE y; --"]), new RegExp(`IN \\('${APP_UUID}'\\)`));
   assert.throws(() => knownSql("sandbox; DROP", []), /identifier/);
   const map = buildMap(appBinary(), APP_UUID, { demanglers: NO_DEMANGLERS });
@@ -332,6 +336,8 @@ test("a cached match map gives way to a dSYM a release publishes later, and stay
   const store = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch });
   store.saveMap(matched);
   assert.equal((await store.maps([APP_UUID])).get(APP_UUID).source, "match", "a failed dSYM download keeps the match map, and a missing manifest doesn't stop the index");
+  const offline = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch: async () => new Response("rate limited", { status: 403 }), log: () => {} });
+  assert.equal((await offline.maps([APP_UUID])).get(APP_UUID).source, "match", "a release list GitHub refuses still leaves the cached map");
   serveArchive = true;
   const later = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch });
   const map = (await later.maps([APP_UUID])).get(APP_UUID);

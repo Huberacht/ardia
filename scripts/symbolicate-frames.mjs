@@ -21,8 +21,8 @@ so it runs on Linux too: tar and xz, plus swift-demangle and c++filt when presen
 also carry *-symbol-map.tsv.gz, a ready map for a build without a dSYM (scripts/symbols/name-stripped-build.mjs);
 --maps adds a folder of such maps. Maps are cached per UUID in --cache (default dist/frame-symbols).
 
-A frame with no symbols is stored as source "none", and a frame outside every named function of
-its image is stored as "outside"; both are tried again after a day. Names come from the function that holds the offset, written "<function> + <bytes>".
+A frame with no symbols is stored as source "none", one named from a match map as "match", and a frame outside every named function of
+its image as "outside"; all three are tried again after a day, so a dSYM published later replaces them. Names come from the function that holds the offset, written "<function> + <bytes>".
 
 Environment: CLICKHOUSE_URL, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD read telemetry.events (the reader user);
 TRIAGE_CLICKHOUSE_PASSWORD (with TRIAGE_CLICKHOUSE_URL, TRIAGE_CLICKHOUSE_USER, TRIAGE_CLICKHOUSE_DATABASE, defaulting

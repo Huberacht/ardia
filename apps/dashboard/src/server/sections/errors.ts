@@ -68,7 +68,7 @@ export async function errorsExceptions(range: RangeKey, signal?: AbortSignal, zo
     query(
       `SELECT uuid, toUnixTimestamp64Milli(timestamp), ${WHERE}, distinct_id, ${TYPE}, ${MESSAGE},
          multiIf(${SITE}, properties['release_version'], ${CLI}, properties['cli_version'], properties['crashed_version'] != '', properties['crashed_version'], ${prop("$app_version")}),
-         substring(properties['$exception_list'], 1, if(properties['crash_images'] != '', 32000, 12000)), properties['$raw_user_agent'], properties['$current_url'],
+         if(properties['crash_images'] != '', properties['$exception_list'], substring(properties['$exception_list'], 1, 12000)), properties['$raw_user_agent'], properties['$current_url'],
          if(${SITE}, concat(${prop("$browser")}, ' ', properties['$browser_version'], ' · ', ${prop("$os")}), concat('macOS ', properties['$os_version'], ' · ', properties['arch'])),
          properties['$exception_level'], properties['crash_signal'], properties['crash_images']
        FROM telemetry.events

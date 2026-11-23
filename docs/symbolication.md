@@ -19,8 +19,9 @@ symbols are published.
    - it writes one row per frame to `sandbox.ardia_frame_symbols`: UUID, offset, image, function, offset inside the
      function, and source.
    Maps are cached per UUID (`dist/frame-symbols/maps`, gzipped, with the Actions cache keyed by their content), so a
-   UUID is downloaded once and later offsets only cost a lookup. A frame is named once. One with no symbols (`none`)
-   or outside every named function (`outside`) is tried again after a day.
+   UUID is downloaded once and later offsets only cost a lookup. A frame named from a dSYM is named once. One with no
+   symbols (`none`), outside every named function (`outside`) or named from a match map (`match`) is tried again after a
+   day, so a dSYM published later replaces it.
 3. **The dashboard reads the names.** Errors and Performance › Freezes look up the frames they show in
    `ardia_frame_symbols` (`apps/dashboard/src/server/frame-symbols.ts`). A named frame reads
    `MenuTarget.undoOrReopenClosedTab(_:) + 400`. An unnamed one keeps its raw offset. Hover a freeze place to see both.

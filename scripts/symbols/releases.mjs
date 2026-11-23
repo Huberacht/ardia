@@ -168,8 +168,15 @@ export class SymbolStore {
       if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
       if (this.loaded.get(uuid)?.source !== "dsym") missing.push(uuid);
     }
+    let index = null;
     if (missing.length) {
-      const index = await this.releaseIndex();
+      try {
+        index = await this.releaseIndex();
+      } catch (error) {
+        this.log(`couldn't list releases, using cached maps only: ${error.message}`);
+      }
+    }
+    if (index) {
       for (const uuid of missing) if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
       const failed = new Set();
       for (let round = 0; round < 8; round++) {
