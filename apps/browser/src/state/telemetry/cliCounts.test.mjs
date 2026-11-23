@@ -44,3 +44,17 @@ test("token command totals read without consent count nothing", () => {
   noteTokenCommands({ dom: 50, browser: 9 }, null);
   assert.equal(takeCliCounts().cli_cdp_commands_dom, 0);
 });
+
+test("an expired token counts nothing, and the next valid reading only sets the new period's baseline", () => {
+  noteTokenCommands({ dom: 100 }, client.consentNow());
+  takeCliCounts();
+  const old = client.consentNow();
+  client.setSharing(false, "settings");
+  client.setSharing(true, "settings");
+  noteTokenCommands({ dom: 110 }, old);
+  assert.equal(takeCliCounts().cli_cdp_commands_dom, 0);
+  noteTokenCommands({ dom: 115 }, client.consentNow());
+  assert.equal(takeCliCounts().cli_cdp_commands_dom, 0);
+  noteTokenCommands({ dom: 118 }, client.consentNow());
+  assert.equal(takeCliCounts().cli_cdp_commands_dom, 3);
+});
