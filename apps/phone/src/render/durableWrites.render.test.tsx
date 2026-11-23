@@ -350,3 +350,19 @@ test("at the archive's limit, the oldest archived tab is pruned when a tab archi
   expect(browserDatabase.readArchivedTabs(tabDatabase(), 10_000).length).toBe(ARCHIVE_LIMIT);
   browserDatabase.writeTabs(tabDatabase(), [], browserDatabase.readArchivedTabs(tabDatabase(), 10_000).map((tab) => tab.id));
 });
+
+test("when more tabs than the archive holds are archived on a busy database with none committed yet, prune trims the queued tabs to the limit", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  expect(flushTabWrites()).toBe(true);
+  browserDatabase.writeTabs(tabDatabase(), [], browserDatabase.readArchivedTabs(tabDatabase(), 10_000).map((tab) => tab.id));
+  withTabs(ARCHIVE_LIMIT + 1);
+  const ids = currentTabs().open.map((tab) => tab.id);
+  const busy = refuse(Number.POSITIVE_INFINITY, "SQLITE_BUSY");
+  for (const id of ids) act(() => archiveTabById(id));
+  expect(browserDatabase.readArchivedTabs(tabDatabase(), 10_000)).toHaveLength(0);
+  expect(pruneExpiredArchive()).toBe(1);
+  busy.mockRestore();
+  expect(flushTabWrites()).toBe(true);
+  expect(browserDatabase.readArchivedTabs(tabDatabase(), 10_000)).toHaveLength(ARCHIVE_LIMIT);
+  browserDatabase.writeTabs(tabDatabase(), [], browserDatabase.readArchivedTabs(tabDatabase(), 10_000).map((tab) => tab.id));
+});

@@ -338,7 +338,9 @@ export function saveTabState(id: string, saved: string | null, save: StateSave =
 function expiredThroughPending(db: SqlDatabase, cutoff: number, live: ReadonlySet<string>): { byAge: string[]; byRank: string[] } {
   const shift = pendingOverfetch(db) + live.size;
   const tail = archivedRankedFrom(db, Math.max(0, ARCHIVE_LIMIT - shift));
-  const overflow = tail.length ? new Set(tail.map((tab) => tab.id)) : null;
+  const queuedArchived = [...(pendingWrites.get(db)?.put.values() ?? [])].filter((tab) => tab.archivedAt !== null).map((tab) => tab.id);
+  const candidates = [...tail.map((tab) => tab.id), ...queuedArchived];
+  const overflow = candidates.length ? new Set(candidates) : null;
   const kept = overflow ? new Set(archiveView(db, (limit) => readArchivedTabs(db, limit), () => true, ARCHIVE_LIMIT).map((tab) => tab.id)) : null;
   const byRank = overflow && kept ? [...overflow].filter((id) => !kept.has(id)) : [];
   return { byAge: archivedBefore(db, cutoff), byRank };
