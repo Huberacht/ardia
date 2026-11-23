@@ -536,3 +536,27 @@ test("pressure sweeps wait for launch to settle, share one rate limit through a 
   assert.equal(asked.length, 1, "after the Mac returns to normal the sweep sends no more asks under the warning's rules");
   webviews.clear();
 });
+
+test("crossing the budget while a warning is already on wakes the sweep jobs, once per crossing", async () => {
+  const { watchOverBudget } = await import("./loadedTabBudget.ts");
+  const { webviews, webviewRef } = await import("../../platform/webviews.ts");
+  const now = Date.now() + 2000 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(3, now);
+  webviews.clear();
+  const refs = Object.fromEntries([active, ...ids].map((id) => [id, webviewRef(id)]));
+  refs[active]({ sleepIfHidden: async () => [] });
+  refs[ids[0]]({ sleepIfHidden: async () => [] });
+  let woken = 0;
+  const stop = watchOverBudget(() => ({ tabs: 2, hiddenMs: 5 * minute, pressure: "warning", everyMs: 15_000 }), () => woken++);
+  refs[ids[1]]({ sleepIfHidden: async () => [] });
+  assert.equal(woken, 1, "a third loaded tab puts the window over a budget of two");
+  refs[ids[2]]({ sleepIfHidden: async () => [] });
+  assert.equal(woken, 1, "staying over budget isn't a new crossing");
+  lifecycle.noteDiscarded(ids[1]);
+  lifecycle.noteDiscarded(ids[2]);
+  assert.equal(woken, 2, "falling back under it is");
+  stop();
+  lifecycle.noteReady(ids[1]);
+  lifecycle.noteReady(ids[2]);
+  webviews.clear();
+});

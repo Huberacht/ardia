@@ -1,7 +1,7 @@
 import type { SystemState } from "../../platform/performance";
 import { everySlowly, reschedule } from "../../platform/slowTimers";
-import { webviews } from "../../platform/webviews";
-import { afterFirstWindow } from "../../lib/afterFirstWindow";
+import { onWebviewsChanged, webviews } from "../../platform/webviews";
+import { afterFirstRoot } from "../../lib/afterFirstWindow";
 import { withDeadline } from "../../lib/deadline";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { useBrowser, type BrowserState } from "../browser/store";
@@ -16,7 +16,7 @@ import type { ConsentToken } from "../telemetry/choice";
 import { hasPage } from "./pageSession";
 import { usePages } from "./pageState";
 import { shownTabIds } from "./shownTabs";
-import { isSleeping } from "./sleepingTabs";
+import { isSleeping, useLifecycle } from "./sleepingTabs";
 import { engineVeto, MINUTE, sleepRules, sleepVeto, tabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
 import { liveOf, onLiveChange } from "./tabLive";
 import { countSwitches, forgetSwitchesExcept, switchesOf } from "./tabSwitches";
@@ -222,6 +222,22 @@ export function pressureChanged(consent: ConsentToken | null, budget = budgetNow
   reschedule();
 }
 
+export function watchOverBudget(budget: () => LoadedTabBudget | null, changed: () => void): () => void {
+  let was = overBudget(budget());
+  const check = () => {
+    const now = overBudget(budget());
+    if (now === was) return;
+    was = now;
+    changed();
+  };
+  const stopViews = onWebviewsChanged(check);
+  const stopLifecycle = useLifecycle.subscribe(check);
+  return () => {
+    stopViews();
+    stopLifecycle();
+  };
+}
+
 export function armPressureSweeps() {
   pressureArmed = true;
   reschedule();
@@ -239,12 +255,14 @@ export function startLoadedTabBudget(system: () => SystemState | null) {
     every: SWEEP_MS,
     run: () => void sweepIfDue(budget(), consentToken()),
     needed: () => overBudget(budget()),
+    watch: (changed) => watchOverBudget(budget, changed),
   });
   everySlowly({
     every: PRESSURE_TICK_MS,
     run: () => void sweepIfDue(budget(), consentToken()),
     needed: () => pressureArmed && underPressure(budget()) && overBudget(budget()),
+    watch: (changed) => watchOverBudget(budget, changed),
   });
-  afterFirstWindow(() => setTimeout(armPressureSweeps, PRESSURE_ARMS_AFTER_MS));
+  afterFirstRoot(() => setTimeout(armPressureSweeps, PRESSURE_ARMS_AFTER_MS));
   if (__DEV__) (globalThis as { acLoadedTabBudget?: unknown }).acLoadedTabBudget = { sleepTabsOverBudget, budget, tabsOverBudget, planOverBudget };
 }

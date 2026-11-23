@@ -97,4 +97,6 @@ test("warm pages are capped after split tabs expand into their panes, the next t
   assert.deepEqual(capWarmPanes(warmOrder(["a"], "s"), panesOf, none, "warning"), ["s", "a"], "the tab a close lands on keeps its place");
   assert.deepEqual(capWarmPanes(["a", "b"], panesOf, new Set(["a"]), "warning"), ["a2", "b"], "a pane already shown is left to the shown layout");
   assert.deepEqual(capWarmPanes(["a", "b"], panesOf, none, "critical"), []);
+  const third = { s: ["x1", "x2", "s"], x1: ["x1", "x2", "s"] };
+  assert.deepEqual(capWarmPanes(warmOrder(["x1"], "s"), (id) => third[id] ?? [id], none, "warning"), ["s", "x1"], "the next tab keeps its place even as a split's third pane");
 });

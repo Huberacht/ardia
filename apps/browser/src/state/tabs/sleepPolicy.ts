@@ -71,7 +71,10 @@ export function warmOrder(neighbours: readonly string[], successor: string | und
 
 export function capWarmPanes(order: readonly string[], panesOf: (id: string) => readonly string[], shown: ReadonlySet<string>, pressure: MemoryPressure): string[] {
   const panes: string[] = [];
-  for (const id of order) for (const pane of panesOf(id)) if (!shown.has(pane) && !panes.includes(pane)) panes.push(pane);
+  for (const id of order) {
+    const own = panesOf(id);
+    for (const pane of own.includes(id) ? [id, ...own.filter((p) => p !== id)] : own) if (!shown.has(pane) && !panes.includes(pane)) panes.push(pane);
+  }
   const cap = warmViewCap(pressure);
   return panes.length > cap ? panes.slice(0, cap) : panes;
 }
