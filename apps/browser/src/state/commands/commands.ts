@@ -194,16 +194,16 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return ui?.panel.open ? s.closePanel(windowId) : undefined;
     }
     case "closeTab":
-      if (targeted) return void closeTab(targeted, { mayWrite, user: !!user });
+      if (targeted) return void closeTab(targeted, { mayWrite, user });
       if (ui?.panel.newTab) {
         closeNewTabBar(windowId);
         if (NEW_TAB_BAR_POLICY.closeTabKeyOnlyDismissesBar || !tabId) return;
-        return void closeTab(tabId, { mayWrite, user: !!user });
+        return void closeTab(tabId, { mayWrite, user });
       }
       if (ui?.panel.open) return tabId ? closePanelToHeroBar(windowId, tabId, "closeKey") : s.closePanel(windowId);
       const closedSelection = closeSelectionByKey(windowId, user);
       if (closedSelection) return void noteSelectionClosedByKey(closedSelection);
-      return tabId ? void closeTab(tabId, { mayWrite, user: !!user }) : undefined;
+      return tabId ? void closeTab(tabId, { mayWrite, user }) : undefined;
     case "print":
       return void web?.print();
     case "printWithSystemDialog":

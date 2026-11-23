@@ -31,9 +31,9 @@ export function cleanUpWithUndo(windowId: string) {
   });
 }
 
-export function middleClickTab(tabId: string) {
+export function middleClickTab(tabId: string, user: ByUser) {
   const removed = store().removeClosedPin(tabId);
-  if (!removed) return void closeTab(tabId, { user: true });
+  if (!removed) return void closeTab(tabId, { user });
   if (removed.entries.length) showClearUndo(removed, "Removed Pinned Tab", "pin.slash");
 }
 

@@ -635,3 +635,117 @@ test("a Close Group you start reads consent before its guard waits, so turning s
   client.setSharing(false, "settings");
   S().updateSettings({ warnBeforeClosingTabGroup: true });
 });
+
+const { shellNativeModules } = await import("../../test-native/index.ts");
+
+test("the tab menu's Close counts under the token taken when the menu opened, and a native ⌘W with no token counts nothing", async () => {
+  const { takeCloseActivationCounts } = await import("../telemetry/closeActivationCounts.ts");
+  const { openTabMenu } = await import("../sidebar/tabMenu.ts");
+  const menus = shellNativeModules.ArdiaMenus;
+  const real = menus.showMenu;
+  client.loadChoice();
+  client.setSharing(false, "settings");
+  const { w, ids: [a, , c] } = windowWith("tabAbove", "a", "b", "c");
+  S().activate(a);
+  S().activate(c);
+  menus.showMenu = () => (client.setSharing(true, "settings"), takeCloseActivationCounts(), Promise.resolve("close"));
+  try {
+    await openTabMenu(w, S().tabs[c]);
+  } finally {
+    menus.showMenu = real;
+  }
+  assert.equal(shown(w), "b");
+  assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 0, close_tab_above_fallbacks: 0 }, "sharing was off when the menu opened");
+  const again = windowWith("tabAbove", "a", "b", "c");
+  S().activate(again.ids[2]);
+  runCommand({ command: "closeTab", arg: null, windowId: again.w }, { user: { consent: null } });
+  assert.equal(shown(again.w), "b");
+  assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 0, close_tab_above_fallbacks: 0 }, "a native event without a token never samples one late");
+  client.setSharing(false, "settings");
+});
+
+test("a pinned tab hidden while Close Group's prompt is open is never brought forward; today's pick applies", async () => {
+  const { closeGroup } = await import("../browser/actions.ts");
+  const dialogs = shellNativeModules.ArdiaDialogs;
+  const real = dialogs.confirm;
+  const { w, ids: [r, b, g1] } = windowWith("tabAbove", "r", "b", "g1");
+  S().pinTabs([b], true, true);
+  const hidden = S().createGroup([r], { name: "H" });
+  const g = S().createGroup([g1], { name: "G" });
+  S().activate(r);
+  S().activate(b);
+  S().activate(g1);
+  S().updateGroup(hidden, { collapsed: true });
+  const profile = S().windows[w].profileId;
+  dialogs.confirm = async () => (S().updateProfile(profile, { pinnedCollapsed: true }), { confirmed: true, suppressed: false });
+  try {
+    await closeGroup(g, { user: you() });
+  } finally {
+    dialogs.confirm = real;
+    S().updateProfile(profile, { pinnedCollapsed: false });
+  }
+  assert.equal(shown(w), "r", "today's pick: the tab above the group");
+});
+
+test("Delete Group from the menu decides Tab above before the shared-folder confirmation waits", async () => {
+  const { openGroupMenu } = await import("../sidebar/groupMenu.ts");
+  const { bindFolder, unbindFolder } = await import("../sharedFolders/store.ts");
+  const { pinKeyOf } = await import("../browser/model.ts");
+  const menus = shellNativeModules.ArdiaMenus;
+  const dialogs = shellNativeModules.ArdiaDialogs;
+  const realMenu = menus.showMenu;
+  const realConfirm = dialogs.confirm;
+  const { w, ids: [p, g1, r] } = windowWith("tabAbove", "p", "g1", "r");
+  S().pinTabs([p], true, true);
+  const g = S().groupTabs([g1], { name: "Team" });
+  S().activate(p);
+  S().activate(r);
+  S().activate(g1);
+  const profileId = S().groups[g].profileId;
+  const key = pinKeyOf(S().groups[g]);
+  bindFolder(profileId, key, "/scratch/Ardia Shared/Team", { device: 1, inode: 9 });
+  menus.showMenu = () => Promise.resolve("delete");
+  dialogs.confirm = async () => (S().updateSettings({ afterClosingTab: "previouslyActive" }), { confirmed: true, suppressed: false });
+  try {
+    await openGroupMenu(w, g);
+  } finally {
+    menus.showMenu = realMenu;
+    dialogs.confirm = realConfirm;
+    unbindFolder(profileId, key);
+  }
+  assert.ok(!S().groups[g], "the group was deleted");
+  assert.equal(shown(w), "p", "the pick made when you chose Delete, before the prompt");
+});
+
+test("closing or deleting a group whose only other tab is an unloaded pin does what Previously active does: that pin comes forward", () => {
+  for (const action of ["closeGroup", "deleteGroup"]) {
+    const results = [];
+    for (const mode of BOTH) {
+      const { w, ids: [p, g1] } = windowWith(mode, "p", "g1");
+      S().pinTabs([p], true, true);
+      const g = S().createGroup([g1], { name: "G" });
+      closeAll([p]);
+      S().activate(g1);
+      S()[action](g, mode === "tabAbove" ? userClose(S().groups[g].tabIds, you()) : undefined);
+      results.push([shown(w), S().tabs[p].page.kind === "asleep"]);
+    }
+    assert.deepEqual(results[1], results[0], `${action}: Tab above matches Previously active`);
+  }
+});
+
+test("a tab that joins the group while Close Group waits is never kept as the next tab; an unchanged group still picks it", async () => {
+  const { closeGroup } = await import("../browser/actions.ts");
+  for (const [joins, expected] of [[false, "a"], [true, "d"]]) {
+    const { w, ids: [a, b, c] } = windowWith("tabAbove", "a", "b", "c", "d");
+    S().updateSettings({ warnBeforeClosingTabGroup: false });
+    const g = S().createGroup([b, c], { name: "G" });
+    S().activate(c);
+    const closing = closeGroup(g, { user: you() });
+    if (joins) S().addTabsToGroup(g, [a]);
+    await closing;
+    const active = S().windows[w].activeTabIds[S().windows[w].profileId];
+    assert.ok(S().tabs[active], "the window shows a tab that exists");
+    assert.equal(shown(w), expected, joins ? "a joined and closed with the group" : "unchanged group");
+  }
+  S().updateSettings({ warnBeforeClosingTabGroup: true });
+});

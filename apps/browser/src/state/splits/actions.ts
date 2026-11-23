@@ -87,9 +87,11 @@ export function dropTabOnRow(tabId: string, rowTabId: string, side: "left" | "ri
   return { adopted: now && splitLane(now) !== splitLane(tab) ? splitLane(now) : null };
 }
 
-export function closePane(tabId: string) {
-  void closeTab(tabId, { user: true });
+export function closePane(tabId: string, user: ByUser) {
+  void closeTab(tabId, { user });
 }
+
+export const pressClosePane = (tabId: string) => closePane(tabId, { consent: consentToken() });
 
 export function closeSplitView(splitId: string, user: ByUser) {
   const split = store().splits[splitId];
@@ -160,7 +162,7 @@ export async function showSplitMenu(tabId: string) {
     case "separate":
       return st.separateSplit(split.id);
     case "close":
-      return closePane(tabId);
+      return closePane(tabId, { consent });
     case "closeSplit":
       return closeSplitView(split.id, { consent });
   }

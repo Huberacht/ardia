@@ -217,6 +217,7 @@ export function liveItemMenuItems(windowId: string, folderId: string, item: Live
 }
 
 export async function openLiveItemMenu(windowId: string, folderId: string, item: LiveItem, tabId: string | null) {
+  const consent = consentToken();
   const unread = !!live().unread[folderId]?.includes(item.id);
   const choice = await showMenu(liveItemMenuItems(windowId, folderId, item, tabId));
   if (choice === "open") openLiveItem(windowId, folderId, item);
@@ -227,7 +228,7 @@ export async function openLiveItemMenu(windowId: string, folderId: string, item:
   else if (choice === "unread") {
     if (unread) markRead(folderId, [item.id]);
     else markUnread(folderId, item.id);
-  } else if (choice === "close" && tabId) void closeTab(tabId, { user: true });
+  } else if (choice === "close" && tabId) void closeTab(tabId, { user: { consent } });
 }
 
 const DISMISS_NOW = "cal:dismissNow:";

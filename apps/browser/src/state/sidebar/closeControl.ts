@@ -55,10 +55,11 @@ export function pressGroupClose(groupId: string) {
 }
 
 export function pressTabClose(tabId: string) {
+  const user = { consent: consentToken() };
   const s = useBrowser.getState();
   const intent = closeIntent(s, tabId);
-  if (intent.kind === "unload") s.closeTabs(intent.ids, userClose(intent.ids, { consent: consentToken() }, { keepTopApps: false }));
-  else middleClickTab(tabId);
+  if (intent.kind === "unload") s.closeTabs(intent.ids, userClose(intent.ids, user, { keepTopApps: false }));
+  else middleClickTab(tabId, user);
 }
 
 export function pressPaneClose(tabId: string, pullOut: boolean) {

@@ -54,13 +54,12 @@ export function switchToTab(tabId: string) {
 
 export const writesFor = (mayWrite?: () => boolean) => (mayWrite ? (write: () => void) => write() : foreignWriteHooks.around);
 
-export type CloseRequest = { mayWrite?: () => boolean; user?: boolean };
-export type GroupCloseRequest = { mayWrite?: () => boolean; user?: ByUser };
+export type CloseRequest = { mayWrite?: () => boolean; user?: ByUser };
 
-export async function closeTab(tabId: string, { mayWrite, user = false }: CloseRequest = {}) {
+export async function closeTab(tabId: string, { mayWrite, user }: CloseRequest = {}) {
   const commit = writesFor(mayWrite);
-  const consent = consentToken();
-  const close = user ? userClose([tabId], { consent }) : {};
+  const consent = user ? user.consent : consentToken();
+  const close = user ? userClose([tabId], user) : {};
   const s = store();
   const tab = s.tabs[tabId];
   const w = tab && s.windows[tab.windowId];
@@ -85,7 +84,7 @@ export async function closeTab(tabId: string, { mayWrite, user = false }: CloseR
   commit(() => store().closeTab(tabId, close));
 }
 
-export async function closeGroup(groupId: string, { mayWrite, user }: GroupCloseRequest = {}) {
+export async function closeGroup(groupId: string, { mayWrite, user }: CloseRequest = {}) {
   const commit = writesFor(mayWrite);
   const s = store();
   const group = s.groups[groupId];

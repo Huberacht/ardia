@@ -306,7 +306,7 @@ function runTabChoice(windowId: string, tab: Tab, f: Facts, choice: string | Des
   else if (choice === "copy") copyUrls([tab.id], false);
   else if (choice === "copyMd") copyUrls([tab.id], true);
   else if (choice === "bookmark") bookmarkTab(windowId, tab.id);
-  else if (choice === "close") void closeTab(tab.id, { user: true });
+  else if (choice === "close") void closeTab(tab.id, { user: { consent } });
   else if (choice === "unloadTopApp") unloadTopApp(tab.id, consent);
   else if (choice === "sleep") void sleepTabsFromMenu([tab.id], "tab");
   else if (choice === "closeSplit" && f.split) closeSplitView(f.split.id, { consent });

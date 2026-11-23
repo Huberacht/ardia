@@ -128,5 +128,6 @@ export type ByUser = { consent: ConsentToken | null };
 export function userClose(ids: string[], { consent }: ByUser, options: CloseOptions = {}): CloseOptions {
   const successors = pickSuccessors(useBrowser.getState(), ids, options.keepTopApps);
   const noted = (pick: Successor) => void (pick.shown && noteCloseActivation(consent, pick.above ? "above" : "fallback"));
-  return { ...options, userClose: { successors, noted } };
+  const shows = (s: BrowserState, windowId: string, profileId: string, id: string) => visibleRows(s, windowId, profileId).some((row) => row.ids.includes(id));
+  return { ...options, userClose: { successors, noted, shows } };
 }
