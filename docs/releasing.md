@@ -176,8 +176,9 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
    than one value across the project's configurations or the version isn't `<version>`, `Info.plist` doesn't take
    `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)`, the Arch `pkgver` that `update-pkgbuild.sh` derives isn't
    right or the committed `.SRCINFO` drifted, the feed can't be read or is empty (only `APPCAST_BASE=none`, or a 404
-   with `RELEASE_FEED_MAY_BE_MISSING=1`, means there's no feed yet), the version is already in it, or the build number
-   isn't above every other build in it, stable or nightly. Every later step takes the version, build number and
+   with `RELEASE_FEED_MAY_BE_MISSING=1`, means there's no feed yet), the version is already in it, a stable isn't above the latest
+   stable in it (`publish.sh` would refuse it), or the build number isn't above every other build in it, stable or
+   nightly. The feed is one request with a 4-second limit. Every later step takes the version, build number and
    minimum macOS from the values it checked. Then it stops if if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
    framework is older than the tree's ArdiaCore sources or the Chromium tree differs from `engine/ardiacore`
    (`apply.sh --check`), or (outside `--rc`) if `prebuilt-engines.tsv` lists no
@@ -230,8 +231,8 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      Apple's log and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist
      submits fresh, and when notarytool can't answer, or answers a status the script doesn't know, it stops with the
      record kept. An `.app` Apple already holds a
-     ticket for is stapled without any upload. The record is only trusted as far as the staple: an Accepted id whose
-     ticket doesn't fit is submitted again. Polling Apple stops after `NOTARY_WAIT_SECONDS` (default 4 h; the
+     ticket for is stapled without any upload. When Apple has accepted an id but stapler can't fetch its ticket, it stops
+     with the record kept rather than uploading again (delete the record if the ticket really isn't that file's). Polling Apple stops after `NOTARY_WAIT_SECONDS` (default 4 h; the
      upload, `info` and stapling come on top) with the id recorded,
    - packages the DMG (lzma in 4 MB chunks, `udif-chunk-size=8192`, hdiutil's largest; `ARDIA_DMG_CHUNK=off` goes back
      to its 1 MB default) and the zip, and signs `appcast.xml` (`generate_appcast` names the feed after the app's
@@ -341,7 +342,7 @@ the engine if `engine/` changed (below).
   keys. That cache (`notary-<version>-<commit>-<run>-<attempt>`, restored before the keys are set up from the newest one
   for the same version and commit, and saved after they're removed) holds submission ids named by CDHash or file
   hash, and the DMG last sent until it's stapled (a few hundred MB): data, never code. `notarize.sh` refuses a
-  symlinked state directory, writes through `mktemp` and a rename, takes nothing but a UUID from a record, trusts it
+  symlinked state directory, writes through `mktemp` and a rename, takes nothing but a UUID from a record, acts on it
   only as far as Apple confirms it and checks a kept DMG as above before using it. Polling is capped at 45 minutes per
   file (`NOTARY_WAIT_SECONDS`), which leaves the 150-minute job time for the upload, stapling and the save on a normal
   run; a job Apple keeps longer than that can still hit its deadline before the save, and its re-run then submits

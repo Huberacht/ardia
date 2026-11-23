@@ -101,9 +101,9 @@ test("pbxSettings counts every configuration and quoted values", () => {
 });
 
 test("feedFacts reads the newest build of either channel and whether the version is listed", () => {
-  assert.deepEqual(feedFacts(LIVE, "1.2.2"), { newest: 41, newestOther: 41, listed: true, listedBuilds: [40], items: 3 });
-  assert.deepEqual(feedFacts(LIVE, "1.2.3-nightly.2"), { newest: 41, newestOther: 40, listed: true, listedBuilds: [41], items: 3 });
-  assert.deepEqual(feedFacts(LIVE, "1.2.3"), { newest: 41, newestOther: 41, listed: false, listedBuilds: [], items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.2"), { newest: 41, newestOther: 41, listed: true, listedBuilds: [40], latestStable: null, items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.3-nightly.2"), { newest: 41, newestOther: 40, listed: true, listedBuilds: [41], latestStable: "1.2.2", items: 3 });
+  assert.deepEqual(feedFacts(LIVE, "1.2.3"), { newest: 41, newestOther: 41, listed: false, listedBuilds: [], latestStable: "1.2.2", items: 3 });
   assert.equal(feedFacts("<html>not found</html>", "1.2.3"), null);
 });
 
@@ -230,7 +230,7 @@ test("an unreadable feed stops a release and a dry run, while a candidate starts
   for (const mode of ["release", "dry-run"]) {
     const down = await run({ version: "1.2.3", root, mode, responses: [new Error("socket hang up")] });
     assert.match(down.fails.join("\n"), /couldn't fetch .*socket hang up/, mode);
-    assert.equal(down.calls.length, 2, "one retry");
+    assert.equal(down.calls.length, 1, "one request");
     const html = await run({ version: "1.2.3", root, mode, responses: [{ status: 200, body: "<html></html>" }] });
     assert.match(html.fails.join("\n"), /isn't a whole Sparkle appcast/);
     const missing = await run({ version: "1.2.3", root, mode, responses: [{ status: 404 }] });
@@ -290,4 +290,17 @@ test("a dry run of a listed nightly whose build differs from the checkout's fail
   const live = feed([["1.2.4-nightly.1", 140, "nightly"], ["1.2.3", 138]]);
   const result = await run({ version: "1.2.4-nightly.1", root: fixture({ version: "1.2.4-nightly.1", builds: [139, 139] }), mode: "dry-run", responses: [{ status: 200, body: live }] });
   assert.match(result.fails.join("\n"), /already lists 1.2.4-nightly.1 as build 140, not 139/);
+});
+
+test("a stable that isn't above the latest stable in the feed fails, as publish.sh would refuse it", async () => {
+  const root = fixture({ version: "1.2.1", builds: [42, 42] });
+  for (const mode of ["release", "dry-run"]) {
+    const result = await run({ version: "1.2.1", root, mode });
+    assert.match(result.fails.join("\n"), /1.2.1 isn't above the latest stable release in the feed \(1.2.2\)/, mode);
+  }
+  const candidate = await run({ version: "1.2.1", root, mode: "candidate" });
+  assert.deepEqual(candidate.fails, []);
+  assert.match(candidate.warns.join("\n"), /isn't above the latest stable/);
+  const nightly = await run({ version: "1.2.1-nightly.1", root: fixture({ version: "1.2.1-nightly.1", builds: [42, 42] }) });
+  assert.deepEqual(nightly.fails, []);
 });

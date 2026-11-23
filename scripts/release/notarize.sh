@@ -135,7 +135,7 @@ kept_matches() {
   local saved="$1" expected="$2" team mnt ok=1
   team="$(team_of "$packed_app")"
   [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || return 1
-  codesign --verify --strict -R="=anchor apple generic and certificate leaf[subject.OU] = \"$team\"" "$saved" >/dev/null 2>&1 || return 1
+  codesign --verify --strict -R="anchor apple generic and certificate leaf[subject.OU] = \"$team\"" "$saved" >/dev/null 2>&1 || return 1
   mnt="$(mktemp -d "${TMPDIR:-/tmp}/ac-notary-kept.XXXXXX")"
   hdiutil attach "$saved" -readonly -nobrowse -noautoopen -noverify -mountpoint "$mnt" >/dev/null 2>&1 || { rmdir "$mnt"; return 1; }
   [ "$(cd "$mnt" && ls -A | sort | tr '\n' ' ')" = ".DS_Store .VolumeIcon.icns .background.tiff .fseventsd Applications Ardia.app " ] || ok=0
@@ -182,7 +182,7 @@ notarize() {
       fi
       rm -rf "$scratch"
     fi
-    echo "Apple accepted $id but has no ticket for this file; submitting again"
+    die "Apple accepted submission $id, but stapler couldn't fetch its ticket for $(basename "$target") (above): run this again once Apple's ticket service answers. If the ticket really isn't this file's, delete $record to submit it fresh."
   fi
   [ -z "$saved" ] || keep_payload "$saved"
   submit "$file" "$log" "$record"

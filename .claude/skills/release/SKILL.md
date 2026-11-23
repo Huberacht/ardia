@@ -166,8 +166,9 @@ scripts/release/preflight.mjs <version>    # --mode dry-run as the CI dry run ch
 It reads the published appcast once and fails on everything that would stop the release later: a version that fits
 no channel, missing, empty or unreadable notes, `MARKETING_VERSION` or `CURRENT_PROJECT_VERSION` with more than one
 value across the project's configurations or a version that isn't `<version>`, an `Info.plist` that stopped reading
-them from the build settings, an Arch `pkgver` that `update-pkgbuild.sh` wouldn't derive from `<version>`, and a
-build number that isn't above every build in the feed (stable and nightly share one feed). `release.sh` and the
+them from the build settings, an Arch `pkgver` that `update-pkgbuild.sh` wouldn't derive from `<version>`, a stable
+that isn't above the latest stable in the feed, and a build number that isn't above every build in it (stable and
+nightly share one feed). `release.sh` and the
 Release workflow's `preflight` job run it first, so a stale build number fails in seconds instead of after the engine
 fetch and `pod install`.
 
@@ -201,7 +202,8 @@ packs, with a copy of the exact DMG it sent (packing again makes other bytes, so
 once it has checked the copy holds the same app and verifies as signed by the same team). On the
 next run it asks Apple about that id first: Accepted staples, In Progress waits, Invalid or Rejected prints Apple's log
 and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist submits fresh,
-and when notarytool can't answer at all it stops and keeps the record. An app Apple already has a ticket for is
+and when notarytool can't answer, answers something unknown, or stapler can't fetch an accepted ticket, it stops and
+keeps the record. An app Apple already has a ticket for is
 stapled with no upload at all. Polling Apple stops after `NOTARY_WAIT_SECONDS` (4 h here, 45 min per file in CI). After a
 dropped or timed-out wait, run `release.sh` again (or `scripts/release/notarize.sh <app> dist/<version>`, and
 `notarize.sh <dmg> dist/<version> <app>`): both pick their submissions up.

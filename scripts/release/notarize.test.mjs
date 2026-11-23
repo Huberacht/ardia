@@ -228,16 +228,16 @@ test("an id Apple doesn't know, a record that isn't an id, or new bytes each sub
   assert.equal(Object.keys(rebuilt.records()).length, 2);
 });
 
-test("an accepted id whose ticket doesn't fit this file submits fresh instead of trusting the record", () => {
+test("an accepted id whose ticket stapler can't fetch stops with the record kept, never uploading again", () => {
   const s = scratch();
   mkdirSync(s.state);
   writeFileSync(join(s.state, sha256(s.dmg)), `${FIRST}\n`);
   writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
-  s.set("submit", [SECOND]);
   const run = s.notarize();
   assert.notEqual(run.status, 0);
-  assert.match(run.output, /Apple accepted 11111111.* but has no ticket for this file; submitting again/);
-  assert.deepEqual(s.calls().slice(0, 7), ["notarytool info", ...Array(5).fill("stapler staple"), "notarytool submit"]);
+  assert.match(run.output, /Apple accepted submission 11111111.*couldn't fetch its ticket.*delete .* to submit it fresh/);
+  assert.deepEqual(s.calls(), ["notarytool info", ...Array(5).fill("stapler staple")]);
+  assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
 });
 
 test("a cut-off upload is submitted again, up to three times", () => {
@@ -406,7 +406,7 @@ test("an info status this script doesn't know stops with the record kept, never 
   assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
 });
 
-test("a kept DMG that won't staple leaves this run's DMG in place, and that one is submitted", () => {
+test("a kept DMG that won't staple leaves this run's DMG in place and stops", () => {
   const s = scratch();
   const app = join(s.dir, "dist", "Ardia.app");
   mkdirSync(join(app, "Contents"), { recursive: true });
@@ -417,12 +417,11 @@ test("a kept DMG that won't staple leaves this run's DMG in place, and that one 
   writeFileSync(join(s.state, `${key}.dmg`), "the earlier packing");
   writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
   volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
-  s.set("submit", [SECOND]);
-  const xcrun = join(s.dir, "bin", "xcrun");
-  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('"stapler staple")', '"stapler staple")\n    [ "$(cat "$3")" = "a disk image" ] && [ -f "$stub/status-66666666-7777-4888-9999-aaaaaaaaaaaa" ] && { echo ok; exit 0; }'));
   const run = s.notarize(s.dmg, {}, [app]);
-  assert.equal(run.status, 0, run.output);
+  assert.notEqual(run.status, 0);
+  assert.match(run.output, /couldn't fetch its ticket/);
   assert.equal(readFileSync(s.dmg, "utf8"), "a disk image");
-  assert.deepEqual(s.calls().filter((c) => c !== "stapler staple"), ["notarytool info", "notarytool submit", "notarytool wait"]);
+  assert.ok(existsSync(join(s.state, `${key}.dmg`)), "the kept copy stays for the next try");
+  assert.deepEqual(s.calls().filter((c) => c !== "stapler staple"), ["notarytool info"]);
   assert.deepEqual(readdirSync(join(s.dir, "dist")).filter((n) => n.startsWith(".kept")), []);
 });

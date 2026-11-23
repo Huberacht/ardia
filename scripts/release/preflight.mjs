@@ -39,12 +39,18 @@ network request (the published appcast):
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DEFAULT_FEED = `https://github.com/${REPO}/releases/latest/download/appcast.xml`;
 const MODES = new Set(["release", "dry-run", "candidate"]);
-const FETCH_TIMEOUT_MS = 6_000;
+const FETCH_TIMEOUT_MS = 4_000;
 
 export function channelOf(version) {
   if (/^\d+\.\d+\.\d+-nightly\.\d+$/.test(version)) return "nightly";
   if (/^\d+\.\d+\.\d+$/.test(version)) return "stable";
   return null;
+}
+
+export function compareVersions(a, b) {
+  const [x, y] = [a, b].map((v) => v.split(".").map(Number));
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
 }
 
 export function pbxSettings(text, name) {
@@ -72,7 +78,7 @@ channels = root.findall("channel") if root.tag == "rss" else []
 if len(channels) != 1:
     print(json.dumps({"error": "not one rss channel"}))
     sys.exit(0)
-print(json.dumps({"items": [[item.findtext(SPARKLE + "shortVersionString"), item.findtext(SPARKLE + "version")] for item in channels[0].iter("item")]}))
+print(json.dumps({"items": [[item.findtext(SPARKLE + "shortVersionString"), item.findtext(SPARKLE + "version"), item.findtext(SPARKLE + "channel") or "stable"] for item in channels[0].iter("item")]}))
 `;
 
 function parsedItems(xml) {
@@ -91,6 +97,7 @@ export function feedFacts(xml, version) {
   let newest = null;
   let newestOther = null;
   const listedBuilds = [];
+  let latestStable = null;
   for (const [index, item] of items.entries()) {
     const build = /<sparkle:version>(\d+)<\/sparkle:version>/.exec(item)?.[1];
     const short = /<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/.exec(item)?.[1];
@@ -100,8 +107,9 @@ export function feedFacts(xml, version) {
     if (mine) listedBuilds.push(number);
     newest = Math.max(newest ?? 0, number);
     if (!mine) newestOther = Math.max(newestOther ?? 0, number);
+    if (!mine && parsed[index][2] === "stable" && channelOf(short) === "stable" && (latestStable === null || compareVersions(short, latestStable) > 0)) latestStable = short;
   }
-  return { newest, newestOther, listed: listedBuilds.length > 0, listedBuilds, items: items.length };
+  return { newest, newestOther, listed: listedBuilds.length > 0, listedBuilds, latestStable, items: items.length };
 }
 
 async function readFeed(source, { fetchImpl, allowNoFeed }) {
@@ -110,18 +118,14 @@ async function readFeed(source, { fetchImpl, allowNoFeed }) {
     if (!existsSync(source)) return { error: `no feed file at ${source}` };
     return { xml: readFileSync(source, "utf8") };
   }
-  let lastError = "";
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const response = await fetchImpl(source, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (response.status === 404 && allowNoFeed) return { xml: "", none: true, note: `${source} answers 404: no feed yet, this release starts it` };
-      if (!response.ok) return { error: `${source} answered HTTP ${response.status}` };
-      return { xml: await response.text() };
-    } catch (error) {
-      lastError = error?.message ?? String(error);
-    }
+  try {
+    const response = await fetchImpl(source, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (response.status === 404 && allowNoFeed) return { xml: "", none: true, note: `${source} answers 404: no feed yet, this release starts it` };
+    if (!response.ok) return { error: `${source} answered HTTP ${response.status}` };
+    return { xml: await response.text() };
+  } catch (error) {
+    return { error: `couldn't fetch ${source} within ${FETCH_TIMEOUT_MS / 1000} s: ${error?.message ?? error}` };
   }
-  return { error: `couldn't fetch ${source}: ${lastError}` };
 }
 
 function archFacts(root, version) {
@@ -244,6 +248,11 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
         pass(`build ${releaseBuild} is above every other build in the feed (${facts.items} items, newest other ${facts.newestOther ?? "none"})`);
       } else {
         fail(`the build number (${releaseBuild}) must be above every build in the feed, nightly or stable (newest: ${facts.newestOther}): bump CURRENT_PROJECT_VERSION`);
+      }
+      if (channel === "stable" && facts.latestStable && compareVersions(version, facts.latestStable) <= 0) {
+        const message = `${version} isn't above the latest stable release in the feed (${facts.latestStable}): publish.sh refuses it, publishing it as latest would move every download and feed backward`;
+        if (mode === "candidate") results.push({ level: "warn", message });
+        else fail(message);
       }
       if (facts.listed) {
         const message = `the feed already lists ${version}`;
