@@ -1378,22 +1378,30 @@ look surface: it has no frost source to refract.
   node translated to the source, with no layer or effect of its own, and no glass's backdrop moves when the strip
   grows or shrinks. HWUI applies a layer's `RenderEffect` where the layer is drawn and reuses it only for the same
   clip, so the strip is two nodes: one holds the source with the effect, and the compositing layer every glass draws
-  holds that one, filtered once a frame. Nothing on the UI thread refreshes the strip when the page scrolls or the
-  backdrop moves: the strip's filtered node draws the source's node, HWUI carries the source's damage into every
-  node that draws it (`mDamageGenerationId`), and it re-renders a layer only where that damage lands inside the
-  layer's bounds. So the strip follows the content under the glasses on every frame it changes, the last frame of a
-  fling included, and costs nothing while it is still. Damage inside a WebView covers the WebView's bounds, so an
-  animation anywhere on a page (a GIF out of view of the bar) re-renders the strip at the animation's rate; a native
-  view animating outside the strip doesn't. A frozen copy of the page between refreshes would need the WebView's
+  holds that one, filtered once a frame. The source never asks a live glass to draw: a glass's layer draws the strip
+  node and the strip draws the source's node, both by reference, so the source's own recording reaches them. Until
+  #3949's fourth round the source invalidated every glass from inside its draw, and `ViewRootImpl` schedules a new
+  traversal for an invalidation made while it draws, so each page frame was followed by a glass-only frame that
+  re-rendered the page's layer: 431 traversals in 5 s on an idle GIF page against 220 with the solid bar. Now only
+  its first recording, a size or page change, and glasses still waiting on it (not live, wanting it) wake glasses.
+  HWUI damages a node drawn by two parents fully on its second visit only when it was damaged that frame
+  (`mDamageGenerationId`), and `DamageAccumulator` never grows damage for an image filter, so a change inside a
+  small clipping parent under the glass would repaint only that rectangle of the blurred strip and leave the old
+  halo around it. Any invalidation under the source marks its strips instead, and the source's next pre-draw
+  re-records each strip's filtered node, which damages the whole strip once before the frame syncs
+  (`lookCounts().stripRefreshes`); a frame with no change under the source re-renders nothing. A strip is a few
+  scaled rows, so redrawing it whole for a change outside it costs less than tracking where blur and lens reach.
+  The page itself stays one functor target: a frozen copy of the page would need the WebView's
   draw functor run a second time, which turned the page white in #3759. A glass redraws only when it moves
   or changes, and its draw records the strip only when the strip's extent, lenses or slots change, comparing
   extents clamped to the source, so a glass near the edge doesn't re-record it on every draw. Each strip knows the
   glasses that draw it: one that leaves (detached, hidden, trimmed, or moved to another strip after a density change)
-  takes its lens with it at once (a glass that still shows draws again to lay the strip out without it), and the last
-  one out drops the strip. A plain overflow layer retires a frame after the last glass stops drawing it. The memory line counts strips
+  takes its lens with it at once (a glass still showing on that strip draws again to lay it out without it), and the last
+  one out drops the strip. A plain overflow layer is freed after the frame that retired it, whether or not a glass draws again. The memory line counts strips
   from a snapshot the UI thread publishes (`lookCounts().strips`, `stripRecords`), and a source that stops recording
   drops them. A source that goes away, or a new one under the same name, makes the glasses naming it draw again, and
-  a glass with no source still asks for one, so a replacement records on its first draw.
+  a glass with no source still asks for one, so a replacement records on its first draw; registering a name also
+  asks the source itself to draw, so one named after its first draw records.
 - **The rim.** liquid-dom's white specular: two lights, from the top left and the opposite side, a 1.25 dp band fading
   inward, power 2, added at 50 % (35 % in dark). It is drawn at full resolution over the glass's clip, after the tint,
   as a second `RuntimeShader`, so it stays sharp, and it draws on every glass from Android 13, lens or not, except
@@ -1413,7 +1421,17 @@ look surface: it has no frost source to refract.
   old lab flag) 7.2 and 6.8 % (p50 12 to 14, p90 21, p99 36 to 38) with 32 GPU passes a frame; the shipped strip
   8.6 % (p50 14, p90 23, p99 48) with 10. Frame by frame the RenderThread issues 3.5 ms at the median against 2.8
   with the solid bar (6.2 before the strip refreshed at 60 Hz) and the GPU takes 3.5 ms against 1.7: the page's
-  layer is what remains. The fold views' own
+  layer is what remains. Measured again after the source stopped waking live glasses (3 runs each, interleaved, the F4 at thermal
+  status 0): the solid bar 4.1, 2.7 and 2.6 % janky (p50 10 to 11 ms, GPU p50 2 ms), the glass 8.3, 9.1 and 6.7 %
+  (p50 15 ms, GPU p50 4 ms). Scrolling is no faster for it, since the WebView asks for every frame of a scroll
+  anyway; the cost is the GPU's: 9.7 render passes a frame against 2.1, the page drawn into its full-screen
+  layer and then composited, the strip's blur, and the fold views' layers redrawn with the glass inside them
+  (`flush layers` is 3.8 ms of the slowest tenth of frames). The WebView's functor runs at most once a frame in
+  every trace. An idle page with a GIF now draws 220 frames in 5 s with the bar out, as the solid bar does
+  (433 before), but still 445 against 220 with the bar folded into the pill: the folded bar's glasses keep their
+  places in the strip at opacity 0 (`shown` stays true; only the fold's opacity hides them), and something on that
+  path asks for a frame for each page frame. Dropping the fold views' hardware layers saves two render passes a
+  frame but doubles the frames with the bar out too, so they stay. The fold views' own
   hardware layers (`renderToHardwareTextureAndroid` on `floatingBarFold` and `hostPillFold`) now redraw with the
   strip, about 0.5 ms a frame; they stay for the fold's fade (b66c3bbdb).
 - **Over the deck, measured.** The idle deck on the F4 with its five glasses live: the look budget's own sample reads
@@ -1430,8 +1448,8 @@ look surface: it has no frost source to refract.
 - **Not seen yet.** The M3 (offline during this pass), Android 12 and 13 phones, TalkBack over the new sources, the
   Duo layouts, the lens during the bar's 0.26 s fold (the fold scales the bar while the strip's lens shapes stay at
   the glasses' unscaled boxes), a deck grid with more than 12 glasses on one strip (the 13th draws the plain blur), a
-  toast over a page (it records the whole `surfaces` source while it shows), and the 60 Hz page strip on a fast
-  fling.
+  toast over a page (it records the whole `surfaces` source while it shows), and the strip's pixels after a change
+  in a small clipping parent (proved by the recording, not by a capture).
 
 ## The look's budget
 
