@@ -357,20 +357,24 @@ test("closing a private window while its row still waits on a missed icon asks n
   }
 });
 
-test("a lookup answered after its page was deleted from history doesn't bring the icon back", async () => {
+test("a lookup answered after its page was deleted from history doesn't bring the icon back, and the row asks again", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
   const page = "https://deleted-while-asked.test/";
   const held = [];
-  globalThis.faviconsForTest = (profile, pages) => new Promise((resolve) => held.push(() => answering({ [page]: "data:image/png;base64,STALE" })(profile, pages).then(resolve)));
+  let calls = 0;
+  globalThis.faviconsForTest = (profile, pages) =>
+    calls++ === 0
+      ? new Promise((resolve) => held.push(() => answering({ [page]: "data:image/png;base64,STALE" })(profile, pages).then(resolve)))
+      : answering({ [page]: "data:image/png;base64,FRESH" })(profile, pages);
   const row = mount(() => useFavicon(page, null, "default"));
   try {
     await waitFor(() => held.length === 1);
     const engine = engineProfile(useBrowser.getState(), "default");
     for (const listener of globalThis.historyListeners) listener({ kind: "deleted", profile: engine, urls: [page] });
     held.shift()();
-    await settle();
-    assert.notEqual(cached(page), "data:image/png;base64,STALE");
+    await waitFor(() => cached(page) === "data:image/png;base64,FRESH");
+    assert.equal(calls, 2);
   } finally {
     row.unmount();
     stop();
@@ -378,6 +382,31 @@ test("a lookup answered after its page was deleted from history doesn't bring th
   }
 });
 
+test("a private row whose own profile has its icon only on disk asks that profile even when Default already shows one", async () => {
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const stop = startFavicons();
+  const page = "https://work-icon-on-disk.test/";
+  const before = useFavicons.getState();
+  useFavicons.setState({ profiles: { ...before.profiles, [engineProfile(S(), "default")]: { pages: { [page]: "data:default" }, srcs: {}, appearances: {} } } });
+  const peeked = [];
+  globalThis.faviconsForTest = () => empty();
+  globalThis.peekFaviconsForTest = (profile, pages) => (peeked.push(profile), answering(profile === "work" ? { [page]: "data:work" } : {})(profile, pages));
+  const windowId = S().createWindow({ kind: "private", profileId: "default" });
+  const viewer = S().windows[windowId].profileId;
+  const row = mount(() => useFavicon(page, null, viewer, "work"));
+  try {
+    await waitFor(() => resolveFavicon(page, null, viewer, "work")?.uri === "data:work");
+    assert.ok(peeked.includes("work"));
+  } finally {
+    row.unmount();
+    S().closeWindow(windowId);
+    stop();
+    useFavicons.setState(before);
+    delete globalThis.faviconsForTest;
+    delete globalThis.peekFaviconsForTest;
+  }
+});
 test("pruning a profile's icons looks the pages still waiting on screen up again", async () => {
   useBrowser.getState().hydrate({});
   const page = "https://pruned.test/";
