@@ -307,3 +307,17 @@ test("closing another profile's remembered tab counts nothing toward Tab above t
   assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 0, close_tab_above_fallbacks: 0 });
   client.setSharing(false, "settings");
 });
+
+test("a batch close whose topmost row is a split goes above that split before taking its surviving pane", () => {
+  const { w, ids: [, b, c, d] } = windowWith("tabAbove", "a", "b", "c", "d");
+  S().createSplit([b, c]);
+  S().activate(d);
+  S().closeTabs([b, d]);
+  assert.equal(shown(w), "a");
+
+  const first = windowWith("tabAbove", "b", "c", "d");
+  S().createSplit([first.ids[0], first.ids[1]]);
+  S().activate(first.ids[2]);
+  S().closeTabs([first.ids[0], first.ids[2]]);
+  assert.equal(shown(first.w), "c", "nothing above: the split's surviving pane");
+});

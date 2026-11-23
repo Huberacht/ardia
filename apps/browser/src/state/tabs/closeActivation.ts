@@ -67,11 +67,11 @@ export function tabAbove(s: BrowserState, windowId: string, closedId: string, cl
   const section = sections.find((rows) => rows.some((row) => row.includes(closedId)));
   const top = section?.findIndex((row) => row.some((id) => closing.has(id))) ?? -1;
   if (section && top >= 0) {
-    for (let i = top; i >= 0; i--) {
+    for (let i = top - 1; i >= 0; i--) {
       const id = latest(s, survivors(section[i]!));
       if (id) return id;
     }
-    for (let i = top + 1; i < section.length; i++) {
+    for (let i = top; i < section.length; i++) {
       const id = latest(s, survivors(section[i]!));
       if (id) return id;
     }
