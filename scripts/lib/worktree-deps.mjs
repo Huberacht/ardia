@@ -82,6 +82,8 @@ export function workspacePatterns(workspaceYaml) {
   const patterns = [];
   let inPackages = false;
   for (const line of workspaceYaml.split(/\r?\n/)) {
+    const inline = /^packages:\s*(\S.*?)\s*$/.exec(line);
+    if (inline && inline[1] !== "[]") throw new Error(`pnpm-workspace.yaml has an inline packages list (${inline[1]}); worktree-setup reads one "- pattern" per line`);
     if (/^packages:\s*$/.test(line)) {
       inPackages = true;
       continue;
@@ -121,6 +123,7 @@ export function checkedProject(root, project) {
 export function workspaceProjects(root, workspaceYaml) {
   const patterns = workspacePatterns(workspaceYaml);
   const baseOf = (pattern) => {
+    if (pattern.startsWith("!") && pattern.includes("*")) throw new Error(`unsupported workspace pattern "${pattern}" in pnpm-workspace.yaml; exclusions must be literal paths`);
     const plain = pattern.replace(/^!/, "").replace(/\/$/, "");
     const base = plain.endsWith("/*") ? plain.slice(0, -2) : plain;
     if (/[*?[\]{}]/.test(base)) throw new Error(`unsupported workspace pattern "${pattern}" in pnpm-workspace.yaml; worktree-setup takes literal paths and dir/*`);
@@ -159,8 +162,9 @@ function readIfExists(file) {
 function readBytes(file) {
   try {
     return fs.readFileSync(file);
-  } catch {
-    return null;
+  } catch (error) {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+    throw new Error(`can't read ${file} (${error.code}); fix its permissions or move it away`);
   }
 }
 
@@ -171,9 +175,13 @@ export function installInputs(root, runtime = runtimeOf()) {
   const projects = workspaceProjects(root, workspace?.toString("utf8") ?? "");
   const snapshot = new Map([["pnpm-lock.yaml", lockfile], ["pnpm-workspace.yaml", workspace]]);
   const names = [".npmrc", ...projects.map((p) => (p ? `${p}/package.json` : "package.json"))];
+  let patches = [];
   try {
-    for (const entry of fs.readdirSync(path.join(root, "patches"), { withFileTypes: true })) if (entry.isFile()) names.push(`patches/${entry.name}`);
-  } catch {}
+    patches = fs.readdirSync(path.join(root, "patches"), { withFileTypes: true });
+  } catch (error) {
+    if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw new Error(`can't read ${path.join(root, "patches")} (${error.code})`);
+  }
+  for (const entry of patches) if (entry.isFile()) names.push(`patches/${entry.name}`);
   for (const name of names) snapshot.set(name, readBytes(path.join(root, name)));
   const files = [...snapshot].filter(([, content]) => content !== null);
   return { files, runtime, projects, lockfile: lockfile.toString("utf8") };
@@ -233,13 +241,11 @@ export function planLinks({ sourceRoot, worktreeRoot, project, entries, exists =
 }
 
 export function markerOf(worktree) {
-  const text = readIfExists(path.join(worktree, "node_modules", MARKER));
-  if (text === null) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { broken: true, projects: [] };
-  }
+  const state = markerState(worktree);
+  if (state.absent) return null;
+  const file = path.join(worktree, "node_modules", MARKER);
+  if (state.unknown) throw new Error(`the marker ${file} is corrupt or isn't valid; fix or remove it (and its links) by hand`);
+  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function lstatOrNull(file) {
@@ -560,6 +566,9 @@ export function setupWorktree(worktreeArg, options = {}) {
   fs.utimesSync(path.join(final, CACHE_STAMP), new Date(), new Date());
   const plans = planAll(worktree, fs.realpathSync(final), inputs.projects);
   const identity = identityOf(worktree);
+  const guardPartial = path.join(worktree, `${GUARD_FILE}.${process.pid}.partial`);
+  fs.writeFileSync(guardPartial, GUARD_SOURCE, { flag: "wx" });
+  fs.renameSync(guardPartial, path.join(worktree, GUARD_FILE));
   const { record, sourceRoot, marker, markerFile, links, warnings } = withKernelLock(registryLock(cacheRoot), () => {
     const stamp = path.join(final, CACHE_STAMP);
     if (!fs.existsSync(stamp)) throw new Error(`${final} isn't built (or was just pruned); run worktree-setup again`);
@@ -576,9 +585,6 @@ export function setupWorktree(worktreeArg, options = {}) {
     return { record, ...linked };
   });
 
-  const guardPartial = path.join(worktree, `${GUARD_FILE}.${process.pid}.partial`);
-  fs.writeFileSync(guardPartial, GUARD_SOURCE, { flag: "wx" });
-  fs.renameSync(guardPartial, path.join(worktree, GUARD_FILE));
   const home = options.home ?? os.homedir();
   const neverIndexed = [worktree, path.join(home, "ardia-scratch"), path.join(home, "ardia-wt")].filter(dropNeverIndex);
   const exclude = excludeFromGit(worktree, [GUARD_FILE, NEVER_INDEX]);
@@ -725,7 +731,7 @@ export function pruneCaches({ cacheRoot = defaultCacheRoot(), olderThanDays = 7,
     const live = liveKeys(root);
     const removed = [];
     for (const name of listDirs(root)) {
-      if (name.startsWith(".") || live.has(name)) continue;
+      if (!/^[0-9a-f]{16}$/.test(name) || live.has(name) || readJson(path.join(root, name, CACHE_STAMP))?.key !== name) continue;
       const dir = path.join(root, name);
       const stat = lstatOrNull(path.join(dir, CACHE_STAMP));
       if (!stat || now - stat.mtimeMs <= olderThanDays * DAY_MS) continue;
@@ -796,6 +802,7 @@ export function main(argv) {
     return 64;
   }
   if (options.command === "build-cache") {
+    if (!(process.env.AC_LOCKED_HELD ?? "").split("\n").some((line) => line.endsWith("/ac-pod.lockf"))) throw new Error("--build-cache runs only under scripts/agent/locked pod");
     buildCache({ worktree: fs.realpathSync(worktree), cacheRoot });
     return 0;
   }

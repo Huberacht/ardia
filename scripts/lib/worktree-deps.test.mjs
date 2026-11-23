@@ -929,3 +929,75 @@ test("an unreadable .pnpmfile.cjs fails setup instead of being replaced", { skip
   }
   assert.equal(fs.readFileSync(file, "utf8"), "module.exports = { hooks: {} };\n");
 });
+
+test("CR20: a corrupt or invalid marker stops setup and undo before anything is deleted", () => {
+  const { setup } = harness();
+  for (const bad of ["{ not json", "{}", '{"key":"0123456789abcdef"}']) {
+    const worktree = makeWorktree();
+    setup(worktree);
+    fs.writeFileSync(path.join(worktree, "node_modules", MARKER), bad);
+    const before = snapshot(path.join(worktree, "node_modules"));
+    assert.throws(() => setup(worktree, { replace: true }), /marker .* (is corrupt|isn't valid)/, bad);
+    assert.throws(() => undoWorktree(worktree, { log: quiet }), /marker .* (is corrupt|isn't valid)/, bad);
+    assert.equal(snapshot(path.join(worktree, "node_modules")), before, bad);
+  }
+});
+
+test("CR21: an install input that exists but can't be read fails setup", { skip: process.getuid?.() === 0 && "root reads anything" }, () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, ".npmrc"), "//registry.example/:_authToken=secret\n");
+  fs.chmodSync(path.join(worktree, ".npmrc"), 0o000);
+  try {
+    assert.throws(() => setup(worktree), /can't read .*\.npmrc/);
+  } finally {
+    fs.chmodSync(path.join(worktree, ".npmrc"), 0o600);
+  }
+  assert.ok(!fs.existsSync(path.join(worktree, "node_modules")));
+});
+
+test("CR22: the pnpm guard is in place before the first dependency link appears", (t) => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  const realSymlink = fs.symlinkSync;
+  let guarded = null;
+  t.mock.method(fs, "symlinkSync", (target, file) => {
+    if (guarded === null && String(file).startsWith(worktree)) guarded = fs.existsSync(path.join(worktree, GUARD_FILE));
+    return realSymlink(target, file);
+  });
+  setup(worktree);
+  t.mock.restoreAll();
+  assert.equal(guarded, true);
+});
+
+test("CR23: --build-cache refuses to run outside scripts/agent/locked pod", () => {
+  const worktree = makeWorktree();
+  const env = { ...process.env, HOME: fresh("home") };
+  delete env.AC_LOCKED_HELD;
+  const run = spawnSync(process.execPath, [path.join(here, "worktree-deps.mjs"), "--build-cache", worktree, "--cache", fresh("cache")], { encoding: "utf8", env });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /--build-cache runs only under scripts\/agent\/locked pod/);
+});
+
+test("CR24/CR25: workspace forms setup can't read fail loudly instead of matching nothing", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, "pnpm-workspace.yaml"), "packages: [apps/*, packages/*]\n");
+  assert.throws(() => setup(worktree), /inline packages list/);
+  write(path.join(worktree, "pnpm-workspace.yaml"), 'packages:\n  - apps/*\n  - "!apps/*"\n');
+  assert.throws(() => setup(worktree), /unsupported workspace pattern "!apps\/\*"/);
+});
+
+test("CR27: prune deletes only folders it can prove are its own caches", () => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  const { key } = setup(worktree);
+  undoWorktree(worktree, { log: quiet });
+  write(path.join(cacheRoot, "reports", CACHE_STAMP), "{}");
+  write(path.join(cacheRoot, "fedcba9876543210", CACHE_STAMP), JSON.stringify({ key: "0123456789abcdef" }));
+  const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  for (const name of ["reports", "fedcba9876543210"]) fs.utimesSync(path.join(cacheRoot, name, CACHE_STAMP), old, old);
+  assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), [path.join(cacheRoot, key)]);
+  assert.ok(fs.existsSync(path.join(cacheRoot, "reports", CACHE_STAMP)));
+  assert.ok(fs.existsSync(path.join(cacheRoot, "fedcba9876543210", CACHE_STAMP)));
+});
