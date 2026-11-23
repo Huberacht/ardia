@@ -32,6 +32,7 @@ export type SymbolProps = ViewProps & {
   size?: number;
   weight?: "light" | "regular" | "medium" | "semibold" | "bold";
   color?: string;
+  centresInk?: boolean;
 };
 
 export const Symbol = requireNativeViewManager<SymbolProps>("ArdiaSymbol");
@@ -55,6 +56,10 @@ export const EdgeFadeMask = requireNativeViewManager<EdgeFadeMaskProps>("ArdiaEd
 export type ActivitySpinnerProps = ViewProps;
 
 export const ActivitySpinner = requireNativeViewManager<ActivitySpinnerProps>("ArdiaActivitySpinner");
+
+export type BreatheProps = ViewProps & { running: boolean; cycleMs: number; opacityRange: readonly [number, number]; scaleRange: readonly [number, number] };
+
+export const Breathe = requireNativeViewManager<BreatheProps>("ArdiaBreathe");
 
 export type FolderIconProps = ViewProps & {
   open: boolean;
@@ -209,3 +214,26 @@ export type DockSelectionProps = ViewProps & {
 export const DockSelection = requireNativeViewManager<DockSelectionProps>("ArdiaDockSelection");
 
 export const PluginPageView = requireNativeViewManager<PluginPageProps>("ArdiaPlugins");
+
+export type FieldGlowLook = {
+  rgba: readonly number[];
+  glow: number[][];
+  tailFade: number[];
+  capFade: number[];
+  tail: number;
+  cap: number;
+  frontShare: number;
+  tailCeiling: number;
+  line: number;
+  floor: number;
+};
+export type FieldGlowProps = ViewProps & { glowId: string; radius: number; look: FieldGlowLook };
+export type FieldGlowNative = {
+  show(id: string, timings: number[]): void;
+  progress(id: string, progress: number, still: boolean): void;
+  finish(id: string, still: boolean): void;
+  reset(id: string): void;
+};
+
+let fieldGlowView: ReturnType<typeof requireNativeViewManager<FieldGlowProps>> | null = null;
+export const FieldGlowView = () => (fieldGlowView ??= requireNativeViewManager<FieldGlowProps>("ArdiaFieldGlow"));

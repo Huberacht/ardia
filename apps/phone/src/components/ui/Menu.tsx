@@ -7,12 +7,13 @@ import { insetRect, MENU_MARGIN, menuAt, menuHeight, menuOnTrigger, menuShrink, 
 import { useReduceMotion } from "./contrast";
 import { focusForScreenReader } from "./coverFocus";
 import { LookFrost, SURFACES_FROST } from "./LookViews";
-import { materialEnter, materialExit, materialMenuMotion, menuMotion } from "./motion";
+import { menuMotion } from "./motion";
 import { measureAnchor, Portal, useOverlayFrame, usePortalLeaving, usePortalLeft } from "./Overlay";
 import { Symbol } from "./Symbol";
 import type { SymbolName } from "./symbolPaths";
 import { useTheme } from "./theme";
-import { font, ink, menuInk, menuLook } from "./tokens";
+import { drawnMenuInk as menuInk, drawnMenuLook as menuLook } from "./menuTokens";
+import { font, ink, smoothCorners } from "./tokens";
 
 export type MenuAction = { label: string; icon?: SymbolName; systemImage?: string; destructive?: boolean; checked?: boolean; disabled?: boolean; onPress: () => void };
 
@@ -74,9 +75,9 @@ export function Menu({ items, place, placer, onDismiss, dimmed = false, origin =
   const revealed = shown && (placer === undefined || content !== null);
   const side = useRef<boolean | undefined>(undefined);
   const spot = placer ? placer(content ?? menuHeight(rows, menuLook) + (page ? menuLook.row : 0), side.current) : { place: place ?? {}, origin, maxHeight: undefined, shrink: undefined };
-  const shrinkX = MATERIAL ? 1 : spot.shrink?.x ?? menuMotion.fromScale;
-  const shrinkY = MATERIAL ? 1 : spot.shrink?.y ?? menuMotion.fromScale;
-  const fromScale = MATERIAL ? materialMenuMotion.fromScale : menuMotion.fromScale;
+  const shrinkX = spot.shrink?.x ?? menuMotion.fromScale;
+  const shrinkY = spot.shrink?.y ?? menuMotion.fromScale;
+  const fromScale = menuMotion.fromScale;
   if (revealed && placer && side.current === undefined) side.current = spot.origin.includes("top");
   const firstRow = useRef<ViewInstance>(null);
   const chosen = useRef(false);
@@ -108,10 +109,6 @@ export function Menu({ items, place, placer, onDismiss, dimmed = false, origin =
   const dim = useSharedValue(reduceMotion ? 1 : 0);
   useEffect(() => {
     if (!revealed || leaving || reduceMotion) return;
-    if (MATERIAL) {
-      opened.value = withTiming(1, { duration: materialMenuMotion.openMs, easing: materialEnter });
-      return;
-    }
     opened.value = withSpring(1, menuMotion.open);
     dim.value = withTiming(1, { duration: menuMotion.heldOpen });
   }, [revealed]);
@@ -124,10 +121,6 @@ export function Menu({ items, place, placer, onDismiss, dimmed = false, origin =
       dim.value = withTiming(0, { duration: menuMotion.contentFade });
       return;
     }
-    if (MATERIAL) {
-      glass.value = withTiming(0, { duration: materialMenuMotion.closeMs, easing: materialExit }, (finished) => finished && runOnJS(left)());
-      return;
-    }
     closed.value = withTiming(1, { duration: closing, easing: Easing.linear });
     glass.value = dimmed ? withTiming(0, { duration: closing, easing: Easing.in(Easing.cubic) }, (finished) => finished && runOnJS(left)()) : withDelay(closing - menuMotion.glassFade, withTiming(0, { duration: menuMotion.glassFade }, (finished) => finished && runOnJS(left)()));
     shownContent.value = withTiming(0, { duration: dimmed ? closing : menuMotion.contentFade });
@@ -138,7 +131,7 @@ export function Menu({ items, place, placer, onDismiss, dimmed = false, origin =
     return { transform: [{ scaleX: open * (1 + (shrinkX - 1) * closed.value) }, { scaleY: open * (1 + (shrinkY - 1) * closed.value) }] };
   });
   const dimStyle = useAnimatedStyle(() => ({ opacity: dim.value }));
-  const fade = useAnimatedStyle(() => ({ opacity: MATERIAL ? glass.value * opened.value : glass.value }));
+  const fade = useAnimatedStyle(() => ({ opacity: glass.value }));
   const rowsFade = useAnimatedStyle(() => ({ opacity: shownContent.value }));
   const choose = (action: () => void) => {
     if (chosen.current) return;
@@ -151,7 +144,7 @@ export function Menu({ items, place, placer, onDismiss, dimmed = false, origin =
   const leading = menuLook.iconSide === "leading";
   const shift = checks ? CHECK_SHIFT : 0;
   const iconsShown = !MATERIAL || page !== null || rows.every((item) => typeof item !== "object" || "heading" in item || item.icon !== undefined);
-  const iconGutter = MATERIAL && page !== null;
+  const iconGutter = (MATERIAL && page !== null) || (!MATERIAL && iconsShown && rows.some((item) => typeof item === "object" && !("heading" in item) && item.icon !== undefined));
   const labelLeft = (icon: boolean) => ((icon || iconGutter) && leading ? menuLook.labelInsetIcon : menuLook.labelInset) + shift - PRESS;
   const iconLeft = menuLook.iconCentre + shift - PRESS - menuLook.iconSlot / 2;
   const pressed = (on: boolean, disabled?: boolean) => [styles.row, on && !MATERIAL ? { backgroundColor: paint.highlight } : null, disabled ? styles.disabled : null];
@@ -299,7 +292,7 @@ function fixedPlacer(place: ViewStyle, host: Rect, insets: Insets, width: number
 
 const EXIT_SLACK_MS = 32;
 
-export const menuExitMs = (dimmed?: boolean) => (MATERIAL ? materialMenuMotion.closeMs : dimmed ? menuMotion.heldClose : menuMotion.close) + EXIT_SLACK_MS;
+export const menuExitMs = (dimmed?: boolean) => (dimmed ? menuMotion.heldClose : menuMotion.close) + EXIT_SLACK_MS;
 
 const widthOf = (place: ViewStyle) => (typeof place.width === "number" ? place.width : menuLook.width);
 
@@ -333,13 +326,13 @@ export function FloatingMenu({ items, place = {}, onDismiss, anchor, at, align, 
 }
 
 const styles = StyleSheet.create({
-  panel: { position: "absolute", minWidth: menuLook.width, borderRadius: menuLook.radius, borderWidth: menuLook.rim },
+  panel: { position: "absolute", minWidth: menuLook.width, borderRadius: menuLook.radius, borderWidth: menuLook.rim, ...smoothCorners },
   unseen: { opacity: 0 },
-  material: { overflow: "hidden" },
+  material: { overflow: "hidden", ...smoothCorners },
   scroll: { flexGrow: 0 },
   rows: { paddingVertical: menuLook.padding / 2 },
   specular: { position: "absolute", top: 0, left: 0, right: 0, height: 1 },
-  row: { flexDirection: "row", alignItems: "center", marginHorizontal: PRESS, minHeight: menuLook.row, paddingVertical: (menuLook.row - menuLook.label.lineHeight) / 2, paddingRight: menuLook.labelInset - PRESS, borderRadius: menuLook.pressRadius },
+  row: { flexDirection: "row", alignItems: "center", marginHorizontal: PRESS, minHeight: menuLook.row, paddingVertical: (menuLook.row - menuLook.label.lineHeight) / 2, paddingRight: menuLook.labelInset - PRESS, borderRadius: menuLook.pressRadius, ...smoothCorners },
   chevronRoom: { paddingRight: menuLook.trailingInset - PRESS + menuLook.chevronSize + 8 },
   chevron: { position: "absolute", right: menuLook.trailingInset - PRESS, top: 0, bottom: 0, justifyContent: "center" },
   label: { flex: 1 },

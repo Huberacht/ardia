@@ -2,14 +2,15 @@ import { useState } from "react";
 import { View } from "react-native";
 import { useTheme } from "../../ui/theme";
 import { useSettings, useTabLayout } from "../../../state/browser/hooks";
-import { chooseSidebarSide, chooseTabLayout, updateSettings } from "../../../state/settings/actions";
+import { chooseScrollToolbar, chooseSidebarSide, chooseTabLayout, updateSettings } from "../../../state/settings/actions";
 import { customNewTabUrl, type Settings } from "../../../state/settings/settings";
 import { Box, Button, Checkbox, DialogActions, DialogTitle, PopUp, Segmented, Sheet, space, Text, TextField, Toggle, type Option, type SegmentOption } from "../../ui";
 import { durationMinutes, durationParts, type DurationUnit } from "../../../lib/time";
 import { cleanUpChoices, CUSTOM_CLEAN_UP, DAILY_CLEAN_UP_MINUTES } from "../../../state/settings/cleanUpAfter";
 import { closeSettingsSheet, showSettingsSheet } from "../../../state/settings/sheet";
-import { Anchor, Group, Row, SectionHeader, SettingToggle } from "../Form";
-import type { SettingId } from "../settingsIndex";
+import { Anchor, FormField, Group, Row, SectionHeader, SettingToggle } from "../Form";
+import { setting, type SettingId } from "../settingsIndex";
+import { ScrollToolbarPreview } from "../ChoicePreviews";
 import { MiniWindow } from "../MiniWindow";
 import { PictureChoice } from "../PictureChoice";
 import { useSettingsColors } from "../useSettingsColors";
@@ -31,6 +32,16 @@ const SLEEPING_LOOKS: Option<SleepingLook>[] = [
   { value: "fade", title: "Fade icon" },
   { value: "strike", title: "Strike through" },
   { value: "both", title: "Both" },
+];
+
+const AFTER_CLOSING_DOWN: Option<Settings["afterClosingTab"]>[] = [
+  { value: "previouslyActive", title: "Previously active tab" },
+  { value: "tabAbove", title: "Tab above" },
+];
+
+const AFTER_CLOSING_ACROSS: Option<Settings["afterClosingTab"]>[] = [
+  { value: "previouslyActive", title: "Previously active tab" },
+  { value: "tabAbove", title: "Tab to the left" },
 ];
 
 const NEW_TAB_OPENS: Option<Settings["newTabOpens"]>[] = [
@@ -105,16 +116,38 @@ function LayoutSection() {
         <Group>
           <SettingToggle
             anchor="tabs.autoHideTabs"
-            description={`Tabs slide away until you point at the window's ${top ? "top edge" : "edge"}. ${keyText("⌘S")} toggles them in one window.`}
+            description={`Tabs slide away until you point at the ${top ? "top edge" : "edge"}. ${keyText("⌘S")} toggles.`}
           />
           <Row anchor="tabs.sidebarSide">
             <Segmented options={SIDEBAR_SIDES} value={sidebarSide} onChange={chooseSidebarSide} />
           </Row>
-          <SettingToggle anchor="tabs.hideToolbarWhileScrolling" />
           <ButtonsRow top={top} />
         </Group>
+        <ScrollToolbarChoices />
       </Box>
     </>
+  );
+}
+
+const SCROLL_TOOLBAR: { hides: boolean; title: string; caption: string }[] = [
+  { hides: false, title: "Keep the toolbar", caption: "Stays put while the page scrolls." },
+  { hides: true, title: "Shrink while scrolling", caption: "Shrinks to a strip as you scroll down." },
+];
+
+function ScrollToolbarChoices() {
+  const hides = useSettings((s) => s.hideToolbarWhileScrolling);
+  return (
+    <Anchor id="tabs.hideToolbarWhileScrolling" shape="card">
+      <FormField label={setting("tabs.hideToolbarWhileScrolling").title}>
+        <Box row gap="xl" accessibilityRole="radiogroup">
+          {SCROLL_TOOLBAR.map((c) => (
+            <PictureChoice key={c.title} title={c.title} caption={c.caption} selected={hides === c.hides} onPress={() => chooseScrollToolbar(c.hides)} size="l">
+              <ScrollToolbarPreview hides={c.hides} />
+            </PictureChoice>
+          ))}
+        </Box>
+      </FormField>
+    </Anchor>
   );
 }
 
@@ -138,6 +171,8 @@ function TabsAndTopAppsSection() {
   const topAppBadges = useSettings((s) => s.showTopAppBadges);
   const fade = useSettings((s) => s.fadeUnloadedTabs);
   const strike = useSettings((s) => s.strikeSleepingTabs);
+  const afterClosingTab = useSettings((s) => s.afterClosingTab);
+  const top = useTabLayout() === "top";
   return (
     <>
       <SectionHeader title="Tabs and Top Apps" />
@@ -153,10 +188,15 @@ function TabsAndTopAppsSection() {
             minWidth={150}
           />
         </Row>
+        <Row anchor="tabs.afterClosingTab">
+          <PopUp value={afterClosingTab} options={top ? AFTER_CLOSING_ACROSS : AFTER_CLOSING_DOWN} onChange={(v) => updateSettings({ afterClosingTab: v })} minWidth={190} />
+        </Row>
         <SettingToggle anchor="tabs.keepTopAppsRunning" />
         <SettingToggle anchor="tabs.closedTopAppTiles" />
         <SettingToggle anchor="tabs.balancedTopApps" />
         <SettingToggle anchor="tabs.topAppFolders" />
+        <SettingToggle anchor="tabs.tabReorderHaptics" />
+        <SettingToggle anchor="tabs.swipeBetweenTabs" />
         <SettingToggle anchor="tabs.showTabHoverMenu" />
         <SettingToggle anchor="tabs.showFullUrlInTabHoverMenu" />
         <SettingToggle anchor="tabs.autoPictureInPicture" />
@@ -230,6 +270,7 @@ function LinksSection() {
           }
         />
         <SettingToggle anchor="tabs.littleArdiaOpensNewTabLinks" />
+        <SettingToggle anchor="tabs.littleArdiaShortcutFromAnyApp" />
         <Row anchor="tabs.peekLinksToOtherSites">
           <PopUp value={peekOtherSites ? "peek" : "same"} options={OTHER_SITE_LINKS} onChange={(v) => updateSettings({ peekLinksToOtherSites: v === "peek" })} />
         </Row>

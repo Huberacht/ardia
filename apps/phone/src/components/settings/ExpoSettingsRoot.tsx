@@ -13,6 +13,7 @@ import { useAppearanceSummary } from "../../state/settings/appearance";
 import { usePreferences } from "../../state/settings/hooks";
 import { closeSettings, settingsRouteKey, type SettingsRoute } from "../../state/settings/nav";
 import { AUTO_ARCHIVE_INTERVALS, autoArchiveTitle, type AutoArchiveInterval } from "../../state/tabs/tabModels";
+import { prepareArchiveNextFrame } from "../../state/tabs/store";
 import { PHONE_SHARING_COPY } from "../../lib/telemetryCopy";
 import { setUsageSharing, useUsageSharing } from "../../state/telemetry/telemetry";
 import { contentMargins, modifierList, PROFILE_COLORS, settingsChrome, settingsLayout, SettingsIconTile, SettingsShortcuts, settingsSwitchStyle, settingsTint, settingsUIAvailable, useWarningInk, type ProfileColor } from "../ui";
@@ -20,19 +21,22 @@ import { ExpoRowLabel } from "./ExpoRowLabel";
 import { ExpoSettingsDone } from "./ExpoSettingsDone";
 import { syncOffered } from "../../state/sync/offer";
 import { browseForMeOffered, refreshChatGPTConnected, useChatGPTConnected } from "../../state/browseForMe/store";
+import { pageSummariesSwitchable, refreshPageSummariesEnabled, setPageSummariesEnabled, usePageSummariesEnabled } from "../../state/pageSummary/enabled";
+import { PAGE_SUMMARY_COPY } from "../../state/pageSummary/copy";
+import { destinationWords } from "../../lib/sharedWords";
 
 const INTERVALS = (Object.keys(AUTO_ARCHIVE_INTERVALS) as AutoArchiveInterval[]).map((id) => ({ id, title: autoArchiveTitle(id) }));
 const APP_LINKS = [
   { id: "ardia", title: "Ardia" },
   { id: "app", title: "App" },
 ] as const;
-const SHORTCUTS = [{ id: "archive", title: "Archive" }, { id: "spaces", title: "Spaces" }];
+const SHORTCUTS = [{ id: "archive", title: destinationWords.archive }, { id: "spaces", title: destinationWords.spaces }];
 const ARCHIVE_ONLY = SHORTCUTS.filter((shortcut) => shortcut.id === "archive");
 const SYNC_TILE = 56;
 const TOP_SECTION_SPACING = 12;
 
 const link = (route: SettingsRoute) => settingsRouteKey(route);
-const colorName = (choice: string) => PROFILE_COLORS[choice as ProfileColor]?.name ?? choice;
+const colorName = (choice: string) => (choice === "custom" ? "Custom" : (PROFILE_COLORS[choice as ProfileColor]?.name ?? choice));
 
 export function ExpoSettingsRoot() {
   const engineId = usePreferences((p) => p.searchEngineId);
@@ -51,12 +55,15 @@ export function ExpoSettingsRoot() {
   const engineName = syncEnabled && synced ? syncedEngineName(synced, engines) : (engines.find((engine) => engine.id === engineId)?.name ?? "");
   const appearance = useAppearanceSummary(colorName);
   const chatGPT = useChatGPTConnected();
+  const summaries = usePageSummariesEnabled();
+  const switchesSummaries = pageSummariesSwitchable();
   useEffect(() => {
     void refreshChatGPTConnected();
+    void refreshPageSummariesEnabled();
   }, []);
   return (
     <ExpoSettingsDone>
-      <Form modifiers={modifierList(navigationTitle("Settings"), navigationBarTitleDisplayMode("inline"), tint(PlatformColor("systemBlue")), settingsChrome(), contentMargins({ edges: "top", length: settingsLayout.expoListTop }))}>
+      <Form modifiers={modifierList(navigationTitle(destinationWords.settings), navigationBarTitleDisplayMode("inline"), tint(PlatformColor("systemBlue")), settingsChrome(), contentMargins({ edges: "top", length: settingsLayout.expoListTop }))}>
         {syncOffered() ? (
           <Section modifiers={[listSectionSpacing(TOP_SECTION_SPACING)]}>
             <NavigationLink value={link({ page: "sync" })}>
@@ -65,7 +72,7 @@ export function ExpoSettingsRoot() {
           </Section>
         ) : null}
         <Section modifiers={[listRowBackground("clear"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), listSectionSpacing(TOP_SECTION_SPACING)]}>
-          <SettingsShortcuts shortcuts={syncOffered() ? SHORTCUTS : ARCHIVE_ONLY} onPress={(id) => leaveFor(id === "archive" ? openArchive : openSpaces)} />
+          <SettingsShortcuts shortcuts={syncOffered() ? SHORTCUTS : ARCHIVE_ONLY} onPress={(id) => leaveFor(id === "archive" ? openPreparedArchive : openSpaces)} />
         </Section>
         <Section title="General">
           <NavigationLink value={link({ page: "appearance" })}>
@@ -135,13 +142,20 @@ export function ExpoSettingsRoot() {
             <ExpoRowLabel title={PHONE_SHARING_COPY.whatsSent} systemImage="info" tint="neutral" />
           </NavigationLink>
         </Section>
-        {browseForMeOffered() ? (
-          <Section title="Experimental">
-            <NavigationLink value={link({ page: "browseForMe" })}>
-              <LabeledContent label={<ExpoRowLabel title="Browse for Me" systemImage="sparkle.magnifyingglass" tint="nightShade" />}>
-                <Text>{chatGPT ? "ChatGPT" : "On iPhone"}</Text>
-              </LabeledContent>
-            </NavigationLink>
+        {browseForMeOffered() || switchesSummaries ? (
+          <Section title="Experimental" footer={switchesSummaries ? <Text>{PAGE_SUMMARY_COPY.iPhoneFooter}</Text> : undefined}>
+            {browseForMeOffered() ? (
+              <NavigationLink value={link({ page: "browseForMe" })}>
+                <LabeledContent label={<ExpoRowLabel title="Browse for Me" systemImage="sparkle.magnifyingglass" tint="nightShade" />}>
+                  <Text>{chatGPT ? "ChatGPT" : "On iPhone"}</Text>
+                </LabeledContent>
+              </NavigationLink>
+            ) : null}
+            {switchesSummaries ? (
+              <Toggle isOn={summaries} onIsOnChange={(on) => void setPageSummariesEnabled(on)} modifiers={modifierList(settingsSwitchStyle())}>
+                <ExpoRowLabel title={PAGE_SUMMARY_COPY.title} systemImage="sparkles" tint="nightShade" />
+              </Toggle>
+            ) : null}
           </Section>
         ) : null}
         <Section title="About" footer={<Text modifiers={[frame({ maxWidth: Number.MAX_SAFE_INTEGER }), multilineTextAlignment("center")]}>{appVersion()}</Text>}>
@@ -162,6 +176,11 @@ function leaveFor(open: () => void) {
   open();
 }
 
+function openPreparedArchive() {
+  openArchive();
+  prepareArchiveNextFrame();
+}
+
 function SyncRow() {
   const warningInk = useWarningInk();
   const line = syncRowSubtitle(useSyncStatus());
@@ -173,7 +192,7 @@ function SyncRow() {
         <Image systemName="macbook.and.iphone" size={SYNC_TILE / 2} color={settingsTint.sync} />
       )}
       <VStack alignment="leading" spacing={2}>
-        <Text modifiers={[font({ textStyle: "headline" })]}>Sync With Mac</Text>
+        <Text modifiers={[font({ textStyle: "headline" })]}>{destinationWords.sync}</Text>
         <Text modifiers={[font({ textStyle: "subheadline" }), foregroundStyle(line.isWarning ? warningInk : { type: "hierarchical", style: "secondary" }), contentTransition("opacity")]}>{line.text}</Text>
       </VStack>
     </HStack>

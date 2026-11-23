@@ -73,7 +73,7 @@ takes effect with the first release after 0.2.13):
 - **Downloads:** GitHub's `download_count` for each release's DMG. Sparkle updates are the zip's count.
 - **Update checks:** builds after 0.2.13 poll `https://netnyahoo.com/appcast.xml` (0.2.32 and earlier) or `https://ardia.dev/appcast.xml` (`SUFeedURL`). nginx
   (`infra/site/nginx.conf`) answers every request with a 302 to
-  `https://github.com/mantrakp04/ardia/releases/latest/download/appcast.xml` and, beside it, mirrors a
+  `https://github.com/ardia-browser/ardia/releases/latest/download/appcast.xml` and, beside it, mirrors a
   telemetry event `update_check { version, first }` with the day as its timestamp. Only requests whose
   User-Agent is the app's Sparkle (`Ardia/<version> Sparkle/…`) count. Nothing else is passed on: no IP
   (so no country), no headers, no cookie, a fixed `distinct_id` (`update-check`). The redirect never waits on
@@ -209,6 +209,14 @@ owner's Mac ──▶ ardia.dev/_ch/ (read-only ClickHouse user)   ardia.dev/_re
     the log, now with the action in front (`browser import`, `csv import`, `settings edit`, `settings delete`,
     `sync delete`). Added to tell which of the two engine refusals the daily password-save warnings are, and from
     which import.
+  - `search_engine_import` (once per import from a Chrome-family browser or Arc, issue #1760): `source` (the browser's
+    import id, such as `arc`, `chrome` or `braveBeta`), `outcome` (`built_in`: the source's engine is one Ardia has
+    built in; `custom`: it came over as a custom engine; `source_default`: the source was on its own default, so
+    Ardia's engine stayed; `unusable`: its address couldn't be used), `changed` (Ardia's engine changed) and `offered`
+    (you had chosen an engine yourself, so Ardia kept it and the done screen offered the source's instead). Never
+    which engine, its name or its address. `usage_counts.import_search_engine_offers_taken` counts presses of that
+    offer's Use … for Search button. `usage_counts.onboarding_preset_kept_imports` counts onboarding's Continue
+    on the browser step leaving out the preset's search engine because an import had already brought one.
   - `tab_presses` (hourly and at quit, when there were any): `presses` on sidebar rows, pinned tiles and top-strip
     chips, `down_switches` (the press switched to the tab on mouse down), `clicks` (the press opened the tab),
     `drag_clicks` (it became a drag and was rescued as a click), `drags`, `drags_without_drop` (sidebar drags let go

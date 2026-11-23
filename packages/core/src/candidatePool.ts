@@ -18,12 +18,13 @@ export type Candidate = {
   tabId?: string;
   fresh?: boolean;
   text: PageText;
+  named?: PageText;
 };
 
 type Lookup = { get(key: string): Candidate | undefined; has(key: string): boolean };
 export type Pool = { list: Candidate[]; byKey: Lookup };
 
-type BookmarkBase = { list: Candidate[]; byKey: Map<string, Candidate>; keys: Set<string>; cursor: number; done: boolean };
+type BookmarkBase = { list: Candidate[]; byKey: Map<string, Candidate>; cursor: number; done: boolean };
 type Builder = {
   base: BookmarkBase;
   history: readonly HistoryRow[];
@@ -42,7 +43,7 @@ const SLICE_CHECK = 64;
 
 function baseFor(bookmarks: readonly BookmarkRow[]): BookmarkBase {
   let base = bases.get(bookmarks);
-  if (!base) bases.set(bookmarks, (base = { list: [], byKey: new Map(), keys: new Set(), cursor: 0, done: false }));
+  if (!base) bases.set(bookmarks, (base = { list: [], byKey: new Map(), cursor: 0, done: false }));
   return base;
 }
 
@@ -54,7 +55,6 @@ function advance(b: Builder, bookmarks: readonly BookmarkRow[], deadline: number
   while (!base.done && base.cursor < bookmarks.length) {
     const row = bookmarks[base.cursor++]!;
     const text = pageText(row);
-    base.keys.add(text.key);
     if (!base.byKey.has(text.key)) {
       const c: Candidate = { url: row.url, title: row.title, favicon: row.favicon, visits: 0, lastVisit: 0, logVisits: 0, bookmarked: true, text };
       base.list.push(c);
@@ -67,10 +67,11 @@ function advance(b: Builder, bookmarks: readonly BookmarkRow[], deadline: number
     const h = b.history[b.historyCursor++]!;
     const text = pageText(h);
     if (!b.byKey.has(text.key)) {
-      const bookmarked = base.keys.has(text.key);
+      const mark = base.byKey.get(text.key);
+      const named = mark?.title && mark.text.titleLower !== text.titleLower && withRootSlash(mark.url) === withRootSlash(h.url) ? mark.text : undefined;
       let c = historyCandidates.get(h);
-      if (!c || c.bookmarked !== bookmarked) {
-        c = { url: h.url, title: h.title, favicon: h.favicon, visits: h.visits, lastVisit: h.lastVisit, logVisits: logVisits(h.visits), bookmarked, text };
+      if (!c || c.bookmarked !== !!mark || c.named !== named) {
+        c = { url: h.url, title: named ? mark!.title : h.title, pageTitle: named ? h.title : undefined, favicon: h.favicon, visits: h.visits, lastVisit: h.lastVisit, logVisits: logVisits(h.visits), bookmarked: !!mark, text, named };
         historyCandidates.set(h, c);
       }
       b.list.push(c);
@@ -148,28 +149,37 @@ export function tabsOver(pool: Pool, tabs: readonly TabRow[], currentTabId?: str
     for (let i = 0; same && i < tabs.length; i++) same = cached.rows[i] === tabs[i];
     if (same) return cached;
   }
-  const open: TabRow[] = [];
-  const chosen = new Map<string, TabRow>();
-  for (const t of tabs) {
-    if (!t.url || t.id === currentTabId) continue;
-    open.push(t);
-    const key = pageText(t).key;
-    const kept = chosen.get(key);
-    if (!kept || (t.customTitle && !kept.customTitle)) chosen.set(key, t);
-  }
   const tabIds = new Map<string, string>();
-  for (const [key, t] of chosen) tabIds.set(key, t.id);
+  const renamedTabKeys = new Set<string>();
+  const firstOfPage: boolean[] = new Array(tabs.length);
+  for (let i = 0; i < tabs.length; i++) {
+    const t = tabs[i]!;
+    if (!t.url || t.id === currentTabId) continue;
+    const key = pageText(t).key;
+    if (!t.customTitle) {
+      if (!tabIds.has(key)) {
+        tabIds.set(key, t.id);
+        firstOfPage[i] = true;
+      }
+    } else if (!renamedTabKeys.has(key)) {
+      renamedTabKeys.add(key);
+      tabIds.set(key, t.id);
+    }
+  }
   const extra: Candidate[] = [];
   const renamed = new Set<string>();
-  for (const t of open) {
+  for (let i = 0; i < tabs.length; i++) {
+    const t = tabs[i]!;
+    if (!t.url || t.id === currentTabId) continue;
     const key = pageText(t).key;
     const listed = pool.byKey.get(key);
-    if (!listed) {
-      if (!t.customTitle && chosen.get(key) !== t) continue;
-      extra.push({ url: t.url, title: t.customTitle || t.title, pageTitle: t.title, ...(t.customTitle ? { renamed: true as const } : {}), favicon: t.favicon, visits: 0, lastVisit: 0, logVisits: 0, fresh: true, bookmarked: false, tabId: t.id, text: tabPageText(t) });
-    } else if (t.customTitle) {
+    if (!t.customTitle) {
+      if (!listed && firstOfPage[i] && (renamedTabKeys.size === 0 || !renamedTabKeys.has(key))) extra.push({ url: t.url, title: t.title, pageTitle: t.title, favicon: t.favicon, visits: 0, lastVisit: 0, logVisits: 0, fresh: true, bookmarked: false, tabId: t.id, text: tabPageText(t) });
+    } else if (!listed) {
+      extra.push({ url: t.url, title: t.customTitle, pageTitle: t.title, renamed: true, favicon: t.favicon, visits: 0, lastVisit: 0, logVisits: 0, fresh: true, bookmarked: false, tabId: t.id, text: tabPageText(t) });
+    } else {
       renamed.add(key);
-      extra.push({ url: t.url, title: t.customTitle, renamed: true, favicon: t.favicon ?? listed.favicon, visits: listed.visits, lastVisit: listed.lastVisit, logVisits: listed.logVisits, bookmarked: listed.bookmarked, tabId: t.id, text: tabPageText(t, listed.text) });
+      extra.push({ url: t.url, title: t.customTitle, renamed: true, favicon: t.favicon ?? listed.favicon, visits: listed.visits, lastVisit: listed.lastVisit, logVisits: listed.logVisits, bookmarked: listed.bookmarked, tabId: t.id, text: tabPageText(t, listed.text), named: listed.named });
     }
   }
   const result = { pool, currentTabId, rows: tabs.slice(), tabIds, extra, renamed };

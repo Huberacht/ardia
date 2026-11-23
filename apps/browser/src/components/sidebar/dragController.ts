@@ -1,12 +1,12 @@
 import { layout } from "../ui/theme";
-import { Animated, type GestureResponderEvent, type View } from "react-native";
+import { Animated, type View } from "react-native";
 import { NO_DROP } from "../../state/drag/drops";
 import { dropTabs } from "../../state/pins/actions";
 import { dragHomeOf, movingTabsFrom, profileBeside, splitIdOfNow } from "../../state/sidebar/current";
 import type { TabPlacement } from "../../state/pins/placing";
 import { SLIDE } from "../tabstrip/tokens";
 import { beginTabDrag, cancelTabDrag, endTabDrag, setDragPicture, updateTabDrag } from "../../state/drag/tabDrag";
-import { noteDragProfileSwitch, noteDragWithoutDrop, noteSidebarDrop } from "../../state/telemetry/tabPresses";
+import { noteDragBegan, noteDragProfileSwitch, noteDragWithoutDrop, noteSidebarDrop } from "../../state/telemetry/tabPresses";
 import { dropTabOnRow } from "../../state/splits/actions";
 import { arrangeLive } from "../../state/sidebar/pinnedOrder";
 import { suppressHover } from "../../state/sidebar/hover";
@@ -19,11 +19,11 @@ import { type DragSession, newDragSession } from "./dragGeometry";
 import { captureEscape, hapticTick } from "../../state/drag/dragNative";
 import { entryKey } from "../../state/sidebar/entryKey";
 import { endHeldTabPress } from "../../state/sidebar/heldTabPress";
-import { tabPlace } from "../../state/sidebar/actions";
 import { dropTabsInProfile, switchProfile } from "../../state/browser/actions";
 
 export class DragController extends DragTargeting {
   protected arriving: { key: string; from: number } | null = null;
+  beforeMeasure: (() => void) | null = null;
 
   create(key: string): Item {
     const arriving = this.arriving?.key === key ? this.arriving : null;
@@ -60,11 +60,13 @@ export class DragController extends DragTargeting {
   async begin(key: string, x: number, y: number) {
     const item = this.items.get(key);
     if (!item || item.kind === "tail") return;
+    this.beforeMeasure?.();
     const lead = tabCell(item) ? item.tabIds[0] : undefined;
     const moving = lead ? movingTabsFrom(lead) : [];
     const sources = moving.length > 1 ? [...this.items.values()].filter((i) => tabCell(i) && i.tabIds.some((id) => moving.includes(id))) : [item];
     this.stopTimers();
     const session = (this.session = newDragSession(sources, { x, y }, this.scrollY));
+    noteDragBegan(session);
     session.shown = this.profile;
     const crossing = sources.every((i) => tabCell(i) && i.section !== "folder");
     session.home = crossing ? dragHomeOf([...new Set(sources.flatMap((i) => i.tabIds))]) : null;
@@ -104,9 +106,11 @@ export class DragController extends DragTargeting {
 
   async beginExternal(count: number, x: number, y: number) {
     if (this.active && !this.session!.external) return;
+    this.beforeMeasure?.();
     this.reset();
     this.setGhost(null);
     const session = (this.session = newDragSession([this.create("external")], { x, y }, this.scrollY));
+    noteDragBegan(session);
     session.shown = this.profile;
     session.external = Math.max(1, count);
     this.token = {};
@@ -166,7 +170,7 @@ export class DragController extends DragTargeting {
     session.shown = profileId;
     if (was === null) return;
     if (!session.home && !session.external) return this.abandon();
-    if (session.home) noteDragProfileSwitch(session.hopping?.id === profileId ? session.hopping.by : null);
+    if (session.home) noteDragProfileSwitch(session.hopping?.id === profileId ? session.hopping.by : null, session);
     session.hopping = null;
     void this.remeasure(session);
   }
@@ -239,10 +243,10 @@ export class DragController extends DragTargeting {
   }
 
   interrupt() {
-    this.end(false, null, true);
+    this.end(false, true);
   }
 
-  end(commit: boolean, release: GestureResponderEvent | null = null, interrupted = false) {
+  end(commit: boolean, interrupted = false) {
     const session = this.session;
     if (session?.external) return void this.finishExternal(false);
     if (!session?.sources.length) return endHeldTabPress([], null);
@@ -262,10 +266,9 @@ export class DragController extends DragTargeting {
         ? this.landingSpot(commit ? drop : NO_DROP)
         : null;
     const dragged = sources.flatMap((i) => i.tabIds);
-    const places = dragged.map(tabPlace).join();
     const dropped = commit && !splitDrop && measured && sources.length > 0;
     let settled: (() => void) | null = null;
-    if (dropped && drop.type === "none" && !toIcon) noteDragWithoutDrop();
+    if (dropped && drop.type === "none" && !toIcon) noteDragWithoutDrop(session);
     if (home && toIcon) void dropTabsInProfile(dragged, toIcon, NO_DROP, home.profileId, true);
     else if (home && crossed) {
       if (dropped && drop.type === "tabs") void dropTabsInProfile(dragged, shown!, drop, home.profileId, false).then((placed) => placed && drop.sequence && arrangeLive(placedSequence(drop.sequence, placed)));
@@ -274,20 +277,18 @@ export class DragController extends DragTargeting {
       const shift = this.splitShift(marks.split?.key);
       const made = dropTabOnRow(dragged[0]!, drop.targetId, drop.side);
       if (made) settled = () => this.settleSplit(dragged[0]!, shift);
-      if (made) noteSidebarDrop(drop.side === "left" ? "split_left" : "split_right");
-      if (made?.adopted === "row") noteSidebarDrop("split_pinned");
-      else if (made?.adopted === "list") noteSidebarDrop("split_unpinned");
+      if (made) noteSidebarDrop(drop.side === "left" ? "split_left" : "split_right", session);
+      if (made?.adopted === "row") noteSidebarDrop("split_pinned", session);
+      else if (made?.adopted === "list") noteSidebarDrop("split_unpinned", session);
     } else if (dropped) {
       const kind = marks.tile ? "tile" : gapKey ? "gap" : null;
-      if (kind && drop.type !== "none") noteSidebarDrop(kind);
+      if (kind && drop.type !== "none") noteSidebarDrop(kind, session);
       dropTabs(dragged, drop);
       if (drop.sequence) arrangeLive(drop.sequence);
     }
     this.reset();
     settled?.();
-    const moved = dragged.map(tabPlace).join() !== places;
-    const stayed = commit && !splitDrop && !into && !moved && !elsewhere;
-    endHeldTabPress(dragged, stayed ? release : null);
+    endHeldTabPress(dragged, null);
     if (leftPanel) closeFolderPanel();
     if (!spot || !ghost) {
       this.token = null;
