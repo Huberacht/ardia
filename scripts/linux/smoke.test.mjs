@@ -6,12 +6,12 @@ import { join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { launchArguments, launchEnvironment } from "../../apps/desktop/scripts/acceptance/lib/ardia.mjs";
 import { encodePng } from "../lib/png.mjs";
-import { ASSERTIONS, HEADLESS_EXIT_LIMIT_MS, HEADLESS_PAGE, SCRIPT_NAME, SCRIPT_TITLE_PREFIX, UNKNOWN_WINDOW_ERROR, USAGE, USER_SCRIPTS_CAPABILITIES, VERSION_PATTERN, WINDOW_STATE_CAPABILITIES, windowStateProblems, windowStateSupport, windowStateVerdict, appVersionVerdict, cliControlSupport, cliTarball, debLayoutProblems, headlessExitArguments, headlessExitVerdict, privateFolder, packageFormat, formatTable, installerRanAgain, launchRefusal, packageStagedFiles, parseArgs, pipeLaunchArguments, splitPipeMessages, summarize, uboSeedProblems, uboTuningProblems, userScriptSource } from "./smoke.mjs";
+import { ASSERTIONS, HEADLESS_EXIT_LIMIT_MS, HEADLESS_PAGE, SYNC_CORE_PHRASES, syncCoreProblems, syncCoreVerdict, SCRIPT_NAME, SCRIPT_TITLE_PREFIX, UNKNOWN_WINDOW_ERROR, USAGE, USER_SCRIPTS_CAPABILITIES, VERSION_PATTERN, WINDOW_STATE_CAPABILITIES, windowStateProblems, windowStateSupport, windowStateVerdict, appVersionVerdict, cliControlSupport, cliTarball, debLayoutProblems, headlessExitArguments, headlessExitVerdict, privateFolder, packageFormat, formatTable, installerRanAgain, launchRefusal, packageStagedFiles, parseArgs, pipeLaunchArguments, splitPipeMessages, summarize, uboSeedProblems, uboTuningProblems, userScriptSource } from "./smoke.mjs";
 import * as smoke from "./smoke.mjs";
 
 test("the package checks are named in the usage and keep the original eight first", () => {
   assert.deepEqual(ASSERTIONS.slice(0, 8), ["ldd", "shell-ui", "bootstrap", "native-tab", "sandbox", "content-blocker", "restart-restore", "staged-install"]);
-  for (const name of ["app-version", "cli-install", "cli-control", "cli-scripts", "window-state", "headless-exit"]) {
+  for (const name of ["app-version", "cli-install", "cli-control", "cli-scripts", "window-state", "sync-core", "headless-exit"]) {
     assert.ok(ASSERTIONS.includes(name), name);
     assert.ok(USAGE.includes(name), name);
   }
@@ -271,4 +271,18 @@ test("headless-exit passes on a PNG and a clean exit, is old when the process ha
   assert.equal(headlessExitVerdict({ code: 0, ms: 900, shot: Buffer.from("not a png at all") }).status, "fail");
   assert.equal(headlessExitVerdict({ code: 1, ms: 900, shot: png }).status, "fail");
   assert.match(headlessExitVerdict({ code: null, signal: "SIGSEGV", ms: 900, shot: null }).message, /exited SIGSEGV after 900 ms and wrote no valid PNG/);
+});
+
+test("sync-core wants the Rust core's answers through ArdiaSync.enterPhrase, and calls an engine without ArdiaSync.core old", () => {
+  assert.equal(syncCoreVerdict(null).status, "old");
+  assert.equal(syncCoreVerdict(["ArdiaSync.status"]).status, "old");
+  assert.equal(syncCoreVerdict(["ArdiaSync.status", "ArdiaSync.core"]).status, "pass");
+  for (const phrase of Object.values(SYNC_CORE_PHRASES)) assert.equal(phrase.split(" ").length, 24);
+  const good = { core: "rust", claim: { granted: true }, valid: { error: "noData" }, checksum: { error: "checksum" }, unknown: { error: "unknownWord", word: "zzzz" } };
+  assert.deepEqual(syncCoreProblems(good), []);
+  const problems = syncCoreProblems({ core: "native", valid: { thrown: "Another Ardia window is running sync" }, checksum: { error: "checksum" }, unknown: { error: "unknownWord", word: "x" } });
+  assert.equal(problems.length, 3, problems.join("\n"));
+  assert.match(problems.join("\n"), /not "rust"/);
+  assert.match(problems.join("\n"), /valid phrase answered .*thrown/);
+  assert.match(problems.join("\n"), /unknown phrase answered .*"word":"x"/);
 });
