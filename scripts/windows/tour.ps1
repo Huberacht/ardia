@@ -561,7 +561,7 @@ function Set-Seen($Stop, [bool]$Seen) {
   if ($Seen) { $Stop.Seen = "yes" } else { $Stop.Seen = "no" }
 }
 
-function Start-Ardia([string]$Name, [switch]$Onboarded, [hashtable]$Settings, [switch]$KeepData) {
+function Start-Ardia([string]$Name, [switch]$Onboarded, [hashtable]$Settings, [switch]$KeepData, [string[]]$Arguments = @()) {
   $data = Join-Path (Join-Path $Out "data") $Name
   if (-not $KeepData) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $data }
   New-Item -ItemType Directory -Force -Path $data | Out-Null
@@ -578,7 +578,7 @@ function Start-Ardia([string]$Name, [switch]$Onboarded, [hashtable]$Settings, [s
   $env:ARDIA_DATA_DIR = $data
   $env:ARDIA_BACKGROUND = ""
   Write-Host "[tour] launching '$Name' with data in $data"
-  $process = Start-Process -FilePath $App -ArgumentList "--log-file=`"$log`"" -PassThru
+  $process = Start-Process -FilePath $App -ArgumentList (@("--log-file=`"$log`"") + $Arguments) -PassThru
   $null = $process.Handle
   $session = [pscustomobject]@{
     Name = $Name
@@ -1451,6 +1451,7 @@ function Start-Hogs([string]$Folder) {
 }
 
 $script:SuggestPort = 0
+$script:SuggestHost = "duckduckgo.com"
 $script:LateQuery = "example.com"
 $script:LateRows = @("example.com tour one", "example.com tour two", "example.com tour three")
 $script:LateMs = 500
@@ -1463,8 +1464,15 @@ function Start-SuggestServer([string]$Log) {
   Remove-Item -Force -ErrorAction SilentlyContinue $script:SuggestRelease
   $portFile = "$Log.port"
   Remove-Item -Force -ErrorAction SilentlyContinue $portFile
-  $job = Start-Job -ArgumentList $portFile, $script:LateQuery, $script:LateRows, $script:LateMs, $Log, $script:SuggestRelease {
-    param($portFile, $lateQuery, $lateRows, $lateMs, $log, $release)
+  $job = Start-Job -ArgumentList $portFile, $script:SuggestHost, $script:LateQuery, $script:LateRows, $script:LateMs, $Log, $script:SuggestRelease {
+    param($portFile, $suggestHost, $lateQuery, $lateRows, $lateMs, $log, $release)
+    $key = [System.Security.Cryptography.RSA]::Create(2048)
+    $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new("CN=$suggestHost", $key, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $names = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+    $names.AddDnsName($suggestHost)
+    $request.CertificateExtensions.Add($names.Build())
+    $made = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(7))
+    $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($made.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, "tour"), "tour")
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
     $listener.Start()
     Set-Content -LiteralPath $portFile -Value $listener.LocalEndpoint.Port
@@ -1472,12 +1480,15 @@ function Start-SuggestServer([string]$Log) {
     while ($true) {
       $client = $listener.AcceptTcpClient()
       try {
-        $stream = $client.GetStream()
+        $client.ReceiveTimeout = 1000
+        $client.SendTimeout = 1000
+        $stream = [System.Net.Security.SslStream]::new($client.GetStream(), $false)
+        $stream.AuthenticateAsServer($certificate, $false, [System.Security.Authentication.SslProtocols]::None, $false)
         $reader = [System.IO.StreamReader]::new($stream)
         $line = [string]$reader.ReadLine()
         while ($reader.ReadLine()) { }
         $query = $null
-        if ($line -match "^GET /suggest\?q=([^ ]*) ") { $query = [Uri]::UnescapeDataString($Matches[1].Replace("+", " ")) }
+        if ($line -match "^GET /ac/\?q=([^ &]*)") { $query = [Uri]::UnescapeDataString($Matches[1].Replace("+", " ")) }
         $asked = $clock.ElapsedMilliseconds
         $rows = @()
         if ($query -eq $lateQuery) {
@@ -1508,7 +1519,7 @@ function Start-SuggestServer([string]$Log) {
   }
   while ($script:SuggestPort -and -not $ready -and (Get-Date) -lt $deadline) {
     try {
-      $ready = (Invoke-WebRequest -Uri "http://127.0.0.1:$($script:SuggestPort)/suggest?q=ready" -TimeoutSec 2 -UseBasicParsing).Content -eq '["ready",[]]'
+      $ready = (Invoke-WebRequest -Uri "https://127.0.0.1:$($script:SuggestPort)/ac/?q=ready&type=list" -TimeoutSec 2 -UseBasicParsing -SkipCertificateCheck).Content -eq '["ready",[]]'
     } catch {
       Start-Sleep -Milliseconds 200
     }
@@ -1518,8 +1529,11 @@ function Start-SuggestServer([string]$Log) {
 }
 
 function Get-SuggestSettings {
-  $base = "http://127.0.0.1:$($script:SuggestPort)"
-  return @{ customSearchEngines = @(@{ id = "tour"; name = "Tour"; keyword = "tour.test"; url = "$base/search?q=%s"; suggestUrl = "$base/suggest?q=%s" }); searchEngine = "tour" }
+  return @{ searchEngine = "duckduckgo" }
+}
+
+function Get-SuggestArguments {
+  return @("--host-resolver-rules=`"MAP $($script:SuggestHost) 127.0.0.1:$($script:SuggestPort)`"", "--ignore-certificate-errors")
 }
 
 function Initialize-SuggestProfile([string]$Name) {
@@ -1536,9 +1550,9 @@ function Initialize-SuggestProfile([string]$Name) {
   if ($saved["settings"] -isnot [System.Collections.IDictionary]) { $saved["settings"] = @{} }
   foreach ($entry in (Get-SuggestSettings).GetEnumerator()) { $saved["settings"][$entry.Key] = $entry.Value }
   if ($saved["settingsMeta"] -isnot [System.Collections.IDictionary]) { $saved["settingsMeta"] = @{ chosen = @(); inferred = @() } }
-  $saved["settingsMeta"]["chosen"] = @(@($saved["settingsMeta"]["chosen"]) + @("searchEngine", "customSearchEngines") | Where-Object { $_ } | Select-Object -Unique)
+  $saved["settingsMeta"]["chosen"] = @(@($saved["settingsMeta"]["chosen"]) + @("searchEngine") | Where-Object { $_ } | Select-Object -Unique)
   Set-Content -LiteralPath $path -Value ($saved | ConvertTo-Json -Depth 64 -Compress) -Encoding utf8NoBOM
-  return "the tour search engine written into $how"
+  return "DuckDuckGo chosen as the search engine in $how"
 }
 
 function Invoke-FirstRunLaunch([string]$Name, [string]$Exe, [scriptblock]$Body, [switch]$OwnSuggestions) {
@@ -1547,7 +1561,7 @@ function Invoke-FirstRunLaunch([string]$Name, [string]$Exe, [scriptblock]$Body, 
   try {
     $script:SuggestProfile = $null
     if ($OwnSuggestions) { $script:SuggestProfile = Initialize-SuggestProfile $Name }
-    $session = if ($OwnSuggestions) { Start-Ardia $Name -KeepData } else { Start-Ardia $Name }
+    $session = if ($OwnSuggestions) { Start-Ardia $Name -KeepData -Arguments (Get-SuggestArguments) } else { Start-Ardia $Name }
   } finally {
     $script:App = $saved
   }
@@ -1611,7 +1625,7 @@ function Invoke-FirstRunTour {
   Invoke-FirstRunLaunch "human-go" "" {
     param($session)
     $walk = Walk-OnboardingToOutro $session
-    Invoke-TypeStop $session "human-go" "First run: Ctrl+T about 400 ms after Get Started, the first key 100 ms after it, the mouse resting on the bar, then the Go button" "Walked the onboarding with its Continue buttons to the last screen ($($walk.Screens); at the last screen: $($walk.AtOutro)), clicked Get Started, pressed Ctrl+T about 400 ms after the click, typed e 100 ms after it, moved the mouse onto Go (rows then grow above it, so the pointer stays over the bar), typed xample.com 30 ms a key, noted where Go was when the field settled, waited 3 s while the late suggestions came in and clicked there. The profile's default search engine is a custom one whose suggest URL is the tour's own loopback server: it answers every request at once with no rows, except example.com, which it answers with three rows only once the stop has noted Go's position and taken its log mark, then $($script:LateMs) ms later, so the late rows always come after the mouse rests and the measurement starts. Required: the first key lands, the bar held the late rows under the pointer, Go stayed put and Go opened Example Domain (#2102)." { param($stop) $clicked = Click-Named $session "Get Started"; $stop.Facts.Add("Get Started clicked: $clicked"); Start-Sleep -Milliseconds 100 } "ctrl+t" "Go" "the whole text: #2101" -Required -RequireGoHold | Out-Null
+    Invoke-TypeStop $session "human-go" "First run: Ctrl+T about 400 ms after Get Started, the first key 100 ms after it, the mouse resting on the bar, then the Go button" "Walked the onboarding with its Continue buttons to the last screen ($($walk.Screens); at the last screen: $($walk.AtOutro)), clicked Get Started, pressed Ctrl+T about 400 ms after the click, typed e 100 ms after it, moved the mouse onto Go (rows then grow above it, so the pointer stays over the bar), typed xample.com 30 ms a key, noted where Go was when the field settled, waited 3 s while the late suggestions came in and clicked there. The profile's search engine is DuckDuckGo, and the launch maps $($script:SuggestHost) to the tour's own loopback TLS server (--host-resolver-rules and --ignore-certificate-errors, which the engine keeps only in a test instance), so the built-in suggestion endpoint is what the bar asks: the server answers every request at once with no rows, except example.com, which it answers with three rows only once the stop has noted Go's position and taken its log mark, then $($script:LateMs) ms later, so the late rows always come after the mouse rests and the measurement starts. Required: the first key lands, the bar held the late rows under the pointer, Go stayed put and Go opened Example Domain (#2102)." { param($stop) $clicked = Click-Named $session "Get Started"; $stop.Facts.Add("Get Started clicked: $clicked"); Start-Sleep -Milliseconds 100 } "ctrl+t" "Go" "the whole text: #2101" -Required -RequireGoHold | Out-Null
   } -OwnSuggestions
   } finally {
     $suggestServer | Stop-Job -ErrorAction SilentlyContinue
