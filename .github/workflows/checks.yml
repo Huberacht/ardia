@@ -85,6 +85,7 @@ jobs:
               - "packages/**"
               - "engine/ardiacore/src/**"
               - "engine/ardiacore-linux/src/**"
+              - "engine/ardiacore-desktop/src/**"
               - "engine/patches/**"
               - "docs/engine-build.md"
               - "scripts/lib/**"

@@ -34,13 +34,13 @@ export const shell = defineModuleDomain({
   modules: {
     ArdiaShell: {
       functions: {
-        setAppearance: { args: [["mode", "AppearanceMode", "String"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "absent", windows: "custom" },
+        setAppearance: { args: [["mode", "AppearanceMode", "String"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
         isDarkAppearance: { args: [], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
-        startDictation: { args: [], result: "void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
-        fetchBangList: { args: [["etag", "string | null", "String?"]], result: "BangListReply", async: true, promise: true, mac: "custom", desktop: "custom", windows: "custom" },
+        startDictation: { args: [], result: "void | Promise<void>", swiftResult: "Void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
+        fetchBangList: { args: [["etag", "string | null", "String?"]], result: "BangListReply", async: true, promise: true, mac: "custom", desktop: "host", windows: "custom" },
         copyText: { args: [["text", "string"]], result: "void", async: false, mac: "custom", desktop: "host", windows: "custom" },
-        copyURL: { args: [["address", "CleanedUrl", "String"]], result: "void", async: false, optional: true, mac: "custom", desktop: "custom", windows: "custom" },
-        readText: { args: [], result: "string", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
+        copyURL: { args: [["address", "CleanedUrl", "String"]], result: "void | Promise<void>", swiftResult: "Void", async: false, optional: true, mac: "custom", desktop: "custom", windows: "custom" },
+        readText: { args: [], result: "string", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
         dictationAvailable: { args: [], result: "boolean", async: false, optional: true, mac: "absent", desktop: "custom", windows: "custom" },
       },
       events: {
@@ -166,9 +166,9 @@ export const shell = defineModuleDomain({
         setAppIcon: { args: [["id", "string"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "absent" },
         systemInfo: { args: [], result: "SystemInfo", swiftResult: "[String: Any]", async: false, mac: "custom", desktop: "absent", windows: "custom" },
         crashReports: { args: [["since", "number"]], result: "CrashReport[]", swiftResult: "[[String: Any]]", async: true, mac: "custom", desktop: "custom", windows: "custom" },
-        hardwareInfo: { args: [], result: "HardwareInfo", swiftResult: "[String: Any]", async: true, mac: "custom", desktop: "custom", windows: "custom" },
+        hardwareInfo: { args: [], result: "HardwareInfo", swiftResult: "[String: Any]", async: true, mac: "custom", desktop: "host", windows: "custom" },
         diagnosticsSample: { args: [], result: "DiagnosticsSample", swiftResult: "[String: Any]", async: true, mac: "custom", desktop: "custom", windows: "custom" },
-        openExternalURL: { args: [["url", "string"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "custom" },
+        openExternalURL: { args: [["url", "string"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
         playIntroMusic: { args: [["cues", "IntroMusicCues", "[String: Double]"], ["muted", "boolean"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
         setIntroMusicMuted: { args: [["muted", "boolean"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
         stopIntroMusic: { args: [["fade", "number"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
@@ -203,8 +203,8 @@ export const shell = defineModuleDomain({
     },
     ArdiaLocation: {
       functions: {
-        locationPermission: { args: [], result: "LocationPermission", swiftResult: "String", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "absent" },
-        requestLocationPermission: { args: [], result: "LocationPermission", async: true, promise: true, queue: "main", mac: "custom", desktop: "adapted", windows: "absent" },
+        locationPermission: { args: [], result: "LocationPermission", swiftResult: "String", async: true, queue: "main", mac: "custom", desktop: "host", windows: "absent" },
+        requestLocationPermission: { args: [], result: "LocationPermission", async: true, promise: true, queue: "main", mac: "custom", desktop: "host", windows: "absent" },
         openLocationSettings: { args: [], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "absent" },
         devLocationRequests: { args: [], result: "number", swiftResult: "Int", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "absent" },
       },
@@ -265,18 +265,18 @@ export const shell = defineModuleDomain({
     },
     ArdiaSystem: {
       functions: {
-        isDefaultBrowser: { args: [], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
-        setAsDefaultBrowser: { args: [], result: "boolean", async: true, promise: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
-        launchAtLoginStatus: { args: [], result: "LaunchAtLoginStatus", swiftResult: "String", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "custom" },
-        setLaunchAtLogin: { args: [["enabled", "boolean"]], result: "void", async: true, queue: "main", throws: true, mac: "custom", desktop: "adapted", windows: "custom" },
+        isDefaultBrowser: { args: [], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
+        setAsDefaultBrowser: { args: [], result: "boolean", async: true, promise: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
+        launchAtLoginStatus: { args: [], result: "LaunchAtLoginStatus", swiftResult: "String", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
+        setLaunchAtLogin: { args: [["enabled", "boolean"]], result: "void", async: true, queue: "main", throws: true, mac: "custom", desktop: "host", windows: "custom" },
         fileExists: { args: [["path", "string"]], result: "boolean", async: false, mac: "custom", desktop: "custom", windows: "custom" },
         openFile: { args: [["path", "string"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "custom" },
         revealFile: { args: [["path", "string"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
         moveToTrash: { args: [["path", "string"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "custom" },
         fileIcon: { args: [["path", "string"], ["size", "number"]], result: "string | null", swiftResult: "String?", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "custom" },
         runningAppIcon: { args: [["pid", "number", "Int"], ["size", "number"]], result: "string | null", swiftResult: "String?", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
-        hapticTick: { args: [], result: "void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
-        setThinScrollBars: { args: [["thin", "boolean"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "custom", windows: "custom" },
+        hapticTick: { args: [], result: "void | Promise<void>", swiftResult: "Void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
+        setThinScrollBars: { args: [["thin", "boolean"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
       },
       constants: {
         backgroundInstance: { type: "boolean", optional: true, mac: "custom", desktop: "custom", windows: "absent" },
@@ -378,7 +378,7 @@ export const shell = defineModuleDomain({
     },
     ArdiaUserScripts: {
       functions: {
-        watch: { args: [["on", "boolean"]], result: "void", async: false, mac: "custom", desktop: "host", windows: "custom" },
+        watch: { args: [["on", "boolean"]], result: "void", async: false, mac: "custom", desktop: "adapted", windows: "custom" },
         read: { args: [], result: "UserScriptsFolder", swiftResult: "[String: Any]", async: true, queue: "module", mac: "custom", desktop: "host", windows: "custom" },
         readStatus: { args: [], result: "string | null", swiftResult: "String?", async: true, queue: "module", mac: "custom", desktop: "host", windows: "custom" },
         writeStatus: { args: [["json", "string"]], result: "void", async: true, queue: "module", throws: true, mac: "custom", desktop: "host", windows: "absent" },
@@ -399,8 +399,8 @@ export const shell = defineModuleDomain({
     },
     ArdiaAutomation: {
       functions: {
-        start: { args: [], result: "ControlSocketStatus", async: true, promise: true, mac: "custom", desktop: "adapted", windows: "absent" },
-        stop: { args: [], result: "void", async: true, promise: true, mac: "custom", desktop: "adapted", windows: "absent" },
+        start: { args: [], result: "ControlSocketStatus", async: true, promise: true, mac: "custom", desktop: "host", windows: "absent" },
+        stop: { args: [], result: "void", async: true, promise: true, mac: "custom", desktop: "host", windows: "absent" },
         reply: { args: [["connection", "number", "Int"], ["line", "string"], ["ticket", "number", "Int"]], result: "void", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
         cutOff: { args: [], result: "boolean", async: false, optional: true, mac: "custom", desktop: "custom", windows: "absent" },
         broadcast: { args: [["connections", "number[]", "[Int]"], ["line", "string"]], result: "void", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
@@ -454,12 +454,12 @@ export const shell = defineModuleDomain({
     },
     ArdiaSystemSignals: {
       functions: {
-        watchIdle: { args: [["thresholds", "number[]"]], result: "void", async: false, instance: "strong", mac: "custom", desktop: "adapted", windows: "custom" },
+        watchIdle: { args: [["thresholds", "number[]"]], result: "void", async: false, instance: "strong", mac: "custom", desktop: "host", windows: "custom" },
         holdsIncomingLinks: { args: [], result: "boolean", async: false, mac: "custom", desktop: "custom", windows: "custom" },
         setHoldIncomingLinks: { args: [["hold", "boolean"], ["hooksStamp", "string | null", "String?"]], result: "void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
         setApprovedDownloadFolders: { args: [["folders", "string[]"]], result: "void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
         moveCompletedDownload: { args: [["path", "string"], ["folder", "string"]], result: "MovedDownload", swiftResult: "[String: Any]", async: true, queue: "userInitiated", mac: "custom", desktop: "custom", windows: "custom" },
-        devPost: { args: [["name", "\"willSleep\" | \"didWake\"", "String"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "adapted", windows: "custom" },
+        devPost: { args: [["name", "\"willSleep\" | \"didWake\"", "String"]], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
       },
       events: {
         onSystemSignal: { payload: "SystemSignal", mac: "custom", desktop: "host", windows: "absent" },
@@ -467,9 +467,9 @@ export const shell = defineModuleDomain({
     },
     ArdiaReport: {
       functions: {
-        draftDirectory: { args: [], result: "string", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
-        fileSize: { args: [["path", "string"]], result: "number", swiftResult: "Int", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
-        removeFile: { args: [["path", "string"]], result: "void", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
+        draftDirectory: { args: [], result: "string | Promise<string>", swiftResult: "String", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
+        fileSize: { args: [["path", "string"]], result: "number | Promise<number>", swiftResult: "Int", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
+        removeFile: { args: [["path", "string"]], result: "void | Promise<void>", swiftResult: "Void", async: false, mac: "custom", desktop: "adapted", windows: "absent" },
         startRecording: { args: [["windowId", "string"], ["includePages", "boolean"], ["path", "string"], ["maxSeconds", "number | null", "Double?"], ["fps?", "number | null", "Double?"], ["maxPixelWidth?", "number | null", "Double?"]], result: "boolean", async: true, queue: "main", instance: "strong", mac: "custom", desktop: "custom", windows: "absent" },
         stopRecording: { args: [], result: "boolean", async: true, queue: "main", instance: "strong", mac: "custom", desktop: "custom", windows: "absent" },
         cancelRecording: { args: [], result: "void", async: true, queue: "main", instance: "strong", mac: "custom", desktop: "custom", windows: "absent" },
@@ -478,7 +478,7 @@ export const shell = defineModuleDomain({
         gzipFile: { args: [["source", "string"], ["destination", "string"], ["removeSource", "boolean"]], result: "number", swiftResult: "Int", async: true, queue: "utility", throws: true, mac: "custom", desktop: "adapted", windows: "absent" },
         gzipText: { args: [["text", "string"], ["destination", "string"]], result: "number", swiftResult: "Int", async: true, queue: "utility", throws: true, mac: "custom", desktop: "adapted", windows: "absent" },
         upload: { args: [["id", "string"], ["url", "string"], ["method", "string"], ["headers", "Record<string, string>", "[String: String]"], ["path", "string"]], result: "UploadReply", async: true, promise: true, instance: "strong", mac: "custom", desktop: "adapted", windows: "absent" },
-        cancelUploads: { args: [], result: "void", async: false, instance: "strong", mac: "custom", desktop: "adapted", windows: "absent" },
+        cancelUploads: { args: [], result: "void | Promise<void>", swiftResult: "Void", async: false, instance: "strong", mac: "custom", desktop: "adapted", windows: "absent" },
         devRenderCost: { args: [["windowId", "string"]], result: "(Record<string, unknown>)[]", swiftResult: "[[String: Any]]", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
         devSnapshotPill: { args: [["path", "string"]], result: "Record<string, number> | null", swiftResult: "[String: Double]?", async: true, queue: "main", instance: "strong", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
         devRecordingPages: { args: [["windowId", "string"]], result: "(Record<string, unknown>)[]", swiftResult: "[[String: Any]]", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
@@ -487,7 +487,7 @@ export const shell = defineModuleDomain({
         devPages: { args: [["windowId", "string"]], result: "(Record<string, unknown>)[]", swiftResult: "[[String: Any]]", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
       },
       events: {
-        onReport: { payload: "ReportEvent", mac: "custom", desktop: "adapted", windows: "absent" },
+        onReport: { payload: "ReportEvent", mac: "custom", desktop: "host", windows: "absent" },
       },
     },
     ArdiaTelemetryLocal: {

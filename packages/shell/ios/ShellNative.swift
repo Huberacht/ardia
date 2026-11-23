@@ -352,7 +352,7 @@ extension MenusNative where Self: Module {
   }
 
   var recordShortcutFunction: AnyDefinition {
-    AsyncFunction("recordShortcut") { [weak self] (promise: Promise) in self?.recordShortcut(promise) }.runOnQueue(.main)
+    AsyncFunction("recordShortcut") { [weak self] (promise: Promise) in if let self { self.recordShortcut(promise) } else { promise.resolve(nil) } }.runOnQueue(.main)
   }
 }
 
@@ -1283,7 +1283,7 @@ extension ConfigNative where Self: Module {
   func sendOnChange(_ payload: [String: Any?]) { sendEvent("onChange", payload) }
 
   var watchFunction: AnyDefinition {
-    AsyncFunction("watch") { [weak self] (names: [String], promise: Promise) in self?.watch(names, promise) }
+    AsyncFunction("watch") { [weak self] (names: [String], promise: Promise) in if let self { self.watch(names, promise) } else { promise.resolve(nil) } }
   }
 }
 

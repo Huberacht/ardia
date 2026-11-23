@@ -27,10 +27,10 @@ import type { DragPreviewShape, OpenWindowOptions, Rect4, WindowEvent, WindowGeo
 export type ShellNative = {
   setAppearance(mode: AppearanceMode): Promise<void>;
   isDarkAppearance(): Promise<boolean>;
-  startDictation(): void;
+  startDictation(): void | Promise<void>;
   fetchBangList(etag: string | null): Promise<BangListReply>;
   copyText(text: string): void;
-  copyURL?(address: CleanedUrl): void;
+  copyURL?(address: CleanedUrl): void | Promise<void>;
   readText(): Promise<string>;
   dictationAvailable?(): boolean;
   addListener(name: "onOpenURLs", listener: (event: ShellNativeEvents["onOpenURLs"]) => void): { remove(): void };
@@ -256,7 +256,7 @@ export type SystemNative = {
   moveToTrash(path: string): Promise<boolean>;
   fileIcon(path: string, size: number): Promise<string | null>;
   runningAppIcon(pid: number, size: number): Promise<string | null>;
-  hapticTick(): void;
+  hapticTick(): void | Promise<void>;
   setThinScrollBars(thin: boolean): Promise<void>;
 };
 
@@ -438,9 +438,9 @@ export type SystemSignalsNativeEvents = {
 };
 
 export type ReportNative = {
-  draftDirectory(): string;
-  fileSize(path: string): number;
-  removeFile(path: string): void;
+  draftDirectory(): string | Promise<string>;
+  fileSize(path: string): number | Promise<number>;
+  removeFile(path: string): void | Promise<void>;
   startRecording(windowId: string, includePages: boolean, path: string, maxSeconds: number | null, fps?: number | null, maxPixelWidth?: number | null): Promise<boolean>;
   stopRecording(): Promise<boolean>;
   cancelRecording(): Promise<void>;
@@ -449,7 +449,7 @@ export type ReportNative = {
   gzipFile(source: string, destination: string, removeSource: boolean): Promise<number>;
   gzipText(text: string, destination: string): Promise<number>;
   upload(id: string, url: string, method: string, headers: Record<string, string>, path: string): Promise<UploadReply>;
-  cancelUploads(): void;
+  cancelUploads(): void | Promise<void>;
   devRenderCost?(windowId: string): Promise<(Record<string, unknown>)[]>;
   devSnapshotPill?(path: string): Promise<Record<string, number> | null>;
   devRecordingPages?(windowId: string): Promise<(Record<string, unknown>)[]>;

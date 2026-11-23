@@ -378,7 +378,10 @@ function swiftDefinition(fn, row) {
   const result = swiftResultOf(row);
   const forwarded = [...row.args.map((arg) => parameterOf(arg).name), ...(row.promise ? ["promise"] : [])].join(", ");
   const owner = row.instance === "weak" ? "self?" : row.instance === "strong" ? "self" : "Self";
-  const call = `${row.throws ? "try " : ""}${row.swiftAsync ? "await " : ""}${owner}.${swiftName(fn)}(${forwarded})${row.fallback === undefined ? "" : ` ?? ${row.fallback}`}`;
+  const effects = `${row.throws ? "try " : ""}${row.swiftAsync ? "await " : ""}`;
+  const call = row.instance === "weak" && row.promise
+    ? `if let self { ${effects}self.${swiftName(fn)}(${forwarded}) } else { promise.resolve(nil) }`
+    : `${effects}${owner}.${swiftName(fn)}(${forwarded})${row.fallback === undefined ? "" : ` ?? ${row.fallback}`}`;
   const closure = `{ ${row.instance === "weak" ? "[weak self] " : ""}(${params.join(", ")})${swiftEffects(row)}${result === "Void" ? "" : ` -> ${result}`} in ${call} }`;
   return [
     `  ${row.instance ? "" : "static "}var ${fn}Function: AnyDefinition {`,

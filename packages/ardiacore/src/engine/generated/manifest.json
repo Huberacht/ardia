@@ -1318,8 +1318,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "58549e8c808bddc1a260444315142e063078e252a0327a90fe5a92cceceb0df5",
-        "swift": "474b311885f2e060b4bd7f40a6cb0ec1ad5cc4fba97b24fefdd3a400be3b5667"
+        "types": "8664b572ce6b71c302ce396ba0d9dfde9213203ac473a7f51c4b0ce0ad2b3f02",
+        "swift": "24feda6d526675175cea171d97771768f5a7e0fd581522911a7fc2ccc624b058"
       },
       "modules": {
         "ArdiaShell": {
@@ -1331,7 +1331,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "absent",
+              "desktop": "host",
               "windows": "custom"
             },
             "isDarkAppearance": {
@@ -1354,7 +1354,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "custom",
+              "desktop": "host",
               "windows": "custom"
             },
             "copyText": {
@@ -1379,7 +1379,7 @@
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "custom",
+              "desktop": "host",
               "windows": "custom"
             },
             "dictationAvailable": {
@@ -2202,7 +2202,7 @@
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "custom",
+              "desktop": "host",
               "windows": "custom"
             },
             "diagnosticsSample": {
@@ -2218,7 +2218,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "custom"
             },
             "playIntroMusic": {
@@ -2371,14 +2371,14 @@
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "absent"
             },
             "requestLocationPermission": {
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "absent"
             },
             "openLocationSettings": {
@@ -2810,21 +2810,21 @@
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "custom",
+              "desktop": "host",
               "windows": "custom"
             },
             "setAsDefaultBrowser": {
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "custom",
+              "desktop": "host",
               "windows": "custom"
             },
             "launchAtLoginStatus": {
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "custom"
             },
             "setLaunchAtLogin": {
@@ -2833,7 +2833,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "custom"
             },
             "fileExists": {
@@ -2905,7 +2905,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "custom",
+              "desktop": "host",
               "windows": "custom"
             }
           },
@@ -3344,7 +3344,7 @@
               ],
               "async": false,
               "mac": "custom",
-              "desktop": "host",
+              "desktop": "adapted",
               "windows": "custom"
             },
             "read": {
@@ -3425,14 +3425,14 @@
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "absent"
             },
             "stop": {
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "absent"
             },
             "reply": {
@@ -3797,7 +3797,7 @@
               ],
               "async": false,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "custom"
             },
             "holdsIncomingLinks": {
@@ -3842,7 +3842,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "custom"
             }
           },
@@ -4028,7 +4028,7 @@
           "events": {
             "onReport": {
               "mac": "custom",
-              "desktop": "adapted",
+              "desktop": "host",
               "windows": "absent"
             }
           }
@@ -4157,7 +4157,7 @@
       "types": "packages/sync/src/generated/native.ts",
       "swift": "packages/sync/ios/SyncNative.swift",
       "sha256": {
-        "types": "3f6a44ec97c096b46c32d96b9ee53bbd01704e968b1ae628320e3fda290c6594",
+        "types": "a1e5a4064125ab8f762e1336845b26cc5db346c2a09344004857928ae1066fd1",
         "swift": "b5196cc68e00ac623efc491d02f3f6ab2c9aa8efeb98935be0e3afce1d240d43"
       },
       "modules": {

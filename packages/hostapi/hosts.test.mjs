@@ -434,15 +434,53 @@ export function cppFunctions(masked) {
   return functions;
 }
 
+const CPP_STRING_CONSTANT = /\b(?:(?:inline|static|constexpr|const)\s+)+(?:char|std::string_view|const\s+char\s*\*|char\s+const\s*\*)\s*(?:const\s+)?(k\w+)\s*(?:\[\s*\])?\s*=\s*"/g;
+
+export function cppStringConstants(sources) {
+  return sources.map((written) => {
+    const code = stripCppComments(written);
+    const masked = maskCppLiterals(code);
+    const spaces = [...masked.matchAll(/\bnamespace\s+([\w:]+)\s*\{/g)].map((match) => {
+      const open = match.index + match[0].length - 1;
+      return { name: match[1], open, close: closing(masked, open, skipCppLiteral) };
+    });
+    const constants = new Map();
+    for (const match of masked.matchAll(CPP_STRING_CONSTANT)) {
+      const quote = match.index + match[0].length - 1;
+      const value = code.slice(quote + 1, skipCppLiteral(code, quote));
+      const prefix = spaces.filter((space) => space.open < match.index && match.index < space.close).sort((a, b) => a.open - b.open).map((space) => space.name);
+      constants.set([...prefix, match[1]].join("::"), value);
+    }
+    return constants;
+  });
+}
+
+export const cppNamespaceAliases = (code) => new Map([...code.matchAll(/\bnamespace\s+(\w+)\s*=\s*((?:::)?[\w:]+)\s*;/g)].map(([, alias, target]) => [alias, target.replace(/^::/, "")]));
+
+export function resolveCppConstant(usage, own, all, aliases = new Map()) {
+  const [head, ...rest] = usage.replace(/^::/, "").split("::");
+  const name = rest.length && aliases.has(head) ? [aliases.get(head), ...rest].join("::") : [head, ...rest].join("::");
+  const values = (tables) => new Set(tables.flatMap((table) => [...table].filter(([full]) => full === name || full.endsWith(`::${name}`)).map(([, value]) => value)));
+  for (const found of [values([own]), values(all)]) if (found.size === 1) return [...found][0];
+  return undefined;
+}
+
+const MODULE_METHOD = /^Ardia[A-Za-z]+\.[a-z][A-Za-z]*$/;
+
 export function linuxModuleDispatch(sources) {
   const methods = new Set();
   const events = new Set();
-  for (const written of sources) {
+  const tables = cppStringConstants(sources);
+  for (const [index, written] of sources.entries()) {
     const code = stripCppComments(written);
     const masked = maskCppLiterals(code);
+    const aliases = cppNamespaceAliases(code);
+    const flags = new Map([...code.matchAll(/\bconst\s+bool\s+(\w+)\s*=\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*;/g)].map(([, flag, method]) => [flag, method]));
+    const literalOrConstant = (literal, constant) => literal ?? (constant === undefined ? undefined : resolveCppConstant(constant, tables[index], tables, aliases));
     for (const match of masked.matchAll(/\b(?:Send)?Event\(\s*"/g)) {
-      const call = /^(?:Send)?Event\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/.exec(code.slice(match.index));
-      if (call) events.add(`${call[1]}.${call[2]}`);
+      const call = /^(?:Send)?Event\(\s*"(Ardia[A-Za-z]+)"\s*,\s*(?:"([a-zA-Z]+)"|((?:::)?[A-Za-z_][\w]*(?:::[A-Za-z_]\w*)*))\s*[,)]/.exec(code.slice(match.index));
+      const event = call && literalOrConstant(call[2], call[3]);
+      if (event && /^[a-zA-Z]+$/.test(event)) events.add(`${call[1]}.${event}`);
     }
     for (const row of masked.matchAll(/\{\s*"/g)) {
       const entry = /^\{\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*,\s*Route::k\w+\s*\}/.exec(code.slice(row.index));
@@ -454,13 +492,20 @@ export function linuxModuleDispatch(sources) {
       if (!owner || owner.boolean) continue;
       const open = branch.index + branch[0].length - 1;
       const close = closing(masked, open, skipCppLiteral);
-      const names = code.slice(open + 1, close).split("||").map((part) => /^\s*(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"\s*$/.exec(part)?.[1]);
-      if (names.some((name) => name === undefined)) continue;
+      const condition = code.slice(open + 1, close);
+      if (maskCppLiterals(condition).includes("&&")) continue;
+      const parts = condition.split("||").map((part) => {
+        const compare = /^\s*(?:method|name)\s*==\s*(?:"([^"]*)"|((?:::)?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*))\s*$/.exec(part);
+        if (!compare) return flags.get(part.trim()) ?? (/\b(?:method|name)\b/.test(maskCppLiterals(part)) ? null : undefined);
+        const name = literalOrConstant(compare[1], compare[2]);
+        return name !== undefined && MODULE_METHOD.test(name) ? name : null;
+      });
+      if (parts.includes(null) || !parts.some(Boolean)) continue;
       let at = close + 1;
       while (/\s/.test(masked[at] ?? "")) at++;
       const statement = masked[at] === "{" ? masked.slice(at + 1, closing(masked, at, skipCppLiteral)) : masked.slice(at, masked.indexOf(";", at) + 1);
       if (/^\s*return\s+(?:true|false)\s*;\s*$/.test(statement)) continue;
-      for (const name of names) methods.add(name);
+      for (const name of parts.filter(Boolean)) methods.add(name);
     }
   }
   return { methods, events };
@@ -759,7 +804,7 @@ export function nativeModuleTypingProblems(source, domain, modules, path = "sour
 }
 
 const exists = (path) => existsSync(ROOT + path);
-const linuxSources = () => filesUnder("engine/ardiacore-linux/src/", /\.(cc|h|mm)$/).map(read);
+const linuxSources = () => ["engine/ardiacore-linux/src/", "engine/ardiacore-desktop/src/"].flatMap((dir) => filesUnder(dir, /\.(cc|h|mm)$/)).map(read);
 
 test("the module-domain scans find the shaders pilot and read the hosts' real tables", () => {
   assert.ok(moduleDomains.some(([domain]) => domain === "shaders"));
@@ -918,6 +963,15 @@ test("the Linux scan counts an if that dispatches inside a function that isn't a
 test("the Linux scan counts a row of a method route table as a dispatched module function, never one inside a comment or a literal", () => {
   const source = 'inline constexpr Method kMethods[] = {\n    {"ArdiaSync.chooseFolder", Route::kChooseFolder},\n    // {"ArdiaSync.ghost", Route::kCore},\n    {"ArdiaSync.core",\n     Route::kCore},\n};\nconst char* kText = "{\\"ArdiaSync.fake\\", Route::kCore}";\n';
   assert.deepEqual([...linuxModuleDispatch([source]).methods].sort(), ["ArdiaSync.chooseFolder", "ArdiaSync.core"]);
+});
+
+test("the Linux scan resolves a method or event named by a string constant, through namespaces, aliases and a bool flag, and skips one it can't pin to a single value", () => {
+  const header = 'namespace ardia::desktop_report {\ninline constexpr char kEvent[] = "onReport";\n}\nnamespace ardia::linux_hardware {\ninline constexpr char kHardwareInfoCall[] = "ArdiaApp.hardwareInfo";\n}\nnamespace one {\ninline constexpr char kCall[] = "ArdiaApp.first";\n}\nnamespace two {\ninline constexpr char kCall[] = "ArdiaApp.second";\n}\n';
+  const host = 'namespace hardware = ardia::linux_hardware;\nvoid Host::Run(std::string_view method) {\n  host->Event("ArdiaReport", ardia::desktop_report::kEvent, base::Value());\n  if (method == hardware::kHardwareInfoCall) return Reply();\n  const bool changing = method == "ArdiaSystem.setAsDefaultBrowser";\n  if (method == "ArdiaSystem.isDefaultBrowser" || changing) return Reply();\n  if (method == kCall) return Reply();\n  if (method == "ArdiaApp.gated" && ready) return Reply();\n}\n';
+  const found = linuxModuleDispatch([header, host]);
+  assert.deepEqual([...found.events], ["ArdiaReport.onReport"]);
+  assert.deepEqual([...found.methods].sort(), ["ArdiaApp.hardwareInfo", "ArdiaSystem.isDefaultBrowser", "ArdiaSystem.setAsDefaultBrowser"]);
+  assert.equal(resolveCppConstant("two::kCall", new Map(), cppStringConstants([header])), "ArdiaApp.second");
 });
 
 test("the Linux event scan reads a module event sent by name through SendEvent or a host's Event, never one inside a literal", () => {

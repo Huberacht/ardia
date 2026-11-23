@@ -3,7 +3,7 @@ import type { Listing } from "../scopeState.ts";
 import type { ResolvedSharedFolder, SharedFolderIdentity, SharedListing, SharedLocation } from "../sharedFolders.ts";
 
 export type SyncNative = {
-  core?: SyncCore;
+  core?: SyncCore | (() => Promise<string>);
   folderInfo(path: string | null): Promise<FolderInfo>;
   chooseFolder(current: string | null): Promise<string | null>;
   newDeviceId(): string;

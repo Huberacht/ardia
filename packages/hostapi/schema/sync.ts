@@ -42,7 +42,7 @@ export const sync = defineModuleDomain({
         takeFileCounts: { args: [], result: "{ placeholders: number; busy: number; hydrated: number }", async: false, optional: true, mac: "absent", desktop: "absent", windows: "custom" },
       },
       constants: {
-        core: { type: "SyncCore", swift: "String", optional: true, mac: "custom", desktop: "adapted", windows: "absent" },
+        core: { type: "SyncCore | (() => Promise<string>)", swift: "String", optional: true, mac: "custom", desktop: "adapted", windows: "absent" },
       },
       events: {},
     },

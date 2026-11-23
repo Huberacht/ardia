@@ -5,20 +5,12 @@ import { reachesNativeHostUnchecked, resolveHostModule } from "./hostModules.ts"
 import { linuxShellMethod, sidebarEdgeEvent } from "./shellMethods.ts";
 import { dominantAccent } from "./iconAccent.ts";
 import { hostModuleName, requireNativeModule } from "./shims/expo-modules-core.ts";
+import { advertisedLoops, capabilityArrays, linuxAdvertised, linuxRoutedNatively, nativeHost } from "../scripts/linux-capabilities.mjs";
 import { setTrafficLightsCenter, trafficLightPosition, trafficLightsPlace } from "./shims/web/windowChrome.tsx";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
-const nativeHost = read("../../../engine/ardiacore-linux/src/ardia/linux/ac_linux_host.cc");
-const bootstrap = nativeHost.slice(nativeHost.indexOf("base::DictValue ShellHostView::Bootstrap() const {"), nativeHost.indexOf("void ShellHostView::LayoutOverlay()"));
-const engineDirs = ["ardiacore-linux/src/ardia/linux/", "ardiacore-desktop/src/ardia/desktop/"].map((dir) => new URL(`../../../engine/${dir}`, import.meta.url));
-const engineSources = engineDirs.flatMap((dir) => readdirSync(dir).filter((file) => /\.(cc|h)$/.test(file)).map((file) => readFileSync(new URL(file, dir), "utf8")));
-const capabilityArrays = new Map(engineSources.flatMap((source) => [...source.matchAll(/const char\* (k[A-Za-z]+)\[\] = \{([^}]*)\}/g)].map(([, name, body]) => [name, [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1])])));
-const advertisedLoops = [...bootstrap.matchAll(/for \(const char\* \w+ : (?:\w+::)*(k[A-Za-z]+)\)/g)].map((match) => match[1]);
-const advertised = [
-  ...[...bootstrap.matchAll(/\.Append\("([A-Za-z]+\.[A-Za-z]+)"\)/g)].map((match) => match[1]),
-  ...advertisedLoops.flatMap((name) => capabilityArrays.get(name) ?? []),
-];
-const routedNatively = new Set(engineSources.flatMap((source) => [...source.matchAll(/"(Ardia[A-Za-z]+\.[A-Za-z]+)"/g)].map((match) => match[1])));
+const advertised = linuxAdvertised;
+const routedNatively = linuxRoutedNatively;
 
 const SHELL_SOURCES = new URL("../../../packages/shell/src/", import.meta.url);
 const shellSources = readdirSync(SHELL_SOURCES).filter((file) => /\.tsx?$/.test(file)).map((file) => readFileSync(new URL(file, SHELL_SOURCES), "utf8"));
