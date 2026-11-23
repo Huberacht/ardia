@@ -74,27 +74,8 @@ test("a free-space reading that arrives before the sidebar has a height is kept 
   assert.match(page, /useEffect\(applySlack, \[height > 0, canDock, resting\]\);/);
 });
 
-test("a page's row cap keeps its peak only while the pager holds: the page that rests drops back to its warm cap, the shown page has none", async () => {
-  const { pageRowsCap } = await import("./pageLayout.ts");
-  const peaks = new Map();
-  const base = { shown: "a", current: "b", visited: false, capRows: 12, screen: 400, throughActive: () => ({ entries: 19, height: 19 * 34 }), holding: true, peaks };
-  assert.equal(pageRowsCap({ ...base, profileId: "a" }), undefined, "the shown page has every row");
-  assert.equal(pageRowsCap({ ...base, profileId: "b" }), 20, "the arriving page mounts down to its selected tab");
-  assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b" }), 20, "a second swipe in the same hold keeps the page that is still sliding out");
-  assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b", holding: false }), 12, "once the pages rest an unvisited page goes back to its warm cap");
-  assert.equal(pageRowsCap({ ...base, profileId: "b", visited: true }), 20, "a visited page held in the same hold keeps its peak");
-  peaks.clear();
-  assert.equal(pageRowsCap({ ...base, profileId: "d", current: "c" }), 12, "a page that never arrived never grows");
-  assert.equal(peaks.size, 0);
-});
-
-test("the arriving page pre-mounts at most two screens: a deeper selected tab waits for the rows to grow at rest", async () => {
-  const { pageRowsCap, PREMOUNT_SCREENS } = await import("./pageLayout.ts");
-  const screen = 12 * 34;
-  const at = (entries, height = entries * 34) => pageRowsCap({ profileId: "b", shown: "a", current: "b", visited: false, capRows: 12, screen, throughActive: () => ({ entries, height }), holding: true, peaks: new Map() });
-  assert.equal(at(5), 12, "a selected tab on the first screen needs nothing extra");
-  assert.equal(at(12 * PREMOUNT_SCREENS - 1), 12 * PREMOUNT_SCREENS, "within two screens: mounted down to it");
-  assert.equal(at(12 * PREMOUNT_SCREENS + 1), 12, "past two screens: the first screen only");
-  assert.equal(at(499), 12, "a 500th row never mounts 500 rows during the slide");
-  assert.equal(at(16, 15 * 34 + 300 * 34), 12, "an open group of 300 tabs before it counts as the 300 rows it draws, not one entry");
+test("no sidebar page mounts past its warm first screen while it isn't the shown one, during a hold included", () => {
+  const sidebar = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
+  assert.match(sidebar, /rows=\{page\.id === shown \? undefined : capRows\}/);
+  assert.doesNotMatch(sidebar, /entriesThrough|throughActive|pageRowsCap/, "nothing pre-mounts down to a selected tab");
 });

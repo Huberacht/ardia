@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { useBrowser } = await import("../browser/store.ts");
 const { sidebarEntries } = await import("./entries.ts");
-const { entriesHeight, entriesWithin, entryHeight, firstPaintEntries, rowSpan, startsOffScreen, throughActive, FIRST_PAINT_HEIGHT } = await import("./geometry.ts");
+const { entriesHeight, entriesWithin, entryHeight, firstPaintEntries, rowSpan, startsOffScreen, FIRST_PAINT_HEIGHT } = await import("./geometry.ts");
 const { groupEntries } = await import("./entries.ts");
 const { GROUP_MEMBERS_PAD_BOTTOM: PAD } = await import("../../lib/sidebarMetrics.ts");
 await import("../../test-native/index.ts");
@@ -153,15 +153,4 @@ test("Minimalism mode hides an empty tab's row and strip entry as the command ba
   assert.deepEqual(shows(), [false, false, false], "the lists kept what they held before Minimalism mode was turned on");
   S().updateSettings({ minimalismMode: false });
   assert.deepEqual(shows(), [true, true, true], "the lists kept what they held before Minimalism mode was turned off");
-});
-
-test("the height down to the selected tab counts an open group as every row it draws, and a closed one as its header", () => {
-  hydrate({ active: "t7" });
-  const open = throughActive(S(), "w", "default");
-  const row = entryHeight(S(), "w", "default", "t:t0");
-  assert.equal(open.entries, 4, "t0, t1, the group, t7");
-  assert.equal(open.height, 3 * (row + 3) + entryHeight(S(), "w", "default", "g:g") + 3);
-  assert.ok(entryHeight(S(), "w", "default", "g:g") > 5 * row, "the open group's five members are in it");
-  hydrate({ active: "t7", collapsed: true });
-  assert.ok(throughActive(S(), "w", "default").height < open.height, "a closed group draws less");
 });

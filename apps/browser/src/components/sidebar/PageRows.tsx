@@ -42,12 +42,11 @@ type PageRowsProps = {
   geometry: RefObject<SidebarGeometry> | undefined;
   regions: SidebarGeometry["regions"];
   viewport: ListViewport | null;
-  shown: { entriesShown: number; grown?: () => void };
 };
 
 const DOCKED_TILES_GAP = SCROLL_EDGE.gap + SCROLL_EDGE.line + SCROLL_EDGE.inset;
 
-export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, tiles, underDockedTiles, innerWidth, inlineNewTab, controller, geometry, regions, viewport, shown }: PageRowsProps) {
+export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, tiles, underDockedTiles, innerWidth, inlineNewTab, controller, geometry, regions, viewport }: PageRowsProps) {
   const [captured] = useState(newCapture);
   const pluginViews = usePluginChrome(PLUGIN_CHROME.sidebar);
   const { list: all } = useCapturedSidebarEntries(windowId, profileId, captured);
@@ -68,8 +67,6 @@ export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, 
   }, [growing, mountedRows, all.length]);
   const limit = cap ?? (growing ? mountedRows : undefined);
   const list = limit === undefined ? all : all.slice(0, limit);
-  shown.entriesShown = list.length;
-  useEffect(() => shown.grown?.(), [shown, list.length]);
   const pending = usePendingEntriesHeight(windowId, profileId, all, mountedRows, growing);
   const showClear = useSettings((s) => s.showClearButton);
   const clearable = showClear && !offScreen && all.length > 0;

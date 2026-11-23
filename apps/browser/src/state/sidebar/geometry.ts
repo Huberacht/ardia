@@ -88,29 +88,6 @@ export function rowSpan(
 
 export const entryHeightNow = (windowId: string, profileId: string, entry: string): number => entryHeight(useBrowser.getState(), windowId, profileId, entry);
 
-export function entriesThrough(s: BrowserState, windowId: string, profileId: string, tabId: string | undefined): number {
-  return tabId ? sidebarEntries(s, windowId, profileId).list.findIndex((entry) => holdsTab(s, entry, tabId)) + 1 : 0;
-}
-
-export function throughActive(s: BrowserState, windowId: string, profileId: string): { entries: number; height: number } {
-  const tabId = s.windows[windowId]?.activeTabIds[profileId];
-  const list = tabId ? sidebarEntries(s, windowId, profileId).list : [];
-  let height = 0;
-  for (let i = 0; i < list.length; i++) {
-    height += entryHeight(s, windowId, profileId, list[i]!) + SIDEBAR_ROW.gap;
-    if (holdsTab(s, list[i]!, tabId!)) return { entries: i + 1, height };
-  }
-  return { entries: 0, height: 0 };
-}
-
-export const throughActiveNow = (windowId: string, profileId: string) => throughActive(useBrowser.getState(), windowId, profileId);
-
-export const entriesThroughTabNow = (windowId: string, tabId: string): number => {
-  const s = useBrowser.getState();
-  const profileId = s.windows[windowId]?.profileId;
-  return profileId ? entriesThrough(s, windowId, profileId, tabId) : 0;
-};
-
 export const firstPaintEntriesNow = (windowId: string, profileId: string, entries: string[], lazy: boolean): number =>
   firstPaintEntries(useBrowser.getState(), windowId, profileId, entries, lazy);
 

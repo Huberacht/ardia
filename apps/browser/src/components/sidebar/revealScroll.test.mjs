@@ -49,95 +49,99 @@ test("switching to a tab whose row is out of view scrolls the sidebar once, with
   assert.equal(frames.length, 0);
 });
 
-test("a tab whose row isn't mounted yet is revealed once the rows grow down to it, never into an empty spacer", () => {
-  const ids = S().windows[w].tabIds;
-  S().activate(ids[0]);
-  runFrames();
-  let shown = 20;
-  geometry.current.entriesShown = () => shown;
-  scrollY.current = 0;
-  scrolls.length = 0;
-  S().activate(ids[45]);
-  runFrames();
-  assert.equal(scrolls.length, 0, "rows mounted to 20 of 46: no scroll yet");
-  shown = 52;
-  geometry.current.laidOut?.();
-  runFrames();
-  assert.equal(scrolls.length, 1, "the rows reached it: one scroll");
-  delete geometry.current.entriesShown;
-});
-
-const waitForRows = (shown) => {
-  const box = { shown };
-  geometry.current.entriesShown = () => box.shown;
-  return box;
+const sliding = () => {
+  const page = { shown: false };
+  geometry.current.ownerShown = () => page.shown;
+  return page;
 };
-const grow = (box, shown) => {
-  box.shown = shown;
+const arrive = (page) => {
+  page.shown = true;
   geometry.current.laidOut?.();
   runFrames();
 };
 const atTop = () => {
-  delete geometry.current.entriesShown;
+  delete geometry.current.ownerShown;
   S().activate(S().windows[w].tabIds[0]);
   runFrames();
   scrollY.current = 0;
   scrolls.length = 0;
 };
 
-test("a reveal waiting for its rows is dropped when the user scrolls that page meanwhile", async () => {
+test("while the page that owns the scroll is still sliding in, its reveal waits; once it is shown, its selected tab is revealed once and nothing stays pending", () => {
   atTop();
-  const rows = waitForRows(20);
+  const page = sliding();
   S().activate(S().windows[w].tabIds[45]);
   runFrames();
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  geometry.current.laidOut?.();
+  runFrames();
+  assert.equal(scrolls.length, 0, "no scroll while the pages move");
+  arrive(page);
+  assert.equal(scrolls.length, 1, "revealed as the pages come to rest");
   scrollY.current = 120;
-  geometry.current.scrolled?.();
-  grow(rows, 60);
-  assert.equal(scrolls.length, 0, "the user's scroll wins over the late reveal");
-  delete geometry.current.entriesShown;
+  geometry.current.laidOut?.();
+  runFrames();
+  assert.equal(scrolls.length, 1, "a later scroll by the user is never overridden: nothing was left pending");
+  delete geometry.current.ownerShown;
 });
 
-test("the sidebar's own reveal scroll doesn't drop the next reveal that waits for its rows", () => {
+test("the pill's own animated scroll can't cancel a reveal, because a reveal never waits on scrolls", () => {
   atTop();
   const ids = S().windows[w].tabIds;
-  S().activate(ids[45]);
+  revealTab(w, ids[40]);
   runFrames();
   assert.equal(scrolls.length, 1);
-  const rows = waitForRows(20);
+  const page = sliding();
   S().activate(ids[55]);
   runFrames();
-  geometry.current.scrolled?.();
-  grow(rows, 60);
-  assert.equal(scrolls.length, 2, "the echo of its own scroll isn't the user's");
-  delete geometry.current.entriesShown;
+  arrive(page);
+  assert.equal(scrolls.length, 2);
+  delete geometry.current.ownerShown;
 });
 
-test("closing a selected tab whose reveal waits for its rows reveals the tab that takes its place instead", async () => {
-  atTop();
-  const ids = S().windows[w].tabIds;
-  S().activate(ids[49]);
-  runFrames();
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  scrollY.current = 0;
-  scrolls.length = 0;
-  const rows = waitForRows(20);
-  S().activate(ids[50]);
-  runFrames();
-  S().closeTab(ids[50]);
-  const replacement = S().windows[w].activeTabIds[S().windows[w].profileId];
-  assert.ok(S().windows[w].tabIds.indexOf(replacement) >= 40, "the tab that takes its place is deep too");
-  grow(rows, 60);
-  assert.equal(scrolls.length, 1, "the replacement is revealed once its rows exist");
-  assert.ok(scrolls[0].y > 300, JSON.stringify(scrolls));
-  delete geometry.current.entriesShown;
-});
+for (const beforeFrame of [true, false]) {
+  test(`closing the selected tab while its page slides in reveals the tab that takes its place at rest (closed ${beforeFrame ? "before" : "after"} the first frame)`, async () => {
+    atTop();
+    const ids = S().windows[w].tabIds;
+    S().activate(ids[44]);
+    runFrames();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    scrollY.current = 0;
+    scrolls.length = 0;
+    const page = sliding();
+    S().activate(ids[45]);
+    if (!beforeFrame) runFrames();
+    S().closeTab(ids[45]);
+    runFrames();
+    const replacement = S().windows[w].activeTabIds[S().windows[w].profileId];
+    assert.ok(S().windows[w].tabIds.indexOf(replacement) >= 40, "the tab that takes its place is deep too");
+    arrive(page);
+    assert.equal(scrolls.length, 1, JSON.stringify(scrolls));
+    assert.ok(scrolls[0].y > 300);
+    delete geometry.current.ownerShown;
+  });
+}
 
 test("closing the selected tab with no reveal waiting keeps the usual behaviour: nothing scrolls", () => {
   atTop();
   S().closeTab(S().windows[w].tabIds[0]);
   runFrames();
   assert.equal(scrolls.length, 0);
+});
+
+test("a reveal waiting for its page is dropped when the window moves to another profile meanwhile", () => {
+  atTop();
+  const home = S().windows[w].profileId;
+  const page = sliding();
+  S().activate(S().windows[w].tabIds[45]);
+  runFrames();
+  const empty = S().createProfile({ name: "Empty" });
+  S().switchProfile(w, empty);
+  runFrames();
+  arrive(page);
+  assert.equal(scrolls.length, 0, "the other profile's page isn't scrolled for the first one's tab");
+  S().switchProfile(w, home);
+  delete geometry.current.ownerShown;
+  runFrames();
 });
 
 test("a measured tile's reveal still in flight never scrolls the page that took over the scroll", async () => {
@@ -155,7 +159,7 @@ test("a measured tile's reveal still in flight never scrolls the page that took 
   runFrames();
   assert.ok(measured, "the tile's measurement is in flight");
   scroll.current = { scrollTo: (move) => scrolledC.push(move), measureInWindow: (done) => done(0, 0) };
-  waitForRows(20);
+  sliding();
   S().activate(ids[45]);
   runFrames();
   measured(0, 2000, 160, 40);
@@ -163,7 +167,7 @@ test("a measured tile's reveal still in flight never scrolls the page that took 
   assert.deepEqual(scrolledC, [], "page C's scroll belongs to C's own reveal");
   scroll.current = before;
   registerRow(w, tile, null);
-  delete geometry.current.entriesShown;
+  delete geometry.current.ownerShown;
 });
 
 test("the selected-row pill's click is one native animated scroll", () => {

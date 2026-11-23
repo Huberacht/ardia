@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 import { ClipView, ContextMenuArea, space, WindowDragRegion } from "../ui";
 import { layout, useTheme } from "../ui/theme";
@@ -6,7 +6,6 @@ import { useSidebarHighContrast } from "../../state/sidebar/textLook";
 import { TintInk } from "../ui/TintInk";
 import { useWindowId, useWindowProfileId } from "../../state/browser/hooks";
 import { useHasDownloads, useNoTiles } from "../../state/sidebar/hooks";
-import { throughActiveNow } from "../../state/sidebar/geometry";
 import { collapsedSidebarHeader, useAddressBarInSidebar, useDownloadsInSidebarFooter, usePageFrameInset, useSidebarCaptionRoom, useSidebarHeaderCollapsed, useToolbarLightsCenter } from "../../state/windows/layout";
 import { closeAnchoredWhenControlsRowChanges } from "../../state/sidebar/controlsRowChange";
 import { DownloadsButton } from "../downloads/DownloadsButton";
@@ -28,7 +27,7 @@ import { bottomFieldBand, SIDEBAR_FIELD, SIDEBAR_FIELD_BOTTOM, SIDEBAR_FOOTER_DO
 import { useNewTabAtTop, useSidebarField, useSidebarPart } from "../../state/sidebar/chrome";
 import { closeFolderPanel } from "../../state/sidebar/tileFolderUi";
 import { openSidebarMenu } from "../../state/sidebar/menus";
-import { GLOW_ROOM, pageRowsCap, rowPitch, type PageSpot, type SidebarGeometry } from "./pageLayout";
+import { GLOW_ROOM, rowPitch, type PageSpot, type SidebarGeometry } from "./pageLayout";
 import { SidebarPage } from "./SidebarPage";
 import { sidebarText } from "./SidebarTextScope";
 import { SidebarRowLookContext, useSidebarRowLookSource } from "./rowLook";
@@ -208,18 +207,12 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
   const [spots] = useState(() => new Map<string, PageSpot>());
   const claimed = useRef<PageSpot | null>(null);
   const pager = pagerFor(windowId);
-  const [peaks] = useState(() => new Map<string, number>());
-  const [, peaksCleared] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => pager.state.subscribe((s) => void (!s.held && peaks.size && (peaks.clear(), peaksCleared()))), [pager, peaks]);
   const waiting = settled !== current;
   useLayoutEffect(() => {
     if (dragging && waiting) pager.bypassHold();
   }, [dragging, waiting, pager]);
   const shown = dragging || !pages.some((page) => page.id === settled) ? current : settled;
   const capRows = Math.ceil(available / rowPitch()) + 1;
-  const holding = pager.holding();
-  const rowsOf = (profileId: string) =>
-    pageRowsCap({ profileId, shown, current, visited: !!spots.get(profileId)?.visited, capRows, screen: available, throughActive: () => throughActiveNow(windowId, profileId), holding, peaks });
   useLayoutEffect(() => {
     const spot = spots.get(current) ?? null;
     if (spot === claimed.current) return;
@@ -230,7 +223,7 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
       return;
     }
     spot.owns = true;
-    Object.assign(geometry.current, { viewport: spot.viewport, regions: spot.regions, tilesFixed: spot.tilesFixed, newTabAtTop: spot.newTabAtTop, edgeLift: spot.edgeLift, entriesShown: () => spot.entriesShown });
+    Object.assign(geometry.current, { viewport: spot.viewport, regions: spot.regions, tilesFixed: spot.tilesFixed, newTabAtTop: spot.newTabAtTop, edgeLift: spot.edgeLift, ownerShown: () => spot.shown });
     onScrollView(spot.scroller);
     onScrollY(spot.scrollY);
     geometry.current.laidOut?.();
@@ -248,7 +241,7 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
           resting={!!page.resting}
           canDock={canDock}
           height={Math.max(0, available - (topField ? GLOW_ROOM : 0))}
-          rows={rowsOf(page.id)}
+          rows={page.id === shown ? undefined : capRows}
           geometry={page.id === shown ? geometry : undefined}
           sharedGeometry={geometry}
           spots={spots}

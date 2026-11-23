@@ -114,7 +114,7 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
   const windowRef = useRef(windowId);
   windowRef.current = windowId;
   useEffect(() => () => forgetRowsScrolled(windowRef.current), []);
-  const page = useRef<PageSpot>({ scrollY: 0, viewport: 0, regions: { pinnedGroups: 0, list: 0 }, tilesFixed: true, newTabAtTop: false, edgeLift: 0, visited: false, owns: false, entriesShown: 0, scroller: null }).current;
+  const page = useRef<PageSpot>({ scrollY: 0, viewport: 0, regions: { pinnedGroups: 0, list: 0 }, tilesFixed: true, newTabAtTop: false, edgeLift: 0, shown: false, owns: false, scroller: null }).current;
   const scrollView = useRef<ScrollView | null>(null);
   useLayoutEffect(() => {
     page.scroller = scrollView.current;
@@ -138,7 +138,6 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
         scrollEdgeBelow.measure({ offset: page.scrollY });
         selectedRow.judge();
         if (!page.owns) return;
-        sharedGeometry.current.scrolled?.();
         noteRowsScrolled(windowRef.current);
         onScrollY(page.scrollY);
       },
@@ -166,8 +165,9 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
     page.tilesFixed = dockFixed;
     page.edgeLift = edgeLift;
     page.newTabAtTop = newTabAtTop;
-    page.visited ||= current;
-    page.grown ??= () => void (page.owns && sharedGeometry.current.laidOut?.());
+    const arrived = current && !page.shown;
+    page.shown = current;
+    if (arrived && page.owns) sharedGeometry.current.laidOut?.();
     if (!page.owns) return;
     sharedGeometry.current.tilesFixed = dockFixed;
     sharedGeometry.current.edgeLift = edgeLift;
@@ -232,7 +232,6 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
                             geometry={undefined}
                             regions={page.regions}
                             viewport={listViewport}
-                            shown={page}
                           />
                           <View key={`${docked ? "docked" : "inline"}${canDock ? "" : ":fixed"}${resting ? ":resting" : ""}`} style={{ flexGrow: 1, minHeight: !canDock && inlineNewTab ? 24 : 0 }}>
                             <ContextMenuArea style={{ flex: 1 }} onLayout={onSlack} onContextMenu={() => void openSidebarMenu(windowId)}>

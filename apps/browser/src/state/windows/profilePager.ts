@@ -117,10 +117,6 @@ class ProfilePager {
     unstable_batchedUpdates(() => this.state.setState(samePages(pages, this.state.getState().pages) ? { held: null, bypassed: false } : { held: null, bypassed: false, pages }));
   }
 
-  holding() {
-    return this.state.getState().held !== null;
-  }
-
   bypassHold() {
     const { held, bypassed } = this.state.getState();
     if (held && !bypassed) this.state.setState({ bypassed: true });

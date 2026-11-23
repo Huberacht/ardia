@@ -29,10 +29,12 @@ const watchStoreTargets = (windowId: string, found: (targets: RevealTargets, via
   useBrowser.subscribeTo(["windows", "tabs"], (s, prev) => {
     if (s.windows === prev.windows && s.tabs === prev.tabs) return;
     const targets = revealTargets(s, prev, windowId);
-    if (targets.switched || targets.opened || targets.replaced) found(targets, false);
+    if (targets.switched || targets.opened) found(targets, false);
   });
 
 export const selectedTabIn = (windowId: string) => activeTabId(useBrowser.getState(), windowId);
+
+export const windowProfileIn = (windowId: string) => useBrowser.getState().windows[windowId]?.profileId;
 
 export const showsProfile = (windowId: string, profileId: string) => useBrowser.getState().windows[windowId]?.profileId === profileId;
 

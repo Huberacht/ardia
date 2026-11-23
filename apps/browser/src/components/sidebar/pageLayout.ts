@@ -9,7 +9,7 @@ export const ROWS_PER_FRAME = 32;
 export const DOCK_SHARE = 0.4;
 export const DOCK_SLACK = 12;
 
-export type SidebarGeometry = { viewport: number; regions: Record<Section, number>; newTabAtTop: boolean; tilesFixed: boolean; edgeLift?: number; laidOut?: () => void; entriesShown?: () => number; scrolled?: () => void };
+export type SidebarGeometry = { viewport: number; regions: Record<Section, number>; newTabAtTop: boolean; tilesFixed: boolean; edgeLift?: number; laidOut?: () => void; ownerShown?: () => boolean };
 
 export type PageSpot = {
   scrollY: number;
@@ -18,26 +18,10 @@ export type PageSpot = {
   tilesFixed: boolean;
   newTabAtTop: boolean;
   edgeLift: number;
-  visited: boolean;
+  shown: boolean;
   owns: boolean;
-  entriesShown: number;
-  grown?: () => void;
   scroller: ScrollView | null;
 };
-
-export const PREMOUNT_SCREENS = 2;
-
-export type PageRowsInput = { profileId: string; shown: string | null; current: string; visited: boolean; capRows: number; screen: number; throughActive: () => { entries: number; height: number }; holding: boolean; peaks: Map<string, number> };
-
-export function pageRowsCap({ profileId, shown, current, visited, capRows, screen, throughActive, holding, peaks }: PageRowsInput): number | undefined {
-  if (profileId === shown) return undefined;
-  const through = profileId !== current || visited ? null : throughActive();
-  const wanted = through && through.entries + 1 > capRows && through.height <= screen * PREMOUNT_SCREENS ? through.entries + 1 : capRows;
-  if (!holding) return wanted;
-  const peak = Math.max(wanted, peaks.get(profileId) ?? 0);
-  if (peak > capRows) peaks.set(profileId, peak);
-  return peak;
-}
 
 export type PageLayoutInput = {
   tiles: number;

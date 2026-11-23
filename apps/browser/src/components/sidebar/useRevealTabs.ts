@@ -1,7 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import type { ScrollView } from "react-native";
-import { watchRevealTargets } from "../../state/sidebar/reveal";
-import { entriesThroughTabNow } from "../../state/sidebar/geometry";
+import { selectedTabIn, showsProfile, watchRevealTargets, windowProfileIn } from "../../state/sidebar/reveal";
 import { reduceMotion } from "../ui/reduceMotion";
 import { GLOW_ROOM, type SidebarGeometry } from "./pageLayout";
 import { locateTab } from "./selectedRow";
@@ -18,31 +17,30 @@ export function revealScrollFor(row: { y: number; height: number }, at: { top: n
 
 type Scroller = Pick<ScrollView, "scrollTo">;
 
-const OWN_SCROLL_MS = 150;
-
 export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | null>, scrollY: RefObject<number>, geometry: RefObject<SidebarGeometry>, stillMotion: () => boolean | null = reduceMotion) {
     let switched: string | null = null;
     let opened: string | null = null;
     let viaPill = false;
     let frame = 0;
     let reveals = 0;
-    let waiting = false;
-    let ownScrollUntil = 0;
+    let atRest: string | null = null;
     const show = (row: { y: number; height: number }, pill: boolean) => {
       const { viewport, edgeLift } = geometry.current;
       const move = revealScrollFor(row, { top: scrollY.current ?? 0, viewport, edgeLift }, pill && !stillMotion());
-      if (!move) return;
-      ownScrollUntil = performance.now() + OWN_SCROLL_MS;
-      scroll.current?.scrollTo(move);
+      if (move) scroll.current?.scrollTo(move);
     };
     const reveal = () => {
       frame = 0;
       if (!geometry.current.viewport || !scroll.current) return;
       const mine = ++reveals;
-      const tabId = switched ?? opened;
-      const shownEntries = geometry.current.entriesShown?.();
-      waiting = !!tabId && shownEntries !== undefined && entriesThroughTabNow(windowId, tabId) > shownEntries;
-      if (waiting) return;
+      if (geometry.current.ownerShown?.() === false) {
+        if (switched) atRest = windowProfileIn(windowId) ?? null;
+        switched = null;
+        return;
+      }
+      const resting = atRest !== null && showsProfile(windowId, atRest) ? selectedTabIn(windowId) : undefined;
+      atRest = null;
+      const tabId = switched ?? opened ?? resting;
       const pill = viaPill;
       switched = opened = null;
       viaPill = false;
@@ -54,28 +52,20 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
       else show(row, pill);
     };
     const schedule = () => {
-      if ((switched || opened) && !frame) frame = requestAnimationFrame(reveal);
+      if ((switched || opened || atRest) && !frame) frame = requestAnimationFrame(reveal);
     };
-    const unsubscribe = watchRevealTargets(windowId, ({ switched: nowSwitched, opened: nowOpened, replaced }, pill) => {
+    const unsubscribe = watchRevealTargets(windowId, ({ switched: nowSwitched, opened: nowOpened }, pill) => {
       reveals++;
-      if (replaced && switched && waiting) switched = replaced;
       if (nowSwitched) switched = nowSwitched;
       if (nowOpened) opened = nowOpened;
       viaPill = pill;
       schedule();
     });
     geometry.current.laidOut = schedule;
-    geometry.current.scrolled = () => {
-      if (!waiting || performance.now() < ownScrollUntil) return;
-      waiting = false;
-      switched = opened = null;
-      viaPill = false;
-    };
     return () => {
       cancelAnimationFrame(frame);
       unsubscribe();
       geometry.current.laidOut = undefined;
-      geometry.current.scrolled = undefined;
     };
 }
 
