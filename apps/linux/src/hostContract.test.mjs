@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callHost } from "./host.ts";
 import { BOOKMARKS_EXPORT_CALL } from "./hostBookmarksExport.ts";
-import { PAGE_OPTION_CALLS, resolveHostModule } from "./hostModules.ts";
+import { resolveHostModule } from "./hostModules.ts";
 import { createNativeEvents } from "./hostEvents.ts";
 import { hostLaunchConfig } from "./hostLaunchConfig.ts";
 import { HostTab } from "./hostTab.ts";
@@ -35,7 +35,7 @@ test("domain adapter preserves argument JSON and scalar, string, null and object
 test("every call of a schema-generated domain reaches a host that serves it under its own name, with its arguments untouched, except the ones the Linux UI routes or answers itself", async () => {
   const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
   const everyCall = Object.entries(manifest.domains).flatMap(([domain, entry]) => Object.keys(entry.calls).map((verb) => `${domain}.${verb}`));
-  const servedWhenTheHostCant = [BOOKMARKS_EXPORT_CALL, ...PAGE_OPTION_CALLS];
+  const servedWhenTheHostCant = [BOOKMARKS_EXPORT_CALL];
   const routedByTheUi = new Set(["passwords.unlock", "passwords.reveal", "passwords.export", "autofill.cardNumber"]);
   const reshapedByTheUi = new Set(["passwords.list", "autofill.addresses", "autofill.cards"]);
   for (const name of [...servedWhenTheHostCant, ...routedByTheUi, ...reshapedByTheUi]) {

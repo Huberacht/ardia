@@ -154,7 +154,7 @@
         },
         "devDelayNextLoad": {
           "mac": "custom",
-          "desktop": "custom",
+          "desktop": "absent",
           "windows": "absent"
         }
       },
@@ -1263,7 +1263,7 @@
       "calls": {
         "setDisplayMediaPicker": {
           "mac": "custom",
-          "desktop": "custom",
+          "desktop": "absent",
           "windows": "absent"
         },
         "setPeekModifier": {
@@ -1303,7 +1303,7 @@
         },
         "setPopupsOpenAsTabs": {
           "mac": "custom",
-          "desktop": "custom",
+          "desktop": "absent",
           "windows": "custom"
         },
         "setAutoPictureInPicture": {
@@ -1313,7 +1313,7 @@
         },
         "setVideoUpscaling": {
           "mac": "custom",
-          "desktop": "custom",
+          "desktop": "absent",
           "windows": "absent"
         },
         "setVideoUpscalingTestConditions": {

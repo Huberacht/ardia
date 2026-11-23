@@ -7,7 +7,7 @@ export const webView = defineDomain({
     setDisplayMediaPicker: {
       args: "{ enabled: boolean }",
       result: "null",
-      desktop: "custom",
+      desktop: "absent",
       mac: "custom",
       windows: "absent",
     },
@@ -63,7 +63,7 @@ export const webView = defineDomain({
     setPopupsOpenAsTabs: {
       args: "{ enabled: boolean }",
       result: "null",
-      desktop: "custom",
+      desktop: "absent",
       mac: "custom",
       windows: "custom",
     },
@@ -77,7 +77,7 @@ export const webView = defineDomain({
     setVideoUpscaling: {
       args: "{ enabled: boolean }",
       result: "null",
-      desktop: "custom",
+      desktop: "absent",
       mac: "custom",
       windows: "absent",
     },

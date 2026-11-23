@@ -93,7 +93,7 @@ export const contentBlocker = defineDomain({
     devDelayNextLoad: {
       args: "{ ms: number }",
       result: "null",
-      desktop: "custom",
+      desktop: "absent",
       mac: "custom",
       windows: "absent",
     },

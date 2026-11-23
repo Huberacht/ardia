@@ -94,6 +94,48 @@ export function parseRoutes(header) {
 }
 
 const linuxRoutes = parseRoutes(linuxContract);
+
+const LINUX = "engine/ardiacore-linux/src/ardia/linux/";
+const CUSTOM_ONLY_DOMAINS = ["autofill", "contentBlocker", "media", "passwords", "profiles", "webKit", "webView", "windows"];
+
+export function namesIn(source, list) {
+  const opening = new RegExp(`\\b${list}\\[\\]\\s*=\\s*\\{`, "g");
+  const open = opening.exec(source);
+  if (!open || opening.exec(source)) throw new Error(`the source declares ${list} exactly once`);
+  const close = source.indexOf("}", open.index + open[0].length);
+  const body = source.slice(open.index + open[0].length, close);
+  const names = [...body.matchAll(/"([^"\\\n]*)"/g)].map((match) => match[1]);
+  if (body.replace(/"[^"\\\n]*"/g, "").replace(/[\s,]/g, "")) throw new Error(`${list} has an entry the scan can't read: ${JSON.stringify(body.trim().slice(0, 80))}`);
+  return names;
+}
+
+export function constantIn(source, name) {
+  const found = [...source.matchAll(new RegExp(`\\b${name}\\[\\]\\s*=\\s*"([^"\\\\]*)"\\s*;`, "g"))];
+  if (found.length !== 1) throw new Error(`the source declares ${name} exactly once`);
+  return found[0][1];
+}
+
+export function linuxServed(read) {
+  const native = (file) => stripComments(read(LINUX + file));
+  const siteControls = native("ac_linux_site_controls.cc");
+  const notAdvertised = new Set([...between(siteControls, "Capabilities() {", "\n}").matchAll(/name != "([^"]+)"/g)].map((match) => match[1]));
+  const credentials = native("ac_linux_credentials.cc");
+  const typedMethods = new Set(namesIn(native("ac_linux_credentials.h"), "kCapabilities"));
+  const typedMethodOf = (name) => `Ardia${name[0].toUpperCase()}${name.slice(1)}`;
+  const dispatched = [...native("ac_linux_host.cc").matchAll(/\bname == "([a-zA-Z]+\.[a-zA-Z]+)"/g)].map((match) => match[1]);
+  return new Set([
+    ...[...namesIn(siteControls, "kServiceCalls"), ...namesIn(siteControls, "kBlockerCalls")].filter((name) => !notAdvertised.has(name)),
+    ...namesIn(credentials, "kManagedNames"),
+    ...namesIn(credentials, "kSecretNames").filter((name) => typedMethods.has(typedMethodOf(name))),
+    ...namesIn(native("ac_linux_cast_core.h"), "kCastCapabilities"),
+    ...namesIn(native("ac_linux_capture.h"), "kCaptureCapabilities"),
+    ...namesIn(native("ac_linux_page_messages.h"), "kLinuxPageMessageRoutes"),
+    ...namesIn(native("ac_linux_link_tabs.h"), "kLinuxLinkTabRoutes"),
+    constantIn(native("ac_linux_idle_profiles.h"), "kLinuxUnloadIdleProfileCall"),
+    ...dispatched,
+  ]);
+}
+
 const linuxEvents = linuxEventNames(linuxContract);
 const windows = JSON.parse(read("packages/expo-windows/src/engine/domains/forwarded.json"));
 const { topics: macTopics, renamed: macRenamed } = macForwarding(read("packages/ardiacore/ios/ArdiaEngineBridge.mm"));
@@ -166,6 +208,39 @@ test("the EventName scan reads every topic however it's spelled and refuses what
   assert.ok(macForwarding(bridgeSource).topics.includes("extensions.action"));
   assert.ok(!macForwarding(commented).topics.includes("extensions.action"));
   assert.ok(!macForwarding(bridgeSource.replace('@"extensions.action", ', '\n// @"extensions.action",\n')).topics.includes("extensions.action"));
+});
+
+test("the custom-only domains are exactly the ones no host passes any call of straight to the engine", () => {
+  const engineFree = domains.filter(([, entry]) => Object.values(entry.calls).every((call) => call.service === undefined)).map(([domain]) => domain);
+  assert.deepEqual(engineFree.sort(), CUSTOM_ONLY_DOMAINS);
+});
+
+test("the Linux host serves exactly a custom-only domain's desktop custom calls: each is in a native dispatch list it advertises or a branch of its own, and nothing it refuses is custom", () => {
+  const served = linuxServed(read);
+  assert.ok(served.has("contentBlocker.state") && served.has("passwords.unlock") && served.has("profiles.unloadIdle"));
+  assert.ok(!served.has("contentBlocker.devDelayNextLoad"), "Linux refuses contentBlocker.devDelayNextLoad as unavailable");
+  for (const domain of CUSTOM_ONLY_DOMAINS) {
+    const entry = manifest.domains[domain];
+    const custom = Object.entries(entry.calls).filter(([, call]) => call.desktop === "custom").map(([verb]) => `${domain}.${verb}`).sort();
+    const nativelyServed = Object.keys(entry.calls).map((verb) => `${domain}.${verb}`).filter((name) => served.has(name)).sort();
+    assert.deepEqual(custom, nativelyServed, `${domain}'s desktop custom calls`);
+    for (const [verb, call] of Object.entries(entry.calls)) assert.notEqual(call.desktop, "route", `${domain}.${verb} has no engine service to route to`);
+  }
+});
+
+test("the Linux dispatch scans read every list however it's spelled and refuse what they can't read", () => {
+  assert.deepEqual(namesIn('constexpr std::string_view kNames[] = {\n  "a.b", "c.d",\n};', "kNames"), ["a.b", "c.d"]);
+  assert.throws(() => namesIn('constexpr std::string_view kNames[] = {"a.b", kOther};', "kNames"), /can't read/);
+  assert.throws(() => namesIn('kNames[] = {"a.b"}; kNames[] = {"c.d"};', "kNames"), /exactly once/);
+  assert.equal(constantIn('inline constexpr char kCall[] = "profiles.unloadIdle";', "kCall"), "profiles.unloadIdle");
+  assert.throws(() => constantIn("inline constexpr char kCall[] = kOther;", "kCall"), /exactly once/);
+  const siteControls = read(`${LINUX}ac_linux_site_controls.cc`);
+  const exclusion = 'if (name != "contentBlocker.devDelayNextLoad") names.push_back(name);';
+  assert.ok(siteControls.includes(exclusion));
+  const advertisedAll = (path) => (path.endsWith("ac_linux_site_controls.cc") ? siteControls.replace(exclusion, "names.push_back(name);") : read(path));
+  assert.ok(linuxServed(advertisedAll).has("contentBlocker.devDelayNextLoad"));
+  const commented = (path) => (path.endsWith("ac_linux_host.cc") ? read(path).replace('if (name == "profiles.loaded") {', 'if (false /* name == "profiles.loaded" */) {') : read(path));
+  assert.ok(!linuxServed(commented).has("profiles.loaded"));
 });
 
 test("the Linux host forwards exactly the desktop-forwarded events and its own Linux-only topics, nothing undeclared", () => {
