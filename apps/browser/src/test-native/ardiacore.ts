@@ -76,8 +76,7 @@ export const engineCalls: { domain: string; verb: string; profile: string }[] = 
 const SUFFIXES_FOR_TESTS = ["com", "net", "org", "io", "example", "uk", "co.uk", "github.io", "s3.amazonaws.com"];
 
 function registrableForTests(host: string): string {
-  if (/^\d+(\.\d+)*$/.test(host)) return host;
-  if (!host.includes(".")) return host;
+  if (!host.includes(".") || /\.\d+$/.test(host)) return host;
   const suffix = SUFFIXES_FOR_TESTS.filter((s) => host.endsWith(`.${s}`)).sort((a, b) => b.length - a.length)[0] ?? host.split(".").pop()!;
   return `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}`;
 }
