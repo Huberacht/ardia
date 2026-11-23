@@ -58,9 +58,9 @@ export function ExpoGeneralPane() {
           </NavigationLink>
         </Section>
       ) : null}
-      <Section title="Links">
+      <Section title="Links" footer={<Text>Links to apps you have, like YouTube or Maps.</Text>}>
         <Picker
-          label={<ExpoRowText title="Open app links in" description="Links to apps you have, like YouTube or Maps." />}
+          label={<ExpoRowText title="Open app links in" />}
           selection={appLinks}
           onSelectionChange={(next: (typeof APP_LINKS)[number]["id"]) => setAppLinks(next)}
           modifiers={[pickerStyle("menu"), tint("secondary")]}
@@ -105,9 +105,9 @@ export function ExpoTabsPane() {
         <ExpoChoiceRow title="Stack" checked={!grid} onPress={() => setDeckGrid(false, !incognito)} />
         <ExpoChoiceRow title="Grid" checked={grid} onPress={() => setDeckGrid(true, !incognito)} />
       </Section>
-      <Section title="Clean up">
+      <Section title="Clean up" footer={<Text>Moves tabs you haven't used in this long to the Archive.</Text>}>
         <Picker
-          label={<ExpoRowText title="Archive inactive tabs" description="Moves tabs you haven't used in this long to the Archive." />}
+          label={<ExpoRowText title="Archive inactive tabs" />}
           selection={interval}
           onSelectionChange={(next: AutoArchiveInterval) => setArchiveInterval(next)}
           modifiers={[pickerStyle("menu"), tint("secondary")]}
