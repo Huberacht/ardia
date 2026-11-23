@@ -467,8 +467,8 @@ Hooks that answer before something happens, with a deadline after which Ardia do
   answer leaves the file where it is. Folders cross the bridge as `~/…`.
   **Trust boundary.** The checks stop a swapped or linked file from being moved in place of the download; they don't
   stop a process running as the same user that already holds a writable descriptor or a hard link to the file from
-  rewriting it after the check. Such a process is outside what Ardia defends against: it can already read
-  `ArdiaControl.json` and drive the browser.
+  rewriting it after the check. Such a process is outside what Ardia defends against: it can already drive the
+  browser (it can run the bundled `ardia`, and on Linux read the token connection's token from `ArdiaControl.json`).
   Code: `state/automation/downloadHooks.ts`.
 - **Floods.** At most 64 pending decisions (16 per runner connection), 200 hooks and 50 rewrite rules per hook; the
   runner runs at most 16 decide programs at once (4 per hook) and gives up at the deadline. Command hooks run at
