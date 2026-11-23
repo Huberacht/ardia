@@ -48,8 +48,9 @@ const NOT_SHIPPED = [
 
 const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^127(\.\d+){3}$|^0\.0\.0\.0$|^\[::1?\]$/i;
 const REVERSE_DNS = /^(com|org|net)\./i;
-const URL_AUTHORITY = /\b(?:https?|wss?):\/\/(?:[^\s/@"'`]*@)?(\[[0-9a-f:.]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.?)(?=[/?#"'`\s)\],;>|]|:\d|$)/giu;
-const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|co|me|tv|gov|edu|info|cloud|goog))["'`]/gi;
+const URL_AUTHORITY = /\b(?:https?|wss?):\/\/(?:[^\s/@"'`]*@)?(\[[0-9a-f:.]+\]|[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.?)(?=[/?#"'`\s)\],;>|]|:\d|$)/giu;
+const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|tv|gov|edu|info|cloud|goog|app|xyz|site|online|tech|computer|services|[a-z]{2}))["'`]/gi;
+const FILE_SUFFIX = /\.(js|db|gz|sh|nm|py|rb|ts|md|mm|cc|rs|xz|7z|app)$/i;
 const NATIVE = /\.(cc|cpp|h|mm|m|swift|rs|patch)$/;
 
 const read = (path) => readFileSync(join(ROOT, path), "utf8");
@@ -92,7 +93,7 @@ function urlHost(authority) {
 function hostsIn(path) {
   const text = shippedText(path);
   const fromUrls = [...text.matchAll(URL_AUTHORITY)].map((m) => urlHost(m[1]));
-  const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !REVERSE_DNS.test(host)) : [];
+  const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !REVERSE_DNS.test(host) && !FILE_SUFFIX.test(host)) : [];
   return [...fromUrls, ...quoted].filter((host) => !RESERVED.test(host));
 }
 
