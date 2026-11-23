@@ -9,8 +9,9 @@
 #      (logs in <out>/smoke.log, ratchet.log, prep.log)
 #   2. two native-bench rounds (launch x6, session x2, windows x2), each in a new folder under <out>
 #   3. gate-verdict.mjs on both rounds
+#   4. on a pass, keeps the candidate's bench bundle as dist/<version>/bench/main.jsbundle: the next gate's control bundle
 # Exit: the first failing step's status (smoke, ratchet, prepare, then the rounds in order), else the verdict's: 0 pass,
-# 1 a row fails, 2 a round is invalid. Any exit, ^C or timeout stops the jobs it started and waits for them; the lock
+# 1 a row fails, 2 a round is invalid; 70 when it passed but the bundle couldn't be kept. Any exit, ^C or timeout stops the jobs it started and waits for them; the lock
 # is held by this process, so it goes with it.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -81,4 +82,10 @@ for r in 1 2; do
 done
 
 node "$perf/gate-verdict.mjs" --control "$previous" --candidate rc "${rounds[@]}"
-exit $?
+verdict=$?
+if [ "$verdict" = 0 ]; then
+  kept=$root/dist/$version/bench/main.jsbundle
+  mkdir -p "$(dirname "$kept")" && cp "$out/prep/rc/bundle/main.jsbundle" "$kept" || { echo "gate: passed, but couldn't keep the bench bundle as $kept"; exit 70; }
+  echo "gate: kept the bench bundle as $kept (the next gate's control bundle)"
+fi
+exit "$verdict"

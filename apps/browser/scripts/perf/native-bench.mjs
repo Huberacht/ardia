@@ -162,13 +162,12 @@ import { appEnv, launchVariables, mergeLaunchEnv } from "../../../../scripts/lib
 import { buildSeed } from "./seed.mjs";
 import { waitForUboEngine } from "./ubo-cache.mjs";
 import { launchedTree, listenerPid, quitTargets, signalIfSame, stopTree, survivors } from "./processes.mjs";
-import { componentsMismatch, componentsState, sidesProblems, templateProblems, templateSizes, waitForStartupComponents } from "./template-state.mjs";
+import { componentsMismatch, componentsState, jointProblems, templateProblems, templateSizes, waitForStartupComponents } from "./template-state.mjs";
 import { parseSettings, profileSeed } from "./profile-seed.mjs";
 import { writeSwitches } from "./js-bench.mjs";
 import { frameTable, framesLibrary, framesRun } from "./frames-phase.mjs";
 import { summary } from "./native-summary.mjs";
-import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, sourceChanged, storeTemplate, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
-import { randomBytes } from "node:crypto";
+import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, sourceChanged, storePair, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
 import { sideLaunchEnv } from "./launch-env.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -611,7 +610,7 @@ function writeBigSeed(side) {
   log(`seeded the big session (${side.label}): ${session.tabs.length} tabs, ${files["history.json"].history.default.length} history entries`);
 }
 
-async function makeTemplate(side, { pair = null } = {}) {
+async function makeTemplate(side) {
   const dir = side.template;
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -621,7 +620,6 @@ async function makeTemplate(side, { pair = null } = {}) {
     return;
   }
   if (opt.seed) return writeBigSeed(side);
-  const cache = side.cache;
   log(`seeding a session (${side.label})`);
   writeFileSync(join(dir, "onboarding.json"), JSON.stringify({ version: 1, completedAt: 1 }));
   const app = await new Instance(side, dir).launch();
@@ -643,7 +641,6 @@ async function makeTemplate(side, { pair = null } = {}) {
   for (const f of ["bench-cmd.js", "bench-result.json", "bench-boot.json"]) rmSync(join(dir, f), { force: true });
   const record = { waitedSecs: { ubo: waited.ubo.secs, components: waited.components.secs }, uboSelfies: waited.ubo.selfies, sizes: templateSizes(dir), components: componentsState(dir).components };
   useTemplateRecord(side, record, "made now");
-  if (cache) log(`${side.label}'s template stored in ${storeTemplate(cache.dir, cache.key, dir, record, { pair })}`);
 }
 
 const cachedChecks = () => ({ maxAgeHours: +opt["template-max-age"], componentsOf: (dir) => componentsState(dir).components });
@@ -677,7 +674,9 @@ async function makeTemplates() {
   for (const side of sides) side.cache = templateCache(side);
   const found = sides.map((side) => side.cache && lookupTemplate(side.cache.dir, side.cache.key, cachedChecks()));
   const pairs = new Set(found.map((f) => f?.entry?.pair ?? null));
-  const usable = found.every((f) => f?.hit) && pairs.size === 1 && !pairs.has(null);
+  const cachedJoint = found.every((f) => f?.hit) ? jointProblems(found.map((f) => f.entry.record)) : [];
+  if (cachedJoint.length) log(`the cached pair doesn't match (${cachedJoint.join("; ")}): making both again`);
+  const usable = found.every((f) => f?.hit) && pairs.size === 1 && !pairs.has(null) && !cachedJoint.length;
   const copied = usable ? sides.map((side, i) => copyCachedTemplate(found[i], side.template, cachedChecks())) : [];
   if (usable && copied.every((c) => c.ok)) {
     for (const [i, side] of sides.entries())
@@ -687,14 +686,17 @@ async function makeTemplates() {
     if (usable) log(`a cached template didn't copy cleanly (${copied.map((c, i) => `${sides[i].label}: ${c.ok ? "ok" : c.problems.join("; ")}`).join("; ")}): making both again`);
     if (sides.some((s) => s.cache)) log(`making ${sides.length > 1 ? "both sides' templates together" : "the template"} (${found.map((f, i) => `${sides[i].label}: ${!f ? "not cached" : !f.hit ? f.problems.join("; ") : "cached, but not made with the other side's"}`).join("; ")})`);
     for (let attempt = 0; attempt < 2; attempt++) {
-      const pair = randomBytes(8).toString("hex");
-      for (const side of sides) await makeTemplate(side, { pair });
+      for (const side of sides) await makeTemplate(side);
       if (!componentsMismatch(sides.map((s) => s.templateRecord).filter(Boolean)).length) break;
       log(`the sides' startup components differ (${componentsMismatch(sides.map((s) => s.templateRecord)).join("; ")}): making both again`);
     }
+    const cached = sides.filter((s) => s.cache);
+    const stored = storePair(cached.map((s) => ({ cacheDir: s.cache.dir, key: s.cache.key, templateDir: s.template, record: s.templateRecord })), jointProblems(sides.map((s) => s.templateRecord).filter(Boolean)));
+    for (const [i, dir] of stored.entries()) log(`${cached[i].label}'s template stored in ${dir}`);
+    if (cached.length && !stored.length) log("not caching these templates: the two sides don't match");
   }
   const records = sides.map((s) => s.templateRecord).filter(Boolean);
-  const mismatch = [...sidesProblems(records), ...componentsMismatch(records)];
+  const mismatch = jointProblems(records);
   if (mismatch.length) throw new Error(`the two sides' templates don't match: ${mismatch.join("; ")}`);
 }
 

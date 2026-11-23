@@ -13,6 +13,12 @@ const args = process.argv.slice(2);
 const kind = ${JSON.stringify(name)} === "native-bench" && args.includes("prepare") ? "prep" : ${JSON.stringify(name)};
 appendFileSync(process.env.STUB_LOG, JSON.stringify([kind, args]) + "\\n");
 const env = kind.replace("-", "_");
+if (kind === "prep") {
+  const { mkdirSync } = await import("node:fs");
+  const out = args[args.indexOf("--out") + 1];
+  mkdirSync(out + "/rc/bundle", { recursive: true });
+  writeFileSync(out + "/rc/bundle/main.jsbundle", "candidate bundle");
+}
 const wait = +(process.env["STUB_SLEEP_" + env] ?? 0);
 setTimeout(() => {
   writeFileSync(process.env.STUB_LOG + "." + kind + ".finished", "");
@@ -116,6 +122,34 @@ test("without the lock it fails at once with the lock's status", () => {
     const r = run(s, { GATE_LOCKED: "" });
     assert.equal(r.status, 75);
     assert.deepEqual(s.calls(), []);
+  } finally {
+    s.done();
+  }
+});
+
+test("a pass keeps the candidate's bench bundle in dist/<version>/bench for the next gate; a FAIL keeps nothing", () => {
+  const s = setup();
+  try {
+    assert.equal(run(s).status, 0);
+    assert.equal(readFileSync(join(s.dir, "dist", "0.2.49", "bench", "main.jsbundle"), "utf8"), "candidate bundle");
+  } finally {
+    s.done();
+  }
+  const f = setup();
+  try {
+    assert.equal(run(f, { STUB_EXIT_gate_verdict: "1" }).status, 1);
+    assert.equal(existsSync(join(f.dir, "dist", "0.2.49", "bench")), false);
+  } finally {
+    f.done();
+  }
+});
+
+test("a pass whose bundle can't be kept exits 70, not 0", () => {
+  const s = setup();
+  try {
+    mkdirSync(join(s.dir, "dist", "0.2.49"), { recursive: true });
+    writeFileSync(join(s.dir, "dist", "0.2.49", "bench"), "a file in the way");
+    assert.equal(run(s).status, 70);
   } finally {
     s.done();
   }

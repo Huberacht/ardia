@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cloneTree, componentDrift, copyCachedTemplate, defaultCacheDir, pruneCache, sourceChanged, entryProblems, keyId, keyProblems, lookupTemplate, storeTemplate, templateKey, uboVersion } from "./template-cache.mjs";
-import { componentsMismatch, componentsState } from "./template-state.mjs";
+import { cloneTree, componentDrift, copyCachedTemplate, defaultCacheDir, pruneCache, sourceChanged, storePair, entryProblems, keyId, keyProblems, lookupTemplate, storeTemplate, templateKey, uboVersion } from "./template-cache.mjs";
+import { componentsMismatch, componentsState, jointProblems } from "./template-state.mjs";
 import { UBO_ID } from "./ubo-cache.mjs";
 
 const MB = 1048576;
@@ -209,4 +209,20 @@ test("a store that fails partway leaves no staging folder behind", withDir((dir)
   const cache = join(dir, "cache");
   assert.throws(() => storeTemplate(cache, key, join(dir, "does-not-exist"), {}));
   assert.deepEqual(readdirSync(join(cache, keyId(key))), []);
+}));
+
+test("a pair that fails the joint check is never cached; a matching pair is stored together", withDir((dir) => {
+  const made = join(dir, "made");
+  const record = fakeTemplate(made);
+  const entries = [key, { ...key, build: "127" }].map((k) => ({ cacheDir: join(dir, "cache"), key: k, templateDir: made, record }));
+  const mismatched = jointProblems([{ ...record, components }, { ...record, components: { ...components, PKIMetadata: { version: "1840" } } }]);
+  assert.match(mismatched.join(), /component PKIMetadata differs/);
+  assert.deepEqual(storePair(entries, mismatched), []);
+  assert.equal(existsSync(join(dir, "cache")), false);
+  const stored = storePair(entries, jointProblems([record, record]));
+  assert.equal(stored.length, 2);
+  const pairs = entries.map((e) => lookupTemplate(e.cacheDir, e.key).entry.pair);
+  assert.equal(pairs[0], pairs[1]);
+  assert.ok(pairs[0]);
+  assert.match(jointProblems([record, { ...record, sizes: { ...record.sizes, uboStoreMB: record.sizes.uboStoreMB * 1.5 } }]).join(), /uBO stores differ/);
 }));

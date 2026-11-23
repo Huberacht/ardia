@@ -130,6 +130,12 @@ export function storeTemplate(cacheDir, key, templateDir, record, { now = Date.n
   return dir;
 }
 
+export function storePair(entries, problems, { now = Date.now() } = {}) {
+  if (problems.length) return [];
+  const pair = randomBytes(8).toString("hex");
+  return entries.map(({ cacheDir, key, templateDir, record }) => storeTemplate(cacheDir, key, templateDir, record, { now, pair }));
+}
+
 const madeAt = (name) => +name.replace(/^\.staging-/, "").split("-")[0];
 
 export function pruneCache(cacheDir, { now = Date.now() } = {}) {

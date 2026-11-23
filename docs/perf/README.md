@@ -152,8 +152,10 @@ scripts/agent/unregister-builds
 
 `gate.sh --help` lists what it runs: `smoke.sh`, `ratchet.mjs run --own` and `native-bench --only prepare` side by
 side, then two rounds (`native-bench --prepared --only launch,session,windows --launch-runs 6 --runs 2`, each in a new
-`mktemp -d` folder), then `gate-verdict.mjs` on both. Its exit status is the first failing step's, else the verdict's
-(0 pass, 1 a row fails, 2 invalid); any exit stops and waits for the jobs it started.
+`mktemp -d` folder), then `gate-verdict.mjs` on both. On a pass it keeps the candidate's bench bundle as
+`dist/<v>/bench/main.jsbundle` (step 2: the next gate's `--control-bundle`, its default) before you delete the out dir.
+Its exit status is the first failing step's, else the verdict's (0 pass, 1 a row fails, 2 invalid; 70 when it passed
+but couldn't keep the bundle); any exit stops and waits for the jobs it started.
 
 js-bench is triage, not part of every gate: the ratchet (`ratchet.mjs run --own`) already checks the same commits,
 renders, store updates and timers on the candidate's own bundle, as counts that don't move with load. Run it when the
