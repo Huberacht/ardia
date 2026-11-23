@@ -1,7 +1,7 @@
 import { engineProfile } from "../browser/model";
 import { clearSiteData, getSiteSettings, resetSiteSettings, setSiteSetting, setZoom, type SiteSettingType, type SiteSettingValue } from "../site/siteSettings";
 import { getSiteSettingsOrigins, getZoomLevels, registrableDomainsOf } from "../../platform/siteSettings";
-import { getContentBlocker, isContentBlockerAllowed, setContentBlockerAllowed } from "../../platform/contentBlocker";
+import { getContentBlocker, isContentBlockerAllowed, removeContentBlockerAllowed, setContentBlockerAllowed } from "../../platform/contentBlocker";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { refreshExtensions, reload, removeExtension, setEnabled, setPinned, findExtension } from "../extensions/actions";
 import type { InstalledExtension } from "../extensions/store";
@@ -127,19 +127,24 @@ async function adBlocker() {
 }
 
 const ANY_PROFILE = "";
+const NOT_HERE_YET = "This Ardia can't change the ad blocker's trusted sites from the ardia command yet; turn off Block Ads & Trackers in Site Controls for the site instead.";
+
+const unknownCall = (error: unknown) => (error as { code?: unknown } | null)?.code === "ERR_UNKNOWN_CALL";
 
 async function oneSiteOf(value: unknown): Promise<string> {
   const site = siteOf(value);
   const probe = `ardia-probe.${site}`;
-  const { domains } = await registrableDomainsOf(ANY_PROFILE, [site, probe]).catch(() => {
-    throw new OpError("failed", "Ardia couldn't check whether that's one site; try again.");
+  const { domains } = await registrableDomainsOf(ANY_PROFILE, [site, probe]).catch((error: unknown) => {
+    throw new OpError(unknownCall(error) ? "refused" : "failed", unknownCall(error) ? NOT_HERE_YET : "Ardia couldn't check whether that's one site; try again.");
   });
-  const registrable = domains?.[0];
+  const registrable = Array.isArray(domains) && domains.length === 2 ? domains[0] : undefined;
   if (typeof registrable !== "string" || domains[1] !== registrable || !(site === registrable || site.endsWith(`.${registrable}`))) {
     throw new OpError("bad_request", `${site} isn't one site: it's a public suffix, an IP address or a name outside the public registries, so trusting it would cover sites run by others. Give the site itself, like example.com or app.example.com.`);
   }
   return site;
 }
+
+const covering = (site: string) => `${site} and its subdomains`;
 
 async function allowAds(params: Record<string, unknown>, call: SocketCall) {
   const site = await oneSiteOf(params.site);
@@ -147,7 +152,7 @@ async function allowAds(params: Record<string, unknown>, call: SocketCall) {
   call.stillServing();
   await setContentBlockerAllowed(site, true);
   expect(await isContentBlockerAllowed(site), `${site} isn't in the ad blocker's trusted list.`);
-  return { site, trusted: true, ...(await adBlocker()) };
+  return { site, trusted: true, covers: covering(site), ...(await adBlocker()) };
 }
 
 async function blockAds(params: Record<string, unknown>, call: SocketCall) {
@@ -161,10 +166,14 @@ async function blockAds(params: Record<string, unknown>, call: SocketCall) {
     );
   }
   call.stillServing();
-  await setContentBlockerAllowed(site, false);
+  const { removed } = await removeContentBlockerAllowed(site).catch((error: unknown) => {
+    if (unknownCall(error)) throw new OpError("refused", NOT_HERE_YET);
+    throw error;
+  });
+  if (!removed) throw new OpError("refused", `${site} isn't an entry the ardia command can take out of the trusted list.`);
   const after = await adBlocker();
   expect(!after.allowedSites.includes(site), `${site} is still in the ad blocker's trusted list.`);
-  return { site, trusted: false, ...after };
+  return { site, trusted: false, covers: covering(site), ...after };
 }
 
 const EXTENSION = { profile: PROFILE, id: id("An extension id from extensions.list") };
@@ -206,15 +215,15 @@ export const SITE_METHODS: MethodSpec[] = [
     mutates: true,
     description: "Add a site to the built-in ad blocker's trusted list, as turning off Block Ads & Trackers in Site Controls does: it covers the site's subdomains, in every profile, from the next page load. A public suffix or IP address is refused",
     params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
-    result: "{site, trusted, enabled, allowedSites}",
+    result: "{site, trusted, covers, enabled, allowedSites}",
     run: allowAds,
   },
   {
     name: "sites.blockAds",
     mutates: true,
-    description: "Take a site out of the built-in ad blocker's trusted list; only an entry sites.adBlocker lists can be taken out",
+    description: "Take a site out of the built-in ad blocker's trusted list. Only that entry goes: an entry sites.adBlocker lists, never a broader one or one uBlock ships with",
     params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
-    result: "{site, trusted, enabled, allowedSites}",
+    result: "{site, trusted, covers, enabled, allowedSites}",
     run: blockAds,
   },
   { name: "sites.zoomLevels", mutates: false, description: "Zoom per host", params: obj({ profile: PROFILE }), result: "{host: zoom}", run: (p) => getZoomLevels(engineOf(p)) },

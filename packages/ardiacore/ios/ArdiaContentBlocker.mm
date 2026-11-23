@@ -509,6 +509,21 @@ NSArray<NSString *> *Strings(id value) {
   });
 }
 
++ (void)removeAllowedHost:(NSString *)host completion:(void (^)(BOOL, NSString *))completion {
+  NSString *script = @"trusted().then((t) => {"
+                      "  const host = %@;"
+                      "  if (!t.whitelist.includes(host) || (t.whitelistDefault || []).includes(host)) return false;"
+                      "  return send({what: 'setWhitelist', whitelist: t.whitelist.filter((d) => d !== host).join('\\n')}).then(() => true);"
+                      "})";
+  completion = [completion copy];
+  Call(kProfile, ScriptWith(script, @[ host.lowercaseString ]), ^(id removed, NSString *error) {
+    const BOOL done = !error && [removed isKindOfClass:NSNumber.class] && [removed boolValue];
+    if (done) Publish(@{@"host" : host.lowercaseString, @"allowed" : @NO});
+    if (!done) return completion(NO, error);
+    Changed(nil, ^(NSString *changedError) { completion(YES, changedError); });
+  });
+}
+
 + (void)userFilters:(void (^)(NSDictionary<NSString *, id> *, NSString *))completion {
   NSString *script = @"send({what: 'readUserFilters'}).then((u) => ({content: typeof u.content === 'string' ? u.content : '', enabled: u.enabled !== false, trusted: !!u.trusted}))";
   Call(kProfile, script, ^(id value, NSString *error) {

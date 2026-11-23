@@ -73,7 +73,7 @@ export const emitEvent = <E extends EventName>(name: E, data: EventData<E>) => {
 export const chromeWindowList: ChromeWindowState[] = [];
 export const pagerSnapshots = new Map<string, { sequence: number; selectionSequence: number; position: number; selected: number; phase: string; velocity: number; count: number; profileId?: string | null }>();
 export const engineCalls: { domain: string; verb: string; profile: string }[] = [];
-const SUFFIXES_FOR_TESTS = ["com", "net", "org", "io", "example", "uk", "co.uk", "github.io"];
+const SUFFIXES_FOR_TESTS = ["com", "net", "org", "io", "example", "uk", "co.uk", "github.io", "s3.amazonaws.com"];
 
 function registrableForTests(host: string): string {
   if (/^\d+(\.\d+)*$/.test(host)) return host;
@@ -81,7 +81,7 @@ function registrableForTests(host: string): string {
   return suffix ? `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}` : host;
 }
 
-export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[] };
+export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[], removed: [] as string[], unsupported: false };
 export const commitReports: boolean[] = [];
 export const commitReportFailures = { next: 0 };
 export const loadedEngineProfiles = new Set<string>([""]);
@@ -531,7 +531,10 @@ const fakeModules = {
     setZoom: ({ profile, host, zoom }) => (siteZoomDb.set(`${profile}\n${host}`, zoom), null),
     preloadPages: () => false,
     setPreloadPages: () => null,
-    registrableDomains: ({ hosts }) => ({ domains: hosts.map(registrableForTests) }),
+    registrableDomains: ({ hosts }) => {
+      if (contentBlockerSites.unsupported) throw Object.assign(new Error("Unknown call"), { code: "ERR_UNKNOWN_CALL" });
+      return { domains: hosts.map(registrableForTests) };
+    },
   }),
   ArdiaPasswords: domain(
     "passwords",
@@ -651,6 +654,11 @@ const fakeModules = {
       if (allowed) contentBlockerSites.allowed.add(host);
       else contentBlockerSites.allowed.delete(host);
       return null;
+    },
+    removeAllowed: ({ host }) => {
+      if (contentBlockerSites.unsupported) throw Object.assign(new Error("Unknown call"), { code: "ERR_UNKNOWN_CALL" });
+      contentBlockerSites.removed.push(host);
+      return { removed: contentBlockerSites.allowed.delete(host) };
     },
     state: () => ({ enabled: contentBlockerSites.enabled, version: "test", lists: [], allowedHosts: [...contentBlockerSites.allowed], stats: { enabled: contentBlockerSites.enabled, ready: true, parseMs: 0, lookups: 0, averageLookupMicros: 0, maxLookupMicros: 0 } }),
   }),
