@@ -7,7 +7,7 @@ import { emptyScope, type Adapter, type Transport } from "./scopeState.ts";
 
 function rng(seed: number) {
   let x = seed >>> 0 || 1;
-  return (n: number) => (x = (x * 1103515245 + 12345) >>> 0) % n;
+  return (n: number) => (x = (Math.imul(x, 1103515245) + 12345) >>> 0) % n;
 }
 
 const PREFIXES = ["h:", "bm:", "tabs:", "pin", "pin:"];
