@@ -39,7 +39,13 @@ globalThis.acTestNativeModules = {
 const enteredPhrases = [];
 
 const posted = [];
+let heldGithub = null;
 globalThis.fetch = async (url, init = {}) => {
+  if (heldGithub && String(url).includes("graphql")) {
+    await heldGithub;
+    const body = JSON.stringify({ data: { rateLimit: null, search: { nodes: [] } } });
+    return { status: 200, ok: true, headers: new Headers(), text: async () => body, json: async () => JSON.parse(body) };
+  }
   posted.push({ url: String(url), headers: JSON.stringify(init.headers ?? {}), body: String(init.body ?? "") });
   const echoed = `Bad credentials: ${JSON.stringify(init.headers ?? {})} ${String(init.body ?? "")}`;
   const status = acceptTelemetry && String(url).includes("otel") ? 200 : 503;
@@ -330,6 +336,17 @@ test("GitHub tokens are held only while their work runs, the stored account's is
   assert.equal(githubAccountsHeld(), 1, "failed connection attempts don't keep their tokens");
   await disconnect("github");
   assert.equal(githubAccountsHeld(), 0);
+  keychain.set("github", CANARY.oauthToken);
+  let release;
+  heldGithub = new Promise((resolve) => (release = resolve));
+  const refreshing = LIVE.github.fetch(folder, { interactive: true }).catch(() => null);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(githubAccountsHeld(), 1, "a refresh in flight holds its token");
+  await disconnect("github");
+  release();
+  heldGithub = null;
+  assert.ok(Array.isArray(await refreshing), "positive control: the held refresh succeeds");
+  assert.equal(githubAccountsHeld(), 0, "a refresh that settles after a disconnect lets the token go");
   keychain.set("github", CANARY.oauthToken);
 });
 
