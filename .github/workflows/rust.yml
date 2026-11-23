@@ -78,8 +78,9 @@ jobs:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
+            ~/.cargo/bin/bindgen
             packages/core-rs/target
-          key: core-rs-${{ runner.os }}-${{ hashFiles('packages/core-rs/rust-toolchain.toml', 'packages/core-rs/Cargo.lock') }}
+          key: core-rs-${{ runner.os }}-${{ hashFiles('packages/core-rs/rust-toolchain.toml', 'packages/core-rs/Cargo.lock', 'packages/core-rs/tests/boringssl/Cargo.lock') }}
           restore-keys: core-rs-${{ runner.os }}-
       - name: Toolchain
         run: rustup toolchain install && rustup component add llvm-tools && rustc --version && cargo --version
@@ -121,6 +122,13 @@ jobs:
         run: |
           dpkg -s libssl-dev >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev)
           python3 -I tests/linux-sync/test_linux_sync.py -v
+      - name: The crypto known answers and the update vectors through the BoringSSL backend
+        if: runner.os == 'Linux'
+        run: |
+          command -v cmake >/dev/null && command -v ninja >/dev/null && dpkg -s libclang-dev >/dev/null 2>&1 \
+            || (sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build libclang-dev)
+          command -v bindgen >/dev/null || (cd "$RUNNER_TEMP" && cargo install --locked bindgen-cli)
+          tests/boringssl/check.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         if: runner.os == 'Linux'
         with:

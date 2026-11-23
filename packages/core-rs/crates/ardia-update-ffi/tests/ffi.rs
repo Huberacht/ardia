@@ -320,3 +320,56 @@ fn the_c_constants_match_the_core() {
     assert_eq!(ARDIA_UPDATE_MAX_VERSION_BYTES, ardia_update_core::MAX_VERSION_BYTES);
     assert_eq!(ARDIA_UPDATE_MAX_PACKAGE_BYTES, ardia_update_core::MAX_PACKAGE_BYTES);
 }
+
+#[test]
+fn outputs_are_written_into_uninitialized_slots_without_reading_them() {
+    use std::mem::MaybeUninit;
+    let vectors = vectors();
+    let valid = &vectors["manifests"][0];
+    let manifest = valid["manifest"].as_str().unwrap().as_bytes();
+    let signature = hex(valid["signature"].as_str().unwrap());
+    let key = hex(valid["publicKey"].as_str().unwrap());
+    for (signature, want, size) in [
+        (signature.clone(), ardia_update_status::Ok, 1000),
+        (signature[..63].to_vec(), ardia_update_status::Signature, 0),
+    ] {
+        let mut slot = MaybeUninit::<ardia_update_package>::uninit();
+        unsafe { ptr::write_bytes(slot.as_mut_ptr(), 0xa5, 1) };
+        let status = unsafe {
+            ardia_update_verify_linux(
+                manifest.as_ptr(),
+                manifest.len(),
+                signature.as_ptr(),
+                signature.len(),
+                key.as_ptr(),
+                key.len(),
+                b"0.2.48".as_ptr(),
+                6,
+                b"0.2.47".as_ptr(),
+                6,
+                ARDIA_UPDATE_KIND_DEB,
+                slot.as_mut_ptr(),
+            )
+        };
+        assert_eq!(status, want);
+        let package = unsafe { slot.assume_init() };
+        assert_eq!(package.size, size);
+        if want != ardia_update_status::Ok {
+            assert_eq!(package, empty());
+        }
+    }
+    let mut order = MaybeUninit::<i32>::uninit();
+    unsafe { ptr::write_bytes(order.as_mut_ptr(), 0xa5, 1) };
+    assert_eq!(
+        unsafe { ardia_update_compare_versions(b"0.2.47".as_ptr(), 6, b"0.2.48".as_ptr(), 6, order.as_mut_ptr()) },
+        ardia_update_status::Ok
+    );
+    assert_eq!(unsafe { order.assume_init() }, -1);
+    let mut channel = MaybeUninit::<u32>::uninit();
+    unsafe { ptr::write_bytes(channel.as_mut_ptr(), 0xa5, 1) };
+    assert_eq!(
+        unsafe { ardia_update_channel_of(b"x".as_ptr(), 1, channel.as_mut_ptr()) },
+        ardia_update_status::Version
+    );
+    assert_eq!(unsafe { channel.assume_init() }, ARDIA_UPDATE_CHANNEL_STABLE);
+}

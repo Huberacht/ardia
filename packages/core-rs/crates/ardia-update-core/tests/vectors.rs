@@ -151,9 +151,11 @@ fn sign(case: &Case) -> ([u8; 32], Vec<u8>) {
     }
 }
 
-fn outcome(result: Result<Package, UpdateError>) -> Value {
+fn outcome(result: Result<Package, UpdateError>, version: &str) -> Value {
     match result {
-        Ok(package) => json!({ "name": package.name, "sha256": hex(&package.sha256), "size": package.size }),
+        Ok(package) => {
+            json!({ "name": package.kind.package_name(version), "sha256": hex(&package.sha256), "size": package.size })
+        }
         Err(error) => json!({ "error": error.code() }),
     }
 }
@@ -529,10 +531,13 @@ fn generate() -> Value {
             entry.insert("installed".into(), json!(case.installed));
             entry.insert("kind".into(), json!(case.kind.name()));
             entry.insert("signatureValid".into(), json!(signature_valid));
-            entry.insert("outcome".into(), outcome(result));
+            entry.insert("outcome".into(), outcome(result, case.version));
             entry.insert(
                 "parse".into(),
-                outcome(package_in_linux_manifest(&case.manifest, case.version, case.kind)),
+                outcome(
+                    package_in_linux_manifest(&case.manifest, case.version, case.kind),
+                    case.version,
+                ),
             );
             for (implementation, differs) in case.overrides {
                 entry.insert(implementation.into(), differs);

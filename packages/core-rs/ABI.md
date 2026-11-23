@@ -110,10 +110,14 @@ manifest) and compares versions and channels, with the rules of the root helper 
   stable takes stable versions only, nightly takes both (`CHANNEL`, `NOT_NEWER`, `VERSION`). A downgrade, the same
   version again, or a nightly of the installed stable is never offered.
 - Pointer rules are the same as `ardia_core`'s: a `NULL` input with length 0 is empty, with any other length it is
-  `INVALID_ARGUMENT`, and a length check that refuses an input wins over a `NULL` pointer. Nothing is allocated, so
-  there is nothing to free, and the library keeps no state.
+  `INVALID_ARGUMENT`, and a length check that refuses an input wins over a `NULL` pointer. An output slot only has to
+  be aligned and writable: it may be uninitialized, since every call writes it (its result, or zeroes on a refusal)
+  and none reads it. No call allocates, temporarily or otherwise (`tests/no_allocation.rs` counts every allocation
+  across the vectors), so there is nothing to free, and the library keeps no state.
 
-Ed25519 goes through `ardia-crypto`'s backend, RustCrypto under cargo and BoringSSL in Chromium. It refuses small-order
+Ed25519 goes through `ardia-crypto`'s backend, RustCrypto under cargo and BoringSSL in Chromium.
+`tests/boringssl/check.sh` builds the same `ardia-crypto` and `ardia-update-core` sources against a pinned BoringSSL
+release under cargo and runs the crypto known answers and every update vector through the BoringSSL backend. It refuses small-order
 keys and `R` values and a non-canonical `S`. OpenSSL, which the helper uses, accepts a small-order key's trivial
 signature; that can't matter for a release, since installs pin `scripts/linux/linux-update.pem`, but it's recorded.
 

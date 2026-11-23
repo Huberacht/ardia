@@ -105,11 +105,15 @@ fn status(outcome: Outcome<()>) -> ardia_update_status {
 }
 
 unsafe fn deliver<T>(out: *mut T, empty: T, body: impl FnOnce() -> Outcome<T>) -> ardia_update_status {
-    let Some(out) = (unsafe { out.as_mut() }) else {
+    if out.is_null() {
         return ardia_update_status::InvalidArgument;
+    }
+    let (value, status) = match body() {
+        Ok(value) => (value, ardia_update_status::Ok),
+        Err(status) => (empty, status),
     };
-    *out = empty;
-    status(body().map(|value| *out = value))
+    unsafe { out.write(value) };
+    status
 }
 
 #[no_mangle]

@@ -51,23 +51,26 @@ impl PackageKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Package {
     pub kind: PackageKind,
-    pub name: String,
     pub sha256: [u8; SHA256_BYTES],
     pub size: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinuxManifest {
-    pub version: String,
-    pub packages: Vec<Package>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinuxManifest<'a> {
+    pub version: &'a str,
+    packages: [Option<Package>; 3],
 }
 
-impl LinuxManifest {
-    pub fn package(&self, kind: PackageKind) -> Option<&Package> {
-        self.packages.iter().find(|package| package.kind == kind)
+impl LinuxManifest<'_> {
+    pub fn package(&self, kind: PackageKind) -> Option<Package> {
+        self.packages[kind as usize]
+    }
+
+    pub fn packages(&self) -> impl Iterator<Item = Package> + '_ {
+        self.packages.iter().flatten().copied()
     }
 }
 
@@ -99,13 +102,26 @@ fn package_size(text: &str) -> Option<u64> {
     text.parse().ok()
 }
 
+fn is_package_name(name: &str, version: &str, kind: PackageKind) -> bool {
+    name.strip_prefix("Ardia-")
+        .and_then(|rest| rest.strip_prefix(version))
+        .and_then(|rest| rest.strip_prefix("-linux-x64."))
+        == Some(kind.extension())
+}
+
 fn package_line(line: &str, version: &str) -> Result<Package, UpdateError> {
-    let fields: Vec<&str> = line.split(' ').collect();
-    let [kind, name, digest, size] = fields[..] else {
+    let mut fields = line.split(' ');
+    let (Some(kind), Some(name), Some(digest), Some(size), None) = (
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+        fields.next(),
+    ) else {
         return Err(UpdateError::Manifest);
     };
     let kind = PackageKind::from_name(kind).ok_or(UpdateError::Manifest)?;
-    if name != kind.package_name(version) {
+    if !is_package_name(name, version, kind) {
         return Err(UpdateError::Manifest);
     }
     let sha256 = sha256_hex(digest).ok_or(UpdateError::Manifest)?;
@@ -113,15 +129,10 @@ fn package_line(line: &str, version: &str) -> Result<Package, UpdateError> {
     if size > MAX_PACKAGE_BYTES {
         return Err(UpdateError::Manifest);
     }
-    Ok(Package {
-        kind,
-        name: name.to_owned(),
-        sha256,
-        size,
-    })
+    Ok(Package { kind, sha256, size })
 }
 
-pub fn parse_linux_manifest(manifest: &[u8]) -> Result<LinuxManifest, UpdateError> {
+pub fn parse_linux_manifest(manifest: &[u8]) -> Result<LinuxManifest<'_>, UpdateError> {
     if manifest.len() > MAX_MANIFEST_BYTES {
         return Err(UpdateError::TooLarge);
     }
@@ -136,26 +147,17 @@ pub fn parse_linux_manifest(manifest: &[u8]) -> Result<LinuxManifest, UpdateErro
         .and_then(|line| line.strip_prefix(VERSION_PREFIX))
         .ok_or(UpdateError::Manifest)?;
     Version::parse(version).map_err(|_| UpdateError::Manifest)?;
-    let mut packages: Vec<Package> = Vec::new();
+    let mut packages = [None; 3];
+    let mut last: Option<PackageKind> = None;
     for line in lines {
         let package = package_line(line, version)?;
-        if packages.last().is_some_and(|last| last.kind >= package.kind) {
+        if last.is_some_and(|last| last >= package.kind) {
             return Err(UpdateError::Manifest);
         }
-        packages.push(package);
+        last = Some(package.kind);
+        packages[package.kind as usize] = Some(package);
     }
-    Ok(LinuxManifest {
-        version: version.to_owned(),
-        packages,
-    })
-}
-
-fn pick(manifest: LinuxManifest, kind: PackageKind) -> Result<Package, UpdateError> {
-    manifest
-        .packages
-        .into_iter()
-        .find(|package| package.kind == kind)
-        .ok_or(UpdateError::Kind)
+    Ok(LinuxManifest { version, packages })
 }
 
 pub fn package_in_linux_manifest(manifest: &[u8], version: &str, kind: PackageKind) -> Result<Package, UpdateError> {
@@ -167,14 +169,14 @@ pub fn package_in_linux_manifest(manifest: &[u8], version: &str, kind: PackageKi
     if parsed.version != version {
         return Err(UpdateError::Manifest);
     }
-    pick(parsed, kind)
+    parsed.package(kind).ok_or(UpdateError::Kind)
 }
 
-pub fn verify_linux_manifest<C: Crypto>(
+pub fn verify_linux_manifest<'a, C: Crypto>(
     public_key: &[u8; PUBLIC_KEY_BYTES],
-    manifest: &[u8],
+    manifest: &'a [u8],
     signature: &[u8],
-) -> Result<LinuxManifest, UpdateError> {
+) -> Result<LinuxManifest<'a>, UpdateError> {
     if manifest.len() > MAX_MANIFEST_BYTES {
         return Err(UpdateError::TooLarge);
     }
@@ -202,5 +204,5 @@ pub fn verify_linux_update<C: Crypto>(
     if wanted <= current {
         return Err(UpdateError::NotNewer);
     }
-    pick(parsed, kind)
+    parsed.package(kind).ok_or(UpdateError::Kind)
 }
