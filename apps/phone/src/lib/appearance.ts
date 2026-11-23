@@ -53,8 +53,7 @@ export type GlassRender = "lens" | "frost" | "solid" | "classic" | "native" | "n
 export function glassRenderTelemetry(os: string, design: Design, chrome: ChromeStyle, nativeRender: "lens" | "frost" | "solid" | null): GlassRender {
   if (design === "material") return "none";
   if (chrome === "classic") return "classic";
-  if (os === "ios") return "native";
-  return nativeRender ?? "solid";
+  return nativeRender ?? (os === "ios" ? "native" : "solid");
 }
 
 export const appearanceTelemetry = (style: InterfaceStyleChoice, scheme: SchemeChoice) => ({ interface_style: TELEMETRY_STYLE[style], color_scheme: TELEMETRY_SCHEME[scheme] });

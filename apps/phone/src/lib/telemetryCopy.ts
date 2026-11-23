@@ -118,7 +118,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["custom_theme_chosen", "theme_edits"],
       },
       {
-        text: "In the same daily counts, on Android: how often the phone refused to draw the Liquid Glass lens or its rim light, so the glass fell back to plain frost. Counts only",
+        text: "In the same daily counts: how often the phone refused to draw the Liquid Glass lens or its rim light, so the glass fell back to plain frost or a flat fill. Counts only",
         fields: ["glass_shaders_failed"],
       },
       {
