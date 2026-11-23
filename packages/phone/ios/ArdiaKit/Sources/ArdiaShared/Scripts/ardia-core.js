@@ -1051,12 +1051,19 @@ function cleanUrl(url        )             {
   return cleanUrlReport(url).url;
 }
 
-const percentEncoded = (character        ) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+const LINE_BREAK_ESCAPES                         = { "\r": "%0D", "\n": "%0A" };
+
+function markdownDestination(url        )         {
+  const oneLine = url.replace(/[\r\n]/g, (character) => LINE_BREAK_ESCAPES[character] );
+  return /[\s<>]/.test(oneLine) ? `<${oneLine.replace(/[<>\\]/g, "\\$&")}>` : oneLine.replace(/[()\\]/g, "\\$&");
+}
+
+const bareAddress = (address        ) => address.trim().replace(/^[a-z][\w+.-]*:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 
 function markdownLink(title        , url        )           {
   const clean = cleanUrl(url);
-  const label = !title || title === url ? clean : title;
-  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${clean.replace(/[()<>\s]/g, percentEncoded)})`            ;
+  const label = !title || bareAddress(title) === bareAddress(url) ? clean : title;
+  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${markdownDestination(clean)})`            ;
 }
 
 function linkLines(lines                     , markdown         )           {

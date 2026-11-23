@@ -317,11 +317,15 @@ test("sameAddress folds only ASCII case in the host, and default ports and the r
   assert.ok(!sameAddress("https://example.com/A", "https://example.com/a"));
 });
 
-test("a Markdown link never shows trackers in its label and its address can't end early", () => {
-  assert.equal(markdownLink("", "https://example.com/a)b?utm_source=mail"), "[https://example.com/a)b](https://example.com/a%29b)");
+test("a Markdown link never shows trackers in its label, and its destination parses back to the clean address", () => {
+  assert.equal(markdownLink("", "https://example.com/a)b?utm_source=mail"), "[https://example.com/a)b](https://example.com/a\\)b)");
   assert.equal(markdownLink("https://x.example/?fbclid=1", "https://x.example/?fbclid=1"), "[https://x.example/](https://x.example/)");
-  assert.equal(markdownLink("Shop [sale] \\o/", "https://shop.example/p (1)?id=7&gclid=x"), "[Shop \\[sale\\] \\\\o/](https://shop.example/p%20%281%29?id=7)");
-  assert.equal(markdownLink("Tab", "https://e.example/<x>"), "[Tab](https://e.example/%3Cx%3E)");
+  assert.equal(markdownLink("example.com/item?utm_source=mail", "https://www.example.com/item?utm_source=mail"), "[https://www.example.com/item](https://www.example.com/item)");
+  assert.equal(markdownLink("Doc", "https://e.example/doc(1)?token=abc(123)&gclid=x"), "[Doc](https://e.example/doc\\(1\\)?token=abc\\(123\\))");
+  assert.equal(markdownLink("Shop [sale] \\o/", "https://shop.example/p (1)?id=7&gclid=x"), "[Shop \\[sale\\] \\\\o/](<https://shop.example/p (1)?id=7>)");
+  assert.equal(markdownLink("Tab", "https://e.example/<x>"), "[Tab](<https://e.example/\\<x\\>>)");
+  assert.equal(markdownLink("Tab", "https://e.example/a\\b"), "[Tab](https://e.example/a\\\\b)");
+  assert.equal(markdownLink("Tab", "https://e.example/a\nb"), "[Tab](https://e.example/a%0Ab)");
 });
 
 test("a cleaner report can't be rewritten after the fact, and link lists are bulleted only for Markdown with several links", () => {

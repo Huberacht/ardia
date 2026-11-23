@@ -76,12 +76,19 @@ export function cleanUrl(url: string): CleanedUrl {
   return cleanUrlReport(url).url;
 }
 
-const percentEncoded = (character: string) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+const LINE_BREAK_ESCAPES: Record<string, string> = { "\r": "%0D", "\n": "%0A" };
+
+function markdownDestination(url: string): string {
+  const oneLine = url.replace(/[\r\n]/g, (character) => LINE_BREAK_ESCAPES[character]!);
+  return /[\s<>]/.test(oneLine) ? `<${oneLine.replace(/[<>\\]/g, "\\$&")}>` : oneLine.replace(/[()\\]/g, "\\$&");
+}
+
+const bareAddress = (address: string) => address.trim().replace(/^[a-z][\w+.-]*:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 
 export function markdownLink(title: string, url: string): LinkText {
   const clean = cleanUrl(url);
-  const label = !title || title === url ? clean : title;
-  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${clean.replace(/[()<>\s]/g, percentEncoded)})` as LinkText;
+  const label = !title || bareAddress(title) === bareAddress(url) ? clean : title;
+  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${markdownDestination(clean)})` as LinkText;
 }
 
 export function linkLines(lines: readonly LinkText[], markdown: boolean): LinkText {

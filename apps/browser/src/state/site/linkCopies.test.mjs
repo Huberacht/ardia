@@ -5,6 +5,8 @@ const { copyLinkFromPageMenu } = await import("./pageLinkCopy.ts");
 const { copyFieldSelection } = await import("../omnibox/paste.ts");
 const { shareFromPage, shareTab } = await import("./share.ts");
 const { takeUrlCopyCounts } = await import("../telemetry/urlCopies.ts");
+const { useBrowser } = await import("../browser/store.ts");
+const { copyUrls } = await import("../sidebar/actions.ts");
 const { consentToken, setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
 
 setConsentPeriod(true, "link-copies");
@@ -89,4 +91,20 @@ test("a single cleaned address goes to the native URL writer when the build has 
   }
   assert.deepEqual(urls, [clean, clean]);
   assert.deepEqual(copied, ["shop"]);
+});
+
+test("copying an untitled tab as Markdown from the sidebar labels it with the clean address, not the one with trackers", () => {
+  reset();
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const w = S().createWindow({ url: "https://example.com/item?utm_source=mail" });
+  const first = S().windows[w].tabIds[0];
+  const second = S().newTab(w, { url: "https://shop.example/a?id=7&fbclid=1" });
+  copyUrls([first], true);
+  copyUrls([first, second], true);
+  assert.deepEqual(copied, [
+    "[https://example.com/item](https://example.com/item)",
+    "- [https://example.com/item](https://example.com/item)\n- [https://shop.example/a?id=7](https://shop.example/a?id=7)",
+  ]);
+  assert.equal(takeUrlCopyCounts().url_copies_cleaned, 3);
 });
