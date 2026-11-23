@@ -65,14 +65,19 @@ def hidden(lines):
         elif fence:
             opener = fence.group(1)
             inside[n] = 'a code fence'
-        elif '<!--' in line:
+        elif '<!--' in CODE_SPAN.sub('', line):
             if COMMENT_OPEN.match(line):
                 inside[n] = 'an HTML comment'
             in_comment = comment_open_after(line, False)
     return inside
 
 
+CODE_SPAN = re.compile(r'(`+)(?!`).*?(?<!`)\1(?!`)')
+
+
 def comment_open_after(line, open_at_start):
+    if not open_at_start:
+        line = CODE_SPAN.sub('', line)
     position, is_open = 0, open_at_start
     while True:
         marker = '-->' if is_open else '<!--'
@@ -306,6 +311,10 @@ class EngineChecker(unittest.TestCase):
     def test_a_second_comment_opened_after_a_closing_marker_hides_the_table(self):
         for opener in ('<!-- a --> <!--\n', 'text <!-- a --> more <!--\n', 'intro <!--\n'):
             self.assertEqual(len(self.check(doc=opener + ENGINE_DOC_SAMPLE + '-->\n')), 1, opener)
+
+    def test_a_comment_marker_inside_a_code_span_hides_nothing(self):
+        for line in ('Use `<!--` to start a comment.\n', 'Write ``<!-- a`` or `<!--`.\n'):
+            self.assertEqual(self.check(doc=line + ENGINE_DOC_SAMPLE), [], line)
 
     def test_comments_that_all_close_on_their_line_hide_nothing(self):
         self.assertEqual(self.check(doc='<!-- a --> text <!-- b -->\n' + ENGINE_DOC_SAMPLE), [])
