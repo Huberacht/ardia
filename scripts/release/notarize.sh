@@ -14,6 +14,8 @@ budget="${NOTARY_WAIT_SECONDS:-14400}"
 deadline=$(($(date +%s) + budget))
 [ ! -L "$state" ] || die "$state is a symlink: NOTARY_STATE_DIR must be a real directory"
 mkdir -p "$state" "$logs"
+scratch=""
+trap '[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
 
 sha256_of() {
   if command -v shasum >/dev/null; then shasum -a 256 "$1" | awk '{ print $1 }'; else sha256sum "$1" | awk '{ print $1 }'; fi
@@ -170,7 +172,7 @@ notarize() {
     if [ -z "$saved" ]; then
       staple && return 0
     else
-      local scratch restored
+      local restored
       scratch="$(mktemp -d "$logs/.kept.XXXXXX")"
       restored="$scratch/$(basename "$target")"
       cp "$saved" "$restored"
@@ -210,7 +212,14 @@ case "$target" in
     ;;
   *.dmg)
     if [ -n "$packed_app" ] && cdhash="$(cdhash_of "$packed_app")"; then
-      packing="$( { printf '%s\n' "$(basename "$target")" "$(git -C "$root" rev-parse HEAD 2>/dev/null || echo none)"; git -C "$root" status --porcelain -- scripts/dmg scripts/release/package.sh 2>/dev/null || true; for input in "$root/scripts/release/package.sh" "$root"/scripts/dmg/*; do [ -f "$input" ] && sha256_of "$input"; done; } | { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi; } | cut -c1-16)"
+      packing_inputs() {
+        printf '%s\n' "$(basename "$target")" "$(git -C "$root" rev-parse HEAD 2>/dev/null || echo none)" "chunk ${ARDIA_DMG_CHUNK:-on}"
+        local input
+        for input in scripts/release/package.sh scripts/dmg/background.tiff scripts/dmg/DS_Store; do
+          if [ -f "$root/$input" ]; then echo "$input $(sha256_of "$root/$input")"; else echo "$input missing"; fi
+        done
+      }
+      packing="$(packing_inputs | { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi; } | cut -c1-16)"
       key="dmg-of-cdhash-$cdhash-packing-$packing"
       notarize "$target" "$key" "$state/$key.dmg" "$cdhash"
     else

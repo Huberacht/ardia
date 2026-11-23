@@ -40,6 +40,8 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DEFAULT_FEED = `https://github.com/${REPO}/releases/latest/download/appcast.xml`;
 const MODES = new Set(["release", "dry-run", "candidate"]);
 const FETCH_TIMEOUT_MS = 4_000;
+const PARSE_TIMEOUT_MS = 3_000;
+const MAX_FEED_BYTES = 8 * 1024 * 1024;
 
 export function channelOf(version) {
   if (/^\d+\.\d+\.\d+-nightly\.\d+$/.test(version)) return "nightly";
@@ -75,21 +77,22 @@ except ET.ParseError as error:
     print(json.dumps({"error": str(error)}))
     sys.exit(0)
 channels = root.findall("channel") if root.tag == "rss" else []
-if len(channels) != 1:
-    print(json.dumps({"error": "not one rss channel"}))
+if len(channels) != 1 or len(list(channels[0].iter("item"))) != len(channels[0].findall("item")):
+    print(json.dumps({"error": "not one rss channel with its items directly in it"}))
     sys.exit(0)
-print(json.dumps({"items": [[item.findtext(SPARKLE + "shortVersionString"), item.findtext(SPARKLE + "version"), item.findtext(SPARKLE + "channel") or "stable"] for item in channels[0].iter("item")]}))
+print(json.dumps({"items": [[item.findtext(SPARKLE + "shortVersionString"), item.findtext(SPARKLE + "version"), item.findtext(SPARKLE + "channel") or "stable"] for item in channels[0].findall("item")]}))
 `;
 
 function parsedItems(xml) {
-  const run = spawnSync("python3", ["-I", "-c", PARSE_FEED], { input: xml, encoding: "utf8" });
+  const run = spawnSync("python3", ["-I", "-c", PARSE_FEED], { input: xml, encoding: "utf8", timeout: PARSE_TIMEOUT_MS });
   if (run.status !== 0) return null;
   const parsed = JSON.parse(run.stdout);
   return parsed.error ? null : parsed.items;
 }
 
 export function feedFacts(xml, version) {
-  if (!xml.includes("xmlns:sparkle")) return null;
+  if (xml.length > MAX_FEED_BYTES || !xml.includes("xmlns:sparkle") || /<!(?:DOCTYPE|ENTITY)/i.test(xml)) return null;
+  if ((xml.match(/<channel>/g) ?? []).length !== 1 || (xml.match(/<\/channel>/g) ?? []).length !== 1) return null;
   const parsed = parsedItems(xml);
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
   if (!parsed || parsed.length === 0 || parsed.length !== items.length) return null;
@@ -122,7 +125,10 @@ async function readFeed(source, { fetchImpl, allowNoFeed }) {
     const response = await fetchImpl(source, { redirect: "follow", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (response.status === 404 && allowNoFeed) return { xml: "", none: true, note: `${source} answers 404: no feed yet, this release starts it` };
     if (!response.ok) return { error: `${source} answered HTTP ${response.status}` };
-    return { xml: await response.text() };
+    if (Number(response.headers?.get?.("content-length") ?? 0) > MAX_FEED_BYTES) return { error: `${source} is over ${MAX_FEED_BYTES} bytes` };
+    const text = await response.text();
+    if (text.length > MAX_FEED_BYTES) return { error: `${source} is over ${MAX_FEED_BYTES} bytes` };
+    return { xml: text };
   } catch (error) {
     return { error: `couldn't fetch ${source} within ${FETCH_TIMEOUT_MS / 1000} s: ${error?.message ?? error}` };
   }
@@ -241,7 +247,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
   if (xml) {
     const facts = feedFacts(xml, version);
     if (!facts) {
-      fail(`${source} isn't a whole Sparkle appcast (not well-formed XML, no items, or an item without its version and build)`);
+      fail(`${source} isn't a whole Sparkle appcast as appcast.py reads one (not well-formed XML, a DTD, not one plain <channel> with its items directly in it, no items, or an item without its version and build)`);
       xml = "";
     } else if (releaseBuild !== null) {
       if (facts.newestOther === null || releaseBuild > facts.newestOther) {

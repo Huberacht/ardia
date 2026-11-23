@@ -51,6 +51,7 @@ esac
 const CODESIGN = `#!/usr/bin/env bash
 path="\${@: -1}"
 if [ "$1" = --verify ]; then
+  case "$3" in "-R=anchor apple generic and certificate leaf"*) ;; *) echo "error: invalid or corrupted code requirement(s)" >&2; exit 1 ;; esac
   [ -f "$NOTARY_STUB/dmg-team" ] && { echo "$path: test-requirement: code failed to satisfy specified code requirement(s)" >&2; exit 3; }
   exit 0
 fi
@@ -116,12 +117,12 @@ function scratch() {
   return { dir, dmg, state, stub, set, calls, notarize, records, ticket: (name = "Ardia-1.2.3.dmg") => writeFileSync(join(stub, "ticket"), `${name}\n`) };
 }
 
-function dmgKey(s, app) {
+function dmgKey(s, app, env = {}) {
   const probe = scratch();
   writeFileSync(join(probe.stub, "cdhash"), readFileSync(join(s.stub, "cdhash"), "utf8"));
   probe.set("submit", [FIRST]);
   probe.ticket();
-  const run = probe.notarize(probe.dmg, {}, [app]);
+  const run = probe.notarize(probe.dmg, env, [app]);
   assert.equal(run.status, 0, run.output);
   return Object.keys(probe.records()).find((name) => !name.endsWith(".dmg"));
 }
@@ -424,4 +425,14 @@ test("a kept DMG that won't staple leaves this run's DMG in place and stops", ()
   assert.ok(existsSync(join(s.state, `${key}.dmg`)), "the kept copy stays for the next try");
   assert.deepEqual(s.calls().filter((c) => c !== "stapler staple"), ["notarytool info"]);
   assert.deepEqual(readdirSync(join(s.dir, "dist")).filter((n) => n.startsWith(".kept")), []);
+});
+
+test("the DMG's key changes with the packing settings, so an image packed another way is never reused", () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  const on = dmgKey(s, app);
+  assert.equal(dmgKey(s, app, { ARDIA_DMG_CHUNK: "on" }), on);
+  assert.notEqual(dmgKey(s, app, { ARDIA_DMG_CHUNK: "off" }), on);
 });

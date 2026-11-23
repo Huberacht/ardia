@@ -178,7 +178,8 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
    right or the committed `.SRCINFO` drifted, the feed can't be read or is empty (only `APPCAST_BASE=none`, or a 404
    with `RELEASE_FEED_MAY_BE_MISSING=1`, means there's no feed yet), the version is already in it, a stable isn't above the latest
    stable in it (`publish.sh` would refuse it), or the build number isn't above every other build in it, stable or
-   nightly. The feed is one request with a 4-second limit. Every later step takes the version, build number and
+   nightly. The feed is one request with a 4-second limit and an 8 MB cap, parsed
+   with Python's ElementTree (no DTD, one plain `<channel>` with its items directly in it, as `appcast.py` reads it). Every later step takes the version, build number and
    minimum macOS from the values it checked. Then it stops if if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
    framework is older than the tree's ArdiaCore sources or the Chromium tree differs from `engine/ardiacore`
    (`apply.sh --check`), or (outside `--rc`) if `prebuilt-engines.tsv` lists no
@@ -222,7 +223,8 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
    - notarizes and staples the app and the DMG. Each submission id is kept in `dist/.notary/` (outside
      `dist/<version>`, so it survives the next run's wipe; `NOTARY_STATE_DIR` moves it): the app's under its code's
      CDHash, which signing the same code again keeps although the zip's bytes change, the DMG's under the CDHash of the
-     app it packs and a hash of the packing inputs (the commit, `package.sh`, `scripts/dmg/`), next to a copy of the
+     app it packs and a hash of the packing inputs (the commit, `package.sh`, `scripts/dmg/background.tiff` and `DS_Store`,
+     `ARDIA_DMG_CHUNK`), next to a copy of the
      exact DMG it sent (`package.sh` never makes the same bytes twice, so a retry staples that copy and only then puts
      it in place of the new one; the copy goes once it's stapled). A kept copy is used only when its signature
      verifies against the packed app's team and it mounts as exactly the volume `package.sh` makes, holding an app with

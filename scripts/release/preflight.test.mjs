@@ -278,12 +278,18 @@ test("a feed cut off, not well-formed, without items, or with items appcast.py w
   const itemless = feed([]);
   const attributed = LIVE.replace("<item>", '<item id="x">').replace("</item>", "</item >");
   const mismatched = LIVE.replace("<sparkle:shortVersionString>1.2.2</sparkle:shortVersionString>", "<sparkle:shortVersionString>1.2.2</sparkle:version>");
-  for (const body of [cut, unclosed, buildless, itemless, attributed, mismatched]) {
+  const langChannel = LIVE.replace("<channel>", '<channel xml:lang="en">');
+  const wrapped = LIVE.replace("        <item>", "        <group><item>").replace("</item>\n", "</item></group>\n");
+  const entities = LIVE.replace("<rss", '<!DOCTYPE rss [<!ENTITY a "aaaaaaaaaa">]>\n<rss').replace("<title>Ardia</title>", "<title>&a;</title>");
+  const huge = LIVE.replace("<title>Ardia</title>", `<title>${"x".repeat(9 * 1024 * 1024)}</title>`);
+  const cases = { cut, unclosed, buildless, itemless, attributed, mismatched, langChannel, wrapped, entities, huge };
+  for (const [name, body] of Object.entries(cases)) {
     const feedOut = join(root, "base.xml");
     const result = await run({ version: "1.2.3", root, feedOut, mode: "dry-run", responses: [{ status: 200, body }] });
-    assert.match(result.fails.join("\n"), /isn't a whole Sparkle appcast/);
-    assert.equal(readFileSync(feedOut, "utf8"), "");
+    assert.match(result.fails.join("\n"), name === "huge" ? /is over 8388608 bytes/ : /isn't a whole Sparkle appcast/, name);
+    assert.equal(readFileSync(feedOut, "utf8"), "", name);
   }
+  assert.equal(feedFacts(huge, "1.2.3"), null, "feedFacts refuses an oversized feed passed as a file too");
 });
 
 test("a dry run of a listed nightly whose build differs from the checkout's fails, as publish.sh would", async () => {
