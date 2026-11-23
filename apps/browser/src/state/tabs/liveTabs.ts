@@ -1,3 +1,4 @@
+import { withEntry } from "../browser/changes";
 import { TAB_GROUP_COLORS } from "@ardia/core";
 import type { StripGroup, StripState, StripTab } from "../../platform/tabs";
 import type { BrowserState } from "../browser/store";
@@ -263,7 +264,7 @@ function intoWindow(s: BrowserState, key: string, to: string): BrowserState {
   let next = removeTabs(s, [key], false);
   const w = next.windows[to];
   if (!w) return s;
-  const tabs = { ...next.tabs, [key]: { ...tab, windowId: to } };
+  const tabs = withEntry(next.tabs, key, { ...tab, windowId: to });
   next = {
     ...next,
     tabs,

@@ -4,6 +4,7 @@ import type { BrowserState } from "./store";
 import { DEFAULT_PROFILE_ID } from "../settings/settings";
 import type { BrowserWindow, Navigation, Profile, Tab, TabGroup, TabLive, TabPin, TabSnapshot } from "./types";
 import { pinnedGroupMembers } from "./structure";
+import { linkChanges } from "./changes";
 
 
 const launch = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -188,8 +189,9 @@ export function merge<T extends object>(obj: T, patch: Partial<T>): T {
 
 export function without<T>(map: Record<string, T>, ids: Iterable<string>): Record<string, T> {
   const next = { ...map };
-  for (const id of ids) delete next[id];
-  return next;
+  const gone = [...ids];
+  for (const id of gone) delete next[id];
+  return linkChanges(next, map, gone);
 }
 
 export function tabLabel(t: Pick<Tab, "url" | "title" | "customTitle">): string {

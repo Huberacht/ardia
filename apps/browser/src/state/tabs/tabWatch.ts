@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { linkedChangedIds } from "../browser/changes";
 import { useBrowser, type BrowserState } from "../browser/store";
 import type { Tab } from "../browser/types";
 import { currentBasePalette, useBasePalette } from "../config/basePalette";
@@ -15,6 +16,14 @@ let listening = false;
 
 function wake(s: BrowserState, prev: BrowserState) {
   if (s.tabs === prev.tabs) return;
+  const changed = linkedChangedIds(s.tabs, prev.tabs);
+  if (changed && changed.length < watchers.size) {
+    for (const id of changed) {
+      const listeners = watchers.get(id);
+      if (listeners) for (const listener of [...listeners]) listener();
+    }
+    return;
+  }
   for (const [id, listeners] of watchers) {
     if (s.tabs[id] === prev.tabs[id]) continue;
     for (const listener of [...listeners]) listener();
