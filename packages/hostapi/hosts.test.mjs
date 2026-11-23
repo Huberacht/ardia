@@ -79,11 +79,24 @@ test("Windows forwards exactly each generated domain's service-backed calls to t
   }
 });
 
-test("the Mac's module for each fully engine-backed domain is the generated one", () => {
+test("the Mac's call table for each domain is the generated one: each service-backed call passes to its service and each custom one to its module's handler", () => {
   for (const [domain, entry] of domains) {
-    if (!entry.swift) continue;
     const swift = read(entry.swift);
     assert.match(swift, new RegExp(`CallTable\\(domain: "${domain}"`));
-    for (const [verb, call] of Object.entries(entry.calls)) assert.ok(swift.includes(`"${verb}": EngineCall.passing("${call.service}"),`), `${domain}.${verb}`);
+    for (const [verb, call] of Object.entries(entry.calls)) {
+      const row = { service: `"${verb}": EngineCall.passing("${call.service}"),`, custom: `"${verb}": ${verb}Handler,` }[call.mac];
+      if (row) assert.ok(swift.includes(row), `${domain}.${verb}`);
+      else assert.ok(!swift.includes(`"${verb}": `), `${domain}.${verb} is absent on the Mac`);
+    }
+  }
+});
+
+test("a domain the Mac serves partly by hand builds its module's table from the generated one", () => {
+  const mixed = domains.filter(([, entry]) => entry.swift.endsWith("Calls.swift"));
+  assert.deepEqual(mixed.map(([domain]) => domain).sort(), ["bookmarks", "favicons"]);
+  for (const [domain, entry] of mixed) {
+    const module = read(entry.swift.replace(/Calls\.swift$/, "Module.swift"));
+    assert.match(module, new RegExp(`static let calls = ${domain}CallTable\\(`), `${domain}'s module`);
+    assert.doesNotMatch(module, /CallTable\(domain:/, `${domain}'s module lists no rows of its own`);
   }
 });

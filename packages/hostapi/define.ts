@@ -5,7 +5,7 @@ export type DesktopBinding = "route" | "custom" | "absent";
 export type Call = {
   args: string;
   result: string;
-  service: string;
+  service?: string;
   desktop: DesktopBinding;
   mac?: Binding;
   windows?: Binding;

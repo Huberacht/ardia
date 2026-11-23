@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callHost } from "./host.ts";
+import { BOOKMARKS_EXPORT_CALL } from "./hostBookmarksExport.ts";
 import { resolveHostModule } from "./hostModules.ts";
 import { createNativeEvents } from "./hostEvents.ts";
 import { hostLaunchConfig } from "./hostLaunchConfig.ts";
@@ -31,12 +32,17 @@ test("domain adapter preserves argument JSON and scalar, string, null and object
   }
 });
 
-test("every call of a schema-generated domain reaches the host under its own name, with its arguments untouched", async () => {
+test("every call of a schema-generated domain reaches the host under its own name, with its arguments untouched, except the ones the Linux UI serves itself", async () => {
   const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
+  const servedByTheUi = new Set([BOOKMARKS_EXPORT_CALL]);
+  for (const name of servedByTheUi) {
+    const [domain, verb] = name.split(".");
+    assert.equal(manifest.domains[domain]?.calls[verb]?.desktop, "custom", `${name} is a desktop custom call`);
+  }
   for (const [domain, entry] of Object.entries(manifest.domains)) {
     const { host, requests } = fixture();
     const call = resolveHostModule(host, `Ardia${domain[0].toUpperCase()}${domain.slice(1)}`, "call");
-    for (const verb of Object.keys(entry.calls)) {
+    for (const verb of Object.keys(entry.calls).filter((verb) => !servedByTheUi.has(`${domain}.${verb}`))) {
       assert.equal(await call(verb, "default", '{"profile":"default"}'), "null");
       assert.deepEqual(requests.at(-1), { name: `${domain}.${verb}`, profile: "default", args: '{"profile":"default"}' });
     }

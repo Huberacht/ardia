@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 const USAGE = `usage: generate.mjs [--check|--write]
 Reads the host API schema in packages/hostapi/schema and writes, or checks, what it generates:
 each domain's TypeScript call and event types and the manifest in packages/ardiacore/src/engine/generated,
-and the Swift module of every domain the Mac serves straight from the engine.`;
+the Swift module of every domain the Mac serves straight from the engine, and the call table of every domain
+whose Mac module serves some calls itself, which that hand-written module builds with its own handlers.`;
 
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const GENERATED_TS = "packages/ardiacore/src/engine/generated/";
@@ -41,9 +42,10 @@ export function validate(name, domain) {
     if (!NAME.test(verb)) fail(`call ${verb} is lowerCamelCase letters`);
     if (typeof call.args !== "string" || !call.args.trim()) fail(`${verb} names its args type`);
     if (typeof call.result !== "string" || !call.result.trim()) fail(`${verb} names its result type`);
-    if (!SERVICE.test(call.service ?? "")) fail(`${verb}'s service is an ac_* call`);
     if (call.desktop === undefined) fail(`${verb} says whether the desktop host routes it: desktop is route, custom or absent, never implied`);
     for (const host of HOSTS) if (call[host] !== undefined && !BINDINGS[host].has(call[host])) fail(`${verb}.${host} is one of ${[...BINDINGS[host]].join(", ")}`);
+    if (call.service !== undefined && !SERVICE.test(call.service)) fail(`${verb}'s service is an ac_* call`);
+    if (call.service === undefined && HOSTS.some((host) => passesStraight(call, host))) fail(`${verb}'s service is an ac_* call: a host passes it straight to the engine`);
   }
   for (const [event, type] of Object.entries(domain.events ?? {})) {
     if (!NAME.test(event)) fail(`event ${event} is lowerCamelCase letters`);
@@ -52,6 +54,7 @@ export function validate(name, domain) {
 }
 
 export const bindingOf = (call, host) => call[host] ?? "service";
+const passesStraight = (call, host) => bindingOf(call, host) === (host === "desktop" ? "route" : "service");
 
 function typescript(name, domain) {
   const lines = [];
@@ -70,6 +73,15 @@ function typescript(name, domain) {
 }
 
 const servedByEngine = (domain) => Object.values(domain.calls ?? {}).every((call) => bindingOf(call, "mac") === "service");
+
+export const swiftPath = (name, domain) => `${SWIFT}${capitalized(name)}${servedByEngine(domain) ? "Module" : "Calls"}.swift`;
+
+const swiftRow = (verb, call) => {
+  const binding = bindingOf(call, "mac");
+  if (binding === "service") return `    "${verb}": EngineCall.passing("${call.service}"),`;
+  if (binding === "custom") return `    "${verb}": ${verb}Handler,`;
+  return null;
+};
 
 function swiftModule(name, domain) {
   const hasEvents = Object.keys(domain.events ?? {}).length > 0;
@@ -92,18 +104,32 @@ function swiftModule(name, domain) {
   return `${lines.join("\n")}\n`;
 }
 
+function swiftCalls(name, domain) {
+  const custom = Object.entries(domain.calls ?? {}).filter(([, call]) => bindingOf(call, "mac") === "custom").map(([verb]) => verb);
+  const lines = [
+    "import ExpoModulesCore",
+    "",
+    `func ${name}CallTable(${custom.map((verb) => `${verb} ${verb}Handler: @escaping CallHandler`).join(", ")}) -> CallTable {`,
+    `  CallTable(domain: "${name}", handlers: [`,
+    ...Object.entries(domain.calls ?? {}).map(([verb, call]) => swiftRow(verb, call)).filter((row) => row !== null),
+    "  ])",
+    "}",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function manifest(domains) {
   const out = { domains: {} };
   for (const name of Object.keys(domains)) {
     const domain = domains[name];
     const calls = {};
     for (const [verb, call] of Object.entries(domain.calls ?? {})) {
-      calls[verb] = { service: call.service, ...Object.fromEntries(HOSTS.map((host) => [host, bindingOf(call, host)])) };
+      calls[verb] = { ...(call.service === undefined ? {} : { service: call.service }), ...Object.fromEntries(HOSTS.map((host) => [host, bindingOf(call, host)])) };
     }
     out.domains[name] = {
       kind: domain.kind,
       types: `${GENERATED_TS}${name}.ts`,
-      swift: servedByEngine(domain) ? `${SWIFT}${capitalized(name)}Module.swift` : null,
+      swift: swiftPath(name, domain),
       calls,
       events: Object.keys(domain.events ?? {}),
     };
@@ -116,7 +142,7 @@ export function outputs(domains) {
   for (const name of Object.keys(domains)) {
     const domain = domains[name];
     files.set(`${GENERATED_TS}${name}.ts`, typescript(name, domain));
-    if (servedByEngine(domain)) files.set(`${SWIFT}${capitalized(name)}Module.swift`, swiftModule(name, domain));
+    files.set(swiftPath(name, domain), servedByEngine(domain) ? swiftModule(name, domain) : swiftCalls(name, domain));
   }
   files.set(MANIFEST, manifest(domains));
   return files;

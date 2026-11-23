@@ -25,11 +25,11 @@ test("api.ts takes each generated domain's calls and events from packages/hostap
 });
 
 test("a type composed from anything but generated domains and one row literal is refused, and every member of the literal is read as a row or refused, so no row escapes the parity checks", () => {
-  const head = "export type EngineEvents = HistoryEvents & {";
+  const head = "export type EngineEvents = BookmarksEvents & FaviconsEvents & HistoryEvents & {";
   assert.ok(api.includes(head));
   const extra = `type Extra = {\n  "tabs.windowRequest": { id: string };\n};\n\n`;
-  assert.throws(() => typeRows(extra + api.replace(head, "export type EngineEvents = Extra & HistoryEvents & {"), manifest, "EngineEvents"), /Extra, which isn't a generated domain/);
-  assert.throws(() => typeRows(api.replace(head, "export type EngineEvents = (HistoryEvents) & {"), manifest, "EngineEvents"), /generated domains and one row literal/);
+  assert.throws(() => typeRows(extra + api.replace(head, "export type EngineEvents = Extra & BookmarksEvents & FaviconsEvents & HistoryEvents & {"), manifest, "EngineEvents"), /Extra, which isn't a generated domain/);
+  assert.throws(() => typeRows(api.replace(head, "export type EngineEvents = BookmarksEvents & FaviconsEvents & (HistoryEvents) & {"), manifest, "EngineEvents"), /generated domains and one row literal/);
   const tail = api.indexOf("\n};\n", api.indexOf(head));
   assert.throws(() => typeRows(`${api.slice(0, tail)}\n} & Extra;\n${api.slice(tail + 4)}`, manifest, "EngineEvents"), /ends its type/);
   assert.throws(() => typeRows(api.replace(head, `${head}\n  ...Extra,`), manifest, "EngineEvents"), /only rows/);
@@ -42,7 +42,7 @@ test("a type composed from anything but generated domains and one row literal is
     assert.throws(() => typeRows(api.replace(row, `${row} ${extra}`), manifest, "EngineEvents"), /only rows/, extra);
   }
   assert.throws(() => typeRows(api.replace(row, `${row}\n${row}`), manifest, "EngineEvents"), /twice/);
-  assert.throws(() => typeRows(api.replace(head, 'export type EngineEvents<HistoryEvents = { "history.undeclared": unknown }> = HistoryEvents & {'), manifest, "EngineEvents"), /non-generic/);
+  assert.throws(() => typeRows(api.replace(head, 'export type EngineEvents<HistoryEvents = { "history.undeclared": unknown }> = BookmarksEvents & FaviconsEvents & HistoryEvents & {'), manifest, "EngineEvents"), /non-generic/);
   assert.throws(() => typeRows(api.replace(head, head.replace("export ", "")) + "\nexport type { EngineEvents };\n", manifest, "EngineEvents"), /2 times|exported/);
   assert.throws(() => typeRows(api.replace(head, head.replace("export ", "")), manifest, "EngineEvents"), /exported/);
   const historyImport = 'import type { HistoryCalls, HistoryEvents } from "./generated/history";';
@@ -52,7 +52,7 @@ test("a type composed from anything but generated domains and one row literal is
 });
 
 test("a payload whose own keys look like rows doesn't count as a row", () => {
-  const head = "export type EngineEvents = HistoryEvents & {";
+  const head = "export type EngineEvents = BookmarksEvents & FaviconsEvents & HistoryEvents & {";
   const nested = api.replace(head, `${head}\n  "bookmarks.nested": { "ui.label": string; 'x.y': number };`);
   const { hand } = typeRows(nested, manifest, "EngineEvents");
   assert.ok(hand.includes("bookmarks.nested"));
@@ -67,7 +67,7 @@ test("a checkout with CRLF line endings reads the same rows as LF", () => {
 
 test("every call in api.ts has a handler in its domain's Swift call table, and nothing else does", () => {
   const swift = new Set();
-  for (const file of nativeFiles.filter((f) => f.endsWith("Module.swift"))) {
+  for (const file of nativeFiles.filter((f) => /(Module|Calls)\.swift$/.test(f))) {
     const text = native(file);
     const domain = text.match(/CallTable\(domain: "([a-zA-Z]+)"/)?.[1];
     if (!domain) continue;

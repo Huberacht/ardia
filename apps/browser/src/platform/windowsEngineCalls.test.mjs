@@ -25,7 +25,7 @@ const sorted = (list) => [...list].sort();
 
 function macTables() {
   const tables = {};
-  for (const file of readdirSync(new URL(ios, repo)).filter((name) => name.endsWith("Module.swift"))) {
+  for (const file of readdirSync(new URL(ios, repo)).filter((name) => /(Module|Calls)\.swift$/.test(name))) {
     const text = read(ios + file);
     const domain = text.match(/CallTable\(domain: "([a-zA-Z]+)"/)?.[1];
     if (!domain || MAC_ONLY.has(domain)) continue;

@@ -95,10 +95,43 @@ test("names, services and bindings outside the schema's forms are refused", () =
   assert.throws(() => validate("demo", { kind: "engine", imports: { "@ardia/core": ["Thing"] }, calls: {}, events: {} }), /relative/);
 });
 
-test("a domain the Mac serves straight from the engine gets its whole Swift module, and a mixed one gets none yet", () => {
-  const files = outputs({ demo: domain({ watch: call() }), mixed: domain({ watch: call(), open: call({ mac: "custom", service: "ac_mixed_open" }) }) });
+test("a domain the Mac serves straight from the engine gets its whole Swift module, and a mixed one a call table its module fills with its own handlers", () => {
+  const files = outputs({
+    demo: domain({ watch: call() }),
+    mixed: domain({ watch: call({ service: "ac_mixed_watch" }), open: call({ mac: "custom", service: "ac_mixed_open" }), import: call({ mac: "custom", service: undefined, desktop: "custom", windows: "custom" }), probe: call({ mac: "absent", service: "ac_mixed_probe" }) }),
+  });
   assert.equal(files.get("packages/ardiacore/ios/DemoModule.swift").includes('"watch": EngineCall.passing("ac_demo_watch"),'), true);
   assert.equal(files.get("packages/ardiacore/ios/DemoModule.swift").includes("Events("), false);
   assert.equal(files.has("packages/ardiacore/ios/MixedModule.swift"), false);
-  assert.equal(JSON.parse(files.get(MANIFEST)).domains.mixed.swift, null);
+  assert.equal(
+    files.get("packages/ardiacore/ios/MixedCalls.swift"),
+    [
+      "import ExpoModulesCore",
+      "",
+      "func mixedCallTable(open openHandler: @escaping CallHandler, import importHandler: @escaping CallHandler) -> CallTable {",
+      '  CallTable(domain: "mixed", handlers: [',
+      '    "watch": EngineCall.passing("ac_mixed_watch"),',
+      '    "open": openHandler,',
+      '    "import": importHandler,',
+      "  ])",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const manifest = JSON.parse(files.get(MANIFEST)).domains;
+  assert.equal(manifest.demo.swift, "packages/ardiacore/ios/DemoModule.swift");
+  assert.equal(manifest.mixed.swift, "packages/ardiacore/ios/MixedCalls.swift");
+  assert.equal("service" in manifest.mixed.calls.import, false);
+});
+
+test("a call may leave out its service only when every host serves it with its own code", () => {
+  const custom = { mac: "custom", desktop: "custom", windows: "custom", service: undefined };
+  assert.doesNotThrow(() => validate("demo", domain({ fetch: call(custom) })));
+  for (const passing of [{ mac: "service" }, { desktop: "route" }, { windows: "service" }]) {
+    assert.throws(() => validate("demo", domain({ fetch: call({ ...custom, ...passing }) })), /passes it straight/, JSON.stringify(passing));
+  }
+  const { mac, ...macDefault } = custom;
+  assert.equal(mac, "custom");
+  assert.throws(() => validate("demo", domain({ fetch: call(macDefault) })), /passes it straight/);
+  assert.doesNotThrow(() => validate("demo", domain({ fetch: call({ ...custom, mac: "absent" }) })));
 });
