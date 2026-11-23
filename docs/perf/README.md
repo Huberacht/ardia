@@ -12,7 +12,7 @@ All of them are in `apps/browser/scripts/perf/`.
 |---|---|---|
 | `native-bench.mjs` | native | Launch, idle CPU and wakeups, memory, tab and window latency, throttling, on a Release app in hidden instances. Its header maps every section and output row to the function that measures it. |
 | `native-summary.mjs`, `gate-verdict.mjs`, `gate.sh` | native | The rows native-bench prints, the release gate's pooled verdict over its rounds, and the script that runs the whole gate under one perflab lock (below). |
-| `bench-registry.mjs` | native, JS | The apps native-bench and js-bench launch with `open`, recorded in `$GATE_APPS_DIR` the moment their pid is known, and `stop`, which quits, kills and confirms them gone: `open` starts an app outside every process group, so signalling the bench doesn't reach it. |
+| `bench-sweep.mjs` | native, JS | Stops the app instances a gate's jobs launched with `open` (outside every process group, so no signal to a bench reaches them), found only by `ARDIA_DATA_DIR` or `HOME` in their environment naming a path inside the gate's own folders, never by executable or pid. The owner's Ardia never matches. |
 | `template-cache.mjs`, `template-state.mjs`, `ubo-cache.mjs` | native, cross-browser | The data folder every run copies: what a finished one must hold (uBO's saved engine, the startup components), and the cache that keeps it between rounds and gates, keyed by the app's build and code, uBO's version, the bench bundle and the page port. |
 | `acperf.swift` | native | Process probes (rusage, phys_footprint, window on screen, quit) and `postkeys` (real key events posted to one pid with `CGEventPostToPid`), built on demand with swiftc. |
 | `acmark.m` | native | Injected into the bench's copy of the app: marks when a window's React content commits, and (`AC_BENCH_KEYLOG=1`) every key down the app's event loop sees. |
@@ -156,13 +156,18 @@ side, then two rounds (`native-bench --prepared --only launch,session,windows --
 `mktemp -d` folder), then `gate-verdict.mjs` on both. On a pass it keeps the candidate's bench bundle as
 `dist/<v>/bench/main.jsbundle` (step 2: the next gate's `--control-bundle`, its default) before you delete the out dir.
 Its exit status is the verdict's (0 pass, 1 a row fails, 2 invalid), or the step that failed (10 smoke, 11 ratchet,
-12 prepare, 13 and 14 the rounds, 15 the verdict didn't run; 70 when it passed but couldn't keep the bundle). None of
+12 prepare, 13 and 14 the rounds, 15 the verdict didn't run; 70 when it passed but couldn't keep the bundle; 71 when an
+app instance it launched is still running after cleanup, whatever the verdict). None of
 those is the lock's own 75-77, so a failed step is never retried or reported as a busy lock. INT, TERM or HUP to it or
-its process group stops every job it started (INT, then TERM, then KILL), then quits and kills every app the benches
-recorded, and the lock stays held until all of them have exited. Each run keeps its own folder, `<out>/.run.XXXXXX`
-(the worker's pid, each job's group marker, the recorded apps), so a second gate on the same `--out` touches nothing
-of a running one before it holds the lock. A round also records each side's build identity and bench bundle hash,
-and `gate-verdict.mjs` refuses rounds where either differs.
+its process group stops every job it started (INT, then TERM, then KILL), then stops the app instances its jobs launched, and the lock stays held until all of them have exited. Jobs run with
+`TMPDIR` set to a scratch folder of the run's own (`/tmp/ac-gate.XXXXXX`, which also holds the ratchet's report in
+`ac-ratchet/`), and the benches keep their data in `<out>/prep` and each round's folder, so every instance they launch
+has `ARDIA_DATA_DIR` or `HOME` inside one of those. `bench-sweep.mjs` stops exactly those: it reads each process's
+environment just before each SIGTERM and SIGKILL and never matches on executable or pid. When some still run, the
+gate exits 71, whatever the verdict. Each run's bookkeeping folder, `<out>/.run.XXXXXX` (the worker's pid, each job's
+group marker, the marker folders), is removed at the end unless cleanup failed, and a second gate on the same `--out`
+touches nothing of a running one before it holds the lock. A round also records each side's build identity and the
+hash of the bench bundle inside the app copy it ran, and `gate-verdict.mjs` refuses rounds where either differs.
 
 js-bench is triage, not part of every gate: the ratchet (`ratchet.mjs run --own`) already checks the same commits,
 renders, store updates and timers on the candidate's own bundle, as counts that don't move with load. Run it when the

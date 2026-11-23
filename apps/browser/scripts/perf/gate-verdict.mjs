@@ -198,7 +198,7 @@ function main() {
     }
   };
   const raw = positionals.map((dir) => ({ control: read(dir, opt.control), candidate: read(dir, opt.candidate) }));
-  const unreadable = raw.flatMap((r) => [r.control.error, r.candidate.error].filter(Boolean));
+  const unreadable = raw.flatMap((r) => [r.control?.error, r.candidate?.error].filter(Boolean));
   if (unreadable.length) {
     for (const e of unreadable) console.log(`invalid: ${e}`);
     console.log("gate: INVALID");

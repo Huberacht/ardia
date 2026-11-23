@@ -7,7 +7,12 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const gate = join(dirname(fileURLToPath(import.meta.url)), "gate.sh");
-const registry = join(dirname(fileURLToPath(import.meta.url)), "bench-registry.mjs");
+const APP = `const { writeFileSync, appendFileSync } = require("node:fs");
+const [pidfile, log] = process.argv.slice(1);
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => { appendFileSync(log, sig + "\\n"); process.exit(0); });
+writeFileSync(pidfile, String(process.pid));
+setInterval(() => {}, 1000);`;
+const LAUNCHER = `require("node:child_process").spawn(process.execPath, ["-e", process.argv[1], ...process.argv.slice(2)], { detached: true, stdio: "ignore" }).unref()`;
 
 const stub = (name) => `import { appendFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -20,11 +25,9 @@ if (process.env["STUB_APP_" + env]) {
   const { spawnSync } = await import("node:child_process");
   const { existsSync, readFileSync } = await import("node:fs");
   const appPid = process.env.STUB_LOG + "." + kind + ".app";
-  spawnSync("perl", ["-e", 'exit if fork; setpgrp(0, 0); open(my $f, ">", $ARGV[0]) or die; print $f $$; close $f; exec "/bin/sleep", "600"', appPid], { stdio: "ignore" });
-  for (let i = 0; i < 200 && !(existsSync(appPid) && readFileSync(appPid, "utf8")); i++) await new Promise((r) => setTimeout(r, 20));
-  const { registerApp } = await import(${JSON.stringify(registry)});
-  registerApp({ pid: +readFileSync(appPid, "utf8"), exe: "/bin/sleep" });
-  writeFileSync(process.env.STUB_LOG + "." + kind + ".registered", "");
+  spawnSync(process.execPath, ["-e", ${JSON.stringify(LAUNCHER)}, ${JSON.stringify(APP)}, appPid, appPid + ".signals"], { env: { PATH: process.env.PATH, ARDIA_DATA_DIR: process.env.TMPDIR + "/app-data" }, stdio: "ignore" });
+  for (let i = 0; i < 300 && !(existsSync(appPid) && readFileSync(appPid, "utf8")); i++) await new Promise((r) => setTimeout(r, 20));
+  writeFileSync(process.env.STUB_LOG + "." + kind + ".launched", "");
 }
 if (kind === "prep") {
   const { mkdirSync } = await import("node:fs");
@@ -49,10 +52,16 @@ function setup() {
   chmodSync(smoke, 0o755);
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
-  const env = { ...process.env, GATE_LOCKED: "1", GATE_ROOT: dir, GATE_PERF: perf, GATE_SMOKE: smoke, STUB_LOG: log, PATH: `${dirname(process.execPath)}:${process.env.PATH}` };
+  const env = { ...process.env, GATE_LOCKED: "1", GATE_TMP_ROOT: dir, GATE_ROOT: dir, GATE_PERF: perf, GATE_SMOKE: smoke, STUB_LOG: log, PATH: `${dirname(process.execPath)}:${process.env.PATH}` };
   const calls = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const spawned = [];
+  const extra = [];
   const done = () => {
+    for (const pid of extra) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
     for (const child of spawned) {
       try {
         process.kill(-child.pid, "SIGKILL");
@@ -63,7 +72,7 @@ function setup() {
       const pid = +readFileSync(join(dir, name), "utf8");
       if (!(pid > 0)) continue;
       const command = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
-      if (command.includes(dir) || command === "/bin/sleep 600") {
+      if (command.includes(dir)) {
         try {
           process.kill(pid, "SIGKILL");
         } catch {}
@@ -71,7 +80,7 @@ function setup() {
     }
     rmSync(dir, { recursive: true, force: true });
   };
-  return { dir, env, log, calls, out: join(dir, "out"), spawned, done };
+  return { dir, env, log, calls, out: join(dir, "out"), spawned, extra, done };
 }
 
 const run = (s, extra = {}) => spawnSync("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...s.env, ...extra }, encoding: "utf8", timeout: 60_000 });
@@ -206,7 +215,7 @@ function withRealLock(s) {
   chmodSync(join(s.dir, "scripts", "agent", "locked"), 0o755);
   const locks = join(s.dir, "locks");
   mkdirSync(locks);
-  return { ...s.env, GATE_LOCKED: "", GATE_LOCK_WAIT: "20", AC_LOCK_ROOT: locks, AC_LOCKED_AS: "", AC_LOCKED_HELD: "", GATE_JOB_INT_SECS: "1", GATE_JOB_TERM_SECS: "5", GATE_CHAIN_TERM_SECS: "60" };
+  return { ...s.env, GATE_LOCKED: "", GATE_LOCK_WAIT: "20", AC_LOCK_ROOT: locks, GATE_TMP_ROOT: s.dir, AC_LOCKED_AS: "", AC_LOCKED_HELD: "", GATE_JOB_INT_SECS: "1", GATE_JOB_TERM_SECS: "5", GATE_CHAIN_TERM_SECS: "60" };
 }
 
 for (const [how, signal, group, code] of [["TERM to its pid", "SIGTERM", false, 143], ["INT to its process group", "SIGINT", true, 130], ["TERM to its process group", "SIGTERM", true, 143]]) {
@@ -297,18 +306,31 @@ const appGone = async (pid, ms = 5000) => {
   return !alive(pid);
 };
 
-for (const [how, act] of [
-  ["INT to its process group", (child) => process.kill(-child.pid, "SIGINT")],
-  ["TERM to its pid", (child) => child.kill("SIGTERM")],
-  ["a prep timeout", null],
+function ownersArdia(s) {
+  const pidfile = join(s.dir, "owner.pid"), log = join(s.dir, "owner.signals");
+  spawnSync(process.execPath, ["-e", LAUNCHER, APP, pidfile, log], { env: { PATH: process.env.PATH, ARDIA_DATA_DIR: join(s.dir, "owner-data"), HOME: process.env.HOME }, stdio: "ignore" });
+  for (let i = 0; i < 300 && !(existsSync(pidfile) && readFileSync(pidfile, "utf8")); i++) spawnSync("sleep", ["0.02"]);
+  const pid = +readFileSync(pidfile, "utf8");
+  s.extra.push(pid);
+  return { pid, signals: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []) };
+}
+
+for (const [how, act, code] of [
+  ["INT to its process group", (child) => process.kill(-child.pid, "SIGINT"), 130],
+  ["TERM to its pid", (child) => child.kill("SIGTERM"), 143],
+  ["a prep timeout", null, 12],
+  ["a normal end", null, 0],
 ]) {
-  test(`through the real lock, an app a bench launched like open (its own group, parent 1) is gone after ${how}, before the lock is free`, async () => {
+  test(`through the real lock, after ${how} the app a bench launched like open is gone before the lock is free, and the owner's Ardia (same executable, its own data dir) is never signalled`, async () => {
     const s = setup();
     try {
-      const env = { ...withRealLock(s), STUB_APP_prep: "1", STUB_SLEEP_prep: "60000", STUB_SLEEP_smoke_SECS: act ? "60" : "0", STUB_SLEEP_ratchet: act ? "60000" : "0", GATE_APP_QUIT_SECS: "2", ...(act ? {} : { GATE_PREP_TIMEOUT: "3" }) };
-      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env, stdio: "ignore", detached: true }); s.spawned.push(child);
+      const owner = ownersArdia(s);
+      const normal = code === 0;
+      const env = { ...withRealLock(s), STUB_APP_prep: "1", STUB_SLEEP_prep: act ? "60000" : normal ? "1500" : "60000", STUB_SLEEP_smoke_SECS: act ? "60" : "0", STUB_SLEEP_ratchet: act ? "60000" : "0", GATE_APP_QUIT_SECS: "2", ...(code === 12 ? { GATE_PREP_TIMEOUT: "3" } : {}) };
+      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env, stdio: "ignore", detached: true });
+      s.spawned.push(child);
       const exited = new Promise((r) => child.on("exit", (c, sig) => r(c ?? sig)));
-      for (const end = Date.now() + 20_000; Date.now() < end && !existsSync(`${s.log}.prep.registered`); ) await new Promise((r) => setTimeout(r, 50));
+      for (const end = Date.now() + 20_000; Date.now() < end && !existsSync(`${s.log}.prep.launched`); ) await new Promise((r) => setTimeout(r, 50));
       const app = +readFileSync(`${s.log}.prep.app`, "utf8");
       assert.ok(alive(app));
       assert.equal(spawnSync("ps", ["-o", "ppid=", "-p", String(app)], { encoding: "utf8" }).stdout.trim(), "1");
@@ -320,15 +342,51 @@ for (const [how, act] of [
         if (alive(app) && !held()) unheld++;
         await new Promise((r) => setTimeout(r, 25));
       }
-      assert.equal(await exited, act ? (how.startsWith("INT") ? 130 : 143) : 12);
+      assert.equal(await exited, code);
       assert.equal(unheld, 0);
       assert.ok(await appGone(app, 500));
       assert.ok(!held());
+      assert.ok(alive(owner.pid));
+      assert.deepEqual(owner.signals(), []);
+      assert.deepEqual(readdirSync(s.out).filter((n) => n.startsWith(".run.")), []);
     } finally {
       s.done();
     }
   });
 }
+
+test("when an app it launched can't be stopped, the gate exits 71 whatever the verdict, and keeps its run folder", () => {
+  const s = setup();
+  try {
+    const fake = join(s.dir, "sweep-fails.mjs");
+    writeFileSync(fake, `console.log("bench-sweep: still running: 1"); process.exit(1);`);
+    const r = spawnSync("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...withRealLock(s), GATE_SWEEP: fake }, encoding: "utf8", timeout: 60_000 });
+    assert.equal(r.status, 71, r.stdout + r.stderr);
+    assert.match(r.stdout, /still running; kept/);
+    assert.equal(readdirSync(s.out).filter((n) => n.startsWith(".run.")).length, 1);
+  } finally {
+    s.done();
+  }
+});
+
+test("a TERM that lands while the lock chain is still starting returns the signal's status, never the launch failure's 12", async () => {
+  for (let i = 0; i < 6; i++) {
+    const s = setup();
+    try {
+      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: withRealLock(s), stdio: "ignore", detached: true });
+      s.spawned.push(child);
+      const exited = new Promise((r) => child.on("exit", (c, sig) => r(c ?? sig)));
+      await new Promise((r) => setTimeout(r, 30 + i * 15));
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {}
+      const code = await exited;
+      assert.ok([143, "SIGTERM"].includes(code), `exit ${code}`);
+    } finally {
+      s.done();
+    }
+  }
+});
 
 test("a second gate with the same out folder leaves the running gate's run folder alone, and the running gate still cancels cleanly", async () => {
   const s = setup();

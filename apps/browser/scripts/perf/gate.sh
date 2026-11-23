@@ -13,19 +13,25 @@
 #   4. on a pass, keeps the candidate's bench bundle as dist/<version>/bench/main.jsbundle: the next gate's control bundle
 # Exit: 0 pass, 1 a row fails, 2 a round is invalid; 10 the smoke test failed, 11 the ratchet, 12 the prepare, 13 round 1,
 # 14 round 2, 15 the verdict couldn't run (each step's own status is in the output); 70 it passed but the bundle
-# couldn't be kept; 75 the lock stayed busy; 130, 143, 129 stopped by INT, TERM, HUP. No step's status is passed
+# couldn't be kept; 71 an app instance it launched is still running after cleanup (whatever the verdict); 75 the lock
+# stayed busy; 130, 143, 129 stopped by INT, TERM, HUP. No step's status is passed
 # through, so none can be taken for the lock's own 75-77.
 # Stopping it (INT, TERM or HUP to its pid or its process group) stops every job it started: INT first, so the
 # benches quit their instances, then TERM, then KILL, each after a deadline. The lock stays held until they have all
-# exited, and it returns after that. Each run keeps its own folder, <out>/.run.XXXXXX: the worker's pid, each job's
-# group marker, and the apps the benches launched with `open` (outside every process group), which it quits, then
-# kills, and checks are gone before it exits and the lock is let go. The lock wrapper runs in a process group of its
+# exited, and it returns after that. Each run keeps its own folder, <out>/.run.XXXXXX (the worker's pid, each job's
+# group marker), removed at the end unless cleanup failed. The jobs run with TMPDIR set to a scratch folder of the
+# run's, /tmp/ac-gate.XXXXXX (its ratchet report is in ac-ratchet/ there), and the benches keep their data in <out>/prep
+# and each round's own folder, so every app instance they launch with `open` (outside every process group) has
+# ARDIA_DATA_DIR or HOME inside one of those. bench-sweep.mjs quits, then kills, exactly those, and checks they're gone before the lock is let go. The lock wrapper runs in a process group of its
 # own and only the worker under it is signalled, so the wrapper waits for the worker before it lets go.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 self=$here/$(basename "$0")
 root=${GATE_ROOT:-$(cd "$here/../../../.." && pwd)}
 perf=${GATE_PERF:-$here}
+sweep=${GATE_SWEEP:-$here/bench-sweep.mjs}
+GATE_SHARED_TMPDIR=${GATE_SHARED_TMPDIR:-${TMPDIR:-/tmp}}
+export GATE_SHARED_TMPDIR
 smoke=${GATE_SMOKE:-$root/.claude/skills/release/scripts/smoke.sh}
 
 help() { sed -n '2,/^set -u/p' "$self" | sed '$d' | sed 's/^# \{0,1\}//'; }
@@ -73,10 +79,27 @@ stop_groups() {
 pending=""
 defer_signals() { trap 'pending=130' INT; trap 'pending=143' TERM; trap 'pending=129' HUP; }
 
+sweep_markers() {
+  local args=() m
+  [ -s "$GATE_RUN/markers" ] || return 0
+  while IFS= read -r m; do [ -n "$m" ] && args+=(--under "$m"); done < "$GATE_RUN/markers"
+  TMPDIR=$GATE_SHARED_TMPDIR node "$sweep" stop "${args[@]}" --quit-secs "${GATE_APP_QUIT_SECS:-15}"
+}
+
 if [ -z "${GATE_LOCKED:-}" ]; then
   mkdir -p "$out" || exit 12
   GATE_RUN=$(mktemp -d "$out/.run.XXXXXX") || exit 12
   export GATE_RUN
+  finish() {
+    local status=$1
+    trap '' INT TERM HUP
+    if ! sweep_markers || [ -e "$GATE_RUN/cleanup-failed" ]; then
+      echo "gate: app instances it launched are still running; kept $GATE_RUN"
+      exit 71
+    fi
+    rm -rf "$GATE_RUN"
+    exit "$status"
+  }
   stop_chain() {
     trap '' INT TERM HUP
     local worker
@@ -87,13 +110,13 @@ if [ -z "${GATE_LOCKED:-}" ]; then
     fi
     group_alive "$chain" && stop_groups "TERM:10 KILL:5" "$chain"
     wait "$chain" 2>/dev/null
-    exit "$1"
+    finish "$1"
   }
   defer_signals
   "${own_group[@]}" "$root/scripts/agent/locked" perflab --wait "${GATE_LOCK_WAIT:-3600}" -- \
     env GATE_LOCKED=1 "$self" "$version" "$previous" --out "$out" --port "$port" --control-bundle "$control_bundle" &
   chain=$!
-  await_group "$chain" || exit 12
+  await_group "$chain" || finish "${pending:-12}"
   trap 'stop_chain 130' INT
   trap 'stop_chain 143' TERM
   trap 'stop_chain 129' HUP
@@ -102,15 +125,20 @@ if [ -z "${GATE_LOCKED:-}" ]; then
   status=$?
   trap '' INT TERM HUP
   group_alive "$chain" && ! wait_groups 10 "$chain" && stop_groups "TERM:10 KILL:5" "$chain"
-  exit "$status"
+  finish "$status"
 fi
 
+own_run=""
 if [ -z "${GATE_RUN:-}" ]; then
   mkdir -p "$out" || exit 12
   GATE_RUN=$(mktemp -d "$out/.run.XXXXXX") || exit 12
   export GATE_RUN
+  own_run=1
 fi
-export GATE_APPS_DIR=$GATE_RUN/apps
+GATE_TMP=$(mktemp -d "${GATE_TMP_ROOT:-/tmp}/ac-gate.XXXXXX") || exit 12
+out_abs=$(cd "$out" 2>/dev/null && pwd -P) || { mkdir -p "$out" && out_abs=$(cd "$out" && pwd -P); } || exit 12
+printf '%s\n' "$GATE_TMP" "$out_abs/prep" > "$GATE_RUN/markers"
+export TMPDIR=$GATE_TMP AC_SCRATCH_TMP=$GATE_TMP
 groups=()
 stop_jobs() {
   trap '' INT TERM HUP
@@ -119,7 +147,12 @@ stop_jobs() {
     for g in "${groups[@]}"; do wait "$g" 2>/dev/null; done
   fi
   groups=()
-  node "$here/bench-registry.mjs" stop "$GATE_APPS_DIR" --quit-secs "${GATE_APP_QUIT_SECS:-15}" || echo "gate: some apps the benches launched are still running (see above)"
+  if ! sweep_markers; then
+    touch "$GATE_RUN/cleanup-failed"
+    echo "gate: app instances it launched are still running (see above); kept $GATE_RUN"
+    exit 71
+  fi
+  [ -z "$own_run" ] || rm -rf "$GATE_RUN"
 }
 start_job() {
   local log=$1
@@ -164,7 +197,8 @@ echo "gate: smoke $smoke_status, ratchet $ratchet_status, prepare $prep_status"
 
 rounds=()
 for r in 1 2; do
-  dir=$(mktemp -d "$out/round$r.XXXXXX") || exit $((12 + r))
+  dir=$(mktemp -d "$out_abs/round$r.XXXXXX") || exit $((12 + r))
+  echo "$dir" >> "$GATE_RUN/markers"
   defer_signals
   start_job "$dir.log" timeout "${GATE_ROUND_TIMEOUT:-3600}" ${awake[@]+"${awake[@]}"} node "$perf/native-bench.mjs" --out "$dir" --port "$port" --prepared \
     --app "$out/prep/rc/app/Ardia.app" --label rc --control "$out/prep/$previous/app/Ardia.app" --control-label "$previous" \

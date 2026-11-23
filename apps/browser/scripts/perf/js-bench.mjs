@@ -59,7 +59,6 @@ import { fileURLToPath } from "node:url";
 import { prepareApp } from "../../../../scripts/lib/app-copy.mjs";
 import { appEnv, binaryOf } from "../../../../scripts/lib/instance.mjs";
 import { writeSeed } from "./seed.mjs";
-import { registerApp } from "./bench-registry.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(here, "../..");
@@ -268,7 +267,6 @@ export async function launch(app, dataDir, port) {
   for (let i = 0; i < 200; i++) {
     const [pid] = pidsOf(binary);
     if (pid) {
-      registerApp({ pid, exe: binary, dataDir });
       launched.add(pid);
       return { pid, launchedAt };
     }

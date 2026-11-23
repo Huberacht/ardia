@@ -233,3 +233,19 @@ test("rounds that measured different bench bundles don't pool, and a round witho
   delete none.meta.bundleSha;
   assert.match(roundProblems(none).join(), /no bench bundle hash/);
 });
+
+test("results that are a bare JSON null are invalid through the CLI, not a crash", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-verdict-"));
+  try {
+    for (const label of ["0.2.47", "rc"]) {
+      mkdirSync(join(dir, "r1", label), { recursive: true });
+      writeFileSync(join(dir, "r1", label, "results.json"), label === "rc" ? "null" : JSON.stringify(complete()));
+    }
+    const cli = spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "gate-verdict.mjs"), "--control", "0.2.47", "--candidate", "rc", join(dir, "r1")], { encoding: "utf8" });
+    assert.equal(cli.status, 2, cli.stderr);
+    assert.equal(cli.stderr, "");
+    assert.match(cli.stdout, /invalid: round 1, candidate: its results aren't an object/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

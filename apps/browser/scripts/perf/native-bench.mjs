@@ -167,7 +167,6 @@ import { parseSettings, profileSeed } from "./profile-seed.mjs";
 import { writeSwitches } from "./js-bench.mjs";
 import { frameTable, framesLibrary, framesRun } from "./frames-phase.mjs";
 import { summary } from "./native-summary.mjs";
-import { registerApp } from "./bench-registry.mjs";
 import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, sourceChanged, storePair, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
 import { sideLaunchEnv } from "./launch-env.mjs";
 
@@ -500,7 +499,6 @@ class Instance {
       else await sleep(5);
     }
     if (!this.pid) throw new Error("the app didn't start");
-    registerApp({ pid: this.pid, exe, dataDir: this.dataDir });
     live.add(this);
     const w = acperf("waitwindow", String(this.pid), "60");
     this.windowAt = w.code === 0 ? +w.out : NaN;
@@ -1352,7 +1350,7 @@ try {
     }
     const other = sides.find((s) => s !== side);
     side.results.meta.source = side.results.meta.preparedFrom?.source ?? appIdentity(side.src);
-    side.results.meta.bundleSha = fileSha256(side.bundle);
+    side.results.meta.bundleSha = fileSha256(join(side.app, "Contents/Resources/main.jsbundle"));
     Object.assign(side.results.meta, { app: side.src, bundle: side.bundle, label: side.label, date: new Date().toISOString(),
       runs: +opt.runs, launchRuns: +opt["launch-runs"], idleSecs: +opt.idle, launchSettleSecs: +opt["launch-settle"], closeSettleSecs: +opt["close-settle"], only: [...only], env: opt.env, seed: opt.seed ?? null, freshCopy: !!opt["fresh-copy"], ...(other ? { role: side.role, interleavedWith: other.label } : {}) });
   }

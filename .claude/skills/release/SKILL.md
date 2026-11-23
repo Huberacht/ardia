@@ -198,7 +198,8 @@ it waits up to `GATE_LOCK_WAIT` seconds (default 3600), then gives up with exit 
 the lock it runs this step's smoke test, 4b's ratchet and 4c's preparation side by side (none of them is a timing;
 logs in `<out>/smoke.log`, `ratchet.log`, `prep.log`), then 4c's two timed rounds and the verdict. Its exit status is
 0 pass, 1 a row fails, 2 a round is invalid, or the step that failed: 10 smoke, 11 ratchet, 12 prepare, 13 and 14 the
-rounds, 15 the verdict didn't run (`gate.sh --help` lists them all; each step's own status is in its output). A ^C, a
+rounds, 15 the verdict didn't run, 71 an app instance it launched is still running after cleanup, whatever the
+verdict (`gate.sh --help` lists them all; each step's own status is in its output). A ^C, a
 TERM to it or its process group, or a timeout stops every job it started and waits for them; the lock stays held
 until they've exited. Fix what failed and run the script again. When the fix means a new candidate (a rebuild, a new
 `--rc`), the next run prepares it afresh: `--prepared` refuses copies made from an older build of the same path, and
@@ -288,7 +289,8 @@ idle, command bar, tab switch, navigate, scroll, hover and native-node churn sce
 gets one more run (a stray window event isn't a regression; a count over in both is). A failure is a real regression
 (find the commit that added the commit, render, store update or timer, and fix it) or an intended increase: raise that
 one ceiling by hand in `apps/browser/scripts/perf/ratchet.json` and say why in the commit and the release report. When
-the release made counts go down, run `ratchet.mjs lower <the run's report>` (`$TMPDIR/ac-ratchet/ratchet.json`), commit
+the release made counts go down, run `ratchet.mjs lower <the run's report>` (`$TMPDIR/ac-ratchet/ratchet.json`; under
+`gate.sh`, `TMPDIR` is the gate's scratch folder, `/tmp/ac-gate.XXXXXX`, named in its output), commit
 the lowered ceilings, and say which counts dropped. The wall-clock gate is a separate step: `docs/perf/README.md`.
 
 ### 4c. Perf gate: the RC against the previous stable release (stable only)
