@@ -203,7 +203,7 @@ export class ArdiaApp {
     for (const method of ["Runtime.enable", "Log.enable"]) {
       const budget = probeBudget(deadline, PROBE_SETUP_TIMEOUT);
       const failure = budget > 0 ? await session.send(method, {}, { timeout: budget }).then(() => null, (error) => error) : new Error(`no time left for ${method}`);
-      if (failure && deadline !== undefined && !(failure instanceof CdpError)) {
+      if (failure && deadline !== undefined && !(failure instanceof CdpError) && (session.closed || Date.now() >= deadline)) {
         await session.close().catch(() => {});
         throw failure;
       }
@@ -245,7 +245,10 @@ export class ArdiaApp {
 
   async mainShell(options) {
     const chosen = await until(async ({ deadline }) => {
-      const list = (await this.shells({ deadline })).filter((s) => s.ready && !s.utility && !s.session.closed);
+      const regular = (shells) => shells.filter((s) => s.ready && !s.utility);
+      let scanned = regular(await this.shells({ deadline }));
+      if (scanned.some((s) => s.session.closed)) scanned = regular(await this.shells({ deadline }));
+      const list = scanned.filter((s) => !s.session.closed);
       return list.find((s) => s.startup) ?? list.find((s) => s.windowId === "main") ?? list[0] ?? false;
     }, { timeout: options?.timeout ?? 25000, label: "a browser shell renderer", abort: () => this.exitReason() });
     return this.cacheShell(chosen);

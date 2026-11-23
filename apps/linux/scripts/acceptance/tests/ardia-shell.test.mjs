@@ -357,7 +357,7 @@ describe("shell probes against slow or dropped renderers", () => {
     }
   });
 
-  it("skips a renderer whose socket closed during the scan", async () => {
+  it("reconnects to the startup renderer when its socket drops mid-scan", async () => {
     let mock = null;
     let dropped = false;
     mock = await startMockCdp({
@@ -378,8 +378,29 @@ describe("shell probes against slow or dropped renderers", () => {
     app.port = mock.port;
     try {
       const main = await app.mainShell({ timeout: 5000 });
+      assert.equal(main.windowId, "main");
       assert.equal(main.session.closed, false);
-      assert.equal((await main.eval("1")).windowId, main.windowId);
+      assert.equal((await main.eval("1")).windowId, "main");
+    } finally {
+      for (const session of app.connections.values()) await session.close().catch(() => {});
+      await mock.close();
+    }
+  });
+
+  it("still finds a ready renderer whose Log.enable never answers", async () => {
+    const mock = await startMockCdp({
+      targets: [{ id: "shell-main", type: "page", url: "chrome://ardia/index.html" }],
+      handlers: {
+        "Log.enable": () => mock.NO_REPLY,
+        "Runtime.evaluate": () => ({ result: { type: "object", value: { windowId: "main", profileId: "default", pageProfile: null, startup: true, utility: null, privateWindow: false, ready: true } } }),
+      },
+    });
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "no-log" });
+    app.port = mock.port;
+    try {
+      const main = await app.mainShell({ timeout: 12500 });
+      assert.equal(main.windowId, "main");
+      assert.equal(main.session.closed, false);
     } finally {
       for (const session of app.connections.values()) await session.close().catch(() => {});
       await mock.close();
