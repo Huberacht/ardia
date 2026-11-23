@@ -1388,49 +1388,71 @@ Metal.
   tint, the 0.5 point edge and the profile tint. The rim is its own pass in its own layer, premultiplied white
   composited with `plusL`, so it adds onto the glass and whatever is behind it in all four channels, as Android's PLUS
   does.
-  - A glass outside the `FrostSource` it names draws that whole source with `layer.render(in:)` (or
-    `drawHierarchy(afterScreenUpdates: false)` if the layer tree comes back blank), once, and again only when it
-    changes, so a glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that
+  - A glass outside the `FrostSource` it names draws that whole source, once, and again only when it changes, so a glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that
     keeps changing is redrawn at most once a second, and again two frames after it stops changing (the end of the
     deck's Incognito crossfade). This is how the deck's chrome draws its backdrop and the start page's buttons their
     spaces and mark.
-  - The page bar and host pill draw the page from WebKit's own `takeSnapshot`, rendered by WebKit in its own process
-    (`afterScreenUpdates: true`; the visible-view path, `false`, blocked the main thread for up to 84 ms on the
-    simulator), of the strip around the glass plus 1,500 points above and below, at the capture's scale. WebKit is
-    asked only while the page is still (three frames without scrolling) and its document has committed: for the first
-    snapshot, once the page rests 600 points from the last one, or once a second for changes in the page. A snapshot
-    is used only if the page didn't move while WebKit took it, and only for the web view, navigation and committed
-    document it was asked for (`WebTab.committedDocuments`, so a same-URL reload drops it). One that fails, comes back
-    blank, or comes back a flat colour that isn't the page's own background is refused and the requests back off.
-    While the page scrolls, the glass keeps sampling the last capture where the page now is (a uniform, not a new
-    capture), as long as nothing over the page crosses the strip and the whole footprint (the glass, its blur and the
-    lens's reach) is still inside it; past that, or past the snapshot's 1,500 points, the glass shows its fill until
-    the page settles and a new snapshot arrives. The page's pixels are clipped to the web view and drawn at its own
+  - Views are drawn off the main thread (`GlassLayerCopy`, `GlassSteps`): on the main thread the walk copies the
+    layer tree it would draw (geometry, contents, colours, corners, borders, masks, shapes, gradients, from the
+    presentation tree, so it matches what is on screen mid-animation; at most 2,000 layers), and a capture queue
+    renders the copy with `layer.render(in:)`, decoding any new pictures there. The result lands a frame or two later;
+    until then the glass keeps its last capture. `GlassLayerCopyTests` checks the copy renders pixel for pixel what the
+    original does. A source the copy refuses, or one whose layer tree comes back blank, is drawn on the main thread as
+    before (`drawHierarchy(afterScreenUpdates: false)` for a blank one). `ArdiaGlassOnMain` draws on the main thread for
+    comparison and `ArdiaGlassCopyProbe` draws both ways and logs how far they differ.
+  - The page bar and host pill draw the page from WebKit's `createPDF`, which WebKit paints in its own process from
+    the document itself, in document coordinates, so a picture taken while the page scrolls lands exactly where the
+    page is (the lab's placement probe measures 0 to 0.5 points against the screen). A document up to 9,000 points
+    tall is drawn whole; a longer one from 1,200 points behind the scroll to 3,600 ahead (during a fling up to
+    6,000 ahead, 1.5 s of travel, and up to 3,000 behind in case it turns; 2,400 each way before the page has
+    moved). The picture is rasterized off the main thread at the capture's scale. A new one is asked for, one at a time, before the scroll is within 1,200 points (or 0.75 s of
+    travel) of its end, and every 2 s while the page is still, for changes in the page. While the page scrolls the
+    lens samples the blurred picture where the page now is (a uniform, not a new capture) and redraws it, off the
+    main thread, 1,800 points each way around the glass (up to 3,600 during a fling), only to recentre it a quarter
+    second ahead of the scroll or when a new picture arrives, as long as
+    nothing over the page crosses the strip. A picture is used only for the web view, navigation and committed
+    document it was asked for (`WebTab.committedDocuments`, so a same-URL reload drops it) at the same zoom; one that
+    fails, comes back blank, or comes back a flat colour that isn't the page's own background is refused and the
+    requests back off. Fixed and sticky elements are painted where the document places them, not where they float
+    on screen.
+  - WebKit's `takeSnapshot` is kept for comparison (`ArdiaGlassPageShot snapshot`): it returns only the visible
+    viewport, whatever rect it is asked for (the rest comes back transparent), so it can't reach ahead of a scroll,
+    and a snapshot taken while scrolling can't be placed exactly. In that mode WebKit is asked again every 8 points
+    while the page creeps (under 400 points a second), never during a fling; `ArdiaGlassStillSnapshots` asks only
+    while it is still.
+  - **Clear glass.** Whenever a refracting glass has no capture that covers it (past the snapshot during a fling,
+    before its first capture, after a failure, while the shader compiles, while it is over budget), it shows clear
+    glass instead of an opaque fill: a translucent veil (#FFFFFF at 66 %, #1C1C1E at 62 % in dark) under the profile
+    tint, the edge and the rim, with the live page showing through it unblurred. The lens crossfades to and from it
+    over 120 ms; the fade starts while the lens is still covered, as soon as the scroll would carry its footprint past
+    the capture within those 120 ms, so the lens never shows a stretched edge. `ArdiaGlassForceClear` shows clear glass
+    everywhere to compare. The page's pixels are clipped to the web view and drawn at its own
     place among the source's views, under anything that covers it, with its clips and opacity.
   - A glass inside its source, or with none (toasts, Reader's buttons, the Duo toolbar under `surfaces`), draws what lies beneath it in the window (`GlassBackdrop`): going up from the glass, each ancestor's fill
     and each sibling drawn under it (by `zPosition`, then order) that overlaps the strip, with its real transform, its
     ancestors' clips and corners and its opacity, starting from the topmost opaque piece that truly covers the strip.
     Those pieces draw with `layer.render(in:)`, and a page among them with WebKit's snapshot.
-  - The capture is redrawn only when a walk of the drawn layers changes (positions, bounds, scroll offsets, the
-    WKWebView's scroll in 120 point steps, opacity, transforms, contents), for two frames after it settles, and every 3 s
+  - The capture is redrawn only when a walk of the drawn layers changes (positions, bounds, opacity, transforms and
+    contents, three layers deep; the page's own scroll is followed by the uniform, not a redraw), for two frames after it settles, and every 3 s
     otherwise. Glass that is hidden or off screen does no work. A capture that fails or comes back blank drops the old
-    strip, shows the glass's fill and tries again after 50 ms, doubling up to 1 s.
+    strip, shows clear glass and tries again after 50 ms, doubling up to 1 s.
   - At most two GPU frames are in flight, the slot taken before any capture work, and a glass that falls back during
     a frame draws into that frame's buffer. The main thread only plans: drawables are taken and the frame encoded on
     a render queue (`GlassRenderer`), so a `nextDrawable()` wait never blocks the main thread, and each layer has one
     draw in flight; a draw that had to wait is retried when the frame in flight finishes. Capture buffers are released when the last glass stops, on background and on a memory warning.
-- **Where each path runs.** Every glass refracts by default. The flat fills are fallbacks only: Classic and Reduce
-  Transparency keep the Classic surface, unchanged; a phone without Metal, or a shader that fails, draws the frost's
-  flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a glass whose main-thread work
-  (the walk, the snapshot request and the capture, failed ones included) takes longer than one frame once (twice in
+- **Where each path runs.** Every glass refracts by default, and no glass sits on an opaque fill except for Classic,
+  Reduce Transparency, a phone without Metal or the lab. Classic and Reduce Transparency keep the Classic surface,
+  unchanged; a phone without Metal draws the frost's flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge
+  and tint; a shader that fails draws clear glass. A glass whose main-thread work (the walk, the copy, the snapshot
+  request and any capture drawn on the main thread, failed ones included) takes longer than one frame once (twice in
   two seconds for a backdrop; a glass's first capture, which sets up its buffers, is forgiven up to 50 ms once per
   glass), or more than 12 % of the main thread over two seconds, is over budget; WebKit's snapshot callbacks count
-  too, and that glass draws the chrome fill over a page
-  (#FFFFFF, #1E1B1D in dark) or the flat fill elsewhere until the app next returns to the foreground
-  (`glass_captures_over_budget`). Lab flags: `ArdiaFlatGlass` drops the lens and rim, `ArdiaGlassSolidPage` keeps the
+  too. That glass shows clear glass for 3 s, then tries the lens again; each trip within a minute doubles the wait,
+  up to 30 s, and returning to the foreground clears it (`glass_captures_over_budget`). Lab flags: `ArdiaFlatGlass` drops the lens and rim, `ArdiaGlassSolidPage` keeps the
   chrome fill over a page, `ArdiaGlassCapture auto|hierarchy|layer|none` picks the capture (`auto` is the default;
   `none` is the control), `ArdiaGlassScroll <s>` scrolls the page on screen up and down for that long (counting as a touch, so the bar
-  collapses; `ArdiaGlassScrollPeriod <s>` sets how fast), `ArdiaGlassSnapshotVisible` uses WebKit's visible-view
+  collapses; `ArdiaGlassScrollPeriod <s>` sets how fast and `ArdiaGlassScrollReach <points>` how far),
+  `ArdiaGlassPlacementProbe` checks each page picture against WebKit's own snapshot of the screen, `ArdiaGlassSnapshotVisible` uses WebKit's visible-view
   snapshot for comparison, `ArdiaGlassPageMode full` recaptures every frame instead of shifting,
   `ArdiaGlassReload <s>` reloads the page on screen, `ArdiaGlassRimProbe` shows two glasses with and without their rim
   over a solid and a translucent colour (the screen proves `plusL` adds: both rise by the same 63 levels, clamped at
@@ -1449,15 +1471,20 @@ Metal.
   `frost` or `solid` on iPhone too.
 - **The search morph** is not glass: the search panel's face is frost (`SEARCH_PANEL_FACE`), so its morph is the
   system blur, on main and here.
-- **Seen on the simulator** (an iPhone 18 Pro simulator on the Mac, iOS 27.0, 2026-11-24): the same 14 s scroll of
-  Wikipedia under the bar, late frames with capture off 0.6 to 0.7 %, the default (shift the cached pixels) 0.2 to
-  0.4 %, recapturing every frame 0.2 to 0.5 %; the main thread 0.1 ms (p50) and at most 3.2 ms. On that long scroll
-  the strip outran the cached snapshot for about a third of its frames, which showed the fill. Frame by frame, the
-  bar's tint followed the page under it or showed the fill, and the rim adds rather than covers.
-- **Open decision.** Capturing views on the CPU (`layer.render(in:)`) can take 38 to 63 ms on the simulator when new
-  content arrives (the deck's Incognito backdrop, a page cover's picture); that trips the budget and the glass falls
-  back to its fill for the rest of the session. A phone may be fast enough; if not, either a looser per-capture
-  rule or the fill after such transitions.
+- **Seen on the simulator** (an iPhone 18 Pro simulator on the Mac, iOS 27.0, 60 Hz, 2026-11-24), late frames
+  against capture off (`none`), two runs each: a 14 s scroll of Wikipedia's Glass up and down 1,926 points 0.24 and
+  0.36 % off, 0.72 and 0.84 % with the lens; a fling (the same page every 0.8 s, up to 9,400 points a second) 0.24
+  and 0.24 % off, 0.48 and 0.60 % on; 12,000 points of History of glass in 24 s 0.42 and 0.25 % off, 0.08 and 0.33 %
+  on. In all three the lens was on for every frame of the scroll (`PAGELAB glass frames` `lens_frames`), with the main
+  thread at 0.11 ms (p50) and at most 1.9 ms and the redraw off the main thread at 0.5 to 0.9 ms. WebKit's
+  `takeSnapshot` asked every 8 points of the scroll cost 1.6 to 2.1 % with the lens on 15 % of the frames (only the
+  viewport comes back); asked only while still, 0 % during the scroll. The deck, switched to Incognito and back
+  after opening from a page, kept its lens on 99.5 % of frames (the rest before its first capture), its capture
+  0.08 ms on the main thread and 2.5 ms (p50) off it, and never went over budget. Clear glass reads over a photo,
+  dense text and a dark page.
+- **Open decision.** Fixed and sticky elements are where the document places them in the page's picture, so a
+  cookie bar floating at the bottom of the screen isn't under the bar's lens. Pages a PDF can't paint (video,
+  WebGL) show their placeholder in the glass.
 - **Not seen yet.** A phone: the simulator's costs are not a phone's, and the budget is set from the simulator. The
   collapsed bar and host pill (collapsing is off by default on iPhone), the press highlight, landscape and the Duo.
 
@@ -1911,7 +1938,8 @@ Every count and timing the phone can send, for the owner to read as one set and 
 | `card_close_tapped` | the × on a card in Android's Material deck | Whether people close tabs with the card's own button rather than a flick; zero across Android testers after a release means the × stopped closing cards, or its tap zone opens the card instead |
 | `material_back_swiped` | a predictive back swipe on Android's Material sheets, dialogs, menus and library | Whether people swipe back out of Material surfaces; zero across Android testers after a release means the swipe stopped reaching them, or Back goes to the wrong surface |
 | `glass_shaders_failed` | Liquid Glass on Android (CodeRabbit on #3759: a lens refused mid-session still reported `lens` at launch) | Counted natively and drained with the pending counts: each time Android refused to build the lens or rim shader, so that glass drew plain frost until the app next came back to the foreground and tried again. `app_launched.glass_render` can't see this, since it's read before any glass draws. Any count on Android 13+ phones means a GPU or driver rejects the AGSL; compare it with the `lens` launches. Since #3950 the iPhone counts its Metal shader failing to compile the same way |
-| `glass_captures_over_budget` | Liquid Glass on iPhone, every glass refracting (#3950) | Counted natively and drained with the pending counts: each time an iPhone glass's capture of what lies under it went over budget (its main-thread work, from the walk to the capture, took longer than one frame once, or more than 12 % of the main thread over two seconds), so that glass drew its fill until the app came back to the foreground. A rising count means capturing is too slow on those phones; compare it with the iPhone `lens` launches |
+| `glass_lens_bridged` | Liquid Glass on iPhone, the lens over the page on every frame (#3950) | Counted natively and drained with the pending counts: each time a refracting iPhone glass faded from its lens to clear glass because its capture of what lies under it ran out (a page scrolled past its picture, a capture that failed), at most once a second per glass; over-budget glass is counted in `glass_captures_over_budget` instead. It should stay near zero: a rising count against `glass_render` `lens` launches means the page pictures don't keep up on those phones |
+| `glass_captures_over_budget` | Liquid Glass on iPhone, every glass refracting (#3950) | Counted natively and drained with the pending counts: each time an iPhone glass's capture of what lies under it went over budget (its main-thread work, from the walk to the capture, took longer than one frame once, or more than 12 % of the main thread over two seconds), so that glass showed clear glass for 3 s, doubling up to 30 s while it kept tripping within a minute. A rising count means capturing is too slow on those phones; compare it with the iPhone `lens` launches |
 | `night_shade_verdicts_reused`, `night_shade_verdicts_learned`, `night_shade_verdicts_corrected` | Night Shade's cached verdicts on Android (a tester's report: yahoo.com loaded white until half way) | Counted natively and drained with the pending counts, never for private tabs. `reused` is a page load, with Night Shade not off, whose site's verdict was already known, so the shade was decided before the first paint; `learned` is a site measured for the first time, whose first load can still shade late; `corrected` is a site whose verdict changed, so that load showed the old one until `DOMContentLoaded`. Read `reused` against `learned` for the hit rate, which should climb as testers revisit sites; a `corrected` share that grows means the measurement disagrees with itself between loads |
 
 ## What is left before the Expo app replaces both native apps

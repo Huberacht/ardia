@@ -20,15 +20,40 @@ public struct GlassSnapshotAsk: Equatable, Sendable {
   public var distance: CGFloat
   public var age: TimeInterval
   public var committed: Bool
+  public var speed: CGFloat
+  public var allowsMoving: Bool
 
-  public init(hasImage: Bool, pending: Bool, stillFrames: Int, distance: CGFloat, age: TimeInterval, committed: Bool) {
+  public init(hasImage: Bool, pending: Bool, stillFrames: Int, distance: CGFloat, age: TimeInterval, committed: Bool, speed: CGFloat = 0, allowsMoving: Bool = false) {
     self.hasImage = hasImage
     self.pending = pending
     self.stillFrames = stillFrames
     self.distance = distance
     self.age = age
     self.committed = committed
+    self.speed = speed
+    self.allowsMoving = allowsMoving
   }
+
+  public var isStill: Bool { stillFrames >= GlassFlowRules.stillFramesForSnapshot }
+
+  public var isSlow: Bool { isStill || (allowsMoving && speed <= GlassFlowRules.slowScroll) }
+}
+
+public struct GlassBudgetCooldown: Sendable {
+  public private(set) var trips = 0
+  public private(set) var until: TimeInterval = -.infinity
+  public private(set) var lastTrip: TimeInterval = -.infinity
+
+  public init() {}
+
+  public mutating func trip(now: TimeInterval) {
+    if now - lastTrip > LiquidGlassRules.budgetTripMemory { trips = 0 }
+    trips += 1
+    lastTrip = now
+    until = now + LiquidGlassRules.budgetCooldown(trips: trips)
+  }
+
+  public func isCooling(now: TimeInterval) -> Bool { now < until }
 }
 
 public struct GlassSnapshotGate: Sendable {
@@ -51,8 +76,9 @@ public struct GlassSnapshotGate: Sendable {
   }
 
   public func mayRequest(now: TimeInterval, _ ask: GlassSnapshotAsk) -> Bool {
-    guard !ask.pending, now >= nextRequest, ask.committed, ask.stillFrames >= GlassFlowRules.stillFramesForSnapshot else { return false }
+    guard !ask.pending, now >= nextRequest, ask.committed, ask.isSlow else { return false }
     guard ask.hasImage else { return true }
+    guard ask.isStill else { return ask.distance >= GlassFlowRules.movingRefetchDistance }
     return ask.distance >= GlassFlowRules.snapshotRefetchDistance || ask.age >= GlassFlowRules.snapshotRefresh
   }
 
@@ -106,19 +132,95 @@ public enum GlassFlowRules {
   public static let backgroundTolerance = 10.0 / 255
   public static let quietFramesForRecapture = 2
   public static let scrollReach: CGFloat = 200
-  public static let scrollStep: CGFloat = 120
-  public static let snapshotReach: CGFloat = 1500
+  public static let slowScroll: CGFloat = 400
+  public static let movingRefetchDistance: CGFloat = 8
+  public static let lensFade: TimeInterval = 0.12
+  public static let directionSpeed: CGFloat = 20
+  public static let documentRefresh: TimeInterval = 2
+  public static let documentBehind: CGFloat = 1200
+  public static let documentAhead: CGFloat = 3600
+  public static let documentAheadLongest: CGFloat = 6000
+  public static let documentAheadSeconds: CGFloat = 1.5
+  public static let documentLead: CGFloat = 1200
+  public static let documentLeadSeconds: CGFloat = 0.75
+  public static let documentBehindSeconds: CGFloat = 0.4
+  public static let documentBehindLongest: CGFloat = 3000
+  public static let documentWhole: CGFloat = 9000
+  public static let documentOverscroll: CGFloat = 300
+  public static let captureReach: CGFloat = 1800
+  public static let captureReachLongest: CGFloat = 3600
+  public static let captureReachSeconds: CGFloat = 0.6
+  public static let captureLeadSeconds: CGFloat = 0.25
 
-  public static func snapshotRect(around needed: CGRect) -> CGRect {
-    needed.insetBy(dx: 0, dy: -snapshotReach)
+  public static func documentArea(visible: CGRect, documentHeight: CGFloat, direction: CGFloat, speed: CGFloat) -> CGRect {
+    let first = min(visible.minY, 0) - documentOverscroll
+    let last = max(documentHeight, visible.maxY) + documentOverscroll
+    if last - first <= documentWhole { return CGRect(x: visible.minX, y: first, width: visible.width, height: last - first) }
+    let ahead = min(max(documentAhead, speed * documentAheadSeconds), documentAheadLongest)
+    let behind = min(max(documentBehind, speed * documentBehindSeconds), documentBehindLongest)
+    let even = (ahead + behind) / 2
+    let above = direction > 0 ? behind : direction < 0 ? ahead : even
+    let below = direction > 0 ? ahead : direction < 0 ? behind : even
+    let top = max(visible.minY - above, first)
+    let bottom = min(visible.maxY + below, last)
+    return CGRect(x: visible.minX, y: top, width: visible.width, height: max(bottom - top, visible.height))
   }
 
-  public static func scrollBucket(_ offset: CGPoint) -> [Int] {
-    [Int((offset.x / scrollStep).rounded(.down)), Int((offset.y / scrollStep).rounded(.down))]
+  public static func captureReach(speed: CGFloat) -> CGFloat {
+    min(max(captureReach, speed * captureReachSeconds), captureReachLongest)
   }
 
-  public static func acceptsSnapshot(requested: CGPoint, now: CGPoint, movedWhilePending: Bool, zoomRequested: CGFloat, zoomNow: CGFloat) -> Bool {
-    !movedWhilePending && requested == now && zoomRequested == zoomNow
+  public static func documentWanted(hasImage: Bool, still: Bool, age: TimeInterval, needed: CGRect, placed: CGRect, document: CGRect, velocity: CGFloat) -> Bool {
+    guard hasImage, !placed.isNull else { return true }
+    let reachable = needed.intersection(document)
+    if still { return age >= documentRefresh || !placed.contains(reachable.isNull ? needed : reachable) }
+    let lead = max(documentLead, abs(velocity) * documentLeadSeconds)
+    let ahead = needed.union(needed.offsetBy(dx: 0, dy: velocity >= 0 ? lead : -lead)).intersection(document)
+    guard !ahead.isNull else { return false }
+    return !placed.insetBy(dx: -0.5, dy: -0.5).contains(ahead)
+  }
+
+  public static func place(area: CGRect, zoom: CGFloat, offset: CGPoint) -> CGRect {
+    guard !area.isNull else { return .null }
+    return CGRect(x: area.minX * zoom - offset.x, y: area.minY * zoom - offset.y, width: area.width * zoom, height: area.height * zoom)
+  }
+
+  public static func captureNeed(footprint: CGRect, velocity: CGPoint) -> CGRect {
+    footprint.union(footprint.offsetBy(dx: velocity.x * captureLeadSeconds, dy: velocity.y * captureLeadSeconds))
+  }
+
+  public static func recenters(held: CGRect, offer: CGRect, need: CGRect) -> Bool {
+    func covered(_ rect: CGRect) -> CGFloat {
+      let inside = rect.intersection(need)
+      return inside.isNull ? 0 : inside.width * inside.height
+    }
+    guard !held.contains(need) else { return false }
+    return covered(offer) > covered(held) + need.width
+  }
+
+  public static func direction(velocity: CGFloat, last: CGFloat) -> CGFloat {
+    if velocity > directionSpeed { return 1 }
+    if velocity < -directionSpeed { return -1 }
+    return last
+  }
+
+  public static func lensDraws(footprint: CGRect, capture: CGRect) -> Bool {
+    !capture.isNull && !footprint.isNull && capture.intersects(footprint)
+  }
+
+  public static func lensShows(footprint: CGRect, capture: CGRect, velocity: CGPoint, travel: ClosedRange<CGFloat>? = nil) -> Bool {
+    guard !capture.isNull, !footprint.isNull else { return false }
+    let room = capture.insetBy(dx: -0.5, dy: -0.5)
+    guard room.contains(footprint) else { return false }
+    let lead = CGFloat(lensFade)
+    let ahead = velocity.y * lead
+    let reach = travel.map { min(max(ahead, $0.lowerBound), $0.upperBound) } ?? ahead
+    return room.contains(footprint.offsetBy(dx: velocity.x * lead, dy: reach))
+  }
+
+  public static func acceptsSnapshot(moved: Bool, maxSpeed: CGFloat, allowsMoving: Bool, zoomRequested: CGFloat, zoomNow: CGFloat) -> Bool {
+    guard zoomRequested == zoomNow else { return false }
+    return !moved || (allowsMoving && maxSpeed <= slowScroll)
   }
 
   public static func uniform(_ samples: [[Double]]) -> [Double]? {

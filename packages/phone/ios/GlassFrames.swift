@@ -10,7 +10,7 @@ final class GlassFrames: NSObject {
 
   private let surfaces = NSHashTable<LiquidGlassSurface>.weakObjects()
   private let captures = NSMapTable<AnyObject, GlassCapture>.weakToStrongObjects()
-  private let overBudget = NSHashTable<AnyObject>.weakObjects()
+  private let cooldowns = NSMapTable<AnyObject, GlassCooldownBox>.weakToStrongObjects()
   private var link: CADisplayLink?
   private var slowTimer: Timer?
   private var stats = FrameStats()
@@ -38,7 +38,7 @@ final class GlassFrames: NSObject {
   func detach(_ surface: LiquidGlassSurface) {
     surfaces.remove(surface)
     captures.removeObject(forKey: surface)
-    overBudget.remove(surface)
+    cooldowns.removeObject(forKey: surface)
     schedule()
   }
 
@@ -53,12 +53,13 @@ final class GlassFrames: NSObject {
   }
 
   func isOverBudget(_ owner: AnyObject?) -> Bool {
-    owner.map(overBudget.contains) ?? false
+    guard let owner, let box = cooldowns.object(forKey: owner) else { return false }
+    return box.cooldown.isCooling(now: CACurrentMediaTime())
   }
 
   func retryBudget() {
-    guard overBudget.count > 0 else { return }
-    overBudget.removeAllObjects()
+    guard cooldowns.count > 0 else { return }
+    cooldowns.removeAllObjects()
     for surface in surfaces.allObjects { surface.needsPath() }
   }
 
@@ -74,7 +75,7 @@ final class GlassFrames: NSObject {
     surface.stillPending = false
     let jobs = surface.plan(with: nil, space: nil)
     guard !jobs.isEmpty else {
-      finished()
+      flight.finish()
       return
     }
     GlassRenderer.shared.run(blurs: [], draws: jobs, pipeline: pipeline, commands: commands) { GlassFrames.shared.finished() }
@@ -185,6 +186,16 @@ final class GlassFrames: NSObject {
       }
     }
     for surface in still { draws += surface.plan(with: nil, space: nil) }
+    if PhoneTestBuild.isOn {
+      for surface in live where surface.choice.path == .live {
+        if surface.showsLens {
+          stats.lensFrames += 1
+        } else {
+          stats.clearFrames += 1
+          stats.clearReasons[surface.clearReason, default: 0] += 1
+        }
+      }
+    }
     framing = false
     let stills = framedStills
     framedStills.removeAll()
@@ -213,10 +224,13 @@ final class GlassFrames: NSObject {
       capture.noteMainThread(ms: spent, now: now, captured: capturedNow)
       if capturedNow { warmedOwners.add(owner) }
       if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
-      if capture.overBudget(now: now, frameMs: frameMs), !overBudget.contains(owner) {
-        overBudget.add(owner)
+      if capture.overBudget(now: now, frameMs: frameMs), !isOverBudget(owner) {
+        let box = cooldowns.object(forKey: owner) ?? GlassCooldownBox()
+        box.cooldown.trip(now: CACurrentMediaTime())
+        cooldowns.setObject(box, forKey: owner)
+        capture.forgetSamples()
         PendingCounts.add(PendingCounts.glassCapturesOverBudget)
-        NSLog("PAGELAB look glass capture over budget: %@ falls back to its fill until the app returns (last %.1f ms)", members.map(\.label).joined(separator: ","), spent)
+        NSLog("PAGELAB look glass capture over budget: %@ turns to clear glass for %.0f s (trip %d, last %.1f ms)", members.map(\.label).joined(separator: ","), LiquidGlassRules.budgetCooldown(trips: box.cooldown.trips), box.cooldown.trips, spent)
         members.forEach { $0.needsPath() }
       }
     }
@@ -238,10 +252,11 @@ final class GlassFrames: NSObject {
     if sourceWhole {
       web = method == .auto ? GlassSources.page(in: space) : nil
       if method == .auto, web == nil, GlassSources.holdsPage(in: space) || members.contains(where: \.waitsForPage) {
-        capture.showFill()
+        capture.drop()
         return
       }
-      wanted = web == nil ? space.bounds : wanted.insetBy(dx: 0, dy: -GlassFlowRules.scrollReach)
+      let reach = GlassLaunch.pageShot == .pdf ? GlassFlowRules.captureReach(speed: hypot(capture.page.velocity.x, capture.page.velocity.y)) : GlassFlowRules.scrollReach
+      wanted = web == nil ? space.bounds : strip.insetBy(dx: 0, dy: -reach)
       pieces = GlassBackdrop.pieces(of: space, covering: wanted, web: web)
     } else if let root = members[0].backdropRoot {
       wanted = strip
@@ -252,21 +267,39 @@ final class GlassFrames: NSObject {
       return
     }
     mark("pieces\(pieces.count)")
+    if let landed = capture.land(sigma: sigma, blurs: &blurs, now: now) { finish(landed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil) }
     capture.strikes = sourceWhole && web == nil ? LiquidGlassRules.backdropStrikes : 1
     let pageIndex = pieces.firstIndex { $0.page != nil }
     let page = pageIndex.map { pieces[$0] }
-    let shiftable = sourceWhole && GlassLaunch.pageMode == .shift && GlassFlowRules.shiftable(pageIndex: pageIndex, overlapsAbove: pieces.map { $0.bounds.applying($0.transform).intersects(wanted) })
-    if let web, page != nil, capture.page.observe(web) { capture.showFill() }
-    capture.survey(pieces, rect: wanted, shiftable: shiftable, shallow: sourceWhole && web == nil)
+    let near = strip.insetBy(dx: 0, dy: -GlassFlowRules.scrollReach)
+    let shiftable = sourceWhole && GlassLaunch.pageMode == .shift && GlassFlowRules.shiftable(pageIndex: pageIndex, overlapsAbove: pieces.map { $0.bounds.applying($0.transform).intersects(near) })
+    if let web, page != nil, capture.page.observe(web, now: now) { capture.drop() }
+    capture.survey(pieces, rect: shiftable ? strip : wanted, shiftable: shiftable)
     mark("survey")
-    if let web, let page { capture.page.request(web, around: wanted.applying(page.transform.inverted()), pixelsPerPoint: pixelsPerPoint, now: now) }
+    if let web, let page { capture.page.request(web, around: strip.applying(page.transform.inverted()), pixelsPerPoint: pixelsPerPoint, now: now) }
     mark("request")
-    guard capture.wants(wanted, now: now, gap: sourceWhole && web == nil ? LiquidGlassRules.backdropRefresh : 0) else { return }
-    if let web, let page, !capture.page.covers(wanted.applying(page.transform.inverted()), of: web) {
-      capture.showFill()
-      return
+    var need: CGRect?
+    if shiftable, let web, let page {
+      guard let placed = capture.page.placed(web) else { return }
+      wanted = wanted.intersection(placed.rect.applying(page.transform))
+      guard !wanted.isNull, !wanted.isEmpty else { return }
+      need = GlassFlowRules.captureNeed(footprint: strip, velocity: capture.page.velocity)
+    } else {
+      wanted = sourceWhole && web != nil ? near : wanted
     }
+    guard capture.wants(wanted, need: need, now: now, gap: sourceWhole && web == nil ? LiquidGlassRules.backdropRefresh : 0) else { return }
+    if !shiftable, let web, let page, !capture.page.covers(wanted.applying(page.transform.inverted()), of: web) { return }
     let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole && web == nil ? capture.wholeMethod : .layer) : method
+    if GlassLaunch.offMain, pieceMethod == .layer, !pieces.isEmpty {
+      if let steps = GlassSteps.make(pieces, page: capture.page) {
+        mark("copy\(steps.layers)")
+        if GlassLaunch.copyProbe { GlassCopyProbe.arm(capture, pieces: pieces, rect: wanted, pixelsPerPoint: pixelsPerPoint) }
+        let outcome = capture.start(rect: wanted, pixelsPerPoint: pixelsPerPoint, now: now, steps: steps, follow: shiftable ? web : nil)
+        if outcome == .started { capturedNow = true }
+        if outcome == .failed { finish(.failed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil) }
+        return
+      }
+    }
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, blurs: &blurs, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
       var drew = true
@@ -279,28 +312,33 @@ final class GlassFrames: NSObject {
       return drew
     }
     mark("capture")
+    if outcome == .captured || outcome == .failed { capturedNow = true }
+    if outcome == .captured { capture.follow(shiftable ? web : nil) }
+    finish(outcome, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil)
+  }
+
+  private func finish(_ outcome: GlassCapture.Outcome, capture: GlassCapture, members: [LiquidGlassSurface], pieces: Int, sourceWhole: Bool, page: Bool) {
     switch outcome {
     case .captured:
-      capturedNow = true
-      capture.follow(shiftable ? web : nil)
       if PhoneTestBuild.isOn {
-        stats.noteCapture(ms: capture.lastMs, pieces: pieces.count)
+        stats.noteCapture(ms: capture.lastMs, pieces: pieces)
+        if capture.offMainMs > 0 { stats.offMainMs.append(capture.offMainMs) }
         stats.snapshotMs += capture.page.takeLatencies()
         let counts = capture.page.takeCounts()
         stats.rejected += counts.rejected
         stats.uncovered += counts.uncovered
+        stats.moving += counts.moving
       }
     case .failed:
-      capturedNow = true
-      if method == .auto, sourceWhole, web == nil, capture.wholeMethod == .layer {
+      if GlassLaunch.capture == .auto, sourceWhole, !page, capture.wholeMethod == .layer {
         capture.wholeMethod = .hierarchy
         if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ backdrop is blank to the layer tree; drawing its view hierarchy instead", members.map(\.label).joined(separator: ",")) }
       }
       if PhoneTestBuild.isOn {
         stats.failed += 1
-        if capture.failures == 1 { NSLog("PAGELAB look glass capture failed: %@ shows its fill and tries again", members.map(\.label).joined(separator: ",")) }
+        if capture.failures == 1 { NSLog("PAGELAB look glass capture failed: %@ shows clear glass and tries again", members.map(\.label).joined(separator: ",")) }
       }
-    case .waiting:
+    case .started, .waiting:
       break
     }
   }
@@ -312,6 +350,11 @@ final class GlassFrames: NSObject {
     var failed = 0
     var rejected = 0
     var uncovered = 0
+    var moving = 0
+    var lensFrames = 0
+    var clearFrames = 0
+    var clearReasons: [String: Int] = [:]
+    var offMainMs: [Double] = []
     var mainMs: [Double] = []
     var worstInterval = 0.0
     var captures = 0
@@ -341,10 +384,14 @@ final class GlassFrames: NSObject {
       if since == 0 { since = now }
       guard now - since >= 1, frames > 0 else { return nil }
       func fixed(_ value: Double) -> String { String(format: "%.2f", value) }
-      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
+      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) moving_snapshots=\(moving)  lens_frames=\(lensFrames) clear_frames=\(clearFrames) clear_why=\(clearReasons.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key):\($0.value)" }.joined(separator: ",")) off_main_ms_p50=\(fixed(LiquidGlassRules.median(offMainMs))) off_main_ms_max=\(fixed(offMainMs.max() ?? 0)) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
       self = FrameStats()
       since = now
       return line
     }
   }
+}
+
+final class GlassCooldownBox {
+  var cooldown = GlassBudgetCooldown()
 }

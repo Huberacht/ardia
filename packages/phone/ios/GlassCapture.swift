@@ -10,12 +10,27 @@ import WebKit
 final class GlassCapture {
   enum Outcome {
     case captured
+    case started
     case failed
     case waiting
   }
 
+  private struct Landed {
+    let pixels: CVPixelBuffer
+    let rect: CGRect
+    let valid: CGRect
+    let inked: Bool
+    let ms: Double
+    let askedAt: CFTimeInterval
+    let follow: (web: WKWebView, offset: CGPoint)?
+  }
+
+  private static let queue = DispatchQueue(label: "ardia.glass.capture", qos: .userInitiated)
+  private static let largest = 4096
+
   private(set) var texture: MTLTexture?
   private(set) var rect: CGRect = .null
+  private(set) var validRect: CGRect = .null
   private(set) var generation = 0
   private(set) var failures = 0
   private var retryAt: CFTimeInterval = 0
@@ -24,7 +39,13 @@ final class GlassCapture {
   private var capturedAt: CFTimeInterval = 0
   private var pool: CVPixelBufferPool?
   private var poolSize: (Int, Int) = (0, 0)
-  private var output: MTLTexture?
+  private var outputs: [MTLTexture] = []
+  private var outputIndex = 0
+  private var token = 0
+  private var flying = false
+  private var landed: Landed?
+  private(set) var offMainMs = 0.0
+  var probe: ((CVPixelBuffer) -> Void)?
   private(set) var lastMs = 0.0
   private var samples: [LiquidGlassRules.CaptureSample] = []
   private var quiet = 0
@@ -43,6 +64,16 @@ final class GlassCapture {
     capturedScroll = web?.scrollView.contentOffset ?? .zero
   }
 
+  var velocity: CGPoint { scrollWeb == nil ? .zero : page.velocity }
+
+  var travel: ClosedRange<CGFloat>? {
+    guard let scroll = scrollWeb?.scrollView else { return nil }
+    let top = -scroll.adjustedContentInset.top
+    let bottom = max(scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom, top)
+    let now = scroll.contentOffset.y
+    return min(top - now, 0)...max(bottom - now, 0)
+  }
+
   var scrollShift: CGPoint {
     guard let web = scrollWeb else { return .zero }
     return CGPoint(x: web.scrollView.contentOffset.x - capturedScroll.x, y: web.scrollView.contentOffset.y - capturedScroll.y)
@@ -53,6 +84,10 @@ final class GlassCapture {
 
   func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, strikes: strikes) }
 
+  func forgetSamples() {
+    samples = []
+  }
+
   func noteMainThread(ms: Double, now: CFTimeInterval, captured: Bool) {
     samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms, cold: captured && !warmed)]
     if captured { warmed = true }
@@ -60,19 +95,20 @@ final class GlassCapture {
 
   var isChanging: Bool { settle > 0 }
 
-  func showFill() {
+  func drop() {
     guard texture != nil else { return }
     texture = nil
     rect = .null
+    validRect = .null
     generation += 1
   }
 
   private(set) var signatureValue = 0
 
-  func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect, shiftable: Bool = true, shallow: Bool = false) {
+  func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect, shiftable: Bool = true) {
     var hasher = Hasher()
     var budget = 1500
-    let depth = shallow ? LiquidGlassRules.backdropWalkDepth : Int.max
+    let depth = LiquidGlassRules.backdropWalkDepth
     hasher.combine(wanted.minX.rounded())
     hasher.combine(wanted.minY.rounded())
     hasher.combine(wanted.width.rounded())
@@ -80,9 +116,7 @@ final class GlassCapture {
     for piece in pieces {
       for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
       if let web = piece.page {
-        if shiftable {
-          hasher.combine(GlassFlowRules.scrollBucket(web.scrollView.contentOffset))
-        } else {
+        if !shiftable {
           hasher.combine(web.scrollView.contentOffset.x)
           hasher.combine(web.scrollView.contentOffset.y)
         }
@@ -107,9 +141,14 @@ final class GlassCapture {
     }
   }
 
-  func wants(_ wanted: CGRect, now: CFTimeInterval, gap: TimeInterval = 0) -> Bool {
-    if now < retryAt { return false }
-    if texture == nil || !rect.contains(wanted) || rect.width > wanted.width * 1.5 + 64 || rect.height > wanted.height * 1.5 + 64 { return true }
+  func wants(_ wanted: CGRect, need: CGRect? = nil, now: CFTimeInterval, gap: TimeInterval = 0) -> Bool {
+    if now < retryAt || flying { return false }
+    if texture == nil { return true }
+    if let need {
+      if GlassFlowRules.recenters(held: validRect.offsetBy(dx: -scrollShift.x, dy: -scrollShift.y), offer: wanted, need: need) { return true }
+    } else if !rect.contains(wanted) || rect.width > wanted.width * 1.5 + 64 || rect.height > wanted.height * 1.5 + 64 {
+      return true
+    }
     if settle > 0 { return GlassFlowRules.recaptureNow(changed: true, quietFrames: quiet, sinceCapture: now - capturedAt, gap: gap) }
     return now - capturedAt > LiquidGlassRules.idleRefresh
   }
@@ -119,7 +158,7 @@ final class GlassCapture {
     let started = CACurrentMediaTime()
     let width = max(Int((wanted.width * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
     let height = max(Int((wanted.height * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
-    guard width <= 2048, height <= 2048 else { return fail(now) }
+    guard width <= Self.largest, height <= Self.largest else { return fail(now) }
     let captured = CGRect(x: wanted.minX, y: wanted.minY, width: CGFloat(width) / pixelsPerPoint, height: CGFloat(height) / pixelsPerPoint)
     guard let pixels = makeBuffer(width: width, height: height) else { return fail(now) }
     CVPixelBufferLockBaseAddress(pixels, [])
@@ -137,25 +176,92 @@ final class GlassCapture {
     UIGraphicsPopContext()
     let inked = drew && Self.hasInk(base, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), width: width, height: height)
     CVPixelBufferUnlockBaseAddress(pixels, [])
-    guard inked, let (input, holder) = GlassMetal.shared.texture(of: pixels), let blurred = outputTexture(like: input), let blur = GlassMetal.shared.blur(sigma: sigma) else { return fail(now) }
-    GlassMetal.shared.flushTextures()
-    blurs.append(GlassBlurJob(kernel: blur, source: input, target: blurred, holder: holder))
-    texture = blurred
-    rect = captured
-    generation += 1
-    failures = 0
-    retryAt = 0
-    capturedAt = now
-    settle = max(settle - 1, 0)
+    token += 1
+    flying = false
+    landed = nil
+    guard inked, install(pixels, rect: captured, valid: wanted, sigma: sigma, blurs: &blurs, at: now) else { return fail(now) }
     lastMs = (CACurrentMediaTime() - started) * 1000
     return .captured
   }
 
+  func start(rect wanted: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval, steps: GlassSteps, follow web: WKWebView?) -> Outcome {
+    if now < retryAt || flying { return .waiting }
+    let width = max(Int((wanted.width * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
+    let height = max(Int((wanted.height * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
+    guard width <= Self.largest, height <= Self.largest, let pixels = makeBuffer(width: width, height: height) else { return fail(now) }
+    let captured = CGRect(x: wanted.minX, y: wanted.minY, width: CGFloat(width) / pixelsPerPoint, height: CGFloat(height) / pixelsPerPoint)
+    token += 1
+    let token = self.token
+    flying = true
+    let follow = web.map { (web: $0, offset: $0.scrollView.contentOffset) }
+    let box = GlassPixels(pixels)
+    Self.queue.async {
+      let started = CACurrentMediaTime()
+      let inked = Self.render(steps, into: box.pixels, rect: captured, pixelsPerPoint: pixelsPerPoint)
+      let ms = (CACurrentMediaTime() - started) * 1000
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          guard token == self.token else { return }
+          self.flying = false
+          self.landed = Landed(pixels: box.pixels, rect: captured, valid: wanted, inked: inked, ms: ms, askedAt: now, follow: follow)
+          GlassFrames.shared.schedule()
+        }
+      }
+    }
+    return .started
+  }
+
+  func land(sigma: Double, blurs: inout [GlassBlurJob], now: CFTimeInterval) -> Outcome? {
+    guard let landed else { return nil }
+    self.landed = nil
+    offMainMs = landed.ms
+    probe?(landed.pixels)
+    guard landed.inked, install(landed.pixels, rect: landed.rect, valid: landed.valid, sigma: sigma, blurs: &blurs, at: landed.askedAt) else { return fail(now) }
+    scrollWeb = landed.follow?.web
+    capturedScroll = landed.follow?.offset ?? .zero
+    return .captured
+  }
+
+  private func install(_ pixels: CVPixelBuffer, rect captured: CGRect, valid: CGRect, sigma: Double, blurs: inout [GlassBlurJob], at time: CFTimeInterval) -> Bool {
+    guard let (input, holder) = GlassMetal.shared.texture(of: pixels), let blurred = nextOutput(like: input), let blur = GlassMetal.shared.blur(sigma: sigma) else { return false }
+    GlassMetal.shared.flushTextures()
+    blurs.append(GlassBlurJob(kernel: blur, source: input, target: blurred, holder: holder))
+    texture = blurred
+    rect = captured
+    validRect = valid.intersection(captured)
+    generation += 1
+    failures = 0
+    retryAt = 0
+    capturedAt = time
+    settle = max(settle - 1, 0)
+    return true
+  }
+
+  nonisolated private static func render(_ steps: GlassSteps, into pixels: CVPixelBuffer, rect captured: CGRect, pixelsPerPoint: CGFloat) -> Bool {
+    CVPixelBufferLockBaseAddress(pixels, [])
+    defer { CVPixelBufferUnlockBaseAddress(pixels, []) }
+    let width = CVPixelBufferGetWidth(pixels)
+    let height = CVPixelBufferGetHeight(pixels)
+    guard let base = CVPixelBufferGetBaseAddress(pixels), let context = CGContext(data: base, width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return false }
+    context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+    context.interpolationQuality = .low
+    context.translateBy(x: 0, y: CGFloat(height))
+    context.scaleBy(x: pixelsPerPoint, y: -pixelsPerPoint)
+    context.translateBy(x: -captured.minX, y: -captured.minY)
+    steps.draw(in: context)
+    return hasInk(base, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), width: width, height: height)
+  }
+
+
   func release() {
     page.release()
+    token += 1
+    flying = false
+    landed = nil
     texture = nil
-    output = nil
+    outputs = []
     rect = .null
+    validRect = .null
     pool = nil
     poolSize = (0, 0)
     signature = nil
@@ -167,6 +273,7 @@ final class GlassCapture {
     retryAt = now + LiquidGlassRules.captureRetryDelay(failures: failures)
     texture = nil
     rect = .null
+    validRect = .null
     generation += 1
     return .failed
   }
@@ -183,7 +290,7 @@ final class GlassCapture {
     }
   }
 
-  private static func hasInk(_ base: UnsafeMutableRawPointer, bytesPerRow: Int, width: Int, height: Int) -> Bool {
+  nonisolated private static func hasInk(_ base: UnsafeMutableRawPointer, bytesPerRow: Int, width: Int, height: Int) -> Bool {
     for row in stride(from: 0, to: height, by: 2) {
       let line = base.advanced(by: row * bytesPerRow)
       for column in stride(from: 0, to: width, by: 2) where line.load(fromByteOffset: column * 4 + 3, as: UInt8.self) > 0 { return true }
@@ -205,7 +312,7 @@ final class GlassCapture {
       CVPixelBufferPoolCreate(nil, [kCVPixelBufferPoolMinimumBufferCountKey as String: 3] as CFDictionary, attributes as CFDictionary, &made)
       pool = made
       poolSize = (width, height)
-      output = nil
+      outputs = []
     }
     guard let pool else { return nil }
     var buffer: CVPixelBuffer?
@@ -213,14 +320,17 @@ final class GlassCapture {
     return buffer
   }
 
-  private func outputTexture(like input: MTLTexture) -> MTLTexture? {
-    if let output, output.width == input.width, output.height == input.height { return output }
-    output = nil
+  private func nextOutput(like input: MTLTexture) -> MTLTexture? {
+    if outputs.first.map({ $0.width != input.width || $0.height != input.height }) ?? false { outputs = [] }
+    outputIndex = (outputIndex + 1) % 2
+    if outputIndex < outputs.count { return outputs[outputIndex] }
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: input.width, height: input.height, mipmapped: false)
     descriptor.usage = [.shaderRead, .shaderWrite]
     descriptor.storageMode = .private
-    output = GlassMetal.shared.device?.makeTexture(descriptor: descriptor)
-    return output
+    guard let made = GlassMetal.shared.device?.makeTexture(descriptor: descriptor) else { return nil }
+    outputs.append(made)
+    outputIndex = outputs.count - 1
+    return made
   }
 
   private static func walk(_ layer: CALayer, into hasher: inout Hasher, budget: inout Int, depth: Int) {
@@ -254,5 +364,13 @@ final class GlassCapture {
       return
     }
     for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget, depth: depth - 1) }
+  }
+}
+
+final class GlassPixels: @unchecked Sendable {
+  let pixels: CVPixelBuffer
+
+  init(_ pixels: CVPixelBuffer) {
+    self.pixels = pixels
   }
 }

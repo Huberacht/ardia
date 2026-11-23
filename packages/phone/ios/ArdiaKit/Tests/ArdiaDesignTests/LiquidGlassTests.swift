@@ -114,9 +114,9 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.rimStops(dark: false).count == 25)
   }
 
-  @Test func `every glass refracts what is under it, falling back only for classic, Metal, budget or the lab`() {
-    func path(classic: Bool = false, metal: Bool = true, flat: Bool = false, lensFailed: Bool = false, holdsPage: Bool = false, solidPageAsked: Bool = false, overBudget: Bool = false, onScreen: Bool = true) -> LiquidGlassRules.Choice {
-      LiquidGlassRules.choose(classic: classic, metal: metal, flat: flat, lensFailed: lensFailed, rimFailed: false, holdsPage: holdsPage, solidPageAsked: solidPageAsked, overBudget: overBudget, onScreen: onScreen)
+  @Test func `every glass refracts what is under it, turning clear over budget and opaque only for classic, Metal or the lab`() {
+    func path(classic: Bool = false, metal: Bool = true, flat: Bool = false, lensFailed: Bool = false, holdsPage: Bool = false, solidPageAsked: Bool = false, overBudget: Bool = false, clearAsked: Bool = false, onScreen: Bool = true) -> LiquidGlassRules.Choice {
+      LiquidGlassRules.choose(classic: classic, metal: metal, flat: flat, lensFailed: lensFailed, rimFailed: false, holdsPage: holdsPage, solidPageAsked: solidPageAsked, overBudget: overBudget, clearAsked: clearAsked, onScreen: onScreen)
     }
     #expect(path().path == .live)
     #expect(path().lens && path().rim)
@@ -127,9 +127,12 @@ struct LiquidGlassTests {
     #expect(path(metal: false).path == .fallback)
     #expect(!path(metal: false).rim)
     #expect(path(onScreen: false).path == .fallback)
-    #expect(path(overBudget: true).path == .fallback)
-    #expect(path(holdsPage: true, overBudget: true).path == .solid)
-    #expect(path(overBudget: true).rim)
+    #expect(path(overBudget: true).path == .clear)
+    #expect(path(holdsPage: true, overBudget: true).path == .clear, "the page bar never turns opaque for its budget")
+    #expect(path(overBudget: true).rim && !path(overBudget: true).lens)
+    #expect(path(clearAsked: true).path == .clear)
+    #expect(LiquidGlassRules.Path.clear.isGlassy && LiquidGlassRules.Path.live.isGlassy)
+    #expect(!LiquidGlassRules.Path.solid.isGlassy && !LiquidGlassRules.Path.fallback.isGlassy && !LiquidGlassRules.Path.classic.isGlassy)
     #expect(path(holdsPage: true, solidPageAsked: true).path == .solid)
     #expect(path(solidPageAsked: true).path == .live)
     #expect(path(flat: true).path == .live)
@@ -204,7 +207,7 @@ struct LiquidGlassTests {
       LiquidGlassRules.choose(classic: classic, metal: metal, flat: false, lensFailed: false, rimFailed: false, holdsPage: true, overBudget: overBudget).path
     }
     let steps = [path(), path(overBudget: true), path()]
-    #expect(steps == [.live, .solid, .live])
+    #expect(steps == [.live, .clear, .live])
     #expect(steps.map(LiquidGlassRules.acceptsCapture) == [true, false, true])
     #expect(!LiquidGlassRules.acceptsCapture(path(classic: true)))
     #expect(!LiquidGlassRules.acceptsCapture(path(metal: false)))
@@ -260,14 +263,18 @@ struct LiquidGlassTests {
     #expect(gate.accepts(token: newer, key: GlassPageKey(page: 2, navigation: 5)))
   }
 
-  @Test func `WebKit is asked only while the page is still, far from the last snapshot or after a second`() {
+  @Test func `WebKit is asked while the page is still or scrolls slowly, far from the last snapshot or after a second`() {
     var gate = GlassSnapshotGate()
     gate.observe(GlassPageKey(page: 1, navigation: 1, committed: 1))
-    func ask(image: Bool = true, pending: Bool = false, still: Int = 5, distance: CGFloat = 0, age: TimeInterval = 0, committed: Bool = true) -> GlassSnapshotAsk {
-      GlassSnapshotAsk(hasImage: image, pending: pending, stillFrames: still, distance: distance, age: age, committed: committed)
+    func ask(image: Bool = true, pending: Bool = false, still: Int = 5, distance: CGFloat = 0, age: TimeInterval = 0, committed: Bool = true, speed: CGFloat = 0, moving: Bool = false) -> GlassSnapshotAsk {
+      GlassSnapshotAsk(hasImage: image, pending: pending, stillFrames: still, distance: distance, age: age, committed: committed, speed: speed, allowsMoving: moving)
     }
     #expect(gate.mayRequest(now: 0, ask(image: false)))
-    #expect(!gate.mayRequest(now: 0, ask(image: false, still: 1)), "never while the page moves")
+    #expect(!gate.mayRequest(now: 0, ask(image: false, still: 1)), "never while the page moves unless moving snapshots are on")
+    #expect(gate.mayRequest(now: 0, ask(image: false, still: 1, speed: 300, moving: true)), "a slow scroll")
+    #expect(!gate.mayRequest(now: 0, ask(image: false, still: 1, speed: 2400, moving: true)), "never during a fling")
+    #expect(!gate.mayRequest(now: 0, ask(still: 1, age: 5, speed: 300, moving: true)), "age alone is no reason while moving")
+    #expect(gate.mayRequest(now: 0, ask(still: 1, distance: 8, speed: 300, moving: true)), "while it creeps, one is always in flight")
     #expect(!gate.mayRequest(now: 0, ask(image: false, committed: false)), "never before the new document commits")
     #expect(!gate.mayRequest(now: 0, ask(image: false, pending: true)))
     #expect(!gate.mayRequest(now: 0, ask(distance: 1)), "a point of scroll is not a reason")
@@ -279,11 +286,12 @@ struct LiquidGlassTests {
     #expect(gate.mayRequest(now: 1.06, ask(image: false)))
   }
 
-  @Test func `a snapshot is used only if the page held still while WebKit took it`() {
-    #expect(GlassFlowRules.acceptsSnapshot(requested: CGPoint(x: 0, y: 1000), now: CGPoint(x: 0, y: 1000), movedWhilePending: false, zoomRequested: 1, zoomNow: 1))
-    #expect(!GlassFlowRules.acceptsSnapshot(requested: CGPoint(x: 0, y: 1000), now: CGPoint(x: 0, y: 1070), movedWhilePending: false, zoomRequested: 1, zoomNow: 1), "70 points later it would sample 70 points too far")
-    #expect(!GlassFlowRules.acceptsSnapshot(requested: CGPoint(x: 0, y: 1000), now: CGPoint(x: 0, y: 1000), movedWhilePending: true, zoomRequested: 1, zoomNow: 1), "moved and came back")
-    #expect(!GlassFlowRules.acceptsSnapshot(requested: .zero, now: .zero, movedWhilePending: false, zoomRequested: 1, zoomNow: 2))
+  @Test func `a snapshot is used if the page held still or only crept while WebKit took it`() {
+    #expect(GlassFlowRules.acceptsSnapshot(moved: false, maxSpeed: 0, allowsMoving: false, zoomRequested: 1, zoomNow: 1))
+    #expect(!GlassFlowRules.acceptsSnapshot(moved: true, maxSpeed: 100, allowsMoving: false, zoomRequested: 1, zoomNow: 1), "with moving snapshots off any move refuses it")
+    #expect(GlassFlowRules.acceptsSnapshot(moved: true, maxSpeed: 300, allowsMoving: true, zoomRequested: 1, zoomNow: 1))
+    #expect(!GlassFlowRules.acceptsSnapshot(moved: true, maxSpeed: 900, allowsMoving: true, zoomRequested: 1, zoomNow: 1), "a fling while it was taken")
+    #expect(!GlassFlowRules.acceptsSnapshot(moved: false, maxSpeed: 0, allowsMoving: true, zoomRequested: 1, zoomNow: 2))
     var gate = GlassSnapshotGate()
     gate.observe(GlassPageKey(page: 1, navigation: 3, committed: 7))
     let asked = gate.begin(now: 0)
@@ -325,7 +333,87 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 84, cold: true)], now: 1.1, frameMs: frameMs), "an 84 ms first capture still counts")
   }
 
-  @Test func `a shifted snapshot must cover the strip, so a fast fling shows the fill`() {
+  @Test func `the page is drawn from its document, further ahead of the scroll than behind it`() {
+    let visible = CGRect(x: 0, y: 2000, width: 402, height: 874)
+    let down = GlassFlowRules.documentArea(visible: visible, documentHeight: 20000, direction: 1, speed: 0)
+    #expect(down.minY == 800 && down.maxY == 2874 + 3600)
+    let up = GlassFlowRules.documentArea(visible: visible, documentHeight: 20000, direction: -1, speed: 0)
+    #expect(up.minY == -300 && up.maxY == 2874 + 1200, "it stops just past the top of the document, where the page can overscroll")
+    let still = GlassFlowRules.documentArea(visible: visible, documentHeight: 20000, direction: 0, speed: 0)
+    #expect(still.minY == -300 && still.maxY == 2874 + 2400, "before the page moves it reaches both ways")
+    let fling = GlassFlowRules.documentArea(visible: visible, documentHeight: 20000, direction: 1, speed: 9000)
+    #expect(abs(fling.maxY - (2874 + 6000)) < 0.001, "a fling reaches further, up to 6,000 points")
+    let short = GlassFlowRules.documentArea(visible: visible, documentHeight: 3000, direction: 1, speed: 0)
+    #expect(short.minY == -300 && short.maxY == 3300, "a short document is drawn whole, with the overscroll at both ends")
+    let flingBack = GlassFlowRules.documentArea(visible: visible, documentHeight: 20000, direction: -1, speed: 9000)
+    #expect(abs(flingBack.maxY - (2874 + 3000)) < 0.001, "a fling keeps more behind it, in case it turns")
+    #expect(GlassFlowRules.captureReach(speed: 0) == 1800 && GlassFlowRules.captureReach(speed: 4000) == 2400 && GlassFlowRules.captureReach(speed: 9000) == 3600)
+    #expect(GlassFlowRules.place(area: CGRect(x: 0, y: 800, width: 402, height: 5674), zoom: 1, offset: CGPoint(x: 0, y: 2000)) == CGRect(x: 0, y: -1200, width: 402, height: 5674))
+    #expect(GlassFlowRules.place(area: CGRect(x: 0, y: 100, width: 201, height: 400), zoom: 2, offset: CGPoint(x: 0, y: 150)) == CGRect(x: 0, y: 50, width: 402, height: 800))
+    #expect(GlassFlowRules.direction(velocity: 300, last: -1) == 1)
+    #expect(GlassFlowRules.direction(velocity: -300, last: 1) == -1)
+    #expect(GlassFlowRules.direction(velocity: 5, last: -1) == -1, "a creep keeps the last direction")
+  }
+
+  @Test func `a new document picture is asked for before the scroll runs past the one it has`() {
+    let needed = CGRect(x: 0, y: 736, width: 402, height: 96)
+    let placed = CGRect(x: 0, y: -1200, width: 402, height: 4000)
+    let document = CGRect(x: 0, y: -5000, width: 402, height: 20000)
+    func wanted(image: Bool = true, still: Bool = false, age: TimeInterval = 0, placed: CGRect = placed, document: CGRect = document, velocity: CGFloat = 0) -> Bool {
+      GlassFlowRules.documentWanted(hasImage: image, still: still, age: age, needed: needed, placed: placed, document: document, velocity: velocity)
+    }
+    #expect(wanted(image: false, still: true, placed: .null))
+    #expect(!wanted(still: true, age: 1))
+    #expect(wanted(still: true, age: 2), "a still page is refreshed every two seconds")
+    #expect(!wanted(velocity: 1000), "1,200 points of lead are still inside")
+    #expect(wanted(velocity: 3000), "a fling needs 2,250 points of lead")
+    #expect(wanted(placed: placed.offsetBy(dx: 0, dy: 1000), velocity: -1000), "scrolling up runs out above")
+    #expect(!wanted(document: CGRect(x: 0, y: -5000, width: 402, height: 7800), velocity: 3000), "no lead is asked for past the end of the document")
+    let need = GlassFlowRules.captureNeed(footprint: CGRect(x: 0, y: 700, width: 402, height: 160), velocity: CGPoint(x: 0, y: 1000))
+    #expect(need == CGRect(x: 0, y: 700, width: 402, height: 410))
+    let held = CGRect(x: 0, y: -1000, width: 402, height: 2500)
+    #expect(!GlassFlowRules.recenters(held: held, offer: held.offsetBy(dx: 0, dy: 500), need: need), "the capture still holds the lead")
+    #expect(GlassFlowRules.recenters(held: held.offsetBy(dx: 0, dy: -400), offer: held.offsetBy(dx: 0, dy: 500), need: need), "it is redrawn ahead before the lead runs out")
+    #expect(!GlassFlowRules.recenters(held: held.offsetBy(dx: 0, dy: -400), offer: held.offsetBy(dx: 0, dy: -400), need: need), "never again for a picture that reaches no further")
+  }
+
+  @Test func `the lens fades to clear glass before its capture runs out`() {
+    let capture = CGRect(x: 0, y: 500, width: 402, height: 500)
+    let footprint = CGRect(x: 0, y: 736, width: 402, height: 96)
+    #expect(GlassFlowRules.lensShows(footprint: footprint, capture: capture, velocity: .zero))
+    #expect(GlassFlowRules.lensShows(footprint: footprint, capture: capture, velocity: CGPoint(x: 0, y: 1000)), "120 points of room at 1000 points a second")
+    #expect(!GlassFlowRules.lensShows(footprint: footprint, capture: capture, velocity: CGPoint(x: 0, y: 2000)), "it starts fading while still covered")
+    #expect(GlassFlowRules.lensShows(footprint: footprint, capture: capture, velocity: CGPoint(x: 0, y: 2000), travel: -900...100), "but not for scrolling the page can't do")
+    #expect(GlassFlowRules.lensShows(footprint: footprint, capture: capture, velocity: CGPoint(x: 0, y: -1500)))
+    #expect(!GlassFlowRules.lensShows(footprint: footprint.offsetBy(dx: 0, dy: 200), capture: capture, velocity: .zero))
+    #expect(GlassFlowRules.lensDraws(footprint: footprint.offsetBy(dx: 0, dy: 200), capture: capture), "it keeps drawing while it fades")
+    #expect(!GlassFlowRules.lensDraws(footprint: footprint.offsetBy(dx: 0, dy: 900), capture: capture))
+    #expect(!GlassFlowRules.lensShows(footprint: footprint, capture: .null, velocity: .zero))
+  }
+
+  @Test func `an over-budget glass cools down for a few seconds, longer each time, and forgets after a minute`() {
+    var cooldown = GlassBudgetCooldown()
+    #expect(!cooldown.isCooling(now: 0))
+    cooldown.trip(now: 10)
+    #expect(cooldown.isCooling(now: 12.9))
+    #expect(!cooldown.isCooling(now: 13))
+    cooldown.trip(now: 14)
+    #expect(cooldown.isCooling(now: 19.9) && !cooldown.isCooling(now: 20))
+    cooldown.trip(now: 21)
+    #expect(cooldown.trips == 3 && !cooldown.isCooling(now: 33))
+    cooldown.trip(now: 200)
+    #expect(cooldown.trips == 1 && !cooldown.isCooling(now: 203))
+    #expect(LiquidGlassRules.budgetCooldown(trips: 9) == LiquidGlassRules.budgetCooldownLongest)
+  }
+
+  @Test func `clear glass is a light veil that keeps text readable`() {
+    let light = GlassFrostStyle.glass.clear(dark: false)
+    let dark = GlassFrostStyle.glass.clear(dark: true)
+    #expect(light.alpha > GlassFrostStyle.glass.tint(dark: false).alpha && light.alpha < GlassFrostStyle.glass.fallback(dark: false).alpha)
+    #expect(dark.alpha > GlassFrostStyle.glass.tint(dark: true).alpha && dark.alpha < GlassFrostStyle.glass.fallback(dark: true).alpha)
+  }
+
+  @Test func `a shifted snapshot must cover the strip, so a fast fling fades to clear glass`() {
     let viewport = CGRect(x: 0, y: 0, width: 402, height: 874)
     let image = viewport.insetBy(dx: 0, dy: -320)
     let bar = CGRect(x: 0, y: 760 - 24, width: 402, height: 48 + 48)

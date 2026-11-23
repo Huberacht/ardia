@@ -16,6 +16,7 @@ final class LiquidGlassSurface: UIView {
   var label: String = "-"
 
   private let fillLayer = CALayer()
+  private let clearLayer = CALayer()
   private let lens = GlassTarget(adds: false)
   private let rim = GlassTarget(adds: true)
   private var lensLayer: CAMetalLayer { lens.layer }
@@ -37,6 +38,9 @@ final class LiquidGlassSurface: UIView {
   private var batchedPath = false
   private var batchedInvalidate = false
   private var laidOut: (size: CGSize, scale: CGFloat)?
+  private var lensWanted = false
+  private var lensOn: Bool?
+  private var lastBridge: CFTimeInterval = 0
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -44,7 +48,11 @@ final class LiquidGlassSurface: UIView {
     isAccessibilityElement = false
     backgroundColor = .clear
     fillLayer.cornerCurve = .circular
+    clearLayer.cornerCurve = .circular
+    clearLayer.isHidden = true
+    lens.layer.opacity = 0
     layer.addSublayer(fillLayer)
+    layer.addSublayer(clearLayer)
     layer.addSublayer(lens.layer)
     layer.addSublayer(rim.layer)
     lens.onDrawn = { [weak self] in self?.updateVisibility() }
@@ -164,13 +172,14 @@ final class LiquidGlassSurface: UIView {
     backdropRoot = mode == .beneath ? window : nil
     let next = LiquidGlassRules.choose(
       classic: classic,
-      metal: metal.hasMetal,
+      metal: metal.device != nil,
       flat: GlassLaunch.flat,
       lensFailed: metal.failures > 0,
       rimFailed: metal.failures > 0,
       holdsPage: found.map(GlassSources.holdsPage) ?? false,
       solidPageAsked: GlassLaunch.solidPage,
       overBudget: GlassFrames.shared.isOverBudget(captureOwner),
+      clearAsked: GlassLaunch.forceClear,
       onScreen: window != nil
     )
     let changed = next != choice
@@ -219,40 +228,87 @@ final class LiquidGlassSurface: UIView {
 
   var needsRetry: Bool { lens.needsRetry || rim.needsRetry }
 
+  var showsLens: Bool { lensOn == true }
+  private(set) var clearReason = ""
+
   func plan(with capture: GlassCapture?, space: UIView?) -> [GlassDrawJob] {
     guard GlassMetal.shared.pipeline != nil else { return [] }
     let size = lensLayer.bounds.size
     guard size.width > 0, size.height > 0 else { return [] }
-    var uv = (left: 0.0, top: 0.0, width: 1.0, height: 1.0)
-    var live = false
-    var texture: MTLTexture?
-    if LiquidGlassRules.acceptsCapture(choice.path), let capture, let space, let captured = capture.texture, let shown = region(in: space), !capture.rect.isNull {
-      let shift = capture.scrollShift
-      let region = shown.offsetBy(dx: shift.x, dy: shift.y)
-      let rect = capture.rect
-      if rect.insetBy(dx: -0.5, dy: -0.5).contains(GlassFlowRules.footprint(of: region, margin: marginPoints)) {
-        uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
-        live = true
-        texture = captured
-      }
-    }
-    let generation = live ? (capture?.generation ?? -1) : -1
     var jobs: [GlassDrawJob] = []
-    if let job = lens.plan(makeFrame(size: size, live: live, uv: uv, rimOnly: false).uniforms, generation: generation, size: size, texture: texture) { jobs.append(job) }
+    if choice.path.isGlassy {
+      var drawing = false
+      var shows = false
+      if LiquidGlassRules.acceptsCapture(choice.path), let capture, let space, let captured = capture.texture, let shown = region(in: space), !capture.rect.isNull {
+        let shift = capture.scrollShift
+        let region = shown.offsetBy(dx: shift.x, dy: shift.y)
+        let rect = capture.rect
+        let footprint = GlassFlowRules.footprint(of: shown, margin: marginPoints).intersection(space.bounds).offsetBy(dx: shift.x, dy: shift.y)
+        if PhoneTestBuild.isOn {
+          let valid = capture.validRect
+          clearReason = valid.contains(footprint) ? "lead" : footprint.minY < valid.minY ? "above\(Int((valid.minY - footprint.minY) / 100) * 100)" : footprint.maxY > valid.maxY ? "below\(Int((footprint.maxY - valid.maxY) / 100) * 100)" : "side"
+        }
+        if GlassFlowRules.lensDraws(footprint: footprint, capture: capture.validRect) {
+          drawing = true
+          shows = GlassFlowRules.lensShows(footprint: footprint, capture: capture.validRect, velocity: capture.velocity, travel: capture.travel)
+          let uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
+          if let job = lens.plan(makeFrame(size: size, live: true, uv: uv, rimOnly: false).uniforms, generation: capture.generation, size: size, texture: captured, live: true) { jobs.append(job) }
+        }
+      }
+      if PhoneTestBuild.isOn, capture?.texture == nil { clearReason = "none" }
+      if !drawing { lens.forget() }
+      lensWanted = shows
+    } else {
+      lensWanted = false
+      if let job = lens.plan(makeFrame(size: size, live: false, uv: (0, 0, 1, 1), rimOnly: false).uniforms, generation: -1, size: size, texture: nil) { jobs.append(job) }
+    }
     if choice.rim, !rimDisabled, let job = rim.plan(makeFrame(size: size, live: false, uv: (0, 0, 1, 1), rimOnly: true).uniforms, generation: 0, size: size, texture: nil) { jobs.append(job) }
     updateVisibility()
     return jobs
   }
 
   func updateVisibility() {
-    let rimShown = choice.rim && !rimDisabled && rim.hasDrawn && GlassMetal.shared.isReady && !classic
-    let lensShown = lens.hasDrawn && GlassMetal.shared.isReady && !classic
-    guard lensLayer.isHidden == lensShown || rim.layer.isHidden == rimShown || fillLayer.isHidden != lensShown else { return }
+    let metal = GlassMetal.shared.isReady && !classic
+    let glassy = choice.path.isGlassy && !classic
+    let rimShown = choice.rim && !rimDisabled && rim.hasDrawn && metal
+    let lensDrawn = lens.hasDrawn && metal
+    let on = glassy ? lensWanted && lens.drawnLive && lensDrawn : lensDrawn
+    let fillShown = !glassy && !lensDrawn
+    if lensLayer.isHidden == lensDrawn || rim.layer.isHidden == rimShown || fillLayer.isHidden == fillShown || clearLayer.isHidden == glassy {
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      lensLayer.isHidden = !lensDrawn
+      fillLayer.isHidden = !fillShown
+      clearLayer.isHidden = !glassy
+      rim.layer.isHidden = !rimShown
+      CATransaction.commit()
+    }
+    setLens(on: on, fades: glassy)
+  }
+
+  private func setLens(on: Bool, fades: Bool) {
+    guard on != lensOn else { return }
+    let now = CACurrentMediaTime()
+    if lensOn == true, !on, choice.path == .live, now - lastBridge >= 1 {
+      lastBridge = now
+      PendingCounts.add(PendingCounts.glassLensBridged)
+    }
+    lensOn = on
+    let target: Float = on ? 1 : 0
+    let from = lensLayer.presentation()?.opacity ?? lensLayer.opacity
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    lensLayer.isHidden = !lensShown
-    fillLayer.isHidden = lensShown
-    rim.layer.isHidden = !rimShown
+    lensLayer.opacity = target
+    if fades, from != target, !lensLayer.isHidden {
+      let fade = CABasicAnimation(keyPath: "opacity")
+      fade.fromValue = from
+      fade.toValue = target
+      fade.duration = GlassFlowRules.lensFade * Double(abs(target - from))
+      fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+      lensLayer.add(fade, forKey: "fade")
+    } else {
+      lensLayer.removeAnimation(forKey: "fade")
+    }
     CATransaction.commit()
   }
 
@@ -303,6 +359,7 @@ final class LiquidGlassSurface: UIView {
     CATransaction.setDisableActions(true)
     let frame = CGRect(origin: .zero, size: size)
     fillLayer.frame = frame
+    clearLayer.frame = frame
     for target in [lens, rim] { target.lay(out: frame, scale: scale) }
     CATransaction.commit()
     invalidate()
@@ -312,21 +369,18 @@ final class LiquidGlassSurface: UIView {
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     let dark = isDark
-    let size = bounds.size
+    let corner = radius(for: bounds.size)
     let base = choice.path == .solid ? (solidFill.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? GlassFrostStyle.glass.fallback(dark: dark)) : GlassFrostStyle.glass.fallback(dark: dark)
-    let tinted = tint.map { GlassInk($0.resolvedColor(with: traits(dark))) }.map { $0.over(base) } ?? base
-    fillLayer.backgroundColor = UIColor(red: tinted.red, green: tinted.green, blue: tinted.blue, alpha: tinted.alpha).cgColor
-    fillLayer.cornerRadius = radius(for: size)
-    let edge = GlassFrostStyle.glass.edge(dark: dark)
-    fillLayer.borderWidth = GlassFrostStyle.glass.edgeWidth
-    fillLayer.borderColor = UIColor(red: edge.red, green: edge.green, blue: edge.blue, alpha: edge.alpha).cgColor
-    let metal = GlassMetal.shared.isReady && !classic
-    if !metal {
-      fillLayer.isHidden = false
-      lensLayer.isHidden = true
-      rim.layer.isHidden = true
+    let tintInk = tint.map { GlassInk($0.resolvedColor(with: traits(dark))) }
+    let edge = GlassFrostStyle.glass.edge(dark: dark).color
+    for (target, ink) in [(fillLayer, base), (clearLayer, GlassFrostStyle.glass.clear(dark: dark))] {
+      target.backgroundColor = (tintInk.map { $0.over(ink) } ?? ink).color
+      target.cornerRadius = corner
+      target.borderWidth = GlassFrostStyle.glass.edgeWidth
+      target.borderColor = edge
     }
     CATransaction.commit()
+    updateVisibility()
   }
 
   private func report() {
@@ -378,6 +432,8 @@ extension GlassInk {
     self.init(red: Double(min(max(red, 0), 1)), green: Double(min(max(green, 0), 1)), blue: Double(min(max(blue, 0), 1)), alpha: Double(min(max(alpha, 0), 1)))
   }
 
+  var color: CGColor { UIColor(red: red, green: green, blue: blue, alpha: alpha).cgColor }
+
   func over(_ under: GlassInk) -> GlassInk {
     let alpha = self.alpha + under.alpha * (1 - self.alpha)
     guard alpha > 0 else { return .clear }
@@ -392,9 +448,11 @@ final class GlassTarget {
   var drawn: [Float]?
   private var drawnGeneration = -1
   private var drawnSize: CGSize = .zero
+  private var epoch = 0
   private(set) var pending = 0
   private(set) var needsRetry = false
   private(set) var hasDrawn = false
+  private(set) var drawnLive = false
   var onDrawn: (() -> Void)?
 
   init(adds: Bool) {
@@ -415,7 +473,15 @@ final class GlassTarget {
     layer.device = GlassMetal.shared.device
   }
 
-  func plan(_ uniforms: [Float], generation: Int, size: CGSize, texture: MTLTexture?) -> GlassDrawJob? {
+  func forget() {
+    guard drawn != nil || drawnLive || needsRetry else { return }
+    drawn = nil
+    drawnLive = false
+    needsRetry = false
+    epoch += 1
+  }
+
+  func plan(_ uniforms: [Float], generation: Int, size: CGSize, texture: MTLTexture?, live: Bool = false) -> GlassDrawJob? {
     if !needsRetry, uniforms == drawn, generation == drawnGeneration, size == drawnSize { return nil }
     guard pending == 0, let source = texture ?? GlassBlank.texture else {
       needsRetry = true
@@ -423,15 +489,19 @@ final class GlassTarget {
     }
     pending += 1
     needsRetry = false
+    let epoch = self.epoch
     return GlassDrawJob(layer: layer, uniforms: uniforms, texture: source) { [weak self] drew in
       guard let self else { return }
       self.pending = max(self.pending - 1, 0)
       if drew {
-        self.drawn = uniforms
-        self.drawnGeneration = generation
-        self.drawnSize = size
         self.hasDrawn = true
-      } else {
+        if epoch == self.epoch {
+          self.drawn = uniforms
+          self.drawnGeneration = generation
+          self.drawnSize = size
+          self.drawnLive = live
+        }
+      } else if epoch == self.epoch {
         self.needsRetry = true
       }
       self.onDrawn?()

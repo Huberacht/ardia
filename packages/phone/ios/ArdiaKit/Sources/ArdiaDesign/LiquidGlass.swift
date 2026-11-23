@@ -60,24 +60,27 @@ public struct GlassFrostStyle: Equatable, Sendable {
   public var saturation: Double
   public var tint: (light: GlassInk, dark: GlassInk)
   public var fallback: (light: GlassInk, dark: GlassInk)
+  public var clear: (light: GlassInk, dark: GlassInk)
   public var edge: (light: GlassInk, dark: GlassInk)
   public var edgeWidth: Double
 
   public func tint(dark: Bool) -> GlassInk { dark ? tint.dark : tint.light }
   public func fallback(dark: Bool) -> GlassInk { dark ? fallback.dark : fallback.light }
   public func edge(dark: Bool) -> GlassInk { dark ? edge.dark : edge.light }
+  public func clear(dark: Bool) -> GlassInk { dark ? clear.dark : clear.light }
 
   public static let glass = GlassFrostStyle(
     blur: 12,
     saturation: 1.5,
     tint: (GlassInk(hex: 0xFFFFFF, alpha: 0.45), GlassInk(hex: 0xFFFFFF, alpha: 0.1)),
     fallback: (GlassInk(hex: 0xFFFFFF, alpha: 0.82), GlassInk(hex: 0x3A3A3C, alpha: 0.82)),
+    clear: (GlassInk(hex: 0xFFFFFF, alpha: 0.66), GlassInk(hex: 0x1C1C1E, alpha: 0.62)),
     edge: (GlassInk(hex: 0x000000, alpha: 0.06), GlassInk(hex: 0xFFFFFF, alpha: 0.1)),
     edgeWidth: 0.5
   )
 
   public static func == (lhs: GlassFrostStyle, rhs: GlassFrostStyle) -> Bool {
-    lhs.blur == rhs.blur && lhs.saturation == rhs.saturation && lhs.tint == rhs.tint && lhs.fallback == rhs.fallback && lhs.edge == rhs.edge && lhs.edgeWidth == rhs.edgeWidth
+    lhs.blur == rhs.blur && lhs.saturation == rhs.saturation && lhs.tint == rhs.tint && lhs.fallback == rhs.fallback && lhs.clear == rhs.clear && lhs.edge == rhs.edge && lhs.edgeWidth == rhs.edgeWidth
   }
 }
 
@@ -104,9 +107,12 @@ public enum LiquidGlassRules {
 
   public enum Path: String, Sendable {
     case live
+    case clear
     case solid
     case fallback
     case classic
+
+    public var isGlassy: Bool { self == .live || self == .clear }
   }
 
   public struct Choice: Equatable, Sendable {
@@ -141,6 +147,7 @@ public enum LiquidGlassRules {
     holdsPage: Bool,
     solidPageAsked: Bool = false,
     overBudget: Bool = false,
+    clearAsked: Bool = false,
     onScreen: Bool = true
   ) -> Choice {
     let rim = metal && !classic && !flat && !rimFailed
@@ -150,7 +157,8 @@ public enum LiquidGlassRules {
     if classic { return pick(.classic, "classic or reduce transparency") }
     if !metal { return pick(.fallback, "no Metal") }
     if !onScreen { return pick(.fallback, "off screen: nothing to refract until it is seen") }
-    if overBudget { return pick(holdsPage ? .solid : .fallback, "capture over budget") }
+    if overBudget { return pick(.clear, "capture over budget: clear glass until it cools down") }
+    if clearAsked { return pick(.clear, "clear glass asked in the lab") }
     if holdsPage, solidPageAsked { return pick(.solid, "page under the glass, solid page asked in the lab") }
     if holdsPage { return pick(.live, "page under the glass, captured as it changes") }
     return pick(.live, "no page under the glass")
@@ -197,6 +205,14 @@ public enum LiquidGlassRules {
   }
 
   public static let backdropStrikes = 2
+  public static let budgetCooldownBase: TimeInterval = 3
+  public static let budgetCooldownLongest: TimeInterval = 30
+  public static let budgetTripMemory: TimeInterval = 60
+
+  public static func budgetCooldown(trips: Int) -> TimeInterval {
+    guard trips > 0 else { return 0 }
+    return min(budgetCooldownBase * pow(2, Double(min(trips - 1, 16))), budgetCooldownLongest)
+  }
 
   public static func acceptsCapture(_ path: Path) -> Bool { path == .live }
 

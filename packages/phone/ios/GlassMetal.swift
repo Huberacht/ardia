@@ -25,6 +25,18 @@ enum GlassLaunch {
 
   static let pageMode: PageMode = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassPageMode").flatMap(PageMode.init(rawValue:)) ?? .shift) : .shift
   static let capture: Capture = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassCapture").flatMap(Capture.init(rawValue:)) ?? .auto) : .auto
+  static let offMain = !PhoneTestBuild.flag("ArdiaGlassOnMain")
+  static let movingSnapshots = !PhoneTestBuild.flag("ArdiaGlassStillSnapshots")
+  static let forceClear = PhoneTestBuild.flag("ArdiaGlassForceClear")
+  static let copyProbe = PhoneTestBuild.flag("ArdiaGlassCopyProbe")
+  static let placementProbe = PhoneTestBuild.flag("ArdiaGlassPlacementProbe")
+
+  enum PageShot: String {
+    case pdf
+    case snapshot
+  }
+
+  static let pageShot: PageShot = PhoneTestBuild.isOn ? (UserDefaults.standard.string(forKey: "ArdiaGlassPageShot").flatMap(PageShot.init(rawValue:)) ?? .pdf) : .pdf
 }
 
 enum GlassReport {
@@ -55,8 +67,6 @@ final class GlassMetal {
   private var blurs: [Double: MPSImageGaussianBlur] = [:]
   var onFailed: (() -> Void)?
 
-  var failed: Bool { failures > 0 && pipeline == nil && !compiling }
-  var hasMetal: Bool { device != nil && !failed }
   var isReady: Bool { pipeline != nil }
 
   func prepare() {

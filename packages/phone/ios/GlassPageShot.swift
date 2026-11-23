@@ -5,22 +5,28 @@ import WebKit
 
 @MainActor
 final class GlassPageShot {
+  private static let rasterQueue = DispatchQueue(label: "ardia.glass.page", qos: .userInitiated)
+
   private var gate = GlassSnapshotGate()
   private weak var web: WKWebView?
   private(set) var image: CGImage?
   private(set) var generation = 0
-  private var rect: CGRect = .null
-  private var offset: CGPoint = .zero
+  private var area: CGRect = .null
   private var zoom: CGFloat = 1
   private var takenAt: CFTimeInterval = 0
   private var pending = false
   private var movedWhilePending = false
   private var requestedOffset: CGPoint = .zero
   private var lastOffset: CGPoint?
+  private var lastSeenAt: CFTimeInterval = 0
   private var stillFrames = 0
+  private(set) var velocity: CGPoint = .zero
+  private var direction: CGFloat = 0
+  private var fastestWhilePending: CGFloat = 0
   private(set) var latencies: [Double] = []
   private(set) var rejected = 0
   private(set) var uncovered = 0
+  private(set) var moving = 0
   var onMainWork: ((Double) -> Void)?
 
   static func key(of web: WKWebView) -> (key: GlassPageKey, committed: Bool) {
@@ -28,14 +34,23 @@ final class GlassPageShot {
     return (GlassPageKey(page: ObjectIdentifier(web).hashValue, navigation: document?.navigation ?? 0, committed: document?.committed ?? 0), document?.settled ?? true)
   }
 
-  var isMoving: Bool { stillFrames < GlassFlowRules.stillFramesForSnapshot }
-
   @discardableResult
-  func observe(_ web: WKWebView) -> Bool {
+  func observe(_ web: WKWebView, now: CFTimeInterval) -> Bool {
     let offset = web.scrollView.contentOffset
     if offset == lastOffset { stillFrames += 1 } else { stillFrames = 0 }
+    var instant = CGPoint.zero
+    if let lastOffset, now > lastSeenAt, lastSeenAt > 0 {
+      let span = CGFloat(now - lastSeenAt)
+      instant = CGPoint(x: (offset.x - lastOffset.x) / span, y: (offset.y - lastOffset.y) / span)
+    }
+    velocity = CGPoint(x: (velocity.x + instant.x) / 2, y: (velocity.y + instant.y) / 2)
+    direction = GlassFlowRules.direction(velocity: velocity.y, last: direction)
     lastOffset = offset
-    if pending, offset != requestedOffset { movedWhilePending = true }
+    lastSeenAt = now
+    if pending {
+      if offset != requestedOffset { movedWhilePending = true }
+      fastestWhilePending = max(fastestWhilePending, hypot(instant.x, instant.y))
+    }
     let key = Self.key(of: web).key
     let changed = gate.observe(key) || self.web !== web
     guard changed else {
@@ -49,19 +64,83 @@ final class GlassPageShot {
   }
 
   func request(_ web: WKWebView, around needed: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
+    switch GlassLaunch.pageShot {
+    case .pdf: requestDocument(web, around: needed, pixelsPerPoint: pixelsPerPoint, now: now)
+    case .snapshot: requestSnapshot(web, pixelsPerPoint: pixelsPerPoint, now: now)
+    }
+  }
+
+  private var speed: CGFloat { hypot(velocity.x, velocity.y) }
+
+  private func requestDocument(_ web: WKWebView, around needed: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
     let (key, committed) = Self.key(of: web)
-    let distance = image == nil ? .infinity : max(abs(web.scrollView.contentOffset.y - offset.y), abs(web.scrollView.contentOffset.x - offset.x))
-    let ask = GlassSnapshotAsk(hasImage: image != nil, pending: pending, stillFrames: stillFrames, distance: distance, age: now - takenAt, committed: committed)
+    guard !pending, committed, key == gate.key, now >= gate.nextRequest else { return }
+    let still = stillFrames >= GlassFlowRules.stillFramesForSnapshot
+    let zoom = web.scrollView.zoomScale
+    let offset = web.scrollView.contentOffset
+    let document = GlassFlowRules.place(area: CGRect(x: 0, y: 0, width: web.scrollView.contentSize.width / zoom, height: web.scrollView.contentSize.height / zoom).insetBy(dx: 0, dy: -GlassFlowRules.documentOverscroll), zoom: zoom, offset: offset).union(web.bounds)
+    guard GlassFlowRules.documentWanted(hasImage: image != nil, still: still, age: now - takenAt, needed: needed, placed: placed(web)?.rect ?? .null, document: document, velocity: velocity.y) else { return }
+    let visible = CGRect(x: offset.x / zoom, y: offset.y / zoom, width: web.bounds.width / zoom, height: web.bounds.height / zoom)
+    let area = GlassFlowRules.documentArea(visible: visible, documentHeight: web.scrollView.contentSize.height / zoom, direction: direction, speed: speed / zoom)
+    let token = gate.begin(now: now)
+    pending = true
+    movedWhilePending = false
+    requestedOffset = offset
+    let configuration = WKPDFConfiguration()
+    configuration.rect = area
+    let started = CACurrentMediaTime()
+    let width = max(Int((area.width * zoom * pixelsPerPoint).rounded()), 1)
+    web.createPDF(configuration: configuration) { [weak self, weak web] result in
+      MainActor.assumeIsolated {
+        let working = CACurrentMediaTime()
+        guard let self else { return }
+        defer { self.onMainWork?((CACurrentMediaTime() - working) * 1000) }
+        guard let web, self.web === web, self.gate.accepts(token: token, key: key), web.scrollView.zoomScale == zoom, case .success(let data) = result else {
+          self.pending = false
+          self.rejected += 1
+          if case .failure = result { self.gate.failed(now: working) }
+          return
+        }
+        let moved = self.movedWhilePending
+        Self.rasterQueue.async {
+          let picture = Self.raster(data, width: width)
+          let rasterMs = (CACurrentMediaTime() - started) * 1000
+          DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+              let landed = CACurrentMediaTime()
+              defer { self.onMainWork?((CACurrentMediaTime() - landed) * 1000) }
+              self.pending = false
+              guard self.web === web, self.gate.accepts(token: token, key: key), web.scrollView.zoomScale == zoom else {
+                self.rejected += 1
+                return
+              }
+              guard let picture, Self.usable(picture, under: web) else {
+                self.gate.failed(now: landed)
+                return
+              }
+              self.keep(picture, area: area, zoom: zoom, at: landed, moved: moved)
+              if PhoneTestBuild.isOn { self.latencies.append(rasterMs) }
+              if GlassLaunch.placementProbe { GlassPlacementProbe.check(picture, area: area, zoom: zoom, web: web) }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func requestSnapshot(_ web: WKWebView, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
+    let (key, committed) = Self.key(of: web)
+    let distance = image == nil ? .infinity : max(abs(web.scrollView.contentOffset.y - requestedOffset.y), abs(web.scrollView.contentOffset.x - requestedOffset.x))
+    let ask = GlassSnapshotAsk(hasImage: image != nil, pending: pending, stillFrames: stillFrames, distance: distance, age: now - takenAt, committed: committed, speed: speed, allowsMoving: GlassLaunch.movingSnapshots)
     guard gate.mayRequest(now: now, ask), key == gate.key else { return }
     let token = gate.begin(now: now)
     pending = true
     movedWhilePending = false
-    let bounded = needed.intersection(web.bounds)
-    let rect = GlassFlowRules.snapshotRect(around: bounded.isNull ? web.bounds : bounded)
+    fastestWhilePending = ask.isStill ? 0 : speed
     let configuration = WKSnapshotConfiguration()
-    configuration.rect = rect
+    configuration.rect = web.bounds
     configuration.afterScreenUpdates = GlassLaunch.snapshotAfterUpdates
-    configuration.snapshotWidth = NSNumber(value: Double(rect.width * pixelsPerPoint / max(web.traitCollection.displayScale, 1)))
+    configuration.snapshotWidth = NSNumber(value: Double(web.bounds.width * pixelsPerPoint / max(web.traitCollection.displayScale, 1)))
     let offset = web.scrollView.contentOffset
     requestedOffset = offset
     let zoom = web.scrollView.zoomScale
@@ -76,8 +155,8 @@ final class GlassPageShot {
           return
         }
         self.pending = false
-        let accepted = GlassFlowRules.acceptsSnapshot(requested: offset, now: web.scrollView.contentOffset, movedWhilePending: self.movedWhilePending, zoomRequested: zoom, zoomNow: web.scrollView.zoomScale)
-        guard accepted else {
+        let moved = self.movedWhilePending || web.scrollView.contentOffset != offset
+        guard GlassFlowRules.acceptsSnapshot(moved: moved, maxSpeed: self.fastestWhilePending, allowsMoving: GlassLaunch.movingSnapshots, zoomRequested: zoom, zoomNow: web.scrollView.zoomScale) else {
           self.rejected += 1
           return
         }
@@ -86,34 +165,38 @@ final class GlassPageShot {
           self.gate.failed(now: working)
           return
         }
-        self.gate.succeeded()
-        self.image = picture
-        self.generation += 1
-        self.rect = rect
-        self.offset = offset
-        self.zoom = zoom
-        self.takenAt = working
+        let area = CGRect(x: offset.x / zoom, y: offset.y / zoom, width: web.bounds.width / zoom, height: web.bounds.height / zoom)
+        self.keep(picture, area: area, zoom: zoom, at: working, moved: moved)
         if PhoneTestBuild.isOn { self.latencies.append((working - started) * 1000) }
       }
     }
   }
 
+  private func keep(_ picture: CGImage, area: CGRect, zoom: CGFloat, at time: CFTimeInterval, moved: Bool) {
+    gate.succeeded()
+    image = picture
+    generation += 1
+    moving += moved ? 1 : 0
+    self.area = area
+    self.zoom = zoom
+    takenAt = time
+  }
+
+  func placed(_ web: WKWebView) -> (image: CGImage, rect: CGRect)? {
+    guard let image, self.web === web, web.scrollView.zoomScale == zoom else { return nil }
+    return (image, GlassFlowRules.place(area: area, zoom: zoom, offset: web.scrollView.contentOffset))
+  }
+
   func covers(_ needed: CGRect, of web: WKWebView) -> Bool {
-    guard image != nil, self.web === web, gate.key == Self.key(of: web).key, web.scrollView.zoomScale == zoom else { return false }
-    let shift = CGPoint(x: web.scrollView.contentOffset.x - offset.x, y: web.scrollView.contentOffset.y - offset.y)
-    let covered = GlassFlowRules.snapshotCovers(image: rect, shift: shift, needed: needed.intersection(web.bounds))
+    guard gate.key == Self.key(of: web).key, let placed = placed(web) else { return false }
+    let covered = GlassFlowRules.snapshotCovers(image: placed.rect, shift: .zero, needed: needed.intersection(web.bounds))
     if !covered { uncovered += 1 }
     return covered
   }
 
   func draw(_ web: WKWebView, transform: CGAffineTransform, in context: CGContext) -> Bool {
-    guard let image, self.web === web, web.scrollView.zoomScale == zoom else { return false }
-    let shift = CGPoint(x: web.scrollView.contentOffset.x - offset.x, y: web.scrollView.contentOffset.y - offset.y)
-    context.saveGState()
-    defer { context.restoreGState() }
-    context.concatenate(transform)
-    context.clip(to: web.bounds)
-    UIImage(cgImage: image).draw(in: rect.offsetBy(dx: -shift.x, dy: -shift.y))
+    guard let placed = placed(web) else { return false }
+    GlassSteps.draw(placed.image, in: placed.rect, clip: web.bounds, transform: transform, context: context)
     return true
   }
 
@@ -122,12 +205,13 @@ final class GlassPageShot {
     return latencies
   }
 
-  func takeCounts() -> (rejected: Int, uncovered: Int) {
+  func takeCounts() -> (rejected: Int, uncovered: Int, moving: Int) {
     defer {
       rejected = 0
       uncovered = 0
+      moving = 0
     }
-    return (rejected, uncovered)
+    return (rejected, uncovered, moving)
   }
 
   func release() {
@@ -135,6 +219,8 @@ final class GlassPageShot {
     pending = false
     web = nil
     lastOffset = nil
+    lastSeenAt = 0
+    velocity = .zero
     stillFrames = 0
     gate = GlassSnapshotGate()
   }
@@ -142,8 +228,21 @@ final class GlassPageShot {
   private func forgetImage() {
     guard image != nil else { return }
     image = nil
-    rect = .null
+    area = .null
     generation += 1
+  }
+
+  nonisolated private static func raster(_ data: Data, width: Int) -> CGImage? {
+    guard let provider = CGDataProvider(data: data as CFData), let document = CGPDFDocument(provider), let page = document.page(at: 1) else { return nil }
+    let box = page.getBoxRect(.mediaBox)
+    guard box.width > 0, box.height > 0 else { return nil }
+    let height = max(Int((box.height * CGFloat(width) / box.width).rounded()), 1)
+    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+    context.interpolationQuality = .low
+    context.scaleBy(x: CGFloat(width) / box.width, y: CGFloat(height) / box.height)
+    context.translateBy(x: -box.minX, y: -box.minY)
+    context.drawPDFPage(page)
+    return context.makeImage()
   }
 
   private static func usable(_ image: CGImage, under web: WKWebView) -> Bool {

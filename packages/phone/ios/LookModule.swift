@@ -20,7 +20,8 @@ public final class LookModule: Module {
           GlassMetal.shared.prepare()
           if PhoneTestBuild.isOn, let seconds = UserDefaults.standard.object(forKey: "ArdiaGlassScroll").flatMap({ Double(String(describing: $0)) }), seconds > 0 {
             let period = UserDefaults.standard.object(forKey: "ArdiaGlassScrollPeriod").flatMap { Double(String(describing: $0)) } ?? 4
-            GlassLabScroll.start(after: 8, for: seconds, period: max(period, 0.2))
+            let reach = UserDefaults.standard.object(forKey: "ArdiaGlassScrollReach").flatMap { Double(String(describing: $0)) } ?? 2400
+            GlassLabScroll.start(after: 8, for: seconds, period: max(period, 0.2), reach: CGFloat(reach))
           }
           if PhoneTestBuild.flag("ArdiaGlassRimProbe") { GlassLabRim.start(after: 6) }
           if PhoneTestBuild.isOn, let delay = UserDefaults.standard.object(forKey: "ArdiaGlassReload").flatMap({ Double(String(describing: $0)) }), delay > 0 { GlassLabReload.start(after: delay) }
