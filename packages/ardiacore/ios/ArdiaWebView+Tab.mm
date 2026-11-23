@@ -29,6 +29,10 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
 
 @implementation ArdiaWebView (Tab)
 
++ (NSString *)appTabIdContainingView:(NSView *)view {
+  return ardia_host::AppTabIdContaining(view);
+}
+
 - (ArdiaCoreAdoption)windowTakes:(ArdiaCoreTab *)tab {
   ArdiaCoreWindow *coreWindow = _standalone ? nil : self.controller.coreWindow;
   return coreWindow ? [coreWindow canAdoptTab:tab] : ArdiaCoreAdoptionAdopted;
@@ -93,6 +97,7 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
   [self markTemporary];
   [self pushPeekModifier];
   [self pushSelectionPopover];
+  [self pushFieldProvider];
   [self bindRestoreKey];
   [self takePageReports];
   [tab deliverHeldPageMessages];
@@ -142,7 +147,8 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
   [ArdiaWebView noteShown:_tab];
   [self stashPageReports];
   AcceptDrops(_tab.view, YES);
-  if (_tab.view.superview == self) [_tab.view removeFromSuperview];
+  if (_tab.view.superview == self && !_life.keepsPageOnDetach) [_tab.view removeFromSuperview];
+  _life.keepsPageOnDetach = NO;
   [self dropDevTools];
   [self resetBlocked:NO];
   [self dropReveal];
@@ -193,6 +199,10 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
 
 + (void)setLittleArdiaOpensNewTabLinks:(BOOL)enabled {
   gLittleArdiaOpensNewTabLinks = enabled;
+}
+
++ (BOOL)littleArdiaOpensNewTabLinksInPlace {
+  return gLittleArdiaOpensNewTabLinks;
 }
 
 + (void)setPopupsOpenAsTabs:(BOOL)enabled {
@@ -349,7 +359,11 @@ const CFTimeInterval kHiddenNewTabLinkSeconds = 1;
 - (void)tabActivatedByChrome:(BOOL)chromes {
   if (TraceVisibility()) NSLog(@"[ardiacore-vis] %@ chrome-activated tab=%d byChrome=%d", _transferKey, _tab ? (int)_tab.tabId : -1, chromes);
   if (_standalone) return;
-  [self requestFocusRestore];
+  if (chromes && _visible && !_selected) {
+    if (TraceVisibility()) NSLog(@"[ardiacore-vis] %@ activated by Chrome in a pane that isn't selected: focus stays", _transferKey);
+  } else {
+    [self requestFocusRestore];
+  }
   if (_sent.navigationQueued) [self emitNavigation];
 }
 

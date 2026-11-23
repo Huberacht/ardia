@@ -21,13 +21,14 @@ export { ProgressTrack } from "./ProgressTrack";
 export { GradientFill, type GradientStop } from "./GradientFill";
 export { curve, duration, legsEasing, nativeLoop, period, spring, springs, springSpec, usePresence, type Fade, type LoopLeg, type SpringSpec } from "./motion";
 export { reduceMotion, reduceMotionKnown } from "./reduceMotion";
-export { PANEL, PanelCloseButton, PanelHeader, Popover, POPOVER_MARGIN, POPOVER_MOTION, PopoverSurface, PopoverValue, usePopoverMotion, usePopoverMotionStyle, usePopoverPresence } from "./Popover";
+export { PANEL, PanelCloseButton, PanelHeader, Popover, POPOVER_MARGIN, POPOVER_MOTION, PopoverSurface, PopoverValue, usePopoverMotion, usePanelsPresence, usePopoverMotionStyle, usePopoverPresence, type PanelPresence } from "./Popover";
 export { Radio } from "./Radio";
 export { Segmented, type SegmentOption } from "./Segmented";
 export { SlidingThumb, useSlidingThumb } from "./SlidingThumb";
 export { Group, Row } from "./Row";
 export { NativeFormContext, useNativeForm } from "./nativeForm";
 export { Swatch } from "./Swatch";
+export { tintedImage, tintedImageKey } from "./TintedImage";
 export { Toggle } from "./Switch";
 export { Text, TextScopeContext, type TextProps, type TextScope } from "./Text";
 export { hex, layout, PROFILE_COLORS, useTheme, type Theme } from "./theme";
@@ -42,10 +43,13 @@ export {
   ContextMenuArea,
   DIA_SPECTRUM,
   DockSelection,
+  drawnFadeLabel,
   FadeLabel,
   FileDropArea,
   FolderIcon,
+  FieldGlowView,
   MagnifyArea,
+  PeekStage,
   Meadow,
   meadowTextStyle,
   MouseArea,
@@ -53,9 +57,11 @@ export {
   OutsidePressArea,
   PopoverBubble,
   PowerUp,
+  PluginPageView,
   ReportVideo,
   Surface,
   SwipeArea,
+  drawnSymbol,
   Symbol,
   ThemeSwatch,
   VisualEffect,
@@ -65,9 +71,13 @@ export {
   WindowProfile,
   type DroppedItem,
   type DropUpdate,
+  type FieldGlowLook,
   type MagnifyUpdate,
   type MeadowIntro,
   type MeadowIntroEvent,
+  type PeekStageGeometry,
+  type PeekStageHandle,
+  type PeekStageState,
   type MeadowTone,
   type SurfaceProps,
   type SwipeAreaHandle,

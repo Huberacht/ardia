@@ -31,7 +31,7 @@ const stackOf = (root: Root) => hosts(root, (props) => Array.isArray(props.path)
 const titlesIn = (node: ReactTestInstance) => node.findAll((inner) => typeof inner.type === "string" && typeof inner.props.title === "string" && typeof inner.props.systemImage === "string").map((inner) => inner.props.title as string);
 const toggleFor = (root: Root, title: string) => hosts(root, (props) => typeof props.isOn === "boolean").find((node) => titlesIn(node).includes(title))!;
 
-onIos("on iPhone Settings is a native stack whose root lists main's rows in main's order, Default Browser when it's offered, and our usage-sharing rows before Show Onboarding", () => {
+onIos("on iPhone Settings groups its rows as General, Search, Tabs, Privacy, Experimental and About, keeping every row, with Default Browser when it's offered, and Privacy has no footer under What's Sent", () => {
   openSettings();
   const root = renderSurface(<SettingsView />);
   const rows = titlesIn(stackOf(root));
@@ -39,20 +39,24 @@ onIos("on iPhone Settings is a native stack whose root lists main's rows in main
     "Appearance",
     "Site Settings",
     "Default Browser",
+    "Open App Links In",
     "Search Engine",
     "Search Suggestions",
     "Auto-Open Keyboard",
     "Archive Inactive Tabs",
-    "Open App Links In",
-    "Clear Browsing Data",
     "Export Open Tabs",
+    "Clear Browsing Data",
     PHONE_SHARING_COPY.toggle,
     PHONE_SHARING_COPY.whatsSent,
     "Show Onboarding",
     "About Ardia",
   ]);
+  const sections = ["General", "Search", "Tabs", "Privacy", "Experimental", "About"];
+  const titled = stackOf(root).findAll((node) => typeof node.type === "string" && typeof node.props.title === "string" && sections.includes(node.props.title as string) && !("systemImage" in node.props));
+  expect(titled.map((node) => node.props.title)).toEqual(["General", "Search", "Tabs", "Privacy", "About"]);
   const links = hosts(root, (props) => typeof props.value === "string" && !("path" in props)).map((node) => node.props.value);
   expect(links).toEqual(["sync", "appearance", "siteSettings", "defaultBrowser", "searchEngine", "clearData", "whatsSent", "about"]);
+  expect(hosts(root, (props) => props.text === PHONE_SHARING_COPY.summary || props.children === PHONE_SHARING_COPY.summary)).toHaveLength(0);
   unmount(root);
 });
 
@@ -76,14 +80,14 @@ onIos("a switch on the root writes its preference, and Done closes Settings", ()
   const before = usePreferences.getState().searchSuggestions;
   act(() => toggleFor(root, "Search Suggestions").props.onIsOnChange({ nativeEvent: { isOn: !before } }));
   expect(usePreferences.getState().searchSuggestions).toBe(!before);
-  const done = hosts(root, (props) => typeof props.onButtonPress === "function" || typeof props.onPress === "function").find((node) => node.findAll((inner) => inner.props.text === "Done" || inner.props.children === "Done").length > 0);
+  const done = hosts(root, (props) => typeof props.onButtonPress === "function" || typeof props.onPress === "function").find((node) => node.props.label === "Done" || node.findAll((inner) => inner.props.text === "Done" || inner.props.children === "Done").length > 0);
   expect(done).toBeDefined();
   act(() => (done!.props.onButtonPress ?? done!.props.onPress)({ nativeEvent: {} }));
   expect(settingsNav().open).toBe(false);
   unmount(root);
 });
 
-onIos("on iPhone Appearance is main's page on Expo UI: Color with nine swatches, Interface Style and Light or Dark with main's footers, the chosen rows marked selected, and a tap writing the choice", () => {
+onIos("on iPhone Appearance is main's page on Expo UI: Color with nine swatches and Custom, Interface Style and Light or Dark with main's footers, the chosen rows marked selected, and a tap writing the choice", () => {
   openSettings({ page: "appearance" });
   const root = renderSurface(<SettingsView />);
   const sections = hosts(root, (props) => typeof props.title === "string" && ["Interface Style", "Light or Dark"].includes(props.title as string));
@@ -92,7 +96,7 @@ onIos("on iPhone Appearance is main's page on Expo UI: Color with nine swatches,
   expect(footers).toEqual(["Match My Mac follows your Mac. Reduce Transparency in iOS Settings always uses Classic.", "Match My Mac follows your Mac. System follows this device."]);
   const buttons = (root: Root) => hosts(root, (props) => Array.isArray(props.modifiers) && (props.modifiers as { $type: string }[]).some((modifier) => modifier.$type === "accessibilityAddTraits"));
   const traitsOf = (node: ReactTestInstance) => ((node.props.modifiers as { $type: string; traits?: string[] }[]).find((modifier) => modifier.$type === "accessibilityAddTraits")?.traits ?? []);
-  expect(buttons(root).length).toBe(9 + 3 + 4 + 2);
+  expect(buttons(root).length).toBe(10 + 3 + 4 + 2);
   expect(buttons(root).filter((node) => traitsOf(node).includes("isSelected"))).toHaveLength(4);
   const glass = buttons(root).find((node) => node.findAll((inner) => typeof inner.props.text === "string" && (inner.props.text as string).startsWith("Glass")).length > 0)!;
   act(() => (glass.props.onButtonPress ?? glass.props.onPress)({ nativeEvent: {} }));
@@ -110,7 +114,7 @@ onIos("where sync isn't offered, the Expo UI Appearance page has no Match My Mac
   expect(texts).toContain("System follows this device.");
   const traitsOf = (node: ReactTestInstance) => ((node.props.modifiers as { $type: string; traits?: string[] }[]).find((modifier) => modifier.$type === "accessibilityAddTraits")?.traits ?? []);
   const buttons = hosts(root, (props) => Array.isArray(props.modifiers) && (props.modifiers as { $type: string }[]).some((modifier) => modifier.$type === "accessibilityAddTraits"));
-  expect(buttons.length).toBe(9 + 2 + 3 + 2);
+  expect(buttons.length).toBe(10 + 2 + 3 + 2);
   const selected = buttons.filter((node) => traitsOf(node).includes("isSelected")).flatMap((node) => node.findAll((inner) => typeof inner.props.text === "string").map((inner) => inner.props.text as string));
   expect(selected.some((text) => text.startsWith("Glass"))).toBe(true);
   expect(selected.some((text) => text.startsWith("System"))).toBe(true);
@@ -124,7 +128,7 @@ onIos("on iPhone Appearance ends with main's Tabs section: Stack and Grid as che
   const counted = jest.spyOn(telemetry, "countUsage").mockImplementation(() => undefined);
   openSettings({ page: "appearance" });
   const root = renderSurface(<SettingsView />);
-  const sections = hosts(root, (props) => typeof props.title === "string" && ["Interface Style", "Light or Dark", "Tabs"].includes(props.title as string));
+  const sections = hosts(root, (props) => typeof props.title === "string" && ["Interface Style", "Light or Dark", "Tabs"].includes(props.title as string)).slice(-3);
   expect(sections.map((node) => node.props.title)).toEqual(["Interface Style", "Light or Dark", "Tabs"]);
   const tabs = sections[2]!;
   expect(tabs.findAll((node) => typeof node.type === "string" && node.props.text === "How your open tabs are laid out. Swipe up on the bottom bar to see them.")).toHaveLength(1);

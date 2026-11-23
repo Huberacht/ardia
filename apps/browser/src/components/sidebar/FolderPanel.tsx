@@ -5,9 +5,10 @@ import { useIsActiveTab, useTab } from "../../state/browser/hooks";
 import { plural, tabTitle } from "../../state/browser/model";
 import { useTileFolderLabel, useTileFolderMembers } from "../../state/pins/hooks";
 import { SLIDE } from "../tabstrip/tokens";
-import { buttonMotion, useGated, usePressScaleMotion } from "../ui/motion";
+import { useGated } from "../ui/motion";
 import { ContextMenuArea, HoverCard as HoverPanel, HoverFill, OutsidePressArea, radius, space, useHover } from "../ui";
 import { SectionLabel } from "./SectionLabel";
+import { Squish, useSquish } from "../ui/Squish";
 import { SidebarListRow, SidebarRowLabel } from "./SidebarRow";
 import { TAB_ROW } from "./tokens";
 import { clickTab } from "../../state/sidebar/actions";
@@ -101,29 +102,28 @@ function MemberRow({ tabId, windowId }: { tabId: string; windowId: string }) {
   const struck = useStruckTitle(tabId);
   const { hovered, hoverProps } = useHover();
   const { wrapper, handle } = useDragItem(`fm:${tabId}`, { kind: "row", tabIds: [tabId], section: "folder" });
-  const pressMotion = usePressScaleMotion(true, buttonMotion.rowPressScale);
-  const rowScale = pressMotion.scale ? { transform: [{ scale: pressMotion.scale }] } : undefined;
+  const squish = useSquish("row");
   if (!tab) return null;
   return (
     <Animated.View ref={wrapper.ref} style={wrapper.style} {...handle}>
       <View {...hoverProps}>
         <ContextMenuArea onContextMenu={() => void openTabMenu(windowId, tab)}>
           <Pressable
-            onPressIn={pressMotion.onPressIn}
-            onPressOut={pressMotion.onPressOut}
+            onPressIn={squish.onPressIn}
+            onPressOut={squish.onPressOut}
             onPress={() => {
               closeFolderPanel();
               clickTab(windowId, tabId);
             }}
           >
             {({ pressed }) => (
-              <Animated.View style={rowScale}>
+              <Squish scale={squish.scale}>
               <SidebarListRow height={layout.rowHeight} padRight={TAB_ROW.contentLeft} fill={active && !pressed ? theme.pinnedSelectedFill : undefined}>
                 <HoverFill shown={pressed || (hovered && !active)} instant={active} color={pressed ? theme.tabPressed : theme.tabHover} radius={radius.tile} />
                 <TabIcon tabId={tabId} url={tab.url} favicon={tab.favicon} icon={tab.customIcon} />
                 <SidebarRowLabel text={tabTitle(tab)} color={active ? theme.textPrimary : theme.textTab} struck={struck} />
               </SidebarListRow>
-              </Animated.View>
+              </Squish>
             )}
           </Pressable>
         </ContextMenuArea>

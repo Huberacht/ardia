@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, findNodeHandle, PanResponder, type View } from "react-native";
 import { beginTabDrag, cancelTabDrag, endTabDrag, setDragPicture, tabDragging, updateTabDrag } from "../../state/drag/tabDrag";
 import { storeChangedSince, storeMark } from "../../state/tabs/topStrip";
@@ -8,11 +8,12 @@ import { raiseView } from "../../state/windows/nativeWindow";
 import { dragRange, dropIndex } from "./stripGroups";
 import { makeRoom, registerSlot, reorderOffsets, settleRoom } from "./stripReorder";
 import { SLIDE } from "./tokens";
+import { StripMotionContext } from "./stripMotion";
 import { AUTO_SCROLL_MAX, AUTO_SCROLL_ZONE, LIFT_MS, LIFT_SLOP, TOP_STRIP_HEIGHT } from "./tokens";
 import { autoScrollSpeed } from "./stripScroll";
 import { noteTabStripEdgeScroll } from "../../state/telemetry/tabStripCounts";
 import { endHeldTabPress, TAB_CLICK_SLOP } from "../../state/sidebar/heldTabPress";
-import { hapticTick } from "../../state/drag/dragNative";
+import { reorderTick } from "../../state/drag/reorderTick";
 
 const IDLE = { kind: "idle" } as const;
 
@@ -21,6 +22,7 @@ export function useStripDrag(item: StripDrag) {
   const shift = useRef(new Animated.Value(0)).current;
   const translateX = useRef(Animated.add(dx, shift)).current;
   const lift = useRef(new Animated.Value(0)).current;
+  const motion = useContext(StripMotionContext);
   const [look, setLook] = useState<"rest" | "dragging" | "crossed">("rest");
   const view = useRef<View>(null);
   const latest = useRef(item);
@@ -122,7 +124,7 @@ export function useStripDrag(item: StripDrag) {
     const aimedBefore = drag.current.to;
     if (!across) makeRoomAt(lifted || from < 0 ? -1 : dropIndex(geometry, from, along));
     const aimedNow = drag.current.to;
-    if (!across && aimedBefore >= 0 && aimedNow >= 0 && aimedNow !== aimedBefore) hapticTick();
+    if (!across && aimedBefore >= 0 && aimedNow >= 0 && aimedNow !== aimedBefore) reorderTick();
     if (!local) updateTabDrag(g.moveX, g.moveY, lifted);
     return lifted || across;
   };
@@ -175,6 +177,7 @@ export function useStripDrag(item: StripDrag) {
           const ids = latest.current.ids();
           const grab: [number, number] = [e.nativeEvent.pageX, e.nativeEvent.pageY];
           landSettle();
+          motion?.land();
           dx.stopAnimation();
           dx.setValue(0);
           const mine = { stripBottom: TOP_STRIP_HEIGHT, lifted: false, ids, dx: 0, to: -1, grab: latest.current.width / 2, crossed: false, far: travel(g.moveX, g.moveY), scrolled: 0, viewport: null as readonly [number, number] | null, gesture: null, frame: 0 };

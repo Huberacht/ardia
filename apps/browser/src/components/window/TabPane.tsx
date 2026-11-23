@@ -3,8 +3,6 @@ import { Animated, View } from "react-native";
 import { usePrewarm } from "../../state/tabs/prewarm";
 import { activate } from "../../state/tabs/actions";
 import { shallowEqual, useBrowserWhile, useStoreWhile, useTabValue } from "../../state/tabs/tabWatch";
-import { useSettings, useTabsShown } from "../../state/browser/hooks";
-import { useSidebarField } from "../../state/sidebar/chrome";
 import { splitOf } from "../../state/splits/splits";
 import type { Tab } from "../../state/browser/types";
 import { BookmarksBar, bookmarksBarShown, type BookmarksBarMode } from "../bookmarks/BookmarksBar";
@@ -15,21 +13,21 @@ import { SplitEmptyState } from "../split/SplitEmptyState";
 import { NewTabPage } from "../ntp/NewTabPage";
 import { EmptyCard } from "./EmptyCard";
 import { NewTabDropArea } from "./NewTabDropArea";
-import { TabContentArea } from "./TabContentArea";
 import { InternalPage } from "../pages";
 import { ShareBar } from "../media/ShareBar";
 import { Toolbar, ToolbarBackdrop } from "../toolbar/Toolbar";
 import { AutoHideBackdrop, AutoHideToolbar, useToolbarMode, useToolbarMotion } from "../toolbar/AutoHideToolbar";
 import { publishPaneChrome } from "../toolbar/WindowToolbar";
 import { addressFieldShownIn, revealToolbar } from "../../state/windows/toolbarAutoHide";
-import { useToolbarRow } from "../toolbar/useToolbarRow";
 import { TabWebView } from "./TabWebView";
 import { withoutFragment } from "../../lib/url";
-import { paneBar, type CardChrome } from "./paneChrome";
+import { developerBarShown, paneBar, type CardChrome } from "./paneChrome";
+import { DeveloperBar } from "../toolbar/DeveloperBar";
+import { useDeveloperMode } from "../../state/site/developerMode";
+import { PluginPageBar } from "../plugins/PluginPageBar";
+import type { PageBarMatch } from "../../state/plugins/pageBar";
 import { PageOverlays } from "./PageOverlays";
 import { useProfileTheme } from "./ThemeScope";
-import { useCardFrame } from "./cardFrame";
-import { newTabOpensOf } from "../../state/settings/settings";
 import { markNewTabPane } from "../../state/omnibox/newTabMarks";
 
 const LINGERING_PANE = "ardia.lingeringPane";
@@ -55,6 +53,11 @@ export const TabPane = memo(function TabPane({
   peekShown,
   lingering,
   seeThrough,
+  pageBar,
+  sidebarFieldOpen,
+  cardRadius,
+  toolbarHeight,
+  newTabCard,
 }: {
   tabId: string;
   windowId: string;
@@ -76,14 +79,18 @@ export const TabPane = memo(function TabPane({
   peekShown: boolean;
   lingering: boolean;
   seeThrough: boolean;
+  pageBar: PageBarMatch | null;
+  sidebarFieldOpen: boolean;
+  cardRadius: number;
+  toolbarHeight: number;
+  newTabCard: boolean;
 }) {
   const visible = !!rect;
   const live = visible || !!warm;
   const own = useTabValue(tabId, paneTab, shallowEqual);
   const theme = useProfileTheme(own.profileId);
-  const toolbarHeight = useToolbarRow().height;
   const isNewTab = !own.url;
-  const emptyCard = useSettings((st) => isNewTab && newTabOpensOf(st) === "commandBar");
+  const emptyCard = isNewTab && newTabCard;
   const newTabShown = useStoreWhile(usePages, live, (s) => !!s.pages[tabId]?.newTabShown);
   const inSomeSplit = useBrowserWhile(!!warm, (s) => !!warm && !!splitOf(s, tabId));
   const inSplit = visible ? inActiveSplit : inSomeSplit;
@@ -105,12 +112,10 @@ export const TabPane = memo(function TabPane({
   const hideBar = autoLayout && bar.bar !== null;
   const mode = useToolbarMode(tabId, windowId, hideBar);
   const addressFieldShown = bar.kind !== "none" && addressFieldShownIn(mode);
-  const sidebarField = useSidebarField();
-  const sidebarOpen = useTabsShown(windowId);
-  const sidebarFieldShown = !!sidebarField && sidebarOpen && !fullscreen && focused;
+  const sidebarFieldShown = sidebarFieldOpen && !fullscreen && focused;
+  const developerBar = developerBarShown(chrome, { developerMode: useDeveloperMode(own.url), small, fullscreen });
   const bookmarksBar = bookmarksBarShown(barMode, own.exists ? own : undefined) && !fullscreen && !inSplit && !small;
   const barHeight = useBookmarksBarHeight();
-  const cardRadius = useCardFrame().radius;
   const doc = withoutFragment(own.url);
   const motion = useToolbarMotion({ enabled: autoLayout, mode, extra: bookmarksBar ? barHeight : 0, doc });
   useEffect(() => {
@@ -140,6 +145,8 @@ export const TabPane = memo(function TabPane({
       {bar.kind === "toolbar" && <Toolbar tabId={tabId} geometry={geometry} windowId={windowId} inSplit={inSplit} focused={focused || !inSplit} />}
       {bar.kind === "backdrop" && <ToolbarBackdrop tabId={tabId} />}
       {bar.kind === "spacer" && <View style={{ height: toolbarHeight }} />}
+      {developerBar && <DeveloperBar tabId={tabId} windowId={windowId} />}
+      {!developerBar && pageBar && <PluginPageBar tabId={tabId} windowId={windowId} match={pageBar} />}
       {!autoLayout && bookmarksBar && <BookmarksBar tabId={tabId} placeholder={!visible} />}
       <Animated.View style={autoLayout ? motion.groupStyle : { flex: 1 }}>
         {autoLayout && bookmarksBar && <BookmarksBar tabId={tabId} placeholder={!visible} />}
@@ -148,17 +155,11 @@ export const TabPane = memo(function TabPane({
           <View style={{ flex: 1 }}>
             {(mounted || prewarmed) && <TabWebView tabId={tabId} visible={visible && !newTabShown && !isNewTab} selected={focused} warm={!!warm && !newTabShown && !isNewTab} />}
             {visible && isNewTab && !small && (
-              <TabContentArea contentAreaOf={tabId}>
-                <NewTabDropArea tabId={tabId} accepting={!covered && !lingering}>
-                  {inSplit ? <SplitEmptyState tabId={tabId} focused={focused} /> : emptyCard ? <EmptyCard windowId={windowId} tabId={tabId} /> : <NewTabPage key={tabId} tabId={tabId} toolbar={toolbar} />}
-                </NewTabDropArea>
-              </TabContentArea>
+              <NewTabDropArea contentAreaOf={tabId} accepting={!covered && !lingering}>
+                {inSplit ? <SplitEmptyState tabId={tabId} focused={focused} /> : emptyCard ? <EmptyCard windowId={windowId} tabId={tabId} /> : <NewTabPage key={tabId} tabId={tabId} toolbar={toolbar} />}
+              </NewTabDropArea>
             )}
-            {visible && (
-              <TabContentArea contentAreaOf={tabId}>
-                <InternalPage tabId={tabId} />
-              </TabContentArea>
-            )}
+            {visible && <InternalPage contentAreaOf={tabId} />}
             {visible && (
               <PageOverlays
                 tabId={tabId}
@@ -174,6 +175,9 @@ export const TabPane = memo(function TabPane({
               />
             )}
           </View>
+        </View>
+        <View pointerEvents="none" style={{ position: "absolute", left: 0, right: 0, top: 0, height: hideBar ? motion.cover.room : 0, overflow: "hidden" }}>
+          <Animated.View style={[{ position: "absolute", left: 0, right: 0, top: 0, height: motion.cover.room, backgroundColor: theme.card }, motion.cover.style]} />
         </View>
       </Animated.View>
       {hideBar && <AutoHideBackdrop tabId={tabId} mode={mode} motion={motion} />}

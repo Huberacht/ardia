@@ -3,7 +3,8 @@ import { hlcWall, type Clock, type HLC } from "./hlc.ts";
 import { holdsBack, noteFileHealth } from "./fileHealth.ts";
 import { baseKeysWith, dropBase, dropRecord, putBase, putRecord, visible, withBaseIndex } from "./scopeKeys.ts";
 export * from "./scopeKeys.ts";
-import type { Adapter, LogFile, Origin, ScopeOptions, ScopeState, SnapshotFile, SyncFile, SyncRecord, Transport } from "./scopeState.ts";
+import { covered, isApplied, markApplied, raiseApplied } from "./applied.ts";
+import type { Adapter, LogFile, ScopeOptions, ScopeState, SnapshotFile, SyncFile, SyncRecord, Transport } from "./scopeState.ts";
 
 const DEFAULTS: Required<Omit<ScopeOptions, "persist" | "holdApply">> = {
   expired: () => false,
@@ -25,7 +26,7 @@ const isValue = (o: Record<string, unknown>) => Object.prototype.hasOwnProperty.
 const isOp = (v: unknown) => isObject(v) && typeof v.k === "string" && typeof v.h === "string" && isValue(v);
 const isRecord = (v: unknown) => isObject(v) && typeof v.h === "string" && isOrigin(v.o) && isValue(v);
 
-function parseSyncFile(payload: string): SyncFile | null {
+export function parseSyncFile(payload: string): SyncFile | null {
   let file: unknown;
   try {
     file = JSON.parse(payload);
@@ -39,22 +40,6 @@ function parseSyncFile(payload: string): SyncFile | null {
   }
   return null;
 }
-
-export const covered = (vv: Record<string, number>, [device, seq]: Origin) => (vv[device] ?? 0) >= seq;
-
-function markApplied(state: ScopeState, device: string, seq: number) {
-  if (covered(state.vv, [device, seq])) return;
-  const extra = new Set(state.extra[device] ?? []);
-  extra.add(seq);
-  let top = state.vv[device] ?? 0;
-  while (extra.delete(top + 1)) top++;
-  state.vv[device] = top;
-  if (extra.size) state.extra[device] = [...extra].sort((a, b) => a - b);
-  else delete state.extra[device];
-}
-
-const isApplied = (state: ScopeState, [device, seq]: Origin) =>
-  covered(state.vv, [device, seq]) || (state.extra[device]?.includes(seq) ?? false);
 
 function see(state: ScopeState, device: string, at: number) {
   if (!(device in state.seen) || at > state.seen[device]!) state.seen[device] = at;
@@ -90,15 +75,7 @@ export function ingestSnapshot(state: ScopeState, file: SnapshotFile, clock: Clo
       changed.add(key);
     }
   }
-  for (const [device, seq] of Object.entries(file.vv)) {
-    if (seq > (state.vv[device] ?? 0)) {
-      state.vv[device] = seq;
-      const extra = (state.extra[device] ?? []).filter((s) => s > seq);
-      for (let top = seq; extra[0] === top + 1; top++) state.vv[device] = extra.shift()!;
-      if (extra.length) state.extra[device] = extra;
-      else delete state.extra[device];
-    }
-  }
+  for (const [device, seq] of Object.entries(file.vv)) raiseApplied(state, device, seq);
 }
 
 const parseBase = (json: string | undefined) => (json === undefined ? undefined : (JSON.parse(json) as unknown));
@@ -383,7 +360,7 @@ async function syncScopeIndexed(args: Parameters<typeof syncScope>[0]): Promise<
     heldApply ||= applyHeld();
     const applied = !heldApply && (await applyAdapter(state, adapter, keys, now(), 2 * (options?.tombstoneTTL ?? DEFAULTS.tombstoneTTL), applyHeld));
     heldApply ||= applyHeld();
-    if (!applied) unapplied.push(...[...keys].filter((k) => k.startsWith(adapter.prefix)));
+    if (!applied) for (const key of keys) if (key.startsWith(adapter.prefix)) unapplied.push(key);
   }
   state.unapplied = [...unapplied, ...[...keys].filter((k) => !adapters.some((a) => k.startsWith(a.prefix)))];
   if (!heldApply && (!state.awaitRemote || Object.keys(state.seen).some((d) => d !== device))) {

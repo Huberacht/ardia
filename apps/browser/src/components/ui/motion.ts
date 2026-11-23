@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Animated, Easing, type EasingFunction } from "react-native";
 import { reduceMotion } from "./reduceMotion";
+import { pressMotionNow, subscribePressMotion, type PressMotion } from "../../lib/pressMotion";
 
 export const curve = {
   linear: Easing.linear,
@@ -15,6 +16,21 @@ export const curve = {
 } as const;
 
 export const currentValue = (value: Animated.Value): number => (value as unknown as { __getValue(): number }).__getValue();
+
+type AttachableNode = { __attach(): void; __detach(): void };
+type NativeNode = { __nativeTag?: number; __detach(): void };
+
+export function releaseNativeValue(value: Animated.Value) {
+  value.removeAllListeners();
+  const node = value as unknown as NativeNode;
+  if (node.__nativeTag != null) node.__detach();
+}
+
+export function keepAttached(value: Animated.Value): () => void {
+  const anchor = value.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) as unknown as AttachableNode;
+  anchor.__attach();
+  return () => anchor.__detach();
+}
 
 export const animating = (value: Animated.Value): boolean => (value as unknown as { _animation?: unknown })._animation != null;
 
@@ -60,16 +76,31 @@ export function nativeLoop(value: Animated.Value, legs: readonly LoopLeg[], iter
   return Animated.loop(Animated.timing(value, { toValue: 1, duration, easing, useNativeDriver: true, isInteraction: false }), { iterations });
 }
 
-export const buttonMotion = { iconPressScale: 0.9, controlPressScale: 0.97, rowPressScale: 0.975, tilePressScale: 0.94 } as const;
+export const buttonMotion = { iconPressScale: 0.96, controlPressScale: 0.985 } as const;
 
-export const pressMotion = { shortestMs: 90, restDisplacementThreshold: 0.0001, restSpeedThreshold: 0.0001 } as const;
+export const bouncePressMotion = {
+  iconPressScale: 0.9,
+  controlPressScale: 0.97,
+  rowPressScale: 0.975,
+  tilePressScale: 0.94,
+  shortestMs: 90,
+  restDisplacementThreshold: 0.0001,
+  restSpeedThreshold: 0.0001,
+} as const;
 
-export const pressReleaseDelay = (heldMs: number) => Math.max(0, pressMotion.shortestMs - heldMs);
+export const pressReleaseDelay = (heldMs: number) => Math.max(0, bouncePressMotion.shortestMs - heldMs);
+
+export function bounceDip(pressedScale: number): number {
+  if (pressedScale === buttonMotion.iconPressScale) return bouncePressMotion.iconPressScale;
+  if (pressedScale === buttonMotion.controlPressScale) return bouncePressMotion.controlPressScale;
+  return pressedScale;
+}
+
+export const usePressMotion = (): PressMotion => useSyncExternalStore(subscribePressMotion, pressMotionNow, pressMotionNow);
 
 export const hoverFade = {
   show: { duration: 50, easing: curve.fade },
   hide: { duration: 200, easing: curve.fade },
-  appear: { duration: duration.fast, easing: curve.fade },
 } as const;
 
 export type Fade = { duration: number; easing: EasingFunction; delay?: number };
@@ -115,6 +146,8 @@ export const springs = {
   release: spring(springSpec.release),
 } as const;
 
+export const liftSpring = () => (pressMotionNow() === "bounce" && reduceMotion() === false ? springs.bouncy : springs.snappy);
+
 export function usePressScaleMotion(enabled = true, pressedScale: number = buttonMotion.iconPressScale) {
   const scale = useRef<Animated.Value | null>(null);
   const pressedAt = useRef(0);
@@ -136,8 +169,27 @@ export function usePressScaleMotion(enabled = true, pressedScale: number = butto
   useEffect(() => cancelRelease, []);
 
   const settle = (value: Animated.Value, pressed: boolean) => {
-    const { restDisplacementThreshold, restSpeedThreshold } = pressMotion;
-    Animated.spring(value, { toValue: pressed ? pressedScale : 1, ...(pressed ? springs.press : springs.release), restDisplacementThreshold, restSpeedThreshold, useNativeDriver: true }).start();
+    const { restDisplacementThreshold, restSpeedThreshold } = bouncePressMotion;
+    Animated.spring(value, { toValue: pressed ? bounceDip(pressedScale) : 1, ...(pressed ? springs.press : springs.release), restDisplacementThreshold, restSpeedThreshold, useNativeDriver: true }).start();
+  };
+
+  const still = (value: Animated.Value, pressed: boolean) => {
+    Animated.spring(value, { toValue: pressed ? pressedScale : 1, ...springs.snappy, useNativeDriver: true }).start();
+  };
+
+  const bounce = (value: Animated.Value, pressed: boolean) => {
+    if (pressed) {
+      pressedAt.current = Date.now();
+      settle(value, true);
+      return;
+    }
+    const wait = pressReleaseDelay(Date.now() - pressedAt.current);
+    if (!wait) return settle(value, false);
+    release.current = setTimeout(() => {
+      release.current = null;
+      if (pressMotionNow() === "bounce") settle(value, false);
+      else still(value, false);
+    }, wait);
   };
 
   const animate = (pressed: boolean) => {
@@ -149,17 +201,9 @@ export function usePressScaleMotion(enabled = true, pressedScale: number = butto
       value.setValue(1);
       return;
     }
-    if (pressed) {
-      pressedAt.current = Date.now();
-      settle(value, true);
-      return;
-    }
-    const wait = pressReleaseDelay(Date.now() - pressedAt.current);
-    if (!wait) return settle(value, false);
-    release.current = setTimeout(() => {
-      release.current = null;
-      settle(value, false);
-    }, wait);
+    if (pressMotionNow() === "bounce") return bounce(value, pressed);
+    value.stopAnimation();
+    still(value, pressed);
   };
 
   return {

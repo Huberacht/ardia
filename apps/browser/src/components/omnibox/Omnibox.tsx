@@ -6,7 +6,7 @@ import { dictationAvailable, startDictation } from "../../state/omnibox/textInpu
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { findNodeHandle, type TextInput, type View } from "react-native";
 import { journeyBarCommitted, journeyBarFocused, journeyKeystroke, journeyNavigate, journeySuggestions } from "../../state/telemetry/journeys";
-import { sampleOmniboxLatency, trackSuggestionChosen } from "../../state/telemetry/track";
+import { newOmniboxKey, omniboxKeyHeard, sampleOmniboxLatency, trackSuggestionChosen } from "../../state/telemetry/track";
 import { useSettings, useTab, useWindow, useWindowId, useWindowProfileId } from "../../state/browser/hooks";
 import { removeHistory } from "../../state/history/actions";
 import { useWindowUiOf } from "../../state/windows/hooks";
@@ -87,6 +87,7 @@ export function Omnibox({
     selected,
     dropdown,
     opensTab: !!opensTab,
+    switchToOpenTab: !!opensTab || hero,
     windowId,
     profileId,
     tabId,
@@ -232,14 +233,13 @@ export function Omnibox({
   }, [items]);
 
   const heardAt = useRef(0);
-  const keyAt = useRef(0);
+  const [key] = useState(newOmniboxKey);
   useLayoutEffect(() => {
     if (__DEV__) traceOmnibox({ bar: `${windowId}:${variant}`, typed, heard: heardAt.current, committed: Date.now() });
-    if (keyAt.current) {
-      sampleOmniboxLatency(Date.now() - keyAt.current);
-      keyAt.current = 0;
-    }
+    sampleOmniboxLatency(key);
   });
+
+  const keystroke = () => (__DEV__ && (heardAt.current = Date.now()), previewSelection.edited(), bangEnter.cancel(), (focusEcho.current = false), omniboxKeyHeard(key), journeyKeystroke(tabId), hero && markNewTabBar("typed", tabId));
 
   const onChangeText = (next: string) => {
     if (__DEV__) heardAt.current = Date.now();
@@ -249,12 +249,7 @@ export function Omnibox({
       if (!change.stale && !previewing) selection.note({ start: change.inline.typed.length, end: next.length });
       return;
     }
-    previewSelection.edited();
-    bangEnter.cancel();
-    focusEcho.current = false;
-    keyAt.current = Date.now();
-    journeyKeystroke(tabId);
-    if (hero) markNewTabBar("typed", tabId);
+    keystroke();
     const bySpace = scope ? null : keywordBySpace(previewing ? value : typed, next);
     const keyword = bySpace ? keywordScope(bySpace.keyword, windowId) : null;
     if (bySpace && keyword) return dispatch({ kind: "enteredScope", scope: keyword, from: bySpace.from });
@@ -306,6 +301,8 @@ export function Omnibox({
       onSelection={(next) => {
         if (previewSelection.isRestoreEcho(next)) return;
         selection.note(next);
+        const kept = inline.kept(next);
+        if (kept !== null) return (selection.rebase(), keystroke(), dispatch({ kind: "typed", text: kept, suppress: false, selected: 0 }));
         if (inline.accepts(next)) dispatch({ kind: "caretAccepted", text: value });
       }}
       onChangeText={onChangeText}

@@ -69,6 +69,7 @@ let appearance: "auto" | "light" | "dark" = "auto";
 
 provideNativeModule("ArdiaDocuments", {
   readDocument: (name: string) => documents.get(name) ?? null,
+  documentExists: (name: string) => documents.has(name),
   writeDocument: (name: string, contents: string) => void documents.set(name, contents),
   saveDocument: async (name: string, contents: string) => void documents.set(name, contents),
   removeDocument: (name: string) => void documents.delete(name),
@@ -93,6 +94,7 @@ provideNativeModule("ArdiaDialogs", {
 });
 provideNativeModule("ArdiaAppWindows", {
   windowCornerRadius: () => 19,
+  drawnWindowCornerRadius: () => 19,
   windowIds: async () => [] as string[],
   windowFrame: async (_id: string): Promise<[number, number, number, number] | null> => null,
   frameCornerRadius: async (_id: string): Promise<number> => 0,

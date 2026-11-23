@@ -12,7 +12,7 @@ on:
         type: boolean
         default: true
       iphone:
-        description: Also build the iPhone app at this version; a real run sends it to TestFlight after the Mac release publishes
+        description: Also build the pinned iPhone TestFlight version. Enable only when the owner asks for TestFlight. A real run uploads to Internal after the Mac release publishes.
         type: boolean
         default: false
 
@@ -36,6 +36,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       tree: ${{ steps.plan.outputs.tree }}
+      linux_tree: ${{ steps.plan.outputs.linux_tree }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -54,13 +55,14 @@ jobs:
           [ "$project" = "$VERSION" ] || check "MARKETING_VERSION is $project: commit the bump to $VERSION first"
           [ -f "docs/release-notes/$VERSION.md" ] || check "no docs/release-notes/$VERSION.md: write and commit the notes first"
           if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then check "v$VERSION is already published"; fi
-          tree=$(engine/engine-key.sh)
-          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          tree=$(engine/engine-key.sh --platform macos)
+          linux_tree=$(engine/engine-key.sh --platform linux)
+          { echo "tree=$tree"; echo "linux_tree=$linux_tree"; } >> "$GITHUB_OUTPUT"
           {
             echo "### Ardia $VERSION ($channel)"
-            echo "- commit \`$GITHUB_SHA\`, engine tree \`${tree:0:12}\`"
+            echo "- commit \`$GITHUB_SHA\`, macOS engine \`${tree:0:12}\`, Linux engine \`${linux_tree:0:12}\`"
             if [ "$DRY_RUN" = true ]; then echo "- dry run: a release candidate, nothing published"; else echo "- publishes"; fi
-            if [ "$IPHONE" = true ]; then echo "- iPhone: $(apple_version_of "$VERSION"), $([ "$DRY_RUN" = true ] && echo "built and signed, not uploaded" || echo "sent to TestFlight after the Mac release")"; fi
+            if [ "$IPHONE" = true ]; then echo "- iPhone: TestFlight's pinned version, $([ "$DRY_RUN" = true ] && echo "built and signed, not uploaded" || echo "sent to TestFlight's Internal group after the Mac release")"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   checks:
@@ -71,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
@@ -115,14 +117,12 @@ jobs:
             exit 1
           fi
           { echo "ARDIACORE_FRAMEWORK=$framework"; echo "ARDIACORE_FRAMEWORK_ENGINE=$TREE"; } >> "$GITHUB_ENV"
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: uv
-        run: curl -LsSf https://astral.sh/uv/0.12.15/install.sh | sh
       - id: cas-key
         run: echo "prefix=xcode-cas-release-$(xcodebuild -version | awk '/Build version/ { print $3 }')-$(date -u +%Y-%m)-" >> "$GITHUB_OUTPUT"
       - id: cas
@@ -148,8 +148,8 @@ jobs:
           key: ubol-webkit-${{ hashFiles('packages/ardiacore/scripts/ubol.sh', 'packages/ardiacore/scripts/ubol-webkit.py') }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ~/Library/Caches/ardia-cli-build
-          key: ardia-cli-${{ hashFiles('apps/cli/scripts/build.sh', 'apps/cli/requirements.lock') }}
+          path: packages/ardiacore/vendor/hsts-preload
+          key: hsts-preload-${{ hashFiles('packages/ardiacore/scripts/hsts-preload.sh', 'packages/ardiacore/scripts/hsts-preload.py') }}
       - name: Pods
         working-directory: apps/browser/macos
         run: pod install
@@ -163,11 +163,11 @@ jobs:
             echo "::notice::pod install only quoted MARKETING_VERSION: kept, not counted as changes"
             git update-index --assume-unchanged "$pbx"
           fi
-          dirty=$(git status --porcelain -- apps/browser apps/cli packages engine scripts/dmg | grep -v ' apps/browser/build' || true)
+          dirty=$(git status --porcelain -- apps/browser packages engine scripts/dmg | grep -v ' apps/browser/build' || true)
           [ -z "$dirty" ] || {
             echo "::error::installing changed tracked files, so release.sh would refuse the tree:"
             echo "$dirty"
-            git diff -- apps/browser apps/cli packages engine scripts/dmg | head -150
+            git diff -- apps/browser packages engine scripts/dmg | head -150
             exit 1
           }
       - name: Build
@@ -185,8 +185,7 @@ jobs:
         env:
           DIST: ${{ steps.paths.outputs.dist }}
         run: |
-          COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$RUNNER_TEMP/build.tar" -C "$DIST" Ardia.xcarchive provenance.txt \
-            "ardia-cli-$VERSION-macos-arm64.tar.gz" "ardia-cli-$VERSION-macos-arm64.tar.gz.sha256"
+          COPYFILE_DISABLE=1 tar --no-mac-metadata -cf "$RUNNER_TEMP/build.tar" -C "$DIST" Ardia.xcarchive provenance.txt
       - if: always() && steps.cas.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
@@ -287,6 +286,13 @@ jobs:
         env:
           DIST: ${{ steps.paths.outputs.dist }}
         run: .github/release/check-sparkle.sh "$DIST" "$VERSION"
+      - name: The app's symbols
+        env:
+          DIST: ${{ steps.paths.outputs.dist }}
+        run: |
+          for file in "$DIST/Ardia-$VERSION-symbols.tar.xz" "$DIST/Ardia-$VERSION-uuids.txt"; do
+            [ -f "$file" ] && [ -s "$file" ] || { echo "::error::no $file: release.sh --phase sign packs the app's symbols, and a release without them can't name its crashes"; exit 1; }
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: release
@@ -296,8 +302,8 @@ jobs:
             ${{ steps.paths.outputs.dist }}/appcast.xml
             ${{ steps.paths.outputs.dist }}/release-notes.md
             ${{ steps.paths.outputs.dist }}/provenance.txt
-            ${{ steps.paths.outputs.dist }}/ardia-cli-${{ inputs.version }}-macos-arm64.tar.gz
-            ${{ steps.paths.outputs.dist }}/ardia-cli-${{ inputs.version }}-macos-arm64.tar.gz.sha256
+            ${{ steps.paths.outputs.dist }}/Ardia-${{ inputs.version }}-symbols.tar.xz
+            ${{ steps.paths.outputs.dist }}/Ardia-${{ inputs.version }}-uuids.txt
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -314,7 +320,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      TREE: ${{ needs.preflight.outputs.tree }}
+      TREE: ${{ needs.preflight.outputs.linux_tree }}
       ARDIACORE_PREBUILT_REPO: ${{ vars.ARDIACORE_PREBUILT_REPO || 'ardia-browser/ardia' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -334,14 +340,8 @@ jobs:
           restore-keys: engine-linux-x64-v3-
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ~/.cache/ardia-cli-build
-          key: ardia-cli-build-linux-x64-${{ hashFiles('apps/cli/scripts/build.sh', 'apps/cli/requirements.lock') }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
           path: packages/ardiacore/vendor/ubo
           key: ubo-linux-${{ hashFiles('packages/ardiacore/scripts/ubo.sh') }}
-      - name: uv
-        run: curl -LsSf https://astral.sh/uv/0.12.15/install.sh | sh
       - name: Build, package, smoke
         run: |
           if ! scripts/linux/release.sh "$VERSION" --engine exact --out "$RUNNER_TEMP/linux"; then
@@ -390,6 +390,53 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  linux-sign:
+    needs: [linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: linux
+          path: ${{ runner.temp }}/linux
+      - name: Sign the self-update manifest
+        env:
+          LINUX_UPDATE_ED_PRIVATE_KEY: ${{ secrets.LINUX_UPDATE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$LINUX_UPDATE_ED_PRIVATE_KEY" ]; then
+            echo "::error::no LINUX_UPDATE_ED_PRIVATE_KEY secret, so v$VERSION can't carry a signed Linux self-update manifest"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/linux-update-key.pem"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$LINUX_UPDATE_ED_PRIVATE_KEY" > "$key"
+          (cd "$RUNNER_TEMP/linux" && sha256sum -c --quiet ./*.sha256)
+          node scripts/linux/sign-update.mjs --key "$key" --dir "$RUNNER_TEMP/linux" --version "$VERSION"
+          mkdir -p "$RUNNER_TEMP/linux-update"
+          mv "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-update.txt" "$RUNNER_TEMP/linux/Ardia-$VERSION-linux-update.txt.sig" "$RUNNER_TEMP/linux-update/"
+          {
+            echo "- Linux: self-update manifest signed"
+            sed 's/^/    /' "$RUNNER_TEMP/linux-update/Ardia-$VERSION-linux-update.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        name: Remove the key
+        run: rm -f "$RUNNER_TEMP/linux-update-key.pem"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-update
+          path: |
+            ${{ runner.temp }}/linux-update/Ardia-${{ inputs.version }}-linux-update.txt
+            ${{ runner.temp }}/linux-update/Ardia-${{ inputs.version }}-linux-update.txt.sig
+          if-no-files-found: error
+          retention-days: 14
+
   windows:
     needs: preflight
     permissions:
@@ -400,7 +447,7 @@ jobs:
       version: ${{ inputs.version }}
 
   publish:
-    needs: [preflight, checks, sign, linux, windows]
+    needs: [preflight, checks, sign, linux, linux-sign, windows]
     if: ${{ !cancelled() && needs.checks.result == 'success' && needs.sign.result == 'success' }}
     runs-on: macos-15
     timeout-minutes: 30
@@ -414,6 +461,11 @@ jobs:
         with:
           name: release
           path: dist/${{ inputs.version }}
+      - name: The app's symbols
+        run: |
+          for file in "dist/$VERSION/Ardia-$VERSION-symbols.tar.xz" "dist/$VERSION/Ardia-$VERSION-uuids.txt"; do
+            [ -f "$file" ] && [ -s "$file" ] || { echo "::error::the release artifact has no $(basename "$file"), so v$VERSION would ship without the app's symbols"; exit 1; }
+          done
       - if: needs.linux.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -426,6 +478,18 @@ jobs:
         run: |
           echo "::warning::the Linux job ended $LINUX_RESULT, so v$VERSION ships without the Linux tarball: build it with scripts/linux/release.sh and upload it by hand once the engine is published"
           echo "- Linux: skipped (the linux job ended $LINUX_RESULT)" >> "$GITHUB_STEP_SUMMARY"
+      - if: needs.linux.result == 'success' && needs.linux-sign.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: linux-update
+          path: dist/${{ inputs.version }}/linux
+      - name: Linux self-update manifest
+        if: needs.linux.result == 'success' && needs.linux-sign.result != 'success'
+        env:
+          SIGN_RESULT: ${{ needs.linux-sign.result }}
+        run: |
+          echo "::warning::the linux-sign job ended $SIGN_RESULT, so v$VERSION ships without Ardia-$VERSION-linux-update.txt and installed Linux apps can't update themselves to it: sign it with scripts/linux/sign-update.mjs and upload the manifest and its .sig by hand"
+          echo "- Linux: no self-update manifest (the linux-sign job ended $SIGN_RESULT)" >> "$GITHUB_STEP_SUMMARY"
       - if: needs.windows.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -544,6 +608,4 @@ jobs:
     uses: ./.github/workflows/ios-release.yml
     with:
       mode: ${{ inputs.dry_run && 'dry-run' || 'upload' }}
-      version: ${{ inputs.version }}
-      public_testers: true
     secrets: inherit

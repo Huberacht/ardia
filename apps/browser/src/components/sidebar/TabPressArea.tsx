@@ -1,49 +1,54 @@
 import { type ReactNode, useRef } from "react";
-import { Animated, Pressable, type Insets, type StyleProp, type ViewStyle } from "react-native";
+import { Pressable, type Insets, type StyleProp, type ViewStyle } from "react-native";
 import { hostOf } from "@ardia/core";
 import { useSettings } from "../../state/browser/hooks";
 import { tabTitle } from "../../state/browser/model";
 import type { Tab } from "../../state/browser/types";
 import { middleClickTab } from "../../state/sidebar/clearTabs";
+import { pressStripClose } from "../../state/tabs/stripPress";
+import { workspaceSnapshot } from "../../state/browser/current";
 import { dismissHover } from "../../state/sidebar/hover";
 import { openTabMenu } from "../../state/sidebar/menus";
 import { clickHeldTabPress, holdTabPress, pressOutTabPress, type TabPress } from "../../state/sidebar/heldTabPress";
 import { tabPressTag } from "../../state/tabs/tabReveal";
-import { useSplitOf } from "../../state/windows/card";
+import { useInSplit } from "../../state/windows/card";
 import { ContextMenuArea } from "../ui";
-import { buttonMotion, usePressScaleMotion } from "../ui/motion";
 
-const SQUISH = { row: buttonMotion.rowPressScale, tile: buttonMotion.tilePressScale } as const;
-
-export function TabPressArea({
-  windowId,
-  tab,
-  style,
-  pressStyle,
-  tooltip,
-  squish,
-  hitSlop,
-  selected = false,
-  children,
-}: {
+type TabPressProps = {
   windowId: string;
   tab: Tab;
   style?: StyleProp<ViewStyle>;
   pressStyle?: StyleProp<ViewStyle>;
   tooltip?: string;
-  squish?: keyof typeof SQUISH;
   hitSlop?: Insets;
   selected?: boolean;
   children: ReactNode | ((state: { pressed: boolean }) => ReactNode);
-}) {
+};
+
+export function TabPressArea(props: TabPressProps) {
   const press = useRef<TabPress | null>(null);
-  const inSplit = !!useSplitOf(tab.id);
+  const inSplit = useInSplit(props.tab.id);
   const plainTooltip = useSettings((s) => !s.showTabHoverMenu);
-  const pressMotion = usePressScaleMotion(!!squish, squish ? SQUISH[squish] : undefined);
-  const scale = pressMotion.scale;
+  return tabPressView({ ...props, press, inSplit, plainTooltip });
+}
+
+export function tabPressView({
+  windowId,
+  tab,
+  style,
+  pressStyle,
+  tooltip,
+  hitSlop,
+  selected = false,
+  children,
+  press,
+  inSplit,
+  plainTooltip,
+  onPressChange,
+}: TabPressProps & { press: { current: TabPress | null }; inSplit: boolean; plainTooltip: boolean; onPressChange?: (pressed: boolean) => void }) {
   return (
     <ContextMenuArea
-      onMiddleClick={() => middleClickTab(tab.id)}
+      onMiddleClick={() => pressStripClose(windowId, tab.id, () => middleClickTab(tab.id), (tabId) => !!workspaceSnapshot().tabs[tabId])}
       onContextMenu={() => {
         dismissHover();
         void openTabMenu(windowId, tab);
@@ -52,12 +57,12 @@ export function TabPressArea({
     >
       <Pressable
         onPressIn={(e) => {
-          pressMotion.onPressIn?.();
+          onPressChange?.(true);
           press.current = holdTabPress(windowId, tab.id, e, press.current);
         }}
         onPress={(e) => clickHeldTabPress(windowId, tab.id, e, press.current)}
         onPressOut={(e) => {
-          pressMotion.onPressOut?.();
+          onPressChange?.(false);
           pressOutTabPress(press.current, e);
         }}
         style={pressStyle}
@@ -66,7 +71,7 @@ export function TabPressArea({
         hitSlop={hitSlop}
         tooltip={tooltip ?? (plainTooltip ? titleTooltip(tab) : undefined)}
       >
-        {scale ? (state) => <Animated.View style={{ transform: [{ scale }] }}>{typeof children === "function" ? children(state) : children}</Animated.View> : children}
+        {children}
       </Pressable>
     </ContextMenuArea>
   );

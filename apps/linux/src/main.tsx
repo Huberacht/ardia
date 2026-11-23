@@ -8,11 +8,14 @@ import { emitAppEvent, emitCommand, menuShown, setWindowCloseDecider } from "@ar
 import { WindowRoot } from "../../browser/src/App";
 import { startNativeSync } from "../../browser/src/state/app/nativeSync";
 import { startTabPages } from "../../browser/src/state/tabs/tabPages";
+import { startReader } from "../../browser/src/state/reader/reader";
 import { startTabLifecycle, useLifecycle } from "../../browser/src/state/tabs/tabLifecycle";
 import { useMedia } from "../../browser/src/state/media/media";
 import { useToolbarAutoHide } from "../../browser/src/state/windows/toolbarAutoHide";
-import { noteToolbarPeekPageHidden } from "../../browser/src/state/telemetry/usage";
+import { noteSidebarPeekPageHidden, noteToolbarPageHidden } from "../../browser/src/state/telemetry/usage";
+import { peekShown } from "../../browser/src/state/windows/dockMotion";
 import { onPageCovered } from "./shims/web/HostWebView";
+import { toolbarMoving } from "./AutoHideToolbarRegion";
 import { copyLinkToSelection, jumpToSelection, replaceInField, usePageSelection } from "../../browser/src/state/site/selection";
 import { webviews } from "../../browser/src/platform/webviews";
 import { startMemoryTrim } from "../../browser/src/state/tabs/memoryTrim";
@@ -24,7 +27,7 @@ import { useOnboarding } from "../../browser/src/state/onboarding/onboarding";
 import { adoptParkedPins } from "../../browser/src/state/pins/parkedPins";
 import { decideLinuxWindowClose } from "./windowCloseDecider";
 import { afterFirstWindow, firstWindowCommitted } from "../../browser/src/lib/afterFirstWindow";
-import { startCliControl } from "../../browser/src/state/app/cliControl";
+import { startProgramControl } from "../../browser/src/state/app/programControl";
 import { startAutomation } from "../../browser/src/state/automation/controlSocket";
 import { startUserScripts } from "../../browser/src/state/extensions/userScripts";
 import { leadUserScripts } from "./hostUserScripts";
@@ -62,10 +65,14 @@ import { inputRegions, startShellAbove } from "./shellAbove";
 import { InWindowPlayer } from "./InWindowPlayer";
 import { startLinuxUpdates } from "./linuxUpdates";
 import { noticeUnsandboxedLaunch } from "./sandboxNotice";
+import { watchWindowDecorations } from "./windowDecorations";
 import { countLoginPasswordChecks } from "./reauthCounts";
 import { startPipPlayer } from "./pipPlayer";
 import { startLinuxShortcuts } from "./shortcutsRuntime";
 import { linuxWindowMenu } from "./linuxWindowMenu";
+import { TrafficLights } from "./TrafficLights";
+import { startWindowButtonStyle } from "../../browser/src/state/windows/windowButtons";
+import { followDesktopButtonLayout } from "./desktopButtonLayout";
 import { followWindowMaximized } from "./windowMaximized";
 import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
 import { startUtility } from "./utility";
@@ -110,12 +117,15 @@ async function start() {
   const restoreSession = launch ? configRestoreSession() : undefined;
   setStoreBatching(unstable_batchedUpdates);
   hydrateLaunchSession(saved, initialLinuxSession(ardiaHost, saved?.settings && restoreSession !== undefined ? { ...saved, settings: { ...saved.settings, restoreSession } } : saved));
+  followDesktopButtonLayout(ardiaHost);
+  startWindowButtonStyle();
   followWindowMaximized(ardiaHost, windowId);
   startConfigFiles(colorRoles, launch);
   startHostTelemetry({ host: ardiaHost, candidate: !utility, locks: navigator.locks as unknown as LeaderLocks });
   countLoginPasswordChecks(linuxTelemetryHooks.leading);
+  watchWindowDecorations(ardiaHost, windowId);
   const capabilities = linuxCapabilities(ardiaHost);
-  if (capabilities.cliControl) startCliControl();
+  if (capabilities.cliControl) startProgramControl();
   await startLinuxShortcuts(ardiaHost);
   if (utility) {
     const persistence = startHostPersistence(ardiaHost, useBrowser, stored ?? {}, createUtilitySessionSnapshot(useBrowser.getState(), saved ?? {}));
@@ -132,7 +142,8 @@ async function start() {
     startHostData();
     startHostTabLifecycle(ardiaHost, useBrowser);
     startShellAbove(ardiaHost);
-    onPageCovered((tabId) => linuxTelemetryHooks.leading() && useToolbarAutoHide.getState().peek[tabId] && noteToolbarPeekPageHidden());
+    onPageCovered((tabId) => linuxTelemetryHooks.leading() && noteToolbarPageHidden(useToolbarAutoHide.getState().peek[tabId] ? "peek" : toolbarMoving(tabId) ? "motion" : null));
+    onPageCovered(() => peekShown(windowId) && noteSidebarPeekPageHidden());
     startPipPlayer(ardiaHost);
     watchTabSwitches(useBrowser);
     setPopupDismissal({ popup: () => useExtensions.getState().popup, windowOf: (tabId) => useBrowser.getState().tabs[tabId]?.windowId, close: () => useExtensions.setState({ popup: null }) });
@@ -145,6 +156,7 @@ async function start() {
     if (!saved) await recordFreshProfile();
     await persistence.flush();
     startTabPages();
+    startReader();
     startNativeSync();
     listenForOpenUrls(ardiaHost);
     startHostDownloads(ardiaHost, useBrowser);
@@ -175,6 +187,7 @@ async function start() {
       <div className="ardia-window">
         {!utility && <InWindowPlayer windowId={windowId} />}
         <WindowRoot windowId={windowId} />
+        <TrafficLights windowId={windowId} />
       </div>
       <MenuHost />
       <FirstWindowCommitted typeahead={!utility} />

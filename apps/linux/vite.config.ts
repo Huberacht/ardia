@@ -13,6 +13,7 @@ const replacements = new Map([
   ...inputAdapters,
   [here("../browser/src/platform/livePersistence.ts"), here("./src/livePersistence.ts")],
   [here("../browser/src/platform/fieldTiming.ts"), here("./src/fieldTiming.ts")],
+  [here("../browser/src/platform/pickConfirmation.ts"), here("./src/pickConfirmation.ts")],
   [here("../../packages/core/src/suggestFetcher.ts"), here("./src/suggestFetcher.ts")],
   [here("../browser/src/components/settings/settingsIndex.ts"), here("./src/settingsIndex.ts")],
   [here("../browser/src/components/settings/Form.tsx"), here("./src/settingsForm.tsx")],
@@ -39,6 +40,7 @@ const replacements = new Map([
   [here("../browser/src/components/extensions/ActionPopup.tsx"), here("./src/ExtensionActionPopup.tsx")],
   [here("../browser/src/platform/windowControls.ts"), here("./src/hostWindowControls.ts")],
   [here("../browser/src/components/window/WindowControls.tsx"), here("./src/WindowControls.tsx")],
+  [here("../browser/src/components/window/LeadingWindowControls.tsx"), here("./src/LeadingWindowControls.tsx")],
 ]);
 const importedPasswordSave = {
   source: here("../browser/src/state/site/passwords.ts"),
@@ -61,7 +63,7 @@ const importerReplacements = new Map([
   [`${here("../browser/src/state/report/actions.ts")}\0${here("../browser/src/state/commands/appCommands.ts")}`, here("./src/reportProblem.ts")],
   [`${here("../browser/src/components/ui/Panel.tsx")}\0${here("../browser/src/components/ui/Popover.tsx")}`, here("./src/GlassPanel.tsx")],
   [`${here("../browser/src/components/ui/index.ts")}\0${here("../browser/src/components/window/SidebarDock.tsx")}`, here("./src/glassUi.tsx")],
-  [`${here("../browser/src/components/ui/index.ts")}\0${here("../browser/src/components/omnibox/CommandPanel.tsx")}`, here("./src/glassUi.tsx")],
+  [`${here("../browser/src/components/ui/index.ts")}\0${here("../browser/src/components/omnibox/PanelBox.tsx")}`, here("./src/glassUi.tsx")],
   [`${here("../browser/src/state/windows/controls.ts")}\0${here("../browser/src/components/window/WindowControls.tsx")}`, here("./src/captionControls.ts")],
   [`${here("../browser/src/state/app/appMenu.ts")}\0${here("../browser/src/components/window/BrowserWindowControls.tsx")}`, here("./src/clusterAppMenu.ts")],
   [`${here("../browser/src/state/windows/layout.ts")}\0${here("../browser/src/components/sidebar/Sidebar.tsx")}`, here("./src/sidebarHeaderLayout.ts")],

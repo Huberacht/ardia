@@ -1,5 +1,10 @@
-import type { ConsentToken } from "./choice";
-import { countFor } from "./countFor";
+import { onConsentPeriodChange, stillValid, type ConsentToken } from "./choice";
+import { consentOrNow, countFor } from "./countFor";
+import { SOCKET_FAMILIES, type SocketFamily } from "../automation/socketCatalog";
+
+export const TOKEN_COMMAND_DOMAINS = ["accessibility", "browser", "dom", "emulation", "fetch", "input", "network", "page", "runtime", "storage", "target", "other"] as const;
+export type TokenCommandDomain = (typeof TOKEN_COMMAND_DOMAINS)[number];
+type TokenCommandTotals = Partial<Record<TokenCommandDomain, number>>;
 
 export type CliInstallReason = "auto" | "settings" | "upgrade";
 
@@ -15,6 +20,11 @@ const NONE = {
   cli_settings_install_failures: 0,
   windowless_pages_given_geometry: 0,
   windowless_pages_missing_geometry: 0,
+  cli_socket_call_failures: 0,
+  cli_socket_lines_shrunk: 0,
+  cli_socket_password_manager_refusals: 0,
+  ...(Object.fromEntries(SOCKET_FAMILIES.map((family) => [`cli_socket_calls_${family}`, 0])) as Record<`cli_socket_calls_${SocketFamily}`, number>),
+  ...(Object.fromEntries(TOKEN_COMMAND_DOMAINS.map((domain) => [`cli_cdp_commands_${domain}`, 0])) as Record<`cli_cdp_commands_${TokenCommandDomain}`, number>),
 };
 
 const FIELDS = {
@@ -25,20 +35,64 @@ const FIELDS = {
 
 let counts = { ...NONE };
 let windowlessSeen = { given: 0, missed: 0 };
+let tokenCommandsSeen: Record<TokenCommandDomain, number> = Object.fromEntries(TOKEN_COMMAND_DOMAINS.map((domain) => [domain, 0])) as Record<TokenCommandDomain, number>;
 
-export const noteCliInstall = (reason: CliInstallReason, ok: boolean, consent?: ConsentToken | null) => countFor(consent, () => void counts[FIELDS[reason][ok ? 0 : 1]]++, { [FIELDS[reason][ok ? 0 : 1]]: 1 });
+export const noteCliInstall = (reason: CliInstallReason, ok: boolean, consent?: ConsentToken | null) => countFor(consentOrNow(consent), () => void counts[FIELDS[reason][ok ? 0 : 1]]++);
 export function noteCliPillShown(compact: boolean) {
   counts.cli_pill_shows++;
   if (compact) counts.cli_pill_compact_shows++;
 }
+export function noteSocketCall(family: SocketFamily, failed: boolean, consent?: ConsentToken | null) {
+  const field = `cli_socket_calls_${family}` as const;
+  countFor(consentOrNow(consent), () => void counts[field]++);
+  if (failed) countFor(consentOrNow(consent), () => void counts.cli_socket_call_failures++);
+}
+export const noteSocketLineShrunk = (consent: ConsentToken | null) => countFor(consentOrNow(consent), () => void counts.cli_socket_lines_shrunk++);
+export const noteSocketPasswordManagerRefused = (consent: ConsentToken | null) =>
+  countFor(consentOrNow(consent), () => void counts.cli_socket_password_manager_refusals++);
 export const noteCliAutoEnabled = () => void counts.cli_auto_enables++;
 
-export function noteWindowlessPages(totals: { given: number; missed: number } | undefined) {
+let windowlessBaselineStale = false;
+let tokenCommandsBaselineStale = false;
+onConsentPeriodChange(() => {
+  windowlessBaselineStale = true;
+  tokenCommandsBaselineStale = true;
+});
+
+export function noteWindowlessPages(totals: { given: number; missed: number } | undefined, consent?: ConsentToken | null) {
   if (!totals) return;
+  const token = consentOrNow(consent);
+  const fresh = stillValid(token) && !windowlessBaselineStale;
+  if (stillValid(token)) windowlessBaselineStale = false;
   const given = Number(totals.given) || 0, missed = Number(totals.missed) || 0;
-  counts.windowless_pages_given_geometry += Math.max(0, given - windowlessSeen.given);
-  counts.windowless_pages_missing_geometry += Math.max(0, missed - windowlessSeen.missed);
+  const newlyGiven = fresh ? Math.max(0, given - windowlessSeen.given) : 0;
+  const newlyMissed = fresh ? Math.max(0, missed - windowlessSeen.missed) : 0;
   windowlessSeen = { given: Math.max(given, windowlessSeen.given), missed: Math.max(missed, windowlessSeen.missed) };
+  if (newlyGiven || newlyMissed) {
+    countFor(token, () => {
+      counts.windowless_pages_given_geometry += newlyGiven;
+      counts.windowless_pages_missing_geometry += newlyMissed;
+    });
+  }
+}
+
+export function noteTokenCommands(totals: TokenCommandTotals | undefined, consent?: ConsentToken | null) {
+  if (!totals) return;
+  const token = consentOrNow(consent);
+  const fresh = stillValid(token) && !tokenCommandsBaselineStale;
+  if (stillValid(token)) tokenCommandsBaselineStale = false;
+  const sent = TOKEN_COMMAND_DOMAINS.map((domain) => {
+    const total = Number(totals[domain]) || 0;
+    const delta = fresh ? Math.max(0, total - tokenCommandsSeen[domain]) : 0;
+    tokenCommandsSeen[domain] = Math.max(total, tokenCommandsSeen[domain]);
+    return [domain, delta] as const;
+  });
+  if (sent.some(([, delta]) => delta)) countFor(token, () => sent.forEach(([domain, delta]) => (counts[`cli_cdp_commands_${domain}`] += delta)));
+}
+
+export function noteEngineCliTotals(status: { windowlessPages?: { given: number; missed: number }; tokenCommands?: TokenCommandTotals }, consent: ConsentToken) {
+  noteWindowlessPages(status.windowlessPages, consent);
+  noteTokenCommands(status.tokenCommands, consent);
 }
 
 export function takeCliCounts() {

@@ -24,12 +24,11 @@ enum MainMenu {
   }
 
   private static func appWideItem(for event: NSEvent, in menu: NSMenu?) -> NSMenuItem? {
-    let held: NSEvent.ModifierFlags = [.command, .shift, .option, .control]
     for item in menu?.items ?? [] {
       if let found = appWideItem(for: event, in: item.submenu) { return found }
       let appWide = item.action == #selector(MenuTarget.quit(_:)) || (item as? CommandItem)?.command == CommandTable.Command.openSettings.rawValue
-      guard appWide, !item.keyEquivalent.isEmpty, item.keyEquivalent == event.charactersIgnoringModifiers else { continue }
-      if item.keyEquivalentModifierMask.intersection(held) == event.modifierFlags.intersection(held) { return item }
+      guard appWide, KeyEquivalentMatch.matches(item, event) else { continue }
+      return item
     }
     return nil
   }
@@ -306,9 +305,12 @@ enum MainMenu {
       profilesItem,
       hidden(.openProfileMenu),
     ])
+    let helpMenu = top("Help", helpItems())
+    MenuCatalog.capture(
+      main, dynamic: [services, shareMenu, moveToProfile, moveToWindow, bookmarkToFolder, profiles, littleArdiaInProfile, history, extensions],
+      growing: [bookmarks, windowMenu])
     NSApp.windowsMenu = windowMenu
-
-    NSApp.helpMenu = top("Help", helpItems())
+    NSApp.helpMenu = helpMenu
 
     built = nil
     refresh()

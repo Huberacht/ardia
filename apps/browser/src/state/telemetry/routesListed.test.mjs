@@ -19,6 +19,8 @@ async function sentRoutes() {
 }
 
 test("command bar lists that show several routes of one site apart are counted and reset once taken", () => {
+  client.loadChoice();
+  client.setSharing(true, "settings");
   takeInlineCompletionCounts();
   noteRoutesListed();
   noteRoutesListed();
