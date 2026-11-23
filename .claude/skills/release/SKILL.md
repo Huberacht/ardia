@@ -358,7 +358,8 @@ keys and deletes them before the launch check (`docs/releasing.md` › CI releas
 
 **Smoke-testing CI's build.** Commit the bump and the notes first, then dispatch with `dry_run=true` (the default):
 the same build as a release candidate (`release.sh --rc`, signed and notarized), published nowhere. Its preflight
-fails on everything a real run would, except a nightly that's already released and still the newest build, which
+fails on everything a real run would, except a nightly that's already released at the checkout's build and still the
+newest build (the feed must list it; a published tag alone fails), which
 only warns (`publish.sh --dry-run` refuses an already released stable anyway). If the sign job
 fails while waiting on Apple, re-run it: the notarization state is cached per version, so it picks the submission up. Download it and run the smoke test
 on it:

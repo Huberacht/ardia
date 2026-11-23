@@ -15,7 +15,31 @@ deadline=$(($(date +%s) + budget))
 [ ! -L "$state" ] || die "$state is a symlink: NOTARY_STATE_DIR must be a real directory"
 mkdir -p "$state" "$logs"
 scratch=""
-trap '[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
+held_lock=""
+trap '[ -z "$scratch" ] || rm -rf "$scratch"; [ -z "$held_lock" ] || rm -rf "$held_lock"' EXIT
+
+started_at() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/[[:space:]]*$//'; }
+
+lock_key() {
+  local lock="$state/$1.lock" attempt holder holder_start stale
+  for attempt in 1 2 3; do
+    if mkdir "$lock" 2>/dev/null; then
+      printf '%s\n%s\n' "$$" "$(started_at $$)" > "$lock/holder"
+      held_lock="$lock"
+      return 0
+    fi
+    holder="$(sed -n 1p "$lock/holder" 2>/dev/null)"
+    holder_start="$(sed -n 2p "$lock/holder" 2>/dev/null)"
+    if [[ "$holder" =~ ^[0-9]+$ ]] && [ -n "$holder_start" ] && [ "$(started_at "$holder")" = "$holder_start" ]; then
+      die "another notarize.sh (pid $holder) is working on $1 in $state; run one at a time"
+    fi
+    stale="$lock.stale.$$"
+    if mv "$lock" "$stale" 2>/dev/null; then
+      if [ "$(sed -n 1p "$stale/holder" 2>/dev/null)" = "$holder" ]; then rm -rf "$stale"; else mv "$stale" "$lock" 2>/dev/null || rm -rf "$stale"; fi
+    fi
+  done
+  die "couldn't take the lock $lock"
+}
 
 sha256_of() {
   if command -v shasum >/dev/null; then shasum -a 256 "$1" | awk '{ print $1 }'; else sha256sum "$1" | awk '{ print $1 }'; fi
@@ -99,9 +123,10 @@ place() {
 }
 
 record_id() {
-  local id="$1" record="$2" tmp
+  local id="$1" record="$2" kept="${3:-}" tmp
   tmp="$(mktemp "$state/.record.XXXXXX")"
   printf '%s\n' "$id" > "$tmp"
+  [ -z "$kept" ] || printf '%s\n' "$kept" >> "$tmp"
   place "$tmp" "$record"
 }
 
@@ -113,7 +138,7 @@ keep_payload() {
 }
 
 submit() {
-  local file="$1" log="$2" record="$3" id="" attempt out
+  local file="$1" log="$2" record="$3" kept="${4:-}" id="" attempt out
   out="$(mktemp "${TMPDIR:-/tmp}/ac-notary-submit.XXXXXX")"
   for attempt in 1 2 3; do
     if xcrun notarytool submit "$file" "${notary_auth[@]}" | tee "$out"; then
@@ -126,7 +151,7 @@ submit() {
   done
   rm -f "$out"
   [ -n "$id" ] || die "notarytool couldn't submit $(basename "$file") (3 attempts)"
-  record_id "$id" "$record"
+  record_id "$id" "$record" "$kept"
   echo "Submission $id recorded in $record: a retry picks it up instead of uploading again"
   wait_for "$id" "$log" "$record"
 }
@@ -149,18 +174,24 @@ kept_matches() {
 }
 
 notarize() {
-  local file="$1" key="$2" saved="${3:-}" expected="${4:-}" log record id=""
+  local file="$1" key="$2" saved="${3:-}" expected="${4:-}" log record id="" kept_sha=""
   log="$logs/notary-$(basename "$target").log"
   record="$state/$key"
+  lock_key "$key"
   echo "Notarizing $(basename "$target") ($key)"
   : > "$log"
   if [ -f "$record" ] && [ ! -L "$record" ]; then
-    id="$(head -c 64 "$record" | tr -d '[:space:]')"
+    id="$(head -c 4096 "$record" | sed -n 1p | tr -d '[:space:]')"
+    kept_sha="$(head -c 4096 "$record" | sed -n 2p | tr -d '[:space:]')"
     valid_id "$id" || { echo "ignoring $record: '$id' isn't a submission id"; id=""; }
   fi
   if [ -n "$id" ] && [ -n "$saved" ]; then
     if [ ! -f "$saved" ] || [ -L "$saved" ]; then
       echo "no kept copy of the file submission $id was made from; submitting this one"
+      id=""
+    elif ! [[ "$kept_sha" =~ ^[0-9a-f]{64}$ ]] || [ "$(sha256_of "$saved")" != "$kept_sha" ]; then
+      echo "the kept copy isn't the file $record names for submission $id (its sha256 differs); submitting this one"
+      rm -f "$saved"
       id=""
     else
       local verdict=0
@@ -184,7 +215,8 @@ notarize() {
       cp "$saved" "$restored"
       if staple "$restored"; then
         mv -f "$restored" "$target"
-        rm -rf "$scratch" "$saved"
+        rm -rf "$scratch"
+        keep_stapled "$id" "$record" "$saved"
         echo "$(basename "$target") is now the copy submission $id was made from (the same app and packing inputs, packed in an earlier attempt)"
         return 0
       fi
@@ -192,13 +224,22 @@ notarize() {
     fi
     die "Apple accepted submission $id, but stapler couldn't fetch its ticket for $(basename "$target") (above): run this again once Apple's ticket service answers. If the ticket really isn't this file's, delete $record to submit it fresh."
   fi
+  local sent=""
   if [ -n "$saved" ]; then
     rm -f "$record"
     keep_payload "$saved"
+    sent="$(sha256_of "$saved")"
   fi
-  submit "$file" "$log" "$record"
+  submit "$file" "$log" "$record" "$sent"
   staple || die "stapler couldn't staple $(basename "$target") after Apple accepted it"
-  [ -z "$saved" ] || rm -f "$saved"
+  [ -z "$saved" ] || keep_stapled "$(sed -n 1p "$record")" "$record" "$saved"
+}
+
+keep_stapled() {
+  local id="$1" record="$2" saved="$3"
+  keep_payload "$saved"
+  record_id "$id" "$record" "$(sha256_of "$saved")"
+  find "$state" -maxdepth 1 -type f -name 'dmg-of-*.dmg' ! -path "$saved" -mtime +3 -exec rm -f {} + 2>/dev/null || true
 }
 
 cdhash_of() {

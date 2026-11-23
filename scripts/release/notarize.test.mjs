@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -114,8 +115,14 @@ function scratch() {
     });
     return { ...result, output: result.stdout + result.stderr };
   };
-  const records = () => (existsSync(state) ? Object.fromEntries(readdirSync(state).map((f) => [f, readFileSync(join(state, f), "utf8").trim()])) : {});
-  return { dir, dmg, state, stub, set, calls, notarize, records, ticket: (name = "Ardia-1.2.3.dmg") => writeFileSync(join(stub, "ticket"), `${name}\n`) };
+  const records = () => (existsSync(state) ? Object.fromEntries(readdirSync(state).map((f) => [f, f.endsWith(".dmg") ? readFileSync(join(state, f), "utf8") : readFileSync(join(state, f), "utf8").split("\n")[0]])) : {});
+  const keptSha = (key) => readFileSync(join(state, key), "utf8").split("\n")[1];
+  const plant = (key, id, content, recordedContent = content) => {
+    mkdirSync(state, { recursive: true });
+    writeFileSync(join(state, `${key}.dmg`), content);
+    writeFileSync(join(state, key), `${id}\n${createHash("sha256").update(recordedContent).digest("hex")}\n`);
+  };
+  return { dir, dmg, state, stub, set, calls, notarize, records, keptSha, plant, ticket: (name = "Ardia-1.2.3.dmg") => writeFileSync(join(stub, "ticket"), `${name}\n`) };
 }
 
 function dmgKey(s, app, env = {}) {
@@ -342,7 +349,8 @@ test("a DMG packed again resumes the submission of the copy it kept, and swaps t
   assert.equal(retry.status, 0, retry.output);
   assert.deepEqual(s.calls().filter(Boolean), ["notarytool info", "notarytool wait", "stapler staple"]);
   assert.equal(readFileSync(s.dmg, "utf8"), "the first packing");
-  assert.ok(!existsSync(join(s.state, `${key}.dmg`)), "the kept copy goes once it's stapled");
+  assert.equal(s.records()[`${key}.dmg`], "the first packing", "the stapled copy stays for a later retry");
+  assert.equal(s.keptSha(key), createHash("sha256").update("the first packing").digest("hex"));
 });
 
 test("a record path that is a symlink to a directory is replaced by the record itself", () => {
@@ -381,9 +389,7 @@ test("a kept DMG that isn't this app, this team's signature or the usual volume 
     mkdirSync(join(app, "Contents"), { recursive: true });
     writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
     const key = dmgKey(s, app);
-    mkdirSync(s.state);
-    writeFileSync(join(s.state, key), `${FIRST}\n`);
-    writeFileSync(join(s.state, `${key}.dmg`), "planted");
+    s.plant(key, FIRST, "planted");
     writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
     setup(s);
     s.set("submit", [SECOND]);
@@ -414,9 +420,7 @@ test("a kept DMG that won't staple leaves this run's DMG in place and stops", ()
   mkdirSync(join(app, "Contents"), { recursive: true });
   writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
   const key = dmgKey(s, app);
-  mkdirSync(s.state, { recursive: true });
-  writeFileSync(join(s.state, key), `${FIRST}\n`);
-  writeFileSync(join(s.state, `${key}.dmg`), "the earlier packing");
+  s.plant(key, FIRST, "the earlier packing");
   writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
   volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
   const run = s.notarize(s.dmg, {}, [app]);
@@ -460,7 +464,7 @@ test("a fresh DMG upload that fails drops the old accepted record first, so the 
   const retry = s.notarize(s.dmg, {}, [app]);
   assert.equal(retry.status, 0, retry.output);
   assert.deepEqual(s.calls(), ["notarytool submit", "notarytool wait", "stapler staple"]);
-  assert.deepEqual(s.records(), { [key]: SECOND });
+  assert.equal(s.records()[key], SECOND);
 });
 
 test("a packing input that can't be hashed keys the DMG by its own bytes instead", () => {
@@ -500,4 +504,62 @@ test("a kept DMG hdiutil can't mount stops with the record and the copy kept, ne
   assert.deepEqual(s.calls().filter(Boolean), []);
   assert.equal(s.records()[key], FIRST);
   assert.equal(s.records()[`${key}.dmg`], "the first packing");
+});
+
+function dmgScratch() {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  return { s, app, key: dmgKey(s, app) };
+}
+
+test("a kept copy whose sha256 isn't the one recorded with the id is never resumed: another run's image is never paired with this id", () => {
+  const { s, app, key } = dmgScratch();
+  s.plant(key, FIRST, "image B, written by a run whose upload failed", "image A, the one submission FIRST was made from");
+  writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
+  s.set("submit", [SECOND]);
+  s.ticket();
+  const run = s.notarize(s.dmg, {}, [app]);
+  assert.equal(run.status, 0, run.output);
+  assert.match(run.output, /isn't the file .* names for submission 11111111.*sha256 differs/);
+  assert.deepEqual(s.calls(), ["notarytool submit", "notarytool wait", "stapler staple"]);
+  assert.equal(readFileSync(s.dmg, "utf8"), "a disk image");
+  assert.equal(s.records()[key], SECOND);
+  assert.equal(s.keptSha(key), createHash("sha256").update("a disk image").digest("hex"));
+});
+
+test("a second notarize.sh on the same key stops while the first one holds it, and takes a lock its dead holder left", () => {
+  const { s, app, key } = dmgScratch();
+  const started = (pid) => spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).stdout.trimEnd();
+  mkdirSync(join(s.state, `${key}.lock`), { recursive: true });
+  writeFileSync(join(s.state, `${key}.lock`, "holder"), `${process.pid}\n${started(process.pid)}\n`);
+  s.set("submit", [FIRST]);
+  s.ticket();
+  const busy = s.notarize(s.dmg, {}, [app]);
+  assert.notEqual(busy.status, 0);
+  assert.match(busy.output, new RegExp(`another notarize.sh \\(pid ${process.pid}\\) is working on ${key}`));
+  assert.deepEqual(s.calls(), []);
+  writeFileSync(join(s.state, `${key}.lock`, "holder"), `${process.pid}\nMon Jan  1 00:00:00 2001\n`);
+  const reused = s.notarize(s.dmg, {}, [app]);
+  assert.equal(reused.status, 0, reused.output);
+  assert.ok(!existsSync(join(s.state, `${key}.lock`)), "the lock goes when the run ends");
+  assert.deepEqual(readdirSync(s.state).filter((n) => n.includes(".stale.")), []);
+});
+
+test("the stapled DMG stays with its id and sha256, so a retry after a later release step failed staples it again without uploading", () => {
+  const { s, app, key } = dmgScratch();
+  s.set("submit", [FIRST]);
+  s.ticket();
+  const first = s.notarize(s.dmg, {}, [app]);
+  assert.equal(first.status, 0, first.output);
+  assert.equal(s.records()[`${key}.dmg`], "a disk image");
+  assert.equal(s.keptSha(key), createHash("sha256").update("a disk image").digest("hex"));
+  writeFileSync(s.dmg, "packed again after the launch check failed");
+  writeFileSync(join(s.stub, "calls"), "");
+  const retry = s.notarize(s.dmg, {}, [app]);
+  assert.equal(retry.status, 0, retry.output);
+  assert.deepEqual(s.calls(), ["notarytool info", "stapler staple"]);
+  assert.equal(readFileSync(s.dmg, "utf8"), "a disk image");
 });

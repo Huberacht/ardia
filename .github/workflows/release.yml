@@ -48,12 +48,18 @@ jobs:
         run: |
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
-          check() { if [ "$DRY_RUN" = true ]; then echo "::warning::$* (a real release would stop here)"; else fail "$*"; fi; }
           . scripts/lib/releases.sh
           channel=$(channel_of "$VERSION") || fail "$VERSION is neither <major>.<minor>.<patch> nor <next stable>-nightly.<n>"
           if [ "$DRY_RUN" = true ]; then mode=dry-run; else mode=release; fi
-          node scripts/release/preflight.mjs "$VERSION" --mode "$mode" --allow-no-feed --github
-          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then check "v$VERSION is already published"; fi
+          values="$RUNNER_TEMP/preflight-values"
+          node scripts/release/preflight.mjs "$VERSION" --mode "$mode" --allow-no-feed --github --values-out "$values"
+          if gh release view "v$VERSION" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ "$DRY_RUN" = true ] && grep -qx 'already_released=nightly-newest' "$values"; then
+              echo "::warning::v$VERSION is already published, as the newest nightly at this build (a real release would stop here)"
+            else
+              fail "v$VERSION is already published: only a dry run of a nightly the feed lists at this build, still the newest, may go on"
+            fi
+          fi
           tree=$(engine/engine-key.sh --platform macos)
           linux_tree=$(engine/engine-key.sh --platform linux)
           { echo "tree=$tree"; echo "linux_tree=$linux_tree"; } >> "$GITHUB_OUTPUT"

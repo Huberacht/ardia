@@ -226,7 +226,12 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      app it packs and a hash of the packing inputs (the commit, `package.sh`, `scripts/dmg/background.tiff` and `DS_Store`,
      `ARDIA_DMG_CHUNK`), next to a copy of the
      exact DMG it sent (`package.sh` never makes the same bytes twice, so a retry staples that copy and only then puts
-     it in place of the new one; the copy goes once it's stapled). A kept copy is used only when its signature
+     it in place of the new one). Once stapled, the stapled copy stays, so a retry after a later step failed (the appcast,
+     the launch check) staples it again instead of uploading; kept copies untouched for three days are pruned. The record
+     holds the id and the sha256 of the kept copy, and a copy whose sha256 differs is never resumed. One `notarize.sh`
+     at a time works on a key: it takes a lock (`<key>.lock`, holding its pid and start time, so a lock its dead holder
+     left is taken over) for the whole check, upload and record, and a second one on the same key stops. A kept copy is
+     used only when its signature
      verifies against the packed app's team and it mounts as exactly the volume `package.sh` makes, holding an app with
      the same CDHash; anything else is discarded and the new DMG submitted. Before a DMG is submitted fresh, its old record
      is dropped, so an upload that fails can't leave an old accepted id beside a new image; a packing input that can't
@@ -333,8 +338,11 @@ the engine if `engine/` changed (below).
 
 - **preflight**, on Ubuntu in a few seconds, runs `scripts/release/preflight.mjs` (above) and checks that `v<version>`
   isn't out yet. A real run fails on any of it. A dry run fails on all of it too, except a nightly that's already
-  released and still the newest build (in the feed, tagged), which only warns, since `publish.sh --dry-run` accepts that
-  one and refuses an already released stable. So a dry run on a commit catches whatever would stop the real run on it.
+  released, listed in the feed at the checkout's build and still the newest build, which only warns, since
+  `publish.sh --dry-run` accepts that one and refuses an already released stable. The tag check follows the same rule:
+  a published `v<version>` only warns in a dry run when the preflight confirmed exactly that (`already_released=nightly-newest`
+  in its `--values-out`); with a feed that answers 404, or for anything else, it fails. So a dry run on a commit catches
+  whatever would stop the real run on it.
 - **checks**: `pnpm typecheck`, `pnpm test`, `pnpm shaders:check`.
 - **build**, on the `xcode-27` runner (Xcode 27.1, the same build as here), with no secrets: fetches the engine for
   this exact `engine/` tree (`fetch-engine.sh`), installs (pnpm, Pods), runs
@@ -345,7 +353,7 @@ the engine if `engine/` changed (below).
 - **sign** installs nothing and restores no cache but the notarization state, so no dependency code runs next to the
   keys. That cache (`notary-<version>-<commit>-<run>-<attempt>`, restored before the keys are set up from the newest one
   for the same version and commit, and saved after they're removed) holds submission ids named by CDHash or file
-  hash, and the DMG last sent until it's stapled (a few hundred MB): data, never code. `notarize.sh` refuses a
+  hash, and the kept DMG (a few hundred MB): data, never code. `notarize.sh` refuses a
   symlinked state directory, writes through `mktemp` and a rename, takes nothing but a UUID from a record, acts on it
   only as far as Apple confirms it and checks a kept DMG as above before using it. Polling is capped at 45 minutes per
   file (`NOTARY_WAIT_SECONDS`), which leaves the 150-minute job time for the upload, stapling and the save on a normal

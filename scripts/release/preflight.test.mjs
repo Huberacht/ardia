@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -219,10 +219,10 @@ test("--values-out hands release.sh the values it checked, quotes and the .0 tak
   const valuesOut = join(root, "values");
   const result = await run({ version: "1.2.3", root, valuesOut });
   assert.deepEqual(result.fails, []);
-  assert.equal(readFileSync(valuesOut, "utf8"), "project_version=1.2.3\nproject_build=42\nrelease_build=42\nmin_macos=15\n");
+  assert.equal(readFileSync(valuesOut, "utf8"), "project_version=1.2.3\nproject_build=42\nrelease_build=42\nmin_macos=15\nalready_released=none\n");
   const candidate = await run({ version: "1.2.4", root: fixture({ notes: null }), mode: "candidate", valuesOut });
   assert.deepEqual(candidate.fails, []);
-  assert.equal(readFileSync(valuesOut, "utf8"), "project_version=1.2.3\nproject_build=42\nrelease_build=43\nmin_macos=15\n");
+  assert.equal(readFileSync(valuesOut, "utf8"), "project_version=1.2.3\nproject_build=42\nrelease_build=43\nmin_macos=15\nalready_released=none\n");
 });
 
 test("an unreadable feed stops a release and a dry run, while a candidate starts from nothing", async () => {
@@ -320,4 +320,55 @@ test("the 8 MB cap counts UTF-8 bytes while the body streams, and applies to a f
   writeFileSync(file, body);
   const local = await run({ version: "1.2.3", root, feed: file });
   assert.match(local.fails.join("\n"), /big\.xml is over 8388608 bytes/);
+});
+
+test("already_released says nightly-newest only when a dry run let a released nightly at this build through", async () => {
+  const root = fixture({ version: "1.2.3-nightly.2", builds: [41, 41] });
+  const valuesOut = join(root, "values");
+  await run({ version: "1.2.3-nightly.2", root, mode: "dry-run", valuesOut });
+  assert.match(readFileSync(valuesOut, "utf8"), /^already_released=nightly-newest$/m);
+  const missing = fixture({ version: "1.2.4", builds: [42, 42] });
+  await run({ version: "1.2.4", root: missing, mode: "dry-run", valuesOut, allowNoFeed: true, responses: [{ status: 404 }] });
+  assert.match(readFileSync(valuesOut, "utf8"), /^already_released=none$/m);
+});
+
+function preflightStep() {
+  const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
+  const start = workflow.indexOf("      - id: plan\n");
+  const body = workflow.slice(workflow.indexOf("        run: |\n", start) + "        run: |\n".length, workflow.indexOf("\n\n  checks:", start));
+  return body.split("\n").map((line) => line.slice(10)).join("\n");
+}
+
+function runPreflightStep({ dryRun, published, alreadyReleased }) {
+  const dir = mkdtempSync(join(tmpdir(), "ac-preflight-step-"));
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  mkdirSync(join(dir, "scripts/lib"), { recursive: true });
+  copyFileSync(join(root, "scripts/lib/releases.sh"), join(dir, "scripts/lib/releases.sh"));
+  mkdirSync(join(dir, "engine"));
+  const stub = (path, body) => { writeFileSync(path, `#!/usr/bin/env bash\n${body}\n`); chmodSync(path, 0o755); };
+  stub(join(dir, "engine/engine-key.sh"), "echo 0123456789abcdef0123");
+  stub(join(bin, "gh"), published ? "exit 0" : "exit 1");
+  stub(join(bin, "node"), `out=""; while [ $# -gt 0 ]; do [ "$1" = --values-out ] && out="$2"; shift; done; printf 'release_build=41\\nalready_released=${alreadyReleased}\\n' > "$out"`);
+  const result = spawnSync("bash", ["-c", preflightStep()], {
+    cwd: dir,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, VERSION: "1.2.3-nightly.2", DRY_RUN: String(dryRun), IPHONE: "false", RUNNER_TEMP: dir, GITHUB_OUTPUT: join(dir, "out"), GITHUB_STEP_SUMMARY: join(dir, "summary"), GITHUB_REPOSITORY: "ardia-browser/ardia", GITHUB_SHA: "0".repeat(40) },
+  });
+  return { status: result.status, output: result.stdout + result.stderr };
+}
+
+test("the preflight job lets a dry run past a published release only for the newest nightly at this build", () => {
+  const ok = runPreflightStep({ dryRun: true, published: true, alreadyReleased: "nightly-newest" });
+  assert.equal(ok.status, 0, ok.output);
+  assert.match(ok.output, /::warning::v1.2.3-nightly.2 is already published, as the newest nightly at this build/);
+  for (const [name, options] of [
+    ["a dry run the preflight didn't confirm (a 404 feed, a stable)", { dryRun: true, published: true, alreadyReleased: "none" }],
+    ["a real release", { dryRun: false, published: true, alreadyReleased: "nightly-newest" }],
+  ]) {
+    const failed = runPreflightStep(options);
+    assert.notEqual(failed.status, 0, name);
+    assert.match(failed.output, /::error::v1.2.3-nightly.2 is already published/, name);
+  }
+  assert.equal(runPreflightStep({ dryRun: true, published: false, alreadyReleased: "none" }).status, 0);
 });

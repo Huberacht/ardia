@@ -32,7 +32,9 @@ network request (the published appcast):
   --feed-out         write the feed it read there (empty when there is none), for
                      release.sh to build the new appcast on
   --values-out       write the checked project values there as key=value lines
-                     (project_version, project_build, release_build, min_macos)
+                     (project_version, project_build, release_build, min_macos, and
+                     already_released: nightly-newest when a dry run let a released
+                     nightly at this build through, else none)
   --allow-no-feed    a feed URL that answers 404 means no feed yet, not a failure
   --github           also print GitHub Actions ::error:: and ::warning:: lines`;
 
@@ -253,6 +255,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
   else if (arch.source !== `ardia-bin-${pkgver}.tar.xz::${tarball}`) fail(`Arch package: its source is ${arch.source}, not ${tarball}`);
   else pass(`Arch package: pkgver ${pkgver}, from v${version}'s tarball`);
 
+  let alreadyReleased = "none";
   const source = feed ?? process.env.APPCAST_BASE ?? DEFAULT_FEED;
   const read = await readFeed(source, { fetchImpl, allowNoFeed });
   let xml = "";
@@ -285,6 +288,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
       if (facts.listed) {
         const message = `the feed already lists ${version}`;
         const sameBuild = facts.listedBuilds.every((build) => build === releaseBuild);
+        if (mode === "dry-run" && channel === "nightly" && sameBuild) alreadyReleased = "nightly-newest";
         if (mode === "candidate" || (mode === "dry-run" && channel === "nightly" && sameBuild)) results.push({ level: "warn", message: `${message} (a real release would stop here)` });
         else if (mode === "dry-run" && channel === "nightly") fail(`${message} as build ${facts.listedBuilds.join(", ")}, not ${releaseBuild}: publish.sh --dry-run would keep both items and refuse the feed`);
         else if (mode === "dry-run") fail(`${message}: publish.sh --dry-run refuses a stable that isn't above the latest stable release, so this dry run would fail at its end`);
@@ -295,7 +299,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
   if (feedOut) writeFileSync(feedOut, xml);
   const ok = !results.some((result) => result.level === "fail");
   if (valuesOut && ok) {
-    writeFileSync(valuesOut, `project_version=${projectVersion}\nproject_build=${projectBuild}\nrelease_build=${releaseBuild}\nmin_macos=${minMacos.split(".")[0]}\n`);
+    writeFileSync(valuesOut, `project_version=${projectVersion}\nproject_build=${projectBuild}\nrelease_build=${releaseBuild}\nmin_macos=${minMacos.split(".")[0]}\nalready_released=${alreadyReleased}\n`);
   }
 
   return { results, ok, channel, releaseBuild };
