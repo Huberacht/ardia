@@ -508,8 +508,15 @@ struct Entry {
 };
 
 inline double UnixMilliseconds(std::filesystem::file_time_type stamp) {
+#if defined(_WIN32)
+  constexpr int64_t unixEpochInFileTime = 116444736000000000ll;
+  using FileTimeTicks = std::chrono::duration<int64_t, std::ratio<1, 10000000>>;
+  int64_t ticks = std::chrono::duration_cast<FileTimeTicks>(stamp.time_since_epoch()).count();
+  return static_cast<double>((ticks - unixEpochInFileTime) / 10000);
+#else
   auto moment = std::filesystem::file_time_type::clock::to_sys(stamp);
   return static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(moment.time_since_epoch()).count());
+#endif
 }
 
 inline std::string IncidentId(const std::filesystem::path &path) {
