@@ -871,3 +871,44 @@ test(
     assert.match(refused.stderr, /apps\/browser\/windows\/Ardia\/Ardia\.ico are symlinks/)
   }),
 )
+
+test(
+  'a symlinked series-win has no Windows key, since the key would read the link instead of the patch list',
+  { skip: process.platform === 'win32' && 'needs symlinks' },
+  withFixture(({ root, git, run }) => {
+    const listed = join(root, win, 'series-win')
+    writeFileSync(join(root, win, 'series-win.real'), readFileSync(listed))
+    rmSync(listed)
+    symlinkSync('series-win.real', listed)
+    git('add', '-A')
+    git('commit', '-q', '-m', 'a symlinked series-win')
+    const refused = run(['--platform', 'win'])
+    assert.notEqual(refused.status, 0)
+    assert.match(refused.stderr, /scripts\/windows\/engine\/series-win is a symlink/)
+  }),
+)
+
+test(
+  'deleting a file the Windows key excludes leaves its --paths clean',
+  withFixture((fx) => {
+    assert.equal(fx.dirty('win'), '')
+    rmSync(join(fx.root, win, 'prebuilt_test.py'))
+    rmSync(join(fx.root, win, 'check_inputs.py'))
+    rmSync(join(fx.root, win, 'patches/chromium-win-unlisted.patch'))
+    assert.equal(fx.dirty('win'), '')
+    rmSync(join(fx.root, win, 'patches/chromium-win-own.patch'))
+    assert.notEqual(fx.dirty('win'), '')
+  }),
+)
+
+test(
+  'an exclusion outside every declared tree has no Windows key',
+  withFixture(({ root, git, run, write }) => {
+    declare(root, write, (declared) => declared.excluded.push('engine/chromium/src'))
+    git('add', '-A')
+    git('commit', '-q', '-m', 'exclude a whole tree')
+    const refused = run(['--platform', 'win'])
+    assert.notEqual(refused.status, 0)
+    assert.match(refused.stderr, /excluded must name paths inside a declared tree, not engine\/chromium\/src/)
+  }),
+)

@@ -3,6 +3,7 @@
 
 Usage: python3 scripts/windows/engine/check_inputs_test.py
 """
+import json
 import os
 import shutil
 import subprocess
@@ -81,6 +82,30 @@ class AcceptTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('only follows', result.stdout)
         self.assertEqual(self.accepted(), before)
+
+    def declare(self, edit):
+        path = os.path.join(self.engine, 'key-inputs.json')
+        declared = json.load(open(path))
+        edit(declared)
+        with open(path, 'w') as f:
+            json.dump(declared, f)
+
+    def test_key_inputs_that_leave_out_the_windows_plan_are_refused(self):
+        before = self.accepted()
+        self.declare(lambda declared: declared.update(
+            trees=[tree for tree in declared['trees'] if tree != 'scripts/windows/engine'] + ['scripts/windows/engine/src'],
+            files=declared['files'] + ['scripts/windows/engine/ardia-layer-win.patch']))
+        result = self.accept()
+        self.assertNotEqual(result.returncode, 0)
+        for path in ('series_win.py', 'series-win', 'scripts/windows/engine/patches,'):
+            self.assertIn(path, result.stdout)
+        self.assertEqual(self.accepted(), before)
+
+    def test_key_inputs_that_exclude_what_the_build_reads_are_refused(self):
+        self.declare(lambda declared: declared['excluded'].append('engine/chromium/src/chrome/browser/ardia'))
+        result = self.accept()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('excluded names engine/chromium/src/chrome/browser/ardia', result.stdout)
 
 
 if __name__ == '__main__':

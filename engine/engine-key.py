@@ -343,6 +343,13 @@ def resource_sources(text, origin):
     return sources
 
 
+def tracked_under(tree, roots):
+    if isinstance(tree.entries, dict):
+        return set()
+    listing = git('ls-files', '-z', '--full-name', '--', *roots, check=False).stdout
+    return {path.decode('utf-8', 'surrogateescape') for path in listing.split(b'\0') if path}
+
+
 class WinPlan:
     def __init__(self, tree, rev='the tree', complete=True):
         tree.load((WIN_ROOT,))
@@ -352,6 +359,15 @@ class WinPlan:
         self.trees = tuple(data['trees'])
         self.series = (data['series'], data['series_win'])
         tree.load(sorted({*data['trees'], *data['files'], *data['resource_lists'], *self.series, data['win_patches']}))
+        modes = tree.entries if isinstance(tree.entries, dict) else {}
+        linked = [path for path in (WIN_DECLARATIONS, *self.series, *data['resource_lists']) if modes.get(path, ('',))[0] == '120000']
+        if linked:
+            raise Problem(f'{rev}: {", ".join(linked)} {"is a symlink" if len(linked) == 1 else "are symlinks"}; the key reads '
+                          'these as text and would hash the link, not the list the build reads')
+        stray = [path for path in data['excluded']
+                 if not any(under(path, tree_root) and path != tree_root for tree_root in data['trees'])]
+        if stray:
+            raise Problem(f'{origin}: excluded must name paths inside a declared tree, not {", ".join(stray)}')
         series_win = text_of(tree, data['series_win'])
         skips = skip_names(series_win)
         shared = [name for name in chromium_names(text_of(tree, data['series']), f'{rev}:{data["series"]}', data['series_tags'])
@@ -364,7 +380,7 @@ class WinPlan:
         tree.load(sorted(set(resources)))
         applied = set(self.patches)
         self.listed = frozenset({*data['files'], *self.patches, *resources})
-        files = tree.files()
+        files = set(tree.files()) | tracked_under(tree, data['trees'])
         excluded = set(data['excluded'])
         excluded |= {path for path in files if under(path, data['win_patches']) and path not in applied}
         excluded |= {path for path in files if any(fnmatch.fnmatchcase(path, pattern) for pattern in data['excluded_patterns'])}
@@ -374,7 +390,6 @@ class WinPlan:
         if clash:
             raise Problem(f'{origin}: the Windows build reads {", ".join(clash)}, which the key inputs exclude')
         self.steps = [('chromium', path) for path in self.patches]
-        modes = tree.entries if isinstance(tree.entries, dict) else {}
         linked = sorted(path for path, (mode, _) in modes.items() if mode == '120000' and self.counts(path))
         if linked:
             raise Problem(f'{rev}: the Windows key inputs {", ".join(linked)} are symlinks; the build copies what they point at, '

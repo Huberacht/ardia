@@ -18,6 +18,7 @@ Usage: check_inputs.py [--accept]
 """
 import argparse
 import difflib
+import fnmatch
 import json
 import os
 import re
@@ -114,12 +115,24 @@ def declared_inputs(problems):
     for path in copied:
         if path not in files:
             problems.append(f'{where}: the Windows build copies {path}, which files does not list')
-    read = ['engine/chromium/src', rel(build.ARDIA_LAYER), build.LAYER_BUILD, rel(build.LAYER_PATCH), rel(build.LAYER_OVERLAY),
-            'scripts/windows/engine/src/ardia/win', 'engine/patches/series.py', 'engine/patches/build',
-            'apps/browser/assets/offline-game', 'apps/browser/assets/offline-game-pipeline']
+    read_whole = ['engine/chromium/src', 'scripts/windows/engine/src', 'apps/browser/assets/offline-game',
+                  'apps/browser/assets/offline-game-pipeline']
+    read = read_whole + [rel(build.ARDIA_LAYER), build.LAYER_BUILD, rel(build.LAYER_PATCH), rel(build.LAYER_OVERLAY),
+                         rel(os.path.join(build.HERE, 'series_win.py')), build.SERIES_WIN_REL, build.WIN_PATCHES_REL,
+                         'engine/patches/series.py', 'engine/patches/build'] + copied
     for path in read:
         if path not in files and not any(under(path, tree) for tree in trees):
             problems.append(f'{where}: the Windows build reads {path}, which no tree or file covers')
+    for out in declared.get('excluded', []):
+        if any(under(out, whole) or under(whole, out) for whole in read_whole) or any(under(path, out) for path in read):
+            problems.append(f'{where}: excluded names {out}, but the Windows build reads what is there')
+    for pattern in declared.get('excluded_patterns', []):
+        hits = [path for path in read if fnmatch.fnmatchcase(path, pattern)]
+        for whole in read_whole:
+            for folder, _, names in os.walk(os.path.join(build.REPO, whole)):
+                hits += [rel(os.path.join(folder, name)) for name in names if fnmatch.fnmatchcase(rel(os.path.join(folder, name)), pattern)]
+        if hits:
+            problems.append(f'{where}: excluded_patterns has {pattern}, which leaves out {", ".join(sorted(hits)[:3])} that the Windows build reads')
     for listing in ('engine/patches/build/ardia_resources.txt', 'scripts/windows/engine/ardia_resources_win.txt'):
         if listing not in declared.get('resource_lists', []):
             problems.append(f'{where}: the Windows build brands with {listing}, which resource_lists does not name')
