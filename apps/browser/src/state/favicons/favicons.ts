@@ -14,7 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
-import { askedAs, incognitoClosed, privateViewer, shouldWrite } from "./privateLookups";
+import { askedAs, incognitoClosed, notePrivateAsker, noteRouteAnswered, privateViewer, routeAnswered, shouldWrite, takeClosedAskers } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -85,6 +85,7 @@ let lookupTimer: ReturnType<typeof setTimeout> | undefined;
 
 function ask(source: string, page: string, into = source) {
   if (isIncognitoProfile(source) || !markAsked(askedAs(source, into), page)) return;
+  if (source !== into) notePrivateAsker(into);
   const id = `${into}\n${source}`;
   let batch = queued.get(id);
   if (!batch) queued.set(id, (batch = { source, into, pages: new Set() }));
@@ -114,7 +115,8 @@ function lookUpPages(source: string, into: string, list: string[]) {
     return { id, entry, started: entry.wrote };
   });
   void faviconsFor(source, list)
-    .then((found) =>
+    .then((found) => {
+      if (routed && !incognitoClosed(into)) for (const page of list) noteRouteAnswered(into, source, page);
       update(into, (icons) => {
         if (incognitoClosed(into)) return icons;
         const writes: [string, string | null][] = [];
@@ -124,8 +126,8 @@ function lookUpPages(source: string, into: string, list: string[]) {
           if (shouldWrite(routed, icons.pages[page], uri)) writes.push([page, uri]);
         }
         return writes.length ? { ...icons, pages: withPages(icons.pages, writes) } : icons;
-      }, true),
-    )
+      }, true);
+    })
     .catch((error) => {
       for (const page of list) unmarkAsked(askedAs(source, into), page);
       warnFor(consent, "[favicons] lookup failed", error);
@@ -164,6 +166,7 @@ function remember(key: string, page: string, src: string, uri: string) {
   const swapped = Date.now() - appearanceChangedAt < APPEARANCE_SWAP_MS;
   wrote(key, page);
   update(key, (icons) => {
+    if (incognitoClosed(key)) return icons;
     const previous = icons.pages[page];
     if (previous === uri && icons.srcs[src] === uri) return icons;
     let appearances = icons.appearances;
@@ -259,8 +262,8 @@ function answered(url: string, profileId?: string): boolean {
   const { profiles } = useFavicons.getState();
   const page = withoutFragment(url);
   const viewer = privateViewer(profileId);
-  if (viewer && profiles[viewer]?.pages[page] !== undefined) return true;
-  return lookupOrder(profileId).every((id) => !askable(id) || profiles[cacheKey(id)]?.pages[page] !== undefined);
+  if (viewer && profiles[viewer]?.pages[page]) return true;
+  return lookupOrder(profileId).every((id) => !askable(id) || profiles[cacheKey(id)]?.pages[page] !== undefined || (!!viewer && routeAnswered(viewer, cacheKey(id), page)));
 }
 
 const askable = (id: string) => !isIncognitoProfile(id) && profileOpened(cacheKey(id));
@@ -373,12 +376,16 @@ export function startFavicons() {
   });
   const stop = useBrowser.subscribeTo(["ui", "windows"], (s, prev) => {
     if (s.ui.appDark !== prev.ui.appDark) appearanceChangedAt = Date.now();
+    if (s.windows !== prev.windows)
+      for (const id of takeClosedAskers()) {
+        forgetAsked(id);
+        for (const [key, batch] of queued) if (batch.into === id) queued.delete(key);
+      }
     if (s.windows !== prev.windows && (changes.length || Object.keys(useFavicons.getState().profiles).some(isIncognitoProfile))) {
       const open = new Set(Object.values(s.windows).map((w) => w.profileId));
       for (const t of Object.values(s.tabs)) open.add(t.profileId);
       queue((f) => {
         const gone = Object.keys(f.profiles).filter((id) => isIncognitoProfile(id) && !open.has(id));
-        for (const id of gone) forgetAsked(id);
         return gone.length ? { ...f, profiles: Object.fromEntries(Object.entries(f.profiles).filter(([id]) => !gone.includes(id))) } : f;
       }, true);
     }

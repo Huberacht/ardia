@@ -13,3 +13,20 @@ export function incognitoClosed(key: string): boolean {
 
 export const shouldWrite = (routed: boolean, known: string | null | undefined, uri: string | null) =>
   routed ? (uri ? !known : known === undefined) : known !== uri;
+
+const askers = new Set<string>();
+const answeredRoutes = new Set<string>();
+const routeId = (into: string, source: string, page: string) => `${into}|${source}|${page}`;
+
+export const notePrivateAsker = (into: string) => void askers.add(into);
+export const noteRouteAnswered = (into: string, source: string, page: string) => void answeredRoutes.add(routeId(into, source, page));
+export const routeAnswered = (into: string, source: string, page: string) => answeredRoutes.has(routeId(into, source, page));
+
+export function takeClosedAskers(): string[] {
+  const closed = [...askers].filter(incognitoClosed);
+  for (const id of closed) {
+    askers.delete(id);
+    for (const route of [...answeredRoutes]) if (route.startsWith(`${id}|`)) answeredRoutes.delete(route);
+  }
+  return closed;
+}
