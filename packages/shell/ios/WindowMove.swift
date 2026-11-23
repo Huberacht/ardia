@@ -10,10 +10,12 @@ let installWindowMoveFallback: Void = {
   typealias PerformDrag = @convention(c) (NSWindow, Selector, NSEvent) -> Void
   let original = unsafeBitCast(method_getImplementation(method), to: PerformDrag.self)
   let block: @convention(block) (NSWindow, NSEvent) -> Void = { window, event in
+    if WindowMove.askingWindowServer { return original(window, selector, event) }
     if WindowMove.windowServerMoves(window, from: event) {
       WindowMove.announceDrag(of: window)
       return
     }
+    if WindowMove.asksWindowServer(window, from: event) { return }
     if !WindowMove.follow(window, from: event) { original(window, selector, event) }
   }
   method_setImplementation(method, imp_implementationWithBlock(block))
@@ -124,14 +126,54 @@ enum WindowMove {
     NotificationCenter.default.post(name: willDrag, object: window)
   }
 
-  static func follow(_ window: NSWindow, from event: NSEvent) -> Bool {
+  private(set) static var askingWindowServer = false
+  private typealias DragWithCompletion = @convention(c) (NSWindow, Selector, NSEvent, @escaping (Bool) -> Void) -> Void
+  private static let dragWithCompletionSelector = NSSelectorFromString("performWindowDragWithEvent:completionHandler:")
+  private static let dragWithCompletion: DragWithCompletion? = {
+    guard let method = class_getInstanceMethod(NSWindow.self, dragWithCompletionSelector),
+          let types = method_getTypeEncoding(method), String(cString: types) == "v32@0:8@16@?24"
+    else { return nil }
+    return unsafeBitCast(method_getImplementation(method), to: DragWithCompletion.self)
+  }()
+
+  #if DEBUG
+  static var nativeDrags: [[String: Any]] = []
+  #endif
+
+  static func asksWindowServer(_ window: NSWindow, from event: NSEvent) -> Bool {
+    guard !following, let dragWithCompletion, event.type == .leftMouseDown, event.clickCount < 2,
+          window.isMovable, !window.styleMask.contains(.fullScreen), window.isVisible
+    else { return false }
+    let stamp = ArdiaConsentStamp.begin()
+    placements.removeObject(forKey: window)
+    askingWindowServer = true
+    defer { askingWindowServer = false }
+    dragWithCompletion(window, dragWithCompletionSelector, event) { [weak window] completed in
+      let endedBeforeRelease = NSEvent.pressedMouseButtons & 1 != 0
+      #if DEBUG
+      if nativeDrags.count < 256 { nativeDrags.append(["completed": completed, "endedBeforeRelease": endedBeforeRelease, "t": CACurrentMediaTime()]) }
+      #endif
+      guard endedBeforeRelease else {
+        ShellEvents.send(.app, stamp.onto(["type": "windowDragNative"]))
+        return
+      }
+      guard window != nil else { return }
+      ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
+      DispatchQueue.main.async {
+        guard let window else { return }
+        _ = follow(window, from: event, stamp: stamp)
+      }
+    }
+    return true
+  }
+
+  static func follow(_ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin()) -> Bool {
     guard !following, event.type == .leftMouseDown, event.clickCount < 2,
           window.isMovable, !window.styleMask.contains(.fullScreen), window.isVisible
     else { return false }
     following = true
     moving = window
     ArdiaHost.beginPressLoop("windowMove")
-    ShellEvents.send(.app, ArdiaConsentStamp.begin().onto(["type": "windowDragLoop"]))
     if holdsPlacement { placements.setObject(Placements(), forKey: window) }
     defer {
       ArdiaHost.endPressLoop()
@@ -149,6 +191,7 @@ enum WindowMove {
       if !announced {
         announced = true
         announceDrag(of: window)
+        ShellEvents.send(.app, stamp.onto(["type": "windowDragLoop"]))
       }
       window.setFrameOrigin(target)
       traceMove()
