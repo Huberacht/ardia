@@ -170,6 +170,83 @@ test("a measured tile's reveal still in flight never scrolls the page that took 
   delete geometry.current.ownerShown;
 });
 
+test("a background tab the outgoing profile opens during the slide never scrolls the arriving page; the arriving page's selected tab wins at rest", async () => {
+  atTop();
+  const home = S().windows[w].profileId;
+  const opener = S().windows[w].tabIds[2];
+  const work = S().createProfile({ name: "Work" });
+  S().switchProfile(w, work);
+  const workTabs = [];
+  for (let i = 0; i < 40; i++) workTabs.push(S().newTab(w, { url: `https://work${i}.example/` }));
+  S().activate(workTabs.at(-1));
+  S().switchProfile(w, home);
+  runFrames();
+  const before = scroll.current;
+  const scrolled = [];
+  scroll.current = { scrollTo: (move) => scrolled.push(move), measureInWindow: (done) => done(0, 0) };
+  const page = sliding();
+  S().switchProfile(w, work);
+  runFrames();
+  const background = S().newTab(w, { url: "https://opened.example/", background: true, openerId: opener, profileId: home });
+  registerRow(w, background, { measureInWindow: (done) => done(0, 5000, 160, 34) });
+  runFrames();
+  arrive(page);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(scrolled.length, 1, JSON.stringify(scrolled));
+  assert.ok(scrolled[0].y < 3000, "the arriving page shows its own selected tab, not the outgoing page's new row");
+  registerRow(w, background, null);
+  scroll.current = before;
+  S().switchProfile(w, home);
+  delete geometry.current.ownerShown;
+  runFrames();
+});
+
+test("a tile reveal still measuring when the user scrolls the page never overrides that scroll", async () => {
+  atTop();
+  const ids = S().windows[w].tabIds;
+  const tile = ids[4];
+  S().pinTabs([tile], true);
+  let measured = null;
+  registerRow(w, tile, { measureInWindow: (done) => void (measured = done) });
+  const before = scroll.current;
+  const scrolled = [];
+  scroll.current = { scrollTo: (move) => scrolled.push(move), measureInWindow: (done) => done(0, 0) };
+  const page = sliding();
+  S().activate(tile);
+  runFrames();
+  arrive(page);
+  assert.ok(measured, "the tile's measurement is in flight at rest");
+  scrollY.current = 120;
+  measured(0, 2000, 160, 40);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(scrolled, [], "the user's scroll stays");
+  scroll.current = before;
+  registerRow(w, tile, null);
+  delete geometry.current.ownerShown;
+});
+
+test("a selected tab that closes during the slide, before any frame could look at it, is replaced by the tab that takes its place at rest", async () => {
+  atTop();
+  const ids = S().windows[w].tabIds;
+  S().activate(ids[46]);
+  runFrames();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  scrollY.current = 0;
+  scrolls.length = 0;
+  const page = sliding();
+  const before = scroll.current;
+  scroll.current = null;
+  S().activate(ids[47]);
+  runFrames();
+  S().closeTab(ids[47]);
+  runFrames();
+  scroll.current = before;
+  arrive(page);
+  assert.equal(scrolls.length, 1, "the replacement is revealed");
+  assert.ok(scrolls[0].y > 300);
+  delete geometry.current.ownerShown;
+});
+
 test("the selected-row pill's click is one native animated scroll", () => {
   const ids = S().windows[w].tabIds;
   scrollY.current = 0;
