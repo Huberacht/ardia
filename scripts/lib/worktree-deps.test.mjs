@@ -17,7 +17,7 @@ import {
   normalizeLockfile,
   planLinks,
   pruneCaches,
-  claimCache,
+  currentPathOf,
   removeTree,
   runtimeOf,
   setupWorktree,
@@ -329,6 +329,16 @@ test("the kernel lock admits one holder at a time and frees itself when its hold
   assert.throws(() => withKernelLock(lockFile, () => 1, { waitSeconds: 0 }), /still held/);
   assert.equal(withKernelLock(lockFile, () => 2), 2);
   assert.ok(Date.now() - started >= 900, "waited for the holder");
+  const blocker = childLock(lockFile, 4000);
+  await once(blocker.stdout, "held");
+  const waiter = childLock(lockFile, 0);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  waiter.kill("SIGKILL");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const perls = spawnSync("ps", ["-A", "-o", "command="], { encoding: "utf8" }).stdout.split("\n").filter((line) => line.startsWith("perl") && line.includes(lockFile));
+  assert.equal(perls.length, 1, "a killed waiter's lock child exits instead of polling on");
+  blocker.kill("SIGKILL");
+  await new Promise((resolve) => blocker.on("close", resolve));
   const crashed = childLock(lockFile, 60000);
   await once(crashed.stdout, "held");
   crashed.kill("SIGKILL");
@@ -380,11 +390,26 @@ test("prune holds the registry lock throughout, a claim needs the cache to still
   pruneCaches({ cacheRoot, log: quiet });
   t.mock.restoreAll();
   assert.ok(probed && vanished);
-  removeTree(path.join(cacheRoot, result.key));
-  assert.throws(() => claimCache(cacheRoot, kept, result.key), /isn't built \(or was just pruned\)/);
+  assert.throws(() => setup(makeWorktree({ patch: "never built\n" }), { build: () => {} }), /isn't built \(or was just pruned\)/);
+  assert.ok(fs.existsSync(path.join(cacheRoot, result.key, CACHE_STAMP)));
 });
 
-test("prune follows a git worktree that moved, and the record moves with it", () => {
+test("setup holds the registry lock from its claim until the marker names the new cache", (t) => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  const realSymlink = fs.symlinkSync;
+  let checked = 0;
+  t.mock.method(fs, "symlinkSync", (...args) => {
+    if (String(args[1]).startsWith(worktree) && checked++ === 0) assert.throws(() => withKernelLock(path.join(cacheRoot, ".registry.lock"), () => 0, { waitSeconds: 0 }), /still held/);
+    return realSymlink(...args);
+  });
+  setup(worktree);
+  t.mock.restoreAll();
+  assert.ok(checked > 0);
+  assert.equal(withKernelLock(path.join(cacheRoot, ".registry.lock"), () => "free", { waitSeconds: 0 }), "free");
+});
+
+test("a git worktree's claim follows it through git worktree move, even when another worktree takes its old path", () => {
   const { cacheRoot, setup } = harness();
   const repo = fresh("repo");
   fs.mkdirSync(repo);
@@ -394,16 +419,73 @@ test("prune follows a git worktree that moved, and the record moves with it", ()
   for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "patches"]) fs.cpSync(path.join(scratch, name), path.join(repo, name), { recursive: true });
   git("add", ".");
   git("commit", "-q", "-m", "init");
-  const linked = path.join(fresh("wt"), "linked");
-  git("worktree", "add", "-q", linked);
-  const result = setup(linked);
-  const moved = path.join(path.dirname(linked), "moved");
-  assert.equal(git("worktree", "move", linked, moved).status, 0);
+  const place = path.join(fresh("wt"), "place");
+  git("worktree", "add", "-q", "-b", "a", place);
+  const a = setup(place);
+  const moved = path.join(path.dirname(place), "moved");
+  assert.equal(git("worktree", "move", place, moved).status, 0);
+  git("worktree", "add", "-q", "-b", "b", place);
+  write(path.join(place, "patches", "left-pad@1.0.0.patch"), "b's own patch\n");
+  const b = setup(place);
+  assert.notEqual(a.key, b.key);
   const later = Date.now() + 10 * 24 * 60 * 60 * 1000;
   assert.deepEqual(pruneCaches({ cacheRoot, now: later, log: quiet }), []);
+  assert.ok(fs.existsSync(path.join(moved, "node_modules", "react", "index.js")));
+  assert.ok(fs.existsSync(path.join(place, "node_modules", "react", "index.js")));
   const records = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
-  assert.deepEqual(records.map((r) => r.worktree), [fs.realpathSync(moved)]);
-  assert.ok(fs.existsSync(path.join(cacheRoot, result.key, CACHE_STAMP)));
+  assert.deepEqual(records.map(currentPathOf).sort(), [fs.realpathSync(moved), fs.realpathSync(place)].sort());
+});
+
+test("a scratch export is recorded by its path", () => {
+  const { cacheRoot, setup } = harness();
+  const exported = makeWorktree();
+  setup(exported);
+  const [record] = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
+  assert.equal(record.gitDir, null);
+  assert.equal(currentPathOf(record), exported);
+});
+
+test("raw patch bytes key and stage exactly", () => {
+  const { setup } = harness();
+  const a = makeWorktree();
+  const b = makeWorktree();
+  fs.writeFileSync(path.join(a, "patches", "left-pad@1.0.0.patch"), Buffer.from([0x80]));
+  fs.writeFileSync(path.join(b, "patches", "left-pad@1.0.0.patch"), Buffer.from([0x81]));
+  assert.notEqual(dependencyKey(installInputs(a, RUNTIME)), dependencyKey(installInputs(b, RUNTIME)));
+  const result = setup(a);
+  assert.deepEqual([...fs.readFileSync(path.join(result.sourceRoot, "patches", "left-pad@1.0.0.patch"))], [0x80]);
+});
+
+test("every workspace project's node_modules is made read-only, literal and deeper ones too", () => {
+  const { cacheRoot } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, "pnpm-workspace.yaml"), WORKSPACE.replace("packages:\n", "packages:\n  - tools/deep/gen\n"));
+  write(path.join(worktree, "tools", "deep", "gen", "package.json"), '{"name":"@ardia/gen"}');
+  const result = setupWorktree(worktree, {
+    cacheRoot,
+    runtime: RUNTIME,
+    log: quiet,
+    build: ({ worktree: from, cacheRoot: cache, runtime }) =>
+      buildCache({ worktree: from, cacheRoot: cache, runtime, install: (staging) => {
+        fakeInstall(staging);
+        write(path.join(staging, "tools", "deep", "gen", "node_modules", "esbuild", "index.js"), "x");
+      } }),
+  });
+  assert.ok(result.projects.includes("tools/deep/gen"));
+  if (process.getuid?.() !== 0) assert.throws(() => fs.mkdirSync(path.join(result.sourceRoot, "tools", "deep", "gen", "node_modules", "new")), { code: "EACCES" });
+});
+
+test("prune leaves staging folders alone; a build, under the pod lock, clears leftover ones", () => {
+  const { cacheRoot, setup } = harness();
+  setup(makeWorktree());
+  const leftover = path.join(cacheRoot, ".staging-0000000000000000-1");
+  write(path.join(leftover, "node_modules", "x"), "x");
+  const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(leftover, old, old);
+  pruneCaches({ cacheRoot, now: Date.now() + 10 * 24 * 60 * 60 * 1000, log: quiet });
+  assert.ok(fs.existsSync(leftover));
+  setup(makeWorktree({ patch: "new key\n" }));
+  assert.ok(!fs.existsSync(leftover));
 });
 
 test("the cache is installed from the exact bytes its key was computed from", (t) => {

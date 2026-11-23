@@ -174,7 +174,8 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
     `node node_modules/react-native/cli.js start --port <n>` there for Metro. `metro.config.js` reads the link
     marker, so Metro, `js-bench.mjs bundle` and the Xcode bundle phase resolve through the links with no wrapper.
   - Changing dependencies (a lockfile, a patch, `pnpm patch`) needs a real install: `--undo` first, then
-    `pnpm install` under `scripts/agent/locked pod`. After pulling a new lockfile, run the setup again;
+    `pnpm install` under `scripts/agent/locked pod`; to link again afterwards, run the setup with `--replace`, which
+    swaps that real install for links. After pulling a new lockfile, run the setup again;
     `--status` says when a worktree no longer matches. `--prune` deletes cached installs no worktree uses. A git
     worktree moved with `git worktree move` is found again; a scratch export that moves must run the setup again.
   - A native build needs the worktree's own `Pods`: `pod install` under `locked pod` works against the linked,
