@@ -3,7 +3,7 @@ import { closeSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { connectCdp, evaluate, fetchJson } from "./cdp.mjs";
+import { CDP_CONNECT_TIMEOUT, connectCdp, evaluate, fetchJson } from "./cdp.mjs";
 import { js, pause, until } from "./util.mjs";
 
 export const SHELL_PREFIX = "chrome://ardia/";
@@ -54,7 +54,35 @@ export function launchEnvironment({ scratch, background = true, base = process.e
   return result;
 }
 
-export async function launchArdia({ executable, uiDir, scratch, background = true, ozone = "headless", extensions = false, extraArgs = [], env = {}, label = "ardia", startTimeout = 45000, coreDumps = true, spawnImpl = spawn }) {
+const STARTUP_CONNECT_RETRY_DELAY = 250;
+const STARTUP_CONNECT_FIRST_ATTEMPT = 5000;
+
+async function connectWhileAlive(app, url, { deadline, connect }) {
+  let lastError = null;
+  for (let attempt = 0; ; attempt++) {
+    const exited = app.exitReason();
+    if (exited) throw new Error(`CDP connection aborted: ${exited}${lastError ? `; last error: ${lastError.message}` : ""}`);
+    const remaining = deadline - Date.now();
+    if (attempt > 0 && remaining <= 0) throw new Error(`CDP connection did not open within the start timeout after ${attempt} attempts: ${lastError.message}`);
+    const timeout = attempt === 0 ? Math.max(STARTUP_CONNECT_FIRST_ATTEMPT, Math.min(CDP_CONNECT_TIMEOUT, remaining)) : Math.min(CDP_CONNECT_TIMEOUT, remaining);
+    const connecting = Promise.resolve().then(() => connect(url, { timeout }));
+    const outcome = await Promise.race([
+      connecting.then((session) => ({ session }), (error) => ({ error })),
+      app.whenExited.then(() => ({ exited: true })),
+    ]);
+    if (outcome.session) return outcome.session;
+    if (outcome.exited) {
+      connecting.then((session) => session.close(), () => {}).catch(() => {});
+      continue;
+    }
+    lastError = outcome.error;
+    const wait = Math.min(STARTUP_CONNECT_RETRY_DELAY, deadline - Date.now());
+    if (wait > 0) await Promise.race([pause(wait), app.whenExited]);
+  }
+}
+
+export async function launchArdia({ executable, uiDir, scratch, background = true, ozone = "headless", extensions = false, extraArgs = [], env = {}, label = "ardia", startTimeout = 45000, coreDumps = true, spawnImpl = spawn, connectImpl = connectCdp }) {
+  const deadline = Date.now() + startTimeout;
   await rm(join(scratch, "DevToolsActivePort"), { force: true });
   await mkdir(join(scratch, "home"), { recursive: true });
   const logPath = join(scratch, `${label}-${Date.now()}.log`);
@@ -72,7 +100,7 @@ export async function launchArdia({ executable, uiDir, scratch, background = tru
     const active = await until(() => readFile(join(scratch, "DevToolsActivePort"), "utf8").then((text) => text.includes("\n") && text), { timeout: startTimeout, label: "DevToolsActivePort", abort: () => app.exitReason() });
     const [port, path] = active.trim().split("\n");
     app.port = Number(port);
-    app.browser = await connectCdp(`ws://127.0.0.1:${port}${path}`);
+    app.browser = await connectWhileAlive(app, `ws://127.0.0.1:${port}${path}`, { deadline, connect: connectImpl });
     return app;
   } catch (error) {
     await app.close();
@@ -100,8 +128,10 @@ export class ArdiaApp {
     this.exited = false;
     this.exitCode = null;
     this.spawnError = null;
-    child.once("exit", (code, signal) => { this.exited = true; this.exitCode = code ?? signal; });
-    child.once("error", (error) => { this.spawnError = error; this.exited = true; });
+    this.whenExited = new Promise((resolve) => {
+      child.once("exit", (code, signal) => { this.exited = true; this.exitCode = code ?? signal; resolve(); });
+      child.once("error", (error) => { this.spawnError = error; this.exited = true; resolve(); });
+    });
   }
 
   exitReason() {
@@ -202,13 +232,14 @@ export class ArdiaApp {
   }
 
   async close({ graceful = true, timeout = 10000 } = {}) {
-    if (graceful && this.browser && !this.browser.closed && !this.exited) await this.browser.send("Browser.close", {}, { timeout: 3000 }).catch(() => {});
+    const askedToClose = graceful && this.browser && !this.browser.closed && !this.exited;
+    if (askedToClose) await this.browser.send("Browser.close", {}, { timeout: 3000 }).catch(() => {});
     for (const session of this.connections.values()) await session.close().catch(() => {});
     this.connections.clear();
     this.shellCache.clear();
     await this.browser?.close().catch(() => {});
     const waitExit = async (limit) => { for (let waited = 0; !this.exited && waited < limit; waited += 50) await delay(50); };
-    await waitExit(timeout);
+    if (askedToClose) await waitExit(timeout);
     for (const signal of ["SIGTERM", "SIGKILL"]) {
       if (this.exited) break;
       try { process.kill(-this.child.pid, signal); } catch { try { this.child.kill(signal); } catch {} }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import vm from "node:vm";
 import { after, before, describe, it } from "node:test";
 import { launchArdia, launchArguments, launchEnvironment } from "../lib/ardia.mjs";
+import { connectCdp } from "../lib/cdp.mjs";
 import { startMockCdp } from "./mock-cdp.mjs";
 
 function fakeShell({ windowId, startup = false, utility = null }) {
@@ -89,10 +90,10 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
     await rm(scratch, { recursive: true, force: true });
   });
 
-  const fakeSpawn = (writePort = true) => (executable, args, options) => {
+  const fakeSpawn = (writePort = true, exitAfter = writePort ? null : 100) => (executable, args, options) => {
     sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { ...options, env: process.env });
     if (writePort) void writeFile(join(scratch, "DevToolsActivePort"), `${mock.port}\n/devtools/browser/mock\n`);
-    else setTimeout(() => sleeper.kill("SIGTERM"), 100);
+    if (exitAfter !== null) { const child = sleeper; setTimeout(() => child.kill("SIGTERM"), exitAfter); }
     return sleeper;
   };
 
@@ -159,5 +160,52 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
 
   it("fails fast when the browser exits before DevTools starts", async () => {
     await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(false), startTimeout: 10000 }), /exited/);
+  });
+
+  it("retries a transient startup connect failure while the browser is alive", async () => {
+    const attempts = [];
+    const flaky = (url, options) => {
+      attempts.push({ url, timeout: options.timeout, at: Date.now() });
+      if (attempts.length === 1) return Promise.reject(new Error(`CDP connection to ${url} timed out after ${options.timeout} ms`));
+      if (attempts.length === 2) return Promise.reject(new Error(`CDP connection to ${url} failed: ECONNREFUSED`));
+      return connectCdp(url, options);
+    };
+    const app = await launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 10000, connectImpl: flaky });
+    try {
+      assert.equal(attempts.length, 3);
+      assert.ok(attempts.every((a) => a.url === `ws://127.0.0.1:${mock.port}/devtools/browser/mock`));
+      assert.ok(attempts.every((a) => a.timeout > 0 && a.timeout <= 15000));
+      assert.ok(attempts[1].at - attempts[0].at >= 200);
+      assert.equal(app.browser.closed, false);
+    } finally {
+      assert.equal(await app.close(), true);
+    }
+  });
+
+  it("stops retrying startup connects once the start timeout is spent", async () => {
+    let attempts = 0;
+    const refused = (url) => { attempts++; return Promise.reject(new Error(`CDP connection to ${url} failed: ECONNREFUSED`)); };
+    const started = Date.now();
+    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 1200, connectImpl: refused }), /start timeout after \d+ attempts: .*ECONNREFUSED/);
+    assert.ok(attempts >= 2);
+    assert.ok(Date.now() - started < 8000);
+  });
+
+  it("aborts a startup connect promptly when the browser exits mid-connect", async () => {
+    let attempts = 0;
+    const hanging = () => { attempts++; return new Promise(() => {}); };
+    const started = Date.now();
+    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(true, 300), startTimeout: 30000, connectImpl: hanging }), /aborted: the browser exited/);
+    assert.equal(attempts, 1);
+    assert.ok(Date.now() - started < 5000);
+  });
+
+  it("aborts startup connect retries promptly when the browser exits between attempts", async () => {
+    let attempts = 0;
+    const refused = (url) => { attempts++; return Promise.reject(new Error(`CDP connection to ${url} failed: ECONNREFUSED`)); };
+    const started = Date.now();
+    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(true, 600), startTimeout: 30000, connectImpl: refused }), /aborted: the browser exited.*ECONNREFUSED/);
+    assert.ok(attempts >= 1);
+    assert.ok(Date.now() - started < 5000);
   });
 });

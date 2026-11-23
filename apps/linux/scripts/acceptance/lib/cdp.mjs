@@ -10,7 +10,9 @@ export class CdpError extends Error {
   }
 }
 
-export async function connectCdp(url, { timeout = 5000, commandTimeout = 10000, WebSocketImpl = globalThis.WebSocket } = {}) {
+export const CDP_CONNECT_TIMEOUT = 15000;
+
+export async function connectCdp(url, { timeout = CDP_CONNECT_TIMEOUT, commandTimeout = 10000, WebSocketImpl = globalThis.WebSocket } = {}) {
   if (typeof WebSocketImpl !== "function") throw new Error("This Node.js has no WebSocket client; use Node 22 or newer");
   const socket = new WebSocketImpl(url);
   const pending = new Map();
