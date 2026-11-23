@@ -235,7 +235,7 @@ On the Windows tree (2026-11-10): `pins` and `guard` pass, 356 patches applied w
 `04-series.sh` applies every `chromium` line of `engine/patches/series`, minus the `skip` lines of
 `scripts/windows/engine/series-win`, then that file's own `chromium` lines (patches in `scripts/windows/engine/patches/`),
 strictly with `git apply` and else with `patch`'s fuzz. It records a failure and goes on, and writes
-`~/chromium-build-win/logs/series-win.tsv`. `series-win` today: one skip and twelve Windows-only patches (the table).
+`~/chromium-build-win/logs/series-win.tsv`. `series-win` today: three skips and 21 Windows-only patches ([Windows-only patches](#windows-only-patches)).
 A shared `chromium` line may end in a platform tag since the Linux port: untagged lines are for every platform, and
 Windows takes those and the `mac` ones (the set it started from), never `linux`.
 The layers:
@@ -338,24 +338,44 @@ a Windows build needs.
 | `chromium-extension-tab-move-closing-window.patch` | applies | OS-neutral | Shared; nothing more |
 | `chromium-enterprise-context-info.patch` | applies | OS-neutral | Shared; `getContextInfo` answers with the device's context in a build without cloud content analysis, which Windows is too (`enterprise_cloud_content_analysis` defaults to false in its tree), so Endpoint Verification gets an answer there as well. Applies strictly to the Windows tree's copy of the file (checked 2026-11-16) |
 | `chromium-ardia-layer.patch` | applies | OS-neutral | It links `chrome/browser/ardia` into the Mac framework only; Windows needs the same link once the `ac_*` layer builds there |
-| `chromium-win-rtl-unittest-domsub.patch` | applies (Windows only, `series-win`) | OS-neutral | Puts back the `base_unittests` literals Helium's domain substitution breaks |
-| `chromium-win-load-local-state-delegate.patch` | applies (Windows only, `series-win`) | OS-neutral | `chrome_main_delegate.cc` calls `LoadLocalState` with no delegate, as stock Chrome |
-| `chromium-win-ardia-layer-calls-mac-only.patch` | applies (Windows only, `series-win`) | OS-neutral | The two calls into `chrome/browser/ardia` become Mac only |
-| `chromium-win-mac-host-sdk-any-toolchain.patch` | applies (Windows only, `series-win`) | Mac only | `mac_sdk.gni` may be read from any toolchain when a Mac host builds for Windows; arm64 needs it ([ARM64](#arm64)) |
-| `chromium-win-app-message-pump.patch` | applies (Windows only, `series-win`) | Windows only | The UI message pump offers each message to the app first, so React Native's windows get their keys and accelerators |
-| `chromium-win-hosted-browser-windows.patch` | applies (Windows only, `series-win`) | Windows only | The hooks `//ardia/win` sets: every normal browser window is page only with a frameless frame view, and the app's main parts join the browser's |
-| `chromium-win-child-window-activation.patch` | applies (Windows only, `series-win`) | Windows only | Lets a browser window that is a child window take activation; unused since hosted windows are top-level, harmless |
-| `chromium-win-app-in-browser-process.patch` | applies (Windows only, `series-win`) | Windows only | `chrome.dll` links `//ardia/win` and calls it before Chrome's main and after it: with `ArdiaApp.dll` beside the launcher the browser process runs the app, and ends as soon as Chromium's shutdown returns, without running exit handlers (#1706) |
-| `chromium-win-install-names.patch` | applies (Windows only, `series-win`) | Windows only | The install is named Ardia (`%LOCALAPPDATA%\Ardia\User Data`), and `ARDIA_DATA_DIR` moves Chromium's data |
-| `chromium-win-hosted-page-fills-window.patch` | applies (Windows only, `series-win`) | Windows only | A hosted window has no rounded page frame or insets: the page fills it |
-| `chromium-win-hosted-no-browser-shortcuts.patch` | applies (Windows only, `series-win`) | Windows only | Chrome's own accelerators are off in hosted windows, so Ctrl+L and the rest reach the app |
-| `chromium-win-relaunch-to-app.patch` | applies (Windows only, `series-win`) | Windows only | A second launch's command line goes to `//ardia/win` instead of Chrome's startup, which would open nothing under `--no-startup-window` |
-| `chromium-win-discard-asks-the-host.patch` | applies (Windows only, `series-win`) | OS-neutral | Every discard but one the user or one of their extensions asks for (`EXTERNAL`: Chrome's Memory Saver timer, its urgent and frozen-with-growing-memory discards and the app's `sleepIfHidden` all do) asks `//ardia/win`'s `g_ardia_keeps_page` before Chromium's own early answers; a page the app keeps is protected (`kExtensionProtected`), which Windows' urgent discards skip |
-| `chromium-win-devtools-other-clients.patch` | applies (Windows only, `series-win`) | OS-neutral | `content::ArdiaHasOtherDevToolsClient`: whether a DevTools client other than the engine's own is attached to a page, so the engine's always-attached Peek client doesn't count as DevTools open |
 
 Every patch that applies does so strictly (`git apply`, no fuzz). 72 of the Mac series' 73 apply; the one left out is a
-Mac-only keychain patch. Four Windows-only patches follow them (`series-win`). The file classes above come from paths, so a
+Mac-only keychain patch. The Windows-only patches follow them (`series-win`, [below](#windows-only-patches)). The file classes above come from paths, so a
 shared file can still call into Mac-only code: two did (`chrome.dll` failed to link without the guard patch).
+
+### Windows-only patches
+
+Each line of `series-win`: a `skip` keeps a patch of `engine/patches/series` off the Windows tree, a `chromium` line
+applies one of `scripts/windows/engine/patches/` after the shared series. `engine/patches/build/tests/test_patch_docs.py`
+fails when a line has no row here, a row's Line doesn't match it, a Removable when is empty, or a row names a line
+`series-win` no longer has.
+
+| Patch | Line | What it does | Removable when |
+|---|---|---|---|
+| `chromium-mac-secure-input-window-focus.patch` | skip | Its only file is `render_widget_host_view_mac.mm`, which Windows doesn't build | With the Mac patch, once the Chromium we build has its upstream fix |
+| `chromium-safe-storage-no-silent-reset.patch` | skip | Its context is helium-macos' `prevent-reset-on-keychain-unavailability`, which a Windows tree doesn't have. Windows still needs a counterpart: a DPAPI decrypt failure must not silently replace the key (`dpapi_key_provider.cc`, `os_crypt_win.cc`) | With the Mac patch; a Windows counterpart would be its own `series-win` line |
+| `chromium-extension-state-mirror-hooks.patch` | skip | Its hooks feed the WebKit replica of each extension, which is Mac only; BUILD.gn's `if (!is_win)` list keeps the replica's engine calls out of the Windows engine | With the Mac patch |
+| `chromium-win-rtl-unittest-domsub.patch` | chromium | Puts back the `base_unittests` literals Helium's domain substitution breaks | Helium's domain substitution leaves those literals alone |
+| `chromium-win-load-local-state-delegate.patch` | chromium | `chrome_main_delegate.cc` calls `LoadLocalState` with no delegate, as stock Chrome does; the parameter comes from `chromium-cef-carryover.patch`, whose caller (H5) is Mac only | The carryover's `LoadLocalState` delegate goes, or a Windows caller passes one |
+| `chromium-win-ardia-layer-calls-mac-only.patch` | chromium | The two calls into `chrome/browser/ardia` that Windows doesn't build (`RegisterManagementPolicyProviders`, `NewArdiaVideoOverlayWindow`) become Mac only; Windows makes Chrome's own Picture in Picture window | Windows builds both: the layer's Mac block and `pip/` |
+| `chromium-win-mac-host-sdk-any-toolchain.patch` | chromium | `mac_sdk.gni` may be read from any toolchain when a Mac host builds for Windows; arm64 needs it ([ARM64](#arm64)) | Chromium reads `mac_sdk.gni` from any toolchain, or Windows engines stop being built on a Mac |
+| `chromium-win-app-message-pump.patch` | chromium | The UI message pump offers each message to the app first, so React Native's windows get their keys and accelerators | Never while React Native Windows runs in the browser process |
+| `chromium-win-hosted-browser-windows.patch` | chromium | The hooks `//ardia/win` sets: every normal browser window is page only with a frameless frame view, and the app's main parts join the browser's | Windows moves to the WebUI host (#3686), whose windows are Chrome's own |
+| `chromium-win-child-window-activation.patch` | chromium | Lets a browser window that is a child window take activation; unused since hosted windows are top-level, and harmless | Now: nothing uses it; drop it with the next Windows engine |
+| `chromium-win-app-in-browser-process.patch` | chromium | `chrome.dll` links `//ardia/win` and calls it before Chrome's main and after it: with `ArdiaApp.dll` beside the launcher the browser process runs the app, and ends as soon as Chromium's shutdown returns, without running exit handlers (#1706) | Never while the app runs in the browser process |
+| `chromium-win-install-names.patch` | chromium | The install is named Ardia (`%LOCALAPPDATA%\Ardia\User Data`), and `ARDIA_DATA_DIR` moves Chromium's data | Never: Ardia's Windows names |
+| `chromium-win-hosted-page-fills-window.patch` | chromium | A hosted window has no rounded page frame or insets: the page fills it | Windows moves to the WebUI host (#3686) |
+| `chromium-win-hosted-no-browser-shortcuts.patch` | chromium | Chrome's own accelerators are off in hosted windows, so Ctrl+L and the rest reach the app | Never while the app owns the shortcuts of hosted windows |
+| `chromium-win-relaunch-to-app.patch` | chromium | A second launch's command line goes to `//ardia/win` instead of Chrome's startup, which would open nothing under `--no-startup-window` | Never while the app opens its own windows under `--no-startup-window` |
+| `chromium-win-reauth-app-window.patch` | chromium | Password export's confirmation (Windows Hello, or the Windows Security prompt without it) opens over the app window the user is in (`g_ardia_win_prompt_window`), not over `GetLastActiveBrowser()`'s window, a page window that is often hidden; the modal prompt had blocked every other engine call while it waited unseen | Chromium asks the embedder for the reauth window, or Windows moves to the WebUI host (#3686), whose active browser is the window the user sees |
+| `chromium-win-external-protocol-dialog.patch` | chromium | A link to another app asks the app's own prompt (`g_ardia_win_external_protocol_dialog`) when Chrome has no delegate for it | Never: Ardia feature (the app's prompt) |
+| `chromium-win-hosted-popups-and-menus.patch` | chromium | A page's sized `window.open` (`NEW_POPUP`) stays a tab of its window (`g_ardia_win_open_as_offer`) instead of a bare Chromium pop-up, and the page, link and image menus ask the host first, which leaves out what Windows can't do (split view, Cast, reading mode and the like; `g_ardia_win_context_menu`) | Never while the app owns tabs and windows on Windows |
+| `chromium-win-strict-login-list.patch` | chromium | `GetAllLogins`, Sync's read, fails when one login can't be decrypted (`kKeychainError`) or the database errs (`kUncategorized`) instead of leaving logins out; the affiliation read Settings, export and autofill use stays lenient, and the affiliation prefetcher moves to it | Chromium's Windows store reports partial reads itself |
+| `chromium-win-keep-every-login.patch` | chromium | Sync's strict read also fails on a login whose password decrypted empty (neither a blocklist entry nor a federated sign-in), and `LoginDatabase::DeleteUndecryptableLogins` deletes nothing (`kEncryptionUnavailable`), so Chromium never deletes a login it can't decrypt | Never while a lost DPAPI key must not cost the user their logins |
+| `chromium-win-discard-asks-the-host.patch` | chromium | Every discard but one the user or one of their extensions asks for (`EXTERNAL`) asks `//ardia/win`'s `g_ardia_keeps_page` before Chromium's own early answers, so Memory Saver's timer, urgent discards and the app's `sleepIfHidden` all spare a page the app keeps | Never while the app decides which pages stay loaded |
+| `chromium-win-devtools-other-clients.patch` | chromium | `content::ArdiaHasOtherDevToolsClient`: whether a DevTools client other than the engine's own is attached to a page, so the engine's always-attached Peek client doesn't count as DevTools open | Never while the engine keeps its own DevTools client on pages |
+| `chromium-win-autoplay-policy.patch` | chromium | Per-site and global autoplay blocking, as on the Mac: a navigation commits with `ardia_autoplay_blocked`, which `//ardia/win` decides, Blink's autoplay policy reads it, and the host counts the plays Blink refused and the media commands that may start playback | Never: Ardia feature (autoplay blocking) |
+| `chromium-win-hosted-theme-change.patch` | chromium | A hosted normal window skips the frame regeneration Chrome does on every theme change (`RegenerateFrameOnThemeChange`): `PerformDwmTransition` CHECKs a system-drawn frame, and hosted windows are custom drawn, so resetting or changing the theme killed the browser process | Chromium stops assuming a DWM frame on a theme change, or Windows moves to the WebUI host (#3686) |
 
 ## GN args
 
