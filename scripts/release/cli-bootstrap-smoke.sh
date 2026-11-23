@@ -11,10 +11,11 @@ ardia tabs answers; the linked ardia is the pinned version, run as published (ad
 same profile with a changed asset, or with none (offline), gets no ardia and no downloaded copy. A copy no signed pin
 names gets no ardia even with active pointing at it and plugins.json approving it. Command Line coverage
 can't be skipped: no fixture fails. Given an earlier release that bundles Command Line (0.2.47), a profile where it
-installed and linked its own ardia moves to the pinned version on <Ardia.app>, one of two ways. If the pinned plugin.json
-asks for nothing the earlier approval didn't cover, it switches with no click and plugins.json records the new approval,
-the old one as previous and the update note. Otherwise the pinned copy is fetched and verified but waits for Update…,
-with plugins.json untouched, and switches once that approval is saved."
+installed and linked its own ardia moves to the pinned version on <Ardia.app> the way that pair is expected to:
+CLI_UPGRADE_EXPECT=auto or prompt, or the built-in answer for a known pair (0.4.0 to 0.6.0: auto); an unknown pair with
+no answer fails. auto: it switches with no click and plugins.json records the new approval, the old one as previous and
+the update note. prompt: the pinned copy is fetched and verified but waits for Update…, with plugins.json untouched,
+and switches once that approval is saved."
 case "${1:-}" in -h | --help | "") echo "$usage"; [ -n "${1:-}" ] && exit 0 || exit 64 ;; esac
 app="$(cd "$1" && pwd -P)"
 version="${2:?$usage}"
@@ -160,8 +161,20 @@ print(json.loads(text)["version"], hashlib.sha256(text + b"\0bundled").hexdigest
     [ "$ran" = "ardia $pinned" ] && break
     sleep 0.2
   done
-  if [ "$ran" = "ardia $pinned" ]; then
-    echo "NOTE  $old_version to $pinned asks for nothing $old_version's approval didn't cover, so it switched with no click"
+  case "${CLI_UPGRADE_EXPECT:-}" in
+    auto|prompt) expect=$CLI_UPGRADE_EXPECT ;;
+    "") case "$old_version>$pinned" in 0.4.0\>0.6.0) expect=auto ;; *) expect="" ;; esac ;;
+    *) expect="" ;;
+  esac
+  observed=$([ "$ran" = "ardia $pinned" ] && echo auto || echo prompt)
+  if [ -z "$expect" ]; then
+    check "the expected outcome of $old_version to $pinned is known (set CLI_UPGRADE_EXPECT=auto or prompt from the two plugin.json files)" 0 "it was $observed"
+    expect=$observed
+  else
+    check "$old_version to $pinned is expected to $([ "$expect" = auto ] && echo "switch with no click" || echo "wait for Update…"), and it did" "$([ "$observed" = "$expect" ] && echo 1 || echo 0)" "it was $observed"
+  fi
+  if [ "$expect" = auto ]; then
+    echo "NOTE  $old_version to $pinned asks for nothing $old_version's approval didn't cover, so it switches with no click"
     recorded="$(python3 -I -c '
 import json, sys
 cli = json.load(open(sys.argv[1]))["plugins"]["cli"]

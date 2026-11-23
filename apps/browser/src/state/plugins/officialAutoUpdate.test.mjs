@@ -133,6 +133,22 @@ test("a failed switch finished by Try Again is counted as an automatic update to
   assert.equal(takePluginCounts().official_updates_auto, 1);
 });
 
+test("two overlapping Try Again presses after a failed switch promote once and count once", async () => {
+  const { installOfficialPlugin } = await import("./official.ts");
+  host.promoteResult = { ok: false, reason: "busy disk" };
+  await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(BUN_060) }]);
+  host.promoteResult = null;
+  host.promotes.length = 0;
+  takePluginCounts();
+  const [first, second] = await Promise.all([installOfficialPlugin("cli", { showSheet: false }), installOfficialPlugin("cli", { showSheet: false })]);
+  assert.deepEqual([first, second], [{ ok: true }, { ok: true }]);
+  assert.equal(host.promotes.length, 1, "the second press waits for the switch already running");
+  assert.equal(takePluginCounts().official_updates_auto, 1);
+  await lifecycle.rescanPlugins(consentToken());
+  await settle();
+  assert.equal(takePluginCounts().official_updates_auto, 0, "a later scan doesn't count it again");
+});
+
 test("an official update that asks for more still waits for Update…: the old copy stays on and the reason is counted", async () => {
   const wider = bun("0.6.0", { permissions: { control: true, network: ["api.example.com"] } });
   await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(wider) }]);

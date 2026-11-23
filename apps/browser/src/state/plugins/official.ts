@@ -195,6 +195,7 @@ export function installOfficialPlugin(name: string, options: InstallOptions = {}
   const approvedCandidate = candidateOf(currentPlugins(), name);
   const record = Object.hasOwn(currentPlugins().records, name) ? currentPlugins().records[name] : undefined;
   if (approvedCandidate?.hash && record?.enabled && approvalMatches(approvedCandidate, record.approved)) {
+    if (currentPlugins().fetches[name]?.state === "promoting") return linked(name);
     const consent = consentToken();
     return promoteCandidate(name, approvedCandidate, consent).then((ok) => {
       if (ok) noteAutoUpdate(name, approvedCandidate, consent);
@@ -228,6 +229,7 @@ const retryAt = new Map<string, { at: number; wait: number }>();
 const FIRST_RETRY_MS = 10 * 60 * 1000;
 const LAST_RETRY_MS = 6 * 60 * 60 * 1000;
 const waitingNoted = new Set<string>();
+const autoNoted = new Set<string>();
 
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -249,6 +251,7 @@ export function resetOfficialUpdatesForTests() {
   retryTimers.clear();
   retryAt.clear();
   waitingNoted.clear();
+  autoNoted.clear();
   inFlight.clear();
 }
 
@@ -280,7 +283,9 @@ export function officialUpdateVerdict(s: Pick<PluginsStore, "listings" | "record
 
 function noteAutoUpdate(name: string, candidate: PluginListing, consent: ConsentToken | null) {
   const record = recordOf(currentPlugins(), name);
-  if (record.updated && record.approved === candidate.hash && currentPlugins().listings[name]?.hash === candidate.hash) notePlugin("official_updates_auto", consent);
+  if (!candidate.hash || autoNoted.has(candidate.hash) || !record.updated || record.approved !== candidate.hash || currentPlugins().listings[name]?.hash !== candidate.hash) return;
+  autoNoted.add(candidate.hash);
+  notePlugin("official_updates_auto", consent);
 }
 
 function approveOfficialUpdate(name: string, candidate: PluginListing, verdict: { added: string[]; runtime: boolean }, consent: ConsentToken | null): boolean {
