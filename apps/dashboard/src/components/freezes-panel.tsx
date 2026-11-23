@@ -15,6 +15,8 @@ function Signatures({ data }: { data: Freezes }) {
     <>
       <p className="mb-2 text-sm text-muted-foreground">
         {formatExact(data.freezes)} freezes, {formatMs(data.frozenMs)} frozen in all, across {formatExact(data.signatures.length)} places. Top first: most people affected, then most time frozen.
+        {" "}
+        {data.namedPlaces === data.signatures.length ? "Every place is named." : `${formatExact(data.namedPlaces)} of ${formatExact(data.signatures.length)} places named; the rest come from builds without published symbols.`}
       </p>
       <DataTable
         dense
@@ -26,7 +28,10 @@ function Signatures({ data }: { data: Freezes }) {
             key: "where",
             header: "Where",
             cell: (s: Signature) => (
-              <span className="font-mono text-[12px]" title={s.topFrames.join("\n") || "No frames from Ardia's own code"}>
+              <span
+                className="font-mono text-[12px]"
+                title={s.topFrames.map((label, i) => (label === s.rawFrames[i] ? label : `${label}  (${s.rawFrames[i]})`)).join("\n") || "No frames from Ardia's own code"}
+              >
                 {s.topFrames[0] ?? `no own frames (${s.signature})`}
               </span>
             ),
@@ -49,7 +54,7 @@ export function FreezesPanel() {
     <Panel
       source="app"
       title="Freezes"
-      description="app_freeze over the last 7 days, grouped by where Ardia's own code was stuck (the top three frames from Ardia's own files). Hover a place for its frames; symbolicate offsets with the engine's symbols."
+      description="app_freeze over the last 7 days, grouped by where Ardia's own code was stuck (the top three frames from Ardia's own files). Frames are named from each build's published symbols (scripts/symbolicate-frames.mjs); hover a place for its top frames and their raw offsets."
     >
       <Loaded query={freezes} skeleton={<TableSkeleton rows={6} columns={7} />}>
         {(data) => <Signatures data={data} />}
