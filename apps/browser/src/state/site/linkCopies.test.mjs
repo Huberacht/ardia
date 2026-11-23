@@ -74,3 +74,19 @@ test("sharing a page, a link or a tab sends the address without trackers, and a 
     ["com.apple.share.Mail.compose", clean],
   ]);
 });
+
+test("a single cleaned address goes to the native URL writer when the build has one, so apps that read the URL flavour get it", () => {
+  reset();
+  const urls = [];
+  shellNativeModules.ArdiaShell.copyURL = (address) => void urls.push(address);
+  try {
+    copyLinkFromPageMenu(tracked);
+    const shown = "shop.example/item?id=7&utm_source=mail&fbclid=abc#reviews";
+    copyFieldSelection(shown, 0, shown.length, tracked, consentToken());
+    copyFieldSelection(shown, 0, 4, tracked, consentToken());
+  } finally {
+    delete shellNativeModules.ArdiaShell.copyURL;
+  }
+  assert.deepEqual(urls, [clean, clean]);
+  assert.deepEqual(copied, ["shop"]);
+});

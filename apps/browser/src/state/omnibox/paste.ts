@@ -1,5 +1,5 @@
 import { classifyPaste, cleanUrlReport, markdownLink, sanitizePaste, searchUrl, type PasteAction } from "@ardia/core";
-import { copyLink, copyText, readText } from "../../platform/clipboard";
+import { copyAddress, copyLink, copyText, readText } from "../../platform/clipboard";
 import { showMenu, type MenuItem } from "../../platform/menus";
 import { menuSections, withOptionAlternate, type MenuKey } from "../app/menuSections";
 import { currentSettings } from "../browser/current";
@@ -66,7 +66,7 @@ export type FieldMenuPick = { kind: "go"; url: string } | { kind: "edit"; text: 
 export function copyFieldSelection(value: string, start: number, end: number, fullUrl: string | null, consent: ConsentToken | null) {
   if (!fullUrl || start !== 0 || end !== value.length) return copyText(value.slice(start, end));
   const { url, removedTracker } = cleanUrlReport(fullUrl);
-  copyLink(url);
+  copyAddress(url);
   noteLinkCopiedFrom("addressField", removedTracker, consent);
 }
 

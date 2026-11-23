@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
-const root = new URL("../../../../", import.meta.url).pathname;
+const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const SKIP = new Set(["node_modules", "dist", "build", "ios", "android", "macos", "windows", "Pods"]);
 const SOURCE = /\.(ts|tsx)$/;
 
@@ -26,7 +27,7 @@ const packageSources = readdirSync(join(root, "packages")).flatMap((name) => {
   }
 });
 const files = [...sources("apps/browser/src"), ...sources("apps/linux/src"), ...sources("apps/phone/src"), ...packageSources].map((path) => ({
-  path: relative(root, join(root, path)),
+  path: relative(root, join(root, path)).split(sep).join("/"),
   text: readFileSync(join(root, path), "utf8"),
 }));
 const FIXTURES = new Set(["apps/browser/src/platform/linkSinkTypeChecks.ts", "apps/phone/src/platform/linkSinkTypeChecks.ts"]);
@@ -45,9 +46,9 @@ test("a cleaned address or link text is only ever made by the cleaner", () => {
   assert.deepEqual(callersOf(/\bas (CleanedUrl|LinkText)\b|<(CleanedUrl|LinkText)>/), ["packages/core/src/cleanUrl.ts"]);
 });
 
-test("plain text copies never take an address: links go through copyLink", () => {
+test("plain text copies and shares never take an address: links go through copyLink and the link sinks", () => {
   const offenders = files.flatMap((f) =>
-    [...f.text.matchAll(/(?<![.\w])copyText\(([^)]*)\)/g)].filter(([, argument]) => /url|href|link|address/i.test(argument)).map(([call]) => `${f.path}: ${call}`),
+    [...f.text.matchAll(/(?<![.\w])(?:copyText|shareText)\(([^)]*)\)/g)].filter(([, argument]) => /url|href|link|address/i.test(argument)).map(([call]) => `${f.path}: ${call}`),
   );
   assert.deepEqual(offenders, []);
 });

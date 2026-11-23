@@ -1,10 +1,10 @@
 import { cleanUrlReport } from "@ardia/core";
-import { copyLink } from "../../platform/clipboard";
+import { copyAddress } from "../../platform/clipboard";
 import { noteLinkCopiedFrom } from "../telemetry/urlCopies";
 
 export function copyLinkFromPageMenu(address: unknown) {
   if (typeof address !== "string" || !address) return;
   const { url, removedTracker } = cleanUrlReport(address);
-  copyLink(url);
+  copyAddress(url);
   noteLinkCopiedFrom("webKitMenu", removedTracker);
 }

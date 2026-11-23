@@ -49,10 +49,10 @@ function isTrackingParam(name: string, hostname = ""): boolean {
 
 export type CleanedUrl = string & { readonly trackersStripped: unique symbol };
 export type LinkText = CleanedUrl | (string & { readonly linksTrackersStripped: unique symbol });
-export type CleanUrlReport = { url: CleanedUrl; removedTracker: boolean };
+export type CleanUrlReport = { readonly url: CleanedUrl; readonly removedTracker: boolean };
 
 export function cleanUrlReport(url: string): CleanUrlReport {
-  const unchanged = { url: url as CleanedUrl, removedTracker: false };
+  const unchanged = Object.freeze({ url: url as CleanedUrl, removedTracker: false });
   const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(url);
   if (!match?.[2]) return unchanged;
   let hostname = "";
@@ -69,15 +69,19 @@ export function cleanUrlReport(url: string): CleanUrlReport {
   const kept = pairs.filter((pair) => pair && !tracks(pair));
   if (kept.length === pairs.length) return unchanged;
   const cleaned = `${base}${kept.length ? `?${kept.join("&")}` : ""}${hash}` as CleanedUrl;
-  return { url: cleaned, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) };
+  return Object.freeze({ url: cleaned, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) });
 }
 
 export function cleanUrl(url: string): CleanedUrl {
   return cleanUrlReport(url).url;
 }
 
+const percentEncoded = (character: string) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+
 export function markdownLink(title: string, url: string): LinkText {
-  return `[${(title || url).replace(/([[\]])/g, "\\$1")}](${cleanUrl(url)})` as LinkText;
+  const clean = cleanUrl(url);
+  const label = !title || title === url ? clean : title;
+  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${clean.replace(/[()<>\s]/g, percentEncoded)})` as LinkText;
 }
 
 export function linkLines(lines: readonly LinkText[], markdown: boolean): LinkText {

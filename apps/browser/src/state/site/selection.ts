@@ -1,6 +1,6 @@
 import { setSearchEngineName, setSelectionPopover, type SearchEngineIdentity } from "../../platform/pageOptions";
 import { chooseTextFragment, cleanUrl, cleanUrlReport, searchUrl, withTextFragment, type CleanedUrl, type SelectionContext } from "@ardia/core";
-import { copyLink } from "../../platform/clipboard";
+import { copyAddress, copyLink } from "../../platform/clipboard";
 import { create } from "zustand";
 import { webviews } from "../../platform/webviews";
 import type { PageSelection } from "../../platform/tabs";
@@ -95,7 +95,7 @@ export async function copyLinkToSelection(tabId: string) {
   const link = await linkToSelection(tabId);
   const windowId = store().tabs[tabId]?.windowId;
   if (!link || !windowId) return;
-  copyLink(link);
+  copyAddress(link);
   showToast(windowId, "Copied Quote Link", "Links directly to the selected text.", { icon: "quote.bubble.fill" });
 }
 
@@ -119,7 +119,7 @@ export async function copyPageUrl(tabId: string, confirmedUrl?: string) {
   const url = confirmedUrl ?? tab?.url;
   if (!tab || !url) return;
   const { url: clean, removedTracker } = cleanUrlReport(url);
-  copyLink(clean);
+  copyAddress(clean);
   noteUrlCopied(awaitsFirstPage(tabId), removedTracker);
   const title = clean !== url ? "Copied a clean link without trackers" : "Copied Current URL";
   const web = webviews.get(tabId);

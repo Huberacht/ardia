@@ -1024,10 +1024,10 @@ function isTrackingParam(name        , hostname = "")          {
 
                                                                                
                                                                                                  
-                                                                          
+                                                                                            
 
 function cleanUrlReport(url        )                 {
-  const unchanged = { url: url              , removedTracker: false };
+  const unchanged = Object.freeze({ url: url              , removedTracker: false });
   const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(url);
   if (!match?.[2]) return unchanged;
   let hostname = "";
@@ -1044,15 +1044,19 @@ function cleanUrlReport(url        )                 {
   const kept = pairs.filter((pair) => pair && !tracks(pair));
   if (kept.length === pairs.length) return unchanged;
   const cleaned = `${base}${kept.length ? `?${kept.join("&")}` : ""}${hash}`              ;
-  return { url: cleaned, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) };
+  return Object.freeze({ url: cleaned, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) });
 }
 
 function cleanUrl(url        )             {
   return cleanUrlReport(url).url;
 }
 
+const percentEncoded = (character        ) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+
 function markdownLink(title        , url        )           {
-  return `[${(title || url).replace(/([[\]])/g, "\\$1")}](${cleanUrl(url)})`            ;
+  const clean = cleanUrl(url);
+  const label = !title || title === url ? clean : title;
+  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${clean.replace(/[()<>\s]/g, percentEncoded)})`            ;
 }
 
 function linkLines(lines                     , markdown         )           {

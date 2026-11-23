@@ -1,5 +1,5 @@
 import { cleanUrl, markdownLink } from "@ardia/core";
-import { copyLink } from "../../platform/clipboard";
+import { copyAddress, copyLink } from "../../platform/clipboard";
 import { prompt } from "../../platform/dialogs";
 import { showMenu, type MenuItem } from "../../platform/menus";
 import { closeTab } from "../browser/actions";
@@ -222,7 +222,7 @@ export async function openLiveItemMenu(windowId: string, folderId: string, item:
   if (choice === "open") openLiveItem(windowId, folderId, item);
   else if (choice === "backToPin" && tabId) returnLiveTab(tabId);
   else if (choice === "background") openLiveItem(windowId, folderId, item, { background: true });
-  else if (choice === "copy") copyLink(cleanUrl(item.url));
+  else if (choice === "copy") copyAddress(cleanUrl(item.url));
   else if (choice === "copyMd") copyLink(markdownLink(item.title, item.url));
   else if (choice === "unread") {
     if (unread) markRead(folderId, [item.id]);

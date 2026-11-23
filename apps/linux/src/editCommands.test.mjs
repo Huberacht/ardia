@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EDIT_ITEMS, createEditTargets, editField, editMenu } from "./editCommands.ts";
+import { copyFieldAs } from "./fieldCopy.ts";
 
 const element = (kind, extra = {}) => ({
   matches: (selector) => kind === "field" ? selector.startsWith("textarea") : false,
@@ -68,4 +69,27 @@ test("a shell text field is edited with the web platform after it gets its focus
   run.length = 0;
   assert.equal(await editField(field, "copy", port(true)), false);
   assert.deepEqual(run, []);
+});
+
+test("copying or cutting the whole address field puts the cleaned address on the clipboard, as the Mac's native swap does", () => {
+  const listeners = {};
+  const deleted = [];
+  const doc = { activeElement: null, addEventListener: (type, listener) => void (listeners[type] = listener), execCommand: (command) => void deleted.push(command) };
+  const fire = (type) => {
+    const event = { type, data: null, prevented: false, clipboardData: { setData: (_, data) => void (event.data = data) }, preventDefault: () => void (event.prevented = true) };
+    listeners[type](event);
+    return event;
+  };
+  const shown = "shop.example/item?id=7&utm_source=mail";
+  copyFieldAs(shown, "https://shop.example/item?id=7", doc);
+  doc.activeElement = element("field", { value: shown, selectionStart: 0, selectionEnd: shown.length });
+  assert.deepEqual([fire("copy").data, fire("cut").data, deleted], ["https://shop.example/item?id=7", "https://shop.example/item?id=7", ["delete"]]);
+  doc.activeElement = element("field", { value: shown, selectionStart: 3, selectionEnd: shown.length });
+  const partial = fire("copy");
+  assert.deepEqual([partial.data, partial.prevented], [null, false]);
+  doc.activeElement = element("field", { value: "typed text", selectionStart: 0, selectionEnd: 10 });
+  assert.equal(fire("copy").prevented, false);
+  copyFieldAs(null, null, doc);
+  doc.activeElement = element("field", { value: shown, selectionStart: 0, selectionEnd: shown.length });
+  assert.equal(fire("copy").prevented, false);
 });

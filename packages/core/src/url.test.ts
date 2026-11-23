@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PSL_TLDS } from "./tlds.ts";
 import { domainToASCII } from "node:url";
-import { cleanUrl, cleanUrlReport } from "./cleanUrl.ts";
+import { cleanUrl, cleanUrlReport, linkLines, markdownLink } from "./cleanUrl.ts";
 import { displayHost, hostSpoofReason, punycodeEncode } from "./idn.ts";
 import { breadcrumb, classifyPaste, fixupUrl, resolveInput, sameAddress, spacedAddressGuess, urlForDisplay } from "./omnibox.ts";
 import { displayUrl } from "./suggest.ts";
@@ -315,4 +315,25 @@ test("sameAddress folds only ASCII case in the host, and default ports and the r
   assert.ok(sameAddress("https://BÜCHER.de:443/a", "https://XN--BCHER-KVA.de/a"));
   assert.ok(sameAddress("https://ﾌﾞｯｸ.jp/a", "https://xn--pckwb0c.jp/a"));
   assert.ok(!sameAddress("https://example.com/A", "https://example.com/a"));
+});
+
+test("a Markdown link never shows trackers in its label and its address can't end early", () => {
+  assert.equal(markdownLink("", "https://example.com/a)b?utm_source=mail"), "[https://example.com/a)b](https://example.com/a%29b)");
+  assert.equal(markdownLink("https://x.example/?fbclid=1", "https://x.example/?fbclid=1"), "[https://x.example/](https://x.example/)");
+  assert.equal(markdownLink("Shop [sale] \\o/", "https://shop.example/p (1)?id=7&gclid=x"), "[Shop \\[sale\\] \\\\o/](https://shop.example/p%20%281%29?id=7)");
+  assert.equal(markdownLink("Tab", "https://e.example/<x>"), "[Tab](https://e.example/%3Cx%3E)");
+});
+
+test("a cleaner report can't be rewritten after the fact, and link lists are bulleted only for Markdown with several links", () => {
+  const report = cleanUrlReport("https://shop.example/item?id=7&utm_source=mail");
+  assert.ok(Object.isFrozen(report));
+  assert.throws(() => {
+    // @ts-expect-error
+    report.url = "https://shop.example/item?id=7&utm_source=mail";
+  });
+  const one = cleanUrl("https://a.example/?utm_source=x");
+  const two = markdownLink("B", "https://b.example/?fbclid=1");
+  assert.equal(linkLines([one, two], true), "- https://a.example/\n- [B](https://b.example/)");
+  assert.equal(linkLines([one, two], false), "https://a.example/\n[B](https://b.example/)");
+  assert.equal(linkLines([two], true), "[B](https://b.example/)");
 });

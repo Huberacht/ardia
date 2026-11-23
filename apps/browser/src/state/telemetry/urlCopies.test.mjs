@@ -14,6 +14,7 @@ const NONE = {
 };
 
 test("address copies are counted, those taken before the first page apart, and taking them starts over", () => {
+  setConsentPeriod(true, "address-copies");
   noteUrlCopied(false);
   noteUrlCopied(true);
   noteUrlCopied(true, true);
@@ -36,6 +37,8 @@ test("a route copy taken while sharing was off, or in an earlier sharing period,
   setConsentPeriod(true, "before");
   const earlier = consentToken();
   setConsentPeriod(false, null);
+  noteUrlCopied(false, true);
+  assert.deepEqual(takeUrlCopyCounts(), { ...NONE, url_copies: 1 });
   noteLinkCopiedFrom("webKitMenu", true);
   noteLinkCopiedFrom("addressField", true, null);
   noteUncleanedUrlCopied(null);

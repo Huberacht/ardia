@@ -16,7 +16,7 @@ export function noteSelectedTabUrlsCopied() {
 export function noteUrlCopied(firstPagePending: boolean, removedTracker = false) {
   copies++;
   if (firstPagePending) whilePending++;
-  if (removedTracker) trackersRemoved++;
+  if (removedTracker) countFor(consentOrNow(undefined), () => void trackersRemoved++);
 }
 
 export function noteLinkCopiedFrom(route: "addressField" | "webKitMenu", removedTracker: boolean, consent?: ConsentToken | null) {

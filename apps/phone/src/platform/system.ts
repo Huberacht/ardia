@@ -1,4 +1,4 @@
-import type { CleanedUrl } from "@ardia/core/src/cleanUrl.ts";
+import type { CleanedUrl, LinkText } from "@ardia/core/src/cleanUrl.ts";
 import { clipboard, pages, system as nativeSystem, type ClipboardOffer } from "@ardia/phone-native";
 import { getStringAsync, hasStringAsync, setStringAsync } from "expo-clipboard";
 import { requireOptionalNativeModule } from "expo-modules-core";
@@ -50,7 +50,7 @@ export const selectionHaptic = () =>
 
 export const confirmHaptic = () => (android ? performAndroidHapticsAsync(AndroidHaptics.Confirm) : impactAsync(ImpactFeedbackStyle.Light));
 
-export const shareText = (text: string, title: string) => Share.share({ message: text, title });
+export const shareLinkList = (links: LinkText, title: string) => Share.share({ message: links, title });
 
 export const pasteText = () => getStringAsync();
 
