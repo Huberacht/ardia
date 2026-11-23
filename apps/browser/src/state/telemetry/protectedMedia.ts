@@ -6,7 +6,7 @@ import { onConsentPeriodChange, stillValid, type ConsentToken } from "./choice";
 const MAX_EVENTS = 30;
 const MAX_BLOCKED_HOSTS = 8;
 const HOSTNAME = /^[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?$/;
-const STAGES = new Set(["access", "accessDenied", "encrypted", "waitingforkey", "error"]);
+const PROBLEM_STAGES = new Set(["accessDenied", "waitingforkey", "error"]);
 const FAMILIES = [
   ["widevine", "com.widevine.alpha"],
   ["playready", "com.microsoft.playready"],
@@ -32,11 +32,12 @@ const family = (keySystem: unknown) => {
 
 export function trackDrmDiagnostic(report: DrmDiagnostic, consent: ConsentToken | null) {
   if (!stillValid(consent)) return;
+  if (!PROBLEM_STAGES.has(report.stage)) return;
   const host = hostname(report.host);
   const site = host && builtInSite(host);
   if (!site) return;
   const systemFamily = family(report.keySystem);
-  const stage = STAGES.has(report.stage) ? report.stage : "unknown";
+  const stage = report.stage;
   const code = Number.isSafeInteger(report.code) ? report.code : 0;
   const blockedHosts = (Array.isArray(report.blockedHosts) ? report.blockedHosts : [])
     .map(hostname)

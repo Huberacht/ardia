@@ -410,13 +410,13 @@ test("a WebKit page menu address reaches native's writer only as a string the cl
   }
 });
 
-test("a DRM report a page can forge reaches the telemetry queue and the local copy only as a built-in site, a DRM family, a stage from a fixed list and numbers", async () => {
+test("a DRM report a page can forge reaches the telemetry queue and the local copy only as a built-in site, a DRM family, a problem stage from a fixed list and numbers", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ status: 503 });
   try {
     const hostName = /^[a-z0-9]([a-z0-9.-]{0,98}[a-z0-9])?$/;
     const families = [["widevine", "com.widevine.alpha"], ["playready", "com.microsoft.playready"], ["fairplay", "com.apple.fps"]];
-    const stages = ["access", "accessDenied", "encrypted", "waitingforkey", "error"];
+    const stages = ["accessDenied", "waitingforkey", "error"];
     const sites = PROTECTED_VIDEO_SITES.map((domain) => domain.replaceAll(".", "_"));
     const valid = { host: "v.qq.com", keySystem: "com.widevine.alpha", stage: "accessDenied", code: 7, main: true, blockedHosts: ["ad.qq.com"] };
     const control = { site: "v_qq_com", family: "widevine", stage: "accessDenied", code: 7, main: true, blocked_hosts_n: 1 };
@@ -426,7 +426,7 @@ test("a DRM report a page can forge reaches the telemetry queue and the local co
         return domain ? { site: domain.replaceAll(".", "_") } : null;
       },
       keySystem: (v) => ({ family: typeof v === "string" && v ? (families.find(([, prefix]) => v.startsWith(prefix))?.[0] ?? "other") : "none" }),
-      stage: (v) => ({ stage: stages.includes(v) ? v : "unknown" }),
+      stage: (v) => (stages.includes(v) ? { stage: v } : null),
       code: (v) => ({ code: Number.isSafeInteger(v) ? v : 0 }),
       main: (v) => ({ main: v === true }),
       blockedHosts: (v) => ({ blocked_hosts_n: Math.min(8, Array.isArray(v) ? v.filter((h) => typeof h === "string" && hostName.test(h)).length : 0) }),
@@ -435,7 +435,7 @@ test("a DRM report a page can forge reaches the telemetry queue and the local co
     const variants = {
       host: [...values, ...strings.flatMap((s) => embedded(s, "v.qq.com", ".v.qq.com").slice(1))],
       keySystem: [...values, ...strings.flatMap((s) => embedded(s, "com.widevine.alpha", "com.widevine.alpha").slice(1))],
-      stage: [...values, ...strings.flatMap((s) => embedded(s, "access", "error").slice(1))],
+      stage: [...values, ...strings.flatMap((s) => embedded(s, "accessDenied", "error").slice(1)), "waitingforkey", "error", "access", "encrypted"],
       code: values,
       main: values,
       blockedHosts: [
@@ -471,7 +471,7 @@ test("a DRM report a page can forge reaches the telemetry queue and the local co
           assert.deepEqual(Object.keys(p).sort(), keys, label);
           assert.ok(sites.includes(p.site), `${label}: site`);
           assert.ok(["widevine", "playready", "fairplay", "other", "none"].includes(p.family), `${label}: family`);
-          assert.ok([...stages, "unknown"].includes(p.stage), `${label}: stage`);
+          assert.ok(stages.includes(p.stage), `${label}: stage`);
           assert.ok(Number.isSafeInteger(p.code) && typeof p.main === "boolean" && Number.isInteger(p.blocked_hosts_n), `${label}: numbers`);
         }
       }

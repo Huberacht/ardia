@@ -409,7 +409,7 @@
   {
    "id": "webkit-page-message:drm",
    "source": "frame",
-   "guard": "Listed streaming sites only; stage from a fixed list, key system matched against a fixed pattern, host from frameInfo.securityOrigin (WebKitTab+ContentBlocker.swift). Before telemetry, protectedMedia.ts checks consent first, then sends only the built-in site's slug, the key system's family from a fixed set, a stage from a fixed list, a safe-integer code, the frame flag and a count of blocked hosts, never a host or the key system string (hostileInputs.test.mjs checks the queue and the local copy)"
+   "guard": "Listed streaming sites only; stage from a fixed list, key system matched against a fixed pattern, host from frameInfo.securityOrigin (WebKitTab+ContentBlocker.swift). Before telemetry, protectedMedia.ts checks consent first, drops a granted request, a video asking for keys and any stage that is not a problem, then sends only the built-in site's slug, the key system's family from a fixed set, a problem stage from a fixed list, a safe-integer code, the frame flag and a count of blocked hosts, never a host or the key system string (hostileInputs.test.mjs checks the queue and the local copy)"
   },
   {
    "id": "webkit-page-message:field",

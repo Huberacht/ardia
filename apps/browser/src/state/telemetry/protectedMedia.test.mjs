@@ -72,7 +72,7 @@ test("the key system is sent as a family from a fixed list, and any other string
     ["user-123-private-token", "other"],
     ["", "none"],
   ];
-  systems.forEach(([keySystem], i) => track(report({ stage: "access", code: 200 + i, keySystem })));
+  systems.forEach(([keySystem], i) => track(report({ stage: "accessDenied", code: 200 + i, keySystem })));
   const events = (await queued()).slice(before);
   assert.deepEqual(events.map((e) => e.properties.family), systems.map(([, family]) => family));
   assert.equal(JSON.stringify(events).includes("user-123"), false);
@@ -87,14 +87,30 @@ test("a host that is not a streaming site records nothing", async () => {
   assert.equal((await queued()).length, before);
 });
 
+test("a granted key-system request, a video asking for keys and a stage nobody listed are not problems: they record nothing and use up neither the repeat check nor the 30", async () => {
+  const before = (await queued()).length;
+  for (let code = 700; code < 760; code++) {
+    track(report({ stage: "access", code }));
+    track(report({ stage: "encrypted", code }));
+    track(report({ stage: "other", code }));
+  }
+  assert.equal((await queued()).length, before);
+  assert.deepEqual(kept().filter((r) => r.properties.code >= 700 && r.properties.code < 760), []);
+  track(report({ stage: "accessDenied", code: 700 }));
+  track(report({ stage: "waitingforkey", code: 700 }));
+  track(report({ stage: "error", code: 700 }));
+  const events = (await queued()).slice(before);
+  assert.deepEqual(events.map((e) => e.properties.stage), ["accessDenied", "waitingforkey", "error"]);
+});
+
 test("nothing but a site name from the fixed list, a family and numbers is stored: no URLs, paths or queries", async () => {
   const before = (await queued()).length;
   track(report({ host: "https://v.qq.com/x/cover/abc?token=secret" }));
   track(report({ host: "v.qq.com/path" }));
   assert.equal((await queued()).length, before);
-  track(report({ stage: "encrypted", code: 300, keySystem: "com.widevine.alpha?token=secret", blockedHosts: ["https://ad.qq.com/p?q=1", "ad.qq.com/x", "ok.example.com"] }));
+  track(report({ stage: "waitingforkey", code: 300, keySystem: "com.widevine.alpha?token=secret", blockedHosts: ["https://ad.qq.com/p?q=1", "ad.qq.com/x", "ok.example.com"] }));
   const events = await queued();
-  const event = events.find((e) => e.properties.stage === "encrypted" && e.properties.code === 300);
+  const event = events.find((e) => e.properties.stage === "waitingforkey" && e.properties.code === 300);
   assert.equal(event.properties.family, "widevine");
   assert.equal(event.properties.blocked_hosts_n, 1);
   assert.equal(JSON.stringify(events).includes("secret"), false);
