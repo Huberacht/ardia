@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { toPosixPath } from "../../../../desktopPaths";
 
 export type Wording = { file: string; replacements: [string, string][] };
 
@@ -38,7 +39,8 @@ export const CREDENTIAL_WORDING: readonly Wording[] = [
 
 const marker = "/apps/browser/src/";
 
-export function rewordWith(list: readonly Wording[], source: string, id: string, code: string): string | null {
+export function rewordWith(list: readonly Wording[], source: string, rawId: string, code: string): string | null {
+  const id = toPosixPath(rawId);
   const at = id.indexOf(marker);
   if (at < 0) return null;
   const path = id.slice(at + marker.length).split("?")[0];
@@ -65,7 +67,8 @@ export function wordingPlugin(name: string, list: readonly Wording[], source: st
     configResolved(config) {
       building = config.command === "build";
     },
-    transform(code, id) {
+    transform(code, rawId) {
+      const id = toPosixPath(rawId);
       const reworded = rewordWith(list, source, id, code);
       if (reworded === null) return null;
       applied.add(id.slice(id.indexOf(marker) + marker.length).split("?")[0] ?? "");
@@ -73,7 +76,7 @@ export function wordingPlugin(name: string, list: readonly Wording[], source: st
     },
     buildEnd(error) {
       if (!building || error) return;
-      const settingsPanes = [...this.getModuleIds()].some((id) => id.includes(`${marker}components/settings/panes/`));
+      const settingsPanes = [...this.getModuleIds()].map(toPosixPath).some((id) => id.includes(`${marker}components/settings/panes/`));
       if (!settingsPanes) return;
       const missing = list.map((entry) => entry.file).filter((file) => !applied.has(file));
       if (missing.length) this.error(`${source} never reworded ${missing.join(", ")}; update apps/desktop/src/platform/linux/wording/${source}`);

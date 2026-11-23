@@ -1,14 +1,14 @@
-import { fileURLToPath } from "node:url";
 import { defineConfig, transformWithEsbuild, type Plugin } from "vite";
 import { lazyComponentId, webShellConfig } from "./vite.shared";
 import { inputAdapters, rawBookmarkAdapter, resolveInputAdapter } from "./inputAdapters";
 import { desktopMode, type DesktopMode } from "./desktopModes";
+import { posixFilePath, toPosixPath } from "./desktopPaths";
 import { linuxWordingPlugins } from "./src/platform/linux/wording/plugins";
 import { CONTROL_KEY_NAME as LINUX_CONTROL_KEY } from "./src/platform/keyNames.linux";
 import { CONTROL_KEY_NAME as WIN_CONTROL_KEY } from "./src/platform/keyNames.win";
 import { desktopShortcutText, hasMacModifiers } from "./shortcutText";
 
-const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+const here = (path: string) => posixFilePath(new URL(path, import.meta.url));
 const replacements = new Map([
   ...inputAdapters,
   [here("../browser/src/platform/livePersistence.ts"), here("./src/livePersistence.ts")],
@@ -76,7 +76,8 @@ function siteMeadowScripts(): Plugin {
   return {
     name: "ardia-desktop:site-meadow",
     enforce: "pre",
-    async transform(code, id) {
+    async transform(code, rawId) {
+      const id = toPosixPath(rawId);
       if (!id.startsWith(siteMeadow) || !id.endsWith(".ts")) return null;
       const result = await transformWithEsbuild(code, id, { loader: "ts", tsconfigRaw: SITE_MEADOW_TSCONFIG });
       return { code: result.code, map: null };
@@ -94,18 +95,23 @@ function desktopComponents(mode: DesktopMode): Plugin {
   return {
     name: "ardia-desktop:components",
     enforce: "pre",
-    transform(code, id) {
+    transform(code, rawId) {
+      const id = toPosixPath(rawId);
       if (!id.includes("/apps/browser/src/components/")) return null;
       if (id.endsWith("/settings/searchMatch.ts") || !hasMacModifiers(code)) return null;
       return { code: shortcutText(code), map: null };
     },
-    async resolveId(source, importer, options) {
-      if (!importer || adapters.has(importer)) return null;
-      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
-      if (resolved?.id === importedPasswordSave.source && importedPasswordSave.importers.has(importer)) return importedPasswordSave.replacement;
-      const scoped = resolved && importerReplacements.get(`${resolved.id}\0${importer}`);
+    async resolveId(source, rawImporter, options) {
+      if (!rawImporter) return null;
+      const importer = toPosixPath(rawImporter);
+      if (adapters.has(importer)) return null;
+      const resolved = await this.resolve(source, rawImporter, { ...options, skipSelf: true });
+      if (!resolved) return null;
+      const id = toPosixPath(resolved.id);
+      if (id === importedPasswordSave.source && importedPasswordSave.importers.has(importer)) return importedPasswordSave.replacement;
+      const scoped = importerReplacements.get(`${id}\0${importer}`);
       if (scoped) return scoped;
-      return resolved ? resolveInputAdapter(resolved.id, importer) ?? replacements.get(resolved.id) ?? null : null;
+      return resolveInputAdapter(id, importer) ?? replacements.get(id) ?? null;
     },
   };
 }

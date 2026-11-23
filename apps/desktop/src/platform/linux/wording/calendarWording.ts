@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { toPosixPath } from "../../../../desktopPaths";
 import type { Wording } from "./credentialWording";
 
 const UNAVAILABLE = "Ardia reads your calendars through Evolution Data Server, which isn't running in this session. Install GNOME Calendar or Evolution, add your accounts in GNOME Online Accounts, then try again.";
@@ -60,7 +61,8 @@ export const CALENDAR_WORDING: readonly Wording[] = [
 
 const marker = "/apps/browser/src/";
 
-export function rewordCalendar(id: string, code: string): string | null {
+export function rewordCalendar(rawId: string, code: string): string | null {
+  const id = toPosixPath(rawId);
   const at = id.indexOf(marker);
   if (at < 0) return null;
   const path = id.slice(at + marker.length).split("?")[0];
@@ -83,7 +85,8 @@ export function calendarWording(): Plugin {
     configResolved(config) {
       building = config.command === "build";
     },
-    transform(code, id) {
+    transform(code, rawId) {
+      const id = toPosixPath(rawId);
       const reworded = rewordCalendar(id, code);
       if (reworded === null) return null;
       applied.add(id.slice(id.indexOf(marker) + marker.length).split("?")[0] ?? "");
@@ -91,7 +94,7 @@ export function calendarWording(): Plugin {
     },
     buildEnd(error) {
       if (!building || error) return;
-      const ids = [...this.getModuleIds()];
+      const ids = [...this.getModuleIds()].map(toPosixPath);
       const missing = CALENDAR_WORDING.map((entry) => entry.file).filter((file) => ids.some((id) => id.includes(`${marker}${file}`)) && !applied.has(file));
       if (missing.length) this.error(`calendarWording.ts never reworded ${missing.join(", ")}; update apps/desktop/src/platform/linux/wording/calendarWording.ts`);
     },

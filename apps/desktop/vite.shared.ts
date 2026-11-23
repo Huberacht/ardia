@@ -1,17 +1,17 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
 import type { Plugin, UserConfig } from "vite";
 import { outDirFor, platformSuffixes, type DesktopMode } from "./desktopModes";
+import { posixFilePath, toPosixPath } from "./desktopPaths";
 
-const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+const here = (path: string) => posixFilePath(new URL(path, import.meta.url));
 const repo = here("../../");
 const shims = here("./src/shims/");
 const platformDir = here("./src/platform/");
-const reactNativeWeb = dirname(createRequire(import.meta.url).resolve("react-native-web/package.json"));
+const reactNativeWeb = toPosixPath(dirname(createRequire(import.meta.url).resolve("react-native-web/package.json")));
 
 const realPackages: Record<string, string> = {
   shell: `${repo}packages/shell/src/index.tsx`,
@@ -28,7 +28,8 @@ function commonJsRequires(): Plugin {
   return {
     name: "ardia-desktop:requires",
     enforce: "pre",
-    transform(code, id) {
+    transform(code, rawId) {
+      const id = toPosixPath(rawId);
       if (!/\.(t|j)sx?$/.test(id) || !scope.some((dir) => id.startsWith(dir)) || !code.includes("require(")) return null;
       const specs: string[] = [];
       const body = code.replace(/\brequire\((["'])([^"']+)\1\)/g, (_match, _quote, spec: string) => {
@@ -82,8 +83,9 @@ function lazyComponents(): Plugin {
     async resolveId(source, importer, options) {
       if (!importer || source.endsWith(EAGER_QUERY) || importer.startsWith(LAZY_PREFIX)) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
-      if (!resolved || !LAZY_COMPONENTS[resolved.id]) return null;
-      return LAZY_PREFIX + resolved.id;
+      const id = resolved && toPosixPath(resolved.id);
+      if (!id || !LAZY_COMPONENTS[id]) return null;
+      return LAZY_PREFIX + id;
     },
     load(id) {
       if (!id.startsWith(LAZY_PREFIX)) return null;

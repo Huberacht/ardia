@@ -1,4 +1,5 @@
 import type { Plugin } from "vite";
+import { toPosixPath } from "../../../../desktopPaths";
 import type { Wording } from "./credentialWording";
 import { hasMacModifiers, linuxShortcutText } from "../../../../shortcutText";
 import { PHRASES_ONLY_WITH } from "../../../../../browser/src/state/telemetry/platformWording";
@@ -216,7 +217,8 @@ export const LINUX_WORDING: readonly Wording[] = [
 ];
 
 const marker = "/apps/browser/src/";
-const sharedPath = (id: string) => {
+const sharedPath = (rawId: string) => {
+  const id = toPosixPath(rawId);
   const at = id.indexOf(marker);
   return at < 0 ? null : (id.slice(at + marker.length).split("?")[0] ?? "");
 };

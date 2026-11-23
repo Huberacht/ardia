@@ -1,6 +1,6 @@
-import { fileURLToPath } from "node:url";
+import { posixFilePath } from "./desktopPaths.ts";
 
-const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+const here = (path: string) => posixFilePath(new URL(path, import.meta.url));
 export const inputAdapters = new Map([
   [here("../browser/src/state/commands/commandShortcuts.ts"), here("./src/shortcutState.ts")],
   [here("../browser/src/state/commands/commandCatalog.ts"), here("./src/commandCatalog.ts")],

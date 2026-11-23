@@ -7,9 +7,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { build } from "vite";
 import { inputAdapters, rawBookmarkAdapter } from "../inputAdapters.ts";
+import { posixFilePath } from "../desktopPaths.ts";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
-const repo = fileURLToPath(new URL("../../../", import.meta.url));
+const root = posixFilePath(new URL("../", import.meta.url));
+const repo = posixFilePath(new URL("../../../", import.meta.url));
 const browser = `${repo}apps/browser/src/`;
 const desktop = `${root}src/`;
 

@@ -32,13 +32,17 @@ const NOTER = /^(?:note|count|track)[A-Z]/;
 const SINK_NAME = /^(?:capture|queueLog|warnFor|errorFor|counted|stillValid|(?:note|count|track)[A-Z]\w*)$/;
 const CONSENT_TYPE = /\bConsentToken\b/;
 
-function buildProgram() {
+export const DESKTOP_MODES = ["linux", "win"];
+
+export const platformSeams = (mode, platform = join(ROOT, "apps/desktop/src/platform")) => ({
+  "@platform/*": [`.${mode}.ts`, `.${mode}.tsx`, ".desktop.ts", ".desktop.tsx"].map((suffix) => `${platform}/*${suffix}`),
+});
+
+function buildProgram(mode) {
   const dir = join(ROOT, "apps/browser");
   const config = ts.parseJsonConfigFileContent(ts.readConfigFile(join(dir, "tsconfig.json"), ts.sys.readFile).config, ts.sys, dir);
   const desktop = walk("apps/desktop/src", /\.tsx?$/).filter((rel) => !TEST_FILE.test(rel)).map((rel) => join(ROOT, rel));
-  const platform = join(ROOT, "apps/desktop/src/platform");
-  const seams = { "@platform/*": [".linux.ts", ".linux.tsx", ".desktop.ts", ".desktop.tsx"].map((suffix) => `${platform}/*${suffix}`) };
-  return ts.createProgram([...config.fileNames, ...desktop], { ...config.options, paths: { ...config.options.paths, ...seams }, noEmit: true });
+  return ts.createProgram([...config.fileNames, ...desktop], { ...config.options, paths: { ...config.options.paths, ...platformSeams(mode) }, noEmit: true });
 }
 
 function activityListeners() {
@@ -205,18 +209,30 @@ export function reachSinks(program, files, listeners) {
   for (const call of calls) {
     if (!chains.get(call).prefix.some((fn) => reached.has(fn))) continue;
     const kind = sinkOf(call);
-    if (kind) sinks.push({ kind, rel: relOf(call), line: call.getSourceFile().getLineAndCharacterOfPosition(call.getStart()).line + 1 });
+    if (kind) sinks.push({ kind, rel: relOf(call), line: call.getSourceFile().getLineAndCharacterOfPosition(call.getStart()).line + 1, start: call.getStart() });
   }
   return { reached: reached.size, sinks };
+}
+
+export function reachSinksAcross(programs, listeners) {
+  const sinks = new Map();
+  let reached = 0;
+  for (const program of programs) {
+    const result = reachSinks(program, scopeFiles(program), listeners);
+    reached = Math.max(reached, result.reached);
+    for (const sink of result.sinks) sinks.set(`${sink.kind}|${sink.rel}|${sink.start}`, sink);
+  }
+  return { reached, sinks: [...sinks.values()] };
 }
 
 const bump = (section, key, n = 1) => void (section[key] = (section[key] ?? 0) + n);
 
 export function analyze() {
-  const program = buildProgram();
+  const programs = DESKTOP_MODES.map(buildProgram);
+  const [program] = programs;
   const files = scopeFiles(program);
   const found = Object.fromEntries(SECTIONS.map((s) => [s, {}]));
-  const { reached, sinks } = reachSinks(program, files, activityListeners());
+  const { reached, sinks } = reachSinksAcross(programs, activityListeners());
   for (const sink of sinks) bump(found[sink.kind], sink.rel);
   for (const rel of queueSection(files)) bump(found.queues, rel);
   for (const key of nativeEventSections()) bump(found.unstampedEvents, key);

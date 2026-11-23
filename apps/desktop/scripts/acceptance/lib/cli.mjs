@@ -2,7 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 
 export const USAGE = `Ardia Linux native acceptance suite
 
-Usage: pnpm --filter @ardia/linux acceptance -- <executable> [uiDir] [options]
+Usage: pnpm --filter @ardia/desktop acceptance -- <executable> [uiDir] [options]
 
 Runs each feature issue's runtime acceptance scenarios headlessly against a packaged
 Linux Ardia build with throwaway profiles, and prints per-issue results as JSON.
