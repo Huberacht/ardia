@@ -287,14 +287,14 @@ onIPhone("cancel lands the panel in the bar's pill, Go departs, and without a pi
   expect(mockStage.close).toHaveBeenLastCalledWith("drop", 0);
 });
 
-onIPhone("when the stage says the cancelled panel has no pill to land in, the bar's pill and its glass come back at once with the side buttons instead of after the settle", () => {
+onIPhone("when the stage says the cancelled panel has no pill to land in, the bar's pill and its glass come back at once with the side buttons instead of after the settle, the capsule's glass whole in that frame rather than materializing", () => {
   const root = page();
   open();
   act(() => browse.cancelSearch());
   expect(centreSeen(root)).toBe(0);
   expect(glassOf(root, "floatingBarAddress").props.shown).toBe(false);
   act(() => stage().onLanding?.({ lands: false, path: "anchorNotFound" }));
-  expect(glassOf(root, "floatingBarAddress").props.shown).toBe(true);
+  expect(glassOf(root, "floatingBarAddress").props).toMatchObject({ shown: true, shownMs: 0 });
   expect(glassOf(root, "floatingBarTabs").props.shown).toBe(true);
   advance(200);
   expect(centreSeen(root)).toBe(1);

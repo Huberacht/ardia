@@ -42,7 +42,7 @@ function useStageBarReturn(active: boolean) {
     ids: active ? STAGE_BAR_IDS : null,
     centreShown,
     sidesShown,
-    centreGlass: { shown: centreShown, shownMs: centreSnaps ? 0 : barReturnMotion.fadeMs },
+    centreGlass: { shown: centreShown, shownMs: 0 },
     sidesGlass: { shown: sidesShown, shownMs: sidesShown || reduceMotion ? barReturnMotion.fadeMs : barReturnMotion.leaveMs },
     centreGlyphs,
     leadingGlyphs,

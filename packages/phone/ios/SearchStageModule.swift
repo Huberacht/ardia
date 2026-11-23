@@ -379,7 +379,19 @@ final class SearchStageView: ExpoView {
       }
     }
     if exit == .morph, reduceMotion || isCommandBar { reportLanding(false, path: "morphSkipped") }
+    if PhoneTestBuild.isOn { traceOverAnchor("close \(exit.rawValue)") }
     watchSettling()
+  }
+
+  private func traceOverAnchor(_ moment: String) {
+    let anchorFrame = anchorNativeId.flatMap { id in window.flatMap { Self.find(nativeId: id, in: $0) } }.map { $0.convert($0.bounds, to: nil) }
+    let pieces = subviews.map { piece -> String in
+      let shown = piece.layer.presentation() ?? piece.layer
+      let frame = piece.convert(piece.bounds, to: nil)
+      let covers = anchorFrame.map { frame.intersects($0) } ?? false
+      return "\(String(describing: type(of: piece))) hidden=\(piece.isHidden) alpha=\(String(format: "%.2f", piece.alpha)) shownAlpha=\(String(format: "%.2f", shown.opacity)) coversAnchor=\(covers)"
+    }
+    NSLog("PAGELAB stage %@ anchor=%@ stageHidden=%@ stageAlpha=%.2f at=%.3f [%@]", moment, anchorFrame.map { NSCoder.string(for: $0) } ?? "none", isHidden ? "yes" : "no", alpha, CACurrentMediaTime(), pieces.joined(separator: "; "))
   }
 
   private func reportLanding(_ lands: Bool, path: String) {
@@ -388,6 +400,7 @@ final class SearchStageView: ExpoView {
   }
 
   func finish() {
+    if PhoneTestBuild.isOn { traceOverAnchor("finish") }
     releaseStartWaiters()
     stopAnticipating()
     landingTask?.cancel()
@@ -425,6 +438,7 @@ final class SearchStageView: ExpoView {
     settleTask = Task { [weak self] in
       guard let self else { return }
       guard await StageSettlePoll.until(every: Self.settlePoll, within: Self.settleDeadline, { self.hasSettled }), isClosing else { return }
+      if PhoneTestBuild.isOn { self.traceOverAnchor("settled \(self.closingPath)") }
       onSettled(["landed": self.morph?.hasDestination == true, "path": self.closingPath])
     }
   }
@@ -509,6 +523,7 @@ final class SearchStageView: ExpoView {
 
   private func hidePanelUnderMorph() {
     UIView.performWithoutAnimation { panel?.alpha = 0 }
+    if PhoneTestBuild.isOn { traceOverAnchor("panel hidden under morph") }
   }
 
   private func handOffMorph() {

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { labLog } from "../../platform/lab";
 import { interactionPerfEnabled } from "../app/interactionPerf";
 
@@ -35,3 +36,11 @@ export const endSearchTiming = () => {
   pressedAt = null;
   closedAt = null;
 };
+
+export function useGlassTrace(name: string, glass: { shown: boolean; shownMs: number }) {
+  useEffect(() => {
+    if (!interactionPerfEnabled()) return;
+    const since = closedAt !== null ? ` close+${Date.now() - closedAt}` : pressedAt !== null ? ` press+${Date.now() - pressedAt}` : "";
+    labLog(`PAGELAB glass ${name} ${glass.shown ? "shown" : "hidden"} ${glass.shownMs}${since}`);
+  }, [glass.shown, glass.shownMs]);
+}

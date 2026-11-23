@@ -15,6 +15,7 @@ import { privateMark } from "../ui/IncognitoSpecs";
 import { PressedGlyph } from "../ui/PressInPlace";
 import { glassFadeMs } from "../ui/motion";
 import { useFoldGlyphs, type BarFoldLook } from "./HostPill";
+import { useGlassTrace } from "../../state/search/searchTiming";
 import { TabStack } from "./BottomBar";
 import { barReturnedToPage } from "../../state/browse/deckPull";
 import { useDeckOwnsBar } from "../../state/browse/hooks";
@@ -86,6 +87,8 @@ export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true
   const swaps = handed || wasHanded.current;
   const handedBack = swaps ? { ...returning, centreGlass: { shown: returning.centreGlass.shown && !handed, shownMs: 0 }, sidesGlass: { shown: returning.sidesGlass.shown && !handed, shownMs: 0 } } : returning;
   const back = useFoldedGlass(handedBack, fold?.glass ?? true);
+  useGlassTrace("address", back.centreGlass);
+  useGlassTrace("sides", back.sidesGlass);
   const centreFold = useFoldGlyphs(fold);
   const ids = anchors ? back.ids : null;
   const inStrip = duo !== null;
