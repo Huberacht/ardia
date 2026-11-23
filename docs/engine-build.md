@@ -621,7 +621,7 @@ releases of helium-chromium, helium-macos, helium-linux and helium-windows and w
 helium-chromium release, with Chromium stable from chromiumdash as context. While a platform is behind it keeps one
 open issue, labelled `todo`, up to date; once every pin is current it comments and closes it. Run it locally with
 `GITHUB_TOKEN=$(gh auth token) node scripts/engine/upstream-pins.mjs`, or dispatch the workflow with `dry_run` to see
-what it would change on the issue. None of these files is an engine key input.
+what it would change on the issue. The script and the workflow sit outside every engine key.
 
 ### 0.21.1 → 0.21.2 (Chromium 157.0.8103.50, 2026-11-12)
 
