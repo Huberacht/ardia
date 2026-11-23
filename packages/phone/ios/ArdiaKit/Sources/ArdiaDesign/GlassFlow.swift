@@ -82,6 +82,12 @@ public enum GlassFlowRules {
   public static let snapshotGap: TimeInterval = 1.0 / 20
   public static let snapshotRefresh: TimeInterval = 0.5
   public static let quietFramesForRecapture = 2
+  public static let scrollReach: CGFloat = 200
+  public static let scrollStep: CGFloat = 120
+
+  public static func scrollBucket(_ offset: CGPoint) -> [Int] {
+    [Int((offset.x / scrollStep).rounded(.down)), Int((offset.y / scrollStep).rounded(.down))]
+  }
 
   public static func snapshotCovers(image: CGRect, shift: CGPoint, needed: CGRect) -> Bool {
     guard !image.isNull, !needed.isNull, !needed.isEmpty else { return false }

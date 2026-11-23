@@ -31,6 +31,18 @@ final class GlassCapture {
   let page = GlassPageShot()
 
   private var warmed = false
+  private weak var scrollWeb: WKWebView?
+  private var capturedScroll: CGPoint = .zero
+
+  func follow(_ web: WKWebView?) {
+    scrollWeb = web
+    capturedScroll = web?.scrollView.contentOffset ?? .zero
+  }
+
+  var scrollShift: CGPoint {
+    guard let web = scrollWeb else { return .zero }
+    return CGPoint(x: web.scrollView.contentOffset.x - capturedScroll.x, y: web.scrollView.contentOffset.y - capturedScroll.y)
+  }
   var wholeMethod: GlassLaunch.Capture = .layer
 
   func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, warm: warmed) }
@@ -63,7 +75,8 @@ final class GlassCapture {
     for piece in pieces {
       for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
       if let web = piece.page {
-        for value in [web.scrollView.contentOffset.x, web.scrollView.contentOffset.y, web.scrollView.zoomScale] { hasher.combine(value) }
+        hasher.combine(GlassFlowRules.scrollBucket(web.scrollView.contentOffset))
+        hasher.combine(web.scrollView.zoomScale)
         hasher.combine(page.generation)
       } else if let view = piece.view {
         if let contents = view.layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }

@@ -228,7 +228,7 @@ final class GlassFrames: NSObject {
         capture.showFill()
         return
       }
-      wanted = web == nil ? space.bounds : strip
+      wanted = web == nil ? space.bounds : wanted.insetBy(dx: 0, dy: -GlassFlowRules.scrollReach)
       pieces = GlassBackdrop.pieces(of: space, covering: wanted, web: web)
     } else if let root = members[0].backdropRoot {
       wanted = strip
@@ -257,6 +257,7 @@ final class GlassFrames: NSObject {
     switch outcome {
     case .captured:
       capturedNow = true
+      capture.follow(sourceWhole ? web : nil)
       if PhoneTestBuild.isOn {
         stats.noteCapture(ms: capture.lastMs, pieces: pieces.count)
         stats.snapshotMs += capture.page.takeLatencies()

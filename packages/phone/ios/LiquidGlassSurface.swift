@@ -220,8 +220,11 @@ final class LiquidGlassSurface: UIView {
     var uv = (left: 0.0, top: 0.0, width: 1.0, height: 1.0)
     var live = false
     var texture: MTLTexture?
-    if LiquidGlassRules.acceptsCapture(choice.path), let capture, let space, let captured = capture.texture, let region = region(in: space), !capture.rect.isNull {
+    if LiquidGlassRules.acceptsCapture(choice.path), let capture, let space, let captured = capture.texture, let shown = region(in: space), !capture.rect.isNull {
+      let shift = capture.scrollShift
+      let region = shown.offsetBy(dx: shift.x, dy: shift.y)
       let rect = capture.rect
+      if shift != .zero, !rect.insetBy(dx: -0.5, dy: -0.5).contains(region) { return fillThisFrame(into: buffer) }
       uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
       live = true
       texture = captured
@@ -239,6 +242,10 @@ final class LiquidGlassSurface: UIView {
     }
     rim.layer.isHidden = !(rimShown && rim.hasDrawn)
     CATransaction.commit()
+  }
+
+  private func fillThisFrame(into buffer: MTLCommandBuffer) {
+    draw(with: nil, space: nil, into: buffer)
   }
 
   private func drawStill() {
