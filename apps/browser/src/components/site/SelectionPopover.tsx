@@ -27,15 +27,21 @@ export function SelectionPopover({ tabId }: { tabId: string }) {
   }, [selection]);
   useEffect(() => () => setPageSelection(tabId, null), [tabId]);
   const counted = useRef(false);
+  const returned = useRef(false);
   useEffect(() => {
-    if (!shown) counted.current = false;
+    if (shown) return;
+    counted.current = false;
+    returned.current = false;
   }, [shown]);
   const noteShown = () => {
     if (counted.current || !shown) return;
     counted.current = true;
-    notePageOverlay("paneOverlayOpened", shown.consent);
+    notePageOverlay("paneOverlayOpened", returned.current ? consentToken() : shown.consent);
   };
-  const noteHidden = () => void (counted.current = false);
+  const noteHidden = () => {
+    if (counted.current) returned.current = true;
+    counted.current = false;
+  };
   if (!selection && !shown) return null;
 
   return (

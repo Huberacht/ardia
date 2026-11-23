@@ -112,3 +112,23 @@ test("a bar that leaves the pane and comes back counts again, and only then", as
     mock.timers.reset();
   }
 });
+
+test("a bar shown while sharing was off counts its return to the pane under the consent of that return", async () => {
+  client.loadChoice();
+  client.setSharing(false, "settings");
+  await opens();
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { bar } = showBar("return-on", { x: 10, y: 200, width: 40, height: 12 });
+    const zoomed = mount(({ zoom }) => bar.type({ ...bar.props, zoom }), { props: { zoom: 1 } });
+    zoomed.value?.props.onLayout({ nativeEvent: { layout: { width: 120 } } });
+    void zoomed.value;
+    client.setSharing(true, "onboarding");
+    assert.equal(await opens(), 0, "its first showing, with sharing off, counts nothing");
+    assert.equal(zoomed.rerender({ zoom: 10 }), null);
+    zoomed.rerender({ zoom: 1 });
+    assert.equal(await opens(), 1, "its return, with sharing on, counts");
+  } finally {
+    mock.timers.reset();
+  }
+});
