@@ -4,11 +4,11 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchArguments, launchEnvironment } from "../../apps/linux/scripts/acceptance/lib/ardia.mjs";
-import { ASSERTIONS, SCRIPT_NAME, SCRIPT_TITLE_PREFIX, UNKNOWN_WINDOW_ERROR, USAGE, USER_SCRIPTS_CAPABILITIES, VERSION_PATTERN, WINDOW_STATE_CAPABILITIES, windowStateProblems, windowStateSupport, windowStateVerdict, appVersionVerdict, cliControlSupport, cliTarball, debLayoutProblems, privateFolder, packageFormat, formatTable, installerRanAgain, launchRefusal, packageStagedFiles, parseArgs, pipeLaunchArguments, splitPipeMessages, summarize, uboSeedProblems, uboTuningProblems, userScriptSource } from "./smoke.mjs";
+import { ASSERTIONS, HEADLESS_EXIT_LIMIT_MS, HEADLESS_PAGE, SCRIPT_NAME, SCRIPT_TITLE_PREFIX, UNKNOWN_WINDOW_ERROR, USAGE, USER_SCRIPTS_CAPABILITIES, VERSION_PATTERN, WINDOW_STATE_CAPABILITIES, windowStateProblems, windowStateSupport, windowStateVerdict, appVersionVerdict, cliControlSupport, cliTarball, debLayoutProblems, headlessExitArguments, headlessExitVerdict, privateFolder, packageFormat, formatTable, installerRanAgain, launchRefusal, packageStagedFiles, parseArgs, pipeLaunchArguments, splitPipeMessages, summarize, uboSeedProblems, uboTuningProblems, userScriptSource } from "./smoke.mjs";
 
 test("the package checks are named in the usage and keep the original eight first", () => {
   assert.deepEqual(ASSERTIONS.slice(0, 8), ["ldd", "shell-ui", "bootstrap", "native-tab", "sandbox", "content-blocker", "restart-restore", "staged-install"]);
-  for (const name of ["app-version", "cli-install", "cli-control", "cli-scripts", "window-state"]) {
+  for (const name of ["app-version", "cli-install", "cli-control", "cli-scripts", "window-state", "headless-exit"]) {
     assert.ok(ASSERTIONS.includes(name), name);
     assert.ok(USAGE.includes(name), name);
   }
@@ -181,4 +181,28 @@ test("window-state accepts the contract's shapes and the unknown-window error, a
   assert.match(problems.join("\n"), /windowState.fullScreen is undefined/);
   assert.match(problems.join("\n"), /unknown window answered \{"answered":null\}/);
   assert.equal(windowStateProblems(null).length, 3);
+});
+
+test("headless-exit launches the packaged binary with --headless --screenshot inside the smoke's launch rules", () => {
+  const args = headlessExitArguments({ scratch: "/tmp/p", output: "/tmp/p/headless.png" });
+  assert.ok(args.includes("--headless"));
+  assert.ok(args.includes("--screenshot=/tmp/p/headless.png"));
+  assert.ok(args.includes(HEADLESS_PAGE));
+  assert.ok(!args.some((arg) => arg.startsWith("--remote-debugging")));
+  assert.equal(launchRefusal(args, launchEnvironment({ scratch: "/tmp/p", base: { PATH: "/usr/bin" } })), null);
+});
+
+test("headless-exit passes on a PNG and a clean exit, is old when the process had to be killed after the PNG, and fails otherwise", () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+  const pass = headlessExitVerdict({ code: 0, ms: 900, shot: png });
+  assert.equal(pass.status, "pass");
+  assert.match(pass.message, /exited 0 after 900 ms/);
+  const stuck = headlessExitVerdict({ timedOut: true, ms: HEADLESS_EXIT_LIMIT_MS, shot: png });
+  assert.equal(stuck.status, "old");
+  assert.match(stuck.message, /still running after 15000 ms and had to be killed/);
+  assert.equal(headlessExitVerdict({ timedOut: true, ms: HEADLESS_EXIT_LIMIT_MS, shot: null }).status, "fail");
+  assert.equal(headlessExitVerdict({ code: 0, ms: 900, shot: null }).status, "fail");
+  assert.equal(headlessExitVerdict({ code: 0, ms: 900, shot: Buffer.from("not a png at all") }).status, "fail");
+  assert.equal(headlessExitVerdict({ code: 1, ms: 900, shot: png }).status, "fail");
+  assert.match(headlessExitVerdict({ code: null, signal: "SIGSEGV", ms: 900, shot: null }).message, /exited SIGSEGV after 900 ms and wrote no PNG/);
 });

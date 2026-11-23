@@ -184,13 +184,17 @@ It refuses any sandbox-disabling switch. Every check must run and pass:
 13. `window-state`: in the first instance, `ArdiaShell.windowButtonLayout` must answer `{ layout, desktop }` (a string
     or `null`, and a string), `ArdiaShell.windowState` for the shell's own window three booleans (`maximized`, `tiled`,
     `fullScreen`), and `windowState` for an unknown window the error `No such native window`.
+14. `headless-exit`: a separate run of the launcher with `--headless --screenshot=<file> --window-size=400,300` on a
+    `data:` page, without the DevTools port. It must write a PNG and exit 0 within 15 s. A run that wrote the PNG but
+    had to be killed reports `old`: the engine predates the headless close fix. Any other outcome fails.
 
-Checks 9 to 12 report `skip` and pass for a dev package without `VERSION` or `cli/`. Checks 9 to 13 can also report
+Checks 9 to 12 report `skip` and pass for a dev package without `VERSION` or `cli/`. Checks 9 to 14 can also report
 `old` when the engine's host predates the feature: `appVersion` is Chromium's own version, the bootstrap advertises
 none of `engine.setCliControl`, `ArdiaCli.install` and `ArdiaAutomation.start`, (for `cli-scripts`) not all four
 `ArdiaUserScripts` methods, or (for `window-state`) neither `ArdiaShell.windowButtonLayout` nor
-`ArdiaShell.windowState`; an engine that advertises only one of the two fails `window-state`. `old` fails the gate unless
-`--allow-old-engine` is passed. CI and `release.sh` pass it only for an engine that isn't the commit's own.
+`ArdiaShell.windowState`, or (for `headless-exit`) a headless screenshot that never exits; an engine that advertises only
+one of the two fails `window-state`. `old` fails the gate unless `--allow-old-engine` is passed. CI and `release.sh`
+pass it only for an engine that isn't the commit's own.
 
 It takes about 8 s without the CLI, and writes `results.json`, the launch logs and `cli.log`.
 

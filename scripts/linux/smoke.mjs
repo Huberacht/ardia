@@ -47,13 +47,15 @@ ARDIA_BACKGROUND=1, a throwaway profile and HOME, the sandbox on) without
   window-state      ArdiaShell.windowButtonLayout answers {layout: string|null, desktop: string},
                     ArdiaShell.windowState for the shell's own window answers three booleans, and for
                     an unknown window fails with "No such native window" (old: neither call advertised)
+  headless-exit     ardia --headless --screenshot=FILE <url> writes a PNG and exits 0 within 15 s, without being killed
+                    (old: it wrote the PNG but kept running)
 
 It writes <results>/results.json ({ok, package, started, assertions[]}) and the
 launch logs to <results>, prints a table, and exits 0 only when every check ran
 and passed or was skipped. A check whose feature the engine's host predates
 (appVersion is Chromium's version; no engine.setCliControl, ArdiaCli.install or
 ArdiaAutomation.start capability; neither ArdiaShell.windowButtonLayout nor
-ArdiaShell.windowState) reports "old": a failure, unless
+ArdiaShell.windowState; a headless screenshot that never exits) reports "old": a failure, unless
 --allow-old-engine accepts it, as CI and release.sh do for an engine that isn't
 the commit's own.
 
@@ -66,7 +68,10 @@ the commit's own.
 `;
 
 export const privateFolder = (path) => mkdir(path, { recursive: true, mode: 0o700 });
-export const ASSERTIONS = ["ldd", "shell-ui", "bootstrap", "native-tab", "sandbox", "content-blocker", "restart-restore", "staged-install", "app-version", "cli-install", "cli-control", "cli-scripts", "window-state"];
+export const ASSERTIONS = ["ldd", "shell-ui", "bootstrap", "native-tab", "sandbox", "content-blocker", "restart-restore", "staged-install", "app-version", "cli-install", "cli-control", "cli-scripts", "window-state", "headless-exit"];
+export const HEADLESS_EXIT_LIMIT_MS = 15000;
+export const HEADLESS_PAGE = "data:text/html,<h1>ardia headless</h1>";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 export const FORBIDDEN_SWITCHES = ["--no-sandbox", "--disable-seccomp-filter-sandbox", "--disable-namespace-sandbox", "--disable-setuid-sandbox", "--disable-gpu-sandbox", "--no-zygote-sandbox", "--single-process", "--in-process-gpu"];
 export const TREE_FORBIDDEN_SWITCHES = ["--no-sandbox", "--disable-seccomp-filter-sandbox", "--disable-namespace-sandbox", "--disable-setuid-sandbox"];
 export const STAGED_FILES = [
@@ -326,6 +331,21 @@ export function windowStateVerdict(capabilities) {
   const missing = WINDOW_STATE_CAPABILITIES.filter((name) => !advertised.includes(name));
   if (missing.length) return { status: "fail", message: `the host advertises ${advertised.join(", ")} without ${missing.join(", ")}: the engine ships the two together` };
   return { status: "pass", message: `the host advertises ${advertised.join(" and ")}` };
+}
+
+export function headlessExitArguments({ scratch, output }) {
+  return launchArguments({ scratch, extraArgs: ["--headless", `--screenshot=${output}`, "--window-size=400,300", HEADLESS_PAGE] }).filter((arg) => !arg.startsWith("--remote-debugging-"));
+}
+
+export function headlessExitVerdict({ code = null, signal = null, timedOut = false, ms = 0, shot = null } = {}) {
+  const wrote = Buffer.isBuffer(shot) && shot.length > PNG_SIGNATURE.length && shot.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+  if (timedOut) {
+    if (wrote) return { status: "old", message: `--headless --screenshot wrote its PNG but was still running after ${HEADLESS_EXIT_LIMIT_MS} ms and had to be killed: the engine predates the headless close fix` };
+    return { status: "fail", message: `--headless --screenshot wrote no PNG and was still running after ${HEADLESS_EXIT_LIMIT_MS} ms` };
+  }
+  if (code !== 0) return { status: "fail", message: `--headless --screenshot exited ${code ?? signal} after ${ms} ms${wrote ? "" : " and wrote no PNG"}` };
+  if (!wrote) return { status: "fail", message: `--headless --screenshot exited 0 after ${ms} ms but wrote no PNG` };
+  return { status: "pass", message: `--headless --screenshot wrote ${shot.length} bytes and exited 0 after ${ms} ms` };
 }
 
 export function cliControlSupport(capabilities) {
@@ -868,6 +888,38 @@ class Smoke {
     throw outcome(verdict.status === "old" ? "old" : "fail", verdict.message, { version: this.version, appVersion });
   }
 
+  async headlessExit() {
+    const scratch = join(this.work, "headless-profile");
+    await privateFolder(scratch);
+    await mkdir(join(scratch, "home"));
+    const output = join(scratch, "headless.png");
+    const args = headlessExitArguments({ scratch, output });
+    const env = launchEnvironment({ scratch });
+    const refused = launchRefusal(args, env);
+    if (refused) throw new Error(refused);
+    const logPath = join(scratch, "headless-exit.log");
+    await writeFile(join(scratch, "headless-exit-command.json"), JSON.stringify({ executable: this.launcher, args }, null, 2));
+    const log = openSync(logPath, "w");
+    const started = Date.now();
+    const child = spawn(this.launcher, args, { stdio: ["ignore", log, log], env, detached: true });
+    closeSync(log);
+    pipeChildren.add(child);
+    const exit = await new Promise((done) => {
+      const timer = setTimeout(() => done({ timedOut: true }), HEADLESS_EXIT_LIMIT_MS);
+      child.once("exit", (code, signal) => { clearTimeout(timer); done({ code, signal }); });
+      child.once("error", (error) => { clearTimeout(timer); done({ code: `spawn error ${error.message}` }); });
+    });
+    const ms = Date.now() - started;
+    try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    pipeChildren.delete(child);
+    await copyFile(logPath, join(this.results, "headless-exit.log")).catch(() => {});
+    const shot = await readFile(output).catch(() => null);
+    const verdict = headlessExitVerdict({ ...exit, ms, shot });
+    const detail = { ms, bytes: shot?.length ?? null, log: "headless-exit.log" };
+    if (verdict.status === "pass") return detail;
+    throw outcome(verdict.status, verdict.message, detail);
+  }
+
   cliEnvironment() {
     const home = join(this.work, "cli-home");
     const data = join(home, ".local", "share");
@@ -1124,6 +1176,7 @@ class Smoke {
     else await this.record("cli-control", () => this.cliControl(), { timeout: 240000 });
     if (!first && this.hasCli) this.skip("cli-scripts", `Ardia did not start: ${launched.detail.error}`);
     else await this.record("cli-scripts", () => this.cliScripts(), { timeout: 300000 });
+    await this.record("headless-exit", () => this.headlessExit(), { timeout: HEADLESS_EXIT_LIMIT_MS + 30000 });
   }
 
   async finish() {
