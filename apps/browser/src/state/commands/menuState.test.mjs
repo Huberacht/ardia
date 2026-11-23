@@ -105,7 +105,12 @@ test("whatever changes in tabs and their live state, a menu that isn't rebuilt i
   const windows = [S().createWindow({ url: "https://a.example/" }), S().createWindow({ url: "https://b.example/" })];
   for (const w of windows) for (let i = 0; i < 4; i++) S().newTab(w, { url: `https://${i}.example/`, background: true });
   let seed = 7;
-  const rand = (n) => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n;
+  const rand = (n) => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) % n;
+  };
   const pick = (list) => list[rand(list.length)];
   const steps = [
     (id) => S().updateTab(id, { title: `Title ${rand(5)}` }),
@@ -133,11 +138,15 @@ test("whatever changes in tabs and their live state, a menu that isn't rebuilt i
     (id) => Object.keys(S().tabs).length > 6 && S().closeTab(id),
   ];
   let kept = 0;
+  const ran = new Set();
   for (let i = 0; i < 600; i++) {
-    const step = pick(steps);
+    const index = rand(steps.length);
+    ran.add(index);
+    const step = steps[index];
     const id = pick(Object.keys(S().tabs));
     if (!menuChanges(() => step(id))) kept++;
   }
+  assert.equal(ran.size, steps.length, `only ${ran.size} of ${steps.length} kinds of step ran`);
   assert.ok(kept > 100, `only ${kept} of 600 steps left the menu alone`);
 });
 
