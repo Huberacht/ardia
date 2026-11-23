@@ -1253,9 +1253,11 @@
   {
    "id": "socket-family:sites",
    "source": "socket",
-   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); URLs through openableUrl; settings through socketSettingRules (D3: any same-user process is the owner)",
+   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); URLs through openableUrl; settings through socketSettingRules (D3: any same-user process is the owner); ad blocker sites through siteOf (a plain lowercase host: no scheme, port, path, wildcard or line break) and, to be trusted, oneSiteOf (Chromium's registrable domain: no public suffix, private section included, and no IP) before they reach uBlock's trusted list",
    "checks": [
-    "apps/browser/src/state/automation/socketSchema.ts#schemaProblem"
+    "apps/browser/src/state/automation/socketSchema.ts#schemaProblem",
+    "apps/browser/src/state/automation/socketSites.ts#siteOf",
+    "apps/browser/src/state/automation/socketSites.ts#oneSiteOf"
    ],
    "findings": [
     "D3"
@@ -1549,6 +1551,16 @@
    "checks": [
     "apps/browser/src/lib/pluginManifest.ts",
     "apps/browser/src/state/plugins/lifecycle.ts"
+   ],
+   "detected": false
+  },
+  {
+   "id": "plugin-update:official-auto",
+   "source": "plugin",
+   "guard": "An official update's manifest is approved without a sheet only when the installed copy and the download are the pin's verified copies and every field but cosmetic text is identical to the approved manifest (a first command-bar-only main excepted); anything else, unknown or malformed keeps the prompt",
+   "checks": [
+    "apps/browser/src/state/plugins/officialUpdate.ts#updateWithin",
+    "apps/browser/src/state/plugins/official.ts#officialUpdateVerdict"
    ],
    "detected": false
   },
