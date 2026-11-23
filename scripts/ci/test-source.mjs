@@ -1,0 +1,342 @@
+import { createHash } from "node:crypto";
+
+const JS_PUNCT = ["===", "!==", "**=", "...", "<<=", ">>=", ">>>", "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "**", "<<", ">>"];
+const REGEX_AFTER_WORD = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "yield", "await", "instanceof"]);
+const IDENT_START = /[A-Za-z_$\u0080-\uffff]/;
+const IDENT_PART = /[A-Za-z0-9_$\u0080-\uffff]/;
+
+export function languageOf(path) {
+  if (/\.(?:[cm]?js|[cm]?ts|tsx|jsx)$/.test(path)) return "js";
+  if (/\.swift$/.test(path)) return "swift";
+  return null;
+}
+
+function regexAllowed(previous) {
+  if (!previous) return true;
+  if (previous.type === "punct") return ![")", "]"].includes(previous.text);
+  if (previous.type === "word") return REGEX_AFTER_WORD.has(previous.text);
+  return false;
+}
+
+export function tokenizeJs(source) {
+  const tokens = [];
+  const stack = [];
+  let at = 0;
+  const push = (type, start, end, extra = {}) => tokens.push({ type, text: source.slice(start, end), start, end, ...extra });
+  const scanTemplate = (start) => {
+    let index = start;
+    while (index < source.length) {
+      const char = source[index];
+      if (char === "\\") index += 2;
+      else if (char === "`") return { end: index + 1, open: false };
+      else if (char === "$" && source[index + 1] === "{") return { end: index + 2, open: true };
+      else index++;
+    }
+    throw new Error(`unterminated template literal at ${start}`);
+  };
+  while (at < source.length) {
+    const char = source[at];
+    const next = source[at + 1];
+    if (/\s/.test(char)) {
+      at++;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (at < source.length && source[at] !== "\n") at++;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = source.indexOf("*/", at + 2);
+      if (end < 0) throw new Error(`unterminated comment at ${at}`);
+      at = end + 2;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      let index = at + 1;
+      while (index < source.length && source[index] !== char) {
+        if (source[index] === "\\") index++;
+        if (source[index] === "\n") throw new Error(`unterminated string at ${at}`);
+        index++;
+      }
+      push("string", at, index + 1);
+      at = index + 1;
+      continue;
+    }
+    if (char === "`" || (char === "}" && stack.at(-1) === "template")) {
+      if (char === "}") stack.pop();
+      const { end, open } = scanTemplate(at + 1);
+      push("template", at, end, { head: char === "`", closed: !open });
+      if (open) stack.push("template");
+      at = end;
+      continue;
+    }
+    if (char === "/" && regexAllowed(tokens.at(-1))) {
+      let index = at + 1;
+      let inClass = false;
+      while (index < source.length) {
+        const current = source[index];
+        if (current === "\\") index++;
+        else if (current === "[") inClass = true;
+        else if (current === "]") inClass = false;
+        else if (current === "/" && !inClass) break;
+        else if (current === "\n") throw new Error(`unterminated regular expression at ${at}`);
+        index++;
+      }
+      index++;
+      while (index < source.length && IDENT_PART.test(source[index])) index++;
+      push("regex", at, index);
+      at = index;
+      continue;
+    }
+    if (IDENT_START.test(char)) {
+      let index = at + 1;
+      while (index < source.length && IDENT_PART.test(source[index])) index++;
+      push("word", at, index);
+      at = index;
+      continue;
+    }
+    if (/[0-9]/.test(char) || (char === "." && /[0-9]/.test(next ?? ""))) {
+      let index = at + 1;
+      while (index < source.length && /[0-9A-Za-z_.]/.test(source[index])) index++;
+      push("number", at, index);
+      at = index;
+      continue;
+    }
+    if (char === "{") stack.push("brace");
+    if (char === "}") stack.pop();
+    const long = JS_PUNCT.find((punct) => source.startsWith(punct, at));
+    const end = at + (long ? long.length : 1);
+    push("punct", at, end);
+    at = end;
+  }
+  return tokens;
+}
+
+export function tokenizeSwift(source) {
+  const tokens = [];
+  let at = 0;
+  const push = (type, start, end) => tokens.push({ type, text: source.slice(start, end), start, end });
+  const skipString = (start) => {
+    const hashes = source.slice(start).match(/^#*/)[0];
+    const triple = source.startsWith('"""', start + hashes.length);
+    const closer = `${triple ? '"""' : '"'}${hashes}`;
+    const escape = `\\${hashes}`;
+    let index = start + hashes.length + (triple ? 3 : 1);
+    while (index < source.length) {
+      if (source.startsWith(`${escape}(`, index)) {
+        index = skipInterpolation(index + escape.length + 1);
+        continue;
+      }
+      if (source.startsWith(escape, index)) {
+        index += escape.length + 1;
+        continue;
+      }
+      if (source.startsWith(closer, index)) return index + closer.length;
+      if (!triple && source[index] === "\n") throw new Error(`unterminated string at ${start}`);
+      index++;
+    }
+    throw new Error(`unterminated string at ${start}`);
+  };
+  const skipInterpolation = (start) => {
+    let depth = 1;
+    let index = start;
+    while (index < source.length) {
+      if (source[index] === '"' || (source[index] === "#" && /^#+"/.test(source.slice(index, index + 16)))) {
+        index = skipString(index);
+        continue;
+      }
+      if (source[index] === "(") depth++;
+      if (source[index] === ")" && --depth === 0) return index + 1;
+      index++;
+    }
+    throw new Error(`unterminated interpolation at ${start}`);
+  };
+  while (at < source.length) {
+    const char = source[at];
+    const next = source[at + 1];
+    if (/\s/.test(char)) {
+      at++;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (at < source.length && source[at] !== "\n") at++;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      let depth = 1;
+      at += 2;
+      while (at < source.length && depth > 0) {
+        if (source.startsWith("/*", at)) {
+          depth++;
+          at += 2;
+        } else if (source.startsWith("*/", at)) {
+          depth--;
+          at += 2;
+        } else at++;
+      }
+      continue;
+    }
+    if (char === '"' || (char === "#" && /^#+"/.test(source.slice(at, at + 16)))) {
+      const end = skipString(at);
+      push("string", at, end);
+      at = end;
+      continue;
+    }
+    if (char === "`") {
+      const end = source.indexOf("`", at + 1);
+      if (end < 0) throw new Error(`unterminated identifier at ${at}`);
+      push("word", at, end + 1);
+      at = end + 1;
+      continue;
+    }
+    if (IDENT_START.test(char) || char === "@" || char === "#") {
+      let index = at + 1;
+      while (index < source.length && IDENT_PART.test(source[index])) index++;
+      push("word", at, index);
+      at = index;
+      continue;
+    }
+    if (/[0-9]/.test(char)) {
+      let index = at + 1;
+      while (index < source.length && /[0-9A-Za-z_.]/.test(source[index])) index++;
+      push("number", at, index);
+      at = index;
+      continue;
+    }
+    push("punct", at, at + 1);
+    at++;
+  }
+  return tokens;
+}
+
+function closing(tokens, openAt) {
+  const open = tokens[openAt].text;
+  const close = { "(": ")", "{": "}", "[": "]" }[open];
+  let depth = 0;
+  for (let index = openAt; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.type !== "punct") continue;
+    if (token.text === open) depth++;
+    else if (token.text === close) {
+      depth--;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+function stringValue(token) {
+  if (token.type === "template") return token.head && token.closed ? token.text.slice(1, -1).replace(/\\`/g, "`") : null;
+  if (token.type !== "string" || token.text.startsWith('"""')) return null;
+  const body = token.text.slice(1, -1);
+  try {
+    return JSON.parse(token.text.startsWith("'") ? `"${body.replace(/\\'/g, "'").replace(/(^|[^\\])"/g, '$1\\"')}"` : token.text);
+  } catch {
+    return body;
+  }
+}
+
+function titleAt(source, tokens, at) {
+  const first = tokens[at];
+  if (first.type !== "template" || !first.head || first.closed) return stringValue(first);
+  let depth = 0;
+  for (let index = at; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.type !== "template") continue;
+    if (token.head && !token.closed) depth++;
+    else if (!token.head && token.closed && --depth === 0) return source.slice(first.start + 1, token.end - 1);
+  }
+  return null;
+}
+
+const JS_CALLS = new Set(["test", "it", "describe", "suite"]);
+const JS_GROUPS = new Set(["describe", "suite"]);
+
+function findJsTests(source) {
+  const tokens = tokenizeJs(source);
+  const found = [];
+  const groups = [];
+  for (let index = 0; index < tokens.length; index++) {
+    while (groups.length && groups.at(-1).end < index) groups.pop();
+    const token = tokens[index];
+    if (token.type !== "word" || !JS_CALLS.has(token.text)) continue;
+    if (tokens[index - 1]?.text === "." || tokens[index - 1]?.text === "?.") continue;
+    let open = index + 1;
+    while (tokens[open]?.text === "." && tokens[open + 1]?.type === "word" && ["only", "skip", "todo"].includes(tokens[open + 1].text)) open += 2;
+    if (tokens[open]?.text !== "(") continue;
+    const name = tokens[open + 1] && titleAt(source, tokens, open + 1);
+    if (typeof name !== "string") continue;
+    const end = closing(tokens, open);
+    if (end < 0) throw new Error(`no closing parenthesis for "${name}"`);
+    if (JS_GROUPS.has(token.text)) {
+      groups.push({ name, end });
+      continue;
+    }
+    found.push({ name, path: [...groups.map((group) => group.name), name].join(" › "), tokens: tokens.slice(index, end + 1) });
+  }
+  return found;
+}
+
+function findSwiftTests(source) {
+  const tokens = tokenizeSwift(source);
+  const found = [];
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index].text !== "func" || tokens[index + 1]?.type !== "word") continue;
+    const raw = tokens[index + 1].text;
+    const name = raw.startsWith("`") ? raw.slice(1, -1) : raw;
+    let attribute = index - 1;
+    while (attribute >= 0 && /^(?:public|private|internal|fileprivate|static|final|override|@MainActor|mutating|nonisolated)$/.test(tokens[attribute].text)) attribute--;
+    let markedTest = false;
+    for (let back = attribute; back >= 0 && back > attribute - 64; back--) {
+      if (tokens[back].text === "@Test") {
+        markedTest = true;
+        break;
+      }
+      if (tokens[back].text === "}" || tokens[back].text === "{" || tokens[back].text === "func") break;
+    }
+    if (!markedTest && !/^test/.test(name)) continue;
+    let open = index + 2;
+    while (open < tokens.length && tokens[open].text !== "{") {
+      if (tokens[open].text === "(") open = closing(tokens, open);
+      open++;
+    }
+    const end = closing(tokens, open);
+    if (end < 0) throw new Error(`no closing brace for ${name}`);
+    found.push({ name, path: name, tokens: tokens.slice(index, end + 1) });
+  }
+  return found;
+}
+
+export function findTests(path, source) {
+  const language = languageOf(path);
+  if (language === "js") return findJsTests(source);
+  if (language === "swift") return findSwiftTests(source);
+  throw new Error(`${path}: only JavaScript, TypeScript and Swift tests can be read`);
+}
+
+function normalizedToken(token) {
+  if (token.type === "string" && /^'[^'"\\]*'$|^"[^'"\\]*"$/.test(token.text)) return `"${token.text.slice(1, -1)}"`;
+  return token.text;
+}
+
+export function normalize(tokens) {
+  const kept = tokens.filter((token, index) => {
+    if (token.type !== "punct") return true;
+    if (token.text === ";") return false;
+    return !(token.text === "," && [")", "]", "}"].includes(tokens[index + 1]?.text));
+  });
+  return kept.map(normalizedToken).join(" ");
+}
+
+export function hashOf(test) {
+  return createHash("sha256").update(normalize(test.tokens)).digest("hex").slice(0, 16);
+}
+
+export function pickTest(tests, wanted) {
+  const byPath = tests.filter((test) => test.path === wanted);
+  if (byPath.length === 1) return { test: byPath[0] };
+  const byName = tests.filter((test) => test.name === wanted);
+  if (byName.length === 1) return { test: byName[0] };
+  if (byPath.length + byName.length > 1) return { error: `more than one test is called "${wanted}"; name it by its describe path (outer › inner)` };
+  return { error: `no test called "${wanted}"` };
+}
