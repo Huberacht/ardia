@@ -17,8 +17,10 @@
 # through, so none can be taken for the lock's own 75-77.
 # Stopping it (INT, TERM or HUP to its pid or its process group) stops every job it started: INT first, so the
 # benches quit their instances, then TERM, then KILL, each after a deadline. The lock stays held until they have all
-# exited, and it returns after that. The lock wrapper runs in a process group of its own and only the worker under it
-# is signalled (its pid is in <out>/.gate-worker.pid), so the wrapper waits for the worker before it lets go.
+# exited, and it returns after that. Each run keeps its own folder, <out>/.run.XXXXXX: the worker's pid, each job's
+# group marker, and the apps the benches launched with `open` (outside every process group), which it quits, then
+# kills, and checks are gone before it exits and the lock is let go. The lock wrapper runs in a process group of its
+# own and only the worker under it is signalled, so the wrapper waits for the worker before it lets go.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 self=$here/$(basename "$0")
@@ -41,8 +43,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-own_group=(perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; setpgrp(0, 0); exec { $ARGV[0] } @ARGV or die "gate.sh: cannot run $ARGV[0]: $!\n"')
+own_group=(perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; setpgrp(0, 0); open(my $f, ">", "$ENV{GATE_RUN}/group.$$") or die "gate.sh: cannot mark the group: $!\n"; close $f; exec { $ARGV[0] } @ARGV or die "gate.sh: cannot run $ARGV[0]: $!\n"')
 group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+await_group() {
+  local end=$(($(date +%s) + 10))
+  while [ ! -e "$GATE_RUN/group.$1" ] && kill -0 "$1" 2>/dev/null && [ "$(date +%s)" -lt "$end" ]; do sleep 0.02; done
+  [ -e "$GATE_RUN/group.$1" ] || { kill -KILL "$1" 2>/dev/null; wait "$1" 2>/dev/null; return 1; }
+}
 wait_groups() {
   local secs=$1 end g alive
   shift
@@ -63,28 +70,34 @@ stop_groups() {
     wait_groups "${step#*:}" "$@" && return 0
   done
 }
+pending=""
+defer_signals() { trap 'pending=130' INT; trap 'pending=143' TERM; trap 'pending=129' HUP; }
 
-worker_file=$out/.gate-worker.pid
 if [ -z "${GATE_LOCKED:-}" ]; then
-  mkdir -p "$out" && rm -f "$worker_file"
-  "${own_group[@]}" "$root/scripts/agent/locked" perflab --wait "${GATE_LOCK_WAIT:-3600}" -- \
-    env GATE_LOCKED=1 "$self" "$version" "$previous" --out "$out" --port "$port" --control-bundle "$control_bundle" &
-  chain=$!
+  mkdir -p "$out" || exit 12
+  GATE_RUN=$(mktemp -d "$out/.run.XXXXXX") || exit 12
+  export GATE_RUN
   stop_chain() {
     trap '' INT TERM HUP
     local worker
-    worker=$(cat "$worker_file" 2>/dev/null)
+    worker=$(cat "$GATE_RUN/worker.pid" 2>/dev/null)
     if [ -n "$worker" ] && [ "$(ps -o pgid= -p "$worker" 2>/dev/null | tr -d ' ')" = "$chain" ]; then
       kill -TERM "$worker" 2>/dev/null
-      wait_groups "${GATE_CHAIN_TERM_SECS:-120}" "$chain"
+      wait_groups "${GATE_CHAIN_TERM_SECS:-150}" "$chain"
     fi
     group_alive "$chain" && stop_groups "TERM:10 KILL:5" "$chain"
     wait "$chain" 2>/dev/null
     exit "$1"
   }
+  defer_signals
+  "${own_group[@]}" "$root/scripts/agent/locked" perflab --wait "${GATE_LOCK_WAIT:-3600}" -- \
+    env GATE_LOCKED=1 "$self" "$version" "$previous" --out "$out" --port "$port" --control-bundle "$control_bundle" &
+  chain=$!
+  await_group "$chain" || exit 12
   trap 'stop_chain 130' INT
   trap 'stop_chain 143' TERM
   trap 'stop_chain 129' HUP
+  [ -z "$pending" ] || stop_chain "$pending"
   wait "$chain"
   status=$?
   trap '' INT TERM HUP
@@ -92,6 +105,12 @@ if [ -z "${GATE_LOCKED:-}" ]; then
   exit "$status"
 fi
 
+if [ -z "${GATE_RUN:-}" ]; then
+  mkdir -p "$out" || exit 12
+  GATE_RUN=$(mktemp -d "$out/.run.XXXXXX") || exit 12
+  export GATE_RUN
+fi
+export GATE_APPS_DIR=$GATE_RUN/apps
 groups=()
 stop_jobs() {
   trap '' INT TERM HUP
@@ -100,9 +119,16 @@ stop_jobs() {
     for g in "${groups[@]}"; do wait "$g" 2>/dev/null; done
   fi
   groups=()
+  node "$here/bench-registry.mjs" stop "$GATE_APPS_DIR" --quit-secs "${GATE_APP_QUIT_SECS:-15}" || echo "gate: some apps the benches launched are still running (see above)"
 }
-pending=""
-defer_signals() { trap 'pending=130' INT; trap 'pending=143' TERM; trap 'pending=129' HUP; }
+start_job() {
+  local log=$1
+  shift
+  "${own_group[@]}" "$@" > "$log" 2>&1 &
+  job=$!
+  groups+=("$job")
+  await_group "$job" || job=""
+}
 take_signals() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -111,25 +137,22 @@ take_signals() {
 }
 trap stop_jobs EXIT
 take_signals
+echo $$ > "$GATE_RUN/worker.pid"
 
 awake=()
 command -v caffeinate >/dev/null && awake=(caffeinate -d -i)
 candidate=$root/dist/$version-rc/export/Ardia.app control=$root/dist/$previous/export/Ardia.app
-mkdir -p "$out" || exit 12
-echo $$ > "$worker_file"
 
 defer_signals
-"${own_group[@]}" timeout "${GATE_PREP_TIMEOUT:-3600}" "$smoke" "$version" "$previous" --rc > "$out/smoke.log" 2>&1 &
-smoke_pid=$!
-groups+=("$smoke_pid")
-"${own_group[@]}" timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/ratchet.mjs" run --own --app "$candidate" > "$out/ratchet.log" 2>&1 &
-ratchet_pid=$!
-groups+=("$ratchet_pid")
-"${own_group[@]}" timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/native-bench.mjs" --out "$out/prep" --port "$port" --only prepare \
-  --app "$candidate" --label rc --control "$control" --control-label "$previous" --control-bundle "$control_bundle" > "$out/prep.log" 2>&1 &
-prep_pid=$!
-groups+=("$prep_pid")
+start_job "$out/smoke.log" timeout "${GATE_PREP_TIMEOUT:-3600}" "$smoke" "$version" "$previous" --rc
+smoke_pid=$job
+start_job "$out/ratchet.log" timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/ratchet.mjs" run --own --app "$candidate"
+ratchet_pid=$job
+start_job "$out/prep.log" timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/native-bench.mjs" --out "$out/prep" --port "$port" --only prepare \
+  --app "$candidate" --label rc --control "$control" --control-label "$previous" --control-bundle "$control_bundle"
+prep_pid=$job
 take_signals
+[ -n "$smoke_pid" ] && [ -n "$ratchet_pid" ] && [ -n "$prep_pid" ] || { echo "gate: a prep job couldn't start"; exit 12; }
 wait "$smoke_pid"; smoke_status=$?
 wait "$ratchet_pid"; ratchet_status=$?
 wait "$prep_pid"; prep_status=$?
@@ -143,12 +166,12 @@ rounds=()
 for r in 1 2; do
   dir=$(mktemp -d "$out/round$r.XXXXXX") || exit $((12 + r))
   defer_signals
-  "${own_group[@]}" timeout "${GATE_ROUND_TIMEOUT:-3600}" ${awake[@]+"${awake[@]}"} node "$perf/native-bench.mjs" --out "$dir" --port "$port" --prepared \
+  start_job "$dir.log" timeout "${GATE_ROUND_TIMEOUT:-3600}" ${awake[@]+"${awake[@]}"} node "$perf/native-bench.mjs" --out "$dir" --port "$port" --prepared \
     --app "$out/prep/rc/app/Ardia.app" --label rc --control "$out/prep/$previous/app/Ardia.app" --control-label "$previous" \
-    --only launch,session,windows --launch-runs 6 --runs 2 > "$dir.log" 2>&1 &
-  round_pid=$!
-  groups=("$round_pid")
+    --only launch,session,windows --launch-runs 6 --runs 2
+  round_pid=$job
   take_signals
+  [ -n "$round_pid" ] || { echo "gate: round $r couldn't start"; exit $((12 + r)); }
   wait "$round_pid"; status=$?
   groups=()
   echo "gate: round $r exited $status ($dir)"

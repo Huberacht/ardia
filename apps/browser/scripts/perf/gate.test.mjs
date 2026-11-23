@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const gate = join(dirname(fileURLToPath(import.meta.url)), "gate.sh");
+const registry = join(dirname(fileURLToPath(import.meta.url)), "bench-registry.mjs");
 
 const stub = (name) => `import { appendFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
@@ -15,6 +16,16 @@ appendFileSync(process.env.STUB_LOG, JSON.stringify([kind, args]) + "\\n");
 writeFileSync(process.env.STUB_LOG + "." + kind + ".pid", String(process.pid));
 const env = kind.replace("-", "_");
 if (process.env["STUB_IGNORE_INT_" + env]) process.on("SIGINT", () => {});
+if (process.env["STUB_APP_" + env]) {
+  const { spawnSync } = await import("node:child_process");
+  const { existsSync, readFileSync } = await import("node:fs");
+  const appPid = process.env.STUB_LOG + "." + kind + ".app";
+  spawnSync("perl", ["-e", 'exit if fork; setpgrp(0, 0); open(my $f, ">", $ARGV[0]) or die; print $f $$; close $f; exec "/bin/sleep", "600"', appPid], { stdio: "ignore" });
+  for (let i = 0; i < 200 && !(existsSync(appPid) && readFileSync(appPid, "utf8")); i++) await new Promise((r) => setTimeout(r, 20));
+  const { registerApp } = await import(${JSON.stringify(registry)});
+  registerApp({ pid: +readFileSync(appPid, "utf8"), exe: "/bin/sleep" });
+  writeFileSync(process.env.STUB_LOG + "." + kind + ".registered", "");
+}
 if (kind === "prep") {
   const { mkdirSync } = await import("node:fs");
   const out = args[args.indexOf("--out") + 1];
@@ -40,7 +51,27 @@ function setup() {
   writeFileSync(log, "");
   const env = { ...process.env, GATE_LOCKED: "1", GATE_ROOT: dir, GATE_PERF: perf, GATE_SMOKE: smoke, STUB_LOG: log, PATH: `${dirname(process.execPath)}:${process.env.PATH}` };
   const calls = () => readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  return { dir, env, log, calls, out: join(dir, "out"), done: () => rmSync(dir, { recursive: true, force: true }) };
+  const spawned = [];
+  const done = () => {
+    for (const child of spawned) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    }
+    for (const name of readdirSync(dir)) {
+      if (!/^calls\.log\..*\.(pid|app)$/.test(name)) continue;
+      const pid = +readFileSync(join(dir, name), "utf8");
+      if (!(pid > 0)) continue;
+      const command = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+      if (command.includes(dir) || command === "/bin/sleep 600") {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {}
+      }
+    }
+    rmSync(dir, { recursive: true, force: true });
+  };
+  return { dir, env, log, calls, out: join(dir, "out"), spawned, done };
 }
 
 const run = (s, extra = {}) => spawnSync("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...s.env, ...extra }, encoding: "utf8", timeout: 60_000 });
@@ -102,7 +133,7 @@ test("a failed prep job waits for the others, then exits with the first failed s
 test("a TERM stops the prep jobs it started and waits for them, and exits 143", async () => {
   const s = setup();
   try {
-    const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...s.env, STUB_SLEEP_ratchet: "20000", STUB_SLEEP_prep: "20000", GATE_JOB_INT_SECS: "2" }, stdio: "ignore" });
+    const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...s.env, STUB_SLEEP_ratchet: "20000", STUB_SLEEP_prep: "20000", GATE_JOB_INT_SECS: "2" }, stdio: "ignore" }); s.spawned.push(child);
     for (const end = Date.now() + 10_000; Date.now() < end && s.calls().length < 3; ) await new Promise((r) => setTimeout(r, 50));
     assert.equal(s.calls().length, 3);
     const t0 = Date.now();
@@ -183,7 +214,7 @@ for (const [how, signal, group, code] of [["TERM to its pid", "SIGTERM", false, 
     const s = setup();
     try {
       const env = withRealLock(s);
-      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...env, STUB_SLEEP_smoke_SECS: "60", STUB_SLEEP_ratchet: "60000", STUB_SLEEP_prep: "60000", STUB_IGNORE_INT_ratchet: "1" }, stdio: "ignore", detached: true });
+      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...env, STUB_SLEEP_smoke_SECS: "60", STUB_SLEEP_ratchet: "60000", STUB_SLEEP_prep: "60000", STUB_IGNORE_INT_ratchet: "1" }, stdio: "ignore", detached: true }); s.spawned.push(child);
       const exited = new Promise((r) => child.on("exit", (c, sig) => r(c ?? sig)));
       const pidFile = (k) => `${s.log}.${k}.pid`;
       for (const end = Date.now() + 20_000; Date.now() < end && !["smoke", "ratchet", "prep"].every((k) => existsSync(pidFile(k))); ) await new Promise((r) => setTimeout(r, 50));
@@ -229,7 +260,8 @@ test("through the real lock, a busy lock fails fast with 75 and starts nothing",
   const s = setup();
   try {
     const env = { ...withRealLock(s), GATE_LOCK_WAIT: "2" };
-    const holder = spawn(join(s.dir, "scripts", "agent", "locked"), ["perflab", "--wait", "5", "--", "sleep", "20"], { env, stdio: "ignore" });
+    const holder = spawn(join(s.dir, "scripts", "agent", "locked"), ["perflab", "--wait", "5", "--", "sleep", "20"], { env, stdio: "ignore", detached: true });
+    s.spawned.push(holder);
     for (const end = Date.now() + 5000; Date.now() < end && !existsSync(join(env.AC_LOCK_ROOT, "ac-perflab.lock")); ) spawnSync("sleep", ["0.05"]);
     const r = spawnSync("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env, encoding: "utf8", timeout: 60_000 });
     holder.kill("SIGTERM");
@@ -245,7 +277,7 @@ test("through the real lock, a TERM while the jobs are still starting still stop
     const s = setup();
     try {
       const env = withRealLock(s);
-      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...env, STUB_SLEEP_smoke_SECS: "60", STUB_SLEEP_ratchet: "60000", STUB_SLEEP_prep: "60000" }, stdio: "ignore", detached: true });
+      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...env, STUB_SLEEP_smoke_SECS: "60", STUB_SLEEP_ratchet: "60000", STUB_SLEEP_prep: "60000" }, stdio: "ignore", detached: true }); s.spawned.push(child);
       const exited = new Promise((r) => child.on("exit", (c, sig) => r(c ?? sig)));
       for (const end = Date.now() + 20_000; Date.now() < end && !existsSync(`${s.log}.smoke.pid`); ) await new Promise((r) => setTimeout(r, 5));
       child.kill("SIGTERM");
@@ -257,5 +289,71 @@ test("through the real lock, a TERM while the jobs are still starting still stop
     } finally {
       s.done();
     }
+  }
+});
+
+const appGone = async (pid, ms = 5000) => {
+  for (const end = Date.now() + ms; Date.now() < end && alive(pid); ) await new Promise((r) => setTimeout(r, 50));
+  return !alive(pid);
+};
+
+for (const [how, act] of [
+  ["INT to its process group", (child) => process.kill(-child.pid, "SIGINT")],
+  ["TERM to its pid", (child) => child.kill("SIGTERM")],
+  ["a prep timeout", null],
+]) {
+  test(`through the real lock, an app a bench launched like open (its own group, parent 1) is gone after ${how}, before the lock is free`, async () => {
+    const s = setup();
+    try {
+      const env = { ...withRealLock(s), STUB_APP_prep: "1", STUB_SLEEP_prep: "60000", STUB_SLEEP_smoke_SECS: act ? "60" : "0", STUB_SLEEP_ratchet: act ? "60000" : "0", GATE_APP_QUIT_SECS: "2", ...(act ? {} : { GATE_PREP_TIMEOUT: "3" }) };
+      const child = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env, stdio: "ignore", detached: true }); s.spawned.push(child);
+      const exited = new Promise((r) => child.on("exit", (c, sig) => r(c ?? sig)));
+      for (const end = Date.now() + 20_000; Date.now() < end && !existsSync(`${s.log}.prep.registered`); ) await new Promise((r) => setTimeout(r, 50));
+      const app = +readFileSync(`${s.log}.prep.app`, "utf8");
+      assert.ok(alive(app));
+      assert.equal(spawnSync("ps", ["-o", "ppid=", "-p", String(app)], { encoding: "utf8" }).stdout.trim(), "1");
+      const held = () => existsSync(join(env.AC_LOCK_ROOT, "ac-perflab.lock"));
+      if (act) act(child);
+      let done = false, unheld = 0;
+      exited.then(() => (done = true));
+      while (!done) {
+        if (alive(app) && !held()) unheld++;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      assert.equal(await exited, act ? (how.startsWith("INT") ? 130 : 143) : 12);
+      assert.equal(unheld, 0);
+      assert.ok(await appGone(app, 500));
+      assert.ok(!held());
+    } finally {
+      s.done();
+    }
+  });
+}
+
+test("a second gate with the same out folder leaves the running gate's run folder alone, and the running gate still cancels cleanly", async () => {
+  const s = setup();
+  try {
+    const env = { ...withRealLock(s), STUB_SLEEP_smoke_SECS: "60", STUB_SLEEP_ratchet: "60000", STUB_SLEEP_prep: "60000" };
+    const first = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env, stdio: "ignore", detached: true }); s.spawned.push(first);
+    const firstExit = new Promise((r) => first.on("exit", (c, sig) => r(c ?? sig)));
+    for (const end = Date.now() + 20_000; Date.now() < end && !["smoke", "ratchet", "prep"].every((k) => existsSync(`${s.log}.${k}.pid`)); ) await new Promise((r) => setTimeout(r, 50));
+    const runs = () => readdirSync(s.out).filter((n) => n.startsWith(".run."));
+    const [firstRun] = runs();
+    const worker = readFileSync(join(s.out, firstRun, "worker.pid"), "utf8");
+    const second = spawn("bash", [gate, "0.2.49", "0.2.48", "--out", s.out], { env: { ...env, GATE_LOCK_WAIT: "30" }, stdio: "ignore", detached: true }); s.spawned.push(second);
+    const secondExit = new Promise((r) => second.on("exit", (c, sig) => r(c ?? sig)));
+    for (const end = Date.now() + 5000; Date.now() < end && runs().length < 2; ) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(runs().length, 2);
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal(readFileSync(join(s.out, firstRun, "worker.pid"), "utf8"), worker);
+    const pids = ["smoke", "ratchet", "prep"].map((k) => +readFileSync(`${s.log}.${k}.pid`, "utf8"));
+    first.kill("SIGTERM");
+    assert.equal(await firstExit, 143);
+    assert.deepEqual(pids.filter(alive), []);
+    for (const end = Date.now() + 10_000; Date.now() < end && !existsSync(join(s.out, runs().find((r) => r !== firstRun), "worker.pid")); ) await new Promise((r) => setTimeout(r, 50));
+    process.kill(-second.pid, "SIGINT");
+    assert.equal(await secondExit, 130);
+  } finally {
+    s.done();
   }
 });

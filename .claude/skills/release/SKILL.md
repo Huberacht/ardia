@@ -330,8 +330,9 @@ deploy ships bench.json with the release notes when it's ready by then; otherwis
 ship it with the next site deploy. Never hold the notes for it.
 
 ```bash
-V=<version>; X=$HOME/ardia-scratch/xbench-$V
-mkdir -p $X/apps/ardia && cp -Rc dist/$V-rc/export/Ardia.app $X/apps/ardia/   # dist/$V/export without an rc
+V=<version>; A=dist/$V-rc/export/Ardia.app   # dist/$V/export without an rc
+X=$HOME/ardia-scratch/xbench-$V-$(plutil -extract CFBundleVersion raw $A/Contents/Info.plist)-$(codesign -dvvv $A 2>&1 | sed -n 's/^CDHash=//p' | cut -c1-12)
+mkdir -p $X/apps/ardia && { [ -e $X/apps/ardia/Ardia.app ] || cp -Rc $A $X/apps/ardia/; }
 codesign --force --deep --sign - $X/apps/ardia/Ardia.app   # ad hoc, as the stored rows' Ardia and Helium ran
 node apps/browser/scripts/perf/xbench.mjs run --out $X/out --apps $X/apps --browsers ardia --rounds 3 --launches 2 \
   --gate off --deadline 60   # run_in_background, about 35 min; exit 75 means items are left: run it again
@@ -340,6 +341,9 @@ node apps/browser/scripts/perf/xbench.mjs report --out $X/out --apps $X/apps --b
 node apps/browser/scripts/perf/xbench.mjs clean --out $X/out --apps $X/apps --browsers ardia && rm -rf $X
 ```
 
+- The folder is named after the candidate's version, build and code signature hash, so running it again after exit 75
+  resumes only that same candidate. A rebuilt candidate gets a new folder and starts over, never reusing the old
+  build's samples.
 - **Refused** (exit 65, bench.json untouched): this Mac's model or chip, or xbench's harness revision, differ from the
   stored file. Leave the site's numbers as they are and tell the owner a full rerun is needed; don't `--force` it.
 - **`full rerun due: …`** in the report's output: a stored rival is over 60 days old, or Dia or Helium in

@@ -59,18 +59,30 @@ export const SESSION_PARTS = ["idle", "memory", "switch", "newtab", "newwindow"]
 
 export function roundProblems(results, { launchRuns = 6, runs = 2 } = {}) {
   const problems = [];
-  const only = results?.meta?.only ?? [];
+  if (!results || typeof results !== "object" || Array.isArray(results)) return ["its results aren't an object"];
+  const list = (name) => {
+    const xs = results[name];
+    if (xs === undefined) return [];
+    if (!Array.isArray(xs)) {
+      problems.push(`its ${name} isn't a list`);
+      return [];
+    }
+    const bad = xs.filter((x) => !x || typeof x !== "object" || Array.isArray(x)).length;
+    if (bad) problems.push(`${bad} of its ${name} entries aren't runs`);
+    return xs.map((x) => (x && typeof x === "object" && !Array.isArray(x) ? x : {}));
+  };
+  const only = Array.isArray(results.meta?.only) ? results.meta.only : [];
   for (const phase of ["launch", "windows"]) if (!only.includes(phase)) problems.push(`it didn't run the ${phase} phase`);
   if (!only.includes("session") && !SESSION_PARTS.every((p) => only.includes(p))) problems.push("it didn't run the session phase (or all five of its parts)");
-  if ((results?.session ?? []).some((r) => r?.parts)) problems.push("its session runs measured only some parts");
+  const launch = list("launch"), session = list("session"), windows = list("windows");
+  if (session.some((r) => r.parts)) problems.push("its session runs measured only some parts");
   const source = results?.meta?.source;
   const missing = ["version", "build", "cdhash"].filter((k) => typeof source?.[k] !== "string" || !source[k]);
   if (missing.length) problems.push(`its build identity has no ${missing.join(", ")} to compare rounds by`);
+  if (typeof results.meta?.bundleSha !== "string" || !results.meta.bundleSha) problems.push("it has no bench bundle hash to compare rounds by");
   const count = (what, have, want) => have !== want && problems.push(`${have} ${what}, wanted ${want}`);
-  const launch = results?.launch ?? [];
   count("launches", launch.length, launchRuns);
   launch.forEach((l, i) => !finite(l?.window, l?.withContent, l?.js, l?.firstPaint, l?.firstFrame) && problems.push(`launch ${i} is missing a time`));
-  const session = results?.session ?? [];
   count("session runs", session.length, runs);
   session.forEach((r, i) => {
     const short = (name, xs, want, ok = Number.isFinite) => {
@@ -86,7 +98,6 @@ export function roundProblems(results, { launchRuns = 6, runs = 2 } = {}) {
     const left = (r?.throttled?.tabSwitch ?? 0) + (r?.throttled?.newTab ?? 0);
     if (left) problems.push(`session ${i}: ${left} samples left out because a page couldn't paint (screen locked or display asleep)`);
   });
-  const windows = results?.windows ?? [];
   count("windows runs", windows.length, runs);
   windows.forEach((r, i) => {
     const good = Array.isArray(r?.newWindow) ? r.newWindow.filter(WINDOW_FIELDS).length : 0;
@@ -105,6 +116,8 @@ export function roundsProblems(rounds, expected) {
     if (apps.size > 1) problems.push(`the ${side}'s app differs between rounds (${[...apps].join(", ")})`);
     const builds = new Set(rounds.map((r) => { const s = r[side]?.meta?.source; return s ? `${s.version} (${s.build}) ${s.cdhash}` : "unknown"; }));
     if (builds.size > 1) problems.push(`the ${side}'s build differs between rounds (${[...builds].join(", ")})`);
+    const bundles = new Set(rounds.map((r) => r[side]?.meta?.bundleSha ?? "unknown"));
+    if (bundles.size > 1) problems.push(`the ${side}'s bench bundle differs between rounds (${[...bundles].map((b) => b.slice(0, 12)).join(", ")})`);
   }
   return problems;
 }
@@ -191,7 +204,12 @@ function main() {
     console.log("gate: INVALID");
     process.exit(2);
   }
-  const incomplete = roundsProblems(raw, { launchRuns: +opt["launch-runs"], runs: +opt.runs });
+  let incomplete;
+  try {
+    incomplete = roundsProblems(raw, { launchRuns: +opt["launch-runs"], runs: +opt.runs });
+  } catch (error) {
+    incomplete = [`a round's results can't be checked (${error.message})`];
+  }
   if (incomplete.length) {
     for (const p of incomplete) console.log(`invalid: ${p}`);
     console.log("gate: INVALID");

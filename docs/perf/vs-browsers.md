@@ -411,8 +411,9 @@ a full rerun is due.
 The release skill's step 4d (`.claude/skills/release/SKILL.md`), after the perf gate, on the build that passed it:
 
 ```sh
-V=<version>; X=$HOME/ardia-scratch/xbench-$V
-mkdir -p $X/apps/ardia && cp -Rc dist/$V-rc/export/Ardia.app $X/apps/ardia/   # dist/$V/export without an rc
+V=<version>; A=dist/$V-rc/export/Ardia.app   # dist/$V/export without an rc
+X=$HOME/ardia-scratch/xbench-$V-$(plutil -extract CFBundleVersion raw $A/Contents/Info.plist)-$(codesign -dvvv $A 2>&1 | sed -n 's/^CDHash=//p' | cut -c1-12)
+mkdir -p $X/apps/ardia && { [ -e $X/apps/ardia/Ardia.app ] || cp -Rc $A $X/apps/ardia/; }
 codesign --force --deep --sign - $X/apps/ardia/Ardia.app   # ad hoc, as the stored rows' Ardia and Helium ran
 node apps/browser/scripts/perf/xbench.mjs run --out $X/out --apps $X/apps --browsers ardia --rounds 3 --launches 2 \
   --gate off --deadline 60   # run_in_background; about 35 min; rerun to resume
