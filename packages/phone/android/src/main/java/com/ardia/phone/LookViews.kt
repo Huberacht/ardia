@@ -1522,6 +1522,12 @@ internal object FrostPage {
 
     enum class Path { Live, Solid, Fallback, Tinted }
 
+    fun wantsSource(choice: Choice?, onlyBackdropUnder: Boolean, blurOverBackdrop: Boolean, holdsPage: Boolean, pageMode: FrostSources.PageMode): Boolean = when {
+        holdsPage && pageMode == FrostSources.PageMode.Solid -> false
+        choice == null -> !(onlyBackdropUnder && !blurOverBackdrop)
+        else -> choice.path == Path.Live || choice.reason == SOURCE_NOT_DRAWN
+    }
+
     data class Choice(val path: Path, val reason: String)
 
     fun choose(
@@ -1548,8 +1554,8 @@ internal object FrostPage {
         !hasSource -> Choice(Path.Fallback, "no source")
         !hardware -> Choice(Path.Fallback, "software canvas")
         insideSource -> Choice(Path.Fallback, "inside its own source")
-        !sourceHasContent -> Choice(Path.Fallback, SOURCE_NOT_DRAWN)
         holdsPage && pageMode == FrostSources.PageMode.Solid -> Choice(Path.Solid, "page under the frost, solid page mode")
+        !sourceHasContent -> Choice(Path.Fallback, SOURCE_NOT_DRAWN)
         holdsPage -> Choice(Path.Live, "page under the frost, redrawn every frame")
         else -> Choice(Path.Live, "no page under the frost")
     }
@@ -1686,10 +1692,12 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         layerHeight = 0
     }
 
+    private fun effectivePageMode(): FrostSources.PageMode = if (pageLive()) FrostSources.PageMode.Live else FrostSources.pageMode
+
     internal fun wantsSource(): Boolean {
         if (!canBlur()) return false
-        val choice = lastChoice ?: return !(FrostSources.find(source)?.holdsOnlyBackdrop == true && !LookSwitch.blurOverBackdrop(context))
-        return choice.path == FrostPage.Path.Live || choice.reason == FrostPage.SOURCE_NOT_DRAWN
+        val from = FrostSources.find(source)
+        return FrostPage.wantsSource(lastChoice, onlyBackdropUnder = from?.holdsOnlyBackdrop == true, blurOverBackdrop = LookSwitch.blurOverBackdrop(context), holdsPage = from?.holdsPage == true, pageMode = effectivePageMode())
     }
 
     private var reportedFinding: String? = null
@@ -1725,7 +1733,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             hardware = canvas.isHardwareAccelerated,
             insideSource = from != null && isInside(from),
             holdsPage = blurs && from?.holdsPage == true,
-            pageMode = if (pageLive()) FrostSources.PageMode.Live else FrostSources.pageMode,
+            pageMode = effectivePageMode(),
             lookOff = lookIsOff,
             onScreen = onScreen(),
         )
