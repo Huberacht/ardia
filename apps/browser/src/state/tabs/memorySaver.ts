@@ -1,4 +1,5 @@
 import { isKeepActiveSiteValid, setMemorySaver, type MemorySaverMode } from "../../platform/performance";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { isQuitting } from "../app/quit";
 import { useBrowser } from "../browser/store";
 import type { Settings } from "../settings/settings";
@@ -33,6 +34,8 @@ export function startMemorySaver() {
     if (changed(s.settings, prev.settings)) push();
   });
 }
+
+export const keptSitesListed = (s: Pick<Settings, "memorySaver" | "busyTabWarnings">) => s.memorySaver !== false || (PLATFORM_FEATURES.busyTabWatch && s.busyTabWarnings !== false);
 
 export function keepActiveSiteOf(typed: string): string {
   const [, scheme = "", host = "", rest = ""] = /^([a-z][\w+.-]*:\/\/)?([^/?#]*)(.*)$/is.exec(typed.trim()) ?? [];

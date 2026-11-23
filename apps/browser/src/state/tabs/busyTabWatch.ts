@@ -164,9 +164,14 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
       run: () => {
         if (!wanted()) return;
         noteBusyTab("busy_tab_kept_running", consentToken());
-        for (const id of tabIds) keptTabs.add(id);
-        if (site) void keepSiteActive(site, wanted);
-        showToast(windowId, site ? `${toastName(site)} will keep running` : `“${name}” will keep running`, undefined, { icon: ICON });
+        if (!site) {
+          for (const id of tabIds) keptTabs.add(id);
+          return showToast(windowId, `“${name}” will keep running`, undefined, { icon: ICON });
+        }
+        void keepSiteActive(site, wanted).then((error) => {
+          const saved = !error && useBrowser.getState().settings.keepActiveSites.includes(site);
+          if (saved && wanted() && mayConfirm(windowId, warningId)) showToast(windowId, `${toastName(site)} will keep running`, undefined, { icon: ICON });
+        });
       },
     },
   });
@@ -253,6 +258,7 @@ export function startBusyTabWatch() {
         changed();
       });
       const toggled = useBrowser.subscribeTo(["settings"], (s, prev) => {
+        if (s.settings.keepActiveSites !== prev.settings.keepActiveSites) keptTabs.clear();
         if (watchOn(s) === watchOn(prev)) return;
         noteBusyTab(watchOn(s) ? "busy_tab_warnings_turned_on" : "busy_tab_warnings_turned_off", consentToken());
         if (!watchOn(s)) {

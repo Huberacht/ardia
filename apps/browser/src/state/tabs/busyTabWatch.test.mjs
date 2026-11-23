@@ -37,7 +37,7 @@ const { shownTabIds } = await import("./shownTabs.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
 const { slowTimersForTests } = await import("../../platform/slowTimers.ts");
 const { setQuitting } = await import("../app/quit.ts");
-const { keepSiteActive } = await import("./memorySaver.ts");
+const { keepSiteActive, keptSitesListed, stopKeepingSiteActive } = await import("./memorySaver.ts");
 const { parseSettings } = await import("../settings/settings.ts");
 const { PLATFORM_FEATURES } = await import("../../lib/platformFeatures.ts");
 const { unshownSettings } = await import("../../components/settings/settingsIndex.ts");
@@ -510,4 +510,71 @@ test("the CPU read needs native API 94, so an older build refuses this JavaScrip
   assert.ok(version >= 94, `NATIVE_API_VERSION is ${version}`);
   assert.equal(Number(/Constant\("apiVersion"\) \{ \(\) -> Int in (\d+) \}/.exec(swift)?.[1]), version);
   assert.match(readFileSync(new URL("../../../../../packages/ardiacore/ios/EngineModule.swift", import.meta.url), "utf8"), /"childProcessCpu":/);
+});
+
+test("the busy average covers exactly the last two minutes: never before two minutes of readings, never counting CPU from before them", () => {
+  const run = (times, coresBetween) => {
+    let heat = new Map();
+    let used = 0;
+    times.forEach((at, i) => {
+      if (i) used += coresBetween(times[i - 1], at) * (at - times[i - 1]) * 1000;
+      heat = readHeat(heat, [{ pid: 1, started: 1, cpuMs: used }], at * 1000);
+    });
+    return heat;
+  };
+  const steady = [0, 5, ...Array.from({ length: 11 }, (_, i) => 15 + i * 10)];
+  assert.deepEqual(sustainedBusy(run(steady, () => 1)), [], "115 s of readings at a full core isn't two minutes yet");
+  assert.deepEqual(sustainedBusy(run([...steady, 125], () => 1)), [1], "125 s is");
+  const burstBefore = [0, 24, ...Array.from({ length: 12 }, (_, i) => 34 + i * 10), 150];
+  assert.deepEqual(sustainedBusy(run(burstBefore, (a) => (a === 24 ? 4 : a < 24 ? 0 : 0.55))), [], "a burst that mostly fell before the two minutes doesn't count; the window starts at the cutoff, interpolated");
+});
+
+test("query values are compared after the same canonical form on both sides, as Chrome's GURL does", () => {
+  const t = (url, rule) => matchesSiteRule(url, rule);
+  assert.ok(t("https://example.com/?q=a+b", "example.com/?q=a+b"), "a plus stays a plus on both sides");
+  assert.ok(t("https://example.com/?q=a%20b", "example.com/?q=a b"), "a space in the rule is %20, as in the page address");
+  assert.ok(!t("https://example.com/?q=a+b", "example.com/?q=a b"), "a plus and a space are different query bytes to Chrome");
+  assert.ok(t("https://example.com/?q=%C3%A9t%C3%A9", "example.com/?q=été"), "non-ASCII in the rule is percent-encoded like the address");
+});
+
+test("Keep Running relies on the saved site exception: removing it brings warnings back, and a refused save confirms nothing", async () => {
+  const start = Date.now() + 8000 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 71, tabIds: [hidden] }];
+  await burn(start, 2, { 71: 1 });
+  globalThis.busyTest.toasts[0].secondary.run();
+  await settle();
+  assert.deepEqual(S().settings.keepActiveSites, ["miner.example"]);
+  assert.equal(globalThis.busyTest.toasts[1].title, "miner.example will keep running", "confirmed after the save");
+  stopKeepingSiteActive("miner.example");
+  await burn(start + 200 * MINUTE, 3, { 71: 1 });
+  assert.equal(globalThis.busyTest.toasts.length, 3, "the exception is gone, so the busy tab is warned about again");
+  reset();
+  globalThis.busyTest.validate = () => Promise.resolve(false);
+  try {
+    await burn(start + 400 * MINUTE, 3, { 71: 1 });
+    globalThis.busyTest.toasts[0].secondary.run();
+    await settle();
+    assert.deepEqual(S().settings.keepActiveSites, []);
+    assert.equal(globalThis.busyTest.toasts.length, 1, "Chrome refused the site, nothing was saved, so nothing is confirmed");
+  } finally {
+    globalThis.busyTest.validate = null;
+  }
+  webviews.clear();
+});
+
+test("the kept-site list shows in Settings whenever Memory Saver or busy-tab warnings read it", () => {
+  assert.equal(keptSitesListed({ memorySaver: true, busyTabWarnings: false }), true);
+  assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: true }), true, "Memory Saver off, warnings on: Keep Running's sites stay visible and removable");
+  assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: false }), false);
+  PLATFORM_FEATURES.busyTabWatch = false;
+  try {
+    assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: true }), false, "where the platform has no watch, only Memory Saver counts");
+  } finally {
+    PLATFORM_FEATURES.busyTabWatch = true;
+  }
+  const pane = readFileSync(new URL("../../components/settings/panes/Advanced.tsx", import.meta.url), "utf8");
+  assert.match(pane, /const sitesListed = useSettings\(keptSitesListed\);/);
+  assert.match(pane, /\{sitesListed &&\s+\[\.\.\.keepActiveSites\]/);
 });

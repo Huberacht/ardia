@@ -8,7 +8,6 @@ export const BUSY_TICK_MS = 10_000;
 export const HOT_CORES = 0.7;
 export const SUSTAINED_MS = 120_000;
 const LONGEST_GAP_MS = 2.5 * BUSY_TICK_MS;
-const COVERED_SLACK_MS = BUSY_TICK_MS / 2;
 
 const isCount = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
 
@@ -26,6 +25,14 @@ export function validReadings(raw: unknown): ChildProcessCpu[] {
   return valid;
 }
 
+function cpuAt(window: readonly Reading[], at: number): number | null {
+  const before = window[0]!;
+  if (before.at > at) return null;
+  const after = window.find((r) => r.at >= at);
+  if (!after || after === before) return before.cpuMs;
+  return before.cpuMs + ((after.cpuMs - before.cpuMs) * (at - before.at)) / (after.at - before.at);
+}
+
 export function readHeat(prev: ReadonlyMap<number, ProcessHeat>, readings: readonly ChildProcessCpu[], now: number, hotCores = HOT_CORES): Map<number, ProcessHeat> {
   const next = new Map<number, ProcessHeat>();
   for (const r of readings) {
@@ -36,10 +43,9 @@ export function readHeat(prev: ReadonlyMap<number, ProcessHeat>, readings: reado
     let from = 0;
     while (from + 1 < kept.length && kept[from + 1]!.at <= now - SUSTAINED_MS) from++;
     const window = [...kept.slice(from), { at: now, cpuMs: r.cpuMs }];
-    const oldest = window[0]!;
     const cores = continued ? (r.cpuMs - last.cpuMs) / (now - last.at) : 0;
-    const covered = now - oldest.at >= SUSTAINED_MS - COVERED_SLACK_MS;
-    const busy = covered && (r.cpuMs - oldest.cpuMs) / (now - oldest.at) >= hotCores;
+    const atCutoff = cpuAt(window, now - SUSTAINED_MS);
+    const busy = atCutoff !== null && (r.cpuMs - atCutoff) / SUSTAINED_MS >= hotCores;
     next.set(r.pid, { started: r.started, readings: window, cores, busySince: busy ? (was?.busySince ?? now) : null });
   }
   return next;
@@ -72,6 +78,14 @@ function tokenHolds(query: string, token: string): boolean {
   return found > 0;
 }
 
+function canonicalQuery(raw: string): string | null {
+  try {
+    return new URL(`http://query.invalid/?${raw}`).search.slice(1);
+  } catch {
+    return null;
+  }
+}
+
 function queryHolds(url: URL, rule: string): boolean {
   const query = `&${url.search.slice(1)}&`;
   return rule.split("&").every((token) => !token || tokenHolds(query, token));
@@ -101,7 +115,8 @@ export function matchesSiteRule(address: string, rule: string): boolean {
   if (port && port !== "*" && (url.port || DEFAULT_PORTS[protocol] || "") !== port) return false;
   if (path && path !== "/" && !url.pathname.startsWith(path)) return false;
   try {
-    return !query || queryHolds(url, query);
+    const canonical = query ? canonicalQuery(query) : "";
+    return !query || (canonical !== null && queryHolds(url, canonical));
   } catch {
     return false;
   }
