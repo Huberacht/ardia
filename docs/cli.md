@@ -16,8 +16,9 @@ is what Ardia does for it: how it ships, how it's installed, and the contract th
 - **macOS.** The Release workflow's `build` job, which holds no secrets, fetches the pinned folder, checks its SHA-256 and
   unpacks it (`official-plugins.py bundle`: files and folders only, its `plugin.json` must be the pinned name and
   version). The `sign` job signs its Mach-Os inside out with the app's Developer ID and hardened runtime, writes each
-  plugin's payload digest into `Info.plist` (`ArdiaBuiltInPlugins`), then signs the app; `verify.sh` recomputes the
-  digests on the signed app and checks every Mach-O's signature and runtime flag. The plugins repo never needs the
+  plugin's payload digest into `Info.plist` (`ArdiaBuiltInPlugins`) and the program registry its manifests' `claim`s and
+  the pin's `legacyInstall` make (`ArdiaProgramRegistry`, `docs/plugins.md` › programs), then signs the app; `verify.sh`
+  recomputes both on the signed app and checks every Mach-O's signature and runtime flag. The plugins repo never needs the
   signing identity. The release no longer publishes an `ardia-cli-*.tar.gz` of its own.
 - **Linux** has no plugins yet, so the package carries the command for its installer: `official-plugins.py linux-cli
   <app version>` fetches the pinned linux-x64 tarball, checks it, and renames it `ardia-cli-<app version>-linux-x64.tar.gz`
@@ -43,7 +44,7 @@ it off until the next launch. An `ardia` installed the old way (`~/Library/Appli
 adopted on update with no click when control was on: the plugin counts as installed, the link moves to the new copy,
 and `CLI/current` points into the store, so paths saved through it keep working. When control was off, it isn't
 adopted (`ADOPT_WITH_CONTROL_OFF` in `state/plugins/programs.ts` is false): the old `ardia` stays on PATH, untouched,
-control stays off, and Command Line shows as available. The old command then reports Ardia unreachable with its own
+control stays off, and Command Line shows as available, its row in Settings › Plugins saying "An older ardia is installed. Install Command Line to update it." The old command then reports Ardia unreachable with its own
 old wording until the user installs Command Line, which adopts it and turns control on as the sheet says
 (`usage_counts.plugin_adoptions_waiting` counts these). There's no uninstall from
 Settings; removing the link brings it back at the next launch.
@@ -51,9 +52,34 @@ Settings; removing the link brings it back at the next launch.
 On Linux, Settings › Advanced › Command line installs it from the package (`install.sh --version <app version> --sha256
 <digest>` with a `file://` URL), as before.
 
-`cliControl` (`state/app/cliControl.ts`) stays the stored key, the control pill and the token server stay in the app
-(`docs/automation.md`), and on Linux and in older data folders it means what it always did; Linux keeps its switch in
-Settings › Advanced.
+`cliControl` (`state/app/cliControl.ts`) stays the stored key, the control pill stays in the app, and on Linux and in
+older data folders it means what it always did; Linux keeps its switch in Settings › Advanced. While it is on, `ardia`
+reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
+- **The control socket** (`ArdiaControl.sock`, mode 0600) carries the owner's methods. It has no token: the server
+  only checks that the peer runs as the same user (`getpeereid`), so every process of that user is admitted.
+- **The engine's token connection** carries `ardia browse`. It listens on loopback with a token written to
+  `ArdiaControl.json`, which the user's own processes can read. It is a full DevTools client of the browser, the same
+  as a `--remote-debugging-port` client (the owner's decision, #2807): every CDP domain and method, every target
+  (`chrome://` and WebUI pages, extension pages, service workers, the browser target), every URL and browser context,
+  and local files, so `ardia browse upload` (`DOM.setFileInputFiles`), `download` and `wait --download`
+  (`Browser.setDownloadBehavior`), emulation on any tab, cookies, storage, request interception, screencasts and the
+  debugger all work. Events and replies pass through unchanged.
+
+  What still guards it is what keeps other users and web pages off the connection, not what a process running as
+  you may do: the token (32 random bytes per start, compared in constant time, only in the 0600 `ArdiaControl.json`),
+  loopback only, no `Origin` header (so no web page can open the socket), and the `RemoteDebuggingAllowed` policy. The
+  engine also keeps its bookkeeping: a command must be a JSON object with an integer `id` and a string `method`
+  (`params`, if present, an object; `sessionId` naming a session this connection attached), one command per
+  (session, id) until its reply, and at most 4096 waiting replies before the connection is closed. Showing a saved
+  password still asks for your Mac's login, as it does in the Passwords page, since that check runs in the browser,
+  not in DevTools. Plugin helpers can't read `ArdiaControl.json`: their sandbox denies the app's data folder and
+  LaunchServices (`docs/plugins.md`, #2857).
+
+  The engine records which tabs the command opened (`Target.createTarget`) for `ardia browse set viewport`'s
+  off-screen move and marks off-screen targets `ardiaOffscreen: true` in `Target.getTargets` and
+  `Target.getTargetInfo`. It never closes a tab on its own: off-screen tabs are closed by the app, through ArdiaCore's
+  normal close, 5 s after the last connection ends (`state/automation/offscreen.ts`). `ac_cli_control`'s status
+  counts commands by domain (`tokenCommands`), sent as `usage_counts.cli_cdp_commands_<domain>`.
 
 ## The contract
 
@@ -64,6 +90,22 @@ Settings › Advanced.
   Ardia"), before it sends anything else. A side raises its minimum only when it needs the other's newer behaviour, so a
   newer command against an older Ardia, or the reverse, either works or says which one to update. `ardia --version`
   reports the command's own version.
+- **Methods.** `methods` lists every method the socket answers: `name`, `area`, `mutates`, `description`, `params` (a
+  JSON Schema subset the socket checks before it runs anything) and `result`. The command's `ardia methods` prints it
+  and `ardia call <method> [params]` calls any method, so a method Ardia adds is usable from the shell without a new
+  command release. Adding methods doesn't change the protocol: a command that calls one an older Ardia lacks gets
+  `unknown_method`. Every area, what it reads and changes, and what stays out of reach (passwords, card numbers,
+  cookie values) is in `docs/control-socket.md`. Tile folders (`pins.*`), page icons (`favicons.get`), shared
+  and live folders (`sharedFolders.*`, `live.*`), setup codes (`presets.*`) and Air Traffic Control rules
+  (`airTraffic.*`) are there too.
+- **One line is at most 1 MiB.** Every line Ardia writes on the socket (a reply, an event, a decide request) is at most
+  1 MiB (1,048,576 bytes, newline included), the limit every shipped command reads (`MAX_LINE` in `control.py` and
+  `control.rs`); a longer line makes the command drop the connection. Old commands can't change, so Ardia keeps to it:
+  pages stop early, a read whose reply wouldn't fit answers `failed` saying what to narrow, a write whose result wouldn't
+  fit answers a compact `{ok, oversized, …counts}` so it's never unclear whether the write happened, an event that
+  wouldn't fit goes out summarized with `truncated: true`, and a decide request that wouldn't fit isn't sent (Ardia uses
+  its default). A reader that falls behind loses its oldest events, never a reply or a decide message and never its connection
+  in the middle of a line; the next event it gets carries `dropped: <n>`. Details in `docs/control-socket.md` › The 1 MiB line.
 - **The plugin schema.** `docs/plugin.schema.json` is the manifest schema Ardia writes (`apps/browser/scripts/
   write-plugin-schema.mjs`; a test keeps it current). The command ships a copy for `ardia plugins check` offline, and the
   plugins repo's CI compares that copy with ardia main's.
