@@ -4,7 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 
-const { analyzeTrace, MAX_TRACE_EVENTS } = await import("./devToolsInsights.ts");
+const { analyzeTrace, overallRating, MAX_TRACE_EVENTS } = await import("./devToolsInsights.ts");
 const { describeIssues, describeIssue } = await import("./devToolsIssues.ts");
 const { parseSourceMap, originalPositionFor, generatedPositionFor, sourceMapRefOf, inlineMapText, SourceMapResolver } = await import("./devToolsSourceMaps.ts");
 const { chainOf, framesOfStack, resolveChain, CAUSE_CHAIN_FUNCTION } = await import("./devToolsStacks.ts");
@@ -856,4 +856,30 @@ test("an LCP image that starts loading before TTFB isn't counted twice", () => {
 test("a comment-looking line with a backtick ends the trailing scan, so a template literal's directive isn't read", () => {
   assert.equal(sourceMapRefOf("const s = `\n//# sourceMappingURL=evil.map\n//`;"), null);
   assert.equal(sourceMapRefOf("x();\n//# sourceMappingURL=app.js.map\n// trailing note"), "app.js.map");
+});
+
+test("the overall rating counts measured metrics, not only insights", () => {
+  const start = 12_000_000_000;
+  const slowPaint = analyzeTrace([navStart(start, "M", "https://a.example/"), { name: "firstContentfulPaint", ph: "R", pid: 2, tid: 3, ts: start + 3_200_000, args: { frame: "M" } }]);
+  assert.equal(slowPaint.metrics.fcp.rating, "poor");
+  assert.equal(overallRating(slowPaint), "poor");
+});
+
+test("the cascade answer is capped in total, and says how many overridden declarations it left out", () => {
+  const rules = Array.from({ length: 200 }, (_, i) => ({ rule: { origin: "regular", selectorList: { selectors: [{ text: `.r${i}`, specificity: { a: 0, b: 1, c: 0 } }] }, style: { cssProperties: Array.from({ length: 20 }, (_, p) => ({ name: `--p${p}`, value: `${i}` })) } }, matchingSelectors: [0] }));
+  const answer = cascadeFor({ matchedCSSRules: rules }, {}, Array.from({ length: 20 }, (_, p) => `--p${p}`), new Map());
+  const kept = answer.reduce((sum, entry) => sum + entry.overridden.length, 0);
+  assert.ok(kept <= 512, `${kept} overridden declarations returned`);
+  assert.ok(answer.every((entry) => entry.overridden.length <= 32));
+  assert.equal(answer[0].overriddenOmitted, 199 - 32);
+  assert.equal(answer.reduce((sum, entry) => sum + entry.overridden.length + entry.overriddenOmitted, 0), 20 * 199);
+});
+
+test("a mapped logpoint in an inline script adds the script's start offsets", () => {
+  const map = `data:application/json;base64,${Buffer.from(JSON.stringify({ version: 3, sources: ["src/inline.ts"], names: [], mappings: "AAAA;AACA" })).toString("base64")}`;
+  const book = logpointBook.newScriptBook();
+  logpointBook.recordScript(book, { scriptId: "7", url: "https://a.example/page.html", sourceMapURL: map, startLine: 10, startColumn: 4 });
+  assert.deepEqual([logpointBook.locate(book, "src/inline.ts", 1, null).line, logpointBook.locate(book, "src/inline.ts", 1, null).column], [11, 5], "the first generated line adds both offsets");
+  assert.deepEqual([logpointBook.locate(book, "src/inline.ts", 2, null).line, logpointBook.locate(book, "src/inline.ts", 2, null).column], [12, 1], "later lines add only the line offset");
+  logpointBook.discardScriptBook(book);
 });

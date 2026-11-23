@@ -349,4 +349,8 @@ export function analyzeTrace(input: unknown): TraceInsights {
   };
 }
 
-export const overallRating = (result: TraceInsights): Rating => worst(result.insights.map((i) => i.rating));
+export const overallRating = (result: TraceInsights): Rating => {
+  const { fcp, lcp, ttfb, tbt, inp, cls } = result.metrics;
+  const measured = [fcp, lcp, ttfb, tbt, inp].flatMap((metric) => (metric ? [metric.rating] : []));
+  return worst([...result.insights.map((i) => i.rating), ...measured, ...(result.counts.layoutShifts ? [cls.rating] : [])]);
+};

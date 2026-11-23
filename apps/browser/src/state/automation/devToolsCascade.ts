@@ -20,7 +20,9 @@ export type Declaration = {
   shorthand: string | null;
 };
 export type OverriddenDeclaration = Declaration & { reason: string };
-export type PropertyCascade = { property: string; computed: string | null; winner: Declaration | null; overridden: OverriddenDeclaration[] };
+export type PropertyCascade = { property: string; computed: string | null; winner: Declaration | null; overridden: OverriddenDeclaration[]; overriddenOmitted: number };
+export const MAX_OVERRIDDEN_PER_PROPERTY = 32;
+export const MAX_OVERRIDDEN_TOTAL = 512;
 
 type Candidate = Declaration & { order: number; active: boolean; invalid: boolean; disabled: boolean; conditionActive: boolean; layerRank: number };
 
@@ -266,6 +268,7 @@ export function cascadeFor(matched: unknown, computed: unknown, properties: read
   const inherited = list(field(matched, "inherited")).slice(0, MAX_INHERITED);
   const registered = registeredInheritance(matched);
   const inherits = (property: string) => registered.get(property) ?? isInherited(property);
+  let overriddenSoFar = 0;
   return properties.slice(0, MAX_PROPERTIES).map((raw) => {
     const property = propertyKey(raw.slice(0, 256));
     let candidates = candidatesOf(own, property, headers, 0, 0);
@@ -279,7 +282,10 @@ export function cascadeFor(matched: unknown, computed: unknown, properties: read
       }
     }
     const overridden = winner ? candidates.filter((c) => c !== winner).map((c) => ({ ...strip(c), reason: reasonAgainst(c, winner!) })) : candidates.map((c) => ({ ...strip(c), reason: c.disabled ? "disabled" : c.invalid ? "invalid value" : !c.conditionActive ? "its @media or @supports condition doesn't apply" : "not applied" }));
-    return { property, computed: computedValues.get(property) ?? null, winner: winner ? strip(winner) : null, overridden: overridden.reverse() };
+    const room = Math.max(0, Math.min(MAX_OVERRIDDEN_PER_PROPERTY, MAX_OVERRIDDEN_TOTAL - overriddenSoFar));
+    const kept = overridden.reverse().slice(0, room);
+    overriddenSoFar += kept.length;
+    return { property, computed: computedValues.get(property) ?? null, winner: winner ? strip(winner) : null, overridden: kept, overriddenOmitted: overridden.length - kept.length };
   });
 }
 

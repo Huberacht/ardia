@@ -11,7 +11,7 @@ export const MAX_HELD_MAP_BYTES = 32 * 1024 * 1024;
 export const MAX_HELD_FRAMES = 1_000;
 
 type Fields = Record<string, unknown>;
-type Script = { url: string; sourceMapURL: string | null; frameId: string | null; contextId: number | null };
+type Script = { url: string; sourceMapURL: string | null; frameId: string | null; contextId: number | null; startLine: number; startColumn: number };
 type ScriptBook = { scripts: Map<string, Script>; frames: Set<string>; frameContexts: Map<string, number>; mapBytes: number };
 type Logpoint = { id: string; tabId: string; breakpointId: string; url: string; line: number; column: number | null; original: { source: string; line: number; column: number | null } | null };
 type Held = { session: InspectionSession; book: ScriptBook; logpoints: Map<string, Logpoint>; pending: number; stop: () => void };
@@ -112,7 +112,8 @@ export function recordScript(book: ScriptBook, params: Fields) {
   const bytes = sourceMapURL?.length ?? 0;
   book.mapBytes += bytes;
   retainedMapBytes += bytes;
-  book.scripts.set(scriptId, { url, sourceMapURL, frameId, contextId });
+  const offset = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0);
+  book.scripts.set(scriptId, { url, sourceMapURL, frameId, contextId, startLine: offset(params.startLine), startColumn: offset(params.startColumn) });
 }
 
 async function release(connection: number, tabId: string, only?: Held) {
@@ -143,7 +144,7 @@ export function locate(book: ScriptBook, url: string, line: number, column: numb
     if (!script.sourceMapURL) continue;
     const map = resolver.mapFor(`script:${scriptId}`, script.sourceMapURL);
     const position = map ? generatedPositionFor(map, url, line, column) : null;
-    if (position) return { url: script.url, line: position.line + 1, column: position.column + 1, scriptId, original: { source: url, line, column } };
+    if (position) return { url: script.url, line: position.line + script.startLine + 1, column: position.column + (position.line === 0 ? script.startColumn : 0) + 1, scriptId, original: { source: url, line, column } };
   }
   return null;
 }
