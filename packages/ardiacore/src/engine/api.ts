@@ -1,16 +1,14 @@
+import type { CleanedUrl } from "@ardia/core";
 import type { AddressInput, SavedAddress, SavedCard } from "../autofill";
-import type { EngineBookmark, BookmarkOp } from "../bookmarks";
 import type { CastDialog, CastRoute, DeviceChooser } from "../media";
 import type { AddedFilterList, ContentBlockerState, ContentBlockerStats } from "../contentBlocker";
 import type {
   ActionPopupRequest, ActionState, ChromeSearchEngine, ExtensionActionChange, ExtensionInstallPrompt, ExtensionPackage, ExtensionsChange, ExtensionsLoadHealth, ExtensionsSyncApplied, ExtensionsSyncApply,
   ExtensionsSyncState, ExtensionSyncIntent, InstalledExtension, SidePanelRequest, TabsRequest,
 } from "../extensions";
-import type { HistoryChangedBatch, HistoryWireRow } from "../history";
-import type { FaviconImage } from "../favicons";
 import type { Download, DownloadSettings } from "../downloads";
 import type {
-  BatterySaverMode, BatterySaverState, CliControlStatus, CursorRestore, CliTabTarget, EngineComponent, EngineInfo, EngineTask, HoverLostEpisode, MemorySaverRequest, PressLoopLongReport, MemorySaverState, PopupProtectedMedia, SystemState, WindowUnpaintedRecord,
+  BatterySaverMode, BatterySaverState, ChildProcessCpu, CliControlStatus, CursorRestore, CliTabTarget, EngineComponent, EngineInfo, EngineTask, HoverLostEpisode, MemorySaverRequest, PressLoopLongReport, MemorySaverState, PopupProtectedMedia, SystemState, WindowUnpaintedRecord,
 } from "../engineDomain";
 import type { ExternalAppAllowance, PermissionRequest, PermissionResult } from "../permissions";
 import type { BrowsingDataType } from "../profiles";
@@ -22,15 +20,18 @@ import type {
   CookieRemoval, PageCookie, PageEngine, PasskeyAccess, SiteData, SiteDataWritten, StorageChange, StorageItems, WebKitCount,
 } from "../webkit";
 import type { DisplayMediaSource, OpenWindowRequest, WebNotification } from "../pageTypes";
+import type { BookmarksCalls, BookmarksEvents } from "./generated/bookmarks";
+import type { FaviconsCalls, FaviconsEvents } from "./generated/favicons";
+import type { HistoryCalls, HistoryEvents } from "./generated/history";
+import type { Done, Profile } from "./wire";
 
-type Profile = { profile: string };
-type Done = Record<string, never> | null;
 type VideoUpscalingState = { enabled: boolean; lowPower: boolean; thermalPressure: boolean; appActive: boolean; tabs: { tabId: number; allowed: boolean; capturing: boolean }[] };
 
-export type EngineCalls = {
+export type EngineCalls = BookmarksCalls & FaviconsCalls & HistoryCalls & {
   "engine.info": [{}, EngineInfo];
   "engine.components": [{}, EngineComponent[]];
   "engine.tasks": [{}, EngineTask[]];
+  "engine.childProcessCpu": [{}, ChildProcessCpu[]];
   "engine.beginTracing": [{}, boolean];
   "engine.endTracing": [{ keep: boolean }, string | null];
   "engine.isTracing": [{}, boolean];
@@ -44,6 +45,7 @@ export type EngineCalls = {
   "engine.setCliControl": [{ on: boolean }, CliControlStatus];
   "engine.setCliActiveTab": [{ tabId: string | null }, CliControlStatus];
   "engine.cliTabTargets": [{ tabIds: string[] }, Record<string, CliTabTarget>];
+  "engine.setCliHeldTabs": [{ tabs: { tabId: string; until: number }[] }, { kept: number; marked: string[] }];
   "engine.cliOwnsTab": [{ tabId: string }, { owned: boolean; shown: boolean }];
   "engine.cliMoveOffscreen": [{ tabId: string }, { ok: boolean; reason?: string }];
   "engine.cliCloseOffscreenTabs": [{}, Done];
@@ -173,26 +175,12 @@ export type EngineCalls = {
   "contentBlocker.removeList": [{ id: string }, null];
   "contentBlocker.isAllowed": [{ host: string }, boolean];
   "contentBlocker.setAllowed": [{ host: string; allowed: boolean }, null];
+  "contentBlocker.removeAllowed": [{ host: string }, { removed: boolean }];
   "contentBlocker.hiddenElements": [{ profile: string }, string[]];
   "contentBlocker.hideElements": [{ profile: string; filters: string[] }, null];
   "contentBlocker.restoreElements": [{ profile: string; filters: string[] }, null];
   "contentBlocker.devFailNextMessage": [{}, null];
   "contentBlocker.devDelayNextLoad": [{ ms: number }, null];
-
-  "history.query": [Profile & { maxUrls: number; maxVisits: number }, { entries: (HistoryWireRow & { v: number[] })[] }];
-  "history.add": [Profile & { pages: { u: string; t: string; v: number[] }[]; toleranceMs: number }, { added: number }];
-  "history.import": [Profile & { rows: { u: string; t: string; n: number; l: number }[] }, Done];
-  "history.deleteUrls": [Profile & { urls: string[] }, Done];
-  "history.watch": [Profile, Done];
-
-  "bookmarks.tree": [Profile, { bar: EngineBookmark; other: EngineBookmark }];
-  "bookmarks.apply": [Profile & { ops: BookmarkOp[] }, { applied: number; skipped: number; invalid: string[] }];
-  "bookmarks.watch": [Profile, Done];
-  "bookmarks.exportHtml": [Profile, string | null];
-
-  "favicons.get": [Profile & { pages: string[]; icons: string[]; size: number }, { pages: Record<string, { png: string; icon: string }>; icons: Record<string, { png: string }> }];
-  "favicons.set": [Profile & { page: string; icon: string; png: string }, { stored: boolean }];
-  "favicons.fetch": [Profile & { url: string }, FaviconImage | null];
 
   "webView.setDisplayMediaPicker": [{ enabled: boolean }, null];
   "webView.setPeekModifier": [{ modifier: "alt" | "shift" | "off" }, null];
@@ -221,6 +209,7 @@ export type EngineCalls = {
   "webKit.writeSiteData": [Profile & { set: PageCookie[]; remove: CookieRemoval[]; storage: Record<string, StorageChange> }, SiteDataWritten | null];
   "webKit.setZoom": [Profile & { host: string; zoom: number }, null];
   "webKit.setFraudWarnings": [{ enabled: boolean }, null];
+  "webKit.writeCopiedAddress": [{ request: number; url: CleanedUrl }, boolean];
   "webKit.devStoreExists": [Profile, boolean];
   "webKit.devTouchStore": [Profile, boolean];
   "webKit.devHoldStore": [Profile, null];
@@ -231,7 +220,7 @@ export type EngineCalls = {
   "webKit.requestPasskeyAccess": [{}, PasskeyAccess];
 };
 
-export type EngineEvents = {
+export type EngineEvents = BookmarksEvents & FaviconsEvents & HistoryEvents & {
   "engine.systemState": SystemState;
   "engine.cliControl": CliControlStatus;
   "engine.hoverLost": HoverLostEpisode;
@@ -245,6 +234,7 @@ export type EngineEvents = {
   "permissions.requested": PermissionRequest;
   "permissions.dismissed": { id: string };
   "webKit.counted": { name: WebKitCount; epoch?: string };
+  "webKit.copyAddress": { url: string; request: number; epoch?: string };
   "webKit.siteDataWanted": { id: string; profile: string; origin: string; epoch?: string };
   "webKit.siteCookiesChanged": { profile: string; domains: string[]; epoch?: string };
   "webKit.notification": { profile: string; notification: WebNotification; epoch?: string };
@@ -260,8 +250,6 @@ export type EngineEvents = {
   "extensions.actionShortcut": ActionPopupRequest;
   "extensions.action": ExtensionActionChange;
   "extensions.sync": { profile: string } & ExtensionSyncIntent;
-  "history.changed": HistoryChangedBatch;
-  "bookmarks.changed": { profile: string };
   "profiles.loaded": { profile: string };
   "media.deviceChooser": DeviceChooser;
   "media.castDialog": CastDialog;

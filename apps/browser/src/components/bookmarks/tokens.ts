@@ -15,7 +15,6 @@ export const bookmarksBar = {
   dividerHeight: 14,
   dropLineInset: space.xs,
   dropRing: 1.5,
-  springOpenMs: 550,
   ghostOpacity: 0.92,
 } as const;
 

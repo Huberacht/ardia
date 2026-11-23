@@ -472,10 +472,15 @@ git -C "$AC_CHROMIUM_BUILD/helium" fetch --depth 1 origin "$(sed -n 's/^helium_c
 
 source engine/patches/build/env.sh
 scripts/agent/locked chromium -- engine/patches/build/01-sync.sh --apply
-scripts/agent/locked chromium -- python3 engine/patches/build/03-helium.py --platform linux --apply
+scripts/agent/locked chromium -- python3 scripts/engine/run-step3.py --platform linux --apply
+scripts/agent/locked chromium -- python3 scripts/engine/run-capture.py --platform linux
 scripts/linux/build.sh --apply --generate
 ```
 
+- **Step 3 through the wrappers.** `run-step3.py` runs `03-helium.py` and stamps one full run on a fresh tree.
+  `run-capture.py` runs `series.py capture-base` before step 4 and records the base it captured. Only a tree and base
+  made that way can be packed into the series base the Engine series workflow checks against
+  (`docs/engine-build.md`, "The series base archive").
 - **Pins.** The tags must match `engine/patches/build/helium-pins.ini`. helium-linux's `helium-chromium` submodule
   may sit a few commits past the shared Helium tag; `03-helium.py` accepts that only when the two commits agree on
   everything the build reads (the patches, version files, lists and utils), which is why the `fetch` line brings in
@@ -680,7 +685,10 @@ command ([linux-ci.md](linux-ci.md) › Linux releases).
   unprivileged user namespaces. `scripts/linux/arch/update-pkgbuild.sh <version> --package <tarball>` (or `--sha256`) sets
   `pkgver` (`0.2.47-nightly.3` becomes `0.2.47nightly.3`, which pacman sorts before `0.2.47`), resets `pkgrel` and writes the matching `.SRCINFO` without makepkg;
   `update-pkgbuild.sh --check` fails when the committed `.SRCINFO` drifts from the PKGBUILD. The committed pair
-  pins the 0.2.47-nightly.2 test build this was verified with; the AUR copy moves with each stable release.
+  pins the 0.2.47-nightly.2 test build this was verified with, on purpose: its sha256 is a real tarball's, and every
+  release writes its own pair with `--out` instead of moving it. The release preflight
+  (`scripts/release/preflight.mjs`) checks the `pkgver` and tarball URL `update-pkgbuild.sh` derives for the version and
+  that the committed `.SRCINFO` matches. The AUR copy moves with each stable release.
   `scripts/linux/arch/publish-aur.sh <version> --sha256 <digest>` clones `ssh://aur@aur.archlinux.org/ardia-bin.git`
   (host keys pinned in `aur_known_hosts`), refuses to go back a version (a nightly counts as older than its stable), checks that the release's tarball has the
   digest, commits and pushes; `--dry-run` clones over HTTPS and pushes nothing. The Release workflow runs it after
@@ -789,6 +797,52 @@ pnpm --filter @ardia/linux acceptance -- <extracted>/ardia/bin/ardia
   userscript installed with `ardia scripts install` running on the fixture page ([linux-ci.md](linux-ci.md) › Smoke gate).
 - **Acceptance suite.** Nine headless scenarios for core features; see [linux-acceptance.md](linux-acceptance.md).
 - **Shared changes.** A change to shared code also needs the Mac checks.
+
+### The Rust sync core in the engine build
+
+`packages/core-rs` builds inside the Chromium tree too, with Chromium's own Rust toolchain, so Chromium links a single
+Rust standard library. Nothing in `ac_linux_*` calls it yet.
+
+- **How it gets in.** `engine/ardiacore-linux/copies.tsv` copies `packages/core-rs` into `//ardia/core_rs`, with the same
+  layout. Those files count toward the Linux engine key only, never the Mac's. `packages/core-rs/BUILD.gn` is the
+  target. A Windows engine can copy the same files in and depend on the same target.
+- **What it builds.**
+  - `ardia_crypto` uses its `boringssl` backend over `//third_party/boringssl:bssl_crypto`. That feature is GN-only,
+    since `bssl-crypto` isn't on crates.io.
+  - `ardia_sync_core` and `ardia_core_rust`, the C ABI, use Chromium's vendored `base64`, `serde`, `serde_json` and
+    `zeroize`.
+  - `source_set("ardia_core")` adds `include/ardia_core.h`. C++ depends on that target.
+- **Keeping it in step.** `cargo test -p ardia-ffi --test chromium_build` fails when a crate source is missing from
+  `BUILD.gn`, or when `copies.tsv` and `BUILD.gn` list different files.
+- **Running it.** Run this on a Linux builder with the series applied. The `//ardia/linux:core_rs_tests` group pulls
+  the targets into the graph. The Rust vector tests read fixtures and the other platforms' wordlists at run time, from
+  the checkout that the GN arg `ardia_core_rs_checkout` names. Without that arg they aren't defined. The first build
+  of the targets took 1,083 steps and 57 s on a warm 16-core Boat VM.
+
+  `AC_REPO` must be the absolute path of an Ardia checkout on the builder at the commit being built. On the Boat
+  builder that's `/home/user/ardia`.
+
+  ```bash
+  export AC_REPO=/home/user/ardia
+  echo "ardia_core_rs_checkout = \"$AC_REPO\"" >> out/Release_GN_linux_x64/args.gn
+  autoninja -C out/Release_GN_linux_x64 ardia/core_rs:tests
+  out/Release_GN_linux_x64/ardia_crypto_known_answers
+  out/Release_GN_linux_x64/ardia_sync_vectors
+  out/Release_GN_linux_x64/ardia_sync_vectors_phrase
+  out/Release_GN_linux_x64/ardia_sync_vectors_password_reads
+  out/Release_GN_linux_x64/ardia_core_rs_unittests --ardia-repo="$AC_REPO" --single-process-tests
+  ```
+
+  - `ardia_crypto_known_answers` runs `crates/ardia-crypto/tests/known_answers.rs` against BoringSSL, including
+    the Ed25519 small-order refusals.
+  - `ardia_sync_vectors*` are cargo's `ardia-sync-vectors` tests on the GN build. Their `FixtureCrypto` wraps the
+    build's backend, which is BoringSSL here, and queues the fixture nonces. Every committed byte reproduces through the
+    normal `seal`.
+  - `ardia_core_rs_unittests` is a gtest. It drives C++ through `ardia_core.h` against `sync-vectors`, the Swift and
+    Kotlin sets, `windows-interop`, `sealed-0.2.32.b64`, `phrase-cases.json` and `password-read-cases.json`. The
+    public ABI has no way to choose a nonce, so this test opens the committed fixed-nonce files instead of resealing
+    them. Passwords are deterministic, so it reseals those and compares every byte.
+  - The tests read fixtures from a checkout, so editing a fixture never moves the engine key.
 
 ### Updates and kill switches
 

@@ -6,7 +6,7 @@ const DARK = {
   well: "rgba(255,255,255,0.06)",
 };
 
-export type SiteTokens = typeof DARK;
+type SiteTokens = typeof DARK;
 
 const LIGHT: SiteTokens = {
   tileStroke: "rgba(0,0,0,0.06)",

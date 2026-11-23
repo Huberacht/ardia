@@ -5,8 +5,8 @@ import { historyRow } from "./tokens";
 const ROW = historyRow.height;
 const HEADER = historyRow.header;
 
-export type Day = { label: string; offset: number };
-export type Row = { entry: HistoryEntry; day: number; first: boolean; last: boolean; offset: number };
+type Day = { label: string; offset: number };
+type Row = { entry: HistoryEntry; day: number; first: boolean; last: boolean; offset: number };
 export type Layout = { days: Day[]; rows: Row[]; height: number };
 
 const searchTexts = new WeakMap<HistoryEntry, string>();

@@ -10,7 +10,6 @@ import {
   HoverFill,
   hex,
   HoverSlot,
-  layout,
   MenuSeparator,
   menuRowFill,
   opacity,
@@ -244,7 +243,7 @@ export function DownloadRow({ d, windowId }: { d: Download; windowId: string }) 
   return (
     <View {...hoverProps} {...focusProps}>
       <MouseArea path={done && !closing ? d.path : null}>
-        <ContextMenuArea onContextMenu={live(() => void downloadMenu(d, windowId))}>
+        <ContextMenuArea onContextMenu={live(() => void downloadMenu(d))}>
           <Pressable disabled={closing} focusable={done && !closing} onPress={live(() => done && void openDownload(d.path))} onAccessibilityTap={done ? tapActivates(live(() => void openDownload(d.path))) : undefined}>
             {({ pressed }) => (
               <View

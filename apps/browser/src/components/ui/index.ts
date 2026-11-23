@@ -43,6 +43,7 @@ export { TooltipAbove } from "./TooltipAbove";
 export { Offstage, useHover, useOffstage, useTooltip } from "./useHover";
 export {
   ActivitySpinner,
+  Breathe,
   ClipView,
   ContextMenuArea,
   DIA_SPECTRUM,

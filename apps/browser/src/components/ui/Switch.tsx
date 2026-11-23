@@ -7,7 +7,7 @@ import { useNativeForm } from "./nativeForm";
 import { spaceActivates, switchA11y, tapActivates } from "./a11y";
 import { useLiveWhile, useClosing } from "./Closing";
 
-export type SwitchLook = {
+type SwitchLook = {
   width: number;
   height: number;
   knob: number;

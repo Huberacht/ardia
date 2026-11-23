@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { typeRows } from "../../../packages/ardiacore/src/engine/apiRows.mjs";
 
 const nativeSource = (path) => readFileSync(new URL(`../../../engine/ardiacore-linux/src/ardia/linux/${path}`, import.meta.url), "utf8");
 const listed = (path, list) => {
@@ -117,9 +118,10 @@ test("with every new capability on, each command, menu entry and shortcut row ap
   assert.deepEqual([...hidden].sort(), ["copyLastFreeze", "toggleJavaScriptFromAppleEvents", "togglePageEngine"], "Copy Last Freeze stays hidden: Linux keeps no freeze records");
   for (const command of ["emailPageLocation", "toggleOpenLinksInLittleArdia", FULL_SCREEN_ITEM, "hideElement", "showHiddenElements"]) assert.equal(unavailableCommands(linuxCapabilities(bare)).has(command), true, `${command} is hidden without the engine`);
   const items = appMenuItems(menuState, new Map(), hidden);
-  for (const id of ["emailPageLocation", "toggleOpenLinksInLittleArdia", FULL_SCREEN_ITEM, "reportProblem"]) assert.ok(find(items, id), `${id} is in the menu`);
+  for (const id of [FULL_SCREEN_ITEM, "reportProblem"]) assert.ok(find(items, id), `${id} is in the menu`);
+  for (const id of ["emailPageLocation", "toggleOpenLinksInLittleArdia"]) assert.equal(find(items, id), undefined, `${id} lives in Share and Settings, as on the Mac`);
   const bareItems = appMenuItems(menuState, new Map(), unavailableCommands(linuxCapabilities(bare)));
-  for (const id of ["emailPageLocation", "toggleOpenLinksInLittleArdia", FULL_SCREEN_ITEM]) assert.equal(find(bareItems, id), undefined, id);
+  assert.equal(find(bareItems, FULL_SCREEN_ITEM), undefined, FULL_SCREEN_ITEM);
   assert.ok(linuxMenuShortcuts().some((row) => row.id === FULL_SCREEN_ITEM));
   assert.ok(staticShortcutSources().some((source) => source.id === FULL_SCREEN_ITEM));
 });
@@ -198,11 +200,11 @@ test("the window-button layout and window state reach the engine as calls and co
 
 test("an event only the Linux engine sends is declared apart from the Mac's, and the Linux engine does send it", () => {
   const api = readFileSync(new URL("../../../packages/ardiacore/src/engine/api.ts", import.meta.url), "utf8");
-  const bodyOf = (name) => api.slice(api.indexOf(`export type ${name} = {`), api.indexOf("\n};", api.indexOf(`export type ${name} = {`)));
-  const keysOf = (body) => [...body.matchAll(/^ {2}"([a-zA-Z]+\.[a-zA-Z]+)":/gm)].map((match) => match[1]);
-  const linuxOnly = keysOf(bodyOf("LinuxHostEvents"));
+  const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
+  const linuxOnly = [...typeRows(api, manifest, "LinuxHostEvents").rows];
   assert.ok(linuxOnly.length > 0);
-  const mac = new Set(keysOf(bodyOf("EngineEvents")));
+  const mac = typeRows(api, manifest, "EngineEvents").rows;
+  assert.ok(mac.has("history.changed"));
   const engine = new URL("../../../engine/chromium/src/chrome/browser/ardia/", import.meta.url);
   const sent = readdirSync(engine).filter((file) => /_linux\.cc$/.test(file)).map((file) => readFileSync(new URL(file, engine), "utf8")).join("\n");
   for (const name of linuxOnly) {

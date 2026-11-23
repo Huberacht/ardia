@@ -28,6 +28,7 @@ For the architecture and the test tooling, read `docs/agent-brief.md`.
   `checkout`, `switch`, `restore`, `stash`, `reset --hard` and `clean` in the shared root checkout (the primary
   checkout of the repo the guard itself lives in), where other sessions keep uncommitted work: there, undo your own hunks by editing and stage as below. `~/chromium-build` stays
   one shared build tree for every worktree; build in it only under `scripts/agent/locked chromium`.
+  Give a new worktree its `node_modules` with `scripts/agent/worktree-setup <dir>` (`docs/agent-brief.md`), never `cp -Rc`.
 - **Commit straight to `main`** from the shared checkout, or push a branch from your worktree. Stage only your
   own hunks (`git add -p` or explicit paths), never someone else's work in progress. Never stage with
   `git apply --unidiff-zero`: it drops hunks into the wrong place (it once committed an `ACClient.mm` that didn't
@@ -177,7 +178,7 @@ yours: the hidden-instance and focus rules are for the owner's Mac.
 - **Instrument what you ship.** Every feature and fix ships with the telemetry that shows it working in the field
   and catches its regression: a use count for a feature, a counter or timing on the path a fix touched, an error
   event where it used to fail. Add it to an existing event before inventing a new one (`apps/browser/src/state/telemetry`,
-  `plugins/cli/ardia_cli/telemetry.py` in ardia-browser/plugins). It stays inside the consent model: sharing on only, counts, timings, enums and
+  `plugins/cli/ts/src/telemetry.ts` in ardia-browser/plugins). It stays inside the consent model: sharing on only, counts, timings, enums and
   flags, never URLs, page content, titles or free text. List new events and fields in the "What's Sent" copy, and
   say in the commit and the parity row what to watch on the dashboard. Skip it only when nothing measurable exists,
   and say so.

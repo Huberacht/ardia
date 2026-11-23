@@ -44,7 +44,7 @@ export function CheckRow({ value, onChange, label }: { value: boolean; onChange:
   return <Checkbox value={value} onChange={onChange} label={label} labelSize="small" />;
 }
 
-export const PROMPT_INPUT_DELAY_MS = 500;
+const PROMPT_INPUT_DELAY_MS = 500;
 
 export function usePromptInputGuard(promptKey: string | number | null | undefined) {
   const visibleAt = useRef(Number.POSITIVE_INFINITY);
