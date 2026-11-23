@@ -81,7 +81,7 @@ function registrableForTests(host: string): string {
   return `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}`;
 }
 
-export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[], removed: [] as string[], unsupported: false, unready: false };
+export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[], removed: [] as string[], unsupported: false, unready: false, followerFails: false };
 export const commitReports: boolean[] = [];
 export const commitReportFailures = { next: 0 };
 export const loadedEngineProfiles = new Set<string>([""]);
@@ -658,7 +658,9 @@ const fakeModules = {
     removeAllowed: ({ host }) => {
       if (contentBlockerSites.unsupported) throw Object.assign(new Error("Unknown call"), { code: "ERR_UNKNOWN_CALL" });
       contentBlockerSites.removed.push(host);
-      return { removed: contentBlockerSites.allowed.delete(host) };
+      const removed = contentBlockerSites.allowed.delete(host);
+      if (contentBlockerSites.followerFails) throw Object.assign(new Error("a profile didn't follow"), { code: removed ? "ERR_PARTIAL" : "ERR_CONTENT_BLOCKER" });
+      return { removed };
     },
     state: () => ({ enabled: contentBlockerSites.enabled, version: "test", lists: [], allowedHosts: [...contentBlockerSites.allowed], stats: { enabled: contentBlockerSites.enabled, ready: !contentBlockerSites.unready, parseMs: 0, lookups: 0, averageLookupMicros: 0, maxLookupMicros: 0 } }),
   }),

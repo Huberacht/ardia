@@ -9,6 +9,7 @@ const reset = () => {
   blocker.enabled = true;
   blocker.unsupported = false;
   blocker.unready = false;
+  blocker.followerFails = false;
   blocker.allowed.clear();
   blocker.written.length = 0;
   blocker.removed.length = 0;
@@ -45,8 +46,23 @@ test("blockAds takes out only an entry the list shows, and names the broader ent
   assert.equal(covered.error?.code, "refused");
   assert.match(covered.error.message, /applovin\.com is, and covers it/);
   assert.equal((await call("sites.blockAds", { site: "other.example" })).error?.code, "refused");
-  assert.deepEqual(blocker.written, [], "nothing reached the blocker");
-  assert.deepEqual(blocker.removed, []);
+  assert.deepEqual(blocker.written, [], "nothing was added");
+  assert.deepEqual(blocker.removed, ["www.applovin.com", "other.example"], "the exact remove was asked, so other profiles get brought in line, and it removed nothing");
+  assert.deepEqual([...blocker.allowed], ["applovin.com"]);
+});
+
+test("a removal another open profile didn't follow fails with a retry hint, and the retry reaches the native call again", async () => {
+  await freshWindow();
+  reset();
+  blocker.allowed.add("applovin.com");
+  blocker.followerFails = true;
+  const partial = await call("sites.blockAds", { site: "applovin.com" });
+  assert.equal(partial.error?.code, "failed");
+  assert.match(partial.error.message, /another open profile hasn't followed yet; run blockAds again/);
+  blocker.followerFails = false;
+  const retry = await call("sites.blockAds", { site: "applovin.com" });
+  assert.equal(retry.error?.code, "refused", "the default profile no longer lists it");
+  assert.deepEqual(blocker.removed, ["applovin.com", "applovin.com"], "the retry still asked the native call, which brings the other profiles in line");
 });
 
 test("a public suffix or IP address is refused, since it would trust sites run by others", async () => {
@@ -95,7 +111,11 @@ test("only a plain host name reaches the ad blocker's trusted list, for adding a
   await freshWindow();
   reset();
   const shapes = HOSTILE_VALUES.flatMap(({ id, value }) => (typeof value === "string" ? embedded(value, "example.com", ".example.com").map((v) => ({ id, value: v })) : [{ id, value }]));
-  for (const extra of ["*.example.com", "example.com/path", "https://example.com", "example.com:8080", "example.com#x", "@@||example.com^", "||example.com^", "/^(?:ardia-blocking-off|)/", "", " example.com", "exa mple.com", "exämple.com", "com", "example.com."]) shapes.push({ id: `extra.${extra}`, value: extra });
+  const invalid = ["*.example.com", "example.com/path", "https://example.com", "example.com:8080", "example.com#x", "@@||example.com^", "||example.com^", "/^(?:ardia-blocking-off|)/", "", " example.com", "exa mple.com", "exämple.com", "com", "example.com."];
+  for (const site of invalid) {
+    for (const method of ["sites.allowAds", "sites.blockAds"]) assert.equal((await call(method, { site })).error?.code, "bad_request", `${method} ${JSON.stringify(site)}`);
+  }
+  for (const extra of invalid) shapes.push({ id: `extra.${extra}`, value: extra });
   for (const { id, value } of shapes) {
     const reply = await call("sites.allowAds", { site: value });
     if (reply.error) continue;
@@ -111,6 +131,5 @@ test("only a plain host name reaches the ad blocker's trusted list, for adding a
   for (const host of blocker.removed) {
     assert.ok(!LINE_TERMINATORS.test(host), `a line break reached the remove sink: ${JSON.stringify(host)}`);
     assert.match(host, SINK_HOST, `the remove sink got ${JSON.stringify(host)}`);
-    assert.ok(blocker.written.includes(host), "only an entry allowAds put there can be taken out");
   }
 });

@@ -517,10 +517,10 @@ NSArray<NSString *> *Strings(id value) {
                       "})";
   completion = [completion copy];
   Call(kProfile, ScriptWith(script, @[ host.lowercaseString ]), ^(id removed, NSString *error) {
-    const BOOL done = !error && [removed isKindOfClass:NSNumber.class] && [removed boolValue];
+    if (error) return completion(NO, error);
+    const BOOL done = [removed isKindOfClass:NSNumber.class] && [removed boolValue];
     if (done) Publish(@{@"host" : host.lowercaseString, @"allowed" : @NO, @"exact" : @YES});
-    if (!done) return completion(NO, error);
-    Changed(nil, ^(NSString *changedError) { completion(YES, changedError); });
+    Changed(nil, ^(NSString *followError) { completion(done, followError); });
   });
 }
 

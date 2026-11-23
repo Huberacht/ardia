@@ -159,19 +159,19 @@ async function allowAds(params: Record<string, unknown>, call: SocketCall) {
 async function blockAds(params: Record<string, unknown>, call: SocketCall) {
   const site = siteOf(params.site);
   const before = await adBlocker();
-  if (!before.allowedSites.includes(site)) {
+  call.stillServing();
+  const { removed } = await removeContentBlockerAllowed(site).catch((error: unknown) => {
+    if (unknownCall(error)) throw new OpError("refused", NOT_HERE_YET);
+    if ((error as { code?: unknown } | null)?.code === "ERR_PARTIAL") throw new OpError("failed", `${site} is out of the trusted list, but another open profile hasn't followed yet; run blockAds again to bring it in line.`);
+    throw error;
+  });
+  if (!removed) {
     const broader = before.allowedSites.find((entry) => site.endsWith(`.${entry}`));
     throw new OpError(
       "refused",
       broader ? `${site} isn't in the trusted list itself; ${broader} is, and covers it. Block ads on ${broader} to take that entry out.` : `${site} isn't in the ad blocker's trusted list.`,
     );
   }
-  call.stillServing();
-  const { removed } = await removeContentBlockerAllowed(site).catch((error: unknown) => {
-    if (unknownCall(error)) throw new OpError("refused", NOT_HERE_YET);
-    throw error;
-  });
-  if (!removed) throw new OpError("refused", `${site} isn't an entry the ardia command can take out of the trusted list.`);
   const after = await adBlocker();
   expect(!after.allowedSites.includes(site), `${site} is still in the ad blocker's trusted list.`);
   const stillCoveredBy = after.allowedSites.find((entry) => site.endsWith(`.${entry}`));
