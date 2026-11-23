@@ -41,9 +41,21 @@ if [[ "$(git -C "$source_dir" rev-parse HEAD 2>/dev/null || true)" != "$boringss
   git -C "$source_dir" checkout -q FETCH_HEAD
 fi
 
+quietly() {
+  local log
+  log=$(mktemp)
+  if ! "$@" >"$log" 2>&1; then
+    tail -n 80 "$log" >&2
+    rm -f "$log"
+    echo "check.sh: $* failed" >&2
+    exit 1
+  fi
+  rm -f "$log"
+}
+
 target=$(rustc -vV | awk '/^host:/ { print $2 }')
-cmake -S "$source_dir" -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Release -DRUST_BINDINGS="$target" >/dev/null
-ninja -C "$build_dir" crypto ssl rust_wrapper bssl_sys >/dev/null
+quietly cmake -S "$source_dir" -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Release -DRUST_BINDINGS="$target"
+quietly ninja -C "$build_dir" crypto ssl rust_wrapper bssl_sys
 
 export BORINGSSL_BUILD_DIR="$build_dir"
 export CARGO_TARGET_DIR="$core/target/boringssl-check"
