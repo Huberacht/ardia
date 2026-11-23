@@ -1264,6 +1264,19 @@ Windows skips this version and ships with the next release. When only `windows-u
 the release already: re-run that job alone (its re-run touches nothing else), or run the last line above on its
 `windows-release-*` artifacts, flattened into one folder as above.
 
+### Finding the source of a JS error
+
+The app runs Hermes bytecode with no debug info, so a frame of its own code in an error report is
+`index.windows`, line 1, with the bytecode offset as its column, and `$app_build` names the build. Every launch job
+that compiled the bundle (every release run) keeps the bundle's composed map as the artifact
+`windows-sourcemaps-<cpu>-build-<build>`, for 90 days on a release and 14 otherwise; the installer carries the same
+files in `sourcemaps\react`. To turn an offset back into source:
+
+```bash
+gh run download <run id> -R ardia-browser/ardia -n windows-sourcemaps-x64-build-<build> -D /tmp/maps-<build>
+printf '    at anonymous (address at index.windows:1:<offset>)\n' | npx metro-symbolicate /tmp/maps-<build>/index.windows.bundle.map
+```
+
 ## Test instances
 
 `LaunchConfig.h` (`AppLaunch::Shared()`) reads the environment once at launch; `Paths.h` holds the one raw reader and
