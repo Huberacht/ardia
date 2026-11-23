@@ -9,6 +9,7 @@ import { goBackAsking, goForwardAsking } from "../tabs/navigation";
 import { liveOf } from "../tabs/tabLive";
 import { CLI_HOLD_DEFAULT_S, CLI_HOLD_MAX_S, CLI_HOLD_MAX_TABS, holdForCli, releaseFromCli } from "../tabs/cliHolds";
 import type { JsonSchema } from "../../lib/jsonSchema";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { noteCliTabsHeld } from "../telemetry/tabSleepCounts";
 import { recentlyClosedIn } from "../windows/recentlyClosedList";
 import { eligibleKind, isEligibleTab, shownPage, windowTabIds } from "./automationWindows";
@@ -147,8 +148,9 @@ async function holdTabs(params: Record<string, unknown>) {
   const outcome = holdForCli(params.session as string, held, seconds);
   if ("refused" in outcome) throw new OpError("refused", outcome.refused);
   noteCliTabsHeld(outcome.started.length);
-  await cliHoldsPushed();
-  return { held, gone: asked.filter((tab) => !held.includes(tab)), seconds };
+  const gone = asked.filter((tab) => !held.includes(tab));
+  if (!PLATFORM_FEATURES.vetoesChromeDiscardsForCli) return { held, gone, seconds };
+  return { held, gone, seconds, engineKeeps: await cliHoldsPushed() };
 }
 
 const releaseTabs = (params: Record<string, unknown>) => ({ released: releaseFromCli(params.session as string) });
@@ -162,7 +164,7 @@ export const TAB_METHODS: MethodSpec[] = [
     mutates: false,
     description: `Keep tabs an ardia command session is using loaded: Ardia's own tab budget doesn't put them to sleep and their profile isn't unloaded as idle for the next seconds (default ${CLI_HOLD_DEFAULT_S}, at most ${CLI_HOLD_MAX_S}); on macOS Chromium's own discarding keeps them too, and elsewhere only while a debugger is attached. Each call replaces the session's held tabs; call again before the time ends to keep holding, and tabs.release ends it sooner`,
     params: obj({ session: HOLD_SESSION, tabs: ids("Tab ids from windows or tabs.list; they replace what this session held", CLI_HOLD_MAX_TABS), seconds: int("How long to hold them", 1, CLI_HOLD_MAX_S) }, ["session", "tabs"]),
-    result: "{held, gone, seconds}",
+    result: "{held, gone, seconds, engineKeeps?}",
     run: holdTabs,
   },
   { name: "tabs.release", mutates: false, description: "Let the tabs a session held with tabs.hold sleep again as Memory Saver decides", params: obj({ session: HOLD_SESSION }, ["session"]), result: "{released}", run: releaseTabs },

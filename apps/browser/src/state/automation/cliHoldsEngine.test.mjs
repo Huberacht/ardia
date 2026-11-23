@@ -14,9 +14,13 @@ cliHoldsClockForTests(() => leaseClock);
 const pushed = [];
 const seconds = [];
 let kept = 0;
+let answerWith = null;
 globalThis.acTestCliHeld = (tabs) => {
   pushed.push(tabs.map((t) => t.tabId).sort());
   seconds.push(Object.fromEntries(tabs.map((t) => [t.tabId, t.seconds])));
+  const next = answerWith;
+  answerWith = null;
+  if (next) return next();
   const answer = { kept };
   kept = 0;
   return answer;
@@ -40,7 +44,8 @@ test("every hold change hands the engine the tabs held right now, and the socket
   const ids = ["https://one.example/", "https://two.example/"].map((url) => S().newTab(windowId, { url, background: true }));
   await settled();
   pushed.length = 0;
-  await ok("tabs.hold", { session: "a", tabs: [ids[0]], seconds: 60 });
+  const first = await ok("tabs.hold", { session: "a", tabs: [ids[0]], seconds: 60 });
+  assert.equal(first.engineKeeps, true);
   assert.deepEqual(pushed.at(-1), [ids[0]], "tabs.hold answers only once the engine has the tab");
   assert.deepEqual(seconds.at(-1), { [ids[0]]: 60 }, "with the seconds its hold has left, so the engine ends it even if the app forgets");
   await ok("tabs.hold", { session: "b", tabs: [ids[1], ids[0]], seconds: 30 });
@@ -80,4 +85,54 @@ test("the engine's kept-by code 103 is a CLI session, and a person's own Sleep T
   assert.equal(engineVeto([103, 100]), "postedDocument", "a form post outranks it");
   assert.equal(onlyAutomaticProtections([103]), true, "Sleep Tab from the menu goes past it");
   assert.equal(onlyAutomaticProtections([103, 5]), false, "but not past audio");
+});
+
+test("a hold that ends while an earlier update is still on its way never reaches the engine, and a refused update says so", async () => {
+  releaseAllCliHolds();
+  await settled();
+  const { windowId } = await freshWindow("https://shown.example/");
+  const id = S().newTab(windowId, { url: "https://late.example/", background: true });
+  let finish;
+  let stallReached;
+  const reached = new Promise((resolve) => (stallReached = resolve));
+  answerWith = () => {
+    stallReached();
+    return new Promise((resolve) => (finish = () => resolve({ kept: 0 })));
+  };
+  const stalled = settled();
+  await reached;
+  const holding = ok("tabs.hold", { session: "late", tabs: [id], seconds: 60 });
+  releaseAllCliHolds();
+  const before = pushed.length;
+  finish();
+  await stalled;
+  const reply = await holding;
+  await settled();
+  assert.ok(pushed.slice(before).every((tabs) => !tabs.includes(id)), "every update after the stall carries what's held when it is sent: nothing");
+  assert.equal(reply.engineKeeps, true);
+  answerWith = () => {
+    throw new Error("the engine refused");
+  };
+  const refused = await ok("tabs.hold", { session: "late", tabs: [id], seconds: 60 });
+  assert.equal(refused.engineKeeps, false, "the client learns Chromium may still discard the tab");
+  releaseAllCliHolds();
+  await settled();
+});
+
+test("a drain that fails leaves its counts to the period they were made in", async () => {
+  await settled();
+  takeTabSleepCounts();
+  setConsentPeriod(false, "cli-holds-engine-test");
+  await settled();
+  setConsentPeriod(true, "cli-holds-engine-test");
+  answerWith = () => {
+    throw new Error("the engine refused");
+  };
+  await settled();
+  kept = 2;
+  await settled();
+  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 0, "the period began with sharing off, and a failed drain didn't start a new one");
+  kept = 1;
+  await settled();
+  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 1);
 });

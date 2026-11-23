@@ -1,3 +1,4 @@
+import { withDeadline } from "../../lib/deadline";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { setControlHeldTabs } from "../../platform/control";
 import { cliHoldsLeft, onCliHoldsChanged } from "../tabs/cliHolds";
@@ -5,27 +6,31 @@ import { consentToken, type ConsentToken } from "../telemetry/client";
 import { noteChromeDiscardsKeptForCli } from "../telemetry/tabSleepCounts";
 
 export const CLI_HOLD_REFRESH_MS = 10_000;
+export const CLI_HOLD_PUSH_MS = 3_000;
 
 let watching = false;
-let pushing: Promise<void> = Promise.resolve();
+let pushing: Promise<boolean> = Promise.resolve(true);
 let countingSince: ConsentToken | null = null;
 let refresh: ReturnType<typeof setInterval> | null = null;
 
-export function pushCliHoldsToEngine(consent: ConsentToken | null): Promise<void> {
-  const tabs = cliHoldsLeft();
-  keepRefreshing(tabs.length > 0);
+export function pushCliHoldsToEngine(consent: ConsentToken | null): Promise<boolean> {
+  keepRefreshing(cliHoldsLeft().length > 0);
   pushing = pushing.then(async () => {
-    const counted = countingSince;
-    countingSince = consent;
+    const tabs = cliHoldsLeft();
     try {
-      const { kept } = await setControlHeldTabs(tabs);
-      noteChromeDiscardsKeptForCli(kept, counted);
-    } catch {}
+      const answer = await withDeadline(setControlHeldTabs(tabs), CLI_HOLD_PUSH_MS, null);
+      if (answer === null) return false;
+      noteChromeDiscardsKeptForCli(answer.kept, countingSince);
+      countingSince = consent;
+      return true;
+    } catch {
+      return false;
+    }
   });
   return pushing;
 }
 
-export const cliHoldsPushed = (): Promise<void> => pushing;
+export const cliHoldsPushed = (): Promise<boolean> => pushing;
 
 function keepRefreshing(on: boolean): void {
   if (on && refresh === null) refresh = setInterval(holdsChanged, CLI_HOLD_REFRESH_MS);

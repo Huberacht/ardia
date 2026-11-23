@@ -82,7 +82,7 @@ export function cliHoldsLeft(): { tabId: string; seconds: number }[] {
     if (lease.until <= now) continue;
     for (const tabId of lease.tabs) left.set(tabId, Math.max(left.get(tabId) ?? 0, lease.until - now));
   }
-  return [...left].map(([tabId, ms]) => ({ tabId, seconds: Math.ceil(ms / 1000) }));
+  return [...left].map(([tabId, ms]) => ({ tabId, seconds: Math.floor(ms / 1000) })).filter((hold) => hold.seconds > 0);
 }
 
 export function releaseAllCliHolds(): void {
