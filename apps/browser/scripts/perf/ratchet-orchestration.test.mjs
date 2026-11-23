@@ -278,7 +278,7 @@ test("a lane that doesn't exit by the deadline is killed with its whole process 
   assert.ok(await gone(childPid), "the stuck lane's child survived");
 });
 
-test("a SIGTERM while the instruction counter runs stops it at once and exits 143 instead of finishing and passing", { timeout: 60_000 }, async () => {
+test("a SIGTERM while the instruction counter runs stops it at once and exits 143 instead of finishing and passing", { timeout: 60_000, skip: process.platform !== "darwin" && "the instruction counter reads macOS time -l" }, async () => {
   const ratchet = spawn(process.execPath, ["--input-type=module", "-e", `
     import { stopOnSignals, instrPerRound } from ${JSON.stringify(ratchetUrl)};
     stopOnSignals();
