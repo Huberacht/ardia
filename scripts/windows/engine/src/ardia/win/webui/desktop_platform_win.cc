@@ -50,11 +50,11 @@ class WinDesktopPlatform final : public ardia::desktop::DesktopPlatform {
 
   bool StartWindowMove(views::Widget* widget) override {
     const HWND window = WidgetWindow(widget);
-    if (!window) {
+    if (!window || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
       return false;
     }
     ReleaseCapture();
-    SendMessageW(window, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+    PostMessageW(window, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
     return true;
   }
 

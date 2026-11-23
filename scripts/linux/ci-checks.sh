@@ -7,7 +7,7 @@ symbol, module-graph and acceptance self-tests, the UI build, the smoke gate
 unit tests, and the Python and Node fixture suites under engine/.
 
 --part ui runs the apps/desktop and scripts/linux checks, side by side.
---part engine runs the Python suites (engine/ardiacore-desktop's among them) and the engine/ardiacore-linux modules,
+--part engine runs the Python suites (engine/ardiacore-desktop/tests among them) and the engine/ardiacore-linux modules,
 N at a time (default: the CPU count), each under a 10-minute deadline.
 --shard I/N keeps the engine part to every Nth Python suite and module,
 starting at the Ith, so N runners split it. The default part is all.
