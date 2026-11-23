@@ -74,7 +74,7 @@ function OfficialPluginRow({ plugin }: { plugin: OfficialPlugin }) {
   const olderProgram = legacy && Object.hasOwn(OFFICIAL_LEGACY_PROGRAMS, plugin.name) ? OFFICIAL_LEGACY_PROGRAMS[plugin.name]! : null;
   const view = officialView(plugin, programs, attempt, fetch, olderProgram);
   const manifest = usePluginListing(plugin.name)?.manifest ?? null;
-  const fullControl = !view.failed && manifest && fullControlLine(manifest) ? FULL_CONTROL_SUMMARY : null;
+  const fullControl = manifest && fullControlLine(manifest) ? FULL_CONTROL_SUMMARY : null;
   const offered = isOffered(plugin);
   useEffect(() => {
     if (offered) noteOfficialPlugin("settings", "shown", plugin.name);

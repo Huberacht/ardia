@@ -24,17 +24,19 @@ function passwordManagerLines(m: PluginManifest, context: ConsentContext): Conse
 
 const FULL_CONTROL_REACH = `every tab and page, your signed-in sites and their cookies, and uploads and downloads of any file on this ${PLATFORM_TERMS.computer}`;
 
-export function fullControlLine(m: PluginManifest): ConsentLine | null {
+export function fullControlLine(m: PluginManifest, context: ConsentContext = {}): ConsentLine | null {
   const afterUpdates = m.programs.some((p) => p.afterUpdate.length > 0);
   if (m.permissions.control) {
     const who = afterUpdates ? "any program you run, and the commands Ardia runs for it after updates," : "any program you run";
-    return { icon: "hand.raised", text: `While control is on in Settings › Advanced, ${who} can fully control Ardia: ${FULL_CONTROL_REACH}` };
+    const when = context.controlOff ? "While control is on in Settings › Advanced" : "Turns on control in Settings › Advanced. While it's on";
+    return { icon: "hand.raised", text: `${when}, ${who} can fully control Ardia: ${FULL_CONTROL_REACH}` };
   }
   if (!m.programs.length) return null;
   const names = m.programs.map((p) => p.name).join(" and ");
   const one = m.programs.length === 1;
-  const also = afterUpdates ? ", also when Ardia runs it after updates" : "";
-  return { icon: "hand.raised", text: `The ${names} ${one ? "command runs" : "commands run"} as you${also}, so while control is on in Settings › Advanced, ${one ? "it" : "they"} can fully control Ardia: ${FULL_CONTROL_REACH}` };
+  const runs = `The ${names} ${one ? "command runs" : "commands run"} as you`;
+  const who = afterUpdates ? `${runs}, as do the commands Ardia runs for it after updates, so while control is on in Settings › Advanced, they` : `${runs}, so while control is on in Settings › Advanced, ${one ? "it" : "they"}`;
+  return { icon: "hand.raised", text: `${who} can fully control Ardia: ${FULL_CONTROL_REACH}` };
 }
 
 export const FULL_CONTROL_SUMMARY = "Can fully control Ardia";
@@ -79,7 +81,7 @@ export type ConsentContext = { controlOff?: boolean; official?: boolean; movesPr
 export const CONTROL_OFF_LINE = "Control is off, as you set it, and installing this leaves it off. To let programs drive Ardia, turn on “Let programs control Ardia” in Settings › Advanced";
 
 export function consentLines(m: PluginManifest, context: ConsentContext = {}): ConsentLine[] {
-  const control = fullControlLine(m);
+  const control = fullControlLine(m, context);
   const lines: ConsentLine[] = [...(control ? [control] : []), ...runtimeLines(m), ...permissionLines(m)];
   if (m.permissions.control && context.controlOff) lines.push({ icon: "hand.raised.slash", text: CONTROL_OFF_LINE });
   const defaults = Object.keys(m.settings.defaults);
