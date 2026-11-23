@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { withoutFragment } from "../../lib/url";
-import { keyedWatch, recordWatch, useKeyed } from "../browser/keyedWatch";
+import { keyedWatch, recordWatch, useKeyed, watchWindowRecord } from "../browser/keyedWatch";
+import { WindowContext } from "../browser/hooks";
+import { useBrowser } from "../browser/store";
 import { changedIds } from "../browser/changes";
 import type { IconTheme } from "../../platform/favicons";
 import { askFaviconTheme, EMPTY_ICONS, lookupOrder, resolveFavicon, useFavicons, watchMissingFavicon, type ResolvedFavicon } from "./favicons";
@@ -74,10 +76,26 @@ export function watchFaviconOf(url: string, src: string | null, listener: Listen
 
 export const watchFaviconTheme = (uri: string, listener: Listener): (() => void) => watchFaviconUri(uri, listener);
 
-export const useResolvedFaviconUri = (url: string, src?: string | null, profileId?: string): string | null =>
-  useKeyed(watchFaviconPage, pageKey(url, src), () => resolveFavicon(url, src, profileId)?.uri ?? null);
+function usePrivateWindowProfile(): string | undefined {
+  const windowId = useContext(WindowContext);
+  return useKeyed(watchWindowRecord, windowId, () => {
+    const w = windowId ? useBrowser.getState().windows[windowId] : undefined;
+    return w?.kind === "private" ? w.profileId : undefined;
+  });
+}
 
-export function useFavicon(url: string, src?: string | null, profileId?: string): ResolvedFavicon | null {
+const useAskingProfile = (profileId?: string) => {
+  const privateProfile = usePrivateWindowProfile();
+  return profileId ?? privateProfile;
+};
+
+export function useResolvedFaviconUri(url: string, src?: string | null, given?: string): string | null {
+  const profileId = useAskingProfile(given);
+  return useKeyed(watchFaviconPage, pageKey(url, src), () => resolveFavicon(url, src, profileId)?.uri ?? null);
+}
+
+export function useFavicon(url: string, src?: string | null, given?: string): ResolvedFavicon | null {
+  const profileId = useAskingProfile(given);
   const key = useKeyed(watchFaviconPage, pageKey(url, src), () => {
     const found = resolveFavicon(url, src, profileId);
     return found ? `${found.profileId} ${found.uri}` : null;

@@ -14,6 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
+import { askedAs, incognitoClosed, privateViewer, shouldWrite } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -72,7 +73,8 @@ const capped = <T,>(map: Record<string, T>, key: string, value: T): Record<strin
 
 let watching = false;
 
-const queued = new Map<string, Set<string>>();
+type LookupBatch = { source: string; into: string; pages: Set<string> };
+const queued = new Map<string, LookupBatch>();
 let writeSeq = 0;
 const inFlight = new Map<string, { lookups: number; wrote?: number }>();
 const wrote = (key: string, page: string) => {
@@ -81,46 +83,51 @@ const wrote = (key: string, page: string) => {
 };
 let lookupTimer: ReturnType<typeof setTimeout> | undefined;
 
-function ask(key: string, page: string) {
-  if (isIncognitoProfile(key) || !markAsked(key, page)) return;
-  if (!queued.has(key)) queued.set(key, new Set());
-  queued.get(key)!.add(page);
+function ask(source: string, page: string, into = source) {
+  if (isIncognitoProfile(source) || !markAsked(askedAs(source, into), page)) return;
+  const id = `${into}\n${source}`;
+  let batch = queued.get(id);
+  if (!batch) queued.set(id, (batch = { source, into, pages: new Set() }));
+  batch.pages.add(page);
   lookupTimer ??= setTimeout(lookUp, LOOKUP_DELAY_MS);
 }
 
 function lookUp() {
   lookupTimer = undefined;
-  const batches = [...queued];
+  const batches = [...queued.values()];
   queued.clear();
-  for (const [key, pages] of batches) {
+  for (const { source, into, pages } of batches) {
+    if (incognitoClosed(into)) continue;
     const all = [...pages];
-    for (let i = 0; i < all.length; i += LOOKUP_BATCH) lookUpPages(key, all.slice(i, i + LOOKUP_BATCH));
+    for (let i = 0; i < all.length; i += LOOKUP_BATCH) lookUpPages(source, into, all.slice(i, i + LOOKUP_BATCH));
   }
 }
 
-function lookUpPages(key: string, list: string[]) {
+function lookUpPages(source: string, into: string, list: string[]) {
   const consent = consentToken();
+  const routed = source !== into;
   const pending = list.map((page) => {
-    const id = `${key}|${page}`;
+    const id = `${into}|${page}`;
     const entry = inFlight.get(id) ?? { lookups: 0 };
     entry.lookups++;
     inFlight.set(id, entry);
     return { id, entry, started: entry.wrote };
   });
-  void faviconsFor(key, list)
+  void faviconsFor(source, list)
     .then((found) =>
-      update(key, (icons) => {
+      update(into, (icons) => {
+        if (incognitoClosed(into)) return icons;
         const writes: [string, string | null][] = [];
         for (const [i, page] of list.entries()) {
           if (pending[i]!.entry.wrote !== pending[i]!.started) continue;
           const uri = found.pages.get(page)?.uri ?? null;
-          if (icons.pages[page] !== uri) writes.push([page, uri]);
+          if (shouldWrite(routed, icons.pages[page], uri)) writes.push([page, uri]);
         }
         return writes.length ? { ...icons, pages: withPages(icons.pages, writes) } : icons;
       }, true),
     )
     .catch((error) => {
-      for (const page of list) unmarkAsked(key, page);
+      for (const page of list) unmarkAsked(askedAs(source, into), page);
       warnFor(consent, "[favicons] lookup failed", error);
     })
     .finally(() => {
@@ -251,6 +258,8 @@ export const useAppearanceDark = () => useKeyed(watchAppDark, ALL, () => useBrow
 function answered(url: string, profileId?: string): boolean {
   const { profiles } = useFavicons.getState();
   const page = withoutFragment(url);
+  const viewer = privateViewer(profileId);
+  if (viewer && profiles[viewer]?.pages[page] !== undefined) return true;
   return lookupOrder(profileId).every((id) => !askable(id) || profiles[cacheKey(id)]?.pages[page] !== undefined);
 }
 
@@ -264,7 +273,8 @@ function check(w: Watcher) {
   if (known === w.known) return;
   w.known = known;
   if (!known) {
-    for (const id of lookupOrder(w.profileId)) if (askable(id)) ask(cacheKey(id), withoutFragment(w.url));
+    const viewer = privateViewer(w.profileId);
+    for (const id of lookupOrder(w.profileId)) if (askable(id)) ask(cacheKey(id), withoutFragment(w.url), viewer ?? cacheKey(id));
   } else if (w.src && w.profileId && !resolveFavicon(w.url, w.src, w.profileId)) fetchMissing(w.profileId, w.url, w.src);
 }
 
@@ -368,6 +378,7 @@ export function startFavicons() {
       for (const t of Object.values(s.tabs)) open.add(t.profileId);
       queue((f) => {
         const gone = Object.keys(f.profiles).filter((id) => isIncognitoProfile(id) && !open.has(id));
+        for (const id of gone) forgetAsked(id);
         return gone.length ? { ...f, profiles: Object.fromEntries(Object.entries(f.profiles).filter(([id]) => !gone.includes(id))) } : f;
       }, true);
     }
