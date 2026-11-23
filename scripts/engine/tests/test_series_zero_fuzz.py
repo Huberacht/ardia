@@ -545,6 +545,13 @@ class Limits(unittest.TestCase):
                 series_base.MAX_DECODER_MEMORY = saved
             self.assertEqual(series_base.read_manifest(out)["files"], {})
 
+    def test_a_missing_archive_is_a_missing_base(self):
+        result = subprocess.run([sys.executable, str(ENGINE / "series-zero-fuzz.py"), "--platform", "mac", "--tarball",
+                                 "/nonexistent/series-base.tar.xz"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("no series base archive at /nonexistent/series-base.tar.xz", result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_a_declared_length_over_the_cap_is_refused_before_reading(self):
         class Source(io.BytesIO):
             headers = {"Content-Length": "999"}
@@ -736,9 +743,9 @@ class Step3Stamp(unittest.TestCase):
     def stamped(self):
         return series_base.step3_stamp(self.src).is_file()
 
-    def capture(self):
+    def capture(self, steps=()):
         with contextlib.redirect_stderr(io.StringIO()):
-            return capturer.run(["--platform", "linux"], series=self.series)
+            return capturer.run(["--platform", "linux"], series=self.series, steps=list(steps))
 
     def verify(self, digest=None):
         _, stamp_sha = packer.verify_step3_stamp(self.src, "linux", digest or self.digest)
@@ -861,14 +868,40 @@ class Step3Stamp(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.capture()
 
-    def test_a_later_capture_adds_files_to_a_recorded_base(self):
+    def test_a_recapture_after_step4_can_not_restore_a_deleted_file(self):
         self.step3()
         self.capture()
-        os.environ["FAKE_CAPTURE"] = "f.cc,g.cc"
-        self.assertEqual(self.capture(), 0)
-        self.verify()
-        record = json.loads(pathlib.Path(self.base, series_base.CAPTURE_RECORD).read_text())
-        self.assertEqual(sorted(record["files"]), ["chrome/f.cc", "chrome/g.cc"])
+        pathlib.Path(self.src, "chrome/f.cc").write_text("hooked by step 4\n")
+        os.unlink(os.path.join(self.base, "chrome/f.cc"))
+        with self.assertRaises(SystemExit):
+            self.capture()
+        self.assertFalse(os.path.exists(os.path.join(self.base, "chrome/f.cc")))
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_deleting_the_whole_base_does_not_allow_a_second_capture(self):
+        self.step3()
+        self.capture()
+        shutil.rmtree(self.base)
+        with self.assertRaises(SystemExit):
+            self.capture()
+        self.assertFalse(os.path.exists(self.base))
+
+    def test_a_tree_step4_already_touched_can_not_be_captured(self):
+        self.step3()
+        step = FakeStep("hook.patch", make_patch(os.path.join(self.root, "p"), "hook.patch", "chrome/f.cc", ORIGINAL,
+                                                 edited(ORIGINAL, l20="hooked\n")))
+        subprocess.run(["git", "apply", step.patch], cwd=self.src, check=True)
+        with self.assertRaises(SystemExit):
+            self.capture(steps=[step])
+        self.assertFalse(os.path.exists(self.base))
+        os.makedirs(os.path.join(self.src, "chrome/browser/ardia"))
+        self.assertIn("engine/chromium", capturer.series_started(self.src, []))
+
+    def test_an_untouched_tree_counts_as_not_started(self):
+        step = FakeStep("hook.patch", make_patch(os.path.join(self.root, "p"), "hook.patch", "chrome/f.cc", ORIGINAL,
+                                                 edited(ORIGINAL, l20="hooked\n")))
+        self.assertIsNone(capturer.series_started(self.src, [step]))
 
     def test_a_capture_for_another_step3_run_is_refused(self):
         self.step3()

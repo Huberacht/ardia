@@ -486,7 +486,8 @@ the next engine build; after that the workflow can drop `--offsets warn`.
 **Re-pack the base on every Chromium or Helium move** (a new `CHROMIUM_VERSION` in `env.sh` or a new commit in
 `helium-pins.ini`) and **on every change to a step-3 input**, after the builders' trees have run step 3 with it. Until
 then the workflow fails. Re-pack too when the series starts reading a file the archive lacks (a new hook): the checker
-names it. On each builder, after step 4 and from a full checkout of the commit the tree was built from (the Linux
+names it. A base is captured once per step-3 run, so that re-pack also starts from a fresh tree (step 3, capture,
+step 4); the base can't be topped up later. On each builder, after step 4 and from a full checkout of the commit the tree was built from (the Linux
 layer copies files from `packages/`), run:
 
     scripts/agent/locked chromium --take <you>
@@ -516,8 +517,11 @@ stamp and record as they were. One that fails after starting work changes the st
 stamp or record no longer matches and pack refuses. `run-step3.py` writes a stamp only after a single full run on a
 fresh tree exits 0 with plain arguments (no `--only`, `--from` or `--no-brand`) and the same input digest before and
 after; any other run that changes the tree deletes the stamp, for good: start again from a fresh tree. `run-capture.py`
-hands series.py the tree and base it resolved, refuses a base holding a file it didn't record, and records the stamp's
-sha256 with every file's sha256 and mode. The archive and the checker handle a patch that renames, copies or only changes the mode
+hands series.py the tree and base it resolved and captures once per stamp. It refuses when that stamp already has a
+capture (a marker beside the tree records it, so deleting the base doesn't undo it), when the base already holds
+files, and when the tree already carries any series step (engine/chromium's layer directory, or a patch that
+reverse-applies), so bytes from after step 4 can't enter the base. It records the stamp's sha256 with every file's
+sha256 and mode. The archive and the checker handle a patch that renames, copies or only changes the mode
 of a file, but `series.py` (`capture-base`, `check`) reads only `+++` lines. Such a patch needs `series.py` to learn
 those headers first, which moves both engine keys: until then `capture-base` doesn't record its source and the
 packer's `series.py check` fails on it. Copy the three files

@@ -3,15 +3,21 @@
 
   run-capture.py [--platform linux|mac] [--cpu arm64|x64] [--force]
 
-Run it after run-step3.py and before step 4 (04-series.sh runs capture-base again, which then adds nothing). The tree
+Run it after run-step3.py and before step 4 (04-series.sh runs capture-base again, which then adds nothing to a
+base this captured). The tree
 is CHROMIUM_SRC, else AC_CHROMIUM_BUILD's (default ~/chromium-build) chromium_git/chromium/src. The base is
 AC_SERIES_BASE, else that build directory's series-base for the platform. Both are passed to series.py explicitly, so
 the child captures from the tree whose stamp is recorded.
 
-It needs a complete step-3 stamp for the tree, and a base that is new or holds only files an earlier record for that
-same stamp listed, with the same content and mode. A file put there any other way stops it. Nothing is written or
-deleted before capture-base runs, and the child's exit code and output pass through unchanged. Once capture-base
-exits 0, <base>/.ardia-capture.json is replaced: the stamp's sha256, and every base file's sha256 and mode.
+It captures once per step-3 run. It refuses when:
+- the tree has no complete step-3 stamp;
+- a capture for this stamp is already recorded beside the tree (<tree's parent>/.ardia-capture-<tree name>.json),
+  which deleting the base doesn't undo;
+- the base already holds files;
+- the tree already carries any series step: engine/chromium's layer directory, or a patch that reverse-applies.
+A new capture needs a fresh tree and a new run-step3.py run. Nothing is written or deleted before capture-base runs,
+and the child's exit code and output pass through unchanged. Once capture-base exits 0, <base>/.ardia-capture.json
+records the stamp's sha256 and every base file's sha256 and mode, and the marker beside the tree records the stamp.
 series-base-pack.py packs only a base whose files match that record exactly.
 """
 
@@ -48,14 +54,23 @@ def complete_stamp(src):
     return stamp if record.get("state") == "complete" else None
 
 
-def earlier_files(record, stamp_sha):
-    if not record.is_file():
-        return {}
-    try:
-        earlier = json.loads(record.read_text())
-    except ValueError:
-        return {}
-    return earlier.get("files", {}) if earlier.get("step3_stamp_sha256") == stamp_sha else {}
+def captured_marker(src):
+    tree = pathlib.Path(src)
+    return tree.parent / f".ardia-capture-{tree.name}.json"
+
+
+def series_started(src, steps):
+    if os.path.isdir(os.path.join(src, "chrome/browser/ardia")):
+        return "engine/chromium's layer (chrome/browser/ardia is in the tree)"
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    for step in steps:
+        if step.kind != "chromium":
+            continue
+        check = subprocess.run(["git", "apply", "--check", "-R", "--whitespace=nowarn", step.patch], cwd=src, env=env,
+                               capture_output=True)
+        if check.returncode == 0:
+            return step.name
+    return None
 
 
 def write_record(base, stamp_sha, files):
@@ -66,7 +81,7 @@ def write_record(base, stamp_sha, files):
     os.replace(partial, path)
 
 
-def run(argv, series=None):
+def run(argv, series=None, steps=None):
     try:
         target = configuration(option(argv, "--platform"), option(argv, "--cpu"))
     except ValueError as error:
@@ -78,12 +93,18 @@ def run(argv, series=None):
         series_base.die(f"no complete step-3 stamp for {src}: run step 3 through scripts/engine/run-step3.py on a fresh "
                         "tree first", 2)
     stamp_sha = series_base.sha256_file(stamp)
-    record = pathlib.Path(base, series_base.CAPTURE_RECORD)
-    present = series_base.base_file_hashes(base) if os.path.isdir(base) else {}
-    earlier = earlier_files(record, stamp_sha)
-    if any(earlier.get(path) != digest for path, digest in present.items()):
-        series_base.die(f"{base} holds files no capture after this step 3 recorded: set it aside and run run-capture.py "
-                        "again on a fresh base", 2)
+    marker = captured_marker(src)
+    if marker.is_file() and stamp_sha in marker.read_text():
+        series_base.die(f"{marker}: this step-3 run already has its capture; a new capture needs a fresh tree and a new "
+                        "run-step3.py run", 2)
+    if os.path.isdir(base) and series_base.base_file_hashes(base):
+        series_base.die(f"{base} already holds files: set it aside, so the capture is the only thing in it", 2)
+    if steps is None:
+        steps = series_base.load_series().read_series(target["AC_TARGET_OS"])
+    started = series_started(src, steps)
+    if started:
+        series_base.die(f"{src} already carries the series ({started}): a capture needs the tree as step 3 left it, so "
+                        "start again from a fresh tree", 2)
     env = dict(os.environ, CHROMIUM_SRC=src, AC_SERIES_BASE=os.path.abspath(base))
     code = subprocess.run([sys.executable, str(series or series_base.REPO / "engine/patches/series.py"), "capture-base",
                            *argv], env=env).returncode
@@ -92,6 +113,9 @@ def run(argv, series=None):
     if series_base.sha256_file(stamp) != stamp_sha:
         series_base.die(f"{stamp} changed while capture-base ran: run step 3 again on a fresh tree", 2)
     write_record(base, stamp_sha, series_base.base_file_hashes(base))
+    partial = marker.with_name(f"{marker.name}.{os.getpid()}.tmp")
+    partial.write_text(json.dumps({"step3_stamp_sha256": stamp_sha}, sort_keys=True) + "\n")
+    os.replace(partial, marker)
     print(f"run-capture: recorded {base}/{series_base.CAPTURE_RECORD}", file=sys.stderr)
     return 0
 

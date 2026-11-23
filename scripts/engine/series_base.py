@@ -349,7 +349,10 @@ def write_tarball(source, paths, manifest_fields, out):
 
 
 def check_archive_size(tarball):
-    size = os.path.getsize(tarball)
+    try:
+        size = os.path.getsize(tarball)
+    except OSError as error:
+        raise Problem(f"no series base archive at {tarball}: {error.strerror}")
     if size > MAX_ARCHIVE_BYTES:
         raise Problem(f"{tarball} is {size} bytes, over the {MAX_ARCHIVE_BYTES} a series base may be")
 
