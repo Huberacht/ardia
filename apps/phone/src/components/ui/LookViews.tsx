@@ -10,7 +10,7 @@ import {
   type GlassShape,
 } from "@ardia/phone-native";
 import { createContext, useContext, type ReactNode, type RefObject } from "react";
-import { Pressable, StyleSheet, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
+import { Platform, Pressable, StyleSheet, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   backdropStops,
@@ -184,6 +184,8 @@ type FrostProps = {
   children?: ReactNode;
 };
 
+export const frostGlassIsNative = (os: string, nativeGlass: boolean) => os === "android" && nativeGlass;
+
 export const chromeIsSolid = (style: ChromeStyle, reduceTransparency: boolean, frostIsNative: boolean) => style === "classic" || reduceTransparency || !frostIsNative;
 
 export function useSolidChrome() {
@@ -224,7 +226,7 @@ export function LookFrost({
       </View>
     );
   const shade = incognito || (dark ?? theme.dark);
-  if (variant === "glass" && glassIsNative())
+  if (variant === "glass" && frostGlassIsNative(Platform.OS, glassIsNative()))
     return (
       <Glass
         source={source}

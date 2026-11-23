@@ -1356,8 +1356,10 @@ look surface: it has no frost source to refract.
   about 8 dp. It is an AGSL `RuntimeShader` chained after the blur and saturation of the source's shared strip
   (below), so it samples the blurred backdrop as liquid-dom does, and one pass refracts every glass of the strip: the
   shader takes up to 12 shapes (box, corner radius, bezel and shift cap, in the strip's own downscaled pixels), finds
-  the one each pixel is in and bends the backdrop through that one. A thirteenth glass on one strip gets the plain
-  blur. The shader is built once per strip; a new effect is made only when a glass moves, resizes or comes and goes.
+  the one each pixel is in and bends the backdrop through that one. The slots go to the strip's glasses oldest first,
+  so the same twelve keep them however the frame's draws are ordered; a thirteenth draws a second, plain blur of the
+  strip (made only while one is waiting), never a neighbour's refraction, and takes the first slot that frees. The
+  shader is built once per strip; a new effect is made only when a glass moves, resizes or comes and goes.
   It runs wherever the glass is on the frost's Live path: the page bar and host pill, the deck's chrome, the start
   page's buttons, Reader's buttons, voice search's buttons and toasts.
 - **One blur and one lens per source** (`FrostStrip`). Each live frost used to blur and refract its own copy of the
@@ -1374,10 +1376,17 @@ look surface: it has no frost source to refract.
   node translated to the source, with no layer or effect of its own, and no glass's backdrop moves when the strip
   grows or shrinks. HWUI applies a layer's `RenderEffect` where the layer is drawn and reuses it only for the same
   clip, so the strip is two nodes: one holds the source with the effect, and the compositing layer every glass draws
-  holds that one, filtered once a frame. When what's under the glasses moves (a scroll, a deck backdrop frame, the
-  page's refresh timer), only the strip is re-recorded, once a frame (`FrostSourceView.refreshStrips`); a glass
-  redraws only when it moves or changes. The memory line counts strips (`lookCounts().strips`, `stripRecords`), and
-  a source that stops recording drops them.
+  holds that one, filtered once a frame. The source refreshes its strips when something inside it is invalidated (the
+  WebView scrolling or animating, a deck backdrop frame: `onDescendantInvalidated`), at most once a frame, and only
+  then, so a still page costs nothing; when no draw is coming that frame (the last frame of a fling held back by the
+  cadence below) it asks one glass to draw so the new sample reaches the screen. A glass redraws only when it moves
+  or changes, and its draw records the strip only when the strip's extent, lenses or slots change, comparing
+  extents clamped to the source, so a glass near the edge doesn't re-record it on every draw. Each strip knows the
+  glasses that draw it: one that leaves (detached, hidden, trimmed, or moved to another strip after a density change)
+  takes its lens with it at the next refresh, and the last one out drops the strip. The memory line counts strips
+  from a snapshot the UI thread publishes (`lookCounts().strips`, `stripRecords`), and a source that stops recording
+  drops them. A source that goes away, or a new one under the same name, makes the glasses naming it draw again, and
+  a glass with no source still asks for one, so a replacement records on its first draw.
 - **The rim.** liquid-dom's white specular: two lights, from the top left and the opposite side, a 1.25 dp band fading
   inward, power 2, added at 50 % (35 % in dark). It is drawn at full resolution over the glass's clip, after the tint,
   as a second `RuntimeShader`, so it stays sharp, and it draws on every glass from Android 13, lens or not, except
@@ -1397,8 +1406,9 @@ look surface: it has no frost source to refract.
   old lab flag) 7.2 and 6.8 % (p50 12 to 14, p90 21, p99 36 to 38) with 32 GPU passes a frame; the shipped strip
   8.6 % (p50 14, p90 23, p99 48) with 10. Frame by frame the RenderThread issues 3.5 ms at the median against 2.8
   with the solid bar (6.2 before the strip refreshed at 60 Hz) and the GPU takes 3.5 ms against 1.7: the page's
-  layer is what remains. A strip over a page re-records at most every 15 ms, so on a 120 Hz screen the blurred page
-  under the bar follows every other frame; the frames between redraw only the page's layer. The fold views' own
+  layer is what remains. A strip over a page refreshes about 60 times a second whatever the screen's rate
+  (`StripCadence`: every frame at 60 Hz, two of three at 90, every other at 120), so the frames between redraw only
+  the page's layer. The fold views' own
   hardware layers (`renderToHardwareTextureAndroid` on `floatingBarFold` and `hostPillFold`) now redraw with the
   strip, about 0.5 ms a frame; they stay for the fold's fade (b66c3bbdb).
 - **Over the deck, measured.** The idle deck on the F4 with its five glasses live: the look budget's own sample reads
@@ -1414,7 +1424,7 @@ look surface: it has no frost source to refract.
   `app_launched.glass_render` reports the best of these the phone can draw at launch, not what each surface drew.
 - **Not seen yet.** The M3 (offline during this pass), Android 12 and 13 phones, TalkBack over the new sources, the
   Duo layouts, the lens during the bar's 0.26 s fold (the fold scales the bar while the strip's lens shapes stay at
-  the glasses' unscaled boxes), a deck grid with more than 12 glasses on one strip (the 13th gets the plain blur), a
+  the glasses' unscaled boxes), a deck grid with more than 12 glasses on one strip (the 13th draws the plain blur), a
   toast over a page (it records the whole `surfaces` source while it shows), and the 60 Hz page strip on a fast
   fling.
 
@@ -1791,7 +1801,7 @@ Events (service `ardia-phone`, `$lib` `ardia-phone-telemetry`, tags `app: phone`
 | Event | Fields | When |
 | --- | --- | --- |
 | `sharing_turned_on` | `source` (settings, onboarding) | turning sharing on |
-| `app_launched` | `legacy_import` (imported, started_fresh, none), `legacy_import_failures` (failed tries before the app opened), `look_mode` (full, no_blur, no_motion, neither: the look this launch shows, after the look's budget and the system's Reduce Motion and Reduce Transparency), `interface_style` (match_mac, glass, classic) and `color_scheme` (match_mac, system, light, dark): the redesign's Appearance choices, and `material_colors` (wallpaper, profile, fallback, not_material): where Android's Material design took its colours, from the wallpaper, from a picked profile colour, or from Ardia's own palette on phones that give none; not_material on iPhone and in the original design, and `color_choice` (match_mac, preset, custom): the colour row's choice, and `glass_render` (lens, frost, solid, classic, native, none): the best glass this phone can draw this launch, not what each surface drew (the page bar stays solid even on a `lens` phone): on Android the Liquid Glass lens and rim (Android 13+), plain frost (Android 12 or `ArdiaFlatGlass`) or without blur (below Android 12, over the look budget or with the look off), and otherwise Classic (Classic or Reduce Transparency), iPhone's own glass, or none in Material You | each launch with sharing on |
+| `app_launched` | `legacy_import` (imported, started_fresh, none), `legacy_import_failures` (failed tries before the app opened), `look_mode` (full, no_blur, no_motion, neither: the look this launch shows, after the look's budget and the system's Reduce Motion and Reduce Transparency), `interface_style` (match_mac, glass, classic) and `color_scheme` (match_mac, system, light, dark): the redesign's Appearance choices, and `material_colors` (wallpaper, profile, fallback, not_material): where Android's Material design took its colours, from the wallpaper, from a picked profile colour, or from Ardia's own palette on phones that give none; not_material on iPhone and in the original design, and `color_choice` (match_mac, preset, custom): the colour row's choice, and `glass_render` (lens, frost, solid, classic, native, none): the best glass this phone can draw this launch, not what each surface drew (a surface can still draw less: on Android 12, which reports `frost`, the page bar keeps the solid page mode, and `glass_unsourced` counts glass left with nothing to blur): on Android the Liquid Glass lens and rim (Android 13+), plain frost (Android 12 or `ArdiaFlatGlass`) or without blur (below Android 12, over the look budget or with the look off), and otherwise Classic (Classic or Reduce Transparency), iPhone's own glass, or none in Material You | each launch with sharing on |
 | `perf_launch` | `launch_ms`, `js_ms` | each launch, once the module gives the process start (`ArdiaPhoneSystem.processStartedAt()`, epoch ms) |
 | `perf_backdrop` | `backdrop_ms` | each launch on iPhone, once the native launch backdrop has shown (`system.launchBackdropShownAt()`, epoch ms on the process start's clock) |
 | `perf_launch_tray` | `tray_ms` | each launch with Auto-Open Keyboard on, once the launch tray is up (process start on `ArdiaPhoneSystem.processStartedAt()`'s clock) |

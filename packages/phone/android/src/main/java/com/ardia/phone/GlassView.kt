@@ -141,7 +141,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     private var rimShader: RuntimeShader? = null
     private var rimDrawn: LiquidGlassRules.Rim? = null
     private val bound = LensBound()
-    private val unsourced = UnsourcedWatch({ job, delay -> postDelayed(job, delay) }, { job -> removeCallbacks(job) }) { isAttachedToWindow && !isClassic && FrostPage.unsourced(lastChoice) }
+    private val unsourced = UnsourcedWatch({ job, delay -> postDelayed(job, delay) }, { job -> removeCallbacks(job) }) { isAttachedToWindow && isShown && canBlur() && FrostPage.unsourced(lastChoice) }
 
     init {
         variant = "glass"
@@ -200,6 +200,11 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         invalidateOutline()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        lastChoice?.let(unsourced::settled)
     }
 
     override fun onDetachedFromWindow() {

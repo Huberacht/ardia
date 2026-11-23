@@ -1383,10 +1383,20 @@ internal object FrostSources {
     @Volatile
     var pageMode: PageMode = PageMode.Solid
 
-    fun register(id: String, view: FrostSourceView) = synchronized(sources) { sources[id] = WeakReference(view) }
+    fun register(id: String, view: FrostSourceView) {
+        synchronized(sources) { sources[id] = WeakReference(view) }
+        redrawFrostsNamed(id)
+    }
 
-    fun unregister(id: String, view: FrostSourceView) = synchronized(sources) {
-        if (sources[id]?.get() === view) sources.remove(id)
+    fun unregister(id: String, view: FrostSourceView) {
+        val removed = synchronized(sources) {
+            if (sources[id]?.get() === view) sources.remove(id) != null else false
+        }
+        if (removed) redrawFrostsNamed(id)
+    }
+
+    private fun redrawFrostsNamed(id: String) {
+        for (frost in frosts()) if (frost.source == id) frost.invalidate()
     }
 
     fun find(id: String?): FrostSourceView? = id?.let { synchronized(sources) { sources[it]?.get() } }
@@ -1414,11 +1424,7 @@ internal object FrostSources {
     }
 
     fun sceneChanged(source: FrostSourceView) {
-        for (frost in frostsOf(source)) when (frost.lastChoice?.path) {
-            FrostPage.Path.Tinted -> frost.retint()
-            FrostPage.Path.Live -> frost.refreshFromSource()
-            else -> Unit
-        }
+        for (frost in frostsOf(source)) if (frost.lastChoice?.path == FrostPage.Path.Tinted) frost.retint()
     }
 
     fun frostsOf(source: FrostSourceView): List<FrostView> = frosts().filter { it.source != null && find(it.source) === source }
@@ -1471,27 +1477,136 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
 
     private val strips = HashMap<FrostStrip.Key, FrostStrip>()
 
-    internal fun strip(key: FrostStrip.Key): FrostStrip = strips.getOrPut(key) { FrostStrip(key) }
-
     internal val stripsHeld: Collection<FrostStrip> get() = strips.values
+
+    data class StripStats(val count: Int, val bytes: Long)
+
+    @Volatile
+    internal var stripStats = StripStats(0, 0L)
+        private set
+
+    private fun publishStats() {
+        stripStats = StripStats(strips.size, strips.values.sumOf { it.bytes })
+    }
+
+    private val cadence = StripCadence(FrostRefresh.PAGE_STRIP_HZ)
+    private var contentChanged = false
+    private var refreshPosted = false
+    private val stripRefresh = Runnable {
+        refreshPosted = false
+        refreshStrips()
+    }
+
+    private fun postStripRefresh() {
+        if (refreshPosted || !isAttachedToWindow) return
+        refreshPosted = true
+        postOnAnimation(stripRefresh)
+    }
+
+    internal fun contentMoved() {
+        if (strips.isEmpty() || recorder == null) return
+        contentChanged = true
+        postStripRefresh()
+    }
+
+    override fun onDescendantInvalidated(child: View, target: View) {
+        super.onDescendantInvalidated(child, target)
+        contentMoved()
+    }
+
+    internal fun join(frost: FrostView, key: FrostStrip.Key, drawingTime: Long, wanted: Rect): FrostStrip {
+        var evicted = false
+        val iterator = strips.entries.iterator()
+        while (iterator.hasNext()) {
+            val (held, strip) = iterator.next()
+            if (held == key || !strip.consumers.remove(frost)) continue
+            strip.stale = true
+            if (strip.consumers.isEmpty()) {
+                strip.release()
+                iterator.remove()
+                evicted = true
+            }
+        }
+        val strip = strips.getOrPut(key) { FrostStrip(key) }
+        if (strip.consumers.add(frost)) strip.stale = true
+        if (strip.stale || strip.laidOutAt != drawingTime || !strip.covers(FrostStrip.place(wanted, width, height, key.scale))) layout(strip, drawingTime, frost)
+        if (evicted) publishStats()
+        return strip
+    }
+
+    internal fun leave(frost: FrostView) {
+        var changed = false
+        val iterator = strips.values.iterator()
+        while (iterator.hasNext()) {
+            val strip = iterator.next()
+            if (!strip.consumers.remove(frost)) continue
+            changed = true
+            strip.stale = true
+            if (strip.consumers.isEmpty()) {
+                strip.release()
+                iterator.remove()
+            }
+        }
+        if (!changed) return
+        publishStats()
+        contentMoved()
+    }
+
+    private fun layout(strip: FrostStrip, drawingTime: Long, drawing: FrostView?) {
+        val content = recorder ?: return
+        val area = Rect()
+        val theirs = Rect()
+        val sharing = ArrayList<FrostView>()
+        for (consumer in strip.consumers) {
+            if (consumer.stripNeed(this, theirs) != strip.key) continue
+            if (sharing.isEmpty()) area.set(theirs) else area.union(theirs)
+            sharing += consumer
+        }
+        if (sharing.isEmpty()) {
+            strip.laidOutAt = drawingTime
+            return
+        }
+        val placed = FrostStrip.place(area, width, height, strip.key.scale)
+        val slots = FrostStrip.slotOrder(sharing.mapNotNull { consumer -> consumer.lensIn(this, placed, strip.key.scale)?.let { consumer to it } }) { it.first.number }
+        val lenses = LiquidGlassRules.lensField(slots.map { it.second }, resources.displayMetrics.density, strip.key.scale, strip.key.saturation)
+        val slotted = slots.map { it.first }.toSet()
+        if (!strip.stale && strip.laysOut(placed, lenses, slotted, sharing)) {
+            strip.laidOutAt = drawingTime
+            return
+        }
+        val routedBefore = sharing.associateWith { strip.nodeFor(it) }
+        strip.record(content, placed, drawingTime, lenses, slotted, sharing)
+        strip.stale = false
+        for ((consumer, node) in routedBefore) if (consumer !== drawing && strip.nodeFor(consumer) !== node) consumer.invalidate()
+        publishStats()
+        LookActivity.stripRecords += 1
+    }
 
     private var refreshedAt = Long.MIN_VALUE
 
-    internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis()): Boolean {
+    internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis(), drawPending: Boolean = isDirty): Boolean {
         val content = recorder ?: return false
-        if (strips.isEmpty()) return false
-        if (frameTime == refreshedAt || frameTime - refreshedAt in 0 until FrostRefresh.stripGap(holdsPage)) return true
-        var all = true
-        for (strip in strips.values) all = strip.refresh(content) && all
-        if (all) refreshedAt = frameTime
-        return all
+        if (strips.isEmpty() || !contentChanged || frameTime == refreshedAt) return false
+        if (holdsPage && !cadence.offer(frameTime)) {
+            postStripRefresh()
+            return false
+        }
+        contentChanged = false
+        refreshedAt = frameTime
+        for (strip in strips.values) if (strip.stale) layout(strip, frameTime, null) else strip.refresh(content)
+        if (!drawPending) strips.values.firstNotNullOfOrNull { it.consumers.firstOrNull() }?.invalidate()
+        return true
     }
 
     private fun stopRecording() {
+        removeCallbacks(stripRefresh)
+        refreshPosted = false
+        contentChanged = false
         recorder?.discardDisplayList()
         recorder = null
         strips.values.forEach(FrostStrip::release)
         strips.clear()
+        publishStats()
     }
 
     internal fun release() {
@@ -1536,6 +1651,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         }
         canvas.drawRenderNode(node)
         FrostSources.redrawFrostsOf(this)
+        contentMoved()
     }
 }
 
@@ -1560,7 +1676,7 @@ internal object FrostPage {
     fun wantsSource(choice: Choice?, onlyBackdropUnder: Boolean, blurOverBackdrop: Boolean, holdsPage: Boolean, pageMode: FrostSources.PageMode): Boolean = when {
         holdsPage && pageMode == FrostSources.PageMode.Solid -> false
         choice == null -> !(onlyBackdropUnder && !blurOverBackdrop)
-        else -> choice.path == Path.Live || choice.reason == SOURCE_NOT_DRAWN
+        else -> choice.path == Path.Live || choice.reason == SOURCE_NOT_DRAWN || choice.reason == NO_SOURCE
     }
 
     data class Choice(val path: Path, val reason: String)
@@ -1596,11 +1712,34 @@ internal object FrostPage {
     }
 }
 
+internal class StripCadence(private val hz: Float) {
+    private var credit = 0f
+    private var offeredAt = Long.MIN_VALUE
+
+    fun offer(frameTimeMs: Long): Boolean {
+        credit = if (offeredAt == Long.MIN_VALUE) 1f else credit + ((frameTimeMs - offeredAt).coerceAtLeast(0L) * hz / 1000f).coerceAtMost(1f)
+        offeredAt = frameTimeMs
+        if (credit < DUE) return false
+        credit = (credit - 1f).coerceIn(0f, CARRY)
+        return true
+    }
+
+    companion object {
+        const val DUE = 0.9f
+        const val CARRY = 0.5f
+    }
+}
+
 internal class FrostStrip(val key: Key) {
     data class Key(val blurPx: Float, val saturation: Float, val scale: Float)
 
     val node = RenderNode("ardiaFrostStrip").apply { setUseCompositingLayer(true, null) }
     private val filtered = RenderNode("ardiaFrostStripFiltered")
+    private var plainNode: RenderNode? = null
+    private var plainFiltered: RenderNode? = null
+    val consumers = LinkedHashSet<FrostView>()
+    var stale = true
+    var laidOutAt = Long.MIN_VALUE
     var left = 0
         private set
     var top = 0
@@ -1611,16 +1750,23 @@ internal class FrostStrip(val key: Key) {
         private set
     var records = 0L
         private set
-    private var recordedAt = Long.MIN_VALUE
     private var effectSet = false
     private var lensesApplied: LiquidGlassRules.LensField? = null
     private var lensShader: android.graphics.RuntimeShader? = null
+    private var slotted: Set<FrostView> = emptySet()
     var lensed = 0
         private set
 
-    fun fresh(drawingTime: Long, area: Rect): Boolean = recordedAt == drawingTime && covers(area)
+    val holdsPlain: Boolean get() = plainNode != null
 
     fun covers(area: Rect): Boolean = width > 0 && height > 0 && area.left >= left && area.top >= top && area.right <= left + width && area.bottom <= top + height
+
+    fun laysOut(placed: Rect, lenses: LiquidGlassRules.LensField?, slots: Set<FrostView>, drawers: Collection<FrostView>): Boolean =
+        effectSet && placed.left == left && placed.top == top && placed.width() == width && placed.height() == height &&
+            lenses == lensesApplied && slots == slotted && !(lenses != null && lensed == 0 && !GlassShaders.lens.failed) &&
+            (lensed == 0 || drawers.all { it in slots }) == (plainNode == null)
+
+    fun nodeFor(frost: FrostView): RenderNode = if (lensed == 0 || frost in slotted) node else plainNode ?: node
 
     fun refresh(source: RenderNode): Boolean {
         if (width <= 0 || height <= 0) return false
@@ -1630,12 +1776,12 @@ internal class FrostStrip(val key: Key) {
         return true
     }
 
-    fun record(source: RenderNode, placed: Rect, drawingTime: Long, lenses: LiquidGlassRules.LensField? = null) {
+    fun record(source: RenderNode, placed: Rect, drawingTime: Long, lenses: LiquidGlassRules.LensField? = null, slots: Set<FrostView> = emptySet(), drawers: Collection<FrostView> = slots) {
+        laidOutAt = drawingTime
         left = placed.left
         top = placed.top
         width = placed.width()
         height = placed.height()
-        recordedAt = drawingTime
         records += 1
         val scaledLeft = (left / key.scale).toInt()
         val scaledTop = (top / key.scale).toInt()
@@ -1644,7 +1790,8 @@ internal class FrostStrip(val key: Key) {
         node.setPosition(scaledLeft, scaledTop, scaledLeft + scaledWidth, scaledTop + scaledHeight)
         filtered.setPosition(0, 0, scaledWidth, scaledHeight)
         val lensBack = lenses != null && lensed == 0 && !GlassShaders.lens.failed
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (!effectSet || lenses != lensesApplied || lensBack)) {
+        val lensesMoved = !effectSet || lenses != lensesApplied || lensBack
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && lensesMoved) {
             val lens = if (lenses != null && Build.VERSION.SDK_INT >= LiquidGlassRules.LENS_MIN_SDK) GlassShaders.lensFor(lenses) { lensShader ?: LiquidGlassShaders.lens().also { lensShader = it } } else null
             val blur = key.blurPx / key.scale
             filtered.setRenderEffect(if (lens == null) FrostStrip.frosted(blur, key.saturation) else RenderEffect.createChainEffect(lens, RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP)))
@@ -1652,38 +1799,66 @@ internal class FrostStrip(val key: Key) {
             lensesApplied = lenses
             effectSet = true
         }
+        slotted = slots
+        val plainWanted = lensed > 0 && drawers.any { it !in slots }
+        if (plainWanted) {
+            val outer = plainNode ?: RenderNode("ardiaFrostStripPlain").apply { setUseCompositingLayer(true, null) }.also { plainNode = it }
+            val inner = plainFiltered ?: RenderNode("ardiaFrostStripPlainFiltered").also { plainFiltered = it }
+            outer.setPosition(scaledLeft, scaledTop, scaledLeft + scaledWidth, scaledTop + scaledHeight)
+            inner.setPosition(0, 0, scaledWidth, scaledHeight)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) inner.setRenderEffect(FrostStrip.frosted(key.blurPx / key.scale, key.saturation))
+        } else {
+            dropPlain()
+        }
         draw(source)
     }
 
+    private fun dropPlain() {
+        plainNode?.discardDisplayList()
+        plainFiltered?.discardDisplayList()
+        plainNode = null
+        plainFiltered = null
+    }
+
     private fun draw(source: RenderNode) {
-        val recording = filtered.beginRecording()
+        drawInto(filtered, node, source)
+        val outer = plainNode
+        val inner = plainFiltered
+        if (outer != null && inner != null) drawInto(inner, outer, source)
+    }
+
+    private fun drawInto(inner: RenderNode, outer: RenderNode, source: RenderNode) {
+        val recording = inner.beginRecording()
         try {
             recording.scale(1f / key.scale, 1f / key.scale)
             recording.translate(-left.toFloat(), -top.toFloat())
             recording.drawRenderNode(source)
         } finally {
-            filtered.endRecording()
+            inner.endRecording()
         }
-        val layer = node.beginRecording()
+        val layer = outer.beginRecording()
         try {
-            layer.drawRenderNode(filtered)
+            layer.drawRenderNode(inner)
         } finally {
-            node.endRecording()
+            outer.endRecording()
         }
     }
 
     fun release() {
         node.discardDisplayList()
         filtered.discardDisplayList()
-        recordedAt = Long.MIN_VALUE
+        dropPlain()
+        laidOutAt = Long.MIN_VALUE
+        stale = true
         effectSet = false
         lensesApplied = null
+        slotted = emptySet()
         lensed = 0
         width = 0
         height = 0
     }
 
-    val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4 * 2
+    val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4 * (if (holdsPlain) 4 else 2)
 
     companion object {
         fun place(area: Rect, sourceWidth: Int, sourceHeight: Int, scale: Float): Rect {
@@ -1694,6 +1869,8 @@ internal class FrostStrip(val key: Key) {
             val bottom = area.bottom.coerceIn(top, sourceHeight.coerceAtLeast(top))
             return Rect(left, top, right, bottom)
         }
+
+        fun <T> slotOrder(candidates: List<T>, order: (T) -> Int): List<T> = candidates.sortedBy(order).take(LiquidGlassRules.MAX_LENSES)
 
         @androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
         fun frosted(radius: Float, saturation: Float): RenderEffect {
@@ -1713,18 +1890,7 @@ internal object FrostScale {
 }
 
 internal object FrostRefresh {
-    const val IDLE_MILLIS = 250L
-    const val AFTER_SCROLL_MILLIS = 300L
-
-    const val PAGE_STRIP_MILLIS = 15L
-
-    fun stripGap(holdsPage: Boolean): Long = if (holdsPage) PAGE_STRIP_MILLIS else 0L
-
-    fun next(holdsPage: Boolean, millisSinceScroll: Long): Long? = when {
-        !holdsPage -> null
-        millisSinceScroll < AFTER_SCROLL_MILLIS -> 0L
-        else -> IDLE_MILLIS
-    }
+    const val PAGE_STRIP_HZ = 60f
 
     fun label(name: String?, source: String?, variant: String?, number: Int): String =
         name?.takeIf { it.isNotBlank() } ?: "${source ?: "-"}/${variant ?: "bar"} #$number"
@@ -1739,26 +1905,10 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     var name: String? = null
     var variant: String? = null
 
-    private val number = FrostRefresh.nextNumber()
+    internal val number = FrostRefresh.nextNumber()
 
     internal val logLabel: String get() = FrostRefresh.label(name, source, variant, number)
-    private var scrolledAt = 0L
-    private val refresh = Runnable { refreshFromSource() }
-    private val scrolled = ViewTreeObserver.OnScrollChangedListener {
-        if (lastChoice?.path == FrostPage.Path.Live && FrostSources.find(source)?.holdsPage == true) {
-            scrolledAt = SystemClock.uptimeMillis()
-            refreshFromSource()
-        }
-    }
-
-    internal fun refreshFromSource() {
-        val from = FrostSources.find(source)
-        if (lastChoice?.path == FrostPage.Path.Live && isShown && from != null && from.refreshStrips()) {
-            scheduleRefresh(from.holdsPage)
-        } else {
-            invalidate()
-        }
-    }
+    private var joined: FrostSourceView? = null
     var cornerRadius: Float = 0f
     var reduceTransparency: Boolean = false
         set(value) {
@@ -1803,7 +1953,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         viewTreeObserver.addOnPreDrawListener(moved)
-        viewTreeObserver.addOnScrollChangedListener(scrolled)
         FrostSources.attach(this)
         FrostSources.sourceChanged(source)
     }
@@ -1811,8 +1960,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     override fun onDetachedFromWindow() {
         FrostSources.detach(this)
         viewTreeObserver.removeOnPreDrawListener(moved)
-        viewTreeObserver.removeOnScrollChangedListener(scrolled)
-        removeCallbacks(refresh)
         forgetLayer()
         FrostSources.sourceChanged(source)
         super.onDetachedFromWindow()
@@ -1841,6 +1988,8 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal open fun lensAt(xPx: Int, yPx: Int, scale: Float): LiquidGlassRules.StripLens? = null
 
     internal open fun forgetLayer() {
+        joined?.leave(this)
+        joined = null
         blurNode?.discardDisplayList()
         blurNode = null
         layerWidth = 0
@@ -1896,7 +2045,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         )
         report(choice, from?.finding?.why)
         if (choice.path == FrostPage.Path.Live && from != null) {
-            if (isShown) scheduleRefresh(from.holdsPage)
             val layerNode = blurNode ?: RenderNode("ardiaFrost").also { blurNode = it }
             val blur = style.blurRadius.value * density
             val scale = FrostScale.of(blur)
@@ -1905,7 +2053,9 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             lastOffset = offset
             val dx = (offset shr 32).toInt()
             val dy = offset.toInt()
-            val strip = shareStrip(from, FrostStrip.Key(blur, style.saturation, scale), stripArea(-dx, -dy, margin))
+            if (joined !== from) joined?.leave(this)
+            joined = from
+            val strip = from.join(this, FrostStrip.Key(blur, style.saturation, scale), drawingTime, stripArea(-dx, -dy, margin))
             layerWidth = ceil((width + margin * 2) / scale).toInt()
             layerHeight = ceil((height + margin * 2) / scale).toInt()
             layerNode.setPosition(0, 0, layerWidth, layerHeight)
@@ -1913,7 +2063,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             val recording = layerNode.beginRecording()
             try {
                 recording.translate((dx + margin) / scale, (dy + margin) / scale)
-                recording.drawRenderNode(strip.node)
+                recording.drawRenderNode(strip.nodeFor(this))
             } finally {
                 layerNode.endRecording()
             }
@@ -1927,11 +2077,9 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             paint.color = style.tint.resolve(dark).toArgb()
             canvas.drawPath(clip, paint)
         } else if (choice.path == FrostPage.Path.Tinted && from != null && tintedFill(canvas, from, style, dark)) {
-            if (blurNode != null) forgetLayer()
-            removeCallbacks(refresh)
+            if (blurNode != null || joined != null) forgetLayer()
         } else {
-            if (blurNode != null) forgetLayer()
-            removeCallbacks(refresh)
+            if (blurNode != null || joined != null) forgetLayer()
             paint.style = Paint.Style.FILL
             paint.color = solidFill(dark) ?: style.fallback.resolve(dark).toArgb()
             canvas.drawPath(clip, paint)
@@ -1991,15 +2139,6 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         return true
     }
 
-    private fun scheduleRefresh(holdsPage: Boolean) {
-        removeCallbacks(refresh)
-        when (val delay = FrostRefresh.next(holdsPage, SystemClock.uptimeMillis() - scrolledAt)) {
-            null -> Unit
-            0L -> postOnAnimation(refresh)
-            else -> postDelayed(refresh, delay)
-        }
-    }
-
     private val stripBox = Rect()
 
     private fun stripArea(x: Int, y: Int, margin: Float): Rect {
@@ -2018,31 +2157,9 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         return FrostStrip.Key(blur, style.saturation, FrostScale.of(blur))
     }
 
-    private fun lensIn(from: FrostSourceView, placed: Rect, scale: Float): LiquidGlassRules.StripLens? {
+    internal fun lensIn(from: FrostSourceView, placed: Rect, scale: Float): LiquidGlassRules.StripLens? {
         val offset = offsetTo(from)
         return lensAt(-(offset shr 32).toInt() - placed.left, -offset.toInt() - placed.top, scale)
-    }
-
-    private fun shareStrip(from: FrostSourceView, key: FrostStrip.Key, mine: Rect): FrostStrip {
-        val strip = from.strip(key)
-        val now = drawingTime
-        if (strip.fresh(now, mine)) return strip
-        val area = Rect(mine)
-        val theirs = Rect()
-        val sharing = ArrayList<FrostView>()
-        sharing += this
-        for (other in FrostSources.frostsOf(from)) {
-            if (other === this) continue
-            if (other.stripNeed(from, theirs) == key) {
-                area.union(theirs)
-                sharing += other
-            }
-        }
-        val placed = FrostStrip.place(area, from.width, from.height, key.scale)
-        val lenses = LiquidGlassRules.lensField(sharing.mapNotNull { it.lensIn(from, placed, key.scale) }, density, key.scale, key.saturation)
-        from.node?.let { strip.record(it, placed, now, lenses) }
-        LookActivity.stripRecords += 1
-        return strip
     }
 
     private fun offsetTo(from: View): Long {
@@ -2086,14 +2203,14 @@ internal object LookMemory {
         val frosts = FrostSources.frosts()
         val layered = frosts.filter { it.holdsLayer }
         val decks = DeckBackdrops.all()
-        val strips = sources.flatMap { it.stripsHeld }
+        val strips = sources.map { it.stripStats }
         return Counts(
             sources = sources.size,
             recording = sources.count { it.isRecording },
             frosts = frosts.size,
             holdingLayers = layered.size,
             layerBytes = layered.sumOf { it.layerWidth.toLong() * it.layerHeight * 4 } + strips.sumOf { it.bytes },
-            strips = strips.size,
+            strips = strips.sumOf { it.count },
             decks = decks.size,
             animating = decks.count { it.isAnimating && !it.heldStill },
             recordingNames = sources.filter { it.isRecording }.map { it.sourceId ?: "?" },
