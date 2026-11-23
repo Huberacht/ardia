@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 const { createDoorbell, doorbellOptions, answerFor, DOORBELL_CHOICES, startPeerDoorbell, plainText } = await import("./peerDoorbell.ts");
-const { useControlApprovals, refreshControlApprovals, revokeApproval, approvalLine } = await import("./controlApprovals.ts");
+const { useControlApprovals, refreshControlApprovals, refreshExpiredApprovals, revokeApproval, approvalLine } = await import("./controlApprovals.ts");
 const { takeCliCounts } = await import("../telemetry/cliCounts.ts");
 const stub = await import("../../test-native/index.ts");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
@@ -165,6 +165,15 @@ test("approvals list, revoke and describe", async () => {
   assert.equal(approvalLine(useControlApprovals.getState().approvals[1], now), "Part of macOS, signed by Apple · Allowed for 30 more minutes");
   assert.equal(approvalLine({ ...useControlApprovals.getState().approvals[1], until: now + 30_000 }, now), "Part of macOS, signed by Apple · Allowed for 1 more minute");
   assert.equal(approvalLine({ ...useControlApprovals.getState().approvals[1], until: now - 1 }, now), "Part of macOS, signed by Apple · Expired");
+  stub.controlPeers.approvals = stub.controlPeers.approvals.map((a) => (a.until ? { ...a, until: now - 1 } : a));
+  await refreshExpiredApprovals(now);
+  assert.equal(useControlApprovals.getState().approvals.length, 2);
+  useControlApprovals.setState((s) => ({ approvals: s.approvals.map((a) => (a.until ? { ...a, until: now - 1 } : a)) }));
+  stub.controlPeers.approvals = stub.controlPeers.approvals.filter((a) => !a.until);
+  await refreshExpiredApprovals(now);
+  assert.deepEqual(useControlApprovals.getState().approvals.map((a) => a.name), ["tool"]);
+  stub.controlPeers.approvals.push({ key: "apple:com.apple.nc", name: "nc", signedBy: "Part of macOS, signed by Apple", added: now });
+  await refreshControlApprovals();
   await revokeApproval("apple:com.apple.nc");
   assert.deepEqual(stub.controlPeers.revoked, ["apple:com.apple.nc"]);
   assert.deepEqual(useControlApprovals.getState().approvals.map((a) => a.name), ["tool"]);

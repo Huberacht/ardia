@@ -19,6 +19,10 @@ export async function refreshControlApprovals() {
   }
 }
 
+export async function refreshExpiredApprovals(at: number) {
+  if (useControlApprovals.getState().approvals.some((a) => a.until !== undefined && a.until <= at)) await refreshControlApprovals();
+}
+
 export async function revokeApproval(key: string) {
   useControlApprovals.setState((s) => ({ approvals: s.approvals.filter((a) => a.key !== key) }));
   await revokeControlApproval(key).catch(() => false);
