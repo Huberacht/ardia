@@ -350,12 +350,19 @@ static NSDictionary<NSString *, id> *OffscreenRefusal(NSString *reason) {
       for (ArdiaCoreTab *tab in [[window tabsForProfile:profile] copy]) [tab close];
 }
 
-+ (NSInteger)cliHoldTabs:(NSArray<NSString *> *)tabIds {
++ (NSInteger)cliHoldTabs:(NSArray<NSDictionary<NSString *, id> *> *)holds {
   NSMutableArray<ArdiaCoreTab *> *tabs = [NSMutableArray array];
-  for (NSString *tabId in tabIds) {
-    if (ArdiaCoreTab *tab = ardia_host::TabWithAppTabId(tabId)) [tabs addObject:tab];
+  NSMutableArray<NSNumber *> *seconds = [NSMutableArray array];
+  for (NSDictionary<NSString *, id> *hold in holds) {
+    id tabId = hold[@"tabId"];
+    id lasts = hold[@"seconds"];
+    if (![tabId isKindOfClass:NSString.class] || ![lasts isKindOfClass:NSNumber.class]) continue;
+    if (ArdiaCoreTab *tab = ardia_host::TabWithAppTabId(tabId)) {
+      [tabs addObject:tab];
+      [seconds addObject:lasts];
+    }
   }
-  return [ArdiaCoreEngine holdTabsForCli:tabs];
+  return [ArdiaCoreEngine holdTabsForCli:tabs seconds:seconds];
 }
 
 + (void)cliTabTargets:(NSArray<NSString *> *)tabIds completion:(void (^)(NSDictionary<NSString *, id> *targets))completion {

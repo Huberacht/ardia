@@ -12,9 +12,11 @@ setConsentPeriod(true, "cli-holds-engine-test");
 let leaseClock = 0;
 cliHoldsClockForTests(() => leaseClock);
 const pushed = [];
+const seconds = [];
 let kept = 0;
-globalThis.acTestCliHeld = (tabIds) => {
-  pushed.push([...tabIds].sort());
+globalThis.acTestCliHeld = (tabs) => {
+  pushed.push(tabs.map((t) => t.tabId).sort());
+  seconds.push(Object.fromEntries(tabs.map((t) => [t.tabId, t.seconds])));
   const answer = { kept };
   kept = 0;
   return answer;
@@ -39,12 +41,14 @@ test("every hold change hands the engine the tabs held right now, and the socket
   await settled();
   pushed.length = 0;
   await ok("tabs.hold", { session: "a", tabs: [ids[0]], seconds: 60 });
-  await ok("tabs.hold", { session: "b", tabs: [ids[1]], seconds: 60 });
-  await settled();
+  assert.deepEqual(pushed.at(-1), [ids[0]], "tabs.hold answers only once the engine has the tab");
+  assert.deepEqual(seconds.at(-1), { [ids[0]]: 60 }, "with the seconds its hold has left, so the engine ends it even if the app forgets");
+  await ok("tabs.hold", { session: "b", tabs: [ids[1], ids[0]], seconds: 30 });
   assert.deepEqual(pushed.at(-1), [...ids].sort(), "both sessions' tabs");
+  assert.deepEqual(seconds.at(-1), { [ids[0]]: 60, [ids[1]]: 30 }, "a tab two sessions hold lasts as long as the longer hold");
   await ok("tabs.release", { session: "a" });
   await settled();
-  assert.deepEqual(pushed.at(-1), [ids[1]]);
+  assert.deepEqual(seconds.at(-1), { [ids[0]]: 30, [ids[1]]: 30 }, "one session's release leaves the other's hold, now the shorter one");
   leaseClock += 61_000;
   await settled();
   assert.deepEqual(pushed.at(-1), [], "a hold that ran out is gone from the engine too");
@@ -54,17 +58,21 @@ test("every hold change hands the engine the tabs held right now, and the socket
   assert.deepEqual(pushed.at(-1), [], "stopping the socket releases every hold, and the engine hears it");
 });
 
-test("the discards Chromium wanted for a held tab are counted once each, and only while sharing is on", async () => {
+test("the discards Chromium asked for on held tabs are counted for the sharing period they happened in", async () => {
+  await settled();
   takeTabSleepCounts();
   kept = 2;
   await settled();
-  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 2);
+  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 2, "counted since the last push, which sharing covered");
   setConsentPeriod(false, "cli-holds-engine-test");
+  await settled();
   kept = 3;
-  const pushedWhileOff = settled();
   setConsentPeriod(true, "cli-holds-engine-test");
-  await pushedWhileOff;
-  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 0, "nothing counted while sharing was off");
+  await settled();
+  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 0, "what the engine counted while sharing was off isn't sent once it's back on");
+  kept = 1;
+  await settled();
+  assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 1, "the next period, all under sharing, counts again");
 });
 
 test("the engine's kept-by code 103 is a CLI session, and a person's own Sleep Tab still wins over it", () => {

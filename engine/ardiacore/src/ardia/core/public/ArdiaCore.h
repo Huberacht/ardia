@@ -107,7 +107,8 @@ ARDIACORE_EXPORT
 @end
 
 @interface ArdiaCoreEngine (CliHolds)
-+ (NSInteger)holdTabsForCli:(NSArray<ArdiaCoreTab*>*)tabs;
++ (NSInteger)holdTabsForCli:(NSArray<ArdiaCoreTab*>*)tabs
+                    seconds:(NSArray<NSNumber*>*)seconds;
 @end
 
 @interface ArdiaCoreEngine (Tracing)

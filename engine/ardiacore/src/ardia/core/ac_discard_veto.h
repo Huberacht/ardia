@@ -1,7 +1,10 @@
 #ifndef ARDIA_CORE_AC_DISCARD_VETO_H_
 #define ARDIA_CORE_AC_DISCARD_VETO_H_
 
+#include <utility>
 #include <vector>
+
+#include "base/time/time.h"
 
 namespace content {
 class NavigationHandle;
@@ -21,7 +24,8 @@ std::vector<DiscardVeto> DiscardVetoesFor(content::WebContents* contents);
 
 void NotePostedDocument(content::NavigationHandle* handle);
 
-void SetCliHeldTabs(const std::vector<content::WebContents*>& held);
+void SetCliHeldTabs(
+    const std::vector<std::pair<content::WebContents*, base::TimeDelta>>& held);
 
 int TakeCliHoldVetoes();
 

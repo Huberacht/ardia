@@ -13,6 +13,7 @@ import { noteCliTabsHeld } from "../telemetry/tabSleepCounts";
 import { recentlyClosedIn } from "../windows/recentlyClosedList";
 import { eligibleKind, isEligibleTab, shownPage, windowTabIds } from "./automationWindows";
 import type { MethodSpec, SocketCall } from "./socketCatalog";
+import { cliHoldsPushed } from "./cliHoldsEngine";
 import { askWhereSeen } from "./socketAsk";
 import { bool, id, ids, int, obj, PROFILE, TAB, text, WINDOW } from "./socketSchema";
 import { expect, now, profileArg, tabOf, windowOf, windowOrFocused } from "./socketTargets";
@@ -138,7 +139,7 @@ function closedClear(params: Record<string, unknown>) {
   return { cleared: listed };
 }
 
-function holdTabs(params: Record<string, unknown>) {
+async function holdTabs(params: Record<string, unknown>) {
   const s = now();
   const asked = [...new Set(params.tabs as string[])];
   const held = asked.filter((tab) => isEligibleTab(s, tab));
@@ -146,6 +147,7 @@ function holdTabs(params: Record<string, unknown>) {
   const outcome = holdForCli(params.session as string, held, seconds);
   if ("refused" in outcome) throw new OpError("refused", outcome.refused);
   noteCliTabsHeld(outcome.started.length);
+  await cliHoldsPushed();
   return { held, gone: asked.filter((tab) => !held.includes(tab)), seconds };
 }
 

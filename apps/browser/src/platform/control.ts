@@ -6,7 +6,7 @@ export const setControl = (enabled: boolean) => call("engine.setCliControl", { o
 export const setControlActiveTab = (tabId: string | null) => call("engine.setCliActiveTab", { tabId });
 export const controlStatus = () => call("engine.cliControlStatus");
 export const controlTabTargets = (tabIds: string[]) => call("engine.cliTabTargets", { tabIds });
-export const setControlHeldTabs = (tabIds: string[]) => call("engine.setCliHeldTabs", { tabIds });
+export const setControlHeldTabs = (tabs: { tabId: string; seconds: number }[]) => call("engine.setCliHeldTabs", { tabs });
 export const controlOwnsTab = (tabId: string) => call("engine.cliOwnsTab", { tabId });
 export const controlMoveOffscreen = (tabId: string) => call("engine.cliMoveOffscreen", { tabId });
 export const controlCloseOffscreenTabs = () => call("engine.cliCloseOffscreenTabs");

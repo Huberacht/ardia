@@ -39,6 +39,7 @@ DOCUMENT_USER_DATA_KEY_IMPL(PostedDocument);
 
 class CliHeldTab : public content::WebContentsUserData<CliHeldTab> {
  public:
+  base::TimeTicks until;
   bool vetoed = false;
 
  private:
@@ -57,6 +58,11 @@ std::vector<base::WeakPtr<content::WebContents>>& HeldTabs() {
 }
 
 int g_cli_hold_vetoes = 0;
+
+CliHeldTab* HeldNow(content::WebContents* contents) {
+  CliHeldTab* held = CliHeldTab::FromWebContents(contents);
+  return held && base::TimeTicks::Now() < held->until ? held : nullptr;
+}
 
 bool RunsDownload(content::WebContents* contents) {
   content::DownloadManager* manager =
@@ -96,8 +102,7 @@ bool PageVetoed(const performance_manager::PageNode* page) {
   if (!contents) {
     return false;
   }
-  if (CliHeldTab* held = CliHeldTab::FromWebContents(contents.get());
-      held && !held->vetoed) {
+  if (CliHeldTab* held = HeldNow(contents.get()); held && !held->vetoed) {
     held->vetoed = true;
     ++g_cli_hold_vetoes;
   }
@@ -120,25 +125,36 @@ std::vector<DiscardVeto> DiscardVetoesFor(content::WebContents* contents) {
   if (RunsDownload(contents)) {
     vetoes.push_back(DiscardVeto::kDownload);
   }
-  if (CliHeldTab::FromWebContents(contents)) {
+  if (HeldNow(contents)) {
     vetoes.push_back(DiscardVeto::kCliHold);
   }
   return vetoes;
 }
 
-void SetCliHeldTabs(const std::vector<content::WebContents*>& held) {
+void SetCliHeldTabs(
+    const std::vector<std::pair<content::WebContents*, base::TimeDelta>>& held) {
   std::vector<base::WeakPtr<content::WebContents>>& marked = HeldTabs();
   for (const base::WeakPtr<content::WebContents>& contents : marked) {
-    if (contents && std::ranges::find(held, contents.get()) == held.end()) {
+    if (contents &&
+        std::ranges::find(held, contents.get(),
+                          &std::pair<content::WebContents*,
+                                     base::TimeDelta>::first) == held.end()) {
       contents->RemoveUserData(CliHeldTab::UserDataKey());
     }
   }
   marked.clear();
-  for (content::WebContents* contents : held) {
-    if (!contents) {
+  const base::TimeTicks now = base::TimeTicks::Now();
+  for (const auto& [contents, lasts] : held) {
+    if (!contents || !lasts.is_positive()) {
       continue;
     }
-    CliHeldTab::CreateForWebContents(contents);
+    CliHeldTab* mark = CliHeldTab::FromWebContents(contents);
+    if (!mark || mark->until <= now) {
+      contents->RemoveUserData(CliHeldTab::UserDataKey());
+      CliHeldTab::CreateForWebContents(contents);
+      mark = CliHeldTab::FromWebContents(contents);
+    }
+    mark->until = now + lasts;
     marked.push_back(contents->GetWeakPtr());
   }
 }
