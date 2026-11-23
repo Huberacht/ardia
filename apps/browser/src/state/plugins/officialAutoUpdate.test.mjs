@@ -92,6 +92,25 @@ test("a Python CLI 0.4.0 approved in 0.2.47 switches to the Bun CLI 0.6.0 by its
   assert.equal(counts.official_updates_waiting, 0);
 });
 
+test("a failed switch leaves the old copy on, shows no note and counts nothing until the retry succeeds", async () => {
+  host.promoteResult = { ok: false, reason: "busy disk" };
+  await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(BUN_060) }]);
+  const approved = manifestHash(BUN_060, PINNED.folderId);
+  assert.equal(P().records.cli.approved, approved, "the approval is on record");
+  assert.equal(P().records.cli.previous, PY_RECEIPT);
+  assert.equal(P().listings.cli.hash, PY_RECEIPT, "the old copy is still the one listed");
+  assert.ok(activeManifest(P(), "cli"), "and still on through previous");
+  assert.notEqual(P().records.cli.approved, P().listings.cli.hash, "so the page's note, bound to the running copy, stays hidden");
+  assert.equal(takePluginCounts().official_updates_auto, 0);
+  host.promoteResult = null;
+  host.promotes.length = 0;
+  resetOfficialUpdatesForTests();
+  await lifecycle.rescanPlugins(consentToken());
+  await settle();
+  assert.equal(P().listings.cli.hash, approved, "the next scan finishes the switch, as after a restart");
+  assert.equal(takePluginCounts().official_updates_auto, 1, "counted once it took");
+});
+
 test("an official update that asks for more still waits for Update…: the old copy stays on and the reason is counted", async () => {
   const wider = bun("0.6.0", { permissions: { control: true, network: ["api.example.com"] } });
   await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(wider) }]);

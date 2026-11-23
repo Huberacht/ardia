@@ -274,6 +274,11 @@ export function officialUpdateVerdict(s: Pick<PluginsStore, "listings" | "record
   return updateWithin(baseline, next);
 }
 
+function noteAutoUpdate(name: string, candidate: PluginListing, consent: ConsentToken | null) {
+  const record = recordOf(currentPlugins(), name);
+  if (record.updated && record.approved === candidate.hash && currentPlugins().listings[name]?.hash === candidate.hash) notePlugin("official_updates_auto", consent);
+}
+
 function approveOfficialUpdate(name: string, candidate: PluginListing, added: string[], consent: ConsentToken | null): boolean {
   const s = currentPlugins();
   const before = recordOf(s, name);
@@ -304,15 +309,14 @@ export function reconcileOfficial(consent: ConsentToken | null, now = Date.now()
           if (!adoptExactApproval(name, candidate, consent)) continue;
         }
         void promoteCandidate(name, candidate, consent).then((ok) => {
-          if (ok) return void retryAt.delete(`promote:${name}`);
+          if (ok) return void (retryAt.delete(`promote:${name}`), noteAutoUpdate(name, candidate, consent));
           retryAt.set(`promote:${name}`, { at: Date.now() + FIRST_RETRY_MS, wait: FIRST_RETRY_MS });
           retryLater(`promote:${name}`, FIRST_RETRY_MS, consent);
         });
       } else if (s.consent?.name !== name) {
         const verdict = officialUpdateVerdict(s, name, candidate);
         if (verdict.ok && approveOfficialUpdate(name, candidate, verdict.added, consent)) {
-          notePlugin("official_updates_auto", consent);
-          void promoteCandidate(name, candidate, consent);
+          void promoteCandidate(name, candidate, consent).then((ok) => ok && noteAutoUpdate(name, candidate, consent));
         } else if (!waitingNoted.has(candidate.hash)) {
           waitingNoted.add(candidate.hash);
           notePlugin("official_updates_waiting", consent);

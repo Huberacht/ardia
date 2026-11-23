@@ -1,4 +1,4 @@
-import { CONTRIBUTES_KEYS, PERMISSION_KEYS, startsEagerly, type CommandSpec, type PluginContributions, type PluginManifest, type PluginPermissions, type ProgramSpec } from "../../lib/pluginManifest";
+import { CONTRIBUTES_KEYS, MENU_SLOTS, PERMISSION_KEYS, startsEagerly, type CommandSpec, type PluginContributions, type PluginManifest, type PluginPermissions, type ProgramSpec } from "../../lib/pluginManifest";
 import { ANY_HOST, hostPatternCovers } from "../../lib/pluginNetwork";
 import { consentLines } from "./consent";
 
@@ -86,10 +86,20 @@ function activationWithin(a: readonly string[], b: readonly string[]): UpdatePro
   return null;
 }
 
+function inOrderWithin(approved: readonly unknown[], next: readonly unknown[]): boolean {
+  let at = 0;
+  for (const item of next.map(canonical)) {
+    while (at < approved.length && canonical(approved[at]) !== item) at++;
+    if (at === approved.length) return false;
+    at++;
+  }
+  return true;
+}
+
 function programsWithin(a: readonly ProgramSpec[], b: readonly ProgramSpec[]): UpdatePromptReason | null {
   for (const program of b) {
     const before = a.find((p) => p.name === program.name);
-    if (!before || !within(before.afterUpdate, program.afterUpdate)) return "programs";
+    if (!before || before.path !== program.path || !inOrderWithin(before.afterUpdate, program.afterUpdate)) return "programs";
   }
   return null;
 }
@@ -98,6 +108,8 @@ const handsOverTab = (c: CommandSpec) => "open" in c.action && c.action.context;
 
 function commandsWithin(a: readonly CommandSpec[], b: readonly CommandSpec[]): UpdatePromptReason | null {
   for (const command of b) {
+    const before = a.find((c) => c.name === command.name);
+    if (before && (!same(before.action, command.action) || !same(before.when ?? null, command.when ?? null))) return "contributions";
     const action = command.action;
     if ("tool" in action || "open" in action || "view" in action || "panel" in action || "handler" in action) {
       if (handsOverTab(command) && !a.some(handsOverTab)) return "contributions";
@@ -108,10 +120,7 @@ function commandsWithin(a: readonly CommandSpec[], b: readonly CommandSpec[]): U
   return null;
 }
 
-function settingsWithin(a: PluginContributions["settings"], b: PluginContributions["settings"]): UpdatePromptReason | null {
-  for (const [key, value] of Object.entries(b.defaults)) if (!Object.hasOwn(a.defaults, key) || !same(a.defaults[key], value)) return "settings";
-  return null;
-}
+const settingsWithin = (a: PluginContributions["settings"], b: PluginContributions["settings"]): UpdatePromptReason | null => (same(a.defaults, b.defaults) ? null : "settings");
 
 const toolsWithin: Rule<PluginContributions["tools"]> = (a, b) => (b.every((t) => a.some((x) => x.name === t.name)) ? null : "contributions");
 
@@ -191,7 +200,9 @@ const MANIFEST_RULES: { [K in keyof PluginManifest]: Rule<PluginManifest[K]> } =
 
 function newRuntime(a: PluginManifest, b: PluginManifest): UpdatePromptReason | null {
   if (!b.main || a.main) return null;
-  if (a.sidecar || b.sidecar || startsEagerly(b.activationEvents)) return "runtime";
+  const k = b.contributes;
+  const elsewhere = b.page || k.panels.length || k.sidebarViews.length || k.toolbar.length || k.omnibox.length || k.tools.length || MENU_SLOTS.some((slot) => k.menus[slot].length);
+  if (a.sidecar || b.sidecar || startsEagerly(b.activationEvents) || elsewhere || !b.activationEvents.every((e) => e.startsWith("onCommand:"))) return "runtime";
   return null;
 }
 

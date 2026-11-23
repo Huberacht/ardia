@@ -46,11 +46,43 @@ test("narrower passes: dropping control, a program, an after-update action or a 
   assert.equal(updateWithin(parse(v2("0.6.0", { permissions: { control: true, network: "*" } })), parse(v2("0.7.0", { permissions: { control: true, network: ["x.example.com"] } }))).ok, true);
 });
 
-test("reordered lists compare as sets: after-update actions, hosts, keywords", () => {
+test("reordered hosts compare as sets; after-update actions keep their order and count, so only removals pass", () => {
   const a = parse(v2("0.6.0", { permissions: { control: true, network: ["a.example.com", "b.example.com"] } }));
-  const b = parse(v2("0.7.0", { permissions: { control: true, network: ["b.example.com", "a.example.com"] } }, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate: [...AFTER_UPDATE].reverse() }] }));
-  assert.deepEqual(updateWithin(a, b), { ok: true, added: updateWithin(a, b).added });
-  assert.equal(updateWithin(a, b).ok, true);
+  const hosts = parse(v2("0.7.0", { permissions: { control: true, network: ["b.example.com", "a.example.com"] } }));
+  assert.equal(updateWithin(a, hosts).ok, true);
+  const steps = (afterUpdate) => parse(v2("0.7.0", { permissions: { control: true, network: ["a.example.com", "b.example.com"] } }, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate }] }));
+  assert.deepEqual(updateWithin(a, steps([...AFTER_UPDATE].reverse())), { ok: false, reason: "programs" }, "reordered");
+  assert.deepEqual(updateWithin(a, steps([AFTER_UPDATE[0], AFTER_UPDATE[0], AFTER_UPDATE[1]])), { ok: false, reason: "programs" }, "an approved step run twice");
+  assert.equal(updateWithin(a, steps([AFTER_UPDATE[0], AFTER_UPDATE[2]])).ok, true, "a step dropped");
+});
+
+test("a program whose path changes prompts, since after-update steps run the binary at that path", () => {
+  const moved = parse(v2("0.7.0", {}, { programs: [{ name: "ardia", path: "bin/other", claim: true, afterUpdate: AFTER_UPDATE }] }));
+  assert.deepEqual(updateWithin(parse(CLI_060), moved), { ok: false, reason: "programs" });
+});
+
+test("a command kept under the same name must keep its action and when clause, so a menu entry can't start handing context to code", () => {
+  const menuBase = { main: "dist/main.js", permissions: { control: true } };
+  const withMenu = (command) => v2("0.6.0", menuBase, { commands: [command], menus: { group: [{ command: "show-status" }] } });
+  const view = { name: "show-status", title: "Command Line: Show Status", icon: "terminal", view: "status" };
+  const a = parse(withMenu(view));
+  assert.equal(updateWithin(a, parse(withMenu(view))).ok, true);
+  assert.deepEqual(updateWithin(a, parse(withMenu({ name: "show-status", title: "Command Line: Show Status", icon: "terminal", handler: true }))), { ok: false, reason: "contributions" });
+  assert.deepEqual(updateWithin(a, parse(withMenu({ ...view, when: "!isPinned" }))), { ok: false, reason: "contributions" });
+});
+
+test("settings defaults must stay exactly the same, since a dropped default stays applied until the plugin is turned off", () => {
+  const a = parse(v2("0.6.0", {}, { settings: { defaults: { cliControl: true } } }));
+  assert.deepEqual(updateWithin(a, parse(v2("0.7.0"))), { ok: false, reason: "settings" });
+  assert.equal(updateWithin(a, parse(v2("0.7.0", {}, { settings: { defaults: { cliControl: true } } }))).ok, true);
+});
+
+test("a first main only counts as on demand when the command bar is its only way in: not with a page, panels, menus, toolbar, omnibox or tools", () => {
+  const { main: _main, ...noMain } = CLI_060;
+  const pageBase = { ...noMain, contributes: { ...CLI_060.contributes, commands: [], panels: [{ id: "default", title: "Status", icon: "terminal", mode: "tab", file: "page/index.html" }] } };
+  const a = parse(pageBase);
+  const withMain = parse({ ...pageBase, version: "0.7.0", main: "dist/main.js" });
+  assert.deepEqual(updateWithin(a, withMain), { ok: false, reason: "runtime" }, "a restored page would wake it");
 });
 
 const broader = [
