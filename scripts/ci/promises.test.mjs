@@ -77,6 +77,11 @@ test("a guard or suite option that stops a test registering changes its hash, an
   const group = 'describe("s", () => {\n  test("t", () => { f(); });\n});\n';
   assert.notEqual(hash(group.replace('describe("s", ', 'describe("s", { skip: true }, '), "s › t"), hash(group, "s › t"));
   assert.notEqual(hash('if (false) test("t", () => { f(); });', "t"), hash('test("t", () => { f(); });', "t"));
+  const plain = 'test("t", () => { f(); });';
+  assert.notEqual(hash(`if (false)\n  ${plain}`, "t"), hash(plain, "t"));
+  assert.notEqual(hash(`for (const o of [])\n  ${plain}`, "t"), hash(`for (const o of [1])\n  ${plain}`, "t"));
+  assert.notEqual(hash(`if (a) g();\nelse\n  ${plain}`, "t"), hash(`if (!a) g();\nelse\n  ${plain}`, "t"));
+  assert.notEqual(hash('describe(\n  "s",\n  { skip: true },\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"), hash('describe(\n  "s",\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"));
   assert.equal(hash(`import a from "a"\nimport "node:path"\n${group}`, "s › t"), hash(`import a from "a"\n${group}`, "s › t"));
   const loop = 'for (const o of [1]) {\n  test(`t ${o}`, () => { f(o); });\n}\n';
   assert.equal(hash(`const other = 1\n${loop}`, "t ${o}"), hash(loop, "t ${o}"));

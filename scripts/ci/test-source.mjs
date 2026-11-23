@@ -365,10 +365,12 @@ function ancestry(tokens, language) {
     const open = opening(tokens, at);
     return open > 0 && tokens[open - 1].text.startsWith("@");
   };
+  const ifStarts = new Map();
   const startsStatement = (index) => {
     const token = tokens[index];
     if (!token.newline || index === 0) return false;
-    if (language === "js") return token.type === "word" && JS_STARTS.has(token.text);
+    const previous = tokens[index - 1];
+    if (language === "js") return token.type === "word" && JS_STARTS.has(token.text) && !previous.control && !["else", "do"].includes(previous.text);
     if (!(SWIFT_STARTS.has(token.text) || token.text.startsWith("@") || token.text.startsWith("#"))) return false;
     return !attributeEnd(index - 1);
   };
@@ -376,6 +378,10 @@ function ancestry(tokens, language) {
     take(index) {
       const token = tokens[index];
       if (startsStatement(index)) boundary[boundary.length - 1] = index;
+      if (language === "js" && token.type === "word") {
+        if (token.text === "if" && tokens[index - 1]?.text !== "else") ifStarts.set(boundary.length, boundary.at(-1));
+        if (token.text === "else" && ifStarts.has(boundary.length)) boundary[boundary.length - 1] = ifStarts.get(boundary.length);
+      }
       if (token.type !== "punct") return;
       if (OPENERS.has(token.text)) {
         stack.push({ start: boundary.at(-1), opener: index });
