@@ -418,7 +418,11 @@ export function cppFunctions(masked) {
       parens = frame.parens;
       boundary = at + 1;
       if (!frame.isFunction) continue;
-      const body = masked.slice(frame.open + 1, at);
+      let body = masked.slice(frame.open + 1, at);
+      for (const nested of functions.filter((fn) => fn.open > frame.open && fn.close < at)) {
+        const start = nested.open - frame.open - 1;
+        body = body.slice(0, start) + " ".repeat(nested.close - nested.open + 1) + body.slice(nested.close - frame.open);
+      }
       const returns = [...body.matchAll(/\breturn\b([^;]*);/g)].map((match) => match[1].trim());
       const onlyBooleans = returns.length > 0 && returns.every((value) => value === "true" || value === "false");
       const boolean = CPP_BOOL_DECLARED.test(frame.header) || frame.returns === "bool" || onlyBooleans;
@@ -440,7 +444,7 @@ export function linuxModuleDispatch(sources) {
     }
     const functions = cppFunctions(masked);
     for (const branch of masked.matchAll(/\bif\s*\((?=\s*(?:method|name)\s*==)/g)) {
-      const owner = functions.filter((fn) => fn.open < branch.index && branch.index < fn.close).at(-1);
+      const owner = functions.filter((fn) => fn.open < branch.index && branch.index < fn.close).sort((a, b) => a.close - a.open - (b.close - b.open))[0];
       if (!owner || owner.boolean) continue;
       const open = branch.index + branch[0].length - 1;
       const close = closing(masked, open, skipCppLiteral);
@@ -522,16 +526,16 @@ export function swiftRegistrations(source, className) {
     body = body.slice(0, view.index) + body.slice(end);
   }
   const statements = topLevelStatements(body);
-  const name = statements.filter((statement) => /^Name\s*\(\s*Self\.moduleName\s*\)$/.test(statement));
+  const name = statements.filter((statement) => /^Name\s*\(\s*Self\s*\.\s*moduleName\s*\)$/.test(statement));
   const rest = statements.filter((statement) => !name.includes(statement));
   return {
-    generated: rest.map((statement) => /^Self\.(\w+)Function$/.exec(statement)?.[1]).filter(Boolean),
-    events: rest.includes("Self.eventsDefinition"),
+    generated: rest.map((statement) => /^Self\s*\.\s*(\w+)Function$/.exec(statement)?.[1]).filter(Boolean),
+    events: rest.some((statement) => /^Self\s*\.\s*eventsDefinition$/.test(statement)),
     name: name.length === 1,
     handWritten: [
       ...[...rest.join("\n").matchAll(/\b(Name|Function|AsyncFunction|Events|Property|Constant|Constants)\s*\(/g)].map((match) => match[1]),
       ...name.slice(1).map(() => "Name"),
-      ...rest.filter((statement) => /\bSelf\.(?:\w+Function|eventsDefinition)\b/.test(statement) && !/^Self\.(?:\w+Function|eventsDefinition)$/.test(statement)),
+      ...rest.filter((statement) => /\bSelf\s*\.\s*(?:\w+Function|eventsDefinition)\b/.test(statement) && !/^Self\s*\.\s*(?:\w+Function|eventsDefinition)$/.test(statement)),
     ],
   };
 }
@@ -557,20 +561,27 @@ function walk(node, visit, { intoFunctions = true } = {}) {
   });
 }
 
+const endsAbruptly = (block) => block.statements.some((statement) => ts.isReturnStatement(statement) || ts.isThrowStatement(statement));
+
+export function ownReturnedExpressions(fn) {
+  if (!fn.body) return [];
+  if (!ts.isBlock(fn.body)) return [fn.body];
+  const expressions = [];
+  const collect = (node) => {
+    walk(node, (child) => {
+      if (ts.isTryStatement(child) && child.finallyBlock && endsAbruptly(child.finallyBlock)) {
+        collect(child.finallyBlock);
+        return false;
+      }
+      if (ts.isReturnStatement(child) && child.expression) expressions.push(child.expression);
+    }, { intoFunctions: false });
+  };
+  collect(fn.body);
+  return expressions;
+}
+
 export function ownReturnedObjects(fn) {
-  if (fn.body && !ts.isBlock(fn.body)) {
-    const value = unwrap(fn.body);
-    return value && ts.isObjectLiteralExpression(value) ? [value] : [];
-  }
-  const objects = [];
-  if (!fn.body) return objects;
-  walk(fn.body, (node) => {
-    if (ts.isReturnStatement(node) && node.expression) {
-      const value = unwrap(node.expression);
-      if (ts.isObjectLiteralExpression(value)) objects.push(value);
-    }
-  }, { intoFunctions: false });
-  return objects;
+  return ownReturnedExpressions(fn).map(unwrap).filter((value) => value && ts.isObjectLiteralExpression(value));
 }
 
 function resolveImport(from, path, exists) {
@@ -693,7 +704,26 @@ export function nativeModuleTypingProblems(source, domain, modules, path = "sour
       continue;
     }
     typed++;
-    if (fn && ts.isArrowFunction(fn) && unwrap(fn.body) === call && ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)) wrappers.add(fn.parent.name.text);
+  }
+  const named = [];
+  walk(file, (node) => {
+    if (ts.isFunctionDeclaration(node) && node.name) named.push([node.name.text, node]);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const value = unwrap(node.initializer);
+      if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) named.push([node.name.text, value]);
+    }
+  });
+  const reachesNative = (expression) => {
+    const value = unwrap(expression);
+    return value && ts.isCallExpression(value) && ts.isIdentifier(value.expression) && (NATIVE_MODULE_CALLS.has(value.expression.text) || wrappers.has(value.expression.text));
+  };
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const [name, fn] of named) {
+      if (wrappers.has(name) || !ownReturnedExpressions(fn).some(reachesNative)) continue;
+      wrappers.add(name);
+      grew = true;
+    }
   }
   const sites = [...calls];
   walk(file, (node) => {
@@ -737,32 +767,61 @@ test("the module-domain scans find the shaders pilot and read the hosts' real ta
   assert.ok(js.events.has("ArdiaShell.onOpenURLs") && js.events.has("ArdiaImport.onImportEvent"));
 });
 
+export function macModuleProblems(domain, entry, read, swiftFiles) {
+  const problems = [];
+  const generated = entry.swift === null ? null : read(entry.swift);
+  const sources = swiftFiles.filter((path) => path !== entry.swift).map((path) => [path, stripComments(read(path))]);
+  const listed = JSON.parse(read(`${entry.package}/expo-module.config.json`)).apple?.modules ?? [];
+  for (const [module, row] of Object.entries(entry.modules)) {
+    const onMac = (binding) => binding.mac === "custom";
+    const functions = Object.keys(row.functions).filter((fn) => onMac(row.functions[fn]));
+    const events = Object.keys(row.events).filter((event) => onMac(row.events[event]));
+    const conforming = sources.flatMap(([path, text]) => [...text.matchAll(new RegExp(`\\bclass (\\w+)\\s*:\\s*Module\\s*,\\s*${row.native}\\b`, "g"))].map((match) => ({ path, text, name: match[1] })));
+    for (const [path, text] of sources) if (new RegExp(`Name\\s*\\(\\s*"${module}"\\s*\\)`).test(text)) problems.push(`${path} names ${module} itself instead of Name(Self.moduleName)`);
+    if (!functions.length && !events.length) {
+      if (conforming.length) problems.push(`${module} has nothing on the Mac, yet ${conforming.map(({ name }) => name).join(", ")} conforms to ${row.native}`);
+      continue;
+    }
+    if (generated === null) {
+      problems.push(`${domain} ${module} has Mac functions or events, but the manifest names no generated Swift for the domain`);
+      continue;
+    }
+    if (!new RegExp(`protocol ${row.native}\\b`).test(generated)) problems.push(`${entry.swift} doesn't declare ${row.native}`);
+    if (conforming.length !== 1) {
+      problems.push(`${conforming.length} Mac modules in ${entry.package}/ios conform to ${row.native}, not exactly one`);
+      continue;
+    }
+    const [{ path, text, name }] = conforming;
+    if (!listed.includes(name)) problems.push(`${entry.package}/expo-module.config.json doesn't register ${name}`);
+    const registered = swiftRegistrations(text, name);
+    if (!registered.name) problems.push(`${path}: ${name} doesn't take its name from ${row.native}`);
+    if (registered.generated.sort().join() !== [...functions].sort().join()) problems.push(`${path}: ${name} registers ${registered.generated.join(", ") || "no"} generated functions, not ${functions.join(", ")}`);
+    if (registered.events !== events.length > 0) problems.push(`${path}: ${name} ${events.length ? "doesn't declare" : "declares"} its events from ${row.native}`);
+    if (registered.handWritten.length) problems.push(`${path}: ${name} registers ${registered.handWritten.join(", ")} by hand`);
+  }
+  return problems;
+}
+
 test("each Mac module of a module domain conforms to its generated protocol and registers exactly its generated name, events and functions, with no hand-written ones beside its views", () => {
   for (const [domain, entry] of moduleDomains) {
-    const generated = read(entry.swift);
-    const sources = filesUnder(`${entry.package}/ios/`, /\.swift$/).filter((path) => path !== entry.swift).map((path) => [path, stripComments(read(path))]);
-    const listed = JSON.parse(read(`${entry.package}/expo-module.config.json`)).apple?.modules ?? [];
-    for (const [module, row] of Object.entries(entry.modules)) {
-      const onMac = (binding) => binding.mac === "custom";
-      const functions = Object.keys(row.functions).filter((fn) => onMac(row.functions[fn]));
-      const events = Object.keys(row.events).filter((event) => onMac(row.events[event]));
-      const conforming = sources.flatMap(([path, text]) => [...text.matchAll(new RegExp(`\\bclass (\\w+): Module, ${row.native}\\b`, "g"))].map((match) => ({ path, text, name: match[1] })));
-      for (const [path, text] of sources) assert.doesNotMatch(text, new RegExp(`Name\\s*\\(\\s*"${module}"\\s*\\)`), `${path} names ${module} itself instead of Name(Self.moduleName)`);
-      if (!functions.length && !events.length) {
-        assert.deepEqual(conforming, [], `${module} has nothing on the Mac, so no module conforms to ${row.native}`);
-        continue;
-      }
-      assert.match(generated, new RegExp(`protocol ${row.native}\\b`), `${entry.swift} declares ${row.native}`);
-      assert.equal(conforming.length, 1, `exactly one Mac module in ${entry.package}/ios conforms to ${row.native}`);
-      const [{ path, text, name }] = conforming;
-      assert.ok(listed.includes(name), `${entry.package}/expo-module.config.json registers ${name}`);
-      const registered = swiftRegistrations(text, name);
-      assert.ok(registered.name, `${path}: ${name} takes its name from ${row.native}`);
-      assert.deepEqual(registered.generated.sort(), [...functions].sort(), `${domain} ${module}'s Mac functions are exactly the generated ones`);
-      assert.equal(registered.events, events.length > 0, `${path}: ${name} declares its events from ${row.native}`);
-      assert.deepEqual(registered.handWritten, [], `${path}: ${name} registers functions, events, constants or a name by hand`);
-    }
+    const swiftFiles = exists(`${entry.package}/ios`) ? filesUnder(`${entry.package}/ios/`, /\.swift$/) : [];
+    assert.deepEqual(macModuleProblems(domain, entry, read, swiftFiles), [], domain);
   }
+});
+
+test("a module domain with nothing on the Mac has no generated Swift, and the Mac check reads that instead of a file named null", () => {
+  const entry = { package: "packages/quiet", swift: null, modules: { ArdiaQuiet: { native: "QuietNative", functions: { probe: { args: [], async: true, mac: "absent", desktop: "custom", windows: "absent" } }, events: {} } } };
+  const files = { "packages/quiet/expo-module.config.json": '{"apple":{"modules":[]}}', "packages/quiet/ios/Other.swift": "public class OtherModule: Module {}\n" };
+  const readFile = (path) => {
+    if (!Object.hasOwn(files, path)) throw new Error(`ENOENT ${path}`);
+    return files[path];
+  };
+  assert.deepEqual(macModuleProblems("quiet", entry, readFile, []), []);
+  assert.deepEqual(macModuleProblems("quiet", entry, readFile, ["packages/quiet/ios/Other.swift"]), []);
+  files["packages/quiet/ios/Quiet.swift"] = "public class QuietModule: Module, QuietNative {}\n";
+  assert.match(macModuleProblems("quiet", entry, readFile, ["packages/quiet/ios/Quiet.swift"]).join("\n"), /has nothing on the Mac, yet QuietModule conforms to QuietNative/);
+  const onMac = { ...entry, modules: { ArdiaQuiet: { ...entry.modules.ArdiaQuiet, functions: { probe: { ...entry.modules.ArdiaQuiet.functions.probe, mac: "custom" } } } } };
+  assert.match(macModuleProblems("quiet", onMac, readFile, []).join("\n"), /names no generated Swift/);
 });
 
 test("a module domain's package reaches each of its Expo modules only through the generated types", () => {
@@ -918,4 +977,95 @@ test("the typing scan reads the TypeScript syntax tree: it refuses a wrapper typ
   assert.equal(nativeModuleTypingProblems('const Demo = <any>requireNativeModule<DemoNative>("ArdiaDemo");', "demo", modules, "source.tsx").problems.length, 0, "in TSX, <any> opens JSX, not a cast");
   assert.equal(problems(`${wrapper("DemoModules[Name]")}\nconst Loose = (nativeModule("ArdiaDemo"))\n  as any;`), 0, "TypeScript ends the statement before an as on the next line, so nothing is cast");
   assert.equal(problems('const re = /requireNativeModule<any>("ArdiaDemo")/;\nconst text = "requireNativeModule<any>(\\"ArdiaDemo\\")";'), 0);
+});
+
+test("the Linux scan judges a branch by its innermost function, and a nested lambda's returns never make the function around it a bool helper", () => {
+  const nestedBool = [
+    "void Dispatch(std::string_view method, Done done) {",
+    "  auto has = [&]() -> bool {",
+    '    if (method == "ArdiaDemo.inLambda") { Note(); return true; }',
+    "    return false;",
+    "  };",
+    "  auto plain = [&]() {",
+    '    if (method == "ArdiaDemo.inPlain") { Note(); return true; }',
+    "    return false;",
+    "  };",
+    '  if (method == "ArdiaDemo.outer") return Run(std::move(done));',
+    "  if (has()) return;",
+    "}",
+  ].join("\n");
+  assert.deepEqual([...linuxModuleDispatch([nestedBool]).methods], ["ArdiaDemo.outer"]);
+  const helperInside = [
+    "void Dispatch(std::string_view method, Done done) {",
+    "  auto known = [](std::string_view name) { return name.size() > 0 ? true : false; };",
+    "  auto yes = []() { return true; };",
+    '  if (method == "ArdiaDemo.first") { Log(); return First(std::move(done)); }',
+    '  if (method == "ArdiaDemo.second") return Second();',
+    "}",
+  ].join("\n");
+  assert.deepEqual([...linuxModuleDispatch([helperInside]).methods].sort(), ["ArdiaDemo.first", "ArdiaDemo.second"]);
+  const noOwnReturns = 'void Dispatch(std::string_view method, Done done) {\n  auto yes = []() { return true; };\n  if (method == "ArdiaDemo.quiet") { Quiet(std::move(done)); }\n}';
+  assert.deepEqual([...linuxModuleDispatch([noOwnReturns]).methods], ["ArdiaDemo.quiet"], "a void dispatcher with no returns of its own isn't judged by its lambda's");
+  const outerBool = cppFunctions(maskCppLiterals("bool Outer() {\n  auto run = []() { Go(); return Done(); };\n  return true;\n}"));
+  assert.deepEqual(outerBool.map(({ header, boolean }) => [header.split("(")[0].trim(), boolean]), [["auto run = []", false], ["bool Outer", true]]);
+});
+
+test("a try whose finally returns or throws overrides what its try and catch return, so only the finally's object is the module", () => {
+  const files = {
+    "w/modules.ts": [
+      "export function demoMaker(host) {",
+      "  try {",
+      "    return { hold() {} };",
+      "  } catch {",
+      "    return { caught() {} };",
+      "  } finally {",
+      "    return { other() {} };",
+      "  }",
+      "}",
+      "export function thrower(host) {",
+      "  try {",
+      "    if (host) return { kept() {} };",
+      "  } finally {",
+      "    cleanup();",
+      "  }",
+      "  return { after() {} };",
+      "}",
+      "export function nestedFinally() {",
+      "  try { return { lost() {} }; } finally { if (x) return { maybe() {} }; }",
+      "}",
+    ].join("\n"),
+  };
+  const readFile = (path) => files[path];
+  const has = (path) => Object.hasOwn(files, path);
+  assert.deepEqual([...windowsJsMembers("demoMaker", "w/modules.ts", readFile, has)], ["other"]);
+  assert.deepEqual([...windowsJsMembers("thrower", "w/modules.ts", readFile, has)], ["kept", "after"]);
+  assert.deepEqual([...windowsJsMembers("nestedFinally", "w/modules.ts", readFile, has)], ["lost", "maybe"], "a finally that only sometimes returns doesn't override the try");
+});
+
+test("the typing scan follows a block-bodied wrapper, a function declaration or expression, and a wrapper of a wrapper, to every cast", () => {
+  const modules = { ArdiaDemo: { native: "DemoNative" } };
+  const problems = (source) => nativeModuleTypingProblems(source, "demo", modules).problems;
+  const wrappers = [
+    'function nativeModule<N extends keyof DemoModules>(name: N) {\n  return requireNativeModule<DemoModules[N]>(name);\n}',
+    'const nativeModule = <N extends keyof DemoModules>(name: N) => {\n  const module = 1;\n  return requireNativeModule<DemoModules[N]>(name);\n};',
+    'const nativeModule = function <N extends keyof DemoModules>(name: N) {\n  return (requireNativeModule<DemoModules[N]>(name));\n};',
+  ];
+  for (const wrapper of wrappers) {
+    assert.deepEqual(problems(`${wrapper}\nconst demo = nativeModule("ArdiaDemo");`), [], wrapper);
+    for (const cast of ["as any", "as unknown", "as unknown as { hold(): void }"]) {
+      assert.equal(problems(`${wrapper}\nconst demo = (nativeModule("ArdiaDemo")) ${cast};`).length, 1, `${wrapper} ${cast}`);
+    }
+    assert.equal(problems(`${wrapper}\nconst demo = nativeModule("ArdiaDemo");\nexport const loose = demo as any;`).length, 1, wrapper);
+  }
+  const twice = `${wrappers[0]}\nfunction backdrop() {\n  return nativeModule("ArdiaDemo");\n}\nconst outer = () => backdrop();\nconst a = (backdrop()) as any;\nconst b = outer() as unknown;`;
+  assert.equal(problems(twice).length, 2);
+});
+
+test("the Mac registration scan takes Self and its generated member split across lines, and still refuses one that is assigned or discarded", () => {
+  const module = (definition) => `public class DemoModule: Module, DemoNative {\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
+  assert.deepEqual(swiftRegistrations(module("    Name(\n      Self\n        .moduleName\n    )\n    Self\n      .holdFunction\n    Self\n      .eventsDefinition"), "DemoModule"), { generated: ["hold"], events: true, name: true, handWritten: [] });
+  const discarded = swiftRegistrations(module("    Name(Self.moduleName)\n    let _ =\n      Self\n      .holdFunction\n    _ = Self\n      .eventsDefinition"), "DemoModule");
+  assert.deepEqual(discarded.generated, []);
+  assert.equal(discarded.events, false);
+  assert.equal(discarded.handWritten.length, 2);
 });

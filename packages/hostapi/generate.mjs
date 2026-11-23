@@ -27,6 +27,7 @@ const TOPIC = /^[a-z][a-zA-Z]*(\.[a-z][a-zA-Z]*)?$/;
 const CLIENT_PACKAGE = "packages/ardiacore/package.json";
 export const clientPackages = new Set(Object.keys(JSON.parse(readFileSync(ROOT + CLIENT_PACKAGE, "utf8")).dependencies ?? {}));
 const isRelative = (path) => path.startsWith("./") || path.startsWith("../");
+const RELATIVE_SPECIFIER = /^(?:\.\.?\/)+[A-Za-z0-9_@-][A-Za-z0-9._@-]*(?:\/[A-Za-z0-9_@-][A-Za-z0-9._@-]*)*$/;
 
 const capitalized = (name) => name[0].toUpperCase() + name.slice(1);
 const sortedKeys = (record) => Object.keys(record).sort();
@@ -97,6 +98,7 @@ export function validateModuleDomain(name, domain) {
   declare(`${capitalized(name)}Modules`, "the domain's module map");
   for (const [path, names] of Object.entries(domain.imports ?? {})) {
     if (!isRelative(path) && !dependencies.has(path)) fail(`import ${path} is relative to the generated folder, or a package ${domain.package}/package.json depends on`);
+    if (isRelative(path) && !RELATIVE_SPECIFIER.test(path)) fail(`import ${JSON.stringify(path)} is a relative path of letters, digits, dots, dashes, underscores and slashes`);
     for (const type of names) {
       if (!TYPE_NAME.test(type)) fail(`import ${type} from ${path} is a type name`);
       declare(type, "import");
@@ -204,6 +206,7 @@ export function validate(name, domain) {
   if (domain.kind !== "engine") fail("kind is engine: JSON calls to ac_* services; positional module domains are listed in moduleDomains");
   for (const [path, names] of Object.entries(domain.imports ?? {})) {
     if (!isRelative(path) && !clientPackages.has(path)) fail(`import ${path} is relative to the generated folder, or a package ${CLIENT_PACKAGE} depends on`);
+    if (isRelative(path) && !RELATIVE_SPECIFIER.test(path)) fail(`import ${JSON.stringify(path)} is a relative path of letters, digits, dots, dashes, underscores and slashes`);
     for (const type of names) if (!TYPE_NAME.test(type)) fail(`import ${type} from ${path} is a type name`);
   }
   for (const [verb, call] of Object.entries(domain.calls ?? {})) {

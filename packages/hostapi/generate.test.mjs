@@ -600,3 +600,13 @@ test("a module domain's type or import may not shadow a TypeScript global the ge
   }
   assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain(undefined, { types: { PromiseResult: "{ ok: boolean }" } })));
 });
+
+test("a relative import is a plain path, so the generated import line is always valid TypeScript", () => {
+  for (const path of ['../foo"bar', "../foo\\bar", "../foo bar", "../foo\nbar", "./", "../", ".//foo", "../foo/", "./foo//bar", "../foo\u0000"]) {
+    assert.throws(() => validateModuleDomain("demo", moduleDomain(undefined, { imports: { [path]: ["Thing"] } })), /is a relative path of letters, digits, dots, dashes, underscores and slashes/, JSON.stringify(path));
+    assert.throws(() => validate("demo", { kind: "engine", imports: { [path]: ["Thing"] }, calls: {}, events: {} }), /is a relative path of letters/, JSON.stringify(path));
+  }
+  for (const path of ["../meadowPage/config", "./types", "../../webkit", "../wire", "../../@scope/thing.d"]) {
+    assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain(undefined, { imports: { [path]: ["Thing"] } })), path);
+  }
+});
