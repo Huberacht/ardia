@@ -148,7 +148,7 @@ export function generatedPositionFor(map: ParsedMap, wanted: string, line1: numb
   return best ? { line: best.line, column: best.column } : null;
 }
 
-const DIRECTIVE = /^\s*(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL=([^\s'"*]+(?:\*(?!\/)[^\s'"*]*)*)\s*(?:\*\/)?\s*$/;
+const DIRECTIVE = /(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL=([^\s'"*]+(?:\*(?!\/)[^\s'"*]*)*)\s*(?:\*\/)?\s*$/;
 const COMMENT_ONLY = /^\s*(?:\/\/|\/\*|\*)/;
 
 export function sourceMapRefOf(script: string): string | null {

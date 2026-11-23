@@ -8,6 +8,7 @@ export const MAX_LOGPOINTS_PER_CONNECTION = 50;
 export const SCRIPTS_SETTLE_MS = 250;
 export const MAX_HELD_SCRIPTS = 20_000;
 export const MAX_HELD_MAP_BYTES = 32 * 1024 * 1024;
+export const MAX_HELD_FRAMES = 1_000;
 
 type Fields = Record<string, unknown>;
 type Script = { url: string; sourceMapURL: string | null; frameId: string | null; contextId: number | null };
@@ -69,11 +70,24 @@ async function openHeld(connection: number, tabId: string): Promise<Held> {
 
 export const newScriptBook = (): ScriptBook => ({ scripts: new Map(), frameContexts: new Map(), mapBytes: 0 });
 
+let retainedMapBytes = 0;
+
+export const retainedLogpointMapBytes = () => retainedMapBytes;
+
 function forget(book: ScriptBook, scriptId: string) {
   const script = book.scripts.get(scriptId);
   if (!script) return;
-  book.mapBytes -= script.sourceMapURL?.length ?? 0;
+  const bytes = script.sourceMapURL?.length ?? 0;
+  book.mapBytes -= bytes;
+  retainedMapBytes -= bytes;
   book.scripts.delete(scriptId);
+}
+
+export function discardScriptBook(book: ScriptBook) {
+  retainedMapBytes -= book.mapBytes;
+  book.mapBytes = 0;
+  book.scripts.clear();
+  book.frameContexts.clear();
 }
 
 export function recordScript(book: ScriptBook, params: Fields) {
@@ -83,18 +97,21 @@ export function recordScript(book: ScriptBook, params: Fields) {
   const aux = isFields(params.executionContextAuxData) ? params.executionContextAuxData : {};
   const frameId = text(aux.frameId, 256);
   const contextId = typeof params.executionContextId === "number" ? params.executionContextId : null;
-  if (frameId && contextId !== null && aux.isDefault === true && book.frameContexts.get(frameId) !== contextId) {
-    for (const [id, script] of [...book.scripts]) if (script.frameId === frameId && script.contextId !== contextId) forget(book, id);
-    book.frameContexts.set(frameId, contextId);
-  }
+  const newContext = frameId !== null && contextId !== null && aux.isDefault === true && book.frameContexts.get(frameId) !== contextId;
+  if (newContext) for (const [id, script] of [...book.scripts]) if (script.frameId === frameId && script.contextId !== contextId) forget(book, id);
   forget(book, scriptId);
   if (book.scripts.size >= MAX_HELD_SCRIPTS) return;
+  if (newContext) {
+    if (!book.frameContexts.has(frameId) && book.frameContexts.size >= MAX_HELD_FRAMES) return;
+    book.frameContexts.set(frameId, contextId);
+  }
   const offered = typeof params.sourceMapURL === "string" && isDataUrl(params.sourceMapURL) ? params.sourceMapURL : null;
-  const sourceMapURL = offered !== null && book.mapBytes + offered.length <= MAX_HELD_MAP_BYTES ? offered : null;
-  book.mapBytes += sourceMapURL?.length ?? 0;
+  const sourceMapURL = offered !== null && retainedMapBytes + offered.length <= MAX_HELD_MAP_BYTES ? offered : null;
+  const bytes = sourceMapURL?.length ?? 0;
+  book.mapBytes += bytes;
+  retainedMapBytes += bytes;
   book.scripts.set(scriptId, { url, sourceMapURL, frameId, contextId });
 }
-
 
 async function release(connection: number, tabId: string, only?: Held) {
   const own = held.get(connection);
@@ -102,6 +119,7 @@ async function release(connection: number, tabId: string, only?: Held) {
   if (!own || !entry || (only && entry !== only)) {
     if (only) {
       only.stop();
+      discardScriptBook(only.book);
       await only.session.close();
     }
     return;
@@ -109,6 +127,7 @@ async function release(connection: number, tabId: string, only?: Held) {
   own.delete(tabId);
   if (!own.size) held.delete(connection);
   entry.stop();
+  discardScriptBook(entry.book);
   await entry.session.close();
 }
 

@@ -203,9 +203,20 @@ function conditionActive(rule: Fields): boolean {
   return true;
 }
 
-function layerOf(rule: Fields): string | null {
-  const names = list(rule.layers).map((layer) => text(field(layer, "text"), 256)).filter((name): name is string => name !== null && name !== "");
-  return names.length ? names.join(".") : null;
+function layerOf(rule: Fields, position: number): string | null {
+  const layers = list(rule.layers);
+  if (!layers.length) return null;
+  return layers
+    .map((layer, depth) => {
+      const name = text(field(layer, "text"), 256);
+      if (name) return name;
+      const range = field(layer, "range");
+      const sheet = text(field(layer, "styleSheetId"), 256);
+      const line = whole(field(range, "startLine"));
+      const column = whole(field(range, "startColumn"));
+      return sheet !== null && line !== null && column !== null ? `<anonymous ${sheet}:${line}:${column}>` : `<anonymous ${position}:${depth}>`;
+    })
+    .join(".");
 }
 
 function stylesOfLevel(level: unknown, withAttributes: boolean): Entry[] {
@@ -213,7 +224,7 @@ function stylesOfLevel(level: unknown, withAttributes: boolean): Entry[] {
   const attributes = field(level, "attributesStyle");
   const presentational: Entry | null = withAttributes && isFields(attributes) ? { style: attributes, origin: "regular", selector: "presentational attributes", specificity: [0, 0, 0], inline: false, layer: null, conditionActive: true } : null;
   let placed = presentational === null;
-  for (const match of list(field(level, "matchedCSSRules")).slice(0, MAX_RULES)) {
+  for (const [position, match] of list(field(level, "matchedCSSRules")).slice(0, MAX_RULES).entries()) {
     const rule = field(match, "rule");
     if (!isFields(rule)) continue;
     const origin = text(rule.origin, 32) ?? "regular";
@@ -222,7 +233,7 @@ function stylesOfLevel(level: unknown, withAttributes: boolean): Entry[] {
       placed = true;
     }
     const { selector, specificity } = specificityOf(rule, field(match, "matchingSelectors"));
-    styles.push({ style: rule.style, origin, selector, specificity, inline: false, layer: layerOf(rule), conditionActive: conditionActive(rule) });
+    styles.push({ style: rule.style, origin, selector, specificity, inline: false, layer: layerOf(rule, position), conditionActive: conditionActive(rule) });
   }
   if (!placed) styles.push(presentational!);
   const inline = field(level, "inlineStyle");

@@ -422,11 +422,12 @@ test("once a session starts closing it refuses new commands, and a breakpoint se
   const session = new InspectionSession("tab-3", 903, fake.transport);
   await session.send("Debugger.enable");
   const inFlight = session.send("Debugger.setBreakpointByUrl", { url: "https://a.example/a.js", lineNumber: 0 });
+  inFlight.catch(() => {});
   const closing = session.close();
   await assert.rejects(session.send("Debugger.enable"), /ended before it finished/);
   await assert.rejects(session.pause(10_000), /ended before it finished/);
   fake.pending.shift()();
-  await inFlight;
+  await assert.rejects(inFlight, /ended before it finished/, "the caller isn't left waiting once the session closes");
   await closing;
   assert.deepEqual(fake.sent, ["Debugger.enable", "Debugger.setBreakpointByUrl", "Debugger.removeBreakpoint", "Debugger.disable"]);
   assert.ok(fake.closed);
@@ -550,6 +551,8 @@ test("the logpoint script book drops a navigated frame's old scripts and caps re
   parsed("3", "https://a.example/huge.js", 2, huge);
   assert.equal(book.scripts.get("3").sourceMapURL, null, "a map past the session's byte budget isn't kept");
   assert.ok(book.mapBytes <= logpointBook.MAX_HELD_MAP_BYTES);
+  logpointBook.discardScriptBook(book);
+  assert.equal(logpointBook.retainedLogpointMapBytes(), 0);
 });
 
 test("teardown finishes even when the transport stalls", async () => {
@@ -629,4 +632,88 @@ test("an inline map with an upper-case DATA: scheme still resolves", () => {
   const book = logpointBook.newScriptBook();
   logpointBook.recordScript(book, { scriptId: "1", url: "https://a.example/x.js", sourceMapURL: upper });
   assert.equal(book.scripts.get("1").sourceMapURL, upper);
+  logpointBook.discardScriptBook(book);
+});
+
+test("an image URL from another renderer never becomes this page's LCP URL", () => {
+  const trace = fixture("trace-load.json");
+  for (const e of trace.traceEvents) if (e.name === "LargestImagePaint::Candidate") e.args.data.imageUrl = "https://cdn.shop.example/hero.jpg";
+  const lcp = trace.traceEvents.find((e) => e.name === "largestContentfulPaint::Candidate" && e.args.data.candidateIndex === 2);
+  trace.traceEvents.push({ name: "LargestImagePaint::Candidate", ph: "R", pid: 7, tid: 1, ts: lcp.ts + 10, args: { frame: "OTHER", data: { DOMNodeId: 42, imageUrl: "https://elsewhere.example/secret.jpg" } } });
+  const result = analyzeTrace(trace);
+  assert.equal(result.insights.find((i) => i.id === "lcp-breakdown").details.element.url, "https://cdn.shop.example/hero.jpg");
+  assert.ok(!JSON.stringify(result).includes("secret.jpg"));
+});
+
+test("a main-frame navigation to about:blank ends the selected page's trace window", () => {
+  const start = 5_000_000_000;
+  const events = [
+    navStart(start, "M", "https://a.example/"),
+    { name: "firstContentfulPaint", ph: "R", pid: 2, tid: 3, ts: start + 100_000, args: { frame: "M" } },
+    navStart(start + 500_000, "M", "about:blank"),
+    { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: start + 600_000, dur: 1_000_000, args: {} },
+  ];
+  const result = analyzeTrace(events);
+  assert.equal(result.counts.longTasks, 0);
+  assert.equal(result.metrics.tbt.ms, 0);
+});
+
+test("logpoint map memory is one budget across every session, and frames are bounded", () => {
+  const map = `data:application/json;base64,${"A".repeat(Math.floor(logpointBook.MAX_HELD_MAP_BYTES / 2) - 40)}`;
+  const books = [logpointBook.newScriptBook(), logpointBook.newScriptBook(), logpointBook.newScriptBook()];
+  books.forEach((book, i) => logpointBook.recordScript(book, { scriptId: "1", url: `https://a.example/${i}.js`, sourceMapURL: map }));
+  assert.deepEqual(books.map((book) => book.scripts.get("1").sourceMapURL !== null), [true, true, false], "the third tab's map would pass the shared budget");
+  assert.ok(logpointBook.retainedLogpointMapBytes() <= logpointBook.MAX_HELD_MAP_BYTES);
+  books.forEach((book) => logpointBook.discardScriptBook(book));
+  assert.equal(logpointBook.retainedLogpointMapBytes(), 0);
+  const frames = logpointBook.newScriptBook();
+  for (let i = 0; i < logpointBook.MAX_HELD_FRAMES + 50; i++) logpointBook.recordScript(frames, { scriptId: `s${i}`, url: `https://a.example/f${i}.js`, executionContextId: i + 1, executionContextAuxData: { frameId: `F${i}`, isDefault: true } });
+  assert.equal(frames.frameContexts.size, logpointBook.MAX_HELD_FRAMES);
+  assert.equal(frames.scripts.size, logpointBook.MAX_HELD_FRAMES, "a script whose frame was refused isn't kept either");
+  logpointBook.discardScriptBook(frames);
+});
+
+test("closing a session releases callers waiting on a stalled transport and aborts a pending open", async () => {
+  const stalled = { send: () => new Promise(() => {}), onEvent: () => () => {}, close: async () => {} };
+  const session = new InspectionSession("tab-7", 907, stalled);
+  const waiting = session.send("DOM.getDocument");
+  const closing = session.close();
+  await assert.rejects(waiting, /ended before it finished/);
+  await closing;
+  let aborted = false;
+  sessions.setInspectionTransport((tabId, signal) => {
+    signal.addEventListener("abort", () => (aborted = true));
+    return new Promise(() => {});
+  });
+  try {
+    const opening = sessions.openInspection("tab-8", 908);
+    await sessions.closeInspectionsFor(908);
+    await assert.rejects(opening, /Control was turned off/);
+    assert.ok(aborted, "the opener was told to stop");
+  } finally {
+    sessions.setInspectionTransport(null);
+  }
+});
+
+test("an anonymous @layer's !important beats unlayered !important, and two anonymous layers stay distinct", () => {
+  const rule = (value, layers) => ({ rule: { origin: "regular", selectorList: { selectors: [{ text: ".x", specificity: { a: 0, b: 1, c: 0 } }] }, style: { cssProperties: [{ name: "color", value, important: true }] }, ...(layers ? { layers } : {}) }, matchingSelectors: [0] });
+  const matched = { matchedCSSRules: [rule("first", [{ text: "" }]), rule("second", [{ text: "" }]), rule("plain")] };
+  const [color] = cascadeFor(matched, {}, ["color"], new Map());
+  assert.equal(color.winner.value, "first", "the earlier anonymous layer wins among !important");
+});
+
+test("a sourceMappingURL directive after code on the last line is found, and a string isn't one", () => {
+  assert.equal(sourceMapRefOf("x();//# sourceMappingURL=app.js.map"), "app.js.map");
+  assert.equal(sourceMapRefOf("x(); /*# sourceMappingURL=app.js.map */"), "app.js.map");
+  assert.equal(sourceMapRefOf('var s = "//# sourceMappingURL=app.js.map";'), null);
+  const started = Date.now();
+  assert.equal(sourceMapRefOf(`x();${"//#sourceMappingURL=a ".repeat(50_000)}y();`), null);
+  assert.ok(Date.now() - started < 500, `took ${Date.now() - started} ms`);
+});
+
+test("an explicit cause: null is kept in the chain", () => {
+  assert.deepEqual(chainOf({ error: { name: "Error", message: "outer", cause: null } }).map((l) => l.message), ["outer", "null"]);
+  assert.deepEqual(chainOf({ error: { name: "Error", message: "outer" } }).map((l) => l.message), ["outer"]);
+  const chain = vm.runInNewContext(`(${CAUSE_CHAIN_FUNCTION}).call(new Error("outer", { cause: null }))`);
+  assert.deepEqual(JSON.parse(JSON.stringify(chain)).map((l) => l.message), ["outer", "null"]);
 });

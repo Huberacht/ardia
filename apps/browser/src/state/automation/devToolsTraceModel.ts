@@ -56,12 +56,15 @@ export function frameOf(ev: Ev): string | null {
   return text(ev.args.frame, 256) ?? text(field(ev.args.data, "frame"), 256);
 }
 
-function isMainNavigation(ev: Ev, mainFrame: string | null): boolean {
+function inMainFrame(ev: Ev, mainFrame: string | null): boolean {
   const data = ev.args.data;
-  const url = text(field(data, "documentLoaderURL"));
-  if (!url || !/^https?:/i.test(url)) return false;
   if (mainFrame !== null) return frameOf(ev) === mainFrame;
   return field(data, "isOutermostMainFrame") === true || field(data, "isLoadingMainFrame") === true;
+}
+
+function isMainNavigation(ev: Ev, mainFrame: string | null): boolean {
+  const url = text(field(ev.args.data, "documentLoaderURL"));
+  return !!url && /^https?:/i.test(url) && inMainFrame(ev, mainFrame);
 }
 
 function targetFramesOf(events: Ev[], mainFrame: string | null): Set<string> {
@@ -120,7 +123,7 @@ export function buildModel(raw: unknown[]): Model {
   const targetFrames = targetFramesOf(events, mainFrame);
   if (navigation) {
     const startedAt = navigation.ts;
-    const next = events.find((ev) => ev.name === "navigationStart" && ev.ts > startedAt && isMainNavigation(ev, mainFrame));
+    const next = events.find((ev) => ev.name === "navigationStart" && ev.ts > startedAt && inMainFrame(ev, mainFrame));
     const from = startedAt - NAVIGATION_SLACK_US;
     const until = next ? next.ts : Infinity;
     const kept: Ev[] = [];
@@ -194,17 +197,19 @@ export function fcpOf(model: Model): Ev | null {
 
 export type Lcp = { ts: number; nodeId: number | null; type: string | null; size: number | null; url: string | null };
 
+const inRenderer = (model: Model, ev: Ev) => (model.mainPid === null || ev.pid === model.mainPid) && (model.mainFrame === null || frameOf(ev) === model.mainFrame);
+
 export function lcpOf(model: Model): Lcp | null {
   let found: Lcp | null = null;
   let index = -1;
   const imageUrls = new Map<number, string>();
   for (const ev of model.events) {
-    if (ev.name === "LargestImagePaint::Candidate") {
+    if (ev.name === "LargestImagePaint::Candidate" && ev.ts >= model.origin && inRenderer(model, ev)) {
       const node = num(field(ev.args.data, "DOMNodeId"));
       const url = text(field(ev.args.data, "imageUrl"));
       if (node !== null && url) imageUrls.set(node, url);
     }
-    if (ev.ts < model.origin || !forNavigation(model, ev)) continue;
+    if (ev.ts < model.origin || !forNavigation(model, ev) || (model.mainPid !== null && ev.pid !== model.mainPid)) continue;
     if (ev.name === "largestContentfulPaint::Invalidate") {
       found = null;
       index = -1;

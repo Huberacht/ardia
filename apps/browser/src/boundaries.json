@@ -1772,7 +1772,7 @@
   {
    "id": "devtools-page-data:source-maps",
    "source": "page",
-   "guard": "Source maps come only from what the caller passes (a map, its JSON, a data: URL, or a script's text whose inline data: map is read) or a script's own inline data: sourceMapURL from Debugger.scriptParsed; Ardia fetches nothing, so a page's sourceURL or sourceMappingURL can't make it reach the network. Size, section, line and segment counts capped; a logpoint session keeps at most MAX_HELD_MAP_BYTES of maps and drops a navigated frame's scripts; mappings with a wrong segment length or a negative position, and negative section offsets, are refused",
+   "guard": "Source maps come only from what the caller passes (a map, its JSON, a data: URL, or a script's text whose inline data: map is read) or a script's own inline data: sourceMapURL from Debugger.scriptParsed; Ardia fetches nothing, so a page's sourceURL or sourceMappingURL can't make it reach the network. Size, section, line and segment counts capped; all logpoint sessions together keep at most MAX_HELD_MAP_BYTES of maps, each keeps at most MAX_HELD_FRAMES frames, and a navigated frame's scripts are dropped; mappings with a wrong segment length or a negative position, and negative section offsets, are refused",
    "checks": [
     "apps/browser/src/state/automation/devToolsSourceMaps.ts#inlineMapText",
     "apps/browser/src/state/automation/devToolsSourceMaps.ts#parseSourceMap"

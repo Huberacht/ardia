@@ -10,7 +10,7 @@ export type DevToolsTransport = {
   close(): Promise<void>;
 };
 
-export type TransportOpener = (tabId: string) => Promise<DevToolsTransport>;
+export type TransportOpener = (tabId: string, signal: AbortSignal) => Promise<DevToolsTransport>;
 
 export const INSPECTION_METHODS: ReadonlySet<string> = new Set([
   "Tracing.start",
@@ -107,7 +107,10 @@ export class InspectionSession {
     this.inFlight.add(work);
     const settled = () => void this.inFlight.delete(work);
     work.then(settled, settled);
-    return work;
+    const endedFirst = this.ended.then((): CdpParams => {
+      throw new OpError("failed", SESSION_ENDED);
+    });
+    return Promise.race([work, endedFirst]);
   }
 
   on(listener: CdpEventListener): () => void {
@@ -172,7 +175,8 @@ export async function openInspection(tabId: string, connection: number): Promise
   if (!opener) throw new OpError("failed", UNAVAILABLE);
   const startedIn = epochOf(connection);
   const controlStartedIn = controlEpoch;
-  const opening = opener(tabId);
+  const abort = new AbortController();
+  const opening = opener(tabId, abort.signal);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancel: () => void = () => {};
   const timedOut = new Promise<"timed-out">((resolve) => (timer = setTimeout(() => resolve("timed-out"), OPEN_TIMEOUT_MS)));
@@ -186,6 +190,7 @@ export async function openInspection(tabId: string, connection: number): Promise
     if (!waiting.size && pendingOpens.get(connection) === waiting) pendingOpens.delete(connection);
   });
   if (outcome === "timed-out" || outcome === "cancelled") {
+    abort.abort();
     void opening.then((late) => late.close()).catch(() => {});
     throw new OpError("failed", outcome === "cancelled" ? STOPPED : "The tab didn't open an inspection session in time.");
   }

@@ -5,7 +5,7 @@ export const MAX_FRAMES = 64;
 const MAX_TEXT = 4096;
 
 export const CAUSE_CHAIN_FUNCTION =
-  "function(){const out=[];const seen=new Set();let e=this;while(e!==undefined&&e!==null&&out.length<16&&!seen.has(e)){if(typeof e==='object')seen.add(e);let name='',message='',stack=null;try{name=String(e.name??'')}catch{}try{message=String(e.message??e)}catch{}try{stack=typeof e.stack==='string'?e.stack.slice(0,16384):null}catch{}out.push({name,message,stack});try{e=e.cause}catch{e=undefined}}return out}";
+  "function(){const out=[];const seen=new Set();let e=this;let more=true;while(more&&out.length<16&&!seen.has(e)){if(e!==null&&typeof e==='object')seen.add(e);let name='',message='',stack=null;try{name=e===null||e===undefined?'':String(e.name??'')}catch{}try{message=e===null?'null':e===undefined?'undefined':String(e.message??e)}catch{}try{stack=e!==null&&e!==undefined&&typeof e.stack==='string'?e.stack.slice(0,16384):null}catch{}out.push({name,message,stack});try{more=e!==null&&typeof e==='object'&&'cause' in e;e=more?e.cause:undefined}catch{more=false}}return out}";
 
 type Fields = Record<string, unknown>;
 
@@ -111,14 +111,16 @@ function rawChainOf(input: unknown): ChainLink[] {
   const links: ChainLink[] = [];
   const seen = new Set<unknown>();
   let current: unknown = field(input, "error") ?? input;
-  while (current !== undefined && current !== null && links.length < MAX_CAUSE_DEPTH && !seen.has(current)) {
+  let more = current !== undefined;
+  while (more && links.length < MAX_CAUSE_DEPTH && !seen.has(current)) {
     if (!isFields(current)) {
-      if (typeof current === "string" || typeof current === "number" || typeof current === "boolean" || typeof current === "bigint") links.push({ name: null, message: String(current).slice(0, MAX_TEXT), frames: [] });
+      if (current === null || typeof current === "string" || typeof current === "number" || typeof current === "boolean" || typeof current === "bigint") links.push({ name: null, message: String(current).slice(0, MAX_TEXT), frames: [] });
       break;
     }
     seen.add(current);
     links.push(linkOf(current));
-    current = field(current, "cause");
+    more = Object.hasOwn(current, "cause");
+    current = current.cause;
   }
   return links;
 }
