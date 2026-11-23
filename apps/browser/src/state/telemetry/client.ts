@@ -1,3 +1,4 @@
+import { withoutSecrets, type SecretFree } from "@ardia/core";
 import { engineInfo, updaterState } from "../../platform/app";
 import { readDocument, saveDocument, writeDocument } from "../../platform/documents";
 import { MAX_BODY_BYTES } from "./config";
@@ -125,7 +126,7 @@ let droppedWhileOff = 0;
 
 export type { CaptureOptions };
 
-export function capture(event: string, props: Record<string, unknown>, consent: ConsentToken | null, options: CaptureOptions = {}) {
+export function capture<P extends Record<string, unknown>>(event: string, props: P & SecretFree<P>, consent: ConsentToken | null, options: CaptureOptions = {}) {
   const sharing = stillValid(consent);
   if (!sharing && COUNT_EVENTS.has(event)) {
     droppedWhileOff++;
@@ -141,7 +142,7 @@ export function capture(event: string, props: Record<string, unknown>, consent: 
       event,
       distinct_id: installId ?? "",
       timestamp: new Date(at).toISOString(),
-      properties: { ...context(), ...cleanProperties(props), ...options.raw },
+      properties: { ...context(), ...cleanProperties(props), ...withoutSecrets(options.raw, "telemetry") },
     };
     recordLocal("event", sharing, { event, uuid: record.uuid, distinct_id: sharing ? installId : null, properties: record.properties }, at);
     if (!sharing) {

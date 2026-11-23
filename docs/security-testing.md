@@ -3,7 +3,8 @@
 These tests guard the places where data the user didn't type reaches a privileged part of the browser: a page's
 messages and events, values a page returns from evaluated script, other devices' sync records, links from other apps,
 plugin calls and the control socket. They run in the normal checks (`pnpm -C apps/browser test`, the packages'
-portable tests and CI on every pull request) and add about 9 seconds.
+portable tests and CI on every pull request) and add about 9 seconds. [Outbound secrets](#outbound-secrets) covers
+the reverse: secrets Ardia holds never leaving through telemetry, logs, sync files or the control socket.
 
 0.2.48 fixed a picked selector with a line break in it, which the content blocker stored as an extra filter line. The
 value had passed a check that was right for the input it expected. These tests check what the privileged
@@ -86,6 +87,64 @@ detected forms, the boundary test names it. Anything else needs a hand-kept row.
 
 A regression case is named after the finding it guards (`A1`, `D5`) and should fail with the fix reverted. Check that
 once by reverting the fix's lines in your checkout before you commit the case.
+
+## Outbound secrets
+
+The table above guards what comes in. Secrets need the opposite guard: a password, a token or a recovery phrase that
+Ardia holds must never go out through telemetry, a log line, a crash report, a sync file or the control socket.
+
+**The rule.** Plaintext a secret is made of lives in JS only as a `Secret<kind>` from `@ardia/core`
+(`packages/core/src/secret.ts`), made with `asSecret(kind, text)` where it enters and turned back into text with
+`reveal(secret)` only at a sink that needs the plaintext: the Keychain, Chrome's password store, the native sync
+module, an Authorization header or token request to the account's own provider, the plugin that owns the secret, and
+the settings sheet that shows it to the user. The kinds are `SECRET_KINDS`: saved passwords, OAuth access and refresh
+tokens, OAuth client secrets, API tokens, plugin secrets and the sync recovery phrase. Sealed logins in sync files are
+ciphertext and stay plain strings.
+
+**What refuses a secret.**
+
+| Where | Compile time | Run time |
+| --- | --- | --- |
+| Any `JSON.stringify` (sync payloads, the telemetry queue, socket and plugin lines) | | `Secret.toJSON` leaves it out |
+| Any string it is put into (log text, error messages, template strings) | `Secret` isn't a `string` | `toString` gives `<secret>` |
+| Telemetry events (`capture`) | `props` is `SecretFree` | `cleanProperties` and `raw` leave it out |
+| Log attributes (`queueLog`), `recordLog` arguments | attributes are text, numbers or flags | left out |
+| Control socket replies and events (`fittedReply`, `fittedEvent`) | `SecretFree` | `toJSON` |
+| Sync writes (`Transport.write`, `SyncNative.write`) | payload is text | `toJSON` |
+
+Each refusal is counted. In the app a refused secret is dropped and counted in `usage_counts` as
+`secret_values_dropped` (a count while sharing is on, never the value or its kind). Under `node --test` the browser's
+test loader switches `@ardia/core` to throw `SecretEscapeError` instead, so a leak fails the test that caused it.
+`apps/browser/src/state/telemetry/secretSinkTypes.ts` holds the `@ts-expect-error` cases the typecheck proves.
+
+**Token shapes.** A secret that was revealed for its sink and then echoed back, say in a provider's error message, is
+plain text again. The telemetry scrubber (`state/telemetry/sanitize.ts`) takes out GitHub, GitLab, OpenAI and Anthropic
+(`sk-`), Stripe, Slack, Google (`AIza`, `ya29.`, `1//0`) and AWS keys, JWTs, Bearer and Basic credentials,
+`password=`/`token:`-style pairs, private key blocks and long random base64 or base64url runs, with one case per shape
+in `sanitize.test.mjs`. Passwords, plugin secrets and recovery phrases have no shape, so for them the brand is the
+guard.
+
+**The containment test** (`apps/browser/src/secretContainment.test.mjs`) plants a canary of every kind in its real
+source (the password store, the Keychain for plugin secrets and live accounts, the stored Google tokens, the native
+recovery words), takes the branded value the source hands out, and drives it through the real telemetry client and
+queue, the local telemetry store, `recordLog`, the console hook, `captureException`, `fittedReply`, `fittedEvent` and
+a real sync cycle with its files. No sink's output may hold the canary, a positive control checks each legitimate
+sink still gets the plaintext, and token-shaped kinds are also checked once revealed. Its registry fails when:
+
+- a kind in `SECRET_KINDS` has no source and canary in the test;
+- a file starts making secrets (`asSecret`) without a `WRAP_SITES` row naming the kinds it makes;
+- a file starts calling `reveal` without a `REVEAL_SINKS` row saying why it needs the plaintext.
+
+A new secret: add its kind to `SECRET_KINDS`, brand it where it enters JS, reveal it only at its sink, and add its
+source, canary and rows to the test.
+
+**Linux.** Sync runs in one window; the others forward their calls over a `BroadcastChannel`, which would clone a
+`Secret` into an empty object. `apps/linux/src/syncAuthority.ts` carries a secret argument across as its kind and text
+and brands it again on arrival (`hostSync.test.mjs`).
+
+**Not covered.** Native code (Swift `SecretBytes`, Rust `Zeroize`, `callWithSecret`) keeps its own handling; this
+guard starts where a secret reaches JS. Plaintext a user types sits in a text field's state until it is branded, and
+JS can't wipe a string from memory.
 
 ## What it doesn't cover
 
