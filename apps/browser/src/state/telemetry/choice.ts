@@ -32,6 +32,8 @@ export type Session = {
   lastLaunchAt: number | null;
   lastQuitAt: number | null;
   lastBuild: string | null;
+  versionSince: number | null;
+  versionColdLaunches: number | null;
   settingsDay: string | null;
   context: SavedContext | null;
   epoch: string | null;
@@ -62,6 +64,8 @@ const DEFAULT: Saved = {
   lastLaunchAt: null,
   lastQuitAt: null,
   lastBuild: null,
+  versionSince: null,
+  versionColdLaunches: null,
   settingsDay: null,
   context: null,
   epoch: null,
@@ -103,6 +107,8 @@ function readSaved(doc: SavedObject | null): Saved {
     lastLaunchAt: numberOr(doc.lastLaunchAt, null),
     lastQuitAt: numberOr(doc.lastQuitAt, null),
     lastBuild: stringOr(doc.lastBuild, null),
+    versionSince: numberOr(doc.versionSince, null),
+    versionColdLaunches: numberOr(doc.versionColdLaunches, null),
     epoch: stringOr(doc.epoch, null) ?? (sharing.sharing ? legacyEpoch(doc) : null),
     settingsDay: stringOr(doc.settingsDay, null),
     context: readContext(doc.context),
