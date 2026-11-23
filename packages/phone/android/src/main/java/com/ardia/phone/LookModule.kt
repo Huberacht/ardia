@@ -38,7 +38,10 @@ class LookModule : Module() {
             readGlassLaunch()
             SystemMotion.note(systemLook.seed())
             val app = context.applicationContext
-            GlassShaders.onFailed = { kotlin.concurrent.thread(name = "ardia-glass-count") { PendingCounts.add(app, PendingCounts.GLASS_SHADERS_FAILED, UsageConsent.window(app)) } }
+            GlassShaders.onFailed = {
+                val window = UsageConsent.window(app)
+                if (window != null) kotlin.concurrent.thread(name = "ardia-glass-count") { PendingCounts.add(app, PendingCounts.GLASS_SHADERS_FAILED, window) }
+            }
             systemLookObserver = SystemLookObserver(context.applicationContext) { systemLook.check() }.also { it.start() }
         }
 
