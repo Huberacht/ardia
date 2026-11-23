@@ -319,6 +319,7 @@ internal class ShaderSlot(private val name: String) {
             build()
         } catch (failure: RuntimeException) {
             failures += 1
+            GlassShaders.onFailed?.invoke()
             android.util.Log.w("PAGELAB", "PAGELAB look glass $name shader failed and is skipped from now on: ${failure.javaClass.simpleName}: ${failure.message}")
             null
         }
@@ -332,10 +333,13 @@ internal object GlassShaders {
         private set
     var makeLens: ((LiquidGlassRules.LensShape) -> RenderEffect)? = null
     var makeRim: (() -> RuntimeShader)? = null
+    var onFailed: (() -> Unit)? = null
 
-    fun retryFailed() {
+    fun retryFailed(): Boolean {
+        val anyFailed = lens.failed || rim.failed
         if (lens.failed) lens = ShaderSlot("lens")
         if (rim.failed) rim = ShaderSlot("rim")
+        return anyFailed
     }
 
     fun reset() {
@@ -343,6 +347,7 @@ internal object GlassShaders {
         rim = ShaderSlot("rim")
         makeLens = null
         makeRim = null
+        onFailed = null
     }
 }
 

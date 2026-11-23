@@ -37,12 +37,14 @@ class LookModule : Module() {
             val context = appContext.reactContext ?: return@OnCreate
             readGlassLaunch()
             SystemMotion.note(systemLook.seed())
+            val app = context.applicationContext
+            GlassShaders.onFailed = { kotlin.concurrent.thread(name = "ardia-glass-count") { PendingCounts.add(app, PendingCounts.GLASS_SHADERS_FAILED, UsageConsent.window(app)) } }
             systemLookObserver = SystemLookObserver(context.applicationContext) { systemLook.check() }.also { it.start() }
         }
 
         OnActivityEntersForeground {
             systemLook.check()
-            GlassShaders.retryFailed()
+            if (GlassShaders.retryFailed()) AttachedLookViews.all().forEach { it.postInvalidate() }
         }
 
         OnDestroy { systemLookObserver?.stop() }

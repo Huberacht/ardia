@@ -110,6 +110,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["custom_theme_chosen", "theme_edits"],
       },
       {
+        text: "In the same daily counts, on Android: how often the phone refused to draw the Liquid Glass lens or its rim light, so the glass fell back to plain frost. Counts only",
+        fields: ["glass_shaders_failed"],
+      },
+      {
         text: "In the same daily counts, on Android: how often you tapped the Ardia logo on the start page to search. Counts only, and never while browsing privately",
         fields: ["start_logo_taps"],
       },

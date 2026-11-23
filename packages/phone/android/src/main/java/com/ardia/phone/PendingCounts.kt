@@ -32,6 +32,7 @@ object UsageConsent {
 
 object PendingCounts {
     const val TABS_SENT = "tabs_sent"
+    const val GLASS_SHADERS_FAILED = "glass_shaders_failed"
     const val NIGHT_SHADE_VERDICTS_REUSED = "night_shade_verdicts_reused"
     const val NIGHT_SHADE_VERDICTS_LEARNED = "night_shade_verdicts_learned"
     const val NIGHT_SHADE_VERDICTS_CORRECTED = "night_shade_verdicts_corrected"

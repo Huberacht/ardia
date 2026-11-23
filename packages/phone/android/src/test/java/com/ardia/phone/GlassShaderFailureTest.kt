@@ -31,6 +31,7 @@ class GlassShaderFailureTest {
 
     private var rimTries = 0
     private var lensTries = 0
+    private var reported = 0
 
     @Before
     fun failBothShaders() {
@@ -43,6 +44,7 @@ class GlassShaderFailureTest {
             lensTries += 1
             throw IllegalArgumentException("lens shader refused")
         }
+        GlassShaders.onFailed = { reported += 1 }
     }
 
     @After
@@ -87,12 +89,20 @@ class GlassShaderFailureTest {
         assertNull(view.lensEffect(66f, 5f))
         assertEquals(1, rimTries)
         assertEquals(1, lensTries)
-        GlassShaders.retryFailed()
+        assertEquals("each failed shader is counted once, not on every draw", 2, reported)
+        assertTrue("a retry after a failure asks the glass to redraw", GlassShaders.retryFailed())
         recorded(view)
         assertNull(view.lensEffect(66f, 5f))
         assertEquals("the rim is built again after a return to the foreground", 2, rimTries)
         assertEquals("the lens is built again after a return to the foreground", 2, lensTries)
+        assertEquals(4, reported)
         assertEquals(0, view.drawFailures)
+    }
+
+    @Test
+    fun aForegroundWithNoFailedShaderRedrawsNothing() {
+        GlassShaders.reset()
+        assertEquals(false, GlassShaders.retryFailed())
     }
 
     @Test
