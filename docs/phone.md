@@ -1423,10 +1423,16 @@ Metal.
   (`PendingCounts.swift`, kept only while sharing is on, as Android's are), the glass draws the flat fill and edge with
   `CALayer`, and the compile is tried again when the app returns to the foreground. `glass_render` now reports `lens`,
   `frost` or `solid` on iPhone too.
-- **Not seen yet.** None of this has run on a simulator or a phone: on 2026-11-23 Simlock's iPhone simulators timed
-  out booting for every lease, and shiv's own two booted simulators drew nothing (screenshots hung). The capture's
-  cost, while scrolling a page under the bar and while the deck animates, is unmeasured, and so is the 4 ms budget;
-  the shader's output is seen only offscreen on a Mac GPU.
+- **Seen on the simulator** (an iPhone 18 Pro simulator on the Mac, iOS 27.0, 2026-11-23, beside main's Apple glass):
+  the start page, the page bar over en.wikipedia.org (refracting the page as it scrolls), the deck, Reader's buttons, a
+  toast over a photo, the search morph and Settings, light and dark. Over 14 s of scrolling Wikipedia under the bar,
+  `auto` captured every frame at 1.5 ms (p50, 2.7 at most) on the main thread, WebKit's snapshots arrived 1.8 ms (p50)
+  after the request, and 2.1 % of frames were late against 0.2 % with `none`; `drawHierarchy` of the page costs 33 to
+  35 ms a capture and `layer.render(in:)` 13 to 20 ms (and can't see the page). Opening and scrolling the deck: 2.2 %
+  late with `auto` (backdrop captures at most once a second, about 35 ms each on the simulator), 0.8 % with `none`.
+- **Not seen yet.** A phone: the simulator's costs are not a phone's, and the 12 % budget is set from the simulator.
+  The collapsed bar and the host pill (the lab scroll moves the page without the touch that collapses the bar), the
+  press highlight, landscape and the Duo layouts.
 
 ## The look's budget
 
