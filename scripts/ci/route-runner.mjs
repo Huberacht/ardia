@@ -272,14 +272,19 @@ export async function githubPressure({ fetchJson, token, settings, ownRepo, ownR
     const jobs = [];
     for (let page = 1; ; page += 1) {
       const data = await read(run.repo, `/actions/runs/${run.id}/jobs?filter=latest&per_page=100&page=${page}`, "jobs", "jobs");
-      jobs.push(...data.jobs);
+      for (const job of data.jobs) {
+        if (!Number.isSafeInteger(job?.id) || typeof job.status !== "string" || !Array.isArray(job.labels) || !job.labels.every((label) => typeof label === "string")) {
+          throw new GithubReadError("malformed");
+        }
+        jobs.push(job);
+      }
       const total = isCount(data.total_count) ? data.total_count : jobs.length;
       if (data.jobs.length < 100 || jobs.length >= total || !spend("jobs")) return jobs;
     }
   };
   const jobLists = await Promise.all(inspected.map(jobsOf));
   return {
-    ...pressureOf(jobLists.flat(), { now, queuedAge: settings.queuedAge }),
+    ...pressureOf([...new Map(jobLists.flat().map((job) => [job.id, job])).values()], { now, queuedAge: settings.queuedAge }),
     runs: runs.size,
     inspected: inspected.length,
   };

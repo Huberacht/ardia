@@ -63,7 +63,8 @@ jobs:
     outputs:
       target: ${{ steps.target.outputs.target }}
     steps:
-      - name: The router, from main
+      - id: router
+        name: The router, from main
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -77,6 +78,7 @@ jobs:
             /.github/vouch/vouch.cjs
       - id: route
         name: GitHub or Boat for the long jobs
+        if: steps.router.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 1
         env:

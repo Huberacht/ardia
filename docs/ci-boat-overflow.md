@@ -128,8 +128,10 @@ expires 2027-02-20. `boat api-key rotate` keeps the old expiry, so it can't rene
    API-key session's 89 days), create a read-only key:
    `boat api-key create ci-limits --preset read-only --ttl <days>d`
 2. `gh secret set BOAT_CI_LIMITS_KEY -R ardia-browser/ardia` and paste the new key.
-3. Check that the next run's summary reads Boat's limits (a reason other than `boat-api-error`), then revoke the old
-   key with `boat api-key revoke <old key id>`.
+3. Prove the new key works before you revoke the old one: add `boat-ci` to a team PR and push. The route step's summary
+   must show a `Boat: starts left …` line with numbers, and a reason of `forced-label` or `boat-low-…`. `boat-api-error`,
+   `boat-key-missing`, `github-free` or `overflow-off` prove nothing. Then revoke the old key with
+   `boat api-key revoke <old key id>`.
 
 ## Code
 

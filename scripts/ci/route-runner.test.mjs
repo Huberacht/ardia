@@ -93,7 +93,8 @@ const limits = (overrides = {}) => ({
   ...overrides,
 });
 
-const job = (status, labels, createdSecondsAgo = 0) => ({ status, labels, created_at: ago(createdSecondsAgo) });
+let nextJobId = 1;
+const job = (status, labels, createdSecondsAgo = 0) => ({ id: nextJobId++, status, labels, created_at: ago(createdSecondsAgo) });
 
 function fakeFetch({ runs = {}, jobs = {}, boat = limits(), boatStatus = 200, failRepo = {}, anonymousOk = {} } = {}) {
   const calls = [];
@@ -357,6 +358,19 @@ test("a run with more than 100 jobs is read page by page", async () => {
   assert.equal(fake.calls.filter((call) => call.url.includes("/runs/1/jobs")).length, 2);
 });
 
+test("a job seen on two overlapping pages counts once", async () => {
+  const first = Array.from({ length: 100 }, () => job("in_progress", ["ubuntu-latest"]));
+  const queued = [job("queued", ["ubuntu-latest"]), job("queued", ["ubuntu-latest"])];
+  const pages = { 1: first, 2: [first[99], ...queued] };
+  const impl = async (url) => {
+    const page = Number(new URL(url).searchParams.get("page") || 1);
+    const body = url.includes("/jobs") ? { total_count: 102, jobs: pages[page] } : { workflow_runs: url.includes(CANONICAL_REPO) && url.includes("status=queued") && page === 1 ? [runOf(1)] : [] };
+    return { ok: true, status: 200, json: async () => body };
+  };
+  const pressure = await pressureWith({ impl });
+  assert.deepEqual([pressure.queued, pressure.busy], [2, 102]);
+});
+
 test("another repository that refuses the token is read anonymously", async () => {
   const runs = { [CANONICAL_REPO]: { queued: [runOf(1)] }, "ardia-browser/plugins": { in_progress: [runOf(2)] } };
   const jobs = { 1: [job("queued", ["ubuntu-latest"])], 2: [job("in_progress", ["ubuntu-latest"])] };
@@ -377,6 +391,8 @@ test("any failed or malformed GitHub read fails the whole read; partial samples 
     "a runs list is malformed": { impl: async (url) => ({ ok: true, status: 200, json: async () => (url.includes("plugins") ? { nope: true } : { workflow_runs: [] }) }) },
     "a run has no id": { impl: async () => ({ ok: true, status: 200, json: async () => ({ workflow_runs: [{ id: "x" }] }) }) },
     "a jobs read fails": { impl: async (url) => (url.includes("/jobs") ? { ok: false, status: 502, json: async () => ({}) } : { ok: true, status: 200, json: async () => ({ workflow_runs: [runOf(1)] }) }) },
+    "a job row is malformed": { impl: async (url) => ({ ok: true, status: 200, json: async () => (url.includes("/jobs") ? { jobs: [{ id: 1, status: "queued" }] } : { workflow_runs: [runOf(1)] }) }) },
+    "a job has no id": { impl: async (url) => ({ ok: true, status: 200, json: async () => (url.includes("/jobs") ? { jobs: [{ status: "queued", labels: ["ubuntu-latest"] }] } : { workflow_runs: [runOf(1)] }) }) },
     "a jobs list is malformed": { impl: async (url) => ({ ok: true, status: 200, json: async () => (url.includes("/jobs") ? { jobs: "x" } : { workflow_runs: [runOf(1)] }) }) },
     "a body is not JSON": { impl: async () => ({ ok: true, status: 200, json: async () => JSON.parse("{nope") }) },
   };
@@ -601,13 +617,14 @@ test("each route job runs the router from main's code, with the key on that step
     assert.ok(block.includes("      target: ${{ steps.target.outputs.target }}\n"), `${name} exposes the final step's target`);
     assert.ok(!text.includes("toJSON(vars)"), `${name} passes only the variables the router reads`);
     assert.match(block, /\n      actions: read\n/);
-    const checkout = block.match(/- name: The router, from main\n(?: {8}.*\n)+/)[0];
+    const checkout = block.match(/- id: router\n {8}name: The router, from main\n(?: {8}.*\n)+/)[0];
     assert.ok(checkout.includes("          ref: refs/heads/main\n"), `${name} checks out main`);
     assert.ok(checkout.includes("persist-credentials: false\n") && checkout.includes("sparse-checkout-cone-mode: false\n") && checkout.includes("continue-on-error: true\n"));
     for (const path of ["/scripts/ci/", "/.github/TEAM.td", "/.github/vouch/vouch.cjs"]) assert.ok(checkout.includes(`            ${path}\n`), `${name} checks out ${path}`);
     const step = block.match(/- id: route\n(?: {8}.*\n?)+/)[0];
     assert.ok(step.includes("BOAT_CI_LIMITS_KEY: ${{ secrets.BOAT_CI_LIMITS_KEY }}"), `${name} gives the route step the key`);
     assert.ok(step.includes("continue-on-error: true\n"), `${name}'s route step never fails the run`);
+    assert.match(step, /\n {8}if: steps\.router\.outcome == 'success'(?: && \(.*\))?\n/, `${name} runs the router only after main's checkout succeeded`);
     assert.ok(step.includes(`run: node .route/scripts/ci/route-runner.mjs --fallback ${fallback} --jobs ${starts}`), `${name} passes its fallback and Boat starts`);
     const envNames = [...step.matchAll(/^ {10}([A-Z_]+): /gm)].map(([, envName]) => envName).sort();
     const settingNames = envNames.filter((envName) => envName.startsWith("BOAT_OVERFLOW"));
