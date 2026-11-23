@@ -243,7 +243,8 @@ select (untagged, `all`, or naming `win`) is refused, here and by the Windows ke
 layers; `engine/chromium` is the exception, since `series_win.py` copies it itself. The layer's `BUILD.gn` conditions are
 read the same way: `is_mac`, `is_linux` and `is_win` joined by `!`, `&&`, `||` and parentheses, read token by token, so
 wrapped conditions, `else if` and `else`, and comments or strings holding braces are followed as GN reads them; any
-other condition, `ardia_sources` changed by anything but a list of names (`=` replaces it, `+=` adds), a source spelled
+other condition, `ardia_sources` changed by anything but a list of names (`=` replaces it, `+=` adds) or inside a call's block
+(a scope of its own in GN), a source spelled
 with `$` or `\`, brackets that don't pair, or a line holding a Mac-only entry and anything else stops the build.
 The layers:
 

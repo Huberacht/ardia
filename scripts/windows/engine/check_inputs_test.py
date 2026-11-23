@@ -333,6 +333,29 @@ class SelectorTest(unittest.TestCase):
         self.assertNotIn('desktop.mm', generated)
         self.assertIn('desktop.cc', self.build.windows_sources(generated))
 
+    def test_ardia_sources_changed_inside_a_call_block_is_refused(self):
+        tail = 'source_set("ardia") {\n  sources = ardia_sources\n}\n'
+        for text in ('ardia_sources = [ "outer.cc" ]\ngroup("local") {\n  ardia_sources = [ "inner.cc" ]\n}\n',
+                     'ardia_sources = [ "outer.cc" ]\ntemplate("t") {\n  if (is_win) {\n    ardia_sources += [ "inner.cc" ]\n  }\n}\n',
+                     'ardia_sources = [ "outer.cc" ]\nlocal = {\n  ardia_sources = [ "inner.cc" ]\n}\n'):
+            with self.subTest(text=text), self.assertRaisesRegex(self.build.InputError, 'a scope of its own'):
+                self.build.windows_sources(text + tail)
+        self.assertEqual(self.build.windows_sources('ardia_sources = [ "outer.cc" ]\ngroup("local") {\n  deps = []\n}\n' + tail),
+                         ['outer.cc'])
+
+    def test_clearing_ardia_sources_then_listing_it_again_passes_the_rewrite_and_the_reader(self):
+        real = self.build.build_text
+        self.addCleanup(setattr, self.build, 'build_text', real)
+        self.build.build_text = lambda: real().replace(
+            'source_set("ardia") {\n',
+            'ardia_sources = []\nardia_sources = [\n  "ac_zoom.cc",\n  "pip/ac_pip_mac.mm",\n  "ac_shared.cc",\n]\n\n'
+            'source_set("ardia") {\n', 1)
+        generated = self.build.ardia_build_file()
+        self.assertEqual(self.build.windows_sources(generated), ['ac_zoom.cc', 'ac_shared.cc', 'ac_reauth.cc'])
+        self.build.build_text = lambda: real().replace('ardia_sources = [\n', 'shared_sources = [\n', 1)
+        with self.assertRaisesRegex(self.build.InputError, 'needs the shared source list'):
+            self.build.ardia_build_file()
+
     def test_series_lines_refuse_every_spelling_of_a_series_layer_for_windows(self):
         for line in ('layer engine/extra', 'layer engine/extra all', 'layer engine/extra win', 'layer engine/extra linux,win',
                      'layer engine/extra mac,linux,win'):

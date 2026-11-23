@@ -269,8 +269,10 @@ def ardia_build_file():
     if len(asserts) != 1:
         raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), line_of(text, "assert("))}: the Windows build needs one '
                          f'`assert(is_mac)` or `assert(is_mac || is_linux)` to turn into `assert(is_win)`')
-    for needle, what in (('ardia_sources = [\n', 'the shared source list'),
-                         ('source_set("ardia") {\n', 'the layer target'),
+    if not re.search(r'^ardia_sources = \[', text, re.M):
+        raise InputError(f'{where(os.path.join(REPO, LAYER_BUILD), 1)}: the Windows build needs the shared source list '
+                         '(`ardia_sources = [` at the top level)')
+    for needle, what in (('source_set("ardia") {\n', 'the layer target'),
                          ('config("exports_config")', 'the exports config it cuts at'),
                          ('    "//ardia/core:hooks",\n', 'the hooks dependency it drops'),
                          ('    "//ardia/core:launch_switches",\n', 'the launch switches dependency it replaces')):
@@ -333,7 +335,7 @@ def windows_takes(condition):
 
 class GnReader:
     def __init__(self, text):
-        self.text, self.tokens, self.at, self.found, self.listed = text, [], 0, [], []
+        self.text, self.tokens, self.at, self.found, self.listed, self.scopes = text, [], 0, [], [], []
         index, line = 0, 1
         while index < len(text):
             match = GN_LEXEME.match(text, index)
@@ -392,7 +394,9 @@ class GnReader:
             self.group('(', ')')
             if self.peek() == '{':
                 self.take('{')
+                self.scopes.append(name)
                 self.block(active, True)
+                self.scopes.pop()
             return
         while self.peek() in ('.', '['):
             if self.take()[0] == '.':
@@ -406,6 +410,9 @@ class GnReader:
         self.take()
         value = self.expression()
         if name == 'ardia_sources':
+            if self.scopes:
+                self.fail(line, f'`ardia_sources {operator}` inside the block of `{self.scopes[-1]}(...)`, a scope of its own '
+                                'that GN drops when it closes; change the list outside it')
             if operator == '-=' or value[0] != 'list':
                 self.fail(line, f'`ardia_sources {operator}` with anything but a list of names; it can\'t follow sources '
                                 'taken out of the list')
@@ -503,7 +510,9 @@ class GnReader:
             self.take(')')
             return ('other',)
         if token == '{':
+            self.scopes.append('{')
             self.block(False, True)
+            self.scopes.pop()
             return ('other',)
         if token.startswith('"'):
             return ('string', token[1:-1])
