@@ -38,8 +38,17 @@ class LoginItemGuardTests(unittest.TestCase):
         switches = (CORE / 'ac_launch_switches_linux.cc').read_text()
         definition = switches[switches.index('bool LinuxIsolatedInstance() {'):]
         definition = definition[:definition.index('\n}\n')]
-        self.assertIn('switches::kUserDataDir', definition)
-        self.assertIn('"ARDIA_DATA_DIR"', definition)
+        self.assertRegex(
+            definition,
+            r'if \(CommandLine\(\)\.HasSwitch\(switches::kUserDataDir\)\) return true;\n'
+            r'\s*return !base::Environment::Create\(\)->GetVar\("ARDIA_DATA_DIR"\)\.value_or\(""\)\.empty\(\);$',
+        )
+        host = (LINUX / 'ac_linux_host.cc').read_text()
+        hosts = between(host, 'bool IsolatedInstance() {', '\n}\n')
+        self.assertEqual(
+            hosts.replace('base::CommandLine::ForCurrentProcess()->', 'CommandLine().').split('{', 1)[1],
+            definition.split('{', 1)[1],
+        )
 
 
 if __name__ == '__main__':
