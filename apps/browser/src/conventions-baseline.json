@@ -24,7 +24,6 @@
     "apps/browser/assets/offline-game-pipeline/build_assets.py": 3,
     "apps/browser/assets/offline-game-pipeline/inline.py": 1,
     "apps/browser/assets/offline-game-pipeline/tint_maps.py": 1,
-    "apps/browser/macos/Podfile": 2,
     "apps/browser/scripts/perf/sync-cycle-bench.mjs": 8,
     "apps/dashboard/pipeline/ch_sync.py": 3,
     "apps/dashboard/src/server/triage/replies.ts": 2,

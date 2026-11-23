@@ -476,7 +476,9 @@ function directiveOf(lang) {
   return HASH_DIRECTIVE;
 }
 
-function scanFile(src, lang, { embedded = false, codeInStrings = true, helpPrinters = new Set() } = {}) {
+const EXECUTABLE_YAML = /^\.github\/workflows\/[^/]+\.ya?ml$|(?:^|\/)action\.ya?ml$/;
+
+function scanFile(src, lang, { embedded = false, codeInStrings = true, helpPrinters = new Set(), path = "" } = {}) {
   if (C_FAMILY.has(lang)) {
     const scanned = scanSource(src, lang, false, codeInStrings);
     const code = blank(scanned.codeAndStrings, scanned.strings.flatMap(stringContentRanges));
@@ -484,7 +486,7 @@ function scanFile(src, lang, { embedded = false, codeInStrings = true, helpPrint
     return { ...scanned, stray: scanned.stray.filter((range) => !exempt(range)), code, parts: [{ lang, src, code, codeAndStrings: scanned.codeAndStrings, strings: scanned.strings }] };
   }
   const isMarkup = lang === "html" || lang === "astro" || lang === "xml";
-  const scanned = isMarkup ? scanMarkup(src, lang) : HASH_SCANNERS[lang](src);
+  const scanned = isMarkup ? scanMarkup(src, lang) : lang === "yaml" ? scanYaml(src, { executable: EXECUTABLE_YAML.test(path) }) : HASH_SCANNERS[lang](src);
   const commentRanges = lang === "python" ? [...scanned.comments, ...scanned.docstrings] : scanned.comments;
   const codeAndStrings = blank(src, commentRanges);
   const code = blank(codeAndStrings, scanned.strings.map((s) => [s.start, s.end]));
@@ -543,7 +545,7 @@ function houseRules(path, src, lang, parts, add, markers) {
   }
   const found = skipMarkers(path, src, lang, parts);
   add("expiring-skip", path, found.filter((marker) => !marker.date).length);
-  markers?.push(...found.filter((marker) => marker.date || marker.never).map((marker) => ({ ...marker, path })));
+  markers?.push(...found.filter((marker) => marker.date || marker.never || marker.invalid).map((marker) => ({ ...marker, path })));
 }
 
 const GENERATED_MARK = /^(?:#!.*\n)?\W{0,4}(?:@generated|(?:auto-?)?generated (?:by|from|with)\b|do not edit\b)/i;
@@ -570,7 +572,7 @@ function checkFile(path, src, add, markers, helpPrinters = new Set()) {
   const rel = inApp ? path.slice(APP_SRC.length) : path;
   const base = posix.basename(path);
   const sourced = new Set([...src.matchAll(SOURCES_HELP)].map((match) => match[1]).filter((name) => helpPrinters.has(name)));
-  const { strings, stray, codeAndStrings, code, parts } = scanFile(src, lang, { codeInStrings: structural, helpPrinters: sourced });
+  const { strings, stray, codeAndStrings, code, parts } = scanFile(src, lang, { codeInStrings: structural, helpPrinters: sourced, path });
   add("comments", path, stray.length);
   houseRules(path, src, lang, parts, add, markers);
   if (!structural) return;
@@ -707,8 +709,13 @@ const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 function expired(markers, today) {
   return markers
-    .filter((marker) => marker.never || marker.date < today)
-    .map((marker) => (marker.never ? `  ${marker.path}:${marker.line} .only, which never belongs in a commit` : `  ${marker.path}:${marker.line} ${marker.kind} for @${marker.owner} expired ${marker.date}`));
+    .filter((marker) => marker.never || marker.invalid || marker.date < today)
+    .map((marker) => {
+      const where = `  ${marker.path}:${marker.line}`;
+      if (marker.never) return `${where} .only, which never belongs in a commit`;
+      if (marker.invalid) return `${where} ${marker.kind} until ${marker.invalid}, which isn't a date (YYYY-MM-DD) with an @owner`;
+      return `${where} ${marker.kind} for @${marker.owner} expired ${marker.date}`;
+    });
 }
 
 const sorted = (found) =>
@@ -770,7 +777,7 @@ if (process.argv.includes("--expired")) {
   const markers = [];
   findViolations(workingTreeFiles().filter(([path, src]) => ACCEPTED_RISK_LISTS.includes(path) || SKIP_HINT.test(src)), markers);
   const late = expired(markers, todayUtc());
-  console.log(late.length ? `Past their date:\n${late.join("\n")}` : `No skip, todo, quarantine or accepted risk is past its date (${markers.length} dated).`);
+  console.log(late.length ? `Past their date, not a date, or .only:\n${late.join("\n")}` : `No skip, todo, quarantine or accepted risk is past its date (${markers.length} dated).`);
   process.exitCode = late.length ? 1 : 0;
 } else if (process.argv.includes("--write-baseline")) {
   writeBaseline(fromHead, process.argv.includes("--force"));
@@ -781,7 +788,7 @@ if (process.argv.includes("--expired")) {
     const lang = languageOf(path, src);
     if (!lang) continue;
     const sourced = new Set([...src.matchAll(SOURCES_HELP)].map((match) => match[1]).filter((name) => helpPrinters.has(name)));
-    for (const [start, end] of scanFile(src, lang, { codeInStrings: inStructuralScope(path), helpPrinters: sourced }).stray) {
+    for (const [start, end] of scanFile(src, lang, { codeInStrings: inStructuralScope(path), helpPrinters: sourced, path }).stray) {
       const line = src.slice(0, start).split("\n").length;
       console.log(`${path}:${line}: ${src.slice(start, end).split("\n")[0].slice(0, 160)}`);
     }
@@ -926,15 +933,19 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("scripts/hello.sh", misuse).comments, 0);
     const bre = ["#!/bin/sh", "# Usage: hello.sh", "(", "case \"$1\" in -h) sed -n '2,/^($/p' \"$0\" ;; esac", "# stray", ""].join("\n");
     assert.equal(house("scripts/hello.sh", bre).comments, 1);
+    const wide = ["#!/bin/sh", "# Usage: hello.sh", "echo hi", "# stray", 'case "$1" in -h) sed -n \'2,$p\' "$0" ;; esac', ""].join("\n");
+    assert.equal(house("scripts/hello.sh", wide).comments, 1);
+    const bytes = ["#!/usr/bin/env node", "// Not help", 'import { readFileSync } from "node:fs";', 'if (process.argv.includes("--help")) console.log(readFileSync(new URL(import.meta.url), "utf8").length);', ""].join("\n");
+    assert.equal(house("scripts/hello.mjs", bytes).comments, 1);
     const commented = ["#!/usr/bin/env node", "// Not help", 'import { readFileSync } from "node:fs";', 'if (process.argv.includes("--help")) {', '  // console.log(readFileSync(import.meta.filename, "utf8"));', '  console.log("usage: hello");', "}", ""].join("\n");
     assert.equal(house("scripts/hello.mjs", commented).comments, 2);
     const pyCommented = ["#!/usr/bin/env python3", "# Not help", "import sys", "if '--help' in sys.argv:", "    # print(open(__file__).read())", "    print('usage: hello')", ""].join("\n");
     assert.equal(house("scripts/hello.py", pyCommented).comments, 2);
     const unread = ["#!/usr/bin/env node", "// Not help", 'import { readFileSync } from "node:fs";', "const self = readFileSync(new URL(import.meta.url), \"utf8\").length;", ""].join("\n");
     assert.equal(house("scripts/hello.mjs", unread).comments, 1);
-    const alias = ["#!/usr/bin/env node", "// Usage: hello", 'const here = fileURLToPath(import.meta.url);', "const help = () => {", '  const lines = readFileSync(here, "utf8").split("\\n");', '  console.log(lines.join("\\n"));', "};", ""].join("\n");
+    const alias = ["#!/usr/bin/env node", "// Usage: hello", 'const here = fileURLToPath(import.meta.url);', "const help = () => {", '  const lines = readFileSync(here, "utf8").split("\\n");', '  console.log(lines.filter((l) => l.startsWith("//")).join("\\n"));', "};", ""].join("\n");
     assert.equal(house("scripts/agent/hello", alias).comments, 0);
-    const js = ["#!/usr/bin/env node", "// Usage: hello.mjs", "// Says hello.", 'import { readFileSync } from "node:fs";', "if (process.argv.includes(\"--help\")) console.log(readFileSync(new URL(import.meta.url), \"utf8\"));", "// stray", ""].join("\n");
+    const js = ["#!/usr/bin/env node", "// Usage: hello.mjs", "// Says hello.", 'import { readFileSync } from "node:fs";', "if (process.argv.includes(\"--help\")) console.log(readFileSync(new URL(import.meta.url), \"utf8\").split(\"\\n\").filter((l) => l.startsWith(\"//\")).join(\"\\n\"));", "// stray", ""].join("\n");
     assert.equal(house("scripts/hello.mjs", js).comments, 1);
     const ps = ["<#", ".SYNOPSIS", "Says hello.", "#>", "#Requires -Version 7", "Write-Host hi # stray", ""].join("\n");
     assert.equal(house("scripts/hello.ps1", ps).comments, 1);
@@ -978,8 +989,11 @@ if (process.argv.includes("--expired")) {
     assert.equal(house(".github/workflows/hello.yml", "jobs:\n  a:\n    steps:\n      - run: sleep 1 # why\n").sleeps, 1);
     const defaults = ["defaults:", "  run:", "    shell: pwsh", "jobs:", "  a:", "    steps:", "      - run: |", '          $x = "a#b"', "          Start-Sleep -Seconds 1", ""].join("\n");
     assert.deepEqual(house(".github/workflows/hello.yml", defaults), { comments: 0, sleeps: 1, skips: 0 });
-    const later = ["jobs:", "  a:", "    steps:", "      - run: Start-Sleep -Seconds 1", "      - run: \"sleep 1\"", "      - with:", "          script: return 1; // why", "defaults:", "  run:", "    shell: pwsh", ""].join("\n");
+    const later = ["jobs:", "  a:", "    steps:", "      - run: Start-Sleep -Seconds 1", "      - run: \"sleep 1\"", "      - uses: actions/github-script@0000000000000000000000000000000000000000", "        with:", "          script: return 1; // why", "defaults:", "  run:", "    shell: pwsh", ""].join("\n");
     assert.deepEqual(house(".github/workflows/hello.yml", later), { comments: 1, sleeps: 1, skips: 0 });
+    assert.equal(house("apps/hello/config.yml", "description: &help |\n  # payload text\nother: !tag >\n  # more payload\n").comments, 0);
+    assert.deepEqual(house("apps/hello/config.yml", "script: |\n  // a literal\nrun: sleep 1\n"), { comments: 0, sleeps: 0, skips: 0 });
+    assert.equal(house(".github/workflows/hello.yml", "jobs:\n  a:\n    steps:\n      - with:\n          script: |\n            // not github-script\n").comments, 0);
     const folded = ["jobs:", "  a:", "    steps:", "      - run: >", "          echo hello", "          sleep 1", ""].join("\n");
     assert.equal(house(".github/workflows/hello.yml", folded).sleeps, 0);
     const windows = ["jobs:", "  a:", "    runs-on: windows-latest", "    steps:", "      - run: Start-Sleep -Seconds 1", ""].join("\n");
@@ -994,6 +1008,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("packages/hello/Cargo.toml", 'name = "a#b" # c\nlit = \'#d\'\n').comments, 1);
     assert.equal(house("engine/hello/BUILD.gn", 'deps = [ "//a:b#c" ]  # why\n').comments, 1);
     assert.equal(house("apps/hello/Podfile", 's.sub(/"\\$\\{X\\}\\/)a/) { "#{$1}b" } # why\n').comments, 1);
+    assert.equal(house("apps/hello/tool.rb", "x = <<~TEXT\n  # sample output\nTEXT\ny = %q{#abcdef} # why\nz = %w[a#b c]\n").comments, 1);
+    assert.equal(house("apps/hello/a.xml", "<a><![CDATA[ <!-- not a comment --> ]]></a><!-- real -->\n").comments, 1);
     assert.equal(house("infra/hello/Dockerfile", "# syntax=docker/dockerfile:1\nFROM node\n# a note\nRUN echo a#b\n").comments, 1);
   });
   test("Kotlin, Rust, CSS and markup comments count, raw strings and lifetimes don't hide them", () => {
@@ -1020,6 +1036,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(shell("until [ -s f ]; do sleep 1; done"), 1);
     assert.equal(shell("deadline=$((SECONDS + 30))\nuntil [ -s f ] || (( SECONDS > deadline )); do sleep 1; done"), 0);
     assert.equal(shell("while [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done"), 0);
+    assert.equal(shell('i=0\nwhile [ "$i" -lt 5 ]; do sleep 1; done'), 1);
+    assert.equal(shell("until [ \"$(date +%s)\" -ge \"$end\" ]; do sleep 1; done"), 0);
     assert.equal(shell("for ((;;)); do sleep 1; done"), 1);
     assert.equal(shell("for ((i = 0; i < 5; i++)); do sleep 1; done"), 0);
     assert.equal(shell("while true; do echo timeout; sleep 1; done"), 1);
@@ -1033,6 +1051,8 @@ if (process.argv.includes("--expired")) {
     const py = (body) => house("scripts/hello.py", `import time\n${body}\n`).sleeps;
     assert.equal(py("for _ in range(5):\n    time.sleep(1)"), 0);
     assert.equal(py("while True:\n    time.sleep(1)"), 1);
+    assert.equal(py("n = 0\nwhile n < 5:\n    time.sleep(1)"), 1);
+    assert.equal(py("n = 0\nwhile n < 5:\n    time.sleep(1)\n    n += 1"), 0);
     assert.equal(py("end = time.monotonic() + 5\nwhile time.monotonic() < end:\n    time.sleep(0.1)"), 0);
     assert.equal(py("time.sleep(2)"), 1);
     const js = (body) => house("apps/browser/src/state/hello/hello.test.mjs", `${body}\n`).sleeps;
@@ -1040,6 +1060,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(js(`${helpers}await wait(50);\nawait settle();\nawait wait(0);`), 1);
     assert.equal(js(`${helpers}for (let i = 0; i < 20 && !ready(); i++) await wait(10);`), 0);
     assert.equal(js(`${helpers}while (!ready()) await wait(10);`), 1);
+    assert.equal(js(`${helpers}let i = 0;\nwhile (i < 5) await wait(10);`), 1);
+    assert.equal(js(`${helpers}let i = 0;\nwhile (i < 5) {\n  await wait(10);\n  i++;\n}`), 0);
     assert.equal(js(`${helpers}while (true) {\n  ready({ timeout: 500 });\n  await wait(1);\n}`), 1);
     assert.equal(js(`${helpers}do {\n  ready();\n} while (retries-- > 0)\nawait wait(1);`), 1);
     assert.equal(js(`${helpers}await wait( 0);\nawait new Promise((r) => setTimeout(r, 0));`), 0);
@@ -1076,6 +1098,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(js('import test, { only } from "node:test";\nonly("focused", fn);'), 1);
     assert.equal(js('import { test as check } from "node:test";\ncheck.only("focused", fn);\ncheck("a", { skip: true }, fn);'), 2);
     assert.equal(js('import * as nodeTest from "node:test";\nnodeTest.only("a", fn);\nnodeTest.test.skip("b", fn);'), 2);
+    assert.equal(js('test["only"]("a", fn);\ndescribe[\'skip\']("b", fn);\nconst text = "test[\'only\'](";'), 2);
+    assert.equal(js('const opts = { only: true };\ntest("a", opts, fn);\nconst data = { skip: true };\nuse(data);'), 1);
     assert.equal(house("apps/browser/src/state/hello/hello.test.ts", 'const REASON: string = "flaky";\ntest("a", { skip: REASON }, fn);\n').skips, 1);
     assert.equal(js('test.only("a", () => {});\ndescribe("b", { only: true }, () => {});'), 2);
     assert.equal(js('test.skip("a", () => {});\nit.todo("b");'), 2);
@@ -1109,6 +1133,9 @@ if (process.argv.includes("--expired")) {
     assert.deepEqual(expired(markers, "2026-02-01"), ["  apps/browser/src/state/hello/hello.test.mjs:1 todo for @alice expired 2026-01-31"]);
     assert.equal(expired(markers, "2026-02-02").length, 2);
     assert.equal(expired(markers, "2026-01-31").length, 0);
+    const impossible = [];
+    findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test("a", { skip: "@a until 2099-02-30: x" }, () => {});\n'], ["apps/browser/scripts/sim/known.json", '{"failing":[{"issue":1,"owner":"@d","expires":"soon"}]}']], impossible);
+    assert.equal(expired(impossible, "2026-01-01").length, 2);
     const focused = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test.only("a", () => {});\n']], focused);
     assert.deepEqual(expired(focused, "2026-01-01"), ["  apps/browser/src/state/hello/hello.test.mjs:1 .only, which never belongs in a commit"]);

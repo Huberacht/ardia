@@ -301,9 +301,10 @@ writeDocument(DOC, versionedJson(data, VERSION));
   inside injected page JS and shader source held in strings. Allowed: license headers, shebangs, tool directives
   (`@ts-expect-error`, `eslint-disable`, `#pragma`, `swiftlint:`, `nogncheck`, `NOLINT`, `/// <reference`,
   `# shellcheck`, `# noqa`, `# type:`, `# yaml-language-server:`, `# syntax=`, `#Requires`, a lone `/** @type {…} */`),
-  and the header a script prints as its `--help` (next to a `help`, `usage`, `-h` or `exit 64`): the lines a `sed -n 'A,Bp' "$0"` or `head -n N "$0"` prints, the
-  leading `#` block an `awk … "$0"` prints or that `step-guard.sh` prints for the step sourcing it, the leading `//`
-  block of a script that reads itself (`readFileSync(… import.meta.url)`), a Python module docstring the script uses
+  and the header a script prints as its `--help` (next to a `help`, `usage`, `-h` or `exit 64`): always the
+  contiguous comment block at the top of the file, and only the part of it that a `sed -n 'A,Bp' "$0"` or
+  `head -n N "$0"` prints, that an `awk … "$0"` or `step-guard.sh` prints, that a script reading itself
+  (`readFileSync(… import.meta.url)`) splits and strips of `//` before printing, a Python module docstring the script uses
   as `__doc__`, and PowerShell comment-based help (`.SYNOPSIS`). Rust attributes (`#[…]`) aren't comments; Python
   docstrings and Rust `///` doc comments are.
 
@@ -385,7 +386,8 @@ on every pull request and push to `main` (plain `node`, no install, no paths fil
 `packages/*/{src,ios}` and `engine/{ardiacore,chromium}/src`. `comments`, `bare-sleep` and `expiring-skip` cover every
 file git tracks in a language the scanners read (`apps/browser/scripts/conventions/scanners.mjs`): JS/TS (and
 `tsconfig*.json`), Swift, C/C++/Objective-C/Mojo/Java, Kotlin and Gradle, Rust, CSS, shell (by extension or shebang),
-PowerShell, Python, YAML (a `run:` block as the shell that step uses, a `script:` block as JS), TOML, GN, Ruby
+PowerShell, Python, YAML (in a workflow or `action.yml`, `run:` as the shell that step uses and an
+`actions/github-script` `script:` as JS; elsewhere a block scalar is text), TOML, GN, Ruby
 (`Podfile`, `.podspec`), Dockerfiles, HTML, Astro and XML. Left out: `node_modules`, lockfiles, `gradlew`, `fixtures/`
 folders outside the scopes above, any folder holding its own `LICENSE` or `COPYING` (a third-party copy), files whose
 first lines say they are generated, and `packages/ardiacore/src/engine/generated`. Outside the first scope, JS held in
@@ -425,6 +427,9 @@ higher than what the file has now, so fixes must lower their entries.
   total grows. The one allowed growth: `imports` may grow while `layout` shrinks, because a file moved out of the old
   layout starts having its imports checked. Moving or renaming a file moves its entries under the new path.
 - Never add violations to the baseline by hand. `--force` overrides the refusal and needs the owner's OK.
+- The baseline counts per file and rule, so swapping one baselined violation for another of the same rule in the
+  same file passes. Fingerprinting each violation would close that, at the cost of a baseline that churns with every
+  edit near a violation; review catches a swap, and the count can only go down.
 - `--show <path>…` prints each comment the check counts in those files, with its line.
 
 ### Skips and accepted risks expire
@@ -443,8 +448,8 @@ owner and a date, in this form:
 - A skip on a condition (`{ skip: !onMac && "needs a Mac" }`, `skipIf`, `.disabled(if:)`, `t.skip()` inside a test)
   names an environment, not a debt, and needs neither. `.only` never belongs in a commit.
 
-A missing owner or date counts against the baseline like any rule. A date that has passed (UTC), and any `.only`,
-fail the check outright, baseline or not: fix the case, or move the date with the owner's OK. `--expired` runs only that part, and
+A missing owner or date counts against the baseline like any rule. A date that has passed (UTC), a claimed date that
+isn't one (`until 2099-02-30`, `"expires": "soon"`), and any `.only` fail the check outright, baseline or not: fix the case, or move the date with the owner's OK. `--expired` runs only that part, and
 `.github/workflows/expiring-skips.yml` runs it every Monday so a date fires even when no pull request runs the check.
 
 React Compiler isn't enabled (`apps/browser/babel.config.js` uses `babel-preset-expo` alone), so the check has no

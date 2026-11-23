@@ -334,6 +334,8 @@ export function scanPython(src) {
   return { comments, strings, docstrings };
 }
 
+const RUBY_HEREDOC = /^<<([~-]?)(['"`]?)([A-Z_][A-Z0-9_]*)\2/;
+
 const SIMPLE_HASH = {
   toml: { quotes: ['"""', "'''", '"', "'"], escapes: { '"': true, '"""': true } },
   gn: { quotes: ['"'], escapes: { '"': true } },
@@ -346,8 +348,16 @@ export function scanHashSimple(src, lang) {
   const n = src.length;
   const comments = [];
   const strings = [];
+  const heredocs = [];
   let i = skipShebang(src);
   while (i < n) {
+    const inHeredoc = heredocs.find((body) => i >= body.start && i < body.end);
+    if (inHeredoc) {
+      strings.push({ start: inHeredoc.start, end: inHeredoc.end });
+      heredocs.splice(heredocs.indexOf(inHeredoc), 1);
+      i = inHeredoc.end;
+      continue;
+    }
     const lineStart = i === 0 || src[i - 1] === "\n";
     if (rubyBlocks && lineStart && src.startsWith("=begin", i)) {
       const start = i;
@@ -363,6 +373,43 @@ export function scanHashSimple(src, lang) {
         const start = i;
         i = lineEndAt(src, i);
         comments.push([start, i]);
+        continue;
+      }
+    }
+    if (rubyBlocks) {
+      const heredoc = RUBY_HEREDOC.exec(src.slice(i, i + 80));
+      if (heredoc) {
+        const word = heredoc[3];
+        const squiggly = heredoc[1] !== "";
+        let at = lineEndAt(src, i) + 1;
+        const bodyStart = at;
+        while (at < src.length) {
+          const end = lineEndAt(src, at);
+          const line = src.slice(at, end);
+          if ((squiggly ? line.trim() : line) === word) break;
+          at = end + 1;
+        }
+        heredocs.push({ start: bodyStart, end: Math.min(at, n) });
+        i += heredoc[0].length;
+        continue;
+      }
+      const percent = /^%[qQwWiIrs]?([^\w\s])/.exec(src.slice(i, i + 4));
+      if (percent && !/[\w)\]}]/.test(src.slice(Math.max(0, i - 40), i).trimEnd().slice(-1))) {
+        const open = percent[1];
+        const close = { "(": ")", "[": "]", "{": "}", "<": ">" }[open] ?? open;
+        let depth = 1;
+        let at = i + percent[0].length;
+        const start = at;
+        while (at < n && depth) {
+          if (src[at] === "\\") at += 2;
+          else {
+            if (src[at] === close) depth--;
+            else if (src[at] === open && open !== close) depth++;
+            at++;
+          }
+        }
+        strings.push({ start, end: Math.max(start, at - 1) });
+        i = at;
         continue;
       }
     }
@@ -387,7 +434,7 @@ export function scanHashSimple(src, lang) {
   return { comments, strings };
 }
 
-const YAML_BLOCK = /^(\s*)(-\s+)?(?:([\w.$-]+|"[^"]*"|'[^']*')\s*:\s+)?[|>][-+]?\d?[-+]?\s*(?:#.*)?$/;
+const YAML_BLOCK = /^(\s*)(-\s+)?(?:([\w.$-]+|"[^"]*"|'[^']*')\s*:\s+)?(?:[&!][^\s]*\s+)*[|>][-+]?\d?[-+]?\s*(?:#.*)?$/;
 
 const indentOf = (text) => text.match(/^\s*/)[0].length;
 
@@ -445,30 +492,48 @@ function runShellOf(lines, at, keyIndent) {
   return siblingShell(lines, at, keyIndent) ?? defaultsShell(lines, at) ?? runnerShell(lines, at);
 }
 
-function siblingShell(lines, at, keyIndent) {
+function siblingValue(lines, at, keyIndent, key) {
+  const pattern = new RegExp(String.raw`^\s*(?:-\s+)?${key}:\s*(.*)$`);
   for (let k = at; k >= 0; k--) {
     const line = lines[k].text;
     if (!line.trim()) continue;
-    const indent = line.match(/^\s*/)[0].length;
-    if (k < at && indent < keyIndent && !/^\s*-\s/.test(line)) break;
-    const shell = /^\s*(?:-\s+)?shell:\s*['"]?(\w+)/.exec(line);
-    if (shell && (indent === keyIndent || line.match(/^\s*-\s+/)?.[0].length === keyIndent)) return shell[1];
-    if (/^\s*-\s/.test(line) && line.match(/^\s*-\s+/)[0].length === keyIndent) break;
+    const indent = indentOf(line);
+    const dash = line.match(/^\s*-\s+/)?.[0].length;
+    if (k < at && indent < keyIndent && dash === undefined) break;
+    const found = pattern.exec(line);
+    if (found && (indent === keyIndent || dash === keyIndent)) return found[1];
+    if (dash === keyIndent) break;
   }
   for (let k = at + 1; k < lines.length; k++) {
     const line = lines[k].text;
     if (!line.trim()) continue;
-    const indent = line.match(/^\s*/)[0].length;
+    const indent = indentOf(line);
     if (indent < keyIndent || (indent === keyIndent && /^\s*-\s/.test(line))) break;
-    const shell = /^\s*shell:\s*['"]?(\w+)/.exec(line);
-    if (shell && indent === keyIndent) return shell[1];
+    const found = pattern.exec(line);
+    if (found && indent === keyIndent) return found[1];
   }
   return null;
 }
 
-const SHELL_LANGS = { pwsh: "powershell", powershell: "powershell", python: "python", bash: "shell", sh: "shell" };
+function siblingShell(lines, at, keyIndent) {
+  return /^['"]?(\w+)/.exec(siblingValue(lines, at, keyIndent, "shell") ?? "")?.[1] ?? null;
+}
 
-export function scanYaml(src) {
+function runsGithubScript(lines, at, keyIndent) {
+  for (let k = at - 1; k >= 0; k--) {
+    const text = lines[k].text;
+    if (!text.trim() || indentOf(text) >= keyIndent) continue;
+    const parent = /^(\s*)(-\s+)?with:\s*$/.exec(text);
+    if (!parent) return false;
+    return /^['"]?actions\/github-script@/.test(siblingValue(lines, k, parent[1].length + (parent[2]?.length ?? 0), "uses") ?? "");
+  }
+  return false;
+}
+
+const SHELL_LANGS = { pwsh: "powershell", powershell: "powershell", python: "python", bash: "shell", sh: "shell" };
+const SCALAR_PROPERTIES = String.raw`(?:[&!][^\s]*\s+)*`;
+
+export function scanYaml(src, { executable = true } = {}) {
   const comments = [];
   const strings = [];
   const embedded = [];
@@ -501,11 +566,11 @@ export function scanYaml(src) {
         }
         if (last > k) {
           const bodyLines = lines.slice(k + 1, last + 1);
-          const lang = key === "run" ? (SHELL_LANGS[runShellOf(lines, k, keyIndent)] ?? "shell") : key === "script" ? "js" : null;
+          const lang = !executable ? null : key === "run" ? (SHELL_LANGS[runShellOf(lines, k, keyIndent)] ?? "shell") : key === "script" && runsGithubScript(lines, k, keyIndent) ? "js" : null;
           if (lang) {
             const offsets = bodyLines.map((line) => line.start + Math.min(indent, line.text.length));
             const pieces = bodyLines.map((line) => line.text.slice(indent));
-            const folded = /^[^#]*:\s+>|^\s*-\s+>/.test(text.replace(/\s+#.*$/, ""));
+            const folded = /(?::|^\s*-)\s+(?:[&!]\S*\s+)*>/.test(text.replace(/\s+#.*$/, ""));
             const joins = pieces.map((piece, at) => (at === 0 ? "" : folded && piece && pieces[at - 1] && !/^\s/.test(piece) && !/^\s/.test(pieces[at - 1]) ? " " : "\n"));
             const charMap = [];
             let joined = "";
@@ -554,8 +619,8 @@ export function scanYaml(src) {
         quoteStart = start + c + 1;
       }
     }
-    const inline = /^(\s*)(-\s+)?(run|script):[ \t]+(?=[^\s|>])/.exec(text);
-    if (inline && !quote) {
+    const inline = new RegExp(String.raw`^(\s*)(-\s+)?(run|script):[ \t]+${SCALAR_PROPERTIES}(?=[^\s|>])`).exec(text);
+    if (inline && !quote && executable && (inline[3] === "run" || runsGithubScript(lines, k, inline[1].length + (inline[2]?.length ?? 0)))) {
       const keyIndent = inline[1].length + (inline[2]?.length ?? 0);
       let from = inline[0].length;
       let value = text.slice(from, commentAt).replace(/\s+$/, "");
@@ -617,6 +682,10 @@ export function scanMarkup(src, lang) {
       for (const match of body.matchAll(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g)) comments.push([match.index, match.index + match[0].length]);
     }
   }
+  body = body.replace(/<!\[CDATA\[[\s\S]*?(?:\]\]>|$)/g, (cdata, at) => {
+    strings.push({ start: at, end: at + cdata.length });
+    return cdata.replace(/[^\n]/g, " ");
+  });
   for (const match of body.matchAll(/<!--[\s\S]*?(?:-->|$)/g)) comments.push([match.index, match.index + match[0].length]);
   return { comments, strings, embedded };
 }

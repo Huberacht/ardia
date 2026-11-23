@@ -3,7 +3,7 @@ export const EXPIRY_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const OWNER = /^@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 
 const DEADLINE =
-  /\b(?:deadline|SECONDS|EPOCHSECONDS|Date\.now|performance\.now|monotonic|perf_counter|time\.time|hrtime|attempts?|tries|retries|elapsed|waited|max_?wait|maxWait|give_?up|giveUp|budget|expired|ends?At)\b|date\s+\+%s|Get-Date|Stopwatch/;
+  /\b(?:deadline|SECONDS|EPOCHSECONDS|Date\.now|performance\.now|monotonic|perf_counter|time\.time|hrtime|attempts?|tries|retries|[Ee]lapsed|waited|max_?wait|maxWait|give_?up|giveUp|budget|expired|ends?At)\b|date\s+\+%s|Get-Date|Stopwatch/;
 const GIVES_UP = /\b(?:break|exit|return|throw|raise|die|fail|Write-Error)\b/;
 
 function boundedBody(body) {
@@ -65,7 +65,8 @@ export function shellHelpLines(src, strings, context = src) {
       while (to <= lines.length && /^\s*#/.test(lines[to - 1])) to++;
       to--;
     }
-    for (let k = Math.max(1, from); k <= Math.min(to, lines.length); k++) exempt.add(k);
+    const header = leadingBlock(src, /^\s*#/);
+    for (let k = Math.max(1, from); k <= Math.min(to, lines.length); k++) if (header.has(k)) exempt.add(k);
   }
   return exempt;
 }
@@ -79,7 +80,11 @@ const SELF_PATH = /\b(?:const|let|var)\s+([\w$]+)\s*=\s*(?:fileURLToPath\(\s*imp
 function printsItself(src, context) {
   const aliases = [...context.matchAll(SELF_PATH)].map((match) => match[1].replace(/\$/g, "\\$"));
   const reads = aliases.length ? [READS_ITSELF, new RegExp(String.raw`readFileSync\(\s*(?:${aliases.join("|")})\b`, "g")] : [READS_ITSELF];
-  const printsHelp = (at) => PRINTS.test(context.slice(context.lastIndexOf("\n", at) + 1, at + 400)) && HELP_CONTEXT.test(context.slice(Math.max(0, at - 600), at + 400));
+  const printsHelp = (at) => {
+    const after = context.slice(at, at + 400);
+    const stripsMarkers = /\.split\(/.test(after) && /["'\x60]\/\/|\\\/\\\//.test(after);
+    return stripsMarkers && PRINTS.test(context.slice(context.lastIndexOf("\n", at) + 1, at + 400)) && HELP_CONTEXT.test(context.slice(Math.max(0, at - 600), at + 400));
+  };
   return reads.some((pattern) => [...context.matchAll(pattern)].some((match) => printsHelp(match.index)));
 }
 
@@ -147,10 +152,25 @@ function shellLoops(code) {
   return loops.filter((loop) => loop.bodyStart >= 0);
 }
 
+const NOT_COUNTERS = new Set(["for", "while", "until", "do", "if", "in", "of", "let", "const", "var", "true", "false", "null", "undefined", "length", "test", "and", "or", "not", "is", "None", "True", "False"]);
+
+function advances(header, body) {
+  const names = [...new Set([...header.matchAll(/\$?\{?([A-Za-z_][\w]*)/g)].map((match) => match[1]))].filter((name) => !NOT_COUNTERS.has(name));
+  const text = `${header}\n${body}`;
+  return names.some((name) =>
+    new RegExp(String.raw`(?:\+\+|--)\s*\$?${name}\b|(?<![\w.])\$?${name}\s*(?:\+\+|--|[-+*/]?=(?!=))|\blet\s+${name}\b|\b(?:read|shift)\b[^\n]*\b${name}\b`).test(text),
+  );
+}
+
+function counted(header, body) {
+  return DEADLINE.test(header) || advances(header, body);
+}
+
 function shellBounded(code, loop, loops) {
   const header = code.slice(loop.start, loop.bodyStart);
+  const body = ownBody(code, loop, loops);
   if (loop.kind === "for" && !/^for\s*\(\(/.test(header)) return true;
-  return SHELL_COUNTED.test(header) || DEADLINE.test(header) || boundedBody(ownBody(code, loop, loops));
+  return (SHELL_COUNTED.test(header) && counted(header, body)) || DEADLINE.test(header) || boundedBody(body);
 }
 
 function innermost(loops, at) {
@@ -205,7 +225,7 @@ export function pythonSleeps(code) {
           if (/^\s*(?:async\s+)?(?:for|while)\b/.test(body)) nested = indentOf(body);
           else own.push(body);
         }
-        if (COMPARISON.test(header.replace(/->/g, "")) || DEADLINE.test(header) || boundedBody(own.join("\n"))) return;
+        if ((COMPARISON.test(header.replace(/->/g, "")) && counted(header, own.join("\n"))) || DEADLINE.test(header) || boundedBody(own.join("\n"))) return;
         break;
       }
       if (indent === 0) break;
@@ -282,8 +302,10 @@ function ownBody(code, loop, loops) {
 function braceBounded(code, loop, loops) {
   const { kind, header } = loop;
   if ((kind === "for" || kind === "foreach") && /\b(?:of|in)\b/.test(header)) return true;
-  if (COMPARISON.test(header.replace(/=>|->/g, "")) || DEADLINE.test(header) || /-(?:lt|le|gt|ge)\b/i.test(header)) return true;
-  return boundedBody(ownBody(code, loop, loops));
+  const body = ownBody(code, loop, loops);
+  if (DEADLINE.test(header)) return true;
+  if ((COMPARISON.test(header.replace(/=>|->/g, "")) || /-(?:lt|le|gt|ge)\b/i.test(header)) && counted(header, body)) return true;
+  return boundedBody(body);
 }
 
 const TIMER_HELPER = [
@@ -366,6 +388,38 @@ function unmatchedOpen(code, at) {
   return -1;
 }
 
+function boundObjectName(code, at) {
+  const bag = unmatchedOpen(code, at);
+  if (bag < 0 || code[bag] !== "{") return null;
+  return /\b(?:const|let|var)\s+([\w$]+)\s*(?::[^=;]+)?=\s*$/.exec(code.slice(Math.max(0, bag - 120), bag))?.[1] ?? null;
+}
+
+function topLevelArgs(code, open) {
+  const close = balanced(code, open, "(", ")");
+  const args = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let k = open + 1; k < close; k++) {
+    const c = code[k];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === "," && depth === 0) {
+      args.push(code.slice(start, k).trim());
+      start = k + 1;
+    }
+  }
+  args.push(code.slice(start, close).trim());
+  return args;
+}
+
+function passedToTestCall(code, callees) {
+  const passed = new Set();
+  for (const match of code.matchAll(new RegExp(String.raw`(?<![\w$.])(?:[\w$]+\.)?(?:${callees})(?:\s*\.\s*[\w$]+)?\s*\(`, "g"))) {
+    for (const arg of topLevelArgs(code, match.index + match[0].length - 1)) if (/^[A-Za-z_$][\w$]*$/.test(arg)) passed.add(arg);
+  }
+  return (name) => name !== null && passed.has(name);
+}
+
 function optionBagCallee(code, at) {
   const bag = unmatchedOpen(code, at);
   if (bag < 0 || code[bag] !== "{" || !/[(,]\s*$/.test(code.slice(Math.max(0, bag - 40), bag))) return "";
@@ -419,19 +473,24 @@ export function jsSkipMarkers(src, code, strings, codeAndStrings) {
   const markers = [];
   const callees = [...testCallees(codeAndStrings)].map((name) => name.replace(/\$/g, "\\$")).join("|");
   const calleePattern = new RegExp(String.raw`^(?:[\w$]+\.)?(?:${callees})$`);
-  for (const match of code.matchAll(new RegExp(String.raw`(?<![\w$.])(?:${callees})(?:\s*\.\s*(?:test|it|describe|suite))?\s*\.\s*(only|skip|todo)\s*\(`, "g"))) {
-    markers.push({ at: match.index, kind: match[1], reason: null, never: match[1] === "only" });
+  const inString = (at) => strings.some((s) => at >= s.start && at < s.end);
+  const holder = String.raw`(?:\s*\.\s*(?:test|it|describe|suite)|\s*\[\s*(["'\x60])(?:test|it|describe|suite)\1\s*\])?`;
+  const methods = new RegExp(String.raw`(?<![\w$.])(?:${callees})${holder}(?:\s*\.\s*(only|skip|todo)|\s*\[\s*(["'\x60])(only|skip|todo)\3\s*\])\s*\(`, "g");
+  for (const match of codeAndStrings.matchAll(methods)) {
+    if (inString(match.index)) continue;
+    const kind = match[2] ?? match[4];
+    markers.push({ at: match.index, kind, reason: null, never: kind === "only" });
   }
   for (const [name, kind] of nodeTestShorthands(codeAndStrings)) {
     for (const match of code.matchAll(new RegExp(String.raw`(?<![\w$.])${name.replace(/\$/g, "\\$")}\s*\(`, "g"))) {
       markers.push({ at: match.index, kind, reason: null, never: kind === "only" });
     }
   }
-  const inString = (at) => strings.some((s) => at >= s.start && at < s.end);
+  const passedToTest = passedToTestCall(code, callees);
   for (const match of codeAndStrings.matchAll(/(?<![\w$.])(["']?)(skip|todo|only)\1\s*:\s*/g)) {
     if (inString(match.index)) continue;
     const valueAt = match.index + match[0].length;
-    if (!calleePattern.test(optionBagCallee(code, match.index))) continue;
+    if (!calleePattern.test(optionBagCallee(code, match.index)) && !passedToTest(boundObjectName(code, match.index))) continue;
     const kind = match[2];
     TRUE_VALUE.lastIndex = valueAt;
     const isTrue = TRUE_VALUE.test(code);
@@ -518,7 +577,7 @@ export function listMarkers(path, src) {
     }
     cursor = at + 1;
     const dated = OWNER.test(entry.owner ?? "") && typeof entry.expires === "string";
-    return { at, kind: "quarantine", owner: dated ? entry.owner.slice(1) : null, date: dated ? entry.expires : null };
+    return { at, kind: "quarantine", owner: dated ? entry.owner.slice(1) : null, date: dated ? entry.expires : null, claimed: entry.expires === undefined ? null : String(entry.expires) };
   });
 }
 
@@ -530,11 +589,16 @@ function isCalendarDate(date) {
   return !Number.isNaN(time) && new Date(time).toISOString().startsWith(date);
 }
 
+const CLAIMED_EXPIRY = /@[A-Za-z0-9-]+\s+until\s+(\S+?)(?=:|\s|$)/;
+
 export function resolveMarker(src, marker) {
   const line = lineOf(src, marker.at);
   if (marker.never) return { ...marker, line, owner: null, date: null };
-  const mark = marker.date === undefined && marker.reason ? EXPIRY_MARK.exec(marker.reason) : null;
-  const owner = marker.date === undefined ? (mark?.[1] ?? null) : marker.owner;
-  const date = marker.date === undefined ? (mark?.[2] ?? null) : marker.date;
-  return isCalendarDate(date) && owner ? { ...marker, line, owner, date } : { ...marker, line, owner: null, date: null };
+  const fromReason = marker.date === undefined;
+  const mark = fromReason && marker.reason ? EXPIRY_MARK.exec(marker.reason) : null;
+  const owner = fromReason ? (mark?.[1] ?? null) : marker.owner;
+  const date = fromReason ? (mark?.[2] ?? null) : marker.date;
+  if (isCalendarDate(date) && owner) return { ...marker, line, owner, date };
+  const claimed = fromReason ? (marker.reason ? CLAIMED_EXPIRY.exec(marker.reason)?.[1] : null) : marker.claimed;
+  return { ...marker, line, owner: null, date: null, invalid: claimed ? claimed : null };
 }
