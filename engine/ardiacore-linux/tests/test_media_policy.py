@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'src'
 DESKTOP_SOURCE = SOURCE.parents[1] / 'ardiacore-desktop' / 'src'
-FILES = [SOURCE / 'ardia/linux' / f'ac_linux_{name}.cc' for name in ['media', 'tab_policy']]
+FILES = [SOURCE / 'ardia/linux/ac_linux_media.cc', DESKTOP_SOURCE / 'ardia/desktop/ac_desktop_tab_policy.cc']
 FIXTURE = ROOT / 'tests/fixtures/media.h'
 
 
