@@ -44,7 +44,7 @@ final class GlassPageShot {
     let rect = web.bounds.insetBy(dx: 0, dy: -Self.reach)
     let configuration = WKSnapshotConfiguration()
     configuration.rect = rect
-    configuration.afterScreenUpdates = false
+    configuration.afterScreenUpdates = true
     configuration.snapshotWidth = NSNumber(value: Double(rect.width * pixelsPerPoint / max(web.traitCollection.displayScale, 1)))
     let offset = web.scrollView.contentOffset
     let zoom = web.scrollView.zoomScale
