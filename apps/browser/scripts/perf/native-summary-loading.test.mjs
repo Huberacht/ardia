@@ -15,12 +15,14 @@ test("the loading rows count only runs where the same /hang tab was active and l
     run(150, hang, { ...hang, id: "t10" }),
     run(160, { ...hang, url: "http://127.0.0.1:1/static?id=seed" }, { ...hang, url: "http://127.0.0.1:1/static?id=seed" }),
     run(170, null, hang),
+    run(180, { ...hang, url: "http://127.0.0.1:1/slow?id=other" }, hang),
+    run(190, { ...hang, id: undefined }, { ...hang, id: undefined }),
   ];
-  assert.deepEqual(runs.map(loadingThroughout), [true, true, false, false, false, false]);
+  assert.deepEqual(runs.map(loadingThroughout), [true, true, false, false, false, false, false, false]);
   const rows = Object.fromEntries(summary({ ...empty, loading: runs }).map((r) => [r.name, r]));
   const loading = rows["active tab loading: wakeups/s (browser process)"];
   assert.equal(loading.n, 2);
   assert.ok(loading.max <= 3);
-  assert.equal(rows["seed tab loaded: wakeups/s (browser process)"].n, 6);
+  assert.equal(rows["seed tab loaded: wakeups/s (browser process)"].n, 8);
   assert.equal(rows["active tab loading: runs where the same tab was active and loading throughout (the rest are left out)"].median, 2);
 });

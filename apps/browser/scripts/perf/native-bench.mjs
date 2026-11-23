@@ -183,7 +183,7 @@ import { componentsMismatch, componentsState, jointProblems, templateProblems, t
 import { parseSettings, profileSeed } from "./profile-seed.mjs";
 import { writeSwitches } from "./js-bench.mjs";
 import { frameTable, framesLibrary, framesRun } from "./frames-phase.mjs";
-import { summary } from "./native-summary.mjs";
+import { LOADING_FIXTURE, summary } from "./native-summary.mjs";
 import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, sourceChanged, storePair, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
 import { sideLaunchEnv } from "./launch-env.mjs";
 
@@ -1187,11 +1187,21 @@ async function sessionRun(side, i, parts) {
 const ACTIVE_TAB = `(() => { const s = ac.store.getState(); const w = s.windows[${WINDOW}]; const id = w.activeTabIds[w.profileId];
   return { id, url: s.tabs[id]?.url ?? null, appLoading: ac.tabLive ? !!ac.tabLive.shownLiveOf(s, id).isLoading : null }; })()`;
 
+async function fixturePage(app) {
+  try {
+    const target = await app.cdp.find("id=load");
+    if (!target) return null;
+    const reply = await app.cdp.send(target, "Runtime.evaluate", { expression: "({ url: location.href, state: document.readyState })", returnByValue: true });
+    return reply?.result?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function activeLoading(app) {
   const tab = await app.run(`return ${ACTIVE_TAB};`);
-  const target = tab.url?.includes("/hang") ? await app.cdp.find("id=load") : null;
-  const ready = target && (await app.cdp.send(target, "Runtime.evaluate", { expression: "document.readyState", returnByValue: true }))?.result?.value;
-  const pageLoading = ready ? ready === "loading" : null;
+  const page = tab.url?.includes(LOADING_FIXTURE) ? await fixturePage(app) : null;
+  const pageLoading = page?.url?.includes(LOADING_FIXTURE) ? page.state === "loading" : null;
   return { ...tab, pageLoading, loading: tab.appLoading ?? pageLoading ?? false };
 }
 
@@ -1205,10 +1215,10 @@ async function loadingRun(side, i) {
     await sleep(30_000);
     r.loadedBefore = await activeLoading(app);
     r.loaded = await idleWindow(app, secs);
-    await app.run(`ac.store.getState().newTab(${WINDOW}, { url: "${base()}/hang?id=load" }); return true;`);
+    await app.run(`ac.store.getState().newTab(${WINDOW}, { url: "${base()}${LOADING_FIXTURE}" }); return true;`);
     await app.pageState("id=load", 30_000, (s) => s.vis);
     let state = null;
-    for (const end = Date.now() + 20_000; Date.now() < end && !(state?.loading && state.url?.includes("/hang")); await sleep(100)) state = await activeLoading(app);
+    for (const end = Date.now() + 20_000; Date.now() < end && !(state?.loading && state.url?.includes(LOADING_FIXTURE)); await sleep(100)) state = await activeLoading(app);
     r.loadingBefore = state;
     await sleep(3000);
     r.loading = await idleWindow(app, secs);

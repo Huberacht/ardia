@@ -7,8 +7,11 @@ export const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
-export const loadingThroughout = (r) =>
-  !!(r.loadingBefore?.loading && r.loadingAfter?.loading && r.loadingBefore.id === r.loadingAfter.id && r.loadingAfter.url?.includes("/hang"));
+export const LOADING_FIXTURE = "/hang?id=load";
+
+const onFixture = (s) => !!(s?.loading && s.id && s.url?.includes(LOADING_FIXTURE));
+
+export const loadingThroughout = (r) => onFixture(r.loadingBefore) && onFixture(r.loadingAfter) && r.loadingBefore.id === r.loadingAfter.id;
 
 export function summary(res) {
   const rows = [];
