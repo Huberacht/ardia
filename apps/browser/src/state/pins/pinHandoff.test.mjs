@@ -103,30 +103,81 @@ test("Back on a frozen copy is dropped for good if its pull-back is cancelled, e
   webviews.delete(mail);
 });
 
-test("a double-click refresh on a frozen tile skips the reload when the page starts loading during the hand-off", async () => {
+async function doubleClickTile(windowId, tabId) {
+  const held = await import("../sidebar/heldTabPress.ts");
   const { refreshShownTile } = await import("../sidebar/actions.ts");
-  const { devTabPresses } = await import("../telemetry/tabPresses.ts");
-  const client = await import("../telemetry/client.ts");
-  client.setSharing(true, "settings");
+  const click = () => {
+    const e = { nativeEvent: { identifier: "0", pageX: 20, pageY: 20 }, touchHistory: { touchBank: [{ startTimeStamp: performance.now() + Math.random() }] } };
+    const press = held.holdTabPress(windowId, tabId, e);
+    held.clickHeldTabPress(windowId, tabId, e, press, (wasShown) => refreshShownTile(windowId, tabId, wasShown));
+  };
+  held.endHeldTabPress([], null);
+  click();
+  click();
+}
+
+function pageAwayInB() {
+  const { a, b, mail } = twoWindows();
+  const calls = [];
+  webviewRef(mail)({ ...page(calls, 80), loadUrl: () => {} });
+  S().updateTab(mail, { url: "https://mail.com/inbox" }, { isLoading: false });
+  const copy = tileOf(b, "https://mail.com");
+  return { a, b, mail, copy, calls };
+}
+
+function watchNavigations() {
+  const real = S().navigate;
+  const seen = [];
+  useBrowser.setState({ navigate: (id, url, options) => (seen.push([id, url]), real(id, url, options)) });
+  return { seen, stop: () => useBrowser.setState({ navigate: real }) };
+}
+
+test("both clicks of a double-click landing before a shared pin's page arrives still take it back to the pinned URL once it does", async () => {
+  const { b, mail, copy, calls } = pageAwayInB();
+  const navs = watchNavigations();
   try {
-    const { a, b, mail } = twoWindows();
-    webviewRef(mail)(page([]));
-    S().activate(tileOf(b, "https://mail.com"));
-    assert.ok(await until(() => S().tabs[mail].windowId === b));
-    const frozen = S().windows[a].activeTabIds.default;
-    assert.equal(S().tabs[frozen].page.holderId, mail);
-    const before = devTabPresses();
-    refreshShownTile(a, frozen, true);
-    assert.ok(await until(() => S().tabs[mail].windowId === a), "the page comes back to A");
-    S().updateLive(mail, { isLoading: true });
-    const calls = [];
-    webviewRef(mail)(page(calls));
-    assert.ok(await until(() => devTabPresses().tile_double_fresh > before.tile_double_fresh), "it counts the page as fresh");
-    await advance(100);
-    assert.deepEqual(calls, [], "and never reloads it");
-    assert.equal(devTabPresses().tile_double_reloads, before.tile_double_reloads);
-    webviews.delete(mail);
+    await doubleClickTile(b, copy);
+    assert.notEqual(S().tabs[mail].windowId, b, "the capture is still running: the page hasn't moved yet");
+    assert.deepEqual(navs.seen, []);
+    assert.ok(await until(() => S().tabs[mail].windowId === b && model.activeTabId(S(), b) === mail), "then the page lands in B");
+    assert.ok(await until(() => navs.seen.length > 0), "and goes back");
+    assert.deepEqual(navs.seen, [[mail, "https://mail.com"]], "to its pinned URL, once");
+    assert.deepEqual(calls, [], "without a reload");
   } finally {
-    client.setSharing(false, "settings");
+    navs.stop();
+    webviews.delete(mail);
+  }
+});
+
+test("a double-click on a selected frozen copy pulls its page across and never reloads it", async () => {
+  const { a, b, mail } = twoWindows();
+  webviewRef(mail)(page([]));
+  S().activate(tileOf(b, "https://mail.com"));
+  assert.ok(await until(() => S().tabs[mail].windowId === b));
+  const frozen = S().windows[a].activeTabIds.default;
+  assert.equal(S().tabs[frozen].page.holderId, mail, "A shows a frozen copy, selected");
+  const calls = [];
+  webviewRef(mail)(page(calls, 80));
+  await doubleClickTile(a, frozen);
+  assert.notEqual(S().tabs[mail].windowId, a, "the swap hasn't finished by the second click");
+  assert.ok(await until(() => S().tabs[mail].windowId === a && model.activeTabId(S(), a) === mail), "the page lands in A");
+  webviewRef(mail)(page(calls));
+  await advance(400);
+  assert.deepEqual(calls, [], "and isn't reloaded once it mounts there");
+  webviews.delete(mail);
+});
+
+test("a double-click whose page never arrives does nothing once the wait runs out", async () => {
+  const { b, mail, copy, calls } = pageAwayInB();
+  const navs = watchNavigations();
+  try {
+    await doubleClickTile(b, copy);
+    S().activate(S().windows[b].tabIds.find((id) => !S().tabs[id].pin));
+    await advance(3500);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(navs.seen, [], "nothing went back once the user moved on");
+  } finally {
+    navs.stop();
+    webviews.delete(mail);
   }
 });

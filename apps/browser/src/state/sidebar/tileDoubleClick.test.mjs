@@ -22,11 +22,16 @@ const delta = (from) => Object.fromEntries(Object.entries(counts()).map(([k, v])
 
 const realNow = performance.now.bind(performance);
 let clock = 1_000_000;
+const navigations = [];
+let realNavigate;
 before(() => {
+  realNavigate = S().navigate;
+  useBrowser.setState({ navigate: (id, url, options) => (navigations.push([id, url]), realNavigate(id, url, options)) });
   performance.now = () => clock;
   client.setSharing(true, "settings");
 });
 after(() => {
+  useBrowser.setState({ navigate: realNavigate });
   performance.now = realNow;
   client.setSharing(false, "settings");
 });
@@ -49,6 +54,7 @@ function doubleClick(w, tabId, first = {}, second = {}) {
 
 function pinnedTile(url = "https://x.com/home") {
   S().hydrate({});
+  navigations.length = 0;
   const w = S().createWindow({ url });
   const [tile] = S().windows[w].tabIds;
   const other = S().newTab(w, { url: "https://b.com/", background: true });
@@ -70,7 +76,7 @@ async function scenario(body, url) {
   }
 }
 
-const navigatedTo = (id) => S().tabs[id].page.nav?.url ?? S().tabs[id].url;
+const navigatedTo = (id) => navigations.findLast(([tabId]) => tabId === id)?.[1];
 
 test("double-clicking the shown tile away from its pinned URL goes back there and doesn't reload", () =>
   scenario(async ({ w, tile, reloads }) => {
@@ -282,6 +288,7 @@ test("a page mounted again between the clicks ends the pair", () =>
 
 test("a pair across a shared pin's page swap still takes the tile back to its pinned URL, and never reloads", async () => {
   S().hydrate({});
+  navigations.length = 0;
   const a = S().createWindow({ url: "https://mail.com/" });
   const [mail] = S().windows[a].tabIds;
   S().newTab(a, { url: "https://a.com/" });
@@ -316,6 +323,20 @@ test("a pair across a shared pin's page swap still takes the tile back to its pi
     webviews.delete(mail);
   }
 });
+
+test("another tab shown while the first click is held makes that click ineligible, though its release shows the tile again", () =>
+  scenario(async ({ w, tile, other, reloads }) => {
+    clock += 2000;
+    const e = event();
+    const press = held.holdTabPress(w, tile, e);
+    S().activate(other);
+    clock += 60;
+    held.clickHeldTabPress(w, tile, e, press, (wasShown) => refreshShownTile(w, tile, wasShown));
+    assert.equal(model.activeTabId(S(), w), tile, "the release showed the tile again");
+    click(w, tile);
+    await settle();
+    assert.deepEqual(reloads, []);
+  }));
 
 test("keyboard activations, which carry no pointer, still switch tabs but never make a pair", () =>
   scenario(async ({ w, tile, other, reloads }) => {

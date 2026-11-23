@@ -7,7 +7,7 @@ import { useBrowser } from "../browser/store";
 import { webviews } from "../../platform/webviews";
 import { focusHeroBar } from "../omnibox/barState";
 import { ancestorIds } from "../groups/groups";
-import { activeTabId, bookmarkProfileId, inPinnedContainer, ownTabTitle, pinSection, tabLayoutOf, tabsShownIn, tabTitle } from "../browser/model";
+import { activeTabId, bookmarkProfileId, familyKeyOf, inPinnedContainer, ownTabTitle, pinSection, tabLayoutOf, tabsShownIn, tabTitle } from "../browser/model";
 import { anchorOutdated, type ClickMods } from "../drag/drops";
 import { selectedTabIds } from "../pins/organize";
 import { groupLabel, groupOf } from "../pins/tabGrouping";
@@ -18,7 +18,9 @@ import { noteRangeSelect, noteTileDoubleClick, type TileDoubleClick } from "../t
 import { samePage } from "../../lib/url";
 import { liveOf, shownLiveOf } from "../tabs/tabLive";
 import { withLivePage } from "../tabs/livePage";
-import { consentToken } from "../telemetry/client";
+import { consentToken, type ConsentToken } from "../telemetry/client";
+import { holderOfPage } from "../tabs/pageSession";
+import { holderOf } from "../pins/pinShare";
 import { noteTextOnlyRow } from "../telemetry/tabStripCounts";
 import { NO_ROW_ICON } from "../pins/rowIcons";
 import type { BookmarkFolderChoice } from "./menuParts";
@@ -50,16 +52,45 @@ export function toggleBookmarkInWindow(windowId: string, page: { url: string; ti
   s.toggleBookmark(bookmarkProfileId(s, s.windows[windowId]), page);
 }
 
+const PIN_ARRIVAL_DEADLINE_MS = 3000;
+
 export function refreshShownTile(windowId: string, tabId: string, wasShown: boolean) {
+  const s = store();
+  const tab = s.tabs[tabId];
+  if (!tab || tab.windowId !== windowId) return;
+  const consent = consentToken();
+  if (holderOf(s, tabId)) return void whenPinLands(windowId, familyKeyOf(tab)).then((landed) => landed && refreshShownPage(windowId, landed, false, consent));
+  if (activeTabId(s, windowId) === tabId) refreshShownPage(windowId, tabId, wasShown, consent);
+}
+
+function whenPinLands(windowId: string, family: string): Promise<string | null> {
+  const before = activeTabId(store(), windowId);
+  return new Promise((done) => {
+    let stop = () => {};
+    const finish = (landed: string | null) => {
+      stop();
+      clearTimeout(deadline);
+      done(landed);
+    };
+    const deadline = setTimeout(() => finish(null), PIN_ARRIVAL_DEADLINE_MS);
+    stop = useBrowser.subscribe((now) => {
+      const shown = activeTabId(now, windowId);
+      const tab = shown ? now.tabs[shown] : undefined;
+      if (shown && tab && familyKeyOf(tab) === family && !holderOfPage(tab)) finish(shown);
+      else if (shown !== before) finish(null);
+    });
+  });
+}
+
+function refreshShownPage(windowId: string, tabId: string, wasShown: boolean, consent: ConsentToken | null) {
   const s = store();
   const tab = s.tabs[tabId];
   if (!tab || activeTabId(s, windowId) !== tabId) return;
   if (tab.pinnedUrl && !samePage(tab.url, tab.pinnedUrl)) {
-    noteTileDoubleClick("return");
+    noteTileDoubleClick("return", consent);
     return s.returnToPinnedUrl(tabId);
   }
-  if (!wasShown || !tab.url || shownLiveOf(s, tabId).isLoading) return noteTileDoubleClick("fresh");
-  const consent = consentToken();
+  if (!wasShown || !tab.url || shownLiveOf(s, tabId).isLoading) return noteTileDoubleClick("fresh", consent);
   const outcome = (what: TileDoubleClick) => noteTileDoubleClick(what, consent);
   void withLivePage(tabId, (page, pageId) => {
     if (liveOf(pageId).isLoading) return outcome("fresh");

@@ -3,7 +3,7 @@ import { modifiersOf } from "../../lib/keys";
 import { activeTabId, familyKeyOf } from "../browser/model";
 import { claimPress, pressLeftTabBehind, switchingByPress } from "../tabs/tabReveal";
 import { useBrowser } from "../browser/store";
-import { isAsleep } from "../tabs/pageSession";
+import { holderOfPage, isAsleep } from "../tabs/pageSession";
 import { isSleeping } from "../tabs/sleepingTabs";
 import { webviewMount } from "../../platform/webviews";
 import type { TabPage } from "../browser/types";
@@ -51,7 +51,7 @@ export type TileDoubleClick = (wasShown: boolean) => void;
 
 export const DOUBLE_CLICK_MS = 500;
 
-let lastPlainClick: { press: TabPress; endedAt: number } | null = null;
+let lastPlainClick: { press: TabPress; endedAt: number; shown: boolean } | null = null;
 
 const near = (a: TabPress["at"], b: TabPress["at"]) => !!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) < TAB_CLICK_SLOP;
 
@@ -64,14 +64,14 @@ function secondOfPair(press: TabPress | null, release: GestureResponderEvent): {
     lastPlainClick = null;
     return null;
   }
-  lastPlainClick = { press, endedAt: performance.now() };
+  lastPlainClick = { press, endedAt: performance.now(), shown: press.wasShown && shownAndAwake(press.windowId, press.tabId) };
   if (!last || last.press === press) return null;
   const paired = last.press.windowId === press.windowId && last.press.pin === press.pin && press.heldAt - last.endedAt < DOUBLE_CLICK_MS && near(last.press.at, press.at);
   if (!paired) return null;
   lastPlainClick = null;
   const now = pageInstance(press.tabId);
   const samePageThroughout = samePageInstance(last.press.page, press.page) && samePageInstance(press.page, now);
-  return { wasShown: last.press.wasShown && press.wasShown && samePageThroughout && shownAndAwake(press.windowId, press.tabId) };
+  return { wasShown: last.shown && press.wasShown && samePageThroughout && shownAndAwake(press.windowId, press.tabId) };
 }
 
 const pinOf = (tabId: string) => {
@@ -85,7 +85,7 @@ const samePageInstance = (a: PageInstance, b: PageInstance) => a.state === b.sta
 
 const shownAndAwake = (windowId: string, tabId: string) => {
   const s = useBrowser.getState();
-  return activeTabId(s, windowId) === tabId && !isAsleep(s.tabs[tabId]) && !isSleeping(tabId);
+  return activeTabId(s, windowId) === tabId && !isAsleep(s.tabs[tabId]) && !holderOfPage(s.tabs[tabId]) && !isSleeping(tabId);
 };
 
 let heldPress: TabPress | null = null;
