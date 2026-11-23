@@ -584,8 +584,8 @@ bookmark, settings, profile or group edit, and on Sync Now. A cycle:
   - `apps/phone/scripts/bundle-shared.mjs --check`: the iPhone's bundle of this code is up to date.
   - `scripts/legacy-migration-e2e.mjs`: the migration tool run end to end on a scratch install.
 - Rust core (`packages/core-rs`, not linked into any host yet): `ardia-sync-core` is this format and the recovery
-  phrase once more, matching Swift byte for byte, behind `ardia-crypto` (RustCrypto now, BoringSSL later for the
-  Chromium build) and a C ABI in `ardia-ffi` (`include/ardia_core.h`; ownership, caps and error rules in
+  phrase once more, matching Swift byte for byte, behind `ardia-crypto` (RustCrypto under cargo, BoringSSL inside
+  Chromium's GN build: [linux-port.md](linux-port.md) › The Rust sync core in the engine build) and a C ABI in `ardia-ffi` (`include/ardia_core.h`; ownership, caps and error rules in
   `packages/core-rs/ABI.md`). `cargo test` reproduces every byte in `sync-vectors`, opens the Swift and Kotlin
   random-nonce sets, both `windows-interop` vaults and `sealed-0.2.32.b64`, and checks every platform's wordlist copy.
   `tests/phrase-cases.json` and `tests/password-read-cases.json` freeze how each platform reads unusual phrases and

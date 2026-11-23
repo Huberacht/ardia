@@ -47,8 +47,22 @@ mod rustcrypto;
 #[cfg(feature = "rustcrypto")]
 pub use rustcrypto::RustCrypto;
 
-#[cfg(feature = "rustcrypto")]
+#[cfg(feature = "boringssl")]
+mod boringssl;
+
+#[cfg(all(feature = "ed25519", any(feature = "boringssl", test)))]
+mod small_order;
+
+#[cfg(feature = "boringssl")]
+pub use boringssl::BoringSsl;
+
+#[cfg(feature = "boringssl")]
+pub type Backend = BoringSsl;
+
+#[cfg(all(feature = "rustcrypto", not(feature = "boringssl")))]
 pub type Backend = RustCrypto;
 
-#[cfg(not(feature = "rustcrypto"))]
-compile_error!("ardia-crypto needs a backend: enable the `rustcrypto` feature");
+#[cfg(not(any(feature = "rustcrypto", feature = "boringssl")))]
+compile_error!(
+    "ardia-crypto needs a backend: enable the `rustcrypto` feature, or `boringssl` inside Chromium's GN build"
+);

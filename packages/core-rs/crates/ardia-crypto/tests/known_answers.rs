@@ -134,17 +134,35 @@ fn ed25519_verifies_rfc_8032_test_1() {
 }
 
 #[cfg(feature = "ed25519")]
-#[test]
-fn ed25519_rejects_small_order_keys_and_their_trivial_signatures() {
+const TRIVIAL_MESSAGES: [&[u8]; 3] = [b"", b"any message", b"update manifest"];
+
+#[cfg(feature = "ed25519")]
+fn identity_and_trivial_signature() -> ([u8; 32], [u8; 64]) {
     let mut identity = [0u8; 32];
     identity[0] = 1;
     let mut trivial = [0u8; 64];
     trivial[0] = 1;
-    for message in [&b""[..], b"any message", b"update manifest"] {
-        let lenient = ed25519_dalek::VerifyingKey::from_bytes(&identity).unwrap();
+    (identity, trivial)
+}
+
+#[cfg(all(feature = "ed25519", feature = "rustcrypto"))]
+#[test]
+fn dalek_lenient_verify_accepts_the_trivial_signature_the_backend_refuses() {
+    let (identity, trivial) = identity_and_trivial_signature();
+    let lenient = ed25519_dalek::VerifyingKey::from_bytes(&identity).unwrap();
+    for message in TRIVIAL_MESSAGES {
         assert!(
             ed25519_dalek::Verifier::verify(&lenient, message, &ed25519_dalek::Signature::from_bytes(&trivial)).is_ok()
         );
+        assert!(!Backend::ed25519_verify(&identity, message, &trivial));
+    }
+}
+
+#[cfg(feature = "ed25519")]
+#[test]
+fn ed25519_rejects_small_order_keys_and_their_trivial_signatures() {
+    let (identity, trivial) = identity_and_trivial_signature();
+    for message in TRIVIAL_MESSAGES {
         assert!(!Backend::ed25519_verify(&identity, message, &trivial));
     }
     let order_two: [u8; 32] = hex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")

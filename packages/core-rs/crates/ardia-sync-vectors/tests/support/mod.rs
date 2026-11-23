@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use std::cell::Cell;
 
-use ardia_crypto::{Crypto, CryptoError, RustCrypto, DIGEST_BYTES, KEY_BYTES, NONCE_BYTES};
+use ardia_crypto::{Backend, Crypto, CryptoError, DIGEST_BYTES, KEY_BYTES, NONCE_BYTES};
 use ardia_sync_core::{Error, SyncKeysWith};
 use base64::Engine;
 use serde_json::Value;
@@ -95,15 +95,15 @@ pub struct FixtureCrypto;
 
 impl Crypto for FixtureCrypto {
     fn sha256(data: &[u8]) -> [u8; DIGEST_BYTES] {
-        RustCrypto::sha256(data)
+        Backend::sha256(data)
     }
 
     fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; DIGEST_BYTES] {
-        RustCrypto::hmac_sha256(key, parts)
+        Backend::hmac_sha256(key, parts)
     }
 
     fn hkdf_sha256(ikm: &[u8], salt: &[u8], info: &[u8], out: &mut [u8]) -> Result<(), CryptoError> {
-        RustCrypto::hkdf_sha256(ikm, salt, info, out)
+        Backend::hkdf_sha256(ikm, salt, info, out)
     }
 
     fn aes256gcm_seal(
@@ -112,7 +112,7 @@ impl Crypto for FixtureCrypto {
         aad: &[u8],
         plain: &[u8],
     ) -> Result<Vec<u8>, CryptoError> {
-        RustCrypto::aes256gcm_seal(key, nonce, aad, plain)
+        Backend::aes256gcm_seal(key, nonce, aad, plain)
     }
 
     fn aes256gcm_open(
@@ -121,7 +121,7 @@ impl Crypto for FixtureCrypto {
         aad: &[u8],
         sealed: &[u8],
     ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-        RustCrypto::aes256gcm_open(key, nonce, aad, sealed)
+        Backend::aes256gcm_open(key, nonce, aad, sealed)
     }
 
     fn fill_random(out: &mut [u8]) -> Result<(), CryptoError> {
@@ -135,12 +135,12 @@ impl Crypto for FixtureCrypto {
                 out.copy_from_slice(&nonce);
                 Ok(())
             }
-            None => RustCrypto::fill_random(out),
+            None => Backend::fill_random(out),
         }
     }
 
     fn ed25519_verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
-        RustCrypto::ed25519_verify(public_key, message, signature)
+        Backend::ed25519_verify(public_key, message, signature)
     }
 }
 
