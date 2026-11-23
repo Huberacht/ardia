@@ -164,8 +164,30 @@ is the only source of which version may be fetched.
     Try Again, in Settings and in onboarding. Leaving onboarding during a download cancels it.
 - **Updates.** A pin that names a new artifact fetches it in the background once you have the plugin, retrying after
   10 minutes, then doubling up to 6 hours.
-  - It switches over only if its exact approval is on record: the same name and hash, or the old receipt below.
-    Otherwise it waits, and the plugin's row offers **Update…**, which shows the consent sheet for the new copy.
+  - It switches over by itself if its exact approval is on record: the same name and hash, or the old receipt below.
+  - It also switches over by itself, with no sheet, when it asks for nothing you hadn't already approved
+    (`state/plugins/officialUpdate.ts`, #3868). All of these must hold:
+    - the installed copy is official by native's say (the pin's digest, an earlier pinned digest, or a 0.2.47 bundled
+      digest), it's on, and the record's `approved` is that copy's exact receipt;
+    - the new copy is the verified download of the pin's own digest (`folderId` is the pin's), its manifest has the
+      same `name`, is marked `official` and has no problems;
+    - every field of the new manifest is the same as or narrower than the approved one. Permissions narrow by key
+      (`tabs` write → read → off, booleans true → false, `network` `"*"` → hosts the old ones cover → off). Programs,
+      after-update actions, hooks, tools, settings defaults, menus, toolbar, sidebar views, panels, omnibox, themes,
+      site switches and the page bar may only shrink. A sidecar must keep its command. Background starts (`*`,
+      `onStartupFinished`, `onEvent:`, `onUrl:`) need an approved equivalent. Title, description, version, icon,
+      keywords and the telemetry text don't count. Command-bar commands and settings rows may be added, as may a first
+      `main` that only starts when you use it: sandboxed, with no permission or network you hadn't approved. A command
+      that hands its page the current tab needs an approved one that did. Any field the comparison doesn't know prompts.
+    - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, and the consent lines that are
+      new). The plugin's page shows "Updated by itself to 0.6.0", that it asks for nothing new, and those lines.
+      Approving any later update by hand drops the note.
+  - Otherwise it waits, and the plugin's row offers **Update…**, which shows the consent sheet for the new copy. It
+    also waits while the consent sheet is open for that plugin, and when nothing is on record: an `ardia` installed
+    the old way that was never approved isn't adopted, since there's no approval to compare with.
+  - Telemetry: `official_updates_auto` counts updates that installed by themselves; `official_updates_waiting` the
+    ones left for review, with `official_update_prompts_<reason>` saying why (`baseline`, `permissions`, `network`,
+    `runtime`, `activation`, `programs`, `hooks`, `settings`, `contributions`, `unknown`), once per download.
   - Until then the approved copy keeps running, and `previous` in the record keeps it approved while the switch
     happens.
 - **Provenance.** Only native code decides that a plugin is official: the signed pin plus a verified copy in the

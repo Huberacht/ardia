@@ -47,7 +47,10 @@ export type PluginRecord = {
   installed?: boolean;
   previous?: string;
   sites?: SiteSwitchValues;
+  updated?: OfficialAutoUpdate;
 };
+
+export type OfficialAutoUpdate = { from: string | null; to: string | null; added: string[] };
 
 export type SiteSwitchValues = Record<string, Record<string, boolean>>;
 

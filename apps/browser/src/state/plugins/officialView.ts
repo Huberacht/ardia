@@ -1,6 +1,6 @@
 import type { InstallResult } from "./installWaiters";
 import type { OfficialPlugin } from "./official";
-import type { OfficialFetch, ProgramsState } from "./store";
+import type { OfficialAutoUpdate, OfficialFetch, ProgramsState } from "./store";
 
 export const wasCancelled = (result: InstallResult) => !result.ok && result.cancelled === true;
 
@@ -66,7 +66,14 @@ export function officialView(plugin: OfficialPlugin, programs: ProgramsState | u
   return { ...base, action: "install", status: olderProgram ? olderInstallLine(plugin, olderProgram) : null };
 }
 
-export const officialTitle = (plugin: OfficialPlugin) => plugin.title || plugin.name;
+export function autoUpdateNote(updated: OfficialAutoUpdate): { title: string; description: string } {
+  const title = updated.to ? `Updated by itself to ${updated.to}` : "Updated by itself";
+  const since = updated.from ? `New since ${updated.from}` : "New since the version you approved";
+  const same = "It asks for nothing you hadn't already approved.";
+  return { title, description: updated.added.length ? `${same} ${since}: ${updated.added.join("; ")}.` : same };
+}
+
+export const officialTitle =(plugin: OfficialPlugin) => plugin.title || plugin.name;
 
 export const isOffered = (plugin: OfficialPlugin) => plugin.state === "available" || plugin.state === "comingSoon";
 
