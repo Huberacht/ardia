@@ -34,10 +34,18 @@ index 253c2a49e4ed04ef7cce283ae905e218d438a007..90bdecb170c2aaf8848d1551727e1855
        onChange: true,
        onSelectionChange: true,
 diff --git a/Libraries/Components/TextInput/TextInput.js b/Libraries/Components/TextInput/TextInput.js
-index 1ae22ed66776941c33b2c0a78038b2b997506aa7..632a0f284e88e2d3034f3eeb50cf2acf3be6652e 100644
+index 1ae22ed66776941c33b2c0a78038b2b997506aa7..6d2be668a23e199bc587a493eee55b44dfbb0a7b 100644
 --- a/Libraries/Components/TextInput/TextInput.js
 +++ b/Libraries/Components/TextInput/TextInput.js
-@@ -247,7 +247,7 @@ function useTextInputStateSynchronization({
+@@ -208,6 +208,7 @@ function useTextInputStateSynchronization({
+ }): {
+   setLastNativeText: string => void,
+   setLastNativeSelection: LastNativeSelection => void,
++  knowsNativeSelection: boolean,
+ } {
+   const [lastNativeText, setLastNativeText] = useState<?Stringish>(props.value);
+   const [lastNativeSelectionState, setLastNativeSelection] =
+@@ -247,7 +248,7 @@ function useTextInputStateSynchronization({
        viewCommands.setTextAndSelection(
          inputRef.current,
          mostRecentEventCount,
@@ -46,6 +54,47 @@ index 1ae22ed66776941c33b2c0a78038b2b997506aa7..632a0f284e88e2d3034f3eeb50cf2acf
          selection?.start ?? -1,
          selection?.end ?? -1,
        );
+@@ -264,7 +265,11 @@ function useTextInputStateSynchronization({
+     viewCommands,
+   ]);
+ 
+-  return {setLastNativeText, setLastNativeSelection};
++  // [Ardia: whether a selection is kept to compare a selection prop against
++  const knowsNativeSelection =
++    lastNativeSelection.start !== -1 || lastNativeSelection.end !== -1;
++  // Ardia]
++  return {setLastNativeText, setLastNativeSelection, knowsNativeSelection};
+ }
+ 
+ /**
+@@ -439,7 +444,7 @@ function InternalTextInput(props: TextInputProps): React.Node {
+       : RCTSinglelineTextInputNativeCommands);
+ 
+   const [mostRecentEventCount, setMostRecentEventCount] = useState<number>(0);
+-  const {setLastNativeText, setLastNativeSelection} =
++  const {setLastNativeText, setLastNativeSelection, knowsNativeSelection} =
+     useTextInputStateSynchronization({
+       props,
+       inputRef,
+@@ -569,6 +574,18 @@ function InternalTextInput(props: TextInputProps): React.Node {
+       return;
+     }
+ 
++    // [Ardia: with no selection prop nothing reads the native selection, so a caret move sets no state and commits nothing; the first one after a controlled selection forgets it, so a later one is always sent
++    if (selection == null) {
++      if (knowsNativeSelection) {
++        setLastNativeSelection({
++          selection: {start: -1, end: -1},
++          mostRecentEventCount,
++        });
++      }
++      return;
++    }
++    // Ardia]
++
+     setLastNativeSelection({
+       selection: event.nativeEvent.selection,
+       mostRecentEventCount,
 diff --git a/Libraries/Image/RCTImageView.mm b/Libraries/Image/RCTImageView.mm
 index 879e36bc2483226756011b21948f2dd1760d7cf8..383f676c62b23f008964002aeb3940f1f55f8907 100644
 --- a/Libraries/Image/RCTImageView.mm
