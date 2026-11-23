@@ -3,7 +3,13 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { mount } from "../../test-hooks.mjs";
 const { usePanelsPresence } = await import("../ui/Popover.tsx");
-const { OVERLAY, overlayBits, overlayCount, pageOverlays, useKeptOverlays, useKeptWhile } = await import("./overlayGate.ts");
+const { BEHIND_NEW_TAB, OVERLAY, nextShownOverlays, overlayBits, overlayCount, pageOverlays, useEligibleGate, useKeptOverlays, useKeptWhile } = await import("./overlayGate.ts");
+const { useBrowser } = await import("../../state/browser/store.ts");
+const { makeTab } = await import("../../state/browser/model.ts");
+const fakeTab = (id, url) => ({ ...makeTab("w", "personal", url), id });
+const { useMedia } = await import("../../state/media/media.ts");
+const { useShareFor } = await import("../../state/media/screenShare.ts");
+const { patchPage } = await import("../../state/tabs/pageState.ts");
 const { pageOf } = await import("../../state/tabs/pageState.ts");
 const IDLE_PAGE = pageOf("no such tab");
 
@@ -39,9 +45,15 @@ test("a pane shown with nothing over its page mounts none of its overlays, only 
   const jsx = body.slice(body.indexOf("return ("));
   const ungated = jsx.split("\n").filter((line) => /^ {6}<[A-Z]/.test(line)).map((line) => line.trim().split(/[ />]/)[0]);
   assert.deepEqual(ungated, ["<SwipeOverlay"], "every other overlay waits for its state");
-  for (const overlay of Object.keys(OVERLAY)) assert.ok(jsx.includes(`has("${overlay}")`), `${overlay} is gated`);
+  for (const overlay of Object.keys(OVERLAY).filter((o) => o !== "control")) assert.ok(jsx.includes(`has("${overlay}")`), `${overlay} is gated`);
+  assert.match(jsx, /\{cliPill && control\.mounted && <ControlPill /);
+  assert.match(body, /const lasting = useLastingLoad\(tabId, loadingPill && !newTabShown\);/, "the pill mounts only once a load has lasted, so a quick load mounts nothing");
+  assert.match(jsx, /<LoadingPill loading=\{lasting\} \/>/);
+  const pill = readFileSync(new URL("./LoadingPill.tsx", import.meta.url), "utf8");
+  assert.ok(!pill.includes("useLastingLoad("), "the lasting check runs once, in the gate");
   const pane = readFileSync(new URL("./TabPane.tsx", import.meta.url), "utf8");
-  assert.match(pane, /\{shareBar && <ShareBar /);
+  assert.match(pane, /const share = useShareFor\(tabId, shareBarRoom\);\n  const shareBar = useKeptWhile\(!!share, shareBarRoom\);/);
+  assert.match(pane, /\{shareBar && <ShareBar tabId=\{tabId\} found=\{share\} \/>\}/);
   assert.match(pane, /\{visible && own\.appPage && <InternalPage /);
 });
 
@@ -55,7 +67,7 @@ test("each page state that shows an overlay turns on its own bit", () => {
 });
 
 test("an overlay stays mounted once it showed, so its close animation runs, and only one that turned on later animates in", () => {
-  const hook = mount(({ on }) => useKeptOverlays(on), { props: { on: OVERLAY.status } });
+  const hook = mount(({ on }) => useKeptOverlays(on, on), { props: { on: OVERLAY.status } });
   assert.equal(hook.value.has("status"), true);
   assert.equal(hook.value.has("find"), false);
   assert.equal(hook.value.entersLater("status"), false, "a link address already showing when the tab came into view shows at once, as before");
@@ -74,4 +86,49 @@ test("the share bar stays mounted while the pane shows, and is let go when it hi
   assert.equal(hook.rerender({ on: false, alive: true }), true);
   assert.equal(hook.rerender({ on: false, alive: false }), false);
   assert.equal(hook.rerender({ on: false, alive: true }), false);
+});
+
+test("the CLI pill shows at once when an active indicator gains an eligible pane, and fades in only when it turns on in one", () => {
+  const gate = mount(({ on, eligible }) => useEligibleGate(on, eligible), { props: { on: false, eligible: true } });
+  assert.deepEqual(gate.value, { mounted: false, enter: false });
+  assert.deepEqual(gate.rerender({ on: true, eligible: true }), { mounted: true, enter: true }, "turned on in a pane that showed it: fades in");
+  assert.deepEqual(gate.rerender({ on: true, eligible: false }), { mounted: false, enter: false }, "focus moved to the other split pane");
+  assert.deepEqual(gate.rerender({ on: true, eligible: true }), { mounted: true, enter: false }, "focus back, or Peek closed, with the indicator on: shown at once, as before");
+  assert.deepEqual(gate.rerender({ on: false, eligible: true }), { mounted: true, enter: false }, "stays mounted to fade out");
+  const fresh = mount(({ on, eligible }) => useEligibleGate(on, eligible), { props: { on: true, eligible: true } });
+  assert.deepEqual(fresh.value, { mounted: true, enter: false }, "a tab coming into view with the indicator on shows it at once");
+});
+
+test("overlay telemetry counts each time one becomes visible, not each mount, and never one held behind the New Tab page", () => {
+  let state = nextShownOverlays(null, 0);
+  assert.deepEqual([state.atShow, state.opened], [0, 0]);
+  const opened = [];
+  for (const shown of [OVERLAY.find, 0, OVERLAY.find, OVERLAY.find | OVERLAY.status]) {
+    state = nextShownOverlays(state, shown);
+    opened.push(state.opened);
+  }
+  assert.deepEqual(opened, [1, 0, 1, 1], "Find opened, closed and opened again in one visit counts twice");
+  const newTabShown = true;
+  const permission = OVERLAY.permission & ~(newTabShown ? BEHIND_NEW_TAB : 0);
+  assert.equal(nextShownOverlays(nextShownOverlays(null, 0), permission).opened, 0, "a permission request behind the New Tab page isn't counted until its prompt shows");
+  assert.equal(nextShownOverlays(null, OVERLAY.status | OVERLAY.find).atShow, 2);
+  const overlays = readFileSync(new URL("./overlayGate.ts", import.meta.url), "utf8");
+  assert.match(overlays, /consent: consentToken\(\) \}/, "consent is taken as the overlay turns visible, in render, not in the effect after it");
+});
+
+test("a pane finds a share to show only while it can show the bar, and not for a tab the share skips", () => {
+  const profiles = { personal: { id: "personal", name: "Personal" } };
+  useBrowser.setState({ profiles: { ...useBrowser.getState().profiles, ...profiles }, tabs: { ...useBrowser.getState().tabs, capturer: fakeTab("capturer", "https://meet.example/"), viewer: fakeTab("viewer", "https://news.example/"), internal: fakeTab("internal", "ardia://history") } });
+  useMedia.setState({ tabShares: { capturer: { capturedTabId: "viewer", origin: "https://meet.example", dismissed: { dismissed: true } } } });
+  patchPage("capturer", { mediaAccess: { camera: false, microphone: false, screen: true } });
+  try {
+    assert.equal(mount(() => useShareFor("viewer", true)).value?.[0], "capturer");
+    assert.equal(mount(() => useShareFor("viewer", false)).value, null, "a hidden or full-screen pane finds none");
+    assert.equal(mount(() => useShareFor("internal", true)).value, null, "an internal page shows no share bar");
+    useBrowser.setState({ tabs: { ...useBrowser.getState().tabs, dismissed: fakeTab("dismissed", "https://x.example/") } });
+    assert.equal(mount(() => useShareFor("dismissed", true)).value, null, "a tab whose bar was dismissed shows none");
+  } finally {
+    useMedia.setState({ tabShares: {} });
+    patchPage("capturer", { mediaAccess: null });
+  }
 });

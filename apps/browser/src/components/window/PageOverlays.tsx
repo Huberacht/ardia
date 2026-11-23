@@ -24,7 +24,8 @@ import { SwipeOverlay } from "./SwipeOverlay";
 import { HISTORY_MENU_WIDTH, HistoryPopover, underButton } from "./HistoryPopover";
 import { TabWebView } from "./TabWebView";
 import { fitLeft, historyMenuLeft, pageSurfaceLeft, type PageAnchor, type PageSurface } from "./pageAnchors";
-import { useFindOpen, useSidebarSide, useTabLive } from "../../state/browser/hooks";
+import { useFindOpen, useSidebarSide } from "../../state/browser/hooks";
+import { useLastingLoad } from "../../state/tabs/lastingLoad";
 import { useControlIndicator } from "../../state/app/programControl";
 import { useNewTabNotices } from "../../state/tabs/newTabNotice";
 import { useEngineOffers } from "../../state/engines/actions";
@@ -33,7 +34,7 @@ import { useDeviceChooserOpen } from "../../state/site/deviceChoosers";
 import { useCast } from "../../state/media/cast";
 import { useHistoryMenu } from "../../state/tabs/navigation";
 import { usePageSelection } from "../../state/site/selection";
-import { overlayBits, pageOverlays, useKeptOverlays } from "./overlayGate";
+import { BEHIND_NEW_TAB, OVERLAY, overlayBits, pageOverlays, useEligibleGate, useKeptOverlays } from "./overlayGate";
 
 export function PageOverlays({
   tabId,
@@ -64,7 +65,11 @@ export function PageOverlays({
   const sidebarRight = useSidebarSide(windowId) === "right";
   const anchor: PageAnchor = { toolbar: toolbar ? geometry : null, sidebarRight };
   const at = (surface: PageSurface, surfaceWidth: number) => ({ left: pageSurfaceLeft(anchor, surface, width, surfaceWidth), top: POPOVER_MARGIN });
-  const overlays = useKeptOverlays(usePageOverlays(tabId, windowId, { cliPill, loadingPill: loadingPill && !newTabShown, historyMenu: popovers }));
+  const lasting = useLastingLoad(tabId, loadingPill && !newTabShown);
+  const on = usePageOverlays(tabId, windowId, popovers) | (lasting ? OVERLAY.loading : 0);
+  const shown = on & ~(newTabShown ? BEHIND_NEW_TAB : 0) & ~(verificationCodes ? 0 : OVERLAY.verificationCode) & ~(cliPill ? 0 : OVERLAY.control);
+  const overlays = useKeptOverlays(on & ~OVERLAY.control, shown);
+  const control = useEligibleGate((on & OVERLAY.control) !== 0, cliPill);
   const has = overlays.has;
   useEffect(startPopoverEscape, []);
   return (
@@ -76,8 +81,8 @@ export function PageOverlays({
         </Animated.View>
       )}
       {has("sadTab") && <SadTab tabId={tabId} />}
-      {!newTabShown && loadingPill && has("loading") && <LoadingPill tabId={tabId} />}
-      {cliPill && has("control") && <ControlPill style={statusStyle} enter={overlays.entersLater("control")} />}
+      {!newTabShown && loadingPill && has("loading") && <LoadingPill loading={lasting} />}
+      {cliPill && control.mounted && <ControlPill style={statusStyle} enter={control.enter} />}
       {!newTabShown && has("permission") && <PermissionPrompt tabId={tabId} {...at("prompt", PERMISSION_PROMPT_WIDTH)} />}
       {has("password") && <PasswordPrompt tabId={tabId} right={POPOVER_MARGIN} top={POPOVER_MARGIN} />}
       {has("autofill") && <AutofillPrompt tabId={tabId} right={POPOVER_MARGIN} top={POPOVER_MARGIN} />}
@@ -97,19 +102,18 @@ export function PageOverlays({
   );
 }
 
-function usePageOverlays(tabId: string, windowId: string, watch: { cliPill: boolean; loadingPill: boolean; historyMenu: boolean }): number {
+function usePageOverlays(tabId: string, windowId: string, historyMenuShown: boolean): number {
   const page = usePage(tabId, pageOverlays);
   const find = useFindOpen(tabId);
-  const loading = useTabLive(tabId, (live) => watch.loadingPill && live.isLoading);
-  const control = useControlIndicator((s) => watch.cliPill && s.shown);
+  const control = useControlIndicator((s) => s.shown);
   const newTabNotice = useNewTabNotices((s) => s.notices[windowId]?.sourceId === tabId);
   const engineOffer = useEngineOffers((offers) => !!offers[tabId]);
   const sharePicker = useMedia((m) => !!m.displayRequests[tabId]);
   const deviceChooser = useDeviceChooserOpen(tabId);
   const castPicker = useCast((c) => !!c.dialogs[tabId]);
-  const historyMenu = useHistoryMenu((s) => watch.historyMenu && s.menu?.tabId === tabId);
+  const historyMenu = useHistoryMenu((s) => historyMenuShown && s.menu?.tabId === tabId);
   const selection = usePageSelection((s) => !!s[tabId]);
-  return page | overlayBits({ find, loading, control, newTabNotice, engineOffer, sharePicker, deviceChooser, castPicker, historyMenu, selection });
+  return page | overlayBits({ find, control, newTabNotice, engineOffer, sharePicker, deviceChooser, castPicker, historyMenu, selection });
 }
 
 const historyMenuAt = (anchor: PageAnchor, paneWidth: number) => (direction: -1 | 1) =>

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { PageState } from "../../state/tabs/pageState";
-import { consentToken } from "../../state/telemetry/client";
+import { consentToken, type ConsentToken } from "../../state/telemetry/client";
 import { notePageOverlay } from "../../state/telemetry/usage";
 
 export const OVERLAY = {
@@ -25,6 +25,8 @@ export const OVERLAY = {
 
 export type Overlay = keyof typeof OVERLAY;
 
+export const BEHIND_NEW_TAB = OVERLAY.permission | OVERLAY.externalApp | OVERLAY.engineOffer | OVERLAY.deviceChooser | OVERLAY.loading;
+
 export const pageOverlays = (p: PageState): number =>
   (p.status ? OVERLAY.status : 0) |
   (p.crashed || p.unresponsive ? OVERLAY.sadTab : 0) |
@@ -46,30 +48,57 @@ export const overlayCount = (bits: number): number => {
   return count;
 };
 
+export type ShownOverlays = { previous: number; atShow: number; opened: number };
+
+export function nextShownOverlays(was: ShownOverlays | null, shown: number): ShownOverlays {
+  if (!was) return { previous: shown, atShow: overlayCount(shown), opened: 0 };
+  return { previous: shown, atShow: 0, opened: overlayCount(shown & ~was.previous) };
+}
+
 export type KeptOverlays = { has: (overlay: Overlay) => boolean; entersLater: (overlay: Overlay) => boolean };
 
-export function useKeptOverlays(on: number): KeptOverlays {
+export function useKeptOverlays(on: number, shown: number): KeptOverlays {
   const atShow = useRef(on).current;
   const kept = useRef(0);
   kept.current |= on;
   const bits = kept.current;
-  const counted = useRef(-1);
-  useEffect(() => {
-    const atFirst = counted.current < 0;
-    const opened = atFirst ? bits : bits & ~counted.current;
-    counted.current = bits;
-    if (!opened) return;
-    const consent = consentToken();
-    for (let i = overlayCount(opened); i > 0; i--) notePageOverlay(atFirst ? "paneOverlayAtShow" : "paneOverlayOpened", consent);
-  }, [bits]);
+  useShownOverlaysCount(shown);
   return {
     has: (overlay) => (bits & OVERLAY[overlay]) !== 0,
     entersLater: (overlay) => (atShow & OVERLAY[overlay]) === 0,
   };
 }
 
+function useShownOverlaysCount(shown: number) {
+  const seen = useRef<ShownOverlays | null>(null);
+  const unsent = useRef<{ atShow: number; opened: number; consent: ConsentToken | null } | null>(null);
+  if (seen.current?.previous !== shown) {
+    const next = nextShownOverlays(seen.current, shown);
+    seen.current = next;
+    if (next.atShow || next.opened) {
+      const pending = unsent.current;
+      unsent.current = pending ? { ...pending, atShow: pending.atShow + next.atShow, opened: pending.opened + next.opened } : { atShow: next.atShow, opened: next.opened, consent: consentToken() };
+    }
+  }
+  useEffect(() => {
+    const pending = unsent.current;
+    if (!pending) return;
+    unsent.current = null;
+    for (let i = 0; i < pending.atShow; i++) notePageOverlay("paneOverlayAtShow", pending.consent);
+    for (let i = 0; i < pending.opened; i++) notePageOverlay("paneOverlayOpened", pending.consent);
+  }, [shown]);
+}
+
 export function useKeptWhile(on: boolean, alive: boolean): boolean {
   const kept = useRef(false);
   kept.current = alive && (kept.current || on);
   return kept.current;
+}
+
+export function useEligibleGate(on: boolean, eligible: boolean): { mounted: boolean; enter: boolean } {
+  const gate = useRef({ mounted: false, enter: false, armed: false }).current;
+  if (!eligible) Object.assign(gate, { mounted: false, enter: false, armed: false });
+  else if (!gate.mounted && on) Object.assign(gate, { mounted: true, enter: gate.armed });
+  else if (!gate.mounted) gate.armed = true;
+  return { mounted: gate.mounted, enter: gate.enter };
 }

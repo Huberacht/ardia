@@ -15,7 +15,7 @@ import { EmptyCard } from "./EmptyCard";
 import { NewTabDropArea } from "./NewTabDropArea";
 import { InternalPage, isInternalTab } from "../pages";
 import { ShareBar } from "../media/ShareBar";
-import { useAnyShareWhile } from "../../state/media/screenShare";
+import { useShareFor } from "../../state/media/screenShare";
 import { useKeptWhile } from "./overlayGate";
 import { Toolbar, ToolbarBackdrop } from "../toolbar/Toolbar";
 import { AutoHideBackdrop, AutoHideToolbar, useToolbarMode, useToolbarMotion } from "../toolbar/AutoHideToolbar";
@@ -98,7 +98,8 @@ export const TabPane = memo(function TabPane({
   const inSplit = visible ? inActiveSplit : inSomeSplit;
   const frame = rect ?? warm ?? { x: 0, y: 0, width: fullWidth, height: fullHeight };
   const shareBarRoom = visible && !fullscreen;
-  const shareBar = useKeptWhile(useAnyShareWhile(shareBarRoom), shareBarRoom);
+  const share = useShareFor(tabId, shareBarRoom);
+  const shareBar = useKeptWhile(!!share, shareBarRoom);
   useEffect(() => {
     if (visible && isNewTab && !mounted) patchPage(tabId, { wasNewTab: true });
   }, [visible, isNewTab, mounted]);
@@ -155,7 +156,7 @@ export const TabPane = memo(function TabPane({
       <Animated.View style={autoLayout ? motion.groupStyle : { flex: 1 }}>
         {autoLayout && bookmarksBar && <BookmarksBar tabId={tabId} placeholder={!visible} />}
         <View style={{ flex: 1 }}>
-          {shareBar && <ShareBar tabId={tabId} />}
+          {shareBar && <ShareBar tabId={tabId} found={share} />}
           <View style={{ flex: 1 }}>
             {(mounted || prewarmed) && <TabWebView tabId={tabId} visible={visible && !newTabShown && !isNewTab} selected={focused} warm={!!warm && !newTabShown && !isNewTab} />}
             {visible && isNewTab && !small && (
