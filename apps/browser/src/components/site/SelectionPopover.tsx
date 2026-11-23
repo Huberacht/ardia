@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 import { useSettings } from "../../state/browser/hooks";
 import { useTabValue } from "../../state/tabs/tabWatch";
+import { consentToken } from "../../state/telemetry/client";
+import { notePageOverlay } from "../../state/telemetry/usage";
 import { defaultSearchEngine } from "../../state/settings/settings";
 import { POPOVER_MOTION, PopoverSurface, space } from "../ui";
 import { searchSelection, setPageSelection, usePageSelection, type ClickModifiers, type PageSelection } from "../../state/site/selection";
@@ -23,6 +25,11 @@ export function SelectionPopover({ tabId }: { tabId: string }) {
     return () => clearTimeout(timer);
   }, [selection]);
   useEffect(() => () => setPageSelection(tabId, null), [tabId]);
+  const barShown = !!shown;
+  const consent = consentToken();
+  useEffect(() => {
+    if (barShown) notePageOverlay("paneOverlayOpened", consent);
+  }, [barShown]);
   if (!selection && !shown) return null;
 
   return (

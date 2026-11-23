@@ -67,7 +67,7 @@ export function PageOverlays({
   const at = (surface: PageSurface, surfaceWidth: number) => ({ left: pageSurfaceLeft(anchor, surface, width, surfaceWidth), top: POPOVER_MARGIN });
   const lasting = useLastingLoad(tabId, loadingPill && !newTabShown);
   const on = usePageOverlays(tabId, windowId, popovers) | (lasting ? OVERLAY.loading : 0);
-  const shown = on & ~(newTabShown ? BEHIND_NEW_TAB : 0) & ~(verificationCodes ? 0 : OVERLAY.verificationCode) & ~(cliPill ? 0 : OVERLAY.control);
+  const shown = on & ~(newTabShown ? BEHIND_NEW_TAB : 0) & ~(verificationCodes ? 0 : OVERLAY.verificationCode) & ~(cliPill ? 0 : OVERLAY.control) & ~OVERLAY.selection;
   const overlays = useKeptOverlays(on & ~OVERLAY.control, shown);
   const control = useEligibleGate((on & OVERLAY.control) !== 0, cliPill);
   const has = overlays.has;

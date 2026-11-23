@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { PageState } from "../../state/tabs/pageState";
 import { consentToken, type ConsentToken } from "../../state/telemetry/client";
 import { notePageOverlay } from "../../state/telemetry/usage";
@@ -59,9 +59,11 @@ export type KeptOverlays = { has: (overlay: Overlay) => boolean; entersLater: (o
 
 export function useKeptOverlays(on: number, shown: number): KeptOverlays {
   const atShow = useRef(on).current;
-  const kept = useRef(0);
-  kept.current |= on;
-  const bits = kept.current;
+  const committed = useRef(0);
+  const bits = committed.current | on;
+  useLayoutEffect(() => {
+    committed.current = bits;
+  }, [bits]);
   useShownOverlaysCount(shown);
   return {
     has: (overlay) => (bits & OVERLAY[overlay]) !== 0,
@@ -69,36 +71,47 @@ export function useKeptOverlays(on: number, shown: number): KeptOverlays {
   };
 }
 
-function useShownOverlaysCount(shown: number) {
-  const seen = useRef<ShownOverlays | null>(null);
-  const unsent = useRef<{ atShow: number; opened: number; consent: ConsentToken | null } | null>(null);
-  if (seen.current?.previous !== shown) {
-    const next = nextShownOverlays(seen.current, shown);
-    seen.current = next;
-    if (next.atShow || next.opened) {
-      const pending = unsent.current;
-      unsent.current = pending ? { ...pending, atShow: pending.atShow + next.atShow, opened: pending.opened + next.opened } : { atShow: next.atShow, opened: next.opened, consent: consentToken() };
-    }
-  }
+const noteShownOverlays = (atShow: number, opened: number, consent: ConsentToken | null) => {
+  for (let i = 0; i < atShow; i++) notePageOverlay("paneOverlayAtShow", consent);
+  for (let i = 0; i < opened; i++) notePageOverlay("paneOverlayOpened", consent);
+};
+
+export function useShownOverlaysCount(shown: number, note: typeof noteShownOverlays = noteShownOverlays) {
+  const committed = useRef<ShownOverlays | null>(null);
+  const consent = consentToken();
   useEffect(() => {
-    const pending = unsent.current;
-    if (!pending) return;
-    unsent.current = null;
-    for (let i = 0; i < pending.atShow; i++) notePageOverlay("paneOverlayAtShow", pending.consent);
-    for (let i = 0; i < pending.opened; i++) notePageOverlay("paneOverlayOpened", pending.consent);
+    if (committed.current?.previous === shown) return;
+    const next = nextShownOverlays(committed.current, shown);
+    committed.current = next;
+    if (next.atShow || next.opened) note(next.atShow, next.opened, consent);
   }, [shown]);
 }
 
 export function useKeptWhile(on: boolean, alive: boolean): boolean {
-  const kept = useRef(false);
-  kept.current = alive && (kept.current || on);
-  return kept.current;
+  const committed = useRef(false);
+  const kept = alive && (committed.current || on);
+  useLayoutEffect(() => {
+    committed.current = kept;
+  }, [kept]);
+  return kept;
+}
+
+export type EligibleGate = { mounted: boolean; enter: boolean; armed: boolean };
+
+const CLOSED_GATE: EligibleGate = { mounted: false, enter: false, armed: false };
+
+export function nextEligibleGate(gate: EligibleGate, on: boolean, eligible: boolean): EligibleGate {
+  if (!eligible) return CLOSED_GATE;
+  if (gate.mounted) return gate;
+  if (on) return { mounted: true, enter: gate.armed, armed: gate.armed };
+  return gate.armed ? gate : { ...gate, armed: true };
 }
 
 export function useEligibleGate(on: boolean, eligible: boolean): { mounted: boolean; enter: boolean } {
-  const gate = useRef({ mounted: false, enter: false, armed: false }).current;
-  if (!eligible) Object.assign(gate, { mounted: false, enter: false, armed: false });
-  else if (!gate.mounted && on) Object.assign(gate, { mounted: true, enter: gate.armed });
-  else if (!gate.mounted) gate.armed = true;
+  const committed = useRef(CLOSED_GATE);
+  const gate = nextEligibleGate(committed.current, on, eligible);
+  useLayoutEffect(() => {
+    committed.current = gate;
+  });
   return { mounted: gate.mounted, enter: gate.enter };
 }

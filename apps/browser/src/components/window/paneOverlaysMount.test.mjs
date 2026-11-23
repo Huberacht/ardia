@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { mount } from "../../test-hooks.mjs";
 const { usePanelsPresence } = await import("../ui/Popover.tsx");
-const { BEHIND_NEW_TAB, OVERLAY, nextShownOverlays, overlayBits, overlayCount, pageOverlays, useEligibleGate, useKeptOverlays, useKeptWhile } = await import("./overlayGate.ts");
+const { BEHIND_NEW_TAB, OVERLAY, nextShownOverlays, overlayBits, overlayCount, pageOverlays, useEligibleGate, useKeptOverlays, useKeptWhile, useShownOverlaysCount } = await import("./overlayGate.ts");
 const { useBrowser } = await import("../../state/browser/store.ts");
 const { makeTab } = await import("../../state/browser/model.ts");
 const fakeTab = (id, url) => ({ ...makeTab("w", "personal", url), id });
@@ -113,7 +113,7 @@ test("overlay telemetry counts each time one becomes visible, not each mount, an
   assert.equal(nextShownOverlays(nextShownOverlays(null, 0), permission).opened, 0, "a permission request behind the New Tab page isn't counted until its prompt shows");
   assert.equal(nextShownOverlays(null, OVERLAY.status | OVERLAY.find).atShow, 2);
   const overlays = readFileSync(new URL("./overlayGate.ts", import.meta.url), "utf8");
-  assert.match(overlays, /consent: consentToken\(\) \}/, "consent is taken as the overlay turns visible, in render, not in the effect after it");
+  assert.match(overlays, /const consent = consentToken\(\);\n  useEffect\(\(\) => \{/, "consent is taken in the render that shows the overlay, and counted only once it commits");
 });
 
 test("a pane finds a share to show only while it can show the bar, and not for a tab the share skips", () => {
@@ -131,4 +131,35 @@ test("a pane finds a share to show only while it can show the bar, and not for a
     useMedia.setState({ tabShares: {} });
     patchPage("capturer", { mediaAccess: null });
   }
+});
+
+test("a render React throws away neither counts an overlay nor resets the CLI pill's gate", () => {
+  const notes = [];
+  const counter = mount(({ shown }) => useShownOverlaysCount(shown, (atShow, opened) => notes.push([atShow, opened])), { props: { shown: 0 } });
+  counter.discard({ shown: OVERLAY.find });
+  counter.rerender({ shown: OVERLAY.find });
+  assert.deepEqual(notes, [[0, 1]], "one committed opening is one count");
+  counter.discard({ shown: 0 });
+  counter.rerender({ shown: OVERLAY.find });
+  assert.deepEqual(notes, [[0, 1]], "a discarded close followed by the same mask counts nothing");
+
+  const gate = mount(({ on, eligible }) => useEligibleGate(on, eligible), { props: { on: true, eligible: true } });
+  gate.discard({ on: true, eligible: false });
+  assert.deepEqual(gate.rerender({ on: false, eligible: true }), { mounted: true, enter: false }, "the pill stays mounted to fade out");
+
+  const kept = mount(({ on }) => useKeptOverlays(on, on), { props: { on: 0 } });
+  kept.discard({ on: OVERLAY.find });
+  assert.equal(kept.rerender({ on: 0 }).has("find"), false, "an overlay only a discarded render saw isn't kept");
+
+  const share = mount(({ on, alive }) => useKeptWhile(on, alive), { props: { on: true, alive: true } });
+  share.discard({ on: false, alive: false });
+  assert.equal(share.rerender({ on: false, alive: true }), true, "the share bar keeps its slide-out after a discarded hidden render");
+});
+
+test("the selection search counts once its bar shows, not when the selection starts", () => {
+  const popover = readFileSync(new URL("../site/SelectionPopover.tsx", import.meta.url), "utf8");
+  assert.match(popover, /const barShown = !!shown;/);
+  assert.match(popover, /useEffect\(\(\) => \{\n    if \(barShown\) notePageOverlay\("paneOverlayOpened", consent\);\n  \}, \[barShown\]\);/);
+  const overlays = readFileSync(new URL("./PageOverlays.tsx", import.meta.url), "utf8");
+  assert.match(overlays, /& ~OVERLAY\.selection/, "the pane's visibility mask leaves the selection to its bar");
 });

@@ -74,8 +74,8 @@ export function mount(render, { props, contexts = [] } = {}) {
       const s = slot(() => ({}));
       at++;
       if (s.ran && deps && sameDeps(s.deps, deps)) return;
-      s.deps = deps;
       effects.push(() => {
+        s.deps = deps;
         s.cleanup?.();
         s.ran = true;
         const cleanup = effect();
@@ -138,6 +138,17 @@ export function mount(render, { props, contexts = [] } = {}) {
       renderNow();
       settle();
       return value;
+    },
+    discard(next = current) {
+      const previous = internals.H;
+      internals.H = dispatcher;
+      at = 0;
+      try {
+        return render(next);
+      } finally {
+        internals.H = previous;
+        effects = [];
+      }
     },
     unmount() {
       alive = false;
