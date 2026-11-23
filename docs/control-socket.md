@@ -7,6 +7,14 @@ per request (`{"id", "result"}` or `{"id", "error": {"code", "message"}}`), and 
 on; with it off every request answers `failed` "Control is off." (`state/automation/controlSocket.ts`). The contract
 with the command (protocol numbers, `hello`) is in `docs/cli.md` › The contract.
 
+On macOS a client that isn't the bundled `ardia` (or another hardened program signed with Ardia's Team ID) is held
+before its first line is read until the user allows it in the doorbell; a client that's refused reads one line,
+`{"id": null, "error": {"code": "refused", "message": …}}`, and the socket closes. Who gets in, how approvals are kept
+and revoked, and the test-instance rule are in `docs/automation.md` › Who the program is. Every admitted connection is
+the owner: the methods below don't vary by client. `usage_counts.cli_socket_doorbells_shown` and
+`cli_socket_doorbell_<outcome>` (`once`, `half_hour`, `always`, `deny`, `unshown`, `timeout`, `left`, `stopped`,
+`unsaved`) count the doorbells and how they ended.
+
 This page is the map of the whole profile against the socket: every data point Ardia keeps, where it lives, and which
 methods read and change it. The goal is full control: anything a person can see or change in Ardia, the command can
 read and change, through the same store actions the UI calls, so every invariant, sync write, undo, saved document and
@@ -288,7 +296,7 @@ changes it today, 🔍 read only, 🗺️ designed below, ⛔ deliberately not e
 | downloads | `downloads.list {profile?, state?, limit?, offset?}` (live progress for running downloads), `downloads.settings {profile?}` | `downloads.pause`, `downloads.resume`, `downloads.cancel`, `downloads.keep`, `downloads.open`, `downloads.reveal`, `downloads.remove`, `downloads.clear`, `downloads.setSettings` |
 | settings | `settings.get {keys?}`, `settings.schema` | `settings.set {values}`, `settings.reset {keys}` |
 | search | `search.engines` (`default` is the engine searches use, an extension's when one controls it, with `controlledBy`) | `search.setDefault {id}` (`refused` while an extension controls it, as Settings disables the picker; so is `settings.set {searchEngine}`), `search.add`, `search.update`, `search.remove` |
-| sites | `sites.origins {profile?}`, `sites.get {origin, profile?}`, `sites.zoomLevels {profile?}` | `sites.set {origin, type, value}`, `sites.reset {origin}`, `sites.setZoom {host, zoom}`, `sites.clearData {site}` |
+| sites | `sites.origins {profile?}`, `sites.get {origin, profile?}`, `sites.zoomLevels {profile?}`, `sites.adBlocker` → `{enabled, allowedSites}` | `sites.set {origin, type, value}`, `sites.reset {origin}`, `sites.setZoom {host, zoom}`, `sites.clearData {site}`, `sites.allowAds {site}` → `{site, trusted, covers, enabled, allowedSites}` and `sites.blockAds {site}` → `{site, removed, trusted, coveredBy?, enabled, allowedSites}`: the built-in uBlock Origin's trusted sites, the list Site Controls' Block Ads & Trackers switch edits (shared by every profile, from the next load). `allowAds` trusts the site and its subdomains, as the switch does (`covers` says so); the site can't be a public suffix (Chromium's list, private section included) or an IP address, so `co.uk`, `github.io` and `s3.amazonaws.com` are refused, while a name under a top-level domain the list doesn't know, like `wiki.intranet.corp`, counts as one site, as Chromium counts it. `blockAds` takes out exactly that entry (`contentBlocker.removeAllowed`): never a broader entry or one uBlock ships with; it answers `removed`, and `trusted` with `coveredBy` when a broader entry still lets the site through, and is refused naming the broader entry when the site itself isn't listed. An Ardia whose host lacks these calls (Linux until its engine has them) refuses both with `refused` |
 | extensions | `extensions.list {profile?}` | `extensions.install {profile?, webStore}` (the user adds it on the store page; `folder` is refused), `extensions.configure {id, siteAccess \| incognito \| userScripts}` (exactly one; `specificSites` is refused), `extensions.setEnabled {id, enabled}`, `extensions.setPinned`, `extensions.reload`, `extensions.uninstall` (Ardia asks the user first) |
 | media | `media.list` | `media.control {tab, action, seconds?}` |
 | sync | `sync.status`, `sync.devices {profile?}` | `sync.now`, `sync.setType {type, on}`, `sync.setProfile {profile, on}`, `sync.setOpenTabs {profile, on}`, `sync.sendTab {tab, device}` |
