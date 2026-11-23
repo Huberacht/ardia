@@ -153,6 +153,7 @@
 #include "base/uuid.h"
 #include "base/unguessable_token.h"
 #include "base/values.h"
+#include "chrome/browser/ardia/ac_cli_console_ring.h"
 #include "chrome/browser/ardia/ac_cli_owned_tabs.h"
 #include "chrome/browser/ardia/ac_cli_visible_tabs.h"
 #include "chrome/browser/ardia/public/ac_engine.h"
@@ -8621,6 +8622,7 @@ void StartLinuxHost() {
   ardiacore::InstallLinuxBackgroundFileDialogs();
   g_ardia_auto_picture_in_picture_off = true;
   ardia::InstallCliVisibleTabs();
+  ardia::InstallCliConsoleRing();
   ardia::linux_password::InstallReauthFallback();
   ardia::InstallLinuxLocationProvider();
   g_ardia_linux_tab_shown = [](content::WebContents* contents) {
