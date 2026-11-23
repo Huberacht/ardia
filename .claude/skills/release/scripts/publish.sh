@@ -136,13 +136,13 @@ stable_tag="$(latest_stable_tag)"
 
 merged="$feed"
 [ "$dry" = 1 ] && merged="$work/appcast.xml"
-if download_live_feed "$stable_tag" "$work/live"; then
+if download_live_feed "$stable_tag" "$work/live" && node "$root/scripts/release/feed-check.mjs" "$work/live/appcast.xml" "$version"; then
   appcast merge "$work/live/appcast.xml" "$built" "$version" "$merged"
 elif [ "${PUBLISH_NEW_FEED:-0}" = 1 ] || [ "$dry" = 1 ]; then
-  echo "note: $stable_tag has no appcast.xml: $version starts the feed"
+  echo "note: $stable_tag has no usable appcast.xml: $version starts the feed"
   cp "$built" "$merged"
 else
-  die "$stable_tag has no appcast.xml, so publishing would start a feed without every earlier release: put it back, or set PUBLISH_NEW_FEED=1 if $version really starts the feed"
+  die "$stable_tag has no usable appcast.xml (missing, empty or not a whole Sparkle appcast), so publishing would start a feed without every earlier release: put the last good one back (docs/releasing.md › Feed recovery), or set PUBLISH_NEW_FEED=1 if $version really starts the feed"
 fi
 appcast check-above "$merged" "$version"
 if [ "$channel" = stable ]; then

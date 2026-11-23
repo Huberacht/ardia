@@ -13,6 +13,8 @@
   appcast.py strip-phased <feed> <version> <out>         drop the version's phased rollout interval
   appcast.py retarget <feed> <version> <url> <length> <signature>   print a feed of that item alone, pointing at url, without deltas
 """
+import base64
+import binascii
 import re
 import sys
 
@@ -89,6 +91,15 @@ def deltas(path, version):
         print(*(f or "-" for f in fields))
 
 
+def is_signature(text):
+    if not re.fullmatch(r"[A-Za-z0-9+/]{86}==", text):
+        return False
+    try:
+        return len(base64.b64decode(text, validate=True)) == 64
+    except binascii.Error:
+        return False
+
+
 def is_nightly(version):
     return re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]+", version) is not None
 
@@ -103,7 +114,7 @@ def delta_bases(path, version, count):
     for item in sorted(others, key=build, reverse=True)[: int(count)]:
         tag = main_enclosure(item)
         url, length, signature = (optional_attribute(tag, n) for n in ("url", "length", "sparkle:edSignature"))
-        if not RELEASE_ASSET.match(url) or not length.isdigit() or not signature:
+        if not RELEASE_ASSET.match(url) or not length.isdigit() or not is_signature(signature):
             print(f"note: skipped {short_version(item)}: its enclosure isn't a signed GitHub release zip", file=sys.stderr)
             continue
         print(build(item), url, length, signature)

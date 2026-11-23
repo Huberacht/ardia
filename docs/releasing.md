@@ -377,12 +377,13 @@ the engine if `engine/` changed (below).
   to `ardia-browser/homebrew-tap` (`HOMEBREW_TAP_TOKEN`); without it, run `update-tap.sh <version>` here afterwards.
   The merge always starts from the live feed: when the latest stable release lists `appcast.xml` but it won't
   download (3 tries), `publish.sh` stops instead of merging onto the sign job's older copy, which would drop what
-  shipped since. When the latest stable release has no `appcast.xml` at all, a real publish stops too, unless
+  shipped since. When the latest stable release has no usable `appcast.xml` (missing, or one that isn't a whole Sparkle
+  appcast with items, by preflight's `feedFacts` through `scripts/release/feed-check.mjs`), a real publish stops too, unless
   `PUBLISH_NEW_FEED=1` says this release starts the feed; a dry run only notes it.
 
 ### Feed recovery
 
-When `publish.sh` stops because the latest stable release has no `appcast.xml` (a nightly's `--clobber` re-upload
+When `publish.sh` stops because the latest stable release has no usable `appcast.xml` (a nightly's `--clobber` re-upload
 that deleted the old file and then failed, or an asset removed by hand), put the last good feed back and re-run the
 publish (in CI, re-run the Release workflow's failed jobs):
 
@@ -404,15 +405,20 @@ feed, so it can pass while the real run would stop.
 `APPCAST_DELTAS` changes it, the repository variable of the same name in CI, and 0 turns deltas off with a warning). A
 stable builds deltas from earlier stables only, since stable copies only ever run a stable; a nightly from the newest
 releases of either channel, since nightly copies run both. It downloads each from its GitHub release within one time
-budget (`APPCAST_DELTA_FETCH_SECONDS`, 30 min: up to 3 attempts per zip, each given only what's left of it) and keeps
-it only if its length and EdDSA signature match the appcast's. It runs `generate_appcast --maximum-deltas <kept>` on
+budget (`APPCAST_DELTA_FETCH_SECONDS`, 30 min: up to 3 attempts per zip, each given only what's left of it), each into
+its own folder, and keeps it only if its length matches the appcast's and the appcast's EdDSA signature (strict base64
+of 64 bytes, or the zip is skipped unread) verifies with the exported app's own `SUPublicEDKey` (`ed25519.swift`). A zip
+named like the new one, or one already staged, is skipped; without the app's key nothing is downloaded. It runs `generate_appcast --maximum-deltas <kept>` on
 them with the new zip, under its own `HOME` cleared each run (a stale `.delta..ignore` in
 `~/Library/Caches/Sparkle_generate_appcast` would suppress a delta), keeps only the new item (`appcast.py only`) and
 merges it onto the published feed (`appcast.py merge`), so earlier items keep their own URLs. Each delta must sit
 under `v<version>`'s release, be signed, verify with `sign_update --verify`, match its length and be smaller than the
 zip.
 
-Missing deltas never stop a release; they warn. That covers earlier zips that wouldn't download, didn't match the
+Missing deltas never stop a release; they warn. When `generate_appcast` fails with the earlier zips, or lists a delta
+that isn't signed, doesn't verify with the app's key or isn't right, `appcast.sh` warns and builds the appcast again
+from the new zip alone; only that build failing stops the release (and `check-sparkle.sh`'s check of the zip's own
+signature). That covers earlier zips that wouldn't download, didn't match the
 appcast or ran out of time, no earlier release to build from (a note), and earlier zips that were there but
 `generate_appcast` made no delta from (a warning on a stable as on a nightly: check the sign job's log, since every
 update then downloads the whole zip). The run's summary says how many deltas shipped and from which builds.
