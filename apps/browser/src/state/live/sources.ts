@@ -3,6 +3,7 @@ import { createGithubClient } from "./githubClient";
 import { basic, deleteSecret, endpoints, form, getSecret, request, setSecret } from "./net";
 import { live, setAccount, updateConfig } from "./store";
 import { LiveError, type CompletionState, type LiveAccount, type LiveFolder, type LiveItem, type LiveSourceId } from "./types";
+import { symbolIcon } from "../../lib/customIcon";
 
 export type LiveSource = {
   id: LiveSourceId;
@@ -12,6 +13,7 @@ export type LiveSource = {
   fetch(folder: LiveFolder, options?: FetchOptions): Promise<LiveItem[]>;
   resolveGone?(items: LiveItem[], options?: FetchOptions): Promise<Record<string, CompletionState>>;
   pausedUntil?(): number | null;
+  warning?(): LiveError | null;
 };
 
 export type FetchOptions = { interactive?: boolean };
@@ -39,6 +41,7 @@ const github: LiveSource = {
     return githubClient.resolveGone(await secret("github"), items, !!options?.interactive);
   },
   pausedUntil: () => githubClient.pausedUntil(),
+  warning: () => githubClient.warning(),
 };
 
 const BITBUCKET_STATE_BATCH = 10;
@@ -227,4 +230,8 @@ export async function connectGoogle(clientId: string, clientSecret: string, code
 export async function disconnect(source: LiveSourceId) {
   await deleteSecret(source);
   setAccount(source, null);
+}
+
+export function liveFolderIcon(folder: LiveFolder): { site: string; icon: string | null } {
+  return { site: SOURCES[folder.sources[0] ?? "github"].site, icon: folder.icon ?? (folder.sources.length > 1 && folder.kind === "documents" ? symbolIcon("doc.text") : null) };
 }

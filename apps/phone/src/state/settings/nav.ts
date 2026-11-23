@@ -3,8 +3,10 @@ import { create } from "zustand";
 export type SettingsRoute =
   | { page: "root" }
   | { page: "appearance" }
+  | { page: "theme" }
   | { page: "searchEngine" }
   | { page: "browseForMe" }
+  | { page: "pageSummary" }
   | { page: "siteSettings" }
   | { page: "filterLists" }
   | { page: "filterList"; id: string }
@@ -44,12 +46,19 @@ export const offerBrowseForMePage = (offered: () => boolean) => {
   browseForMePageOffered = offered;
 };
 
-export const settingsRouteOffered = (route: SettingsRoute) => (route.page === "browseForMe" ? browseForMePageOffered() : !SYNC_PAGES.has(route.page) || syncPagesOffered());
+let pageSummaryPageOffered: () => boolean = () => false;
 
-export function openSettings(route: SettingsRoute = { page: "root" }) {
+export const offerPageSummaryPage = (offered: () => boolean) => {
+  pageSummaryPageOffered = offered;
+};
+
+export const settingsRouteOffered = (route: SettingsRoute) =>
+  route.page === "browseForMe" ? browseForMePageOffered() : route.page === "pageSummary" ? pageSummaryPageOffered() : !SYNC_PAGES.has(route.page) || syncPagesOffered();
+
+export function openSettings(route: SettingsRoute = { page: "root" }, { direct = false } = {}) {
   if (!settingsRouteOffered(route)) return;
   scrolls.clear();
-  const stack: SettingsRoute[] = route.page === "root" ? [route] : [{ page: "root" }, route];
+  const stack: SettingsRoute[] = direct || route.page === "root" ? [route] : [{ page: "root" }, route];
   useSettingsNav.setState({ open: true, stack, popping: false });
 }
 
@@ -78,7 +87,7 @@ export function closeSettings() {
 
 export const settingsNav = () => useSettingsNav.getState();
 
-const SIMPLE_PAGES = new Set<SettingsRoute["page"]>(["root", "appearance", "searchEngine", "browseForMe", "siteSettings", "filterLists", "myFilters", "trustedSites", "clearData", "sync", "defaultBrowser", "syncConnect", "syncWords", "syncScan", "about", "licenses", "whatsSent"]);
+const SIMPLE_PAGES = new Set<SettingsRoute["page"]>(["root", "appearance", "theme", "searchEngine", "browseForMe", "pageSummary", "siteSettings", "filterLists", "myFilters", "trustedSites", "clearData", "sync", "defaultBrowser", "syncConnect", "syncWords", "syncScan", "about", "licenses", "whatsSent"]);
 
 export const settingsRouteKey = (route: SettingsRoute): string => (route.page === "filterList" ? `filterList:${route.id}` : route.page);
 

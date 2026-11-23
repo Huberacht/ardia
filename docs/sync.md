@@ -481,6 +481,10 @@ Settings › Sync. Dia puts sync in Account › Sync, with the section icon
   **Other Options** (Dia's menu: "Set Up Without Another Device", "Enter Recovery Phrase").
   Below is the sync folder, with Choose…. If iCloud Drive is off it says so, links to iCloud
   settings, and offers another folder; test instances never default to iCloud Drive.
+  On Linux there's no cloud drive to default to: until a folder is chosen, the button is **Turn On…**, which asks
+  where the folder goes and makes an `Ardia Sync` folder inside the one picked. Two picks are used as they are: a
+  folder already named `Ardia Sync`, and a folder that already holds sync data, which goes to **Enter Recovery
+  Phrase…** instead of starting a second chain (`docs/linux-port.md` › Sync).
 - **Turn On Sync** makes a phrase and shows **Save Your Recovery Kit**, with Dia's copy:
   - "Your Recovery Kit contains all you need to recover your data should you lose access to
     this device."
@@ -508,6 +512,9 @@ Settings › Sync. Dia puts sync in Account › Sync, with the section icon
     server.
   - **Advanced…** has Save Recovery Kit…, Copy Recovery Code (Dia's ⌥ item, copied as
     `org.nspasteboard.ConcealedType`), Sync Now, Show Sync Folder in Finder and Stop Syncing….
+  - On Linux the Sync Folder row has **Move…** (and Advanced… has Move Sync Folder…): it copies this phrase's files to
+    the folder picked and syncs through it from then on, or just points at a folder that already holds them, and
+    never touches the old folder (`state/sync/folderMove.ts`, `docs/linux-port.md` › Sync).
   - Then Profiles (toggles, and Add to This Mac), All Open Tabs (a switch per synced profile: "Every open tab syncs, not
     just pinned ones. Closing a tab closes it on your other Macs too."), What Syncs (Bookmarks, History, Open Tabs,
     Pinned Tabs and Groups, Passwords, Extensions, Settings) and Devices (each with "last synced …").
@@ -576,6 +583,15 @@ bookmark, settings, profile or group edit, and on Sync Now. A cycle:
     - `companion/companion.test.ts`: the iPhone's adapters and cycle.
   - `apps/phone/scripts/bundle-shared.mjs --check`: the iPhone's bundle of this code is up to date.
   - `scripts/legacy-migration-e2e.mjs`: the migration tool run end to end on a scratch install.
+- Rust core (`packages/core-rs`, not linked into any host yet): `ardia-sync-core` is this format and the recovery
+  phrase once more, matching Swift byte for byte, behind `ardia-crypto` (RustCrypto under cargo, BoringSSL inside
+  Chromium's GN build: [linux-port.md](linux-port.md) › The Rust sync core in the engine build) and a C ABI in `ardia-ffi` (`include/ardia_core.h`; ownership, caps and error rules in
+  `packages/core-rs/ABI.md`). `cargo test` reproduces every byte in `sync-vectors`, opens the Swift and Kotlin
+  random-nonce sets, both `windows-interop` vaults and `sealed-0.2.32.b64`, and checks every platform's wordlist copy.
+  `tests/phrase-cases.json` and `tests/password-read-cases.json` freeze how each platform reads unusual phrases and
+  sealed passwords today (Rust follows Swift, including Foundation's lenient base64 and its dropped leading U+FEFF);
+  `tests/linux-sync/test_linux_sync.py` runs the Linux C++ against the same vectors and cases. The Rust workflow (`.github/workflows/rust.yml`) runs all of it on
+  macOS, Linux and Windows.
 - `pnpm --filter @ardia/browser test` runs `src/state/sync/adapters.test.mjs` (4 tests against the real
   store: delete versus add, concurrent moves that would make a cycle, parked pinned tabs, passwords
   both ways), `src/state/sync/send.test.mjs` (sent tabs: one addressed elsewhere is never touched; it opens once and

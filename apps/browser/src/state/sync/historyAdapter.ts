@@ -6,15 +6,22 @@ import { engineProfile } from "../browser/model";
 import type { HistoryEntry } from "../browser/types";
 import { isWebPageUrl } from "../../lib/url";
 import { HISTORY, historyValue, recordId, type HistoryValue } from "./records";
-import { withSyncWorkCounts } from "../telemetry/workCounts";
+import { consentToken } from "../telemetry/client";
+import { noteSyncHistoryTitlesKept, withSyncWorkCounts } from "../telemetry/workCounts";
 import { historyExtractsOf } from "./historyExtracts";
 
 const store = () => useBrowser.getState();
 
 const HISTORY_WINDOW_MS = 90 * 86_400_000;
 
-const lastVisitOf = (v: HistoryValue) => Math.max(0, ...v.vt);
+const lastVisitOf = (v: HistoryValue) => v.vt.reduce((m, t) => Math.max(m, t), 0);
 const SAME_VISIT_MS = 1;
+const keptVisits = (vt: number[]) => {
+  if (vt.length <= MAX_VISIT_TIMES) return vt;
+  const out: number[] = [];
+  for (const t of [...vt].sort((a, z) => a - z)) if (!out.length || t - out[out.length - 1]! > SAME_VISIT_MS) out.push(t);
+  return out.slice(-MAX_VISIT_TIMES);
+};
 const sameVisits = (a: number[], b: number[]) => a.length === b.length && a.every((t, i) => Math.abs(b[i]! - t) <= SAME_VISIT_MS);
 
 export function historyExpired(key: string, value: unknown, now: number) {
@@ -123,7 +130,7 @@ export function historyAdapter(profileId: string): Adapter {
         const old = byUrl.get(url);
         if (v) {
           const have = old?.visitTimes ?? [];
-          const fresh = v.vt.filter((t) => t >= since && !have.some((h) => Math.abs(h - t) <= SAME_VISIT_MS));
+          const fresh = keptVisits(v.vt).filter((t) => t >= since && !have.some((h) => Math.abs(h - t) <= SAME_VISIT_MS));
           if (fresh.length) add.push({ url, title: v.t, visitTimes: fresh });
           const times = [...have, ...fresh].sort((a, z) => a - z).slice(-MAX_VISIT_TIMES);
           if (!times.length) continue;
@@ -142,7 +149,9 @@ export function historyAdapter(profileId: string): Adapter {
       }
       if (!updates.size) return;
       const engine = engineProfile(useBrowser.getState(), profileId);
+      const consent = consentToken();
       await Promise.all([addHistoryVisits(engine, add, SAME_VISIT_MS), deleteHistoryUrls(engine, remove)]);
+      let titlesKept = 0;
       useBrowser.setState((s) => {
         const current = new Map(historyOf(s, profileId).map((e) => [e.url, e]));
         for (const [url, update] of updates) {
@@ -151,12 +160,14 @@ export function historyAdapter(profileId: string): Adapter {
           else if (!now) current.set(url, update);
           else {
             const times = [...new Set([...(now.visitTimes ?? []), ...(update.visitTimes ?? [])])].sort((a, z) => a - z).slice(-MAX_VISIT_TIMES);
-            current.set(url, { ...update, visits: Math.max(now.visits, update.visits), lastVisit: times[times.length - 1]!, visitTimes: times });
+            if (now.title && now.title !== update.title) titlesKept++;
+            current.set(url, { ...update, title: now.title || update.title, visits: Math.max(now.visits, update.visits), lastVisit: times[times.length - 1]!, visitTimes: times });
           }
         }
         const list = [...current.values()].sort((a, z) => z.lastVisit - a.lastVisit).slice(0, MAX_HISTORY);
         return withHistoryList(s, engine, list);
       });
+      if (titlesKept) noteSyncHistoryTitlesKept(titlesKept, consent);
     },
   });
 }

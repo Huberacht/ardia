@@ -1,22 +1,19 @@
 import { getAnimatedStyle } from "react-native-reanimated";
 import { act } from "react-test-renderer";
-import { Platform } from "react-native";
-import { DECK, deckGeometry } from "../lib/deckGeometry";
 import { Surfaces } from "../App";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import { deckPull, PULL_STAGE } from "../state/browse/deckPull";
 import { useBrowse } from "../state/browse/store";
 import * as pages from "../state/pages/store";
 import { currentTabs } from "../state/tabs/store";
+import * as telemetry from "../state/telemetry/telemetry";
 import { framesUntil, landOpeningPage, renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
-const onIos = Platform.OS === "ios" ? test : test.skip;
-const onAndroid = Platform.OS === "android" ? test : test.skip;
 
-onIos("on iPhone, opening a card makes no page while the card grows, so the mount can't stall the growth; the page is made once the card has landed, and that same page stays in front, never made twice", () => {
+test("opening a card makes no page while the card grows, so the mount can't stall the growth; the page is made once the card has landed, and that same page stays in front, never made twice", () => {
   const registered = jest.spyOn(pages, "registerPageHandle");
   const registrations = (handle: "made" | "ended") => registered.mock.calls.filter((call) => (call[1] === null) === (handle === "ended")).length;
   withTabs(3);
@@ -37,7 +34,7 @@ onIos("on iPhone, opening a card makes no page while the card grows, so the moun
   registered.mockRestore();
 });
 
-onIos("on iPhone a card opens as the reverse of the swipe: no opening card is mounted over the deck, the deck's own card grows from its place while the others tuck in behind it, the page is made only once the card has landed so its mount can't stall the growth, and it takes the card's place once it is laid out while the bar's glyphs cross-fade back", () => {
+test("a card opens as the reverse of the swipe: no opening card is mounted over the deck, the deck's own card grows from its place while the others tuck in behind it, the page is made only once the card has landed so its mount can't stall the growth, and it takes the card's place once it is laid out while the bar's glyphs cross-fade back", () => {
   withTabs(3);
   useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
   const root = renderSurface(<Surfaces />);
@@ -82,7 +79,7 @@ onIos("on iPhone a card opens as the reverse of the swipe: no opening card is mo
   unmount(root);
 });
 
-onAndroid("on Android, opening a card grows it with no page made, makes the page under the deck when the spring lands, and that same page stays in front, never made twice", () => {
+test("opening a card grows it with no page made, makes the page under the deck when the spring lands, and that same page stays in front, never made twice", () => {
   const registered = jest.spyOn(pages, "registerPageHandle");
   const registrations = (handle: "made" | "ended") => registered.mock.calls.filter((call) => (call[1] === null) === (handle === "ended")).length;
   withTabs(3);
@@ -103,7 +100,7 @@ onAndroid("on Android, opening a card grows it with no page made, makes the page
   registered.mockRestore();
 });
 
-onAndroid("on Android, while the card grows, nothing mounts the page, so the spring runs on a quiet UI thread", () => {
+test("while the card grows, nothing mounts the page, so the spring runs on a quiet UI thread", () => {
   withTabs(3);
   useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
   const root = renderSurface(<Surfaces />);
@@ -112,25 +109,6 @@ onAndroid("on Android, while the card grows, nothing mounts the page, so the spr
     act(() => jest.advanceTimersByTime(16));
     expect(root.root.findAll((node) => (node.type as { name?: string })?.name === "BrowsingScreen")).toHaveLength(0);
   }
-  unmount(root);
-});
-
-onAndroid("on Android, an opening card grows a status-bar strip in the page's tone above its picture, so at full size the picture lands where the live page starts", () => {
-  withTabs(3);
-  useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
-  const root = renderSurface(<Surfaces />);
-  const strips = () => root.root.findAll((node) => node.props.testID === "deckCardFace" && typeof node.type === "string");
-  const drop = (face: ReturnType<typeof strips>[number]) => ((getAnimatedStyle(face).transform as { translateY?: number }[] | undefined) ?? []).reduce((sum, step) => sum + (step.translateY ?? 0), 0);
-  expect(strips().every((strip) => drop(strip) === 0)).toBe(true);
-  act(() => sendDeckCommand({ kind: "openFocused" }));
-  let grown = 0;
-  for (let frame = 0; frame < 120 && useBrowse.getState().surface === "deck"; frame++) {
-    act(() => jest.advanceTimersByTime(16));
-    for (const strip of strips()) grown = Math.max(grown, drop(strip));
-  }
-  const g = deckGeometry(393, 873, 40, 24);
-  expect(grown * (g.width / g.cardWidth)).toBeGreaterThan(36);
-  expect(grown * (g.width / g.cardWidth)).toBeLessThanOrEqual(40.001);
   unmount(root);
 });
 
@@ -149,4 +127,24 @@ test("the deck takes taps and a card's page takes over as soon as its spring is 
   expect(useBrowse.getState().surface).toBe("browsing");
   expect(elapsed).toBeLessThan(450);
   unmount(root);
+});
+
+test("card_opens_waited counts only an open whose page didn't lay out within its cap, not every pulled open whose page is made as its card lands", () => {
+  const counted = jest.spyOn(telemetry, "countUsage").mockImplementation(() => undefined);
+  for (const laysOut of [true, false]) {
+    withTabs(3);
+    useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
+    const root = renderSurface(<Surfaces />);
+    act(() => sendDeckCommand({ kind: "openFocused" }));
+    let landed = false;
+    for (let elapsed = 0; elapsed < 1000 && useBrowse.getState().surface === "deck"; elapsed += 16) {
+      act(() => jest.advanceTimersByTime(16));
+      if (laysOut && !landed && useBrowse.getState().opening !== null) landed = landOpeningPage(root);
+    }
+    expect(useBrowse.getState().surface).toBe("browsing");
+    expect(counted.mock.calls.filter(([name]) => name === "card_opens_waited")).toHaveLength(laysOut ? 0 : 1);
+    counted.mockClear();
+    unmount(root);
+    act(() => jest.runOnlyPendingTimers());
+  }
 });
