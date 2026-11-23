@@ -124,7 +124,7 @@ test("a domain the Mac serves straight from the engine gets its whole Swift modu
   assert.equal("service" in manifest.mixed.calls.import, false);
 });
 
-test("the generated Swift compiles for an empty call table and for verbs Swift won't take as a bare label", () => {
+test("the generated Swift parses, with an empty table written as [:] and verbs Swift won't take as a bare label escaped", () => {
   const files = outputs({
     quiet: domain({ probe: call({ mac: "absent", service: "ac_quiet_probe" }), keep: call({ mac: "custom", service: "ac_quiet_keep" }) }),
     hollow: domain({ probe: call({ mac: "absent", service: "ac_hollow_probe" }) }),

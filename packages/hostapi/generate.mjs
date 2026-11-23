@@ -152,8 +152,13 @@ export function outputs(domains) {
   return files;
 }
 
-const listed = (dir, keep) => (existsSync(ROOT + dir) ? readdirSync(ROOT + dir).filter(keep).map((file) => dir + file) : []);
-const retired = (files) => [...listed(GENERATED_TS, () => true), ...listed(SWIFT, (file) => file.endsWith("Calls.swift"))].filter((path) => !files.has(path));
+const generatedTypes = () => (existsSync(ROOT + GENERATED_TS) ? readdirSync(ROOT + GENERATED_TS).map((file) => GENERATED_TS + file) : []);
+const generatedSwift = () => {
+  if (!existsSync(ROOT + MANIFEST)) return [];
+  const previous = JSON.parse(readFileSync(ROOT + MANIFEST, "utf8"));
+  return Object.values(previous.domains ?? {}).map((domain) => domain.swift).filter((path) => typeof path === "string" && path.startsWith(SWIFT) && existsSync(ROOT + path));
+};
+const retired = (files) => [...new Set([...generatedTypes(), ...generatedSwift()])].filter((path) => !files.has(path));
 
 export function stale(files) {
   const problems = [];
