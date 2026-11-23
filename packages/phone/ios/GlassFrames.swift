@@ -246,7 +246,7 @@ final class GlassFrames: NSObject {
     if let web, page != nil, capture.page.observe(web) { capture.showFill() }
     capture.survey(pieces, rect: wanted)
     mark("survey")
-    if let web, page != nil { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, changed: capture.isChanging, now: now) }
+    if let web, page != nil { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, now: now) }
     mark("request")
     guard capture.wants(wanted, now: now, gap: sourceWhole && web == nil ? LiquidGlassRules.backdropRefresh : 0) else { return }
     if let web, let page, !capture.page.covers(wanted.applying(page.transform.inverted()), of: web) {

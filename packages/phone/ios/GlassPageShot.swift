@@ -37,8 +37,13 @@ final class GlassPageShot {
     return true
   }
 
-  func request(_ web: WKWebView, pixelsPerPoint: CGFloat, changed: Bool, now: CFTimeInterval) {
-    guard gate.mayRequest(now: now, changed: changed || image == nil, pending: pending), let key = gate.key else { return }
+  private var requestedBucket: [Int] = []
+
+  func request(_ web: WKWebView, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
+    let bucket = GlassFlowRules.scrollBucket(web.scrollView.contentOffset) + [Int(web.scrollView.zoomScale * 100)]
+    let changed = image == nil || bucket != requestedBucket
+    guard gate.mayRequest(now: now, changed: changed, pending: pending), let key = gate.key else { return }
+    requestedBucket = bucket
     let token = gate.begin(now: now)
     pending = true
     let rect = web.bounds.insetBy(dx: 0, dy: -Self.reach)
@@ -109,6 +114,7 @@ final class GlassPageShot {
     forgetImage()
     pending = false
     web = nil
+    requestedBucket = []
     gate = GlassSnapshotGate()
   }
 
