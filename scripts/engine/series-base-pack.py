@@ -45,19 +45,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import series_base  # noqa: E402
 
 
-def chromium_build():
-    return os.environ.get("AC_CHROMIUM_BUILD", os.path.expanduser("~/chromium-build"))
-
-
-def default_base(platform, cpu):
-    if "AC_SERIES_BASE" in os.environ:
-        return os.environ["AC_SERIES_BASE"]
-    name = "series-base" if (platform, cpu) == ("mac", "arm64") else f"series-base-{platform}-{cpu}"
-    return os.path.join(chromium_build(), name)
-
-
-def default_src():
-    return os.environ.get("CHROMIUM_SRC", os.path.join(chromium_build(), "chromium_git/chromium/src"))
+default_base = series_base.default_base
+default_src = series_base.default_src
 
 
 def tree_version(src):
@@ -70,8 +59,8 @@ def git_head(path):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-stamp", "step3-resources", "brand-namesub",
-            "series-check")
+VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-stamp", "capture-record", "step3-resources",
+            "brand-namesub", "series-check")
 
 
 def run_checked(command, what, env=None):
@@ -108,7 +97,7 @@ def verify_stages(src, platform):
         series_base.die(f"{marker} doesn't show a whole step 3 for {platform} (missing {missing or ['platform=' + platform]})")
 
 
-def verify_step3_stamp(src, base, platform, inputs, paths):
+def verify_step3_stamp(src, base, platform, inputs):
     stamp_file = series_base.step3_stamp(src)
     if not stamp_file.is_file():
         series_base.die(f"no {stamp_file}: step 3 didn't run on {src} through scripts/engine/run-step3.py, so what it "
@@ -126,12 +115,26 @@ def verify_step3_stamp(src, base, platform, inputs, paths):
     if stamp.get("inputs") != inputs:
         series_base.die(f"step 3 ran on {src} with inputs {str(stamp.get('inputs'))[:12]}, but this checkout's are "
                         f"{inputs[:12]}: run step 3 again on a fresh tree with these inputs, then step 4")
-    recorded = float(stamp.get("recorded_at", 0))
-    older = sorted(path for path in paths if os.path.isfile(os.path.join(base, path)) and
-                   os.stat(os.path.join(base, path)).st_ctime < recorded)
-    if older:
-        series_base.die(f"{len(older)} files in {base} were captured before step 3 finished on this tree (e.g. "
-                        f"{older[0]}): set the base aside and run step 4 again")
+    verify_capture(base, series_base.sha256_file(stamp_file))
+
+
+def verify_capture(base, stamp_sha):
+    record_file = pathlib.Path(base, series_base.CAPTURE_RECORD)
+    if not record_file.is_file():
+        series_base.die(f"no {record_file}: capture the base with scripts/engine/run-capture.py after run-step3.py")
+    try:
+        record = json.loads(record_file.read_text())
+    except ValueError as error:
+        series_base.die(f"{record_file} is unreadable: {error}")
+    if record.get("step3_stamp_sha256") != stamp_sha:
+        series_base.die(f"{record_file} was recorded for another step 3 run than this tree's stamp: set the base aside "
+                        "and run run-capture.py again")
+    recorded = record.get("files", {})
+    present = series_base.base_file_hashes(base)
+    changed = sorted(path for path in set(recorded) | set(present) if recorded.get(path) != present.get(path))
+    if changed:
+        series_base.die(f"{len(changed)} files in {base} aren't what run-capture.py captured (e.g. {changed[0]}): set the "
+                        "base aside and run run-capture.py again")
 
 
 def verify_resources(src, base):
@@ -147,7 +150,7 @@ def verify_resources(src, base):
                         "\n  ".join(wrong))
 
 
-def verify_tree(ident, src, base, platform, cpu, paths):
+def verify_tree(ident, src, base, platform, cpu):
     version = tree_version(src)
     if version != ident["chromium"]:
         series_base.die(f"{src} is Chromium {version}, but the pins say {ident['chromium']}")
@@ -156,7 +159,7 @@ def verify_tree(ident, src, base, platform, cpu, paths):
     for name, key in (("helium", "helium_chromium"), (series_base.PLATFORM_HELIUM[platform], "helium_platform")):
         verify_helium(os.path.join(helium_root, name), ident[key], key)
     verify_stages(src, platform)
-    verify_step3_stamp(src, base, platform, ident["inputs"], paths)
+    verify_step3_stamp(src, base, platform, ident["inputs"])
     verify_resources(src, base)
     marker = pathlib.Path(base, ".ardia-series-target")
     if marker.exists() and json.loads(marker.read_text()) != {"platform": platform, "cpu": cpu}:
@@ -191,7 +194,7 @@ def cmd_pack(args):
     steps = series.read_series(args.platform)
     required, optional = series_base.base_paths(steps)
     paths = set(required) | set(optional)
-    verified = [] if args.no_verify else verify_tree(ident, src, base, args.platform, cpu, paths)
+    verified = [] if args.no_verify else verify_tree(ident, src, base, args.platform, cpu)
     missing = sorted(path for path in required if not os.path.lexists(os.path.join(base, path)))
     if missing:
         for path in missing:

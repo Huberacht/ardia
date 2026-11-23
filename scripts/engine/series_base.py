@@ -86,6 +86,40 @@ def step3_digest(build=BUILD, repo=REPO):
     return digest.hexdigest()
 
 
+CAPTURE_RECORD = ".ardia-capture.json"
+BASE_MARKERS = (".ardia-series-target", CAPTURE_RECORD)
+
+
+def chromium_build():
+    return os.environ.get("AC_CHROMIUM_BUILD", os.path.expanduser("~/chromium-build"))
+
+
+def default_base(platform, cpu):
+    if "AC_SERIES_BASE" in os.environ:
+        return os.environ["AC_SERIES_BASE"]
+    name = "series-base" if (platform, cpu) == ("mac", "arm64") else f"series-base-{platform}-{cpu}"
+    return os.path.join(chromium_build(), name)
+
+
+def default_src():
+    return os.environ.get("CHROMIUM_SRC", os.path.join(chromium_build(), "chromium_git/chromium/src"))
+
+
+def base_file_hashes(base):
+    out = {}
+    for top, dirs, files in os.walk(base):
+        dirs.sort()
+        for name in sorted(files):
+            full = os.path.join(top, name)
+            path = os.path.relpath(full, base).replace(os.sep, "/")
+            if path in BASE_MARKERS:
+                continue
+            if os.path.islink(full) or not os.path.isfile(full):
+                raise Problem(f"{full} isn't a regular file: the series base holds regular files only")
+            out[path] = sha256_file(full)
+    return out
+
+
 def stage_marker(tree):
     tree = pathlib.Path(tree)
     return tree.parent / f".helium-stages-{tree.name}"

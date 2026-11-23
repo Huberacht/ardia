@@ -1,14 +1,17 @@
+import contextlib
 import importlib.util
 import io
 import json
 import os
 import re
 import pathlib
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ENGINE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ENGINE))
@@ -23,6 +26,9 @@ spec.loader.exec_module(packer)
 spec = importlib.util.spec_from_file_location("run_step3", ENGINE / "run-step3.py")
 step3 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(step3)
+spec = importlib.util.spec_from_file_location("run_capture", ENGINE / "run-capture.py")
+capturer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(capturer)
 
 ORIGINAL = "".join(f"line {n}\n" for n in range(1, 41))
 
@@ -605,87 +611,174 @@ class Packer(unittest.TestCase):
                 packer.cmd_publish(args)
 
 
+FAKE_STEP3 = """
+import os, sys
+argv = sys.argv[1:]
+tree = argv[argv.index("--tree") + 1]
+if not os.path.isdir(tree):
+    sys.exit(2)
+stages = [s for s in os.environ["FAKE_STAGES"].split(",") if s]
+marker = os.path.join(os.path.dirname(tree), ".helium-stages-" + os.path.basename(tree))
+done = []
+if os.path.exists(marker):
+    done = open(marker).read().split()[1:]
+with open(marker, "w") as handle:
+    handle.write("\\n".join(["tree-inode=%d" % os.stat(tree).st_ino] + done + stages + ["platform=linux"]) + "\\n")
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
+"""
+
+FAKE_CAPTURE = """
+import os, shutil, sys
+base = os.environ["AC_SERIES_BASE"]
+os.makedirs(os.path.join(base, "chrome"), exist_ok=True)
+for name in os.environ["FAKE_CAPTURE"].split(","):
+    target = os.path.join(base, "chrome", name)
+    if not os.path.exists(target):
+        shutil.copyfile(os.path.join(os.environ["CHROMIUM_SRC"], "chrome", name), target)
+open(os.path.join(base, ".ardia-series-target"), "w").write("{}")
+sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
+"""
+
+
 class Step3Stamp(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="ac-step3-test-")
         self.src = os.path.join(self.root, "src")
         self.base = os.path.join(self.root, "base")
-        os.makedirs(self.src)
-        os.makedirs(os.path.join(self.base, "chrome"))
-        self.inode = f"tree-inode={os.stat(self.src).st_ino}"
+        os.makedirs(os.path.join(self.src, "chrome"))
+        pathlib.Path(self.src, "chrome/f.cc").write_text(ORIGINAL)
+        pathlib.Path(self.src, "chrome/g.cc").write_text(ORIGINAL)
+        self.helium = os.path.join(self.root, "fake-03-helium.py")
+        pathlib.Path(self.helium).write_text(FAKE_STEP3)
+        self.series = os.path.join(self.root, "fake-series.py")
+        pathlib.Path(self.series).write_text(FAKE_CAPTURE)
+        self.env = {"CHROMIUM_SRC": self.src, "AC_SERIES_BASE": self.base, "FAKE_CAPTURE": "f.cc", "FAKE_EXIT": "0"}
+        self.saved = {key: os.environ.get(key) for key in [*self.env, "FAKE_STAGES"]}
+        os.environ.update(self.env)
+        self.digest = series_base.step3_digest()
 
     def tearDown(self):
+        for key, value in self.saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         subprocess.run(["rm", "-rf", self.root])
 
-    def write_marker(self, stages):
-        pathlib.Path(self.root, ".helium-stages-src").write_text("\n".join([self.inode, *stages, "platform=linux"]) + "\n")
+    def step3(self, stages=series_base.STEP3_STAGES, extra=(), exit_code=0):
+        os.environ["FAKE_STAGES"] = ",".join(stages)
+        os.environ["FAKE_EXIT"] = str(exit_code)
+        with contextlib.redirect_stderr(io.StringIO()):
+            code = step3.run(["--apply", "--platform", "linux", "--tree", self.src, *extra], helium=self.helium)
+        os.environ["FAKE_EXIT"] = "0"
+        return code
 
-    def run_step3(self, digest="a" * 64):
-        self.write_marker([])
-        step3.begin(self.src, "linux", digest)
-        self.write_marker(series_base.STEP3_STAGES)
-        self.assertTrue(step3.finish(self.src, "linux", digest, digest))
+    def stamped(self):
+        return series_base.step3_stamp(self.src).is_file()
 
     def capture(self):
-        pathlib.Path(self.base, "chrome/f.cc").write_text(ORIGINAL)
+        with contextlib.redirect_stderr(io.StringIO()):
+            return capturer.run(["--platform", "linux"], series=self.series)
 
-    def verify(self, digest="a" * 64):
-        packer.verify_step3_stamp(self.src, self.base, "linux", digest, {"chrome/f.cc"})
+    def verify(self, digest=None):
+        packer.verify_step3_stamp(self.src, self.base, "linux", digest or self.digest)
 
-    def test_a_base_captured_after_a_stamped_step3_passes(self):
-        self.run_step3()
-        self.capture()
+    def test_one_full_run_is_stamped_and_its_capture_packs(self):
+        self.assertEqual(self.step3(), 0)
+        self.assertTrue(self.stamped())
+        self.assertEqual(self.capture(), 0)
         self.verify()
 
+    def test_a_failed_run_then_a_direct_stage_then_a_wrapper_run_leaves_no_stamp(self):
+        self.assertEqual(self.step3(stages=["patches"], exit_code=1), 1)
+        self.assertFalse(self.stamped())
+        os.environ["FAKE_STAGES"] = "fixups"
+        subprocess.run([sys.executable, self.helium, "--tree", self.src], check=True)
+        self.assertEqual(self.step3(stages=[s for s in series_base.STEP3_STAGES if s not in ("patches", "fixups")]), 0)
+        self.assertFalse(self.stamped())
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_inputs_that_change_during_the_run_leave_no_stamp_and_a_revert_does_not_bring_one_back(self):
+        digests = iter(["a" * 64, "b" * 64, "a" * 64, "a" * 64])
+        with mock.patch.object(series_base, "step3_digest", lambda: next(digests)):
+            self.step3(stages=series_base.STEP3_STAGES[:3])
+            self.assertFalse(self.stamped())
+            self.step3(stages=series_base.STEP3_STAGES[3:])
+        self.assertFalse(self.stamped())
+
+    def test_a_partial_or_unbranded_run_leaves_no_stamp(self):
+        for extra in (["--only", "patches"], ["--from=patches"], ["--no-brand"], ["--onl", "patches"]):
+            subprocess.run(["rm", "-f", str(series_base.stage_marker(self.src))])
+            self.step3(extra=extra)
+            self.assertFalse(self.stamped(), extra)
+
+    def test_a_new_run_deletes_the_old_stamp_before_it_starts(self):
+        self.step3()
+        self.assertTrue(self.stamped())
+        self.assertEqual(self.step3(stages=[], exit_code=1), 1)
+        self.assertFalse(self.stamped())
+
     def test_a_step3_input_edited_after_step3_ran_is_refused(self):
-        self.run_step3("a" * 64)
+        self.step3()
         self.capture()
         with self.assertRaises(SystemExit):
             self.verify("b" * 64)
 
-    def test_a_base_captured_before_step3_finished_is_refused(self):
+    def test_a_stale_file_copied_into_the_base_after_capture_is_refused(self):
+        self.step3()
         self.capture()
-        stamp_time = os.stat(os.path.join(self.base, "chrome/f.cc")).st_ctime + 5
-        self.run_step3()
-        record = json.loads(series_base.step3_stamp(self.src).read_text())
-        record["recorded_at"] = stamp_time
-        series_base.step3_stamp(self.src).write_text(json.dumps(record))
+        stale = os.path.join(self.root, "stale.cc")
+        pathlib.Path(stale).write_text("old\n")
+        shutil.copy2(stale, os.path.join(self.base, "chrome/f.cc"))
         with self.assertRaises(SystemExit):
             self.verify()
 
-    def test_a_step3_run_again_after_the_stamp_is_refused(self):
-        self.run_step3()
+    def test_a_file_added_to_the_base_after_capture_is_refused(self):
+        self.step3()
         self.capture()
-        self.write_marker([*series_base.STEP3_STAGES, "started:patches"])
+        pathlib.Path(self.base, "chrome/extra.cc").write_text("x\n")
         with self.assertRaises(SystemExit):
             self.verify()
 
-    def test_a_tree_without_a_stamp_is_refused(self):
-        self.write_marker(series_base.STEP3_STAGES)
+    def test_capture_refuses_a_base_with_files_it_did_not_record(self):
+        self.step3()
+        os.makedirs(os.path.join(self.base, "chrome"))
+        pathlib.Path(self.base, "chrome/f.cc").write_text("stale\n")
+        with self.assertRaises(SystemExit):
+            self.capture()
+
+    def test_a_later_capture_adds_files_to_a_recorded_base(self):
+        self.step3()
         self.capture()
+        os.environ["FAKE_CAPTURE"] = "f.cc,g.cc"
+        self.assertEqual(self.capture(), 0)
+        self.verify()
+        record = json.loads(pathlib.Path(self.base, series_base.CAPTURE_RECORD).read_text())
+        self.assertEqual(sorted(record["files"]), ["chrome/f.cc", "chrome/g.cc"])
+
+    def test_a_capture_for_another_step3_run_is_refused(self):
+        self.step3()
+        self.capture()
+        subprocess.run(["rm", "-f", str(series_base.stage_marker(self.src))])
+        self.step3()
         with self.assertRaises(SystemExit):
             self.verify()
 
-    def test_step3_started_by_hand_can_not_be_stamped_later(self):
-        self.write_marker(["patches"])
-        with self.assertRaises(series_base.Problem):
-            step3.begin(self.src, "linux", "a" * 64)
+    def test_capture_needs_a_stamp(self):
+        with self.assertRaises(SystemExit):
+            self.capture()
 
-    def test_a_later_partial_run_needs_the_same_inputs(self):
-        self.write_marker([])
-        step3.begin(self.src, "linux", "a" * 64)
-        self.write_marker(["patches"])
-        step3.begin(self.src, "linux", "a" * 64)
-        with self.assertRaises(series_base.Problem):
-            step3.begin(self.src, "linux", "b" * 64)
-
-    def test_inputs_that_change_while_step3_runs_invalidate_the_stamp(self):
-        self.write_marker([])
-        step3.begin(self.src, "linux", "a" * 64)
-        self.write_marker(series_base.STEP3_STAGES)
-        with self.assertRaises(series_base.Problem):
-            step3.finish(self.src, "linux", "a" * 64, "b" * 64)
-        self.assertEqual(json.loads(series_base.step3_stamp(self.src).read_text())["state"], "invalid")
+    def test_a_missing_tree_fails_as_03_helium_py_does(self):
+        missing = os.path.join(self.root, "missing/src")
+        helium = str(series_base.BUILD / "03-helium.py")
+        direct = subprocess.run([sys.executable, helium, "--apply", "--platform", "linux", "--tree", missing],
+                                capture_output=True, text=True)
+        wrapped = subprocess.run([sys.executable, str(ENGINE / "run-step3.py"), "--apply", "--platform", "linux",
+                                  "--tree", missing], capture_output=True, text=True)
+        self.assertEqual(direct.returncode, 2)
+        self.assertEqual((wrapped.returncode, wrapped.stdout, wrapped.stderr),
+                         (direct.returncode, direct.stdout, direct.stderr))
 
 
 class Workflow(unittest.TestCase):
