@@ -5,7 +5,8 @@ import { mount } from "../../test-hooks.mjs";
 globalThis.__DEV__ = false;
 await import("../../test-native/index.ts");
 const { useBrowser } = await import("../browser/store.ts");
-const { armLoadRecord, useNewTabKeptForPage, watchPageDrawn } = await import("./newTabKeep.ts");
+const { armLoadRecord, useHeroBarFocusWhenShownAgain, useNewTabKeptForPage, watchPageDrawn } = await import("./newTabKeep.ts");
+const { registerHeroBar } = await import("../omnibox/barState.ts");
 const { navigationOf } = await import("./pageSession.ts");
 const seqOf = (tab) => navigationOf(S().tabs[tab])?.seq;
 
@@ -129,4 +130,36 @@ test("a load that ended for an earlier navigation doesn't end the watch for a ne
   await wait(120);
   assert.deepEqual(calls, [true]);
   disarm();
+});
+
+test("an earlier navigation's load ending after the watch began doesn't release a newer navigation's hold", async () => {
+  const tab = aTab();
+  const disarm = armLoadRecord(tab);
+  S().navigate(tab, "https://a2.com");
+  S().updateLive(tab, { isLoading: true });
+  S().navigate(tab, "https://b.com");
+  const calls = [];
+  watchPageDrawn(tab, seqOf(tab), (timedOut) => calls.push(timedOut), 1000, 20);
+  S().updateLive(tab, { isLoading: false });
+  await wait(60);
+  assert.deepEqual(calls, [], "a2.com's load ending says nothing about b.com");
+  S().updateLive(tab, { isLoading: true });
+  S().updateLive(tab, { isLoading: false });
+  await wait(60);
+  assert.deepEqual(calls, [false], "b.com's own start and end release it");
+  disarm();
+});
+
+test("a New Tab page shown again after a hold refocuses its bar keeping the field's selection", () => {
+  const tab = aTab();
+  const w = S().tabs[tab].windowId;
+  const modes = [];
+  const unregister = registerHeroBar(w, tab, (mode) => modes.push(mode));
+  const page = mount(({ kept }) => useHeroBarFocusWhenShownAgain(w, tab, kept), { props: { kept: false } });
+  page.rerender({ kept: true });
+  assert.deepEqual(modes, [], "nothing while it is held");
+  page.rerender({ kept: false });
+  assert.deepEqual(modes, ["restore"]);
+  page.unmount();
+  unregister();
 });

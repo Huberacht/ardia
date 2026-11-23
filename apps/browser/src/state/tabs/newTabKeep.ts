@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useBrowser } from "../browser/store";
-import { watchShownLive } from "../browser/hooks";
 import { focusHeroBar } from "../omnibox/barState";
 import { consentToken } from "../telemetry/client";
 import { notePageOverlay } from "../telemetry/usage";
@@ -43,36 +42,45 @@ export function armLoadRecord(tabId: string): () => void {
   };
 }
 
+const loadEnded = (tabId: string, seq: number | undefined) => {
+  const load = loads.get(tabId);
+  return seq !== undefined && load?.seq === seq && load.ended && !shownLiveOf(useBrowser.getState(), tabId).isLoading;
+};
+
 export function watchPageDrawn(tabId: string, seq: number | undefined, drawn: (timedOut: boolean) => void, maxMs = NEW_TAB_KEPT_MAX_MS, afterLoadMs = NEW_TAB_DROP_AFTER_LOAD_MS): () => void {
-  const load = seq === undefined ? undefined : loads.get(tabId);
-  const ours = load !== undefined && load.seq === seq;
-  let sawLoading = ours || shownLiveOf(useBrowser.getState(), tabId).isLoading;
+  const disarm = armLoadRecord(tabId);
   let afterLoad: ReturnType<typeof setTimeout> | undefined;
   let done = false;
-  const finish = (timedOut: boolean) => {
-    if (done) return;
+  const end = () => {
     done = true;
     stop();
+    disarm();
     clearTimeout(cap);
     clearTimeout(afterLoad);
-    drawn(timedOut);
   };
-  const stop = watchShownLive(tabId, () => {
-    if (shownLiveOf(useBrowser.getState(), tabId).isLoading) {
-      sawLoading = true;
+  const check = () => {
+    if (!loadEnded(tabId, seq)) {
       clearTimeout(afterLoad);
       afterLoad = undefined;
-      return;
+    } else if (afterLoad === undefined) {
+      afterLoad = setTimeout(() => {
+        if (done) return;
+        end();
+        drawn(false);
+      }, afterLoadMs);
     }
-    if (sawLoading && afterLoad === undefined) afterLoad = setTimeout(() => finish(false), afterLoadMs);
+  };
+  const stop = onLiveChange((id) => {
+    if (id === tabId && !done) check();
   });
-  const cap = setTimeout(() => finish(true), maxMs);
-  if (ours && load.ended && !shownLiveOf(useBrowser.getState(), tabId).isLoading) afterLoad = setTimeout(() => finish(false), afterLoadMs);
+  const cap = setTimeout(() => {
+    if (done) return;
+    end();
+    drawn(true);
+  }, maxMs);
+  check();
   return () => {
-    done = true;
-    stop();
-    clearTimeout(cap);
-    clearTimeout(afterLoad);
+    if (!done) end();
   };
 }
 
@@ -100,7 +108,7 @@ export function useNewTabKeptForPage(tabId: string, newTabShown: boolean, pageSh
 export function useHeroBarFocusWhenShownAgain(windowId: string, tabId: string, kept: boolean) {
   const keptBefore = useRef(kept);
   useLayoutEffect(() => {
-    if (keptBefore.current && !kept) focusHeroBar(windowId, tabId);
+    if (keptBefore.current && !kept) focusHeroBar(windowId, tabId, "restore");
     keptBefore.current = kept;
   }, [kept, windowId, tabId]);
 }
