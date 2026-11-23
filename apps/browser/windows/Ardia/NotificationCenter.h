@@ -170,14 +170,18 @@ inline std::optional<std::wstring> FileUrlOf(std::wstring const &path) noexcept 
   return std::wstring(url);
 }
 
+inline constexpr size_t kMaxIconDataUriBytes = 1048576;
+inline constexpr DWORD kMaxIconBytes = 786432;
+
 inline std::optional<std::wstring> DataUriIcon(std::string const &icon, std::string const &id) noexcept {
+  if (icon.size() > kMaxIconDataUriBytes) return std::nullopt;
   size_t marker = icon.find(";base64,");
   if (marker == std::string::npos) return std::nullopt;
   std::string_view mime = std::string_view{icon}.substr(5, marker - 5);
   const wchar_t *extension = mime == "image/jpeg" ? L"jpg" : mime == "image/gif" ? L"gif" : L"png";
   std::string_view encoded = std::string_view{icon}.substr(marker + 8);
   DWORD size = 0;
-  if (!CryptStringToBinaryA(encoded.data(), static_cast<DWORD>(encoded.size()), CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr) || size == 0) return std::nullopt;
+  if (!CryptStringToBinaryA(encoded.data(), static_cast<DWORD>(encoded.size()), CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr) || size == 0 || size > kMaxIconBytes) return std::nullopt;
   std::vector<BYTE> bytes(size);
   if (!CryptStringToBinaryA(encoded.data(), static_cast<DWORD>(encoded.size()), CRYPT_STRING_BASE64, bytes.data(), &size, nullptr, nullptr)) return std::nullopt;
   std::wstring path = TempIconPath(id, extension);

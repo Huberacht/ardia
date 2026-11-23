@@ -135,6 +135,9 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
     center.removePendingNotificationRequests(withIdentifiers: ids)
   }
 
+  static let maxIconDataUriBytes = 1_048_576
+  static let maxIconBytes = 786_432
+
   private func attachment(from url: URL, id: String, completion: @escaping (UNNotificationAttachment?, NotificationIcon) -> Void) {
     let make = { (file: URL) in
       do {
@@ -151,8 +154,14 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
     guard url.scheme?.lowercased() == "data", url.absoluteString.lowercased().hasPrefix("data:image/") else {
       return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil))
     }
+    guard url.absoluteString.utf8.count <= Self.maxIconDataUriBytes else {
+      return completion(nil, NotificationIcon(status: "too_large", errorCode: nil))
+    }
     guard let data = try? Data(contentsOf: url), !data.isEmpty else {
       return completion(nil, NotificationIcon(status: "empty", errorCode: nil))
+    }
+    guard data.count <= Self.maxIconBytes else {
+      return completion(nil, NotificationIcon(status: "too_large", errorCode: nil))
     }
     let subtype = url.absoluteString.dropFirst("data:image/".count).prefix { $0 != ";" && $0 != "," }.lowercased()
     let ext = ["jpeg": "jpg", "jpg": "jpg", "gif": "gif", "heic": "heic", "tiff": "tiff", "webp": "webp"][subtype] ?? "png"
