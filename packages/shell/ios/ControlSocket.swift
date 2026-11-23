@@ -373,12 +373,9 @@ final class ControlSocket {
   }
 
   private static func unsafeFolder(_ dir: String) -> String? {
-    var info = stat()
-    guard lstat(dir, &info) == 0 else { return "Couldn't read the data folder \(dir) (\(errnoText()))." }
-    guard (info.st_mode & S_IFMT) == S_IFDIR else { return "The data folder \(dir) isn't a real folder." }
-    guard info.st_uid == geteuid() else { return "The data folder \(dir) belongs to another user." }
-    guard info.st_mode & (S_IWGRP | S_IWOTH) == 0 else { return "Others can write to the data folder \(dir)." }
-    return nil
+    let folder = PrivateFolder.openFolder(dir)
+    if folder.fd >= 0 { Darwin.close(folder.fd) }
+    return folder.problem
   }
 
   private static func errnoText() -> String {

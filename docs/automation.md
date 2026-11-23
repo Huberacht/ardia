@@ -8,8 +8,11 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
 
 - While "Let the ardia command control Ardia" (`cliControl`) is on, the app listens on a Unix socket at exactly
   `<data dir>/ArdiaControl.sock` (the app's own data dir; `ARDIA_DATA_DIR` for test instances).
-- **Safe place.** The server starts only if the data dir is a real directory (not a symlink) owned by the user and not
-  writable by group or others; otherwise it logs one line and reports an error status. The socket is created under a
+- **Safe place.** The server starts only if the data dir is a real directory (not a symlink) owned by the user, not
+  writable by group or others, not on a volume that ignores ownership, and with no macOS access list that allows
+  anyone but the user anything (an inherited `everyone allow read` would otherwise reach every file made in it, 0600
+  or not; `ControlPeerCore/PrivateFolder.swift`, as the engine's `UnsafeControlFolder`); otherwise it logs one line
+  and reports an error status. The socket is created under a
   0177 umask, so it is 0600 from the start (a socket is made 0777 less the umask, so 0077 would leave it 0700).
 - **One owner.** The server holds an exclusive `flock` on `<data dir>/ArdiaControl.sock.lock` for as long as it
   serves. Only after taking the lock may it remove an old path, and only a socket (never a regular file, directory or
@@ -34,8 +37,9 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   for one of macOS's own, and path + cdhash for anything else. That cdhash is checked against the running process
   (a `cdhash H"…"` requirement on the dynamic code), so a file swapped on disk can't borrow an approval; a program whose
   running code doesn't validate has no cdhash and can only be allowed once.
-  They live in `<data dir>/ArdiaControlApprovals.json` (0600, read only if it's a private regular file of the user's,
-  written by an `O_EXCL` temp file and a rename), are listed in Settings › Advanced › Command line and automation ›
+  They live in `<data dir>/ArdiaControlApprovals.json` (0600 with no access list, read only if it's a private regular
+  file of the user's with no access list letting anyone else in, from a folder that passes the same check, and written
+  by an `O_EXCL` temp file stripped of any inherited access list, then a rename), are listed in Settings › Advanced › Command line and automation ›
   Programs you let in, and removing one there closes its open connections; a 30-minute one also closes them when it
   runs out, at the approval's own end time on the wall clock (sleep included), and after that end no line it sends is
   run and no new event is sent to it (only a frame already being written to it may finish). One doorbell shows at a time. Connections share one only when they come

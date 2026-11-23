@@ -86,6 +86,55 @@ final class ControlPeerTests: XCTestCase {
     XCTAssertEqual(ControlPeerPolicy(ownTeam: "U5L5T3NGVV", sameUserIsEnough: true).verdict(unsigned, approvals: [], now: now), .sameUser)
   }
 
+  func testAFolderWithAnInheritableAccessListIsRefused() throws {
+    let folder = scratch.appendingPathComponent("shared").path
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    XCTAssertNil(PrivateFolder.openFolder(folder).problem)
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow read,file_inherit", folder]), 0)
+    let refused = try XCTUnwrap(PrivateFolder.openFolder(folder).problem)
+    XCTAssertTrue(refused.contains("access list"), refused)
+    let store = ControlApprovals(directory: folder)
+    let approval = ControlApproval(key: "apple:com.apple.nc", name: "nc", signedBy: "Apple", path: nil, added: 1, until: nil)
+    XCTAssertFalse(store.add(approval))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: store.path))
+    XCTAssertEqual(store.load(), [])
+    XCTAssertNotNil(store.problem)
+  }
+
+  func testAnOwnerOnlyAccessListIsFine() throws {
+    let folder = scratch.appendingPathComponent("mine").path
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    XCTAssertEqual(run("/bin/chmod", ["+a", "\(NSUserName()) allow read", folder]), 0)
+    XCTAssertNil(PrivateFolder.openFolder(folder).problem)
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone deny delete", folder]), 0)
+    XCTAssertNil(PrivateFolder.openFolder(folder).problem)
+  }
+
+  func testTheApprovalsFileHasNoAccessListAndAnAddedOneIsIgnored() throws {
+    let store = ControlApprovals(directory: scratch.path)
+    let approval = ControlApproval(key: "apple:com.apple.nc", name: "nc", signedBy: "Apple", path: nil, added: 1, until: nil)
+    XCTAssertTrue(store.add(approval))
+    let fd = open(store.path, O_RDONLY)
+    XCTAssertGreaterThanOrEqual(fd, 0)
+    XCTAssertEqual(PrivateFolder.extendedAccess(fd), .none)
+    close(fd)
+    XCTAssertEqual(store.load().map(\.key), [approval.key])
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow read", store.path]), 0)
+    XCTAssertEqual(store.load(), [])
+    XCTAssertNotNil(store.problem)
+  }
+
+  func testOnlyOwnerCanReadStripsAnInheritedAccessList() throws {
+    let file = scratch.appendingPathComponent("secret").path
+    XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: Data(), attributes: [.posixPermissions: 0o644]))
+    XCTAssertEqual(run("/bin/chmod", ["+a", "everyone allow read", file]), 0)
+    let fd = open(file, O_RDWR)
+    defer { close(fd) }
+    XCTAssertEqual(PrivateFolder.extendedAccess(fd), .allowsOthers)
+    XCTAssertTrue(PrivateFolder.onlyOwnerCanRead(fd))
+    XCTAssertEqual(PrivateFolder.extendedAccess(fd), .none)
+  }
+
   func testDisplayTextIsPlainAndBounded() {
     XCTAssertEqual(ControlPeer.plain("ar\u{202E}dia\n\u{0007}x", limit: 64), "ardiax")
     XCTAssertEqual(ControlPeer.plain(String(repeating: "a", count: 100), limit: 10).count, 10)

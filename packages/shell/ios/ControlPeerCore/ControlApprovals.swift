@@ -53,14 +53,20 @@ public final class ControlApprovals {
 
   public func load(now: Date = Date()) -> [ControlApproval] {
     problem = nil
-    let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+    let folder = PrivateFolder.openFolder(directory)
+    guard folder.fd >= 0 else {
+      problem = folder.problem
+      return []
+    }
+    defer { Darwin.close(folder.fd) }
+    let fd = openat(folder.fd, Self.fileName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
     guard fd >= 0 else {
       if errno != ENOENT { problem = "Couldn't read \(Self.fileName) (\(String(cString: strerror(errno))))." }
       return []
     }
     defer { Darwin.close(fd) }
     var info = stat()
-    guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid(), info.st_mode & 0o077 == 0, info.st_size <= Self.maxBytes else {
+    guard PrivateFolder.privateFile(fd), fstat(fd, &info) == 0, info.st_size <= Self.maxBytes else {
       problem = "\(Self.fileName) isn't a private file of yours, so Ardia ignores it."
       return []
     }
@@ -90,13 +96,19 @@ public final class ControlApprovals {
 
   func save(_ entries: [ControlApproval]) -> Bool {
     guard let data = try? JSONEncoder().encode(entries) else { return false }
-    let temporary = (directory as NSString).appendingPathComponent(".\(Self.fileName).\(getpid()).\(UInt32.random(in: 0...UInt32.max))")
-    let fd = Darwin.open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    let folder = PrivateFolder.openFolder(directory)
+    guard folder.fd >= 0 else {
+      problem = folder.problem
+      return false
+    }
+    defer { Darwin.close(folder.fd) }
+    let temporary = ".\(Self.fileName).\(getpid()).\(UInt32.random(in: 0...UInt32.max))"
+    let fd = openat(folder.fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { return false }
-    let wrote = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, data.count) }
+    let wrote = PrivateFolder.onlyOwnerCanRead(fd) ? data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, data.count) } : -1
     Darwin.close(fd)
-    guard wrote == data.count, rename(temporary, path) == 0 else {
-      unlink(temporary)
+    guard wrote == data.count, renameat(folder.fd, temporary, folder.fd, Self.fileName) == 0 else {
+      unlinkat(folder.fd, temporary, 0)
       return false
     }
     return true
