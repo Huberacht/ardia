@@ -339,7 +339,7 @@ function preflightStep() {
   return body.split("\n").map((line) => line.slice(10)).join("\n");
 }
 
-function runPreflightStep({ dryRun, published, alreadyReleased }) {
+function runPreflightStep({ dryRun, published, alreadyReleased, version = "1.2.3-nightly.2", latest = "v1.2.2" }) {
   const dir = mkdtempSync(join(tmpdir(), "ac-preflight-step-"));
   const bin = join(dir, "bin");
   mkdirSync(bin);
@@ -348,12 +348,12 @@ function runPreflightStep({ dryRun, published, alreadyReleased }) {
   mkdirSync(join(dir, "engine"));
   const stub = (path, body) => { writeFileSync(path, `#!/usr/bin/env bash\n${body}\n`); chmodSync(path, 0o755); };
   stub(join(dir, "engine/engine-key.sh"), "echo 0123456789abcdef0123");
-  stub(join(bin, "gh"), published ? "exit 0" : "exit 1");
+  stub(join(bin, "gh"), `case "$*" in *--json*) echo "${latest}"; exit 0 ;; esac\nexit ${published ? 0 : 1}`);
   stub(join(bin, "node"), `out=""; while [ $# -gt 0 ]; do [ "$1" = --values-out ] && out="$2"; shift; done; printf 'release_build=41\\nalready_released=${alreadyReleased}\\n' > "$out"`);
   const result = spawnSync("bash", ["-c", preflightStep()], {
     cwd: dir,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, VERSION: "1.2.3-nightly.2", DRY_RUN: String(dryRun), IPHONE: "false", RUNNER_TEMP: dir, GITHUB_OUTPUT: join(dir, "out"), GITHUB_STEP_SUMMARY: join(dir, "summary"), GITHUB_REPOSITORY: "ardia-browser/ardia", GITHUB_SHA: "0".repeat(40) },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, VERSION: version, DRY_RUN: String(dryRun), IPHONE: "false", RUNNER_TEMP: dir, GITHUB_OUTPUT: join(dir, "out"), GITHUB_STEP_SUMMARY: join(dir, "summary"), GITHUB_REPOSITORY: "ardia-browser/ardia", GITHUB_SHA: "0".repeat(40) },
   });
   return { status: result.status, output: result.stdout + result.stderr };
 }
@@ -378,4 +378,20 @@ test("a feed that isn't well-formed is refused before the item scan, so thousand
   const started = Date.now();
   assert.equal(feedFacts(body, "1.2.3"), null);
   assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+});
+
+test("the preflight job stops a stable that isn't above the latest stable tag, even when the feed answered 404", () => {
+  const below = runPreflightStep({ dryRun: true, published: false, alreadyReleased: "none", version: "1.2.1", latest: "v1.2.2" });
+  assert.notEqual(below.status, 0);
+  assert.match(below.output, /::error::1.2.1 isn't above the latest stable release \(1.2.2\)/);
+  for (const [version, latest] of [["1.2.3", "v1.2.2"], ["1.10.0", "v1.9.9"], ["1.2.1-nightly.1", "v1.2.2"]]) {
+    const ok = runPreflightStep({ dryRun: true, published: false, alreadyReleased: "none", version, latest });
+    assert.equal(ok.status, 0, `${version} over ${latest}: ${ok.output}`);
+  }
+});
+
+test("a feed that doesn't parse fails the preflight as not a whole appcast, before any item scan", async () => {
+  const body = LIVE.replace("</channel>", `${"<item>".repeat(200_000)}</channel>`);
+  const result = await run({ version: "1.2.3", root: fixture(), mode: "dry-run", responses: [{ status: 200, body }] });
+  assert.match(result.fails.join("\n"), /isn't a whole Sparkle appcast as appcast.py reads one/);
 });

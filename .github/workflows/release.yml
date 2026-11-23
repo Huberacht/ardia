@@ -60,6 +60,11 @@ jobs:
               fail "v$VERSION is already published: only a dry run of a nightly the feed lists at this build, still the newest, may go on"
             fi
           fi
+          if [ "$channel" = stable ] && latest=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName 2>/dev/null) && [[ "$latest" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            latest="${latest#v}"
+            [ "$latest" = "$VERSION" ] || [ "$(printf '%s\n%s\n' "$latest" "$VERSION" | sort -V | tail -1)" = "$VERSION" ] \
+              || fail "$VERSION isn't above the latest stable release ($latest): publish.sh refuses it, so it stops here instead of after the build"
+          fi
           tree=$(engine/engine-key.sh --platform macos)
           linux_tree=$(engine/engine-key.sh --platform linux)
           { echo "tree=$tree"; echo "linux_tree=$linux_tree"; } >> "$GITHUB_OUTPUT"

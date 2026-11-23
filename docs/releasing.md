@@ -341,7 +341,8 @@ the engine if `engine/` changed (below).
   released, listed in the feed at the checkout's build and still the newest build, which only warns, since
   `publish.sh --dry-run` accepts that one and refuses an already released stable. The tag check follows the same rule:
   a published `v<version>` only warns in a dry run when the preflight confirmed exactly that (`already_released=nightly-newest`
-  in its `--values-out`); with a feed that answers 404, or for anything else, it fails. So a dry run on a commit catches
+  in its `--values-out`); with a feed that answers 404, or for anything else, it fails. A stable must also be above the
+  latest stable release's tag (`gh release view`), which catches the order `publish.sh` checks even when there's no feed. So a dry run on a commit catches
   whatever would stop the real run on it.
 - **checks**: `pnpm typecheck`, `pnpm test`, `pnpm shaders:check`.
 - **build**, on the `xcode-27` runner (Xcode 27.1, the same build as here), with no secrets: fetches the engine for
