@@ -440,6 +440,7 @@ function analyse(img, scale, data, width) {
   const lastTabRun = hitTabRuns.reduce((last, [a, b], i) => (favs.some((f) => f.full && f.x + 8 >= a && f.x + 8 < b) ? i : last), -1);
   const tabRuns = hitTabRuns.filter((_, i) => i <= lastTabRun);
   const tabButtonRuns = hitTabRuns.slice(lastTabRun + 1).slice(-2);
+  const edgeRuns = hitTabRuns.filter((r) => !tabButtonRuns.includes(r));
   const buttonRuns = [...hitButtonRuns, ...tabButtonRuns.filter(([a, b]) => b - a >= 14)].sort((p, q) => p[0] - q[0]);
   const loose = data.loose;
   const withFav = loose.filter((t) => data.favicons[t] && !data.discarded.includes(t) && !sharedColour(t));
@@ -504,7 +505,7 @@ function analyse(img, scale, data, width) {
     const hidden = side === "L" ? hiddenL : hiddenR;
     if (!hidden) return null;
     const edge = side === "L" ? viewport[0] : viewport[1];
-    const peek = tabRuns.find(([a, b]) => (side === "L" ? a <= edge + 1 : b >= edge - 1));
+    const peek = edgeRuns.find(([a, b]) => (side === "L" ? a <= edge + 1 : b >= edge - 1));
     if (!peek) return 0;
     const a = side === "L" ? edge : edge - 8;
     const shows = inkWidth(peek[0], peek[1], peek[0]).maxInk >= 40 || favs.some((f) => f.count >= 16 && f.x < peek[1] && f.x + f.w > peek[0]);
