@@ -20,6 +20,9 @@ spec.loader.exec_module(checker)
 spec = importlib.util.spec_from_file_location("series_base_pack", ENGINE / "series-base-pack.py")
 packer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packer)
+spec = importlib.util.spec_from_file_location("run_step3", ENGINE / "run-step3.py")
+step3 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(step3)
 
 ORIGINAL = "".join(f"line {n}\n" for n in range(1, 41))
 
@@ -447,6 +450,14 @@ class GitForms(Fixture):
         self.assert_needs_and_applies(step, ["chrome/f.cc"])
         self.assertEqual(series_base.patch_sections(step), [("chrome/f.cc", "chrome/g.cc", "rename")])
 
+    def test_a_mode_patch_on_a_file_with_another_mode_fails_on_the_warning(self):
+        step = git_patch(self.dir, "chmod +x chrome/f.cc")
+        self.write_tree(ORIGINAL)
+        os.chmod(os.path.join(self.tree, "chrome/f.cc"), 0o755)
+        [result] = self.run_tree([step])
+        self.assertFalse(result.ok)
+        self.assertTrue(any("git apply warned" in problem for problem in result.problems), result.problems)
+
     def test_a_copy_only_patch_needs_its_source(self):
         step = git_patch(self.dir, "cp chrome/f.cc chrome/copy.cc")
         self.assertIn("copy from chrome/f.cc", pathlib.Path(step.patch).read_text())
@@ -483,6 +494,26 @@ class Limits(unittest.TestCase):
         with self.assertRaises(series_base.Problem):
             checker.copy_capped(Source(b"x" * 100), sink, 50)
         checker.copy_capped(Source(b"x" * 50), io.BytesIO(), 50)
+
+    def test_a_pax_header_counts_against_the_expanded_limit(self):
+        with tempfile.TemporaryDirectory() as root:
+            out = os.path.join(root, "pax.tar.xz")
+            manifest = json.dumps({"format": series_base.FORMAT, "files": {}, "absent": []}).encode()
+            with tarfile.open(out, "w:xz", format=tarfile.PAX_FORMAT) as tar:
+                info = tarfile.TarInfo("manifest.json")
+                info.size = len(manifest)
+                info.pax_headers = {"comment": "x" * 4096}
+                tar.addfile(info, io.BytesIO(manifest))
+            saved = series_base.MAX_EXPANDED_BYTES
+            try:
+                series_base.MAX_EXPANDED_BYTES = 256
+                with self.assertRaises(series_base.Problem):
+                    series_base.read_manifest(out)
+                with self.assertRaises(series_base.Problem):
+                    series_base.extract(out, tempfile.mkdtemp(dir=root))
+            finally:
+                series_base.MAX_EXPANDED_BYTES = saved
+            self.assertEqual(series_base.read_manifest(out)["files"], {})
 
     def test_a_declared_length_over_the_cap_is_refused_before_reading(self):
         class Source(io.BytesIO):
@@ -572,6 +603,89 @@ class Packer(unittest.TestCase):
             args = type("Args", (), {"archive": out, "repo": "nobody/nothing"})()
             with self.assertRaises(SystemExit):
                 packer.cmd_publish(args)
+
+
+class Step3Stamp(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="ac-step3-test-")
+        self.src = os.path.join(self.root, "src")
+        self.base = os.path.join(self.root, "base")
+        os.makedirs(self.src)
+        os.makedirs(os.path.join(self.base, "chrome"))
+        self.inode = f"tree-inode={os.stat(self.src).st_ino}"
+
+    def tearDown(self):
+        subprocess.run(["rm", "-rf", self.root])
+
+    def write_marker(self, stages):
+        pathlib.Path(self.root, ".helium-stages-src").write_text("\n".join([self.inode, *stages, "platform=linux"]) + "\n")
+
+    def run_step3(self, digest="a" * 64):
+        self.write_marker([])
+        step3.begin(self.src, "linux", digest)
+        self.write_marker(series_base.STEP3_STAGES)
+        self.assertTrue(step3.finish(self.src, "linux", digest, digest))
+
+    def capture(self):
+        pathlib.Path(self.base, "chrome/f.cc").write_text(ORIGINAL)
+
+    def verify(self, digest="a" * 64):
+        packer.verify_step3_stamp(self.src, self.base, "linux", digest, {"chrome/f.cc"})
+
+    def test_a_base_captured_after_a_stamped_step3_passes(self):
+        self.run_step3()
+        self.capture()
+        self.verify()
+
+    def test_a_step3_input_edited_after_step3_ran_is_refused(self):
+        self.run_step3("a" * 64)
+        self.capture()
+        with self.assertRaises(SystemExit):
+            self.verify("b" * 64)
+
+    def test_a_base_captured_before_step3_finished_is_refused(self):
+        self.capture()
+        stamp_time = os.stat(os.path.join(self.base, "chrome/f.cc")).st_ctime + 5
+        self.run_step3()
+        record = json.loads(series_base.step3_stamp(self.src).read_text())
+        record["recorded_at"] = stamp_time
+        series_base.step3_stamp(self.src).write_text(json.dumps(record))
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_a_step3_run_again_after_the_stamp_is_refused(self):
+        self.run_step3()
+        self.capture()
+        self.write_marker([*series_base.STEP3_STAGES, "started:patches"])
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_a_tree_without_a_stamp_is_refused(self):
+        self.write_marker(series_base.STEP3_STAGES)
+        self.capture()
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_step3_started_by_hand_can_not_be_stamped_later(self):
+        self.write_marker(["patches"])
+        with self.assertRaises(series_base.Problem):
+            step3.begin(self.src, "linux", "a" * 64)
+
+    def test_a_later_partial_run_needs_the_same_inputs(self):
+        self.write_marker([])
+        step3.begin(self.src, "linux", "a" * 64)
+        self.write_marker(["patches"])
+        step3.begin(self.src, "linux", "a" * 64)
+        with self.assertRaises(series_base.Problem):
+            step3.begin(self.src, "linux", "b" * 64)
+
+    def test_inputs_that_change_while_step3_runs_invalidate_the_stamp(self):
+        self.write_marker([])
+        step3.begin(self.src, "linux", "a" * 64)
+        self.write_marker(series_base.STEP3_STAGES)
+        with self.assertRaises(series_base.Problem):
+            step3.finish(self.src, "linux", "a" * 64, "b" * 64)
+        self.assertEqual(json.loads(series_base.step3_stamp(self.src).read_text())["state"], "invalid")
 
 
 class Workflow(unittest.TestCase):

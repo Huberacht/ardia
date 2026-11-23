@@ -70,7 +70,8 @@ def git_head(path):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-resources", "brand-namesub", "series-check")
+VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-stamp", "step3-resources", "brand-namesub",
+            "series-check")
 
 
 def run_checked(command, what, env=None):
@@ -107,6 +108,32 @@ def verify_stages(src, platform):
         series_base.die(f"{marker} doesn't show a whole step 3 for {platform} (missing {missing or ['platform=' + platform]})")
 
 
+def verify_step3_stamp(src, base, platform, inputs, paths):
+    stamp_file = series_base.step3_stamp(src)
+    if not stamp_file.is_file():
+        series_base.die(f"no {stamp_file}: step 3 didn't run on {src} through scripts/engine/run-step3.py, so what it "
+                        "read is unknown; run it on a fresh tree")
+    try:
+        stamp = json.loads(stamp_file.read_text())
+    except ValueError as error:
+        series_base.die(f"{stamp_file} is unreadable: {error}")
+    marker = series_base.stage_marker(src)
+    expected = {"state": "complete", "tree_inode": os.stat(src).st_ino, "platform": platform,
+                "marker_sha256": series_base.sha256_file(marker) if marker.is_file() else None}
+    wrong = [f"{key} is {stamp.get(key)!r}, not {value!r}" for key, value in expected.items() if stamp.get(key) != value]
+    if wrong:
+        series_base.die(f"{stamp_file} doesn't describe this tree's finished step 3: " + "; ".join(wrong))
+    if stamp.get("inputs") != inputs:
+        series_base.die(f"step 3 ran on {src} with inputs {str(stamp.get('inputs'))[:12]}, but this checkout's are "
+                        f"{inputs[:12]}: run step 3 again on a fresh tree with these inputs, then step 4")
+    recorded = float(stamp.get("recorded_at", 0))
+    older = sorted(path for path in paths if os.path.isfile(os.path.join(base, path)) and
+                   os.stat(os.path.join(base, path)).st_ctime < recorded)
+    if older:
+        series_base.die(f"{len(older)} files in {base} were captured before step 3 finished on this tree (e.g. "
+                        f"{older[0]}): set the base aside and run step 4 again")
+
+
 def verify_resources(src, base):
     wrong = []
     for source, dest in series_base.resource_pairs():
@@ -120,7 +147,7 @@ def verify_resources(src, base):
                         "\n  ".join(wrong))
 
 
-def verify_tree(ident, src, base, platform, cpu):
+def verify_tree(ident, src, base, platform, cpu, paths):
     version = tree_version(src)
     if version != ident["chromium"]:
         series_base.die(f"{src} is Chromium {version}, but the pins say {ident['chromium']}")
@@ -129,6 +156,7 @@ def verify_tree(ident, src, base, platform, cpu):
     for name, key in (("helium", "helium_chromium"), (series_base.PLATFORM_HELIUM[platform], "helium_platform")):
         verify_helium(os.path.join(helium_root, name), ident[key], key)
     verify_stages(src, platform)
+    verify_step3_stamp(src, base, platform, ident["inputs"], paths)
     verify_resources(src, base)
     marker = pathlib.Path(base, ".ardia-series-target")
     if marker.exists() and json.loads(marker.read_text()) != {"platform": platform, "cpu": cpu}:
@@ -159,10 +187,11 @@ def cmd_pack(args):
     if not os.path.isdir(base):
         series_base.die(f"no series base at {base}: run `series.py capture-base --platform {args.platform}` on a tree "
                         "Helium and the branding just left (docs/engine-build.md)")
-    verified = [] if args.no_verify else verify_tree(ident, src, base, args.platform, cpu)
     series = series_base.load_series()
     steps = series.read_series(args.platform)
     required, optional = series_base.base_paths(steps)
+    paths = set(required) | set(optional)
+    verified = [] if args.no_verify else verify_tree(ident, src, base, args.platform, cpu, paths)
     missing = sorted(path for path in required if not os.path.lexists(os.path.join(base, path)))
     if missing:
         for path in missing:
@@ -175,7 +204,7 @@ def cmd_pack(args):
     fields = dict(ident, verified=verified, series_commit=commit,
                   packed_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   steps=len(steps))
-    manifest, out = series_base.write_tarball(base, set(required) | set(optional), fields, dest)
+    manifest, out = series_base.write_tarball(base, paths, fields, dest)
     digest = series_base.sha256_file(out)
     pathlib.Path(out + ".sha256").write_text(f"{digest}  {os.path.basename(out)}\n")
     pathlib.Path(out + ".manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")

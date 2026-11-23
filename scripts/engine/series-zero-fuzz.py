@@ -110,6 +110,8 @@ def apply_strict(patch, tree):
     if result.returncode == 0:
         for skipped in re.findall(r"^Skipped patch '(.+)'\.$", output, re.M):
             problems.append(f"{skipped}: git apply skipped it")
+        for warning in re.findall(r"^warning: (.+)$", output, re.M):
+            problems.append(f"git apply warned: {warning}")
         return problems, parse_offsets(output)
     detail = failing_hunks(patch, tree)
     problems.extend(detail or ["git apply: " + line for line in output.strip().splitlines() if line.startswith("error:")])

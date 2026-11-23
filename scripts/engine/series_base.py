@@ -1,8 +1,10 @@
 import configparser
+import contextlib
 import hashlib
 import importlib.util
 import io
 import json
+import lzma
 import os
 import pathlib
 import re
@@ -82,6 +84,16 @@ def step3_digest(build=BUILD, repo=REPO):
             raise Problem(f"step 3 reads {name}, which is missing")
         digest.update(name.encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
+
+
+def stage_marker(tree):
+    tree = pathlib.Path(tree)
+    return tree.parent / f".helium-stages-{tree.name}"
+
+
+def step3_stamp(tree):
+    tree = pathlib.Path(tree)
+    return tree.parent / f".ardia-step3-{tree.name}.json"
 
 
 def identity(platform, cpu=None, build=BUILD, repo=REPO):
@@ -282,6 +294,59 @@ def check_archive_size(tarball):
         raise Problem(f"{tarball} is {size} bytes, over the {MAX_ARCHIVE_BYTES} a series base may be")
 
 
+class CappedStream(io.RawIOBase):
+    def __init__(self, inner, limit, name):
+        super().__init__()
+        self.inner, self.limit, self.name = inner, limit, name
+
+    def check(self):
+        if self.inner.tell() > self.limit:
+            raise Problem(f"{self.name} expands past {self.limit} bytes, headers included")
+
+    def readable(self):
+        return True
+
+    def seekable(self):
+        return True
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            size = self.limit + 1 - self.inner.tell()
+        data = self.inner.read(min(size, max(self.limit + 1 - self.inner.tell(), 0)))
+        self.check()
+        return data
+
+    def readinto(self, buffer):
+        data = self.read(len(buffer))
+        buffer[:len(data)] = data
+        return len(data)
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        target = {io.SEEK_SET: offset, io.SEEK_CUR: self.inner.tell() + offset}.get(whence)
+        if target is None:
+            raise io.UnsupportedOperation("a series base archive is read forwards or from its start")
+        if target > self.limit:
+            raise Problem(f"{self.name} expands past {self.limit} bytes, headers included")
+        position = self.inner.seek(target)
+        self.check()
+        return position
+
+    def tell(self):
+        return self.inner.tell()
+
+    def close(self):
+        self.inner.close()
+        super().close()
+
+
+@contextlib.contextmanager
+def open_archive(tarball):
+    check_archive_size(tarball)
+    with CappedStream(lzma.open(tarball, "rb"), MAX_EXPANDED_BYTES, tarball) as stream:
+        with tarfile.open(fileobj=stream, mode="r:") as tar:
+            yield tar
+
+
 def members(tar, tarball):
     count = total = 0
     for member in tar:
@@ -297,14 +362,14 @@ def members(tar, tarball):
 def read_manifest(tarball):
     check_archive_size(tarball)
     try:
-        with tarfile.open(tarball, "r:xz") as tar:
+        with open_archive(tarball) as tar:
             member = next((m for m in members(tar, tarball) if m.name == MANIFEST), None)
             if member is None or not member.isfile():
                 raise Problem(f"{tarball} isn't a series base archive: it has no {MANIFEST} file")
             if member.size > MAX_MANIFEST_BYTES:
                 raise Problem(f"{tarball}: {MANIFEST} is {member.size} bytes, over {MAX_MANIFEST_BYTES}")
             manifest = json.loads(tar.extractfile(member).read(MAX_MANIFEST_BYTES + 1))
-    except (OSError, KeyError, ValueError, EOFError, tarfile.TarError) as error:
+    except (OSError, KeyError, ValueError, EOFError, lzma.LZMAError, tarfile.TarError) as error:
         raise Problem(f"{tarball} isn't a series base archive: {error}")
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT or \
             not isinstance(manifest.get("files"), dict) or not isinstance(manifest.get("absent"), list):
@@ -320,7 +385,7 @@ def extract(tarball, dest):
     if os.listdir(dest):
         raise Problem(f"{dest} isn't empty")
     try:
-        with tarfile.open(tarball, "r:xz") as tar:
+        with open_archive(tarball) as tar:
             for member in members(tar, tarball):
                 if member.name == MANIFEST:
                     continue
@@ -346,7 +411,7 @@ def extract(tarball, dest):
                 with open(target, "xb") as handle:
                     handle.write(data)
                 os.chmod(target, int(files[path].get("mode", "644"), 8) & 0o755)
-    except (OSError, EOFError, tarfile.TarError) as error:
+    except (OSError, EOFError, lzma.LZMAError, tarfile.TarError) as error:
         raise Problem(f"{tarball} can't be read: {error}")
     missing = sorted(set(files) - seen)
     if missing:

@@ -460,9 +460,11 @@ one archive per platform and CPU, by those pins, that digest and its sha256.
 
 `scripts/engine/series-zero-fuzz.py` works out the pins and the input digest from the checkout, fetches the matching
 archives (at most 64 MB each, cached in `~/.cache/ardia/series-base`), checks the table's sha256, then unpacks each one
-under size and entry limits, with every file checked against the manifest. It applies the series to each archive in a
+under size and entry limits (every decompressed byte counts, tar and PAX headers included), with every file checked
+against the manifest. It applies the series to each archive in a
 scratch directory: every `chromium` line with `git apply` and its exact context, every `layer` line with its
-`apply.sh`. It fails when no archive matches the pins and inputs ("the pins moved", or "step 3's inputs changed"), when
+`apply.sh`. A `git apply` warning fails its step too (a mode change on a file with another mode applies with only a
+warning). It fails when no archive matches the pins and inputs ("the pins moved", or "step 3's inputs changed"), when
 the archive lacks a file the series reads (it names the file), and when a hunk needs fuzz (it names the patch, its
 series line, the file and the hunk). A hunk that lands at an offset from its header fails when it does so on every
 platform that applies the patch. A patch for both platforms can sit exactly on only one when platform-only steps shift
@@ -494,12 +496,17 @@ is read-only on the tree. It refuses unless:
 - `chrome/VERSION` is the pinned Chromium;
 - both Helium checkouts exist, are clean and sit at the pinned commits;
 - the tree's `.helium-stages-src` marker names this tree's inode and shows every mutating step-3 stage for the platform;
+- `run-step3.py` ran that step 3: its stamp (`.ardia-step3-src.json` beside the tree) records the same tree, platform
+  and marker, and the input digest it recorded when step 3 began and finished is this checkout's;
+- every file in the base was captured after that step 3 finished (its ctime is later than the stamp);
 - every `ardia_resources.txt` resource is byte for byte in the base (or in the tree, when the series doesn't touch it);
 - `ardia_namesub.py --check-only` finds no Helium left in the tree's strings;
 - `series.py check` reproduces the tree from the base.
 
-It records those checks in the manifest. A change to `03-helium.py`'s logic or to `domsub-keep-store.txt` can't be read
-back from a tree; its digest still forces the re-pack. The archive and the checker handle a patch that renames, copies or only changes the mode
+It records those checks in the manifest. A change to any step-3 input after step 3 ran (including `03-helium.py`'s logic
+and `domsub-keep-store.txt`, which can't be read back from a tree) makes the checkout's digest differ from the stamp's,
+so pack refuses until step 3 runs again on a fresh tree. A tree whose step 3 ran without `run-step3.py` can't be
+stamped afterwards. The archive and the checker handle a patch that renames, copies or only changes the mode
 of a file, but `series.py` (`capture-base`, `check`) reads only `+++` lines. Such a patch needs `series.py` to learn
 those headers first, which moves both engine keys: until then `capture-base` doesn't record its source and the
 packer's `series.py check` fails on it. Copy the three files
@@ -537,7 +544,10 @@ pathbuilder, which doesn't read CRLSets.
 Everything lives outside the repo in `~/chromium-build`, which carries `.metadata_never_index`.
 The step scripts are copied in `engine/patches/build/`, and each expects `~/chromium-build`. Each refuses to run
 without `--apply` and the chromium lock (`scripts/agent/locked chromium`); `--help` prints its usage. Run them in the
-order 1, 3, 4, 2, 5 on a fresh checkout (`gn gen` once the tree is patched). Helium's checkouts are
+order 1, 3, 4, 2, 5 on a fresh checkout (`gn gen` once the tree is patched). Run step 3 through
+`scripts/engine/run-step3.py --apply` (same arguments as `03-helium.py`), so the tree records which step-3 inputs it
+was built with; a series base can be published only from such a tree ([The series base archive](#the-series-base-archive)).
+Helium's checkouts are
 `~/chromium-build/helium` and `~/chromium-build/helium-macos` (`HELIUM_DIR`, `HELIUM_MACOS_DIR`), at the commits
 `helium-pins.ini` names.
 
