@@ -11,14 +11,14 @@ const macTest = (name, fn) => test(name, { skip: process.platform !== "darwin" &
 const PLIST = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Fake</string><key>CFBundleIdentifier</key><string>dev.ardia.fake</string></dict></plist>`;
 const entitlements = (keys) => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${keys.map((k) => `<key>${k}</key><true/>`).join("")}</dict></plist>`;
 
-function fakeApp({ debug = false } = {}) {
+function fakeApp({ debug = false, bundle = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "app-copy-"));
   const app = join(dir, "Fake.app");
   mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
   mkdirSync(join(app, "Contents/Resources"), { recursive: true });
   writeFileSync(join(app, "Contents/Info.plist"), PLIST);
   copyFileSync("/usr/bin/true", join(app, "Contents/MacOS/Fake"));
-  writeFileSync(join(app, "Contents/Resources/main.jsbundle"), "shipped");
+  if (bundle) writeFileSync(join(app, "Contents/Resources/main.jsbundle"), "shipped");
   const plist = join(dir, "ent.plist");
   writeFileSync(plist, entitlements(debug ? ["com.apple.security.get-task-allow"] : []));
   execFileSync("codesign", ["--force", "--sign", "-", "--entitlements", plist, app], { stdio: "ignore" });
@@ -29,7 +29,7 @@ function fakeApp({ debug = false } = {}) {
   return { dir, app, own, other };
 }
 
-const birth = (path) => statSync(path).birthtimeMs;
+const inodeOf = (path) => statSync(path).ino;
 
 macTest("a release app run with its own bundle and no injection is cloned untouched: no ip.txt, no re-sign", () => {
   const { dir, app, own } = fakeApp();
@@ -42,10 +42,10 @@ macTest("a release app run with its own bundle and no injection is cloned untouc
 macTest("the untouched copy is reused on the next run instead of cloned again", () => {
   const { dir, app, own } = fakeApp();
   const first = prepareApp(app, join(dir, "out"), { bundle: own });
-  const made = birth(join(first, "Contents/Info.plist"));
+  const made = inodeOf(join(first, "Contents/Info.plist"));
   const second = prepareApp(app, join(dir, "out"), { bundle: own });
   assert.equal(second, first);
-  assert.equal(birth(join(second, "Contents/Info.plist")), made);
+  assert.equal(inodeOf(join(second, "Contents/Info.plist")), made);
 });
 
 macTest("a copy left from another bundle is cloned fresh, not reused", () => {
@@ -104,11 +104,18 @@ macTest("a cached copy whose resources were changed after cloning is cloned agai
   execFileSync("codesign", ["--verify", "--strict", second]);
 });
 
-macTest("a reused clone must hold the bundle this run asks for, even when the source's bundle was edited without re-signing", () => {
+macTest("a source app whose bundle was edited without re-signing fails before launch, asking for a re-sign, instead of handing out a stale or broken copy", () => {
   const { dir, app, own } = fakeApp();
   prepareApp(app, join(dir, "out"), { bundle: own });
   writeFileSync(join(app, "Contents/Resources/main.jsbundle"), "edited in place");
   writeFileSync(own, "edited in place");
-  const copy = prepareApp(app, join(dir, "out"), { bundle: own });
-  assert.equal(readFileSync(join(copy, "Contents/Resources/main.jsbundle"), "utf8"), "edited in place");
+  assert.throws(() => prepareApp(app, join(dir, "out"), { bundle: own }), /re-sign the source app/);
+  assert.throws(() => prepareApp(app, join(dir, "fresh"), { bundle: own }), /re-sign the source app/);
+});
+
+macTest("a source with no bundle of its own, run without one, is reused rather than cloned every time", () => {
+  const { dir, app } = fakeApp({ bundle: false });
+  const first = prepareApp(app, join(dir, "out"));
+  const made = inodeOf(join(first, "Contents/Info.plist"));
+  assert.equal(inodeOf(join(prepareApp(app, join(dir, "out")), "Contents/Info.plist")), made);
 });

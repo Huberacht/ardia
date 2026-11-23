@@ -21,7 +21,7 @@ export function untouchedCopy({ source, bundle, granted, missing }) {
   if (!bundle) return true;
   if (granted.includes(`<key>${DEBUG_ENTITLEMENT}</key>`)) return false;
   const shipped = join(source, "Contents/Resources/main.jsbundle");
-  return existsSync(shipped) && readFileSync(bundle).equals(readFileSync(shipped));
+  return existsSync(shipped) && (realpathSync(bundle) === realpathSync(shipped) || readFileSync(bundle).equals(readFileSync(shipped)));
 }
 
 const sealIntact = (app) => spawnSync("codesign", ["--verify", "--strict", "--deep", app], { stdio: "ignore" }).status === 0;
@@ -29,7 +29,11 @@ const sealIntact = (app) => spawnSync("codesign", ["--verify", "--strict", "--de
 const cdhashOf = (app) => spawnSync("codesign", ["-dvvv", app], { encoding: "utf8" }).stderr.match(/^CDHash=(\w+)$/m)?.[1] ?? null;
 
 const SHIPPED_BUNDLE = "Contents/Resources/main.jsbundle";
-const sameBundle = (copy, wanted) => existsSync(join(copy, SHIPPED_BUNDLE)) && existsSync(wanted) && readFileSync(join(copy, SHIPPED_BUNDLE)).equals(readFileSync(wanted));
+function sameBundle(copy, wanted) {
+  const held = join(copy, SHIPPED_BUNDLE);
+  if (!existsSync(held) || !existsSync(wanted)) return !existsSync(held) && !existsSync(wanted);
+  return readFileSync(held).equals(readFileSync(wanted));
+}
 
 function reuseOrClone(source, dir, copy, bundle) {
   const stampFile = join(dir, "source.txt");
@@ -40,6 +44,7 @@ function reuseOrClone(source, dir, copy, bundle) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   execFileSync("cp", ["-cR", source, copy]);
+  if (!sealIntact(copy)) throw new Error(`${source}'s signature doesn't cover its contents (was its main.jsbundle edited without re-signing?): re-sign the source app`);
   writeFileSync(stampFile, stamp);
   return copy;
 }

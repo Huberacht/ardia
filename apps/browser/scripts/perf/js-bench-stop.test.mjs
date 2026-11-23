@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { launch, quit, quitOnSignals, stopInstances } from "./js-bench.mjs";
+import { killInstances } from "./js-bench.mjs";
+
+const jsBench = new URL("./js-bench.mjs", import.meta.url).href;
+const STUBBORN = `process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`;
 
 const alive = (pid) => {
   try {
@@ -12,41 +18,57 @@ const alive = (pid) => {
   }
 };
 
-const slowToQuit = async () => {
-  const child = spawn(process.execPath, ["-e", `process.on("SIGTERM", () => setTimeout(() => process.exit(0), 800)); setInterval(() => {}, 1000);`], { stdio: "ignore" });
-  await new Promise((r) => setTimeout(r, 300));
-  return child.pid;
+const gone = async (pid) => {
+  for (let i = 0; i < 40 && alive(pid); i++) await new Promise((r) => setTimeout(r, 50));
+  return !alive(pid);
 };
 
-test("stopping waits for an instance that was already quitting instead of finding nothing to do", { timeout: 20_000 }, async () => {
-  const pid = await slowToQuit();
-  const quitting = quit(pid);
-  await stopInstances({ binaries: new Set() });
-  assert.ok(!alive(pid), "stopInstances returned while the instance was still quitting");
-  await quitting;
+function harness(body, env = {}) {
+  const child = spawn(process.execPath, ["--input-type=module", "-e", body], { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, ...env } });
+  const ready = new Promise((resolve) => {
+    let out = "";
+    child.stdout.setEncoding("utf8").on("data", (d) => {
+      out += d;
+      if (out.includes("\n")) resolve(JSON.parse(out.split("\n")[0]));
+    });
+  });
+  const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve(code ?? signal)));
+  return { child, ready, exited };
+}
+
+const startInstances = `
+import { spawn } from "node:child_process";
+import { hardStopOnSignals, trackInstance } from ${JSON.stringify(jsBench)};
+const pids = [0, 1].map(() => spawn(process.execPath, ["-e", ${JSON.stringify(STUBBORN)}], { detached: true, stdio: "ignore" }).pid);
+pids.forEach(trackInstance);
+hardStopOnSignals();
+console.log(JSON.stringify(pids));
+setInterval(() => {}, 1000);
+`;
+
+test("a signal kills every instance at once, even ones that ignore SIGTERM, and exits with the first signal's code; a second one changes nothing", { timeout: 20_000 }, async () => {
+  const { child, ready, exited } = harness(startInstances);
+  const pids = await ready;
+  child.kill("SIGINT");
+  child.kill("SIGTERM");
+  assert.equal(await exited, 130);
+  for (const pid of pids) assert.ok(await gone(pid), `instance ${pid} survived`);
 });
 
-test("a signal keeps its handler through cleanup, so a second one can't cut it short, and exits only after the instances are gone", { timeout: 20_000 }, async () => {
-  const pid = await slowToQuit();
-  quit(pid);
-  const exits = [];
-  let resolveExit;
-  const exited = new Promise((r) => (resolveExit = r));
-  const dispose = quitOnSignals([], { exit: (code) => {
-    exits.push({ code, alive: alive(pid) });
-    resolveExit();
-  } });
-  const before = process.listenerCount("SIGTERM");
-  process.emit("SIGTERM");
-  assert.equal(process.listenerCount("SIGTERM"), before);
-  process.emit("SIGTERM");
+test("each run records its instances where the ratchet can find and kill them", { timeout: 20_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bench-instances-"));
+  const { child, ready, exited } = harness(startInstances, { ARDIA_BENCH_INSTANCES: dir });
+  const pids = await ready;
+  const [file] = readdirSync(dir);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, file), "utf8")).pids, pids);
+  child.kill("SIGKILL");
   await exited;
-  await new Promise((r) => setTimeout(r, 50));
-  dispose();
-  assert.ok(exits.length >= 1);
-  assert.ok(exits.every((e) => e.code === 143 && !e.alive), JSON.stringify(exits));
+  killInstances(JSON.parse(readFileSync(join(dir, file), "utf8")));
+  for (const pid of pids) assert.ok(await gone(pid), `instance ${pid} survived`);
 });
 
-test("once stopping has begun, nothing new is launched", async () => {
-  await assert.rejects(launch("/nonexistent/Ardia.app", "/tmp/none", 9999), /stopping/);
+test("an instance opened but not yet found by pid is killed through its binary", { timeout: 20_000 }, async () => {
+  const pid = spawn(process.execPath, ["-e", STUBBORN], { detached: true, stdio: "ignore" }).pid;
+  killInstances({ binaries: ["/x/Ardia"] }, (binary) => (binary === "/x/Ardia" ? [pid] : []));
+  assert.ok(await gone(pid));
 });

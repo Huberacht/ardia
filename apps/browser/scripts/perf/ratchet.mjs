@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isHarnessTimer } from "./js-bench.mjs";
+import { isHarnessTimer, killInstances } from "./js-bench.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appDir = process.env.RATCHET_APP_DIR ? resolve(process.env.RATCHET_APP_DIR) : resolve(here, "../..");
@@ -142,6 +143,7 @@ export function retryPlan(rows) {
 }
 
 export function positiveInteger(value, name) {
+  if (value === true) throw new Error(`${name} needs a value`);
   const n = Number(value);
   if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(n) || n < 1) throw new Error(`${name} must be a positive whole number, got ${value}`);
   return n;
@@ -221,7 +223,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith("--")) {
       const name = argv[i].slice(2);
-      const value = argv[i + 1] === undefined || argv[i + 1].startsWith("--") ? "1" : argv[++i];
+      const value = argv[i + 1] === undefined || argv[i + 1].startsWith("--") ? true : argv[++i];
       if (multi.has(name)) (flags[name] ??= []).push(value);
       else flags[name] = value;
     } else positional.push(argv[i]);
@@ -396,39 +398,52 @@ function census(files) {
   for (const r of wobbly.filter((r) => !isTotal(r.key)).sort((a, b) => a.key.localeCompare(b.key))) console.log(line(r));
 }
 
-const running = new Map();
+const groups = new Set();
+const instancesDir = mkdtempSync(join(tmpdir(), "ratchet-instances-"));
+process.on("exit", () => rmSync(instancesDir, { recursive: true, force: true }));
 
-export function spawnAsync(cmd, args, { cwd, env, capture = false, group = false } = {}) {
+export function spawnAsync(cmd, args, { cwd, env = process.env, capture = false, captureErr = false } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env, detached: group, stdio: ["ignore", capture ? "pipe" : "ignore", "inherit"] });
-    const closed = new Promise((done) => child.once("close", done));
-    running.set(child, { closed, group });
-    closed.then(() => running.delete(child));
+    const child = spawn(cmd, args, { cwd, env: { ...env, ARDIA_BENCH_INSTANCES: instancesDir }, detached: true, stdio: ["ignore", capture ? "pipe" : "ignore", captureErr ? "pipe" : "inherit"] });
+    groups.add(child.pid);
     let out = "";
+    let err = "";
     if (capture) child.stdout.setEncoding("utf8").on("data", (d) => (out += d));
+    if (captureErr) child.stderr.setEncoding("utf8").on("data", (d) => (err += d));
     child.once("error", reject);
-    child.once("close", (code, signal) => (code === 0 ? resolve(out) : reject(new Error(`${basename(args[0] ?? cmd)} ${args.slice(1, 3).join(" ")} exited with ${code ?? signal}`))));
+    child.once("close", (code, signal) => {
+      groups.delete(child.pid);
+      if (code === 0) resolve(captureErr ? { out, err } : out);
+      else reject(new Error(`${basename(args[0] ?? cmd)} ${args.slice(1, 3).join(" ")} exited with ${code ?? signal}`));
+    });
   });
 }
 
-export function stopLanes() {
-  const waiting = [...running.entries()].map(([child, { closed, group }]) => {
+function recordedInstances() {
+  const all = { pids: [], binaries: [] };
+  for (const file of existsSync(instancesDir) ? readdirSync(instancesDir) : []) {
     try {
-      if (group) process.kill(-child.pid, "SIGTERM");
-      else child.kill("SIGTERM");
+      const { pids = [], binaries = [] } = readJson(join(instancesDir, file));
+      all.pids.push(...pids);
+      all.binaries.push(...binaries);
     } catch {}
-    return closed;
-  });
-  return Promise.all(waiting);
+  }
+  return all;
 }
 
-function stopLanesOnSignals() {
-  let stopping = null;
+let stoppedWith = null;
+
+export function hardStopOnSignals() {
   for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]])
-    process.once(sig, async () => {
-      console.error(`[ratchet] ${sig}: stopping ${running.size} lane(s) and their instances`);
-      stopping ??= stopLanes();
-      await stopping;
+    process.on(sig, () => {
+      if (stoppedWith !== null) return;
+      stoppedWith = code;
+      for (const pgid of groups) {
+        try {
+          process.kill(-pgid, "SIGKILL");
+        } catch {}
+      }
+      killInstances(recordedInstances());
       process.exit(code);
     });
 }
@@ -458,7 +473,7 @@ async function jsSetup(flags, out, mark, { counts, serialRuns = 0 }) {
   if (!flags.own && !flags.bundle) {
     const bundle = join(out, "bundle");
     mark("bundling the tree");
-    await spawnAsync(process.execPath, [join(here, "js-bench.mjs"), "bundle", bundle], { group: true });
+    await spawnAsync(process.execPath, [join(here, "js-bench.mjs"), "bundle", bundle]);
     jsbundle = join(bundle, "main.jsbundle");
   }
   const libs = [flags.lib ? resolve(flags.lib) : join(here, "bench-app.js"), join(here, "ratchet-app.js")].join(",");
@@ -487,9 +502,12 @@ async function run(flags) {
   if (setup) mark(`running ${JOURNEYS.join(",")} and the one-tab launch side by side on ${setup.app}`);
   if (!flags["skip-micro"]) mark("counting the Node hot paths alongside");
   const [, , micro] = await allFinished([big?.run(), small?.run(), flags["skip-micro"] ? null : microCountsAsync()]);
-  const instr = !flags["skip-micro"] && flags.instr ? Math.max(instrPerRound(), instrPerRound()) : null;
+  const instr = !flags["skip-micro"] && flags.instr ? Math.max(await instrPerRound(), await instrPerRound()) : null;
   mark("checking");
   const files = setup ? [big.report, small.report] : [];
+  const microFile = micro ? join(out, `${flags.label ?? "ratchet"}-micro.json`) : null;
+  if (microFile) writeFileSync(microFile, `${JSON.stringify(micro)}\n`);
+  let retryFiles = [];
   let result = evaluate(ceilings, { files, micro, instr });
   const again = setup ? retryPlan(result.rows) : { big: null, small: null };
   if (again.big || again.small) {
@@ -500,9 +518,10 @@ async function run(flags) {
       again.small && setup.lane({ seed: "small", scenarios: again.small, name, slot: 1 }),
     ].filter(Boolean);
     await allFinished(retry.map((l) => l.run()));
-    result = evaluate(ceilings, { files, retryFiles: retry.map((l) => l.report), micro, instr });
-    console.error(`[ratchet] the same verdict from the saved reports: ratchet.mjs check ${files.join(" ")} ${retry.map((l) => `--retry ${l.report}`).join(" ")}`);
+    retryFiles = retry.map((l) => l.report);
+    result = evaluate(ceilings, { files, retryFiles, micro, instr });
   }
+  console.error(`[ratchet] the same verdict from the saved reports: node ${shellQuote(join(here, "ratchet.mjs"))} check ${replayArgs({ files, retryFiles, microFile, instr }).map(shellQuote).join(" ")}`);
   const ok = printCheck(result, ceilings, { quiet: true });
   console.error(`[ratchet] ${((Date.now() - started) / 1000).toFixed(0)}s`);
   process.exit(ok ? 0 : 1);
@@ -527,7 +546,7 @@ async function baseline(flags) {
   const reports = [...lanes.map((l) => l.report), small.report];
   if (flags["measure-only"]) return console.log(reports.join(" "));
   mark("counting instructions");
-  init(reports, await counting, Math.max(instrPerRound(), instrPerRound(), instrPerRound()));
+  init(reports, await counting, Math.max(await instrPerRound(), await instrPerRound(), await instrPerRound()));
 }
 
 const MICRO_ARGS = ["--no-warnings", "--import", "./src/test-loader.mjs", "scripts/perf/micro-bench.mjs", "counts"];
@@ -536,10 +555,6 @@ function parseMicro(text) {
   const line = text.split("\n").find((l) => l.startsWith("COUNTS "));
   if (!line) throw new Error("micro-bench counts printed no COUNTS line");
   return JSON.parse(line.slice("COUNTS ".length));
-}
-
-export function microCounts() {
-  return parseMicro(spawnSync(process.execPath, MICRO_ARGS, { cwd: appDir, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).stdout);
 }
 
 export const microCountsAsync = () => spawnAsync(process.execPath, MICRO_ARGS, { cwd: appDir, capture: true }).then(parseMicro);
@@ -552,9 +567,15 @@ function retiredFrom(stderr) {
   return Number(m[1]);
 }
 
-export function instrPerRound(rounds = 10) {
-  const retired = (n) => retiredFrom(spawnSync("/usr/bin/time", INSTR_ARGS, { cwd: appDir, encoding: "utf8", env: { ...process.env, INSTR_ROUNDS: String(n) } }).stderr);
-  return Math.round((retired(rounds) - retired(0)) / rounds);
+export async function instrPerRound(rounds = 10) {
+  const retired = async (n) => retiredFrom((await spawnAsync("/usr/bin/time", INSTR_ARGS, { cwd: appDir, env: { ...process.env, INSTR_ROUNDS: String(n) }, captureErr: true })).err);
+  return Math.round(((await retired(rounds)) - (await retired(0))) / rounds);
+}
+
+export const shellQuote = (arg) => (/^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${String(arg).replace(/'/g, "'\\''")}'`);
+
+export function replayArgs({ files, retryFiles = [], microFile = null, instr = null }) {
+  return [...files, ...retryFiles.flatMap((f) => ["--retry", f]), ...(microFile ? ["--micro", microFile] : []), ...(instr !== null ? ["--instr", String(instr)] : [])];
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -562,15 +583,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { positional, flags } = parseArgs(rest);
   try {
     const micro = command !== "init" && flags.micro?.length ? readJson(flags.micro[0]) : null;
+    if (command !== "run" && flags.instr === true) throw new Error("--instr needs a value outside run");
     const instr = flags.instr !== undefined && command !== "run" ? Number(flags.instr) : null;
-    if (command === "run" || command === "baseline") stopLanesOnSignals();
+    if (command === "run" || command === "baseline" || command === "init") hardStopOnSignals();
     if (command === "run") await run(flags);
     else if (command === "baseline") await baseline(flags);
     else if (command === "check") process.exit(check(positional, micro, instr, flags.retry ?? []) ? 0 : 1);
     else if (command === "lower") lower(positional, micro, instr, flags.retry ?? []);
     else if (command === "init") {
-      const microRuns = flags.micro ? flags.micro.map(readJson) : [microCounts(), microCounts()];
-      init(positional, microRuns, flags["no-instr"] ? null : Math.max(instrPerRound(), instrPerRound(), instrPerRound()), { adopt: !!flags.adopt });
+      const microRuns = flags.micro ? flags.micro.map(readJson) : await allFinished([microCountsAsync(), microCountsAsync()]);
+      init(positional, microRuns, flags["no-instr"] ? null : Math.max(await instrPerRound(), await instrPerRound(), await instrPerRound()), { adopt: !!flags.adopt });
     }
     else if (command === "census") census(positional);
     else {

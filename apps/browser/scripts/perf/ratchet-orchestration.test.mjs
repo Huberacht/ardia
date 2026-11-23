@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { allFinished, collectWithRetry, evaluate, JOURNEYS, laneLabel, portPlan, positiveInteger, retryPlan, SMALL_JOURNEYS, spawnAsync, splitRuns, stopLanes, withRetry } from "./ratchet.mjs";
-import { existsSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { stopInstances } from "./js-bench.mjs";
+import { allFinished, collectWithRetry, evaluate, JOURNEYS, laneLabel, portPlan, positiveInteger, replayArgs, retryPlan, shellQuote, SMALL_JOURNEYS, spawnAsync, splitRuns, withRetry } from "./ratchet.mjs";
 
 const over = (key, tier = "exact") => ({ tier, key, ceiling: 1, value: 2, kind: "over" });
 
@@ -165,45 +163,6 @@ test("a lane's stdout is captured when asked", async () => {
   assert.equal(await spawnAsync(process.execPath, ["-e", "console.log('COUNTS {}')"], { capture: true }), "COUNTS {}\n");
 });
 
-test("stopping the ratchet stops its lanes and waits for each to clean up", async () => {
-  const { mkdtempSync, existsSync } = await import("node:fs");
-  const dir = mkdtempSync(join(tmpdir(), "ratchet-stop-"));
-  const marker = join(dir, "cleaned");
-  const lane = `process.on("SIGTERM", () => setTimeout(() => { require("fs").writeFileSync(${JSON.stringify(marker)}, "1"); process.exit(0); }, 200)); setInterval(() => {}, 1000);`;
-  const running = spawnAsync(process.execPath, ["-e", lane]).catch(() => {});
-  await new Promise((r) => setTimeout(r, 300));
-  await stopLanes();
-  assert.ok(existsSync(marker), "stopLanes returned before the lane finished its cleanup");
-  await running;
-});
-
-test("an instance opened but not yet found by pid is still quit when js-bench is stopped", async () => {
-  const quit = [];
-  let looks = 0;
-  await stopInstances({ pids: new Set(), binaries: new Set(["/x/Ardia"]), find: () => (++looks < 3 ? [] : [42]), stop: async (pid) => quit.push(pid), waitMs: 2000 });
-  assert.deepEqual(quit, [42]);
-});
-
-test("stopping the bundling lane stops the bundler's own child too", { timeout: 20_000 }, async () => {
-  const file = join(mkdtempSync(join(tmpdir(), "ratchet-group-")), "pid");
-  const grandchild = `require("fs").writeFileSync(${JSON.stringify(file)}, String(process.pid)); setInterval(() => {}, 1000);`;
-  const lane = `require("child_process").execFileSync(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" });`;
-  const running = spawnAsync(process.execPath, ["-e", lane], { group: true }).catch(() => {});
-  for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 50));
-  const pid = Number(readFileSync(file, "utf8"));
-  await stopLanes();
-  await running;
-  await new Promise((r) => setTimeout(r, 200));
-  let alive = true;
-  try {
-    process.kill(pid, 0);
-    process.kill(pid, "SIGKILL");
-  } catch {
-    alive = false;
-  }
-  assert.equal(alive, false, "the bundler's child outlived the stopped lane");
-});
-
 const realCeilings = JSON.parse(readFileSync(new URL("./ratchet.json", import.meta.url), "utf8"));
 const checkCli = (...args) => spawnSync(process.execPath, [new URL("./ratchet.mjs", import.meta.url).pathname, "check", ...args], { encoding: "utf8" });
 
@@ -235,4 +194,118 @@ test("lower --retry sees the retry's runs, as run judged them", () => {
   assert.deepEqual(values["hover.commits"], [20, 24]);
   assert.deepEqual(values["idle.commits"], [0]);
   assert.ok(ran.has("idle"));
+});
+
+const ratchetUrl = new URL("./ratchet.mjs", import.meta.url).href;
+const jsBenchUrl = new URL("./js-bench.mjs", import.meta.url).href;
+const STUBBORN = `process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);`;
+const isAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const gone = async (pid) => {
+  for (let i = 0; i < 60 && isAlive(pid); i++) await new Promise((r) => setTimeout(r, 50));
+  return !isAlive(pid);
+};
+const waitForFile = async (file) => {
+  for (let i = 0; i < 200 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 50));
+  return Number(readFileSync(file, "utf8"));
+};
+
+test("a signal to the ratchet kills every lane's process group, what the lanes started, and the browsers they recorded, then exits with the first signal's code", { timeout: 30_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet-hard-stop-"));
+  const grandchildFile = join(dir, "grandchild");
+  const browserFile = join(dir, "browser");
+  const grandchild = `require("fs").writeFileSync(${JSON.stringify(grandchildFile)}, String(process.pid)); ${STUBBORN}`;
+  const bundlerLane = `require("child_process").execFileSync(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" });`;
+  const benchLane = `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    import { trackInstance } from ${JSON.stringify(jsBenchUrl)};
+    const browser = spawn(process.execPath, ["-e", ${JSON.stringify(STUBBORN)}], { detached: true, stdio: "ignore" });
+    browser.unref();
+    trackInstance(browser.pid);
+    writeFileSync(${JSON.stringify(browserFile)}, String(browser.pid));
+    setInterval(() => {}, 1000);`;
+  const ratchet = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { hardStopOnSignals, spawnAsync } from ${JSON.stringify(ratchetUrl)};
+    hardStopOnSignals();
+    spawnAsync(process.execPath, ["-e", ${JSON.stringify(bundlerLane)}]).catch(() => {});
+    spawnAsync(process.execPath, ["--input-type=module", "-e", ${JSON.stringify(benchLane)}]).catch(() => {});
+    setInterval(() => {}, 1000);`], { stdio: "ignore" });
+  const exited = new Promise((resolve) => ratchet.once("exit", (code, signal) => resolve(code ?? signal)));
+  const grandchildPid = await waitForFile(grandchildFile);
+  const browserPid = await waitForFile(browserFile);
+  ratchet.kill("SIGINT");
+  ratchet.kill("SIGINT");
+  assert.equal(await exited, 130);
+  assert.ok(await gone(grandchildPid), "the bundler's child survived");
+  assert.ok(await gone(browserPid), "a recorded browser survived");
+});
+
+test("a SIGTERM while the instruction counter runs stops it at once and exits 143 instead of finishing and passing", { timeout: 60_000 }, async () => {
+  const ratchet = spawn(process.execPath, ["--input-type=module", "-e", `
+    import { hardStopOnSignals, instrPerRound } from ${JSON.stringify(ratchetUrl)};
+    hardStopOnSignals();
+    console.log("started");
+    await instrPerRound();
+    console.log("finished");
+    process.exit(0);`], { stdio: ["ignore", "pipe", "ignore"] });
+  let out = "";
+  ratchet.stdout.setEncoding("utf8").on("data", (d) => (out += d));
+  const exited = new Promise((resolve) => ratchet.once("exit", (code, signal) => resolve(code ?? signal)));
+  for (let i = 0; i < 100 && !out.includes("started"); i++) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 300));
+  const signalled = Date.now();
+  ratchet.kill("SIGTERM");
+  assert.equal(await exited, 143);
+  assert.ok(!out.includes("finished"));
+  assert.ok(Date.now() - signalled < 3000, `took ${Date.now() - signalled} ms to stop`);
+});
+
+test("shellQuote keeps paths with spaces and quotes whole through a shell", () => {
+  const path = "/tmp/a b/it's here.json";
+  const echoed = spawnSync("/bin/sh", ["-c", `printf %s ${shellQuote(path)}`], { encoding: "utf8" }).stdout;
+  assert.equal(echoed, path);
+  assert.equal(shellQuote("/tmp/plain.json"), "/tmp/plain.json");
+});
+
+test("the replay command run prints gives run's own verdict, Node and instruction counts included", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ratchet replay '"));
+  const hover = realCeilings.exact["hover.commits"];
+  const idle = realCeilings.exact["idle.commits"];
+  const rev = { benchRevision: Number(realCeilings.revisions.bench) };
+  const write = (name, results) => {
+    const file = join(dir, `${name}.json`);
+    writeFileSync(file, JSON.stringify({ label: name, seed: "big", ...rev, results: results.map((r) => ({ probeRevision: Number(realCeilings.revisions.probe), ...r })) }));
+    return file;
+  };
+  const [microKey, microCeiling] = Object.entries(realCeilings.micro)[0];
+  const instrCeiling = realCeilings.instr["micro.instrPerRound"];
+  const cases = [
+    { micro: { [microKey]: microCeiling }, instr: null },
+    { micro: { [microKey]: microCeiling + 1 }, instr: null },
+    { micro: { [microKey]: microCeiling }, instr: Math.ceil(instrCeiling * 1.2) },
+  ];
+  const files = [write("first", [{ hover: stats(hover + 1), idle: stats(idle) }])];
+  const retryFiles = [write("again", [{ hover: stats(hover) }])];
+  for (const [i, { micro, instr }] of cases.entries()) {
+    const microFile = join(dir, `micro ${i}.json`);
+    writeFileSync(microFile, JSON.stringify(micro));
+    const runVerdict = evaluate(realCeilings, { files, retryFiles, micro, instr }).rows.some((r) => r.kind === "over") ? 1 : 0;
+    const command = `${shellQuote(process.execPath)} ${shellQuote(new URL("./ratchet.mjs", import.meta.url).pathname)} check ${replayArgs({ files, retryFiles, microFile, instr }).map(shellQuote).join(" ")}`;
+    const replayed = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" }).status;
+    assert.equal(replayed, runVerdict, `case ${i}: run says ${runVerdict}, the replay says ${replayed}`);
+  }
+});
+
+test("--runs or --lanes with no value fails instead of becoming 1", () => {
+  assert.throws(() => positiveInteger(true, "--runs"), /--runs needs a value/);
+  const r = spawnSync(process.execPath, [new URL("./ratchet.mjs", import.meta.url).pathname, "baseline", "--runs", "--lanes", "4", "--app", "/nonexistent/Ardia.app", "--bundle", "/nonexistent.jsbundle", "--out", mkdtempSync(join(tmpdir(), "ratchet-bare-"))], { encoding: "utf8", timeout: 20_000 });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--runs needs a value/);
 });

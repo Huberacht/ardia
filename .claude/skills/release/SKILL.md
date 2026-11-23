@@ -303,8 +303,9 @@ idle, command bar, tab switch, navigate, scroll, hover and native-node churn sce
 one-tab launch in a second one beside it (report `ratchet-small.json`). A count over its ceiling gets one more run of
 the journeys up to that scenario, and a one-tab count gets its own one-tab rerun (a stray window event isn't a
 regression; a count over in both is). Native nodes left behind by the churn are never rerun: one run with any left
-fails. After a retry, check the saved reports with the line it prints (`ratchet.mjs check <reports> --retry <retry
-reports>`), not by listing the retry report as a plain one: that drops the scenarios it didn't rerun. A failure is a real regression
+fails. To check its verdict again from the saved reports, use the `check` line it prints last (the reports, `--retry`
+for a retry, `--micro` for the Node counts), not the retry report listed as a plain one: that drops the scenarios it
+didn't rerun. A failure is a real regression
 (find the commit that added the commit, render, store update or timer, and fix it) or an intended increase: raise that
 one ceiling by hand in `apps/browser/scripts/perf/ratchet.json` and say why in the commit and the release report. When
 the release made counts go down, run `ratchet.mjs lower <the run's report>` (`$TMPDIR/ac-ratchet/ratchet.json`, plus `--retry

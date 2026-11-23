@@ -228,17 +228,19 @@ node apps/browser/scripts/perf/ratchet.mjs baseline --measure-only   # the runs 
 launch in a second (its own test-server port, remote-debugging port, data folder, app copy and report,
 `<label>-small.json`), and the Node counts. Test-server ports start at `--port` (default 47831) and remote-debugging
 ports at `--cdp-port` (default 9700), one per run each instance actually makes; both are checked before anything
-launches. ⌃C or a SIGTERM stops every lane (the bundler with its whole process group) and waits for each instance to
-quit.
+launches. Every lane, the bundler and the instruction counter run in their own process group, and each js-bench
+records the instances it opened; ⌃C or a SIGTERM SIGKILLs all of them at once and exits 130 or 143 (the instances are
+throwaway hidden apps on scratch data). A run that ends normally still quits each instance gracefully.
 The instruction counter (`--instr`) runs after them, alone. It exits 1 and prints a table of the counts over their
 ceiling. A count over in the first run gets one more run, and only a count over in both fails: a real regression is in
 both, a pointer moving over the hidden window or the window deactivating mid-scenario is in one. The second run is the
 journeys in order up to the last one with a count over, not that scenario alone: a scenario's counts depend on the
 ones before it (`openClose` straight after `startup` mounts 6 fewer components on close, `ContextMenuArea` included, than
 after `pageLoad`, and `pageLoad` alone runs about 12% more tasks and timers). The one-tab launch runs again only when one
-of its own counts is over, and `nodeChurn` never does: its worst run decides. After a retry, `run` prints the `check
-… --retry …` line that gives the same verdict from the saved reports; passing the retry report as a plain report instead
-would drop the scenarios it didn't rerun. A report of several runs is judged by its median run. Against the old serial flow (median of 3, interleaved, `--bundle` given): a run 143 → 126 s, and one with
+of its own counts is over, and `nodeChurn` never does: its worst run decides. `run` saves the Node counts
+(`<label>-micro.json`) and ends by printing the `check` line, quoted for a shell, that gives the same verdict from the
+saved reports: the reports, `--retry` for each retry report, `--micro` and, with `--instr`, the measured count. Passing a
+retry report as a plain report instead would drop the scenarios it didn't rerun. A report of several runs is judged by its median run. Against the old serial flow (median of 3, interleaved, `--bundle` given): a run 143 → 126 s, and one with
 a `pageLoad` count over 281 → 223 s; a count over in `launch` reruns only `startup,launch`.
 
 `baseline` spreads the journeys' 8 launches (`--runs`) over 4 hidden instances (`--lanes`, default 4; both positive whole
