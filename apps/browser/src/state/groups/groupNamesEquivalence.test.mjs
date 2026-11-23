@@ -102,8 +102,8 @@ test("every whitespace character is trimmed exactly as String.prototype.trim tri
   for (let code = 0; code <= 0xffff; code++) {
     const c = String.fromCharCode(code);
     const members = [
-      { url: "https://example.com/a", title: `One${c} - ${c}Example${c}` },
-      { url: "https://example.com/b", title: `${c}Example${c}${c} - Two` },
+      { url: "https://example.com/a", title: `One${c} - ${c}EXAMPLE${c}` },
+      { url: "https://example.com/b", title: `${c}EXAMPLE${c}${c} - Two` },
     ];
     const want = reference.autoGroupName(members);
     assert.equal(live.autoGroupName(members), want, `U+${code.toString(16)}`);
