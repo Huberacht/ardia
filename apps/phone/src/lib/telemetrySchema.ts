@@ -40,6 +40,7 @@ export const EVENT_FIELDS = {
     color_scheme: { kind: "enum", values: ["match_mac", "system", "light", "dark"] },
     material_colors: { kind: "enum", values: ["wallpaper", "profile", "fallback", "not_material"] },
     color_choice: { kind: "enum", values: ["match_mac", "preset", "custom"] },
+    glass_render: { kind: "enum", values: ["lens", "frost", "solid", "classic", "native", "none"] },
   },
   perf_launch: { launch_ms: { kind: "ms" }, js_ms: { kind: "ms" } },
   perf_backdrop: { backdrop_ms: { kind: "ms" } },

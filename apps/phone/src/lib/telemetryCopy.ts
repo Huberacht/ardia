@@ -42,6 +42,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["color_choice"],
       },
       {
+        text: "With each launch, how Ardia draws its glass: with the Liquid Glass lens, as frosted glass or without blur on Android, the system’s own glass, Classic, or none in Material You",
+        fields: ["glass_render"],
+      },
+      {
         text: "On Android, with each launch, whether the Material You design was off, and with it on, whether Dynamic Colors used your wallpaper, Ardia used your custom color, or the phone gave no wallpaper palette and Ardia used its own",
         fields: ["material_colors"],
       },
