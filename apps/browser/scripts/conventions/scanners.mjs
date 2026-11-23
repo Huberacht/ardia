@@ -448,7 +448,7 @@ function defaultsShells(lines) {
     let run = -1;
     for (let j = k + 1; j < lines.length; j++) {
       const text = lines[j].text;
-      if (!text.trim()) continue;
+      if (!isContent(text)) continue;
       const indent = indentOf(text);
       if (indent <= base) break;
       if (/^\s*run:\s*$/.test(text)) run = indent;
@@ -461,8 +461,10 @@ function defaultsShells(lines) {
   return found;
 }
 
+const isContent = (text) => text.trim() !== "" && !/^\s*#/.test(text);
+
 function childIndent(lines, at) {
-  for (let k = at + 1; k < lines.length; k++) if (lines[k].text.trim()) return indentOf(lines[k].text);
+  for (let k = at + 1; k < lines.length; k++) if (isContent(lines[k].text)) return indentOf(lines[k].text);
   return -1;
 }
 
@@ -491,7 +493,7 @@ function runnerShell(lines, at) {
   const keyIndent = childIndent(lines, job);
   for (let k = job + 1; k < lines.length; k++) {
     const text = lines[k].text;
-    if (text.trim() && indentOf(text) <= jobIndent) break;
+    if (isContent(text) && indentOf(text) <= jobIndent) break;
     if (indentOf(text) !== keyIndent) continue;
     if (/^\s*runs-on:.*\bwindows\b/i.test(text)) return "pwsh";
     if (/^\s*runs-on:\s*$/.test(text)) {
@@ -676,7 +678,7 @@ export function scanYaml(src, { executable = true } = {}) {
             : quoted[2].replace(/''/g, " '");
       }
       const lang = inline[3] === "script" ? "js" : (SHELL_LANGS[runShellOf(lines, k, keyIndent)] ?? "shell");
-      const charMap = Array.from(value, (_, at) => start + from + at);
+      const charMap = Array.from({ length: value.length }, (_, at) => start + from + at);
       if (value) embedded.push({ lang, text: value, offsets: [start + from], charMap });
     }
   }
@@ -729,11 +731,10 @@ export function scanMarkup(src, lang) {
       for (const match of body.matchAll(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g)) comments.push([match.index, match.index + match[0].length]);
     }
   }
-  body = body.replace(/<!\[CDATA\[[\s\S]*?(?:\]\]>|$)/g, (cdata, at) => {
-    strings.push({ start: at, end: at + cdata.length });
-    return cdata.replace(/[^\n]/g, " ");
-  });
-  for (const match of body.matchAll(/<!--[\s\S]*?(?:-->|$)/g)) comments.push([match.index, match.index + match[0].length]);
+  for (const match of body.matchAll(/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)/g)) {
+    if (match[0].startsWith("<!--")) comments.push([match.index, match.index + match[0].length]);
+    else strings.push({ start: match.index, end: match.index + match[0].length });
+  }
   return { comments, strings, embedded };
 }
 

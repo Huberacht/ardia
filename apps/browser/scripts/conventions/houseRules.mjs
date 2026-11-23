@@ -613,8 +613,9 @@ export function listMarkers(path, src) {
       if (found) at = found.index;
     }
     cursor = at + 1;
-    const dated = typeof entry.owner === "string" && OWNER.test(entry.owner) && typeof entry.expires === "string";
-    return { at, kind: "quarantine", owner: dated ? entry.owner.slice(1) : null, date: dated ? entry.expires : null, claimed: entry.expires === undefined ? null : String(entry.expires) };
+    const owner = typeof entry.owner === "string" && OWNER.test(entry.owner) ? entry.owner.slice(1) : null;
+    const supplied = Object.hasOwn(entry, "expires");
+    return { at, kind: "quarantine", owner, date: typeof entry.expires === "string" ? entry.expires : null, claimed: supplied ? String(entry.expires) : null };
   });
 }
 
@@ -636,6 +637,7 @@ export function resolveMarker(src, marker) {
   const owner = fromReason ? (mark?.[1] ?? null) : marker.owner;
   const date = fromReason ? (mark?.[2] ?? null) : marker.date;
   if (isCalendarDate(date) && owner) return { ...marker, line, owner, date };
-  const claimed = fromReason ? (marker.reason ? CLAIMED_EXPIRY.exec(marker.reason)?.[1] : null) : marker.claimed;
-  return { ...marker, line, owner: null, date: null, invalid: claimed ? claimed : null };
+  const claimed = fromReason ? (marker.reason ? (CLAIMED_EXPIRY.exec(marker.reason)?.[1] ?? null) : null) : marker.claimed;
+  const invalid = claimed === null || isCalendarDate(claimed) ? null : claimed === "" ? '""' : claimed;
+  return { ...marker, line, owner: null, date: null, invalid };
 }

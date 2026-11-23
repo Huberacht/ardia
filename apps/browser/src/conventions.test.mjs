@@ -1009,6 +1009,9 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("tools/tasks.yml", "version: 1\nname: tool\nshell: bash\ntasks:\n  run: echo hi\n").sleeps, 0);
     const wide = ["jobs:", "    a:", "        defaults:", "            run:", "                shell: pwsh", "        steps:", "            - run: Start-Sleep 1", ""].join("\n");
     assert.equal(house(".github/workflows/hello.yml", wide).sleeps, 1);
+    assert.deepEqual(house(".github/workflows/hello.yml", "jobs:\n# a note\n  a:\n    runs-on: windows-latest\n# another\n    steps:\n      - run: Start-Sleep 1\n"), { comments: 2, sleeps: 1, skips: 0 });
+    const emoji = ["jobs:", "  a:", "    steps:", "      - uses: actions/github-script@0000000000000000000000000000000000000000", "        with:", "          script: \"core.info('😀'); // note\"", ""].join("\n");
+    assert.equal(house(".github/workflows/hello.yml", emoji).comments, 1);
     assert.equal(house(".github/workflows/hello.yml", 'jobs:\n  a:\n    steps:\n      - run: "echo preparing\\nsleep 1"\n').sleeps, 1);
     const jobs = ["jobs:", "  a:", "    defaults:", "      run:", "        shell: pwsh", "    steps:", "      - run: Start-Sleep 1", "  b:", "    steps:", "      - run: Start-Sleep 1", ""].join("\n");
     assert.equal(house(".github/workflows/hello.yml", jobs).sleeps, 1);
@@ -1019,7 +1022,9 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("apps/hello/Podfile", 's.sub(/"\\$\\{X\\}\\/)a/) { "#{$1}b" } # why\n').comments, 1);
     assert.equal(house("apps/hello/tool.rb", "x = <<~TEXT\n  # sample output\nTEXT\ny = %q{#abcdef} # why\nz = %w[a#b c]\n").comments, 1);
     assert.equal(house("apps/hello/tool.rb", "x = <<~'usage'\n  # sample\nusage\nwarn %q{# Example}\n").comments, 0);
+    assert.equal(house("apps/hello/tool.rb", "x = <<~text\n  # sample output\ntext\n").comments, 0);
     assert.equal(house("apps/hello/a.xml", "<a><![CDATA[ <!-- not a comment --> ]]></a><!-- real -->\n").comments, 1);
+    assert.equal(house("apps/hello/a.xml", "<!-- <![CDATA[ -->\n<a/>\n<!-- real -->\n").comments, 2);
     assert.equal(house("infra/hello/Dockerfile", "# syntax=docker/dockerfile:1\nFROM node\n# a note\nRUN echo a#b\n").comments, 1);
   });
   test("Kotlin, Rust, CSS and markup comments count, raw strings and lifetimes don't hide them", () => {
@@ -1165,6 +1170,10 @@ if (process.argv.includes("--expired")) {
     const focused = [];
     findViolations([["apps/browser/src/state/hello/hello.test.mjs", 'test.only("a", () => {});\n']], focused);
     assert.deepEqual(expired(focused, "2026-01-01"), ["  apps/browser/src/state/hello/hello.test.mjs:1 .only, which never belongs in a commit"]);
+    const owners = [];
+    findViolations([["apps/browser/scripts/sim/known.json", JSON.stringify({ failing: [{ issue: 1, expires: "2099-01-01" }, { issue: 2, owner: "@dana", expires: "" }, { issue: 3, owner: "@dana" }] })]], owners);
+    assert.deepEqual(expired(owners, "2026-01-01"), ['  apps/browser/scripts/sim/known.json:1 quarantine until "", which isn\'t a date (YYYY-MM-DD) with an @owner']);
+    assert.equal(house("apps/browser/scripts/sim/known.json", JSON.stringify({ failing: [{ issue: 1, expires: "2099-01-01" }] })).skips, 1);
     const twice = [];
     findViolations([["apps/browser/scripts/sim/known.json", '{"failing":[{"issue":7,"owner":"@dana","expires":"2026-01-01"},\n{"issue":7,"owner":"@dana","expires":"2026-01-02"}]}']], twice);
     assert.deepEqual(twice.map((marker) => marker.line), [1, 2]);
