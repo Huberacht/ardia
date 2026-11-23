@@ -1606,6 +1606,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     private var blurNode: RenderNode? = null
     private var effectRadius = -1f
     private var effectSaturation = -1f
+    private var effectLens: RenderEffect? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bounds = RectF()
     private val clip = Path()
@@ -1666,11 +1667,16 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal var layerHeight = 0
         private set
 
-    internal fun forgetLayer() {
+    internal open fun lensReach(): Float = 0f
+
+    internal open fun lensEffect(marginPx: Float, scale: Float): RenderEffect? = null
+
+    internal open fun forgetLayer() {
         blurNode?.discardDisplayList()
         blurNode = null
         effectRadius = -1f
         effectSaturation = -1f
+        effectLens = null
         layerWidth = 0
         layerHeight = 0
     }
@@ -1724,8 +1730,8 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             val layerNode = blurNode ?: RenderNode("ardiaFrost").also { blurNode = it }
             val blur = style.blurRadius.value * density
             val scale = FrostScale.of(blur)
-            applyEffect(layerNode, blur / scale, style.saturation)
-            val margin = ceil(blur * 2)
+            val margin = LiquidGlassRules.marginPx(blur, lensReach())
+            applyEffect(layerNode, blur / scale, style.saturation, lensEffect(margin, scale))
             val offset = offsetTo(from)
             lastOffset = offset
             val dx = (offset shr 32).toInt()
@@ -1825,20 +1831,20 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         }
     }
 
-    private fun applyEffect(layerNode: RenderNode, radius: Float, saturation: Float) {
+    private fun applyEffect(layerNode: RenderNode, radius: Float, saturation: Float, lens: RenderEffect?) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-        if (radius == effectRadius && saturation == effectSaturation) return
+        if (radius == effectRadius && saturation == effectSaturation && lens === effectLens) return
         effectRadius = radius
         effectSaturation = saturation
+        effectLens = lens
         val blur = RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP)
-        layerNode.setRenderEffect(
-            if (saturation == 1f) {
-                blur
-            } else {
-                val matrix = android.graphics.ColorMatrix().apply { setSaturation(saturation) }
-                RenderEffect.createChainEffect(RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(matrix)), blur)
-            },
-        )
+        val frosted = if (saturation == 1f) {
+            blur
+        } else {
+            val matrix = android.graphics.ColorMatrix().apply { setSaturation(saturation) }
+            RenderEffect.createChainEffect(RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(matrix)), blur)
+        }
+        layerNode.setRenderEffect(if (lens == null) frosted else RenderEffect.createChainEffect(lens, frosted))
     }
 
     private fun offsetTo(from: View): Long {

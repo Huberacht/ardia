@@ -55,14 +55,6 @@ class GlassRulesTest {
     }
 
     @Test
-    fun nativeGlassIsOnlyAskedForByItsLaunchArgument() {
-        assertTrue(GlassRules.nativeGlassAsked(mapOf("ArdiaNativeGlass" to true)))
-        assertFalse(GlassRules.nativeGlassAsked(mapOf("ArdiaNativeGlass" to "true")))
-        assertFalse(GlassRules.nativeGlassAsked(emptyMap()))
-        assertFalse("a store build passes no arguments", GlassRules.nativeGlassAsked(LaunchExtras.arguments(mapOf("ArdiaNativeGlass" to true), allowed = false)))
-    }
-
-    @Test
     fun theMacsLookArrivesInTheSyncViewAsOnIPhone() {
         val decoded = syncJson.decodeFromString<SyncSnapshot>("""{"devices":[],"profiles":[],"look":{"interfaceStyle":"classic","appearance":"dark"},"syncedAt":5}""")
         assertEquals(SyncedLook("classic", "dark"), decoded.look)

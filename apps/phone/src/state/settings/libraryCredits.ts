@@ -23,9 +23,18 @@ export const IPHONE_NATIVE_CREDITS: LibraryCredit[] = [
   },
 ];
 
+export const ANDROID_PORTED_CREDITS: LibraryCredit[] = [
+  {
+    name: "liquid-dom",
+    detail: "Andras Prifer’s glass shader, ported for Android’s Liquid Glass lens and rim light",
+    license: "MIT",
+    url: "https://github.com/AndrewPrifer/liquid-dom",
+  },
+];
+
 const androidNative = (): LibraryCredit[] => credits.native.map((library) => ({ name: library.name, detail: library.artifacts.join(", "), license: library.license, url: library.url }));
 
 export function libraryCredits(platform: "ios" | "android" | string): LibraryCredit[] {
-  const native = platform === "ios" ? IPHONE_NATIVE_CREDITS : androidNative();
+  const native = platform === "ios" ? IPHONE_NATIVE_CREDITS : [...androidNative(), ...ANDROID_PORTED_CREDITS];
   return [...native, ...credits.packages.map((pkg) => ({ name: pkg.name, detail: pkg.version, license: pkg.license, url: pkg.url }))];
 }

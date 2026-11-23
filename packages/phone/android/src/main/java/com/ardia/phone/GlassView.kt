@@ -2,11 +2,15 @@ package com.ardia.phone
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
+import android.os.Build
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
@@ -19,7 +23,6 @@ internal object GlassRules {
     const val CLASSIC_EDGE_DP = 0.5f
     const val CLASSIC_SHADOW_ELEVATION_DP = 3f
     const val DEFAULT_SHOWN_MS = 200f
-    const val NATIVE_GLASS_ARGUMENT = "ArdiaNativeGlass"
 
     fun solid(surface: String?, reduceTransparency: Boolean): Boolean = reduceTransparency || surface == "classic"
 
@@ -38,8 +41,11 @@ internal object GlassRules {
 
     fun fadesIn(wasShown: Boolean, shown: Boolean, attached: Boolean, durationMs: Float, animatorsOn: Boolean): Boolean =
         !wasShown && shown && attached && durationMs > 0f && animatorsOn
+}
 
-    fun nativeGlassAsked(arguments: Map<String, Any>): Boolean = arguments[NATIVE_GLASS_ARGUMENT] == true
+internal object GlassLaunch {
+    @Volatile
+    var flat: Boolean = false
 }
 
 class GlassView(context: Context, appContext: AppContext) : FrostView(context, appContext) {
@@ -68,9 +74,15 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     private var surfaceAlpha = 1f
     private var fader: ValueAnimator? = null
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val box = RectF()
     private val outlinePath = Path()
     private var radiusPx = 0f
+    private var lensShape: LiquidGlassRules.LensShape? = null
+    private var lens: RenderEffect? = null
+    private var rimShader: RuntimeShader? = null
+    private var rimDrawn: LiquidGlassRules.Rim? = null
+    private var lensThisDraw = false
 
     init {
         variant = "glass"
@@ -84,6 +96,37 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     val isClassic: Boolean get() = GlassRules.solid(surface, reduceTransparency)
 
     override fun canBlur(): Boolean = !isClassic && super.canBlur()
+
+    private val lensOn: Boolean get() = LiquidGlassRules.lensWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, livePath = true)
+
+    override fun lensReach(): Float {
+        if (!lensOn) return 0f
+        val bezel = LiquidGlassRules.bezelDp(LiquidGlassRules.defaults, width / density, height / density)
+        return LiquidGlassRules.maxShiftDp(LiquidGlassRules.defaults, bezel) * density
+    }
+
+    override fun lensEffect(marginPx: Float, scale: Float): RenderEffect? {
+        if (!lensOn || Build.VERSION.SDK_INT < LiquidGlassRules.LENS_MIN_SDK) {
+            lensThisDraw = false
+            return null
+        }
+        val wanted = LiquidGlassRules.lensShape(width, height, marginPx, scale, radiusPx, density)
+        if (wanted != lensShape || lens == null) {
+            lensShape = wanted
+            lens = LiquidGlassShaders.lensEffect(wanted)
+        }
+        lensThisDraw = true
+        return lens
+    }
+
+    override fun forgetLayer() {
+        super.forgetLayer()
+        lensShape = null
+        lens = null
+        lensThisDraw = false
+    }
+
+    internal val drawsLens: Boolean get() = lensThisDraw && lastChoice?.path == FrostPage.Path.Live
 
     override fun update() {
         val classic = isClassic
@@ -144,14 +187,33 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     private fun drawGlass(canvas: Canvas) {
+        lensThisDraw = false
         super.drawLook(canvas)
-        val tinting = tint ?: return
-        paint.style = Paint.Style.FILL
-        paint.color = tinting
         box.set(0f, 0f, width.toFloat(), height.toFloat())
         outlinePath.reset()
         outlinePath.addRoundRect(box, radiusPx, radiusPx, Path.Direction.CW)
-        canvas.drawPath(outlinePath, paint)
+        tint?.let { tinting ->
+            paint.style = Paint.Style.FILL
+            paint.color = tinting
+            canvas.drawPath(outlinePath, paint)
+        }
+        if (drawsLens && Build.VERSION.SDK_INT >= LiquidGlassRules.LENS_MIN_SDK) drawRim(canvas)
+    }
+
+    private fun drawRim(canvas: Canvas) {
+        if (Build.VERSION.SDK_INT < LiquidGlassRules.LENS_MIN_SDK) return
+        val shader = rimShader ?: LiquidGlassShaders.rim().also {
+            rimShader = it
+            rimPaint.shader = it
+            rimPaint.blendMode = BlendMode.PLUS
+        }
+        val rim = LiquidGlassRules.rim(width, height, radiusPx, density, isDark)
+        if (rim != rimDrawn) {
+            LiquidGlassShaders.apply(shader, rim)
+            rimPaint.shader = shader
+            rimDrawn = rim
+        }
+        canvas.drawPath(outlinePath, rimPaint)
     }
 
     private fun drawClassic(canvas: Canvas) {

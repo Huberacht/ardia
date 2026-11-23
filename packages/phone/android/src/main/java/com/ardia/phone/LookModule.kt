@@ -1,5 +1,6 @@
 package com.ardia.phone
 
+import com.ardia.design.Frosting
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
@@ -20,10 +21,21 @@ class LookModule : Module() {
 
         Function("systemLook") { systemLook.check() }
 
-        Function("hasGlass") { GlassRules.nativeGlassAsked(LaunchExtras.arguments(LaunchExtras.of(appContext.currentActivity?.intent))) }
+        Function("hasGlass") {
+            readGlassLaunch()
+            true
+        }
+
+        Function("glassRender") {
+            readGlassLaunch()
+            val context = appContext.reactContext
+            val blurs = Frosting.isBlurSupported && context != null && !LookSwitch.isOff(context) && !LookBudget.isDegraded(context)
+            LiquidGlassRules.render(android.os.Build.VERSION.SDK_INT, classic = false, flat = GlassLaunch.flat, blurs = blurs).raw
+        }
 
         OnCreate {
             val context = appContext.reactContext ?: return@OnCreate
+            readGlassLaunch()
             SystemMotion.note(systemLook.seed())
             systemLookObserver = SystemLookObserver(context.applicationContext) { systemLook.check() }.also { it.start() }
         }
@@ -246,6 +258,11 @@ class LookModule : Module() {
             Prop("shownMs") { view: GlassView, value: Float? -> view.shownMs = (value ?: GlassRules.DEFAULT_SHOWN_MS).coerceAtLeast(0f) }
             OnViewDidUpdateProps { view -> view.update() }
         }
+    }
+
+    private fun readGlassLaunch() {
+        val activity = appContext.currentActivity ?: return
+        GlassLaunch.flat = LiquidGlassRules.flatAsked(LaunchExtras.arguments(LaunchExtras.of(activity.intent)))
     }
 
     companion object {
