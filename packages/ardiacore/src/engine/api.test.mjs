@@ -7,7 +7,7 @@ const ios = new URL("../../ios/", import.meta.url);
 const nativeFiles = readdirSync(ios).filter((f) => /\.(swift|mm)$/.test(f));
 const native = (file) => readFileSync(new URL(file, ios), "utf8");
 
-const api = readApi();
+const api = readApi().replace(/\r\n/g, "\n");
 const manifest = readManifest();
 const capitalized = (name) => name[0].toUpperCase() + name.slice(1);
 const sorted = (set) => [...set].sort();
