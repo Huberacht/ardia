@@ -100,6 +100,11 @@ stamp_file="$dd/.ac-native-stamp-Debug"
 app_file="$dd/.ac-app-Debug"
 kind_file="$dd/.ac-kind-Debug"
 mkdir -p "$dd"
+judge_engine() {
+  ARDIACORE_ENGINE_MATCH=$("$repo/packages/ardiacore/scripts/engine-match.sh" resolve "$repo" "${AC_ENGINE_RECORD:?build-app lost the engine record it read before taking its lock}") || return 1
+  export ARDIACORE_ENGINE_MATCH
+  "$repo/packages/ardiacore/scripts/engine-match.sh" check "$ARDIACORE_ENGINE_MATCH"
+}
 if [[ -n "${AC_BUILD_APP_LOCKER:-}" && "$AC_BUILD_APP_LOCKER" != "$PPID" ]]; then
   echo "build-app: already running inside build-app (pid $AC_BUILD_APP_LOCKER); a nested build-app isn't supported" >&2
   exit 64
@@ -114,10 +119,9 @@ if [[ -z "${AC_BUILD_APP_LOCKER:-}" ]]; then
   else
     source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
   fi
-  ARDIACORE_ENGINE_MATCH=$("$repo/packages/ardiacore/scripts/engine-match.sh" resolve "$repo" \
-    "$(cat "$(dirname "$source_framework")/engine-match" 2>/dev/null || echo match=local)") || exit 1
-  export ARDIACORE_ENGINE_MATCH
-  "$repo/packages/ardiacore/scripts/engine-match.sh" check "$ARDIACORE_ENGINE_MATCH" || exit 1
+  AC_ENGINE_RECORD=$(cat "$(dirname "$source_framework")/engine-match" 2>/dev/null || echo match=local)
+  export AC_ENGINE_RECORD
+  judge_engine || exit 1
   ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework" --as "$name" --wait "$wait") ||
     { echo "build-app: couldn't stage the engine from $source_framework" >&2; exit 1; }
   export ARDIACORE_FRAMEWORK
@@ -125,6 +129,7 @@ if [[ -z "${AC_BUILD_APP_LOCKER:-}" ]]; then
 fi
 signing=default
 [[ -n "$adhoc" ]] && signing=adhoc
+judge_engine || exit 1
 
 stamp_now() {
   "$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" "$@" 2>"$log.stamp"

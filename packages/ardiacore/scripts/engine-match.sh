@@ -7,11 +7,14 @@
 # an engine whose release couldn't be looked up.
 #
 #   engine-match.sh get <field> <line>             prints one field (match is local when the line has none)
-#   engine-match.sh public-hash <root> [<commit>]  the hash of the public headers in <root>'s files, or at <commit>
+#   engine-match.sh public-hash <root> [<commit>]  the hash of the public headers' paths, modes and contents at
+#                                                  <commit>, or on disk: the files git tracks or shows as untracked
+#                                                  (every file there when <root> has no git, as in a build slot)
 #   engine-match.sh resolve <root> <line>          the record judged against the tree in <root>, as it is on disk:
 #                                                  match recomputed from its engine key when <root> is a git checkout,
 #                                                  plus public=same|changed|unknown
-#   engine-match.sh check <resolved line>          fails when a nearest engine's public headers differ from the tree's
+#   engine-match.sh check <resolved line>          fails unless the engine is local or its public headers match the
+#                                                  tree's (an engine whose headers nothing records fails too)
 #   engine-match.sh plist <resolved line> <Info.plist>
 #                                                  checks, then writes ArdiaEngineMatch, ArdiaEngineKey,
 #                                                  ArdiaEngineVersion and ArdiaEngineSource into the app's Info.plist
@@ -43,22 +46,39 @@ match_of() {
   esac
 }
 
-public_hash() {
-  local root=$1 commit=${2:-}
-  if [[ -n "$commit" ]]; then
-    git -C "$root" ls-tree -r "$commit" -- "$public_dir" | awk -F '\t' '{ split($1, meta, " "); print $2 " " meta[3] }'
-  else
-    [[ -d "$root/$public_dir" ]] || return 0
-    (cd "$root" && find "$public_dir" -type f ! -name '.*' -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' file; do
-      printf '%s %s\n' "$file" "$(git hash-object --no-filters -- "$file")"
-    done)
-  fi | LC_ALL=C sort | shasum -a 256 | cut -c1-64
-}
-
 is_checkout() {
   local top
   top=$(git -C "$1" rev-parse --show-toplevel 2>/dev/null) || return 1
   [[ "$(cd "$top" && pwd -P)" == "$(cd "$1" && pwd -P)" ]]
+}
+
+public_files() {
+  local root=$1
+  if is_checkout "$root"; then
+    git -C "$root" ls-files -z -co --exclude-standard -- "$public_dir"
+  elif [[ -d "$root/$public_dir" ]]; then
+    (cd "$root" && find "$public_dir" \( -type f -o -type l \) -print0)
+  fi
+}
+
+disk_entry() {
+  local file=$1
+  if [[ -L "$file" ]]; then
+    printf '%s 120000 %s\n' "$file" "$(printf '%s' "$(readlink "$file")" | git hash-object --stdin)"
+  elif [[ -f "$file" && -x "$file" ]]; then
+    printf '%s 100755 %s\n' "$file" "$(git hash-object --no-filters -- "$file")"
+  elif [[ -f "$file" ]]; then
+    printf '%s 100644 %s\n' "$file" "$(git hash-object --no-filters -- "$file")"
+  fi
+}
+
+public_hash() {
+  local root=$1 commit=${2:-}
+  if [[ -n "$commit" ]]; then
+    git -C "$root" ls-tree -r "$commit" -- "$public_dir" | awk -F '\t' '{ split($1, meta, " "); print $2 " " meta[1] " " meta[3] }'
+  else
+    public_files "$root" | (cd "$root" && while IFS= read -r -d '' file; do disk_entry "$file"; done)
+  fi | LC_ALL=C sort | shasum -a 256 | cut -c1-64
 }
 
 resolve() {
@@ -83,16 +103,23 @@ resolve() {
 }
 
 check() {
-  local line=$1 match public
+  local line=$1 match public engine problem
   match=$(match_of "$line")
-  [[ "$match" == nearest ]] || return 0
+  [[ "$match" == local ]] && return 0
   public=$(field public "$line")
   [[ "$public" == same ]] && return 0
+  engine="engine $(field key "$line" | cut -c1-12)"
+  [[ -z "$(field version "$line")" ]] || engine="$(field version "$line")'s engine (published from $(field source "$line" | cut -c1-10))"
+  if [[ "$public" == changed ]]; then
+    problem="this tree's $public_dir differs from that of $engine, so the app can't match it"
+  else
+    problem="nothing records the $public_dir that $engine was built with, so the app can't be checked against it"
+  fi
   if [[ "${ARDIACORE_ALLOW_PUBLIC_MISMATCH:-}" == 1 ]]; then
-    echo "warning: building against $(field version "$line")'s engine, older than this tree's, though $public_dir changed since (ARDIACORE_ALLOW_PUBLIC_MISMATCH=1)" >&2
+    echo "warning: $problem (building anyway: ARDIACORE_ALLOW_PUBLIC_MISMATCH=1)" >&2
     return 0
   fi
-  echo "error: this tree's $public_dir differs from that of $(field version "$line")'s engine (published from $(field source "$line" | cut -c1-10)), the nearest published Mac engine it was given, so the app can't match it." >&2
+  echo "error: $problem." >&2
   echo "error: build the engine (docs/engine-build.md) and set ARDIACORE_FRAMEWORK to it, check out a commit with a published engine, or set ARDIACORE_ALLOW_PUBLIC_MISMATCH=1 to build anyway." >&2
   return 1
 }

@@ -28,13 +28,14 @@ for arg in "$@"; do
 done
 [ "$offline" = 0 ] || [ "$describe" = 1 ] || die "--offline only goes with --describe"
 match_script="$here/engine-match.sh"
+[ -x "$match_script" ] || die "$match_script is missing: fetch-engine.sh records the engine it picks with it, so keep the two scripts together"
 
 key_script="$root/engine/engine-key.sh"
 key() { "$key_script" --platform macos "$@"; }
 git -C "$root" rev-parse --git-dir >/dev/null 2>&1 || die "$root isn't a git checkout: a prebuilt engine is matched to its engine key (engine/engine-key.sh --platform macos)"
 key_paths=($(key --paths))
 dirty=$(git -C "$root" status --porcelain -- "${key_paths[@]}" | cut -c4- | awk 'NR <= 5' | paste -sd ',' - | sed 's/,/, /g')
-[ -z "$dirty" ] || die "$dirty (in the macOS engine key) have uncommitted changes, and no prebuilt has them: build the engine (docs/engine-build.md)"
+[ -z "$dirty" ] || [ "$describe" = 1 ] || die "$dirty (in the macOS engine key) have uncommitted changes, and no prebuilt has them: build the engine (docs/engine-build.md)"
 tree=$(key)
 
 remote_table=""
@@ -52,15 +53,18 @@ release_tag() {
   case "$1" in engine-*) echo "$1" ;; *) echo "v$1" ;; esac
 }
 published_source() {
-  local tag=$1 key=$2 known listed
+  local tag=$1 key=$2 may_ask_remote=$3 known recorded=0 listed
   known=$(cat "$store/${key:0:12}/engine-match" 2>/dev/null || true)
-  if [ "$("$match_script" get key "$known")" = "$key" ] && [ -n "$("$match_script" get source "$known")" ] && [ -n "$("$match_script" get public_hash "$known")" ]; then
-    "$match_script" get source "$known"
-    return 0
+  if [ "$("$match_script" get key "$known")" = "$key" ] && [ -n "$("$match_script" get public_hash "$known")" ]; then
+    recorded=1
+    if [ -n "$("$match_script" get source "$known")" ]; then
+      "$match_script" get source "$known"
+      return 0
+    fi
   fi
   if git -C "$root" rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null; then return 0; fi
-  [ "$offline" = 0 ] || return 0
-  listed=$(GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote \
+  [ "$recorded" = 0 ] && [ "$may_ask_remote" = 1 ] && [ "$offline" = 0 ] || return 0
+  listed=$(GIT_TERMINAL_PROMPT=0 perl -e 'alarm shift; exec @ARGV' 10 git ls-remote \
     "${ARDIACORE_ENGINE_TAG_REMOTE:-https://github.com/$repo.git}" "refs/tags/$tag" "refs/tags/$tag^{}" 2>/dev/null || true)
   awk -v deref="refs/tags/$tag^{}" -v tag="refs/tags/$tag" '$2 == deref { d = $1 } $2 == tag { t = $1 } END { print (d != "" ? d : t) }' <<<"$listed"
 }
@@ -69,7 +73,7 @@ entry=$(lookup "$tree")
 match=exact
 base=$(git -C "$root" rev-list -1 HEAD -- "${key_paths[@]}" 2>/dev/null || true)
 if [ -z "$entry" ] && [ "$offline" = 1 ]; then
-  echo "match=unknown key=$tree"
+  echo "match=unknown key=$tree version= source= public_hash=$("$match_script" public-hash "$root" "$base")"
   exit 0
 fi
 if [ -z "$entry" ]; then
@@ -101,7 +105,9 @@ read -r tree version sha built <<<"$entry"
 built=${built:-$tree}
 short=${tree:0:12}
 dest="$store/$short"
-match_line="match=$match key=$tree version=$version source=$(published_source "$(release_tag "$version")" "$tree") public_hash=$("$match_script" public-hash "$root" "$base")"
+downloading=0
+[ "$describe" = 1 ] || [ -f "$dest/.complete" ] || downloading=1
+match_line="match=$match key=$tree version=$version source=$(published_source "$(release_tag "$version")" "$tree" "$downloading") public_hash=$("$match_script" public-hash "$root" "$base")"
 if [ "$describe" = 1 ]; then
   echo "$match_line"
   exit 0

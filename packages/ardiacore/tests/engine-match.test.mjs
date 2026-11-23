@@ -30,7 +30,7 @@ if [ "\${1:-}" = --paths ]; then echo engine; exit 0; fi
 git -C "$root" ls-tree -r "\${1:-HEAD}" engine | shasum -a 256 | cut -c1-64
 `;
 
-function checkout({ row = true } = {}) {
+function checkout({ row = true, archive = false } = {}) {
   const root = scratch();
   for (const name of ["fetch-engine.sh", "engine-match.sh", "stage-framework.sh"]) {
     write(root, `packages/ardiacore/scripts/${name}`, fs.readFileSync(join(scripts, name), "utf8"), 0o755);
@@ -39,23 +39,35 @@ function checkout({ row = true } = {}) {
   write(root, "engine/engine-key.sh", FAKE_KEY, 0o755);
   write(root, HEADER, "int api(void);\n");
   write(root, "engine/patch.txt", "one\n");
-  write(root, "bin/curl", `#!/bin/bash\necho called >> "${root}/curl-calls"\nexit 22\n`, 0o755);
-  fs.writeFileSync(join(root, ".gitignore"), "curl-calls\nstage/\ncache/\n");
+  write(root, "bin/curl", `#!/bin/bash\ncase "$*" in *file://*) exec /usr/bin/curl "$@" ;; esac\necho called >> "${root}/curl-calls"\nexit 22\n`, 0o755);
+  fs.writeFileSync(join(root, ".gitignore"), "curl-calls\nstage/\ncache/\n.DS_Store\n");
   git(root, "init", "-q", "-b", "main");
   git(root, "add", "-A");
   git(root, "commit", "-q", "-m", "engine one");
   const base = git(root, "rev-parse", "HEAD");
   const key = execFileSync(join(root, "engine/engine-key.sh"), ["--platform", "macos"], { encoding: "utf8" }).trim();
   const tag = `engine-${key.slice(0, 12)}`;
-  write(root, "packages/ardiacore/prebuilt-engines.tsv", row ? `${key}\t${tag}\t${"0".repeat(64)}\n` : "# none\n");
+  const assets = scratch();
+  let sha = "0".repeat(64);
+  if (archive) {
+    const pack = scratch();
+    write(pack, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
+    fs.mkdirSync(join(assets, tag));
+    const file = join(assets, tag, `ArdiaCore-${key.slice(0, 12)}.tar.xz`);
+    execFileSync("tar", ["-cJf", file, "-C", pack, "Chromium Framework.framework"]);
+    sha = execFileSync("shasum", ["-a", "256", file], { encoding: "utf8" }).split(" ")[0];
+  }
+  write(root, "packages/ardiacore/prebuilt-engines.tsv", row ? `${key}\t${tag}\t${sha}\n` : "# none\n");
   const store = join(root, "apps/browser/build-ardiacore/prebuilt", key.slice(0, 12));
-  write(store, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
-  write(store, ".complete", "");
+  if (!archive) {
+    write(store, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
+    write(store, ".complete", "");
+  }
   git(root, "add", "-A");
   git(root, "commit", "-q", "-m", "published from here");
   const published = git(root, "rev-parse", "HEAD");
   git(root, "tag", tag, published);
-  return { root, key, tag, base, published, store, framework: join(store, "Chromium Framework.framework") };
+  return { root, key, tag, base, published, store, assets, framework: join(store, "Chromium Framework.framework") };
 }
 
 const commitFile = (root, rel, text) => {
@@ -80,27 +92,53 @@ test("an exact engine is recorded with its key, release, the commit it was publi
   assert.match(field(record(store), "public_hash"), /^[0-9a-f]{64}$/);
 });
 
-test("the published source comes from the remote's tag when this clone hasn't fetched it, and stays empty when nothing knows it", () => {
-  const { root, tag, published, store } = checkout();
+test("the published source comes from the remote's tag only while downloading, and a miss is kept so a cached engine never asks again", () => {
+  const { root, tag, published, store, assets } = checkout({ archive: true });
+  const remote = join(scratch(), "remote.git");
+  execFileSync("git", ["clone", "-q", "--bare", root, remote]);
+  git(root, "tag", "-d", tag);
+  const download = { ARDIACORE_PREBUILT_ASSETS: `file://${assets}` };
+  const first = fetchEngine(root, [], { ...download, ARDIACORE_ENGINE_TAG_REMOTE: remote });
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(field(record(store), "source"), published);
+  fs.rmSync(store, { recursive: true });
+  assert.equal(fetchEngine(root, [], download).status, 0, "a remote that doesn't answer leaves the source empty");
+  assert.equal(field(record(store), "source"), "");
+  const hit = fetchEngine(root, [], { ARDIACORE_ENGINE_TAG_REMOTE: remote });
+  assert.equal(hit.status, 0, hit.stderr);
+  assert.equal(field(record(store), "source"), "", "a cached engine whose lookup missed doesn't ask the remote again");
+  git(root, "tag", tag, published);
+  assert.equal(fetchEngine(root).status, 0);
+  assert.equal(field(record(store), "source"), published, "a tag fetched since is read locally");
+});
+
+test("a cached engine with no record never asks the remote for its source", () => {
+  const { root, tag, store } = checkout();
   const remote = join(scratch(), "remote.git");
   execFileSync("git", ["clone", "-q", "--bare", root, remote]);
   git(root, "tag", "-d", tag);
   assert.equal(fetchEngine(root, [], { ARDIACORE_ENGINE_TAG_REMOTE: remote }).status, 0);
-  assert.equal(field(record(store), "source"), published);
-  fs.rmSync(join(store, "engine-match"));
-  assert.equal(fetchEngine(root).status, 0);
   assert.equal(field(record(store), "source"), "");
 });
 
-test("the hash of the public headers is the same from a commit and from the files on disk, and moves with their content", () => {
+test("the public headers hash the same from a commit and from disk, and move with content, mode and the files git shows", () => {
   const { root } = checkout();
   const atHead = publicHashAt(root, "HEAD");
-  assert.equal(run(matchScript, ["public-hash", root]).stdout.trim(), atHead);
+  const onDisk = () => run(matchScript, ["public-hash", root]).stdout.trim();
+  assert.equal(onDisk(), atHead);
   write(root, HEADER, "int api(int);\n");
-  assert.notEqual(run(matchScript, ["public-hash", root]).stdout.trim(), atHead);
+  assert.notEqual(onDisk(), atHead);
   write(root, HEADER, "int api(void);\n");
+  fs.chmodSync(join(root, HEADER), 0o755);
+  assert.notEqual(onDisk(), atHead, "a mode change counts, as in the committed tree");
+  fs.chmodSync(join(root, HEADER), 0o644);
   write(root, "engine/ardiacore/src/ardia/core/public/.DS_Store", "x");
-  assert.equal(run(matchScript, ["public-hash", root]).stdout.trim(), atHead);
+  assert.equal(onDisk(), atHead, "an ignored file doesn't count");
+  write(root, "engine/ardiacore/src/ardia/core/public/new.h", "int added(void);\n");
+  assert.notEqual(onDisk(), atHead, "an untracked file git status shows counts");
+  fs.rmSync(join(root, "engine/ardiacore/src/ardia/core/public/new.h"));
+  fs.rmSync(join(root, HEADER));
+  assert.notEqual(onDisk(), atHead, "a deleted tracked file counts");
 });
 
 test("a nearest engine is judged by the tree: unchanged public headers build, changed ones stop the build", () => {
@@ -168,24 +206,54 @@ test("--describe prints the record without downloading, and --offline never reac
   const missing = checkout({ row: false });
   const offline = fetchEngine(missing.root, ["--describe", "--offline"]);
   assert.equal(offline.status, 0, offline.stderr);
-  assert.equal(offline.stdout.trim(), `match=unknown key=${missing.key}`);
+  assert.equal(offline.stdout.trim(), `match=unknown key=${missing.key} version= source= public_hash=${publicHashAt(missing.root, missing.base)}`);
   assert.equal(fs.existsSync(join(missing.root, "curl-calls")), false);
   assert.notEqual(fetchEngine(root, ["--offline"]).status, 0);
 });
 
-test("a cached engine with no record keeps its hit offline and is recorded as unknown, never failing the build", () => {
-  const { root, key } = checkout({ row: false });
+const cachedEngine = (root, key) => {
   const cache = scratch();
   const dir = join(cache, "engines", key.slice(0, 12));
   write(dir, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
   write(dir, ".complete", "");
-  const r = run(process.execPath, [join(repoRoot, "scripts/agent/build-cache"), "engine", "--repo", root], { env: envFor(root, { AC_APP_CACHE: cache }) });
+  const engine = () => run(process.execPath, [join(repoRoot, "scripts/agent/build-cache"), "engine", "--repo", root], { env: envFor(root, { AC_APP_CACHE: cache }) });
+  return { dir, engine, line: () => fs.readFileSync(join(dir, "engine-match"), "utf8").trim() };
+};
+
+test("a cached engine with no record keeps its hit offline as unknown, and its committed headers are still checked", () => {
+  const { root, key, base } = checkout({ row: false });
+  const { dir, engine, line } = cachedEngine(root, key);
+  const r = engine();
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim(), join(dir, "Chromium Framework.framework"));
-  assert.equal(fs.readFileSync(join(dir, "engine-match"), "utf8").trim(), `match=unknown key=${key}`);
+  assert.equal(line(), `match=unknown key=${key} version= source= public_hash=${publicHashAt(root, base)}`);
   assert.equal(fs.existsSync(join(root, "curl-calls")), false);
-  assert.equal(resolve(root, `match=unknown key=${key}`).stdout.trim(), `match=unknown key=${key} version= source= public_hash= public=unknown`);
-  assert.equal(run(matchScript, ["check", "match=unknown key=k public=unknown"]).status, 0);
+  const clean = resolve(root, line()).stdout.trim();
+  assert.match(clean, /^match=unknown .* public=same$/);
+  assert.equal(run(matchScript, ["check", clean]).status, 0);
+});
+
+test("a cached engine with no record and an uncommitted public header edit recovers the committed headers and refuses the build", () => {
+  const { root, key, base } = checkout({ row: false });
+  write(root, HEADER, "int api(int);\n");
+  const { engine, line } = cachedEngine(root, key);
+  assert.equal(engine().status, 0);
+  assert.equal(field(line(), "public_hash"), publicHashAt(root, base));
+  const judged = resolve(root, line()).stdout.trim();
+  assert.match(judged, /^match=unknown .* public=changed$/);
+  const stopped = run(matchScript, ["check", judged]);
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /differs from that of engine /);
+});
+
+test("an engine whose headers nothing records fails closed unless overridden", () => {
+  const unrecorded = "match=unknown key=k version= source= public_hash= public=unknown";
+  const stopped = run(matchScript, ["check", unrecorded]);
+  assert.equal(stopped.status, 1);
+  assert.match(stopped.stderr, /nothing records/);
+  assert.equal(run(matchScript, ["check", unrecorded], { env: { ARDIACORE_ALLOW_PUBLIC_MISMATCH: "1" } }).status, 0);
+  assert.equal(resolve(scratch(), "match=unknown key=k").stdout.trim(), unrecorded);
+  assert.equal(run(matchScript, ["check", "match=exact key=k public=unknown"]).status, 1);
 });
 
 test("a cached engine whose row is in the local table gets its full record offline", () => {
@@ -202,7 +270,7 @@ test("a cached engine whose row is in the local table gets its full record offli
 });
 
 test("check passes exact, local, unknown and unchanged nearest engines and stops a changed one unless overridden", () => {
-  for (const line of ["match=exact key=k public=same", "match=local", "", "match=nearest key=k public=same", "match=unknown key=k public=unknown"]) {
+  for (const line of ["match=exact key=k public=same", "match=local", "", "match=nearest key=k public=same", "match=unknown key=k public=same"]) {
     assert.equal(run(matchScript, ["check", line]).status, 0, line);
   }
   const changed = "match=nearest key=k version=engine-abc source=0123456789abcdef public=changed";
@@ -251,11 +319,36 @@ test("plist writes the engine keys into the app's Info.plist, and a local build 
   const r = run(matchScript, ["plist", "match=nearest key=abc version=engine-abc source=0123 public_hash=ff public=same", plist]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "nearest", ArdiaEngineKey: "abc", ArdiaEngineVersion: "engine-abc", ArdiaEngineSource: "0123" });
-  assert.equal(run(matchScript, ["plist", "match=unknown key=abc version= source= public_hash= public=unknown", plist]).status, 0);
+  assert.equal(run(matchScript, ["plist", "match=unknown key=abc version= source= public_hash=ff public=same", plist]).status, 0);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "unknown", ArdiaEngineKey: "abc" });
   assert.equal(run(matchScript, ["plist", "match=local", plist]).status, 0);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "local" });
   const stopped = run(matchScript, ["plist", "match=nearest key=abc public=changed", plist]);
   assert.equal(stopped.status, 1);
   assert.deepEqual(read(), { CFBundleName: "Ardia", ArdiaEngineMatch: "local" });
+});
+
+test("build-app judges the engine again after taking its lock, right before it stamps the app cache", () => {
+  const text = fs.readFileSync(join(repoRoot, "scripts/agent/build-app"), "utf8");
+  const lock = text.indexOf('exec lockf -k -t "$wait" "$dd/.build-app.lock"');
+  const again = text.indexOf("judge_engine || exit 1", lock);
+  const stamp = text.indexOf("stamp=$(stamp_now)");
+  assert.ok(lock > 0 && again > lock && again < stamp, "the judgement after the lock comes before the stamp");
+  assert.ok(text.lastIndexOf("judge_engine || exit 1", lock) > 0, "and once before staging, to fail fast");
+});
+
+test("an engine input changed after the first judgement changes the judged line, so the cache stamp can't reuse the old app", async () => {
+  const lib = await import(join(repoRoot, "scripts/lib/build-cache.mjs"));
+  const { root, store } = checkout();
+  assert.equal(fetchEngine(root).status, 0);
+  const before = resolve(root, record(store)).stdout.trim();
+  assert.match(before, /^match=exact /);
+  write(root, "engine/patch.txt", "edited while staging\n");
+  const uncommitted = resolve(root, record(store)).stdout.trim();
+  assert.match(uncommitted, /^match=nearest .* public=same$/);
+  commitFile(root, "engine/patch.txt", "committed while staging\n");
+  assert.match(resolve(root, record(store)).stdout.trim(), /^match=nearest .* public=same$/);
+  const lines = (match) => lib.envFingerprint({ ARDIACORE_ENGINE_MATCH: match }).lines;
+  assert.deepEqual(lines(before), [`env ARDIACORE_ENGINE_MATCH=${before}`]);
+  assert.notDeepEqual(lines(before), lines(uncommitted));
 });
