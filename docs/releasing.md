@@ -224,18 +224,18 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      `dist/<version>`, so it survives the next run's wipe; `NOTARY_STATE_DIR` moves it): the app's under its code's
      CDHash, which signing the same code again keeps although the zip's bytes change, the DMG's under the CDHash of the
      app it packs and a hash of the packing inputs (the commit, `package.sh`, `scripts/dmg/background.tiff` and `DS_Store`,
-     `ARDIA_DMG_CHUNK`), next to a copy of the
-     exact DMG it sent (`package.sh` never makes the same bytes twice, so a retry staples that copy and only then puts
-     it in place of the new one). Once stapled, the stapled copy stays, so a retry after a later step failed (the appcast,
-     the launch check) staples it again instead of uploading; kept copies untouched for three days are pruned. The record
-     holds the id and the sha256 of the kept copy, and a copy whose sha256 differs is never resumed. One `notarize.sh`
-     at a time works on a key: it takes a lock (`<key>.lock`, holding its pid and start time, so a lock its dead holder
-     left is taken over) for the whole check, upload and record, and a second one on the same key stops. A kept copy is
-     used only when its signature
+     `ARDIA_DMG_CHUNK`). The DMG it submits is a copy in the state directory, named by its own sha256
+     (`<key>.<sha256>.dmg`), so the bytes hashed are the bytes uploaded even if the DMG is packed again meanwhile; the
+     record (id, that sha256, and `complete` once stapled) is written through a temporary file and a rename, and the
+     previous image goes only after it. Stapling works on a private copy that then replaces the DMG, so the kept image
+     is never rewritten: a retry after a later step failed (the appcast, the launch check) staples it again instead of
+     uploading. Pruning removes only images of `complete` records, and images no record names, untouched for three
+     days. One `notarize.sh` runs per state directory: it holds a kernel lock on `<state>/.lock` (`flock` through perl)
+     for the whole run, the OS frees it when the process dies, and a second run waits `NOTARY_LOCK_SECONDS` (default
+     600) and stops. A kept copy is used only when its sha256 is the one recorded and its signature
      verifies against the packed app's team and it mounts as exactly the volume `package.sh` makes, holding an app with
-     the same CDHash; anything else is discarded and the new DMG submitted. Before a DMG is submitted fresh, its old record
-     is dropped, so an upload that fails can't leave an old accepted id beside a new image; a packing input that can't
-     be hashed keys the DMG by its own bytes. A
+     the same CDHash; anything else is discarded and the new DMG submitted. An upload that fails leaves the old record
+     beside its own image, never beside the new one; a packing input that can't be hashed keys the DMG by its own bytes. A
      retry asks Apple about that id before uploading: Accepted staples, In Progress waits, Invalid or Rejected prints
      Apple's log and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist
      submits fresh, and when notarytool can't answer, or answers a status the script doesn't know, it stops with the

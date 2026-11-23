@@ -198,8 +198,10 @@ shipping an unnotarized build. Never store or re-create the credential yourself;
 Notarization adds a few minutes per submission. A retry doesn't upload again: `notarize.sh` records each submission id
 in `dist/.notary/` (which survives `rm -rf dist/<version>`; `NOTARY_STATE_DIR` moves it), the app under its code's
 CDHash (the same code signed again keeps it, though the zip's bytes change), and the DMG under the CDHash of the app it
-packs, with a copy of the exact DMG it sent (packing again makes other bytes, so a retry from the same commit and packing inputs staples that copy and swaps it in,
-once it has checked the copy holds the same app and verifies as signed by the same team). On the
+packs, with the exact DMG it sent kept as `<key>.<sha256>.dmg` (packing again makes other bytes, so a retry from the
+same commit and packing inputs staples a copy of that image and swaps it in, once it has checked the sha256, that it
+holds the same app and that it verifies as signed by the same team). One run at a time per state directory: a second
+waits `NOTARY_LOCK_SECONDS` (10 min) for the kernel lock on `<state>/.lock` and stops. On the
 next run it asks Apple about that id first: Accepted staples, In Progress waits, Invalid or Rejected prints Apple's log
 and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist submits fresh,
 and when notarytool can't answer, answers something unknown, or stapler can't fetch an accepted ticket, it stops and
