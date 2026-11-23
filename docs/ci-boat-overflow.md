@@ -7,7 +7,7 @@ GitHub-hosted runners run our CI. When they are busy, the long jobs of three wor
 
 | Workflow | Jobs that can move | GitHub runner otherwise | Median time on GitHub |
 | - | - | - | - |
-| `checks.yml` | `typecheck, tests and Mac bundle`, the 3 `browser tests` shares | `ubuntu-latest` | 2.2 min, 4.8 min |
+| `checks.yml` | `typecheck, tests and Mac bundle`, the 6 `browser tests` shares | `ubuntu-latest` | 2.2 min, 4.8 min (with 3 shares) |
 | `linux.yml` | the 2 `checks` jobs, `package` | `ubuntu-24.04` | 2.5 and 4.0 min, 4.4 min |
 | `android.yml` | `app` | `ubuntu-latest` | 5.2 min |
 
@@ -42,7 +42,7 @@ unless every step below says Boat:
    they queue on their own cap. If any read fails or comes back malformed, it picks GitHub (`github-read-failed`)
    rather than deciding from part of the picture.
 6. **Boat has room.** It reads the Boat account's `/limits` with the `BOAT_CI_LIMITS_KEY` secret. After the jobs this
-   run would start (4 for Checks, 3 for Linux, 1 for Android), it needs at least 120 starts left today, 20 this hour,
+   run would start (7 for Checks, 3 for Linux, 1 for Android), it needs at least 120 starts left today, 20 this hour,
    5 this minute, 50 included VM hours, 5 free sandboxes, `canStart`, and the `large` machine type.
 
 Any error, timeout or missing secret picks GitHub. Each request has 5 seconds. After 25 seconds in all, the router

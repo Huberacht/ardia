@@ -79,7 +79,7 @@ const limits = (overrides = {}) => ({
   maxActiveSandboxes: 100,
   starts: {
     unlimited: false,
-    minute: { limit: 10, used: 0, remaining: 10 },
+    minute: { limit: 30, used: 0, remaining: 30 },
     hour: { limit: 50, used: 0, remaining: 50 },
     day: { limit: 300, used: 0, remaining: 300 },
   },
@@ -293,20 +293,22 @@ test("GitHub overflows at the queued or busy threshold, or on one long-queued jo
 
 test("Boat headroom needs every reserve left after this run's starts", () => {
   const settings = settingsFrom({});
-  const check = (overrides, jobs = 4) => headroomOf(limits(overrides), { jobs, settings }).reason;
+  const check = (overrides, jobs = 7) => headroomOf(limits(overrides), { jobs, settings }).reason;
   assert.equal(check({}), "boat-ok");
   assert.equal(check({ canStart: false }), "boat-low-canstart");
   assert.equal(check({ machineTypes: [{ type: "large", available: false }] }), "boat-low-machine");
   assert.equal(check({ machineTypes: [{ type: "small", available: true }] }), "boat-low-machine");
   const starts = (window, remaining) => ({ starts: { ...limits().starts, [window]: { remaining } } });
-  assert.equal(check(starts("day", 124)), "boat-ok");
-  assert.equal(check(starts("day", 123)), "boat-low-day-starts");
-  assert.equal(check(starts("hour", 23)), "boat-low-hour-starts");
-  assert.equal(check(starts("minute", 8)), "boat-low-minute-starts");
-  assert.equal(check(starts("minute", 8), 3), "boat-ok");
+  assert.equal(check(starts("day", 127)), "boat-ok");
+  assert.equal(check(starts("day", 126)), "boat-low-day-starts");
+  assert.equal(check(starts("hour", 27)), "boat-ok");
+  assert.equal(check(starts("hour", 26)), "boat-low-hour-starts");
+  assert.equal(check(starts("minute", 12)), "boat-ok");
+  assert.equal(check(starts("minute", 11)), "boat-low-minute-starts");
+  assert.equal(check(starts("minute", 11), 6), "boat-ok");
   assert.equal(check({ planIncluded: { vmHoursRemaining: 49.9 } }), "boat-low-vm-hours");
-  assert.equal(check({ activeSandboxes: 91, maxActiveSandboxes: 100 }), "boat-ok");
-  assert.equal(check({ activeSandboxes: 92, maxActiveSandboxes: 100 }), "boat-low-sandboxes");
+  assert.equal(check({ activeSandboxes: 88, maxActiveSandboxes: 100 }), "boat-ok");
+  assert.equal(check({ activeSandboxes: 89, maxActiveSandboxes: 100 }), "boat-low-sandboxes");
   assert.equal(check({ starts: { unlimited: true } }), "boat-ok");
 });
 
@@ -589,7 +591,7 @@ function jobBlocks(text) {
 }
 
 const ROUTED = {
-  "checks.yml": { route: "changes", fallback: "ubuntu-latest", jobs: ["check", "browser"], starts: 4 },
+  "checks.yml": { route: "changes", fallback: "ubuntu-latest", jobs: ["check", "browser"], starts: 7 },
   "linux.yml": { route: "route", fallback: "ubuntu-24.04", jobs: ["checks", "package"], starts: 3 },
   "android.yml": { route: "route", fallback: "ubuntu-latest", jobs: ["app"], starts: 1 },
 };
