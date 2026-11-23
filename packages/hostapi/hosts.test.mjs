@@ -7,6 +7,7 @@ const read = (path) => readFileSync(ROOT + path, "utf8");
 const manifest = JSON.parse(read(MANIFEST));
 const domains = Object.entries(manifest.domains);
 const LINUX_ONLY_EVENTS = ["downloads.removed", "history.imported"];
+const NO_WINDOWS_MODULE = ["webKit"];
 
 export function stripComments(written) {
   const source = written.replace(/\\[ \t]*\r?\n/g, "");
@@ -191,8 +192,19 @@ test("the Mac forwards exactly each generated domain's Mac-forwarded engine topi
   for (const { name, topic } of forwarded) assert.equal(macRenamed.get(topic) ?? topic, name, `the Mac emits topic ${topic} as ${name}`);
 });
 
+test("a domain Windows has no module for is absent there call by call and event by event, and forwarded.json never names it", () => {
+  for (const domain of NO_WINDOWS_MODULE) {
+    const entry = manifest.domains[domain];
+    assert.ok(entry, `${domain} is a generated domain`);
+    assert.deepEqual(Object.entries(entry.calls).filter(([, call]) => call.windows !== "absent").map(([verb]) => verb), [], `${domain}'s calls Windows serves`);
+    assert.deepEqual(Object.entries(entry.events).filter(([, event]) => event.windows !== "absent").map(([event]) => event), [], `${domain}'s events Windows sends`);
+    assert.equal(Object.hasOwn(windows.forwarded, domain), false, `forwarded.json forwards ${domain}`);
+    assert.equal(Object.hasOwn(windows.missing, domain), false, `forwarded.json lists ${domain} as missing, which gives it a module`);
+  }
+});
+
 test("Windows forwards exactly each generated domain's service-backed calls to the same engine call, and its forwarded events from their engine topics", () => {
-  for (const [domain, entry] of domains) {
+  for (const [domain, entry] of domains.filter(([domain]) => !NO_WINDOWS_MODULE.includes(domain))) {
     const forwarded = Object.fromEntries(Object.entries(entry.calls).filter(([, call]) => call.windows === "service").map(([verb, call]) => [verb, call.service]));
     assert.deepEqual(windows.forwarded[domain] ?? {}, forwarded, `forwarded.json's ${domain} rows`);
     const absent = Object.entries(entry.calls).filter(([, call]) => call.windows === "absent").map(([verb]) => verb).sort();
@@ -215,9 +227,9 @@ test("the Mac's call table for each domain is the generated one: each service-ba
   }
 });
 
-test("a domain the Mac serves partly by hand builds its module's table from the generated one", () => {
+test("a domain the Mac serves partly or wholly by hand builds its module's table from the generated one", () => {
   const mixed = domains.filter(([, entry]) => entry.swift.endsWith("Calls.swift"));
-  assert.deepEqual(mixed.map(([domain]) => domain).sort(), ["bookmarks", "downloads", "engine", "extensions", "favicons", "permissions", "search", "sites", "tabs"]);
+  assert.deepEqual(mixed.map(([domain]) => domain).sort(), ["autofill", "bookmarks", "contentBlocker", "downloads", "engine", "extensions", "favicons", "media", "passwords", "permissions", "profiles", "search", "sites", "tabs", "webKit", "webView", "windows"]);
   for (const [domain, entry] of mixed) {
     const module = read(entry.swift.replace(/Calls\.swift$/, "Module.swift"));
     assert.match(module, new RegExp(`static let calls = ${domain}CallTable\\(`), `${domain}'s module`);

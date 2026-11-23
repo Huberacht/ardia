@@ -11,7 +11,9 @@ const api = readApi().replace(/\r\n/g, "\n");
 const manifest = readManifest();
 const capitalized = (name) => name[0].toUpperCase() + name.slice(1);
 const sorted = (set) => [...set].sort();
-const GENERATED_EVENTS = "BookmarksEvents & DownloadsEvents & EngineDomainEvents & ExtensionsEvents & FaviconsEvents & HistoryEvents & PermissionsEvents & SearchEvents & SitesEvents & TabsEvents";
+const GENERATED_EVENTS = "AutofillEvents & BookmarksEvents & ContentBlockerEvents & DownloadsEvents & EngineDomainEvents & ExtensionsEvents & FaviconsEvents & HistoryEvents & MediaEvents & PasswordsEvents & PermissionsEvents & ProfilesEvents & SearchEvents & SitesEvents & TabsEvents & WebKitEvents & WebViewEvents & WindowsEvents";
+const EVENTS_TYPE = `export type EngineEvents = ${GENERATED_EVENTS}`;
+const withRows = api.replace(`${EVENTS_TYPE};`, `${EVENTS_TYPE} & {\n  "reauth.sampled": { granted: boolean };\n};`);
 
 test("api.ts takes each generated domain's calls and events from packages/hostapi and restates none of them", () => {
   const calls = typeRows(api, manifest, "EngineCalls");
@@ -26,27 +28,35 @@ test("api.ts takes each generated domain's calls and events from packages/hostap
   }
 });
 
+test("every engine call and event comes from the schema: api.ts hand-writes none", () => {
+  assert.deepEqual(typeRows(api, manifest, "EngineCalls").hand, []);
+  assert.deepEqual(typeRows(api, manifest, "EngineEvents").hand, []);
+  assert.ok(api.includes(`${EVENTS_TYPE};`));
+  assert.notEqual(withRows, api);
+  assert.deepEqual(typeRows(withRows, manifest, "EngineEvents").hand, ["reauth.sampled"]);
+});
+
 test("a type composed from anything but generated domains and one row literal is refused, and every member of the literal is read as a row or refused, so no row escapes the parity checks", () => {
-  const head = `export type EngineEvents = ${GENERATED_EVENTS} & {`;
-  assert.ok(api.includes(head));
+  const head = `${EVENTS_TYPE} & {`;
+  assert.ok(withRows.includes(head));
   const extra = `type Extra = {\n  "tabs.windowRequest": { id: string };\n};\n\n`;
-  assert.throws(() => typeRows(extra + api.replace(head, `export type EngineEvents = Extra & ${GENERATED_EVENTS} & {`), manifest, "EngineEvents"), /Extra, which isn't a generated domain/);
-  assert.throws(() => typeRows(api.replace(head, `export type EngineEvents = ${GENERATED_EVENTS.replace("HistoryEvents", "(HistoryEvents)")} & {`), manifest, "EngineEvents"), /generated domains and one row literal/);
-  const tail = api.indexOf("\n};\n", api.indexOf(head));
-  assert.throws(() => typeRows(`${api.slice(0, tail)}\n} & Extra;\n${api.slice(tail + 4)}`, manifest, "EngineEvents"), /ends its type/);
-  assert.throws(() => typeRows(api.replace(head, `${head}\n  ...Extra,`), manifest, "EngineEvents"), /only rows/);
+  assert.throws(() => typeRows(extra + withRows.replace(head, `export type EngineEvents = Extra & ${GENERATED_EVENTS} & {`), manifest, "EngineEvents"), /Extra, which isn't a generated domain/);
+  assert.throws(() => typeRows(withRows.replace(head, `export type EngineEvents = ${GENERATED_EVENTS.replace("HistoryEvents", "(HistoryEvents)")} & {`), manifest, "EngineEvents"), /generated domains and at most one row literal/);
+  const tail = withRows.indexOf("\n};\n", withRows.indexOf(head));
+  assert.throws(() => typeRows(`${withRows.slice(0, tail)}\n} & Extra;\n${withRows.slice(tail + 4)}`, manifest, "EngineEvents"), /at most one row literal, last/);
+  assert.throws(() => typeRows(withRows.replace(head, `${head}\n  ...Extra,`), manifest, "EngineEvents"), /only rows/);
   assert.throws(() => typeRows(`${api}\nexport type EngineEvents = {};\n`, manifest, "EngineEvents"), /2 times/);
-  const row = api.slice(api.indexOf("\n", api.indexOf(head)) + 1).split("\n")[0];
+  const row = withRows.slice(withRows.indexOf("\n", withRows.indexOf(head)) + 1).split("\n")[0];
   for (const extra of ['"history.undeclared": unknown;', "'history.undeclared': unknown;"]) {
-    assert.ok(typeRows(api.replace(row, `${row} ${extra}`), manifest, "EngineEvents").rows.has("history.undeclared"), extra);
+    assert.ok(typeRows(withRows.replace(row, `${row} ${extra}`), manifest, "EngineEvents").rows.has("history.undeclared"), extra);
   }
   for (const extra of ["historyUndeclared: unknown;", '"history.undeclared2": unknown;', '"history_undeclared": unknown;', "[`history.undeclared`]: unknown;", '"history.undeclared"?: unknown;', "[key: string]: unknown;"]) {
-    assert.throws(() => typeRows(api.replace(row, `${row} ${extra}`), manifest, "EngineEvents"), /only rows/, extra);
+    assert.throws(() => typeRows(withRows.replace(row, `${row} ${extra}`), manifest, "EngineEvents"), /only rows/, extra);
   }
-  assert.throws(() => typeRows(api.replace(row, `${row}\n${row}`), manifest, "EngineEvents"), /twice/);
-  assert.throws(() => typeRows(api.replace(head, `export type EngineEvents<HistoryEvents = { "history.undeclared": unknown }> = ${GENERATED_EVENTS} & {`), manifest, "EngineEvents"), /non-generic/);
-  assert.throws(() => typeRows(api.replace(head, head.replace("export ", "")) + "\nexport type { EngineEvents };\n", manifest, "EngineEvents"), /2 times|exported/);
-  assert.throws(() => typeRows(api.replace(head, head.replace("export ", "")), manifest, "EngineEvents"), /exported/);
+  assert.throws(() => typeRows(withRows.replace(row, `${row}\n${row}`), manifest, "EngineEvents"), /twice/);
+  assert.throws(() => typeRows(withRows.replace(head, `export type EngineEvents<HistoryEvents = { "history.undeclared": unknown }> = ${GENERATED_EVENTS} & {`), manifest, "EngineEvents"), /non-generic/);
+  assert.throws(() => typeRows(withRows.replace(head, head.replace("export ", "")) + "\nexport type { EngineEvents };\n", manifest, "EngineEvents"), /2 times|exported/);
+  assert.throws(() => typeRows(withRows.replace(head, head.replace("export ", "")), manifest, "EngineEvents"), /exported/);
   const historyImport = 'import type { HistoryCalls, HistoryEvents } from "./generated/history";';
   assert.ok(api.includes(historyImport));
   assert.throws(() => typeRows(api.replace(historyImport, `${"/"}* ${historyImport} *${"/"}\nimport type { HistoryCalls } from "./generated/history";\ntype HistoryEvents = { "history.undeclared": unknown };`), manifest, "EngineEvents"), /must be imported from \.\/generated\/history as its HistoryEvents/);
@@ -60,8 +70,8 @@ test("a type composed from anything but generated domains and one row literal is
 });
 
 test("a payload whose own keys look like rows doesn't count as a row", () => {
-  const head = `export type EngineEvents = ${GENERATED_EVENTS} & {`;
-  const nested = api.replace(head, `${head}\n  "bookmarks.nested": { "ui.label": string; 'x.y': number };`);
+  const head = `${EVENTS_TYPE} & {`;
+  const nested = withRows.replace(head, `${head}\n  "bookmarks.nested": { "ui.label": string; 'x.y': number };`);
   const { hand } = typeRows(nested, manifest, "EngineEvents");
   assert.ok(hand.includes("bookmarks.nested"));
   assert.ok(!hand.includes("ui.label") && !hand.includes("x.y"));
