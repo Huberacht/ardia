@@ -343,6 +343,21 @@ class SelectorTest(unittest.TestCase):
         self.assertEqual(self.build.windows_sources('ardia_sources = [ "outer.cc" ]\ngroup("local") {\n  deps = []\n}\n' + tail),
                          ['outer.cc'])
 
+    def test_sources_written_inside_a_foreach_loop_are_refused(self):
+        head = 'ardia_sources = [ "shared.cc" ]\n'
+        for body in ('  sources += [ "ac_passwords_page.cc" ]\n',
+                     '  if (is_win) {\n    sources += [ "ac_passwords_page.cc" ]\n  }\n',
+                     '  sources = ardia_sources\n',
+                     '  sources -= [ "shared.cc" ]\n'):
+            text = f'{head}source_set("ardia") {{\n  sources = ardia_sources\n  foreach(item, []) {{\n  {body}  }}\n}}\n'
+            with self.subTest(body=body), self.assertRaisesRegex(self.build.InputError, 'inside a `foreach\\(...\\)` loop'):
+                self.build.windows_sources(text)
+        nested = f'{head}if (is_win) {{\n  foreach(item, []) {{\n    sources += [ "ac_passwords_page.cc" ]\n  }}\n}}\n'
+        with self.assertRaisesRegex(self.build.InputError, 'inside a `foreach\\(...\\)` loop'):
+            self.build.windows_sources(nested + 'source_set("ardia") {\n  sources = ardia_sources\n}\n')
+        reading = f'{head}source_set("ardia") {{\n  sources = ardia_sources\n  foreach(item, sources) {{\n    print(item)\n  }}\n}}\n'
+        self.assertEqual(self.build.windows_sources(reading), ['shared.cc'])
+
     def test_clearing_ardia_sources_then_listing_it_again_passes_the_rewrite_and_the_reader(self):
         real = self.build.build_text
         self.addCleanup(setattr, self.build, 'build_text', real)

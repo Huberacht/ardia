@@ -418,6 +418,9 @@ class GnReader:
                                 'taken out of the list')
             if active:
                 self.listed = self.names(value[1], line) if operator == '=' else self.listed + self.names(value[1], line)
+        elif name == 'sources' and 'foreach' in self.scopes:
+            self.fail(line, f'`sources {operator}` inside a `foreach(...)` loop, which may run any number of times; list the '
+                            'sources outside it')
         elif name == 'sources' and active:
             if operator == '=' and value == ('name', 'ardia_sources'):
                 self.found.extend(self.listed)
