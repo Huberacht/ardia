@@ -1,7 +1,5 @@
 import { SyncNative } from "../../platform/sync";
 
-export const syncCore = () => SyncNative?.core ?? "native";
-
 export function takeSyncFileCounts() {
   const counts = SyncNative?.takeFileCounts?.();
   const failures = SyncNative?.takeOpenFailures?.();
