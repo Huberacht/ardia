@@ -66,6 +66,7 @@
 //                             profiles, 5000 history entries, 1000 bookmarks) instead of one tab, to time what a
 //                             long-time user's launch does. Its active tab is the bench's id=seed page, so the launch
 //                             rows mean the same; the other 199 tabs point at the bench server's /static?id=p-…
+//     --seed-tabs <n>         --seed big: that many tabs instead of 200 (the extra ones are plain tabs in Personal)
 //     --fresh-copy            launch phase only: every launch runs from its own APFS clone of the app (same signature,
 //                             a new path and inodes), removed after, as the first launch after an install or update
 //                             is. Without it only the first launch of a prepared copy is cold; the rest are warm.
@@ -180,6 +181,7 @@ const { values: opt } = parseArgs({
     env: { type: "string", multiple: true, default: [] },
     "control-env": { type: "string", multiple: true, default: [] },
     seed: { type: "string" },
+    "seed-tabs": { type: "string", default: "200" },
     "profile-count": { type: "string", default: "4" },
     "profile-visits": { type: "string" },
     setting: { type: "string", multiple: true, default: [] },
@@ -574,7 +576,7 @@ const sideSettings = (side) => parseSettings(side.role === "control" ? opt["cont
 function writeBigSeed(side) {
   const dir = side.template;
   const version = execFileSync("defaults", ["read", join(side.src, "Contents/Info.plist"), "CFBundleShortVersionString"], { encoding: "utf8" }).trim();
-  const files = buildSeed(base(), version);
+  const files = buildSeed(base(), version, { tabs: +opt["seed-tabs"] });
   delete files["perf-probe"];
   const session = files["session.json"];
   Object.assign(session.settings, sideSettings(side));
