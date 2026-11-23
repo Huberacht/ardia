@@ -48,7 +48,7 @@ const NOT_SHIPPED = [
 
 const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^127(\.\d+){3}$|^0\.0\.0\.0$|^\[::1?\]$/i;
 const REVERSE_DNS = /^(com|org|net)\./i;
-const URL_AUTHORITY = /\b(?:https?|wss?):\/\/(?:[^\s/@"'`]*@)?(\[[0-9a-f:.]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)(?=[/?#"'`\s)\],;>|]|:\d|$)/giu;
+const URL_AUTHORITY = /\b(?:https?|wss?):\/\/(?:[^\s/@"'`]*@)?(\[[0-9a-f:.]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.?)(?=[/?#"'`\s)\],;>|]|:\d|$)/giu;
 const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|co|me|tv|gov|edu|info|cloud|goog))["'`]/gi;
 const NATIVE = /\.(cc|cpp|h|mm|m|swift|rs|patch)$/;
 
@@ -80,11 +80,13 @@ function removedLines(path) {
 }
 
 function urlHost(authority) {
+  let host;
   try {
-    return new URL(`https://${authority}/`).hostname;
+    host = new URL(`https://${authority}/`).hostname;
   } catch {
-    return authority.toLowerCase();
+    host = authority.toLowerCase();
   }
+  return host.replace(/\.$/, "");
 }
 
 function hostsIn(path) {
@@ -102,7 +104,7 @@ function section(doc, title) {
 }
 
 const ticked = (text) => [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-const looksLikeHost = (value) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(value) && !/\.(md|ts|tsx|mjs|js|swift|mm|cc|h|py|sh|patch|json|plist|txt|ini)$/i.test(value);
+const looksLikeHost = (value) => (/^\[[0-9a-f:.]+\]$/i.test(value) || /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(value)) && !/\.(md|ts|tsx|mjs|js|swift|mm|cc|h|py|sh|patch|json|plist|txt|ini)$/i.test(value);
 const looksLikePath = (value) => /^[\w.@-]+(\/[\w.@-]+)+$/.test(value);
 
 function tableRows(text) {
@@ -121,7 +123,7 @@ const singleLabel = named.split("\n").filter((line) => line.startsWith("- Single
 const disabled = tableRows(section(doc, "Google and Chromium endpoints that are off"));
 
 test("every host hard-coded in Ardia's shipped sources, as a URL or as a quoted host in native and engine code, is listed in docs/privacy.md", () => {
-  const listed = new Set([...[...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost), ...singleLabel].map((h) => h.toLowerCase()));
+  const listed = new Set([...[...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost), ...singleLabel].map(urlHost));
   const files = shippedFiles();
   assert.ok(files.length > 1000, "the scan still finds the app's sources");
   const missing = new Map();
