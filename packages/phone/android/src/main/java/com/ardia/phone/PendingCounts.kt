@@ -70,6 +70,11 @@ object PendingCounts {
         Unit
     }
 
+    fun glassShaderFailures(app: Context, write: (() -> Unit) -> Unit = { work -> kotlin.concurrent.thread(name = "ardia-glass-count") { work() } }): () -> Unit = {
+        val window = UsageConsent.window(app)
+        if (window != null) write { add(app, GLASS_SHADERS_FAILED, window) }
+    }
+
     fun peek(context: Context): Map<String, Int> = synchronized(this) { store(context).all() }
 
     fun take(context: Context): Map<String, Int> = synchronized(this) {
