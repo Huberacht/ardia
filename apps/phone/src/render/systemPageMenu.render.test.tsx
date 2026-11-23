@@ -94,7 +94,7 @@ onIos("a settled page's Night Shade and blocker state is read ahead, so the menu
   await flush();
 });
 
-onIos("Find on Page closes the menu and starts in the same moment, without waiting for the sheet to finish leaving", async () => {
+onIos("Find on Page closes the menu at once and starts on the next frame, so the sheet begins leaving first and Find never waits for it to finish", async () => {
   page("https://site0.example/", false);
   jest.spyOn(pages, "hasSystemFind").mockReturnValue(true);
   const find = jest.spyOn(pages, "presentSystemFind").mockResolvedValue(undefined as never);
@@ -102,6 +102,8 @@ onIos("Find on Page closes the menu and starts in the same moment, without waiti
   await act(async () => void openPageMenu());
   act(() => showFind());
   expect(usePageUi.getState().menuOpen).toBe(false);
+  expect(find).not.toHaveBeenCalled();
+  act(() => jest.advanceTimersByTime(16));
   await flush();
   expect(find).toHaveBeenCalledWith("t0");
   unmount(root);

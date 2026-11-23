@@ -471,9 +471,14 @@ export function showFind() {
   if (usesSystemFind()) {
     countUsage("find_opened_system");
     markFindPressed();
+    const id = selectedId();
     closePageMenu();
     markFindPhase("menuClosing");
-    withPage(async (id) => markFindPhase((await pages.presentSystemFind(id)) ? "navigatorVisible" : "navigatorPending"));
+    if (!id) return;
+    requestAnimationFrame(() => {
+      if (selectedId() !== id) return;
+      quietly(async () => markFindPhase((await pages.presentSystemFind(id)) ? "navigatorVisible" : "navigatorPending"));
+    });
     return;
   }
   countUsage("find_opened_bar");
