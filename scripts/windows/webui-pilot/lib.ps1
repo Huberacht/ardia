@@ -220,6 +220,7 @@ function Shell-Lines-Matching([string]$pattern, [int]$after = 0) { @(Shell-Lines
 
 function Wait-ShellReady([int]$Seconds = 60, [int]$After = 0) {
   $h = Wait-Shell $Seconds
+  Wait-Until { DevTools-Port } $Seconds "this run's own DevTools port" | Out-Null
   Wait-Until { (Shell-Lines-Matching 'shell painted; the start is settled' $After).Count -ge 1 } $Seconds 'the shell to report it painted' | Out-Null
   Wait-Until { (Cdp-Eval 'typeof window.__ardiaHost === "object" && !!document.querySelector(".ardia-window-controls") && document.getElementById("root").innerText.trim().length > 0') -eq $true } $Seconds 'the shell UI to render' | Out-Null
   $h
@@ -227,7 +228,27 @@ function Wait-ShellReady([int]$Seconds = 60, [int]$After = 0) {
 
 function Rect-Text($r) { "$($r.Left),$($r.Top) $($r.Right - $r.Left)x$($r.Bottom - $r.Top)" }
 
-function Cdp-List { $all = Invoke-RestMethod -TimeoutSec 10 "http://127.0.0.1:$($script:Port)/json/list"; @($all | ForEach-Object { $_ }) }
+function DevTools-Port {
+  if ($script:Port -and $script:PortOwner -and [Pilot]::IsTracked($script:PortOwner)) { return $script:Port }
+  $script:Port = 0
+  $script:PortOwner = 0
+  $file = Join-Path $script:Data 'Chromium\DevToolsActivePort'
+  $first = Get-Content -LiteralPath $file -TotalCount 1 -ErrorAction SilentlyContinue
+  $port = 0
+  if (-not [int]::TryParse("$first", [ref]$port) -or $port -le 0) { return 0 }
+  $owner = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue | ForEach-Object OwningProcess | Where-Object { [Pilot]::IsTracked([int]$_) }) | Select-Object -First 1
+  if (-not $owner) { return 0 }
+  $script:Port = $port
+  $script:PortOwner = [int]$owner
+  $port
+}
+
+function Cdp-List {
+  $port = DevTools-Port
+  if (-not $port) { throw "this run's browser has no DevTools port yet" }
+  $all = Invoke-RestMethod -TimeoutSec 10 "http://127.0.0.1:$port/json/list"
+  @($all | ForEach-Object { $_ })
+}
 
 function Cdp-Command([string]$method, $params, [string]$match = 'chrome://ardia/', [switch]$NoReply) {
   $targets = Cdp-List
@@ -263,6 +284,7 @@ $Proof = 'C:\pilot\proof'
 $RunRoot = $null
 $Data = $null
 $Port = 0
+$PortOwner = 0
 New-Item -ItemType Directory -Force $Proof, $RunsRoot | Out-Null
 
 function New-PilotRun {
@@ -273,8 +295,6 @@ function New-PilotRun {
   $script:RunRoot = $root
   $script:Data = Join-Path $root 'data'
   New-Item -ItemType Directory $script:Data | Out-Null
-  $busy = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object LocalPort)
-  do { $script:Port = Get-Random -Minimum 9300 -Maximum 9900 } while ($busy -contains $script:Port)
   $root
 }
 
@@ -292,7 +312,10 @@ function Remove-PilotRun([string]$root) {
 function Start-Shell([switch]$Fresh, [string[]]$Extra = @()) {
   if ($Fresh -or -not $script:Data) { New-PilotRun | Out-Null }
   $env:ARDIA_DATA_DIR = $script:Data
-  $env:ARDIA_REMOTE_DEBUGGING_PORT = "$($script:Port)"
+  $env:ARDIA_REMOTE_DEBUGGING_PORT = '0'
+  $script:Port = 0
+  $script:PortOwner = 0
+  Remove-Item -LiteralPath (Join-Path $script:Data 'Chromium\DevToolsActivePort') -Force -ErrorAction SilentlyContinue
   $arguments = @('--ardia-shell=webui', '--enable-logging', '--v=0') + $Extra
   $p = Start-Process "$App\chrome.exe" -ArgumentList (Join-Arguments $arguments) -PassThru
   [Pilot]::Roots.Add($p.Id) | Out-Null

@@ -1572,11 +1572,23 @@ pass-through regions active) and `install_static_unittests --gtest_filter=UserDa
   before Crashpad starts. There is no fallback: neither Chromium's default folder (the React Native app's) nor a
   temporary one.
 - **No links inside the WebUI tree.** After the folder is created, `install_static` walks the whole profile tree
-  (`FindFirstFileEx`, never following a link) and exits with code 1 if any file or folder in it is a reparse point:
-  a junction, a directory or file symlink, at any depth. Ardia's own check walks the WebUI app-data folder the same
-  way (`FirstLinkInside`). The pilot's tree is its own, so the walk is bounded, and it doesn't matter where a link
-  points: a stale link to an unrelated folder refuses too. The WebUI folder itself may still be a link (a profile
-  moved to another drive); its target is what gets compared above.
+  (`WebUITreeHasLink`: `FindFirstFileEx`, never following a link) and exits with code 1 if any file or folder in it
+  is a reparse point: a junction, a directory or file symlink, at any depth. Ardia's own check walks the WebUI
+  app-data folder with the same function. The pilot's tree is its own, so the walk is bounded, and it doesn't matter
+  where a link points: a stale link to an unrelated folder refuses too. The WebUI folder itself may still be a link
+  (a profile moved to another drive); its target is what gets compared above. Only a reparse attribute refuses.
+  A folder that disappears between being listed and being opened (`ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND`)
+  is skipped, so the running shell clearing its caches can't stop a second launch; so is a subfolder that answers
+  `ERROR_ACCESS_DENIED`, because a folder being deleted while something still holds it open answers exactly that,
+  and a folder in the user's own profile that the user can't list could only have been locked down by a process
+  running as the user, which is out of scope below. If the profile folder itself can't be listed for any reason
+  other than being gone, or a subfolder fails any other way, the walk can't vouch for the tree and the shell
+  refuses to start. `install_static_unittests` (`UserDataDir.WebUITreeWalk*`) checks a plain tree, a subfolder and
+  the root removed just before they're listed, and a directory symlink.
+- **No managed relocation.** If a `UserDataDir` policy is set (HKLM or HKCU, under the install's
+  `SOFTWARE\Policies` key that `install_static` reads), it moves the React Native app's profile and would also decide
+  the WebUI shell's, so the WebUI shell exits with code 1 in `install_static`, before Crashpad opens anything there.
+  The pilot doesn't support managed profile relocation.
 - After those checks `install_static` keeps a handle open on the profile folder for the life of the process, opened
   with `FILE_LIST_DIRECTORY | SYNCHRONIZE` and sharing read and write but not delete, and hands Chromium the handle's
   final path, not the spelling it was given. A handle with no access rights is left out of Windows' sharing check, so
@@ -1636,7 +1648,7 @@ pass-through regions active) and `install_static_unittests --gtest_filter=UserDa
 | `src/ardia/win/webui/webui_shell.{h,cc}` | the bridge bound to the live shell document as on Linux (`Trusted`: the shell's live primary main frame with the committed origin `chrome://ardia/`; `OwnsHandler`: the handler of that document's generation; a new document (a reload or a renderer swap) or a renderer exit retires the generation, which drops its pending replies (`DeliverReply`), its events and its pages; `OnJavascriptDisallowed` drops that handler's pending replies at once and retires the generation only if the handler no longer owns the live document; a page whose creation was asked by a retired document is never made and its profile never loaded; closing the window tears the shell down while its views are still alive (`TearDown`, from `OnWidgetDestroying` and before the widget is reset: the document is retired, pages, delegate, pass-through regions and the view pointers are cleared, and `ShellContents` deletes its children before its own state), so destroying the shell's WebContents can't call back into freed views; tab URLs pass one check (`AllowedPageUrl`) before any profile loads and again before a page navigates: no `javascript:`, no `chrome://ardia` in any spelling or behind `view-source:`, nothing that doesn't parse; a row in `boundaries.json`); one `views::Widget` (`ShellTreeHost`, a `DesktopWindowTreeHostWin` with Chrome's client-area insets; `ShellFrame`, a `views::FrameView` hit tester), the `chrome://ardia` WebUI config, data source and `ardiaRequest` handler, the transparent shell `WebView` above the page `WebView`s, input pass-through, page leases and navigation events, accelerators, `session.read`/`session.write`, `engine.call` for the 36 routes of `ac_linux_contract.h` through the Windows `ac_*` table |
 | `src/ardia/win/webui/webui_caption_script.h` | lines added to `host-bootstrap.js` that report the shell's maximize button rectangle (`ArdiaShell.setMaximizeButton`) |
 | `scripts/windows/assemble-webui.ps1` | engine + `apps/linux/dist` as `ardia-ui\` beside `chrome.exe`, the layout `scripts/linux/package.py` ships |
-| `scripts/windows/webui-pilot/` | the real-input run below (`run.ps1`, its helpers and test page), the stale-document check (`stale.ps1`), the hostile-input check at the bridge's sinks (`bridge.ps1`), the junction check (`junction.ps1`) and the close-cycle check (`close.ps1`); they track the processes they start and stop only those and their children, give each run its own remote-debugging port, run each launch in its own marked folder under `C:\pilot\runs`, and delete only a folder whose `.pilot-run` marker names it |
+| `scripts/windows/webui-pilot/` | the real-input run below (`run.ps1`, its helpers and test page), the stale-document check (`stale.ps1`), the hostile-input check at the bridge's sinks (`bridge.ps1`), the junction check (`junction.ps1`) and the close-cycle check (`close.ps1`), the policy and cleanup-race check (`profile-edges.ps1`) and the concurrent-runs check (`ports.ps1`); they track the processes they start and stop only those and their children, launch with `--remote-debugging-port=0` and read the port back from the run's own `DevToolsActivePort`, using it only while the process listening on it is one this run started, run each launch in its own marked folder under `C:\pilot\runs`, and delete only a folder whose `.pilot-run` marker names it |
 
 The frontend is `apps/linux`'s production build, unchanged, with Linux wording. Host calls the pilot doesn't answer
 resolve to `null` (and `engine.call`s outside the routes fail as unknown) and are logged once each as

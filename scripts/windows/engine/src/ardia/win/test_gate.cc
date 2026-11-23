@@ -14,6 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "chrome/install_static/user_data_dir.h"
 
 namespace ardia_win {
 
@@ -274,42 +275,6 @@ base::FilePath AppDataRoot(const wchar_t* variable, int key) {
   return base::PathService::Get(key, &folder) ? folder : base::FilePath();
 }
 
-std::optional<std::wstring> FirstLinkInside(const std::wstring& root) {
-  std::vector<std::wstring> pending{root};
-  while (!pending.empty()) {
-    const std::wstring folder = std::move(pending.back());
-    pending.pop_back();
-    WIN32_FIND_DATAW data;
-    HANDLE find = ::FindFirstFileExW((folder + L"\\*").c_str(),
-                                     FindExInfoBasic, &data,
-                                     FindExSearchNameMatch, nullptr,
-                                     FIND_FIRST_EX_LARGE_FETCH);
-    if (find == INVALID_HANDLE_VALUE) {
-      return folder;
-    }
-    std::optional<std::wstring> link;
-    do {
-      const std::wstring name = data.cFileName;
-      if (name == L"." || name == L"..") {
-        continue;
-      }
-      const std::wstring child = folder + L"\\" + name;
-      if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
-        link = child;
-        break;
-      }
-      if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-        pending.push_back(child);
-      }
-    } while (::FindNextFileW(find, &data));
-    ::FindClose(find);
-    if (link) {
-      return link;
-    }
-  }
-  return std::nullopt;
-}
-
 std::vector<std::optional<std::wstring>> ReactNativeFolders() {
   std::vector<std::optional<std::wstring>> folders;
   for (const auto& [variable, key] :
@@ -334,11 +299,9 @@ std::wstring ReactNativeFolderClash(const std::vector<std::wstring>& folders) {
     if (!mine) {
       return L"the WebUI folder " + folder + L" can't be resolved";
     }
-    if (Exists(base::FilePath(folder))) {
-      if (const std::optional<std::wstring> link = FirstLinkInside(*mine)) {
-        return L"the WebUI folder " + folder + L" holds a link or an unreadable "
-               L"folder at " + *link;
-      }
+    if (install_static::WebUITreeHasLink(*mine, nullptr, nullptr)) {
+      return L"the WebUI folder " + folder +
+             L" holds a link or a folder that can't be listed";
     }
     for (const std::optional<std::wstring>& protected_folder : theirs) {
       if (!protected_folder) {
