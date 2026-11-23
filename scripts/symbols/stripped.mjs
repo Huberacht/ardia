@@ -2,25 +2,33 @@ import { createHash } from "node:crypto";
 import { functionStarts, imageFor } from "./macho.mjs";
 import { buildMap, lookup } from "./symbol-map.mjs";
 
+function writesDestination(w) {
+  if ((w & 0x1c000000) >>> 0 === 0x10000000) return true;
+  if ((w & 0x0e000000) >>> 0 === 0x0a000000) return true;
+  const generalLoad = (w & 0x0a000000) >>> 0 === 0x08000000 && !(w & 0x04000000);
+  return generalLoad && ((w & 0x00400000) !== 0 || (w & 0x3b000000) >>> 0 === 0x18000000);
+}
+
 export function maskedWords(words) {
   const out = new Uint32Array(words.length);
   const pageRegisters = new Set();
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
+    const pcRelative = (w & 0x1f000000) >>> 0 === 0x10000000;
     if ((w & 0x7c000000) >>> 0 === 0x14000000) out[i] = (w & 0xfc000000) >>> 0;
-    else if ((w & 0x1f000000) >>> 0 === 0x10000000) {
-      out[i] = (w & 0x9f00001f) >>> 0;
-      pageRegisters.add(w & 0x1f);
-    } else if ((w & 0x3b000000) >>> 0 === 0x18000000) out[i] = (w & 0xff00001f) >>> 0;
+    else if (pcRelative) out[i] = (w & 0x9f00001f) >>> 0;
+    else if ((w & 0x3b000000) >>> 0 === 0x18000000) out[i] = (w & 0xff00001f) >>> 0;
     else if (pageRegisters.has((w >>> 5) & 0x1f) && ((w & 0x7f800000) >>> 0 === 0x11000000 || (w & 0x3b000000) >>> 0 === 0x39000000)) out[i] = (w & ~(0xfff << 10)) >>> 0;
     else out[i] = w;
+    if (pcRelative) pageRegisters.add(w & 0x1f);
+    else if (writesDestination(w)) pageRegisters.delete(w & 0x1f);
   }
   return out;
 }
 
 export function functionsOf(buffer) {
-  const found = imageFor(buffer);
-  if (!found) throw new Error("not a Mach-O binary");
+  const found = imageFor(buffer, null, "arm64");
+  if (!found) throw new Error("no arm64 slice: matching code only understands arm64");
   const { slice, image } = found;
   if (!image.text || image.base == null) throw new Error("the binary has no __TEXT,__text section");
   const textEnd = image.text.addr + image.text.size;
@@ -54,6 +62,8 @@ export function nameStripped({ targetBuffer, siblingBuffer, dsymBuffer, objc = n
 
   const entries = [];
   const counts = { objc: 0, code: 0, position: 0, none: 0 };
+  const nextPaired = new Array(target.funcs.length + 1).fill(target.funcs.length);
+  for (let i = target.funcs.length - 1; i >= 0; i--) nextPaired[i] = pair[i] >= 0 ? i : nextPaired[i + 1];
   let previous = -1;
   for (let i = 0; i < target.funcs.length; i++) {
     if (pair[i] >= 0) previous = i;
@@ -62,8 +72,7 @@ export function nameStripped({ targetBuffer, siblingBuffer, dsymBuffer, objc = n
     if (name) counts.objc++;
     else if (pair[i] >= 0 && (name = siblingName(sibling.funcs[pair[i]].start))) counts.code++;
     else {
-      let next = i + 1;
-      while (next < target.funcs.length && pair[next] < 0) next++;
+      const next = nextPaired[i + 1];
       if (previous >= 0 && previous < i && next < target.funcs.length && pair[next] - pair[previous] === next - previous) {
         const guess = siblingName(sibling.funcs[pair[previous] + (i - previous)].start);
         if (guess) {

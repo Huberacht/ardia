@@ -10,7 +10,7 @@ import { crashFrames, frameOffset, freezeFrames, imageUuids, nativeFrames, wante
 import { knownSql, plan, resolve, RETRY_MISSING_MS, run } from "./job.mjs";
 import { functionStarts, functionSymbols, imageFor, parseImage } from "./macho.mjs";
 import { parseUuids, SymbolStore } from "./releases.mjs";
-import { maskedWords, nameStripped } from "./stripped.mjs";
+import { functionsOf, maskedWords, nameStripped } from "./stripped.mjs";
 import { buildMap, demangle, lookup, parseMap, serializeMap } from "./symbol-map.mjs";
 
 const NO_DEMANGLERS = { swift: [], cxx: [] };
@@ -71,7 +71,7 @@ test("a frame's offset is from the image's __TEXT start, and names the function 
   assert.deepEqual(lookup(map, 0x10ff), { name: "main", delta: 0xff });
   assert.deepEqual(lookup(map, 0x1100), { name: "-[MenuTarget undo:]", delta: 0 });
   assert.deepEqual(lookup(map, 0x1190), { name: "-[MenuTarget undo:]", delta: 0x90 });
-  assert.deepEqual(lookup(map, 0x1280), { name: "$s5Ardia10MenuTargetC4undoyyypF.alias", delta: 0x80 });
+  assert.deepEqual(lookup(map, 0x1280), { name: "$s5Ardia10MenuTargetC4undoyyypF.alias (identical code folded)", delta: 0x80 });
   assert.equal(lookup(map, 0xfff), null);
   assert.equal(lookup(map, 0x1300), null);
   assert.equal(lookup(map, -1), null);
@@ -217,7 +217,7 @@ test("end to end: frames from events are named from a published release's dSYM a
   const named = Object.fromEntries(rows.map((r) => [`${r.image}+0x${r.offset.toString(16)}`, `${r.symbol}|${r.symbol_offset}|${r.source}`]));
   assert.deepEqual(named, {
     "Chromium Framework+0x4104": "-[CrApplication sendAction:to:from:]|4|dsym",
-    "Ardia+0x1210": "$s5Ardia10MenuTargetC4undoyyypF.alias|16|match",
+    "Ardia+0x1210": "$s5Ardia10MenuTargetC4undoyyypF.alias (identical code folded)|16|match",
     "Ardia+0x10": "|0|none",
   });
   assert.deepEqual(summary.buildsWithoutSymbols, [`Ardia ${OTHER_UUID}`]);
@@ -237,8 +237,8 @@ test("end to end: frames from events are named from a published release's dSYM a
 });
 
 test("masking ignores PC-relative fields, so moved code still matches", () => {
-  const a = maskedWords(Uint32Array.from([0x94000010, 0x90000008, 0x91002108, 0xf9400508, 0x91000400, 0x14000002]));
-  const b = maskedWords(Uint32Array.from([0x94000220, 0xb0000008, 0x91234108, 0xf9411108, 0x91000400, 0x14000002]));
+  const a = maskedWords(Uint32Array.from([0x94000010, 0x90000008, 0xf9400508, 0x90000009, 0x91002120, 0x91000400, 0x14000002]));
+  const b = maskedWords(Uint32Array.from([0x94000220, 0xb0000008, 0xf9411108, 0xb0000009, 0x91234120, 0x91000400, 0x14000002]));
   assert.deepEqual([...a], [...b]);
   const c = maskedWords(Uint32Array.from([0x91000800]));
   assert.notDeepEqual([...maskedWords(Uint32Array.from([0x91000400]))], [...c]);
@@ -357,4 +357,64 @@ test("a cached match map gives way to a dSYM a release publishes later, and stay
   const map = (await later.maps([APP_UUID])).get(APP_UUID);
   assert.equal(map.source, "dsym");
   assert.deepEqual(lookup(map, 0x1104), { name: "-[MenuTarget undo:]", delta: 4 });
+});
+
+test("a downloaded file whose load commands, names or function starts run past their bounds is refused or skipped, never misread", () => {
+  const segmentTooSmall = appBinary();
+  segmentTooSmall.writeUInt32LE(5000, 32 + 64);
+  assert.throws(() => parseImage(segmentTooSmall), /sections run past/);
+  const uuidTooShort = appBinary();
+  const uuidAt = 32 + segmentTooSmall.readUInt32LE(36);
+  uuidTooShort.writeUInt32LE(12, uuidAt + 4);
+  assert.throws(() => parseImage(uuidTooShort), /bad size/);
+  const unterminated = machO({ uuid: APP_UUID, text: Buffer.alloc(0x40), symbols: [{ name: "_kept", address: TEXT }, { name: "_last", address: TEXT + 0x20 }] });
+  unterminated[unterminated.length - 1] = 0x41;
+  const parsed = imageFor(unterminated);
+  assert.deepEqual(functionSymbols(parsed.slice, parsed.image).map((s) => s.name), ["_kept"]);
+  const cutOff = appBinary();
+  const { image } = imageFor(cutOff);
+  cutOff[image.functionStarts.dataoff + image.functionStarts.datasize - 1] = 0x80;
+  assert.throws(() => functionStarts(cutOff, parseImage(cutOff)), /cut off/);
+  const pastEnd = { ...image, functionStarts: { dataoff: cutOff.length - 2, datasize: 10 } };
+  assert.throws(() => functionStarts(cutOff, pastEnd), /run past/);
+});
+
+test("a symbol at the end of __text gets no empty row, and maps with an unknown version or overlapping rows are refused", () => {
+  const binary = machO({ uuid: APP_UUID, text: Buffer.alloc(0x40), symbols: [{ name: "_a", address: TEXT }, { name: "_end_marker", address: TEXT + 0x40 }] });
+  const map = buildMap(binary, APP_UUID, { demanglers: NO_DEMANGLERS });
+  assert.deepEqual(map.entries.map((e) => [e.name, e.end - e.start]), [["a", 0x40]]);
+  assert.deepEqual(parseMap(serializeMap(map)), map);
+  const header = serializeMap(map).split("\n")[0];
+  assert.throws(() => parseMap(header.replace("ardia-symbol-map 1 ", "ardia-symbol-map 10 ") + "\n"), /not an Ardia symbol map/);
+  assert.throws(() => parseMap([header, "1000\t1030\ta", "1020\t1022\tb"].join("\n")), /non-overlapping/);
+  assert.equal(parseMap([header, "1000\t1020\ta", "1020\t1022\tb", "1030\t1040\tc"].join("\n")).entries.length, 3);
+});
+
+test("an image name listed with two UUIDs names no frames, and stored rows are read only for the wanted offsets", () => {
+  assert.equal(imageUuids([{ name: "Ardia", uuid: APP_UUID }, { name: "Ardia", uuid: OTHER_UUID }, { name: "Ardia", uuid: APP_UUID }]).size, 0);
+  assert.deepEqual([...imageUuids([{ name: "Ardia", uuid: APP_UUID }, { name: "Ardia", uuid: APP_UUID.toUpperCase() }])], [["Ardia", APP_UUID]]);
+  assert.match(knownSql("sandbox", [APP_UUID, APP_UUID], [16, 2, 16, -1, 1.5]), new RegExp(`uuid IN \\('${APP_UUID}'\\) AND offset IN \\(16, 2\\)`));
+});
+
+test("an unreadable cached map is dropped and treated as missing", async () => {
+  const cache = join(scratch, "corrupt-cache");
+  const logs = [];
+  const store = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch: async () => new Response("[]", { status: 200 }), log: (line) => logs.push(line) });
+  writeFileSync(store.mapPath(APP_UUID), "not a map");
+  store.saveMap({ ...buildMap(appBinary(OTHER_UUID), OTHER_UUID, { demanglers: NO_DEMANGLERS }) });
+  const maps = await store.maps([APP_UUID, OTHER_UUID]);
+  assert.deepEqual([...maps.keys()], [OTHER_UUID]);
+  assert.ok(!existsSync(store.mapPath(APP_UUID)));
+  assert.ok(logs.some((line) => line.includes("unreadable cached map")));
+});
+
+test("a page register written again is no longer treated as page-relative, and matching needs arm64", () => {
+  const withImmediate = (imm) => maskedWords(Uint32Array.from([0x90000008, 0xd2800028, (0x91000100 | (imm << 10)) >>> 0]));
+  assert.notDeepEqual([...withImmediate(4)], [...withImmediate(8)]);
+  const pageOffset = (imm) => maskedWords(Uint32Array.from([0x90000008, (0x91000100 | (imm << 10)) >>> 0]));
+  assert.deepEqual([...pageOffset(4)], [...pageOffset(8)]);
+  const pastStoresAndBranches = (imm) => maskedWords(Uint32Array.from([0x90000015, 0xf90003f5, 0xb4000555, 0x94000015, (0xf94002b5 | (imm << 10)) >>> 0]));
+  assert.deepEqual([...pastStoresAndBranches(0x124)], [...pastStoresAndBranches(0x675)], "a store, CBZ or branch naming x21 leaves it page-relative");
+  assert.throws(() => functionsOf(machO({ uuid: OTHER_UUID, cpu: 0x01000007, text: Buffer.alloc(16), starts: [TEXT] })), /arm64/);
+  assert.equal(functionsOf(fat([machO({ uuid: OTHER_UUID, cpu: 0x01000007, text: Buffer.alloc(16), starts: [TEXT] }), appBinary()])).image.arch, "arm64");
 });

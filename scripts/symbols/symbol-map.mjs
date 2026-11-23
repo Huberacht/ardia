@@ -54,16 +54,25 @@ export function buildMap(buffer, uuid, { demanglers } = {}) {
   const { slice, image } = found;
   if (image.base == null || !image.text) throw new Error("the image has no __TEXT,__text section");
   const rank = (symbol) => (symbol.name.startsWith("<") ? 0 : 2) + (symbol.external ? 1 : 0);
-  const best = new Map();
-  const folded = new Set();
-  for (const symbol of functionSymbols(slice, image)) {
-    if (symbol.name.startsWith("<deduplicated_symbol>")) folded.add(symbol.address);
-    const held = best.get(symbol.address);
-    if (!held || rank(symbol) > rank(held)) best.set(symbol.address, symbol);
-  }
-  const starts = [...best.keys()].sort((a, b) => a - b);
-  const names = demangle(starts.map((a) => best.get(a).name), demanglers).map((name, i) => (folded.has(starts[i]) && !name.startsWith("<") ? `${name}${FOLDED}` : name));
   const textEnd = image.text.addr + image.text.size;
+  const byAddress = new Map();
+  for (const symbol of functionSymbols(slice, image)) {
+    if (symbol.address < image.text.addr || symbol.address >= textEnd) continue;
+    const held = byAddress.get(symbol.address);
+    if (held) held.push(symbol);
+    else byAddress.set(symbol.address, [symbol]);
+  }
+  const starts = [...byAddress.keys()].sort((a, b) => a - b);
+  const unique = [...new Set([...byAddress.values()].flat().map((s) => s.name))];
+  const demangled = new Map(demangle(unique, demanglers).map((name, i) => [unique[i], name]));
+  const names = starts.map((address) => {
+    const symbols = byAddress.get(address);
+    const best = symbols.reduce((a, b) => (rank(b) > rank(a) ? b : a));
+    const name = demangled.get(best.name);
+    const distinct = new Set(symbols.filter((s) => !s.name.startsWith("<")).map((s) => demangled.get(s.name)));
+    const folded = distinct.size > 1 || (symbols.some((s) => s.name.startsWith("<deduplicated_symbol>")) && !name.startsWith("<"));
+    return folded ? `${name}${FOLDED}` : name;
+  });
   const entries = starts.map((address, i) => ({
     start: address - image.base,
     end: (i + 1 < starts.length ? starts[i + 1] : textEnd) - image.base,
@@ -86,18 +95,18 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export function parseMap(text) {
   const lines = text.split("\n");
   const head = lines[0]?.split(" ") ?? [];
-  if (lines[0]?.slice(0, MAP_HEADER.length) !== MAP_HEADER || head.length !== 8) throw new Error("not an Ardia symbol map");
+  if (head.length !== 8 || head.slice(0, 3).join(" ") !== MAP_HEADER) throw new Error("not an Ardia symbol map");
   const [, , , uuid, arch, source, textStart, textEnd] = head;
   if (!UUID.test(uuid) || !HEX.test(textStart) || !HEX.test(textEnd) || !/^[a-z]+$/.test(source)) throw new Error("the symbol map's header is malformed");
   const entries = [];
-  let previous = -1;
+  let previousEnd = 0;
   for (const line of lines.slice(1)) {
     if (!line) continue;
     const [start, end, ...rest] = line.split("\t");
     if (!HEX.test(start) || !HEX.test(end) || !rest.length) throw new Error(`the symbol map has a malformed row: ${line.slice(0, 80)}`);
     const entry = { start: parseInt(start, 16), end: parseInt(end, 16), name: rest.join("\t") };
-    if (entry.start <= previous || entry.end <= entry.start) throw new Error("the symbol map's rows aren't sorted ranges");
-    previous = entry.start;
+    if (entry.start < previousEnd || entry.end <= entry.start) throw new Error("the symbol map's rows aren't sorted, non-overlapping ranges");
+    previousEnd = entry.end;
     entries.push(entry);
   }
   return { uuid, arch, source, textStart: parseInt(textStart, 16), textEnd: parseInt(textEnd, 16), entries };

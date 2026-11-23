@@ -19,12 +19,18 @@ function parsed(json: string): unknown {
 
 export function imageUuids(imagesJson: string): Map<string, string> {
   const images = new Map<string, string>();
+  const ambiguous = new Set<string>();
   const list = parsed(imagesJson);
   if (!Array.isArray(list)) return images;
   for (const entry of list as { name?: unknown; uuid?: unknown }[]) {
     const name = typeof entry?.name === "string" ? entry.name : "";
     const uuid = typeof entry?.uuid === "string" ? entry.uuid.toLowerCase() : "";
-    if (name && UUID.test(uuid) && !images.has(name)) images.set(name, uuid);
+    if (!name || !UUID.test(uuid) || ambiguous.has(name)) continue;
+    if (!images.has(name)) images.set(name, uuid);
+    else if (images.get(name) !== uuid) {
+      images.delete(name);
+      ambiguous.add(name);
+    }
   }
   return images;
 }

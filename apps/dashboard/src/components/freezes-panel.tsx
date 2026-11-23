@@ -27,14 +27,16 @@ function Signatures({ data }: { data: Freezes }) {
           {
             key: "where",
             header: "Where",
-            cell: (s: Signature) => (
-              <span
-                className="font-mono text-[12px]"
-                title={s.topFrames.map((label, i) => (label === s.rawFrames[i] ? label : `${label}  (${s.rawFrames[i]})`)).join("\n") || "No frames from Ardia's own code"}
-              >
-                {s.topFrames[0] ?? `no own frames (${s.signature})`}
-              </span>
-            ),
+            cell: (s: Signature) => {
+              const lines = s.topFrames.map((label, i) => (label === s.rawFrames[i] ? label : `${label}  (${s.rawFrames[i]})`));
+              if (!lines.length) return <span className="font-mono text-[12px]" title="No frames from Ardia's own code">{`no own frames (${s.signature})`}</span>;
+              return (
+                <details className="font-mono text-[12px]" title={lines.join("\n")}>
+                  <summary className="cursor-pointer">{s.topFrames[0]}</summary>
+                  <pre className="mt-1 whitespace-pre-wrap text-[11px] text-muted-foreground">{lines.join("\n")}</pre>
+                </details>
+              );
+            },
           },
           { key: "thread", header: "Thread", cell: (s: Signature) => THREAD[s.thread] ?? s.thread },
           { key: "activity", header: "Job", cell: (s: Signature) => (s.activity && s.activity !== "none" ? s.activity : "–") },

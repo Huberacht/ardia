@@ -30,10 +30,11 @@ WHERE event IN ('app_freeze', '$exception')
   AND if(event = 'app_freeze', properties['freeze_images'], properties['crash_images']) NOT IN ('', '[]')
 FORMAT JSONEachRow`;
 
-export function knownSql(db, uuids) {
+export function knownSql(db, uuids, offsets = []) {
   if (!IDENTIFIER.test(db)) throw new Error("the sandbox database must be a plain identifier");
-  const list = uuids.filter((u) => UUID.test(u)).map((u) => `'${u}'`).join(", ");
-  return `SELECT uuid, offset, source, symbol, symbol_offset, toUnixTimestamp64Milli(resolved_at) AS at FROM ${db}.${TABLE} FINAL WHERE uuid IN (${list || "''"}) FORMAT JSONEachRow`;
+  const list = [...new Set(uuids.filter((u) => typeof u === "string" && UUID.test(u)))].map((u) => `'${u}'`).join(", ");
+  const at = [...new Set(offsets.filter((o) => Number.isSafeInteger(o) && o >= 0))].join(", ");
+  return `SELECT uuid, offset, source, symbol, symbol_offset, toUnixTimestamp64Milli(resolved_at) AS at FROM ${db}.${TABLE} FINAL WHERE uuid IN (${list || "''"}) AND offset IN (${at || "0"}) FORMAT JSONEachRow`;
 }
 
 export function plan(wanted, known, now) {
@@ -104,7 +105,7 @@ export async function run({ reader, sandbox, db = "sandbox", store, days = 14, d
   if (sandbox) {
     if (!dryRun) await sandbox(createTable(db));
     try {
-      known = jsonLines(await sandbox(knownSql(db, [...new Set(wanted.map((f) => f.uuid))])));
+      known = jsonLines(await sandbox(knownSql(db, wanted.map((f) => f.uuid), wanted.map((f) => f.offset))));
     } catch (error) {
       if (!dryRun) throw error;
       log(`couldn't read ${db}.${TABLE}: ${error.message}`);

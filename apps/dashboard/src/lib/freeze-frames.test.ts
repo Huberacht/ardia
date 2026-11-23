@@ -43,4 +43,5 @@ test("frames without a known image, or with a malformed offset, stay raw and are
   assert.equal(nativeFrame({ function: "x", module: "Chromium Framework", image_offset: "0x" }, images).offset, null);
   assert.equal(nativeFrame({ function: "x", module: "Chromium Framework", image_offset: "0x" + "f".repeat(14) }, images).offset, null);
   assert.equal(imageUuids("[{").size, 0);
+  assert.equal(imageUuids(JSON.stringify([{ name: "Ardia", uuid: APP }, { name: "Ardia", uuid: ENGINE }])).size, 0);
 });

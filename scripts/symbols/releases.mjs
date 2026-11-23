@@ -44,6 +44,16 @@ export class SymbolStore {
     return join(this.cache, "maps", `${uuid}.map.gz`);
   }
 
+  loadCached(uuid) {
+    if (this.loaded.has(uuid) || !existsSync(this.mapPath(uuid))) return;
+    try {
+      this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
+    } catch (error) {
+      this.log(`dropping the unreadable cached map for ${uuid}: ${error.message}`);
+      rmSync(this.mapPath(uuid), { force: true });
+    }
+  }
+
   saveMap(map) {
     const path = this.mapPath(map.uuid);
     writeFileSync(`${path}.part`, gzipSync(serializeMap(map)));
@@ -165,7 +175,7 @@ export class SymbolStore {
     this.importMapDirs();
     const missing = [];
     for (const uuid of uuids) {
-      if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
+      this.loadCached(uuid);
       if (this.loaded.get(uuid)?.source !== "dsym") missing.push(uuid);
     }
     let index = null;
@@ -176,7 +186,7 @@ export class SymbolStore {
         this.log(`couldn't list releases, using cached maps only: ${error.message}`);
       }
     }
-    for (const uuid of missing) if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
+    for (const uuid of missing) this.loadCached(uuid);
     if (index) {
       const failed = new Set();
       for (let round = 0; round < 8; round++) {

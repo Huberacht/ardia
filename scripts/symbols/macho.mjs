@@ -19,6 +19,13 @@ const cString = (buffer, start) => {
   return buffer.toString("utf8", start, end < 0 ? buffer.length : end);
 };
 
+const tableString = (buffer, start, limit) => {
+  const end = buffer.subarray(0, limit).indexOf(0, start);
+  return end < 0 ? null : buffer.toString("utf8", start, end);
+};
+
+const FIXED_SIZE = { [LC_SEGMENT_64]: 72, [LC_UUID]: 24, [LC_SYMTAB]: 24, [LC_FUNCTION_STARTS]: 16 };
+
 const uuidString = (bytes) => {
   const hex = Buffer.from(bytes).toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
@@ -55,11 +62,12 @@ export function parseImage(slice) {
     if (at + 8 > slice.length) throw new Error("not a Mach-O file: load commands run past the end");
     const cmd = slice.readUInt32LE(at);
     const size = slice.readUInt32LE(at + 4);
-    if (size < 8 || at + size > slice.length) throw new Error("not a Mach-O file: a load command has a bad size");
+    if (size < (FIXED_SIZE[cmd] ?? 8) || at + size > slice.length) throw new Error("not a Mach-O file: a load command has a bad size");
     if (cmd === LC_SEGMENT_64) {
       const segment = cString(slice.subarray(at + 8, at + 24), 0);
       const vmaddr = Number(slice.readBigUInt64LE(at + 24));
       const nsects = slice.readUInt32LE(at + 64);
+      if (72 + nsects * 80 > size) throw new Error("not a Mach-O file: a segment's sections run past its load command");
       if (segment === "__TEXT") image.base = vmaddr;
       for (let s = 0; s < nsects; s++) {
         const sect = at + 72 + s * 80;
@@ -87,10 +95,10 @@ export function parseImage(slice) {
   return image;
 }
 
-export function imageFor(buffer, uuid) {
+export function imageFor(buffer, uuid, arch) {
   for (const slice of slices(buffer)) {
     const image = parseImage(slice);
-    if (!uuid || image.uuid === uuid) return { slice, image };
+    if ((!uuid || image.uuid === uuid) && (!arch || image.arch === arch)) return { slice, image };
   }
   return null;
 }
@@ -108,7 +116,7 @@ export function functionSymbols(slice, image) {
     const type = slice[at + 4];
     const sect = slice[at + 5];
     if (type & N_STAB || (type & N_TYPE) !== N_SECT || sect !== image.text.index || strx >= strsize) continue;
-    const name = cString(slice, stroff + strx);
+    const name = tableString(slice, stroff + strx, stroff + strsize);
     if (!name || LOCAL_LABEL.test(name)) continue;
     out.push({ address: Number(slice.readBigUInt64LE(at + 8)), name, external: Boolean(type & N_EXT), order: i });
   }
@@ -118,13 +126,16 @@ export function functionSymbols(slice, image) {
 export function functionStarts(slice, image) {
   if (!image.functionStarts || image.base == null) return [];
   const { dataoff, datasize } = image.functionStarts;
+  const end = dataoff + datasize;
+  if (end > slice.length) throw new Error("not a Mach-O file: the function starts run past the end");
   const out = [];
   let address = image.base;
   let at = dataoff;
-  while (at < dataoff + datasize) {
+  while (at < end) {
     let value = 0;
     let shift = 0;
     for (;;) {
+      if (at >= end || shift > 63) throw new Error("not a Mach-O file: a function start is cut off");
       const byte = slice[at++];
       value += (byte & 0x7f) * 2 ** shift;
       shift += 7;

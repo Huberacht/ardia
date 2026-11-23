@@ -40,8 +40,8 @@ for (const key of ["target", "sibling", "dsym", "out"]) {
   }
 }
 
-function objcNames(path, base) {
-  const run = spawnSync("dyld_info", ["-objc", path], { encoding: "utf8", maxBuffer: 1 << 28 });
+function objcNames(path, base, arch) {
+  const run = spawnSync("dyld_info", ["-arch", arch, "-objc", path], { encoding: "utf8", maxBuffer: 1 << 28 });
   const names = new Map();
   if (run.status !== 0) {
     console.error("warning: dyld_info -objc failed, so no Objective-C names from the target itself");
@@ -52,16 +52,16 @@ function objcNames(path, base) {
 }
 
 const targetBuffer = readFileSync(values.target);
-const found = imageFor(targetBuffer);
+const found = imageFor(targetBuffer, null, "arm64");
 if (!found) {
-  console.error(`error: ${values.target} isn't a Mach-O binary`);
+  console.error(`error: ${values.target} has no arm64 slice`);
   process.exit(1);
 }
 const { map, counts, functions } = nameStripped({
   targetBuffer,
   siblingBuffer: readFileSync(values.sibling),
   dsymBuffer: readFileSync(values.dsym),
-  objc: objcNames(values.target, found.image.base),
+  objc: objcNames(values.target, found.image.base, found.image.arch),
 });
 writeFileSync(values.out, values.out.endsWith(".gz") ? gzipSync(serializeMap(map)) : serializeMap(map));
 console.error(`${map.uuid}: ${functions} functions, named ${counts.objc} from Objective-C, ${counts.code} by identical code, ${counts.position} by position; ${counts.none} left unnamed`);
