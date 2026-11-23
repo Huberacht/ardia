@@ -34,7 +34,8 @@ const SCANNED = [
 ];
 
 const NOT_SHIPPED = [
-  /(^|\/)(tests?|__tests__|test-native|fixtures|plugin-tests|selfCheck|probe|testdata)\//,
+  /(^|\/)(tests?|__tests__|test-native|fixtures|selfCheck|probe|testdata)\//,
+  /(^|\/)[^/]*-tests\//,
   /.\/scripts\//,
   /(^|\/)[^/]*Tests?\//,
   /\.(test|spec)\.[^/]+$/,
@@ -45,8 +46,10 @@ const NOT_SHIPPED = [
   /(^|\/)(THIRD_PARTY_NOTICES|LICENSE|NOTICE)[^/]*$/,
 ];
 
-const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^[\d.]+$|^0x[\da-f.]+$/i;
+const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^[\d.]+$|^0x[\da-f.]+$|^(com|org|net)\./i;
 const URL_HOST = /\b(?:https?|wss?):\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi;
+const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|co|me|tv|gov|edu|info|cloud|goog))["'`]/gi;
+const NATIVE = /\.(cc|cpp|h|mm|m|swift|rs|patch)$/;
 
 const read = (path) => readFileSync(join(ROOT, path), "utf8");
 
@@ -55,10 +58,30 @@ function shippedFiles() {
   return listed.split("\0").filter((path) => path && !NOT_SHIPPED.some((rule) => rule.test(path)));
 }
 
+function shippedText(path) {
+  const text = read(path);
+  if (!path.endsWith(".patch")) return text;
+  const hunks = text.slice(Math.max(0, text.indexOf("\n@@")));
+  return hunks
+    .split("\n")
+    .filter((line) => line.startsWith("+") || line.startsWith(" "))
+    .filter((line) => !line.startsWith("+++"))
+    .join("\n");
+}
+
+function removedLines(path) {
+  const text = read(path);
+  return text
+    .slice(Math.max(0, text.indexOf("\n@@")))
+    .split("\n")
+    .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+    .join("\n");
+}
+
 function hostsIn(path) {
-  let text = read(path);
-  if (path.endsWith(".patch")) text = text.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).join("\n");
-  return [...text.matchAll(URL_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !RESERVED.test(host));
+  const text = shippedText(path);
+  const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)] : [];
+  return [...text.matchAll(URL_HOST), ...quoted].map((m) => m[1].toLowerCase()).filter((host) => !RESERVED.test(host));
 }
 
 function section(doc, title) {
@@ -86,7 +109,7 @@ const contacted = tableRows(section(doc, "Endpoints Ardia contacts"));
 const named = section(doc, "Hosts named in the source that Ardia doesn't contact");
 const disabled = tableRows(section(doc, "Google and Chromium endpoints that are off"));
 
-test("every http(s) host hard-coded in Ardia's shipped sources is listed in docs/privacy.md", () => {
+test("every host hard-coded in Ardia's shipped sources, as a URL or as a quoted host in native and engine code, is listed in docs/privacy.md", () => {
   const listed = new Set([...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost).map((h) => h.toLowerCase()));
   const files = shippedFiles();
   assert.ok(files.length > 1000, "the scan still finds the app's sources");
@@ -98,7 +121,7 @@ test("every http(s) host hard-coded in Ardia's shipped sources is listed in docs
   assert.deepEqual(report, [], `add each host to ${DOC}: a row under "Endpoints Ardia contacts" if Ardia itself contacts it, else the "doesn't contact" list`);
 });
 
-test("each endpoint row names a host and the code that contacts it", () => {
+test("each endpoint row names a host and cites code that still names it", () => {
   assert.ok(contacted.length >= 10, "the endpoint table still has its rows");
   for (const row of contacted) {
     const hosts = ticked(row.Host).filter(looksLikeHost);
@@ -112,15 +135,18 @@ test("each endpoint row names a host and the code that contacts it", () => {
   }
 });
 
-test("each disabled Google or Chromium endpoint still cites a patch, switch or build argument that turns it off", () => {
+test("each disabled Google or Chromium endpoint cites a patch, switch or build argument whose shipped lines still hold its literal", () => {
   assert.ok(disabled.length >= 10, "the disabled-endpoint table still has its rows");
   for (const row of disabled) {
     const paths = ticked(row["Off by"]).filter(looksLikePath);
-    const proof = ticked(row.Proof);
+    const removes = [...row.Proof.matchAll(/removes `([^`]+)`/g)].map((m) => m[1]);
+    const holds = ticked(row.Proof.replace(/removes `[^`]+`/g, ""));
     assert.ok(paths.length, `the ${row.Endpoint} row cites a file`);
-    assert.ok(proof.length, `the ${row.Endpoint} row gives the literal that proves it`);
+    assert.ok(holds.length + removes.length, `the ${row.Endpoint} row gives the literal that proves it`);
     for (const path of paths) assert.ok(existsSync(join(ROOT, path)), `${path}, cited for ${row.Endpoint}, exists`);
-    const text = read(paths[0]);
-    for (const literal of proof) assert.ok(text.includes(literal), `${paths[0]} still holds ${literal} (${row.Endpoint})`);
+    const shipped = shippedText(paths[0]);
+    for (const literal of holds) assert.ok(shipped.includes(literal), `${paths[0]} still holds ${literal} (${row.Endpoint})`);
+    const removed = removedLines(paths[0]);
+    for (const literal of removes) assert.ok(removed.includes(literal) && !shipped.includes(literal), `${paths[0]} still removes ${literal} (${row.Endpoint})`);
   }
 });

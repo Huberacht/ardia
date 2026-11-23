@@ -3,7 +3,7 @@
 This is the list of every host Ardia (not the pages you open) talks to, how each request travels, and every Google or
 Chromium service that is turned off. `apps/browser/src/privacyEndpoints.test.mjs` keeps it honest: it scans the
 shipped sources of the Mac, Linux and Windows apps for hard-coded `http(s)://` and `ws(s)://` hosts and fails when one
-isn't on this page, and it fails when a row below cites a file that's gone or a literal that's no longer in it.
+isn't on this page (in native and engine code also a quoted bare host, such as a redirect allowlist entry; in a patch, the lines it adds and the context it keeps), and it fails when a row below cites a file that's gone or a literal that's no longer in it.
 Reserved names (`.example`, `.test`, `.invalid`, `.localhost`, `.local`) and IP literals are skipped; tests, fixtures,
 build scripts and docs aren't shipped and aren't scanned.
 
@@ -28,18 +28,19 @@ build scripts and docs aren't shipped and aren't scanned.
 
 | Host | Purpose | Stack | System proxy | Private windows | Other profiles | Cookies and credentials | Gate | Off switch | Code |
 |---|---|---|---|---|---|---|---|---|---|
-| `ardia.dev` | Usage counts and crash reports (`/otel/v1/logs`) | App `fetch` (Mac, Windows); Chromium system context (Linux) | Yes | App-wide counts; a private window adds to counts, never a URL or a title | App-wide, no profile | None | Sharing on only | Settings › General › Share anonymous crash reports | `apps/browser/src/state/telemetry/config.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_telemetry_policy.h` |
-| `ardia.dev` | Kill switches (`/switches.json`), once a launch | App `fetch` with `credentials: "omit"`; Chromium system context (Linux) | Yes | App-wide, nothing from the window | App-wide | None | Automatic update checks on | Settings › General › Install updates automatically | `apps/browser/src/platform/killSwitches.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_updates_policy.h` |
+| `ardia.dev` | Usage counts and crash reports (`/otel/v1/logs`) | App `fetch` (Mac, Windows); Chromium system context (Linux) | Yes | App-wide counts; a private window adds to counts, never a URL or a title | App-wide, no profile | No Chromium cookies; an ingest key header that is the same in every copy of Ardia, not a per-user credential | Sharing on only | Settings › General › Share anonymous crash reports | `apps/browser/src/state/telemetry/config.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_telemetry_policy.h` |
+| `ardia.dev` | Kill switches (`/switches.json`), once a launch | App `fetch` with `credentials: "omit"`; Chromium system context (Linux) | Yes | App-wide, nothing from the window | App-wide | None (credentials omitted) | Automatic update checks on | Settings › General › Install updates automatically | `apps/browser/src/platform/killSwitches.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_updates_policy.h` |
 | `ardia.dev` | Update feed (`/appcast.xml`), Sparkle on the Mac | Sparkle's URLSession | Yes | App-wide | App-wide | No Chromium cookies | Automatic update checks on, or Check for Updates | Settings › General › Install updates automatically | `apps/browser/macos/Ardia-macOS/Info.plist` |
-| `ardia.dev` | Reports you send (`/api/feedback`); attachments go to the upload addresses it hands back | App `fetch`, attachments over an ephemeral URLSession (Mac); Chromium system context (Linux) | Yes | Only what you attach | Only what you attach | None | You press Send | Don't send a report | `apps/browser/src/state/report/actions.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_report_core.h` |
-| `github.com` | Update downloads (redirected to GitHub's asset hosts), the Windows and Linux update feeds, official plugin downloads | Sparkle's URLSession (Mac), WinHTTP (Windows), Chromium system context (Linux), ephemeral URLSession (plugins) | Yes | App-wide | App-wide | None | Updates: automatic checks or Check for Updates; plugins: you install or update one | Install updates automatically; don't install the plugin | `apps/browser/official-plugins.json`, `apps/browser/windows/Ardia/UpdateModule.h`, `packages/shell/ios/AppUpdater.swift` |
+| `ardia.dev` | Reports you send (`/api/feedback`); attachments go to the upload addresses it hands back | App `fetch`, attachments over an ephemeral URLSession (Mac); Chromium system context (Linux) | Yes | Can be sent from a private window: you write it and pick what to attach, which may include the current page's address | Only what you attach | No Chromium cookies; the same app ingest key | You press Send | Don't send a report | `apps/browser/src/state/report/actions.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_report_core.h` |
+| `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` | Update downloads (GitHub redirects release assets to its asset hosts; Linux allows only these three), the Windows and Linux update feeds, official plugin downloads | Sparkle's URLSession (Mac), WinHTTP (Windows), Chromium system context (Linux), ephemeral URLSession (plugins) | Yes | App-wide | App-wide | None | Updates: automatic checks or Check for Updates; plugins: you install or update one | Install updates automatically; don't install the plugin | `apps/browser/official-plugins.json`, `apps/browser/windows/Ardia/UpdateModule.h`, `packages/shell/ios/AppUpdater.swift`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_self_update_policy.h` |
 | `api.github.com` | Linux release list for updates | Chromium system context | Yes | App-wide | App-wide | None | Automatic update checks on | Install updates automatically | `engine/ardiacore-linux/src/ardia/linux/ac_linux_updates_policy.h` |
 | `services.helium.imput.net` | The `!bang` list (`/bangs.json`), refreshed at most once a day when you type `!`; no query is sent | Ephemeral URLSession with no cookies (Mac), WinHTTP (Windows), Chromium system context (Linux) | Yes | Never refreshed from a private window: it uses the copy on disk or the bundled list | App-wide | None | You type `!` in the address bar | None; the bundled list works offline | `packages/shell/ios/BangListFetch.swift`, `apps/browser/windows/Ardia/ShellModule.h`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_bang_list_policy.h` |
 | `www.google.com`, `api.bing.com`, `duckduckgo.com`, `ac.ecosia.org`, `search.brave.com`, `www.startpage.com`, `search.yahoo.com`, `www.baidu.com`, `suggest.yandex.com` | Search suggestions from the profile's search engine as you type | The window profile's Chromium network context | Yes, plus extension and policy proxies | Off | Each window asks with its own profile | Mac: that engine's own cookies from the profile, as Chrome does, never saved; Linux: none | Suggest while typing on | Settings › Profiles › Suggest while typing | `packages/core/src/engines.ts`, `engine/chromium/src/chrome/browser/ardia/ac_search_suggest.cc`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_suggest_policy.h` |
-| A page's icon host (from the page) | Favicons the app fetches when Chromium hasn't stored one | The tab's own profile's Chromium network context | Yes, plus extension and policy proxies | Never fetched for a private tab; a private window only reads other profiles' local icon stores, without network, and keeps the answers in its own cache, dropped when it closes | Only the tab's own profile fetches | No cookies | Shown tabs only | None | `packages/ardiacore/ios/ArdiaFavicons.mm`, `apps/browser/src/state/favicons/favicons.ts` |
+| A page's icon host (from the page) | The icon a page reports, and the icon the app fetches when Chromium hasn't stored one | The tab's own profile's network context (a private tab's is its off-the-record one, as for the page's own requests) | Yes, plus extension and policy proxies | A private tab's reported icon loads through its own off-the-record profile; the app fetches no missing icon for it. A private window also reads other profiles' local icon stores, without network, and keeps the answers in its own cache, dropped when it closes | Only the tab's own profile fetches | No cookies | Shown tabs only | None | `packages/ardiacore/ios/ArdiaFavicons.mm`, `apps/browser/src/state/favicons/favicons.ts` |
+| A search engine's or scoped site's host (from the engine or page) | `https://<host>/favicon.ico` for the icons in Settings › Profiles › Search and the address bar's scope chip, when no bundled or stored icon exists | The given profile's Chromium network context (Default in Settings, the window's own in the address bar) | Yes, plus extension and policy proxies | Not fetched for a private window's profile | That profile only | No cookies | The row is shown | None | `apps/browser/src/components/favicon/Favicon.tsx`, `apps/browser/src/components/settings/panes/ProfileSearch.tsx` |
 | Website notification icons (from the page) | The icon of a site's notification | The tab's own profile's Chromium network context, then a local file or `data:` image; the notification layer refuses anything else | Yes | Private windows post no notifications | The tab's own profile only | No cookies | The site has notification permission | Block the site's notifications | `apps/browser/src/state/site/webNotifications.ts`, `packages/shell/ios/NotificationHub.swift` |
-| `clients2.google.com` | Chrome Web Store installs, extension updates and Google's extension kill switch | Chromium's extension downloader on the profile's network context | Yes, plus extension and policy proxies | Chromium's rules: updates are per regular profile | Per profile | Chromium's rules: retries with the profile's Google cookies only when the store asks for them | You install an extension | Remove the extensions | `engine/patches/chromium-webstore-direct.patch`, `engine/patches/chromium-extension-updates.patch` |
-| `update.googleapis.com` | Security components only: CRLSet, PKI metadata (CT logs, root store), the SSL error assistant | Chromium's component updater, system context | Yes | App-wide | App-wide | None | Always | None | `engine/patches/chromium-component-updater-security-only.patch` |
+| `clients2.google.com`, `chromewebstore.googleapis.com` | Chrome Web Store installs, extension updates, Google's extension kill switch, and the store's item details for an install prompt | Chromium's extension downloader on the profile's network context | Yes, plus extension and policy proxies | Chromium's rules: updates are per regular profile | Per profile | Chromium's rules: retries with the profile's Google cookies only when the store asks for them | You install an extension | Remove the extensions | `engine/patches/chromium-webstore-direct.patch`, `engine/patches/chromium-extension-updates.patch` |
+| `update.googleapis.com`, `dl.google.com`, `gvt1.com` | Security components only: CRLSet, PKI metadata (CT logs, root store), the SSL error assistant. The update check is `update.googleapis.com`; the downloads it answers with come from `dl.google.com`, Google's `gvt1.com` mirrors (such as edgedl.me.gvt1.com) or `www.google.com/dl/`, the only download hosts the patch accepts | Chromium's component updater, system context | Yes | App-wide | App-wide | None | Always | None | `engine/patches/chromium-component-updater-security-only.patch` |
 | `api.github.com`, `github.com`, `api.bitbucket.org`, `bitbucket.org`, `api.notion.com`, `oauth2.googleapis.com`, `www.googleapis.com` | Live Folders: your GitHub, Bitbucket, Notion and Google Drive items, and signing in to them | App `fetch` (Mac, Windows); the app profile's Chromium context with credentials omitted (Linux) | Yes | Refused in private windows | The account you connected, app-wide | The token you granted, no cookies | You connect an account | Settings › Automations › Connected accounts | `apps/browser/src/state/live/net.ts`, `apps/browser/src/state/live/sources.ts`, `engine/ardiacore-linux/src/ardia/linux/ac_linux_live.cc` |
 | Your Confluence site (user-chosen) | Live Folders for Confluence | App `fetch` | Yes | Refused in private windows | App-wide | The token you granted | You connect it | Disconnect it | `apps/browser/src/state/live/sources.ts` |
 | Hosts a plugin declares (plugin-chosen) | A plugin's `net.fetch`, https only, to the hosts in its manifest | `NWConnection` (Mac) | No: direct | Not tied to a window | App-wide | Only what the plugin sends | The plugin has the network permission and you installed it | Remove or turn off the plugin | `packages/shell/ios/PluginHostFetch.swift`, `apps/browser/src/state/plugins/channelData.ts` |
@@ -50,8 +51,9 @@ Sync makes no network request: it writes sealed files to a folder you pick and t
 
 ### Private windows and other profiles
 
-- Nothing outside Chromium starts from a private window: suggestions, providers, plugins' omnibox rows, Live Folders,
-  the bang list refresh, notifications and favicon fetches are all off there.
+- Nothing outside Chromium starts by itself from a private window: suggestions, providers, plugins' omnibox rows,
+  Live Folders, the bang list refresh, notifications and the app's missing-icon fetches are all off there. The one
+  exception is Report a Problem, which you write and send yourself, with only the attachments you pick.
 - A private window may still show icons it finds in other profiles' local icon stores (as Chrome's incognito shows the
   original profile's). That is a local read with no network and no write: the answers go into the private window's own
   cache and leave with it, and nothing about a private page is written into another profile's cache or store. A
@@ -77,12 +79,21 @@ Pages, links and patterns: Ardia opens these only as pages you navigate to, or m
   `www.vanguardinvestments.com.au`.
 - Onboarding's suggested sites (bundled icons, nothing fetched): `app.slack.com`, `calendar.google.com`,
   `docs.google.com`, `linear.app`, `outlook.office.com`.
-- Links Ardia opens as pages: `chromewebstore.google.com` (an extension's store page), `accounts.google.com` (Google's
-  sign-in page for Live Folders, opened in a tab), `www.atlassian.com`, `your-team.atlassian.net` (a placeholder),
-  `crbug.com`.
+- Links Ardia opens as pages: `chromewebstore.google.com` and `chrome.google.com` (an extension's store page),
+  `accounts.google.com` (Google's sign-in page for Live Folders, opened in a tab), `www.atlassian.com`,
+  `your-team.atlassian.net` (a placeholder), `crbug.com`.
+- Streaming sites matched by name for DRM and media handling (`packages/ardiacore/ios/ArdiaPopupWindow.mm`,
+  `WebKitMediaFaults.swift`): `netflix.com`, `disneyplus.com`, `max.com`, `hbomax.com`, `primevideo.com`, `hulu.com`,
+  `tv.apple.com`, `music.apple.com`, `peacocktv.com`, `paramountplus.com`, `crunchyroll.com`, `hotstar.com`,
+  `jiohotstar.com`, `v.qq.com`, `audible.com`, `canalplus.com`, `tv.youtube.com`, `osnplus.com`, `anghami.com`.
+- Hosts a check refuses: `metadata.goog` (plugins' `net.fetch` never reaches cloud metadata), `google.com` (matched in
+  the Web Store patch's checks).
 - XML and schema namespaces, never fetched: `www.w3.org`, `www.apple.com`, `schemas.microsoft.com`, `json-schema.org`.
 - Licence text: `www.apache.org`, `www.gnu.org`, `fsf.org`.
-- Placeholders: `example.com`, and Helium's unresolvable services host `services-disabled.qjz9zk`.
+- Placeholders: `example.com`, `other.org`, and Helium's unresolvable services host `services-disabled.qjz9zk`.
+- Hosts Helium's code would use, still in the patches' context lines but replaced: `push.helium.computer` (its push
+  server, swapped for the placeholder), `clients2.9oo91e.qjz9zk` (Google's crash upload, already unresolvable).
+- Not hosts, method names that read like one: `engine.info`, `host.info`.
 
 ## Google and Chromium endpoints that are off
 
@@ -91,7 +102,7 @@ Ardia's engine is Chromium with Helium's and ungoogled-chromium's patches (pinne
 Chromium's source to unresolvable `*.qjz9zk` names, except the Web Store and extension update hosts listed in
 `domsub-keep-store.txt`; that covers the many services ungoogled-chromium removes (Google sign-in and sync, metrics
 upload, variations, Safe Browsing lookups, Translate, spell-check downloads, Google host detection, network time,
-domain reliability, GCM). Each row cites the file that turns it off and a literal the test finds in it.
+domain reliability, GCM). Each row cites the file that turns it off and a literal the test finds in its shipped lines (for a patch: the lines it adds or keeps; "removes" means a line it takes out). This is a citation check: it proves the cited change is still there, not that the service is unreachable at run time.
 
 | Endpoint | What it was | Off by | Proof |
 |---|---|---|---|
@@ -102,14 +113,14 @@ domain reliability, GCM). Each row cites the file that turns it off and a litera
 | Chrome Remote Desktop and Hangouts services | Remoting host and the Hangouts extension | `engine/patches/build/gn_defines.sh` | `enable_remoting=false` |
 | Chrome's own updater | Google Update / Keystone | `engine/patches/build/gn_defines.sh` | `enable_updater=false` |
 | Helium's services (`services.helium.imput.net` from the engine), its update feed and crash server | Helium's services and updates | `engine/patches/chromium-helium-branding.patch` | `services-disabled.qjz9zk` |
-| Helium's onboarding consent | The page that turns Helium's services on | `engine/patches/chromium-helium-onboarding-off.patch` | `onboarding` |
-| Helium's services settings page | Switches for Helium's services | `engine/patches/chromium-helium-services-page-off.patch` | `services` |
-| Helium's web push server | An autopush WebSocket for site push messages | `engine/patches/chromium-helium-web-push-off.patch` | `ShouldAccessPushService` |
-| Helium's bang list in Chromium | `BangManager` fetching bangs | `engine/patches/chromium-helium-bangs-off.patch` | `LoadBangs` |
-| Helium's translation providers | Page text sent to a translation provider | `engine/patches/chromium-helium-translate-providers-off.patch` | `HasTranslationProvider` |
-| Helium's search engine assets | Non-free search engine icons fetched at build time | `engine/patches/chromium-helium-search-assets-off.patch` | `enable_builtin_search_provider_assets` |
+| Helium's onboarding consent | The page that turns Helium's services on | `engine/patches/chromium-helium-onboarding-off.patch` | removes `//components/helium_onboarding:generated_resources` |
+| Helium's services settings page | Switches for Helium's services | `engine/patches/chromium-helium-services-page-off.patch` | removes `routes.HELIUM_SERVICES` |
+| Helium's web push server | An autopush WebSocket for site push messages | `engine/patches/chromium-helium-web-push-off.patch` | `ShouldAccessPushService`, `wss://services-disabled.qjz9zk/` |
+| Helium's bang list in Chromium | `BangManager` fetching bangs | `engine/patches/chromium-helium-bangs-off.patch` | `std::vector<Bang>()` |
+| Helium's translation providers | Page text sent to a translation provider | `engine/patches/chromium-helium-translate-providers-off.patch` | `HasTranslationProvider`, `return false;` |
+| Helium's search engine assets | Non-free search engine icons fetched at build time | `engine/patches/chromium-helium-search-assets-off.patch` | `enable_builtin_search_provider_assets = is_internal_chrome_branded` |
 | Helium's crash upload prompt (`crash.helium.computer`) | An infobar asking to upload crashes | `engine/patches/build/03-helium.py` | `crash-dialog.patch` |
 | Helium's Sparkle updater in the engine | A second updater inside the framework | `engine/patches/build/03-helium.py` | `sparkle-integration.patch` |
-| Component updater, everything but security components | Widevine, hints, models and other downloads | `engine/patches/chromium-component-updater-security-only.patch` | `GetCrxComponents` |
+| Component updater, everything but security components | Widevine, hints, models and other downloads | `engine/patches/chromium-component-updater-security-only.patch` | `kCrlSetId`, `kComponentDownloadHost` |
 | Gemini in Chrome (Glic) and contextual cueing | Google's in-browser assistant | `engine/ardiacore/src/ardia/core/ac_main_delegate.cc` | `Glic,GlicActor` |
 | Proxy and remote debugging switches | Command-line routes around the system proxy and into the profile | `engine/ardiacore/src/ardia/core/ac_main_delegate.cc` | `proxy-server` |
