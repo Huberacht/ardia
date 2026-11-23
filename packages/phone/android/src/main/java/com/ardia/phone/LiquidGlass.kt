@@ -66,7 +66,7 @@ internal object LiquidGlassRules {
 
     fun pageLive(sdk: Int, classic: Boolean, overPageAsked: Boolean): Boolean = overPageAsked && !classic && sdk >= LENS_MIN_SDK
 
-    fun rimWanted(sdk: Int, classic: Boolean, flat: Boolean): Boolean = !classic && !flat && sdk >= LENS_MIN_SDK
+    fun rimWanted(sdk: Int, classic: Boolean, flat: Boolean, blurs: Boolean): Boolean = blurs && !classic && !flat && sdk >= LENS_MIN_SDK
 
     fun lensWanted(sdk: Int, classic: Boolean, flat: Boolean, livePath: Boolean): Boolean =
         livePath && render(sdk, classic, flat, blurs = true) == Render.Lens
@@ -104,9 +104,9 @@ internal object LiquidGlassRules {
             val progress = step / steps.toFloat()
             val height = params.depthDp + profile(progress) * bezelDp
             val slope = slope(progress, params.maxSlope)
-            for (ior in floatArrayOf(params.ior + params.dispersion, params.ior, max(params.ior - params.dispersion, 1.0001f))) {
-                most = max(most, shiftRatio(slope, ior) * height)
-            }
+            most = max(most, shiftRatio(slope, params.ior + params.dispersion) * height)
+            most = max(most, shiftRatio(slope, params.ior) * height)
+            most = max(most, shiftRatio(slope, max(params.ior - params.dispersion, 1.0001f)) * height)
         }
         return most
     }
@@ -130,8 +130,7 @@ internal object LiquidGlassRules {
         val maxSlope: Float,
     )
 
-    fun lensShape(widthPx: Int, heightPx: Int, marginPx: Float, scale: Float, radiusPx: Float, density: Float, params: Params = defaults): LensShape {
-        val bezelDp = bezelDp(params, widthPx / density, heightPx / density)
+    fun lensShape(widthPx: Int, heightPx: Int, marginPx: Float, scale: Float, radiusPx: Float, density: Float, bezelDp: Float, shiftDp: Float, params: Params = defaults): LensShape {
         val toLayer = density / scale
         return LensShape(
             left = marginPx / scale,
@@ -142,7 +141,7 @@ internal object LiquidGlassRules {
             exponent = CIRCULAR_CORNER_EXPONENT,
             bezel = max(bezelDp * toLayer, 1f),
             depth = params.depthDp * toLayer,
-            maxShift = maxShiftDp(params, bezelDp) * toLayer,
+            maxShift = shiftDp * toLayer,
             ior = params.ior,
             dispersion = params.dispersion,
             maxSlope = params.maxSlope,
@@ -252,7 +251,8 @@ half4 main(float2 p) {
     half4 green = backdrop.eval(p + shift(bend(normal, ior), height));
     half red = backdrop.eval(p + shift(bend(normal, ior + dispersion), height)).r;
     half blue = backdrop.eval(p + shift(bend(normal, max(ior - dispersion, 1.0001)), height)).b;
-    return half4(red, green.g, blue, green.a);
+    half coverage = green.a;
+    return half4(min(red, coverage), min(green.g, coverage), min(blue, coverage), coverage);
 }
 """
 
@@ -282,6 +282,63 @@ half4 main(float2 p) {
     return half4(alpha, alpha, alpha, alpha);
 }
 """
+}
+
+internal class LensBound(private val params: LiquidGlassRules.Params = LiquidGlassRules.defaults) {
+    var computed = 0
+        private set
+    var bezelDp = 0f
+        private set
+    var shiftDp = 0f
+        private set
+    private var widthPx = -1
+    private var heightPx = -1
+    private var density = -1f
+
+    fun measure(widthPx: Int, heightPx: Int, density: Float): LensBound {
+        if (widthPx == this.widthPx && heightPx == this.heightPx && density == this.density) return this
+        this.widthPx = widthPx
+        this.heightPx = heightPx
+        this.density = density
+        bezelDp = LiquidGlassRules.bezelDp(params, widthPx / density, heightPx / density)
+        shiftDp = LiquidGlassRules.maxShiftDp(params, bezelDp)
+        computed += 1
+        return this
+    }
+}
+
+internal class ShaderSlot(private val name: String) {
+    var failures = 0
+        private set
+
+    val failed: Boolean get() = failures > 0
+
+    fun <T : Any> attempt(build: () -> T): T? {
+        if (failed) return null
+        return try {
+            build()
+        } catch (failure: RuntimeException) {
+            failures += 1
+            android.util.Log.w("PAGELAB", "PAGELAB look glass $name shader failed and is skipped from now on: ${failure.javaClass.simpleName}: ${failure.message}")
+            null
+        }
+    }
+}
+
+internal object GlassShaders {
+    var lens = ShaderSlot("lens")
+        private set
+    var rim = ShaderSlot("rim")
+        private set
+    var makeLens: ((LiquidGlassRules.LensShape) -> RenderEffect)? = null
+    var makeRim: (() -> RuntimeShader)? = null
+
+    fun reset() {
+        lens = ShaderSlot("lens")
+        rim = ShaderSlot("rim")
+        makeLens = null
+        makeRim = null
+    }
 }
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)

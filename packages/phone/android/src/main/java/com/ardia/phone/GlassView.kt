@@ -109,6 +109,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     private var rimShader: RuntimeShader? = null
     private var rimDrawn: LiquidGlassRules.Rim? = null
     private var lensThisDraw = false
+    private val bound = LensBound()
 
     init {
         variant = "glass"
@@ -123,7 +124,9 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
 
     override fun canBlur(): Boolean = !isClassic && super.canBlur()
 
-    private val lensOn: Boolean get() = LiquidGlassRules.lensWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, livePath = true)
+    private val lensOn: Boolean get() = !GlassShaders.lens.failed && LiquidGlassRules.lensWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, livePath = true)
+
+    internal val lensBound: LensBound get() = bound.measure(width, height, density)
 
     override fun pageLive(): Boolean = LiquidGlassRules.pageLive(Build.VERSION.SDK_INT, isClassic, GlassLaunch.overPage)
 
@@ -131,8 +134,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
 
     override fun lensReach(): Float {
         if (!lensOn) return 0f
-        val bezel = LiquidGlassRules.bezelDp(LiquidGlassRules.defaults, width / density, height / density)
-        return LiquidGlassRules.maxShiftDp(LiquidGlassRules.defaults, bezel) * density
+        return lensBound.shiftDp * density
     }
 
     override fun lensEffect(marginPx: Float, scale: Float): RenderEffect? {
@@ -140,12 +142,13 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
             lensThisDraw = false
             return null
         }
-        val wanted = LiquidGlassRules.lensShape(width, height, marginPx, scale, radiusPx, density)
+        val measured = lensBound
+        val wanted = LiquidGlassRules.lensShape(width, height, marginPx, scale, radiusPx, density, measured.bezelDp, measured.shiftDp)
         if (wanted != lensShape || lens == null) {
             lensShape = wanted
-            lens = LiquidGlassShaders.lensEffect(wanted)
+            lens = GlassShaders.lens.attempt { (GlassShaders.makeLens ?: LiquidGlassShaders::lensEffect)(wanted) }
         }
-        lensThisDraw = true
+        lensThisDraw = lens != null
         return lens
     }
 
@@ -158,7 +161,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
 
     internal val drawsLens: Boolean get() = lensThisDraw && lastChoice?.path == FrostPage.Path.Live
 
-    private val drawsRim: Boolean get() = LiquidGlassRules.rimWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat)
+    private val drawsRim: Boolean get() = !GlassShaders.rim.failed && LiquidGlassRules.rimWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, blurs = !lookIsOff && !budgetDegraded)
 
     override fun update() {
         val classic = isClassic
@@ -229,19 +232,19 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
             paint.color = tinting
             canvas.drawPath(outlinePath, paint)
         }
-        if (drawsRim) drawRim(canvas)
+        if (drawsRim && canvas.isHardwareAccelerated) drawRim(canvas)
     }
 
     private fun drawRim(canvas: Canvas) {
         if (Build.VERSION.SDK_INT < LiquidGlassRules.LENS_MIN_SDK) return
-        val shader = rimShader ?: LiquidGlassShaders.rim().also {
+        val shader = rimShader ?: GlassShaders.rim.attempt { (GlassShaders.makeRim ?: LiquidGlassShaders::rim)() }?.also {
             rimShader = it
             rimPaint.shader = it
             rimPaint.blendMode = BlendMode.PLUS
-        }
+        } ?: return
         val rim = LiquidGlassRules.rim(width, height, radiusPx, density, isDark)
         if (rim != rimDrawn) {
-            LiquidGlassShaders.apply(shader, rim)
+            GlassShaders.rim.attempt { LiquidGlassShaders.apply(shader, rim) } ?: return
             rimPaint.shader = shader
             rimDrawn = rim
         }

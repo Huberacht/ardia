@@ -41,11 +41,27 @@ class LiquidGlassRulesTest {
     }
 
     @Test
-    fun theRimLightsEveryGlassFromAndroid13ButClassicAndFlat() {
-        assertTrue(LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = false))
-        assertFalse(LiquidGlassRules.rimWanted(sdk = 32, classic = false, flat = false))
-        assertFalse(LiquidGlassRules.rimWanted(sdk = 34, classic = true, flat = false))
-        assertFalse(LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = true))
+    fun theRimLightsEveryGlassFromAndroid13ButClassicFlatAndTheFlatFill() {
+        assertTrue(LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = false, blurs = true))
+        assertFalse(LiquidGlassRules.rimWanted(sdk = 32, classic = false, flat = false, blurs = true))
+        assertFalse(LiquidGlassRules.rimWanted(sdk = 34, classic = true, flat = false, blurs = true))
+        assertFalse(LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = true, blurs = true))
+        assertFalse("look off or over the look budget draw the flat fill, so no rim", LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = false, blurs = false))
+    }
+
+    @Test
+    fun theShiftBoundIsWorkedOutOnceForTheSameGeometry() {
+        val bound = LensBound()
+        bound.measure(132, 132, 2.75f)
+        val first = bound.shiftDp
+        repeat(10) { bound.measure(132, 132, 2.75f) }
+        assertEquals(1, bound.computed)
+        assertEquals(first, bound.shiftDp, 0f)
+        assertEquals(LiquidGlassRules.maxShiftDp(params, LiquidGlassRules.bezelDp(params, 48f, 48f)), first, 0.0001f)
+        bound.measure(640, 132, 2.75f)
+        assertEquals("a new size is measured again", 2, bound.computed)
+        bound.measure(640, 132, 2.75f)
+        assertEquals(2, bound.computed)
     }
 
     @Test
@@ -99,7 +115,8 @@ class LiquidGlassRulesTest {
     @Test
     fun theShapeSitsInsideTheDownscaledLayerAfterItsMargin() {
         val density = 2.75f
-        val shape = LiquidGlassRules.lensShape(widthPx = 132, heightPx = 132, marginPx = 66f, scale = 5f, radiusPx = 66f, density = density)
+        val bound = LensBound().measure(132, 132, density)
+        val shape = LiquidGlassRules.lensShape(widthPx = 132, heightPx = 132, marginPx = 66f, scale = 5f, radiusPx = 66f, density = density, bezelDp = bound.bezelDp, shiftDp = bound.shiftDp)
         assertEquals(13.2f, shape.left, 0.001f)
         assertEquals(13.2f, shape.top, 0.001f)
         assertEquals(39.6f, shape.right, 0.001f)
@@ -109,7 +126,8 @@ class LiquidGlassRulesTest {
         assertEquals(params.bezelDp * density / 5f, shape.bezel, 0.001f)
         assertEquals(params.depthDp * density / 5f, shape.depth, 0.001f)
         assertTrue("the shader's cap fits the margin", shape.maxShift <= shape.left)
-        val capsule = LiquidGlassRules.lensShape(widthPx = 800, heightPx = 132, marginPx = 66f, scale = 5f, radiusPx = 999f, density = density)
+        val wide = LensBound().measure(800, 132, density)
+        val capsule = LiquidGlassRules.lensShape(widthPx = 800, heightPx = 132, marginPx = 66f, scale = 5f, radiusPx = 999f, density = density, bezelDp = wide.bezelDp, shiftDp = wide.shiftDp)
         assertEquals("a radius past half the short side is a capsule", 13.2f, capsule.radius, 0.001f)
     }
 
