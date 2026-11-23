@@ -16,9 +16,17 @@
 //     --control-bundle <file> the control's bundle (default: --app's bundle); --control-label <name> (default as --label)
 //     --prepared              --app (and --control) are copies this script already prepared (<out>/<label>/app/
 //                             Ardia.app: bundle swapped in, signed for the marker): run them in place, without
-//                             building a bundle, copying or signing. `--only prepare` makes those copies and exits.
+//                             building a bundle, copying or signing. `--only prepare` makes those copies and both templates, and exits.
 //     --runs <n>              session and windows runs (default 3); --launch-runs <n> cold launches (default 5)
 //     --idle <secs>           each idle window (default 60)
+//     --launch-settle <secs>  session: the wait after the first page paints, before the 1-tab idle window (default 30)
+//     --close-settle <secs>   session: the wait after closing back to 1 tab, before that memory reading (default 30)
+//     --template-cache <dir>  where finished templates are kept (default dist/<v>/bench/templates for an app in
+//                             dist/<v>/export, else <out>/.templates), keyed by the app's version, build and code signature
+//                             hash, its bundled uBO, the bench bundle and the page port. A cached one is checked again
+//                             before use, and both sides' startup components must match
+//     --template-max-age <h>  a cached template older than this is made again (default 12; 0 never caches): the CRLSet
+//                             and uBO's lists move, so an old one would download them inside the runs
 //     --only <a,b>            phases (default launch,session,throttle,sample):
 //                               launch     cold launches
 //                               session    one instance per run with all of: idle, memory, switch, newtab, newwindow
@@ -46,7 +54,8 @@
 //                               throttle   hidden animating tabs' rAF and timer rates
 //                               churn      leak check: open and close 10 tabs 5 times
 //                               sample     main-thread `sample`s, idle and while switching and scrolling
-//                               prepare    prepare the app copies and exit (see --prepared)
+//                               prepare    prepare the app copies and both templates, and exit (see --prepared); none
+//                                          of it is a timing, so it can run beside the smoke test and the ratchet
 //     --env K=V               repeatable: extra environment for every instance (DYLD_INSERT_LIBRARIES is appended to
 //                             the marker library). Instances stay muted; don't pass ARDIA_INSTANCE allowAudio.
 //     --control-env K=V       repeatable: extra environment for the control's instances only, so one app can be measured
@@ -61,7 +70,8 @@
 //     --frames-only <regex>   frames, framecounts: only the interactions whose name matches (case-insensitive)
 //     --frames-sample         frames: `sample` the app over the first repetition of each interaction (<out>/frames-sample/*.txt)
 //     --journey-n <n>         iterations of each journey per run in newtabkey and navigate (default 10)
-//     --page-port <n>         the test pages' server port (default: any free port)
+//     --page-port <n>         the test pages' server port (default 9476; when it's busy, any free port, and templates
+//                             aren't cached: they restore their page from this port)
 //     --seed big              launch, newtabkey and navigate phases: start every launch from seed.mjs's big saved session (200 tabs in two
 //                             profiles, 5000 history entries, 1000 bookmarks) instead of one tab, to time what a
 //                             long-time user's launch does. Its active tab is the bench's id=seed page, so the launch
@@ -95,9 +105,9 @@
 //                   launch, the bench-cmd.js → bench-result.json channel of bench-channel.js, marks(), quit)
 //   Phases          makeTemplate (the seeded data folder each run copies: its instance stays up until uBO's cache is
 //                   written and flushed and the component updater's first check is done, then template.json records
-//                   both and a template whose sizes are off stops the run), launchRun, sessionRun, windowsRun, newWindow,
-//                   idleWindow, throttled, throttleRun, churnRun, sampleRun
-//   Report          summary() builds every row below; printTable
+//                   both and a template whose sizes are off stops the run; template-cache.mjs keeps it), launchRun,
+//                   sessionRun, windowsRun, newWindow, idleWindow, displayDown, throttled, throttleRun, churnRun, sampleRun
+//   Report          native-summary.mjs builds every row below; printTable. gate-verdict.mjs reads rounds pooled
 //   Main            options, the candidate and control sides, interleaved()
 //
 // Rows: the function that measures each, and what it waits on. Launch rows count from just before `open`; command rows
@@ -111,16 +121,19 @@
 //   launch → first page painted             launchRun   the seed tab's first-contentful-paint (PerformanceObserver)
 //   launch → first page's first frame       launchRun   the seed tab's first requestAnimationFrame callback
 //   idle CPU / idle wakeups/s (…)           sessionRun  idle: idleWindow(), acperf rusage over the process tree --idle
-//                                                        secs apart with the channel paused, at 1 tab and at 20
-//   memory (phys_footprint), …              sessionRun  memory: footprint() of the tree at 1 tab (30 s after launch,
-//                                                        after the idle window), 10 tabs (+10 s), 20 tabs (+15 s), and
-//                                                        closed back to 1 (+30 s); "browser process" rows: that process
+//                                                        secs apart with the channel paused, at 1 tab (--launch-settle
+//                                                        secs after the first page paints) and at 20
+//   memory (phys_footprint), …              sessionRun  memory: footprint() of the tree at 1 tab (after the idle
+//                                                        window), 10 tabs (+10 s), 20 tabs (+15 s), and closed back to
+//                                                        1 (+--close-settle secs); "browser process" rows: that process
 //   after an idle minute: command answered  sessionRun  idle: the first command after the 1-tab idle (App Nap check)
 //   idle windows: someone used the Mac      sessionRun  idle: acperf input over each idle window: seconds of mouse,
 //                                                        trackpad or keyboard input (HIDIdleTime), and of the pointer
 //                                                        moving over the instance's window. Nonzero means the idle rows
 //                                                        of that run measured the owner's input too
-//   samples left out: page couldn't paint   sessionRun  switch/newtab: throttled(), < 5 rAF frames in 250 ms just before
+//   samples left out: page couldn't paint   sessionRun  switch/newtab: displayDown() (screen locked or display asleep) just
+//                                                        before the sample, or throttled() (< 5 rAF frames in 250 ms on
+//                                                        the visible page) once before the run's first switch
 //   tab switch → shown                      sessionRun  switch: ac.actions.switchToTab → the page's visibilitychange to
 //                                                        visible + 2 rAFs (16 per run, among 20 tabs)
 //   new tab → first paint / first frame     sessionRun  newtab: store newTab → the new page's FCP / first rAF (5 per run)
@@ -151,10 +164,12 @@ import { appEnv, launchVariables, mergeLaunchEnv } from "../../../../scripts/lib
 import { buildSeed } from "./seed.mjs";
 import { waitForUboEngine } from "./ubo-cache.mjs";
 import { launchedTree, listenerPid, quitTargets, signalIfSame, stopTree, survivors } from "./processes.mjs";
-import { componentsState, sidesProblems, templateProblems, templateSizes, waitForStartupComponents } from "./template-state.mjs";
+import { componentsMismatch, componentsState, sidesProblems, templateProblems, templateSizes, waitForStartupComponents } from "./template-state.mjs";
 import { parseSettings, profileSeed } from "./profile-seed.mjs";
 import { writeSwitches } from "./js-bench.mjs";
-import { frameRows, frameTable, framesLibrary, framesRun } from "./frames-phase.mjs";
+import { frameTable, framesLibrary, framesRun } from "./frames-phase.mjs";
+import { summary } from "./native-summary.mjs";
+import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, storeTemplate, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
 import { sideLaunchEnv } from "./launch-env.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -169,6 +184,10 @@ const { values: opt } = parseArgs({
     runs: { type: "string", default: "3" },
     "launch-runs": { type: "string", default: "5" },
     idle: { type: "string", default: "60" },
+    "launch-settle": { type: "string", default: "30" },
+    "close-settle": { type: "string", default: "30" },
+    "template-cache": { type: "string" },
+    "template-max-age": { type: "string", default: String(TEMPLATE_MAX_AGE_HOURS) },
     only: { type: "string", default: "launch,session,throttle,sample" },
     compare: { type: "string" },
     report: { type: "string" },
@@ -186,7 +205,7 @@ const { values: opt } = parseArgs({
     "control-setting": { type: "string", multiple: true, default: [] },
     "fresh-copy": { type: "boolean" },
     "trace-startup": { type: "string" },
-    "page-port": { type: "string", default: "0" },
+    "page-port": { type: "string", default: "9476" },
     "journey-n": { type: "string", default: "10" },
     "frames-n": { type: "string", default: "8" },
     "frames-only": { type: "string" },
@@ -203,12 +222,6 @@ if (opt.help) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.error(`[bench ${new Date().toISOString().slice(11, 19)}]`, ...a);
-const median = (xs) => {
-  const s = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
-  if (!s.length) return NaN;
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-};
 
 const toolDir = join(opt.out, ".tools");
 function acperf(...args) {
@@ -297,6 +310,15 @@ const footprint = (snap) => {
   return { totalMB: total, processes: snap.length, kinds };
 };
 
+const displayDown = () => {
+  try {
+    const d = JSON.parse(acperf("display").out);
+    return !!(d.locked || d.asleep);
+  } catch {
+    return true;
+  }
+};
+
 const PAGE_SCRIPT = `
 window.__ac = { vis: [[Date.now(), document.visibilityState]], shown: [], fcp: null, frame: null, ticks: 0, raf: 0, fast: 0 };
 requestAnimationFrame(() => (__ac.frame = Date.now()));
@@ -341,7 +363,13 @@ function startServer() {
       if (!html) return res.writeHead(404).end();
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }).end(html);
     });
-    server.listen(+opt["page-port"], "127.0.0.1", () => resolveServer(server));
+    const wanted = +opt["page-port"];
+    server.once("error", (error) => {
+      if (error.code !== "EADDRINUSE" || !wanted) throw error;
+      log(`page port ${wanted} is busy: serving the test pages on any free port, so templates aren't cached this run`);
+      server.listen(0, "127.0.0.1", () => resolveServer(server));
+    });
+    server.listen(wanted, "127.0.0.1", () => resolveServer(server));
   });
 }
 
@@ -588,7 +616,7 @@ function writeBigSeed(side) {
   log(`seeded the big session (${side.label}): ${session.tabs.length} tabs, ${files["history.json"].history.default.length} history entries`);
 }
 
-async function makeTemplate(side) {
+async function makeTemplate(side, { fresh = false } = {}) {
   const dir = side.template;
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -598,6 +626,16 @@ async function makeTemplate(side) {
     return;
   }
   if (opt.seed) return writeBigSeed(side);
+  const cache = templateCache(side);
+  if (cache && !fresh) {
+    const found = lookupTemplate(cache.dir, cache.key, { maxAgeHours: +opt["template-max-age"] });
+    if (found.hit) {
+      copyCachedTemplate(found, dir);
+      return useTemplateRecord(side, { ...found.entry.record, cached: { dir: found.dir, made: found.entry.made } },
+        `cached ${cachedAgeHours(found.entry).toFixed(1)} h ago in ${found.dir}`);
+    }
+    log(`${side.label}: making a template (${found.problems.join("; ")})`);
+  }
   log(`seeding a session (${side.label})`);
   writeFileSync(join(dir, "onboarding.json"), JSON.stringify({ version: 1, completedAt: 1 }));
   const app = await new Instance(side, dir).launch();
@@ -617,13 +655,42 @@ async function makeTemplate(side) {
     await app.quit();
   }
   for (const f of ["bench-cmd.js", "bench-result.json", "bench-boot.json"]) rmSync(join(dir, f), { force: true });
-  side.templateRecord = { waitedSecs: { ubo: waited.ubo.secs, components: waited.components.secs }, uboSelfies: waited.ubo.selfies, sizes: templateSizes(dir), components: componentsState(dir).components };
-  writeFileSync(join(side.dir, "template.json"), JSON.stringify(side.templateRecord, null, 2));
-  side.results.meta.template = side.templateRecord;
-  const problems = templateProblems(side.templateRecord);
+  const record = { waitedSecs: { ubo: waited.ubo.secs, components: waited.components.secs }, uboSelfies: waited.ubo.selfies, sizes: templateSizes(dir), components: componentsState(dir).components };
+  useTemplateRecord(side, record, "made now");
+  if (cache) log(`${side.label}'s template stored in ${storeTemplate(cache.dir, cache.key, dir, record)}`);
+}
+
+function templateCache(side) {
+  if (!(+opt["template-max-age"] > 0)) return null;
+  const key = templateKey({ identity: appIdentity(side.app), bundleSha: fileSha256(join(side.app, "Contents/Resources/main.jsbundle")), pagePort: server.address().port === +opt["page-port"] ? +opt["page-port"] : 0 });
+  const problems = keyProblems(key);
+  if (problems.length) {
+    log(`${side.label}: not caching its template (${problems.join("; ")})`);
+    return null;
+  }
+  return { key, dir: resolve(opt["template-cache"] ?? defaultCacheDir(side.results.meta.preparedFrom?.app ?? side.src, opt.out)) };
+}
+
+function useTemplateRecord(side, record, how) {
+  side.templateRecord = record;
+  writeFileSync(join(side.dir, "template.json"), JSON.stringify(record, null, 2));
+  side.results.meta.template = record;
+  const problems = templateProblems(record);
   if (problems.length) throw new Error(`${side.label}'s template is off, so its runs would be skewed: ${problems.join("; ")} (${join(side.dir, "template.json")})`);
-  const { uboStoreMB, uboBlobsMB } = side.templateRecord.sizes;
-  log(`${side.label}'s template: uBO store ${uboStoreMB.toFixed(1)} MB, blobs ${uboBlobsMB.toFixed(1)} MB; components ${Object.entries(side.templateRecord.components).map(([k, c]) => `${k} ${c.version}`).join(", ")}`);
+  const { uboStoreMB, uboBlobsMB } = record.sizes;
+  log(`${side.label}'s template (${how}): uBO store ${uboStoreMB.toFixed(1)} MB, blobs ${uboBlobsMB.toFixed(1)} MB; components ${Object.entries(record.components).map(([k, c]) => `${k} ${c.version}`).join(", ")}`);
+}
+
+async function makeTemplates() {
+  for (const side of sides) await makeTemplate(side);
+  const records = () => sides.map((s) => s.templateRecord).filter(Boolean);
+  if (componentsMismatch(records()).length) {
+    const redo = sides.filter((s) => s.templateRecord?.cached);
+    log(`the sides' startup components differ (${componentsMismatch(records()).join("; ")}): making ${redo.length ? redo.map((s) => s.label).join(" and ") : sides[0].label}'s template again`);
+    for (const side of redo.length ? redo : [sides[0]]) await makeTemplate(side, { fresh: true });
+  }
+  const mismatch = [...sidesProblems(records()), ...componentsMismatch(records())];
+  if (mismatch.length) throw new Error(`the two sides' templates don't match: ${mismatch.join("; ")}`);
 }
 
 function freshDir(side, name) {
@@ -1022,7 +1089,7 @@ async function sessionRun(side, i, parts) {
   try {
     await app.launch();
     await app.pageState("id=seed", 30_000, (s) => s.fcp);
-    if (has("idle") || has("memory")) await sleep(30_000);
+    if (has("idle") || has("memory")) await sleep(+opt["launch-settle"] * 1000);
     if (has("idle")) r.idle.tabs1 = await idleWindow(app, secs);
     if (has("memory")) r.memory.tabs1 = footprint(usage(app.pid));
     await openTabs(app, 1, 10);
@@ -1036,12 +1103,14 @@ async function sessionRun(side, i, parts) {
     if (has("idle")) r.idle.tabs20 = await idleWindow(app, secs);
 
     const tabs = has("switch") ? (await tabIds(app)).filter(([, url]) => url.includes("/static?id=t")) : [];
+    const painting = has("switch") || has("newtab") ? (await throttled(app)) !== true : true;
+    r.paintProbe = painting;
     for (let k = 0; k < (has("switch") ? 16 : 0); k++) {
       const [id, url] = tabs[(k * 7 + 3) % tabs.length];
       const marker = url.match(/id=(t\d+)/)[1];
       const target = await app.cdp.find(`id=${marker}`);
       const before = (await app.cdp.state(target))?.shown?.length ?? 0;
-      const hidden = await throttled(app);
+      const hidden = !painting || displayDown();
       const at = await app.run(`const t = ac.now(); ac.actions.switchToTab(${JSON.stringify(id)}); return t;`);
       const s = await app.pageState(`id=${marker}`, 5000, (st) => (st.shown?.length ?? 0) > before);
       const shown = s?.shown.at(-1);
@@ -1052,7 +1121,7 @@ async function sessionRun(side, i, parts) {
     }
 
     for (let k = 0; k < (has("newtab") ? 5 : 0); k++) {
-      const hidden = await throttled(app);
+      const hidden = !painting || displayDown();
       const at = await app.run(`const t = ac.now(); ac.store.getState().newTab(${WINDOW}, { url: "${base()}/static?id=n${k}" }); return t;`);
       const s = await app.pageState(`id=n${k}`, 20_000, (st) => st.fcp);
       if (hidden) r.throttled.newTab++;
@@ -1069,7 +1138,7 @@ async function sessionRun(side, i, parts) {
       r.processes.tabs20 = usage(app.pid).length;
       await app.run(`const s = ac.store.getState(); const w = ${WINDOW}; const keep = s.windows[w].tabIds.find((id) => s.tabs[id].url.includes("id=seed"));
         ac.store.getState().activate(keep); for (const id of s.windows[w].tabIds) if (id !== keep) ac.store.getState().closeTab(id); return true;`);
-      await sleep(30_000);
+      await sleep(+opt["close-settle"] * 1000);
       r.memory.closed = footprint(usage(app.pid));
       r.processes.closed = r.memory.closed.processes;
     }
@@ -1185,98 +1254,6 @@ function summarizeSample(file) {
   };
 }
 
-function summary(res) {
-  const rows = [];
-  const add = (name, xs, unit, digits = 0) => {
-    const v = xs.filter(Number.isFinite);
-    rows.push({ name, median: median(v), min: Math.min(...v), max: Math.max(...v), n: v.length, unit, digits });
-  };
-  add("launch → window shown", res.launch.map((r) => r.window), "ms");
-  add("launch → window shown with its content", res.launch.map((r) => r.withContent), "ms");
-  add("launch → JS running", res.launch.map((r) => r.js), "ms");
-  add("launch → first page painted", res.launch.map((r) => r.firstPaint), "ms");
-  add("launch → first page's first frame", res.launch.map((r) => r.firstFrame), "ms");
-  const P = res.profiles ?? [];
-  if (P.length) {
-    const of = `${P[0].profiles} profiles, ${P[0].visits} opened`;
-    add(`profiles loaded ${P[0].warmupMs / 1000} s after opening them (${of})`, P.map((r) => r.before.loaded), "");
-    add(`profiles loaded after ${P[0].idleMs / 1000} s on Personal`, P.map((r) => r.after.loaded), "");
-    add(`memory ${P[0].warmupMs / 1000} s after opening them (phys_footprint)`, P.map((r) => r.before.memory.totalMB), "MB");
-    add(`memory after ${P[0].idleMs / 1000} s on Personal (phys_footprint)`, P.map((r) => r.after.memory.totalMB), "MB");
-    add(`memory after ${P[0].idleMs / 1000} s on Personal, browser process`, P.map((r) => r.after.memory.kinds.browser), "MB");
-    add(`processes after ${P[0].idleMs / 1000} s on Personal`, P.map((r) => r.after.memory.processes), "");
-    add("back to a profile → its page shown", P.map((r) => r.back), "ms");
-    add("back to a profile: runs where it had to load again", [P.filter((r) => r.reloaded).length], "");
-  }
-  const S = res.session;
-  for (const t of ["tabs1", "tabs20"]) {
-    add(`idle CPU, ${t.slice(4)} tab(s) (all processes)`, S.map((r) => r.idle[t]?.total.cpu), "%", 2);
-    add(`idle wakeups/s, ${t.slice(4)} tab(s) (all processes)`, S.map((r) => r.idle[t]?.total.wakeups), "/s", 1);
-    add(`idle CPU, ${t.slice(4)} tab(s) (browser process)`, S.map((r) => r.idle[t]?.kinds.browser?.cpu), "%", 2);
-    add(`idle wakeups/s, ${t.slice(4)} tab(s) (browser process)`, S.map((r) => r.idle[t]?.kinds.browser?.wakeups), "/s", 1);
-    add(`idle wakeups/s, ${t.slice(4)} tab(s) (GPU process)`, S.map((r) => r.idle[t]?.kinds["gpu-process"]?.wakeups), "/s", 1);
-    add(`idle wakeups/s, ${t.slice(4)} tab(s) (renderers)`, S.map((r) => r.idle[t]?.kinds.renderer?.wakeups), "/s", 1);
-  }
-  for (const m of ["tabs1", "tabs10", "tabs20", "closed"]) add(`memory (phys_footprint), ${m === "closed" ? "after closing back to 1 tab" : m.slice(4) + " tab(s)"}`, S.map((r) => r.memory[m]?.totalMB), "MB");
-  add("memory, browser process, 20 tabs", S.map((r) => r.memory.tabs20?.kinds.browser), "MB");
-  add("memory, browser process, after closing", S.map((r) => r.memory.closed?.kinds.browser), "MB");
-  const used = (r, k) => {
-    const windows = [r.idle.tabs1, r.idle.tabs20].filter(Boolean);
-    return windows.length ? windows.reduce((n, w) => n + (w.input?.[k] ?? NaN), 0) : NaN;
-  };
-  add("idle windows: someone used the Mac (s, per run)", S.map((r) => used(r, "inputSecs")), "s", 2);
-  add("idle windows: …with the pointer moving over the window (s, per run)", S.map((r) => used(r, "overWindowSecs")), "s", 2);
-  add("after an idle minute: command answered (App Nap check)", S.map((r) => r.idle.tabs1?.afterIdle?.commandMs), "ms");
-  const timedSwitches = (r) => !r.parts || r.parts.includes("switch") || r.parts.includes("newtab");
-  add("samples left out: page couldn't paint (switch + new tab, per run)", S.map((r) => r.throttled && timedSwitches(r) ? r.throttled.tabSwitch + r.throttled.newTab : NaN), "");
-  add("tab switch → shown (median of 16 per run)", S.map((r) => median(r.tabSwitch)), "ms");
-  add("new tab → first paint (median of 5 per run)", S.map((r) => median(r.newTab)), "ms");
-  add("new tab → its page's first frame (median of 5 per run)", S.map((r) => median(r.newTabFrame ?? [])), "ms");
-  const W = [...S, ...(res.windows ?? [])];
-  add("new window → on screen (median per run)", W.map((r) => median(r.newWindow.map((w) => w.window))), "ms");
-  add("new window → on screen with its content (median per run)", W.map((r) => median(r.newWindow.map((w) => w.withContent))), "ms");
-  add("new window → first paint (median per run)", W.map((r) => median(r.newWindow.map((w) => w.firstPaint))), "ms");
-  add("new window → its page's first frame (median per run)", W.map((r) => median(r.newWindow.map((w) => w.firstFrame))), "ms");
-  const J = res.journeys ?? [];
-  const pooled = (name, get) => {
-    const v = J.flatMap((r) => get(r)).filter(Number.isFinite).sort((a, b) => a - b);
-    if (!v.length) return;
-    rows.push({ name, median: median(v), p75: v[Math.min(v.length - 1, Math.ceil(v.length * 0.75) - 1)], min: v[0], max: v.at(-1), n: v.length, unit: "ms", digits: 0 });
-  };
-  const of = (kind, field) => (r) => r[kind].map((x) => x[field]);
-  pooled("J2 ⌘T key → JS has the new tab", of("j2", "js"));
-  pooled("J2 ⌘T key → its command bar committed", of("j2", "commit"));
-  pooled("J2 ⌘T key → that commit on screen", of("j2", "shown"));
-  pooled("J2 ⌘T key → bar focused and on screen (typeable)", of("j2", "typeable"));
-  pooled("J2 keystroke → its suggestions on screen", of("j2", "suggest"));
-  pooled("J2 the app's own ⌘T → typeable (its t0 is the event's timestamp)", of("j2", "appTypeable"));
-  pooled("J2 the app's t0 minus the key's timestamp (should be 0)", of("j2", "t0Skew"));
-  pooled("J2 acperf hands ⌘T over → the event's timestamp (not in the rows)", of("j2", "postGap"));
-  pooled("J2 ⌘T key made → the app's event loop saw it", of("j2", "delivery"));
-  pooled("J2 keystroke made → the app's event loop saw it", of("j2", "suggestDelivery"));
-  for (const [kind, from] of [["j4new", "new tab's bar (⌘T)"], ["j4page", "page's panel (⌘L)"]]) {
-    pooled(`J4 ${from}: Enter → engine asked to load (our side)`, of(kind, "request"));
-    pooled(`J4 ${from}: Enter → Chrome started the navigation`, of(kind, "start"));
-    pooled(`J4 ${from}: Enter → document committed`, of(kind, "commit"));
-    pooled(`J4 ${from}: Enter → first contentful paint (the app's mark)`, of(kind, "fcp"));
-    pooled(`J4 ${from}: Enter → first contentful paint (the page's own, CDP)`, of(kind, "pageFcp"));
-    pooled(`J4 ${from}: request → first contentful paint (engine and network)`, of(kind, "engine"));
-    pooled(`J4 ${from}: Enter made → the app's event loop saw it`, of(kind, "delivery"));
-  }
-  if (J.length) {
-    for (const kind of ["j2", "j4new", "j4page"]) {
-      const lost = J.reduce((n, r) => n + r.lost[kind].length, 0);
-      const kept = J.reduce((n, r) => n + r[kind].length, 0);
-      if (lost || kept) rows.push({ name: `journeys ${kind}: iterations lost (no bar, panel, page or sample)`, median: lost, min: lost, max: lost, n: lost + kept, unit: "", digits: 0 });
-    }
-    const loads = J.flatMap((r) => r.load ?? []);
-    if (loads.length) rows.push({ name: "journeys: 1-minute load average at each run's start and end", median: median(loads), min: Math.min(...loads), max: Math.max(...loads), n: loads.length, unit: "", digits: 0 });
-    rows.push({ name: "journeys: fetches the guard answered (nothing left the machine)", median: J.reduce((n, r) => n + (r.blocked ?? 0), 0), min: 0, max: 0, n: J.length, unit: "", digits: 0 });
-  }
-  rows.push(...frameRows(res));
-  return rows;
-}
-
 function printTable(rows, other, names = ["Before", "After"]) {
   const fmt = (r) =>
     Number.isFinite(r?.median) ? `${r.median.toFixed(r.digits)} ${r.unit}${r.p75 === undefined ? "" : `, p75 ${r.p75.toFixed(r.digits)}`} (${r.min.toFixed(r.digits)}–${r.max.toFixed(r.digits)}, n=${r.n})` : "—";
@@ -1369,13 +1346,11 @@ try {
     Object.assign(side.results.meta, { app: side.src, bundle: side.bundle, label: side.label, date: new Date().toISOString(),
       runs: +opt.runs, idleSecs: +opt.idle, only: [...only], env: opt.env, seed: opt.seed ?? null, freshCopy: !!opt["fresh-copy"], ...(other ? { role: side.role, interleavedWith: other.label } : {}) });
   }
+  await makeTemplates();
   if (only.has("prepare")) {
     for (const side of sides) console.log(`prepared ${side.app} (rerun with --app ${side.app} --prepared)`);
     process.exit(0);
   }
-  for (const side of sides) await makeTemplate(side);
-  const mismatch = sidesProblems(sides.map((s) => s.templateRecord).filter(Boolean));
-  if (mismatch.length) throw new Error(`the two sides' templates don't match: ${mismatch.join("; ")}`);
   if (only.has("profiles")) await interleaved(+opt.runs, profilesRun);
   if (only.has("launch")) await interleaved(+opt["launch-runs"], launchRun);
   const parts = new Set(SESSION_PARTS.filter((p) => only.has("session") || only.has(p)));

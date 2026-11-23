@@ -19,8 +19,11 @@ There are two channels (`docs/releasing.md` › Channels):
 - **Nightly** (`0.2.37-nightly.1`): fast iteration, one fix at a time. Only the focused checks for what changed run;
   no perf ratchet, no perf gate, no landing-page refresh. It's a GitHub prerelease, so the site's download,
   the README and fetch-engine (all on `releases/latest`) keep pointing at stable.
-- **Stable** (`0.2.37`): everything below, about 2 h with the smoke test, the update test, the ratchet, the
-  perf gate and the site's benchmarks. Its perf is compared with the previous **stable** release, never a nightly.
+- **Stable** (`0.2.37`): everything below. From the candidate to publish, the checks take about 40 min: the smoke
+  test, the update test, the ratchet and the perf gate's preparation side by side (about 5 min), then the gate's two
+  timed rounds (about 17 min each).
+  The site's benchmarks run on the Mac mini beside them or after publishing, never in front of it. Its perf is
+  compared with the previous **stable** release, never a nightly.
 
 When the owner asks for a nightly, or asks for a release without saying stable, run the nightly loop. A fix being
 ready is not a request: never start a nightly or a stable unless the owner asks for a release in that request.
@@ -184,6 +187,21 @@ Notarization adds a few minutes per submission.
 
 ## 4. Smoke test the build
 
+For a stable, start three things at once as soon as the candidate exists. None of them is a timing, so none takes the
+perflab lock, and none waits for another:
+
+```bash
+OUT=$HOME/ardia-scratch/gate-<version>
+.claude/skills/release/scripts/smoke.sh <version> <previous> --rc                                   # 4
+node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/export/Ardia.app       # 4b
+node apps/browser/scripts/perf/native-bench.mjs --out $OUT/prep --port 9478 --only prepare \
+  --app dist/<version>-rc/export/Ardia.app --label rc --control dist/<previous>/export/Ardia.app \
+  --control-label <previous> --control-bundle dist/<previous>/bench/main.jsbundle                 # 4c's copies and templates
+```
+
+When all three are done (a fail in one doesn't stop the others; fix and rerun only what failed), take the perflab lock
+for 4c's timed rounds. Start 4d on the Mac mini at the same time. A nightly runs only the smoke test.
+
 ```bash
 .claude/skills/release/scripts/smoke.sh <version> <previous>     # --rc for dist/<version>-rc
 ```
@@ -250,8 +268,9 @@ passed on the earlier candidate; move on to publishing.
 
 ### 4b. Perf ratchet (stable only)
 
-Check the candidate's counts against the ceilings before publishing (about two minutes, no perflab lock needed: they
-are counts, not timings):
+Check the candidate's counts against the ceilings before publishing, beside the smoke test (about five minutes; B1's
+speed-up of `ratchet.mjs`, `bench-app.js` and `ratchet-app.js` makes it shorter; no perflab lock needed: they are
+counts, not timings):
 
 ```bash
 node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/export/Ardia.app   # dist/<version>/export without an rc
@@ -268,12 +287,27 @@ the lowered ceilings, and say which counts dropped. The wall-clock gate is a sep
 ### 4c. Perf gate: the RC against the previous stable release (stable only)
 
 Every stable release is timed against the previous stable one before it publishes (never against a nightly: the
-control is `dist/<previous stable>/export/Ardia.app`), and ships only when every row is the same or
-better (`docs/perf/README.md` › Gating a release: native-bench with `--control dist/<previous>/export/Ardia.app`,
-interleaved, launch x6+ and session x2, then js-bench alternating the two apps). It runs alone on a quiet Mac, holding
-the perflab lock, after the smoke test and the ratchet. Call a row a regression only when the ranges separate.
-Afterwards read `scripts/agent/cpu-cap`'s log (`cpu-cap.log`): a pause of the bench or its instances during the run
-invalidates it, so rerun. Put the numbers in `docs/perf/<previous>-to-<version>.md`.
+control is `dist/<previous stable>/export/Ardia.app`), and ships only when every row passes
+(`docs/perf/README.md` › Gating a release). The copies and both templates were made beside the smoke test (step 4);
+the timed part is two rounds of native-bench on the prepared copies, interleaved, launch x6 and session x2 each,
+alone on a quiet Mac under the perflab lock, about 17 minutes a round. Then `gate-verdict.mjs` reads the two rounds
+pooled: a row fails when the pooled ranges separate, or when it's worse in both rounds by more than the previous
+release's own round-to-round spread. It exits 1 on a failed row and 2 on an invalid round (samples left out with the
+screen locked or the display asleep: rerun that round).
+
+```bash
+for r in 1 2; do
+  scripts/agent/locked perflab --as <you> -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
+    --out $OUT/round$r --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc \
+    --control $OUT/prep/<previous>/app/Ardia.app --control-label <previous> --only launch,session --launch-runs 6 --runs 2
+done
+node apps/browser/scripts/perf/gate-verdict.mjs --control <previous> --candidate rc $OUT/round1 $OUT/round2
+```
+
+js-bench is triage, not a gate step, when the ratchet passed: run its alternating loop (`docs/perf/README.md`) only
+when a gate row fails or needs explaining. Afterwards read `scripts/agent/cpu-cap`'s log (`cpu-cap.log`): a pause of
+the bench or its instances during the run invalidates it, so rerun. Put the verdict table and both rounds' tables in
+`docs/perf/<previous>-to-<version>.md`.
 
 The notes get a `## Faster` section only when the release is measurably faster: a short table of the rows that
 moved (old, new, change) and one sentence naming the biggest win. A release that's the same within noise has no
@@ -282,10 +316,17 @@ Faster section. (0.2.28 and 0.2.29 were also timed against 0.2.17, the last CEF 
 
 ### 4d. The site's benchmarks: Ardia again, rivals kept (stable only)
 
-After the perf gate passes, measure the same build against the stored Dia and Helium rows, so ardia.dev's Benchmarks
-section and `/benchmarks` show this release. Only Ardia runs; the rivals' figures, versions and dates come from
-`apps/site/src/data/bench.json` (`docs/perf/vs-browsers.md` › Running it). It's a timing run, so it goes after the perf
-gate, never beside it, and xbench takes the perflab lock itself. Nightlies skip it, as they skip the perf gate.
+Measure the same build against the stored Dia and Helium rows, so ardia.dev's Benchmarks section and `/benchmarks`
+show this release. Only Ardia runs; the rivals' figures, versions and dates come from `apps/site/src/data/bench.json`
+(`docs/perf/vs-browsers.md` › Running it). Nightlies skip it, as they skip the perf gate.
+
+It never blocks the binary: publishing (step 5) doesn't wait for it. It has to run on the Mac mini, the machine
+bench.json was measured on (xbench refuses any other), and it's a timing run, so it takes the mini's perflab lock
+itself and never runs beside another timing on the same Mac. When the gate runs on the MacBook, start it on the mini
+as soon as the candidate exists. When the gate is on the mini, run it there after publishing. Its template is cached
+in `$X/apps/.templates` (`--template-cache`), so a rerun after exit 75 or a `clean` skips the 90 s settle. Step 6's site
+deploy ships bench.json with the release notes when it's ready by then; otherwise deploy the notes without it and
+ship it with the next site deploy. Never hold the notes for it.
 
 ```bash
 V=<version>; X=$HOME/ardia-scratch/xbench-$V
