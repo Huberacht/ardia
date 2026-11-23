@@ -119,18 +119,25 @@ def duplicates(rows, where):
     return problems
 
 
-RENDERS_NOTHING = re.compile(r'<!--.*?-->|<br\s*/?>|&nbsp;', re.S)
+HTML_COMMENT = re.compile(r'<!--.*?-->', re.S)
+HTML_TAG = re.compile(r'</?[A-Za-z][^>]*>')
+HTML_ENTITY = re.compile(r'&(#\d+|#[xX][0-9A-Fa-f]+|[A-Za-z]+);')
+LINK = re.compile(r'!?\[([^\]]*)\]\([^)]*\)')
 PLACEHOLDER = re.compile(r'^(todo|tbd|tbc|fixme|xxx|n/?a|none|-+|\?+|\.+)$', re.I)
 
 
 def rendered(cell):
-    return RENDERS_NOTHING.sub('', cell).replace('`', '').replace('*', '').replace('_', '').strip()
+    text = HTML_COMMENT.sub('', cell)
+    text = LINK.sub(r'\1', text)
+    text = HTML_TAG.sub('', text)
+    text = HTML_ENTITY.sub(' ', text)
+    return re.sub(r'[`*_~\s]+', ' ', text).strip()
 
 
 def empty_cells(rows, columns, where):
     return [f'{where}:{line}: `{name}` has an empty {column}'
             for name, row, line in rows for column in columns
-            if not rendered(row[column]) or PLACEHOLDER.match(rendered(row[column]))]
+            if not re.search(r'[A-Za-z0-9]', rendered(row[column])) or PLACEHOLDER.match(rendered(row[column]))]
 
 
 def engine_problems(series_text, doc_text, patch_files, where='docs/engine-build.md'):
@@ -308,7 +315,7 @@ class EngineChecker(unittest.TestCase):
                          ['doc:5: `chromium-a.patch` has an empty Removable when'])
 
     def test_a_removable_when_that_renders_nothing_fails(self):
-        for blank in ('<!-- TODO -->', 'TODO', 'n/a', '-', '`` **  **', '<br>'):
+        for blank in ('<!-- TODO -->', 'TODO', 'n/a', '-', '`` **  **', '<br>', '[](x)', '&#160;', '<span></span>', '<BR>', '&nbsp; &#xA0;', '\\|'):
             self.assertEqual(self.check(doc=ENGINE_DOC_SAMPLE.replace('Upstream fixes a', blank)),
                              ['doc:5: `chromium-a.patch` has an empty Removable when'], blank)
 
