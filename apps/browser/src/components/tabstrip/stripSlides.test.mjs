@@ -5,7 +5,7 @@ globalThis.__DEV__ = false;
 const native = await import("../../test-native/reactNative.ts");
 const client = await import("../../state/telemetry/client.ts");
 const { takeTabMotionCounts } = await import("../../state/telemetry/tabMotionCounts.ts");
-const { createMotion, plan } = await import("./stripSlides.ts");
+const { createMotion, plan, shoot } = await import("./stripSlides.ts");
 
 const animations = native.animations;
 after(() => {
@@ -19,6 +19,7 @@ const shot = (keys, { width = 100, tabs = {}, end = null } = {}) => ({
   x: new Map(keys.map((k, i) => [k, i * (width + 4)])),
   width: new Map(keys.map((k) => [k, width])),
   tabs: new Map(keys.map((k) => [k, [k]])),
+  shown: new Map(keys.map((k) => [k, [k]])),
   groups: new Set(),
   end,
   state: { tabs: Object.fromEntries([...keys, ...Object.keys(tabs)].map((k) => [k, { id: k, url: `https://e.test/${k}`, title: k, profileId: "default" }])) },
@@ -212,9 +213,11 @@ test("a fading tab that slides keeps its fade's own clock, so its ghost starts w
 test("a member opened or closed inside a surviving group steps everything at once and takes its press", () => {
   const before = shot(["a", "group:g", "c"], { tabs: { m1: 1, m2: 1 } });
   before.tabs.set("group:g", ["m1", "m2"]);
+  before.shown.set("group:g", ["m1", "m2"]);
   before.width.set("group:g", 300);
   const after = shot(["a", "group:g", "c"], { tabs: { m1: 1 } });
   after.tabs.set("group:g", ["m1"]);
+  after.shown.set("group:g", ["m1"]);
   after.x.set("c", before.x.get("c") - 177);
   delete after.state.tabs.m2;
   const p = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.filter((id) => id === "m2"));
@@ -231,4 +234,66 @@ test("a tab pushed into the overflow menu just leaves, and one coming back just 
   assert.deepEqual(p.appears, ["n"]);
   const back = plan(after, before, new Map(), [-48, 1000], Date.now(), false);
   assert.deepEqual(back.appears, [], "c comes back without a fade-in");
+});
+
+const grouped = (keys, members, shownMembers, extraTabs = []) => {
+  const s = shot(keys, { tabs: Object.fromEntries([...members, ...extraTabs].map((id) => [id, 1])) });
+  s.groups.add("group:g");
+  s.tabs.set("group:g", members);
+  s.shown.set("group:g", shownMembers);
+  return s;
+};
+
+test("an ordinary close slides even when a hidden group member closes with it", () => {
+  const before = grouped(["group:g", "a", "b"], ["m1", "hidden"], [], []);
+  before.end = 312;
+  const after = grouped(["group:g", "b"], ["m1"], [], []);
+  after.end = 208;
+  after.x.set("b", before.x.get("a"));
+  delete after.state.tabs.a;
+  delete after.state.tabs.hidden;
+  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), false);
+  assert.equal(p.stepped, false);
+  assert.deepEqual(p.moves.map((m) => m.key), ["b", "~new"]);
+});
+
+test("closing only a group member that sits in the overflow menu plans nothing", () => {
+  const before = grouped(["a", "group:g", "b"], ["m1", "over"], ["m1"]);
+  const after = grouped(["a", "group:g", "b"], ["m1"], ["m1"]);
+  delete after.state.tabs.over;
+  assert.equal(plan(before, after, new Map(), [-48, 1000], Date.now(), false), null);
+});
+
+test("closing a member the strip shows steps", () => {
+  const before = grouped(["a", "group:g", "b"], ["m1", "m2"], ["m1", "m2"]);
+  const after = grouped(["a", "group:g", "b"], ["m1"], ["m1"]);
+  after.x.set("b", before.x.get("b") - 100);
+  delete after.state.tabs.m2;
+  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), false);
+  assert.equal(p.stepped, true);
+  assert.deepEqual(p.moves, []);
+});
+
+test("a group that shifts keeps its own place, and the tabs after it still slide", () => {
+  const before = grouped(["a", "group:g", "b"], ["m1"], ["m1"]);
+  before.end = 312;
+  const after = grouped(["group:g", "b"], ["m1"], ["m1"]);
+  after.end = 208;
+  delete after.state.tabs.a;
+  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), false);
+  assert.deepEqual(p.moves.map((m) => m.key), ["b", "~new"]);
+});
+
+test("a snapshot shows an expanded group's members after the overflow menu, and none of a collapsed group's", () => {
+  const top = { slots: [{ tabIds: ["m1", "m2", "over"], width: 300 }, { tabIds: ["c1"], width: 80 }, { tabIds: ["a"], width: 100 }], lefts: [0, 304, 388] };
+  const entries = [
+    { kind: "group", id: "g", collapsed: false, members: [{ kind: "tab", id: "m1", group: "g" }, { kind: "tab", id: "m2", group: "g" }], memberTabIds: ["m1", "m2", "over"] },
+    { kind: "group", id: "h", collapsed: true, members: [{ kind: "tab", id: "c1", group: "h" }] },
+    { kind: "tab", id: "a", group: null },
+  ];
+  const snap = shoot(entries, top, 15, null, { tabs: {} });
+  assert.deepEqual(snap.shown.get("group:g"), ["m1", "m2"]);
+  assert.deepEqual(snap.shown.get("group:h"), []);
+  assert.deepEqual(snap.shown.get("a"), ["a"]);
+  assert.deepEqual(snap.tabs.get("group:g"), ["m1", "m2", "over"]);
 });

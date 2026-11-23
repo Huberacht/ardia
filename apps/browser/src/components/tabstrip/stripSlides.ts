@@ -15,7 +15,7 @@ type Run = Animated.CompositeAnimation;
 export type StripSlide = { key: string; value: Animated.Value; opacity: Animated.Value | null; from: number; at: number; until: number; moving: number; fading: boolean; appearAt: number | null; pending: boolean; mounted: boolean; consent: ConsentToken | null };
 type GhostTab = { title: string; url: string; favicon?: string | null; icon?: string | null; profileId: string };
 export type StripGhost = { key: string; x: number; width: number; tab: GhostTab; opacity: Animated.Value; until: number; started: boolean };
-export type Shot = { keys: string[]; x: Map<string, number>; width: Map<string, number>; tabs: Map<string, string[]>; groups: Set<string>; end: number | null; state: BrowserState };
+export type Shot = { keys: string[]; x: Map<string, number>; width: Map<string, number>; tabs: Map<string, string[]>; shown: Map<string, string[]>; groups: Set<string>; end: number | null; state: BrowserState };
 type Move = { key: string; from: number };
 export type Plan = { moves: Move[]; appears: string[]; ghosts: StripGhost[]; at: number; stepped: boolean; pressed: string[] };
 
@@ -34,7 +34,7 @@ const slideEasing = STRIP_MOTION.slideEasing;
 let ghostIds = 0;
 
 export function shoot(entries: StripEntry[], top: DragGeometry, start: number, end: number | null, state: BrowserState): Shot {
-  const shot: Shot = { keys: [], x: new Map(), width: new Map(), tabs: new Map(), groups: new Set(), end, state };
+  const shot: Shot = { keys: [], x: new Map(), width: new Map(), tabs: new Map(), shown: new Map(), groups: new Set(), end, state };
   let i = 0;
   for (const e of entries) {
     const key = slideKey(e);
@@ -46,6 +46,7 @@ export function shoot(entries: StripEntry[], top: DragGeometry, start: number, e
     shot.x.set(key, start + left);
     shot.width.set(key, slot.width);
     shot.tabs.set(key, slot.tabIds);
+    shot.shown.set(key, e.kind !== "group" ? slot.tabIds : e.collapsed ? [] : e.members.flatMap(tabsOf));
     if (e.kind === "group") shot.groups.add(key);
   }
   return shot;
@@ -73,8 +74,8 @@ function memberChanges(before: Shot, after: Shot, had: Set<string>) {
   const opened: string[] = [];
   for (const key of after.keys) {
     if (!had.has(key)) continue;
-    const was = before.tabs.get(key)!;
-    const is = after.tabs.get(key)!;
+    const was = before.shown.get(key)!;
+    const is = after.shown.get(key)!;
     for (const id of was) if (!is.includes(id) && !after.state.tabs[id]) closed.push(id);
     for (const id of is) if (!was.includes(id) && !before.state.tabs[id]) opened.push(id);
   }
@@ -96,7 +97,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
   const stepped = pressed.length > 0 || memberChanged;
   const seen = (x: number, width: number) => x + width > band[0] && x < band[1];
   const moves: Move[] = [];
-  let blocked = still || stepped;
+  const blocked = still || stepped;
   for (const key of after.keys) {
     if (!had.has(key)) continue;
     const delta = before.x.get(key)! - after.x.get(key)!;
@@ -104,8 +105,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     const live = slides.get(key);
     const from = offsetAt(live, now) + delta;
     if (Math.abs(from) < 0.5) continue;
-    if (after.groups.has(key)) blocked = true;
-    if (blocked) continue;
+    if (blocked || after.groups.has(key)) continue;
     const width = after.width.get(key)!;
     if (live?.moving || seen(after.x.get(key)!, width) || seen(before.x.get(key)!, width)) moves.push({ key, from });
   }
