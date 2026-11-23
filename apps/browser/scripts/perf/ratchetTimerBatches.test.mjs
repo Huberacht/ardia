@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { flatten } from "./ratchet.mjs";
 
 const CLOSE_WORK = { "event:topLayout": 80, "device:onAnimatedValueUpdate": 20, "event:topScroll": 20, callback: 257 };
@@ -22,7 +23,11 @@ const report = (...batches) => {
   return file;
 };
 
-const checkStatus = (file) => spawnSync(process.execPath, [new URL("./ratchet.mjs", import.meta.url).pathname, "check", file], { encoding: "utf8" }).status;
+const ratchetCli = fileURLToPath(new URL("./ratchet.mjs", import.meta.url));
+
+const runCheck = (file) => spawnSync(process.execPath, [ratchetCli, "check", file], { encoding: "utf8" });
+
+const checkStatus = (file) => runCheck(file).status;
 
 test("two closes that differ only in how many timer batches the host made flatten to the same task total", () => {
   const macBook = flatten(openClose(390)).counts;
@@ -57,5 +62,7 @@ test("the check still fails when a close does more work of its own", () => {
   const file = join(mkdtempSync(join(tmpdir(), "ratchet-batches-")), "report.json");
   const results = [560, 560, 560].map((n) => ({ probeRevision: 2, ...openClose(n, { ...CLOSE_WORK, "event:topLayout": 200 }) }));
   writeFileSync(file, JSON.stringify({ label: "t", seed: "big", benchRevision: 5, results }));
-  assert.equal(checkStatus(file), 1);
+  const { status, stdout } = runCheck(file);
+  assert.equal(status, 1);
+  assert.match(stdout, /OVER THE CEILING[\s\S]*close\.tasks\.event:topLayout/);
 });
