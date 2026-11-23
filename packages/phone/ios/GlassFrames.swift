@@ -62,16 +62,23 @@ final class GlassFrames: NSObject {
     for surface in surfaces.allObjects { surface.needsPath() }
   }
 
-  func reserve() -> Bool { flight.reserve() }
+  private let warmedOwners = NSHashTable<AnyObject>.weakObjects()
 
-  func submit(_ buffer: MTLCommandBuffer) {
-    buffer.addCompletedHandler { _ in
-      DispatchQueue.main.async { MainActor.assumeIsolated { GlassFrames.shared.finished() } }
+  func submitStill(_ surface: LiquidGlassSurface) {
+    guard let pipeline = GlassMetal.shared.pipeline, let commands = GlassMetal.shared.queue else { return }
+    guard flight.reserve() else {
+      surface.stillPending = true
+      stillsWaiting = true
+      return
     }
-    buffer.commit()
+    surface.stillPending = false
+    let jobs = surface.plan(with: nil, space: nil)
+    guard !jobs.isEmpty else {
+      finished()
+      return
+    }
+    GlassRenderer.shared.run(blurs: [], draws: jobs, pipeline: pipeline, commands: commands) { GlassFrames.shared.finished() }
   }
-
-  func release() { finished() }
 
   func drawsInThisFrame(_ surface: LiquidGlassSurface) -> Bool {
     guard framing else { return false }
@@ -81,14 +88,10 @@ final class GlassFrames: NSObject {
 
   private func finished() {
     flight.finish()
-    if stillsWaiting {
-      stillsWaiting = false
-      for surface in surfaces.allObjects where surface.window != nil && surface.stillPending { surface.drawPendingStill() }
+    stillsWaiting = false
+    for surface in surfaces.allObjects where surface.window != nil && (surface.stillPending || surface.needsRetry) && !surface.wantsFrames {
+      surface.drawPendingStill()
     }
-  }
-
-  func waitForRoom() {
-    stillsWaiting = true
   }
 
   @objc func releaseCaptures() {
@@ -152,15 +155,14 @@ final class GlassFrames: NSObject {
       schedule()
       return
     }
+    guard let pipeline = GlassMetal.shared.pipeline, let commands = GlassMetal.shared.queue else { return }
     guard flight.reserve() else {
       if PhoneTestBuild.isOn { stats.dropped += 1 }
       return
     }
-    guard let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
-      flight.finish()
-      return
-    }
     framing = true
+    var blurs: [GlassBlurJob] = []
+    var draws: [GlassDrawJob] = []
     var groups: [ObjectIdentifier: (owner: AnyObject, space: UIView, members: [LiquidGlassSurface])] = [:]
     var still: [LiquidGlassSurface] = []
     for surface in live {
@@ -172,19 +174,26 @@ final class GlassFrames: NSObject {
       }
     }
     for entry in groups.values {
-      let capture = captures.object(forKey: entry.owner) ?? GlassCapture()
+      let capture = captures.object(forKey: entry.owner) ?? GlassCapture(warmed: warmedOwners.contains(entry.owner))
       captures.setObject(capture, forKey: entry.owner)
-      collect(capture, entry.space, entry.members, owner: entry.owner, into: buffer, now: now, frameMs: frameMs)
+      if capture.page.onMainWork == nil {
+        capture.page.onMainWork = { [weak capture] ms in capture?.noteMainThread(ms: ms, now: CACurrentMediaTime(), captured: false) }
+      }
+      collect(capture, entry.space, entry.members, owner: entry.owner, blurs: &blurs, now: now, frameMs: frameMs)
       for surface in entry.members {
-        surface.draw(with: LiquidGlassRules.acceptsCapture(surface.choice.path) ? capture : nil, space: entry.space, into: buffer)
+        draws += surface.plan(with: LiquidGlassRules.acceptsCapture(surface.choice.path) ? capture : nil, space: entry.space)
       }
     }
-    for surface in still { surface.draw(with: nil, space: nil, into: buffer) }
+    for surface in still { draws += surface.plan(with: nil, space: nil) }
     framing = false
     let stills = framedStills
     framedStills.removeAll()
-    for surface in stills where surface.window != nil { surface.draw(with: nil, space: nil, into: buffer) }
-    submit(buffer)
+    for surface in stills where surface.window != nil { draws += surface.plan(with: nil, space: nil) }
+    if blurs.isEmpty, draws.isEmpty {
+      flight.finish()
+    } else {
+      GlassRenderer.shared.run(blurs: blurs, draws: draws, pipeline: pipeline, commands: commands) { GlassFrames.shared.finished() }
+    }
     trimCaptures(keeping: groups.values.map(\.owner))
     if PhoneTestBuild.isOn {
       stats.noteTick(ms: (CACurrentMediaTime() - started) * 1000)
@@ -193,7 +202,7 @@ final class GlassFrames: NSObject {
     schedule()
   }
 
-  private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, into buffer: MTLCommandBuffer, now: CFTimeInterval, frameMs: Double) {
+  private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, blurs: inout [GlassBlurJob], now: CFTimeInterval, frameMs: Double) {
     let started = CACurrentMediaTime()
     var capturedNow = false
     var marks: [String] = []
@@ -202,6 +211,7 @@ final class GlassFrames: NSObject {
       let spent = (CACurrentMediaTime() - started) * 1000
       if PhoneTestBuild.isOn, spent > frameMs { NSLog("PAGELAB look glass slow pass %@ %.1f ms: %@", members.map(\.label).joined(separator: ","), spent, marks.joined(separator: " ")) }
       capture.noteMainThread(ms: spent, now: now, captured: capturedNow)
+      if capturedNow { warmedOwners.add(owner) }
       if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
       if capture.overBudget(now: now, frameMs: frameMs), !overBudget.contains(owner) {
         overBudget.add(owner)
@@ -242,9 +252,11 @@ final class GlassFrames: NSObject {
       return
     }
     mark("pieces\(pieces.count)")
-    let page = pieces.first { $0.page != nil }
+    let pageIndex = pieces.firstIndex { $0.page != nil }
+    let page = pageIndex.map { pieces[$0] }
+    let shiftable = sourceWhole && GlassLaunch.pageMode == .shift && GlassFlowRules.shiftable(pageIndex: pageIndex, overlapsAbove: pieces.map { $0.bounds.applying($0.transform).intersects(wanted) })
     if let web, page != nil, capture.page.observe(web) { capture.showFill() }
-    capture.survey(pieces, rect: wanted)
+    capture.survey(pieces, rect: wanted, shiftable: shiftable, shallow: sourceWhole && web == nil)
     mark("survey")
     if let web, let page { capture.page.request(web, around: wanted.applying(page.transform.inverted()), pixelsPerPoint: pixelsPerPoint, now: now) }
     mark("request")
@@ -254,7 +266,7 @@ final class GlassFrames: NSObject {
       return
     }
     let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole && web == nil ? capture.wholeMethod : .layer) : method
-    let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
+    let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, blurs: &blurs, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
       var drew = true
       for piece in pieces {
@@ -269,7 +281,7 @@ final class GlassFrames: NSObject {
     switch outcome {
     case .captured:
       capturedNow = true
-      capture.follow(sourceWhole ? web : nil)
+      capture.follow(shiftable ? web : nil)
       if PhoneTestBuild.isOn {
         stats.noteCapture(ms: capture.lastMs, pieces: pieces.count)
         stats.snapshotMs += capture.page.takeLatencies()

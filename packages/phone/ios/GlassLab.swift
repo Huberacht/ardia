@@ -66,3 +66,34 @@ final class GlassLabScroll: NSObject {
     NSLog("PAGELAB glass scroll done")
   }
 }
+
+@MainActor
+enum GlassLabRim {
+  static func start(after delay: Double) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+      MainActor.assumeIsolated {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let window = windows.first(where: \.isKeyWindow) ?? windows.first else { return }
+        let board = UIView(frame: window.bounds)
+        board.backgroundColor = .white
+        board.isUserInteractionEnabled = false
+        let solid = UIView(frame: CGRect(x: 0, y: 0, width: window.bounds.width, height: window.bounds.height / 2))
+        solid.backgroundColor = UIColor(red: 0.1, green: 0.45, blue: 0.8, alpha: 1)
+        let wash = UIView(frame: CGRect(x: 0, y: window.bounds.height / 2, width: window.bounds.width, height: window.bounds.height / 2))
+        wash.backgroundColor = UIColor(red: 1, green: 0.5, blue: 0.1, alpha: 0.5)
+        board.addSubview(solid)
+        board.addSubview(wash)
+        for (index, top) in [200.0, 300.0, window.bounds.height / 2 + 150, window.bounds.height / 2 + 250].enumerated() {
+          let glass = LiquidGlassSurface(frame: CGRect(x: 40, y: top, width: 220, height: 64))
+          glass.label = "rimProbe\(index)"
+          glass.dark = false
+          glass.rimDisabled = index % 2 == 1
+          board.addSubview(glass)
+        }
+        window.addSubview(board)
+        NSLog("PAGELAB glass rim probe shown")
+      }
+    }
+  }
+}
+

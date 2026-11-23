@@ -30,8 +30,12 @@ final class GlassCapture {
   private var quiet = 0
   let page = GlassPageShot()
 
-  private var warmed = false
+  private var warmed: Bool
   private weak var scrollWeb: WKWebView?
+
+  init(warmed: Bool = false) {
+    self.warmed = warmed
+  }
   private var capturedScroll: CGPoint = .zero
 
   func follow(_ web: WKWebView?) {
@@ -63,9 +67,10 @@ final class GlassCapture {
 
   private(set) var signatureValue = 0
 
-  func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect) {
+  func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect, shiftable: Bool = true, shallow: Bool = false) {
     var hasher = Hasher()
     var budget = 1500
+    let depth = shallow ? LiquidGlassRules.backdropWalkDepth : Int.max
     hasher.combine(wanted.minX.rounded())
     hasher.combine(wanted.minY.rounded())
     hasher.combine(wanted.width.rounded())
@@ -73,12 +78,17 @@ final class GlassCapture {
     for piece in pieces {
       for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
       if let web = piece.page {
-        hasher.combine(GlassFlowRules.scrollBucket(web.scrollView.contentOffset))
+        if shiftable {
+          hasher.combine(GlassFlowRules.scrollBucket(web.scrollView.contentOffset))
+        } else {
+          hasher.combine(web.scrollView.contentOffset.x)
+          hasher.combine(web.scrollView.contentOffset.y)
+        }
         hasher.combine(web.scrollView.zoomScale)
         hasher.combine(page.generation)
       } else if let view = piece.view {
         if let contents = view.layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
-        for sublayer in view.layer.sublayers ?? [] { Self.walk(sublayer, into: &hasher, budget: &budget) }
+        for sublayer in view.layer.sublayers ?? [] { Self.walk(sublayer, into: &hasher, budget: &budget, depth: depth) }
       }
     }
     note(hasher.finalize())
@@ -102,7 +112,7 @@ final class GlassCapture {
     return now - capturedAt > LiquidGlassRules.idleRefresh
   }
 
-  func capture(rect wanted: CGRect, pixelsPerPoint: CGFloat, sigma: Double, into buffer: MTLCommandBuffer, now: CFTimeInterval, draw: (CGContext) -> Bool) -> Outcome {
+  func capture(rect wanted: CGRect, pixelsPerPoint: CGFloat, sigma: Double, blurs: inout [GlassBlurJob], now: CFTimeInterval, draw: (CGContext) -> Bool) -> Outcome {
     if now < retryAt { return .waiting }
     let started = CACurrentMediaTime()
     let width = max(Int((wanted.width * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
@@ -127,9 +137,7 @@ final class GlassCapture {
     CVPixelBufferUnlockBaseAddress(pixels, [])
     guard inked, let (input, holder) = GlassMetal.shared.texture(of: pixels), let blurred = outputTexture(like: input), let blur = GlassMetal.shared.blur(sigma: sigma) else { return fail(now) }
     GlassMetal.shared.flushTextures()
-    blur.encode(commandBuffer: buffer, sourceTexture: input, destinationTexture: blurred)
-    let held = holder
-    buffer.addCompletedHandler { _ in _ = held }
+    blurs.append(GlassBlurJob(kernel: blur, source: input, target: blurred, holder: holder))
     texture = blurred
     rect = captured
     generation += 1
@@ -213,8 +221,8 @@ final class GlassCapture {
     return output
   }
 
-  private static func walk(_ layer: CALayer, into hasher: inout Hasher, budget: inout Int) {
-    guard budget > 0 else { return }
+  private static func walk(_ layer: CALayer, into hasher: inout Hasher, budget: inout Int, depth: Int) {
+    guard budget > 0, depth > 0 else { return }
     budget -= 1
     let shown = layer.presentation() ?? layer
     if shown.isHidden || shown.opacity <= 0 {
@@ -243,6 +251,6 @@ final class GlassCapture {
       hasher.combine(web.scrollView.contentOffset.y)
       return
     }
-    for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget) }
+    for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget, depth: depth - 1) }
   }
 }

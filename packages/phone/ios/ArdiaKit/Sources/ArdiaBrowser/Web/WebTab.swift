@@ -73,6 +73,7 @@ public final class WebTab: DiscardablePage, Identifiable {
   public private(set) var pageZoom = 1.0
   public private(set) var isFindingInPage = false
   public private(set) var navigationGeneration = 0
+  public private(set) var committedDocuments = 0
   public static var labScrollCountsAsTouch = false
   public private(set) var hasCommittedLoad = true
   public var request: PageRequest?
@@ -464,6 +465,7 @@ public final class WebTab: DiscardablePage, Identifiable {
 
   fileprivate func didCommit() {
     hasCommittedLoad = true
+    committedDocuments += 1
     capturingOrigins = [:]
     blockedResources.reset()
     scrollTracker.reset()

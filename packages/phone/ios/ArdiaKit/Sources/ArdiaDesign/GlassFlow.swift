@@ -4,10 +4,30 @@ import Foundation
 public struct GlassPageKey: Hashable, Sendable {
   public var page: Int
   public var navigation: Int
+  public var committed: Int
 
-  public init(page: Int, navigation: Int) {
+  public init(page: Int, navigation: Int, committed: Int = 0) {
     self.page = page
     self.navigation = navigation
+    self.committed = committed
+  }
+}
+
+public struct GlassSnapshotAsk: Equatable, Sendable {
+  public var hasImage: Bool
+  public var pending: Bool
+  public var stillFrames: Int
+  public var distance: CGFloat
+  public var age: TimeInterval
+  public var committed: Bool
+
+  public init(hasImage: Bool, pending: Bool, stillFrames: Int, distance: CGFloat, age: TimeInterval, committed: Bool) {
+    self.hasImage = hasImage
+    self.pending = pending
+    self.stillFrames = stillFrames
+    self.distance = distance
+    self.age = age
+    self.committed = committed
   }
 }
 
@@ -30,10 +50,10 @@ public struct GlassSnapshotGate: Sendable {
     return true
   }
 
-  public func mayRequest(now: TimeInterval, changed: Bool, pending: Bool) -> Bool {
-    guard !pending, now >= nextRequest else { return false }
-    let since = now - lastRequest
-    return changed ? since >= GlassFlowRules.snapshotGap : since >= GlassFlowRules.snapshotRefresh
+  public func mayRequest(now: TimeInterval, _ ask: GlassSnapshotAsk) -> Bool {
+    guard !ask.pending, now >= nextRequest, ask.committed, ask.stillFrames >= GlassFlowRules.stillFramesForSnapshot else { return false }
+    guard ask.hasImage else { return true }
+    return ask.distance >= GlassFlowRules.snapshotRefetchDistance || ask.age >= GlassFlowRules.snapshotRefresh
   }
 
   public mutating func begin(now: TimeInterval) -> Int {
@@ -79,17 +99,15 @@ public struct GlassFlight: Sendable {
 }
 
 public enum GlassFlowRules {
-  public static let snapshotGap: TimeInterval = 1.0 / 20
-  public static let snapshotRefresh: TimeInterval = 0.5
+  public static let snapshotRefresh: TimeInterval = 1
+  public static let stillFramesForSnapshot = 3
+  public static let snapshotRefetchDistance: CGFloat = 600
+  public static let uniformTolerance = 4.0 / 255
+  public static let backgroundTolerance = 10.0 / 255
   public static let quietFramesForRecapture = 2
   public static let scrollReach: CGFloat = 200
   public static let scrollStep: CGFloat = 120
-  public static let snapshotReach: CGFloat = 400
-  public static let snapshotStep: CGFloat = 180
-
-  public static func snapshotBucket(_ offset: CGPoint, zoom: CGFloat) -> [Int] {
-    [Int((offset.x / snapshotStep).rounded(.down)), Int((offset.y / snapshotStep).rounded(.down)), Int((zoom * 100).rounded())]
-  }
+  public static let snapshotReach: CGFloat = 1500
 
   public static func snapshotRect(around needed: CGRect) -> CGRect {
     needed.insetBy(dx: 0, dy: -snapshotReach)
@@ -97,6 +115,33 @@ public enum GlassFlowRules {
 
   public static func scrollBucket(_ offset: CGPoint) -> [Int] {
     [Int((offset.x / scrollStep).rounded(.down)), Int((offset.y / scrollStep).rounded(.down))]
+  }
+
+  public static func acceptsSnapshot(requested: CGPoint, now: CGPoint, movedWhilePending: Bool, zoomRequested: CGFloat, zoomNow: CGFloat) -> Bool {
+    !movedWhilePending && requested == now && zoomRequested == zoomNow
+  }
+
+  public static func uniform(_ samples: [[Double]]) -> [Double]? {
+    guard let first = samples.first else { return nil }
+    for channel in first.indices {
+      let values = samples.map { $0[channel] }
+      guard let low = values.min(), let high = values.max(), high - low <= uniformTolerance else { return nil }
+    }
+    return first
+  }
+
+  public static func acceptsUniform(_ color: [Double], background: [Double]?) -> Bool {
+    guard let background, background.count == color.count else { return false }
+    return zip(color, background).allSatisfy { abs($0 - $1) <= backgroundTolerance }
+  }
+
+  public static func footprint(of glass: CGRect, margin: CGFloat) -> CGRect {
+    glass.insetBy(dx: -margin, dy: -margin)
+  }
+
+  public static func shiftable(pageIndex: Int?, overlapsAbove: [Bool]) -> Bool {
+    guard let pageIndex else { return false }
+    return !overlapsAbove.enumerated().contains { $0.offset > pageIndex && $0.element }
   }
 
   public static func snapshotCovers(image: CGRect, shift: CGPoint, needed: CGRect) -> Bool {

@@ -260,32 +260,61 @@ struct LiquidGlassTests {
     #expect(gate.accepts(token: newer, key: GlassPageKey(page: 2, navigation: 5)))
   }
 
-  @Test func `snapshot requests are throttled while scrolling and back off after failures`() {
+  @Test func `WebKit is asked only while the page is still, far from the last snapshot or after a second`() {
     var gate = GlassSnapshotGate()
-    gate.observe(GlassPageKey(page: 1, navigation: 1))
-    #expect(gate.mayRequest(now: 0, changed: true, pending: false))
-    _ = gate.begin(now: 0)
-    #expect(!gate.mayRequest(now: 0.01, changed: true, pending: false), "at most twenty a second while scrolling")
-    #expect(gate.mayRequest(now: 0.06, changed: true, pending: false))
-    #expect(!gate.mayRequest(now: 0.06, changed: true, pending: true))
-    #expect(!gate.mayRequest(now: 0.3, changed: false, pending: false), "a still page refreshes twice a second")
-    #expect(gate.mayRequest(now: 0.6, changed: false, pending: false))
+    gate.observe(GlassPageKey(page: 1, navigation: 1, committed: 1))
+    func ask(image: Bool = true, pending: Bool = false, still: Int = 5, distance: CGFloat = 0, age: TimeInterval = 0, committed: Bool = true) -> GlassSnapshotAsk {
+      GlassSnapshotAsk(hasImage: image, pending: pending, stillFrames: still, distance: distance, age: age, committed: committed)
+    }
+    #expect(gate.mayRequest(now: 0, ask(image: false)))
+    #expect(!gate.mayRequest(now: 0, ask(image: false, still: 1)), "never while the page moves")
+    #expect(!gate.mayRequest(now: 0, ask(image: false, committed: false)), "never before the new document commits")
+    #expect(!gate.mayRequest(now: 0, ask(image: false, pending: true)))
+    #expect(!gate.mayRequest(now: 0, ask(distance: 1)), "a point of scroll is not a reason")
+    #expect(!gate.mayRequest(now: 0, ask(distance: 599)))
+    #expect(gate.mayRequest(now: 0, ask(distance: 600)))
+    #expect(gate.mayRequest(now: 0, ask(age: 1)))
     gate.failed(now: 1)
-    gate.failed(now: 1)
-    #expect(!gate.mayRequest(now: 1.05, changed: true, pending: false))
-    #expect(gate.mayRequest(now: 1.11, changed: true, pending: false))
-    gate.succeeded()
-    #expect(gate.failures == 0)
+    #expect(!gate.mayRequest(now: 1.01, ask(image: false)))
+    #expect(gate.mayRequest(now: 1.06, ask(image: false)))
   }
 
-  @Test func `WebKit renders only the strip around the glass, and is asked again every 180 points of scroll`() {
-    let needed = CGRect(x: 0, y: 536, width: 402, height: 496)
-    #expect(GlassFlowRules.snapshotRect(around: needed) == CGRect(x: 0, y: 136, width: 402, height: 1296))
-    #expect(GlassFlowRules.snapshotBucket(CGPoint(x: 0, y: 179), zoom: 1) == GlassFlowRules.snapshotBucket(.zero, zoom: 1))
-    #expect(GlassFlowRules.snapshotBucket(CGPoint(x: 0, y: 181), zoom: 1) != GlassFlowRules.snapshotBucket(.zero, zoom: 1))
-    #expect(GlassFlowRules.snapshotBucket(.zero, zoom: 1.5) != GlassFlowRules.snapshotBucket(.zero, zoom: 1))
-    let captured = needed
-    #expect(GlassFlowRules.snapshotCovers(image: GlassFlowRules.snapshotRect(around: needed), shift: CGPoint(x: 0, y: GlassFlowRules.snapshotStep), needed: captured), "a capture a full step later is still covered")
+  @Test func `a snapshot is used only if the page held still while WebKit took it`() {
+    #expect(GlassFlowRules.acceptsSnapshot(requested: CGPoint(x: 0, y: 1000), now: CGPoint(x: 0, y: 1000), movedWhilePending: false, zoomRequested: 1, zoomNow: 1))
+    #expect(!GlassFlowRules.acceptsSnapshot(requested: CGPoint(x: 0, y: 1000), now: CGPoint(x: 0, y: 1070), movedWhilePending: false, zoomRequested: 1, zoomNow: 1), "70 points later it would sample 70 points too far")
+    #expect(!GlassFlowRules.acceptsSnapshot(requested: CGPoint(x: 0, y: 1000), now: CGPoint(x: 0, y: 1000), movedWhilePending: true, zoomRequested: 1, zoomNow: 1), "moved and came back")
+    #expect(!GlassFlowRules.acceptsSnapshot(requested: .zero, now: .zero, movedWhilePending: false, zoomRequested: 1, zoomNow: 2))
+    var gate = GlassSnapshotGate()
+    gate.observe(GlassPageKey(page: 1, navigation: 3, committed: 7))
+    let asked = gate.begin(now: 0)
+    let reloaded = gate.observe(GlassPageKey(page: 1, navigation: 3, committed: 8))
+    #expect(reloaded, "the same URL committed again")
+    #expect(!gate.accepts(token: asked, key: GlassPageKey(page: 1, navigation: 3, committed: 7)))
+  }
+
+  @Test func `a flat snapshot is kept only when the page's own background is that flat colour`() {
+    let white = Array(repeating: [1.0, 1.0, 1.0, 1.0], count: 16)
+    #expect(GlassFlowRules.uniform(white) == [1, 1, 1, 1])
+    #expect(GlassFlowRules.uniform(white + [[0.2, 0.2, 0.2, 1]]) == nil)
+    #expect(GlassFlowRules.acceptsUniform([1, 1, 1, 1], background: [1, 1, 1, 1]))
+    #expect(!GlassFlowRules.acceptsUniform([0, 0, 0, 1], background: [1, 1, 1, 1]), "a black frame over a white page is a blank snapshot")
+    #expect(!GlassFlowRules.acceptsUniform([1, 1, 1, 1], background: nil))
+  }
+
+  @Test func `the whole sampling footprint must be inside the capture, and only page pixels shift`() {
+    let glass = CGRect(x: 20, y: 760, width: 360, height: 48)
+    let footprint = GlassFlowRules.footprint(of: glass, margin: 24)
+    #expect(footprint == CGRect(x: -4, y: 736, width: 408, height: 96))
+    #expect(!CGRect(x: -4, y: 737, width: 408, height: 400).contains(footprint), "a point short of the margin is not enough")
+    #expect(GlassFlowRules.shiftable(pageIndex: 1, overlapsAbove: [true, true, false]))
+    #expect(!GlassFlowRules.shiftable(pageIndex: 1, overlapsAbove: [true, true, true]), "something over the page in the strip")
+    #expect(!GlassFlowRules.shiftable(pageIndex: nil, overlapsAbove: [true]))
+  }
+
+  @Test func `a cold capture is forgiven once and only up to fifty milliseconds`() {
+    let frameMs = 1000.0 / 60
+    #expect(!LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 45, cold: true)], now: 1.1, frameMs: frameMs))
+    #expect(LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 84, cold: true)], now: 1.1, frameMs: frameMs), "an 84 ms first capture still counts")
   }
 
   @Test func `a shifted snapshot must cover the strip, so a fast fling shows the fill`() {

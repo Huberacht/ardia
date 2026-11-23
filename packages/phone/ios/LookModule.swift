@@ -22,6 +22,7 @@ public final class LookModule: Module {
             let period = UserDefaults.standard.object(forKey: "ArdiaGlassScrollPeriod").flatMap { Double(String(describing: $0)) } ?? 4
             GlassLabScroll.start(after: 8, for: seconds, period: max(period, 0.2))
           }
+          if PhoneTestBuild.flag("ArdiaGlassRimProbe") { GlassLabRim.start(after: 6) }
           if PhoneTestBuild.flag("ArdiaGlassProbe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
               MainActor.assumeIsolated {

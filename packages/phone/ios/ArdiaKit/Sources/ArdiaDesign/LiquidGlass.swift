@@ -158,6 +158,8 @@ public enum LiquidGlassRules {
 
   public static let budgetWindow: TimeInterval = 2
   public static let captureBudgetShare = 0.12
+  public static let coldCapMs = 50.0
+  public static let backdropWalkDepth = 3
 
   public static func median(_ samples: [Double]) -> Double {
     guard !samples.isEmpty else { return 0 }
@@ -190,7 +192,7 @@ public enum LiquidGlassRules {
   }
 
   public static func overBudget(_ samples: [CaptureSample], now: TimeInterval, frameMs: Double) -> Bool {
-    overBudget(samples, now: now) || recentSamples(samples, now: now).contains { !$0.cold && GlassFlowRules.overFrame(captureMs: $0.ms, frameMs: frameMs) }
+    overBudget(samples, now: now) || recentSamples(samples, now: now).contains { ($0.cold ? $0.ms > coldCapMs : true) && GlassFlowRules.overFrame(captureMs: $0.ms, frameMs: frameMs) }
   }
 
   public static func acceptsCapture(_ path: Path) -> Bool { path == .live }

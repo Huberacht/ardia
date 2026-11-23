@@ -24,7 +24,7 @@ final class LiquidGlassSurface: UIView {
   private(set) var backdropMode: LiquidGlassRules.Backdrop?
   private(set) weak var backdropSource: FrostSourceView?
   private(set) weak var backdropRoot: UIView?
-  private(set) var stillPending = false
+  var stillPending = false
   private var drawnUniforms: [Float]? {
     get { lens.drawn }
     set {
@@ -47,6 +47,8 @@ final class LiquidGlassSurface: UIView {
     layer.addSublayer(fillLayer)
     layer.addSublayer(lens.layer)
     layer.addSublayer(rim.layer)
+    lens.onDrawn = { [weak self] in self?.updateVisibility() }
+    rim.onDrawn = { [weak self] in self?.updateVisibility() }
     registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: LiquidGlassSurface, _: UITraitCollection) in view.invalidate() }
   }
 
@@ -213,10 +215,14 @@ final class LiquidGlassSurface: UIView {
     return region.isNull || region.isEmpty ? nil : region
   }
 
-  func draw(with capture: GlassCapture?, space: UIView?, into buffer: MTLCommandBuffer) {
-    guard let pipeline = GlassMetal.shared.pipeline else { return }
+  var rimDisabled = false
+
+  var needsRetry: Bool { lens.needsRetry || rim.needsRetry }
+
+  func plan(with capture: GlassCapture?, space: UIView?) -> [GlassDrawJob] {
+    guard GlassMetal.shared.pipeline != nil else { return [] }
     let size = lensLayer.bounds.size
-    guard size.width > 0, size.height > 0 else { return }
+    guard size.width > 0, size.height > 0 else { return [] }
     var uv = (left: 0.0, top: 0.0, width: 1.0, height: 1.0)
     var live = false
     var texture: MTLTexture?
@@ -224,49 +230,40 @@ final class LiquidGlassSurface: UIView {
       let shift = capture.scrollShift
       let region = shown.offsetBy(dx: shift.x, dy: shift.y)
       let rect = capture.rect
-      if shift != .zero, !rect.insetBy(dx: -0.5, dy: -0.5).contains(region) { return fillThisFrame(into: buffer) }
-      uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
-      live = true
-      texture = captured
+      if rect.insetBy(dx: -0.5, dy: -0.5).contains(GlassFlowRules.footprint(of: region, margin: marginPoints)) {
+        uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
+        live = true
+        texture = captured
+      }
     }
-    let generation = capture?.generation ?? -1
-    let drewLens = lens.draw(makeFrame(size: size, live: live, uv: uv, rimOnly: false).uniforms, generation: generation, size: size, texture: texture, pipeline: pipeline, into: buffer)
-    let rimShown = choice.rim
-    if rimShown { rim.draw(makeFrame(size: size, live: false, uv: uv, rimOnly: true).uniforms, generation: 0, size: size, texture: nil, pipeline: pipeline, into: buffer) }
-    guard drewLens || rim.layer.isHidden == rimShown else { return }
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    if lens.hasDrawn {
-      lensLayer.isHidden = false
-      fillLayer.isHidden = true
-    }
-    rim.layer.isHidden = !(rimShown && rim.hasDrawn)
-    CATransaction.commit()
+    let generation = live ? (capture?.generation ?? -1) : -1
+    var jobs: [GlassDrawJob] = []
+    if let job = lens.plan(makeFrame(size: size, live: live, uv: uv, rimOnly: false).uniforms, generation: generation, size: size, texture: texture) { jobs.append(job) }
+    if choice.rim, !rimDisabled, let job = rim.plan(makeFrame(size: size, live: false, uv: (0, 0, 1, 1), rimOnly: true).uniforms, generation: 0, size: size, texture: nil) { jobs.append(job) }
+    updateVisibility()
+    return jobs
   }
 
-  private func fillThisFrame(into buffer: MTLCommandBuffer) {
-    draw(with: nil, space: nil, into: buffer)
+  func updateVisibility() {
+    let rimShown = choice.rim && !rimDisabled && rim.hasDrawn && GlassMetal.shared.isReady && !classic
+    let lensShown = lens.hasDrawn && GlassMetal.shared.isReady && !classic
+    guard lensLayer.isHidden == lensShown || rim.layer.isHidden == rimShown || fillLayer.isHidden != lensShown else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    lensLayer.isHidden = !lensShown
+    fillLayer.isHidden = lensShown
+    rim.layer.isHidden = !rimShown
+    CATransaction.commit()
   }
 
   private func drawStill() {
     guard window != nil, GlassMetal.shared.isReady, !classic else { return }
     if GlassFrames.shared.drawsInThisFrame(self) { return }
-    guard GlassFrames.shared.reserve() else {
-      stillPending = true
-      GlassFrames.shared.waitForRoom()
-      return
-    }
-    guard let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
-      GlassFrames.shared.release()
-      return
-    }
-    stillPending = false
-    draw(with: nil, space: nil, into: buffer)
-    GlassFrames.shared.submit(buffer)
+    GlassFrames.shared.submitStill(self)
   }
 
   func drawPendingStill() {
-    guard stillPending, !wantsFrames else { return }
+    guard (stillPending || needsRetry), !wantsFrames else { return }
     drawStill()
   }
 
@@ -395,8 +392,10 @@ final class GlassTarget {
   var drawn: [Float]?
   private var drawnGeneration = -1
   private var drawnSize: CGSize = .zero
-  private(set) var outstanding = 0
+  private(set) var pending = 0
+  private(set) var needsRetry = false
   private(set) var hasDrawn = false
+  var onDrawn: (() -> Void)?
 
   init(adds: Bool) {
     layer.pixelFormat = .bgra8Unorm
@@ -416,34 +415,26 @@ final class GlassTarget {
     layer.device = GlassMetal.shared.device
   }
 
-  @discardableResult
-  func draw(_ uniforms: [Float], generation: Int, size: CGSize, texture: MTLTexture?, pipeline: MTLRenderPipelineState, into buffer: MTLCommandBuffer) -> Bool {
-    if uniforms == drawn, generation == drawnGeneration, size == drawnSize { return false }
-    guard GlassFlowRules.canAcquireDrawable(outstanding: outstanding, maximum: layer.maximumDrawableCount), let drawable = layer.nextDrawable() else { return false }
-    let pass = MTLRenderPassDescriptor()
-    pass.colorAttachments[0].texture = drawable.texture
-    pass.colorAttachments[0].loadAction = .clear
-    pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-    pass.colorAttachments[0].storeAction = .store
-    guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
-    encoder.setRenderPipelineState(pipeline)
-    uniforms.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }
-    encoder.setFragmentTexture(texture ?? GlassBlank.texture, index: 0)
-    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-    encoder.endEncoding()
-    outstanding += 1
-    buffer.addCompletedHandler { [weak self] _ in
-      DispatchQueue.main.async { MainActor.assumeIsolated { self?.presented() } }
+  func plan(_ uniforms: [Float], generation: Int, size: CGSize, texture: MTLTexture?) -> GlassDrawJob? {
+    if !needsRetry, uniforms == drawn, generation == drawnGeneration, size == drawnSize { return nil }
+    guard pending == 0, let source = texture ?? GlassBlank.texture else {
+      needsRetry = true
+      return nil
     }
-    buffer.present(drawable)
-    drawn = uniforms
-    drawnGeneration = generation
-    drawnSize = size
-    hasDrawn = true
-    return true
-  }
-
-  private func presented() {
-    outstanding = max(outstanding - 1, 0)
+    pending += 1
+    needsRetry = false
+    return GlassDrawJob(layer: layer, uniforms: uniforms, texture: source) { [weak self] drew in
+      guard let self else { return }
+      self.pending = max(self.pending - 1, 0)
+      if drew {
+        self.drawn = uniforms
+        self.drawnGeneration = generation
+        self.drawnSize = size
+        self.hasDrawn = true
+      } else {
+        self.needsRetry = true
+      }
+      self.onDrawn?()
+    }
   }
 }
