@@ -1,13 +1,13 @@
 import { useEffect, type ReactNode } from "react";
 import { PlatformColor } from "react-native";
 import { Button, Form, LabeledContent, NavigationLink, Picker, Section, Text, Toggle } from "@expo/ui/swift-ui";
-import { frame, multilineTextAlignment, navigationBarTitleDisplayMode, navigationTitle, pickerStyle, tag, tint } from "@expo/ui/swift-ui/modifiers";
+import { navigationBarTitleDisplayMode, navigationTitle, pickerStyle, tag, tint } from "@expo/ui/swift-ui/modifiers";
 import { refreshDefaultBrowser, useDefaultBrowser } from "../../state/settings/defaultBrowser";
 import { offersDefaultBrowser } from "../../state/settings/settingsRules";
 import { useSyncEnabled, useSyncView } from "../../state/sync/hooks";
 import { syncedEngineName } from "../../state/sync/syncRules";
 import { showOnboarding } from "../../state/onboarding/store";
-import { appVersion, exportOpenTabs, setAppLinks, setArchiveInterval, setAutoOpenKeyboard, setSearchSuggestions, useEngines } from "../../state/settings/actions";
+import { exportOpenTabs, setAppLinks, setArchiveInterval, setAutoOpenKeyboard, setSearchSuggestions, useEngines } from "../../state/settings/actions";
 import { usePreferences } from "../../state/settings/hooks";
 import { settingsRouteKey, type SettingsRoute } from "../../state/settings/nav";
 import { AUTO_ARCHIVE_INTERVALS, autoArchiveTitle, type AutoArchiveInterval } from "../../state/tabs/tabModels";
@@ -20,7 +20,7 @@ import { browseForMeOffered, refreshChatGPTConnected, useChatGPTConnected } from
 import { pageSummariesSwitchable, refreshPageSummariesEnabled, setPageSummariesEnabled, usePageSummariesEnabled } from "../../state/pageSummary/enabled";
 import { PAGE_SUMMARY_COPY } from "../../state/pageSummary/copy";
 import { countUsage } from "../../state/telemetry/telemetry";
-import { contentMargins, modifierList, settingsChrome, settingsLayout, settingsSwitchStyle } from "../ui";
+import { bouncesOnlyWhenScrollable, contentMargins, modifierList, settingsChrome, settingsLayout, settingsSwitchStyle } from "../ui";
 import { ExpoRowText } from "./ExpoRowLabel";
 import { ExpoChoiceRow } from "./ExpoSettingsParts";
 
@@ -29,14 +29,13 @@ const APP_LINKS = [
   { id: "ardia", title: "Ardia" },
   { id: "app", title: "App" },
 ] as const;
-const FILL = Number.MAX_SAFE_INTEGER;
 
 const link = (route: SettingsRoute) => settingsRouteKey(route);
 
 function PaneForm({ title, children }: { title: string; children: ReactNode }) {
   useEffect(() => countUsage("settings_panes_opened"), []);
   return (
-    <Form modifiers={modifierList(navigationTitle(title), navigationBarTitleDisplayMode("inline"), tint(PlatformColor("systemBlue")), settingsChrome(), contentMargins({ edges: "top", length: settingsLayout.expoListTop }))}>
+    <Form modifiers={modifierList(navigationTitle(title), navigationBarTitleDisplayMode("inline"), tint(PlatformColor("systemBlue")), settingsChrome(), bouncesOnlyWhenScrollable(), contentMargins({ edges: "top", length: settingsLayout.expoListTop }))}>
       {children}
     </Form>
   );
@@ -83,7 +82,7 @@ export function ExpoGeneralPane() {
           <ExpoRowText title={PHONE_SHARING_COPY.whatsSent} />
         </NavigationLink>
       </Section>
-      <Section title="About" footer={<Text modifiers={[frame({ maxWidth: FILL }), multilineTextAlignment("center")]}>{appVersion()}</Text>}>
+      <Section title="About">
         <Button onPress={showOnboarding} modifiers={[tint("primary")]}>
           <ExpoRowText title="Set up Ardia again" description="Shows the welcome screens again." />
         </Button>
