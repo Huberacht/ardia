@@ -30,7 +30,7 @@ const EXPECTED = [
 
 const MINIMAL_PROPS: Record<string, Record<string, unknown>> = {
   ArdiaFadeLabel: { text: "" },
-  ArdiaBreathe: { running: true, cycleMs: 1420, opacityRange: [0.86, 1], scaleRange: [0.96, 1.06] },
+  ArdiaBreathe: { running: false, cycleMs: 1420, opacityRange: [0.86, 1], scaleRange: [0.96, 1.06] },
   ArdiaEdgeFadeMask: { fadeWidth: 88, floor: 0.25, onset: 24 },
   ArdiaWindowBackdrop: { colors: ["#000000", "#FFFFFF"] },
   ArdiaThemeSwatch: { colors: [] },
