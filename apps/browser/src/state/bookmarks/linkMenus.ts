@@ -71,6 +71,6 @@ export function runLinkChoice(choice: string | null, links: Link[], windowId: st
 
 export function copyLinks(links: Link[], markdown: boolean) {
   if (!links.length) return;
-  const lines = links.map((l) => (markdown ? markdownLink(l.title || l.url, l.url) : cleanUrl(l.url)));
+  const lines = links.map((l) => (markdown ? markdownLink(l.title ?? "", l.url) : cleanUrl(l.url)));
   copyLink(linkLines(lines, markdown));
 }

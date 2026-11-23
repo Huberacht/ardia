@@ -7,7 +7,7 @@ import { useBrowser } from "../browser/store";
 import { webviews } from "../../platform/webviews";
 import { focusHeroBar } from "../omnibox/barState";
 import { ancestorIds } from "../groups/groups";
-import { activeTabId, bookmarkProfileId, inPinnedContainer, pinSection, tabLayoutOf, tabsShownIn, tabTitle } from "../browser/model";
+import { activeTabId, bookmarkProfileId, inPinnedContainer, ownTabTitle, pinSection, tabLayoutOf, tabsShownIn, tabTitle } from "../browser/model";
 import { anchorOutdated, type ClickMods } from "../drag/drops";
 import { selectedTabIds } from "../pins/organize";
 import { groupLabel, groupOf } from "../pins/tabGrouping";
@@ -127,7 +127,7 @@ export function copyUrls(ids: string[], markdown: boolean) {
   const tabs = ids.map((id) => store().tabs[id]).filter((t): t is Tab => !!t?.url);
   if (!tabs.length) return;
   const reports = tabs.map((t) => cleanUrlReport(t.url));
-  const lines = tabs.map((t, i) => (markdown ? markdownLink(tabTitle(t), t.url) : reports[i]!.url));
+  const lines = tabs.map((t, i) => (markdown ? markdownLink(ownTabTitle(t), t.url) : reports[i]!.url));
   copyLink(linkLines(lines, markdown));
   tabs.forEach((t, i) => noteUrlCopied(awaitsFirstPage(t.id), reports[i]!.removedTracker));
 }

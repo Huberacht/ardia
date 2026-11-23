@@ -320,7 +320,10 @@ test("sameAddress folds only ASCII case in the host, and default ports and the r
 test("a Markdown link never shows trackers in its label, and its destination parses back to the clean address", () => {
   assert.equal(markdownLink("", "https://example.com/a)b?utm_source=mail"), "[https://example.com/a)b](https://example.com/a\\)b)");
   assert.equal(markdownLink("https://x.example/?fbclid=1", "https://x.example/?fbclid=1"), "[https://x.example/](https://x.example/)");
-  assert.equal(markdownLink("example.com/item?utm_source=mail", "https://www.example.com/item?utm_source=mail"), "[https://www.example.com/item](https://www.example.com/item)");
+  assert.equal(markdownLink("example.com", "https://www.example.com/?utm_source=mail"), "[example.com](https://www.example.com/)");
+  assert.equal(markdownLink("Fish", "https://e.example/?q=fish&copy;&utm_source=x"), "[Fish](https://e.example/?q=fish&amp;copy;)");
+  assert.equal(markdownLink("Fish", "https://e.example/a b?q=fish&copy;&x=1"), "[Fish](<https://e.example/a b?q=fish&amp;copy;&x=1>)");
+  assert.equal(markdownLink("Plain", "https://e.example/?a=1&b=2&fbclid=3"), "[Plain](https://e.example/?a=1&b=2)");
   assert.equal(markdownLink("Doc", "https://e.example/doc(1)?token=abc(123)&gclid=x"), "[Doc](https://e.example/doc\\(1\\)?token=abc\\(123\\))");
   assert.equal(markdownLink("Shop [sale] \\o/", "https://shop.example/p (1)?id=7&gclid=x"), "[Shop \\[sale\\] \\\\o/](<https://shop.example/p (1)?id=7>)");
   assert.equal(markdownLink("Tab", "https://e.example/<x>"), "[Tab](<https://e.example/\\<x\\>>)");

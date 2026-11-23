@@ -13,7 +13,7 @@ import { awaitsFirstPage } from "../tabs/pendingAddress";
 import { noteSelectedTabUrlsCopied, noteUrlCopied } from "../telemetry/urlCopies";
 import { selectedTabIds } from "../pins/organize";
 import { copyLinks } from "../bookmarks/linkMenus";
-import { tabTitle } from "../browser/model";
+import { ownTabTitle } from "../browser/model";
 import type { BrowserState } from "../browser/store";
 
 export type { PageSelection };
@@ -106,7 +106,7 @@ export function copySelectedTabUrls(s: BrowserState, windowId: string, markdown:
   const links = selectedTabIds(s, windowId)
     .map((id) => s.tabs[id])
     .filter((t) => !!t?.url)
-    .map((t) => ({ url: t!.url, title: tabTitle(t!) }));
+    .map((t) => ({ url: t!.url, title: ownTabTitle(t!) }));
   if (links.length < 2) return false;
   copyLinks(links, markdown);
   noteSelectedTabUrlsCopied();
