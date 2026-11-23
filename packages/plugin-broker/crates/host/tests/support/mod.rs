@@ -42,7 +42,7 @@ fn build_sdk_bench() -> PathBuf {
         .unwrap_or_else(|error| panic!("the sdk-bench fixture needs node to build its bundle ({error}); install Node 24 or newer"));
     assert!(
         output.status.success(),
-        "node {} {} failed ({})\n{}{}\nthe build imports esbuild, which nothing in this workspace installs for it: run `npm install --no-save --no-package-lock --prefix . esbuild@0.28.2` inside packages/plugin-broker",
+        "node {} {} failed ({})\n{}{}\nthe build imports esbuild: run `pnpm install` at the repo root, or install it beside the crate the way .github/workflows/rust.yml does",
         script.display(),
         bundle.display(),
         output.status,
