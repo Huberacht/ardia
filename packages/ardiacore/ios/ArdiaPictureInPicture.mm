@@ -4,6 +4,7 @@
 #import "ArdiaChromeWindowHost.h"
 #import "ArdiaPiPThrowMath.h"
 #import "ArdiaPiPSeekMath.h"
+#import "ArdiaPiPZoomMath.h"
 
 #import <ApplicationServices/ApplicationServices.h>
 #import <dlfcn.h>
@@ -117,7 +118,7 @@ void InstallDragMonitor() {
 id gOtherAppPinchMonitor;
 
 void FollowPinchesFromOtherApps() {
-  const BOOL wanted = !NSApp.isActive && [ArdiaPiPZoom anyShowing];
+  const BOOL wanted = ardia_pip_zoom::WantsOtherAppPinches(NSApp.isActive, [ArdiaPiPZoom anyZoomable]);
   if (wanted == (gOtherAppPinchMonitor != nil)) return;
   if (!wanted) {
     [NSEvent removeMonitor:gOtherAppPinchMonitor];
@@ -141,6 +142,10 @@ void InstallZoomMonitor() {
     for (NSNotificationName name in @[ NSApplicationDidBecomeActiveNotification, NSApplicationDidResignActiveNotification ])
       [center addObserverForName:name object:NSApp queue:nil usingBlock:^(NSNotification *) {
         FollowPinchesFromOtherApps();
+      }];
+    for (NSNotificationName name in @[ NSWindowWillCloseNotification, NSWindowDidChangeOcclusionStateNotification ])
+      [center addObserverForName:name object:nil queue:nil usingBlock:^(NSNotification *) {
+        RefreshPinchesFromOtherApps();
       }];
   }
   FollowPinchesFromOtherApps();
@@ -346,8 +351,14 @@ BOOL ActivateApp(NSString *why) {
 void WatchZoom() { InstallZoomMonitor(); }
 
 void PinchFromOtherApp(NSEvent *event) {
-  if (NSApp.isActive || ![ArdiaPiPZoom anyShowing]) return FollowPinchesFromOtherApps();
+  if (!ardia_pip_zoom::WantsOtherAppPinches(NSApp.isActive, [ArdiaPiPZoom anyZoomable])) return FollowPinchesFromOtherApps();
   [ArdiaPiPZoom handleFromOtherApp:event];
+}
+
+void RefreshPinchesFromOtherApps() {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    FollowPinchesFromOtherApps();
+  });
 }
 
 BOOL FollowsPinchesFromOtherApps() { return gOtherAppPinchMonitor != nil; }
@@ -449,6 +460,7 @@ void DocumentEntered(ArdiaWebView *view, ArdiaConsentStamp *stamp) {
 }
 
 + (NSString *)devPictureInPictureAction:(NSString *)action {
+  if ([action isEqual:@"pinchMonitor"]) return FollowsPinchesFromOtherApps() ? @"1" : @"0";
   ArdiaPiPController *controller = nil;
   for (NSWindow *window in NSApp.windows)
     if ([ArdiaPiPController forWindow:window] && window.visible) controller = [ArdiaPiPController forWindow:window];
@@ -474,6 +486,7 @@ void DocumentEntered(ArdiaWebView *view, ArdiaConsentStamp *stamp) {
   else if ([action hasPrefix:@"pinch:"]) [ArdiaPiPZoom devPinch:controller.window args:[[action substringFromIndex:6] componentsSeparatedByString:@","]];
   else if ([action isEqual:@"pinchStats"]) return DevJSON([ArdiaPiPZoom devPinchStats:controller.window]);
   else if ([action isEqual:@"standIn"]) return [ArdiaPiPZoom devStandInWindow:controller.window];
+  else if ([action isEqual:@"lastPinch"]) return DevJSON([ArdiaPiPZoom devLastPinch]);
   else if ([action hasPrefix:@"magnify:"]) return [controller devMagnify:[[action substringFromIndex:8] componentsSeparatedByString:@","]];
   else if ([action hasPrefix:@"hittable:"]) {
     if (!ArdiaLaunchConfig.shared.testInstance) return @"test instances only";

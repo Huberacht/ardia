@@ -255,7 +255,7 @@ using namespace ardia_pip;
 - (NSString *)devMagnify:(NSArray<NSString *> *)args {
   NSWindow *window = _window;
   if (!ArdiaLaunchConfig.shared.testInstance) return @"test instances only";
-  if (args.count != 5) return @"usage: x,y,total,steps,main|none|otherApp";
+  if (args.count != 5 && args.count != 6) return @"usage: x,y,total,steps,main|none|otherApp[,noEnd]";
   constexpr int kGestureType = 29, kGestureHIDType = 110, kZoomGesture = 8, kGestureZoomValue = 113, kGesturePhase = 132, kWindowUnderPointer = 51;
   constexpr int kGestureBegan = 1, kGestureChanged = 2, kGestureEnded = 4;
   const NSRect frame = window.frame;
@@ -271,6 +271,7 @@ using namespace ardia_pip;
     }
   const NSInteger target = [mode isEqual:@"main"] ? browser.windowNumber : 0;
   const BOOL otherApp = [mode isEqual:@"otherApp"];
+  const BOOL dropEnd = args.count == 6 && [args[5] isEqual:@"noEnd"];
   const double each = std::pow(total, 1.0 / steps) - 1;
   const CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
   auto send = [=](double seconds, int phase, double magnification) {
@@ -292,7 +293,7 @@ using namespace ardia_pip;
   const double interval = 1.0 / 120;
   send(0, kGestureBegan, 0);
   for (int i = 1; i <= steps; i++) send(i * interval, kGestureChanged, each);
-  send((steps + 1) * interval, kGestureEnded, 0);
+  if (!dropEnd) send((steps + 1) * interval, kGestureEnded, 0);
   NSWindow *under = [ArdiaPiPZoom windowUnder:pointer];
   NSDictionary *answer = @{
     @"pointer" : NSStringFromPoint(pointer),
@@ -300,7 +301,7 @@ using namespace ardia_pip;
     @"under" : @(under.windowNumber),
     @"pip" : @(window.windowNumber),
     @"browser" : @(browser.windowNumber),
-    @"eventWindow" : @(target),
+    @"requestedEventWindow" : @(target),
     @"active" : @(NSApp.isActive),
     @"followsOtherApps" : @(FollowsPinchesFromOtherApps()),
   };

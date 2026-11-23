@@ -183,16 +183,29 @@ typedef NS_ENUM(NSInteger, ArdiaPiPEdge) { ArdiaPiPEdgeNone = 0, ArdiaPiPEdgeLef
 @end
 
 @interface ArdiaPiPZoom : NSObject
-+ (BOOL)handle:(NSEvent *)event;
-+ (BOOL)handleFromOtherApp:(NSEvent *)event;
-+ (BOOL)anyShowing;
 + (BOOL)zooms:(NSWindow *)window;
-+ (NSWindow *)windowUnder:(NSPoint)pointer;
++ (instancetype)forWindow:(NSWindow *)window;
++ (BOOL)enabled;
 + (BOOL)beginEdgeResize:(NSWindow *)window event:(NSEvent *)event;
 + (BOOL)continueEdgeResize:(NSEvent *)event;
 + (void)devPinch:(NSWindow *)window args:(NSArray<NSString *> *)args;
 + (NSDictionary *)devPinchStats:(NSWindow *)window;
 + (NSString *)devStandInWindow:(NSWindow *)window;
+- (void)pinchBegan;
+- (void)pinchBy:(double)factor at:(NSPoint)pointer;
+- (void)pinchEnded;
+- (void)cancelStandIn;
+- (void)zoomBy:(double)factor at:(NSPoint)pointer ease:(BOOL)ease;
+- (NSInteger)standInNumber;
+- (void)notePinchUnfocused:(BOOL)unfocused fromOtherApp:(BOOL)fromOtherApp;
+@end
+
+@interface ArdiaPiPZoom (Routing)
++ (BOOL)handle:(NSEvent *)event;
++ (BOOL)handleFromOtherApp:(NSEvent *)event;
++ (BOOL)anyZoomable;
++ (NSWindow *)windowUnder:(NSPoint)pointer;
++ (NSDictionary *)devLastPinch;
 @end
 
 namespace ardia_pip {

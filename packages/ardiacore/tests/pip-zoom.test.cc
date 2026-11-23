@@ -1,6 +1,8 @@
 #include "../ios/ArdiaPiPZoomMath.h"
 
+#include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <cstdlib>
 
 using namespace ardia_pip_zoom;
@@ -202,7 +204,80 @@ int main() {
     CHECK(phaseless.window == 40 && phaseless.apply && !phaseless.end);
     StepPinch(lock, Phase::Began, 40, true);
     PinchStep restarted = StepPinch(lock, Phase::Began, 41, true);
-    CHECK(restarted.window == 41 && restarted.begin && lock.window == 41);
+    CHECK(restarted.window == 41 && restarted.begin && lock.window == 41 && restarted.finish == 40);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    StepPinch(lock, Phase::Changed, 40, true);
+    PinchStep stalled = StallPinch(lock);
+    CHECK(stalled.window == 40 && stalled.end && !stalled.consume && !stalled.apply && !stalled.cancel);
+    CHECK(lock.owned && lock.stalled);
+    CHECK(StallPinch(lock).window == 0);
+    PinchStep resumed = StepPinch(lock, Phase::Changed, 0, true);
+    CHECK(resumed.window == 40 && resumed.consume && resumed.begin && resumed.apply && !resumed.end);
+    CHECK(!lock.stalled);
+    PinchStep ended = StepPinch(lock, Phase::Ended, 0, true);
+    CHECK(ended.window == 40 && ended.end);
+    CHECK(StallPinch(lock).window == 0);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    StallPinch(lock);
+    PinchStep lateEnd = StepPinch(lock, Phase::Ended, 0, true);
+    CHECK(lateEnd.consume && lateEnd.window == 0 && !lateEnd.begin && !lateEnd.end);
+    CHECK(!lock.owned);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    PinchStep beside = StepPinch(lock, Phase::Began, 0, false);
+    CHECK(beside.finish == 40 && beside.window == 0 && !beside.consume);
+    CHECK(!lock.owned && lock.elsewhere && lock.window == 0);
+    PinchStep again = StepPinch(lock, Phase::Began, 40, true);
+    CHECK(again.finish == 0 && again.begin);
+    PinchStep same = StepPinch(lock, Phase::Began, 40, true);
+    CHECK(same.finish == 40 && same.window == 40 && same.begin);
+    StallPinch(lock);
+    PinchStep afterStall = StepPinch(lock, Phase::Began, 41, true);
+    CHECK(afterStall.finish == 0 && afterStall.window == 41);
+  }
+  {
+    PinchLock lock;
+    StepPinch(lock, Phase::Began, 40, true);
+    StallPinch(lock);
+    PinchStep hidden = StepPinch(lock, Phase::Changed, 0, false);
+    CHECK(hidden.consume && !hidden.cancel && !hidden.begin && hidden.window == 0 && lock.window == 0);
+  }
+  {
+    CHECK(KeepsStandIn(true, true, false));
+    CHECK(!KeepsStandIn(true, true, true));
+    CHECK(!KeepsStandIn(true, false, false));
+    CHECK(!KeepsStandIn(false, true, false));
+    CHECK(WantsOtherAppPinches(false, true));
+    CHECK(!WantsOtherAppPinches(true, true));
+    CHECK(!WantsOtherAppPinches(false, false));
+  }
+  {
+    const double nan = std::nan(""), inf = HUGE_VAL;
+    for (double hostile : {nan, inf, -inf, 1e308, -1e308, 4.9e-324, -0.0}) {
+      const double factor = MagnifyFactor(hostile);
+      CHECK(std::isfinite(factor) && factor >= kLeastMagnifyFactor && factor <= kMostMagnifyFactor);
+      const double scroll = ScrollFactor(hostile, true), wheel = ScrollFactor(hostile, false);
+      CHECK(std::isfinite(scroll) && scroll > 0 && std::isfinite(wheel) && wheel > 0);
+      CHECK(!UsablePointer({hostile, 100}) || std::fabs(hostile) <= kFarthestPointer);
+      CHECK(!UsablePointer({100, hostile}) || std::fabs(hostile) <= kFarthestPointer);
+      const Rect frame{1000, 16, 480, 270};
+      Result r = Zoom(frame, 480, aspect, factor, {1200, 100}, visible, minSize, maxSize);
+      CHECK(Finite(r.frame) && r.frame.w >= minSize.w && r.frame.w <= maxSize.w);
+      CHECK(r.frame.x >= visible.x && r.frame.maxX() <= visible.maxX() && r.frame.y >= visible.y && r.frame.maxY() <= visible.maxY());
+    }
+    CHECK(MagnifyFactor(nan) == 1 && MagnifyFactor(inf) == 1 && ScrollFactor(nan, true) == 1);
+    CHECK(MagnifyFactor(1e308) == kMostMagnifyFactor && MagnifyFactor(-1e308) == kLeastMagnifyFactor);
+    CHECK(!UsablePointer({nan, 1}) && !UsablePointer({1, inf}) && !UsablePointer({-inf, 1}) && !UsablePointer({1e9, 1}));
+    CHECK(UsablePointer({-1512, 945}) && UsablePointer({0, 0}));
+    CHECK(WindowUnder({{40, 0, {1000, 16, 480, 270}}}, {nan, nan}, 0) == 0);
   }
   if (failures) return std::printf("%d failed\n", failures), 1;
   std::printf("pip-zoom: all passed\n");

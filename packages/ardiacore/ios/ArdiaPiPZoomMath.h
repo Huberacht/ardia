@@ -27,12 +27,17 @@ constexpr double kPinchFollow = 0.05;
 constexpr double kHandOffLinger = 0.25, kHandOffTimeout = 0.6;
 constexpr double kHittableHiddenAlpha = 0.01;
 
+constexpr double kMostScrollExponent = 2, kLeastMagnifyFactor = 0.05, kMostMagnifyFactor = 4, kFarthestPointer = 1e6;
+constexpr double kPinchStall = 1.0;
+
 inline double ScrollFactor(double deltaY, bool precise) {
-  return std::exp((precise ? kPerPoint : kPerLine) * deltaY);
+  if (!std::isfinite(deltaY)) return 1;
+  return std::exp(std::clamp((precise ? kPerPoint : kPerLine) * deltaY, -kMostScrollExponent, kMostScrollExponent));
 }
 
 inline double MagnifyFactor(double magnification) {
-  return std::max(0.05, 1 + magnification);
+  if (!std::isfinite(magnification)) return 1;
+  return std::clamp(1 + magnification, kLeastMagnifyFactor, kMostMagnifyFactor);
 }
 
 inline void WidthLimits(double aspect, Size minSize, Size maxSize, Rect visible, double *low, double *high) {
@@ -86,6 +91,14 @@ struct Window {
   Rect frame;
 };
 
+inline bool UsablePointer(Point p) {
+  return std::isfinite(p.x) && std::isfinite(p.y) && std::fabs(p.x) <= kFarthestPointer && std::fabs(p.y) <= kFarthestPointer;
+}
+
+inline bool KeepsStandIn(bool windowExists, bool visible, bool stashed) { return windowExists && visible && !stashed; }
+
+inline bool WantsOtherAppPinches(bool appActive, bool anyZoomable) { return !appActive && anyZoomable; }
+
 inline bool Contains(Rect r, Point p) { return p.x >= r.x && p.x < r.maxX() && p.y >= r.y && p.y < r.maxY(); }
 
 inline long WindowUnder(const std::vector<Window> &frontToBack, Point pointer, long topmost) {
@@ -100,34 +113,48 @@ enum class Phase { None, Began, Changed, Ended };
 
 struct PinchLock {
   long window = 0;
-  bool owned = false, elsewhere = false;
+  bool owned = false, elsewhere = false, stalled = false;
 };
 
 struct PinchStep {
   long window = 0;
   bool consume = false, begin = false, apply = false, end = false, cancel = false;
+  long finish = 0;
 };
 
 inline PinchStep StepPinch(PinchLock &lock, Phase phase, long under, bool lockedZooms) {
   if (phase == Phase::Began) {
-    lock = {under, under != 0, under == 0};
-    if (!under) return {};
-    return {under, true, true, true, false, false};
+    const long finish = lock.owned && lock.window && !lock.stalled ? lock.window : 0;
+    lock = {under, under != 0, under == 0, false};
+    PinchStep step;
+    step.finish = finish;
+    if (under) step = {under, true, true, true, false, false, finish};
+    return step;
   }
   const bool ended = phase == Phase::Ended;
   PinchStep step;
   if (lock.owned) {
     step.consume = true;
-    if (lock.window && lockedZooms) step = {lock.window, true, false, true, ended, false};
-    else if (lock.window) {
-      step = {lock.window, true, false, false, false, true};
+    if (lock.window && !lockedZooms) {
+      if (!lock.stalled) step = {lock.window, true, false, false, false, true, 0};
       lock.window = 0;
+    } else if (lock.window && lock.stalled) {
+      if (!ended) step = {lock.window, true, true, true, false, false, 0};
+      lock.stalled = false;
+    } else if (lock.window) {
+      step = {lock.window, true, false, true, ended, false, 0};
     }
   } else if (!lock.elsewhere && under) {
-    step = {under, true, false, true, ended, false};
+    step = {under, true, false, true, ended, false, 0};
   }
   if (ended) lock = {};
   return step;
+}
+
+inline PinchStep StallPinch(PinchLock &lock) {
+  if (!lock.owned || !lock.window || lock.stalled) return {};
+  lock.stalled = true;
+  return {lock.window, false, false, false, true, false, 0};
 }
 
 }

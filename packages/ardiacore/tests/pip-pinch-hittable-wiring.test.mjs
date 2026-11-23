@@ -28,23 +28,50 @@ test("the stand-in's own panel never takes the gesture, and the window gets its 
 });
 
 const pip = read("../ios/ArdiaPictureInPicture.mm");
+const routing = read("../ios/ArdiaPiPZoom+Routing.mm");
+const controller = read("../ios/ArdiaPiPController.mm");
+const webView = read("../ios/ArdiaWebView+PictureInPicture.mm");
 
 test("a pinch or a ⌘-scroll finds the Picture in Picture window under the pointer, not the window macOS handed the gesture to", () => {
-  assert.doesNotMatch(zoom, /if \(event\.window\) return event\.window;/);
-  const under = body(zoom, "+ (NSWindow *)windowUnder:(NSPoint)pointer {");
+  assert.doesNotMatch(zoom + routing, /if \(event\.window\) return event\.window;/);
+  const under = body(routing, "+ (NSWindow *)windowUnder:(NSPoint)pointer {");
+  assert.match(under, /if \(!ardia_pip_zoom::UsablePointer\(\{pointer\.x, pointer\.y\}\)\) return nil;/);
   assert.match(under, /\[NSWindow windowNumberAtPoint:pointer belowWindowWithWindowNumber:0\]/);
   assert.match(under, /ardia_pip_zoom::WindowUnder\(/);
-  assert.match(body(zoom, "+ (BOOL)routePinch:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {"), /ardia_pip_zoom::StepPinch\(gPinchLock,/);
-  assert.doesNotMatch(zoom, /convertPointToScreen:event\.locationInWindow/);
+  const pinch = body(routing, "+ (BOOL)routePinch:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {");
+  assert.match(pinch, /ardia_pip_zoom::StepPinch\(gPinchLock,/);
+  assert.match(pinch, /if \(!ardia_pip_zoom::UsablePointer\(\{pointer\.x, pointer\.y\}\)\) return gPinchLock\.owned;/);
+  assert.match(pinch, /\[self watchForStall\];/);
+  assert.doesNotMatch(zoom + routing, /convertPointToScreen:event\.locationInWindow/);
 });
 
-test("pinches from other apps are followed only while Ardia is in the background with a Picture in Picture window showing, and never activate it", () => {
+test("a pinch whose end never arrives, or that a new pinch replaces, never leaves the stand-in up", () => {
+  const apply = body(routing, "+ (void)apply:(ardia_pip_zoom::PinchStep)next");
+  assert.match(apply, /next\.finish \? \[NSApp windowWithWindowNumber:next\.finish\] : nil\) \[\[self forWindow:finished\] pinchEnded\];/);
+  assert.match(body(routing, "+ (void)watchForStall {"), /ardia_pip_zoom::StallPinch\(gPinchLock\)/);
+  assert.match(body(zoom, "- (void)tick:(CADisplayLink *)link {"), /if \(!ardia_pip_zoom::KeepsStandIn\(window != nil, window\.visible, \[ArdiaPiPController forWindow:window\]\.stashedEdge != ArdiaPiPEdgeNone\)\)\s*return \[self cancelStandIn\];/);
+});
+
+test("pinches from other apps are followed only while Ardia is in the background with a zoomable Picture in Picture window, and never activate it", () => {
   const follow = body(pip, "void FollowPinchesFromOtherApps() {");
-  assert.match(follow, /const BOOL wanted = !NSApp\.isActive && \[ArdiaPiPZoom anyShowing\];/);
+  assert.match(follow, /const BOOL wanted = ardia_pip_zoom::WantsOtherAppPinches\(NSApp\.isActive, \[ArdiaPiPZoom anyZoomable\]\);/);
   assert.match(follow, /addGlobalMonitorForEventsMatchingMask:NSEventMaskMagnify\b/);
   assert.match(follow, /\[NSEvent removeMonitor:gOtherAppPinchMonitor\];/);
+  assert.match(body(routing, "+ (BOOL)anyZoomable {"), /if \(\[self zooms:window\]\) return YES;/);
   const fromOtherApp = body(pip, "void PinchFromOtherApp(NSEvent *event) {");
-  assert.match(fromOtherApp, /if \(NSApp\.isActive \|\| !\[ArdiaPiPZoom anyShowing\]\) return FollowPinchesFromOtherApps\(\);/);
-  assert.doesNotMatch(fromOtherApp + body(zoom, "+ (BOOL)routePinch:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {"), /Activate/);
-  assert.match(body(zoom, "+ (BOOL)handle:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {"), /event\.timestamp == gLastPinchAt/);
+  assert.match(fromOtherApp, /if \(!ardia_pip_zoom::WantsOtherAppPinches\(NSApp\.isActive, \[ArdiaPiPZoom anyZoomable\]\)\) return FollowPinchesFromOtherApps\(\);/);
+  assert.doesNotMatch(fromOtherApp + body(routing, "+ (BOOL)routePinch:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {"), /Activate/);
+  assert.match(body(routing, "+ (BOOL)handle:(NSEvent *)event fromOtherApp:(BOOL)fromOtherApp {"), /event\.timestamp == gLastPinchAt/);
+});
+
+test("the pinch monitor for other apps is looked at again when a Picture in Picture window closes, hides, tucks or comes back", () => {
+  assert.match(body(pip, "void InstallZoomMonitor() {"), /NSWindowWillCloseNotification, NSWindowDidChangeOcclusionStateNotification[\s\S]*RefreshPinchesFromOtherApps\(\);/);
+  assert.match(body(controller, "- (void)setStashedEdge:(ArdiaPiPEdge)edge {"), /RefreshPinchesFromOtherApps\(\);/);
+  assert.match(body(controller, "- (void)detach {"), /RefreshPinchesFromOtherApps\(\);/);
+  assert.match(body(webView, "- (void)tab:(ArdiaCoreTab *)tab didChangePictureInPicture:"), /if \(!active\) \{\s*ardia_pip::RefreshPinchesFromOtherApps\(\);/);
+  assert.match(body(pip, "void DocumentEntered(ArdiaWebView *view, ArdiaConsentStamp *stamp) {"), /InstallZoomMonitor\(\);/);
+});
+
+test("the pointer of an event with no Core Graphics event behind it comes from the mouse, never a null CGEvent", () => {
+  assert.match(body(controller, "NSPoint PointerOf(NSEvent *event) {"), /CGEventRef backing = event\.CGEvent;\s*if \(!backing\) return NSEvent\.mouseLocation;/);
 });

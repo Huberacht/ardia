@@ -4,9 +4,12 @@ edge moves a stand-in that mirrors the live video every display frame instead of
 each step: a 2 s pinch moves the stand-in on every frame while the real window keeps its size, then the real window
 takes the final size and the stand-in goes; two quick pinches share one stand-in; edge and corner drags keep the
 aspect ratio and the opposite edge or corner; the real window stays able to take the rest of the gesture under the stand-in; a window parked past the screen edge resizes where it is; a pinch right after a mouse resize grows the window (it once divided by
-a stale zero aspect and crashed); a pinch over the window resizes it without a click to focus it, both when macOS hands
-the gesture to the browser window and when another app is in front, while a pinch beside it is left alone; and each
-gesture sends one pictureInPictureStandIn or pictureInPictureResized event.
+a stale zero aspect and crashed); a pinch over the window resizes it without a click to focus it when macOS hands the
+gesture to the browser window, while a pinch beside it is left alone; a pinch whose end never arrives, or that a new
+pinch replaces, hands off its stand-in; the other-app pinch path and a queued ⌘-scroll route to the window while Ardia is
+in the background (routing only: a real gesture from another app is a manual check); the pinch monitor for other apps
+follows the window tucking, untucking, closing and reopening; and each gesture sends one pictureInPictureStandIn or
+pictureInPictureResized event.
 
   node apps/browser/scripts/pip-resize-test.mjs <Debug app> [--out DIR] [--keep]
   node apps/browser/scripts/pip-resize-test.mjs --attach [--out DIR]
@@ -328,46 +331,82 @@ try {
       if (answer !== (on ? "1" : "0")) throw new Error(`fakeAppActive: ${JSON.stringify(answer)}`);
     };
     const standInFlags = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureStandIn").map((e) => e.payload ?? e);
+    const activations = async () => (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureActivated").length;
     const magnify = async (args) => JSON.parse(await pip(`magnify:${args}`));
+    const lastPinch = async () => JSON.parse(await pip("lastPinch"));
+    const monitor = async () => (await engine("tabs.devPictureInPictureAction", { action: "pinchMonitor" })) === "1";
     const handOff = async () => {
       await sleep(300);
       await until("the hand-off", async () => !(await pip("standIn")), 5000);
       await sleep(300);
     };
-    await pip("alpha:0");
-    if ((await pip("hittable:1")) !== "1") throw new Error("couldn't make the window hittable");
+    const middle = (s) => `${Math.round(s.width / 2)},${Math.round(s.height / 2)}`;
+    const hittable = async () => {
+      await pip("alpha:0");
+      if ((await pip("hittable:1")) !== "1") throw new Error("couldn't make the window hittable");
+    };
+    await hittable();
     try {
-      await r.check("a pinch over the window resizes it while macOS hands the pinch to the browser window, and a pinch beside it doesn't", async () => {
+      await r.check("routing: a pinch macOS hands to the browser window, seen by the monitor with that window, resizes the PiP under the pointer; one beside it passes through", async () => {
         await appActive(true);
         const before = await state();
         const count = (await standInFlags()).length;
-        const over = await magnify(`${Math.round(before.width / 2)},${Math.round(before.height / 2)},1.3,24,main`);
+        const over = await magnify(`${middle(before)},1.3,24,main`);
         await handOff();
+        const seenOver = await lastPinch();
         const grown = await state();
         const beside = await magnify(`-80,${Math.round(grown.height / 2)},1.3,24,main`);
         await sleep(900);
+        const seenBeside = await lastPinch();
         const after = await state();
         const flags = await standInFlags();
         const problems = [];
-        if (!over.eventWindow || over.eventWindow === over.pip) problems.push(`the pinch wasn't handed to the browser window: ${JSON.stringify(over)}`);
+        if (!seenOver.eventWindow || seenOver.eventWindow !== over.browser || seenOver.eventWindow === over.pip) problems.push(`the monitor saw the pinch on window ${seenOver.eventWindow}, not the browser window ${over.browser}`);
+        if (seenOver.routedTo !== over.pip || !seenOver.consumed || seenOver.fromOtherApp) problems.push(`the pinch over it went to ${JSON.stringify(seenOver)}`);
         if (over.under !== over.pip) problems.push(`the pointer's window was ${over.under}, not the PiP ${over.pip} (topmost ${over.topmost})`);
         if (grown.width < before.width * 1.2) problems.push(`the pinch over it left it ${size(grown)}`);
-        if (beside.under) problems.push(`the pinch beside it picked window ${beside.under}`);
+        if (seenBeside.eventWindow !== over.browser || seenBeside.routedTo || seenBeside.consumed) problems.push(`the pinch beside it went to ${JSON.stringify(seenBeside)}`);
         if (after.width !== grown.width) problems.push(`the pinch beside it resized it to ${size(after)}`);
         if (flags.length !== count + 1) problems.push(`${flags.length - count} pictureInPictureStandIn events for one pinch over it`);
         else if (!flags.at(-1).unfocused || flags.at(-1).fromOtherApp) problems.push(`it was reported as ${JSON.stringify(flags.at(-1))}`);
         if (problems.length) throw new Error(problems.join("; "));
-        return { before: size(before), grown: size(grown), beside: beside.topmost };
+        return { before: size(before), grown: size(grown), seenOn: seenOver.eventWindow, beside: beside.topmost };
       });
-      await r.check("while another app is in front a pinch over the window resizes it and ⌘-scroll zooms it, without asking to activate Ardia", async () => {
+      await r.check("a pinch whose end never arrives hands off within the stall deadline, and a pinch beside the window hands off the one before it", async () => {
+        const before = await state();
+        await magnify(`${middle(before)},1.2,12,main,noEnd`);
+        await sleep(200);
+        const during = await pip("standIn");
+        await until("the stalled pinch's hand-off", async () => !(await pip("standIn")), 3000);
+        const stalled = await lastPinch();
+        const afterStall = await state();
+        await magnify(`${middle(afterStall)},0.85,12,main,noEnd`);
+        await sleep(200);
+        const second = await pip("standIn");
+        const replacedAt = Date.now();
+        await magnify(`-80,${Math.round(afterStall.height / 2)},1.3,12,main`);
+        await until("the replaced pinch's hand-off", async () => !(await pip("standIn")), 900);
+        const replacedIn = Date.now() - replacedAt;
+        const after = await state();
+        const problems = [];
+        if (!during) problems.push("no stand-in during the pinch with no end");
+        if (!stalled.stalled || stalled.stallTimer) problems.push(`the lock after the stall: ${JSON.stringify(stalled)}`);
+        if (afterStall.width <= before.width) problems.push(`the stalled pinch didn't keep its size: ${size(afterStall)}`);
+        if (!second) problems.push("no stand-in for the second pinch");
+        if (after.width >= afterStall.width) problems.push(`the replaced pinch didn't keep its size: ${size(after)}`);
+        if (problems.length) throw new Error(problems.join("; "));
+        return { before: size(before), stalled: size(afterStall), replaced: size(after), replacedInMs: replacedIn };
+      });
+      await r.check("routing: the other-app pinch path resizes the PiP and an NSApp-queued ⌘-scroll zooms it while Ardia is in the background, without asking to activate (a real background gesture is a manual check)", async () => {
         await appActive(false);
         try {
           await sleep(300);
           const before = await state();
           const count = (await standInFlags()).length;
-          const activations = (await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureActivated").length;
-          const pinched = await magnify(`${Math.round(before.width / 2)},${Math.round(before.height / 2)},0.8,24,otherApp`);
+          const asked = await activations();
+          const pinched = await magnify(`${middle(before)},0.8,24,otherApp`);
           await handOff();
+          const seen = await lastPinch();
           const shrunk = await state();
           await pip("swipe:0,60,10,command");
           await sleep(900);
@@ -375,10 +414,11 @@ try {
           const flags = await standInFlags();
           const problems = [];
           if (!pinched.followsOtherApps) problems.push("no pinch monitor for other apps while Ardia was in the background");
+          if (!seen.fromOtherApp || seen.routedTo !== pinched.pip || seen.eventWindow) problems.push(`the other-app pinch went to ${JSON.stringify(seen)}`);
           if (shrunk.width > before.width * 0.9) problems.push(`the pinch left it ${size(shrunk)}`);
           if (scrolled.width <= shrunk.width) problems.push(`⌘-scroll left it ${size(scrolled)}`);
           if (flags.length !== count + 1 || !flags.at(-1).fromOtherApp) problems.push(`stand-in events ${JSON.stringify(flags.slice(count))}`);
-          if ((await engine("tabs.devEvents", { tabId })).filter((e) => e.name === "pictureInPictureActivated").length !== activations) problems.push("it asked to activate Ardia");
+          if ((await activations()) !== asked) problems.push("it asked to activate Ardia");
           if (problems.length) throw new Error(problems.join("; "));
           return { before: size(before), pinched: size(shrunk), scrolled: size(scrolled) };
         } finally {
@@ -387,12 +427,42 @@ try {
       });
       await r.check("with Ardia active again the pinch monitor for other apps is gone", async () => {
         const before = await state();
-        const routed = await magnify(`${Math.round(before.width / 2)},${Math.round(before.height / 2)},1.3,24,otherApp`);
+        const routed = await magnify(`${middle(before)},1.3,24,otherApp`);
         await sleep(900);
         const after = await state();
         if (routed.followsOtherApps) throw new Error("the monitor stayed on");
         if (after.width !== before.width) throw new Error(`a pinch from another app resized it to ${size(after)} while Ardia was active`);
         return size(after);
+      });
+      await r.check("in the background, the pinch monitor for other apps goes when the window tucks or closes and comes back when it untucks or reopens", async () => {
+        const page = await instance.page(url, { timeout: 5000 });
+        const steps = {};
+        await appActive(false);
+        try {
+          await sleep(300);
+          steps.shown = await monitor();
+          await pip("stash");
+          await sleep(500);
+          steps.tucked = await monitor();
+          await pip("unstash");
+          await sleep(700);
+          steps.untucked = await monitor();
+          await page.eval("document.exitPictureInPicture().then(() => 'ok', (e) => String(e))");
+          await until("the window to close", async () => !(await shown()), 3000);
+          await sleep(600);
+          steps.closed = await monitor();
+          const entered = await page.eval("document.getElementById('v').requestPictureInPicture().then(() => 'ok', (e) => String(e))", { userGesture: true });
+          if (entered !== "ok") throw new Error(`no PiP again: ${entered}`);
+          await until("the styled PiP window", shown, 8000);
+          await sleep(500);
+          steps.reopened = await monitor();
+        } finally {
+          await appActive(true).catch(() => null);
+          await hittable().catch(() => null);
+        }
+        const expected = { shown: true, tucked: false, untucked: true, closed: false, reopened: true };
+        if (JSON.stringify(steps) !== JSON.stringify(expected)) throw new Error(`monitor ${JSON.stringify(steps)}, expected ${JSON.stringify(expected)}`);
+        return steps;
       });
     } finally {
       await pip("hittable:0").catch(() => null);

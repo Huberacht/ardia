@@ -4,7 +4,7 @@
   "frame": "any frame, including cross-origin and sandboxed iframes",
   "main-world": "a value returned from script evaluated in the page's main world, which the page can rewrite (Chromium evaluates there; WebKit uses an isolated world)",
   "sync": "a record from another device that holds the sync key",
-  "other-app": "another app on this Mac, through an opened URL, an Apple Event or a notification",
+  "other-app": "another app on this Mac, through an opened URL, an Apple Event, a notification, or an input event posted while it is in front",
   "plugin": "an approved plugin, within its manifest's permissions",
   "socket": "a same-user process on the control socket while Settings > Advanced > Let programs control Ardia is on",
   "native": "the browser's own native layer, relaying OS input",
@@ -1739,6 +1739,13 @@
     "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#StartPage",
     "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#AllowedPageUrl"
    ],
+   "detected": false
+  },
+  {
+   "id": "native-monitor:pinchFromOtherApp",
+   "source": "other-app",
+   "guard": "A magnify event seen while another app is in front only resizes a Picture in Picture window: the monitor exists only while Ardia is inactive with a zoomable window, a missing CGEvent falls back to the mouse location, a non-finite or far-off pointer is refused before hit-testing, the window must be the topmost under the pointer, and a non-finite or huge magnification becomes a factor between 0.05 and 4 before the clamped, finite-checked resize",
+   "checks": ["packages/ardiacore/ios/ArdiaPictureInPicture.mm#PinchFromOtherApp", "packages/ardiacore/ios/ArdiaPiPZoomMath.h#UsablePointer", "packages/ardiacore/ios/ArdiaPiPZoomMath.h#MagnifyFactor", "packages/ardiacore/ios/ArdiaPiPController.mm#if (!backing) return NSEvent.mouseLocation;", "packages/ardiacore/tests/pip-zoom.test.cc#for (double hostile"],
    "detected": false
   }
  ]
