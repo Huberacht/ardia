@@ -2,7 +2,7 @@ import { displayHost, hostOf } from "@ardia/core";
 import { memo, useState } from "react";
 import { Image, View } from "react-native";
 import { faviconFailed, useAppearanceDark } from "../../state/favicons/favicons";
-import { useFavicon, useFaviconTheme } from "../../state/favicons/faviconHooks";
+import { useFavicon, useFaviconTheme, usePrivateViewer } from "../../state/favicons/faviconHooks";
 import { drawnSymbol, radius, tintedImage, useTheme, weight } from "../ui";
 import { CapCenteredLetter } from "../glyph/CapCenteredLetter";
 import { bundledSiteIcon } from "./siteIcons";
@@ -26,9 +26,10 @@ export const Favicon = memo(function Favicon({
 }) {
   const theme = useTheme();
   useAppearanceDark();
-  const cached = useFavicon(url, direct ? null : favicon, profileId);
+  const viewer = usePrivateViewer() ?? profileId;
+  const cached = useFavicon(url, direct ? null : favicon, viewer);
   const resolved = direct && favicon ? { uri: favicon, profileId: "" } : cached;
-  const shape = useFaviconTheme(theme.dark || direct ? "" : url, favicon, profileId);
+  const shape = useFaviconTheme(theme.dark || direct ? "" : url, favicon, viewer);
   const white = shape?.kind === "template" && !!shape.stroke;
   const [broken, setBroken] = useState<string | null>(null);
   if (!url && !resolved) return <NewTabIcon size={size} opacity={opacity} />;

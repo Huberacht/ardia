@@ -45,6 +45,12 @@
           "desktop": "route",
           "windows": "service"
         },
+        "peek": {
+          "service": "ac_favicons_peek",
+          "mac": "custom",
+          "desktop": "route",
+          "windows": "custom"
+        },
         "set": {
           "service": "ac_favicons_set",
           "mac": "service",
