@@ -196,8 +196,11 @@ final class GlassFrames: NSObject {
   private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, into buffer: MTLCommandBuffer, now: CFTimeInterval, frameMs: Double) {
     let started = CACurrentMediaTime()
     var capturedNow = false
+    var marks: [String] = []
+    func mark(_ name: String) { if PhoneTestBuild.isOn { marks.append("\(name)=\(String(format: "%.1f", (CACurrentMediaTime() - started) * 1000))") } }
     defer {
       let spent = (CACurrentMediaTime() - started) * 1000
+      if PhoneTestBuild.isOn, spent > frameMs { NSLog("PAGELAB look glass slow pass %@ %.1f ms: %@", members.map(\.label).joined(separator: ","), spent, marks.joined(separator: " ")) }
       capture.noteMainThread(ms: spent, now: now, captured: capturedNow)
       if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
       if capture.overBudget(now: now, frameMs: frameMs), !overBudget.contains(owner) {
@@ -238,10 +241,13 @@ final class GlassFrames: NSObject {
     } else {
       return
     }
+    mark("pieces\(pieces.count)")
     let page = pieces.first { $0.page != nil }
     if let web, page != nil, capture.page.observe(web) { capture.showFill() }
     capture.survey(pieces, rect: wanted)
+    mark("survey")
     if let web, page != nil { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, changed: capture.isChanging, now: now) }
+    mark("request")
     guard capture.wants(wanted, now: now, gap: sourceWhole && web == nil ? LiquidGlassRules.backdropRefresh : 0) else { return }
     if let web, let page, !capture.page.covers(wanted.applying(page.transform.inverted()), of: web) {
       capture.showFill()
@@ -251,9 +257,15 @@ final class GlassFrames: NSObject {
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
       var drew = true
-      for piece in pieces where !GlassBackdrop.draw(piece, method: pieceMethod, page: capture.page, in: context) { drew = false }
+      for piece in pieces {
+        let pieceStarted = CACurrentMediaTime()
+        if !GlassBackdrop.draw(piece, method: pieceMethod, page: capture.page, in: context) { drew = false }
+        let pieceMs = (CACurrentMediaTime() - pieceStarted) * 1000
+        if PhoneTestBuild.isOn, pieceMs > 2 { marks.append("\(piece.page != nil ? "page" : piece.view.map { String(describing: type(of: $0)) } ?? "fill")=\(String(format: "%.1f", pieceMs))") }
+      }
       return drew
     }
+    mark("capture")
     switch outcome {
     case .captured:
       capturedNow = true
