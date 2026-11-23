@@ -6,7 +6,7 @@ import { withInspection } from "./devToolsSession";
 import { MAX_MAPS_PER_CALL, SourceMapResolver } from "./devToolsSourceMaps";
 import { CAUSE_CHAIN_FUNCTION, chainOf, resolveChain } from "./devToolsStacks";
 import type { MethodSpec, SocketCall } from "./socketCatalog";
-import { bool, int, obj, TAB, text } from "./socketSchema";
+import { int, obj, TAB, text } from "./socketSchema";
 import { tabOf } from "./socketTargets";
 import { OpError } from "./workspaceTargets";
 
@@ -21,19 +21,18 @@ async function issues(params: Record<string, unknown>, call: SocketCall) {
   }
   const tab = tabOf(params.tab);
   const waitMs = (params.waitMs as number | undefined) ?? 500;
-  const described = await withInspection(tab.id, (session) => collectIssues(session, waitMs));
+  const described = await withInspection(tab.id, call.connection, (session) => collectIssues(session, waitMs));
   call.stillServing();
   noteDevTools("issues_reported", described.issues.length, consent);
   return { tab: tab.id, ...described };
 }
 
-async function stackTrace(params: Record<string, unknown>) {
+function stackTrace(params: Record<string, unknown>) {
   const consent = consentToken();
   const chain = chainOf(params.error);
   if (!chain.length) throw new OpError("bad_request", "error must be an error ({name, message, stack, cause}), a list of them, or {exceptionDetails}.");
-  const provided = params.sourceMaps as Record<string, unknown> | undefined;
-  const resolver = new SourceMapResolver({ provided, allowFetch: params.fetchSourceMaps !== false });
-  const resolved = await resolveChain(chain, resolver);
+  const resolver = new SourceMapResolver({ maps: params.sourceMaps as Record<string, unknown> | undefined, scripts: params.scripts as Record<string, unknown> | undefined });
+  const resolved = resolveChain(chain, resolver);
   noteDevTools("source_maps_resolved", resolver.resolvedCount, consent);
   noteDevTools("source_maps_failed", resolver.failures.length, consent);
   return { chain: resolved, sourceMaps: { resolved: resolver.resolvedCount, failed: resolver.failures } };
@@ -45,7 +44,7 @@ async function styles(params: Record<string, unknown>, call: SocketCall) {
   const selector = params.selector as string;
   if (!selector.trim() || selector.length > SELECTOR_LIMIT || /[\u0000]/.test(selector)) throw new OpError("bad_request", `selector must be a CSS selector of at most ${SELECTOR_LIMIT} characters.`);
   const properties = (params.properties as string[] | undefined) ?? null;
-  const result = await withInspection(tab.id, (session) => stylesFor(session, selector, properties));
+  const result = await withInspection(tab.id, call.connection, (session) => stylesFor(session, selector, properties));
   call.stillServing();
   noteDevTools("style_lookups", 1, consent);
   return { tab: tab.id, ...result };
@@ -72,12 +71,12 @@ export const DEVTOOLS_INSPECT_METHODS: MethodSpec[] = [
   {
     name: "devtools.stackTrace",
     mutates: false,
-    description: `Resolve an error's stack through source maps, keeping its whole Error.cause chain. error is {name, message, stack, cause}, a list of those (what Runtime.callFunctionOn on the error with devtools.causeChainFunction returns), or {exceptionDetails}. Maps come from sourceMaps, inline data: maps, or same-origin http(s) maps fetched without cookies`,
+    description: `Resolve an error's stack through source maps, keeping its whole Error.cause chain. error is {name, message, stack, cause}, a list of those (what Runtime.callFunctionOn on the error with devtools.causeChainFunction returns), or {exceptionDetails}. Maps come only from what you pass: sourceMaps (a map, its JSON, or a data: URL) or scripts (a script's text, whose inline data: map is read). Ardia fetches nothing`,
     params: obj(
       {
         error: { type: ["object", "array"], description: "The error, its cause chain, or {exceptionDetails, causes}" },
-        sourceMaps: { type: "object", description: `Source maps by script address, at most ${MAX_MAPS_PER_CALL}` },
-        fetchSourceMaps: bool("Fetch same-origin source maps over http(s) without cookies (default true)"),
+        sourceMaps: { type: "object", description: `Source maps by script address (a map, its JSON or a data: URL), at most ${MAX_MAPS_PER_CALL}` },
+        scripts: { type: "object", description: `Script text by script address, for scripts with an inline data: source map, at most ${MAX_MAPS_PER_CALL}` },
       },
       ["error"],
     ),

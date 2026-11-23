@@ -1,7 +1,5 @@
 export const MAX_MAP_BYTES = 10 * 1024 * 1024;
-export const MAX_SCRIPT_BYTES = 16 * 1024 * 1024;
 export const MAX_MAPS_PER_CALL = 16;
-export const SOURCE_FETCH_TIMEOUT_MS = 5_000;
 const MAX_SEGMENTS = 4_000_000;
 const MAX_SECTIONS = 64;
 
@@ -46,17 +44,20 @@ function decodeMappings(mappings: string): Segment[][] {
       fields.push(value % 2 === 1 ? -Math.floor(value / 2) : Math.floor(value / 2));
     }
     if (++count > MAX_SEGMENTS) throw new Error("too many mappings");
+    if (fields.length !== 1 && fields.length !== 4 && fields.length !== 5) throw new Error("bad segment");
     const prev = line[line.length - 1];
     const column = (prev ? prev[0] : 0) + fields[0]!;
-    if (fields.length >= 4) {
-      source += fields[1]!;
-      srcLine += fields[2]!;
-      srcCol += fields[3]!;
-      if (fields.length >= 5) name += fields[4]!;
-      line.push([column, source, srcLine, srcCol, fields.length >= 5 ? name : -1]);
-    } else {
+    if (column < 0) throw new Error("negative column");
+    if (fields.length === 1) {
       line.push([column, -1, -1, -1, -1]);
+      continue;
     }
+    source += fields[1]!;
+    srcLine += fields[2]!;
+    srcCol += fields[3]!;
+    if (fields.length === 5) name += fields[4]!;
+    if (source < 0 || srcLine < 0 || srcCol < 0 || name < 0) throw new Error("negative position");
+    line.push([column, source, srcLine, srcCol, fields.length === 5 ? name : -1]);
   }
   lines.push(line);
   for (const l of lines) l.sort((a, b) => a[0] - b[0]);
@@ -156,59 +157,42 @@ export function sourceMapRefOf(script: string): string | null {
   return null;
 }
 
-function httpUrl(value: string): URL | null {
+const INLINE_MAP = /^data:application\/json(?:;charset=[\w-]+)?;base64,([A-Za-z0-9+/=]+)$/i;
+
+export function inlineMapText(ref: string): string | null {
+  const inline = INLINE_MAP.exec(ref);
+  if (!inline || inline[1]!.length > (MAX_MAP_BYTES * 4) / 3) return null;
   try {
-    const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password ? url : null;
+    return decodeBase64Utf8(inline[1]!);
   } catch {
     return null;
   }
-}
-
-export type MapLocation = { kind: "inline"; text: string } | { kind: "remote"; url: string };
-
-export function mapLocation(scriptUrl: string, ref: string): MapLocation | null {
-  const inline = /^data:application\/json(?:;charset=[\w-]+)?;base64,([A-Za-z0-9+/=]+)$/i.exec(ref);
-  if (inline) {
-    if (inline[1]!.length > (MAX_MAP_BYTES * 4) / 3) return null;
-    try {
-      return { kind: "inline", text: decodeBase64Utf8(inline[1]!) };
-    } catch {
-      return null;
-    }
-  }
-  const script = httpUrl(scriptUrl);
-  if (!script) return null;
-  let target: URL;
-  try {
-    target = new URL(ref, script);
-  } catch {
-    return null;
-  }
-  if (!httpUrl(target.href) || target.origin !== script.origin) return null;
-  return { kind: "remote", url: target.href };
 }
 
 function decodeBase64Utf8(data: string): string {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-export type MapFailure = { url: string; reason: "not-web" | "too-big" | "fetch-failed" | "no-map" | "cross-origin" | "bad-map" | "limit" };
+export type MapFailure = { url: string; reason: "no-map" | "not-inline" | "bad-map" | "limit" };
+
+export type MapSources = { maps?: Readonly<Record<string, unknown>>; scripts?: Readonly<Record<string, unknown>> };
 
 export class SourceMapResolver {
   private maps = new Map<string, ParsedMap | null>();
+  private scripts = new Map<string, string>();
   private loads = 0;
   readonly failures: MapFailure[] = [];
-  private fetchFn: typeof fetch;
-  private allowFetch: boolean;
 
-  constructor(options: { provided?: Readonly<Record<string, unknown>>; fetchFn?: typeof fetch; allowFetch: boolean }) {
-    this.fetchFn = options.fetchFn ?? fetch;
-    this.allowFetch = options.allowFetch;
-    for (const [url, raw] of Object.entries(options.provided ?? {}).slice(0, MAX_MAPS_PER_CALL)) this.maps.set(url, parseSourceMap(raw));
+  constructor(sources: MapSources = {}) {
+    for (const [url, raw] of Object.entries(sources.maps ?? {}).slice(0, MAX_MAPS_PER_CALL)) {
+      const text = typeof raw === "string" && raw.startsWith("data:") ? inlineMapText(raw) : raw;
+      this.maps.set(url, text === null ? null : parseSourceMap(text));
+      if (this.maps.get(url) === null) this.failures.push({ url: url.slice(0, 2048), reason: "bad-map" });
+    }
+    for (const [url, raw] of Object.entries(sources.scripts ?? {}).slice(0, MAX_MAPS_PER_CALL)) if (typeof raw === "string") this.scripts.set(url, raw);
   }
 
   get resolvedCount() {
@@ -221,63 +205,15 @@ export class SourceMapResolver {
     return null;
   }
 
-  private async fetchText(url: string, limit: number): Promise<string | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), SOURCE_FETCH_TIMEOUT_MS);
-    try {
-      const reply = await this.fetchFn(url, { credentials: "omit", redirect: "error", signal: controller.signal });
-      if (!reply.ok) return null;
-      const declared = Number(reply.headers?.get?.("content-length") ?? NaN);
-      if (Number.isFinite(declared) && declared > limit) return null;
-      const reader = reply.body?.getReader?.();
-      if (!reader) {
-        const body = await reply.text();
-        return body.length > limit ? null : body;
-      }
-      const chunks: Uint8Array[] = [];
-      let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        if (received > limit) {
-          await reader.cancel().catch(() => {});
-          return null;
-        }
-        chunks.push(value);
-      }
-      const bytes = new Uint8Array(received);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      return new TextDecoder().decode(bytes);
-    } catch {
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async mapFor(scriptUrl: string, scriptSource?: string | null, mapRef?: string | null): Promise<ParsedMap | null> {
+  mapFor(scriptUrl: string, mapRef: string | null = null): ParsedMap | null {
     if (this.maps.has(scriptUrl)) return this.maps.get(scriptUrl)!;
-    if (!httpUrl(scriptUrl) && !mapRef?.startsWith("data:")) return this.fail(scriptUrl, "not-web");
-    if (!this.allowFetch && !mapRef?.startsWith("data:")) return this.fail(scriptUrl, "no-map");
-    if (++this.loads > MAX_MAPS_PER_CALL) return this.fail(scriptUrl, "limit");
-    let ref = mapRef ?? null;
-    if (!ref) {
-      const script = scriptSource ?? (await this.fetchText(scriptUrl, MAX_SCRIPT_BYTES));
-      if (script === null) return this.fail(scriptUrl, "fetch-failed");
-      ref = sourceMapRefOf(script);
-    }
+    const script = this.scripts.get(scriptUrl);
+    const ref = mapRef ?? (script === undefined ? null : sourceMapRefOf(script));
     if (!ref) return this.fail(scriptUrl, "no-map");
-    const location = mapLocation(scriptUrl, ref);
-    if (!location) return this.fail(scriptUrl, ref.startsWith("data:") ? "bad-map" : "cross-origin");
-    const text = location.kind === "inline" ? location.text : this.allowFetch ? await this.fetchText(location.url, MAX_MAP_BYTES) : null;
-    if (text === null) return this.fail(scriptUrl, "fetch-failed");
-    if (text.length > MAX_MAP_BYTES) return this.fail(scriptUrl, "too-big");
-    const parsed = parseSourceMap(text);
+    if (!ref.startsWith("data:")) return this.fail(scriptUrl, "not-inline");
+    if (++this.loads > MAX_MAPS_PER_CALL) return this.fail(scriptUrl, "limit");
+    const text = inlineMapText(ref);
+    const parsed = text === null ? null : parseSourceMap(text);
     if (!parsed) return this.fail(scriptUrl, "bad-map");
     this.maps.set(scriptUrl, parsed);
     return parsed;

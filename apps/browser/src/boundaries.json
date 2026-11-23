@@ -1403,10 +1403,11 @@
   {
    "id": "socket-family:devtools",
    "source": "socket",
-   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); tabs through tabOf; reload and logpoints only on tabs the command opened (controlOwnsTab); a session sends only INSPECTION_METHODS, never an emulation or network override; logpoint conditions always answer false (D3: any same-user process is the owner)",
+   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); tabs through tabOf; reload and logpoints only on tabs the command opened (controlOwnsTab); a session sends only INSPECTION_METHODS, never an emulation or network override, and every session ends when its connection closes or control stops (closeInspectionsFor); logpoint conditions always answer false (D3: any same-user process is the owner)",
    "checks": [
     "apps/browser/src/state/automation/socketSchema.ts#schemaProblem",
     "apps/browser/src/state/automation/devToolsSession.ts#INSPECTION_METHODS",
+    "apps/browser/src/state/automation/devToolsSession.ts#closeInspectionsFor",
     "apps/browser/src/state/automation/devToolsLogpoints.ts#logpointCondition",
     "apps/browser/src/state/automation/socketDevToolsLogpoints.ts#controlOwnsTab"
    ],
@@ -1771,9 +1772,9 @@
   {
    "id": "devtools-page-data:source-maps",
    "source": "page",
-   "guard": "Source maps come from the caller, an inline data: URL, or a same-origin http(s) fetch without cookies or redirects, size and count capped; a malformed map resolves nothing",
+   "guard": "Source maps come only from what the caller passes (a map, its JSON, a data: URL, or a script's text whose inline data: map is read) or a script's own inline data: sourceMapURL from Debugger.scriptParsed; Ardia fetches nothing, so a page's sourceURL or sourceMappingURL can't make it reach the network. Size and count capped; mappings with a wrong segment length or a negative position are refused",
    "checks": [
-    "apps/browser/src/state/automation/devToolsSourceMaps.ts#mapLocation",
+    "apps/browser/src/state/automation/devToolsSourceMaps.ts#inlineMapText",
     "apps/browser/src/state/automation/devToolsSourceMaps.ts#parseSourceMap"
    ],
    "detected": false

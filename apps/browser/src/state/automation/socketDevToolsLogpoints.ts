@@ -35,7 +35,7 @@ export const DEVTOOLS_LOGPOINT_METHODS: MethodSpec[] = [
   {
     name: "devtools.logpoint",
     mutates: true,
-    description: "Log an expression each time a line runs, without pausing the page, on a tab the command opened. url is the script's address or an original source path its source map names; the line is mapped through the map. Its console line starts with the answer's label. Logpoints end when this connection closes",
+    description: "Log an expression each time a line runs, without pausing the page, on a tab the command opened. url is the script's address or an original source path its source map names; the line is mapped through the map. Its console line starts with the answer's label. expression and condition run as the page's own JavaScript where the line runs, with the page's privileges, so they can change page state; keep them to reads. Logpoints end when this connection closes",
     params: obj(
       {
         tab: TAB,

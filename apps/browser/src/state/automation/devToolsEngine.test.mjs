@@ -6,13 +6,13 @@ import ts from "typescript";
 
 const { analyzeTrace, MAX_TRACE_EVENTS } = await import("./devToolsInsights.ts");
 const { describeIssues, describeIssue } = await import("./devToolsIssues.ts");
-const { parseSourceMap, originalPositionFor, generatedPositionFor, sourceMapRefOf, mapLocation, SourceMapResolver } = await import("./devToolsSourceMaps.ts");
+const { parseSourceMap, originalPositionFor, generatedPositionFor, sourceMapRefOf, inlineMapText, SourceMapResolver } = await import("./devToolsSourceMaps.ts");
 const { chainOf, framesOfStack, resolveChain, CAUSE_CHAIN_FUNCTION } = await import("./devToolsStacks.ts");
 const { cascadeFor, declaredProperties, estimateSpecificity, headerOf } = await import("./devToolsCascade.ts");
 const { logpointCondition, checkedExpression } = await import("./devToolsLogpoints.ts");
 const { InspectionSession, liveInspectionSessions } = await import("./devToolsSession.ts");
 const { recordTrace } = await import("./devToolsTrace.ts");
-const { fetchFieldData, fieldDataKey } = await import("./devToolsFieldData.ts");
+const { fetchFieldData, fieldDataOrigin } = await import("./devToolsFieldData.ts");
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/devtools/${name}`, import.meta.url), "utf8"));
 
@@ -37,10 +37,10 @@ test("a page-load trace gives Core Web Vitals, the LCP phases and each insight's
   assert.deepEqual(byId["long-tasks"].details.tasks.map((t) => [t.durationMs, t.attribution?.activity]), [[180, "EvaluateScript"], [90, "FunctionCall"]], "another process's and a worker thread's tasks don't count");
   assert.equal(byId["long-tasks"].details.tasks[1].attribution.functionName, "onBuyClick");
   assert.deepEqual(byId["render-blocking"].details.requests.map((r) => r.url), ["https://shop.example/site.css"]);
-  assert.equal(byId["render-blocking"].savingsMs, 245);
+  assert.equal(byId["render-blocking"].savingsMs, 220);
   assert.equal(byId["document-latency"].rating, "good");
   assert.equal(byId["network-bottlenecks"].details.slowest[0].url, "https://cdn.shop.example/hero.jpg");
-  assert.deepEqual(result.counts, { events: 43, requests: 5, layoutShifts: 3, interactions: 2, longTasks: 2 });
+  assert.deepEqual(result.counts, { events: 42, requests: 5, layoutShifts: 3, interactions: 2, longTasks: 2 });
   assert.equal(result.truncated, false);
 });
 
@@ -147,40 +147,40 @@ test("a TypeScript-compiled inline source map resolves a thrown error's stack to
   const stack = `Error: fee too high\n    at charge (${scriptUrl}:${throwLine + 1}:${throwColumn})\n    at async checkout (${scriptUrl}:40:3)`;
   const chain = chainOf({ error: { name: "Error", message: "fee too high", stack, cause: { name: "RangeError", message: "amount out of range", stack: `RangeError: amount out of range\n    at charge (${scriptUrl}:${throwLine + 1}:${throwColumn + 40})` } } });
   assert.deepEqual(chain.map((l) => [l.name, l.message, l.frames.length]), [["Error", "fee too high", 2], ["RangeError", "amount out of range", 1]]);
-  const fetched = [];
-  const fetchFn = async (url) => {
-    fetched.push(url);
-    return { ok: true, headers: new Map(), text: async () => out };
-  };
-  const resolver = new SourceMapResolver({ allowFetch: true, fetchFn });
-  const resolved = await resolveChain(chain, resolver);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => assert.fail("source maps never go to the network");
+  let resolver;
+  let resolved;
+  try {
+    resolver = new SourceMapResolver({ scripts: { [scriptUrl]: out } });
+    resolved = resolveChain(chain, resolver);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
   assert.deepEqual(resolved[0].frames[0].original && [resolved[0].frames[0].original.source, resolved[0].frames[0].original.line], ["charge.ts", 6]);
   assert.equal(resolved[0].frames[1].async, "await");
   assert.equal(resolved[1].frames[0].original.line, 6);
-  assert.deepEqual(fetched, [scriptUrl], "one fetch per script, then the parsed map is reused");
-  assert.equal(resolver.resolvedCount, 1);
+  assert.equal(resolver.resolvedCount, 1, "the parsed map is reused for every frame of that script");
 });
 
-test("source maps are fetched only from the script's own origin over http(s), without cookies or redirects", async () => {
-  assert.equal(mapLocation("https://shop.example/a.js", "https://evil.example/a.js.map"), null);
-  assert.equal(mapLocation("https://shop.example/a.js", "file:///etc/passwd"), null);
-  assert.equal(mapLocation("https://shop.example/a.js", "javascript:alert(1)"), null);
-  assert.equal(mapLocation("chrome://settings/a.js", "a.js.map"), null);
-  assert.deepEqual(mapLocation("https://shop.example/js/a.js", "../maps/a.js.map"), { kind: "remote", url: "https://shop.example/maps/a.js.map" });
-  assert.equal(mapLocation("https://shop.example/a.js", "data:application/json;base64,!!!"), null);
-  const seen = [];
-  const fetchFn = async (url, init) => {
-    seen.push([url, init.credentials, init.redirect]);
-    if (url.endsWith(".js")) return { ok: true, headers: new Map(), text: async () => "x()\n//# sourceMappingURL=https://evil.example/x.map" };
-    return { ok: true, headers: new Map(), text: async () => "{}" };
-  };
-  const resolver = new SourceMapResolver({ allowFetch: true, fetchFn });
-  assert.equal(await resolver.mapFor("https://shop.example/x.js"), null);
-  assert.equal(await resolver.mapFor("file:///Users/me/x.js"), null);
-  assert.deepEqual(seen, [["https://shop.example/x.js", "omit", "error"]]);
-  assert.deepEqual(resolver.failures.map((f) => f.reason), ["cross-origin", "not-web"]);
-  const offline = new SourceMapResolver({ allowFetch: false, fetchFn: async () => assert.fail("no fetch when fetchSourceMaps is false") });
-  assert.equal(await offline.mapFor("https://shop.example/x.js"), null);
+test("source maps come only from what the caller passes or an inline data: URL, never the network", () => {
+  const map = JSON.stringify({ version: 3, sources: ["a.ts"], names: [], mappings: "AAAA" });
+  const inline = `data:application/json;base64,${Buffer.from(map).toString("base64")}`;
+  assert.equal(inlineMapText(inline), map);
+  for (const ref of ["https://shop.example/a.js.map", "a.js.map", "file:///etc/passwd", "javascript:alert(1)", "data:application/json;base64,!!!", "data:text/html;base64,PGI+"]) assert.equal(inlineMapText(ref), null, ref);
+  const resolver = new SourceMapResolver({ maps: { "https://shop.example/given.js": inline, "https://shop.example/broken.js": "{" }, scripts: { "https://shop.example/remote.js": "x()\n//# sourceMappingURL=https://shop.example/remote.js.map", "https://shop.example/inline.js": `x()\n//# sourceMappingURL=${inline}` } });
+  assert.ok(resolver.mapFor("https://shop.example/given.js"));
+  assert.ok(resolver.mapFor("https://shop.example/inline.js"));
+  assert.equal(resolver.mapFor("https://shop.example/remote.js"), null);
+  assert.equal(resolver.mapFor("https://shop.example/unknown.js"), null);
+  assert.equal(resolver.mapFor("https://shop.example/broken.js"), null);
+  assert.deepEqual(Object.fromEntries(resolver.failures.map((f) => [f.url.split("/").pop(), f.reason])), { "broken.js": "bad-map", "remote.js": "not-inline", "unknown.js": "no-map" });
+});
+
+test("the mappings decoder refuses segments of the wrong length and negative positions", () => {
+  const ok = { version: 3, sources: ["a.ts"], names: ["n"], mappings: "AAAA,CAAC,CAACA" };
+  assert.ok(parseSourceMap(ok));
+  for (const mappings of ["AA", "AAA", "AAAAAA", "AAAA,D", "AAAD", "AADA", "AAAA,ADAA", "AAAAD"]) assert.equal(parseSourceMap({ ...ok, mappings }), null, mappings);
 });
 
 test("CDP exception details keep async parents and the stack text parser ignores junk lines", () => {
@@ -286,7 +286,7 @@ function fakeTransport(script = {}) {
 test("an inspection session never sends an override and undoes only what it turned on when it closes", async () => {
   const fake = fakeTransport({ "Debugger.setBreakpointByUrl": { breakpointId: "bp-1", locations: [] } });
   const before = liveInspectionSessions();
-  const session = new InspectionSession("tab-1", fake.transport);
+  const session = new InspectionSession("tab-1", 901, fake.transport);
   assert.equal(liveInspectionSessions(), before + 1);
   for (const method of ["Emulation.setDeviceMetricsOverride", "Emulation.clearDeviceMetricsOverride", "Network.setCacheDisabled", "Network.emulateNetworkConditions", "Network.disable", "Audits.checkContrast", "Runtime.evaluate", "Page.navigate", "Debugger.pause", "Target.closeTarget"]) {
     await assert.rejects(session.send(method), /never sends/, method);
@@ -300,7 +300,7 @@ test("an inspection session never sends an override and undoes only what it turn
   assert.ok(fake.sent.every(([m]) => !/^(Emulation|Network)\./.test(m)));
   assert.ok(fake.closed);
   assert.equal(liveInspectionSessions(), before);
-  await assert.rejects(session.send("Audits.enable"), /already ended/);
+  await assert.rejects(session.send("Audits.enable"), /ended before it finished/);
 });
 
 test("each trace recording starts from an empty buffer and drops it once handed back", async () => {
@@ -314,9 +314,9 @@ test("each trace recording starts from an empty buffer and drops it once handed 
         return {};
       },
     });
-    const session = new InspectionSession("tab-2", fake.transport);
+    const session = new InspectionSession("tab-2", 902, fake.transport);
     try {
-      return { recording: await recordTrace(session, { durationMs: 1, reload: false }), sent: fake.sent };
+      return { recording: await recordTrace(session, { durationMs: 1, reload: false, beforeReload: () => {} }), sent: fake.sent };
     } finally {
       await session.close();
     }
@@ -336,15 +336,15 @@ test("field data sends only the origin by default and refuses non-web pages", as
     sent.push([url, JSON.parse(init.body), init.credentials]);
     return { ok: true, status: 200, json: async () => ({ record: { metrics: { largest_contentful_paint: { histogram: [{ density: 0.7 }, { density: 0.2 }, { density: 0.1 }], percentiles: { p75: "2100" } } } } }) };
   };
-  const data = await fetchFieldData({ pageUrl: "https://shop.example/cart?id=9#x", scope: "origin", apiKey: "AIzaFixtureKey_123", formFactor: null }, fetchFn);
+  const data = await fetchFieldData({ pageUrl: "https://shop.example/cart?id=9#x", apiKey: "AIzaFixtureKey_123", formFactor: null }, fetchFn);
   assert.deepEqual(sent[0][1].origin, "https://shop.example");
   assert.equal(JSON.stringify(sent[0][1]).includes("cart"), false);
   assert.equal(sent[0][2], "omit");
   assert.deepEqual(data.metrics.largest_contentful_paint, { p75: 2100, good: 0.7, poor: 0.1 });
-  await fetchFieldData({ pageUrl: "https://shop.example/cart?id=9", scope: "url", apiKey: "AIzaFixtureKey_123", formFactor: "PHONE" }, fetchFn);
-  assert.deepEqual(sent[1][1].url, "https://shop.example/cart");
-  for (const pageUrl of ["chrome://settings", "file:///etc/hosts", "javascript:alert(1)", "https://u:p@shop.example/"]) assert.throws(() => fieldDataKey(pageUrl, "origin"));
-  await assert.rejects(fetchFieldData({ pageUrl: "https://shop.example/", scope: "origin", apiKey: "bad key&x=1", formFactor: null }, fetchFn), /API key/);
+  await fetchFieldData({ pageUrl: "https://shop.example/cart?id=9", apiKey: "AIzaFixtureKey_123", formFactor: "PHONE" }, fetchFn);
+  assert.deepEqual(Object.keys(sent[1][1]).sort(), ["formFactor", "metrics", "origin"], "never a url field");
+  for (const pageUrl of ["chrome://settings", "file:///etc/hosts", "javascript:alert(1)", "https://u:p@shop.example/"]) assert.throws(() => fieldDataOrigin(pageUrl));
+  await assert.rejects(fetchFieldData({ pageUrl: "https://shop.example/", apiKey: "bad key&x=1", formFactor: null }, fetchFn), /API key/);
 });
 
 test("a trace with a second navigation attributes nothing from the second page to the first", () => {
@@ -382,25 +382,109 @@ test("custom properties keep their case, and distinct blocked resources stay dis
   assert.deepEqual(issues.map((i) => i.affected.resourceUrl), ["http://a.example/1.png", "http://a.example/2.png"]);
 });
 
-test("a long inline source map is found, and a streamed response stops at its size limit", async () => {
+test("a long inline source map is found anywhere in the script", () => {
   const body = Array.from({ length: 400 }, (_, i) => `export const value${i}: number = ${i};`).join("\n");
   const out = ts.transpileModule(`${body}\nexport function late(): never { throw new Error("late"); }`, { compilerOptions: { target: ts.ScriptTarget.ES2022, inlineSourceMap: true, inlineSources: true }, fileName: "src/late.ts" }).outputText;
   const ref = sourceMapRefOf(out);
   assert.ok(ref && ref.length > 8192, "the inline map is longer than 8 KiB");
-  assert.ok(parseSourceMap(Buffer.from(ref.split(",")[1], "base64").toString("utf8")));
+  assert.ok(parseSourceMap(inlineMapText(ref)));
   assert.equal(sourceMapRefOf("var a = 'sourceMappingURL=nope';"), null);
-  const chunk = new Uint8Array(4 * 1024 * 1024);
-  let reads = 0;
-  let cancelled = false;
-  const fetchFn = async () => ({
-    ok: true,
-    headers: new Map(),
-    body: { getReader: () => ({ read: async () => (++reads > 50 ? { done: true } : { done: false, value: chunk }), cancel: async () => void (cancelled = true) }) },
-    text: async () => assert.fail("a streamed body isn't buffered whole"),
+});
+
+const sessions = await import("./devToolsSession.ts");
+
+function deferredTransport() {
+  const sent = [];
+  const pending = [];
+  let closed = false;
+  return {
+    sent,
+    pending,
+    get closed() {
+      return closed;
+    },
+    transport: {
+      send(method, params) {
+        sent.push(method);
+        if (method === "Debugger.setBreakpointByUrl") return new Promise((resolve) => pending.push(() => resolve({ breakpointId: "late-bp" })));
+        return Promise.resolve({});
+      },
+      onEvent: () => () => {},
+      async close() {
+        closed = true;
+      },
+    },
+  };
+}
+
+test("once a session starts closing it refuses new commands, and a breakpoint set in flight is still removed", async () => {
+  const fake = deferredTransport();
+  const session = new InspectionSession("tab-3", 903, fake.transport);
+  await session.send("Debugger.enable");
+  const inFlight = session.send("Debugger.setBreakpointByUrl", { url: "https://a.example/a.js", lineNumber: 0 });
+  const closing = session.close();
+  await assert.rejects(session.send("Debugger.enable"), /ended before it finished/);
+  await assert.rejects(session.pause(10_000), /ended before it finished/);
+  fake.pending.shift()();
+  await inFlight;
+  await closing;
+  assert.deepEqual(fake.sent, ["Debugger.enable", "Debugger.setBreakpointByUrl", "Debugger.removeBreakpoint", "Debugger.disable"]);
+  assert.ok(fake.closed);
+});
+
+test("closing a connection or turning control off ends its sessions, including one still opening", async () => {
+  const transports = [];
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  sessions.setInspectionTransport(async () => {
+    const fake = deferredTransport();
+    transports.push(fake);
+    await gate;
+    return fake.transport;
   });
-  const resolver = new SourceMapResolver({ allowFetch: true, fetchFn });
-  assert.equal(await resolver.mapFor("https://shop.example/huge.js"), null);
-  assert.ok(cancelled);
-  assert.ok(reads <= 5, `stopped after ${reads} chunks`);
-  assert.deepEqual(resolver.failures.map((f) => f.reason), ["fetch-failed"]);
+  try {
+    const opening = sessions.openInspection("tab-4", 904);
+    await sessions.closeInspectionsFor(904);
+    release();
+    await assert.rejects(opening, /Control was turned off/);
+    assert.ok(transports[0].closed, "a session that finished opening after its connection closed is closed at once");
+    const open = await sessions.openInspection("tab-5", 905);
+    const work = open.pause(10_000);
+    await sessions.closeAllInspections();
+    await assert.rejects(work, /ended before it finished/);
+    assert.equal(sessions.liveInspectionSessions(), 0);
+  } finally {
+    sessions.setInspectionTransport(null);
+  }
+});
+
+test("interactions from another frame or the previous document don't count toward INP, and blocking spans aren't double counted", () => {
+  const trace = fixture("trace-load.json");
+  const before = 999_000_000;
+  trace.traceEvents.push(
+    { name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: before, args: { data: { interactionId: 90, duration: 900, type: "click", frame: "F1", timeStamp: 1, processingStart: 2, processingEnd: 3 } } },
+    { name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: 1_004_000_000, args: { data: { interactionId: 91, duration: 800, type: "click", frame: "F2", timeStamp: 1, processingStart: 2, processingEnd: 3 } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_700_000, args: { data: { requestId: "R9", url: "https://shop.example/other.css", renderBlocking: "blocking" } } },
+    { name: "ResourceFinish", ph: "I", pid: 2, tid: 3, ts: 1_000_850_000, args: { data: { requestId: "R9", finishTime: 1000.85 } } },
+  );
+  const result = analyzeTrace(trace);
+  assert.equal(result.metrics.inp.ms, 320);
+  assert.equal(result.counts.interactions, 2);
+  const blocking = result.insights.find((i) => i.id === "render-blocking");
+  assert.equal(blocking.savingsMs, 220, "a blocker inside another blocker's span adds nothing");
+  assert.equal(blocking.details.requests.length, 2);
+});
+
+test("a registered custom property that doesn't inherit isn't taken from an ancestor, and shorthands count for their longhands", () => {
+  const rule = (selector, props) => ({ rule: { origin: "regular", selectorList: { selectors: [{ text: selector, specificity: { a: 0, b: 1, c: 0 } }] }, style: { cssProperties: props } }, matchingSelectors: [0] });
+  const matched = {
+    matchedCSSRules: [rule(".card", [{ name: "margin", value: "4px 8px", longhandProperties: [{ name: "margin-top", value: "4px" }, { name: "margin-left", value: "8px" }] }]), rule(".card.wide", [{ name: "margin-left", value: "16px" }])],
+    inherited: [{ matchedCSSRules: [rule(".parent", [{ name: "--gap", value: "10px" }, { name: "--tone", value: "dark" }])] }],
+    cssPropertyRules: [{ propertyName: { text: "--gap" }, style: { cssProperties: [{ name: "syntax", value: '"<length>"' }, { name: "inherits", value: "false" }] } }],
+  };
+  const [gap, tone, top, left] = cascadeFor(matched, { computedStyle: [] }, ["--gap", "--tone", "margin-top", "margin-left"], new Map());
+  assert.equal(gap.winner, null);
+  assert.equal(tone.winner.value, "dark");
+  assert.deepEqual([top.winner.value, top.winner.shorthand], ["4px", "margin"]);
+  assert.deepEqual([left.winner.value, left.winner.shorthand, left.overridden[0].value, left.overridden[0].shorthand], ["16px", null, "8px", "margin"]);
 });

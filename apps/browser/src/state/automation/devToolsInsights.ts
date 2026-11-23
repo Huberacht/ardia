@@ -151,6 +151,8 @@ function interactionsOf(model: Model): Interaction[] {
   for (const ev of model.events) {
     if (ev.name !== "EventTiming" || (ev.ph !== "b" && ev.ph !== "X")) continue;
     const data = ev.args.data;
+    const frame = text(field(data, "frame"), 256);
+    if (frame && model.mainFrame && frame !== model.mainFrame) continue;
     const id = num(field(data, "interactionId"));
     const duration = num(field(data, "duration"));
     if (id === null || id <= 0 || duration === null || duration < 0) continue;
@@ -240,19 +242,32 @@ function longTaskInsight(model: Model, tasks: Ev[], fcp: Ev | null): { insight: 
 
 const BLOCKING = new Set(["blocking", "in_body_parser_blocking"]);
 
+function blockedSpan(rows: RequestRow[], from: number, limit: number): number {
+  const spans = rows
+    .map((row): [number, number] => [Math.max(row.sendTs, from), Math.min(row.finishTs ?? limit, limit)])
+    .filter(([start, end]) => end > start)
+    .sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  let reach = -Infinity;
+  for (const [start, end] of spans) {
+    if (end <= reach) continue;
+    total += end - Math.max(start, reach);
+    reach = end;
+  }
+  return total;
+}
+
 function renderBlockingInsight(model: Model, fcp: Ev | null, doc: RequestRow | null): Insight | null {
   const limit = fcp?.ts ?? model.end;
   const rows = [...model.requests.values()].filter((row) => row.renderBlocking !== null && BLOCKING.has(row.renderBlocking) && row.sendTs <= limit && row !== doc);
   if (!rows.length) return null;
-  const start = doc?.headersEndTs ?? model.origin;
-  const lastFinish = rows.reduce((latest, row) => Math.max(latest, Math.min(row.finishTs ?? limit, limit)), start);
-  const savings = Math.max(0, lastFinish - start);
+  const savings = blockedSpan(rows, doc?.headersEndTs ?? model.origin, limit);
   const rating: Rating = ms(savings) >= 300 ? "poor" : ms(savings) >= 100 ? "needs-improvement" : "good";
   return {
     id: "render-blocking",
     title: "Render-blocking requests",
     rating,
-    summary: `${rows.length} request${rows.length === 1 ? " blocks" : "s block"} the first paint for up to ${ms(savings)} ms. Inline critical CSS, defer or async scripts, and load the rest later.`,
+    summary: `${rows.length} request${rows.length === 1 ? " blocks" : "s block"} the first paint for ${ms(savings)} ms. Inline critical CSS, defer or async scripts, and load the rest later.`,
     savingsMs: ms(savings),
     details: { requests: rows.sort((a, b) => (b.finishTs ?? limit) - b.sendTs - ((a.finishTs ?? limit) - a.sendTs)).slice(0, MAX_LISTED).map((row) => requestDetail(model, row)) },
   };

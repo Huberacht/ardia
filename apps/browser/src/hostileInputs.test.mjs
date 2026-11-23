@@ -407,8 +407,8 @@ test("a WebKit page menu address reaches native's writer only as a string the cl
 });
 
 const { logpointCondition, checkedExpression } = await import("./state/automation/devToolsLogpoints.ts");
-const { mapLocation } = await import("./state/automation/devToolsSourceMaps.ts");
-const { fieldDataKey } = await import("./state/automation/devToolsFieldData.ts");
+const { inlineMapText, SourceMapResolver } = await import("./state/automation/devToolsSourceMaps.ts");
+const { fieldDataOrigin } = await import("./state/automation/devToolsFieldData.ts");
 const { describeIssue } = await import("./state/automation/devToolsIssues.ts");
 const { schemaProblem } = await import("./state/automation/socketSchema.ts");
 const { DEVTOOLS_INSPECT_METHODS } = await import("./state/automation/socketDevToolsInspect.ts");
@@ -434,32 +434,37 @@ test("no hostile expression or condition makes a logpoint's condition truthy, so
   }
 });
 
-test("a source map is only ever an inline map or a same-origin http(s) address, whatever the page names", () => {
-  const script = "https://shop.example/js/app.js";
-  assert.deepEqual(mapLocation(script, "app.js.map"), { kind: "remote", url: "https://shop.example/js/app.js.map" });
-  for (const s of strings)
-    for (const ref of [s, `${s}.map`, `https://evil.example/${s}`, `\u002f/evil.example/${s}`]) {
-      const location = mapLocation(script, ref);
-      if (!location || location.kind === "inline") continue;
-      const url = new URL(location.url);
-      assert.equal(url.origin, "https://shop.example", show(ref));
-      assert.equal(url.username + url.password, "", show(ref));
-    }
+test("a source map is only ever an inline data: map or one the caller passed, and nothing goes to the network, whatever the page names", () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => assert.fail("source maps never go to the network");
+  try {
+    const map = JSON.stringify({ version: 3, sources: ["a.ts"], names: [], mappings: "AAAA" });
+    assert.equal(inlineMapText(`data:application/json;base64,${Buffer.from(map).toString("base64")}`), map, "an inline map decodes");
+    for (const s of strings)
+      for (const ref of [s, `${s}.map`, `https://evil.example/${s}`, `\u002f/evil.example/${s}`, `data:application/json;base64,${s}`]) {
+        const text = inlineMapText(ref);
+        if (text !== null) assert.ok(ref.startsWith("data:application/json"), show(ref));
+        const resolver = new SourceMapResolver({ scripts: { "https://shop.example/a.js": `x()\n//# sourceMappingURL=${ref}` } });
+        const parsed = resolver.mapFor("https://shop.example/a.js");
+        if (parsed) assert.ok(ref.startsWith("data:"), show(ref));
+      }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
-test("field data asks only for a web origin or path, never another scheme, credentials or a query", () => {
-  assert.equal(fieldDataKey("https://shop.example/a?b=1#c", "origin"), "https://shop.example");
+test("field data asks only for a web origin, never another scheme, credentials, a path or a query", () => {
+  assert.equal(fieldDataOrigin("https://shop.example/a?b=1#c"), "https://shop.example");
   for (const s of strings)
-    for (const page of [s, `https://shop.example/${s}`, `${s}://shop.example/`])
-      for (const scope of ["origin", "url"]) {
-        let key = null;
-        try {
-          key = fieldDataKey(page, scope);
-        } catch {
-          continue;
-        }
-        assert.match(key, /^https?:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/, show(page));
+    for (const page of [s, `https://shop.example/${s}`, `${s}://shop.example/`]) {
+      let origin = null;
+      try {
+        origin = fieldDataOrigin(page);
+      } catch {
+        continue;
       }
+      assert.match(origin, /^https?:\/\/[^/?#@\s]+$/, show(page));
+    }
 });
 
 test("DevTools issue codes and the styles method's property names refuse hostile values", () => {

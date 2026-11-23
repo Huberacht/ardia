@@ -21,9 +21,7 @@ export const COMPLETE_TIMEOUT_MS = 15_000;
 
 export type Recording = { events: unknown[]; truncated: boolean; complete: boolean };
 
-const sleep = (msWait: number) => new Promise<void>((resolve) => setTimeout(resolve, msWait));
-
-export async function recordTrace(session: InspectionSession, options: { durationMs: number; reload: boolean }): Promise<Recording> {
+export async function recordTrace(session: InspectionSession, options: { durationMs: number; reload: boolean; beforeReload: () => void }): Promise<Recording> {
   let events: unknown[] = [];
   let truncated = false;
   const stop = session.on((method, params) => {
@@ -39,8 +37,11 @@ export async function recordTrace(session: InspectionSession, options: { duratio
   });
   try {
     await session.send("Tracing.start", { transferMode: "ReportEvents", traceConfig: { recordMode: "recordUntilFull", includedCategories: TRACE_CATEGORIES, excludedCategories: ["*"] } });
-    if (options.reload) await session.send("Page.reload", { ignoreCache: false });
-    await sleep(options.durationMs);
+    if (options.reload) {
+      options.beforeReload();
+      await session.send("Page.reload", { ignoreCache: false });
+    }
+    await session.pause(options.durationMs);
     const done = session.waitFor("Tracing.tracingComplete", COMPLETE_TIMEOUT_MS);
     await session.send("Tracing.end");
     const complete = (await done) !== null;

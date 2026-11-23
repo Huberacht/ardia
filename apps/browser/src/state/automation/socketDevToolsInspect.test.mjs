@@ -57,6 +57,7 @@ function scriptedTab() {
         emit("Debugger.scriptParsed", { scriptId: "10", url: "https://shop.example/plain.js", sourceMapURL: "" });
         return { debuggerId: "d1" };
       case "Debugger.setBreakpointByUrl":
+        if (params.url.endsWith("refused.js")) throw new Error("bad location");
         return { breakpointId: `bp-${++breakpoints}`, locations: params.url.endsWith("app.min.js") ? [{ scriptId: "9", lineNumber: params.lineNumber, columnNumber: params.columnNumber ?? 0 }] : [] };
       default:
         return {};
@@ -83,12 +84,15 @@ function scriptedTab() {
   return { sent, opened, opener, methods: () => sent.map((s) => s.method) };
 }
 
+let slowIds = 0;
+
 async function slow(connection, method, params) {
   const before = stub.controlSocket.replies.length;
-  stub.emitControlRequest({ connection, generation: stub.controlSocket.generation, line: JSON.stringify({ id: `slow-${before}`, method, params }) });
-  const deadline = Date.now() + 5000;
+  const id = `slow-${++slowIds}`;
+  stub.emitControlRequest({ connection, generation: stub.controlSocket.generation, line: JSON.stringify({ id, method, params }) });
+  const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
-    const reply = stub.controlSocket.replies.slice(before).find((r) => r.connection === connection);
+    const reply = stub.controlSocket.replies.slice(before).find((r) => r.connection === connection && JSON.parse(r.line).id === id);
     if (reply) return JSON.parse(reply.line);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -142,7 +146,7 @@ test("devtools.perfTrace records in its own session, answers insights, keeps fie
     assert.equal((await slow(42, "devtools.perfTrace", { tab, durationMs: 250, includeFieldData: true })).error.code, "bad_request");
     const withField = await slowOk(42, "devtools.perfTrace", { tab, durationMs: 250, includeFieldData: true, fieldDataKey: "AIzaFixtureKey_123" });
     assert.deepEqual(fetched.map((f) => f.body.origin), ["https://shop.example"]);
-    assert.equal(withField.fieldData.key, "https://shop.example");
+    assert.equal(withField.fieldData.origin, "https://shop.example");
     assert.equal((await slow(42, "devtools.perfTrace", { tab, durationMs: 250, reload: true })).error.code, "refused");
     globalThis.acTestCliOwns = () => ({ owned: true, shown: false });
     await slowOk(42, "devtools.perfTrace", { tab, durationMs: 250, reload: true });
@@ -207,10 +211,10 @@ test("devtools.stackTrace maps a cause chain through a given source map without 
   await freshWindow();
   const client = socketClient(46);
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async () => assert.fail("fetchSourceMaps false never fetches");
+  globalThis.fetch = async () => assert.fail("source maps never go to the network");
   try {
     const stack = "Error: no stock\n    at addToCart (https://shop.example/assets/app.min.js:1:15)";
-    const result = await client.ok("devtools.stackTrace", { error: { message: "no stock", stack, cause: { name: "HttpError", message: "409", stack: "HttpError: 409\n    at https://shop.example/assets/app.min.js:1:2" } }, sourceMaps: { "https://shop.example/assets/app.min.js": MAP }, fetchSourceMaps: false });
+    const result = await client.ok("devtools.stackTrace", { error: { message: "no stock", stack, cause: { name: "HttpError", message: "409", stack: "HttpError: 409\n    at https://shop.example/assets/app.min.js:1:2" } }, sourceMaps: { "https://shop.example/assets/app.min.js": MAP } });
     assert.deepEqual(result.chain.map((l) => [l.name, l.frames[0].original?.source, l.frames[0].original?.line]), [["Error", "webpack:///src/cart.ts", 12], ["HttpError", "webpack:///src/cart.ts", 1]]);
     assert.equal(result.sourceMaps.resolved, 1);
     assert.equal((await client.call("devtools.stackTrace", { error: {} })).error.code, "bad_request");
@@ -263,4 +267,60 @@ test("logpoints go only on tabs the command opened, map original sources, and en
     setInspectionTransport(null);
   }
   assert.equal(S().tabs[tab].id, tab);
+});
+
+test("closing the connection mid-trace ends the session at once, and field data follows the page the trace ended on", async () => {
+  setConsentPeriod(true, "devtools-socket-test");
+  const { tab } = await freshWindow("https://shop.example/");
+  const scripted = scriptedTab();
+  setInspectionTransport(scripted.opener);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => assert.fail("no field data for a page that changed origin");
+  try {
+    const before = stub.controlSocket.replies.length;
+    stub.emitControlRequest({ connection: 49, generation: stub.controlSocket.generation, line: JSON.stringify({ id: 1, method: "devtools.perfTrace", params: { tab, durationMs: 30000 } }) });
+    await settle();
+    assert.equal(liveInspectionSessions(), 1);
+    stub.emitControlClose(49);
+    await settle();
+    assert.equal(liveInspectionSessions(), 0, "the 30-second trace didn't keep running");
+    assert.ok(scripted.opened.every((t) => t.closed));
+    assert.ok(scripted.methods().includes("Tracing.end"));
+    assert.equal(stub.controlSocket.replies.slice(before).filter((r) => r.connection === 49 && !JSON.parse(r.line).error).length, 0);
+    const moving = scriptedTab();
+    setInspectionTransport(async (tabId) => {
+      const transport = await moving.opener(tabId);
+      S().updateTab(tabId, { url: "https://elsewhere.example/" });
+      return transport;
+    });
+    const result = await slowOk(50, "devtools.perfTrace", { tab, durationMs: 250, includeFieldData: true, fieldDataKey: "AIzaFixtureKey_123" });
+    assert.match(result.fieldData.skipped, /changed origin|no longer/);
+  } finally {
+    globalThis.fetch = realFetch;
+    setInspectionTransport(null);
+  }
+});
+
+test("a refused first logpoint closes its session, and concurrent logpoints can't pass the per-connection cap", async () => {
+  const { tab } = await freshWindow("https://shop.example/");
+  const scripted = scriptedTab();
+  setInspectionTransport(scripted.opener);
+  globalThis.acTestCliOwns = () => ({ owned: true, shown: false });
+  try {
+    const refused = await slow(51, "devtools.logpoint", { tab, url: "https://shop.example/refused.js", line: 1, expression: "1" });
+    assert.equal(refused.error.code, "failed");
+    assert.equal(heldLogpointSessions(), 0);
+    assert.equal(liveInspectionSessions(), 0, "an empty logpoint session isn't left open");
+    const { MAX_LOGPOINTS_PER_CONNECTION } = await import("./devToolsLogpoints.ts");
+    const asks = Array.from({ length: MAX_LOGPOINTS_PER_CONNECTION + 5 }, (_, i) => slow(52, "devtools.logpoint", { tab, url: "https://shop.example/plain.js", line: i + 1, expression: "1" }));
+    const replies = await Promise.all(asks);
+    assert.equal(replies.filter((r) => !r.error).length, MAX_LOGPOINTS_PER_CONNECTION);
+    assert.equal(replies.filter((r) => r.error?.code === "refused").length, 5);
+    stub.emitControlClose(52);
+    await settle();
+    assert.equal(liveInspectionSessions(), 0);
+  } finally {
+    delete globalThis.acTestCliOwns;
+    setInspectionTransport(null);
+  }
 });

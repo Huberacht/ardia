@@ -2,7 +2,7 @@ import { controlOwnsTab } from "../../platform/control";
 import { isIncognitoProfile } from "../browser/model";
 import { noteDevTools } from "../telemetry/cliCounts";
 import { consentToken, type ConsentToken } from "../telemetry/client";
-import { fetchFieldData, fieldDataKey, type FieldData, type FieldDataRequest } from "./devToolsFieldData";
+import { fetchFieldData, fieldDataOrigin, type FieldData, type FieldDataRequest } from "./devToolsFieldData";
 import { analyzeTrace, overallRating, traceEventsOf, type InsightId, type TraceInsights } from "./devToolsInsights";
 import { withInspection } from "./devToolsSession";
 import { recordTrace } from "./devToolsTrace";
@@ -14,9 +14,8 @@ import { OpError } from "./workspaceTargets";
 const INSIGHT_IDS: InsightId[] = ["lcp-breakdown", "cls-culprits", "inp-breakdown", "long-tasks", "render-blocking", "document-latency", "network-bottlenecks"];
 
 const FIELD_DATA_PARAMS = {
-  includeFieldData: bool("Also ask the public field-data service for this page's real-user metrics. Off unless you set it; sends the page's origin (or address with fieldDataScope url) to that service"),
+  includeFieldData: bool("Also ask the public field-data service for real-user metrics of the traced page's origin. Off unless you set it; sends only that origin, never a path or query"),
   fieldDataKey: text("Your API key for the field-data service; needed with includeFieldData"),
-  fieldDataScope: oneOf(["origin", "url"], "What to ask field data for: the origin (default) or this exact address without its query"),
   formFactor: oneOf(["PHONE", "DESKTOP", "TABLET"], "Field data for one device class; all when left out"),
 };
 
@@ -34,34 +33,54 @@ function only(result: TraceInsights, insight: unknown) {
   return { ...result, insights: result.insights.filter((i) => i.id === insight) };
 }
 
-function fieldDataRequest(params: Record<string, unknown>, pageUrl: string, profileId: string): FieldDataRequest | null {
+function checkFieldDataAsk(params: Record<string, unknown>, profileId: string): { apiKey: string; formFactor: FieldDataRequest["formFactor"] } | null {
   if (params.includeFieldData !== true) return null;
   if (isIncognitoProfile(profileId)) throw new OpError("refused", "Field data is never asked for a private window's page.");
   if (typeof params.fieldDataKey !== "string") throw new OpError("bad_request", "includeFieldData needs fieldDataKey.");
-  const scope = params.fieldDataScope === "url" ? "url" : "origin";
-  fieldDataKey(pageUrl, scope);
-  return { pageUrl, scope, apiKey: params.fieldDataKey, formFactor: (params.formFactor as FieldDataRequest["formFactor"] | undefined) ?? null };
+  return { apiKey: params.fieldDataKey, formFactor: (params.formFactor as FieldDataRequest["formFactor"] | undefined) ?? null };
 }
 
-async function fieldDataFor(request: FieldDataRequest | null, consent: ConsentToken | null): Promise<FieldData | null> {
-  if (!request) return null;
+type FieldDataAnswer = FieldData | { skipped: string } | null;
+
+async function fieldDataAfterTrace(ask: ReturnType<typeof checkFieldDataAsk>, tabId: string, tracedUrl: string | null, consent: ConsentToken | null): Promise<FieldDataAnswer> {
+  if (!ask) return null;
+  const pageUrl = tabOf(tabId).url;
+  let origin: string;
+  try {
+    origin = fieldDataOrigin(pageUrl);
+  } catch {
+    return { skipped: "The tab no longer shows a web page." };
+  }
+  if (tracedUrl && fieldDataOrigin(tracedUrl) !== origin) return { skipped: "The page changed origin during the trace, so field data wouldn't match it." };
   noteDevTools("field_data_requests", 1, consent);
-  return fetchFieldData(request);
+  return fetchFieldData({ pageUrl, apiKey: ask.apiKey, formFactor: ask.formFactor });
 }
+
+const tracedPage = (result: TraceInsights) => {
+  const url = result.navigation?.url ?? null;
+  if (!url) return null;
+  try {
+    fieldDataOrigin(url);
+    return url;
+  } catch {
+    return null;
+  }
+};
 
 async function perfTrace(params: Record<string, unknown>, call: SocketCall) {
   const consent = consentToken();
   const tab = tabOf(params.tab);
   const reload = params.reload === true;
   if (reload && !(await controlOwnsTab(tab.id)).owned) throw new OpError("refused", "Only a tab the ardia command opened can be reloaded for a trace.");
+  call.stillServing();
   const durationMs = (params.durationMs as number | undefined) ?? 5000;
-  const field = fieldDataRequest(params, tab.url, tab.profileId);
+  const ask = checkFieldDataAsk(params, tab.profileId);
   try {
-    const recording = await withInspection(tab.id, (session) => recordTrace(session, { durationMs, reload }));
+    const recording = await withInspection(tab.id, call.connection, (session) => recordTrace(session, { durationMs, reload, beforeReload: call.stillServing }));
     call.stillServing();
     const result = timed(() => analyzeTrace(recording.events), consent);
     noteDevTools("traces", 1, consent);
-    const fieldData = await fieldDataFor(field, consent);
+    const fieldData = await fieldDataAfterTrace(ask, tab.id, tracedPage(result), consent);
     return { tab: tab.id, durationMs, reloaded: reload, complete: recording.complete, ...only({ ...result, truncated: result.truncated || recording.truncated }, params.insight), rating: overallRating(result), fieldData };
   } catch (error) {
     noteDevTools("trace_failures", 1, consent);

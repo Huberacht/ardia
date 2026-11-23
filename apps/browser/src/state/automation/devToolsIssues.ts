@@ -220,7 +220,7 @@ export async function collectIssues(session: InspectionSession, waitMs: number) 
   });
   try {
     await session.send("Audits.enable");
-    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    await session.pause(waitMs);
     return describeIssues(raw);
   } finally {
     stop();

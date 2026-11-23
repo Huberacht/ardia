@@ -17,6 +17,7 @@ export type Declaration = {
   specificity: Specificity | null;
   source: { styleSheetId: string | null; url: string | null; line: number | null; column: number | null; inline: boolean };
   inheritedFrom: number;
+  shorthand: string | null;
 };
 export type OverriddenDeclaration = Declaration & { reason: string };
 export type PropertyCascade = { property: string; computed: string | null; winner: Declaration | null; overridden: OverriddenDeclaration[] };
@@ -81,17 +82,34 @@ function sourceOf(style: unknown, prop: unknown, headers: ReadonlyMap<string, Sh
   };
 }
 
-function candidatesOf(styles: { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean }[], property: string, headers: ReadonlyMap<string, SheetHeader>, inheritedFrom: number, start: number): Candidate[] {
+type Entry = { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean };
+
+function declarationsFor(style: unknown, property: string): { prop: unknown; value: string; shorthand: string | null }[] {
+  const direct: { prop: unknown; value: string; shorthand: string | null }[] = [];
+  const expanded: { prop: unknown; value: string; shorthand: string | null }[] = [];
+  for (const prop of list(field(style, "cssProperties"))) {
+    const name = text(field(prop, "name"), 256);
+    if (name === null) continue;
+    if (propertyKey(name) === property) {
+      direct.push({ prop, value: text(field(prop, "value"), 2048) ?? "", shorthand: null });
+      continue;
+    }
+    for (const longhand of list(field(prop, "longhandProperties"))) {
+      const longName = text(field(longhand, "name"), 256);
+      if (longName !== null && propertyKey(longName) === property) expanded.push({ prop, value: text(field(longhand, "value"), 2048) ?? "", shorthand: propertyKey(name) });
+    }
+  }
+  return direct.length ? direct : expanded;
+}
+
+function candidatesOf(styles: Entry[], property: string, headers: ReadonlyMap<string, SheetHeader>, inheritedFrom: number, start: number): Candidate[] {
   const out: Candidate[] = [];
   let order = start;
   for (const entry of styles) {
-    for (const prop of list(field(entry.style, "cssProperties"))) {
+    for (const { prop, value, shorthand } of declarationsFor(entry.style, property)) {
       order++;
-      const name = text(field(prop, "name"), 256);
-      if (name === null || propertyKey(name) !== property) continue;
       const disabled = field(prop, "disabled") === true;
       const invalid = field(prop, "parsedOk") === false;
-      const value = text(field(prop, "value"), 2048) ?? "";
       out.push({
         value,
         important: field(prop, "important") === true,
@@ -100,6 +118,7 @@ function candidatesOf(styles: { style: unknown; origin: string; selector: string
         specificity: entry.specificity,
         source: sourceOf(entry.style, prop, headers, entry.inline),
         inheritedFrom,
+        shorthand,
         order,
         active: !disabled && !invalid,
         invalid,
@@ -108,6 +127,17 @@ function candidatesOf(styles: { style: unknown; origin: string; selector: string
     }
   }
   return out;
+}
+
+export function registeredInheritance(matched: unknown): Map<string, boolean> {
+  const registered = new Map<string, boolean>();
+  for (const rule of list(field(matched, "cssPropertyRules")).slice(0, MAX_RULES)) {
+    const name = text(field(field(rule, "propertyName"), "text"), 256);
+    if (!name?.startsWith("--")) continue;
+    const inherits = list(field(field(rule, "style"), "cssProperties")).find((p) => text(field(p, "name"), 64) === "inherits");
+    registered.set(name, text(field(inherits, "value"), 16)?.trim() !== "false");
+  }
+  return registered;
 }
 
 const IMPORTANT_RANK: Readonly<Record<string, number>> = { "user-agent": 3, injected: 2, regular: 1, inspector: 1 };
@@ -138,7 +168,7 @@ function reasonAgainst(loser: Candidate, winner: Candidate): string {
   return "earlier in the cascade";
 }
 
-const strip = (c: Candidate): Declaration => ({ value: c.value, important: c.important, origin: c.origin, selector: c.selector, specificity: c.specificity, source: c.source, inheritedFrom: c.inheritedFrom });
+const strip = (c: Candidate): Declaration => ({ value: c.value, important: c.important, origin: c.origin, selector: c.selector, specificity: c.specificity, source: c.source, inheritedFrom: c.inheritedFrom, shorthand: c.shorthand });
 
 function stylesOfLevel(level: unknown, withAttributes: boolean): { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean }[] {
   const styles: { style: unknown; origin: string; selector: string; specificity: Specificity | null; inline: boolean }[] = [];
@@ -178,11 +208,13 @@ export function cascadeFor(matched: unknown, computed: unknown, properties: read
   }
   const own = stylesOfLevel(matched, true);
   const inherited = list(field(matched, "inherited")).slice(0, MAX_INHERITED);
+  const registered = registeredInheritance(matched);
+  const inherits = (property: string) => registered.get(property) ?? isInherited(property);
   return properties.slice(0, MAX_PROPERTIES).map((raw) => {
     const property = propertyKey(raw);
     let candidates = candidatesOf(own, property, headers, 0, 0);
     let winner = pickWinner(candidates);
-    if (!winner && isInherited(property)) {
+    if (!winner && inherits(property)) {
       for (const [i, level] of inherited.entries()) {
         const found = candidatesOf(stylesOfLevel(level, false), property, headers, i + 1, (i + 1) * 1_000_000);
         candidates = [...candidates, ...found];

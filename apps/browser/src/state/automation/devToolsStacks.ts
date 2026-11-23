@@ -98,12 +98,12 @@ function linkOf(value: Fields): ChainLink {
 
 const linksOfList = (list: unknown[]): ChainLink[] => list.filter(isFields).slice(0, MAX_CAUSE_DEPTH).map(linkOf);
 
-export async function resolveChain(chain: ChainLink[], resolver: SourceMapResolver): Promise<ResolvedLink[]> {
+export function resolveChain(chain: ChainLink[], resolver: SourceMapResolver): ResolvedLink[] {
   const resolved: ResolvedLink[] = [];
   for (const link of chain) {
     const frames: ResolvedFrame[] = [];
     for (const frame of link.frames) {
-      const map = await resolver.mapFor(frame.url);
+      const map = resolver.mapFor(frame.url);
       frames.push({ ...frame, original: map ? originalPositionFor(map, frame.line - 1, frame.column - 1) : null });
     }
     resolved.push({ ...link, frames });

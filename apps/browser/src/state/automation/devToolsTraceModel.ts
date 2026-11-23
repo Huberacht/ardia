@@ -1,5 +1,6 @@
 export const MAX_TRACE_EVENTS = 1_000_000;
 const MAX_URL = 2048;
+const NAVIGATION_SLACK_US = 1_000;
 
 export type Fields = Record<string, unknown>;
 export type Ev = { name: string; ph: string; ts: number; dur: number; pid: number; tid: number; args: Fields };
@@ -94,7 +95,8 @@ export function buildModel(raw: unknown[]): Model {
   if (navigation) {
     const startedAt = navigation.ts;
     const next = events.find((ev) => ev.name === "navigationStart" && ev.ts > startedAt && isMainNavigation(ev, mainFrame));
-    if (next) events = events.filter((ev) => ev.ph === "M" || ev.ts < next.ts);
+    const from = startedAt - NAVIGATION_SLACK_US;
+    events = events.filter((ev) => ev.ph === "M" || (ev.ts >= from && (!next || ev.ts < next.ts)));
   }
   const first = events.find((ev) => ev.ph !== "M");
   const origin = navigation?.ts ?? first?.ts ?? 0;
