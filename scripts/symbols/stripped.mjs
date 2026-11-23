@@ -24,6 +24,7 @@ export function maskedWords(words) {
     else if (pageRegisters.has((w >>> 5) & 0x1f) && ((w & 0x7f800000) >>> 0 === 0x11000000 || (w & 0x3b000000) >>> 0 === 0x39000000)) out[i] = (w & ~(0xfff << 10)) >>> 0;
     else out[i] = w;
     if (pcRelative) pageRegisters.add(w & 0x1f);
+    else if ((w & 0xfc000000) >>> 0 === 0x94000000 || (w & 0xfffffc1f) >>> 0 === 0xd63f0000) for (let r = 0; r <= 18; r++) pageRegisters.delete(r);
     else if (writesDestination(w)) pageRegisters.delete(w & 0x1f);
   }
   return out;

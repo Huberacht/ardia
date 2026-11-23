@@ -506,3 +506,12 @@ test("a release map is imported again when its cached copy went bad, and dSYMs f
   const second = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch, log: () => {} });
   assert.equal((await second.maps([APP_UUID])).get(APP_UUID)?.source, "match", "the release map comes back after its cached copy went bad");
 });
+
+test("a call clobbers the caller-saved page registers but not the callee-saved ones, and a map with inverted text bounds is refused", () => {
+  const afterCall = (rd, imm, call = 0x94000010) => [...maskedWords(Uint32Array.from([0x90000000 | rd, call, (0x91000000 | (imm << 10) | (rd << 5)) >>> 0]))];
+  assert.notDeepEqual(afterCall(0, 4), afterCall(0, 8), "x0 holds BL's return value");
+  assert.notDeepEqual(afterCall(0, 4, 0xd63f0100), afterCall(0, 8, 0xd63f0100), "BLR clobbers too");
+  assert.deepEqual(afterCall(19, 4), afterCall(19, 8), "x19 survives the call");
+  const map = buildMap(appBinary(), APP_UUID, { demanglers: NO_DEMANGLERS });
+  assert.throws(() => parseMap(serializeMap({ ...map, textStart: 0x2000, textEnd: 0x1000 })), /header/);
+});

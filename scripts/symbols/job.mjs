@@ -3,7 +3,7 @@ import { lookup } from "./symbol-map.mjs";
 
 export const TABLE = "ardia_frame_symbols";
 export const RETRY_MISSING_MS = 24 * 60 * 60_000;
-export const KNOWN_CHUNK = 5000;
+export const KNOWN_CHUNK = 4500;
 const RECHECKED = new Set(["none", "outside", "match"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const IDENTIFIER = /^\w+$/;

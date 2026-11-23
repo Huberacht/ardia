@@ -98,7 +98,7 @@ export function parseMap(text) {
   const head = lines[0]?.split(" ") ?? [];
   if (head.length !== 8 || head.slice(0, 3).join(" ") !== MAP_HEADER) throw new Error("not an Ardia symbol map");
   const [, , , uuid, arch, source, textStart, textEnd] = head;
-  if (!UUID.test(uuid) || !HEX.test(textStart) || !HEX.test(textEnd) || !MAP_SOURCES.has(source)) throw new Error("the symbol map's header is malformed");
+  if (!UUID.test(uuid) || !HEX.test(textStart) || !HEX.test(textEnd) || !MAP_SOURCES.has(source) || parseInt(textEnd, 16) <= parseInt(textStart, 16)) throw new Error("the symbol map's header is malformed");
   const entries = [];
   let previousEnd = 0;
   for (const line of lines.slice(1)) {
