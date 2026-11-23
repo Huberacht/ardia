@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { MANIFEST, ROOT } from "./generate.mjs";
 
@@ -315,50 +315,269 @@ test("a domain the Mac serves partly or wholly by hand builds its module's table
 const moduleDomains = Object.entries(manifest.modules);
 const filesUnder = (dir, pattern) => readdirSync(ROOT + dir, { recursive: true }).filter((file) => pattern.test(file)).map((file) => `${dir}${file}`.replaceAll("\\", "/")).sort();
 const moduleFunctions = moduleDomains.flatMap(([domain, entry]) => Object.entries(entry.modules).flatMap(([module, row]) => Object.entries(row.functions).map(([fn, binding]) => ({ domain, module, fn, binding }))));
+const moduleEvents = moduleDomains.flatMap(([domain, entry]) => Object.entries(entry.modules).flatMap(([module, row]) => Object.entries(row.events).map(([event, binding]) => ({ domain, module, event, binding }))));
 
-export function classBody(source, name) {
-  const start = source.search(new RegExp(`\\bclass ${name}\\b`));
-  if (start < 0) throw new Error(`the source declares no class ${name}`);
-  const end = source.indexOf("\n}", start);
-  return source.slice(start, end < 0 ? source.length : end + 2);
+function skipQuoted(text, at) {
+  const quote = text[at];
+  let end = at + 1;
+  while (end < text.length && text[end] !== quote) end += text[end] === "\\" ? 2 : 1;
+  return end;
 }
 
-export function windowsNativeMethods(sources) {
-  const served = new Map();
-  for (const source of sources) {
+export function stripJsComments(source) {
+  let out = "";
+  let previous = "";
+  for (let at = 0; at < source.length; ) {
+    const char = source[at];
+    const two = source.slice(at, at + 2);
+    if (two === "//") {
+      const end = source.indexOf("\n", at);
+      at = end < 0 ? source.length : end;
+    } else if (two === "/*") {
+      const end = source.indexOf("*/", at + 2);
+      if (end < 0) throw new Error("a block comment never closes");
+      out += " ";
+      at = end + 2;
+    } else if (char === '"' || char === "'" || char === "`") {
+      const end = skipQuoted(source, at);
+      out += source.slice(at, end + 1);
+      previous = char;
+      at = end + 1;
+    } else if (char === "/" && (previous === "" || /[(,=:[!&|?{};+\-*%<>~^]/.test(previous) || /\breturn\s*$/.test(out))) {
+      let end = at + 1;
+      for (let inClass = false; end < source.length && (inClass || source[end] !== "/"); end++) {
+        if (source[end] === "\\") end++;
+        else if (source[end] === "[") inClass = true;
+        else if (source[end] === "]") inClass = false;
+      }
+      out += source.slice(at, end + 1);
+      previous = "/";
+      at = end + 1;
+    } else {
+      out += char;
+      if (/\S/.test(char)) previous = char;
+      at++;
+    }
+  }
+  return out;
+}
+
+export function block(text, open) {
+  if (text[open] !== "{") throw new Error(`a block opens with {, not ${JSON.stringify(text.slice(open, open + 20))}`);
+  let depth = 0;
+  for (let at = open; at < text.length; at++) {
+    const char = text[at];
+    if (char === '"' || char === "'" || char === "`") at = skipQuoted(text, at);
+    else if (char === "{") depth++;
+    else if (char === "}" && --depth === 0) return { start: open, end: at + 1, body: text.slice(open + 1, at) };
+  }
+  throw new Error("a block never closes");
+}
+
+export function objectKeys(text, open) {
+  const { body } = block(text, open);
+  const keys = [];
+  let depth = 0;
+  let expectKey = true;
+  for (let at = 0; at < body.length; at++) {
+    const char = body[at];
+    if (char === '"' || char === "'" || char === "`") {
+      at = skipQuoted(body, at);
+      expectKey = false;
+    } else if ("({[".includes(char)) {
+      depth++;
+      expectKey = false;
+    } else if (")}]".includes(char)) {
+      depth--;
+    } else if (depth === 0 && char === ",") {
+      expectKey = true;
+    } else if (depth === 0 && expectKey && /\S/.test(char)) {
+      expectKey = false;
+      const key = /^(?:async\s+)?([A-Za-z_$][\w$]*)\s*[:(,]|^(?:async\s+)?([A-Za-z_$][\w$]*)\s*$/.exec(body.slice(at));
+      if (key && !body.startsWith("...", at)) keys.push(key[1] ?? key[2]);
+    }
+  }
+  return keys;
+}
+
+export function swiftRegistrations(source, className) {
+  const declared = new RegExp(`\\bclass ${className}\\b[^{]*\\{`).exec(source);
+  if (!declared) throw new Error(`the source declares no class ${className}`);
+  const classBody = block(source, declared.index + declared[0].length - 1).body;
+  const definition = /\bfunc definition\(\)\s*->\s*ModuleDefinition\s*\{/.exec(classBody);
+  if (!definition) throw new Error(`${className} has no definition()`);
+  let body = block(classBody, definition.index + definition[0].length - 1).body;
+  for (let view = /\bView\([^)]*\)\s*\{/.exec(body); view; view = /\bView\([^)]*\)\s*\{/.exec(body)) {
+    const { end } = block(body, view.index + view[0].length - 1);
+    body = body.slice(0, view.index) + body.slice(end);
+  }
+  return {
+    generated: [...body.matchAll(/\bSelf\.(\w+)Function\b/g)].map((match) => match[1]),
+    events: /\bSelf\.eventsDefinition\b/.test(body),
+    name: /\bName\(Self\.moduleName\)/.test(body),
+    handWritten: [...body.matchAll(/\b(Name|Function|AsyncFunction|Events|Property|Constant|Constants)\(/g)].map((match) => match[1]).filter((kind, index, all) => !(kind === "Name" && all.filter((k) => k === "Name").length === 1 && /\bName\(Self\.moduleName\)/.test(body))),
+  };
+}
+
+export function nativeModuleCalls(source) {
+  const calls = [];
+  for (const match of source.matchAll(/\brequire(?:Optional)?NativeModule\b\s*/g)) {
+    let at = match.index + match[0].length;
+    let type;
+    if (source[at] === "<") {
+      let depth = 0;
+      const start = at;
+      for (; at < source.length; at++) {
+        if (source[at] === "<") depth++;
+        else if (source[at] === ">" && source[at - 1] !== "=" && --depth === 0) break;
+      }
+      type = source.slice(start + 1, at).trim();
+      at++;
+      while (/\s/.test(source[at] ?? "")) at++;
+    }
+    if (source[at] !== "(") continue;
+    const close = source.indexOf(")", at);
+    calls.push({ whole: source.slice(match.index, close + 1), type, argument: source.slice(at + 1, close).trim() });
+  }
+  return calls;
+}
+
+export function nativeModuleTypingProblems(source, domain, modules) {
+  const map = `${domain[0].toUpperCase()}${domain.slice(1)}Modules`;
+  const problems = [];
+  let typed = 0;
+  for (const { whole, type, argument } of nativeModuleCalls(source)) {
+    const literal = /^"(Ardia[A-Za-z]+)"$/.exec(argument)?.[1];
+    if (literal !== undefined) {
+      if (!modules[literal]) continue;
+      if (type === modules[literal].native || type === `${map}["${literal}"]`) typed++;
+      else problems.push(`${whole} types ${literal} as ${type ?? "nothing"} instead of ${modules[literal].native}`);
+      continue;
+    }
+    const index = new RegExp(`^${map}\\[(\\w+)\\]$`).exec(type ?? "")?.[1];
+    if (index === undefined || !new RegExp(`<${index} extends keyof ${map}>\\s*\\(\\s*${argument.replace(/[^\w$]/g, "")}\\s*:\\s*${index}\\s*\\)`).test(source)) {
+      problems.push(`${whole} takes a module name without the generated ${map} type`);
+    } else typed++;
+  }
+  for (const [cast] of source.matchAll(/\b(?:require(?:Optional)?NativeModule|nativeModule)\b[^;\n]*\bas\s+(?:any|unknown)\b/g)) problems.push(`${cast} casts a native module past its generated type`);
+  return { problems, typed };
+}
+
+export function linuxModuleDispatch(sources) {
+  const text = sources.map(stripComments).join("\n");
+  return {
+    methods: new Set([...text.matchAll(/\b(?:method|name)\s*==\s*"(Ardia[A-Za-z]+\.[a-z][A-Za-z]*)"/g)].map((match) => match[1])),
+    events: new Set([...text.matchAll(/\bSendEvent\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/g)].map((match) => `${match[1]}.${match[2]}`)),
+  };
+}
+
+export function windowsNativeModules(sources) {
+  const methods = new Map();
+  const events = new Set();
+  for (const written of sources) {
+    const source = stripComments(written);
+    for (const match of source.matchAll(/\bEmitEvent\([^,]+,\s*L"(Ardia[A-Za-z]+)"\s*,\s*L"([a-zA-Z]+)"/g)) events.add(`${match[1]}.${match[2]}`);
     const modules = [...source.matchAll(/REACT_MODULE\(\s*\w+\s*,\s*L"([^"]+)"\s*\)/g)].map((match) => match[1]);
     if (modules.length > 1) throw new Error(`one header registers ${modules.join(" and ")}; the scan reads one module per header`);
     if (!modules.length) continue;
-    const methods = [...source.matchAll(/REACT_(?:SYNC_)?METHOD\(\s*(\w+)\s*(?:,\s*L"([^"]+)"\s*)?\)/g)].map((match) => match[2] ?? match[1]);
-    served.set(modules[0], new Set(methods));
+    methods.set(modules[0], new Set([...source.matchAll(/REACT_(?:SYNC_)?METHOD\(\s*(\w+)\s*(?:,\s*L"([^"]+)"\s*)?\)/g)].map((match) => match[2] ?? match[1])));
   }
-  return served;
+  return { methods, events };
 }
 
-export function windowsJsModules(modulesSource, defaultsSource) {
-  const writtenInJs = new Set([...between(stripComments(modulesSource), "const writtenInJs", "\n").matchAll(/\b(Ardia[A-Za-z]+):/g)].map((match) => match[1]));
-  const body = between(stripComments(defaultsSource), "export const moduleDefaults", "\n};");
+const WINDOWS_JS = "packages/expo-windows/src/";
+
+function resolveImport(from, path, exists) {
+  const base = `${from.slice(0, from.lastIndexOf("/") + 1)}${path}`.split("/").reduce((parts, part) => (part === ".." ? parts.slice(0, -1) : part === "." ? parts : [...parts, part]), []).join("/");
+  const found = [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].find(exists);
+  if (!found) throw new Error(`${from} imports ${path}, which the scan can't find`);
+  return found;
+}
+
+export function windowsJsMembers(name, path, read, exists, seen = new Set()) {
+  if (seen.has(`${path}:${name}`)) throw new Error(`${name} in ${path} refers back to itself`);
+  seen.add(`${path}:${name}`);
+  const source = stripJsComments(read(path));
+  const local = new RegExp(`\\bconst ${name}\\s*(?::[^=]+)?=\\s*([A-Za-z_$][\\w$]*)\\s*\\(`).exec(source);
+  if (local) return windowsJsMembers(local[1], path, read, exists, seen);
+  const imported = [...source.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*"([^"]+)"/g)].find(([, names]) => names.split(",").some((entry) => entry.trim().split(/\s+as\s+/).at(-1) === name));
+  if (imported) {
+    const original = imported[1].split(",").map((entry) => entry.trim().split(/\s+as\s+/)).find((parts) => parts.at(-1) === name)[0];
+    return windowsJsMembers(original, resolveImport(path, imported[2], exists), read, exists, seen);
+  }
+  const constant = new RegExp(`\\bexport\\s+const\\s+${name}\\b[^=]*=\\s*\\{`).exec(source);
+  if (constant) return new Set(objectKeys(source, constant.index + constant[0].length - 1));
+  const fn = new RegExp(`\\bexport\\s+function\\s+${name}\\b`).exec(source);
+  if (fn) {
+    const opening = /\)\s*(?::[^{]+)?\{/g;
+    opening.lastIndex = fn.index;
+    const open = opening.exec(source);
+    const body = block(source, open.index + open[0].length - 1);
+    const returned = [...body.body.matchAll(/\breturn\s*\{/g)].flatMap((match) => objectKeys(body.body, match.index + match[0].length - 1));
+    if (returned.length) return new Set(returned);
+  }
+  throw new Error(`the scan can't read Windows' JS module ${name} in ${path}`);
+}
+
+export function windowsJsModules(read, exists) {
+  const modulesPath = `${WINDOWS_JS}modules.ts`;
+  const modules = stripJsComments(read(modulesPath));
+  const written = between(modules, "const writtenInJs", "\n");
+  const members = new Map();
+  for (const [, module, value] of written.matchAll(/\b(Ardia[A-Za-z]+):\s*([A-Za-z_$][\w$]*)/g)) members.set(module, () => windowsJsMembers(value, modulesPath, read, exists));
+  const defaultsSource = stripJsComments(read(`${WINDOWS_JS}defaults.ts`));
+  const declared = /\bexport const moduleDefaults\b[^=]*=\s*\{/.exec(defaultsSource);
   const defaults = new Map();
-  const entries = [...body.matchAll(/^ {2}(Ardia[A-Za-z]+): /gm)];
-  entries.forEach((match, index) => {
-    const text = body.slice(match.index, entries[index + 1]?.index ?? body.length);
-    defaults.set(match[1], new Set([...text.matchAll(/\b([a-zA-Z]+)\s*:/g)].map((key) => key[1]).filter((key) => key !== match[1])));
-  });
-  return { writtenInJs, defaults };
+  const { body } = block(defaultsSource, declared.index + declared[0].length - 1);
+  for (const match of body.matchAll(/(?:^|\n)\s*(Ardia[A-Za-z]+):\s*\{/g)) defaults.set(match[1], new Set(objectKeys(body, match.index + match[0].length - 1)));
+  const events = new Set();
+  for (const path of filesUnder(WINDOWS_JS, /\.tsx?$/).filter((file) => !/\.test\./.test(file))) {
+    for (const match of stripJsComments(read(path)).matchAll(/\bemit(?:NativeEvent|WhenListened)\(\s*"(Ardia[A-Za-z]+)"\s*,\s*"([a-zA-Z]+)"/g)) events.add(`${match[1]}.${match[2]}`);
+  }
+  return { members, defaults, events };
 }
 
-test("the module-domain scans find the shaders pilot and the hosts' tables", () => {
+const exists = (path) => existsSync(ROOT + path);
+
+test("the module-domain scans find the shaders pilot and read the hosts' real tables", () => {
   assert.ok(moduleDomains.some(([domain]) => domain === "shaders"));
   assert.ok(moduleFunctions.length >= 4);
-  assert.equal(classBody("class A: Module {\n  x\n}\nclass B {}", "A"), "class A: Module {\n  x\n}");
-  assert.deepEqual([...windowsNativeMethods(['REACT_MODULE(K, L"ArdiaKeychain")\n  REACT_METHOD(get)\n  REACT_METHOD(remove, L"delete")\n  REACT_SYNC_METHOD(peek)']).get("ArdiaKeychain")], ["get", "delete", "peek"]);
-  assert.throws(() => windowsNativeMethods(['REACT_MODULE(A, L"ArdiaA") REACT_MODULE(B, L"ArdiaB")']), /one module per header/);
-  const { writtenInJs, defaults } = windowsJsModules(read("packages/expo-windows/src/modules.ts"), read("packages/expo-windows/src/defaults.ts"));
-  assert.ok(writtenInJs.has("ArdiaUpdater") && writtenInJs.has("ArdiaSync"));
-  assert.ok(defaults.get("ArdiaCli")?.has("canInstallUnattended") && defaults.get("ArdiaTranslate")?.has("languageName"));
+  assert.equal(stripJsComments('const a = /^\\/*x/s; // gone\nconst b = "/* kept */"; /* gone */ return /a\\/b/;'), 'const a = /^\\/*x/s; \nconst b = "/* kept */";   return /a\\/b/;');
+  assert.equal(stripJsComments("const half = width / 2; const third = 3 / 1;"), "const half = width / 2; const third = 3 / 1;");
+  assert.deepEqual(objectKeys('{ a: 1, b(x) { return { c: 2 }; }, async d() {}, e, ...f, "g": 3, h: { i: 4 } }', 0), ["a", "b", "d", "e", "h"]);
+  const linux = linuxModuleDispatch(filesUnder("engine/ardiacore-linux/src/", /\.(cc|h|mm)$/).map(read));
+  assert.ok(linux.methods.has("ArdiaCalendar.status") && linux.methods.has("ArdiaConfig.watch"));
+  assert.ok(linux.events.has("ArdiaShell.shell"));
+  const windowsNative = windowsNativeModules(filesUnder("apps/browser/windows/Ardia/", /\.h$/).map(read));
+  assert.ok(windowsNative.methods.get("ArdiaKeychain")?.has("delete") && windowsNative.methods.get("ArdiaFocus")?.has("keyHoldCounts"));
+  const js = windowsJsModules(read, exists);
+  assert.ok(js.members.get("ArdiaUpdater")().size > 0 && js.members.get("ArdiaSwipe")().size > 0 && js.members.get("ArdiaImport")().size > 0);
+  assert.ok(js.defaults.get("ArdiaCli")?.has("canInstallUnattended") && js.defaults.get("ArdiaTranslate")?.has("languageName"));
+  assert.ok(js.events.has("ArdiaShell.onOpenURLs") && js.events.has("ArdiaImport.onImportEvent"));
 });
 
-test("each Mac module of a module domain conforms to its generated protocol and takes its name, events and functions from it, defining none of its own", () => {
+test("the host scans count only real dispatch entries, callable members and emitted events, so a missing method or event fails", () => {
+  const linux = linuxModuleDispatch(['const char* kNote = "ArdiaDemo.hold";\nif (method == "ArdiaDemo.probe") return;\nSendEvent("ArdiaDemo", "tone", payload);\nLog("ArdiaDemo.missing");']);
+  assert.deepEqual([...linux.methods], ["ArdiaDemo.probe"]);
+  assert.deepEqual([...linux.events], ["ArdiaDemo.tone"]);
+  assert.equal(linuxModuleDispatch(['// if (method == "ArdiaDemo.probe")']).methods.size, 0);
+  const native = windowsNativeModules(['REACT_MODULE(Demo, L"ArdiaDemo")\n  REACT_METHOD(hold)\n  REACT_METHOD(remove, L"delete")\n  REACT_SYNC_METHOD(peek)\n  EmitEvent(context, L"ArdiaDemo", L"tone", payload);', 'std::wstring note = L"ArdiaDemo.missing";']);
+  assert.deepEqual([...native.methods.get("ArdiaDemo")], ["hold", "delete", "peek"]);
+  assert.deepEqual([...native.events], ["ArdiaDemo.tone"]);
+  assert.throws(() => windowsNativeModules(['REACT_MODULE(A, L"ArdiaA") REACT_MODULE(B, L"ArdiaB")']), /one module per header/);
+  const files = {
+    "w/modules.ts": 'import { demoOnWindows as demo } from "./demo";\nconst made = demoMaker();\nimport { demoMaker } from "./maker";\n',
+    "w/demo/index.ts": 'export const demoOnWindows = { hold: () => noteMissing("probe"), async peek() { return probe(); } };',
+    "w/maker.ts": "export function demoMaker(host = null) {\n  const probe = () => 1;\n  return { open, close: () => probe() };\n}",
+  };
+  const readFile = (path) => files[path];
+  const has = (path) => Object.hasOwn(files, path);
+  assert.deepEqual([...windowsJsMembers("demo", "w/modules.ts", readFile, has)], ["hold", "peek"]);
+  assert.deepEqual([...windowsJsMembers("made", "w/modules.ts", readFile, has)], ["open", "close"]);
+  assert.throws(() => windowsJsMembers("nowhere", "w/modules.ts", readFile, has), /can't read/);
+});
+
+test("each Mac module of a module domain conforms to its generated protocol and registers exactly its generated name, events and functions, with no hand-written ones beside its views", () => {
   for (const [domain, entry] of moduleDomains) {
     const generated = read(entry.swift);
     const sources = filesUnder(`${entry.package}/ios/`, /\.swift$/).filter((path) => path !== entry.swift).map((path) => [path, stripComments(read(path))]);
@@ -377,46 +596,67 @@ test("each Mac module of a module domain conforms to its generated protocol and 
       assert.equal(conforming.length, 1, `exactly one Mac module in ${entry.package}/ios conforms to ${row.native}`);
       const [{ path, text, name }] = conforming;
       assert.ok(listed.includes(name), `${entry.package}/expo-module.config.json registers ${name}`);
-      const body = classBody(text, name);
-      assert.match(body, /Name\(Self\.moduleName\)/, `${path}: ${name} takes its name from ${row.native}`);
-      assert.equal(body.includes("Self.eventsDefinition"), events.length > 0, `${path}: ${name} declares its events from ${row.native}`);
-      for (const fn of Object.keys(row.functions)) {
-        assert.equal(body.includes(`Self.${fn}Function`), functions.includes(fn), `${domain} ${module}.${fn} is ${row.functions[fn].mac} on the Mac`);
-        assert.doesNotMatch(body, new RegExp(`(?:Async)?Function\\("${fn}"`), `${path}: ${name} defines ${fn} by hand`);
-      }
+      const registered = swiftRegistrations(text, name);
+      assert.ok(registered.name, `${path}: ${name} takes its name from ${row.native}`);
+      assert.deepEqual(registered.generated.sort(), [...functions].sort(), `${domain} ${module}'s Mac functions are exactly the generated ones`);
+      assert.equal(registered.events, events.length > 0, `${path}: ${name} declares its events from ${row.native}`);
+      assert.deepEqual(registered.handWritten, [], `${path}: ${name} registers functions, events, constants or a name by hand`);
     }
   }
+});
+
+test("the Mac registration scan sees a hand-written function, event or name beside the generated ones, and ignores what a view declares", () => {
+  const module = (definition) => `public class DemoModule: Module, DemoNative {\n  static func hold(_ on: Bool) {}\n\n  public func definition() -> ModuleDefinition {\n${definition}\n  }\n}\n`;
+  const clean = swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    View(DemoView.self) {\n      Prop("on") { (view: DemoView, on: Bool) in view.on = on }\n      Events("onTone")\n    }'), "DemoModule");
+  assert.deepEqual(clean, { generated: ["hold"], events: false, name: true, handWritten: [] });
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    AsyncFunction("extra") { () in }'), "DemoModule").handWritten, ["AsyncFunction"]);
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Self.holdFunction\n    Function("extra") { () in 1 }'), "DemoModule").handWritten, ["Function"]);
+  assert.deepEqual(swiftRegistrations(module('    Name(Self.moduleName)\n    Events("tone")\n    Self.holdFunction'), "DemoModule").handWritten, ["Events"]);
+  assert.deepEqual(swiftRegistrations(module('    Name("ArdiaDemo")\n    Self.holdFunction'), "DemoModule"), { generated: ["hold"], events: false, name: false, handWritten: ["Name"] });
 });
 
 test("a module domain's package reaches each of its Expo modules only through the generated types", () => {
   for (const [domain, entry] of moduleDomains) {
-    const generated = new Set(entry.types ? [entry.types] : []);
-    const sources = filesUnder(`${entry.package}/src/`, /\.tsx?$/).filter((path) => !generated.has(path)).map((path) => [path, stripComments(read(path))]);
+    const sources = filesUnder(`${entry.package}/src/`, /\.tsx?$/).filter((path) => path !== entry.types).map((path) => [path, stripJsComments(read(path))]);
     assert.ok(sources.some(([, text]) => text.includes('from "./generated/native"')), `${entry.package}/src imports its generated types`);
+    let typed = 0;
     for (const [path, text] of sources) {
-      for (const match of text.matchAll(/require(?:Optional)?NativeModule(?:<([^(]*)>)?\(\s*"(Ardia[A-Za-z]+)"/g)) {
-        const [, type, module] = match;
-        const row = entry.modules[module];
-        if (!row) continue;
-        const capitalized = domain[0].toUpperCase() + domain.slice(1);
-        assert.ok(type === row.native || type === `${capitalized}Modules["${module}"]`, `${path} types ${module} as ${type ?? "nothing"} instead of the generated ${row.native}`);
-      }
+      const found = nativeModuleTypingProblems(text, domain, entry.modules);
+      assert.deepEqual(found.problems, [], path);
+      typed += found.typed;
     }
+    assert.ok(typed > 0, `${entry.package}/src reaches a module through its generated types`);
   }
 });
 
-test("the Linux host serves a module function natively exactly when its desktop binding is host", () => {
-  const linux = filesUnder(LINUX.replace(/[^/]+\/$/, ""), /\.(cc|h|mm|js)$/).map(read).map(stripComments).join("\n");
-  for (const { module, fn, binding } of moduleFunctions) {
-    assert.equal(linux.includes(`"${module}.${fn}"`), binding.desktop === "host", `${module}.${fn} is ${binding.desktop} on the desktop host`);
-  }
+test("the typing scan refuses a wrapper typed any, a literal typed by hand and a cast past the generated type", () => {
+  const modules = { ArdiaDemo: { native: "DemoNative" } };
+  const wrapper = (type) => `const nativeModule = <Name extends keyof DemoModules>(name: Name) => requireNativeModule<${type}>(name);\nconst Backdrop = nativeModule("ArdiaDemo");`;
+  assert.deepEqual(nativeModuleTypingProblems(wrapper("DemoModules[Name]"), "demo", modules), { problems: [], typed: 1 });
+  assert.equal(nativeModuleTypingProblems(wrapper("any"), "demo", modules).problems.length, 1);
+  assert.equal(nativeModuleTypingProblems("const m = (name: string) => requireNativeModule<DemoModules[Name]>(name);", "demo", modules).problems.length, 1);
+  assert.equal(nativeModuleTypingProblems('requireNativeModule<{ hold(on: boolean): Promise<void> }>("ArdiaDemo");', "demo", modules).problems.length, 1);
+  assert.equal(nativeModuleTypingProblems('requireNativeModule("ArdiaDemo");', "demo", modules).problems.length, 1);
+  assert.deepEqual(nativeModuleCalls('requireNativeModule<{ run(cb: () => void): Promise<Map<string, number>> }>( "ArdiaDemo" )').map(({ type, argument }) => [type, argument]), [["{ run(cb: () => void): Promise<Map<string, number>> }", '"ArdiaDemo"']]);
+  assert.deepEqual(nativeModuleTypingProblems('requireNativeModule<DemoNative>("ArdiaDemo"); requireNativeModule<{}>("ArdiaElse");', "demo", modules), { problems: [], typed: 1 });
+  assert.equal(nativeModuleTypingProblems(`${wrapper("DemoModules[Name]")}\nconst loose = nativeModule("ArdiaDemo") as any;`, "demo", modules).problems.length, 1);
 });
 
-test("Windows serves a module function, natively or in JS, exactly when its windows binding is custom", () => {
-  const native = windowsNativeMethods(filesUnder("apps/browser/windows/Ardia/", /\.h$/).map((path) => stripComments(read(path))));
-  const { writtenInJs, defaults } = windowsJsModules(read("packages/expo-windows/src/modules.ts"), read("packages/expo-windows/src/defaults.ts"));
+test("the Linux host dispatches a module function and sends a module event exactly when its desktop binding is host", () => {
+  const linux = linuxModuleDispatch(filesUnder("engine/ardiacore-linux/src/", /\.(cc|h|mm)$/).map(read));
+  for (const { module, fn, binding } of moduleFunctions) assert.equal(linux.methods.has(`${module}.${fn}`), binding.desktop === "host", `${module}.${fn} is ${binding.desktop} on the desktop host`);
+  for (const { module, event, binding } of moduleEvents) assert.equal(linux.events.has(`${module}.${event}`), binding.desktop === "host", `event ${module}.${event} is ${binding.desktop} on the desktop host`);
+});
+
+test("Windows serves a module function as a native method, a JS member or a default, and sends a module event, exactly when its windows binding is custom", () => {
+  const native = windowsNativeModules(filesUnder("apps/browser/windows/Ardia/", /\.h$/).map(read));
+  const js = windowsJsModules(read, exists);
   for (const { module, fn, binding } of moduleFunctions) {
-    const served = native.get(module)?.has(fn) || writtenInJs.has(module) || defaults.get(module)?.has(fn) || false;
+    const served = native.methods.get(module)?.has(fn) || js.members.get(module)?.().has(fn) || js.defaults.get(module)?.has(fn) || false;
     assert.equal(served, binding.windows === "custom", `${module}.${fn} is ${binding.windows} on Windows`);
+  }
+  for (const { module, event, binding } of moduleEvents) {
+    const sent = native.events.has(`${module}.${event}`) || js.events.has(`${module}.${event}`);
+    assert.equal(sent, binding.windows === "custom", `event ${module}.${event} is ${binding.windows} on Windows`);
   }
 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -261,6 +262,8 @@ test("a host forwards each engine topic as one event, so two events never claim 
   assert.throws(() => validateTopics({ demo: withEvents({ changed: event() }), other: withEvents({ changed: event({ topic: "demo.changed", desktop: "custom" }) }) }), /both take engine topic demo\.changed on mac/);
 });
 
+const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+
 const richModules = () =>
   moduleDomain(
     {
@@ -355,6 +358,7 @@ test("a module domain's Swift gives each Mac module a protocol of its custom fun
   const nothingOnMac = outputs({}, { demo: moduleDomain({ ArdiaQuiet: { functions: { probe: fn({ mac: "absent" }) }, events: {} } }) });
   assert.equal([...nothingOnMac.keys()].some((path) => path.endsWith(".swift")), false);
   assert.equal(JSON.parse(nothingOnMac.get(MANIFEST)).modules.demo.swift, null);
+  assert.deepEqual(Object.keys(JSON.parse(nothingOnMac.get(MANIFEST)).modules.demo.sha256), ["types"]);
 });
 
 test("the manifest lists each module domain's functions and events with every host's binding, after the engine domains, which it leaves as they were", () => {
@@ -369,6 +373,7 @@ test("the manifest lists each module domain's functions and events with every ho
     package: "packages/shaders",
     types: "packages/shaders/src/generated/native.ts",
     swift: "packages/shaders/ios/ShadedNative.swift",
+    sha256: { types: sha256(files.get("packages/shaders/src/generated/native.ts")), swift: sha256(files.get("packages/shaders/ios/ShadedNative.swift")) },
     modules: {
       ArdiaDemo: {
         native: "DemoNative",
@@ -500,6 +505,79 @@ test("the generated module Swift typechecks against Expo's shapes, and a module 
     const refused = spawnSync("swiftc", ["-typecheck", stubs, drifted], { encoding: "utf8" });
     assert.notEqual(refused.status, 0, "a module whose signature drifts from the schema doesn't compile");
     assert.match(refused.stderr, /does not conform to protocol 'DemoNative'/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a module function named after a Swift keyword is declared and called with backticks, and still typechecks", () => {
+  const keywords = ["import", "default", "self", "init", "delete", "in"];
+  const files = outputs({}, { demo: moduleDomain({ ArdiaDemo: { functions: Object.fromEntries(keywords.map((name) => [name, fn({ args: [], result: "number", async: name !== "delete" })])), events: {} } }) });
+  const swift = files.get("packages/shaders/ios/DemoNative.swift");
+  assert.ok(swift.includes("  static func `import`() -> Double"));
+  assert.ok(swift.includes('    AsyncFunction("import") { () -> Double in Self.`import`() }'));
+  assert.ok(swift.includes("  static func delete() -> Double"));
+  assert.ok(swift.includes('    Function("delete") { () -> Double in Self.delete() }'));
+  assert.ok(swift.includes("  static var importFunction: AnyDefinition {"));
+  assert.ok(files.get("packages/shaders/src/generated/native.ts").includes("  import(): Promise<number>;"));
+  const swiftc = spawnSync("swiftc", ["--version"], { encoding: "utf8" });
+  if (swiftc.status !== 0) return;
+  const dir = mkdtempSync(join(tmpdir(), "hostapi-keyword-swift-"));
+  try {
+    const stubs = join(dir, "Expo.swift");
+    writeFileSync(stubs, SWIFT_EXPO_STUBS);
+    const body = swift.replace("import ExpoModulesCore\n", "");
+    const at = join(dir, "DemoNative.swift");
+    writeFileSync(at, `${body}\nextension DemoNative { static var eventsDefinitionIfAny: AnyDefinition { Definition() } }\n${conformers(body)}\n`);
+    const checked = spawnSync("swiftc", ["-typecheck", stubs, at], { encoding: "utf8" });
+    assert.equal(checked.status, 0, checked.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--write deletes or overwrites a module domain's file only when it still holds what the generator wrote, so a hand-written replacement is never lost", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hostapi-ownership-"));
+  try {
+    const copy = (path) => {
+      mkdirSync(join(dir, path, ".."), { recursive: true });
+      cpSync(ROOT + path, join(dir, path), { recursive: true });
+    };
+    for (const path of ["packages/hostapi/generate.mjs", "packages/hostapi/define.ts", "packages/hostapi/schema", "packages/ardiacore/package.json", "packages/shaders/package.json"]) copy(path);
+    const generator = join(dir, "packages/hostapi/generate.mjs");
+    const at = (path) => join(dir, path);
+    const write = () => runAt(generator, "--write");
+    const swift = "packages/shaders/ios/ShadersNative.swift";
+    const types = "packages/shaders/src/generated/native.ts";
+    assert.equal(write().status, 0);
+    assert.equal(runAt(generator, "--check").status, 0);
+    const index = at("packages/hostapi/schema/index.ts");
+    const withShaders = readFileSync(index, "utf8");
+    const withoutShaders = withShaders.replace("export const moduleDomains = { shaders };", "export const moduleDomains = {};");
+    assert.notEqual(withoutShaders, withShaders);
+
+    writeFileSync(at(swift), "import ExpoModulesCore\n\nprotocol AreaLightNative {}\n");
+    const refused = write();
+    assert.equal(refused.status, 1, "a hand-edited generated file isn't overwritten");
+    assert.match(refused.stderr, /would overwrite a file the generator didn't write: packages\/shaders\/ios\/ShadersNative\.swift/);
+    assert.equal(readFileSync(at(swift), "utf8"), "import ExpoModulesCore\n\nprotocol AreaLightNative {}\n");
+
+    rmSync(at(swift));
+    assert.equal(write().status, 0);
+    writeFileSync(index, withoutShaders);
+    writeFileSync(at(swift), "import ExpoModulesCore\n\nprotocol HandWritten {}\n");
+    const retiring = write();
+    assert.equal(retiring.status, 0, retiring.stderr);
+    assert.equal(readFileSync(at(swift), "utf8"), "import ExpoModulesCore\n\nprotocol HandWritten {}\n", "the hand-written replacement survives the domain's removal");
+    assert.equal(existsSync(at(types)), false, "the untouched generated TypeScript is retired");
+    assert.deepEqual(JSON.parse(readFileSync(at(MANIFEST), "utf8")).modules, {});
+
+    rmSync(at(swift));
+    writeFileSync(index, withShaders);
+    assert.equal(write().status, 0);
+    writeFileSync(index, withoutShaders);
+    assert.equal(write().status, 0);
+    assert.equal(existsSync(at(swift)), false, "an untouched generated Swift file is retired with its domain");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

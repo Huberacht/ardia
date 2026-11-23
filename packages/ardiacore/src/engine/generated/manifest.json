@@ -1253,6 +1253,10 @@
       "package": "packages/shaders",
       "types": "packages/shaders/src/generated/native.ts",
       "swift": "packages/shaders/ios/ShadersNative.swift",
+      "sha256": {
+        "types": "9b3d31e50065d975d3c8d1a0a32285e0a19cfcb84d150a12f5da55d8756c70e9",
+        "swift": "9bf2eee20d7afe4eec3948c38bc97f09b467fc34a1d5cc8d7dd5a82eacc121ac"
+      },
       "modules": {
         "ArdiaAreaLight": {
           "native": "AreaLightNative",

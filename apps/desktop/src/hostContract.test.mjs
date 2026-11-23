@@ -56,7 +56,7 @@ test("every call of a schema-generated domain reaches a host that serves it unde
   }
 });
 
-test("every function of a schema module domain is answered by the desktop UI when its desktop binding is custom, and otherwise reaches the native host with its positional arguments", async () => {
+test("every function of a schema module domain is answered by the desktop UI when its desktop binding is custom, and otherwise reaches the native host with its positional arguments, as a Promise exactly when it is async", async () => {
   const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
   const functions = Object.values(manifest.modules).flatMap((domain) => Object.entries(domain.modules).flatMap(([module, entry]) => Object.entries(entry.functions).map(([fn, row]) => ({ module, fn, row }))));
   assert.ok(functions.some(({ module, fn }) => module === "ArdiaWindowBackdrop" && fn === "holdKeyLook"), "the scan found the shaders pilot");
@@ -66,15 +66,11 @@ test("every function of a schema module domain is answered by the desktop UI whe
     const { host, requests } = fixture();
     const resolved = resolveHostModule(host, module, fn);
     assert.equal(typeof resolved, "function", `${name} resolves to a function`);
-    if (row.desktop === "custom") {
-      assert.equal(reachesNativeHostUnchecked(resolved), false, `${name} is answered by the desktop UI`);
-      await resolved(...args);
-      assert.deepEqual(requests, [], `${name} never reaches the host`);
-    } else {
-      assert.equal(reachesNativeHostUnchecked(resolved), true, `${name} goes to the native host, which serves it only when its binding is host`);
-      await resolved(...args);
-      assert.deepEqual(requests, [{ method: name, args: { args } }], `${name} reaches the host with its positional arguments`);
-    }
+    assert.equal(reachesNativeHostUnchecked(resolved), row.desktop !== "custom", row.desktop === "custom" ? `${name} is answered by the desktop UI` : `${name} goes to the native host, which serves it only when its binding is host`);
+    const answer = resolved(...args);
+    assert.equal(answer instanceof Promise, row.async, `${name} answers ${row.async ? "with a Promise" : "synchronously"}, as the schema's async says`);
+    await answer;
+    assert.deepEqual(requests, row.desktop === "custom" ? [] : [{ method: name, args: { args } }], row.desktop === "custom" ? `${name} never reaches the host` : `${name} reaches the host with its positional arguments`);
   }
 });
 

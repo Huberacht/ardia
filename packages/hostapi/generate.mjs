@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +43,14 @@ const RESERVED = new Set([
   "operator", "private", "promise", "protocol", "public", "repeat", "rethrows", "return", "self", "static", "struct", "subscript", "super", "switch", "this", "throw", "throws", "true", "try",
   "typealias", "typeof", "var", "void", "where", "while", "with", "yield",
 ]);
+
+const SWIFT_KEYWORDS = new Set([
+  "Any", "Self", "as", "associatedtype", "await", "break", "case", "catch", "class", "continue", "default", "defer", "deinit", "do", "else", "enum", "extension", "fallthrough", "false",
+  "fileprivate", "for", "func", "guard", "if", "import", "in", "init", "inout", "internal", "is", "let", "nil", "open", "operator", "precedencegroup", "private", "protocol", "public",
+  "repeat", "rethrows", "return", "self", "some", "static", "struct", "subscript", "super", "switch", "throw", "throws", "true", "try", "typealias", "var", "where", "while",
+]);
+export const swiftName = (name) => (SWIFT_KEYWORDS.has(name) ? `\`${name}\`` : name);
+const digest = (text) => createHash("sha256").update(text).digest("hex");
 
 const schema = () => import(new URL("./schema/index.ts", import.meta.url).href);
 
@@ -311,14 +320,14 @@ const macModules = (domain) => Object.entries(domain.modules).filter(([, entry])
 function swiftRequirement(fn, row) {
   const params = [...row.args.map(([param, type, swift]) => `_ ${param}: ${swiftTypeOf(type, swift)}`), ...(row.promise ? ["_ promise: Promise"] : [])];
   const result = row.promise ? "Void" : swiftTypeOf(row.result, row.swiftResult);
-  return `  static func ${fn}(${params.join(", ")})${result === "Void" ? "" : ` -> ${result}`}`;
+  return `  static func ${swiftName(fn)}(${params.join(", ")})${result === "Void" ? "" : ` -> ${result}`}`;
 }
 
 function swiftDefinition(fn, row) {
   const params = [...row.args.map(([param, type, swift]) => `${param}: ${swiftTypeOf(type, swift)}`), ...(row.promise ? ["promise: Promise"] : [])];
   const result = row.promise ? "Void" : swiftTypeOf(row.result, row.swiftResult);
   const forwarded = [...row.args.map(([param]) => param), ...(row.promise ? ["promise"] : [])].join(", ");
-  const closure = `{ (${params.join(", ")})${result === "Void" ? "" : ` -> ${result}`} in Self.${fn}(${forwarded}) }`;
+  const closure = `{ (${params.join(", ")})${result === "Void" ? "" : ` -> ${result}`} in Self.${swiftName(fn)}(${forwarded}) }`;
   return [
     `  static var ${fn}Function: AnyDefinition {`,
     `    ${row.async ? "AsyncFunction" : "Function"}("${fn}") ${closure}${row.queue === "main" ? ".runOnQueue(.main)" : ""}`,
@@ -359,7 +368,9 @@ function moduleManifest(name, domain) {
       events: Object.fromEntries(Object.entries(entry.events).map(([event, row]) => [event, moduleBindings(row)])),
     };
   }
-  return { kind: domain.kind, package: domain.package, types: modulePaths(name, domain.package).types, swift: moduleSwiftPath(name, domain), modules };
+  const swift = moduleSwiftPath(name, domain);
+  const sha256 = { types: digest(moduleTypescript(name, domain)), ...(swift === null ? {} : { swift: digest(moduleSwift(domain)) }) };
+  return { kind: domain.kind, package: domain.package, types: modulePaths(name, domain.package).types, swift, sha256, modules };
 }
 
 function manifest(domains, moduleDomains) {
@@ -441,7 +452,10 @@ function previouslyGenerated() {
   for (const [name, entry] of Object.entries(previous.modules ?? {})) {
     if (!NAME.test(name) || !isRecord(entry) || entry.kind !== "module" || typeof entry.package !== "string" || !PACKAGE.test(entry.package)) continue;
     const paths = modulePaths(name, entry.package);
-    for (const key of ["types", "swift"]) if (entry[key] === paths[key] && existsSync(ROOT + paths[key])) owned.push(paths[key]);
+    for (const key of ["types", "swift"]) {
+      if (entry[key] !== paths[key] || !existsSync(ROOT + paths[key])) continue;
+      if (isRecord(entry.sha256) && entry.sha256[key] === digest(readFileSync(ROOT + paths[key], "utf8"))) owned.push(paths[key]);
+    }
   }
   for (const [name, entry] of Object.entries(previous.domains)) {
     const domain = previousDomain(name, entry);
