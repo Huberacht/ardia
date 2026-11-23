@@ -165,6 +165,8 @@ export function sourceMapRefOf(script: string): string | null {
   return null;
 }
 
+export const isDataUrl = (value: string) => /^data:/i.test(value);
+
 const INLINE_MAP = /^data:application\/json(?:;charset=[\w-]+)?;base64,([A-Za-z0-9+/=]+)$/i;
 
 export function inlineMapText(ref: string): string | null {
@@ -196,7 +198,7 @@ export class SourceMapResolver {
 
   constructor(sources: MapSources = {}) {
     for (const [url, raw] of Object.entries(sources.maps ?? {}).slice(0, MAX_MAPS_PER_CALL)) {
-      const text = typeof raw === "string" && raw.startsWith("data:") ? inlineMapText(raw) : raw;
+      const text = typeof raw === "string" && isDataUrl(raw) ? inlineMapText(raw) : raw;
       this.maps.set(url, text === null ? null : parseSourceMap(text));
       if (this.maps.get(url) === null) this.failures.push({ url: url.slice(0, 2048), reason: "bad-map" });
     }
@@ -218,7 +220,7 @@ export class SourceMapResolver {
     const script = this.scripts.get(scriptUrl);
     const ref = mapRef ?? (script === undefined ? null : sourceMapRefOf(script));
     if (!ref) return this.fail(scriptUrl, "no-map");
-    if (!ref.startsWith("data:")) return this.fail(scriptUrl, "not-inline");
+    if (!isDataUrl(ref)) return this.fail(scriptUrl, "not-inline");
     if (++this.loads > MAX_MAPS_PER_CALL) return this.fail(scriptUrl, "limit");
     const text = inlineMapText(ref);
     const parsed = text === null ? null : parseSourceMap(text);

@@ -1,5 +1,5 @@
 import { openInspection, type InspectionSession } from "./devToolsSession";
-import { generatedPositionFor, SourceMapResolver } from "./devToolsSourceMaps";
+import { generatedPositionFor, isDataUrl, SourceMapResolver } from "./devToolsSourceMaps";
 import { STOPPED } from "./socketCatalog";
 import { OpError } from "./workspaceTargets";
 
@@ -89,7 +89,7 @@ export function recordScript(book: ScriptBook, params: Fields) {
   }
   forget(book, scriptId);
   if (book.scripts.size >= MAX_HELD_SCRIPTS) return;
-  const offered = typeof params.sourceMapURL === "string" && params.sourceMapURL.startsWith("data:") ? params.sourceMapURL : null;
+  const offered = typeof params.sourceMapURL === "string" && isDataUrl(params.sourceMapURL) ? params.sourceMapURL : null;
   const sourceMapURL = offered !== null && book.mapBytes + offered.length <= MAX_HELD_MAP_BYTES ? offered : null;
   book.mapBytes += sourceMapURL?.length ?? 0;
   book.scripts.set(scriptId, { url, sourceMapURL, frameId, contextId });

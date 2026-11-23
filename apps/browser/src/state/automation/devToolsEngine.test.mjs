@@ -619,3 +619,14 @@ test("stack frames keep URLs with parentheses, primitive causes stay in the chai
   const csp = (reportOnly) => ({ issue: { code: "ContentSecurityPolicyIssue", details: { contentSecurityPolicyIssueDetails: { violatedDirective: "script-src", isReportOnly: reportOnly, contentSecurityPolicyViolationType: "kInlineViolation", sourceCodeLocation: { url: "https://a.example/", lineNumber: 1, columnNumber: 1 } } } } });
   assert.deepEqual(describeIssues([csp(true), csp(false)]).issues.map((i) => i.severity), ["error", "warning"]);
 });
+
+test("an inline map with an upper-case DATA: scheme still resolves", () => {
+  const map = JSON.stringify({ version: 3, sources: ["a.ts"], names: [], mappings: "AAAA" });
+  const upper = `DATA:application/json;base64,${Buffer.from(map).toString("base64")}`;
+  const resolver = new SourceMapResolver({ maps: { "https://a.example/given.js": upper }, scripts: { "https://a.example/inline.js": `x()\n//# sourceMappingURL=${upper}` } });
+  assert.ok(resolver.mapFor("https://a.example/given.js"));
+  assert.ok(resolver.mapFor("https://a.example/inline.js"));
+  const book = logpointBook.newScriptBook();
+  logpointBook.recordScript(book, { scriptId: "1", url: "https://a.example/x.js", sourceMapURL: upper });
+  assert.equal(book.scripts.get("1").sourceMapURL, upper);
+});
