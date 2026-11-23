@@ -346,3 +346,61 @@ test("field data sends only the origin by default and refuses non-web pages", as
   for (const pageUrl of ["chrome://settings", "file:///etc/hosts", "javascript:alert(1)", "https://u:p@shop.example/"]) assert.throws(() => fieldDataKey(pageUrl, "origin"));
   await assert.rejects(fetchFieldData({ pageUrl: "https://shop.example/", scope: "origin", apiKey: "bad key&x=1", formFactor: null }, fetchFn), /API key/);
 });
+
+test("a trace with a second navigation attributes nothing from the second page to the first", () => {
+  const trace = fixture("trace-load.json");
+  const later = 1_010_000_000;
+  trace.traceEvents.push(
+    { name: "navigationStart", ph: "R", pid: 2, tid: 3, ts: later, args: { frame: "F1", data: { documentLoaderURL: "https://shop.example/next", isLoadingMainFrame: true, isOutermostMainFrame: true, navigationId: "N2" } } },
+    { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: later + 1_000_000, dur: 1_000_000, args: {} },
+    { name: "LayoutShift", ph: "I", pid: 2, tid: 3, ts: later + 1_000_000, args: { frame: "F1", data: { score: 0.8, weighted_score_delta: 0.8, had_recent_input: false, navigationId: "N2" } } },
+  );
+  const result = analyzeTrace(trace);
+  assert.deepEqual([result.metrics.tbt.ms, result.metrics.cls.value, result.navigation.navigationId], [170, 0.13, "N1"]);
+});
+
+test("a slow server makes TTFB the LCP phase the summary blames", () => {
+  const start = 2_000_000_000;
+  const events = [
+    { name: "navigationStart", ph: "R", pid: 2, tid: 3, ts: start, args: { frame: "F", data: { documentLoaderURL: "https://slow.example/", isOutermostMainFrame: true, navigationId: "S" } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "D", url: "https://slow.example/" } } },
+    { name: "ResourceReceiveResponse", ph: "I", pid: 2, tid: 3, ts: start + 3_000_000, args: { data: { requestId: "D", statusCode: 200, mimeType: "text/html", timing: { requestTime: (start + 1000) / 1e6, receiveHeadersEnd: 2999 } } } },
+    { name: "largestContentfulPaint::Candidate", ph: "R", pid: 2, tid: 3, ts: start + 3_100_000, args: { frame: "F", data: { candidateIndex: 1, navigationId: "S", type: "text", nodeId: 3 } } },
+  ];
+  const lcp = analyzeTrace(events).insights.find((i) => i.id === "lcp-breakdown");
+  assert.match(lcp.summary, /largest phase is ttfb\. The server answers the document slowly/);
+});
+
+test("custom properties keep their case, and distinct blocked resources stay distinct issues", () => {
+  const style = (name, value, line) => ({ name, value, range: { startLine: line, startColumn: 0 } });
+  const matched = { matchedCSSRules: [{ rule: { origin: "regular", selectorList: { selectors: [{ text: ":root", specificity: { a: 0, b: 1, c: 0 } }] }, style: { cssProperties: [style("--Brand", "red", 1), style("--brand", "blue", 2)] } }, matchingSelectors: [0] }] };
+  const [upper, lower] = cascadeFor(matched, { computedStyle: [{ name: "--Brand", value: "red" }, { name: "--brand", value: "blue" }] }, ["--Brand", "--brand"], new Map());
+  assert.deepEqual([upper.winner.value, upper.computed, upper.overridden.length, lower.winner.value], ["red", "red", 0, "blue"]);
+  assert.deepEqual(declaredProperties(matched), ["--Brand", "--brand"]);
+  const mixed = (url) => ({ issue: { code: "MixedContentIssue", details: { mixedContentIssueDetails: { resolutionStatus: "MixedContentBlocked", insecureURL: url, mainResourceURL: "https://shop.example/" } } } });
+  const { issues } = describeIssues([mixed("http://a.example/1.png"), mixed("http://a.example/2.png"), mixed("http://a.example/1.png")]);
+  assert.deepEqual(issues.map((i) => i.affected.resourceUrl), ["http://a.example/1.png", "http://a.example/2.png"]);
+});
+
+test("a long inline source map is found, and a streamed response stops at its size limit", async () => {
+  const body = Array.from({ length: 400 }, (_, i) => `export const value${i}: number = ${i};`).join("\n");
+  const out = ts.transpileModule(`${body}\nexport function late(): never { throw new Error("late"); }`, { compilerOptions: { target: ts.ScriptTarget.ES2022, inlineSourceMap: true, inlineSources: true }, fileName: "src/late.ts" }).outputText;
+  const ref = sourceMapRefOf(out);
+  assert.ok(ref && ref.length > 8192, "the inline map is longer than 8 KiB");
+  assert.ok(parseSourceMap(Buffer.from(ref.split(",")[1], "base64").toString("utf8")));
+  assert.equal(sourceMapRefOf("var a = 'sourceMappingURL=nope';"), null);
+  const chunk = new Uint8Array(4 * 1024 * 1024);
+  let reads = 0;
+  let cancelled = false;
+  const fetchFn = async () => ({
+    ok: true,
+    headers: new Map(),
+    body: { getReader: () => ({ read: async () => (++reads > 50 ? { done: true } : { done: false, value: chunk }), cancel: async () => void (cancelled = true) }) },
+    text: async () => assert.fail("a streamed body isn't buffered whole"),
+  });
+  const resolver = new SourceMapResolver({ allowFetch: true, fetchFn });
+  assert.equal(await resolver.mapFor("https://shop.example/huge.js"), null);
+  assert.ok(cancelled);
+  assert.ok(reads <= 5, `stopped after ${reads} chunks`);
+  assert.deepEqual(resolver.failures.map((f) => f.reason), ["fetch-failed"]);
+});

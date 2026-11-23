@@ -54,8 +54,15 @@ export function frameOf(ev: Ev): string | null {
   return text(ev.args.frame, 256) ?? text(field(ev.args.data, "frame"), 256);
 }
 
+function isMainNavigation(ev: Ev, mainFrame: string | null): boolean {
+  const data = ev.args.data;
+  const url = text(field(data, "documentLoaderURL"));
+  if (!url || !/^https?:/i.test(url)) return false;
+  return field(data, "isOutermostMainFrame") === true || field(data, "isLoadingMainFrame") === true || (mainFrame !== null && frameOf(ev) === mainFrame);
+}
+
 export function buildModel(raw: unknown[]): Model {
-  const events: Ev[] = [];
+  let events: Ev[] = [];
   for (const item of raw) {
     const ev = normalized(item);
     if (ev) events.push(ev);
@@ -78,12 +85,16 @@ export function buildModel(raw: unknown[]): Model {
     if (ev.name !== "navigationStart") continue;
     const data = ev.args.data;
     const url = text(field(data, "documentLoaderURL"));
-    const main = field(data, "isOutermostMainFrame") === true || field(data, "isLoadingMainFrame") === true || (mainFrame !== null && frameOf(ev) === mainFrame);
-    if (!main || !url || !/^https?:/i.test(url)) continue;
+    if (!isMainNavigation(ev, mainFrame) || !url || !/^https?:/i.test(url)) continue;
     navigation = { ts: ev.ts, url, navigationId: text(field(data, "navigationId"), 256) };
     if (mainFrame === null) mainFrame = frameOf(ev);
     if (mainPid === null) mainPid = ev.pid;
     break;
+  }
+  if (navigation) {
+    const startedAt = navigation.ts;
+    const next = events.find((ev) => ev.name === "navigationStart" && ev.ts > startedAt && isMainNavigation(ev, mainFrame));
+    if (next) events = events.filter((ev) => ev.ph === "M" || ev.ts < next.ts);
   }
   const first = events.find((ev) => ev.ph !== "M");
   const origin = navigation?.ts ?? first?.ts ?? 0;

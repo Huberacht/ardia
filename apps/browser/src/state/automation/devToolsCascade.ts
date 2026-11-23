@@ -36,6 +36,8 @@ const text = (value: unknown, max = 4096): string | null => (typeof value === "s
 const whole = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null);
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 
+export const propertyKey = (name: string) => (name.startsWith("--") ? name : name.toLowerCase());
+
 export const isInherited = (property: string) => property.startsWith("--") || INHERITED.has(property);
 
 export function estimateSpecificity(selector: string): Specificity {
@@ -85,7 +87,8 @@ function candidatesOf(styles: { style: unknown; origin: string; selector: string
   for (const entry of styles) {
     for (const prop of list(field(entry.style, "cssProperties"))) {
       order++;
-      if (text(field(prop, "name"), 256)?.toLowerCase() !== property) continue;
+      const name = text(field(prop, "name"), 256);
+      if (name === null || propertyKey(name) !== property) continue;
       const disabled = field(prop, "disabled") === true;
       const invalid = field(prop, "parsedOk") === false;
       const value = text(field(prop, "value"), 2048) ?? "";
@@ -157,7 +160,8 @@ export function declaredProperties(matched: unknown): string[] {
   for (const entry of stylesOfLevel(matched, true)) {
     if (entry.origin === "user-agent") continue;
     for (const prop of list(field(entry.style, "cssProperties"))) {
-      const name = text(field(prop, "name"), 256)?.toLowerCase();
+      const raw = text(field(prop, "name"), 256);
+      const name = raw === null ? null : propertyKey(raw);
       if (name && field(prop, "implicit") !== true && field(prop, "disabled") !== true) names.add(name);
       if (names.size >= MAX_PROPERTIES) return [...names];
     }
@@ -175,7 +179,7 @@ export function cascadeFor(matched: unknown, computed: unknown, properties: read
   const own = stylesOfLevel(matched, true);
   const inherited = list(field(matched, "inherited")).slice(0, MAX_INHERITED);
   return properties.slice(0, MAX_PROPERTIES).map((raw) => {
-    const property = raw.toLowerCase();
+    const property = propertyKey(raw);
     let candidates = candidatesOf(own, property, headers, 0, 0);
     let winner = pickWinner(candidates);
     if (!winner && isInherited(property)) {

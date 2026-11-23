@@ -144,9 +144,16 @@ export function generatedPositionFor(map: ParsedMap, wanted: string, line1: numb
 }
 
 export function sourceMapRefOf(script: string): string | null {
-  const tail = script.slice(-8192);
-  const matches = [...tail.matchAll(/[#@] sourceMappingURL=([^\s'"]+)\s*(?:\*\/)?\s*$/gm)];
-  return matches.length ? matches[matches.length - 1]![1]! : null;
+  let at = script.length;
+  while (at > 0) {
+    const found = script.lastIndexOf("sourceMappingURL=", at - 1);
+    if (found < 2) return null;
+    const marker = script.slice(found - 2, found);
+    const match = /^([^\s'"]+)\s*(?:\*\/)?\s*$/.exec(script.slice(found + "sourceMappingURL=".length).split("\n")[0]!);
+    if ((marker === "# " || marker === "@ ") && match) return match[1]!;
+    at = found;
+  }
+  return null;
 }
 
 function httpUrl(value: string): URL | null {
@@ -222,8 +229,30 @@ export class SourceMapResolver {
       if (!reply.ok) return null;
       const declared = Number(reply.headers?.get?.("content-length") ?? NaN);
       if (Number.isFinite(declared) && declared > limit) return null;
-      const body = await reply.text();
-      return body.length > limit ? null : body;
+      const reader = reply.body?.getReader?.();
+      if (!reader) {
+        const body = await reply.text();
+        return body.length > limit ? null : body;
+      }
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > limit) {
+          await reader.cancel().catch(() => {});
+          return null;
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(received);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return new TextDecoder().decode(bytes);
     } catch {
       return null;
     } finally {

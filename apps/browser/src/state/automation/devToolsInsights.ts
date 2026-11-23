@@ -38,7 +38,7 @@ function lcpInsight(model: Model, lcp: Lcp | null, doc: RequestRow | null): Insi
   const ttfb = ttfbEnd === null ? null : Math.max(0, ttfbEnd - model.origin);
   const resource = lcp.url ? [...model.requests.values()].find((row) => withoutFragment(row.url) === withoutFragment(lcp.url!)) ?? null : null;
   const phases: Fields = { ttfbMs: ttfb === null ? null : ms(ttfb) };
-  let biggest: [string, number] = ["renderDelayMs", 0];
+  let biggest: [string, number] = ttfb === null ? ["renderDelayMs", 0] : ["ttfbMs", ttfb];
   const note = (key: string, us: number) => {
     const value = Math.max(0, us);
     phases[key] = ms(value);
@@ -53,6 +53,7 @@ function lcpInsight(model: Model, lcp: Lcp | null, doc: RequestRow | null): Insi
   }
   const rating = rate(ms(lcpUs), THRESHOLDS.lcp);
   const advice: Record<string, string> = {
+    ttfbMs: "The server answers the document slowly: cache the HTML at the edge, avoid redirects and speed up server work.",
     loadDelayMs: "The LCP resource is discovered late: reference it in the HTML or preload it with fetchpriority=high.",
     loadDurationMs: "The LCP resource takes long to download: compress it, serve a smaller size or a modern format, or use a CDN.",
     renderDelayMs: "The LCP element renders late after its content is ready: reduce render-blocking CSS and main-thread work before it paints.",
@@ -203,7 +204,7 @@ const ATTRIBUTABLE = new Set(["EvaluateScript", "v8.compile", "v8.evaluateModule
 
 function longTasksOf(model: Model): Ev[] {
   const onMain = (ev: Ev) => (model.mainThreads.size ? model.mainThreads.has(`${ev.pid}:${ev.tid}`) : true) && (model.mainPid === null || ev.pid === model.mainPid);
-  return model.events.filter((ev) => ev.ph === "X" && (ev.name === "RunTask" || ev.name === "ThreadControllerImpl::RunTask") && ev.dur > LONG_TASK_US && onMain(ev));
+  return model.events.filter((ev) => ev.ph === "X" && ev.ts >= model.origin && (ev.name === "RunTask" || ev.name === "ThreadControllerImpl::RunTask") && ev.dur > LONG_TASK_US && onMain(ev));
 }
 
 function attribution(model: Model, task: Ev) {

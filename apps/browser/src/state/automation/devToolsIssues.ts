@@ -14,6 +14,7 @@ export type Affected = {
   frameId: string | null;
   source: { url: string | null; line: number | null; column: number | null } | null;
   cookie: { name: string | null; domain: string | null; path: string | null } | null;
+  resourceUrl: string | null;
 };
 
 export type DescribedIssue = { code: string; kind: IssueKind; severity: IssueSeverity; title: string; explanation: string; fix: string; reasons: string[]; affected: Affected };
@@ -36,6 +37,7 @@ function affectedOf(details: unknown): Affected {
     frameId: text(field(frame, "frameId"), 256) ?? text(field(details, "frameId"), 256),
     source: isFields(location) ? { url: text(location.url), line: num(location.lineNumber), column: num(location.columnNumber) } : null,
     cookie: isFields(cookie) ? { name: text(cookie.name, 256), domain: text(cookie.domain, 256), path: text(cookie.path, 256) } : null,
+    resourceUrl: text(field(details, "insecureURL")) ?? text(field(details, "blockedURL")),
   };
 }
 
