@@ -268,7 +268,7 @@ fn read_input(path: &Path, cap: u64, what: &str, oversize: Reason) -> Result<Vec
 fn public_key_from_pem(pem: &[u8]) -> Option<[u8; PUBLIC_KEY_BYTES]> {
     let text = core::str::from_utf8(pem).ok()?;
     let body = text.strip_suffix('\n').unwrap_or(text);
-    let mut lines = body.split('\n');
+    let mut lines = body.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line));
     let (Some(PEM_BEGIN), Some(encoded), Some(PEM_END), None) =
         (lines.next(), lines.next(), lines.next(), lines.next())
     else {
@@ -410,29 +410,27 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
-    const RELEASE_PEM_AS_CHECKED_OUT: &str = include_str!("../../../../../scripts/linux/linux-update.pem");
-
-    fn release_pem() -> String {
-        RELEASE_PEM_AS_CHECKED_OUT.replace("\r\n", "\n")
-    }
+    const RELEASE_PEM: &str = include_str!("../../../../../scripts/linux/linux-update.pem");
 
     #[test]
     fn the_release_pem_is_the_core_release_key() {
         assert_eq!(
-            public_key_from_pem(release_pem().as_bytes()),
+            public_key_from_pem(RELEASE_PEM.as_bytes()),
             Some(ardia_update_core::LINUX_UPDATE_PUBLIC_KEY)
         );
     }
 
     #[test]
     fn a_pem_must_be_exactly_one_ed25519_public_key() {
-        let pem = release_pem();
+        let pem = RELEASE_PEM;
         let body = pem.lines().nth(1).unwrap();
         for pem in [
             String::new(),
             format!("{PEM_BEGIN}\n{body}\n"),
             format!("{PEM_BEGIN}\n{body}\n{PEM_END}\n{PEM_END}\n"),
-            format!("{PEM_BEGIN}\r\n{body}\r\n{PEM_END}\r\n"),
+            format!("{PEM_BEGIN}\r\r\n{body}\r\n{PEM_END}\r\n"),
+            format!("{PEM_BEGIN}\r{body}\r{PEM_END}\r"),
+            format!("{PEM_BEGIN}\n{body}\n{PEM_END}\n\n"),
             format!("{PEM_BEGIN}\n{body}=\n{PEM_END}\n"),
             format!("{PEM_BEGIN}\n{}\n{PEM_END}\n", &body[..body.len() - 4]),
             format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\n"),
@@ -440,7 +438,18 @@ mod tests {
         ] {
             assert_eq!(public_key_from_pem(pem.as_bytes()), None, "{pem:?}");
         }
-        assert!(public_key_from_pem(pem.trim_end().as_bytes()).is_some());
+        for accepted in [
+            format!("{PEM_BEGIN}\n{body}\n{PEM_END}\n"),
+            format!("{PEM_BEGIN}\n{body}\n{PEM_END}"),
+            format!("{PEM_BEGIN}\r\n{body}\r\n{PEM_END}\r\n"),
+            format!("{PEM_BEGIN}\r\n{body}\r\n{PEM_END}"),
+        ] {
+            assert_eq!(
+                public_key_from_pem(accepted.as_bytes()),
+                Some(ardia_update_core::LINUX_UPDATE_PUBLIC_KEY),
+                "{accepted:?}"
+            );
+        }
     }
 
     #[test]

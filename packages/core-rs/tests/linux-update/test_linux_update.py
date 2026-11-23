@@ -8,6 +8,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -74,6 +75,10 @@ def rust_tool(name):
     return str(installed) if os.access(installed, os.X_OK) else None
 
 
+def cargo_target_dir():
+    return pathlib.Path(os.environ.get('CARGO_TARGET_DIR') or 'target')
+
+
 def verifier_binary():
     cargo = rust_tool('cargo')
     if cargo is None:
@@ -82,7 +87,7 @@ def verifier_binary():
                            capture_output=True, text=True, timeout=900)
     if built.returncode != 0:
         raise AssertionError(built.stderr)
-    return CORE / 'target/release' / ('ardia-update-verify.exe' if os.name == 'nt' else 'ardia-update-verify')
+    return CORE / cargo_target_dir() / 'release' / ('ardia-update-verify.exe' if os.name == 'nt' else 'ardia-update-verify')
 
 
 def verdict(binary, manifest, signature, key, version, installed, kind):
@@ -407,6 +412,31 @@ class PackagedVerifierTests(unittest.TestCase):
         else:
             self.packaging.check_update_verify(binary)
 
+    def fake_build(self, name):
+        root = self.dir / name
+        output, ui = root / 'out', root / 'ui'
+        output.mkdir(parents=True)
+        ui.mkdir()
+        for required in self.packaging.REQUIRED:
+            if required == 'locales':
+                (output / required).mkdir()
+                (output / required / 'en-US.pak').write_bytes(b'locale')
+            else:
+                (output / required).write_bytes(b'runtime')
+        (output / 'chrome').chmod(0o755)
+        (ui / 'index.html').write_text('<html></html>')
+        return root, output, ui
+
+    def test_package_py_checks_the_staged_copy_and_writes_nothing_when_it_fails(self):
+        root, output, ui = self.fake_build('refused')
+        broken = root / 'ardia-update-verify'
+        broken.write_bytes(elf(kind=1))
+        broken.chmod(0o755)
+        destination = root / 'ardia.tar.xz'
+        with self.assertRaisesRegex(ValueError, 'lib/ardia/ardia-update-verify'):
+            self.packaging.package(output, ui, destination, update_verify=broken)
+        self.assertFalse(destination.exists())
+
     def test_the_built_verifier_passes_the_packaging_check(self):
         if rust_tool('cargo') is None or rust_tool('rustup') is None:
             unavailable('cargo and rustup are unavailable to build the musl ardia-update-verify')
@@ -416,6 +446,12 @@ class PackagedVerifierTests(unittest.TestCase):
         binary = pathlib.Path(built.stdout.strip())
         self.assertIsNone(self.problem(binary.read_bytes()))
         self.packaging.check_update_verify(binary)
+        root, output, ui = self.fake_build('packaged')
+        archive = self.packaging.package(output, ui, root / 'ardia.tar.xz', update_verify=binary)
+        with tarfile.open(archive) as packed:
+            member = packed.getmember('ardia/lib/ardia/ardia-update-verify')
+            self.assertEqual(member.mode & 0o777, 0o755)
+            self.assertEqual(packed.extractfile(member).read(), binary.read_bytes())
 
 
 if __name__ == '__main__':

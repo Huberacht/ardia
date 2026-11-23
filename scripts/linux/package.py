@@ -178,8 +178,8 @@ def package(output, ui, destination, content_blocker=None, version=None, cli=Non
         if version is None:
             raise ValueError('a package with a .deb needs --version')
         linux_formats.deb_version(version)
-    if update_verify is not None:
-        check_update_verify(update_verify)
+    if update_verify is not None and not update_verify.is_file():
+        raise ValueError(f'no ardia-update-verify at {update_verify}')
     cli_digest = None
     if cli is not None:
         if version is None:
@@ -247,6 +247,8 @@ def package(output, ui, destination, content_blocker=None, version=None, cli=Non
             target = root / 'share/icons/hicolor/256x256/apps/ardia.png'
             target.parent.mkdir(parents=True)
             shutil.copyfile(icon, target)
+        if update_verify is not None:
+            check_update_verify(runtime / 'ardia-update-verify')
         normalize_modes(root)
         write_archive(root, destination)
         if deb is not None:

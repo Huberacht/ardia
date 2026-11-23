@@ -337,7 +337,7 @@ fn a_key_that_is_not_one_ed25519_public_key_verifies_nothing() {
     let good = fs::read_to_string(release.path("key.pem")).unwrap();
     for (label, key) in [
         ("empty", String::new()),
-        ("CRLF", good.replace('\n', "\r\n")),
+        ("bare carriage returns", good.replace('\n', "\r")),
         ("two keys", format!("{good}{good}")),
         ("a private key header", good.replace("PUBLIC", "PRIVATE")),
         ("another algorithm", good.replace(SPKI_PREFIX, "MCowBQYDK2VxAyEA")),
@@ -583,5 +583,24 @@ fn native_absolute_paths_are_accepted() {
         &release.ok_line(),
         0,
         "native paths",
+    );
+}
+
+#[test]
+fn a_key_checked_out_with_crlf_line_endings_still_verifies() {
+    let release = Release::new();
+    let lf = fs::read_to_string(release.path("key.pem")).unwrap();
+    release.scratch.file("key.pem", lf.replace('\n', "\r\n"));
+    expect(
+        release.check("manifest", "0.2.48", "0.2.47", "deb"),
+        &release.ok_line(),
+        0,
+        "a CRLF key",
+    );
+    expect(
+        release.check("package", "0.2.48", "0.2.47", "deb"),
+        &release.ok_line(),
+        0,
+        "a CRLF key, package",
     );
 }
