@@ -138,6 +138,119 @@ class GlassStripTest {
     }
 
     @Test
+    fun aChangeUnderTheSourceRedrawsTheWholeStripOnceAFrameSoNoBlurHaloIsLeftBehind() {
+        val scene = bar()
+        live(scene)
+        scene.glasses.forEach(::onHardware)
+        val strip = scene.source.stripsHeld.single()
+        val records = strip.records
+        val tile = View(activity).apply { setBackgroundColor(Color.RED) }
+        val clipping = FrameLayout(activity).apply { clipChildren = true; addView(tile) }
+        scene.source.addView(clipping)
+        clipping.at(20, 410, 8, 8)
+        tile.at(0, 0, 8, 8)
+        onHardware(scene.source)
+        scene.source.viewTreeObserver.dispatchOnPreDraw()
+        scene.glasses.forEach(::onHardware)
+        val before = strip.refreshes
+        tile.setBackgroundColor(Color.GREEN)
+        tile.setBackgroundColor(Color.BLUE)
+        assertEquals("nothing is recorded while the change is made", before, strip.refreshes)
+        scene.source.viewTreeObserver.dispatchOnPreDraw()
+        assertEquals("a tile in a small clipping parent re-records the whole filtered strip once before the frame", before + 1, strip.refreshes)
+        scene.source.viewTreeObserver.dispatchOnPreDraw()
+        assertEquals("and a frame with no change under the source leaves it", before + 1, strip.refreshes)
+        assertEquals("the strip's layout is not recorded again", records, strip.records)
+        assertTrue("and no glass is asked to draw for it", scene.glasses.none { it.isDirty })
+    }
+
+    @Test
+    fun hidingAGlassWakesAGlassOnItsOwnStripAndChangingKeysWakesTheStripLeftBehind() {
+        val scene = scene(Rect(10, 400, 54, 444), Rect(64, 400, 108, 444), Rect(118, 400, 162, 444))
+        live(scene)
+        scene.glasses.forEach(::onHardware)
+        assertTrue(scene.glasses.none { it.isDirty })
+        val wanted = Rect()
+        val key = scene.glasses[1].stripNeed(scene.source, wanted)!!
+        val denser = key.copy(blurPx = key.blurPx * 2f, scale = FrostScale.of(key.blurPx * 2f))
+        scene.source.join(scene.glasses[1], denser, 9_000L, wanted)
+        assertTrue("a glass leaving for another key wakes one still on the old strip", scene.glasses[0].isDirty)
+        scene.source.join(scene.glasses[2], denser, 9_000L, wanted)
+        assertEquals(2, scene.source.stripsHeld.size)
+        assertFalse(scene.glasses[2].isDirty)
+        scene.glasses[1].forgetLayer()
+        assertTrue("the glass left on the hidden one's strip is the one woken", scene.glasses[2].isDirty)
+    }
+
+    @Test
+    fun aSourceNamedAfterItsFirstDrawIsAskedToDrawForTheGlassWaitingOnIt() {
+        val root = FrameLayout(activity)
+        activity.setContentView(root)
+        val source = FrostSourceView(activity, appContext)
+        source.addView(View(activity).apply { setBackgroundColor(Color.MAGENTA) })
+        root.addView(source)
+        val glass = GlassView(activity, appContext).apply { this.source = "named-late"; shape = "capsule" }
+        root.addView(glass)
+        root.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(470, View.MeasureSpec.EXACTLY))
+        root.at(0, 0, 320, 470)
+        source.at(0, 0, 320, 470)
+        source.getChildAt(0).at(0, 0, 320, 470)
+        glass.at(10, 400, 44, 44)
+        onHardware(source)
+        onHardware(glass)
+        assertEquals(FrostPage.NO_SOURCE, glass.lastChoice?.reason)
+        onHardware(source)
+        assertFalse(source.isDirty)
+        source.sourceId = "named-late"
+        assertTrue("registration asks the source to draw, not only the glass", source.isDirty)
+        onHardware(source)
+        assertTrue(source.isRecording)
+    }
+
+    @Test
+    fun aSourceDrawingAgainLeavesItsLiveGlassesAloneSoNoSecondFrameIsScheduled() {
+        val scene = bar()
+        live(scene)
+        scene.glasses.forEach(::onHardware)
+        assertTrue(scene.glasses.none { it.isDirty })
+        for (colour in listOf(Color.GREEN, Color.RED, Color.BLUE)) {
+            scene.source.getChildAt(0).setBackgroundColor(colour)
+            onHardware(scene.source)
+        }
+        assertTrue("a live glass is not invalidated from inside the source's draw", scene.glasses.none { it.isDirty })
+        assertTrue(scene.glasses.none { it.waitsOnSource() })
+    }
+
+    @Test
+    fun onlyAGlassStillWaitingForItsSourceIsWokenWhenTheSourceDraws() {
+        val scene = bar()
+        scene.glasses.forEach(::onHardware)
+        assertEquals(FrostPage.SOURCE_NOT_DRAWN, scene.glasses[0].lastChoice?.reason)
+        assertTrue(scene.glasses.all { it.waitsOnSource() })
+        onHardware(scene.source)
+        assertTrue("the source's first recording wakes the glasses waiting on it", scene.glasses.all { it.isDirty })
+        onHardware(scene.glasses[0])
+        assertEquals(FrostPage.Path.Live, scene.glasses[0].lastChoice?.path)
+        assertFalse(scene.glasses[0].waitsOnSource())
+        assertTrue("the glass that has not drawn since still waits", scene.glasses[1].waitsOnSource())
+        onHardware(scene.source)
+        assertFalse("the live one is left alone", scene.glasses[0].isDirty)
+        assertTrue(scene.glasses[1].isDirty)
+        scene.glasses[1].reduceTransparency = true
+        onHardware(scene.glasses[1])
+        assertFalse("a glass that cannot blur waits on nothing", scene.glasses[1].waitsOnSource())
+    }
+
+    @Test
+    fun aSourceThatChangesSizeAsksItsGlassesToLayTheStripOutAgain() {
+        val scene = bar()
+        live(scene)
+        scene.glasses.forEach(::onHardware)
+        scene.source.at(0, 0, 320, 300)
+        assertTrue(scene.glasses.all { it.isDirty })
+    }
+
+    @Test
     fun aGlassThatLeavesTakesItsLensWithItAndTheLastOneEvictsTheStrip() {
         val scene = bar()
         live(scene)
@@ -231,8 +344,8 @@ class GlassStripTest {
         assertFalse(strip.holdsPlain)
         assertTrue("the plain layer outlives the frame that retired it, for any glass that drew it earlier", strip.retiring > 0)
         assertNotSame(strip.node, plain)
-        scene.source.join(youngest, key, 7_008L, wanted)
-        assertEquals("and goes the next frame", 0, strip.retiring)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(50))
+        assertEquals("and goes after the next frame, even when no glass draws again", 0, strip.retiring)
     }
 
     @Test

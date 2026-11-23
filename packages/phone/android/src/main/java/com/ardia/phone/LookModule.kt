@@ -129,6 +129,7 @@ class LookModule : Module() {
                 "sourceRecordings" to LookActivity.sourceRecordings,
                 "blurLayerRenders" to LookActivity.blurLayerRenders,
                 "stripRecords" to LookActivity.stripRecords,
+                "stripRefreshes" to LookActivity.stripRefreshes,
                 "strips" to counts.strips,
                 "retints" to LookActivity.retints,
                 "restingLayerHolds" to LookActivity.restingLayerHolds,

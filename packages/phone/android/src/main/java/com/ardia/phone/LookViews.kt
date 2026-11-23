@@ -248,6 +248,8 @@ internal object LookActivity {
     @Volatile
     var stripRecords = 0L
     @Volatile
+    var stripRefreshes = 0L
+    @Volatile
     var retints = 0L
     @Volatile
     var restingLayerHolds = 0L
@@ -1385,6 +1387,7 @@ internal object FrostSources {
 
     fun register(id: String, view: FrostSourceView) {
         synchronized(sources) { sources[id] = WeakReference(view) }
+        view.invalidate()
         redrawFrostsNamed(id)
     }
 
@@ -1417,6 +1420,10 @@ internal object FrostSources {
 
     fun redrawFrostsOf(source: FrostSourceView) {
         for (frost in frosts()) if (frost.source != null && find(frost.source) === source) frost.invalidate()
+    }
+
+    fun wakeFrostsWaitingOn(source: FrostSourceView) {
+        for (frost in frostsOf(source)) if (frost.waitsOnSource()) frost.invalidate()
     }
 
     fun retintFrostsOf(source: FrostSourceView) {
@@ -1469,10 +1476,16 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
     internal fun backdrop(): DeckBackdropView? = finding.backdrop
 
     private val laidOut = ViewTreeObserver.OnGlobalLayoutListener {
+        val pageBefore = if (pageKnown) pageHeld else null
         pageKnown = false
         val before = knownFinding
         knownFinding = null
-        if (before != null && before != finding) FrostSources.redrawFrostsOf(this)
+        if ((before != null && before != finding) || (pageBefore != null && pageBefore != holdsPage)) FrostSources.redrawFrostsOf(this)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (recorder != null) FrostSources.redrawFrostsOf(this)
     }
 
     private val strips = HashMap<FrostStrip.Key, FrostStrip>()
@@ -1500,6 +1513,8 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
                 strip.release()
                 iterator.remove()
                 evicted = true
+            } else {
+                strip.wakeOneConsumer()
             }
         }
         val strip = strips.getOrPut(key) { FrostStrip(key) }
@@ -1521,11 +1536,29 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             if (strip.consumers.isEmpty()) {
                 strip.release()
                 iterator.remove()
+            } else {
+                strip.wakeOneConsumer()
             }
         }
-        if (!changed) return
-        publishStats()
-        strips.values.firstNotNullOfOrNull { strip -> strip.consumers.firstOrNull { it.samplesNow } }?.invalidate()
+        if (changed) publishStats()
+    }
+
+    private var stripsBehind = false
+
+    private val beforeDraw = ViewTreeObserver.OnPreDrawListener {
+        if (stripsBehind) refreshStrips()
+        true
+    }
+
+    override fun onDescendantInvalidated(child: View, target: View) {
+        super.onDescendantInvalidated(child, target)
+        if (strips.isNotEmpty()) stripsBehind = true
+    }
+
+    private fun refreshStrips() {
+        stripsBehind = false
+        val content = recorder ?: return
+        for (strip in strips.values) if (strip.refresh(content)) LookActivity.stripRefreshes += 1
     }
 
     private fun layout(strip: FrostStrip, drawingTime: Long, drawing: FrostView?) {
@@ -1580,10 +1613,12 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         super.onAttachedToWindow()
         sourceId?.let { FrostSources.register(it, this) }
         viewTreeObserver.addOnGlobalLayoutListener(laidOut)
+        viewTreeObserver.addOnPreDrawListener(beforeDraw)
     }
 
     override fun onDetachedFromWindow() {
         viewTreeObserver.removeOnGlobalLayoutListener(laidOut)
+        viewTreeObserver.removeOnPreDrawListener(beforeDraw)
         sourceId?.let { FrostSources.unregister(it, this) }
         stopRecording()
         super.onDetachedFromWindow()
@@ -1596,6 +1631,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             super.dispatchDraw(canvas)
             return
         }
+        val fresh = recorder == null
         val node = recorder ?: RenderNode("ardiaFrostSource").also { recorder = it }
         LookActivity.sourceRecordings += 1
         node.setPosition(0, 0, width, height)
@@ -1607,7 +1643,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             node.endRecording()
         }
         canvas.drawRenderNode(node)
-        FrostSources.redrawFrostsOf(this)
+        if (fresh) FrostSources.redrawFrostsOf(this) else FrostSources.wakeFrostsWaitingOn(this)
     }
 }
 
@@ -1668,7 +1704,7 @@ internal object FrostPage {
     }
 }
 
-internal class FrostStrip(val key: Key) {
+internal class FrostStrip(val key: Key, private val afterNextFrame: (() -> Unit) -> Unit = FrostStrip::afterNextFrame) {
     data class Key(val blurPx: Float, val saturation: Float, val scale: Float)
 
     val node = RenderNode("ardiaFrostStrip").apply { setUseCompositingLayer(true, null) }
@@ -1696,6 +1732,20 @@ internal class FrostStrip(val key: Key) {
         private set
 
     val holdsPlain: Boolean get() = plainNode != null
+
+    fun wakeOneConsumer() {
+        consumers.firstOrNull { it.samplesNow }?.invalidate()
+    }
+
+    var refreshes = 0L
+        private set
+
+    fun refresh(source: RenderNode): Boolean {
+        if (!effectSet || width <= 0 || height <= 0) return false
+        draw(source)
+        refreshes += 1
+        return true
+    }
 
     fun covers(area: Rect): Boolean = width > 0 && height > 0 && area.left >= left && area.top >= top && area.right <= left + width && area.bottom <= top + height
 
@@ -1748,10 +1798,16 @@ internal class FrostStrip(val key: Key) {
     val retiring: Int get() = retired.size
 
     private fun dropPlain() {
-        plainNode?.let { retired += it to laidOutAt }
-        plainFiltered?.let { retired += it to laidOutAt }
+        val gone = listOfNotNull(plainNode, plainFiltered)
         plainNode = null
         plainFiltered = null
+        if (gone.isEmpty()) return
+        gone.forEach { retired += it to laidOutAt }
+        afterNextFrame { discard(gone) }
+    }
+
+    private fun discard(nodes: List<RenderNode>) {
+        for (node in nodes) if (retired.removeAll { it.first === node }) node.discardDisplayList()
     }
 
     fun discardRetiredBefore(drawingTime: Long) {
@@ -1808,6 +1864,10 @@ internal class FrostStrip(val key: Key) {
     val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4 * (if (holdsPlain) 4 else 2)
 
     companion object {
+        fun afterNextFrame(work: () -> Unit) {
+            android.view.Choreographer.getInstance().postFrameCallback { work() }
+        }
+
         fun place(area: Rect, sourceWidth: Int, sourceHeight: Int, scale: Float): Rect {
             val step = scale.toInt().coerceAtLeast(1)
             val left = (area.left.coerceIn(0, sourceWidth) / step) * step
@@ -1959,6 +2019,8 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     }
 
     private fun effectivePageMode(): FrostSources.PageMode = if (pageLive()) FrostSources.PageMode.Live else FrostSources.pageMode
+
+    internal fun waitsOnSource(): Boolean = lastChoice?.path != FrostPage.Path.Live && wantsSource()
 
     internal fun wantsSource(): Boolean {
         if (!canBlur()) return false

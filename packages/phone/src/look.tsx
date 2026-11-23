@@ -73,6 +73,7 @@ export type LookCounts = {
   sourceRecordings?: number;
   blurLayerRenders?: number;
   stripRecords?: number;
+  stripRefreshes?: number;
   strips?: number;
   retints?: number;
   restingLayerHolds?: number;
