@@ -297,3 +297,42 @@ test("a snapshot shows an expanded group's members after the overflow menu, and 
   assert.deepEqual(snap.shown.get("a"), ["a"]);
   assert.deepEqual(snap.tabs.get("group:g"), ["m1", "m2", "over"]);
 });
+
+test("a change that cancels a chip's live offset stops its slide where it belongs, and keeps its fade", () => {
+  const own = createMotion();
+  const at = Date.now();
+  held(() => {
+    own.apply({ moves: [{ key: "b", from: 104 }], appears: ["c"], ghosts: [], at, stepped: false, pressed: [] });
+    own.apply({ moves: [{ key: "c", from: 104 }], appears: [], ghosts: [], at, stepped: false, pressed: [] });
+    for (const k of ["b", "c"]) own.motion.mount(own.motion.slide(k));
+    const b = own.motion.slide("b");
+    const c = own.motion.slide("c");
+    const before = shot(["a", "b", "c"]);
+    const after = shot(["a", "n", "b", "c"]);
+    const p = plan(before, after, own.slides, [-48, 1000], at, false);
+    assert.deepEqual(p.moves.filter((m) => m.key === "b" || m.key === "c"), [{ key: "b", from: 0 }, { key: "c", from: 0 }]);
+    own.apply(p);
+    assert.equal(b.value.__getValue(), 0);
+    assert.equal(own.motion.slide("b"), null, "b's slide is gone, not left running away from its place");
+    assert.equal(c.value.__getValue(), 0);
+    assert.equal(own.motion.slide("c"), c, "c keeps fading in");
+    assert.equal(c.fading, true);
+  });
+  animations.running = [];
+});
+
+test("the + button stops too when a change cancels its live offset", () => {
+  const own = createMotion();
+  const at = Date.now();
+  held(() => {
+    own.apply({ moves: [{ key: "~new", from: 104 }], appears: [], ghosts: [], at, stepped: false, pressed: [] });
+    own.motion.mount(own.motion.slide("~new"));
+    const before = shot(["a", "b"], { end: 208 });
+    const after = shot(["a", "n", "b"], { end: 312 });
+    const p = plan(before, after, own.slides, [-48, 1000], at, false);
+    assert.deepEqual(p.moves.find((m) => m.key === "~new"), { key: "~new", from: 0 });
+    own.apply(p);
+    assert.equal(own.motion.slide("~new"), null);
+  });
+  animations.running = [];
+});

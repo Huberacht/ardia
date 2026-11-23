@@ -104,14 +104,19 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     if (Math.abs(delta) < 0.5) continue;
     const live = slides.get(key);
     const from = offsetAt(live, now) + delta;
-    if (Math.abs(from) < 0.5) continue;
+    if (Math.abs(from) < 0.5) {
+      if (live?.moving || live?.pending) moves.push({ key, from: 0 });
+      continue;
+    }
     if (blocked || after.groups.has(key)) continue;
     const width = after.width.get(key)!;
     if (live?.moving || seen(after.x.get(key)!, width) || seen(before.x.get(key)!, width)) moves.push({ key, from });
   }
   if (!blocked && before.end !== null && after.end !== null && Math.abs(before.end - after.end) >= 0.5) {
-    const from = offsetAt(slides.get(NEW_TAB_SLOT), now) + before.end - after.end;
+    const live = slides.get(NEW_TAB_SLOT);
+    const from = offsetAt(live, now) + before.end - after.end;
     if (Math.abs(from) >= 0.5) moves.push({ key: NEW_TAB_SLOT, from });
+    else if (live?.moving || live?.pending) moves.push({ key: NEW_TAB_SLOT, from: 0 });
   }
   const appears = opened.filter((k) => !after.groups.has(k) && seen(after.x.get(k)!, after.width.get(k)!));
   const ghosts = closed.flatMap((k): StripGhost[] => {
