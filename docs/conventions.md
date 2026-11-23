@@ -220,7 +220,10 @@ writeDocument(DOC, versionedJson(data, VERSION));
   copy name, only one copy runs at a time, and a slow copy that succeeds late still opens the writes. An existence
   probe that fails counts as present: the stores call a file missing only on a confirmed "no such file" (on macOS,
   ENOENT with its folder present), so a permission error or a missing folder reads as unreadable and keeps the
-  writes held. A copy whose source has gone fails instead of passing.
+  writes held. A copy whose source has gone fails with `ERR_DOCUMENT_GONE`, and only when
+  the file is confirmed absent with its folder present. The gate then treats the document as missing: it recreates
+  it from the current state with `createDocument`, so a file that reappeared at that name fails the create and is
+  kept aside first. On Linux the copy never succeeds from cached text (#3872).
 - Until that copy lands, every write to the document waits. Quitting retries a copy that is waiting to retry and
   waits for each held document. Received synced tabs wait too, so a receipt never outruns the disk.
 - The session then comes back from a backup. A session that reads but throws while it is prepared or hydrated
@@ -231,7 +234,8 @@ writeDocument(DOC, versionedJson(data, VERSION));
 - Backups are immutable files with rising sequence numbers: `session-backup-<n>.json` (daily) and
   `session-premigration-<n>.json`, each holding `{backupAt, session}`. A new file takes the highest number on disk
   plus one and is created with `createDocument`, which fails with `ERR_DOCUMENT_EXISTS` rather than overwrite, and
-  then moves on to the next number. macOS links a fully synced temp file into place and syncs the folder, and its
+  then moves on to the next number. macOS links a fully synced temp file into place and syncs the folder (falling back from `F_FULLFSYNC` to `fsync`
+  only when the filesystem reports it unsupported), and its
   `copyDocument` syncs the copy and the folder too. Windows moves a flushed temp file without replacing, with
   WRITE_THROUGH. Linux checks in JS only (#3872). `listDocuments(prefix)` lists committed regular files only, never
   staged writes or directories, and `removeDocument` deletes files only. Restore, cadence and retention share one
@@ -243,7 +247,9 @@ writeDocument(DOC, versionedJson(data, VERSION));
     monotonic clock. A failed backup is tried again five
     minutes later.
   - A launch whose `session.json` still needs a migration saves a pre-migration snapshot first, under one reserved
-    name it retries until it lands (a name someone else took moves it to the next number), and the migrated session isn't written until then.
+    name it retries until it lands. Names someone else took move it on to the next number within the same attempt,
+    and a retry that finds its bytes already there asks the store to confirm they are durable (`syncDocument`) before
+    it counts. and the migrated session isn't written until then.
   - The 7 newest daily backups and the 3 newest snapshots are kept, counting every numbered file, malformed ones
     included (they go first). Pruning never removes the newest backup that
     loads whole or the file just written, and nothing is pruned in a launch that is recovering a damaged session.

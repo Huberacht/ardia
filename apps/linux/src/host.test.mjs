@@ -105,6 +105,17 @@ test("two creates of one name at once: the second is refused as taken, and listi
   await assert.rejects(documents.create("session-backup-1.json", "c"), (error) => error.code === "ERR_DOCUMENT_EXISTS");
 });
 
+test("a copy never succeeds from cached text: gone when the host has no file, refused when the host can't copy bytes", async () => {
+  let stored = null;
+  const { host, requests } = fixture(async (method) => (method.endsWith("readDocument") ? stored : null));
+  host.bootstrap.documents = { "session.json": "{" };
+  const documents = createHostDocuments(host);
+  await assert.rejects(documents.copy("session.json", "session-unreadable-1-1.json"), (error) => error.code === "ERR_DOCUMENT_GONE");
+  stored = "{";
+  await assert.rejects(documents.copy("session.json", "session-unreadable-1-1.json"), (error) => error.code === "ERR_UNSUPPORTED");
+  assert.ok(!requests.some(([method]) => method.endsWith("writeDocument")), "no copy was written from the cached text");
+});
+
 test("documents read back a write or removal before the native write finishes and roll back a failed one", async () => {
   let fail;
   const pending = new Promise((_, reject) => { fail = reject; });

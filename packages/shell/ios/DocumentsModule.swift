@@ -23,7 +23,14 @@ public class DocumentsModule: Module {
     Function("removeDocument") { (name: String) in try DocumentStore.remove(name) }
     AsyncFunction("copyDocument") { (name: String, copyName: String, promise: Promise) in
       try DocumentStore.copy(name, to: copyName) { error in
-        if let error { promise.reject("ERR_COPY_DOCUMENT", error.localizedDescription) } else { promise.resolve(nil) }
+        guard let error else { return promise.resolve(nil) }
+        promise.reject(error is DocumentStore.DocumentGone ? "ERR_DOCUMENT_GONE" : "ERR_COPY_DOCUMENT", error.localizedDescription)
+      }
+    }
+    AsyncFunction("syncDocument") { (name: String, promise: Promise) in
+      try DocumentStore.sync(name) { error in
+        guard let error else { return promise.resolve(nil) }
+        promise.reject(error is DocumentStore.DocumentGone ? "ERR_DOCUMENT_GONE" : "ERR_SYNC_DOCUMENT", error.localizedDescription)
       }
     }
     AsyncFunction("saveDocument") { (name: String, contents: String, promise: Promise) in

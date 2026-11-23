@@ -1,4 +1,4 @@
-import { documentSaved, writeDocument } from "../../platform/documents";
+import { createDocument, documentSaved, writeDocument } from "../../platform/documents";
 import { SESSION_DOCUMENT } from "./sessionDocument";
 import { cosmeticChange, doc, field, listed, type Doc } from "./documentJson";
 import { useBrowser, type BrowserState } from "../browser/store";
@@ -249,7 +249,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   };
   for (const [name, found] of [[SESSION_DOCUMENT, launch.session], [DOWNLOADS_DOCUMENT, launch.downloads]] as const) {
     const session = name === SESSION_DOCUMENT;
-    const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) });
+    const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, () => createDocument(name, DOCS.find((d) => d.name === name)!.json(useBrowser.getState())));
     if (gate) gates.set(name, gate);
   }
   if (launch.session.state === "usable" && launch.session.from < SESSION_VERSION) {

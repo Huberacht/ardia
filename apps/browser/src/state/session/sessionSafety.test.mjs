@@ -50,6 +50,9 @@ function clean() {
   stub.refusedCopies.on = false;
   stub.refusedCopies.of.clear();
   stub.refusedSaves.on = false;
+  stub.refusedSyncs.on = false;
+  stub.linkedButUnsynced.on = false;
+  stub.takenNames.clear();
   stub.heldCopies.on = false;
   stub.heldCopies.queue.length = 0;
   stub.asyncExists.on = false;
@@ -941,23 +944,83 @@ test("retention counts malformed numbered files too, and still never prunes the 
   assert.ok(left.every((name) => stub.docs.get(name).includes("session")), "every malformed file went");
 });
 
-test("a damaged session.json that vanishes before it can be copied isn't treated as gone: nothing is written", async () => {
+test("a damaged session.json deleted while its copy retries is recreated from the session, so tabs opened since launch survive quit", async () => {
   realSession();
   stub.docs.set("session.json", "{");
   stub.refusedCopies.on = true;
   const stop = startPersistence();
-  S().createWindow({ url: "https://new.example/" });
   await settle();
   stub.docs.delete("session.json");
   stub.refusedCopies.on = false;
-  const now = Date.now;
-  Date.now = () => now() + 120_000;
-  monotonicSkew += 120_000;
+  S().createWindow({ url: "https://opened-after-launch.example/" });
+  flushPersistence({ final: true });
+  await finishQuitSaves(3_000);
+  stop();
+  resumePersistence();
+  assert.ok(savedUrls().includes("https://opened-after-launch.example/"));
+  assert.equal(asideCopies().length, 0, "nothing to copy: the file was gone");
+});
+
+test("if a file reappears at that name before the session is recreated, it is kept aside, not overwritten", async () => {
+  realSession();
+  stub.docs.set("session.json", "{");
+  stub.refusedCopies.on = true;
+  const stop = startPersistence();
+  await settle();
+  stub.docs.delete("session.json");
+  stub.refusedCopies.on = false;
+  stub.takenNames.add("session.json");
   try {
+    S().createWindow({ url: "https://new.example/" });
+    monotonicSkew += 120_000;
     await settle();
   } finally {
-    Date.now = now;
+    stub.takenNames.clear();
   }
+  stub.docs.set("session.json", "{\"reappeared\":true}");
+  monotonicSkew += 120_000;
+  await settle();
   stop();
-  assert.ok(!stub.docs.has("session.json"), "the writes stay held");
+  assert.equal(stub.docs.get(asideCopies()[0]), "{\"reappeared\":true}");
+  assert.ok(savedUrls().includes("https://new.example/"));
+});
+
+test("a migration snapshot linked but not synced isn't trusted on retry until the store confirms it is durable", async () => {
+  const good = JSON.parse(realSession(["https://old-version.example/"]));
+  const old = JSON.stringify({ ...good, version: 9 });
+  stub.docs.set("session.json", old);
+  stub.linkedButUnsynced.on = true;
+  stub.refusedSyncs.on = true;
+  stub.syncedDocs.length = 0;
+  const stop = startPersistence();
+  await settle();
+  stub.linkedButUnsynced.on = false;
+  S().updateTab(Object.keys(S().tabs)[0], { title: "touched" });
+  monotonicSkew += 120_000;
+  await settle();
+  assert.equal(stub.docs.get("session.json"), old, "held: the snapshot's bytes are there but not confirmed durable");
+  assert.ok(stub.syncedDocs.some((name) => name.startsWith(MIGRATION_BACKUP)), "the retry asked the store to sync it");
+  stub.refusedSyncs.on = false;
+  monotonicSkew += 120_000;
+  await settle();
+  stop();
+  assert.equal(JSON.parse(stub.docs.get("session.json")).version, SESSION_VERSION);
+  assert.equal(backupsOf(MIGRATION_BACKUP).length, 1);
+});
+
+test("six occupied snapshot names that listing doesn't show are passed in one attempt, and a transient failure keeps the candidate", async () => {
+  clean();
+  const at = noonOf("2026-05-03");
+  const rolling = backups();
+  for (let i = 1; i <= 6; i++) stub.takenNames.add(`${MIGRATION_BACKUP}${i}.json`);
+  try {
+    stub.refusedSaves.on = true;
+    await rolling.beforeMigration(session(1), at).catch(() => {});
+    stub.refusedSaves.on = false;
+    await rolling.beforeMigration(session(1), at);
+  } finally {
+    stub.takenNames.clear();
+    stub.refusedSaves.on = false;
+  }
+  assert.deepEqual(backupsOf(MIGRATION_BACKUP), [`${MIGRATION_BACKUP}7.json`]);
 });

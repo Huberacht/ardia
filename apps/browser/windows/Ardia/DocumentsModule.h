@@ -266,6 +266,7 @@ inline bool RemoveFile(std::filesystem::path const &path) noexcept {
 }
 
 inline constexpr char kDocumentExists[] = "ERR_DOCUMENT_EXISTS";
+inline constexpr char kDocumentGone[] = "ERR_DOCUMENT_GONE";
 
 class DocumentStore {
  public:
@@ -407,9 +408,41 @@ class DocumentStore {
         if (!writing.owns_lock()) {
           message = std::string("The documents are busy");
         } else if (GetFileAttributesW(Files::LongPath(from).c_str()) == INVALID_FILE_ATTRIBUTES) {
-          message = Paths::Utf8(Files::ErrorText(GetLastError()));
+          DWORD error = GetLastError();
+          message = error == ERROR_FILE_NOT_FOUND ? std::string(kDocumentGone) : Paths::Utf8(Files::ErrorText(error));
         } else if (DWORD failure = Files::CopyAtomically(from, to); failure != ERROR_SUCCESS) {
           message = Paths::Utf8(Files::ErrorText(failure));
+        }
+      }
+      try {
+        done(message);
+      } catch (...) {
+      }
+    });
+  }
+
+  static void Sync(std::string_view name, Done done) noexcept {
+    auto url = Url(name);
+    if (!url) {
+      done(std::string("Invalid document name"));
+      return;
+    }
+    std::filesystem::path target = *url;
+    Queue().Async([target, done]() {
+      std::optional<std::string> message;
+      {
+        std::unique_lock<std::timed_mutex> writing(State().writing, std::chrono::seconds(10));
+        if (!writing.owns_lock()) {
+          message = std::string("The documents are busy");
+        } else {
+          HANDLE file = CreateFileW(Files::LongPath(target).c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+          if (file == INVALID_HANDLE_VALUE) {
+            DWORD error = GetLastError();
+            message = error == ERROR_FILE_NOT_FOUND ? std::string(kDocumentGone) : Paths::Utf8(Files::ErrorText(error));
+          } else {
+            if (!FlushFileBuffers(file)) message = Paths::Utf8(Files::ErrorText(GetLastError()));
+            CloseHandle(file);
+          }
         }
       }
       try {
@@ -627,13 +660,7 @@ struct DocumentsModule {
 
   REACT_METHOD(createDocument)
   void createDocument(std::string name, std::string contents, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
-    DocumentStore::Create(name, std::move(contents), [promise](std::optional<std::string> const &error) {
-      if (!error) return promise.Resolve();
-      winrt::Microsoft::ReactNative::ReactError failure;
-      failure.Code = *error == kDocumentExists ? kDocumentExists : "ERR_CREATE_DOCUMENT";
-      failure.Message = *error;
-      promise.Reject(failure);
-    });
+    DocumentStore::Create(name, std::move(contents), SettleCoded(promise, "ERR_CREATE_DOCUMENT"));
   }
 
   REACT_SYNC_METHOD(listDocuments)
@@ -641,13 +668,28 @@ struct DocumentsModule {
 
   REACT_METHOD(copyDocument)
   void copyDocument(std::string name, std::string copyName, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
-    DocumentStore::Copy(name, copyName, Settle(promise));
+    DocumentStore::Copy(name, copyName, SettleCoded(promise, "ERR_COPY_DOCUMENT"));
+  }
+
+  REACT_METHOD(syncDocument)
+  void syncDocument(std::string name, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
+    DocumentStore::Sync(name, SettleCoded(promise, "ERR_SYNC_DOCUMENT"));
   }
 
   REACT_SYNC_METHOD(removeDocument)
   bool removeDocument(std::string name) noexcept { return DocumentStore::Remove(name); }
 
  private:
+  static DocumentStore::Done SettleCoded(winrt::Microsoft::ReactNative::ReactPromise<void> const &promise, std::string fallback) noexcept {
+    return [promise, fallback](std::optional<std::string> const &error) {
+      if (!error) return promise.Resolve();
+      winrt::Microsoft::ReactNative::ReactError failure;
+      failure.Code = *error == kDocumentExists || *error == kDocumentGone ? *error : fallback;
+      failure.Message = *error;
+      promise.Reject(failure);
+    };
+  }
+
   static DocumentStore::Done Settle(winrt::Microsoft::ReactNative::ReactPromise<void> const &promise) noexcept {
     return [promise](std::optional<std::string> const &error) {
       if (!error) return promise.Resolve();

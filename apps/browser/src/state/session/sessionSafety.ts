@@ -1,4 +1,4 @@
-import { copyDocument, createDocument, documentExists, listDocuments, readDocument, removeDocument } from "../../platform/documents";
+import { copyDocument, createDocument, documentExists, listDocuments, readDocument, removeDocument, syncDocument } from "../../platform/documents";
 import { consentToken, type ConsentToken } from "../telemetry/consentPeriod";
 import { isFields, isString } from "../../lib/decode";
 import { readSaved, readSavedValue, type Migrations, type SavedObject, type SavedProblem } from "../../lib/savedDocument";
@@ -133,17 +133,26 @@ export function writeGate(task: () => Promise<void>, saveAgain: (delay: number) 
   };
 }
 
-export function keepAsideGate(name: string, found: FoundDocument, saveAgain: (delay: number) => void, noted: { unreadable: () => void; failed: () => void }): WriteGate | null {
+export const documentGone = (error: unknown) => isFields(error) && error.code === "ERR_DOCUMENT_GONE";
+
+export function keepAsideGate(
+  name: string,
+  found: FoundDocument,
+  saveAgain: (delay: number) => void,
+  noted: { unreadable: () => void; failed: () => void },
+  recreate: () => Promise<void>,
+): WriteGate | null {
   if (found.state !== "unusable" && found.state !== "unknown") return null;
   const aside = asideName(name);
-  if (found.state === "unusable") return writeGate(() => keepCopy(name, aside), saveAgain, noted.failed);
+  const keepOrRecreate = () => keepCopy(name, aside).catch((error: unknown) => (documentGone(error) ? recreate() : Promise.reject(error)));
+  if (found.state === "unusable") return writeGate(keepOrRecreate, saveAgain, noted.failed);
   let counted = false;
   const keep = () =>
     found.exists.then((exists) => {
       if (!exists) return;
       if (!counted) noted.unreadable();
       counted = true;
-      return keepCopy(name, aside);
+      return keepOrRecreate();
     });
   return writeGate(keep, saveAgain, noted.failed);
 }
@@ -317,29 +326,31 @@ export function rollingBackups(rules: BackupRules): RollingBackups {
     beforeMigration: (sessionText, now = Date.now()) => {
       const consent = consentToken();
       migration ??= { name: `${MIGRATION_BACKUP}${nextSeq(MIGRATION_BACKUP)}.json`, json: backupJson(now, sessionText.trim()) };
-      const { name, json } = migration;
-      writing = true;
-      let held: unknown = null;
-      try {
-        held = readDocument(name);
-      } catch {
-        held = null;
-      }
       const reserved = migration;
-      const attempt =
-        held === json
-          ? Promise.resolve(name)
-          : createOnce(name, json).then(
-              () => name,
-              (error: unknown) => {
-                if (!nameTaken(error)) throw error;
-                return createFresh(MIGRATION_BACKUP, json, Math.max(Number(SEQ.exec(name.slice(MIGRATION_BACKUP.length))?.[1] ?? 0) + 1, nextSeq(MIGRATION_BACKUP))).then((fresh) => {
-                  reserved.name = fresh;
-                  return fresh;
-                });
-              },
-            );
-      return attempt.then((landedName) => landed(MIGRATION_BACKUP, MIGRATION_BACKUPS_KEPT, landedName, now, true, consent), failed);
+      writing = true;
+      const seqOf = (name: string) => Number(SEQ.exec(name.slice(MIGRATION_BACKUP.length))?.[1] ?? 0);
+      const attempt = async (): Promise<string> => {
+        for (let tries = 1; ; tries++) {
+          let held: unknown = null;
+          try {
+            held = readDocument(reserved.name);
+          } catch {
+            held = null;
+          }
+          if (held === reserved.json) {
+            await syncDocument(reserved.name);
+            return reserved.name;
+          }
+          try {
+            await createOnce(reserved.name, reserved.json);
+            return reserved.name;
+          } catch (error) {
+            if (!nameTaken(error) || tries >= CREATE_ATTEMPTS * 4) throw error;
+            reserved.name = `${MIGRATION_BACKUP}${Math.max(seqOf(reserved.name) + 1, nextSeq(MIGRATION_BACKUP))}.json`;
+          }
+        }
+      };
+      return attempt().then((landedName) => landed(MIGRATION_BACKUP, MIGRATION_BACKUPS_KEPT, landedName, now, true, consent), failed);
     },
   };
 }

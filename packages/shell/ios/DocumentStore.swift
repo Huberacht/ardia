@@ -61,7 +61,19 @@ enum DocumentStore {
     let fd = open(path, O_RDONLY)
     guard fd >= 0 else { return false }
     defer { Darwin.close(fd) }
-    return fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0
+    if fcntl(fd, F_FULLFSYNC) == 0 { return true }
+    let unsupported = errno == ENOTSUP || errno == EINVAL
+    return unsupported && fsync(fd) == 0
+  }
+
+  struct DocumentGone: Error {}
+
+  static func sync(_ name: String, done: @escaping Done) throws {
+    let target = try url(name)
+    queue.async {
+      if confirmedMissing(target) { return done(DocumentGone()) }
+      done(regularFile(target) && durable(target.path) && durable(target.deletingLastPathComponent().path) ? nil : CocoaError(.fileWriteUnknown))
+    }
   }
 
   private static func regularFile(_ url: URL) -> Bool {
@@ -142,6 +154,7 @@ enum DocumentStore {
     let source = try url(name)
     let target = try url(copyName)
     queue.async {
+      if confirmedMissing(source) { return done(DocumentGone()) }
       do {
         let staging = target.deletingLastPathComponent().appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
         try FileManager.default.copyItem(at: source, to: staging)

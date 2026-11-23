@@ -66,6 +66,10 @@ export const copyDocument = async (name: string, copyName: string) => {
   const contents = documents.get(name);
   if (contents !== undefined) documents.set(copyName, contents);
 };
+export const syncDocument = async (name: string) => {
+  if (hostDocuments) return hostDocuments.sync(name);
+  if (!documents.has(name)) throw Object.assign(new Error("Document gone"), { code: "ERR_DOCUMENT_GONE" });
+};
 export const createDocument = async (name: string, contents: string) => {
   if (hostDocuments) return hostDocuments.create(name, contents);
   if (documents.has(name)) throw Object.assign(new Error("Document exists"), { code: "ERR_DOCUMENT_EXISTS" });
@@ -104,7 +108,7 @@ const claimHostFocus = async (generation: number, tag: number) => {
 };
 const openHostWindow = ardiaHost ? createHostWindowOpener(ardiaHost, () => useBrowser.getState(), (event) => emitWindowEvent(event), (id) => dropRefusedWindow(useBrowser, id)) : undefined;
 const pickHostFolder = ardiaHost ? createFolderPicker(ardiaHost, (options) => linuxHostDialogs().confirm(options).then((answer) => answer.confirmed)) : undefined;
-const hostShellLocals: Record<string, unknown> = { readDocument, documentExists, writeDocument, saveDocument, documentSaved, removeDocument, copyDocument, listDocuments, createDocument, claimFocus: claimHostFocus, openWindow: openHostWindow, pickFolder: pickHostFolder };
+const hostShellLocals: Record<string, unknown> = { readDocument, documentExists, writeDocument, saveDocument, documentSaved, removeDocument, copyDocument, listDocuments, createDocument, syncDocument, claimFocus: claimHostFocus, openWindow: openHostWindow, pickFolder: pickHostFolder };
 const hostAppLocals: Record<string, unknown> = { systemInfo, launchConfig };
 provideNativeModuleProvider((module, method) => ardiaHost ? (module === "ArdiaShell" ? hostShellLocals[method] : module === "ArdiaApp" ? hostAppLocals[method] : undefined) : undefined);
 const shellLocals: Record<string, unknown> = {
