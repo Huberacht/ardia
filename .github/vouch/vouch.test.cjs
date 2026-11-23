@@ -786,8 +786,8 @@ test("the gate passes an unvouched author's pull request labelled run-ci", async
   assert.equal(result.run, true);
 });
 
-test("the gate's first attempt reads the payload and calls no API; a re-run reads the labels again", async () => {
-  for (const author of ["stranger", "alice", "shivamhwp", "renovate[bot]", "mallory"]) {
+test("the gate's first attempt reads the payload and calls no API for a trusted or denounced author; a re-run reads the labels again", async () => {
+  for (const author of ["alice", "shivamhwp", "renovate[bot]", "mallory"]) {
     const github = fakeGithub({ pulls: [pr(42, author)] });
     await gateFor({ author, association: "CONTRIBUTOR", github });
     assert.deepEqual(github.calls, [], author);
@@ -803,6 +803,13 @@ test("a run-ci label in the event is confirmed live, so a maintainer who took it
   const { result } = await gateFor({ author: "stranger", association: "CONTRIBUTOR", payloadLabels: ["run-ci"], github: removed });
   assert.equal(result.run, false);
   assert.deepEqual(removed.calls.map((call) => call.name), ["pulls.get"]);
+});
+
+test("a run-ci label added after the event, while the run waited in the queue, still lets the first attempt build", async () => {
+  const added = fakeGithub({ pulls: [pr(42, "stranger", { labels: ["run-ci"], association: "CONTRIBUTOR" })] });
+  const { result } = await gateFor({ author: "stranger", association: "CONTRIBUTOR", labels: ["run-ci"], payloadLabels: [], github: added });
+  assert.equal(result.run, true);
+  assert.deepEqual(added.calls.map((call) => call.name), ["pulls.get"]);
 });
 
 test("the gate passes a re-run started by a user with write or admin", async () => {

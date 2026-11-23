@@ -1415,11 +1415,11 @@ async function gate(args) {
         actor,
         actorPermission: actorDecides ? await permissionOf(session, actor) : "none",
       });
-      return { ...outcome, byLabel: outcome.run && !TRUSTED_STATUSES.includes(status) };
+      return { ...outcome, unvouched: status === "unknown" };
     };
     const live = async () => (await github.rest.pulls.get({ ...repo, pull_number: context.payload.pull_request.number })).data;
     let outcome = await decide(runAttempt > 1 ? await live() : context.payload.pull_request);
-    if (runAttempt === 1 && outcome.byLabel) outcome = await decide(await live());
+    if (runAttempt === 1 && outcome.unvouched) outcome = await decide(await live());
     decision = { run: outcome.run, reason: outcome.reason };
   }
   core.setOutput("run", decision.run ? "true" : "false");
