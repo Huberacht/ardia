@@ -23,8 +23,6 @@ import { dropTabsInProfile, switchProfile } from "../../state/browser/actions";
 
 export class DragController extends DragTargeting {
   protected arriving: { key: string; from: number } | null = null;
-  beforeMeasure: (() => void) | null = null;
-  rowsArrived = async () => void (this.session?.measured && (await this.remeasure(this.session)));
 
   create(key: string): Item {
     const arriving = this.arriving?.key === key ? this.arriving : null;
@@ -61,7 +59,6 @@ export class DragController extends DragTargeting {
   async begin(key: string, x: number, y: number) {
     const item = this.items.get(key);
     if (!item || item.kind === "tail") return;
-    this.beforeMeasure?.();
     const lead = tabCell(item) ? item.tabIds[0] : undefined;
     const moving = lead ? movingTabsFrom(lead) : [];
     const sources = moving.length > 1 ? [...this.items.values()].filter((i) => tabCell(i) && i.tabIds.some((id) => moving.includes(id))) : [item];
@@ -107,7 +104,6 @@ export class DragController extends DragTargeting {
 
   async beginExternal(count: number, x: number, y: number) {
     if (this.active && !this.session!.external) return;
-    this.beforeMeasure?.();
     this.reset();
     this.setGhost(null);
     const session = (this.session = newDragSession([this.create("external")], { x, y }, this.scrollY));

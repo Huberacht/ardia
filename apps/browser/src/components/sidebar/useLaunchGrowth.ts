@@ -1,14 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { View } from "react-native";
 import type { DragController } from "./dragController";
-import { launchRowsHolding, launchRowsStarted, noteLaunchRowsCancelled, noteLaunchRowsDeferred, noteLaunchRowsMounted, releaseLaunchRows, startLaunchRows, useLaunchRowsHolding } from "../../state/sidebar/launchRows";
+import { RowAwareDragController } from "./rowAwareDragController";
+import { joinsLaunchRows, launchRowsHolding, launchRowsStarted, noteLaunchRowsCancelled, noteLaunchRowsDeferred, noteLaunchRowsMounted, releaseLaunchRows, startLaunchRows, useLaunchRowsHolding } from "../../state/sidebar/launchRows";
 
 type LaunchGrowthInput = { lazy: boolean; current: boolean; total: number; shownRows: number; controller: DragController | undefined };
 
 export function useLaunchGrowth(windowId: string, { lazy, current, total, shownRows, controller }: LaunchGrowthInput) {
   const holdingNow = useLaunchRowsHolding(windowId);
   const holding = lazy && holdingNow;
-  const [launch] = useState(() => lazy && current && !launchRowsStarted());
+  const [launch] = useState(() => lazy && current && joinsLaunchRows(windowId));
   const list = useRef<View | null>(null);
   const counted = useRef(false);
   const shown = useRef(shownRows);
@@ -24,7 +25,7 @@ export function useLaunchGrowth(windowId: string, { lazy, current, total, shownR
       noteLaunchRowsDeferred(total - shown.current);
       counted.current = true;
     };
-    if (list.current) list.current.measure(contentShown);
+    if (list.current && !launchRowsStarted()) list.current.measure(contentShown);
     else contentShown();
     return () => {
       live = false;
@@ -32,7 +33,7 @@ export function useLaunchGrowth(windowId: string, { lazy, current, total, shownR
   }, []);
 
   useLayoutEffect(() => {
-    if (!controller || !holding) return;
+    if (!(controller instanceof RowAwareDragController) || !holding) return;
     const release = () => releaseLaunchRows(windowId, "drag");
     controller.beforeMeasure = release;
     return () => {
@@ -41,7 +42,7 @@ export function useLaunchGrowth(windowId: string, { lazy, current, total, shownR
   }, [controller, holding, windowId]);
 
   useEffect(() => {
-    if (launch && controller?.active) void controller.rowsArrived();
+    if (launch && controller instanceof RowAwareDragController && controller.active) controller.rowsArrived();
   }, [shownRows]);
 
   useEffect(() => {

@@ -78,14 +78,6 @@ test("a page already loading when the hold starts is waited on, not left to the 
   assert.equal(rows.launchRowsReport().release, "loaded");
 });
 
-test("a page that already finished loading holds nothing", () => {
-  hydrate();
-  markTabReady("at0");
-  rows.startLaunchRows();
-  assert.equal(rows.launchRowsHolding("a"), false);
-  assert.equal(rows.launchRowsSettled(), true);
-});
-
 test("a page still loading lets the rows in at the deadline", () => {
   hydrate();
   rows.startLaunchRows();
@@ -182,4 +174,34 @@ test("scrolling one window's sidebar lets only that window's rows in", async () 
   assert.equal(rows.launchRowsHolding("a"), true);
   assert.equal(rows.launchRowsHolding("b"), false);
   assert.equal(rows.launchRowsReport().release, "scroll");
+});
+
+test("a restored tab whose view is attached but hasn't reported a load still holds, until its load or the deadline", () => {
+  hydrate();
+  markTabReady("at0");
+  rows.startLaunchRows();
+  assert.equal(rows.launchRowsHolding("a"), true);
+  S().updateLive("at0", { isLoading: true });
+  S().updateLive("at0", { isLoading: false });
+  assert.equal(rows.launchRowsHolding("a"), false);
+  assert.equal(rows.launchRowsReport().release, "loaded");
+});
+
+test("closing a window whose page is still loading isn't counted as that page loading", () => {
+  hydrate({ urls: { a: undefined, b: undefined } });
+  rows.startLaunchRows();
+  S().updateLive("bt0", { isLoading: true });
+  S().closeWindow("b");
+  assert.equal(rows.launchRowsHolding("b"), false);
+  assert.equal(rows.launchRowsReport().release, null);
+});
+
+test("a restored window's list that mounts after the hold started still joins it; a new window or a released one doesn't", () => {
+  hydrate({ urls: { a: undefined, b: undefined } });
+  assert.equal(rows.joinsLaunchRows("a"), true, "before the first content every first list joins");
+  rows.startLaunchRows();
+  assert.equal(rows.joinsLaunchRows("b"), true);
+  assert.equal(rows.joinsLaunchRows("new"), false);
+  rows.releaseLaunchRows("b", "scroll");
+  assert.equal(rows.joinsLaunchRows("b"), false);
 });

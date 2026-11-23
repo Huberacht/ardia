@@ -10,6 +10,7 @@ import { LANDING, markNow, noDragMarks, SOURCE, SPLIT_LEFT, SPLIT_RIGHT, watchMa
 import { useKeyed } from "../../state/browser/keyedWatch";
 import { cellKey, dragItemStyle, restingTail, type Ghost, type ItemSpec } from "./dragModel";
 import { DragController } from "./dragController";
+import { RowAwareDragController } from "./rowAwareDragController";
 import { DragItems } from "./dragItems";
 import { onAppEvent } from "../../state/drag/dragNative";
 import { WindowDropGlow } from "../tabstrip/WindowDropGlow";
@@ -23,7 +24,7 @@ export const FoldEntryContext = createContext(false);
 
 
 export function DragProvider({ children }: { children: (ghost: Ghost | null, controller: DragController) => ReactNode }) {
-  const controller = useMemo(() => new DragController(), []);
+  const controller = useMemo(() => new RowAwareDragController(), []);
   const items = useMemo(() => new DragItems(controller, true), [controller]);
   const [ghost, setGhost] = useState<Ghost | null>(null);
   controller.setGhost = setGhost;

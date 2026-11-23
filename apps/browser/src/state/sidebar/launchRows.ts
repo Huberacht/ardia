@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { activeTabId } from "../browser/model";
 import { liveOf, onLiveChange } from "../tabs/tabLive";
-import { isTabReady } from "../tabs/pageState";
 import { isWebPageUrl } from "../../lib/url";
 import { jsStartedAt } from "../telemetry/jsStart";
 
@@ -25,6 +24,8 @@ export const useLaunchRowsHolding = (windowId: string) => useLaunchRows((s) => h
 export const launchRowsHolding = (windowId: string) => holdingIn(useLaunchRows.getState(), windowId);
 
 export const launchRowsStarted = () => useLaunchRows.getState().started;
+
+export const joinsLaunchRows = (windowId: string) => !launchRowsStarted() || launchRowsHolding(windowId);
 
 const windows = new Map<string, Held>();
 let startedAt: number | null = null;
@@ -61,9 +62,11 @@ function launchTabOf(s: BrowserState, windowId: string): string | null {
 function watch() {
   stops.push(
     onLiveChange((id, live) => {
+      const s = useBrowser.getState();
       for (const [windowId, held] of windows) {
         if (held.tab !== id) continue;
-        if (live.isLoading) held.loading = true;
+        if (!s.windows[windowId] || s.tabs[id]?.windowId !== windowId) held.tab = null;
+        else if (live.isLoading) held.loading = true;
         else if (held.loading) releaseLaunchRows(windowId, "loaded");
       }
     }),
@@ -88,9 +91,7 @@ export function startLaunchRows() {
       const w = s.windows[windowId];
       if (!w || w.kind === "small") continue;
       const tab = launchTabOf(s, windowId);
-      const live = tab ? liveOf(tab) : null;
-      if (tab && live && !live.isLoading && isTabReady(tab)) continue;
-      windows.set(windowId, { tab, profileId: w.profileId, loading: !!live?.isLoading });
+      windows.set(windowId, { tab, profileId: w.profileId, loading: !!tab && liveOf(tab).isLoading });
       held[windowId] = true;
     }
   }
