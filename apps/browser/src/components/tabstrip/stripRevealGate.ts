@@ -35,21 +35,26 @@ export function commandScroll(from: number, to: number, animated: boolean, until
   return { baseline: from, command: { from, to: Math.max(0, to), animated, furthest: 0, until } };
 }
 
-export function observeScroll(intent: ScrollIntent, x: number, max: number, now: number): { intent: ScrollIntent; user: boolean } {
+export function observeScroll(intent: ScrollIntent, x: number, previous: number, max: number, now: number): { intent: ScrollIntent; user: boolean } {
   const end = Math.max(0, max);
-  const command = intent.command;
+  const clamped = (previous > end + 0.5 && Math.abs(x - end) <= 0.5) || (previous < -0.5 && Math.abs(x) <= 0.5);
+  if (clamped) return { intent: { ...intent, baseline: x }, user: false };
+  const command = intent.command && now <= intent.command.until ? intent.command : null;
   if (!command) {
-    if (intent.baseline > end + 0.5 && Math.abs(x - end) < 1) return { intent: scrollIntentAt(x), user: false };
-    if (Math.abs(x - intent.baseline) >= 1) return { intent: scrollIntentAt(x), user: true };
-    return { intent, user: false };
+    const baseline = intent.command ? previous : intent.baseline;
+    return Math.abs(x - baseline) >= 1 ? { intent: scrollIntentAt(x), user: true } : { intent: intent.command ? scrollIntentAt(baseline) : intent, user: false };
   }
   const to = Math.min(command.to, end);
-  if (Math.abs(x - to) < 0.5) return { intent: scrollIntentAt(to), user: false };
-  if (!command.animated || now > command.until) return { intent: scrollIntentAt(x), user: true };
+  if (Math.abs(x - to) <= 1) return { intent: scrollIntentAt(x), user: false };
+  if (!command.animated) return { intent: scrollIntentAt(x), user: true };
   const way = Math.abs(to - command.from);
   const progress = (x - command.from) * Math.sign(to - command.from);
   if (progress < -0.5 || progress > way + 0.5 || progress < command.furthest - 1) return { intent: scrollIntentAt(x), user: true };
   return { intent: { ...intent, command: { ...command, furthest: Math.max(command.furthest, progress) } }, user: false };
+}
+
+export function userTookOver(first: FirstReveal, activeId: string): { first: FirstReveal; revealed: string } {
+  return { first: endSettling(first), revealed: activeId };
 }
 
 export type PendingReveal = { tabId: string; scrolls: number };

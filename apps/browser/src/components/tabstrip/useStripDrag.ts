@@ -166,6 +166,7 @@ export function useStripDrag(item: StripDrag) {
       if (drag.current.crossed) latest.current.cross?.clear();
       settleRoom(latest.current.geometry);
       if (!latest.current.local) cancelTabDrag();
+      endHeldTabPress([], null);
     },
     [],
   );

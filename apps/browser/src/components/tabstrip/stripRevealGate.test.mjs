@@ -56,9 +56,11 @@ const { commandScroll, endSettling, observeScroll, revealStillWanted, scrollInte
 
 const run = (intent, steps, max = 6000) => {
   let users = 0;
-  for (const [x, now] of steps) {
-    const step = observeScroll(intent, x, max, now);
+  let previous = intent.command ? intent.command.from : intent.baseline;
+  for (const [x, now, end = max] of steps) {
+    const step = observeScroll(intent, x, previous, end, now);
     intent = step.intent;
+    previous = x;
     if (step.user) users++;
   }
   return { intent, users };
@@ -96,7 +98,7 @@ test("a reverse wheel step during an animated reveal counts as the user's", () =
 test("a wheel step during the first reveal's own scroll cancels the measuring recheck", () => {
   const first = firstOverflowReveal(FIRST_REVEAL, at({ measuring: true, now: 1000 }));
   assert.equal(first.reveal, true);
-  const wheel = observeScroll(commandScroll(0, 4585, false, 1080), 4625, 6000, 1020);
+  const wheel = observeScroll(commandScroll(0, 4585, false, 1080), 4625, 4585, 6000, 1020);
   assert.equal(wheel.user, true);
   const taken = endSettling(first.state);
   assert.equal(firstOverflowReveal(taken, at({ measuring: false, userScrollAt: -Infinity, now: 1200 })).reveal, false, "the group finishing its measure doesn't undo the user's scroll");
@@ -117,4 +119,39 @@ test("a strip that first overflows while a tab press is held reveals once the pr
   assert.equal(held.reveal, false);
   assert.equal(held.state, FIRST_REVEAL, "the first reveal stays pending");
   assert.equal(firstOverflowReveal(held.state, at({ now: 1400 })).reveal, true);
+});
+
+test("a jump that lands within a point of its target, as native rounding leaves it, is the strip's own", () => {
+  assert.equal(run(commandScroll(0, 4585, false, 1250), [[4585.5, 1010]]).users, 0);
+  assert.equal(run(commandScroll(0, 4585, false, 1250), [[4586, 1010]]).users, 0);
+  assert.equal(run(commandScroll(0, 4585, false, 1250), [[4587, 1010]]).users, 1);
+});
+
+test("a layout clamp to the strip's new end is no one's scroll, even with another jump of the strip's pending", () => {
+  const pending = commandScroll(3000, 1000, false, 1250);
+  const clamp = run(pending, [[2400, 1010, 2400]]);
+  assert.equal(clamp.users, 0);
+  assert.notEqual(clamp.intent.command, null, "the pending jump still counts as the strip's when it lands");
+  assert.equal(run(pending, [[2400, 1010, 2400], [1000, 1020, 2400]]).users, 0);
+  assert.equal(run(scrollIntentAt(-20), [[0, 1000]]).users, 0, "back to the start after an inset change");
+});
+
+test("a scroll that lands on an expired command's target is the user's", () => {
+  const glide = commandScroll(100, 900, true, 1600);
+  const stalled = run(glide, [[300, 1100], [500, 1200]]);
+  assert.equal(run(stalled.intent, [[900, 5000]]).users, 1);
+});
+
+test("a user scroll during a held close drops the reveal that would run once the pointer leaves", async () => {
+  const { userTookOver } = await import("./stripRevealGate.ts");
+  assert.equal(selectionReveal("t5", "t6", true, true, false), "none", "held while the pointer is in the strip");
+  const took = userTookOver(FIRST_REVEAL, "t6");
+  assert.equal(selectionReveal(took.revealed, "t6", false, true, false), "none", "the pointer leaving doesn't snap the strip back");
+  assert.equal(selectionReveal("t5", "t6", false, true, false), "run", "without the scroll the reveal runs on leaving");
+});
+
+test("a group header drag counts as a strip drag for the reveal gates", () => {
+  assert.equal(firstOverflowReveal(FIRST_REVEAL, at({ dragging: true })).reveal, false);
+  assert.equal(firstOverflowReveal(FIRST_REVEAL, at({ dragging: true })).state, FIRST_REVEAL, "the first reveal waits for the drag to end");
+  assert.equal(selectionReveal("a", "b", false, true, true), "drop");
 });

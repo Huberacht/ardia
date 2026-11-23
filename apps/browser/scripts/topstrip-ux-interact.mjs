@@ -183,6 +183,29 @@ export async function runInteractions(ctx) {
       record(`revealYieldsToScroll${name}`, { ...r, dy, snappedBack: r.settled !== r.afterWheel });
     }
 
+    if (want("closeGhostScrolled")) {
+      const trials = [];
+      for (const settle of [1, 2, 3, 4]) {
+        await prepare("c120", WIDTH, "mid");
+        const m0 = await measure("c120", "cg0", { hits: false });
+        const scroll = await run(`return Math.round(globalThis.topStripPages["c120|default"].scroll().x);`);
+        const target = m0.detail.favs.find(([t, x, full]) => full && /^t\d+$/.test(t) && t !== m0.active.split("-").pop() && x > 400 && x < 1000);
+        const colour = ctx.COLOURS[Number(target[0].slice(1))];
+        const shot = join(out, "frames", `close-ghost-scrolled-${settle}.png`);
+        await run(`st().closeTabs(["c120-${target[0]}"]); return frames(${settle}).then(() => D.devSnapshotWindow("c120", ${JSON.stringify(shot)}, false));`);
+        const img = ctx.readPng(shot);
+        const k = img.width / WIDTH;
+        const px = (x, y) => { const i = (Math.round(y * k) * img.width + Math.round(x * k)) * 4; return [img.rgba[i], img.rgba[i + 1], img.rgba[i + 2]]; };
+        const far = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]);
+        const bg = px(target[1] - 6, 6);
+        let ink = 0;
+        for (let y = 12; y < 30; y++) for (let x = target[1] - 2; x < target[1] + 18; x++) { const c = px(x, y); if (far(c, colour) < far(c, bg)) ink++; }
+        trials.push({ settle, scroll, target: target[0], ink });
+        await run(`ac.runCommand({ command: "reopenClosedTab", arg: null, windowId: "c120" }); return wait(1200);`);
+      }
+      record("closeGhostScrolled", { seen: trials.filter((t) => t.ink > 40).length, of: trials.length, trials });
+    }
+
     if (want("groupEdgeDrag")) {
       await prepare("c120", WIDTH, 0);
       const group = await run(`const id = st().createGroup(["c120-t4", "c120-t5", "c120-t6", "c120-t7"], { name: "Edge" }); st().updateGroup(id, { collapsed: false }); return wait(1200).then(() => id);`);
