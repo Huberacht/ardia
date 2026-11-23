@@ -191,7 +191,8 @@ abstract class LookView(context: Context, appContext: AppContext) : ExpoView(con
 
     open fun update() = invalidate()
 
-    private var reportedFailure = false
+    internal var drawFailures = 0
+        private set
 
     final override fun onDraw(canvas: Canvas) = drawSafely(canvas)
 
@@ -203,8 +204,8 @@ abstract class LookView(context: Context, appContext: AppContext) : ExpoView(con
         } catch (failure: Exception) {
             canvas.restoreToCount(saved)
             fillBounds(canvas, fallbackColor())
-            if (!reportedFailure) {
-                reportedFailure = true
+            drawFailures += 1
+            if (drawFailures == 1) {
                 android.util.Log.w("PAGELAB", "PAGELAB look ${javaClass.simpleName} could not draw at ${width}x$height and fell back to a flat colour: ${failure.javaClass.simpleName}: ${failure.message}")
             }
         }

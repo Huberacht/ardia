@@ -30,7 +30,7 @@ class LookModule : Module() {
             readGlassLaunch()
             val context = appContext.reactContext
             val blurs = Frosting.isBlurSupported && context != null && !LookSwitch.isOff(context) && !LookBudget.isDegraded(context)
-            LiquidGlassRules.render(android.os.Build.VERSION.SDK_INT, classic = false, flat = GlassLaunch.flat, blurs = blurs).raw
+            LiquidGlassRules.render(android.os.Build.VERSION.SDK_INT, classic = false, flat = GlassLaunch.flat || GlassShaders.lens.failed, blurs = blurs).raw
         }
 
         OnCreate {
@@ -40,7 +40,10 @@ class LookModule : Module() {
             systemLookObserver = SystemLookObserver(context.applicationContext) { systemLook.check() }.also { it.start() }
         }
 
-        OnActivityEntersForeground { systemLook.check() }
+        OnActivityEntersForeground {
+            systemLook.check()
+            GlassShaders.retryFailed()
+        }
 
         OnDestroy { systemLookObserver?.stop() }
 
@@ -48,6 +51,7 @@ class LookModule : Module() {
             check(PhoneLab.isOn) { "the page frost mode is a lab switch" }
             FrostSources.pageMode = FrostSources.PageMode.entries.firstOrNull { it.raw == mode } ?: FrostSources.PageMode.Live
             FrostSources.frosts().forEach { it.invalidate() }
+            FrostSources.allSources().forEach { it.invalidate() }
             FrostSources.pageMode.raw
         }
 

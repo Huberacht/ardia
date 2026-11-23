@@ -333,6 +333,11 @@ internal object GlassShaders {
     var makeLens: ((LiquidGlassRules.LensShape) -> RenderEffect)? = null
     var makeRim: (() -> RuntimeShader)? = null
 
+    fun retryFailed() {
+        if (lens.failed) lens = ShaderSlot("lens")
+        if (rim.failed) rim = ShaderSlot("rim")
+    }
+
     fun reset() {
         lens = ShaderSlot("lens")
         rim = ShaderSlot("rim")

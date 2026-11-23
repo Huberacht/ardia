@@ -72,11 +72,27 @@ class GlassShaderFailureTest {
         val view = glass()
         recorded(view)
         recorded(view)
+        assertEquals("a hardware draw with a failed rim never takes the square fallback", 0, view.drawFailures)
         val second = drawn(view)
         assertEquals("the corner stays clear: no square fallback", 0, Color.alpha(second.getPixel(2, 2)))
         assertTrue("the round glass is drawn", Color.alpha(second.getPixel(50, 50)) > 0)
         assertEquals("the rim's failure is kept, not retried", 1, rimTries)
         assertEquals(1, GlassShaders.rim.failures)
+    }
+
+    @Test
+    fun aFailedShaderIsTriedAgainWhenTheAppComesBackToTheForeground() {
+        val view = glass()
+        recorded(view)
+        assertNull(view.lensEffect(66f, 5f))
+        assertEquals(1, rimTries)
+        assertEquals(1, lensTries)
+        GlassShaders.retryFailed()
+        recorded(view)
+        assertNull(view.lensEffect(66f, 5f))
+        assertEquals("the rim is built again after a return to the foreground", 2, rimTries)
+        assertEquals("the lens is built again after a return to the foreground", 2, lensTries)
+        assertEquals(0, view.drawFailures)
     }
 
     @Test
@@ -97,6 +113,8 @@ class GlassShaderFailureTest {
         assertNull(view.lensEffect(66f, 5f))
         assertEquals(1, lensTries)
         assertEquals(1, GlassShaders.lens.failures)
+        recorded(view)
+        assertEquals("a hardware draw with a failed lens never takes the square fallback", 0, view.drawFailures)
         val again = drawn(view)
         assertEquals(0, Color.alpha(again.getPixel(2, 2)))
         assertTrue(Color.alpha(again.getPixel(50, 50)) > 0)
