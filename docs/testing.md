@@ -319,10 +319,14 @@ lose or leak data, or when the bug is invisible by eye and has shipped before.
 ## Promises: the tests that guard closed bugs
 
 `scripts/ci/promises.lock` holds each regression test that guards a closed bug to what it was when the bug closed.
-One tab-separated line per promise: the closed issue, a hash of the test's source, the test file and the test's name
-(its describe path, `outer › inner`, when the name alone isn't unique in the file). The hash ignores whitespace,
-comments, semicolons, trailing commas and quote style, so reformatting is free. node:test `test(…)` and `it(…)` in
-JavaScript and TypeScript, XCTest `func test…` and Swift Testing `@Test` functions can be locked.
+One tab-separated line per promise: the closed issue, a hash, the test file and the test's name (its describe path,
+`outer › inner`, when the name alone isn't unique in the file; a name is found with its whitespace changed too). The
+hash covers the test's source, a Swift test's attributes, and the head of every block it sits in: a loop and the
+list it walks, a `describe.skip`, an `if` around it, a Swift `@Suite(.disabled())`. Data a test reads from outside
+those (a table defined above the loop) isn't covered. Whitespace, comments, trailing commas and quote style don't
+count, so reformatting is free; semicolons do, and a line break after `return`, `break`, `continue` or `throw`
+counts as one. node:test `test(…)` and `it(…)` in JavaScript, TypeScript and TSX, XCTest `func test…` and Swift
+Testing `@Test` functions can be locked.
 
 `scripts/ci/promises.test.mjs` (the repository job, which runs on any test file change) fails when a locked test is
 deleted, renamed or its body changes. To change one on purpose:

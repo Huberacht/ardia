@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { add, check, formatLock, LOCK, parseLock, ROOT, update } from "./promises.mjs";
-import { findTests, hashOf } from "./test-source.mjs";
+import { findTests, hashOf, pickTest } from "./test-source.mjs";
 
 const hashes = (path, source) => Object.fromEntries(findTests(path, source).map((found) => [found.path, hashOf(found)]));
 
@@ -23,21 +23,21 @@ describe("a group", () => {
 });
 `;
 
-test("whitespace, comments, semicolons, trailing commas and quote style don't change a test's hash", () => {
-  const reformatted = `import { test, describe } from "node:test"
+test("whitespace, comments, trailing commas and quote style don't change a test's hash", () => {
+  const reformatted = `import { test, describe } from "node:test";
 test('keeps the pins', () => {
-  const pins = [1, 2, 3,]
+  const pins = [1, 2, 3,];
   assert.deepEqual(
     pins.filter((pin) => pin > 1),
     [2, 3],
-  )
-})
+  );
+});
 describe("a group", () => {
   it("drops nothing", async () => {
-    const text = \`a \${'b'} c\`
-    assert.match(text, /a b c/)
-  })
-})
+    const text = \`a \${'b'} c\`;
+    assert.match(text, /a b c/);
+  });
+});
 `;
   assert.deepEqual(hashes("x.test.mjs", reformatted), hashes("x.test.mjs", JS));
 });
@@ -49,6 +49,32 @@ test("a change to a test's body, its name or the call it makes changes the hash,
   assert.equal(changed["a group › drops nothing"], before["a group › drops nothing"]);
   assert.notEqual(hashes("x.test.mjs", JS.replace("test(", "test.skip("))["keeps the pins"], before["keeps the pins"]);
   assert.equal(hashes("x.test.mjs", JS.replace('test("keeps the pins"', 'test("keeps pins"'))["keeps the pins"], undefined);
+});
+
+test("what a test runs under counts: its loop, its describe, the condition around it", () => {
+  const hash = (source, name) => hashOf(findTests("x.test.mjs", source).find((found) => found.path === name));
+  const loop = 'for (const order of ["first", "second"]) {\n  test(`closes ${order}`, () => { close(order); });\n}\n';
+  assert.notEqual(hash(loop.replace('["first", "second"]', "[]"), "closes ${order}"), hash(loop, "closes ${order}"));
+  const group = 'describe("g", () => {\n  test("t", () => { f(); });\n});\n';
+  assert.notEqual(hash(group.replace("describe(", "describe.skip("), "g › t"), hash(group, "g › t"));
+  const guarded = 'if (process.platform === "darwin") {\n  test("t", () => { f(); });\n}\n';
+  assert.notEqual(hash(guarded.replace("darwin", "linux"), "t"), hash(guarded, "t"));
+  assert.equal(hash(`import a from "./a.mjs";\n${loop}`, "closes ${order}"), hash(`import b from "./b.mjs";\n\n${loop}`, "closes ${order}"));
+});
+
+test("a skipped assertion, a regex after a condition and an elision all change the hash", () => {
+  const hash = (body) => hashOf(findTests("x.test.mjs", `test("x", () => { ${body} });`)[0]);
+  assert.notEqual(hash("if (wrong) return; assert.equal(actual, expected);"), hash("if (wrong) return assert.equal(actual, expected);"));
+  assert.notEqual(hash("if (wrong) return\nassert.equal(actual, expected);"), hash("if (wrong) return assert.equal(actual, expected);"));
+  assert.notEqual(hash('if (ready) /[)]/.test(")"); assert.equal(1, 1);'), hash('if (ready) /[)]/.test(")"); assert.equal(1, 2);'));
+  assert.notEqual(hash("f([,]);"), hash("f([]);"));
+  assert.equal(hash("f([1, 2,]);"), hash("f([1, 2]);"));
+  assert.equal(hash("const n = (a + b) / 2; f(n);"), hash("const n = (a + b) / 2;\nf(n);"));
+});
+
+test("a test is found by its name with its whitespace changed, as a template title reformatted", () => {
+  const tests = findTests("x.test.mjs", "test(`runs ${n + 1}`, () => {});");
+  assert.equal(pickTest(tests, "runs ${n+1}").test?.name, "runs ${n + 1}");
 });
 
 test("tests are found inside loops and describe blocks, by a template title and past regex and template braces", () => {
@@ -102,6 +128,10 @@ func \`listed hosts require HTTPS\`(host: String) {
 `;
   const found = findTests("PacingTests.swift", source);
   assert.deepEqual(found.map((item) => item.name), ["testAFrameWaits", "listed hosts require HTTPS"]);
+  const swiftHash = (text, name) => hashOf(findTests("PacingTests.swift", text).find((item) => item.name === name));
+  assert.notEqual(swiftHash(source.replace('@Test(arguments: ["a.example"])', '@Test(.disabled(), arguments: ["a.example"])'), "listed hosts require HTTPS"), swiftHash(source, "listed hosts require HTTPS"));
+  assert.notEqual(swiftHash(source.replace('["a.example"]', "[]"), "listed hosts require HTTPS"), swiftHash(source, "listed hosts require HTTPS"));
+  assert.notEqual(swiftHash(`@Suite(.disabled())\nstruct Hosts {\n${source}}\n`, "testAFrameWaits"), swiftHash(`struct Hosts {\n${source}}\n`, "testAFrameWaits"));
   const reindented = source.replace(/\n {2,}/g, "\n");
   assert.deepEqual(hashes("PacingTests.swift", reindented), hashes("PacingTests.swift", source));
 });

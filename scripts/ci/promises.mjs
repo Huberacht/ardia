@@ -6,9 +6,10 @@ import { findTests, hashOf, languageOf, pickTest } from "./test-source.mjs";
 
 const HELP = `Holds the regression tests that guard closed bugs to what they were when the bug closed.
 scripts/ci/promises.lock has one line per promise: the closed issue, the hash of the test's
-source (whitespace, comments, semicolons, trailing commas and quote style don't count), the
-test file and the test's name (its describe path, outer › inner, when the name alone is not
-unique). The check fails when a locked test is deleted, renamed or changed.
+source and of what it runs under (the loop, describe or condition around it; whitespace,
+comments, trailing commas and quote style don't count), the test file and the test's name
+(its describe path, outer › inner, when the name alone is not unique). The check fails when
+a locked test is deleted, renamed or changed.
 
   scripts/ci/promises.mjs                        check every promise
   scripts/ci/promises.mjs --update <issue>       record the current hash of the issue's tests

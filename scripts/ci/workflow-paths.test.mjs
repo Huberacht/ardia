@@ -43,7 +43,7 @@ function changeFilters(text) {
 const covers = (outer, inner) => outer === inner || (outer.endsWith("/**") && inner.startsWith(outer.slice(0, -2)));
 
 const globPattern = (glob) =>
-  new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\0/g, ".*")}$`);
+  new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "\u0001").replace(/\*\*/g, "\0").replace(/\*/g, "[^/]*").replace(/\0/g, ".*").replace(/\u0001/g, "(?:.*/)?")}$`);
 
 function matched(globs, path) {
   let included = false;
@@ -196,5 +196,8 @@ test("the path globs these tests use read like GitHub's", () => {
   assert.ok(matched(["packages/*/src/**", "!packages/phone/**"], "packages/core/src/a.ts"));
   assert.ok(!matched(["packages/*/src/**", "!packages/phone/**"], "packages/phone/src/a.ts"));
   assert.ok(!matched(["packages/*/package.json"], "packages/core/src/package.json"));
+  assert.ok(matched(["**/*.test.*"], "example.test.mjs"));
+  assert.ok(matched(["**/*.test.*"], "apps/browser/src/a/b.test.mjs"));
+  assert.ok(!matched(["**/*.test.*"], "apps/browser/src/a/b.mjs"));
   assert.equal(relative(REPO, dirname(fileURLToPath(import.meta.url))), "scripts/ci");
 });

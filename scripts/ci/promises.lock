@@ -1,168 +1,168 @@
 issue	hash	file	test
-421	6007c4257120fe0e	apps/browser/src/state/tabs/tabs.test.mjs	closing the shown tab goes back to the tab used before it, not its neighbour
-421	1ca2fb09c802ecae	apps/browser/src/state/tabs/tabs.test.mjs	tabs opened behind don't count as used until they're shown
-514	8bd97739b2e627b0	apps/browser/src/state/sync/sharedData.test.mjs	a Mac that joined while the other Mac's files couldn't be read for over a day lists its profiles once they can
-514	2ae14e09a34f6d5f	packages/sync/src/fileHealth.test.ts	a set-aside file stays given up while it fails, is read once it's whole, and a file read whole leaves nothing in flight
-530	eb63e6ab3a4eb313	apps/browser/src/state/media/media.test.mjs	a woken page that plays on its own, or plays something else, isn't sought
-530	49ec393b778034b4	apps/browser/src/state/media/media.test.mjs	play on a sleeping tab reloads it and resumes where it paused
-530	bfd640bf75e138d3	apps/browser/src/state/media/media.test.mjs	play on a sleeping tab whose page reports no media session still resumes once the page has loaded
-544	6bba95a4bf61893a	apps/browser/src/platform/pageScriptTheme.test.mjs	a stale light theme-color over a dark page and a dark fixed header follows the header (#544)
-603	2740a2b4775f0c32	apps/browser/src/state/media/media.test.mjs	a play in another window or profile doesn't take the sidebar player
-603	903bd0bbda54001b	apps/browser/src/state/media/media.test.mjs	a play that started earlier doesn't take the sidebar player from a tab paused later
-603	c98f70427f3ac81b	apps/browser/src/state/media/media.test.mjs	a tab paused in the background gives the sidebar player to a tab that starts playing in the background
-603	d3b159d12c9e1e2a	apps/browser/src/state/media/media.test.mjs	a tab paused in the background loses the sidebar player to a tab that starts playing on screen, and doesn't get it back when that tab pauses
-634	cbe7d2af2f6ada81	apps/browser/src/state/tabs/liveTabs.test.mjs	an extension that shows another tab and then discards the shown one is obeyed, whatever the strip last said about a close
-720	2f5c781bf6c89151	apps/browser/src/state/windows/windowClose.test.mjs	closing a second window whose tabs all stay open in the first asks nothing
-720	ea8191f83be85358	apps/browser/src/state/windows/windowClose.test.mjs	closing a window's last tab still asks about the tabs of its window
-720	4f1e08d8eae464ab	apps/browser/src/state/windows/windowClose.test.mjs	with sharing off every window still asks about its own tabs
-720	b6041596a2cc4dfb	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a window asks only about the tabs that close with it
-733	2a324c2493e57094	apps/browser/src/state/sidebar/hover.test.mjs	a panel that draws nothing leaves the rows hoverable
-733	69e8deb1a5e876da	apps/browser/src/state/sidebar/hover.test.mjs	an open command panel over the sidebar rows takes their highlight
-733	b4fa618a5f9a6ae4	apps/browser/src/state/sidebar/hover.test.mjs	the covered flag follows a panel that unmounts or moves to another window
-738	ebd0366cc9df7819	apps/browser/src/components/ui/selectedTabContrast.test.mjs	the line under the pinned tabs keeps Dia's colour on built-in presets and reaches the selection floor on every custom colour
-751	992f8a39226e4f37	apps/browser/src/state/windows/fullScreenDisplay.test.mjs	a full screen event without a display leaves the window opening exactly as before
-751	637c8ee548e47d61	apps/browser/src/state/windows/fullScreenDisplay.test.mjs	a full screen window carried to another display keeps its place in line, and leaving full screen frees it
-751	08c4ead6ba085ac4	apps/browser/src/state/windows/fullScreenDisplay.test.mjs	a window full screen on an external display reopens naming that display, not just its old frame
-761	246138e00f19c831	apps/browser/src/state/omnibox/newTabBar.test.mjs	the bar opens once over a blank tab, never over a tab a page opened that has no URL yet
-775	9b007f9b2a2b5518	packages/ardiacore/tests/webkit-input-source-keys.test.mjs	a WebKit tab hands 英数 and かな to the input source before WebKit sees the key
-775	4b1882b2c03e86ee	packages/ardiacore/tests/webkit-input-source-keys.test.mjs	Ardia's own text views use the same helper, so the two engines cannot drift apart
-775	80305e299e99c00f	packages/ardiacore/tests/webkit-input-source-keys.test.mjs	InputSourceKeys takes exactly 英数 and かな and runs the system's key bindings for them
-780	d885e8e23eb7c186	apps/browser/src/state/windows/autoHideTabs.test.mjs	tabs moved or dragged out of a window into a new one keep that window's hidden or shown tabs (#780)
-785	ec70574e43d712d0	apps/browser/src/state/downloads/openDownload.test.mjs	archives are told apart from other downloads
-785	71d50a2d8e4231af	apps/browser/src/state/downloads/openDownload.test.mjs	opening a downloaded zip shows it in Finder once, where Archive Utility unpacks it, and never brings Finder back later (#785)
-785	3c3e6779842c5614	apps/browser/src/state/downloads/openDownload.test.mjs	other files only open, and a missing archive isn't revealed
-810	6edfd113f1de34c8	apps/browser/src/state/windows/focusedPane.test.mjs	focus in a shown split's other pane makes that pane the active one
-810	647601a8b520bb2f	apps/browser/src/state/windows/focusedPane.test.mjs	focus landing in a hidden split pane leaves the shown tab in front
-828	e83e7fc6f5303e51	apps/browser/src/components/tabstrip/stripLayout.test.mjs	a held chip width keeps every tab where it was after a close, whatever room the close freed
-835	c5e3380ff356736e	apps/browser/src/state/extensions/extensionChanges.test.mjs	every control on an extension the engine no longer has settles quietly and shows the engine's list
-835	16424576807f8981	apps/browser/src/state/omnibox/fixupHermes.test.mjs	fixupUrl on hyphenated dotted words neither throws nor stalls in Hermes
-835	0b9d69b2d387a343	packages/core/src/url.test.ts	fixupUrl reads the host up to the first / ? or #: one trailing dot, a 1-5 digit port, labels never start or end in a hyphen
-848	c37c7d4a57140296	apps/browser/src/state/sidebar/sharedTiles.test.mjs	a page's Top Apps hold still only toward a neighbour that shares the same set
-848	23243ed6ea70aa2b	apps/browser/src/state/sidebar/sharedTiles.test.mjs	shared Top Apps stay where they are for the whole switch and cross-fade, unshared ones ride their page
-851	dcca316c93e487e8	packages/core/src/suggest.test.ts	a typed address opens as typed: a saved #fragment of the same page never replaces it
-857	c1808b7d680f97a8	apps/browser/src/state/tabs/navigation.test.mjs	back does not close a pinned tab, even one a link opened
-857	2c25169842d8a87c	apps/browser/src/state/tabs/navigation.test.mjs	back does nothing on a link-opened tab whose opener closed, even when its opener's opener adopts it
-857	161b7c2667148ffe	apps/browser/src/state/tabs/navigation.test.mjs	back does nothing once the opener is gone
-857	aa73ebfa6f68f1fa	apps/browser/src/state/tabs/navigation.test.mjs	back is not offered on a tab opened by hand beside the current one, once it has a page
-857	2393ed18f01b7656	apps/browser/src/state/tabs/navigation.test.mjs	back on a link opened in a split pane closes it and shows the tab that opened it
-857	cddcc02c368d6cfe	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab a link opened goes back in the page when the page has history
-857	e3cf063218fb0bc2	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab opened behind from a link, then switched to, closes it and shows the opener
-857	b9f2a23727ecdb9d	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab opened in front from a link, with no history of its own, closes it and shows the opener
-857	a8dc0714bd929d6d	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab with no opener and no history does nothing
-857	6a7f7087d573756e	apps/browser/src/state/tabs/navigation.test.mjs	back on the first of two links opened behind returns to the opener, not to the other link
-867	471da2c5256f8caa	apps/browser/src/platform/pageScriptPeek.test.mjs	an other-site link the page's own click handler takes (a menu button, #867) never peeks
-884	ce179eb7462f0d59	apps/browser/src/platform/pageScriptTheme.test.mjs	a light theme-color over a page painted in color(srgb …) is kept, as on Perplexity (#884)
-884	024ceb31d54e6cbd	apps/browser/src/platform/pageScriptTheme.test.mjs	a translucent color(srgb …) header is blended over the page
-884	71d22a714079d295	apps/browser/src/platform/pageScriptTheme.test.mjs	an lch() theme-color is read as the light gray it is, as on Linear (#884)
-884	6f8725514e40abae	apps/browser/src/platform/pageScriptTheme.test.mjs	theme-colors in newer CSS color formats land within a step of what Chromium paints
-903	07682361107d11a2	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	Castle's tamper probe (new, then a call on the prototype) asks nothing and leaves no stray rejection, as in Chrome (#903)
-909	c4bcd2b3c78e05c3	apps/browser/src/state/extensions/extensions.test.mjs	a private window shows the extensions allowed in incognito, spanning ones too (#909)
-909	1db1dda35e0e54b4	apps/browser/src/state/extensions/extensions.test.mjs	Options from a private window: a spanning extension's page opens in its profile's regular window, as in Chrome
-909	4a5163da4e46512a	apps/browser/src/state/extensions/extensions.test.mjs	with several profiles, a private window lists and opens only its own profile's extensions
-914	e8bce721aa328964	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	the shim is in place as soon as the page script runs, before Ardia's config arrives (#914)
-915	b01784dfbd462594	apps/browser/src/state/sidebar/hover.test.mjs	heading for the card onto a row with no card of its own (an open group's header) still lets the card go
-920	b071cb228fe41cb6	packages/ardiacore/src/handOff.test.mjs	a tab nobody opened is not re-homed onto a hidden pre-loaded view while a stray-tab listener can adopt it
-920	f494128b71bafcbb	packages/ardiacore/src/handOff.test.mjs	a tab nobody opened still goes to a hidden view when no stray-tab listener exists to adopt it
-956	02651922ac1b7892	apps/browser/src/platform/pageScriptDrm.test.mjs	an access whose keys can't be created counts as a refusal, so stalled playback prompts
-956	1fb26fe660ee2cec	apps/browser/src/platform/pageScriptDrm.test.mjs	keys that are created, Clear Key's refused keys and a wrong receiver keep the page quiet
-957	897d01174a31870c	apps/browser/src/state/windows/windowClose.test.mjs	a closing window that gains a new tab before its animation ends stays open and is focused
-957	320eb87be18abcdb	apps/browser/src/state/windows/windowClose.test.mjs	closing two windows that share tabs closes both when the ${order} one's animation ends first
-965	3ae6479050ed7b53	apps/browser/src/state/automation/controlSocket.test.mjs	the pill names the app that runs the command, the most recent one, and forgets it once it hides
-970	7f98c9c7249134ae	apps/browser/src/state/drag/newTabDrop.test.mjs	a drop with nothing usable leaves the New Tab page as it was
-970	b8993e4f31c1d489	apps/browser/src/state/drag/newTabDrop.test.mjs	a link dropped on a New Tab page navigates it, and text searches
-970	5e614f2c17bc9653	apps/browser/src/state/drag/newTabDrop.test.mjs	files dropped on a New Tab page: the first opens in that tab, the rest in background tabs
-970	e2906547cc0ff803	apps/browser/src/state/drag/newTabDrop.test.mjs	only absolute local file URLs and non-empty text become inputs
-971	cd994525271c417d	apps/browser/src/components/ui/selectedTabContrast.test.mjs	a fill that already shows is returned as is
-971	1c42bfe20267813d	apps/browser/src/components/ui/selectedTabContrast.test.mjs	a near-white profile gets a darker selected tab
-972	963b71267129edf6	apps/browser/src/state/pins/awayTitle.test.mjs	a pinned tab at its pinned URL has no away title
-972	a27624c135ae6e3c	apps/browser/src/state/pins/awayTitle.test.mjs	a pinned tab that left its URL shows / and the page it is on
-972	fbe667639e7f0ce8	apps/browser/src/state/pins/awayTitle.test.mjs	a renamed pinned tab keeps its name before the slash, and the page title replaces it after
-972	1277909bbcb7f176	apps/browser/src/state/pins/awayTitle.test.mjs	an untitled page falls back to its address
-1041	50bb148786bf464c	apps/browser/src/components/window/dockMotion.test.mjs	the dock is fullscreen, docked, peeking, hiding or away, and a still sidebar that isn't docked watches the left edge, also over a full-screen page (#1041)
-1074	68c25c9e605d029a	apps/browser/src/state/drag/drops.test.mjs	⇧-click ranges from the shown tab once it changed without a click: never from a tile clicked before (#1074)
-1074	fc3af82897875d9e	apps/browser/src/state/drag/drops.test.mjs	a ⇧-click that ranges from the shown tab because it changed since the last click counts as one (#1074 telemetry)
-1138	c436ec5e996e91a5	apps/browser/src/state/windows/toolbarAutoHide.test.mjs	a chat loading older messages while wheeling up (a jump down) doesn't hide the bar again (#1138)
-1190	fa61f440f2e66257	apps/browser/src/state/tabs/tabs.test.mjs	a tab opened behind joins the ⌃Tab order only once it is shown, so ⌃Tab still returns to the tab before (#1190)
-1192	8b0d9f91eb4b2a58	apps/browser/src/components/window/dockMotion.test.mjs	while the peek slides away only the window's edge brings it back, not the column it is leaving (#1192)
-1197	71af32510c72f2c0	apps/browser/src/state/sync/profileRemoval.test.mjs	a profile deleted on the only Mac can be removed from sync: its records go, and no Mac is offered it again (#1197, #1175)
-1239	9ac039d23fc203b6	apps/browser/src/state/windows/sidebarFieldPlace.test.mjs	the address panel's anchor follows the sidebar field when the sidebar changes side or the window is resized, on ${name} (#2021, #1239)
-1301	994c153f19a9f28e	apps/browser/src/state/windows/toolbarAutoHide.test.mjs	a scroller that snaps vertically and mandatorily (a Shorts or Reels feed) never reports down (#1301)
-1454	2e5dc2d4b163d953	apps/browser/src/state/tabs/popupsOpenAsTabs.test.mjs	a ⇧-clicked link that asks for a new window opens as a Peek when ⇧ is the Peek key, from frames the page script can't reach (#1454)
-1630	40707f3f6142842c	apps/browser/src/components/window/dockMotion.test.mjs	the slide is an ease-in-out over 200 ms that never passes its final width (#1630: an overshoot laid pages out too wide and back)
-1687	34c8f1f8d0fa4cfe	apps/browser/src/platform/windowsDialogPages.test.mjs	a pop-up menu tracks on a RunModal thread, owned by that thread's own window, so pages keep loading while it is open (#1687)
-1727	6c00cb9defe9afba	apps/browser/src/components/settings/panes/passwordRows.test.mjs	a short list shows every row
-1727	c34866c20e608798	apps/browser/src/components/settings/panes/passwordRows.test.mjs	unlocking thousands of saved passwords puts one page of rows on screen, and scrolling near the end adds the next page
-1782	f2015ba52c73cff9	apps/browser/src/state/windows/quitWarning.test.mjs	on the Mac closing a window never shows the quit warning
-1782	bad1f6393da94507	apps/browser/src/state/windows/quitWarning.test.mjs	only Windows quits when its last window closes
-1782	327c227c97b7845e	apps/browser/src/state/windows/quitWarning.test.mjs	the warning uses the Mac's words and its don't-ask-again
-1852	0fa904e512aae666	apps/browser/src/components/ui/gated.test.mjs	a closed gate gives exactly the rest value whatever the source still takes
-1852	8d3c94fecd69bdcc	apps/browser/src/components/ui/gated.test.mjs	an open gate passes the source through
-1852	f5df52a0a1347d97	apps/browser/src/components/ui/gated.test.mjs	closing the gate mid-animation pins the node to rest while the source keeps moving
-2000	c736272fe223290b	apps/browser/src/state/airTraffic/airTraffic.test.mjs	a pattern without a scheme is a wildcard over the link
-2146	88151d8511d91e38	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	a site's CaptureController answers for the tab it shares, as Chrome's does, so Meet shows its presenter preview (#2146)
-2175	cf1103d1f1a1f3b8	apps/browser/src/state/session/pinGuard.test.mjs	closing the only window that showed a profile keeps its pins on disk, and they come back after a relaunch (#2175)
-2175	311fa6aa4f3bc2d8	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a profile handed to the open window keeps its pinned tabs and pinned folders (#2175)
-2245	eda3119fe593079e	apps/browser/src/state/extensions/extensions.test.mjs	Add on an install prompt the engine no longer holds says so in the dialog, and Cancel on one rejects nothing
-2245	97643b5339ddf8a4	apps/linux/src/pageFocus.test.mjs	focusIfUnfocused gives the page the keyboard unless a shell field has it, and answers whether it did
-2260	421aa59c31191e5d	apps/browser/src/state/sync/scopeWrites.test.mjs	a sync record or base is written only through putRecord, dropRecord, putBase and dropBase, so the cycle's journal sees every change
-2492	fc1b6a42b25ab639	apps/browser/src/state/tabs/tabs.test.mjs	tabs closed together come back to their places, from ⇧⌘T or Recently Closed in any order (#2492)
-2572	518bcdfd42d5c76c	apps/browser/src/state/commands/menuState.test.mjs	the menu state tells the shell whether links from other apps open in Little Ardia
-2695	78222fd0a9ad0dab	apps/browser/src/components/ui/pressFeedback.test.mjs	a pressed glyph dips a little and comes back without a bounce
-2695	d7c705494363cd92	apps/browser/src/components/ui/pressFeedback.test.mjs	nothing used all day springs past its rest
-2702	ead28f0c9223a5be	apps/browser/src/components/sidebar/dragGesture.test.mjs	a press that drifts no farther than a click allows stays a click: no drag starts, so the row and its group never hide
-2702	d36f48d5c155c4c8	apps/browser/src/components/sidebar/dragGesture.test.mjs	past the click slop the drag takes the press, starts where the pointer is, follows it and ends on release
-2702	810ab2c07c4c1338	apps/browser/src/components/sidebar/dragGesture.test.mjs	the click slop is the one distance: under it a press is a click, over it a drag
-2714	f353c962698b3ae4	apps/browser/src/state/profiles/switcherShown.test.mjs	the profile switcher shows only with several profiles, outside Incognito, unless the owner picked Nothing
-2725	cbf3b94fa1caa7ab	apps/browser/src/components/window/dockMotion.test.mjs	a peek's light moves that stay wholly off the window at one height aren't sent; the first visible one and the rest place are
-2772	c82f06fe689b50a0	apps/browser/src/state/import/importWithheld.test.mjs	an import the engine withheld for a secret says why on the done step and is counted
-2772	8dd525011610cd99	apps/browser/src/state/import/importWithheld.test.mjs	with several profiles, the note names the one held back and the others still import
-2862	00d29389073798be	apps/browser/src/state/tabs/tabs.test.mjs	switching tabs in one profile keeps another profile's opener links in the same window
-2917	c0201169c00dc38c	apps/browser/src/components/profiles/dotsRow.test.mjs	a row too wide to clear the button when centred starts just past it (#2917)
-2933	592a2998cc2feacd	apps/browser/src/state/sync/adapters.test.mjs	history: a title Chrome reports while synced visits are being written stays in the list
-2933	0713b332f5c10c0a	apps/browser/src/state/sync/adapters.test.mjs	history: a title synced from another Mac doesn't replace the one this Mac's Chrome keeps, so the command bar finds the page without a restart
-2951	b74076f83f00979d	apps/browser/src/state/plugins/removeConfirmed.test.mjs	Cancel in the Remove dialog keeps the plugin, its files and its record
-2951	e11594ab8ea607d3	apps/browser/src/state/plugins/removeConfirmed.test.mjs	Remove in the dialog removes the plugin
-3003	0f2f6bf2c5d52809	apps/browser/src/components/sidebar/liveFolderHeader.test.mjs	a live folder's header starts at its box's edge, as a group's does, so their icons and titles line up (#3003)
-3088	2658f3645427cadc	apps/browser/src/components/ui/releaseNativeValue.test.mjs	a native value no view holds is detached once, so its native node is dropped
-3088	4425e8d69bf6e2e6	apps/browser/src/components/ui/releaseNativeValue.test.mjs	a tab's toolbar motion releases its four values when the tab goes away
-3088	f49cc81eec9eed42	apps/browser/src/components/ui/releaseNativeValue.test.mjs	a value that never went native, or was already dropped, only loses its listeners
-3141	0ec1c57366b047f9	apps/browser/src/state/sidebar/menus.test.mjs	Sleep Tab sleeps a pinned row, a Top App and a regular tab that Chrome keeps only for automatic sleep, and keeps one holding typed input
-3148	56956ff0af9b63ae	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a handed-over pin whose key another profile's tab holds still restores its page (#3148)
-3148	2c640e9631ed2457	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, two profiles handed over at once each keep their own Top Apps folder and tab ids (#3148)
-3149	89605dcddb3c1d07	apps/browser/src/state/pins/samePagePins.test.mjs	adopting a parked split whose pane the window already holds keeps the split (#3149)
-3149	dafbcd57f704f19a	apps/browser/src/state/pins/samePagePins.test.mjs	adopting parked pins next to a pin of the same page keeps both; the same pin isn't added twice (#3149)
-3149	ae2adce664e08dd5	apps/browser/src/state/pins/samePagePins.test.mjs	closing a profile's last window parks both pins of one page, and both come back (#3149)
-3149	3961f9ca42f0f39f	apps/browser/src/state/pins/samePagePins.test.mjs	launching with Restore Session off keeps both pins of one page (#3149)
-3149	ba5277f396236c3c	apps/browser/src/state/pins/samePagePins.test.mjs	reopening a closed copy of a pin whose pin is parked brings that pin back, not a second one (#3149)
-3189	db8ca2601abff307	apps/browser/src/state/media/pinnedMediaControls.test.mjs	turning sidebar media controls off restyles a pinned player with no change to its tab
-3189	2baa5034d6b2c582	apps/browser/src/state/media/pinnedMediaControls.test.mjs	with sidebar media controls off, the pointer doesn't treat a pinned player as a media card
-3205	7d4fea8586abd73b	apps/browser/src/state/session/pinGuard.test.mjs	a pins-backup.json that exists but the store can't read is not replaced, and the new backup goes beside it (#3205)
-3205	f80ea07d36f50a7d	apps/browser/src/state/session/pinGuard.test.mjs	when the store answers whether pins-backup.json exists only later, as Linux does, an unreadable one is still kept (#3205)
-3205	52a78884cb4e8a36	apps/browser/src/state/session/pinGuard.test.mjs	with no pins-backup.json at all, the first backup still takes the primary name (#3205)
-3205	3dd130314693d03a	apps/linux/src/host.test.mjs	a document the bootstrap left out counts as there unless the host reads it as missing (#3205)
-3211	5c0dc109fc8efb56	apps/browser/src/components/sidebar/selectedRow.test.mjs	a row measurement that lands after the tracker stops installs no watch
-3211	89b935fc6d9664c4	apps/browser/src/components/sidebar/selectedRow.test.mjs	coming back to a page whose pill still shows re-attaches the icon watch
-3211	92282a2643436d33	apps/browser/src/components/sidebar/selectedRow.test.mjs	moving the hidden pill's tab out of its group, at the same window index, still brings the pill
-3212	dc86b1662ad54160	apps/browser/src/state/session/pinGuard.test.mjs	a held session write that drops pins is counted as a real write, not a cosmetic one
-3212	2b8411d959ec5ebe	apps/browser/src/state/session/pinGuard.test.mjs	a quit cancelled while a backup lands doesn't leave saving frozen: later changes still reach session.json
-3225	09fc4450dcc2954c	apps/browser/src/platform/jsTimersDisplayAsleep.test.mjs	JS timers keep a clock while the display sleeps: React Native's frame tick is not a bare NSScreen CADisplayLink
-3225	3c846cb942116809	apps/browser/src/platform/jsTimersDisplayAsleep.test.mjs	RCTTiming still sleeps far-off timers on a run-loop NSTimer instead of waiting on frames
-3227	ac6e4b6020afdd1b	apps/browser/src/state/settings/searchOnClose.test.mjs	closing Settings drops its search, so opening it again starts with an empty field and no results (#3227)
-3339	b7bf110cbb6d8ea7	apps/phone/src/state/toasts/placement.test.ts	over a page the toast clears the floating bar by 64 points, and Android's Material You bar, 8 above the safe area and 64 tall, by its top plus a gap (#3339)
-3347	6ad1ecc23a5fa9f9	packages/ardiacore/tests/pip-back-to-tab-activation-wiring.test.mjs	Back to Tab activates the app over the frontmost app, as Chromium does, not with a cooperative request macOS can decline
-3347	9973e052a3f242cc	packages/ardiacore/tests/pip-back-to-tab-activation-wiring.test.mjs	every way back to the tab goes through the one activation and says whether another app was in front
-3352	747b58d10b0f2b19	packages/ardiacore/tests/pip-pinch-hittable-wiring.test.mjs	the stand-in's own panel never takes the gesture, and the window gets its alpha back at the hand-off
-3352	bc71c8b2495178b4	packages/ardiacore/tests/pip-pinch-hittable-wiring.test.mjs	while the stand-in shows a pinch or edge drag, the real window stays where the rest of the gesture lands
-3378	675c5ac2b982dbd1	packages/ardiacore/tests/ubo-scriptlets.test.mjs	the bundled proxy wrappers refuse prototype cycles like native functions and never hang
-3378	8947714d6e341880	packages/ardiacore/tests/ubo-scriptlets.test.mjs	the bundled x.com rules leave toString alone and keep the XHR wrapper safe from cycles
-3378	8742442f4e031290	packages/ardiacore/tests/ubo-scriptlets.test.mjs	the patched proxy wrappers refuse prototype cycles like native functions and never hang
-3416	cc6856c002d823d8	apps/phone/scripts/one-sqlite-engine.test.mjs	the phone's native code reaches SQLite only through expo-sqlite's engine
-3423	837f54450f703a92	packages/ardiacore/tests/webkit-page-dialogs.test.mjs	a WebKit page's file panel is logged, not shown, in background mode
-3423	ea43a8034f4bbb10	packages/ardiacore/tests/webkit-page-dialogs.test.swift	a hidden tab holds a few dialogs and answers the rest at once, so a page can't pile them up
-3528	e7cc4287c0a7d8aa	apps/browser/src/components/tabstrip/stripWidths.test.mjs	after the last tab closes and widens its neighbour, closing a middle tab lets the next tab slide into its place at the held width
-3528	16a7813ef7257cf9	apps/browser/src/components/tabstrip/stripWidths.test.mjs	closing a middle tab and then the last one at the same spot widens the new last tab only to the closed tab's edge, so its × stays under the pointer
-3528	0b926d790bd511a2	apps/browser/src/components/tabstrip/stripWidths.test.mjs	closing the last tab while the pointer stays widens the new last tab into the freed room, so its × is under the pointer and the left edge stays put
-3562	4c0692ac9c825db3	apps/browser/src/state/reader/readerPage.test.mjs	the reader page draws no text size or font controls, and nothing it draws changes the look
-3588	291efac49893391b	apps/linux/src/readerService.test.mjs	every browser window starts the shared reader service, as the Mac app does
-3631	2e62692d35c49ad6	apps/browser/src/components/window/dockMotion.test.mjs	${arc ? "Arc's" : "Dia's"} layout: the peek usePeek starts slides in on an ease-out over 150 ms that never passes its final width or pulls back (#3631: Arc's 1.5 % overshoot detached the panel from the window's edge)
-3649	4a8eb420b3c98947	apps/browser/src/platform/commandBarFieldEditor.test.mjs	the command bar's field editor keeps its undo to its own editing session, so ⌘Z never reaches a closed field's text
+421	383df80e12bc190f	apps/browser/src/state/tabs/tabs.test.mjs	closing the shown tab goes back to the tab used before it, not its neighbour
+421	67dd8d497baac1d8	apps/browser/src/state/tabs/tabs.test.mjs	tabs opened behind don't count as used until they're shown
+514	300e6df67286a600	apps/browser/src/state/sync/sharedData.test.mjs	a Mac that joined while the other Mac's files couldn't be read for over a day lists its profiles once they can
+514	c420bd8d824263bf	packages/sync/src/fileHealth.test.ts	a set-aside file stays given up while it fails, is read once it's whole, and a file read whole leaves nothing in flight
+530	5eb10e23edfac99b	apps/browser/src/state/media/media.test.mjs	a woken page that plays on its own, or plays something else, isn't sought
+530	e249ae46d8e7b2f6	apps/browser/src/state/media/media.test.mjs	play on a sleeping tab reloads it and resumes where it paused
+530	d275f41ce1c5080e	apps/browser/src/state/media/media.test.mjs	play on a sleeping tab whose page reports no media session still resumes once the page has loaded
+544	b5db56fb14abd0c2	apps/browser/src/platform/pageScriptTheme.test.mjs	a stale light theme-color over a dark page and a dark fixed header follows the header (#544)
+603	6b9f3062ca42fb6c	apps/browser/src/state/media/media.test.mjs	a play in another window or profile doesn't take the sidebar player
+603	2a1ad66eb55d8f08	apps/browser/src/state/media/media.test.mjs	a play that started earlier doesn't take the sidebar player from a tab paused later
+603	9cc70cb3d96797ce	apps/browser/src/state/media/media.test.mjs	a tab paused in the background gives the sidebar player to a tab that starts playing in the background
+603	aaf52cdc59c789f9	apps/browser/src/state/media/media.test.mjs	a tab paused in the background loses the sidebar player to a tab that starts playing on screen, and doesn't get it back when that tab pauses
+634	55f9e3b050f7e4f4	apps/browser/src/state/tabs/liveTabs.test.mjs	an extension that shows another tab and then discards the shown one is obeyed, whatever the strip last said about a close
+720	2498cae9f6eb13de	apps/browser/src/state/windows/windowClose.test.mjs	closing a second window whose tabs all stay open in the first asks nothing
+720	e86c8be77811459c	apps/browser/src/state/windows/windowClose.test.mjs	closing a window's last tab still asks about the tabs of its window
+720	f45af1df3fb486ac	apps/browser/src/state/windows/windowClose.test.mjs	with sharing off every window still asks about its own tabs
+720	f8cc96eec3968ec8	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a window asks only about the tabs that close with it
+733	8248d7c78ade2c2b	apps/browser/src/state/sidebar/hover.test.mjs	a panel that draws nothing leaves the rows hoverable
+733	38798ddd5d6846bc	apps/browser/src/state/sidebar/hover.test.mjs	an open command panel over the sidebar rows takes their highlight
+733	0ba1b35f7435f22d	apps/browser/src/state/sidebar/hover.test.mjs	the covered flag follows a panel that unmounts or moves to another window
+738	6bed33ee792139a1	apps/browser/src/components/ui/selectedTabContrast.test.mjs	the line under the pinned tabs keeps Dia's colour on built-in presets and reaches the selection floor on every custom colour
+751	fd8b95ae728b168b	apps/browser/src/state/windows/fullScreenDisplay.test.mjs	a full screen event without a display leaves the window opening exactly as before
+751	101295e2913594e8	apps/browser/src/state/windows/fullScreenDisplay.test.mjs	a full screen window carried to another display keeps its place in line, and leaving full screen frees it
+751	324dbeceee074df0	apps/browser/src/state/windows/fullScreenDisplay.test.mjs	a window full screen on an external display reopens naming that display, not just its old frame
+761	c3135d93703fa185	apps/browser/src/state/omnibox/newTabBar.test.mjs	the bar opens once over a blank tab, never over a tab a page opened that has no URL yet
+775	d3d393296b0c0059	packages/ardiacore/tests/webkit-input-source-keys.test.mjs	a WebKit tab hands 英数 and かな to the input source before WebKit sees the key
+775	645b53d3a7ba05eb	packages/ardiacore/tests/webkit-input-source-keys.test.mjs	Ardia's own text views use the same helper, so the two engines cannot drift apart
+775	11a58c57a6421fee	packages/ardiacore/tests/webkit-input-source-keys.test.mjs	InputSourceKeys takes exactly 英数 and かな and runs the system's key bindings for them
+780	e587099aa6320345	apps/browser/src/state/windows/autoHideTabs.test.mjs	tabs moved or dragged out of a window into a new one keep that window's hidden or shown tabs (#780)
+785	49db8e436d0a5ec4	apps/browser/src/state/downloads/openDownload.test.mjs	archives are told apart from other downloads
+785	debfa12c94322d6b	apps/browser/src/state/downloads/openDownload.test.mjs	opening a downloaded zip shows it in Finder once, where Archive Utility unpacks it, and never brings Finder back later (#785)
+785	920526edeb990c4b	apps/browser/src/state/downloads/openDownload.test.mjs	other files only open, and a missing archive isn't revealed
+810	175c884e70b0c00c	apps/browser/src/state/windows/focusedPane.test.mjs	focus in a shown split's other pane makes that pane the active one
+810	76f0831e4b1b2edb	apps/browser/src/state/windows/focusedPane.test.mjs	focus landing in a hidden split pane leaves the shown tab in front
+828	f241ead6c8cab5f6	apps/browser/src/components/tabstrip/stripLayout.test.mjs	a held chip width keeps every tab where it was after a close, whatever room the close freed
+835	d8b3eb0fedf8f30e	apps/browser/src/state/extensions/extensionChanges.test.mjs	every control on an extension the engine no longer has settles quietly and shows the engine's list
+835	6924187033c58352	apps/browser/src/state/omnibox/fixupHermes.test.mjs	fixupUrl on hyphenated dotted words neither throws nor stalls in Hermes
+835	3f4da915e4a92e06	packages/core/src/url.test.ts	fixupUrl reads the host up to the first / ? or #: one trailing dot, a 1-5 digit port, labels never start or end in a hyphen
+848	50e8a107021a5f39	apps/browser/src/state/sidebar/sharedTiles.test.mjs	a page's Top Apps hold still only toward a neighbour that shares the same set
+848	969cb661d0b59b43	apps/browser/src/state/sidebar/sharedTiles.test.mjs	shared Top Apps stay where they are for the whole switch and cross-fade, unshared ones ride their page
+851	f3445e5e0fcd1b04	packages/core/src/suggest.test.ts	a typed address opens as typed: a saved #fragment of the same page never replaces it
+857	7de768b9ecdcfa1f	apps/browser/src/state/tabs/navigation.test.mjs	back does not close a pinned tab, even one a link opened
+857	7d41e9126ec160b8	apps/browser/src/state/tabs/navigation.test.mjs	back does nothing on a link-opened tab whose opener closed, even when its opener's opener adopts it
+857	e3c689645a9055b6	apps/browser/src/state/tabs/navigation.test.mjs	back does nothing once the opener is gone
+857	ee73d3832d8fb08d	apps/browser/src/state/tabs/navigation.test.mjs	back is not offered on a tab opened by hand beside the current one, once it has a page
+857	2969cca49f157501	apps/browser/src/state/tabs/navigation.test.mjs	back on a link opened in a split pane closes it and shows the tab that opened it
+857	eea6dc09dd959dee	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab a link opened goes back in the page when the page has history
+857	6706bcc7979fadda	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab opened behind from a link, then switched to, closes it and shows the opener
+857	85bd9c4854a76cb7	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab opened in front from a link, with no history of its own, closes it and shows the opener
+857	b18c0f07a8a039c8	apps/browser/src/state/tabs/navigation.test.mjs	back on a tab with no opener and no history does nothing
+857	36df6b8447e7a5f1	apps/browser/src/state/tabs/navigation.test.mjs	back on the first of two links opened behind returns to the opener, not to the other link
+867	0ea700132efc6ca9	apps/browser/src/platform/pageScriptPeek.test.mjs	an other-site link the page's own click handler takes (a menu button, #867) never peeks
+884	482ee21ca7de8389	apps/browser/src/platform/pageScriptTheme.test.mjs	a light theme-color over a page painted in color(srgb …) is kept, as on Perplexity (#884)
+884	6e216adf2ecd3fc1	apps/browser/src/platform/pageScriptTheme.test.mjs	a translucent color(srgb …) header is blended over the page
+884	37434f40af46a59a	apps/browser/src/platform/pageScriptTheme.test.mjs	an lch() theme-color is read as the light gray it is, as on Linear (#884)
+884	d7388fc2032cc84f	apps/browser/src/platform/pageScriptTheme.test.mjs	theme-colors in newer CSS color formats land within a step of what Chromium paints
+903	5b536aaec32d41c9	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	Castle's tamper probe (new, then a call on the prototype) asks nothing and leaves no stray rejection, as in Chrome (#903)
+909	01d27b3f38576f71	apps/browser/src/state/extensions/extensions.test.mjs	a private window shows the extensions allowed in incognito, spanning ones too (#909)
+909	fc9669285dd8bdc7	apps/browser/src/state/extensions/extensions.test.mjs	Options from a private window: a spanning extension's page opens in its profile's regular window, as in Chrome
+909	776919e219de87d3	apps/browser/src/state/extensions/extensions.test.mjs	with several profiles, a private window lists and opens only its own profile's extensions
+914	4f110bd0108763f6	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	the shim is in place as soon as the page script runs, before Ardia's config arrives (#914)
+915	db1dae4f4f7719d8	apps/browser/src/state/sidebar/hover.test.mjs	heading for the card onto a row with no card of its own (an open group's header) still lets the card go
+920	6646c8431784ee25	packages/ardiacore/src/handOff.test.mjs	a tab nobody opened is not re-homed onto a hidden pre-loaded view while a stray-tab listener can adopt it
+920	5432bdc7de9088e7	packages/ardiacore/src/handOff.test.mjs	a tab nobody opened still goes to a hidden view when no stray-tab listener exists to adopt it
+956	e572c37f61531cb7	apps/browser/src/platform/pageScriptDrm.test.mjs	an access whose keys can't be created counts as a refusal, so stalled playback prompts
+956	6440ddb37b45c4a2	apps/browser/src/platform/pageScriptDrm.test.mjs	keys that are created, Clear Key's refused keys and a wrong receiver keep the page quiet
+957	f2ecac5aff0915b3	apps/browser/src/state/windows/windowClose.test.mjs	a closing window that gains a new tab before its animation ends stays open and is focused
+957	92983642a3e9f22c	apps/browser/src/state/windows/windowClose.test.mjs	closing two windows that share tabs closes both when the ${order} one's animation ends first
+965	f1af45bb90ce896f	apps/browser/src/state/automation/controlSocket.test.mjs	the pill names the app that runs the command, the most recent one, and forgets it once it hides
+970	af82d340108f4f68	apps/browser/src/state/drag/newTabDrop.test.mjs	a drop with nothing usable leaves the New Tab page as it was
+970	f58c2e2c19f10eca	apps/browser/src/state/drag/newTabDrop.test.mjs	a link dropped on a New Tab page navigates it, and text searches
+970	c36829b448574c0f	apps/browser/src/state/drag/newTabDrop.test.mjs	files dropped on a New Tab page: the first opens in that tab, the rest in background tabs
+970	b3660c59b18caab8	apps/browser/src/state/drag/newTabDrop.test.mjs	only absolute local file URLs and non-empty text become inputs
+971	9964b9df48d01f8f	apps/browser/src/components/ui/selectedTabContrast.test.mjs	a fill that already shows is returned as is
+971	8d0e834cdc8377fd	apps/browser/src/components/ui/selectedTabContrast.test.mjs	a near-white profile gets a darker selected tab
+972	df1bbe00b4f06a5e	apps/browser/src/state/pins/awayTitle.test.mjs	a pinned tab at its pinned URL has no away title
+972	39d24fc1d38a0cd0	apps/browser/src/state/pins/awayTitle.test.mjs	a pinned tab that left its URL shows / and the page it is on
+972	53a2f0d9de6cffd8	apps/browser/src/state/pins/awayTitle.test.mjs	a renamed pinned tab keeps its name before the slash, and the page title replaces it after
+972	4cd857d9b8fe9729	apps/browser/src/state/pins/awayTitle.test.mjs	an untitled page falls back to its address
+1041	3b745f5894b1b798	apps/browser/src/components/window/dockMotion.test.mjs	the dock is fullscreen, docked, peeking, hiding or away, and a still sidebar that isn't docked watches the left edge, also over a full-screen page (#1041)
+1074	d33efd94a4b5c0f1	apps/browser/src/state/drag/drops.test.mjs	⇧-click ranges from the shown tab once it changed without a click: never from a tile clicked before (#1074)
+1074	97893f23a1a1c08a	apps/browser/src/state/drag/drops.test.mjs	a ⇧-click that ranges from the shown tab because it changed since the last click counts as one (#1074 telemetry)
+1138	5b7ab8c17cde2ad5	apps/browser/src/state/windows/toolbarAutoHide.test.mjs	a chat loading older messages while wheeling up (a jump down) doesn't hide the bar again (#1138)
+1190	f655e60f86e99956	apps/browser/src/state/tabs/tabs.test.mjs	a tab opened behind joins the ⌃Tab order only once it is shown, so ⌃Tab still returns to the tab before (#1190)
+1192	28bf5dbc850cc09b	apps/browser/src/components/window/dockMotion.test.mjs	while the peek slides away only the window's edge brings it back, not the column it is leaving (#1192)
+1197	dd246ab55f5204e1	apps/browser/src/state/sync/profileRemoval.test.mjs	a profile deleted on the only Mac can be removed from sync: its records go, and no Mac is offered it again (#1197, #1175)
+1239	2b8661d7fb498a04	apps/browser/src/state/windows/sidebarFieldPlace.test.mjs	the address panel's anchor follows the sidebar field when the sidebar changes side or the window is resized, on ${name} (#2021, #1239)
+1301	87427c3db87b0d1b	apps/browser/src/state/windows/toolbarAutoHide.test.mjs	a scroller that snaps vertically and mandatorily (a Shorts or Reels feed) never reports down (#1301)
+1454	5ed56f65501a040c	apps/browser/src/state/tabs/popupsOpenAsTabs.test.mjs	a ⇧-clicked link that asks for a new window opens as a Peek when ⇧ is the Peek key, from frames the page script can't reach (#1454)
+1630	d789bc3985d65b0d	apps/browser/src/components/window/dockMotion.test.mjs	the slide is an ease-in-out over 200 ms that never passes its final width (#1630: an overshoot laid pages out too wide and back)
+1687	5437f5bd0771b188	apps/browser/src/platform/windowsDialogPages.test.mjs	a pop-up menu tracks on a RunModal thread, owned by that thread's own window, so pages keep loading while it is open (#1687)
+1727	8c355c87980c45e9	apps/browser/src/components/settings/panes/passwordRows.test.mjs	a short list shows every row
+1727	107080e2f8eeb410	apps/browser/src/components/settings/panes/passwordRows.test.mjs	unlocking thousands of saved passwords puts one page of rows on screen, and scrolling near the end adds the next page
+1782	833accea3ff86a52	apps/browser/src/state/windows/quitWarning.test.mjs	on the Mac closing a window never shows the quit warning
+1782	6cc7f068127fae33	apps/browser/src/state/windows/quitWarning.test.mjs	only Windows quits when its last window closes
+1782	15b6de3a8ac53d52	apps/browser/src/state/windows/quitWarning.test.mjs	the warning uses the Mac's words and its don't-ask-again
+1852	a677fba109d4f44c	apps/browser/src/components/ui/gated.test.mjs	a closed gate gives exactly the rest value whatever the source still takes
+1852	9f8b2533f43bd146	apps/browser/src/components/ui/gated.test.mjs	an open gate passes the source through
+1852	1ea9b98b2becec2b	apps/browser/src/components/ui/gated.test.mjs	closing the gate mid-animation pins the node to rest while the source keeps moving
+2000	5cbff522f423843e	apps/browser/src/state/airTraffic/airTraffic.test.mjs	a pattern without a scheme is a wildcard over the link
+2146	913a85054d5d4688	apps/browser/src/platform/pageScriptDisplayMedia.test.mjs	a site's CaptureController answers for the tab it shares, as Chrome's does, so Meet shows its presenter preview (#2146)
+2175	d6b508e688b36e0f	apps/browser/src/state/session/pinGuard.test.mjs	closing the only window that showed a profile keeps its pins on disk, and they come back after a relaunch (#2175)
+2175	1fad76de25a23588	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a profile handed to the open window keeps its pinned tabs and pinned folders (#2175)
+2245	73e18a6e4be80bc4	apps/browser/src/state/extensions/extensions.test.mjs	Add on an install prompt the engine no longer holds says so in the dialog, and Cancel on one rejects nothing
+2245	fe17442fdad3de61	apps/linux/src/pageFocus.test.mjs	focusIfUnfocused gives the page the keyboard unless a shell field has it, and answers whether it did
+2260	cb2884a57b51a848	apps/browser/src/state/sync/scopeWrites.test.mjs	a sync record or base is written only through putRecord, dropRecord, putBase and dropBase, so the cycle's journal sees every change
+2492	f666f5d810bba18b	apps/browser/src/state/tabs/tabs.test.mjs	tabs closed together come back to their places, from ⇧⌘T or Recently Closed in any order (#2492)
+2572	80a3ca73b2bdbcc1	apps/browser/src/state/commands/menuState.test.mjs	the menu state tells the shell whether links from other apps open in Little Ardia
+2695	382756f4c8c1feb5	apps/browser/src/components/ui/pressFeedback.test.mjs	a pressed glyph dips a little and comes back without a bounce
+2695	884fcaf54baeeb2a	apps/browser/src/components/ui/pressFeedback.test.mjs	nothing used all day springs past its rest
+2702	9bda1f1657fba84f	apps/browser/src/components/sidebar/dragGesture.test.mjs	a press that drifts no farther than a click allows stays a click: no drag starts, so the row and its group never hide
+2702	95e10f143bcdc997	apps/browser/src/components/sidebar/dragGesture.test.mjs	past the click slop the drag takes the press, starts where the pointer is, follows it and ends on release
+2702	e690ce4ce354cd0d	apps/browser/src/components/sidebar/dragGesture.test.mjs	the click slop is the one distance: under it a press is a click, over it a drag
+2714	9a65271371317b1c	apps/browser/src/state/profiles/switcherShown.test.mjs	the profile switcher shows only with several profiles, outside Incognito, unless the owner picked Nothing
+2725	9ac4b2b0e43d971e	apps/browser/src/components/window/dockMotion.test.mjs	a peek's light moves that stay wholly off the window at one height aren't sent; the first visible one and the rest place are
+2772	acb0667a718a650c	apps/browser/src/state/import/importWithheld.test.mjs	an import the engine withheld for a secret says why on the done step and is counted
+2772	dd1a07cd2aaa81a4	apps/browser/src/state/import/importWithheld.test.mjs	with several profiles, the note names the one held back and the others still import
+2862	4c9b8a5196785550	apps/browser/src/state/tabs/tabs.test.mjs	switching tabs in one profile keeps another profile's opener links in the same window
+2917	100e6018b1abfeeb	apps/browser/src/components/profiles/dotsRow.test.mjs	a row too wide to clear the button when centred starts just past it (#2917)
+2933	cbd652ee75784494	apps/browser/src/state/sync/adapters.test.mjs	history: a title Chrome reports while synced visits are being written stays in the list
+2933	d52c8bfc03aa28fe	apps/browser/src/state/sync/adapters.test.mjs	history: a title synced from another Mac doesn't replace the one this Mac's Chrome keeps, so the command bar finds the page without a restart
+2951	c8f599283cf7d1e3	apps/browser/src/state/plugins/removeConfirmed.test.mjs	Cancel in the Remove dialog keeps the plugin, its files and its record
+2951	2925278001aa1d15	apps/browser/src/state/plugins/removeConfirmed.test.mjs	Remove in the dialog removes the plugin
+3003	c3c9b89b32cf6651	apps/browser/src/components/sidebar/liveFolderHeader.test.mjs	a live folder's header starts at its box's edge, as a group's does, so their icons and titles line up (#3003)
+3088	c102b500f1665949	apps/browser/src/components/ui/releaseNativeValue.test.mjs	a native value no view holds is detached once, so its native node is dropped
+3088	2f16e0d3bce741e5	apps/browser/src/components/ui/releaseNativeValue.test.mjs	a tab's toolbar motion releases its four values when the tab goes away
+3088	17a6d5a50d838e81	apps/browser/src/components/ui/releaseNativeValue.test.mjs	a value that never went native, or was already dropped, only loses its listeners
+3141	463988891a2a9073	apps/browser/src/state/sidebar/menus.test.mjs	Sleep Tab sleeps a pinned row, a Top App and a regular tab that Chrome keeps only for automatic sleep, and keeps one holding typed input
+3148	812af45cba458dd1	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, a handed-over pin whose key another profile's tab holds still restores its page (#3148)
+3148	f553f5a284ec3b45	apps/browser/src/state/windows/windowClose.test.mjs	with sharing on, two profiles handed over at once each keep their own Top Apps folder and tab ids (#3148)
+3149	e6e9130a0a3fac9a	apps/browser/src/state/pins/samePagePins.test.mjs	adopting a parked split whose pane the window already holds keeps the split (#3149)
+3149	2eb5bc632e687ca9	apps/browser/src/state/pins/samePagePins.test.mjs	adopting parked pins next to a pin of the same page keeps both; the same pin isn't added twice (#3149)
+3149	177e76d354b48246	apps/browser/src/state/pins/samePagePins.test.mjs	closing a profile's last window parks both pins of one page, and both come back (#3149)
+3149	76663ac5941ce286	apps/browser/src/state/pins/samePagePins.test.mjs	launching with Restore Session off keeps both pins of one page (#3149)
+3149	593fbaf8e14265cd	apps/browser/src/state/pins/samePagePins.test.mjs	reopening a closed copy of a pin whose pin is parked brings that pin back, not a second one (#3149)
+3189	28f5c63f7c14fdb1	apps/browser/src/state/media/pinnedMediaControls.test.mjs	turning sidebar media controls off restyles a pinned player with no change to its tab
+3189	5e5c82727178c218	apps/browser/src/state/media/pinnedMediaControls.test.mjs	with sidebar media controls off, the pointer doesn't treat a pinned player as a media card
+3205	2185c70adfdfea16	apps/browser/src/state/session/pinGuard.test.mjs	a pins-backup.json that exists but the store can't read is not replaced, and the new backup goes beside it (#3205)
+3205	5ba1390307eb8244	apps/browser/src/state/session/pinGuard.test.mjs	when the store answers whether pins-backup.json exists only later, as Linux does, an unreadable one is still kept (#3205)
+3205	363ad3b5579c4d87	apps/browser/src/state/session/pinGuard.test.mjs	with no pins-backup.json at all, the first backup still takes the primary name (#3205)
+3205	3f19ecfb1fef4401	apps/linux/src/host.test.mjs	a document the bootstrap left out counts as there unless the host reads it as missing (#3205)
+3211	1cab25b0929973db	apps/browser/src/components/sidebar/selectedRow.test.mjs	a row measurement that lands after the tracker stops installs no watch
+3211	ffbf2e91c29b0f9a	apps/browser/src/components/sidebar/selectedRow.test.mjs	coming back to a page whose pill still shows re-attaches the icon watch
+3211	e37a21befe9ff89b	apps/browser/src/components/sidebar/selectedRow.test.mjs	moving the hidden pill's tab out of its group, at the same window index, still brings the pill
+3212	a9a9a96dfcb02607	apps/browser/src/state/session/pinGuard.test.mjs	a held session write that drops pins is counted as a real write, not a cosmetic one
+3212	89701753024c6b8e	apps/browser/src/state/session/pinGuard.test.mjs	a quit cancelled while a backup lands doesn't leave saving frozen: later changes still reach session.json
+3225	09c092e6f915e907	apps/browser/src/platform/jsTimersDisplayAsleep.test.mjs	JS timers keep a clock while the display sleeps: React Native's frame tick is not a bare NSScreen CADisplayLink
+3225	7406822dccee02d6	apps/browser/src/platform/jsTimersDisplayAsleep.test.mjs	RCTTiming still sleeps far-off timers on a run-loop NSTimer instead of waiting on frames
+3227	94170851b253f12b	apps/browser/src/state/settings/searchOnClose.test.mjs	closing Settings drops its search, so opening it again starts with an empty field and no results (#3227)
+3339	c1e46c7d5bcc8b87	apps/phone/src/state/toasts/placement.test.ts	over a page the toast clears the floating bar by 64 points, and Android's Material You bar, 8 above the safe area and 64 tall, by its top plus a gap (#3339)
+3347	1cbe936784443e66	packages/ardiacore/tests/pip-back-to-tab-activation-wiring.test.mjs	Back to Tab activates the app over the frontmost app, as Chromium does, not with a cooperative request macOS can decline
+3347	d214ab5a3fa3651a	packages/ardiacore/tests/pip-back-to-tab-activation-wiring.test.mjs	every way back to the tab goes through the one activation and says whether another app was in front
+3352	3791fe6b8eff9aa7	packages/ardiacore/tests/pip-pinch-hittable-wiring.test.mjs	the stand-in's own panel never takes the gesture, and the window gets its alpha back at the hand-off
+3352	0c78558a945c0492	packages/ardiacore/tests/pip-pinch-hittable-wiring.test.mjs	while the stand-in shows a pinch or edge drag, the real window stays where the rest of the gesture lands
+3378	5595004da191dde1	packages/ardiacore/tests/ubo-scriptlets.test.mjs	the bundled proxy wrappers refuse prototype cycles like native functions and never hang
+3378	191d65eb73590817	packages/ardiacore/tests/ubo-scriptlets.test.mjs	the bundled x.com rules leave toString alone and keep the XHR wrapper safe from cycles
+3378	af3df841294d6405	packages/ardiacore/tests/ubo-scriptlets.test.mjs	the patched proxy wrappers refuse prototype cycles like native functions and never hang
+3416	772c532bd9a7dfdb	apps/phone/scripts/one-sqlite-engine.test.mjs	the phone's native code reaches SQLite only through expo-sqlite's engine
+3423	6da8e2b9cd58bc8b	packages/ardiacore/tests/webkit-page-dialogs.test.mjs	a WebKit page's file panel is logged, not shown, in background mode
+3423	c491e380b15fc982	packages/ardiacore/tests/webkit-page-dialogs.test.swift	a hidden tab holds a few dialogs and answers the rest at once, so a page can't pile them up
+3528	8e2f2abe995d67ba	apps/browser/src/components/tabstrip/stripWidths.test.mjs	after the last tab closes and widens its neighbour, closing a middle tab lets the next tab slide into its place at the held width
+3528	c3d274eae97453b1	apps/browser/src/components/tabstrip/stripWidths.test.mjs	closing a middle tab and then the last one at the same spot widens the new last tab only to the closed tab's edge, so its × stays under the pointer
+3528	fe11d5a673b7a83e	apps/browser/src/components/tabstrip/stripWidths.test.mjs	closing the last tab while the pointer stays widens the new last tab into the freed room, so its × is under the pointer and the left edge stays put
+3562	ae49d1c8c48d95d1	apps/browser/src/state/reader/readerPage.test.mjs	the reader page draws no text size or font controls, and nothing it draws changes the look
+3588	ad2b5cdf87c4f8bd	apps/linux/src/readerService.test.mjs	every browser window starts the shared reader service, as the Mac app does
+3631	4f0b4dc64419d868	apps/browser/src/components/window/dockMotion.test.mjs	${arc ? "Arc's" : "Dia's"} layout: the peek usePeek starts slides in on an ease-out over 150 ms that never passes its final width or pulls back (#3631: Arc's 1.5 % overshoot detached the panel from the window's edge)
+3649	848a05e22c2b4b62	apps/browser/src/platform/commandBarFieldEditor.test.mjs	the command bar's field editor keeps its undo to its own editing session, so ⌘Z never reaches a closed field's text
