@@ -44,6 +44,8 @@ control="$data/Chromium/ArdiaControl.json"
 for _ in $(seq 1 300); do [ -s "$control" ] && break; sleep 0.2; done
 [ -s "$control" ] || { echo "FAIL  the ardia command's token server starts  (no $control after 60 s)"; exit 1; }
 pid="$(field pid <"$control")"
+[ -n "$pid" ] && [ "$(node -e 'console.log(Object.hasOwn(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")), "token"))' "$control" 2>/dev/null)" = false ] && ok=1 || ok=0
+check "ArdiaControl.json has no token (the command asks the control socket for it)" $ok
 browse() { "$cli" --data-dir "$data" browse --session smoke "$@" 2>&1 || true; }
 page="http://127.0.0.1:$port/login.html"
 
