@@ -127,7 +127,7 @@ is the only source of which version may be fetched.
     files that compress well are fine. Folders a path implies count as entries. zlib reads the one gzip member,
     checking its CRC and length; bytes after it (a second member, padding) are refused. The per-file ratio comes from
     how much of the stream zlib consumed while that file came out, taken every 4 KB of output. Verifying a kept copy
-    applies the same caps.
+    applies the same caps. A file's ratio is checked before any of it is written.
   - requires the unpacked `plugin.json` to be the pinned name and version, claiming only programs the pin reserves
     for it.
   - trusts nothing but the pin, as VS Code does with its own extensions: no Developer ID signature or notarization is
@@ -526,8 +526,8 @@ Paths go in as `-D` parameters, never into the profile's text.
   `/usr/local` and `/opt/homebrew` (nothing else there, so no `etc`, `var` or a database beside them), the Command Line Tools and
   the Xcode `xcode-select` points to, so `/usr/bin/python3` and `git` work. It reads those trees, `/etc/ssl` and a few
   files programs look up (`passwd`, `group`, `services`, `localtime`, Xcode's license choice). An absolute program also
-  reads its own install folder (`/opt/homebrew/opt/node` for its `bin/node`), except in a shared temp folder, where it
-  reads only itself.
+  reads its own install folder (`/opt/homebrew/opt/node` for its `bin/node`), except in a shared temp folder or straight
+  in `/usr`, `/usr/local` or `/opt/homebrew` (`/usr/bin/python3`, `/opt/homebrew/bin/brew`), where it reads only itself.
 - **main's host** may start nothing, not even a file in its own folder, and can't fork. It reads only the system, its own
   binary and the plugin's folder.
 - **With network** (a sidecar whose plugin is granted it), outbound and local IP, the resolver's socket, the

@@ -467,18 +467,18 @@ enum OfficialArchive {
         if relative.count > 1, let problem = makeFolders(Array(relative.dropLast())) { return problem }
         guard !folders.contains(joined) else { return "\(path) is both a file and a folder" }
         guard folders.count + files.count <= limits.entries else { return "the archive has more than \(limits.entries) entries" }
+        let start = position
+        if entry.size >= limits.ratioFloor, entry.size / inflation.compressed(from: start, to: start + entry.size) > limits.entryRatio {
+          return "\(path) unpacks to more than \(limits.entryRatio) times its compressed size"
+        }
         if let problem = file(joined, entry.size) { return problem }
         files.insert(joined)
-        let start = position
         var left = entry.size
         while left > 0 {
           let take = Int(min(left, Int64(chunk)))
           guard let chunkBytes = readExactly(take) else { return "the archive ends too soon" }
           if let problem = bytes(joined, Data(chunkBytes)) { return problem }
           left -= Int64(take)
-        }
-        if entry.size >= limits.ratioFloor, entry.size / inflation.compressed(from: start, to: position) > limits.entryRatio {
-          return "\(path) unpacks to more than \(limits.entryRatio) times its compressed size"
         }
         if let problem = done(joined, entry.mode & 0o111 != 0) { return problem }
         let skip = padded - Int(entry.size)

@@ -858,7 +858,9 @@ final class OfficialPluginsTests: XCTestCase {
 
   func testOneEntryThatInflatesPastItsRatioIsRefusedAmongOrdinaryOnes() throws {
     let archive = try pluginArchive(manifest(), extra: [file("tool/noise", noise(8 << 20)), file("tool/zeros", Data(count: 6 << 20))])
-    XCTAssertEqual(unpack(archive, into: try freshStage()), "tool/zeros unpacks to more than 200 times its compressed size")
+    let stage = try freshStage()
+    XCTAssertEqual(unpack(archive, into: stage), "tool/zeros unpacks to more than 200 times its compressed size")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: "\(stage)/zeros"), "it is refused before a byte of it is written")
     let ordinary = try pluginArchive(manifest(), extra: [file("tool/noise", noise(8 << 20)), file("tool/text", Data(String(repeating: "a", count: 3 << 20).utf8))])
     XCTAssertNil(unpack(ordinary, into: try freshStage()), "a highly compressible file under the floor is fine")
   }

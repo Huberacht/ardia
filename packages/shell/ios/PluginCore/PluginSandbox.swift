@@ -427,6 +427,7 @@ struct PluginSandbox {
     if folder == "/" || folder.split(separator: "/").count < 2 || protected.contains(where: { Self.overlaps($0, folder) }) { return program }
     if Self.unreadableTrees.contains(where: { Self.overlaps($0, folder) }) && !readable(folder) { return program }
     if Self.sharedTemporaryTrees.contains(where: { Self.overlaps($0, folder) }) && !readable(folder) { return program }
+    if (["/usr"] + Self.packagePrefixes).contains(where: { Self.isInside($0, folder) }) { return program }
     return folder
   }
 

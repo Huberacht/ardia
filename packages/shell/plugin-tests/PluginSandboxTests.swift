@@ -92,6 +92,10 @@ final class PluginSandboxTests: XCTestCase {
     XCTAssertEqual(sandbox(program: "/bin/sh").installFolder(), "/bin/sh")
     XCTAssertEqual(sandbox(program: "\(home)/bin/tool").installFolder(), "\(home)/bin/tool")
     XCTAssertEqual(sandbox(program: "/opt/homebrew/opt/node/bin/node").installFolder(), "/opt/homebrew/opt/node")
+    for direct in ["/opt/homebrew/bin/brew", "/usr/local/bin/tool", "/usr/bin/python3", "/opt/bin/tool"] {
+      XCTAssertEqual(sandbox(program: direct).installFolder(), direct, "a program straight in a prefix's bin doesn't take the whole prefix")
+    }
+    XCTAssertEqual(sandbox(program: "/opt/homebrew/opt/node/bin/node").installFolder(), "/opt/homebrew/opt/node", "a package's own folder still does")
     XCTAssertEqual(sandbox(program: "/private/tmp/shared/bin/tool").installFolder(), "/private/tmp/shared/bin/tool", "a shared temp folder isn't granted for the program in it")
     XCTAssertEqual(sandbox(program: "/private/var/folders/x/T/tool").installFolder(), "/private/var/folders/x/T/tool")
     XCTAssertEqual(sandbox(program: "\(plugin)/bin/tool").installFolder(), "\(plugin)/bin/tool", "its own folder is read through PLUGIN, not INSTALL")

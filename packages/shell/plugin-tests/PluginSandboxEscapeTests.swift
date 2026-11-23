@@ -374,6 +374,15 @@ final class PluginSandboxEscapeTests: XCTestCase {
     XCTAssertEqual(try sandboxed(probe, ["read", "/private/etc/ssl/cert.pem"], network: false, kind: .script).status, EPERM, "nor the system's certificates")
   }
 
+  func testAProgramStraightInAPackagePrefixReadsOnlyThePrefixsToolFolders() throws {
+    for (program, private_) in [("/opt/homebrew/bin/brew", "/opt/homebrew/etc"), ("/opt/homebrew/bin/brew", "/opt/homebrew/var"), ("/usr/bin/python3", "/usr/local/etc")] {
+      guard FileManager.default.fileExists(atPath: program), try Self.run(probe, ["listdir", private_]).status == 0 else { continue }
+      let box = PluginSandbox(home: home, appData: data, configFolder: config, pluginFolder: plugin, pluginData: pluginData, program: program, network: true)
+      let listed = try Self.run("/usr/bin/sandbox-exec", try box.arguments() + [probe, "listdir", private_], in: plugin)
+      XCTAssertEqual(listed.status, EPERM, "\(private_) lists for a helper running \(program): \(listed.output)")
+    }
+  }
+
   func testTheScriptHostCannotStartProgramsOrFork() throws {
     let copy = "\(plugin)/copy"
     try FileManager.default.copyItem(atPath: probe, toPath: copy)
