@@ -3,6 +3,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { citations, DOC } from "./parity-tests.mjs";
+import { LOCK, parseLock } from "./promises.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const workflow = (name) => readFileSync(join(REPO, ".github/workflows", name), "utf8").replace(/\r\n/g, "\n");
@@ -175,6 +177,14 @@ test("the repository job starts on every test test:root runs and every repositor
     const probe = path.endsWith("/") ? `${path}any` : path;
     assert.ok(matched(repo, probe), `a change to ${path}, which a root test names, runs the repository job`);
   }
+});
+
+test("the repository job starts on the parity doc, the promises lock and every test either one cites", () => {
+  const repo = changeFilters(workflow("checks.yml")).repo;
+  const locked = parseLock(readFileSync(join(REPO, LOCK), "utf8")).map((promise) => promise.file);
+  const cited = citations(readFileSync(join(REPO, DOC), "utf8")).found.map((citation) => citation.file);
+  assert.ok(locked.length > 50 && cited.length > 50, "the lock and the doc still name their tests");
+  for (const path of [DOC, LOCK, ...locked, ...cited]) assert.ok(matched(repo, path), `a change to ${path} runs the repository job`);
 });
 
 test("Deploy starts on main only for the paths one of its services deploys from", () => {

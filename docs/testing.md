@@ -73,8 +73,8 @@ holds the rest.
   simulator and the Mac bundle, Metro then Hermes) for the workspace code; the browser's tests in six shares
   (`--test-shard=I/6`) for what those tests read, which reaches past `apps/browser` into every package, the engine
   sources, `apps/linux/src`, `scripts/{lib,security,windows}`, `tests/` and two docs; and `repository, vouch and
-  stale tests` (`test:root`, no install) for `scripts/`, `engine/`, `.github/`, `.claude/`, the site and the release
-  notes. A
+  stale tests` (`test:root`, no install) for `scripts/`, `engine/`, `.github/`, `.claude/`, the site, the release
+  notes, `docs/dia-feature-parity.md` and any test file (for the promises lock and the parity citations). A
   docs-only, phone-app, dashboard or videos change starts none of them. When the filter can't tell (an API error, a
   force push it can't diff, a pull request of 3,000 files or more) or the `which checks run` job fails, every job
   runs. `scripts/ci/workflow-paths.test.mjs` keeps the trigger paths and the filters in step, follows the meadow
@@ -315,6 +315,33 @@ lose or leak data, or when the bug is invisible by eye and has shipped before.
 | `packages/sync` | The 9 convergence cases above, and the crypto's 5 (`docs/sync.md` › Tests) | Sync correctness and encryption |
 | `packages/import/tests/ImportTests.swift` | Importing never writes to the source profile, never leaves its data folder, decrypts logins only with the right key and only after consent | Another browser's data and secrets |
 | `extras/raycast-ardia` | Tab and profile ids, and what's typed into New Tab, are quoted in the AppleScript it sends; its answer reads back into the right tabs and profiles; a profile name matches whole, then by a start only one profile has, ignoring case, and a start several share names them instead of picking one | Script injection; New Window opening the wrong profile |
+
+## Promises: the tests that guard closed bugs
+
+`scripts/ci/promises.lock` holds each regression test that guards a closed bug to what it was when the bug closed.
+One tab-separated line per promise: the closed issue, a hash of the test's source, the test file and the test's name
+(its describe path, `outer › inner`, when the name alone isn't unique in the file). The hash ignores whitespace,
+comments, semicolons, trailing commas and quote style, so reformatting is free. node:test `test(…)` and `it(…)` in
+JavaScript and TypeScript, XCTest `func test…` and Swift Testing `@Test` functions can be locked.
+
+`scripts/ci/promises.test.mjs` (the repository job, which runs on any test file change) fails when a locked test is
+deleted, renamed or its body changes. To change one on purpose:
+
+- the test still guards the bug: `node scripts/ci/promises.mjs --update <issue>` records the new hash, and the
+  lock's diff shows the reviewer which promise moved;
+- it moved or was renamed: fix its file or name in the lock, then `--update <issue>`;
+- it no longer holds (the feature went): delete its line and say why in the pull request.
+
+A fix for a bug adds its regression test with `node scripts/ci/promises.mjs --add <issue> <file> "<test name>"`
+once the issue closes. The seed (2026-11-22) is 167 tests for 85 closed bugs: the #857 rows above, every test
+whose name cites a closed bug's issue, and the tests a closing commit added for its bug, without the telemetry
+counts, perf harnesses and incidental tests those commits also brought. `node scripts/ci/promises.mjs` checks
+the lock in about 0.2 s.
+
+`docs/dia-feature-parity.md` cites tests the same checked way: a code span holding the test file's repo path, or
+`path#test name` for one test in it. `scripts/ci/parity-tests.test.mjs` fails when a cited file or test is gone or a
+test file is named any other way (a bare name, outside a code span), and `node scripts/ci/parity-tests.mjs --list`
+prints each row with its tests.
 
 ## What went, and why
 
