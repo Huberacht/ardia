@@ -8,8 +8,8 @@ import { parseSaved, versionedJson, unchanged, type Migrations, type SavedObject
 import { isFields, isString, numberOr, stringOr } from "../../lib/decode";
 
 const STATE_DOC = "telemetry.json";
-const STATE_VERSION = 1;
-const STATE_MIGRATIONS: Migrations = { 0: unchanged };
+const STATE_VERSION = 2;
+const STATE_MIGRATIONS: Migrations = { 0: unchanged, 1: (doc) => ({ ...doc, versionSince: null, versionColdLaunches: null }) };
 
 export type Watch = {
   watchReport: string | null;

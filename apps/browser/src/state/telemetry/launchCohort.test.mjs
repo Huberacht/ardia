@@ -11,7 +11,7 @@ const versionSince = processStart - 3 * DAY;
 Object.assign(stub.appInfo, { appVersion: "0.3.0", appBuild: "30", osVersion: "27.0.1", arch: "arm64", isolatedInstance: false, processStart, bootTime, launchMarks: {} });
 stub.docs.set(
   "telemetry.json",
-  JSON.stringify({ version: 1, sharing: true, installId: "install", decidedAt: 1, askDoneAt: 1, crashCursor: 0, lastVersion: "0.3.0", lastBuild: "30", sessionOpen: false, lastLaunchAt: bootTime - DAY, versionSince, versionColdLaunches: 1 }),
+  JSON.stringify({ version: 2, sharing: true, installId: "install", decidedAt: 1, askDoneAt: 1, crashCursor: 0, lastVersion: "0.3.0", lastBuild: "30", sessionOpen: false, lastLaunchAt: bootTime - DAY, versionSince, versionColdLaunches: 1 }),
 );
 NativeModules.ACFieldTiming.drain = () => [["launch", "content", Date.now()]];
 globalThis.fetch = async () => ({ status: 200 });
