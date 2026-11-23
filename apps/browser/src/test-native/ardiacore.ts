@@ -77,8 +77,9 @@ const SUFFIXES_FOR_TESTS = ["com", "net", "org", "io", "example", "uk", "co.uk",
 
 function registrableForTests(host: string): string {
   if (/^\d+(\.\d+)*$/.test(host)) return host;
-  const suffix = SUFFIXES_FOR_TESTS.filter((s) => host.endsWith(`.${s}`)).sort((a, b) => b.length - a.length)[0];
-  return suffix ? `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}` : host;
+  if (!host.includes(".")) return host;
+  const suffix = SUFFIXES_FOR_TESTS.filter((s) => host.endsWith(`.${s}`)).sort((a, b) => b.length - a.length)[0] ?? host.split(".").pop()!;
+  return `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}`;
 }
 
 export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[], removed: [] as string[], unsupported: false };

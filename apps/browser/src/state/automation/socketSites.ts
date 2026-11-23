@@ -139,7 +139,7 @@ async function oneSiteOf(value: unknown): Promise<string> {
   });
   const registrable = Array.isArray(domains) && domains.length === 2 ? domains[0] : undefined;
   if (typeof registrable !== "string" || domains[1] !== registrable || !(site === registrable || site.endsWith(`.${registrable}`))) {
-    throw new OpError("bad_request", `${site} isn't one site: it's a public suffix, an IP address or a name outside the public registries, so trusting it would cover sites run by others. Give the site itself, like example.com or app.example.com.`);
+    throw new OpError("bad_request", `${site} isn't one site: it's a public suffix or an IP address, so trusting it would cover sites run by others. Give the site itself, like example.com or app.example.com.`);
   }
   return site;
 }

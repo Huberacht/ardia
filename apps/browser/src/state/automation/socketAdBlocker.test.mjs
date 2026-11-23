@@ -45,15 +45,15 @@ test("blockAds takes out only an entry the list shows, and names the broader ent
   assert.deepEqual(blocker.removed, []);
 });
 
-test("a public suffix, IP address or name outside the public registries is refused, since it would trust sites run by others", async () => {
+test("a public suffix or IP address is refused, since it would trust sites run by others", async () => {
   await freshWindow();
   reset();
-  for (const site of ["co.uk", "github.io", "s3.amazonaws.com", "com", "0.1", "127.0.0.1", "192.168.0.1", "intranet.corp", "localhost"]) {
+  for (const site of ["co.uk", "github.io", "s3.amazonaws.com", "com", "0.1", "127.0.0.1", "192.168.0.1", "localhost"]) {
     const reply = await call("sites.allowAds", { site });
     assert.equal(reply.error?.code, "bad_request", site);
   }
-  for (const site of ["user.github.io", "shop.co.uk", "example.com", "bucket.s3.amazonaws.com", "amazonaws.com"]) await ok("sites.allowAds", { site });
-  assert.deepEqual(blocker.written, ["user.github.io", "shop.co.uk", "example.com", "bucket.s3.amazonaws.com", "amazonaws.com"]);
+  for (const site of ["user.github.io", "shop.co.uk", "example.com", "bucket.s3.amazonaws.com", "amazonaws.com", "wiki.intranet.corp"]) await ok("sites.allowAds", { site });
+  assert.deepEqual(blocker.written, ["user.github.io", "shop.co.uk", "example.com", "bucket.s3.amazonaws.com", "amazonaws.com", "wiki.intranet.corp"], "a name under an unknown top-level domain is one site, as Chromium counts it");
 });
 
 test("with the ad blocker off in Settings, the trusted list still changes and the answer says it's off", async () => {
