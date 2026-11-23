@@ -46,7 +46,7 @@ const NOT_SHIPPED = [
   /(^|\/)(THIRD_PARTY_NOTICES|LICENSE|NOTICE)[^/]*$/,
 ];
 
-const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^[\d.]+$|^0x[\da-f.]+$|^(com|org|net)\./i;
+const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^127(\.\d+){3}$|^0\.0\.0\.0$|^(com|org|net)\./i;
 const URL_HOST = /\b(?:https?|wss?):\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi;
 const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|co|me|tv|gov|edu|info|cloud|goog))["'`]/gi;
 const NATIVE = /\.(cc|cpp|h|mm|m|swift|rs|patch)$/;

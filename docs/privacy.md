@@ -4,7 +4,7 @@ This is the list of every host Ardia (not the pages you open) talks to, how each
 Chromium service that is turned off. `apps/browser/src/privacyEndpoints.test.mjs` keeps it honest: it scans the
 shipped sources of the Mac, Linux and Windows apps for hard-coded `http(s)://` and `ws(s)://` hosts and fails when one
 isn't on this page (in native and engine code also a quoted bare host, such as a redirect allowlist entry; in a patch, the lines it adds and the context it keeps), and it fails when a row below cites a file that's gone or a literal that's no longer in it.
-Reserved names (`.example`, `.test`, `.invalid`, `.localhost`, `.local`) and IP literals are skipped; tests, fixtures,
+Reserved names (`.example`, `.test`, `.invalid`, `.localhost`, `.local`) and the loopback addresses (`127.x.x.x`, `0.0.0.0`) are skipped; any other IP literal must be listed like a host; tests, fixtures,
 build scripts and docs aren't shipped and aren't scanned.
 
 ## How requests travel
