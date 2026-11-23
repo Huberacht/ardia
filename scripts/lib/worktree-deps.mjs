@@ -319,11 +319,19 @@ export function isOurGuard(text) {
 export function checkGuardSlot(worktree) {
   const tracked = spawnSync("git", ["-C", worktree, "ls-files", "--error-unmatch", GUARD_FILE], { stdio: "ignore" }).status === 0;
   if (tracked) throw new Error(`${worktree} tracks its own ${GUARD_FILE}, so its pnpm install can't be blocked; link it by hand or not at all`);
-  const stat = lstatOrNull(path.join(worktree, GUARD_FILE));
-  if (stat && !stat.isFile()) throw new Error(`${path.join(worktree, GUARD_FILE)} isn't a regular file; move it away first`);
-  const existing = stat ? readIfExists(path.join(worktree, GUARD_FILE)) : null;
+  const file = path.join(worktree, GUARD_FILE);
+  const stat = lstatOrNull(file);
+  if (stat && !stat.isFile()) throw new Error(`${file} isn't a regular file; move it away first`);
+  let existing = null;
+  if (stat) {
+    try {
+      existing = fs.readFileSync(file, "utf8");
+    } catch (error) {
+      throw new Error(`can't read ${file} (${error.code}); move it away first`);
+    }
+  }
   if (existing !== null && !isOurGuard(existing)) {
-    throw new Error(`${path.join(worktree, GUARD_FILE)} is someone else's pnpmfile; move it away first (setup would replace it and --undo would delete it)`);
+    throw new Error(`${file} is someone else's pnpmfile; move it away first (setup would replace it and --undo would delete it)`);
   }
 }
 
@@ -338,7 +346,7 @@ sub parent_gone {
   my $buf;
   return sysread(STDIN, $buf, 64) ? 0 : 1;
 }
-open(my $fh, ">>", $lock) or die "worktree-setup: cannot open $lock: $!\\n";
+open(my $fh, ">>", $lock) or do { open(my $f, ">", "$ready.failed"); print $f "cannot open $lock: $!"; close $f; exit 74 };
 my $deadline = time + $wait;
 until (flock($fh, LOCK_EX | LOCK_NB)) {
   if (time >= $deadline) { open(my $f, ">", "$ready.timeout"); close $f; exit 75; }
@@ -358,6 +366,7 @@ export function withKernelLock(lockFile, action, { waitSeconds = 300 } = {}) {
   const deadline = Date.now() + (waitSeconds + 5) * 1000;
   try {
     while (!fs.existsSync(ready)) {
+      if (fs.existsSync(`${ready}.failed`)) throw new Error(`can't take ${lockFile}: ${readIfExists(`${ready}.failed`)}`);
       if (fs.existsSync(`${ready}.timeout`) || Date.now() > deadline) throw new Error(`${lockFile} is still held after ${waitSeconds} s`);
       Atomics.wait(sleeper, 0, 0, 10);
     }
@@ -366,6 +375,7 @@ export function withKernelLock(lockFile, action, { waitSeconds = 300 } = {}) {
     holder.kill("SIGKILL");
     fs.rmSync(ready, { force: true });
     fs.rmSync(`${ready}.timeout`, { force: true });
+    fs.rmSync(`${ready}.failed`, { force: true });
   }
 }
 
@@ -373,10 +383,15 @@ function excludeFromGit(worktree, names) {
   const result = spawnSync("git", ["-C", worktree, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8" });
   if (result.status !== 0) return null;
   const file = path.resolve(worktree, gitLine(result.stdout));
+  const top = spawnSync("git", ["-C", worktree, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (top.status !== 0) return null;
+  const relative = path.relative(fs.realpathSync(gitLine(top.stdout)), worktree).split(path.sep).join("/");
+  const escape = (text) => text.replace(/[\\*?[]/g, "\\$&").replace(/ $/, "\\ ");
+  const rules = names.map((name) => `/${relative ? `${escape(relative)}/` : ""}${escape(name)}`);
   withKernelLock(path.join(path.dirname(file), "exclude.worktree-setup.lock"), () => {
     const current = readIfExists(file) ?? "";
     const lines = new Set(current.split(/\r?\n/));
-    const missing = names.map((name) => `/${name}`).filter((line) => !lines.has(line));
+    const missing = rules.filter((line) => !lines.has(line));
     if (missing.length) fs.appendFileSync(file, `${current && !current.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   });
   return file;
@@ -529,7 +544,7 @@ export function setupWorktree(worktreeArg, options = {}) {
   const key = dependencyKey(inputs);
   const previous = markerOf(worktree);
   const previouslyManaged = (previous?.projects ?? []).map((project) => checkedProject(worktree, project));
-  const ownInstall = ownInstallDirs(worktree, inputs.projects.filter((project) => !previouslyManaged.includes(project)), options.replace ?? false);
+  ownInstallDirs(worktree, inputs.projects.filter((project) => !previouslyManaged.includes(project)), options.replace ?? false);
 
   fs.mkdirSync(cacheRoot, { recursive: true });
   dropNeverIndex(cacheRoot);
@@ -544,15 +559,19 @@ export function setupWorktree(worktreeArg, options = {}) {
   if (!fs.existsSync(path.join(final, CACHE_STAMP))) throw new Error(`building ${final} didn't publish ${CACHE_STAMP}`);
   fs.utimesSync(path.join(final, CACHE_STAMP), new Date(), new Date());
   const plans = planAll(worktree, fs.realpathSync(final), inputs.projects);
-  for (const dir of ownInstall) fs.rmSync(dir, { recursive: true, force: true });
   const identity = identityOf(worktree);
   const { record, sourceRoot, marker, markerFile, links, warnings } = withKernelLock(registryLock(cacheRoot), () => {
     const stamp = path.join(final, CACHE_STAMP);
     if (!fs.existsSync(stamp)) throw new Error(`${final} isn't built (or was just pruned); run worktree-setup again`);
     fs.utimesSync(stamp, new Date(), new Date());
+    fs.rmSync(path.join(final, ".npmrc"), { force: true });
+    const current = markerOf(worktree);
+    const managedNow = (current?.projects ?? []).map((project) => checkedProject(worktree, project));
+    const ownNow = ownInstallDirs(worktree, inputs.projects.filter((project) => !managedNow.includes(project)), options.replace ?? false);
+    for (const dir of ownNow) fs.rmSync(dir, { recursive: true, force: true });
     const claimed = readJson(recordFile(cacheRoot, identity))?.keys ?? [];
-    const record = writeClaim(cacheRoot, worktree, identity, [...new Set([...claimed, ...(previous?.key ? [previous.key] : []), key])]);
-    const linked = linkInto(worktree, fs.realpathSync(final), key, inputs.projects, plans, previous);
+    const record = writeClaim(cacheRoot, worktree, identity, [...new Set([...claimed, ...(current?.key ? [current.key] : []), key])]);
+    const linked = linkInto(worktree, fs.realpathSync(final), key, inputs.projects, plans, current);
     writeClaim(cacheRoot, worktree, identity, [key]);
     return { record, ...linked };
   });
@@ -581,13 +600,14 @@ export function undoWorktree(worktreeArg, { log = console.log } = {}) {
   const marker = markerOf(worktree);
   if (!marker) throw new Error(`${worktree} isn't linked by worktree-setup (no node_modules/${MARKER})`);
   const projects = new Set(["", ...(Array.isArray(marker.projects) ? marker.projects : [])].map((project) => checkedProject(worktree, project)));
-  for (const project of [...projects].sort().reverse()) fs.rmSync(path.join(worktree, project, "node_modules"), { recursive: true, force: true });
-  const guard = path.join(worktree, GUARD_FILE);
-  if (lstatOrNull(guard)?.isFile() && isOurGuard(readIfExists(guard))) fs.rmSync(guard);
   if (marker.root) {
     const cacheRoot = path.dirname(marker.root);
     withKernelLock(registryLock(cacheRoot), () => fs.rmSync(recordFile(cacheRoot, identityOf(worktree)), { force: true }));
   }
+  for (const project of [...projects].filter(Boolean).sort().reverse()) fs.rmSync(path.join(worktree, project, "node_modules"), { recursive: true, force: true });
+  const guard = path.join(worktree, GUARD_FILE);
+  if (lstatOrNull(guard)?.isFile() && isOurGuard(readIfExists(guard))) fs.rmSync(guard);
+  fs.rmSync(path.join(worktree, "node_modules"), { recursive: true, force: true });
   log(`worktree-setup: removed the links in ${worktree} (${[...projects].map((p) => p || ".").join(", ")}) and its pnpm guard; ${marker.root} is untouched`);
 }
 
@@ -692,7 +712,13 @@ export function liveKeys(cacheRoot) {
   return live;
 }
 
+export function checkedAge(days) {
+  if (typeof days !== "number" || !Number.isFinite(days) || days < 0) throw new Error(`--older-than takes a number of days, 0 or more (got ${days})`);
+  return days;
+}
+
 export function pruneCaches({ cacheRoot = defaultCacheRoot(), olderThanDays = 7, now = Date.now(), log = console.log } = {}) {
+  checkedAge(olderThanDays);
   const root = path.resolve(cacheRoot);
   if (!fs.existsSync(root)) return [];
   return withKernelLock(registryLock(root), () => {
@@ -740,7 +766,7 @@ export function parseArgs(argv) {
         options.cacheRoot = path.resolve(value());
         break;
       case "--older-than":
-        options.olderThanDays = Number(value());
+        options.olderThanDays = checkedAge(Number(value()));
         break;
       case "--replace":
         options.replace = true;

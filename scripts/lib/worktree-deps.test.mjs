@@ -24,6 +24,7 @@ import {
   setupWorktree,
   undoWorktree,
   withKernelLock,
+  parseArgs,
   workspacePatterns,
   workspaceProjects,
   worktreeStatus,
@@ -47,6 +48,13 @@ const write = (file, text = "") => {
 let serial = 0;
 const fresh = (name) => path.join(root, `${name}-${serial++}`);
 const quiet = () => {};
+const lstatOrNullForTest = (file) => {
+  try {
+    return fs.lstatSync(file);
+  } catch {
+    return null;
+  }
+};
 
 function makeWorktree({ patch = "patch v1\n" } = {}) {
   const dir = fresh("worktree");
@@ -320,19 +328,24 @@ test("prune keeps a cache any recorded worktree or scratch export still links, g
 
 const childLock = (lockFile, holdMs) =>
   spawn(process.execPath, ["--input-type=module", "-e", `import { withKernelLock } from ${JSON.stringify(path.join(here, "worktree-deps.mjs"))}; withKernelLock(${JSON.stringify(lockFile)}, () => { process.stdout.write("held\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${holdMs}); });`], { stdio: ["ignore", "pipe", "inherit"] });
-const once = (stream, text) => new Promise((resolve) => stream.on("data", (d) => String(d).includes(text) && resolve()));
+const held = (child) =>
+  new Promise((resolve, reject) => {
+    child.stdout.on("data", (d) => String(d).includes("held") && resolve());
+    child.on("exit", (code, signal) => reject(new Error(`the lock child exited (${code ?? signal}) before it held the lock`)));
+  });
 
-test("the kernel lock admits one holder at a time and frees itself when its holder dies", async () => {
+test("the kernel lock admits one holder at a time and frees itself when its holder dies", async (t) => {
   const lockFile = path.join(fresh("lock"), "registry.lock");
   assert.equal(withKernelLock(lockFile, () => 7), 7);
   const holder = childLock(lockFile, 1500);
-  await once(holder.stdout, "held");
+  await held(holder);
   const started = Date.now();
   assert.throws(() => withKernelLock(lockFile, () => 1, { waitSeconds: 0 }), /still held/);
   assert.equal(withKernelLock(lockFile, () => 2), 2);
   assert.ok(Date.now() - started >= 900, "waited for the holder");
-  const blocker = childLock(lockFile, 4000);
-  await once(blocker.stdout, "held");
+  const blocker = childLock(lockFile, 600000);
+  t.after(() => blocker.kill("SIGKILL"));
+  await held(blocker);
   const waiter = childLock(lockFile, 0);
   await new Promise((resolve) => setTimeout(resolve, 500));
   waiter.kill("SIGKILL");
@@ -342,7 +355,7 @@ test("the kernel lock admits one holder at a time and frees itself when its hold
   blocker.kill("SIGKILL");
   await new Promise((resolve) => blocker.on("close", resolve));
   const crashed = childLock(lockFile, 60000);
-  await once(crashed.stdout, "held");
+  await held(crashed);
   crashed.kill("SIGKILL");
   await new Promise((resolve) => crashed.on("close", resolve));
   const again = Date.now();
@@ -664,7 +677,7 @@ test("concurrent setups on one new key build it once under the pod lock, and exc
   for (const { code, out } of results) assert.equal(code, 0, out);
   assert.equal(fs.readFileSync(path.join(dir, "installs"), "utf8").trim().split("\n").length, 1);
   const exclude = fs.readFileSync(path.join(repo, ".git", "info", "exclude"), "utf8").split("\n");
-  assert.equal(exclude.filter((line) => line === `/${GUARD_FILE}`).length, 1);
+  for (const n of [0, 1, 2]) assert.equal(exclude.filter((line) => line === `/w${n}/${GUARD_FILE}`).length, 1);
   for (const worktree of worktrees) assert.ok(fs.existsSync(path.join(worktree, "node_modules", "x", "index.js")));
 });
 
@@ -805,4 +818,114 @@ test("CR12: setup drops .metadata_never_index into the given home, not the real 
   fs.mkdirSync(path.join(home, "ardia-scratch"), { recursive: true });
   setup(makeWorktree(), { home });
   assert.ok(fs.existsSync(path.join(home, "ardia-scratch", ".metadata_never_index")));
+});
+
+test("CR14: exclude rules are written relative to the git top level, so they hide a subfolder export's files", () => {
+  const { setup } = harness();
+  const repo = gitRepo(fresh("repo"));
+  const exported = path.join(repo, "exports", "w0");
+  fs.cpSync(makeWorktree(), exported, { recursive: true });
+  setup(exported);
+  const exclude = fs.readFileSync(path.join(repo, ".git", "info", "exclude"), "utf8").split("\n");
+  assert.ok(exclude.includes(`/exports/w0/${GUARD_FILE}`), exclude.join("|"));
+  assert.equal(gitIn(repo, "check-ignore", "-q", `exports/w0/${GUARD_FILE}`).status, 0);
+  assert.equal(gitIn(repo, "check-ignore", "-q", "exports/w0/.metadata_never_index").status, 0);
+});
+
+test("CR15: --replace keeps the own install if the cache vanishes before the locked check", () => {
+  const { cacheRoot, setup } = harness();
+  setup(makeWorktree());
+  const worktree = makeWorktree();
+  write(path.join(worktree, "node_modules", "real-install", "index.js"), "mine");
+  const realRealpath = fs.realpathSync;
+  let pruned = false;
+  const { key } = { key: dependencyKey(installInputs(worktree, RUNTIME)) };
+  const stamp = path.join(cacheRoot, key, CACHE_STAMP);
+  const realExists = fs.existsSync;
+  let checks = 0;
+  const restore = () => {
+    fs.existsSync = realExists;
+    fs.realpathSync = realRealpath;
+  };
+  fs.existsSync = (file) => {
+    if (file === stamp && ++checks === 3 && !pruned) {
+      pruned = true;
+      removeTree(path.join(cacheRoot, key));
+    }
+    return realExists(file);
+  };
+  try {
+    assert.throws(() => setup(worktree, { replace: true }), /isn't built \(or was just pruned\)/);
+  } finally {
+    restore();
+  }
+  assert.ok(pruned);
+  assert.equal(fs.readFileSync(path.join(worktree, "node_modules", "real-install", "index.js"), "utf8"), "mine");
+});
+
+test("CR16: cleanup uses the inventory read under the registry lock, not the one read before the build", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  setup(worktree);
+  write(path.join(worktree, "patches", "left-pad@1.0.0.patch"), "patch v2\n");
+  const build = ({ worktree: from, cacheRoot, runtime }) => {
+    const markerFile = path.join(from, "node_modules", MARKER);
+    const marker = JSON.parse(fs.readFileSync(markerFile, "utf8"));
+    fs.writeFileSync(markerFile, JSON.stringify({ ...marker, projects: [...marker.projects, "packages/kit"] }));
+    fs.mkdirSync(path.join(from, "packages", "kit", "node_modules"), { recursive: true });
+    fs.symlinkSync("/gone", path.join(from, "packages", "kit", "node_modules", "stale-link"));
+    return buildCache({ worktree: from, cacheRoot, runtime, install: fakeInstall });
+  };
+  setup(worktree, { build });
+  assert.equal(lstatOrNullForTest(path.join(worktree, "packages", "kit", "node_modules", "stale-link")), null, "the concurrently managed folder was cleaned");
+});
+
+test("CR17: undo releases the claim before removing anything, so a lock failure leaves it retryable", () => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  setup(worktree);
+  const lockFile = path.join(cacheRoot, ".registry.lock");
+  fs.rmSync(lockFile, { force: true });
+  fs.mkdirSync(lockFile);
+  assert.throws(() => undoWorktree(worktree, { log: quiet }), /cannot open|can't take/);
+  assert.ok(markerState(worktree).key, "the marker is still there");
+  assert.ok(fs.existsSync(path.join(worktree, "node_modules", "react")));
+  fs.rmdirSync(lockFile);
+  undoWorktree(worktree, { log: quiet });
+  assert.ok(!fs.existsSync(path.join(worktree, "node_modules")));
+  assert.deepEqual(fs.readdirSync(path.join(cacheRoot, USERS_DIR)), []);
+});
+
+test("CR18: an age that isn't a finite, non-negative number is refused before prune scans", () => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  const { key } = setup(worktree);
+  undoWorktree(worktree, { log: quiet });
+  for (const age of [NaN, -1, Infinity]) assert.throws(() => pruneCaches({ cacheRoot, olderThanDays: age, log: quiet }), /--older-than/);
+  assert.throws(() => parseArgs(["--prune", "--older-than", "typo"]), /--older-than/);
+  assert.equal(parseArgs(["--prune", "--older-than", "0"]).olderThanDays, 0);
+  assert.ok(fs.existsSync(path.join(cacheRoot, key, CACHE_STAMP)));
+  assert.deepEqual(pruneCaches({ cacheRoot, olderThanDays: 0, now: Date.now() + 1000, log: quiet }), [path.join(cacheRoot, key)]);
+});
+
+test("a cache hit removes a stray .npmrc left by a build from before it was dropped", () => {
+  const { setup } = harness();
+  const { sourceRoot } = setup(makeWorktree());
+  fs.writeFileSync(path.join(sourceRoot, ".npmrc"), "//registry.example/:_authToken=old\n", { mode: 0o644 });
+  setup(makeWorktree());
+  assert.ok(!fs.existsSync(path.join(sourceRoot, ".npmrc")));
+});
+
+test("an unreadable .pnpmfile.cjs fails setup instead of being replaced", { skip: process.getuid?.() === 0 && "root reads anything" }, () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  const file = path.join(worktree, GUARD_FILE);
+  fs.writeFileSync(file, "module.exports = { hooks: {} };\n");
+  fs.chmodSync(file, 0o000);
+  try {
+    assert.throws(() => setup(worktree), /can't read .*\.pnpmfile\.cjs/);
+  } finally {
+    fs.chmodSync(file, 0o644);
+  }
+  assert.equal(fs.readFileSync(file, "utf8"), "module.exports = { hooks: {} };\n");
 });
