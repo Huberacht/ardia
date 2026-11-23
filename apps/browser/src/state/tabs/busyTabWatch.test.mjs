@@ -719,3 +719,25 @@ test("closing a tab the busy process held drops the cached owners, so the tab le
   assert.equal(globalThis.busyTest.toasts.length, 1, "the next tick looks again instead of trusting owners cached a few seconds before");
   webviews.clear();
 });
+
+test("a tab that leaves the warned site while Keep Running's site check is pending saves nothing", async () => {
+  const start = Date.now() + 12500 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 121, tabIds: [hidden] }];
+  await burn(start, 2, { 121: 1 });
+  let answer;
+  globalThis.busyTest.validate = () => new Promise((resolve) => (answer = resolve));
+  try {
+    globalThis.busyTest.toasts[0].secondary.run();
+    await settle();
+    S().updateTab(hidden, { url: "https://elsewhere.example/" });
+    answer(true);
+    await settle();
+    assert.deepEqual(S().settings.keepActiveSites, [], "the tab went to another site while the check ran, so the old one isn't saved");
+    assert.equal(globalThis.busyTest.toasts.length, 1, "and nothing is confirmed");
+  } finally {
+    globalThis.busyTest.validate = null;
+  }
+  webviews.clear();
+});

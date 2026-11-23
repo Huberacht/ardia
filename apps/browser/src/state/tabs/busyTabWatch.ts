@@ -168,15 +168,17 @@ function warnAboutTabs(windowId: string, pid: number, ownerTabIds: string[], now
     secondary: {
       title: "Keep Running",
       run: () => {
-        if (!wanted()) return;
-        const now = useBrowser.getState();
-        if (tabIds.some((id) => !hasTab(now, id) || siteToKeepActive(now.tabs[id]!.url) !== site)) return;
+        const onWarnedSite = () => {
+          const now = useBrowser.getState();
+          return tabIds.every((id) => hasTab(now, id) && siteToKeepActive(now.tabs[id]!.url) === site);
+        };
+        if (!wanted() || !onWarnedSite()) return;
         noteBusyTab("busy_tab_kept_running", consentToken());
         if (!site) {
           for (const id of tabIds) keptTabs.add(id);
           return showToast(windowId, `“${name}” will keep running`, undefined, { icon: ICON });
         }
-        void keepSiteActive(site, wanted).then((error) => {
+        void keepSiteActive(site, () => wanted() && onWarnedSite()).then((error) => {
           const saved = !error && useBrowser.getState().settings.keepActiveSites.includes(site);
           if (saved && wanted() && mayConfirm(windowId, warningId)) showToast(windowId, `${toastName(site)} will keep running`, undefined, { icon: ICON });
         });
