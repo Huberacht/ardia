@@ -47,16 +47,20 @@ test("a takeover anchors on the window's origin from the press, taken before mac
   const asking = move.slice(move.indexOf("static func asksWindowServer"), move.indexOf("static func follow"));
   const origin = asking.indexOf("let pressOrigin = window.frame.origin");
   assert.ok(origin > 0 && origin < asking.indexOf("dragWithCompletion(window, dragWithCompletionSelector, event)"), "the origin is read before the native drag can move the window");
-  assert.match(asking, /follow\(window, from: event, stamp: stamp, anchoredAt: pressOrigin\)/);
+  assert.match(asking, /follow\(window, from: event, stamp: stamp, anchoredAt: pressOrigin, countsTakeover: true\)/);
   const follow = move.slice(move.indexOf("static func follow"), move.indexOf("private static let gestureEvents"));
   assert.match(follow, /let origin = anchoredAt \?\? window\.frame\.origin/);
   assert.match(move, /WindowDragTakeover\.anchoredOrigin\(origin: origin, press: start, pointer: pointer\)/);
 });
 
-test("a takeover is counted only once Ardia's loop has admitted the window", () => {
+test("a takeover is counted as soon as Ardia's loop admits the window, not before and not when the drag ends", () => {
   const asking = move.slice(move.indexOf("static func asksWindowServer"), move.indexOf("static func follow"));
-  assert.match(asking, /if follow\(window, from: event, stamp: stamp, anchoredAt: pressOrigin\) \{\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragTakeover"\]\)\)\s*\}/);
-  assert.ok(asking.indexOf('"windowDragTakeover"') > asking.indexOf("if follow("), "nothing counts a takeover before follow says yes");
+  assert.match(asking, /_ = follow\(window, from: event, stamp: stamp, anchoredAt: pressOrigin, countsTakeover: true\)/);
+  assert.ok(!asking.includes('"windowDragTakeover"'), "asksWindowServer never counts a takeover itself");
+  const follow = move.slice(move.indexOf("static func follow"), move.indexOf("private static let gestureEvents"));
+  const guardEnd = follow.indexOf("else { return false }");
+  const sent = follow.indexOf('if countsTakeover { ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"])) }');
+  assert.ok(guardEnd > 0 && sent > guardEnd && sent < follow.indexOf("while window.isVisible"), "counted after the guard admits the window and before the loop runs");
 });
 
 test("a press the window server owns in the title bar announces nothing, so a click there keeps Little Ardia's landing fit", () => {

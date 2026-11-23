@@ -180,19 +180,20 @@ enum WindowMove {
           guard let window,
                 WindowDragTakeover.outcome(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: queuedPressAt(), held: true) == .takeOver
           else { return }
-          if follow(window, from: event, stamp: stamp, anchoredAt: pressOrigin) {
-            ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
-          }
+          _ = follow(window, from: event, stamp: stamp, anchoredAt: pressOrigin, countsTakeover: true)
         }
       }
     }
     return true
   }
 
-  static func follow(_ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin(), anchoredAt: NSPoint? = nil) -> Bool {
+  static func follow(
+    _ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin(), anchoredAt: NSPoint? = nil, countsTakeover: Bool = false
+  ) -> Bool {
     guard !following, event.type == .leftMouseDown, event.clickCount < 2,
           window.isMovable, !window.styleMask.contains(.fullScreen), window.isVisible
     else { return false }
+    if countsTakeover { ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"])) }
     following = true
     moving = window
     ArdiaHost.beginPressLoop("windowMove")
