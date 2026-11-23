@@ -29,6 +29,7 @@ packages/core-rs                          shared Rust core, C ABI (Track 1)
   ├─ ardia-sync-core                      vault format, keys, recovery phrase
   ├─ ardia-import-core                    browser data parsers
   ├─ ardia-update-core                    signed manifest checks
+  ├─ ardia-update-ffi                     its extern "C" + header until a platform calls it
   └─ ardia-ffi                            extern "C" + cbindgen header
 engine/chromium                           Chrome services as ac_* calls, all platforms (Track 2)
 engine/ardiacore-desktop                  WebUI host shared by Linux and Windows (Tracks 2, 4)
@@ -65,7 +66,7 @@ After that, the rule for every later change is:
 
 - **Sync** (first). The vault format is already byte-compatible on macOS, Linux, Windows and Android: `NNS1` magic, HKDF-SHA256 info strings `file-key`, `name-key`, `password-key`, `password-nonce-key`, AES-256-GCM with the `NNS1 + "<chain>/<scope>/<file>"` associated data, u32be length + 1024-byte padding, the deterministic password nonce, base32 folder tags, BIP39 English with 4-letter prefixes (`docs/sync.md`). Rust replaces `SyncCrypto.swift`, `RecoveryPhrase.swift`, `Wordlist.swift`, `ac_linux_sync_{crypto,wordlist,json}.cc` and later the Kotlin copy. Keychain, libsecret and DPAPI key storage stay native.
 - **Import parsers.** Netscape HTML, CSV, Chromium bookmarks and search engines, SNSS sessions, Firefox and Zen session JSON, Arc and Dia sidebars, ZIP, Firefox key4/PBE/JWE, Chromium v10/v11 blobs once the key is known. The output is the existing `ImportResult` JSON. Discovery, the OS key unlock (Keychain safe storage, libsecret/KWallet, DPAPI), Safari Full Disk Access and SQLite snapshots stay native.
-- **Update manifest signatures.** Ed25519 over the manifest. Linux checks one today in a shell script; Windows checks only an unsigned SHA-256 and gets the check for the first time.
+- **Update manifest signatures.** Ed25519 over the manifest. Linux checks one today in a shell script; Windows checks only an unsigned SHA-256 and gets the check for the first time. `ardia-update-core` verifies the Linux manifest with the helper's exact rules and the shared vectors in `packages/core-rs/tests/update-vectors.json` (#3963); its C ABI is `libardia_update` (`packages/core-rs/ABI.md`) until a platform calls it, so neither engine key moves before then.
 - **Plugin policy.** Fetch policy, URL parsing, archive and pin checks, storage limits and budgets out of `packages/shell/ios/PluginCore`, shared with `packages/plugin-broker`'s QuickJS host. This happens when the desktop host gets a plugin manager, not before. `packages/plugin-broker` joins the same CI job now so it stops rotting.
 
 **Not moved:** crash dump parsing (each platform's format differs, 56 shared lines on Linux) and config/document I/O (mostly file calls). They don't repay a boundary.

@@ -14,6 +14,11 @@ on:
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_crypto.cc"
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_wordlist.cc"
       - "engine/ardiacore-linux/copies.tsv"
+      - "engine/ardiacore-linux/src/ardia/linux/ac_linux_self_update_policy.h"
+      - "scripts/linux/ardia-update"
+      - "scripts/linux/linux-update.pem"
+      - "apps/linux/src/updateReleases.ts"
+      - "apps/browser/src/lib/versions.ts"
       - ".github/workflows/rust.yml"
   push:
     branches: [main]
@@ -84,18 +89,18 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test, vectors and header drift
         run: cargo test --locked --all-features
-      - name: Release static library
-        run: cargo build --locked --release -p ardia-ffi
+      - name: Release static libraries
+        run: cargo build --locked --release -p ardia-ffi -p ardia-update-ffi
       - name: The shared and static libraries export exactly the header's functions in every build
         if: runner.os != 'Windows'
         run: |
           python3 -I tests/check_exports.py
-          for build in "--all-targets -p ardia-ffi" "--all-targets --all-features" "--workspace --all-targets --all-features"; do
+          for build in "--all-targets -p ardia-ffi -p ardia-update-ffi" "--all-targets --all-features" "--workspace --all-targets --all-features"; do
             echo "cargo build --release $build"
             cargo build --locked --release $build
             python3 -I tests/check_exports.py
           done
-          cargo build --locked --release -p ardia-ffi
+          cargo build --locked --release -p ardia-ffi -p ardia-update-ffi
       - name: C and C++ smoke against the static library
         if: runner.os != 'Windows'
         run: |
@@ -105,6 +110,10 @@ jobs:
           "$RUNNER_TEMP/ardia-core-smoke"
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic -I include tests/cpp/smoke.cc target/release/libardia_core.a $extra -o "$RUNNER_TEMP/ardia-core-smoke-cpp"
           "$RUNNER_TEMP/ardia-core-smoke-cpp"
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I include tests/c/update_smoke.c target/release/libardia_update.a $extra -o "$RUNNER_TEMP/ardia-update-smoke"
+          "$RUNNER_TEMP/ardia-update-smoke"
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -I include tests/cpp/update_smoke.cc target/release/libardia_update.a $extra -o "$RUNNER_TEMP/ardia-update-smoke-cpp"
+          "$RUNNER_TEMP/ardia-update-smoke-cpp"
       - name: Linux C++ sync against the shared vectors
         if: runner.os == 'Linux'
         env:
@@ -112,6 +121,15 @@ jobs:
         run: |
           dpkg -s libssl-dev >/dev/null 2>&1 || (sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev)
           python3 -I tests/linux-sync/test_linux_sync.py -v
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        if: runner.os == 'Linux'
+        with:
+          node-version: 24
+      - name: Linux updater, engine policy, OpenSSL and TypeScript against the shared update vectors
+        if: runner.os == 'Linux'
+        env:
+          ARDIA_REQUIRE_LINUX_CROSSCHECK: "1"
+        run: python3 -I tests/linux-update/test_linux_update.py -v
 
   plugin-broker:
     needs: gate
