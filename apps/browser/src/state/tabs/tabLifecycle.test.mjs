@@ -195,8 +195,8 @@ test("the loaded tab budget grows with the Mac's memory, and shrinks to the mode
   assert.deepEqual(minutes(loadedTabBudget(on("moderate"), sys(16))), { tabs: 32, minutes: 120 });
   assert.deepEqual(minutes(loadedTabBudget(on("maximum"), sys(16))), { tabs: 8, minutes: 30 });
   assert.deepEqual(minutes(loadedTabBudget(on("maximum"), sys(8))), { tabs: 5, minutes: 30 });
-  assert.deepEqual(minutes(loadedTabBudget(on("balanced"), sys(32, "warning"))), { tabs: 10, minutes: 10 }, "under pressure the floor, and ten minutes hidden");
-  assert.deepEqual(minutes(loadedTabBudget(on("moderate"), sys(32, "critical"))), { tabs: 20, minutes: 10 });
+  assert.deepEqual(minutes(loadedTabBudget(on("balanced"), sys(32, "warning"))), { tabs: 10, minutes: 5 }, "under a memory warning the floor, and five minutes hidden");
+  assert.deepEqual(minutes(loadedTabBudget(on("moderate"), sys(32, "critical"))), { tabs: 20, minutes: 2 }, "under critical pressure two minutes");
   assert.deepEqual(minutes(loadedTabBudget(on("turbo"), sys(8))), { tabs: 10, minutes: 60 }, "an unknown mode is Balanced");
   assert.equal(loadedTabBudget({ memorySaver: false, memorySaverMode: "maximum" }, sys(8)), null, "Memory Saver off keeps every tab loaded");
   assert.equal(loadedTabBudget(on("balanced"), null), null, "nothing sleeps before the Mac's memory is known");
@@ -448,3 +448,48 @@ test("a protection seen while sharing is off is still counted the first time it 
   webviews.clear();
 });
 
+test("memory pressure tightens the sweep at once, a few tabs a tick, counts each level reached, and caps the warm background pages", async (t) => {
+  const { sleepTabsOverBudget, loadedTabBudget } = await import("./loadedTabBudget.ts");
+  const { capWarmViews } = await import("./sleepPolicy.ts");
+  const { webviews } = await import("../../platform/webviews.ts");
+  const { takeTabSleepCounts, noteMemoryPressure } = await import("../telemetry/tabSleepCounts.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const now = Date.now() + 720 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(12, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (6 + i) * minute }));
+  webviews.clear();
+  const asked = [];
+  for (const id of [active, ...ids]) webviews.set(id, { sleepIfHidden: (seconds) => (asked.push([id, seconds]), Promise.resolve([])) });
+  takeTabSleepCounts();
+  const sys = (memoryPressure) => ({ onBattery: false, batteryLevel: null, lowPowerMode: false, memoryPressure, physicalMemory: 8 * 2 ** 30 });
+  const settings = { memorySaver: true, memorySaverMode: "maximum" };
+  const sweep = async (budget, at) => {
+    const done = sleepTabsOverBudget(budget, at);
+    for (let i = 0; i < 8; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      t.mock.timers.tick(1500);
+    }
+    return done;
+  };
+  assert.deepEqual(await sweep(loadedTabBudget(settings, sys("normal")), now), [], "at normal pressure nothing hidden under half an hour sleeps");
+  const warning = loadedTabBudget(settings, sys("warning"));
+  assert.equal(warning.everyMs, 15_000);
+  const slept = await sweep(warning, now);
+  assert.equal(slept.length, 4, "a warning sleeps at most four tabs in one tick");
+  assert.deepEqual(asked.map(([, seconds]) => seconds), [300, 300, 300, 300], "each asked with the five minute wait");
+  slept.forEach((id) => lifecycle.noteDiscarded(id));
+  const critical = loadedTabBudget(settings, sys("critical"));
+  assert.equal((await sweep(critical, now + 10_000)).length, 4);
+  noteMemoryPressure("warning");
+  noteMemoryPressure("critical");
+  const counts = takeTabSleepCounts();
+  assert.equal(counts.tabs_slept_under_memory_warning, 4);
+  assert.equal(counts.tabs_slept_under_memory_critical, 4);
+  assert.equal(counts.tabs_slept_over_budget, 8);
+  assert.equal(counts.memory_pressure_warnings, 1);
+  assert.equal(counts.memory_pressure_criticals, 1);
+  assert.deepEqual(capWarmViews(["a", "b", "c"], "s", "normal"), ["s", "a", "b", "c"]);
+  assert.deepEqual(capWarmViews(["a", "b", "c"], "s", "warning"), ["s", "a"], "a warning keeps two warm pages, the next tab first");
+  assert.deepEqual(capWarmViews(["a", "b"], undefined, "critical"), [], "critical pressure keeps none");
+  webviews.clear();
+});
