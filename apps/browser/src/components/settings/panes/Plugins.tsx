@@ -243,7 +243,7 @@ function PluginPage({ name }: { name: string }) {
         >
           <Toggle value={active} disabled={!m} asksFirst={!active} accessibilityLabel={`Turn on ${m?.title ?? name}`} onChange={(on) => setOn(name, on)} />
         </Row>
-        {active && listing.official && record.updated && record.approved === listing.hash ? <Row title={autoUpdateNote(record.updated).title} description={autoUpdateNote(record.updated).description} /> : null}
+        {listing.official && record.updated && record.approved === listing.hash ? <Row title={autoUpdateNote(record.updated).title} description={autoUpdateNote(record.updated).description} /> : null}
         {active && (m?.process || (m?.main && process)) ? (
           <Row title={m?.process ? "Its program" : "Its code"} description={m?.process ? m.process.run.join(" ") : typeof m?.main === "string" ? m.main : m?.main?.entry}>
             <Button title="Show Log" onPress={() => showPluginLog(name)} />

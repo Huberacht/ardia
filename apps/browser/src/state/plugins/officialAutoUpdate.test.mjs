@@ -111,6 +111,19 @@ test("a failed switch leaves the old copy on, shows no note and counts nothing u
   assert.equal(takePluginCounts().official_updates_auto, 1, "counted once it took");
 });
 
+test("a failed switch finished by Try Again is counted as an automatic update too", async () => {
+  const { installOfficialPlugin } = await import("./official.ts");
+  host.promoteResult = { ok: false, reason: "busy disk" };
+  await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(BUN_060) }]);
+  assert.equal(takePluginCounts().official_updates_auto, 0);
+  host.promoteResult = null;
+  const result = await installOfficialPlugin("cli", { showSheet: false });
+  assert.deepEqual(result, { ok: true });
+  assert.equal(P().consent, null, "no sheet: the approval is on record");
+  assert.equal(P().listings.cli.hash, manifestHash(BUN_060, PINNED.folderId));
+  assert.equal(takePluginCounts().official_updates_auto, 1);
+});
+
 test("an official update that asks for more still waits for Update…: the old copy stays on and the reason is counted", async () => {
   const wider = bun("0.6.0", { permissions: { control: true, network: ["api.example.com"] } });
   await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(wider) }]);

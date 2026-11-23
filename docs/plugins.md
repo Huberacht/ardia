@@ -171,16 +171,20 @@ is the only source of which version may be fetched.
       digest), it's on, and the record's `approved` is that copy's exact receipt;
     - the new copy is the verified download of the pin's own digest (`folderId` is the pin's), its manifest has the
       same `name`, is marked `official` and has no problems;
-    - every field of the new manifest is the same as or narrower than the approved one. Permissions narrow by key
-      (`tabs` write → read → off, booleans true → false, `network` `"*"` → hosts the old ones cover → off). Programs,
-      after-update actions, hooks, tools, settings defaults, menus, toolbar, sidebar views, panels, omnibox, themes,
-      site switches and the page bar may only shrink. A sidecar must keep its command. Background starts (`*`,
-      `onStartupFinished`, `onEvent:`, `onUrl:`) need an approved equivalent. Title, description, version, icon,
-      keywords and the telemetry text don't count. Command-bar commands and settings rows may be added, as may a first
-      `main` that only starts when you use it: sandboxed, with no permission or network you hadn't approved. A command
-      that hands its page the current tab needs an approved one that did. Any field the comparison doesn't know prompts.
+    - its manifest asks for nothing the approved one didn't. Permissions may narrow key by key (`tabs` write → read
+      → off, booleans true → false, `network` `"*"` → hosts the old ones cover → off). Everything else that runs,
+      reaches pages or changes the browser must be identical, order and limits included: programs with their paths
+      and after-update steps, hooks, tools and their timeouts, settings defaults and rows, menus, toolbar, sidebar
+      views, panels, omnibox, themes, site switches, the page bar, the page, `main` and sidecar specs with their
+      memory budgets, and every activation event other than `onCommand:`. Existing commands must stay exactly as
+      they were. The only additions are new command-bar commands that show a view or run a handler, and a first
+      `main` whose only way in is the command bar (all its activation events `onCommand:`; no page, panels, sidebar
+      views, toolbar, omnibox, menus, tools, hooks or sidecar). Title, description, version, `requires`, icon,
+      keywords, the telemetry text and a program's `example` and `claim` don't count. Any field the comparison
+      doesn't know prompts.
     - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, and the consent lines that are
-      new). The plugin's page shows "Updated by itself to 0.6.0", that it asks for nothing new, and those lines.
+      new). While that copy is the one installed, the plugin's page shows "Updated by itself to 0.6.0", that it asks
+      for nothing new, and those lines. `official_updates_auto` counts the switch once it took.
       Approving any later update by hand drops the note.
   - Otherwise it waits, and the plugin's row offers **Update…**, which shows the consent sheet for the new copy. It
     also waits while the consent sheet is open for that plugin, and when nothing is on record: an `ardia` installed

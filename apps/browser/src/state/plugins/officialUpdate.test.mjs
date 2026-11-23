@@ -38,22 +38,23 @@ test("the Python CLI 0.4.0 to 0.6.0: same permissions, so it passes, and the not
   assert.ok(!verdict.added.some((line) => line.includes("PATH")), "PATH lines were already approved");
 });
 
-test("narrower passes: dropping control, a program, an after-update action or a network host", () => {
+test("permissions narrow per key: control off, tabs write to read, a host the old pattern covers, every site to one host", () => {
   const wide = parse(v2("0.6.0", { permissions: { control: true, network: ["api.example.com", "*.example.org"], tabs: "write" } }));
   assert.equal(updateWithin(wide, parse(v2("0.7.0", { permissions: { network: ["a.example.org"], tabs: "read" } }))).ok, true);
-  assert.equal(updateWithin(wide, parse(v2("0.7.0", { permissions: { control: true } }, { programs: [] }))).ok, true);
-  assert.equal(updateWithin(wide, parse(v2("0.7.0", { permissions: { control: true } }, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate: [["skills", "refresh"]] }] }))).ok, true);
   assert.equal(updateWithin(parse(v2("0.6.0", { permissions: { control: true, network: "*" } })), parse(v2("0.7.0", { permissions: { control: true, network: ["x.example.com"] } }))).ok, true);
+  const hosts = parse(v2("0.7.0", { permissions: { control: true, network: ["*.example.org", "api.example.com"], tabs: "write" } }));
+  assert.equal(updateWithin(wide, hosts).ok, true, "reordered hosts");
 });
 
-test("reordered hosts compare as sets; after-update actions keep their order and count, so only removals pass", () => {
-  const a = parse(v2("0.6.0", { permissions: { control: true, network: ["a.example.com", "b.example.com"] } }));
-  const hosts = parse(v2("0.7.0", { permissions: { control: true, network: ["b.example.com", "a.example.com"] } }));
-  assert.equal(updateWithin(a, hosts).ok, true);
-  const steps = (afterUpdate) => parse(v2("0.7.0", { permissions: { control: true, network: ["a.example.com", "b.example.com"] } }, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate }] }));
+test("what runs must stay identical: programs and their after-update steps, in order and count", () => {
+  const steps = (afterUpdate) => parse(v2("0.7.0", {}, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate }] }));
+  const a = parse(CLI_060);
   assert.deepEqual(updateWithin(a, steps([...AFTER_UPDATE].reverse())), { ok: false, reason: "programs" }, "reordered");
-  assert.deepEqual(updateWithin(a, steps([AFTER_UPDATE[0], AFTER_UPDATE[0], AFTER_UPDATE[1]])), { ok: false, reason: "programs" }, "an approved step run twice");
-  assert.equal(updateWithin(a, steps([AFTER_UPDATE[0], AFTER_UPDATE[2]])).ok, true, "a step dropped");
+  assert.deepEqual(updateWithin(a, steps([AFTER_UPDATE[0], ...AFTER_UPDATE])), { ok: false, reason: "programs" }, "an approved step run twice");
+  assert.deepEqual(updateWithin(a, steps([AFTER_UPDATE[0], AFTER_UPDATE[2]])), { ok: false, reason: "programs" }, "a dropped step changes what runs after it");
+  assert.deepEqual(updateWithin(a, parse(v2("0.7.0", {}, { programs: [] }))), { ok: false, reason: "programs" });
+  const two = (order) => parse(v2("0.6.0", {}, { programs: order.map((name) => ({ name, path: `bin/${name}`, afterUpdate: [["setup"]] })) }));
+  assert.deepEqual(updateWithin(two(["ardia", "ardia-x"]), two(["ardia-x", "ardia"])), { ok: false, reason: "programs" }, "two programs swapped");
 });
 
 test("a program whose path changes prompts, since after-update steps run the binary at that path", () => {
@@ -98,7 +99,7 @@ const broader = [
   ["code that starts in the background", v2("0.7.0", { activationEvents: ["onStartupFinished"] }), "activation"],
   ["a URL activation", v2("0.7.0", { activationEvents: ["onUrl:example.com"] }), "activation"],
   ["a settings default it writes", v2("0.7.0", {}, { settings: { defaults: { cliControl: true } } }), "settings"],
-  ["a new toolbar button", v2("0.7.0", {}, { toolbar: [{ id: "status", title: "Status", icon: "terminal", command: "show-status" }] }), "contributions"],
+  ["a new toolbar button", v2("0.7.0", {}, { toolbar: [{ id: "status", title: "Status", icon: "terminal", command: "show-status" }] }), "activation"],
   ["a new tool offered to other programs", v2("0.7.0", {}, { tools: [{ name: "peek", title: "Peek", description: "d" }] }), "contributions"],
 ];
 
@@ -117,7 +118,7 @@ test("a sidecar that wasn't approved, or a changed sidecar command, prompts", ()
 });
 
 test("a new main that would start by itself prompts, an on-demand one doesn't", () => {
-  assert.deepEqual(updateWithin(parse(CLI_040), parse(v2("0.6.0", { activationEvents: ["*"] }))), { ok: false, reason: "activation" });
+  assert.deepEqual(updateWithin(parse(CLI_040), parse(v2("0.6.0", { activationEvents: ["*"] }))), { ok: false, reason: "runtime" });
   assert.equal(updateWithin(parse(CLI_040), parse(v2("0.6.0", { activationEvents: ["onCommand:show-status"] }))).ok, true);
 });
 
@@ -128,7 +129,42 @@ test("a field the comparison doesn't know prompts: unknown manifest, permission 
   const next = parse(v2("0.7.0"));
   assert.deepEqual(updateWithin(a, { ...next, contributes: { ...next.contributes, keybindings: [] } }), { ok: false, reason: "unknown" });
   assert.deepEqual(updateWithin({ ...a, oldOnly: 1 }, next), { ok: false, reason: "unknown" });
-  assert.deepEqual(updateWithin(a, { ...next, activationEvents: ["onSomethingNew:x"] }), { ok: false, reason: "unknown" });
+  assert.equal(updateWithin(a, { ...next, activationEvents: ["onSomethingNew:x"] }).ok, false);
+});
+
+test("round 2: order, resolved targets, limits and row defaults that change behaviour all prompt", () => {
+  const status = { name: "show-status", title: "Status", icon: "terminal", handler: true };
+  const menus = (entries) => parse(v2("0.6.0", {}, { commands: [status], menus: { tab: entries } }));
+  const pinnedFirst = [{ command: "show-status", when: "isPinned" }, { command: "show-status" }];
+  assert.equal(updateWithin(menus(pinnedFirst), menus(pinnedFirst)).ok, true);
+  assert.deepEqual(updateWithin(menus(pinnedFirst), menus([...pinnedFirst].reverse())), { ok: false, reason: "contributions" }, "menu entries reordered");
+  assert.deepEqual(updateWithin(menus(pinnedFirst), menus([pinnedFirst[1]])), { ok: false, reason: "contributions" }, "the restricting entry dropped");
+
+  const panel = (id) => ({ id, title: id, icon: "doc", mode: "tab", file: `${id}.html` });
+  const pages = (ids, extra = []) => parse(v2("0.6.0", { permissions: { control: true, tabs: "read" } }, { commands: [{ name: "open-it", title: "Open", icon: "doc", open: "split", context: true }, ...extra], panels: ids.map(panel) }));
+  assert.equal(updateWithin(pages(["one", "two"]), pages(["one", "two"])).ok, true);
+  assert.deepEqual(updateWithin(pages(["one", "two"]), pages(["two", "one"])), { ok: false, reason: "contributions" }, "panels reordered change where the tab goes");
+  assert.deepEqual(updateWithin(pages(["one", "two"]), pages(["one", "two"], [{ name: "open-two", title: "Two", icon: "doc", open: "tab", path: "/two" }])), { ok: false, reason: "contributions" }, "a new open command");
+
+  const eager = (events) => parse(v2("0.6.0", { activationEvents: events }));
+  assert.deepEqual(updateWithin(eager(["*"]), eager(["*", "onUrl:example.com"])), { ok: false, reason: "activation" }, "* doesn't cover a new URL trigger");
+
+  assert.deepEqual(updateWithin(parse(CLI_060), parse(v2("0.7.0", { memoryMB: 2048 }))), { ok: false, reason: "runtime" }, "a bigger memory budget for main");
+  const plain = { manifest: 2, name: "cli", title: "Command Line", version: "0.6.0", official: true, permissions: { control: true } };
+  assert.deepEqual(updateWithin(parse({ ...plain, sidecar: { run: ["bin/d"] } }), parse({ ...plain, version: "0.7.0", sidecar: { run: ["bin/d"], memoryMB: 2048 } })), { ok: false, reason: "runtime" }, "a bigger sidecar budget");
+
+  const tool = (timeout) => parse(v2("0.6.0", {}, { tools: [{ name: "peek", title: "Peek", description: "d", timeout }] }));
+  assert.deepEqual(updateWithin(tool(1), tool(300)), { ok: false, reason: "contributions" }, "a longer tool timeout");
+
+  const row = (value) => parse(v2("0.6.0", {}, { settings: { rows: [{ key: "local", type: "toggle", title: "Local", default: value }] } }));
+  assert.deepEqual(updateWithin(row(false), row(true)), { ok: false, reason: "settings" }, "a row default flipped");
+});
+
+test("a new command-bar command that shows a view or runs a handler is the only addition that passes", () => {
+  const extra = parse(v2("0.7.0", {}, { commands: [...CLI_060.contributes.commands, { name: "ping", title: "Ping", icon: "bolt", handler: true }] }));
+  assert.equal(updateWithin(parse(CLI_060), extra).ok, true);
+  const renamed = parse(v2("0.7.0", {}, { commands: [{ ...CLI_060.contributes.commands[0], title: "Other" }] }));
+  assert.deepEqual(updateWithin(parse(CLI_060), renamed), { ok: false, reason: "contributions" }, "a kept command must stay as it was");
 });
 
 test("a different name or a manifest not marked official never passes", () => {

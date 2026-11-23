@@ -195,7 +195,11 @@ export function installOfficialPlugin(name: string, options: InstallOptions = {}
   const approvedCandidate = candidateOf(currentPlugins(), name);
   const record = Object.hasOwn(currentPlugins().records, name) ? currentPlugins().records[name] : undefined;
   if (approvedCandidate?.hash && record?.enabled && approvalMatches(approvedCandidate, record.approved)) {
-    return promoteCandidate(name, approvedCandidate, consentToken()).then(() => linked(name));
+    const consent = consentToken();
+    return promoteCandidate(name, approvedCandidate, consent).then((ok) => {
+      if (ok) noteAutoUpdate(name, approvedCandidate, consent);
+      return linked(name);
+    });
   }
   if (!needsFetch(name)) return askToInstall(name, options);
   return fetchOfficialCandidate(name, consentToken()).then((fetched) => {
