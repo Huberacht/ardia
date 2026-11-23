@@ -105,7 +105,7 @@ test("check passes exact, local and unchanged nearest engines and stops a change
   const changed = "match=nearest key=k version=engine-abc source=0123456789abcdef public=changed";
   const stopped = run(matchScript, ["check", changed]);
   assert.equal(stopped.status, 1);
-  assert.match(stopped.stderr, /engine\/ardiacore\/src\/ardia\/core\/public differs from engine engine-abc's \(built from 0123456789\)/);
+  assert.match(stopped.stderr, /engine\/ardiacore\/src\/ardia\/core\/public differs from that of engine-abc's engine \(built from 0123456789\)/);
   assert.match(stopped.stderr, /ARDIACORE_ALLOW_PUBLIC_MISMATCH=1/);
   const allowed = run(matchScript, ["check", changed], { env: { ARDIACORE_ALLOW_PUBLIC_MISMATCH: "1" } });
   assert.equal(allowed.status, 0);
@@ -129,7 +129,7 @@ test("stage-framework stops before staging when a nearest engine's public header
   const stage = join(root, "packages/ardiacore/scripts/stage-framework.sh");
   const stopped = run(stage, [], { env });
   assert.equal(stopped.status, 1);
-  assert.match(stopped.stderr, /differs from engine/);
+  assert.match(stopped.stderr, /differs from that of/);
   assert.equal(fs.existsSync(join(stageDir, "Chromium Framework.framework")), false);
   write(stageDir, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
   write(stageDir, ".stamp", run(stage, ["--key", env.ARDIACORE_FRAMEWORK]).stdout);

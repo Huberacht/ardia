@@ -43,10 +43,10 @@ check() {
   public=$(field public "$line")
   [[ "$public" == same ]] && return 0
   if [[ "${ARDIACORE_ALLOW_PUBLIC_MISMATCH:-}" == 1 ]]; then
-    echo "warning: building against engine $(field version "$line"), older than this checkout's, though $public_dir changed since (ARDIACORE_ALLOW_PUBLIC_MISMATCH=1)" >&2
+    echo "warning: building against $(field version "$line")'s engine, older than this checkout's, though $public_dir changed since (ARDIACORE_ALLOW_PUBLIC_MISMATCH=1)" >&2
     return 0
   fi
-  echo "error: this checkout's $public_dir differs from engine $(field version "$line")'s (built from $(field source "$line" | cut -c1-10)), the nearest published Mac engine it was given, so the app can't match it." >&2
+  echo "error: this checkout's $public_dir differs from that of $(field version "$line")'s engine (built from $(field source "$line" | cut -c1-10)), the nearest published Mac engine it was given, so the app can't match it." >&2
   echo "error: build the engine (docs/engine-build.md) and set ARDIACORE_FRAMEWORK to it, check out a commit with a published engine, or set ARDIACORE_ALLOW_PUBLIC_MISMATCH=1 to build anyway." >&2
   return 1
 }
