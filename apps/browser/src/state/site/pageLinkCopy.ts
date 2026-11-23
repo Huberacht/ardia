@@ -1,15 +1,15 @@
 import { cleanUrlReport } from "@ardia/core";
-import { copyAddress } from "../../platform/clipboard";
-import { onWebKitCopyAddress } from "../../platform/webkit";
+import { onWebKitCopyAddress, writeCopiedWebKitAddress } from "../../platform/webkit";
 import type { ConsentToken } from "../telemetry/consentPeriod";
 import { nativeConsent } from "../telemetry/nativeConsent";
 import { noteWebKitMenuLinkCopied } from "../telemetry/urlCopies";
 
-export function copyLinkFromPageMenu(address: unknown, changeCount: unknown, consent: ConsentToken | null) {
-  if (typeof address !== "string" || !address) return;
+export async function copyLinkFromPageMenu(address: unknown, request: unknown, consent: ConsentToken | null): Promise<boolean> {
+  if (typeof address !== "string" || !address || typeof request !== "number" || !Number.isInteger(request)) return false;
   const { url, removedTracker } = cleanUrlReport(address);
-  copyAddress(url, typeof changeCount === "number" && Number.isInteger(changeCount) ? changeCount : null);
-  noteWebKitMenuLinkCopied(removedTracker, consent);
+  const written = (await writeCopiedWebKitAddress(request, url).catch(() => false)) === true;
+  if (written) noteWebKitMenuLinkCopied(removedTracker, consent);
+  return written;
 }
 
-export const startPageLinkCopies = () => onWebKitCopyAddress((copy) => copyLinkFromPageMenu(copy.url, copy.changeCount, nativeConsent(copy)));
+export const startPageLinkCopies = () => onWebKitCopyAddress((copy) => void copyLinkFromPageMenu(copy.url, copy.request, nativeConsent(copy)));

@@ -345,17 +345,44 @@ test("a cleaner report can't be rewritten after the fact, and link lists are bul
   assert.equal(linkLines([two], true), "[B](https://b.example/)");
 });
 
+const LABEL_MARKUP = new Set(["\\", "[", "]", "*", "_", "`", "<", ">", "~"]);
+
+function renderedLabel(source: string): string {
+  let text = "";
+  for (let i = 0; i < source.length; i++) {
+    const character = source[i]!;
+    if (character === "\\") {
+      const next = source[i + 1] ?? "";
+      assert.match(next, /[!-/:-@[-`{-~]/, `a backslash that escapes nothing in ${JSON.stringify(source)}`);
+      text += next;
+      i++;
+    } else if (character === "&") {
+      const entity = /^&(#?[A-Za-z0-9]+);/.exec(source.slice(i));
+      if (!entity) text += "&";
+      else {
+        assert.equal(entity[1], "amp", `an entity that would render as another character in ${JSON.stringify(source)}`);
+        text += "&";
+        i += entity[0].length - 1;
+      }
+    } else {
+      assert.ok(!LABEL_MARKUP.has(character), `unescaped ${character} would render as markup in ${JSON.stringify(source)}`);
+      assert.doesNotMatch(character, /[\r\n\u2028\u2029]/, `a line break in ${JSON.stringify(source)}`);
+      text += character;
+    }
+  }
+  return text;
+}
+
 function readMarkdownLink(markdown: string): { label: string; destination: string } {
   const link = /^\[((?:\\.|[^\\\]])*)\]\((<(?:\\.|[^\\>\n])*>|(?:\\.|[^\\()\s])*)\)$/.exec(markdown);
   assert.ok(link, `not one CommonMark inline link: ${JSON.stringify(markdown)}`);
-  const label = link[1]!.replace(/\\(.)/g, "$1");
   const raw = link[2]!;
   const destination = (raw.startsWith("<") ? raw.slice(1, -1) : raw).replace(/\\([()<>\\])/g, "$1").replace(/&amp;/g, "&");
-  return { label, destination };
+  return { label: renderedLabel(link[1]!), destination };
 }
 
 test("every Markdown link reads back as one link whose destination is the clean address and whose label sits on one line", () => {
-  const titles = ["Line one\n\nLine two", "A\r\nB\u2028C\u2029D", "\n\n", "Shop [sale] \\o/", "", "Plain"];
+  const titles = ["https://other.example/p?ref=1&utm_campaign=z", "Line one\n\nLine two", "A\r\nB\u2028C\u2029D", "\n\n", "Shop [sale] \\o/", "", "Plain", "*literal*", "snake_case_title", "`code`", "<b>bold</b>", "~~gone~~", "AT&T &copy; &#169;", "!\\[img]"];
   const urls = [
     "https://e.example/a?utm_source=x",
     "https://e.example/doc(1)?token=abc(123)&gclid=x",
@@ -367,7 +394,15 @@ test("every Markdown link reads back as one link whose destination is the clean 
     for (const url of urls) {
       const { label, destination } = readMarkdownLink(markdownLink(title, url));
       assert.equal(destination, cleanUrl(url), `${JSON.stringify(title)} ${url}`);
-      assert.doesNotMatch(label, /[\r\n\u2028\u2029]/, JSON.stringify(title));
-      assert.ok(label.length > 0, JSON.stringify(title));
+      const shown = title.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
+      assert.equal(label, !shown || shown === url ? cleanUrl(url) : cleanUrl(shown), JSON.stringify(title));
     }
+});
+
+test("a title that is the page's tracked address with whitespace around it is labelled with the clean address", () => {
+  const url = "https://shop.example/item?id=7&utm_source=mail";
+  assert.equal(markdownLink(`  ${url}\n`, url), "[https://shop.example/item?id=7](https://shop.example/item?id=7)");
+  assert.equal(markdownLink(`\t${url} `, url), "[https://shop.example/item?id=7](https://shop.example/item?id=7)");
+  assert.equal(markdownLink(`${url}#reviews`, url), "[https://shop.example/item?id=7#reviews](https://shop.example/item?id=7)");
+  assert.equal(markdownLink("https://shop.example/?gclid=1", "https://shop.example/"), "[https://shop.example/](https://shop.example/)");
 });

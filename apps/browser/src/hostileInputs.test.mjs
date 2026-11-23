@@ -359,26 +359,20 @@ test("the release's original smuggled hide is refused at every layer", () => {
   assert.equal(LINUX_NATIVE_REFUSES.test(`${HOST}##${smuggled}`), true);
 });
 
-test("a WebKit page menu address reaches the clipboard only as a string the cleaner returned, whatever the page holds", () => {
-  const copied = [];
-  const before = stub.shellNativeModules.ArdiaShell.copyText;
-  stub.shellNativeModules.ArdiaShell.copyText = (text) => void copied.push(text);
-  try {
-    for (const { id, value } of HOSTILE_VALUES) {
-      copied.length = 0;
-      copyLinkFromPageMenu(value, null, null);
-      if (typeof value !== "string" || !value) assert.deepEqual(copied, [], id);
-      else assert.deepEqual(copied, [cleanUrl(value)], id);
+test("a WebKit page menu address reaches native's writer only as a string the cleaner returned, whatever the page holds", async () => {
+  const { webKitAddressWrites } = stub;
+  webKitAddressWrites.written.length = 0;
+  for (const { id, value } of HOSTILE_VALUES) {
+    webKitAddressWrites.written.length = 0;
+    await copyLinkFromPageMenu(value, 7, null);
+    if (typeof value !== "string" || !value) assert.deepEqual(webKitAddressWrites.written, [], id);
+    else assert.deepEqual(webKitAddressWrites.written, [{ request: 7, url: cleanUrl(value) }], id);
+  }
+  for (const s of strings) {
+    for (const address of [s, `https://a.example/?utm_source=${s}&q=1`, `https://a.example/${s}?fbclid=1`]) {
+      webKitAddressWrites.written.length = 0;
+      await copyLinkFromPageMenu(address, 7, null);
+      assert.deepEqual(webKitAddressWrites.written, address ? [{ request: 7, url: cleanUrl(address) }] : [], show(address));
     }
-    for (const s of strings) {
-      for (const address of [s, `https://a.example/?utm_source=${s}&q=1`, `https://a.example/${s}?fbclid=1`]) {
-        copied.length = 0;
-        copyLinkFromPageMenu(address, null, null);
-        assert.equal(copied.length, address ? 1 : 0, show(address));
-        if (address) assert.equal(copied[0], cleanUrl(address), show(address));
-      }
-    }
-  } finally {
-    stub.shellNativeModules.ArdiaShell.copyText = before;
   }
 });

@@ -205,6 +205,7 @@ export type EngineCalls = BookmarksCalls & FaviconsCalls & HistoryCalls & {
   "webKit.writeSiteData": [Profile & { set: PageCookie[]; remove: CookieRemoval[]; storage: Record<string, StorageChange> }, SiteDataWritten | null];
   "webKit.setZoom": [Profile & { host: string; zoom: number }, null];
   "webKit.setFraudWarnings": [{ enabled: boolean }, null];
+  "webKit.writeCopiedAddress": [{ request: number; url: string }, boolean];
   "webKit.devStoreExists": [Profile, boolean];
   "webKit.devTouchStore": [Profile, boolean];
   "webKit.devHoldStore": [Profile, null];
@@ -229,7 +230,7 @@ export type EngineEvents = BookmarksEvents & FaviconsEvents & HistoryEvents & {
   "permissions.requested": PermissionRequest;
   "permissions.dismissed": { id: string };
   "webKit.counted": { name: WebKitCount; epoch?: string };
-  "webKit.copyAddress": { url: string; changeCount?: number; epoch?: string };
+  "webKit.copyAddress": { url: string; request: number; epoch?: string };
   "webKit.siteDataWanted": { id: string; profile: string; origin: string; epoch?: string };
   "webKit.siteCookiesChanged": { profile: string; domains: string[]; epoch?: string };
   "webKit.notification": { profile: string; notification: WebNotification; epoch?: string };

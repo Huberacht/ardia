@@ -1053,6 +1053,8 @@ function cleanUrl(url        )             {
 
 const LINE_BREAK_ESCAPES                         = { "\r": "%0D", "\n": "%0A" };
 
+const markdownLabel = (text        ) => text.replace(/[\\[\]*_\x60<>~]/g, "\\$&").replace(/&(?=#?[A-Za-z0-9]+;)/g, "&amp;");
+
 function markdownDestination(url        )         {
   const oneLine = url.replace(/[\r\n]/g, (character) => LINE_BREAK_ESCAPES[character] ).replace(/&(?=#?[A-Za-z0-9]+;)/g, "&amp;");
   return /[\s<>]/.test(oneLine) ? `<${oneLine.replace(/[<>\\]/g, "\\$&")}>` : oneLine.replace(/[()\\]/g, "\\$&");
@@ -1061,8 +1063,8 @@ function markdownDestination(url        )         {
 function markdownLink(title        , url        )           {
   const clean = cleanUrl(url);
   const oneLine = title.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
-  const label = !oneLine || title === url ? clean : oneLine;
-  return `[${label.replace(/([[\]\\])/g, "\\$1")}](${markdownDestination(clean)})`            ;
+  const label = !oneLine || oneLine === url.trim() ? clean : cleanUrl(oneLine);
+  return `[${markdownLabel(label)}](${markdownDestination(clean)})`            ;
 }
 
 function linkLines(lines                     , markdown         )           {

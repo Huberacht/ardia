@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { shellNativeModules } = await import("../../test-native/index.ts");
 const { copyLinkFromPageMenu, startPageLinkCopies } = await import("./pageLinkCopy.ts");
-const { emitEvent } = await import("../../test-native/ardiacore.ts");
+const { emitEvent, webKitAddressWrites } = await import("../../test-native/ardiacore.ts");
 const { copyFieldSelection } = await import("../omnibox/paste.ts");
 const { shareFromPage, shareTab } = await import("./share.ts");
 const { takeUrlCopyCounts } = await import("../telemetry/urlCopies.ts");
@@ -25,21 +25,42 @@ const reset = () => {
   takeUrlCopyCounts();
 };
 
-test("Copy Link, Image or Media Address in a WebKit page copies the address without trackers", () => {
+test("Copy Link, Image or Media Address in a WebKit page hands native the address without trackers, and counts only what native wrote", async () => {
   reset();
-  copyLinkFromPageMenu(tracked, null, consentToken());
-  copyLinkFromPageMenu("https://example.com/plain.png", null, consentToken());
-  copyLinkFromPageMenu("blob:https://example.com/1234?utm_source=x", null, consentToken());
-  assert.deepEqual(copied, [clean, "https://example.com/plain.png", "blob:https://example.com/1234?utm_source=x"]);
+  webKitAddressWrites.written.length = 0;
+  assert.equal(await copyLinkFromPageMenu(tracked, 1, consentToken()), true);
+  assert.equal(await copyLinkFromPageMenu("https://example.com/plain.png", 2, consentToken()), true);
+  assert.equal(await copyLinkFromPageMenu("blob:https://example.com/1234?utm_source=x", 3, consentToken()), true);
+  assert.deepEqual(webKitAddressWrites.written, [
+    { request: 1, url: clean },
+    { request: 2, url: "https://example.com/plain.png" },
+    { request: 3, url: "blob:https://example.com/1234?utm_source=x" },
+  ]);
   const counts = takeUrlCopyCounts();
   assert.equal(counts.url_copies_from_webkit_menu, 3);
   assert.equal(counts.url_copies_cleaned, 1);
 });
 
-test("a WebKit menu copy with no address, or one that isn't text, copies nothing", () => {
+test("a WebKit copy native declined, because a newer menu copy or another copy came first, is not counted", async () => {
   reset();
-  for (const value of [undefined, null, "", 42, {}, ["https://a.example/?utm_source=x"]]) copyLinkFromPageMenu(value, null, consentToken());
-  assert.deepEqual(copied, []);
+  const answer = webKitAddressWrites.answer;
+  webKitAddressWrites.answer = () => false;
+  try {
+    assert.equal(await copyLinkFromPageMenu(tracked, 4, consentToken()), false);
+  } finally {
+    webKitAddressWrites.answer = answer;
+  }
+  const counts = takeUrlCopyCounts();
+  assert.equal(counts.url_copies_from_webkit_menu, 0);
+  assert.equal(counts.url_copies_cleaned, 0);
+});
+
+test("a WebKit menu copy with no address, one that isn't text, or no request number, copies nothing", async () => {
+  reset();
+  webKitAddressWrites.written.length = 0;
+  for (const value of [undefined, null, "", 42, {}, ["https://a.example/?utm_source=x"]]) assert.equal(await copyLinkFromPageMenu(value, 1, consentToken()), false);
+  for (const request of [undefined, null, 1.5, "1", NaN]) assert.equal(await copyLinkFromPageMenu(tracked, request, consentToken()), false);
+  assert.deepEqual(webKitAddressWrites.written, []);
   assert.equal(takeUrlCopyCounts().url_copies_from_webkit_menu, 0);
 });
 
@@ -76,12 +97,11 @@ test("a single cleaned address goes to the native URL writer when the build has 
   const urls = [];
   shellNativeModules.ArdiaShell.copyURL = (address) => void urls.push(address);
   try {
-    copyLinkFromPageMenu(tracked, null, consentToken());
     copyFieldSelection("shop.example/item?id=7&utm_source=mail&fbclid=abc#reviews", 0, 4, tracked);
   } finally {
     delete shellNativeModules.ArdiaShell.copyURL;
   }
-  assert.deepEqual(urls, [clean]);
+  assert.deepEqual(urls, []);
   assert.deepEqual(copied, ["shop"]);
 });
 
@@ -101,20 +121,23 @@ test("copying an untitled tab as Markdown from the sidebar labels it with the cl
   assert.equal(takeUrlCopyCounts().url_copies_cleaned, 3);
 });
 
-test("a WebKit page menu copy arrives as an app-wide event, so it lands even after its page view is gone, and carries the pasteboard count it was asked at", () => {
+test("a WebKit page menu copy arrives as an app-wide event with its native request number, so it lands even after its page view is gone", async () => {
   reset();
-  const urls = [];
-  shellNativeModules.ArdiaShell.copyURL = (address, unlessChangedSince) => void urls.push([address, unlessChangedSince]);
+  webKitAddressWrites.written.length = 0;
   const stop = startPageLinkCopies();
   try {
-    emitEvent("webKit.copyAddress", { url: tracked, changeCount: 41, epoch: "link-copies" });
-    emitEvent("webKit.copyAddress", { url: "https://example.com/plain.png", epoch: "link-copies" });
-    emitEvent("webKit.copyAddress", { url: tracked, changeCount: 1.5 });
-    emitEvent("webKit.copyAddress", { url: "" });
+    emitEvent("webKit.copyAddress", { url: tracked, request: 41, epoch: "link-copies" });
+    emitEvent("webKit.copyAddress", { url: "https://example.com/plain.png", request: 42, epoch: "link-copies" });
+    emitEvent("webKit.copyAddress", { url: tracked, request: 1.5, epoch: "link-copies" });
+    emitEvent("webKit.copyAddress", { url: tracked, request: 43 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
   } finally {
     stop?.remove?.();
-    delete shellNativeModules.ArdiaShell.copyURL;
   }
-  assert.deepEqual(urls, [[clean, 41], ["https://example.com/plain.png", null], [clean, null]]);
+  assert.deepEqual(webKitAddressWrites.written, [
+    { request: 41, url: clean },
+    { request: 42, url: "https://example.com/plain.png" },
+    { request: 43, url: clean },
+  ]);
   assert.equal(takeUrlCopyCounts().url_copies_from_webkit_menu, 2);
 });

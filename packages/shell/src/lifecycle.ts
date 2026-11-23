@@ -59,6 +59,6 @@ export type ShellNative = {
   dictationAvailable?(): boolean;
   fetchBangList(etag: string | null): Promise<BangListReply>;
   copyText(text: string): void;
-  copyURL?(address: CleanedUrl, unlessChangedSince?: number | null): void;
+  copyURL?(address: CleanedUrl): void;
   readText(): Promise<string>;
 };

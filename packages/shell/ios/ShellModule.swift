@@ -84,10 +84,9 @@ public class ShellModule: Module {
         NSPasteboard.general.setString(text, forType: .string)
       }
     }
-    Function("copyURL") { (address: String, unlessChangedSince: Int?) in
+    Function("copyURL") { (address: String) in
       DispatchQueue.main.async {
         let board = NSPasteboard.general
-        if let unlessChangedSince, board.changeCount != unlessChangedSince { return }
         board.clearContents()
         if let url = URL(string: address), url.scheme != nil { board.writeObjects([url as NSURL]) }
         board.setString(address, forType: .string)
