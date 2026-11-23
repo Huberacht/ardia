@@ -58,51 +58,51 @@ final class SearchStageView: ExpoView {
   var corners = StageCorners()
   var cardPlace = StageCardPlace()
 
-  private let keyboardSentinel = UIView()
+  let keyboardSentinel = UIView()
   private var keyboard: StageKeyboardTracker?
   private var keyboardHeight: CGFloat = 0
   private(set) var reduceMotion = UIAccessibility.isReduceMotionEnabled
 
   private(set) var isShown = false
-  private(set) var isClosing = false
+  var isClosing = false
   private var isDeparting = false
   private var hasLanded = false
   private var isHoldingLift = false
   private var heldLift: CGFloat?
   private var dragOffset: CGFloat = 0
-  private var releaseVelocity: CGFloat = 0
+  var releaseVelocity: CGFloat = 0
   private var revealsContents = true
   private var hasRevealed = false
   private var reportedLift: (lift: CGFloat, up: Bool, predicted: Bool)?
-  private var face: StageFace?
+  var face: StageFace?
   private var emergence: StageEmergence?
-  private var morph: StageMorph?
-  private var fadingMorph: StageMorph?
-  private var pendingFlight: CGFloat?
-  private var pendingFallback: Task<Void, Never>?
+  var morph: StageMorph?
+  var fadingMorph: StageMorph?
+  var pendingFlight: CGFloat?
+  var pendingFallback: Task<Void, Never>?
   private var landingTask: Task<Void, Never>?
   private var releaseTask: Task<Void, Never>?
-  private var settleTask: Task<Void, Never>?
-  private var arrivalTask: Task<Void, Never>?
-  private var settledReported = false
+  var settleTask: Task<Void, Never>?
+  var arrivalTask: Task<Void, Never>?
+  var settledReported = false
   private var revealDeadline: Task<Void, Never>?
   private var revealHold: Task<Void, Never>?
   private var revealLink: CADisplayLink?
   private var rise: UIViewPropertyAnimator?
   private var anticipatedLift: CGFloat?
-  private var closingPath = "none"
+  var closingPath = "none"
   private var anticipationTask: Task<Void, Never>?
   private static var keyboardMemory: StageKeyboardMemory?
 
   private static let keyboardThreshold: CGFloat = 120
-  private static let keyboardGrace: Duration = .milliseconds(50)
+  static let keyboardGrace: Duration = .milliseconds(50)
   private static let keyboardAnticipation: Duration = .milliseconds(600)
-  private static let landingLead: TimeInterval = 0.05
+  static let landingLead: TimeInterval = 0.05
   private static let contentDeadline: Duration = .milliseconds(250)
   private static let contentCap: Duration = .milliseconds(750)
-  private static let settlePoll: Duration = .milliseconds(16)
-  private static let settleDeadline: Duration = .milliseconds(1500)
-  private static let stillReleaseSpeed: CGFloat = 1
+  static let settlePoll: Duration = .milliseconds(16)
+  static let settleDeadline: Duration = .milliseconds(1500)
+  static let stillReleaseSpeed: CGFloat = 1
   private static let commandBarTuckedScale: CGFloat = 0.96
 
   required init(appContext: AppContext? = nil) {
@@ -164,7 +164,7 @@ final class SearchStageView: ExpoView {
     reduceMotion = UIAccessibility.isReduceMotionEnabled
   }
 
-  private var panel: SearchStagePanelView? {
+  var panel: SearchStagePanelView? {
     subviews.lazy.compactMap { $0 as? SearchStagePanelView }.first
   }
 
@@ -197,7 +197,7 @@ final class SearchStageView: ExpoView {
     }
   }
 
-  private var keyboardUp: Bool { keyboardHeight > 0 }
+  var keyboardUp: Bool { keyboardHeight > 0 }
   private var trayHeight: CGFloat { panel?.bounds.height ?? 0 }
   private var isCommandBar: Bool { commandTop != nil }
   private var isUp: Bool { keyboardUp || (!isClosing && hasLanded) }
@@ -215,7 +215,7 @@ final class SearchStageView: ExpoView {
     anticipatedLift = nil
   }
 
-  private var card: CGRect {
+  var card: CGRect {
     CGRect(x: cardPlace.cardInset, y: 0, width: (panel?.bounds.width ?? 0) - 2 * cardPlace.cardInset, height: max(trayHeight - cardPlace.cardGap, 0))
   }
 
@@ -395,22 +395,6 @@ final class SearchStageView: ExpoView {
     watchSettling()
   }
 
-  private func traceOverAnchor(_ moment: String) {
-    let anchorFrame = anchorNativeId.flatMap { id in window.flatMap { Self.find(nativeId: id, in: $0) } }.map { $0.convert($0.bounds, to: nil) }
-    let pieces = subviews.map { piece -> String in
-      let shown = piece.layer.presentation() ?? piece.layer
-      let frame = piece.convert(piece.bounds, to: nil)
-      let covers = anchorFrame.map { frame.intersects($0) } ?? false
-      return "\(String(describing: type(of: piece))) hidden=\(piece.isHidden) alpha=\(String(format: "%.2f", piece.alpha)) shownAlpha=\(String(format: "%.2f", shown.opacity)) coversAnchor=\(covers)"
-    }
-    NSLog("PAGELAB stage %@ anchor=%@ stageHidden=%@ stageAlpha=%.2f at=%.3f [%@]", moment, anchorFrame.map { NSCoder.string(for: $0) } ?? "none", isHidden ? "yes" : "no", alpha, CACurrentMediaTime(), pieces.joined(separator: "; "))
-  }
-
-  private func reportLanding(_ lands: Bool, path: String) {
-    closingPath = path
-    onLanding(["lands": lands, "path": path])
-  }
-
   func finish() {
     if PhoneTestBuild.isOn { traceOverAnchor("finish") }
     releaseStartWaiters()
@@ -446,36 +430,6 @@ final class SearchStageView: ExpoView {
     CATransaction.commit()
   }
 
-  private func watchSettling() {
-    settleTask?.cancel()
-    settleTask = Task { [weak self] in
-      guard let self else { return }
-      guard await StageSettlePoll.until(every: Self.settlePoll, within: Self.settleDeadline, { self.hasSettled }), self.isClosing else { return }
-      self.reportSettled(landed: self.morph?.hasDestination == true)
-    }
-  }
-
-  private func reportSettled(landed: Bool) {
-    guard !settledReported else { return }
-    settledReported = true
-    settleTask?.cancel()
-    arrivalTask?.cancel()
-    if PhoneTestBuild.isOn { traceOverAnchor("settled \(closingPath)") }
-    onSettled(["landed": landed, "path": closingPath])
-  }
-
-  private func reportArrival(after arrival: TimeInterval, of flying: StageMorph) {
-    arrivalTask?.cancel()
-    let deadline = ContinuousClock.now + .milliseconds(Int(max(0, arrival - Self.landingLead) * 1000))
-    arrivalTask = Task { [weak self] in
-      while ContinuousClock.now < deadline, !Task.isCancelled, !flying.isVisiblyLanded {
-        try? await Task.sleep(for: Self.settlePoll)
-      }
-      guard let self, !Task.isCancelled, self.isClosing, self.morph === flying else { return }
-      self.reportSettled(landed: true)
-    }
-  }
-
   private func keyboardWillMove(_ move: StageKeyboardMove) {
     guard window != nil else { return }
     let height = move.height
@@ -502,89 +456,6 @@ final class SearchStageView: ExpoView {
       }
     }
     if let velocity = pendingFlight, !keyboardUp { flyMorph(velocity: velocity) }
-  }
-
-  private func beginMorph(from shownSurface: StageMorph.Start?) {
-    guard let panel else {
-      reportLanding(false, path: "noPanel")
-      return
-    }
-    morph = StageMorph(card: card, fieldCenter: fieldCenter, corners: corners, of: panel, in: self, look: look, from: shownSurface)
-    move(.immediate) { [self] in
-      isClosing = true
-      if !keyboardUp { morph?.appear() }
-    }
-    pendingFlight = releaseVelocity
-    DispatchQueue.main.async { [weak self] in self?.launchMorph() }
-  }
-
-  private func launchMorph() {
-    guard let velocity = pendingFlight else { return }
-    guard keyboardUp else {
-      flyMorph(velocity: velocity)
-      return
-    }
-    pendingFallback?.cancel()
-    pendingFallback = Task { [weak self] in
-      try? await Task.sleep(for: Self.keyboardGrace)
-      guard let self, !Task.isCancelled, let velocity = pendingFlight else { return }
-      flyMorph(velocity: velocity)
-    }
-  }
-
-  private func flyMorph(velocity: CGFloat) {
-    cancelPendingFlight()
-    guard let morph else {
-      reportLanding(false, path: "noMorph")
-      return
-    }
-    guard let anchor = resolveAnchor() else {
-      reportLanding(false, path: anchorMissReason)
-      morph.vanish()
-      hidePanelUnderMorph()
-      return
-    }
-    reportLanding(true, path: "anchored")
-    let target = convert(anchor.frame, from: nil)
-    if let panel { morph.restart(fromCard: card, of: panel, in: self) }
-    let carried = face.flatMap { $0.fits(anchor) ? $0 : nil }
-    let arrival: TimeInterval
-    if abs(velocity) < Self.stillReleaseSpeed, let clock = StageKeyboardClock(layer: keyboardSentinel.layer) {
-      arrival = morph.fly(to: target, style: anchor.style, carrying: carried, timing: clock.timing, duration: clock.duration, direct: landsDirectly)
-    } else {
-      let distance = target.midY - morph.view.frame.midY
-      let timing = Motion.smoothSpring.stageTimingParameters(initialVelocity: Motion.relativeVelocity(velocity, over: distance))
-      arrival = morph.fly(to: target, style: anchor.style, carrying: carried, timing: timing, duration: Motion.smoothSpring.settlingDuration, direct: landsDirectly)
-    }
-    reportArrival(after: arrival, of: morph)
-    hidePanelUnderMorph()
-  }
-
-  private func cancelPendingFlight() {
-    pendingFallback?.cancel()
-    pendingFallback = nil
-    pendingFlight = nil
-  }
-
-  private func hidePanelUnderMorph() {
-    UIView.performWithoutAnimation { panel?.alpha = 0 }
-    if PhoneTestBuild.isOn { traceOverAnchor("panel hidden under morph") }
-  }
-
-  private func handOffMorph() {
-    cancelPendingFlight()
-    fadingMorph?.remove()
-    fadingMorph = morph
-    morph?.handOff()
-    morph = nil
-  }
-
-  private func dropMorph() {
-    cancelPendingFlight()
-    morph?.remove()
-    morph = nil
-    fadingMorph?.remove()
-    fadingMorph = nil
   }
 
   private func endEmergence() {
@@ -658,14 +529,14 @@ final class SearchStageView: ExpoView {
     }
   }
 
-  private enum Curve {
+  enum Curve {
     case immediate
     case spring(Spring, velocity: CGFloat)
     case timing(ArdiaDesign.MotionCurve)
   }
 
   @discardableResult
-  private func move(_ curve: Curve, _ changes: @escaping () -> Void) -> UIViewPropertyAnimator? {
+  func move(_ curve: Curve, _ changes: @escaping () -> Void) -> UIViewPropertyAnimator? {
     switch curve {
     case .immediate:
       UIView.performWithoutAnimation {

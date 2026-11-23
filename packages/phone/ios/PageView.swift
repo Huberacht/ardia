@@ -32,29 +32,29 @@ final class PageView: ExpoView {
   var pullToRefresh = true
   private(set) var page: WebTab?
 
-  private weak var hostedWebView: WKWebView?
+  weak var hostedWebView: WKWebView?
   private var failedID: String?
   private var sampled: PageTone?
   private var sentTone: PageTone?
   private var sentState: NSDictionary?
   private var wasLoading = false
-  private var observing = 0
+  var observing = 0
   private var toneTask: Task<Void, Never>?
   private var scrollObservation: NSKeyValueObservation?
   private var contentSizeObservation: NSKeyValueObservation?
   private let sideMargins = UIView()
   private var lastScroll: TimeInterval = 0
   private var scrollRestTask: Task<Void, Never>?
-  private var drawnTask: Task<Void, Never>?
-  private var drawnSent = false
-  private var drawnDelivered = false
-  private var drawnDocument: Int?
-  private var coverHandedOver = false
-  private weak var hiddenCover: UIView?
-  private var hiddenCoverID: String?
-  private var hiddenCoverWasHidden = false
-  private var coverCapTask: Task<Void, Never>?
-  private var coverRetryTask: Task<Void, Never>?
+  var drawnTask: Task<Void, Never>?
+  var drawnSent = false
+  var drawnDelivered = false
+  var drawnDocument: Int?
+  var coverHandedOver = false
+  weak var hiddenCover: UIView?
+  var hiddenCoverID: String?
+  var hiddenCoverWasHidden = false
+  var coverCapTask: Task<Void, Never>?
+  var coverRetryTask: Task<Void, Never>?
   var coverNativeID: String? {
     didSet { if coverNativeID != oldValue { MainActor.assumeIsolated { coverChanged() } } }
   }
@@ -219,159 +219,6 @@ final class PageView: ExpoView {
     coverRetryTask = nil
     scrollRestTask?.cancel()
     scrollRestTask = nil
-  }
-
-  @MainActor
-  private func shows(_ webView: WKWebView, since generation: Int) -> Bool {
-    observing == generation && hostedWebView === webView && webView.superview === self && window != nil
-  }
-
-  @MainActor
-  private func probing(_ webView: WKWebView, of page: WebTab, navigation: Int, since generation: Int) -> Bool {
-    shows(webView, since: generation) && self.page === page && page.webView === webView && page.navigationGeneration == navigation && (!page.isLoading || page.hasCommittedLoad) && PageSnapshots.isOnScreen(webView)
-  }
-
-  @MainActor
-  private func reportDrawnSoon() {
-    guard !drawnSent, drawnTask == nil, window != nil, let page, let webView = hostedWebView, webView.superview === self, !webView.bounds.isEmpty else { return }
-    startCoverCap()
-    let generation = observing
-    drawnTask = Task { @MainActor [weak self, weak webView, weak page] in
-      var flatProbes = 0
-      var navigation = page?.navigationGeneration ?? 0
-      for attempt in 0..<PageView.drawnProbeTries {
-        if attempt > 0 { try? await Task.sleep(for: PageView.drawnProbeGap) }
-        guard !Task.isCancelled, let self, let probed = webView, let page else { return }
-        if page.navigationGeneration != navigation {
-          navigation = page.navigationGeneration
-          flatProbes = 0
-        }
-        guard self.probing(probed, of: page, navigation: navigation, since: generation) else { continue }
-        let probe = WKSnapshotConfiguration()
-        probe.afterScreenUpdates = true
-        probe.snapshotWidth = NSNumber(value: PageView.drawnProbeWidth)
-        guard let image = try? await probed.takeSnapshot(configuration: probe) else { continue }
-        guard !Task.isCancelled, self.probing(probed, of: page, navigation: navigation, since: generation) else { continue }
-        let flat = await PageSnapshots.isFlatAwayFromMain(image)
-        guard !Task.isCancelled, self.probing(probed, of: page, navigation: navigation, since: generation) else { continue }
-        if flat {
-          if page.isLoading { continue }
-          flatProbes += 1
-          if flatProbes < PageView.flatProbesAccepted { continue }
-        }
-        let presented = await NextFramePresented.wait()
-        guard !Task.isCancelled else { return }
-        guard presented, self.probing(probed, of: page, navigation: navigation, since: generation) else { continue }
-        self.drawnTask = nil
-        guard !self.drawnSent else { return }
-        self.drawnSent = true
-        self.drawnDelivered = true
-        self.drawnDocument = navigation
-        self.handOverCover(reason: "drawn")
-        self.onPageEvent(["name": "drawn", "document": navigation])
-        return
-      }
-      guard !Task.isCancelled, let self else { return }
-      self.drawnTask = nil
-    }
-  }
-
-  @MainActor
-  private func coverChanged() {
-    coverCapTask?.cancel()
-    coverCapTask = nil
-    coverRetryTask?.cancel()
-    coverRetryTask = nil
-    restoreHiddenCover()
-    coverHandedOver = false
-    guard coverNativeID != nil else { return }
-    if drawnDelivered {
-      handOverCover(reason: "drawn")
-      return
-    }
-    if window != nil, hostedWebView?.superview === self { startCoverCap() }
-  }
-
-  @MainActor
-  private func startCoverCap() {
-    guard coverNativeID != nil, !coverHandedOver, coverCapTask == nil else { return }
-    coverCapTask = Task { @MainActor [weak self] in
-      try? await Task.sleep(for: PageView.coverCap)
-      guard !Task.isCancelled, let self else { return }
-      self.coverCapTask = nil
-      self.coverRetryTask?.cancel()
-      self.coverRetryTask = nil
-      if !self.hideCover(reason: "cap") { self.finishCover(reason: "cap", found: false) }
-    }
-  }
-
-  @MainActor
-  private func handOverCover(reason: String) {
-    guard coverNativeID != nil, !coverHandedOver, coverRetryTask == nil else { return }
-    if hideCover(reason: reason) { return }
-    let wanted = coverNativeID
-    coverRetryTask = Task { @MainActor [weak self] in
-      for _ in 0..<PageView.coverRetries {
-        try? await Task.sleep(for: PageView.coverRetryGap)
-        guard !Task.isCancelled, let self, self.coverNativeID == wanted, !self.coverHandedOver else { return }
-        if self.hideCover(reason: reason) {
-          self.coverRetryTask = nil
-          return
-        }
-      }
-      guard !Task.isCancelled, let self, self.coverNativeID == wanted else { return }
-      self.coverRetryTask = nil
-      self.finishCover(reason: "cap", found: false)
-    }
-  }
-
-  @MainActor
-  private func hideCover(reason: String) -> Bool {
-    guard let id = coverNativeID, !coverHandedOver, let window, let found = PageView.view(withNativeID: id, in: window) else { return false }
-    hiddenCoverWasHidden = found.isHidden
-    found.isHidden = true
-    hiddenCover = found
-    hiddenCoverID = id
-    finishCover(reason: reason, found: true)
-    return true
-  }
-
-  @MainActor
-  private func finishCover(reason: String, found: Bool) {
-    guard let id = coverNativeID, !coverHandedOver else { return }
-    coverHandedOver = true
-    coverCapTask?.cancel()
-    coverCapTask = nil
-    coverRetryTask?.cancel()
-    coverRetryTask = nil
-    onPageEvent(["name": "coverHidden", "reason": reason, "found": found, "cover": id])
-  }
-
-  @MainActor
-  private func restoreHiddenCover() {
-    defer {
-      hiddenCover = nil
-      hiddenCoverID = nil
-    }
-    guard let view = hiddenCover, let id = hiddenCoverID, view.isHidden else { return }
-    let stillOurs = view.superview == nil || (view.responds(to: NSSelectorFromString(PageView.nativeIDKey)) && (view.value(forKey: PageView.nativeIDKey) as? String) == id)
-    guard stillOurs else { return }
-    view.isHidden = hiddenCoverWasHidden
-  }
-
-  private static let nativeIDKey = "nativeId"
-
-  static func view(withNativeID id: String, in root: UIView) -> UIView? {
-    let selector = NSSelectorFromString(nativeIDKey)
-    var queue: [UIView] = [root]
-    var index = 0
-    while index < queue.count {
-      let view = queue[index]
-      index += 1
-      if view.responds(to: selector), (view.value(forKey: nativeIDKey) as? String) == id { return view }
-      queue.append(contentsOf: view.subviews)
-    }
-    return nil
   }
 
   @MainActor
@@ -703,48 +550,5 @@ final class PageView: ExpoView {
   func load(_ address: String) {
     guard let url = URL(string: address) else { return }
     page?.load(url)
-  }
-}
-
-@MainActor
-final class NextFramePresented: NSObject {
-  private var link: CADisplayLink?
-  private var continuation: CheckedContinuation<Bool, Never>?
-  private var finished = false
-
-  static func wait() async -> Bool {
-    let waiter = NextFramePresented()
-    return await withTaskCancellationHandler {
-      await waiter.run()
-    } onCancel: {
-      Task { @MainActor in waiter.finish(presented: false) }
-    }
-  }
-
-  private func run() async -> Bool {
-    await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-      guard !self.finished, !Task.isCancelled else {
-        self.finished = true
-        continuation.resume(returning: false)
-        return
-      }
-      self.continuation = continuation
-      let link = CADisplayLink(target: self, selector: #selector(self.presented))
-      link.add(to: .main, forMode: .common)
-      self.link = link
-    }
-  }
-
-  @objc private func presented() {
-    finish(presented: true)
-  }
-
-  func finish(presented: Bool) {
-    link?.invalidate()
-    link = nil
-    finished = true
-    guard let continuation else { return }
-    self.continuation = nil
-    continuation.resume(returning: presented)
   }
 }
