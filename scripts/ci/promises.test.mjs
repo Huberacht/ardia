@@ -97,6 +97,8 @@ test("a regex opening an interpolation or after x++ is read right, and async bef
   const hash = (body) => hashOf(findTests("x.test.mjs", `test("t", async () => { ${body} });`)[0]);
   assert.notEqual(hash('const s = `${/[)]/.test(")")}`; g(1);'), hash('const s = `${/[)]/.test(")")}`; g(2);'));
   assert.notEqual(hash("let x = 8; assert.equal(x++ / 2, 4);"), hash("let x = 8; assert.equal(x++ / 2, 5);"));
+  assert.notEqual(hash("const of = 4; assert.equal(of / 2, 2);"), hash("const of = 4; assert.equal(of / 2, 3);"));
+  assert.equal(findTests("x.test.mjs", 'test("t", () => { for (const x of /a/.exec(s)) f(x); });').length, 1);
   assert.notEqual(hash("async\nfunction f() {} await f();"), hash("async function f() {} await f();"));
 });
 

@@ -14,8 +14,9 @@ export function languageOf(path) {
 
 const CONTROL_WORDS = new Set(["if", "while", "for", "with"]);
 
-function regexAllowed(previous) {
+function regexAllowed(previous, beforePrevious) {
   if (!previous) return true;
+  if (previous.type === "word" && previous.text === "of") return beforePrevious?.type === "word" || ["]", "}"].includes(beforePrevious?.text);
   if (previous.type === "template") return !previous.closed;
   if (previous.type === "punct" && previous.text === ")") return Boolean(previous.control);
   if (previous.type === "punct") return !["]", "++", "--"].includes(previous.text);
@@ -165,13 +166,13 @@ function lexJs(source, from, untilBrace, jsx) {
       continue;
     }
     if (untilBrace && char === "}" && !stack.length) return { tokens, end: at };
-    if (jsx && char === "<" && /[A-Za-z>]/.test(next ?? "") && !TYPE_PARAMETERS.test(source.slice(at, at + 80)) && regexAllowed(tokens.at(-1))) {
+    if (jsx && char === "<" && /[A-Za-z>]/.test(next ?? "") && !TYPE_PARAMETERS.test(source.slice(at, at + 80)) && regexAllowed(tokens.at(-1), tokens.at(-2))) {
       const { end, text } = scanJsx(source, at);
       push("jsx", at, end, { text });
       at = end;
       continue;
     }
-    if (char === "/" && regexAllowed(tokens.at(-1))) {
+    if (char === "/" && regexAllowed(tokens.at(-1), tokens.at(-2))) {
       let index = at + 1;
       let inClass = false;
       while (index < source.length) {
