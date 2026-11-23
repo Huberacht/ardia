@@ -81,6 +81,12 @@ test("a guard or suite option that stops a test registering changes its hash, an
   assert.notEqual(hash(`if (false)\n  ${plain}`, "t"), hash(plain, "t"));
   assert.notEqual(hash(`for (const o of [])\n  ${plain}`, "t"), hash(`for (const o of [1])\n  ${plain}`, "t"));
   assert.notEqual(hash(`if (a) g();\nelse\n  ${plain}`, "t"), hash(`if (!a) g();\nelse\n  ${plain}`, "t"));
+  assert.equal(hash(`if (false) { f(1); } else ${plain}`, "t"), hash(`if (false) { f(2); } else ${plain}`, "t"));
+  assert.notEqual(hash(`if (a) { f(); } else if (!b) { g(); } else {\n  ${plain}\n}`, "t"), hash(`if (a) { f(); } else if (b) { g(); } else {\n  ${plain}\n}`, "t"));
+  assert.notEqual(hash(`false &&\n  ${plain}`, "t"), hash(`true &&\n  ${plain}`, "t"));
+  assert.notEqual(hash(`switch (x) {\n  case 1:\n    g();\n    ${plain}\n}`, "t"), hash(`switch (x) {\n  case 2:\n    g();\n    ${plain}\n}`, "t"));
+  const suite = (skip) => `describe("s", { skip: ${skip} },\n  function () {\n    test("t", () => { f(); });\n  });`;
+  assert.notEqual(hash(suite(true), "s › t"), hash(suite(false), "s › t"));
   assert.notEqual(hash('describe(\n  "s",\n  { skip: true },\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"), hash('describe(\n  "s",\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"));
   assert.equal(hash(`import a from "a"\nimport "node:path"\n${group}`, "s › t"), hash(`import a from "a"\n${group}`, "s › t"));
   const loop = 'for (const o of [1]) {\n  test(`t ${o}`, () => { f(o); });\n}\n';
@@ -89,6 +95,7 @@ test("a guard or suite option that stops a test registering changes its hash, an
   const swift = (text) => hashOf(findTests("x.swift", text)[0]);
   const marked = "@Test func `t`() { f() }\n";
   assert.notEqual(swift(`#if false\n${marked}#endif\n`), swift(marked));
+  assert.notEqual(swift(`#if /* why */ false\n${marked}#endif\n`), swift(`#if /* why */ true\n${marked}#endif\n`));
   assert.equal(swift(`import Testing\nimport struct Foundation.Date\n@Suite struct S {\n${marked}}\n`), swift(`import Testing\n@Suite struct S {\n${marked}}\n`));
   assert.notEqual(swift(`@Suite(.disabled())\nstruct S {\n${marked}}\n`), swift(`@Suite\nstruct S {\n${marked}}\n`));
 });

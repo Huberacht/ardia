@@ -33,6 +33,7 @@ on:
       - "**/*.test.*"
       - "**/*-test.mjs"
       - "**/*Tests.swift"
+      - "**/test_*.py"
   push:
     branches: [main]
     paths: *inputs
@@ -150,6 +151,7 @@ jobs:
               - "**/*.test.*"
               - "**/*-test.mjs"
               - "**/*Tests.swift"
+              - "**/test_*.py"
       - id: router
         name: The router, from main
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

@@ -273,7 +273,7 @@ export function tokenizeSwift(source) {
       continue;
     }
     if (char === "/" && next === "*") {
-      newline = true;
+      const commentStart = at;
       let depth = 1;
       at += 2;
       while (at < source.length && depth > 0) {
@@ -285,6 +285,7 @@ export function tokenizeSwift(source) {
           at += 2;
         } else at++;
       }
+      if (source.slice(commentStart, at).includes("\n")) newline = true;
       continue;
     }
     if (char === '"' || (char === "#" && /^#+"/.test(source.slice(at, at + 16)))) {
@@ -355,9 +356,26 @@ const JS_STARTS = new Set(["import", "export", "const", "let", "var", "for", "if
 const SWIFT_STARTS = new Set(["import", "let", "var", "func", "struct", "class", "enum", "extension", "actor", "protocol", "final", "public", "private", "internal", "fileprivate", "static"]);
 const SWIFT_MODIFIERS = /^(?:public|private|internal|fileprivate|static|final|override|mutating|nonisolated|class)$/;
 
+const CONTINUING_WORDS = new Set(["else", "do", "await", "return", "yield", "void", "typeof", "new", "in", "of", "instanceof", "delete", "throw", "case"]);
+
+function labelEnd(tokens, at) {
+  let depth = 0;
+  for (let index = at + 1; index < tokens.length; index++) {
+    const text = tokens[index].type === "punct" ? tokens[index].text : null;
+    if (text && OPENERS.has(text)) depth++;
+    else if (text && CLOSERS.has(text)) depth--;
+    else if (text === ":" && depth === 0) return index;
+    if (depth < 0) return -1;
+  }
+  return -1;
+}
+
 function ancestry(tokens, language) {
   const stack = [];
   const boundary = [0];
+  const prepend = new Map();
+  const chains = new Map();
+  const labels = new Map();
   const attributeEnd = (at) => {
     const token = tokens[at];
     if (!token) return false;
@@ -366,22 +384,42 @@ function ancestry(tokens, language) {
     const open = opening(tokens, at);
     return open > 0 && tokens[open - 1].text.startsWith("@");
   };
-  const ifStarts = new Map();
+  const inBlock = () => !stack.length || tokens[stack.at(-1).opener].text === "{";
+  const continues = (previous) =>
+    previous.control || (previous.type === "punct" && ![";", "}", ")", "]"].includes(previous.text)) || (previous.type === "word" && CONTINUING_WORDS.has(previous.text));
   const startsStatement = (index) => {
     const token = tokens[index];
-    if (!token.newline || index === 0) return false;
-    const previous = tokens[index - 1];
-    if (language === "js") return token.type === "word" && JS_STARTS.has(token.text) && !previous.control && !["else", "do"].includes(previous.text);
+    if (!token.newline || index === 0 || !inBlock()) return false;
+    if (language === "js") return token.type === "word" && JS_STARTS.has(token.text) && !continues(tokens[index - 1]);
     if (!(SWIFT_STARTS.has(token.text) || token.text.startsWith("@") || token.text.startsWith("#"))) return false;
     return !attributeEnd(index - 1);
   };
+  const setBoundary = (at) => {
+    boundary[boundary.length - 1] = at;
+  };
+  const forget = (depth) => {
+    for (const map of [chains, labels]) for (const key of map.keys()) if (key > depth) map.delete(key);
+  };
+  const slice = (start, end) => [...(prepend.get(start) ?? []), ...tokens.slice(start, end)];
   return {
     take(index) {
       const token = tokens[index];
-      if (startsStatement(index)) boundary[boundary.length - 1] = index;
-      if (language === "js" && token.type === "word") {
-        if (token.text === "if" && tokens[index - 1]?.text !== "else") ifStarts.set(boundary.length, boundary.at(-1));
-        if (token.text === "else" && ifStarts.has(boundary.length)) boundary[boundary.length - 1] = ifStarts.get(boundary.length);
+      const depth = boundary.length;
+      if (startsStatement(index)) setBoundary(index);
+      if (language === "js" && token.type === "word" && inBlock()) {
+        if (token.text === "if" && tokens[index + 1]?.text === "(") {
+          const condition = tokens.slice(index, closing(tokens, index + 1) + 1);
+          chains.set(depth, tokens[index - 1]?.text === "else" ? [...(chains.get(depth) ?? []), ...condition] : condition);
+        } else if (token.text === "else") {
+          prepend.set(index, [...(chains.get(depth) ?? [])]);
+          setBoundary(index);
+        } else if ((token.text === "case" || token.text === "default") && tokens[index - 1]?.text !== ".") {
+          const end = labelEnd(tokens, index);
+          if (end > index) {
+            labels.set(depth, tokens.slice(index, end + 1));
+            setBoundary(index);
+          }
+        }
       }
       if (token.type !== "punct") return;
       if (OPENERS.has(token.text)) {
@@ -391,13 +429,15 @@ function ancestry(tokens, language) {
         stack.pop();
         boundary.pop();
         if (!boundary.length) boundary.push(index + 1);
+        forget(boundary.length);
         const next = tokens[index + 1];
-        if (token.text === "}" && next && (next.newline || next.type === "word")) boundary[boundary.length - 1] = index + 1;
-      } else if (token.text === ";") boundary[boundary.length - 1] = index + 1;
+        if (token.text === "}" && next && (next.newline || next.type === "word")) setBoundary(index + 1);
+      } else if (token.text === ";") setBoundary(index + 1);
     },
     headers(index) {
-      const headers = stack.map(({ start, opener }) => tokens.slice(start, opener + 1));
-      if (language === "js") headers.push(tokens.slice(boundary.at(-1), index));
+      const headers = stack.map(({ start, opener }) => slice(start, opener + 1));
+      for (const key of [...labels.keys()].sort((x, y) => x - y)) headers.push(labels.get(key));
+      if (language === "js") headers.push(slice(boundary.at(-1), index));
       return headers;
     },
   };
