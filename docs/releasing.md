@@ -380,6 +380,24 @@ the engine if `engine/` changed (below).
   shipped since. When the latest stable release has no `appcast.xml` at all, a real publish stops too, unless
   `PUBLISH_NEW_FEED=1` says this release starts the feed; a dry run only notes it.
 
+### Feed recovery
+
+When `publish.sh` stops because the latest stable release has no `appcast.xml` (a nightly's `--clobber` re-upload
+that deleted the old file and then failed, or an asset removed by hand), put the last good feed back and re-run the
+publish (in CI, re-run the Release workflow's failed jobs):
+
+```bash
+gh run download <id of the last Release run that published> -R ardia-browser/ardia -n release -D /tmp/feed
+gh release upload "$(gh release view -R ardia-browser/ardia --json tagName -q .tagName)" -R ardia-browser/ardia --clobber /tmp/feed/appcast.xml
+```
+
+The sign job's `appcast.xml` in that run's `release` artifact (kept 14 days) is the live feed of that moment plus its
+release; when it's gone, take the latest stable release's own `appcast.xml` from the release before it
+(`gh release download <tag> -p appcast.xml`) and accept that nightlies since then drop out of the feed until the next
+publish. `PUBLISH_NEW_FEED=1` with a local `publish.sh` is only for a genuinely new feed (the first release on a new
+repo), never to get past a lost one: it publishes a feed without any earlier release. A dry run only notes a missing
+feed, so it can pass while the real run would stop.
+
 ### Deltas
 
 `appcast.sh` reads the published appcast for the newest earlier zips (`appcast.py delta-bases`, 3 by default;

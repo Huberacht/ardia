@@ -391,7 +391,10 @@ onto the published feed, creates the release as latest with the DMG, zip and app
 The release also ships up to three Sparkle deltas (`Ardia<build>-<earlier build>.delta`) that `appcast.sh` builds
 from the newest earlier zips; when none come out the sign job warns and the release goes on, so mention it in the
 report (`docs/releasing.md` › Deltas). `publish.sh` stops when the live feed is listed but won't download, and when the
-latest stable has no `appcast.xml` unless `PUBLISH_NEW_FEED=1`.
+latest stable has no `appcast.xml` unless `PUBLISH_NEW_FEED=1`. If it stops on a missing feed, re-upload the last good
+`appcast.xml` (the last publishing run's `release` artifact) to the latest stable release with
+`gh release upload <tag> --clobber`, then re-run the publish (`docs/releasing.md` › Feed recovery).
+`PUBLISH_NEW_FEED=1`, with a local `publish.sh`, is only for a genuinely new feed. A dry run only notes a missing feed.
 It holds the `release-lock` branch while it publishes, so
 it refuses to run alongside another publish, local or CI, naming the holder; `--break-lock` clears a lock older than
 2 h left by a publish that died. The build job has no secrets; a separate sign job, which installs nothing, holds the
