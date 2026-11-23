@@ -7,7 +7,7 @@ import { splitOf } from "../splits/splits";
 import { withLivePage } from "../tabs/livePage";
 import { goBackAsking, goForwardAsking } from "../tabs/navigation";
 import { liveOf } from "../tabs/tabLive";
-import { CLI_HOLD_DEFAULT_S, CLI_HOLD_MAX_S, CLI_HOLD_MAX_TABS, holdForCli, releaseFromCli } from "../tabs/cliHolds";
+import { CLI_HOLD_DEFAULT_S, CLI_HOLD_MAX_S, CLI_HOLD_MAX_TABS, heldByCli, holdForCli, releaseFromCli } from "../tabs/cliHolds";
 import type { JsonSchema } from "../../lib/jsonSchema";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { noteCliTabsHeld } from "../telemetry/tabSleepCounts";
@@ -151,10 +151,14 @@ async function holdTabs(params: Record<string, unknown>) {
   const gone = asked.filter((tab) => !held.includes(tab));
   if (!PLATFORM_FEATURES.vetoesChromeDiscardsForCli) return { held, gone, seconds };
   const marked = await cliHoldsPushed();
-  return { held, gone, seconds, engineKeeps: marked !== null && held.every((tab) => marked.has(tab)) };
+  return { held, gone, seconds, engineKeeps: marked !== null && held.every((tab) => marked.has(tab) && heldByCli(tab)) };
 }
 
-const releaseTabs = (params: Record<string, unknown>) => ({ released: releaseFromCli(params.session as string) });
+async function releaseTabs(params: Record<string, unknown>) {
+  const released = releaseFromCli(params.session as string);
+  if (PLATFORM_FEATURES.vetoesChromeDiscardsForCli) await cliHoldsPushed();
+  return { released };
+}
 
 const HOLD_SESSION: JsonSchema = { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$", description: "The holding session's own name; each session's holds are its own" };
 

@@ -163,3 +163,27 @@ test("engineKeeps is true only when the engine marked every held tab", async () 
   releaseAllCliHolds();
   await settled();
 });
+
+test("a hold that ends while the engine's answer is on its way isn't reported kept, and a release answers only once the engine let go", async () => {
+  releaseAllCliHolds();
+  await settled();
+  const { windowId } = await freshWindow("https://shown.example/");
+  const id = S().newTab(windowId, { url: "https://slow.example/", background: true });
+  let finish;
+  answerWith = () => new Promise((resolve) => (finish = () => resolve({ kept: 0, marked: [id] })));
+  const holding = ok("tabs.hold", { session: "slow", tabs: [id], seconds: 1 });
+  while (!finish) await new Promise((done) => setImmediate(done));
+  leaseClock += 1_500;
+  finish();
+  assert.equal((await holding).engineKeeps, false, "the hold ran out before the answer went out");
+  await ok("tabs.hold", { session: "slow", tabs: [id], seconds: 60 });
+  let cleared;
+  answerWith = () => new Promise((resolve) => (cleared = () => resolve({ kept: 0, marked: [] })));
+  let answered = false;
+  const releasing = ok("tabs.release", { session: "slow" }).then((reply) => ((answered = true), reply));
+  while (!cleared) await new Promise((done) => setImmediate(done));
+  assert.equal(answered, false, "tabs.release waits for the engine to let the tab go");
+  cleared();
+  assert.deepEqual((await releasing).released, [id]);
+  assert.deepEqual(pushed.at(-1), [], "the engine heard the release");
+});
