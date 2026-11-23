@@ -77,13 +77,22 @@ test("a free-space reading that arrives before the sidebar has a height is kept 
 test("a page's row cap keeps its peak only while the pager holds: the page that rests drops back to its warm cap, the shown page has none", async () => {
   const { pageRowsCap } = await import("./pageLayout.ts");
   const peaks = new Map();
-  const base = { shown: "a", current: "b", visited: false, capRows: 12, throughActive: () => 99, holding: true, peaks };
+  const base = { shown: "a", current: "b", visited: false, capRows: 12, throughActive: () => 19, holding: true, peaks };
   assert.equal(pageRowsCap({ ...base, profileId: "a" }), undefined, "the shown page has every row");
-  assert.equal(pageRowsCap({ ...base, profileId: "b" }), 100, "the arriving page mounts down to its selected tab");
-  assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b" }), 100, "a second swipe in the same hold keeps the page that is still sliding out");
+  assert.equal(pageRowsCap({ ...base, profileId: "b" }), 20, "the arriving page mounts down to its selected tab");
+  assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b" }), 20, "a second swipe in the same hold keeps the page that is still sliding out");
   assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b", holding: false }), 12, "once the pages rest an unvisited page goes back to its warm cap");
-  assert.equal(pageRowsCap({ ...base, profileId: "b", visited: true }), 100, "a visited page held in the same hold keeps its peak");
+  assert.equal(pageRowsCap({ ...base, profileId: "b", visited: true }), 20, "a visited page held in the same hold keeps its peak");
   peaks.clear();
   assert.equal(pageRowsCap({ ...base, profileId: "d", current: "c" }), 12, "a page that never arrived never grows");
   assert.equal(peaks.size, 0);
+});
+
+test("the arriving page pre-mounts at most two screens: a deeper selected tab waits for the rows to grow at rest", async () => {
+  const { pageRowsCap, PREMOUNT_SCREENS } = await import("./pageLayout.ts");
+  const at = (through) => pageRowsCap({ profileId: "b", shown: "a", current: "b", visited: false, capRows: 12, throughActive: () => through, holding: true, peaks: new Map() });
+  assert.equal(at(5), 12, "a selected tab on the first screen needs nothing extra");
+  assert.equal(at(12 * PREMOUNT_SCREENS - 1), 12 * PREMOUNT_SCREENS, "within two screens: mounted down to it");
+  assert.equal(at(12 * PREMOUNT_SCREENS), 12, "past two screens: the first screen only");
+  assert.equal(at(499), 12, "a 500th row never mounts 500 rows during the slide");
 });

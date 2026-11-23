@@ -9,7 +9,7 @@ export const ROWS_PER_FRAME = 32;
 export const DOCK_SHARE = 0.4;
 export const DOCK_SLACK = 12;
 
-export type SidebarGeometry = { viewport: number; regions: Record<Section, number>; newTabAtTop: boolean; tilesFixed: boolean; edgeLift?: number; laidOut?: () => void };
+export type SidebarGeometry = { viewport: number; regions: Record<Section, number>; newTabAtTop: boolean; tilesFixed: boolean; edgeLift?: number; laidOut?: () => void; entriesShown?: () => number };
 
 export type PageSpot = {
   scrollY: number;
@@ -20,14 +20,19 @@ export type PageSpot = {
   edgeLift: number;
   visited: boolean;
   owns: boolean;
+  entriesShown: number;
+  grown?: () => void;
   scroller: ScrollView | null;
 };
+
+export const PREMOUNT_SCREENS = 2;
 
 export type PageRowsInput = { profileId: string; shown: string | null; current: string; visited: boolean; capRows: number; throughActive: () => number; holding: boolean; peaks: Map<string, number> };
 
 export function pageRowsCap({ profileId, shown, current, visited, capRows, throughActive, holding, peaks }: PageRowsInput): number | undefined {
   if (profileId === shown) return undefined;
-  const wanted = profileId !== current || visited ? capRows : Math.max(capRows, throughActive() + 1);
+  const through = profileId !== current || visited ? 0 : throughActive() + 1;
+  const wanted = through > capRows && through <= capRows * PREMOUNT_SCREENS ? through : capRows;
   if (!holding) return wanted;
   const peak = Math.max(wanted, peaks.get(profileId) ?? 0);
   if (peak > capRows) peaks.set(profileId, peak);

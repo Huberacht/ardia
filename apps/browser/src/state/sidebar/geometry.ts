@@ -88,12 +88,20 @@ export function rowSpan(
 
 export const entryHeightNow = (windowId: string, profileId: string, entry: string): number => entryHeight(useBrowser.getState(), windowId, profileId, entry);
 
-export function entriesThroughActive(s: BrowserState, windowId: string, profileId: string): number {
-  const tabId = s.windows[windowId]?.activeTabIds[profileId];
+export function entriesThrough(s: BrowserState, windowId: string, profileId: string, tabId: string | undefined): number {
   return tabId ? sidebarEntries(s, windowId, profileId).list.findIndex((entry) => holdsTab(s, entry, tabId)) + 1 : 0;
 }
 
-export const entriesThroughActiveNow = (windowId: string, profileId: string): number => entriesThroughActive(useBrowser.getState(), windowId, profileId);
+export const entriesThroughActiveNow = (windowId: string, profileId: string): number => {
+  const s = useBrowser.getState();
+  return entriesThrough(s, windowId, profileId, s.windows[windowId]?.activeTabIds[profileId]);
+};
+
+export const entriesThroughTabNow = (windowId: string, tabId: string): number => {
+  const s = useBrowser.getState();
+  const profileId = s.windows[windowId]?.profileId;
+  return profileId ? entriesThrough(s, windowId, profileId, tabId) : 0;
+};
 
 export const firstPaintEntriesNow = (windowId: string, profileId: string, entries: string[], lazy: boolean): number =>
   firstPaintEntries(useBrowser.getState(), windowId, profileId, entries, lazy);

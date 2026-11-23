@@ -1,6 +1,7 @@
 import { useEffect, type RefObject } from "react";
 import type { ScrollView } from "react-native";
 import { watchRevealTargets } from "../../state/sidebar/reveal";
+import { entriesThroughTabNow } from "../../state/sidebar/geometry";
 import { reduceMotion } from "../ui/reduceMotion";
 import { GLOW_ROOM, type SidebarGeometry } from "./pageLayout";
 import { locateTab } from "./selectedRow";
@@ -31,6 +32,9 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
     const reveal = () => {
       frame = 0;
       if (!geometry.current.viewport || !scroll.current) return;
+      const target = switched ?? opened;
+      const shownEntries = geometry.current.entriesShown?.();
+      if (target && shownEntries !== undefined && entriesThroughTabNow(windowId, target) > shownEntries) return;
       const mine = ++reveals;
       const tabId = switched ?? opened;
       const pill = viaPill;

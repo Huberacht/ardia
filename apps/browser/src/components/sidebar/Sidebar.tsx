@@ -230,7 +230,7 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
       return;
     }
     spot.owns = true;
-    Object.assign(geometry.current, { viewport: spot.viewport, regions: spot.regions, tilesFixed: spot.tilesFixed, newTabAtTop: spot.newTabAtTop, edgeLift: spot.edgeLift });
+    Object.assign(geometry.current, { viewport: spot.viewport, regions: spot.regions, tilesFixed: spot.tilesFixed, newTabAtTop: spot.newTabAtTop, edgeLift: spot.edgeLift, entriesShown: () => spot.entriesShown });
     onScrollView(spot.scroller);
     onScrollY(spot.scrollY);
     geometry.current.laidOut?.();

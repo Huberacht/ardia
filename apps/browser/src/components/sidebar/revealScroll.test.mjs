@@ -48,6 +48,24 @@ test("switching to a tab whose row is out of view scrolls the sidebar once, with
   assert.equal(frames.length, 0);
 });
 
+test("a tab whose row isn't mounted yet is revealed once the rows grow down to it, never into an empty spacer", () => {
+  const ids = S().windows[w].tabIds;
+  S().activate(ids[0]);
+  runFrames();
+  let shown = 20;
+  geometry.current.entriesShown = () => shown;
+  scrollY.current = 0;
+  scrolls.length = 0;
+  S().activate(ids[45]);
+  runFrames();
+  assert.equal(scrolls.length, 0, "rows mounted to 20 of 46: no scroll yet");
+  shown = 52;
+  geometry.current.laidOut?.();
+  runFrames();
+  assert.equal(scrolls.length, 1, "the rows reached it: one scroll");
+  delete geometry.current.entriesShown;
+});
+
 test("the selected-row pill's click is one native animated scroll", () => {
   const ids = S().windows[w].tabIds;
   scrollY.current = 0;
