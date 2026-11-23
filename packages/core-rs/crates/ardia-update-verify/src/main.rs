@@ -267,8 +267,10 @@ fn read_input(path: &Path, cap: u64, what: &str, oversize: Reason) -> Result<Vec
 
 fn public_key_from_pem(pem: &[u8]) -> Option<[u8; PUBLIC_KEY_BYTES]> {
     let text = core::str::from_utf8(pem).ok()?;
-    let body = text.strip_suffix('\n').unwrap_or(text);
-    let mut lines = body.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line));
+    let mut lines = text.split_inclusive('\n').map(|line| match line.strip_suffix('\n') {
+        Some(ended) => ended.strip_suffix('\r').unwrap_or(ended),
+        None => line,
+    });
     let (Some(PEM_BEGIN), Some(encoded), Some(PEM_END), None) =
         (lines.next(), lines.next(), lines.next(), lines.next())
     else {
@@ -431,6 +433,10 @@ mod tests {
             format!("{PEM_BEGIN}\r\r\n{body}\r\n{PEM_END}\r\n"),
             format!("{PEM_BEGIN}\r{body}\r{PEM_END}\r"),
             format!("{PEM_BEGIN}\n{body}\n{PEM_END}\n\n"),
+            format!("{PEM_BEGIN}\r\n{body}\r\n{PEM_END}\r\n\r\n"),
+            format!("{PEM_BEGIN}\n{body}\n{PEM_END}\r"),
+            format!("{PEM_BEGIN}\r\n{body}\r\n{PEM_END}\r"),
+            format!("{PEM_BEGIN}\n{body}\r\r\n{PEM_END}\n"),
             format!("{PEM_BEGIN}\n{body}=\n{PEM_END}\n"),
             format!("{PEM_BEGIN}\n{}\n{PEM_END}\n", &body[..body.len() - 4]),
             format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\n"),

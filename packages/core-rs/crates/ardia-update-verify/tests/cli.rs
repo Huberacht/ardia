@@ -338,6 +338,18 @@ fn a_key_that_is_not_one_ed25519_public_key_verifies_nothing() {
     for (label, key) in [
         ("empty", String::new()),
         ("bare carriage returns", good.replace('\n', "\r")),
+        (
+            "a lone carriage return at the end",
+            format!("{}\r", good.trim_end_matches('\n')),
+        ),
+        (
+            "a CRLF key with a lone carriage return at the end",
+            format!("{}\r", good.trim_end_matches('\n').replace('\n', "\r\n")),
+        ),
+        (
+            "a trailing blank CRLF line",
+            format!("{}\r\n", good.replace('\n', "\r\n")),
+        ),
         ("two keys", format!("{good}{good}")),
         ("a private key header", good.replace("PUBLIC", "PRIVATE")),
         ("another algorithm", good.replace(SPKI_PREFIX, "MCowBQYDK2VxAyEA")),

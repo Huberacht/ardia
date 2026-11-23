@@ -6,7 +6,7 @@ Builds lib/ardia/ardia-update-verify, the verifier lib/ardia/ardia-update checks
 every update manifest and package with, from packages/core-rs: a static
 x86_64-unknown-linux-musl release build linked with rust-lld, so it runs on any
 x86-64 Linux whatever its libc, and builds the same from macOS. Prints the
-binary'"'"'s path, under $CARGO_TARGET_DIR when it is set. Needs cargo and
+binary'"'"'s path, under CARGO_TARGET_DIR when it is set. Needs cargo and
 rustup (the toolchain packages/core-rs/rust-toolchain.toml pins, plus the musl
 target, which it adds).'
 
