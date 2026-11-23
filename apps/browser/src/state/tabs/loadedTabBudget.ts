@@ -10,15 +10,16 @@ import { withSharedFamily } from "../pins/pinShare";
 import type { Settings } from "../settings/settings";
 import { withPinnedPanes } from "../splits/splits";
 import { noteBudgetSweep, noteSleepVeto, noteTabSleptOverBudget, noteTabSleptOverBudgetReopened } from "../telemetry/tabSleepCounts";
-import { consentToken } from "../telemetry/client";
+import { consentToken, stillValid } from "../telemetry/client";
+import type { ConsentToken } from "../telemetry/choice";
 import { hasPage } from "./pageSession";
 import { usePages } from "./pageState";
 import { shownTabIds } from "./shownTabs";
 import { isSleeping } from "./sleepingTabs";
-import { engineVeto, MINUTE, sleepRules, tabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
+import { engineVeto, MINUTE, sleepRules, sleepVeto, tabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
 import { liveOf, onLiveChange } from "./tabLive";
 import { countSwitches, forgetSwitchesExcept, switchesOf } from "./tabSwitches";
-import { downloadingIn, forgetTabDownloadsExcept } from "./tabDownloads";
+import { downloadingIn, forgetTabDownloadsExcept, noteDownloadChanged } from "./tabDownloads";
 
 export type LoadedTabBudget = Pick<SleepRules, "tabs" | "hiddenMs"> & Partial<SleepRules>;
 
@@ -100,13 +101,28 @@ export function tabsOverBudget(
 }
 
 const COUNTED_VETOES: ReadonlySet<SleepVeto> = new Set(["call", "pictureInPicture", "audible", "recentlyAudible", "frequentlyUsed", "typedInput", "postedDocument", "beforeUnload", "download", "other"]);
-const lastVeto = new Map<string, SleepVeto>();
+const countedVetoes = new Set<string>();
+let countedIn: ConsentToken | null = null;
 
-function noteVeto(id: string, veto: SleepVeto | null, consent: ReturnType<typeof consentToken>) {
-  if (!veto || !COUNTED_VETOES.has(veto)) return void lastVeto.delete(id);
-  if (lastVeto.get(id) === veto) return;
-  lastVeto.set(id, veto);
+function noteVeto(id: string, veto: SleepVeto | null, consent: ConsentToken | null) {
+  if (!veto || !COUNTED_VETOES.has(veto) || !stillValid(consent)) return;
+  if (countedIn !== consent) {
+    countedVetoes.clear();
+    countedIn = consent;
+  }
+  const key = `${id}\n${veto}`;
+  if (countedVetoes.has(key)) return;
+  countedVetoes.add(key);
   noteSleepVeto(veto, consent);
+}
+
+const vetoedTabOf = (key: string) => key.slice(0, key.indexOf("\n"));
+
+function vetoNow(id: string, budget: LoadedTabBudget, now: number): SleepVeto | "gone" | null {
+  const s = useBrowser.getState();
+  if (!s.tabs[id] || !webviews.has(id) || isSleeping(id)) return "gone";
+  const shown = new Set(withSharedFamily(s, withPinnedPanes(s, [...shownTabIds(s)])));
+  return sleepVeto(sleepFacts(s, id, shown, seenAt, askAgainAt), now, { hiddenMs: budget.hiddenMs, pressure: budget.pressure ?? "normal" });
 }
 
 const seenAt = new Map<string, number>();
@@ -121,9 +137,9 @@ export async function sleepTabsOverBudget(budget: LoadedTabBudget | null, now = 
   for (const id of shownTabIds(s)) seenAt.set(id, now);
   for (const id of seenAt.keys()) if (!s.tabs[id]) seenAt.delete(id);
   for (const id of lastAudibleAt.keys()) if (!s.tabs[id]) lastAudibleAt.delete(id);
-  for (const id of lastVeto.keys()) if (!s.tabs[id]) lastVeto.delete(id);
+  for (const key of countedVetoes) if (!s.tabs[vetoedTabOf(key)]) countedVetoes.delete(key);
   forgetSwitchesExcept(s.tabs);
-  forgetTabDownloadsExcept(s.tabs);
+  forgetTabDownloadsExcept(s.tabs, s.downloads);
   for (const [id, at] of askAgainAt) if (!s.tabs[id] || at <= now) askAgainAt.delete(id);
   for (const [id, at] of keptAt) if (!s.tabs[id] || now - at >= KEPT_RECENTLY_MS) keptAt.delete(id);
   const plan = planOverBudget(s, webviews.keys(), budget, now, seenAt, askAgainAt);
@@ -137,6 +153,11 @@ export async function sleepTabsOverBudget(budget: LoadedTabBudget | null, now = 
   sweeping = true;
   try {
     for (const id of asking) {
+      const vetoed = vetoNow(id, budget, now);
+      if (vetoed) {
+        if (vetoed !== "gone") noteVeto(id, vetoed, consent);
+        continue;
+      }
       const asked = Promise.resolve(webviews.get(id)?.sleepIfHidden(budget.hiddenMs / 1000)).catch(() => undefined);
       const keptBy = await withDeadline(asked, ANSWER_WITHIN_MS, undefined);
       const veto = keptBy ? engineVeto(keptBy) : null;
@@ -144,7 +165,6 @@ export async function sleepTabsOverBudget(budget: LoadedTabBudget | null, now = 
         slept.push(id);
         sleptAt.set(id, now);
         keptAt.delete(id);
-        lastVeto.delete(id);
         noteTabSleptOverBudget(consent);
       } else if (veto === "recentlySeen") seenAt.set(id, now);
       else {
@@ -180,7 +200,11 @@ export function startLoadedTabBudget(system: () => SystemState | null) {
   if (started) return;
   started = true;
   const budget = () => loadedTabBudget(useBrowser.getState().settings, system());
-  useBrowser.subscribeTo(["windows"], (s, prev) => countSwitches(prev.windows, s.windows));
+  useBrowser.subscribeTo(["windows"], (s, prev) => countSwitches(prev, s));
+  useBrowser.subscribeTo(["downloads"], (s, prev) => {
+    for (const d of s.downloads) if (!prev.downloads.includes(d)) noteDownloadChanged(d);
+    forgetTabDownloadsExcept(s.tabs, s.downloads);
+  });
   onLiveChange((tabId, live, prev) => {
     if (prev.playingAudio && !live.playingAudio) noteAudibleEnded(tabId);
   });

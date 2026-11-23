@@ -354,7 +354,7 @@ test("a tab switched to 15 times stays loaded, and each kind of protection that 
   const now = Date.now() + 480 * 60 * minute;
   const { ids, active } = windowOfHiddenTabs(4, now);
   clearSwitches();
-  const unsubscribe = useBrowser.subscribe((s, prev) => countSwitches(prev.windows, s.windows));
+  const unsubscribe = useBrowser.subscribe((s, prev) => countSwitches(prev, s));
   for (let i = 0; i < 15; i++) {
     S().activate(ids[3]);
     S().activate(active);
@@ -388,20 +388,106 @@ test("a tab switched to 15 times stays loaded, and each kind of protection that 
   clearSwitches();
 });
 
-test("a tab whose navigation became a download stays loaded while that download runs, and may sleep once it ends", async () => {
+test("a tab whose navigation became a download stays loaded while that download runs, redirected or not, and only for its own profile's download", async () => {
   const { tabsOverBudget } = await import("./loadedTabBudget.ts");
-  const { noteNavigationDownload, clearTabDownloads } = await import("./tabDownloads.ts");
+  const { noteNavigationDownload, noteDownloadChanged, forgetTabDownloadsExcept, clearTabDownloads } = await import("./tabDownloads.ts");
   const now = Date.now() + 600 * 60 * minute;
   const { ids, active } = windowOfHiddenTabs(3, now);
   ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i * 60) * minute }));
-  clearTabDownloads();
-  noteNavigationDownload(ids[2], "https://files.example/big.zip");
-  const download = { id: "d1", url: "https://files.example/big.zip", filename: "big.zip", path: "/tmp/big.zip", state: "downloading", paused: false, received: 1, total: 10, speed: 1, mimeType: "application/zip" };
-  S().upsertDownload(download);
   const over = () => tabsOverBudget(S(), [active, ...ids], { tabs: 1, hiddenMs: 30 * minute }, now);
-  assert.deepEqual(over(), [ids[1], ids[0]], "the tab running the download stays");
-  S().upsertDownload({ ...download, state: "finished", received: 10 });
-  assert.deepEqual(over(), [ids[2], ids[1], ids[0]], "once it finishes the tab is idle like the rest");
-  S().removeDownload("d1");
+  const row = (id, url, extra = {}) => ({ id, url, filename: "f.zip", path: `/tmp/${id}.zip`, state: "downloading", paused: false, received: 1, total: 10, speed: 1, mimeType: "application/zip", profile: "", startTime: now, ...extra });
+  const put = (d) => {
+    S().upsertDownload(d);
+    noteDownloadChanged(d, now);
+  };
   clearTabDownloads();
+  noteNavigationDownload(ids[2], "https://cdn.example/final.zip", "", S().downloads, now);
+  put(row("d1", "https://files.example/get?id=1"));
+  assert.deepEqual(over(), [ids[1], ids[0]], "the download it started stays linked though it was redirected: the event names the final URL, the record the first");
+  put(row("d1", "https://files.example/get?id=1", { state: "cancelled" }));
+  assert.deepEqual(over(), [ids[2], ids[1], ids[0]], "cancelled, the tab is idle like the rest");
+  put(row("d1", "https://files.example/get?id=1", { state: "downloading" }));
+  assert.deepEqual(over(), [ids[2], ids[1], ids[0]], "a later resume of that record isn't claimed again without a new navigation");
+
+  const later = now + 120_000;
+  noteNavigationDownload(ids[1], "https://files.example/same.zip", "", S().downloads, later);
+  put(row("d2", "https://files.example/same.zip", { profile: "Work", startTime: later }));
+  assert.ok(over().includes(ids[1]), "the same URL downloading in another profile doesn't keep this tab awake");
+  put(row("d3", "https://files.example/same.zip", { startTime: later }));
+  assert.ok(!over().includes(ids[1]), "its own profile's download does");
+  S().closeTabs([ids[1]]);
+  forgetTabDownloadsExcept(S().tabs, S().downloads);
+  noteNavigationDownload(ids[0], "https://other.example/x.zip", "", S().downloads, later + 60_000);
+  put(row("d4", "https://other.example/x.zip", { startTime: later + 60_000 }));
+  assert.ok(!over().includes(ids[0]), "a closed tab's link is gone, and a new navigation's download links to its own tab");
+  for (const id of ["d1", "d2", "d3", "d4"]) S().removeDownload(id);
+  forgetTabDownloadsExcept(S().tabs, S().downloads);
+  assert.deepEqual(over(), [ids[2], ids[0]], "a download gone from the list keeps nothing awake");
+  clearTabDownloads();
+});
+
+test("a candidate that starts a download while an earlier tab's answer is awaited isn't asked, and each tab is counted once per reason", async (t) => {
+  const { sleepTabsOverBudget } = await import("./loadedTabBudget.ts");
+  const { noteNavigationDownload, noteDownloadChanged, clearTabDownloads } = await import("./tabDownloads.ts");
+  const { webviews } = await import("../../platform/webviews.ts");
+  const { takeTabSleepCounts } = await import("../telemetry/tabSleepCounts.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const now = Date.now() + 900 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(3, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i * 60) * minute }));
+  clearTabDownloads();
+  const asked = [];
+  let answers = {
+    [ids[2]]: () => {
+      noteNavigationDownload(ids[1], "https://files.example/late.zip", "", S().downloads, now);
+      const d = { id: "late", url: "https://files.example/late.zip", filename: "l", path: "/tmp/l", state: "downloading", paused: false, received: 1, total: 9, speed: 1, mimeType: "x", profile: "", startTime: now };
+      S().upsertDownload(d);
+      noteDownloadChanged(d, now);
+      return Promise.resolve([26]);
+    },
+  };
+  webviews.clear();
+  for (const id of [active, ...ids]) webviews.set(id, { sleepIfHidden: () => (asked.push(id), answers[id]?.() ?? Promise.resolve([])) });
+  takeTabSleepCounts();
+  const sweep = async (at) => {
+    const done = sleepTabsOverBudget({ tabs: 1, hiddenMs: 30 * minute }, at);
+    for (let i = 0; i < 8; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      t.mock.timers.tick(1500);
+    }
+    return done;
+  };
+  assert.deepEqual(await sweep(now), [ids[0]]);
+  assert.deepEqual(asked, [ids[2], ids[0]], "the tab whose download began mid-sweep is skipped, not sent to Chromium");
+  answers = { [ids[2]]: () => Promise.resolve([26]) };
+  await sweep(now + 11 * minute);
+  const counts = takeTabSleepCounts();
+  assert.equal(counts.sleep_kept_typed_input, 1, "typed input kept the tab twice, counted once");
+  assert.equal(counts.sleep_kept_download, 1);
+  S().removeDownload("late");
+  webviews.clear();
+  clearTabDownloads();
+});
+
+test("a protection seen while sharing is off is still counted the first time it is seen after sharing turns on", async (t) => {
+  const { sleepTabsOverBudget } = await import("./loadedTabBudget.ts");
+  const { takeTabSleepCounts } = await import("../telemetry/tabSleepCounts.ts");
+  const { webviews } = await import("../../platform/webviews.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const now = Date.now() + 1200 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(2, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i * 60) * minute }));
+  S().updateLive(ids[1], { playingAudio: true });
+  webviews.clear();
+  for (const id of [active, ...ids]) webviews.set(id, { sleepIfHidden: () => Promise.resolve([7]) });
+  takeTabSleepCounts();
+  setConsentPeriod(false, null);
+  await sleepTabsOverBudget({ tabs: 1, hiddenMs: 30 * minute }, now);
+  setConsentPeriod(true, "tab-lifecycle-test-2");
+  await sleepTabsOverBudget({ tabs: 1, hiddenMs: 30 * minute }, now + minute);
+  await sleepTabsOverBudget({ tabs: 1, hiddenMs: 30 * minute }, now + 2 * minute);
+  assert.equal(takeTabSleepCounts().sleep_kept_audible, 1, "counted once in the period sharing was on, though first seen before it");
+  setConsentPeriod(true, "tab-lifecycle-test");
+  S().updateLive(ids[1], { playingAudio: false });
+  webviews.clear();
 });

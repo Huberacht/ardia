@@ -73,15 +73,18 @@ test("the engine's reasons map to the protection that matters most", () => {
   assert.equal(engineVeto([-1]), "notSleepable");
 });
 
-test("a tab switch counts once per change of a window's front tab, in any profile page", () => {
+test("a tab switch counts once per change of a window's front tab, including a return to a profile page's remembered tab", () => {
   const counts = new Map();
-  const w = (active) => ({ w1: { activeTabIds: active } });
-  let prev = w({ p1: "a" });
-  for (const next of [w({ p1: "b" }), w({ p1: "a" }), w({ p1: "a", p2: "x" }), w({ p1: "b", p2: "x" })]) {
+  const tabs = Object.fromEntries(["a", "b", "x"].map((id) => [id, { windowId: "w1" }]));
+  const at = (profileId, active) => ({ tabs, windows: { w1: { profileId, activeTabIds: active } } });
+  let prev = at("p1", { p1: "a" });
+  for (const next of [at("p1", { p1: "b" }), at("p1", { p1: "a" }), at("p2", { p1: "a", p2: "x" }), at("p1", { p1: "a", p2: "x" }), at("p2", { p1: "a", p2: "x" })]) {
     countSwitches(prev, next, counts);
     prev = next;
   }
-  assert.deepEqual(Object.fromEntries(counts), { b: 2, a: 1, x: 1 });
+  assert.deepEqual(Object.fromEntries(counts), { b: 1, a: 2, x: 2 }, "paging back to p2 shows x again without touching activeTabIds, and counts");
   countSwitches(prev, prev, counts);
-  assert.equal(counts.get("b"), 2, "the same windows count nothing");
+  assert.equal(counts.get("x"), 2, "the same windows count nothing");
+  countSwitches(prev, at("p2", { p1: "b", p2: "x" }), counts);
+  assert.equal(counts.get("b"), 1, "a change on a profile page that isn't shown is no visit");
 });

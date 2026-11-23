@@ -1,17 +1,20 @@
 import type { BrowserState } from "../browser/store";
 
-type Windows = BrowserState["windows"];
+type Fronts = Pick<BrowserState, "windows" | "tabs">;
 
 const switches = new Map<string, number>();
 
-export function countSwitches(prev: Windows, next: Windows, counts: Map<string, number> = switches) {
-  if (prev === next) return;
-  for (const [windowId, w] of Object.entries(next)) {
-    const before = prev[windowId]?.activeTabIds;
-    if (before === w.activeTabIds) continue;
-    for (const [profileId, tabId] of Object.entries(w.activeTabIds)) {
-      if (tabId && before?.[profileId] !== tabId) counts.set(tabId, (counts.get(tabId) ?? 0) + 1);
-    }
+const frontOf = (s: Fronts, windowId: string) => {
+  const w = s.windows[windowId];
+  const id = w?.activeTabIds[w.profileId];
+  return id && s.tabs[id]?.windowId === windowId ? id : undefined;
+};
+
+export function countSwitches(prev: Fronts, next: Fronts, counts: Map<string, number> = switches) {
+  if (prev.windows === next.windows) return;
+  for (const windowId of Object.keys(next.windows)) {
+    const front = frontOf(next, windowId);
+    if (front && front !== frontOf(prev, windowId)) counts.set(front, (counts.get(front) ?? 0) + 1);
   }
 }
 

@@ -1646,7 +1646,7 @@
    "id": "page-event:downloadNavigation",
    "source": "page",
    "detected": false,
-   "guard": "The URL a tab's navigation turned into a download is only compared for equality with the engine's own download list, to keep that tab loaded while the download runs; at most 8 kept per tab, dropped with the tab",
+   "guard": "The final URL of a tab's navigation that became a download is kept for at most 10 s, only to link that tab to a download the engine itself reports in the same profile starting within that time (URL match first). The link is by the engine's download id and ends when the download finishes, fails, is cancelled, leaves the list or the tab closes; it only keeps that tab loaded",
    "checks": [
     "apps/browser/src/state/tabs/tabDownloads.ts#noteNavigationDownload"
    ]
