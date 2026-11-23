@@ -14,6 +14,10 @@ export { getDisplayMediaThumbnails } from "../../platform/media";
 export { noteScreenRecordingMissing } from "../telemetry/usage";
 export { startSharePreviews } from "../telemetry/sharePreviewCounts";
 
+const anyTabShare = (m: { tabShares: Record<string, TabShare> }) => Object.keys(m.tabShares).length > 0;
+
+export const useAnyShareWhile = (live: boolean): boolean => useStoreWhile(useMedia, live, anyTabShare);
+
 export function useShareFor(tabId: string): [string, TabShare] | null {
   const shares = useMedia((m) => m.tabShares);
   const sharing = Object.keys(shares).length > 0;

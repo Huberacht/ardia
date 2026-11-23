@@ -13,8 +13,10 @@ import { SplitEmptyState } from "../split/SplitEmptyState";
 import { NewTabPage } from "../ntp/NewTabPage";
 import { EmptyCard } from "./EmptyCard";
 import { NewTabDropArea } from "./NewTabDropArea";
-import { InternalPage } from "../pages";
+import { InternalPage, isInternalTab } from "../pages";
 import { ShareBar } from "../media/ShareBar";
+import { useAnyShareWhile } from "../../state/media/screenShare";
+import { useKeptWhile } from "./overlayGate";
 import { Toolbar, ToolbarBackdrop } from "../toolbar/Toolbar";
 import { AutoHideBackdrop, AutoHideToolbar, useToolbarMode, useToolbarMotion } from "../toolbar/AutoHideToolbar";
 import { publishPaneChrome } from "../toolbar/WindowToolbar";
@@ -95,6 +97,8 @@ export const TabPane = memo(function TabPane({
   const inSomeSplit = useBrowserWhile(!!warm, (s) => !!warm && !!splitOf(s, tabId));
   const inSplit = visible ? inActiveSplit : inSomeSplit;
   const frame = rect ?? warm ?? { x: 0, y: 0, width: fullWidth, height: fullHeight };
+  const shareBarRoom = visible && !fullscreen;
+  const shareBar = useKeptWhile(useAnyShareWhile(shareBarRoom), shareBarRoom);
   useEffect(() => {
     if (visible && isNewTab && !mounted) patchPage(tabId, { wasNewTab: true });
   }, [visible, isNewTab, mounted]);
@@ -151,7 +155,7 @@ export const TabPane = memo(function TabPane({
       <Animated.View style={autoLayout ? motion.groupStyle : { flex: 1 }}>
         {autoLayout && bookmarksBar && <BookmarksBar tabId={tabId} placeholder={!visible} />}
         <View style={{ flex: 1 }}>
-          {visible && !fullscreen && <ShareBar tabId={tabId} />}
+          {shareBar && <ShareBar tabId={tabId} />}
           <View style={{ flex: 1 }}>
             {(mounted || prewarmed) && <TabWebView tabId={tabId} visible={visible && !newTabShown && !isNewTab} selected={focused} warm={!!warm && !newTabShown && !isNewTab} />}
             {visible && isNewTab && !small && (
@@ -159,7 +163,7 @@ export const TabPane = memo(function TabPane({
                 {inSplit ? <SplitEmptyState tabId={tabId} focused={focused} /> : emptyCard ? <EmptyCard windowId={windowId} tabId={tabId} /> : <NewTabPage key={tabId} tabId={tabId} toolbar={toolbar} />}
               </NewTabDropArea>
             )}
-            {visible && <InternalPage contentAreaOf={tabId} />}
+            {visible && own.appPage && <InternalPage contentAreaOf={tabId} />}
             {visible && (
               <PageOverlays
                 tabId={tabId}
@@ -186,4 +190,4 @@ export const TabPane = memo(function TabPane({
   );
 });
 
-const paneTab = (t: Tab | undefined) => ({ exists: !!t, url: t?.url ?? "", profileId: t?.profileId ?? "" });
+const paneTab = (t: Tab | undefined) => ({ exists: !!t, url: t?.url ?? "", profileId: t?.profileId ?? "", appPage: !!t && isInternalTab(t) });

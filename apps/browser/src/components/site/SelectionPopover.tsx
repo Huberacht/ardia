@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 import { useSettings } from "../../state/browser/hooks";
+import { useTabValue } from "../../state/tabs/tabWatch";
 import { defaultSearchEngine } from "../../state/settings/settings";
 import { POPOVER_MOTION, PopoverSurface, space } from "../ui";
 import { searchSelection, setPageSelection, usePageSelection, type ClickModifiers, type PageSelection } from "../../state/site/selection";
@@ -10,7 +11,8 @@ import { ChipButton, SITE_PANEL } from "./SiteControlsParts";
 const HEIGHT = SITE_PANEL.footerControl + 2 * space.xs;
 const GAP = 6;
 
-export function SelectionPopover({ tabId, zoom }: { tabId: string; zoom: number }) {
+export function SelectionPopover({ tabId }: { tabId: string }) {
+  const zoom = useTabValue(tabId, (t) => t?.zoom ?? 1);
   const enabled = useSettings((st) => st.showSelectionSearch);
   const selection = usePageSelection((s) => (enabled ? (s[tabId] ?? null) : null));
   const [shown, setShown] = useState<PageSelection | null>(null);
