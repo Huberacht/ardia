@@ -25,6 +25,7 @@ import {
   setDesktopSite,
   setNightShadeOn,
   shareCurrentPage,
+  shareOffersPrint,
   shareOverPageMenu,
   showFind,
   showReader,
@@ -75,7 +76,9 @@ function MenuScroll({ scrollRef, ...props }: ScrollViewProps & { scrollRef?: Ref
   return scrollRef ? <ScrollView ref={scrollRef} {...props} /> : <SheetScrollView {...props} />;
 }
 
-export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false, scrollRef }: { tabId: string; model: MenuModel; onTranslate: () => void; systemSheet?: boolean; scrollRef?: RefObject<ScrollViewInstance | null> }) {
+type PageMenuWordsProps = { tabId: string; model: MenuModel; onTranslate: () => void; systemSheet?: boolean; scrollRef?: RefObject<ScrollViewInstance | null>; onContentHeight?: (height: number) => void };
+
+export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false, scrollRef, onContentHeight }: PageMenuWordsProps) {
   const large = useAccessibilityText();
   const devices = useSendTargets(tabId);
   const offersSummary = usePageSummariesEnabled() && canSummarizePages();
@@ -89,7 +92,7 @@ export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false, 
   const { columns, measure } = useActionColumns(actions.map((action) => action.label));
   const square = columns === actions.length;
   return (
-    <MenuScroll scrollRef={scrollRef} testID="pageMenuWords" style={styles.scroll} contentContainerStyle={[styles.column, large ? styles.largeBottom : null]} bounces={false}>
+    <MenuScroll scrollRef={scrollRef} testID="pageMenuWords" style={styles.scroll} contentContainerStyle={[styles.column, large ? styles.largeBottom : null]} bounces={false} onContentSizeChange={onContentHeight ? (width, height) => (width > pageMenuCards.padding * 2 + 1 ? onContentHeight(height) : undefined) : undefined}>
       <NavigationBar tabId={tabId} model={model} large={large} />
       <View testID="pageMenuActions" style={styles.actionRows} onLayout={(event) => measure(event.nativeEvent.layout.width)}>
         {inRows(actions, columns).map((row, index) => (
@@ -112,7 +115,7 @@ export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false, 
         {model.pageRows ? <ZoomRow model={model} large={large} /> : null}
         {model.pageRows ? <ToggleRow which="desktopSite" icon="desktop" title="Desktop Site" value={model.desktopSite} enabled={model.isWebPage} onChange={setDesktopSite} /> : null}
         {model.pageRows ? <Row icon="translate" title={model.translateTitle} enabled={model.translate} onPress={onTranslate} /> : null}
-        {canPrintPages() ? <Row icon="printer" title="Print" enabled={model.print} onPress={printCurrentPage} /> : null}
+        {canPrintPages() && !shareOffersPrint() ? <Row icon="printer" title="Print" enabled={model.print} onPress={printCurrentPage} /> : null}
         <Row icon="gearshape" title="Site Settings" enabled onPress={openSiteSettingsSheet} />
       </Group>
       <Group>

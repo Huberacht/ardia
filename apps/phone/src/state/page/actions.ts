@@ -277,12 +277,21 @@ export const shareOverPageMenu = () => {
   const tab = selectedTab();
   if (!tab || !isSyncableUrl(tab.url)) return;
   const sharedFrom = opening;
-  void shareLink(tab.url, tab.title)
+  void shareFrom(tab)
     .catch(() => undefined)
     .finally(() => {
       if (opening === sharedFrom) closePageMenu();
     });
 };
+
+async function shareFrom(tab: BrowserTab) {
+  if (!shareOffersPrint()) {
+    await shareLink(tab.url, tab.title);
+    return;
+  }
+  const activity = await pages.sharePage(tab.id, tab.url, tab.title);
+  if (activity === PRINT_ACTIVITY && !tab.isPrivate) countUsage("pages_printed");
+}
 
 export function canPrintPages(): boolean {
   try {
@@ -440,11 +449,21 @@ export function showTitleFeedback(text: string) {
   }, TITLE_FEEDBACK_MS);
 }
 
+const PRINT_ACTIVITY = "com.apple.UIKit.activity.Print";
+
+export function shareOffersPrint(): boolean {
+  try {
+    return Platform.OS === "ios" && pages.sharesWithPrint();
+  } catch {
+    return false;
+  }
+}
+
 export function shareCurrentPage() {
   const tab = selectedTab();
   if (!tab || !isSyncableUrl(tab.url)) return;
   closePageMenu();
-  quietly(() => shareLink(tab.url, tab.title));
+  quietly(() => shareFrom(tab));
 }
 
 export function showReader() {

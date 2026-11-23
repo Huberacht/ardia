@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Platform, StyleSheet, View, type ScrollViewInstance } from "react-native";
 import { BottomSheet, Button, ConfirmationDialog, Group, Host, RNHostView, Text, VStack } from "@expo/ui/swift-ui";
-import { ignoreSafeArea, presentationDetents, presentationDragIndicator } from "@expo/ui/swift-ui/modifiers";
+import { ignoreSafeArea, presentationDetents, presentationDragIndicator, type PresentationDetent } from "@expo/ui/swift-ui/modifiers";
 import { askTranslation, confirmTranslation, isCurrentShowing, pageMenuHostGone, pageMenuPresentation, releaseTranslationAsk, type MenuPresentation } from "../../state/page/actions";
 import { usePageUi } from "../../state/page/store";
 import { useMenuModel, useMenuOpen, useMenuOpening, useMenuPage, usePageQuiet, useTranslationAsk } from "../../state/page/hooks";
@@ -13,8 +13,12 @@ import { PageMenuWords, usePageMenuInk } from "./PageMenuWords";
 
 const contentLaidOut = () => markMenuPhase("laidOut");
 const presentationIgnored = () => undefined;
-const MENU_SHEET = [presentationDetents(["medium", "large"]), presentationDragIndicator("visible")];
+const UNMEASURED_DETENTS: PresentationDetent[] = ["medium", "large"];
 const LIBRARY_SHEET = [presentationDetents(["large"], { selection: "large" }), presentationDragIndicator("automatic")];
+
+let lastMenuHeight: number | null = null;
+
+export const menuDetents = (height: number | null): PresentationDetent[] => (height ? [{ height }] : UNMEASURED_DETENTS);
 
 export const usesSystemPageMenu = (design: Design) => design === "redesigned" && Platform.OS === "ios" && settingsUIAvailable();
 
@@ -53,6 +57,13 @@ export function SystemPageMenu({ tabId, open, shownToken, onPresentation }: Syst
 
 function SystemPageMenuContent({ tabId, scroll }: { tabId: string; scroll: RefObject<ScrollViewInstance | null> }) {
   const page = useMenuPage();
+  const [menuHeight, setMenuHeight] = useState(lastMenuHeight);
+  const measured = (height: number) => {
+    if (height <= 0) return;
+    const fitted = Math.ceil(height);
+    lastMenuHeight = fitted;
+    setMenuHeight((now) => (now === fitted ? now : fitted));
+  };
   if (page === "library") {
     return (
       <Group modifiers={LIBRARY_SHEET}>
@@ -61,13 +72,13 @@ function SystemPageMenuContent({ tabId, scroll }: { tabId: string; scroll: RefOb
     );
   }
   return (
-    <Group modifiers={MENU_SHEET}>
-      <PageMenuSheetWords tabId={tabId} scroll={scroll} />
+    <Group modifiers={[presentationDetents(menuDetents(menuHeight)), presentationDragIndicator("visible")]}>
+      <PageMenuSheetWords tabId={tabId} scroll={scroll} onContentHeight={measured} />
     </Group>
   );
 }
 
-function PageMenuSheetWords({ tabId, scroll }: { tabId: string; scroll: RefObject<ScrollViewInstance | null> }) {
+function PageMenuSheetWords({ tabId, scroll, onContentHeight }: { tabId: string; scroll: RefObject<ScrollViewInstance | null>; onContentHeight: (height: number) => void }) {
   const ink = usePageMenuInk();
   const model = useMenuModel(tabId);
   const ask = useTranslationAsk();
@@ -77,7 +88,7 @@ function PageMenuSheetWords({ tabId, scroll }: { tabId: string; scroll: RefObjec
         <VStack modifiers={[ignoreSafeArea({ edges: "bottom" })]}>
           <RNHostView>
             <View testID="systemPageMenuFill" style={[styles.fill, { backgroundColor: ink.solid }]} onLayout={contentLaidOut}>
-              <PageMenuWords tabId={tabId} model={model} onTranslate={askTranslation} systemSheet scrollRef={scroll} />
+              <PageMenuWords tabId={tabId} model={model} onTranslate={askTranslation} systemSheet scrollRef={scroll} onContentHeight={onContentHeight} />
             </View>
           </RNHostView>
         </VStack>

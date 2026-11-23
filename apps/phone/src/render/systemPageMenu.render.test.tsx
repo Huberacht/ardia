@@ -15,6 +15,7 @@ import { useBrowse } from "../state/browse/store";
 import * as library from "../state/library/store";
 import { useLibrary } from "../state/library/store";
 import { useTabs } from "../state/tabs/store";
+import * as telemetry from "../state/telemetry/telemetry";
 import { pressButton, renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const onIos = Platform.OS === "ios" ? test : test.skip;
@@ -356,4 +357,44 @@ test("the menu's site switches stay off until the site's own state has loaded", 
   const base = { url: "https://a.example/", hasPage: true, canGoBack: false, canGoForward: false, isLoading: false, pageZoom: 1, zoomLevels: [], isDesktopSite: false, nightShade: "disabled" as const, systemDark: false, blockersEnabled: true, blockedRequests: 0 };
   expect(menuModel({ ...base, siteKnown: false }).siteSwitches).toBe(false);
   expect(menuModel({ ...base, siteKnown: true }).siteSwitches).toBe(true);
+});
+
+onIos("Share in the iPhone menu opens the page's own Share sheet over the menu, counts a print made from it, and closes the menu once it's done", async () => {
+  page("https://share-print.example/", false);
+  jest.spyOn(pages, "sharesWithPrint").mockReturnValue(true);
+  const counted = jest.spyOn(telemetry, "countUsage").mockImplementation(() => undefined);
+  let finish: (activity: string | null) => void = () => undefined;
+  const shared = jest.spyOn(pages, "sharePage").mockImplementation(() => new Promise((resolve) => (finish = resolve)) as never);
+  const root = menu();
+  await act(async () => void openPageMenu());
+  await pressButton(root, "Share");
+  expect(shared).toHaveBeenCalledWith("t0", "https://site0.example/", expect.any(String));
+  expect(usePageUi.getState().menuOpen).toBe(true);
+  finish("com.apple.UIKit.activity.Print");
+  await flush();
+  expect(counted).toHaveBeenCalledWith("pages_printed");
+  expect(usePageUi.getState().menuOpen).toBe(false);
+  unmount(root);
+});
+
+onIos("the menu sheet takes one detent as tall as its rows, measured only once the rows have a real width, and keeps it for the next open", async () => {
+  page("https://measured.example/", false);
+  const root = menu();
+  await act(async () => void openPageMenu());
+  const rows = () => hosts(root.root, (props) => props.testID === "pageMenuWords" && typeof props.onContentSizeChange === "function")[0]!;
+  const detents = () => {
+    const group = hosts(menuSheet(root)!, (props) => Array.isArray(props.modifiers) && (props.modifiers as { $type: string }[]).some((modifier) => modifier.$type === "presentationDetents"))[0]!;
+    return (group.props.modifiers as { $type: string; detents?: unknown }[]).find((modifier) => modifier.$type === "presentationDetents")!.detents;
+  };
+  expect(detents()).toEqual(["medium", "large"]);
+  act(() => rows().props.onContentSizeChange(0, 4000));
+  expect(detents()).toEqual(["medium", "large"]);
+  act(() => rows().props.onContentSizeChange(393, 611.4));
+  expect(detents()).toEqual([{ height: 612 }]);
+  unmount(root);
+  const again = menu();
+  await act(async () => void openPageMenu());
+  const group = hosts(sheetIn(again, "systemPageMenuSheet")!, (props) => Array.isArray(props.modifiers) && (props.modifiers as { $type: string }[]).some((modifier) => modifier.$type === "presentationDetents"))[0]!;
+  expect((group.props.modifiers as { $type: string; detents?: unknown }[]).find((modifier) => modifier.$type === "presentationDetents")!.detents).toEqual([{ height: 612 }]);
+  unmount(again);
 });
