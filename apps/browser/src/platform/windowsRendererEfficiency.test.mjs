@@ -133,3 +133,62 @@ test("off Windows the hourly counts gain no fields at all", async () => {
   const { takeRendererEfficiencyCounts } = await import("../state/telemetry/rendererEfficiencyCounts.ts");
   assert.deepEqual(takeRendererEfficiencyCounts(), {});
 });
+
+test("an engine without the call answers once, and then is never asked again this session", async () => {
+  let asked = 0;
+  const counts = rendererEfficiencyCounts(async () => {
+    asked++;
+    throw new Error("unknown verb");
+  }, () => true);
+  try {
+    counts.setConsentEpoch("e1");
+    await new Promise((resolve) => setImmediate(resolve));
+    await counts.refresh();
+    counts.takeCounts();
+    await counts.refresh();
+    counts.setConsentEpoch("e2");
+    await counts.refresh();
+    assert.equal(asked, 1);
+    assert.deepEqual(counts.takeCounts(), {});
+  } finally {
+    counts.stop();
+  }
+});
+
+test("any other failure keeps asking", async () => {
+  let asked = 0;
+  const counts = rendererEfficiencyCounts(async () => {
+    asked++;
+    throw new Error("no engine");
+  }, () => true);
+  try {
+    counts.setConsentEpoch("e1");
+    await new Promise((resolve) => setImmediate(resolve));
+    await counts.refresh();
+    await counts.refresh();
+    assert.equal(asked, 3);
+  } finally {
+    counts.stop();
+  }
+});
+
+test("with sharing on it polls the engine every interval from the start, and stops when sharing goes off", async () => {
+  let asked = 0;
+  const ticks = [];
+  const timers = { every: (run, ms) => (ticks.push({ run, ms, live: true }), ticks.length - 1), cancel: (handle) => void (ticks[handle].live = false) };
+  const counts = rendererEfficiencyCounts(async () => (asked++, { counts: {} }), () => true, 60_000, timers);
+  counts.setConsentEpoch("e1");
+  await counts.refresh();
+  assert.equal(ticks.length, 1);
+  assert.equal(ticks[0].ms, 60_000);
+  const beforeTicks = asked;
+  for (let i = 0; i < 3; i++) {
+    ticks[0].run();
+    await counts.refresh();
+  }
+  assert.ok(asked > beforeTicks);
+  counts.setConsentEpoch("");
+  assert.equal(ticks[0].live, false);
+  counts.takeCounts();
+  assert.equal(ticks.length, 1);
+});

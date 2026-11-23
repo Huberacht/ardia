@@ -301,9 +301,9 @@ void StartRendererEfficiency() {
     return;
   }
   g_started = true;
+  g_ardia_win_renderer_gone.store(&OnRendererGone, std::memory_order_release);
   g_ardia_win_renderer_priority.store(&OnRendererPriority,
                                       std::memory_order_release);
-  g_ardia_win_renderer_gone.store(&OnRendererGone, std::memory_order_release);
   Graph* graph = PerformanceManager::GetGraph();
   if (auto* voting = graph->GetRegisteredObjectAs<PriorityVotingSystem>()) {
     voting->AddPriorityVoter<KeepCallsAndPictureInPicture>();
