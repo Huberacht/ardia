@@ -10,7 +10,6 @@ const lifecycle = await import("./lifecycle.ts");
 const { manifestHash } = await import("./appChecks.ts");
 const { officialPlugins, officialUpdateVerdict, resetOfficialUpdatesForTests } = await import("./official.ts");
 const { autoUpdateNote } = await import("./officialView.ts");
-const { FIRST_MAIN_POLICY } = await import("./officialUpdate.ts");
 const { takePluginCounts } = await import("../telemetry/pluginCounts.ts");
 const { setConsentPeriod, consentToken } = await import("../telemetry/consentPeriod.ts");
 const { readPluginRecords, parsePluginRecords, pluginRecordsJson } = await import("./savedState.ts");
@@ -47,8 +46,6 @@ const candidateOf = (text, folderId = PINNED.folderId) => ({ folderId, text, leg
 const RECORDS = (approved, extra = {}) => JSON.stringify({ version: 1, plugins: { cli: { enabled: true, approved, values: {}, applied: {}, installed: true, ...extra } } });
 
 appInfo.appVersion = "0.2.49";
-assert.equal(FIRST_MAIN_POLICY.autoApprove, false, "Ardia ships with a first main prompting");
-FIRST_MAIN_POLICY.autoApprove = true;
 setConsentPeriod(true, "test-epoch");
 lifecycle.PROMOTION_RETRY.delayMs = 20;
 host.pinned = [PINNED];
@@ -73,23 +70,12 @@ async function launch(records, folders) {
   await settle();
 }
 
-test("with the default policy, 0.4.0 to 0.6.0 waits for Update… (a first main is a new runtime), while an update with the same surface switches by itself", async () => {
-  FIRST_MAIN_POLICY.autoApprove = false;
-  try {
-    await launch(RECORDS(PY_RECEIPT), [{ ...LEGACY_040, candidate: candidateOf(BUN_060) }]);
-    assert.deepEqual(host.promotes, []);
-    assert.equal(P().records.cli.approved, PY_RECEIPT);
-    assert.equal(officialPlugins(P(), true, () => false)[0].update, "0.6.0");
-    const counts = takePluginCounts();
-    assert.equal(counts.official_update_prompts_runtime, 1);
-    const bun050 = bun("0.5.0");
-    const store050 = `official-${"5".repeat(64)}`;
-    await launch(RECORDS(manifestHash(bun050, store050)), [{ name: "cli", status: "ok", official: true, legacy: true, folderId: store050, text: bun050, candidate: candidateOf(BUN_060) }]);
-    assert.deepEqual(host.promotes.map((p) => p.approved), [manifestHash(BUN_060, PINNED.folderId)], "0.5.0 to 0.6.0 asks for nothing new");
-    assert.deepEqual(P().records.cli.updated, { from: "0.5.0", to: "0.6.0", added: [] });
-  } finally {
-    FIRST_MAIN_POLICY.autoApprove = true;
-  }
+test("an update with the same surface switches by itself, with a note that doesn't claim new code", async () => {
+  const bun050 = bun("0.5.0");
+  const store050 = `official-${"5".repeat(64)}`;
+  await launch(RECORDS(manifestHash(bun050, store050)), [{ name: "cli", status: "ok", official: true, legacy: true, folderId: store050, text: bun050, candidate: candidateOf(BUN_060) }]);
+  assert.deepEqual(host.promotes.map((p) => p.approved), [manifestHash(BUN_060, PINNED.folderId)]);
+  assert.deepEqual(P().records.cli.updated, { from: "0.5.0", to: "0.6.0", added: [] });
 });
 
 test("a Python CLI 0.4.0 approved in 0.2.47 switches to the Bun CLI 0.6.0 by itself: same permissions, so no sheet", async () => {
@@ -105,7 +91,7 @@ test("a Python CLI 0.4.0 approved in 0.2.47 switches to the Bun CLI 0.6.0 by its
   assert.equal(record.approved, approved);
   assert.equal(record.previous, PY_RECEIPT, "the 0.2.47 receipt stays for a rollback");
   assert.equal(record.installed, true);
-  assert.deepEqual([record.updated.from, record.updated.to], ["0.4.0", "0.6.0"]);
+  assert.deepEqual([record.updated.from, record.updated.to, record.updated.runtime], ["0.4.0", "0.6.0", true], "the note says it added code");
   assert.ok(record.updated.added.some((line) => line.includes("Command Line: Show Status")), "the note says what's new");
   assert.equal(S().settings.cliControl, true, "control is left as it was");
   assert.deepEqual(parsePluginRecords(stub.docs.get("plugins.json")).cli.updated, record.updated, "the note is saved");
@@ -242,12 +228,15 @@ test("the saved note is read back bounded and checked", () => {
   assert.deepEqual(kept, { from: "0.4.0", to: "0.6.0", added: ["x"] });
 });
 
-test("the plugin page says it updated by itself and what's new", () => {
-  assert.deepEqual(autoUpdateNote({ from: "0.4.0", to: "0.6.0", added: [] }), { title: "Updated by itself to 0.6.0", description: "It asks for nothing you hadn't already approved." });
-  assert.deepEqual(autoUpdateNote({ from: "0.4.0", to: "0.6.0", added: ["Adds to the command bar: Command Line: Show Status"] }), {
+test("the plugin page says it updated by itself, says plainly when it added code, and lists what's new", () => {
+  assert.deepEqual(autoUpdateNote({ from: "0.5.0", to: "0.6.0", added: [] }), { title: "Updated by itself to 0.6.0", description: "Its permissions didn't change." });
+  assert.deepEqual(autoUpdateNote({ from: "0.4.0", to: "0.6.0", added: ["Adds to the command bar: Command Line: Show Status"], runtime: true }), {
     title: "Updated by itself to 0.6.0",
-    description: "It asks for nothing you hadn't already approved. New since 0.4.0: Adds to the command bar: Command Line: Show Status.",
+    description:
+      "It added its own code, which runs in Ardia's sandbox, offline, only when you use one of its commands in the command bar. Its permissions didn't change. New since 0.4.0: Adds to the command bar: Command Line: Show Status.",
   });
+  assert.equal(parsePluginRecords(RECORDS(PY_RECEIPT, { updated: { from: "0.4.0", to: "0.6.0", added: [], runtime: true } })).cli.updated.runtime, true);
+  assert.equal(parsePluginRecords(RECORDS(PY_RECEIPT, { updated: { from: "0.4.0", to: "0.6.0", added: [], runtime: "yes" } })).cli.updated.runtime, undefined);
 });
 
 test("hostile values in a downloaded official plugin.json never reach plugins.json or a switch: approval and promotion stay untouched", async () => {

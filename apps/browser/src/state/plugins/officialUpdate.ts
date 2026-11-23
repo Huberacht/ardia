@@ -3,12 +3,11 @@ import { consentLines } from "./consent";
 
 export const UPDATE_PROMPT_REASONS = ["baseline", "permissions", "network", "runtime", "activation", "programs", "hooks", "settings", "contributions", "unknown"] as const;
 export type UpdatePromptReason = (typeof UPDATE_PROMPT_REASONS)[number];
-export type UpdateVerdict = { ok: true; added: string[] } | { ok: false; reason: UpdatePromptReason };
+export type UpdateVerdict = { ok: true; added: string[]; runtime: boolean } | { ok: false; reason: UpdatePromptReason };
 
 type Both = { approved: PluginManifest; next: PluginManifest; fallbackExample: string | null };
 type Rule<T> = (approved: T, next: T, both: Both) => UpdatePromptReason | null;
 
-export const FIRST_MAIN_POLICY = { autoApprove: false };
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -41,7 +40,7 @@ const MAIN_USES = PERMISSION_KEYS.filter((key) => key !== "control");
 
 const grantsMainNothing = (p: PluginPermissions) => MAIN_USES.every((key) => p[key] === false);
 
-const firstMain = ({ approved, next }: Both) => FIRST_MAIN_POLICY.autoApprove && approved.main === null && next.main !== null;
+const firstMain = ({ approved, next }: Both) => approved.main === null && next.main !== null;
 
 const runs = (programs: readonly ProgramSpec[], fallbackExample: string | null) => ({
   programs: programs.map((p) => ({ name: p.name, path: p.path, afterUpdate: p.afterUpdate })),
@@ -107,7 +106,7 @@ const isMainSpec = (m: unknown): boolean =>
   !!m && typeof m === "object" && Object.keys(m).sort().join() === "entry,memoryMB" && typeof (m as MainSpec).entry === "string" && isPluginPath((m as MainSpec).entry) && Number.isSafeInteger((m as MainSpec).memoryMB);
 
 const mainWithin: Rule<PluginManifest["main"]> = (a, b, { approved, next }) => {
-  if (a === null && b !== null) return FIRST_MAIN_POLICY.autoApprove && !approved.sidecar && isMainSpec(b) && firstMainOnDemand(next) ? null : "runtime";
+  if (a === null && b !== null) return !approved.sidecar && isMainSpec(b) && firstMainOnDemand(next) ? null : "runtime";
   return same(a, b) ? null : "runtime";
 };
 
@@ -157,5 +156,5 @@ function compare(both: Both): UpdateVerdict {
   }
   const lines = (m: PluginManifest) => consentLines({ ...m, permissions: { ...m.permissions, network: Array.isArray(m.permissions.network) ? [...m.permissions.network].sort() : m.permissions.network } });
   const before = new Set(lines(approved).map((l) => l.text));
-  return { ok: true, added: lines(next).map((l) => l.text).filter((text) => !before.has(text)) };
+  return { ok: true, added: lines(next).map((l) => l.text).filter((text) => !before.has(text)), runtime: firstMain(both) };
 }

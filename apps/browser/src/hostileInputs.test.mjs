@@ -23,7 +23,7 @@ const { syncedHome } = await import("./state/sync/pinRecords.ts");
 const { sendableUrl } = await import("./state/sync/sentTabsAdapter.ts");
 const { filterListAddress } = await import("./state/site/contentBlocking.ts");
 const { CLEAN_UP_KEY, LEGACY_CLEAN_UP_KEY } = await import("./state/settings/cleanUpAfter.ts");
-const { updateWithin, FIRST_MAIN_POLICY } = await import("./state/plugins/officialUpdate.ts");
+const { updateWithin } = await import("./state/plugins/officialUpdate.ts");
 const { readManifest } = await import("./lib/pluginManifest.ts");
 
 const S = () => useBrowser.getState();
@@ -359,9 +359,7 @@ test("the release's original smuggled hide is refused at every layer", () => {
   assert.equal(LINUX_NATIVE_REFUSES.test(`${HOST}##${smuggled}`), true);
 });
 
-test("an official update's manifest with any hostile value in a field that counts is never approved without a sheet", (t) => {
-  FIRST_MAIN_POLICY.autoApprove = true;
-  t.after(() => void (FIRST_MAIN_POLICY.autoApprove = false));
+test("an official update's manifest with any hostile value in a field that counts is never approved without a sheet", () => {
   const steps = [["skills", "install", "--auto"], ["skills", "refresh"], ["computer", "refresh"]];
   const approved = readManifest(JSON.stringify({ manifest: 1, name: "cli", title: "Command Line", version: "0.4.0", alwaysOn: true, official: true, permissions: ["control"], programs: [{ name: "ardia", path: "bin/ardia", afterUpdate: steps }] })).manifest;
   const next = readManifest(JSON.stringify({ manifest: 2, name: "cli", title: "Command Line", version: "0.6.0", alwaysOn: true, official: true, main: "dist/main.js", permissions: { control: true }, contributes: { commands: [{ name: "show-status", title: "Status", icon: "terminal", view: "status" }], programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate: steps }] } })).manifest;

@@ -46,7 +46,7 @@ const versionOf = (raw: unknown): string | null => (typeof raw === "string" && V
 export function updatedOf(raw: unknown): OfficialAutoUpdate | null {
   if (!isFields(raw) || !Array.isArray(raw.added)) return null;
   const added = raw.added.filter((line): line is string => typeof line === "string" && line.length > 0 && line.length <= MAX_UPDATE_LINE).slice(0, MAX_UPDATE_LINES);
-  return { from: versionOf(raw.from), to: versionOf(raw.to), added };
+  return { from: versionOf(raw.from), to: versionOf(raw.to), added, ...(raw.runtime === true ? { runtime: true as const } : {}) };
 }
 
 export function parsePluginRecords(json: string | null): Record<string, PluginRecord> {

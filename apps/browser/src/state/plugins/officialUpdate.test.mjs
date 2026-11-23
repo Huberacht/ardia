@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 const { readManifest } = await import("../../lib/pluginManifest.ts");
-const { updateWithin, UPDATE_PROMPT_REASONS, FIRST_MAIN_POLICY } = await import("./officialUpdate.ts");
+const { updateWithin, UPDATE_PROMPT_REASONS } = await import("./officialUpdate.ts");
 
 const parse = (doc) => {
   const read = readManifest(JSON.stringify(doc));
@@ -26,17 +26,48 @@ const CLI_060 = {
 const v2 = (version, extra = {}, contributes = {}) => ({ ...CLI_060, version, ...extra, contributes: { ...CLI_060.contributes, ...contributes } });
 
 const from040 = (next) => updateWithin(parse(CLI_040), next, "ardia tabs");
-assert.equal(FIRST_MAIN_POLICY.autoApprove, false, "Ardia ships with a first main prompting");
-FIRST_MAIN_POLICY.autoApprove = true;
-
-test("by default a first main prompts: even sandboxed and offline it can show toasts and dialogs and call other plugins' tools, so 0.4.0 to 0.6.0 waits for Update…", () => {
-  FIRST_MAIN_POLICY.autoApprove = false;
-  try {
-    assert.deepEqual(from040(parse(CLI_060)), { ok: false, reason: "runtime" });
-  } finally {
-    FIRST_MAIN_POLICY.autoApprove = true;
-  }
+test("a first main reachable only from the command bar, with permissions that give it nothing, passes silently and is flagged as a new runtime", () => {
+  const verdict = from040(parse(CLI_060));
+  assert.equal(verdict.ok, true);
+  assert.equal(verdict.runtime, true, "the note says it added code");
+  assert.equal(updateWithin(parse(CLI_060), parse(v2("0.7.0"))).runtime, false, "an existing main isn't new");
 });
+
+const firstMainWith = (extra = {}, contributes = {}) => from040(parse(v2("0.6.0", extra, contributes)));
+const firstMainRefusals = [
+  ["a startup activation", { activationEvents: ["onStartupFinished"] }, {}],
+  ["every event", { activationEvents: ["*"] }, {}],
+  ["a URL activation", { activationEvents: ["onUrl:example.com"] }, {}],
+  ["an event activation", { activationEvents: ["onEvent:tab.created"] }, {}],
+  ["a sidebar view", {}, { sidebarViews: [{ id: "side", title: "Side", icon: "terminal" }] }],
+  ["a toolbar button", {}, { toolbar: [{ id: "tb", title: "Status", icon: "terminal", command: "show-status" }] }],
+  ["a menu entry", {}, { menus: { tab: [{ command: "show-status" }] } }],
+  ["an omnibox provider", {}, { omnibox: [{ id: "o", title: "O", keyword: "st" }] }],
+  ["a panel", {}, { panels: [{ id: "default", title: "P", icon: "doc", mode: "tab", file: "p.html" }] }],
+  ["a tool", {}, { tools: [{ name: "peek", title: "Peek", description: "d" }] }],
+  ["a hook", {}, { hooks: ["tab.created"] }],
+];
+for (const [what, extra, contributes] of firstMainRefusals) {
+  test(`a first main with ${what} prompts`, () => assert.equal(firstMainWith(extra, contributes).ok, false));
+}
+const grants = [
+  ["tabs read", { tabs: "read" }],
+  ["full URLs", { tabs: "read", fullUrls: true }],
+  ["the active page", { activePage: true }],
+  ["commands", { commands: true }],
+  ["storage", { storage: true }],
+  ["secrets", { secrets: true }],
+  ["a network host", { network: ["api.example.com"] }],
+  ["every site", { network: "*" }],
+];
+for (const [what, granted] of grants) {
+  test(`a first main with ${what} prompts, even when 0.4.0 had already declared it`, () => {
+    const permissions = { control: true, ...granted };
+    const before = { ...CLI_040, manifest: 2, permissions, contributes: { programs: [{ name: "ardia", path: "bin/ardia", afterUpdate: AFTER_UPDATE }] } };
+    delete before.programs;
+    assert.deepEqual(updateWithin(parse(before), parse(v2("0.6.0", { permissions })), "ardia tabs"), { ok: false, reason: "runtime" });
+  });
+}
 
 test("a program's example must stay what Settings offers to copy: the pin's fallback counts for a manifest without one", () => {
   assert.equal(from040(parse(CLI_060)).ok, true, "0.4.0 had none, so the pin's ardia tabs; 0.6.0 says ardia tabs");
@@ -48,12 +79,12 @@ test("round 5: the example is compared the way Settings picks it, and a host-ord
   const programs = (first) => parse(v2("0.6.0", {}, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, ...(first ? { example: first } : {}), afterUpdate: AFTER_UPDATE }, { name: "ardia-help", path: "bin/h", example: "ardia-help --help" }] }));
   assert.deepEqual(updateWithin(programs(null), programs("ardia tabs"), "ardia tabs"), { ok: false, reason: "programs" }, "Settings would switch from ardia-help --help to ardia tabs");
   const hosts = (network) => parse(v2("0.6.0", { permissions: { control: true, network } }));
-  assert.deepEqual(updateWithin(hosts(["b.example.com", "a.example.com"]), hosts(["a.example.com", "b.example.com"])), { ok: true, added: [] });
+  assert.deepEqual(updateWithin(hosts(["b.example.com", "a.example.com"]), hosts(["a.example.com", "b.example.com"])), { ok: true, added: [], runtime: false });
 });
 
 test("an equal manifest under a new version, description, keywords and telemetry text passes, with nothing new to tell", () => {
   const verdict = updateWithin(parse(CLI_060), parse(v2("0.7.0", { description: "Changed words.", keywords: ["other"], telemetry: { title: "x", items: ["y"] } })));
-  assert.deepEqual(verdict, { ok: true, added: [] });
+  assert.deepEqual(verdict, { ok: true, added: [], runtime: false });
 });
 
 test("the Python CLI 0.4.0 to 0.6.0: same permissions, so it passes, and the note lists what's new (an on-demand sandboxed view and a command-bar entry)", () => {

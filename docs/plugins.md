@@ -165,7 +165,7 @@ is the only source of which version may be fetched.
 - **Updates.** A pin that names a new artifact fetches it in the background once you have the plugin, retrying after
   10 minutes, then doubling up to 6 hours.
   - It switches over by itself if its exact approval is on record: the same name and hash, or the old receipt below.
-  - It also switches over by itself, with no sheet, when it asks for nothing you hadn't already approved
+  - It also switches over by itself, with no sheet, when it grants nothing you hadn't already approved
     (`state/plugins/officialUpdate.ts`, #3868). All of these must hold:
     - the installed copy is official by native's say (the pin's digest, an earlier pinned digest, or a 0.2.47 bundled
       digest), it's on, and the record's `approved` is that copy's exact receipt;
@@ -178,17 +178,19 @@ is the only source of which version may be fetched.
       sidebar views, panels, omnibox, themes, site switches, the page bar, the page, `main` and sidecar specs with
       their memory budgets, every activation event other than `onCommand:`, and every approved command. A program's
       `example` must stay what Settings offers to copy (the pin's example stands in for a manifest without one).
-      A first `main` is a new runtime: even sandboxed and offline it can show toasts and dialogs, relink its own
-      programs and call other plugins' tools, so it prompts. `FIRST_MAIN_POLICY.autoApprove` in `officialUpdate.ts`
-      (off) would let one through when its only way in is the command bar, with the new view or handler commands
-      that reach it: all its activation events `onCommand:`, no page, panels, sidebar views, toolbar, omnibox, menus,
-      tools, hooks or sidecar, and no permission it could use (only `control`). That is the Python 0.4.0 to Bun 0.6.0
-      move, which therefore waits for **Update…** while the switch is off. Title, description, version, `requires`,
-      icon, keywords, the telemetry text and a program's `claim` don't count. Any field the comparison doesn't know, or a malformed one, prompts. The
-      boundary row is `plugin-update:official-auto`.
-    - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, and the consent lines that are
-      new). While that copy is the one installed, the plugin's page shows "Updated by itself to 0.6.0", that it asks
-      for nothing new, and those lines. `official_updates_auto` counts the switch once it took.
+      The one addition is a first `main` (the owner's call, for the move off the Python CLI): it passes only when
+      its only way in is the command bar, with the new view or handler commands that reach it (all its activation
+      events `onCommand:`; no page, panels, sidebar views, toolbar, omnibox, menus, tools, hooks or sidecar), and
+      the unchanged permissions give it nothing to use (only `control`, the separate program-control setting). It
+      is still a new runtime, able to show toasts and dialogs and relink its own programs, so the note says so.
+      Python 0.4.0 to Bun 0.6.0 is this case. Title, description, version, `requires`, icon, keywords, the telemetry
+      text and a program's `claim` don't count. Any field the comparison doesn't know, or a malformed one, prompts.
+      The boundary row is `plugin-update:official-auto`.
+    - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, the consent lines that are
+      new, and `runtime` when it added a first `main`). While that copy is the one installed, the plugin's page shows
+      "Updated by itself to 0.6.0", "It added its own code, which runs in Ardia's sandbox, offline, only when you
+      use one of its commands in the command bar" when it did, "Its permissions didn't change", and those lines.
+      `official_updates_auto` counts the switch once it took.
       Approving any later update by hand drops the note.
   - Otherwise it waits, and the plugin's row offers **Update…**, which shows the consent sheet for the new copy. It
     also waits while the consent sheet is open for that plugin, and when nothing is on record: an `ardia` installed
