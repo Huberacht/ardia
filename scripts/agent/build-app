@@ -114,7 +114,7 @@ elif [[ -d "$chromium_framework" ]]; then
 else
   source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
 fi
-ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework") ||
+ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework" --as "$name" --wait "$wait") ||
   { echo "build-app: couldn't stage the engine from $source_framework" >&2; exit 1; }
 export ARDIACORE_FRAMEWORK
 signing=default
@@ -193,13 +193,18 @@ fi
 slot="" built_stamp=$stamp
 if [[ $mode == plain ]]; then
   echo "build-app: $config into ${dd#"$repo"/} (log: ${log#"$repo"/})"
+  : >"$log"
+  if [[ -x "$repo/packages/core-rs/scripts/build-xcframework.sh" ]] && ! "$repo/packages/core-rs/scripts/build-xcframework.sh" >>"$log" 2>&1; then
+    echo "build-app: couldn't build ArdiaCoreRS.xcframework (packages/core-rs/scripts/build-xcframework.sh; log: ${log#"$repo"/})" >&2
+    exit 1
+  fi
   (
     cd "$app_dir" &&
       "$repo/scripts/agent/locked" xcodebuild --wait "$wait" --as "$name" -- \
         xcodebuild -workspace macos/Ardia.xcworkspace -scheme Ardia-macOS -derivedDataPath "$dd" \
         -destination 'platform=macOS,arch=arm64' -configuration "$config" -hideShellScriptEnvironment \
         ${settings[@]+"${settings[@]}"} build
-  ) >"$log" 2>&1
+  ) >>"$log" 2>&1
   status=$?
   app="$dd/Build/Products/$config/Ardia.app"
   if [[ $status -eq 0 && -n "$built_stamp" && "$(stamp_now)" != "$built_stamp" ]]; then
@@ -221,6 +226,7 @@ else
     if [[ $i -lt ${#candidates[@]} ]]; then
       slot=${candidates[$i]}
       try_wait=2
+      [[ $i -eq 0 ]] && try_wait=60
     elif [[ -z "$reserved" ]]; then
       slot=$("$cache_tool" reserve --owner $$) || { echo "build-app: couldn't make a build slot" >&2; exit 1; }
       reserved=$slot try_wait=$wait

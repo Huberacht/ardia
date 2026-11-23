@@ -191,11 +191,14 @@ function stampFor(manifest, inputs) {
 }
 
 let groupSlot = null;
-const GROUP_WRAPPER = 'setpgrp(0, 0); my $f = shift; open(my $h, ">", $f) or die "$f: $!"; print $h "{\\"pgid\\":$$}"; close $h; exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!";';
 
 function sh(cmd, args, opts) {
   console.log(`build-cache: ${[cmd, ...args].join(" ")}`);
-  const wrapped = groupSlot ? ["perl", ["-e", GROUP_WRAPPER, lib.slotGroupFile(groupSlot), cmd, ...args]] : [cmd, args];
+  const wrapped = groupSlot ? lib.groupCommand(groupSlot, cmd, args) : [cmd, args];
+  if (!wrapped) {
+    console.log(`build-cache: ${groupSlot} is busy: process group ${lib.slotGroup(groupSlot)} from an earlier command is still running`);
+    process.exit(75);
+  }
   const r = spawnSync(wrapped[0], wrapped[1], { stdio: "inherit", ...opts });
   return r.status ?? 1;
 }
@@ -283,6 +286,8 @@ function slotRun() {
     if (attempt === 3) throw new Error(`${mismatched.length} files kept changing while they were synced (${mismatched[0]})`);
   }
   const state = syncDeps(slot, lib.readSlotState(slot), manifest);
+  const xcframework = join(tree, "packages/core-rs/scripts/build-xcframework.sh");
+  if (fs.existsSync(xcframework) && sh(xcframework, [], { cwd: tree }) !== 0) throw new Error("building ArdiaCoreRS.xcframework failed in the slot");
   for (const rel of lib.UNFINGERPRINTABLE_FILES) {
     if (fs.existsSync(join(repo, rel))) fs.copyFileSync(join(repo, rel), join(tree, rel));
     else fs.rmSync(join(tree, rel), { force: true });
@@ -397,6 +402,14 @@ try {
     console.log(`from ${snap.meta.head?.slice(0, 10) ?? "?"} built ${snap.meta.created}`);
   } else if (command === "stage-engine") {
     need("framework");
+    const chromiumSrc = process.env.CHROMIUM_SRC || join(process.env.HOME, "chromium-build/chromium_git/chromium/src");
+    if (!process.env.AC_STAGE_ENGINE_LOCKED && lib.isInside(flags.framework, chromiumSrc)) {
+      const r = spawnSync(join(here, "locked"), ["chromium", "--wait", flags.wait || "1500", ...(flags.as ? ["--as", flags.as] : []), "--", process.execPath, fileURLToPath(import.meta.url), "stage-engine", "--framework", flags.framework], {
+        stdio: ["ignore", "inherit", "inherit"],
+        env: { ...process.env, AC_STAGE_ENGINE_LOCKED: "1" },
+      });
+      process.exit(r.status ?? 1);
+    }
     const { copy } = lib.stageEngine(cfg.cacheRoot, resolve(flags.framework), hashCache);
     hashCache.save();
     lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, keepEngines: cfg.keepEngines, graceMs: cfg.graceMs, protectEngines: [dirname(copy)] });

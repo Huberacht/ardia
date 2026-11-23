@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export const STAMP_VERSION = 4;
+export const STAMP_VERSION = 5;
 
 const NATIVE = [
   /^apps\/browser\/macos\//,
@@ -35,12 +35,12 @@ export const isDeps = (rel) => DEPS.some((r) => r.test(rel));
 export const isPodsInput = (rel) => PODS.some((r) => r.test(rel));
 
 const BUILD_ENV = new RegExp(
-  "^(RCT_|EXPO_|USE_|HERMES_|COCOAPODS_|SWIFT_|CLANG_|GCC_|OTHER_|BUNDLE_|ARDIACORE_(STAGE|PREBUILT)|HSTS_|UBO_|UBOL_)|" +
+  "^(RCT_|EXPO_|USE_|HERMES_|COCOAPODS_|SWIFT_|CLANG_|GCC_|OTHER_|BUNDLE_|ARDIACORE_(STAGE|PREBUILT)|HSTS_|UBO_|UBOL_|RUST|CARGO_)|" +
     "^(NODE_BINARY|NODE_OPTIONS|ENTRY_FILE|SKIP_BUNDLING|FORCE_BUNDLING|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|CONFIG_JSON|" +
     "ARDIA_PRUNE|CHROMIUM_TAG|TOOLCHAINS|DEVELOPER_DIR|SDKROOT|MACOSX_DEPLOYMENT_TARGET|CC|CXX|LD|CPP|CFLAGS|CXXFLAGS|" +
     "OBJCFLAGS|LDFLAGS|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|OBJC_INCLUDE_PATH|LIBRARY_PATH|CP_HOME_DIR|LANG|LC_ALL)$",
 );
-export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE"];
+export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE", "ARDIA_CORE_RS_XCFRAMEWORK"];
 export const BUNDLING_ENV = /^(SKIP_BUNDLING|FORCE_BUNDLING|BUNDLE_[A-Z_]+|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|ENTRY_FILE|CONFIG_JSON|USE_HERMES|HERMES_CLI_PATH|SOURCEMAP_FILE|NODE_ARGS|CLI_PATH)$/;
 export const UNFINGERPRINTABLE_FILES = ["apps/browser/macos/.xcode.env.local", "apps/browser/macos/.xcode.env.updates"];
 
@@ -183,13 +183,27 @@ export function toolchainIdentity() {
   return `toolchain ${parts.join(" | ").replace(/\s+/g, " ")}`;
 }
 
-export function stampOf({ manifest, config, signing = "default", framework, toolchain, env, native = isNative }) {
+export function rustIdentity(repo, env = process.env) {
+  const core = join(repo, "packages/core-rs");
+  if (!fs.existsSync(join(core, "rust-toolchain.toml"))) return "rust none";
+  const runEnv = { ...env, PATH: `${join(homedir(), ".cargo/bin")}:${env.PATH ?? ""}`, RUSTUP_AUTO_INSTALL: "0" };
+  const run = (cmd, args) => {
+    const r = spawnSync(cmd, args, { cwd: core, env: runEnv, encoding: "utf8" });
+    return r.status === 0 ? r.stdout.trim().replace(/\s+/g, " ") : null;
+  };
+  const rustc = run("rustc", ["-vV"]);
+  const cargo = run("cargo", ["-V"]);
+  return rustc && cargo ? `rust ${rustc} | ${cargo}` : "rust unavailable";
+}
+
+export function stampOf({ manifest, config, signing = "default", framework, toolchain, rust = "rust none", env, native = isNative }) {
   return hashManifest(pick(manifest, native), [
     `stamp v${STAMP_VERSION}`,
     `config ${config}`,
     `signing ${signing}`,
     framework,
     toolchain,
+    rust,
     ...env.lines,
   ]).slice(0, 32);
 }
@@ -211,7 +225,7 @@ export function localEnvLines(repo, files = UNFINGERPRINTABLE_FILES) {
   return { lines };
 }
 
-export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity(), repo = null, localEnvFiles = UNFINGERPRINTABLE_FILES }) {
+export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity(), repo = null, rust = repo ? rustIdentity(repo, env) : "rust none", localEnvFiles = UNFINGERPRINTABLE_FILES }) {
   const fingerprint = envFingerprint(env);
   if (fingerprint.blocked.length) return { blocked: `${fingerprint.blocked.join(", ")} set` };
   const local = repo ? localEnvLines(repo, localEnvFiles) : { lines: [] };
@@ -220,7 +234,7 @@ export function stampInputs({ framework, env = process.env, hashCache, toolchain
   const identity = frameworkIdentity(framework, hashCache);
   if (!identity) return { blocked: `no engine framework at ${framework || "(none)"}` };
   if (!toolchain) return { blocked: "the Xcode toolchain didn't answer" };
-  return { framework: identity, toolchain, env: fingerprint };
+  return { framework: identity, toolchain, rust, env: fingerprint };
 }
 
 export function cloneTree(src, dst) {
@@ -286,9 +300,17 @@ export function duBytes(path) {
   return r.status === 0 ? Number(r.stdout.split(/\s/)[0]) * 1024 : 0;
 }
 
+export const entryIntact = (entry) => {
+  try {
+    return treeDigest(entry.dir, undefined, { skipTop: ENTRY_META }) === entry.meta.digest;
+  } catch {
+    return false;
+  }
+};
+
 export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measure = duBytes } = {}) {
   const existing = lookup(cacheRoot, stamp);
-  if (existing) return { ...existing, existed: true };
+  if (existing && entryIntact(existing)) return { ...existing, existed: true };
   fs.mkdirSync(cacheRoot, { recursive: true });
   const tmp = join(cacheRoot, `.tmp-${process.pid}-${Date.now()}`);
   fs.mkdirSync(tmp);
@@ -298,7 +320,11 @@ export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measur
     const digest = treeDigest(tmp, undefined, { skipTop: ENTRY_META });
     fs.writeFileSync(join(tmp, "meta.json"), JSON.stringify({ ...meta, stamp, digest, created: new Date().toISOString(), bytes: measure(tmp) }, null, 1));
     touch(tmp);
-    fs.renameSync(tmp, cacheEntryDir(cacheRoot, stamp));
+    if (treeDigest(tmp, undefined, { skipTop: ENTRY_META }) !== digest) throw new Error("the new entry changed while it was written");
+    const dir = cacheEntryDir(cacheRoot, stamp);
+    const stale = lookup(cacheRoot, stamp);
+    if (stale && !entryIntact(stale)) removeAtomically(cacheRoot, dir);
+    fs.renameSync(tmp, dir);
   } catch {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -322,16 +348,49 @@ export function snapshotEntry(entry, dest) {
   }
 }
 
+export const isInside = (path, root) => {
+  try {
+    const real = fs.realpathSync(path);
+    const base = fs.realpathSync(root);
+    return real === base || real.startsWith(`${base}/`);
+  } catch {
+    return false;
+  }
+};
+
+export function linksLeaving(root) {
+  const found = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        const target = fs.readlinkSync(path);
+        if (isAbsolute(target) || !resolve(dirname(path), target).startsWith(`${root}/`)) found.push(`${path} -> ${target}`);
+      } else if (entry.isDirectory()) walk(path);
+    }
+  };
+  walk(root);
+  return found;
+}
+
 export function stageEngine(cacheRoot, framework, cache) {
-  const digest = treeDigest(framework, cache);
+  const root = fs.realpathSync(framework);
+  const leaving = linksLeaving(root);
+  if (leaving.length) throw new Error(`${framework} has links that leave it (${leaving[0]}); stage a self-contained framework`);
+  const digest = treeDigest(root, cache);
   const dir = join(cacheRoot, "engine-copies", digest.slice(0, 32));
   const copy = join(dir, "Chromium Framework.framework");
-  if (!fs.existsSync(join(dir, ".complete"))) {
+  let existing = fs.existsSync(join(dir, ".complete"));
+  if (existing && (fs.lstatSync(copy, { throwIfNoEntry: false })?.isSymbolicLink() ?? true)) {
+    removeAtomically(join(cacheRoot, "engine-copies"), dir);
+    existing = false;
+  }
+  if (!existing) {
     const tmp = `${dir}.tmp-${process.pid}`;
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.mkdirSync(tmp, { recursive: true });
     try {
-      cloneOrThrow(framework, join(tmp, "Chromium Framework.framework"));
+      cloneOrThrow(root, join(tmp, "Chromium Framework.framework"));
       if (treeDigest(join(tmp, "Chromium Framework.framework"), cache) !== digest) throw new Error(`${framework} changed while it was copied`);
       fs.writeFileSync(join(tmp, ".complete"), digest);
       fs.renameSync(tmp, dir);
@@ -474,6 +533,13 @@ export function groupAlive(pgid) {
 }
 
 export const slotGroup = (slot) => Number(readJson(slotGroupFile(slot), {}).pgid);
+
+export const GROUP_WRAPPER = 'setpgrp(0, 0); my $f = shift; open(my $h, ">", $f) or die "$f: $!"; print $h "{\\"pgid\\":$$}"; close $h; exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!";';
+
+export function groupCommand(slot, cmd, args) {
+  if (settleGroup(slot)) return null;
+  return ["perl", ["-e", GROUP_WRAPPER, slotGroupFile(slot), cmd, ...args]];
+}
 
 export function settleGroup(slot) {
   if (!fs.existsSync(slotGroupFile(slot))) return false;

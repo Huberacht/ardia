@@ -29,7 +29,7 @@ function repo() {
   write(dir, "packages/base/src/index.ts", "export const base = 1;\n");
   write(dir, "apps/browser/src/FakeScreen.tsx", "export default 1;\n");
   write(dir, "pnpm-lock.yaml", "lockfileVersion: 9\n");
-  write(dir, ".gitignore", "node_modules\nbuild-*\n");
+  write(dir, ".gitignore", "node_modules\n/apps/browser/build-*/\n");
   write(dir, "apps/browser/build-x/ignored.o", "x");
   return dir;
 }
@@ -478,4 +478,106 @@ test("a slot stays busy while any of its recorded process group runs, and nobody
   assert.equal(lib.settleGroup(slot), false);
   assert.ok(!fs.existsSync(lib.slotGroupFile(slot)));
   assert.ok(!lib.slotBusy(slot, { root: scratch() }));
+});
+
+const CORE_RS = ["packages", "core-rs"].join("/");
+
+test("every Rust core input changes the stamp: crates, lockfile, toolchain file, cargo config, header, build script", () => {
+  const dir = repo();
+  const files = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/config.toml", "include/ardia_core.h", "scripts/build-xcframework.sh", "crates/ardia-ffi/src/lib.rs"];
+  for (const rel of files) write(dir, `${CORE_RS}/${rel}`, `${rel} v1\n`);
+  const seen = new Set([stampOf(dir)]);
+  for (const rel of files) {
+    write(dir, `${CORE_RS}/${rel}`, `${rel} v2\n`);
+    const next = stampOf(dir);
+    assert.ok(!seen.has(next), rel);
+    seen.add(next);
+  }
+});
+
+test("the Rust toolchain and its environment are in the stamp, and a redirected xcframework turns reuse off", () => {
+  const dir = repo();
+  const base = stampOf(dir, { rust: "rust rustc 1.100.0 (0ef1bc386 2026-11-09) | cargo 1.100.0" });
+  assert.notEqual(stampOf(dir, { rust: "rust rustc 1.101.0 (aaaaaaaaa 2026-12-01) | cargo 1.101.0" }), base);
+  assert.notEqual(stampOf(dir, { rust: "rust unavailable" }), base);
+  assert.deepEqual(lib.envFingerprint({ RUSTUP_TOOLCHAIN: "nightly", CARGO_TARGET_DIR: "/t" }).lines, ["env CARGO_TARGET_DIR=/t", "env RUSTUP_TOOLCHAIN=nightly"]);
+  assert.deepEqual(lib.envFingerprint({ ARDIA_CORE_RS_XCFRAMEWORK: "/elsewhere" }).blocked, ["ARDIA_CORE_RS_XCFRAMEWORK"]);
+  const inputs = lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", rust: "rust r" });
+  assert.equal(inputs.rust, "rust r");
+});
+
+test("the Rust identity reads the toolchain the core pins, and says so when there is no core or no rustc", () => {
+  const noCore = scratch();
+  assert.equal(lib.rustIdentity(noCore), "rust none");
+  const core = scratch();
+  write(core, `${CORE_RS}/rust-toolchain.toml`, "[toolchain]\nchannel = \"0.0.0-missing\"\n");
+  assert.match(lib.rustIdentity(core, { PATH: "/nonexistent" }), /^rust unavailable/);
+});
+
+test("staging resolves a symlinked framework, refuses links that leave it, and replaces a copy that is a symlink", () => {
+  const cache = scratch();
+  const real = framework();
+  const linked = join(scratch(), "Linked.framework");
+  fs.symlinkSync(real, linked);
+  const staged = lib.stageEngine(cache, linked);
+  assert.equal(fs.lstatSync(staged.copy).isSymbolicLink(), false);
+  assert.equal(fs.lstatSync(join(staged.copy, "Versions/A/Chromium Framework")).isSymbolicLink(), false);
+  fs.writeFileSync(join(real, "Versions/A/Chromium Framework"), "edited after staging");
+  assert.equal(fs.readFileSync(join(staged.copy, "Versions/A/Chromium Framework"), "utf8"), "engine");
+
+  const leaky = framework();
+  const outside = write(scratch(), "outside.pak", "x");
+  fs.symlinkSync(outside, join(leaky, "Versions/A/resources.pak"));
+  assert.throws(() => lib.stageEngine(cache, leaky), /links that leave it/);
+
+  const source = framework();
+  const first = lib.stageEngine(cache, source);
+  fs.rmSync(first.copy, { recursive: true });
+  fs.symlinkSync(source, first.copy);
+  const again = lib.stageEngine(cache, source);
+  assert.equal(again.copy, first.copy);
+  assert.equal(fs.lstatSync(again.copy).isSymbolicLink(), false);
+});
+
+test("a framework inside the local Chromium tree is recognised by its real path", () => {
+  const tree = scratch();
+  const fw = join(tree, "out/Release_GN_arm64/Chromium Framework.framework");
+  fs.mkdirSync(fw, { recursive: true });
+  const link = join(scratch(), "fw");
+  fs.symlinkSync(fw, link);
+  assert.equal(lib.isInside(fw, tree), true);
+  assert.equal(lib.isInside(link, tree), true);
+  assert.equal(lib.isInside(framework(), tree), false);
+  assert.equal(lib.isInside("/nowhere/at/all", tree), false);
+});
+
+test("no wrapped command starts while the slot's recorded process group still runs", async () => {
+  const { spawn } = await import("node:child_process");
+  const slot = scratch();
+  assert.deepEqual(lib.groupCommand(slot, "true", [])?.[0], "perl");
+  const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  fs.writeFileSync(lib.slotGroupFile(slot), JSON.stringify({ pgid: child.pid }));
+  try {
+    assert.equal(lib.groupCommand(slot, "true", []), null);
+    assert.equal(JSON.parse(fs.readFileSync(lib.slotGroupFile(slot), "utf8")).pgid, child.pid);
+  } finally {
+    process.kill(-child.pid, "SIGKILL");
+  }
+  await new Promise((r) => child.on("exit", r));
+  assert.ok(lib.groupCommand(slot, "true", []));
+});
+
+test("publishing over an entry whose bytes no longer match its digest replaces it; an intact one is kept", () => {
+  const cache = scratch();
+  const first = lib.store(cache, S1, fakeApp(scratch(), "abc"), {}, { measure: one });
+  fs.writeFileSync(join(first.app, "Contents/MacOS/Ardia"), "xyz");
+  assert.equal(lib.snapshotEntry(lib.lookup(cache, S1), join(scratch(), "bad")), null);
+  const replaced = lib.store(cache, S1, fakeApp(scratch(), "new"), {}, { measure: one });
+  assert.notEqual(replaced.existed, true);
+  assert.equal(appText(lib.lookup(cache, S1)), "new");
+  assert.ok(lib.snapshotEntry(lib.lookup(cache, S1), join(scratch(), "good")));
+  const kept = lib.store(cache, S1, fakeApp(scratch(), "other"), {}, { measure: one });
+  assert.equal(kept.existed, true);
+  assert.equal(appText(lib.lookup(cache, S1)), "new");
+  assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp")), []);
 });
