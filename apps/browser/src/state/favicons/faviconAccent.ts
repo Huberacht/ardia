@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 import { iconAccent } from "../../platform/favicons";
 import { useResolvedFaviconUri } from "./faviconHooks";
-import { onPrivateIconsDropped } from "./favicons";
+import { faviconHeld, onPrivateIconsDropped } from "./favicons";
 
 const KEPT = 64;
 
@@ -11,7 +11,6 @@ export const useFaviconAccents = create<{ byUri: Record<string, string | null> }
 const asking = new Map<string, symbol>();
 
 onPrivateIconsDropped((unheld) => {
-  for (const uri of [...asking.keys()].filter(unheld)) asking.delete(uri);
   const { byUri } = useFaviconAccents.getState();
   if (Object.keys(byUri).some(unheld)) useFaviconAccents.setState({ byUri: Object.fromEntries(Object.entries(byUri).filter(([uri]) => !unheld(uri))) });
 });
@@ -33,7 +32,7 @@ export function useFaviconAccent(url: string, profileId?: string): string | null
       .then((found) => {
         if (asking.get(uri) !== request) return;
         asking.delete(uri);
-        remember(uri, found ?? null);
+        if (faviconHeld(uri)) remember(uri, found ?? null);
       });
   }, [uri, accent]);
   return accent;

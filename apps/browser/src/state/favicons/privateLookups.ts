@@ -13,4 +13,7 @@ export function incognitoClosed(key: string): boolean {
 
 const urisOf = (icons: IconMaps) => [...Object.values(icons.pages), ...Object.values(icons.srcs), ...Object.values(icons.appearances).flat()].filter((uri): uri is string => !!uri);
 
-export const urisHeldBy = (kept: IconMaps[]): Set<string> => new Set(kept.flatMap(urisOf));
+export function unheldBy(kept: IconMaps[]): (uri: string) => boolean {
+  const held = new Set(kept.flatMap(urisOf));
+  return (uri) => !held.has(uri);
+}

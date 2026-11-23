@@ -9,11 +9,12 @@ const native = import.meta.resolve("../../platform/favicons.ts");
 const stub = `export * from ${JSON.stringify(native)};
 export const faviconsFor = (profile, pages) => globalThis.faviconsForTest(profile, pages);
 export const storeFavicon = (...args) => (globalThis.storedFavicons.push(args), Promise.resolve({ stored: true }));
+export const iconAccent = (uri) => (globalThis.iconAccentForTest ? globalThis.iconAccentForTest(uri) : Promise.resolve(null));
 export const iconTheme = (request) => (globalThis.iconThemeForTest ? globalThis.iconThemeForTest(request) : Promise.resolve(null));
 export const fetchFavicon = (src, profile) => (globalThis.fetchFaviconForTest ? globalThis.fetchFaviconForTest(src, profile) : Promise.resolve(null));`;
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier === "../../platform/favicons" && context.parentURL?.endsWith("/state/favicons/favicons.ts"))
+    if (specifier === "../../platform/favicons" && /\/state\/favicons\/(favicons|faviconAccent)\.ts$/.test(context.parentURL ?? ""))
       return { url: `data:text/javascript,${encodeURIComponent(stub)}`, shortCircuit: true };
     return next(specifier, context);
   },
@@ -26,7 +27,7 @@ const { useBrowser } = await import("../browser/store.ts");
 const { engineProfile } = await import("../browser/model.ts");
 const { WindowContext } = await import("../browser/hooks.ts");
 const { webviews } = await import("../../platform/webviews.ts");
-const { useFaviconAccents } = await import("./faviconAccent.ts");
+const { useFaviconAccent, useFaviconAccents } = await import("./faviconAccent.ts");
 const { markAsked } = await import("./askedFavicons.ts");
 
 const waitFor = async (check) => {
@@ -359,7 +360,9 @@ test("a row left in a private window's tree after the window is gone still asks 
     const w = privateWindow(page);
     const row = mount(() => useFavicon(page), { contexts: [[WindowContext, w.id]] });
     useBrowser.getState().closeWindow(w.id);
+    row.rerender();
     await settle();
+    assert.equal(row.value, null);
     assert.deepEqual(asked, []);
     assert.equal(cached(page), undefined);
     row.unmount();
@@ -469,28 +472,72 @@ test("a private icon that already left the cache still takes its theme and accen
   }
 });
 
-test("a theme reply from before a private window closed can't overwrite a newer request for the same icon", async () => {
+test("closing a private window cancels no other window's theme or accent request, and keeps no late private answer", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
-  const uri = "data:image/png;base64,RACEDTHEME";
-  const w = privateWindow("https://raced-theme.test/");
+  const shared = "data:image/png;base64,SHAREDICON";
+  const only = "data:image/png;base64,PRIVATEONLY";
+  const s = () => useBrowser.getState();
+  const normalWindow = s().createWindow({ url: "https://shared-icon.test/" });
+  const normalTab = s().windows[normalWindow].tabIds[0];
+  const w = privateWindow("https://shared-icon.test/");
+  const [, privateTab] = [w.tab, s().newTab(w.id, { url: "https://private-only-icon.test/" })];
+  const icons = { [normalTab]: shared, [w.tab]: shared, [privateTab]: only };
+  for (const [tab, uri] of Object.entries(icons)) webviews.set(tab, { downloadFavicon: () => Promise.resolve({ uri, width: 32, height: 32 }) });
+  const themes = new Map();
+  const accents = new Map();
+  globalThis.iconThemeForTest = ({ uri }) => new Promise((resolve) => themes.set(uri, resolve));
+  globalThis.iconAccentForTest = (uri) => new Promise((resolve) => accents.set(uri, resolve));
+  try {
+    noteFavicon(normalTab, "https://shared-icon.test/a.ico");
+    noteFavicon(w.tab, "https://shared-icon.test/a.ico");
+    noteFavicon(privateTab, "https://private-only-icon.test/b.ico");
+    await waitFor(() => resolveFavicon("https://private-only-icon.test/", null, w.profile)?.uri === only && resolveFavicon("https://shared-icon.test/", null, "default")?.uri === shared);
+    askFaviconTheme(shared);
+    askFaviconTheme(only);
+    const rows = [mount(() => useFaviconAccent("https://shared-icon.test/", "default")), mount(() => useFaviconAccent("https://private-only-icon.test/", w.profile))];
+    await waitFor(() => themes.size === 2 && accents.size === 2);
+    for (const row of rows) row.unmount();
+    s().closeWindow(w.id);
+    await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
+    for (const resolve of themes.values()) resolve({ kind: "full" });
+    for (const resolve of accents.values()) resolve("#112233");
+    await settle();
+    assert.deepEqual(useFavicons.getState().themes[shared], { kind: "full" }, "the regular window's theme request survived the close");
+    assert.equal(useFaviconAccents.getState().byUri[shared], "#112233", "and its accent request");
+    assert.equal(useFavicons.getState().themes[only], undefined);
+    assert.equal(useFaviconAccents.getState().byUri[only], undefined);
+  } finally {
+    delete globalThis.iconThemeForTest;
+    delete globalThis.iconAccentForTest;
+    webviews.clear();
+    stop();
+  }
+});
+
+test("a private window's close leaves a pending theme request alone, so a stale answer can't land over a newer one", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const uri = "data:image/png;base64,STALETHEME";
+  const w = privateWindow("https://stale-theme.test/");
   webviews.set(w.tab, { downloadFavicon: () => Promise.resolve({ uri, width: 32, height: 32 }) });
   const replies = [];
   globalThis.iconThemeForTest = () => new Promise((resolve) => replies.push(resolve));
   try {
-    noteFavicon(w.tab, "https://raced-theme.test/a.ico");
-    await waitFor(() => resolveFavicon("https://raced-theme.test/", null, w.profile)?.uri === uri);
+    noteFavicon(w.tab, "https://stale-theme.test/a.ico");
+    await waitFor(() => resolveFavicon("https://stale-theme.test/", null, w.profile)?.uri === uri);
     askFaviconTheme(uri);
     await waitFor(() => replies.length === 1);
     useBrowser.getState().closeWindow(w.id);
     await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
     askFaviconTheme(uri);
-    await waitFor(() => replies.length === 2);
+    await settle();
     replies[0](null);
     await settle();
-    replies[1]({ kind: "full" });
+    assert.equal(useFavicons.getState().themes[uri], undefined, "the answer from before the close isn't stored");
+    for (const reply of replies.slice(1)) reply({ kind: "full" });
     await settle();
-    assert.deepEqual(useFavicons.getState().themes[uri], { kind: "full" });
+    assert.equal(useFavicons.getState().themes[uri], undefined, "nothing holds the private icon any more");
   } finally {
     delete globalThis.iconThemeForTest;
     webviews.clear();

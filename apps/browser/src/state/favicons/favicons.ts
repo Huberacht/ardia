@@ -14,7 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
-import { incognitoClosed, privateViewer, urisHeldBy } from "./privateLookups";
+import { incognitoClosed, privateViewer, unheldBy } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -316,6 +316,8 @@ export function watchMissingFavicon(w: Watcher) {
 const theming = new Map<string, symbol>();
 const privateIconListeners = new Set<(unheld: (uri: string) => boolean) => void>();
 
+export const faviconHeld = (uri: string) => !unheldBy(Object.values(useFavicons.getState().profiles))(uri);
+
 export function onPrivateIconsDropped(listener: (unheld: (uri: string) => boolean) => void) {
   privateIconListeners.add(listener);
   return () => void privateIconListeners.delete(listener);
@@ -330,6 +332,7 @@ export function askFaviconTheme(uri: string) {
     .then((found) => {
       if (theming.get(uri) !== request) return;
       theming.delete(uri);
+      if (!faviconHeld(uri)) return;
       queue((f) => (f.themes[uri] === (found ?? null) ? f : { ...f, themes: capped(f.themes, uri, found ?? null) }));
     });
 }
@@ -383,9 +386,7 @@ export function startFavicons() {
         const gone = Object.keys(f.profiles).filter((id) => isIncognitoProfile(id) && !open.has(id));
         if (!gone.length) return f;
         const profiles = Object.fromEntries(Object.entries(f.profiles).filter(([id]) => !gone.includes(id)));
-        const held = urisHeldBy(Object.values(profiles));
-        const unheld = (uri: string) => !held.has(uri);
-        for (const uri of [...theming.keys()].filter(unheld)) theming.delete(uri);
+        const unheld = unheldBy(Object.values(profiles));
         for (const listener of privateIconListeners) listener(unheld);
         return { ...f, profiles, themes: Object.fromEntries(Object.entries(f.themes).filter(([uri]) => !unheld(uri))) };
       }, true);
