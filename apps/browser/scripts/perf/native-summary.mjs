@@ -39,6 +39,20 @@ export function summary(res) {
     add(`idle wakeups/s, ${t.slice(4)} tab(s) (GPU process)`, S.map((r) => r.idle[t]?.kinds["gpu-process"]?.wakeups), "/s", 1);
     add(`idle wakeups/s, ${t.slice(4)} tab(s) (renderers)`, S.map((r) => r.idle[t]?.kinds.renderer?.wakeups), "/s", 1);
   }
+  const L = res.loading ?? [];
+  for (const [k, what] of [["loaded", "seed tab loaded"], ["loading", "active tab loading"]]) {
+    if (!L.length) break;
+    add(`${what}: wakeups/s (browser process)`, L.map((r) => r[k]?.kinds.browser?.wakeups), "/s", 1);
+    add(`${what}: CPU (browser process)`, L.map((r) => r[k]?.kinds.browser?.cpu), "%", 2);
+    add(`${what}: wakeups/s (all processes)`, L.map((r) => r[k]?.total.wakeups), "/s", 1);
+    add(`${what}: CPU (all processes)`, L.map((r) => r[k]?.total.cpu), "%", 2);
+    add(`${what}: wakeups/s (GPU process)`, L.map((r) => r[k]?.kinds["gpu-process"]?.wakeups), "/s", 1);
+  }
+  if (L.length) {
+    add("active tab loading: runs where the app saw it loading throughout", [L.filter((r) => r.loadingBefore?.loading && r.loadingAfter?.loading).length], "");
+    add("active tab loading: someone used the Mac (s, per run)", L.map((r) => (r.loaded?.input?.inputSecs ?? NaN) + (r.loading?.input?.inputSecs ?? NaN)), "s", 2);
+    add("active tab loading: 1-minute load average (start and end of each run)", L.flatMap((r) => r.load), "", 1);
+  }
   for (const m of ["tabs1", "tabs10", "tabs20", "closed"]) add(`memory (phys_footprint), ${m === "closed" ? "after closing back to 1 tab" : m.slice(4) + " tab(s)"}`, S.map((r) => r.memory[m]?.totalMB), "MB");
   add("memory, browser process, 10 tabs", S.map((r) => r.memory.tabs10?.kinds.browser), "MB");
   add("memory, browser process, 20 tabs", S.map((r) => r.memory.tabs20?.kinds.browser), "MB");

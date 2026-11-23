@@ -53,6 +53,9 @@
 //                               windows    8 new windows per run, alone
 //                               throttle   hidden animating tabs' rAF and timer rates
 //                               churn      leak check: open and close 10 tabs 5 times
+//                               loading    what a page that never finishes loading costs while it's the active tab (the
+//                                          toolbar's stop button breathing): --idle seconds with the seed tab loaded,
+//                                          then --idle seconds with a new active tab whose response never ends
 //                               sample     main-thread `sample`s, idle and while switching and scrolling
 //                               prepare    prepare the app copies and both templates, and exit (see --prepared); none
 //                                          of it is a timing, so it can run beside the smoke test and the ratchet
@@ -124,6 +127,9 @@
 //   idle CPU / idle wakeups/s (…)           sessionRun  idle: idleWindow(), acperf rusage over the process tree --idle
 //                                                        secs apart with the channel paused, at 1 tab (--launch-settle
 //                                                        secs after the first page paints) and at 20
+//   active tab loading: …                   loadingRun  idleWindow() with the seed tab loaded, then with the active tab
+//                                                        on /hang (headers and a first chunk, never the end), checked
+//                                                        loading in the app (tabLive isLoading) before and after
 //   JS heap / JS allocated (Hermes)         sessionRun  memory: HermesInternal.getInstrumentedStats() right after each
 //                                                        footprint: js_heapSize (the GC's capacity, in 4 MB segments) and
 //                                                        js_allocatedBytes
@@ -349,11 +355,19 @@ function animPage(id) {
 setInterval(() => __ac.fast++, 16);</script>`;
 }
 
+const hanging = new Set();
+
 function startServer() {
   return new Promise((resolveServer) => {
     const server = createServer((req, res) => {
       const url = new URL(req.url, "http://x");
       const id = url.searchParams.get("id") ?? "0";
+      if (url.pathname === "/hang") {
+        hanging.add(res);
+        res.on("close", () => hanging.delete(res));
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+        return void res.write(`<!doctype html><meta charset=utf-8><title>Loading ${id}</title><script>${PAGE_SCRIPT}</script><h1>Still loading ${id}</h1>`);
+      }
       const html = url.pathname === "/anim" ? animPage(id) : url.pathname === "/static" ? staticPage(id) : null;
       if (!html) return res.writeHead(404).end();
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" }).end(html);
@@ -1163,6 +1177,37 @@ async function sessionRun(side, i, parts) {
   side.results.session.push(r);
 }
 
+const ACTIVE_LOADING = `(() => { const s = ac.store.getState(); const w = s.windows[${WINDOW}]; const id = w.activeTabIds[w.profileId];
+  return { id, url: s.tabs[id]?.url ?? null, loading: !!ac.tabLive.shownLiveOf(s, id).isLoading }; })()`;
+
+async function loadingRun(side, i) {
+  const secs = +opt.idle;
+  const app = new Instance(side, freshDir(side, `loading-${i}`));
+  const r = { load: [Math.round(loadavg()[0] * 10) / 10] };
+  try {
+    await app.launch();
+    await app.pageState("id=seed", 30_000, (s) => s.fcp);
+    await sleep(30_000);
+    r.loadedBefore = await app.run(`return ${ACTIVE_LOADING};`);
+    r.loaded = await idleWindow(app, secs);
+    await app.run(`ac.store.getState().newTab(${WINDOW}, { url: "${base()}/hang?id=load" }); return true;`);
+    await app.pageState("id=load", 30_000, (s) => s.vis);
+    let state = null;
+    for (const end = Date.now() + 20_000; Date.now() < end && !(state?.loading && state.url?.includes("/hang")); await sleep(100)) state = await app.run(`return ${ACTIVE_LOADING};`);
+    r.loadingBefore = state;
+    await sleep(3000);
+    r.loading = await idleWindow(app, secs);
+    r.loadingAfter = await app.run(`return ${ACTIVE_LOADING};`);
+    r.load.push(Math.round(loadavg()[0] * 10) / 10);
+  } finally {
+    for (const res of hanging) res.destroy();
+    await app.done();
+  }
+  const brief = (w) => w && { wakeups: +w.kinds.browser?.wakeups.toFixed(1), cpu: +w.kinds.browser?.cpu.toFixed(2), all: +w.total.wakeups.toFixed(1) };
+  log(`${side.tag}loading ${i}:`, JSON.stringify({ loaded: brief(r.loaded), loading: brief(r.loading), appLoading: [r.loadingBefore?.loading, r.loadingAfter?.loading], load: r.load }));
+  side.results.loading.push(r);
+}
+
 async function throttleRun(side) {
   const app = new Instance(side, freshDir(side, "throttle"));
   try {
@@ -1289,7 +1334,7 @@ const fail = (message) => {
 if (!opt.app) fail("usage: native-bench.mjs --app <Ardia.app> [--control <app>] [--out dir] [--only phases] … (--help)");
 const JOURNEY_PHASES = ["newtabkey", "navigate"];
 const FRAME_PHASES = ["frames", "framecounts"];
-const PHASES = ["launch", "session", ...SESSION_PARTS, ...JOURNEY_PHASES, ...FRAME_PHASES, "profiles", "windows", "throttle", "churn", "sample", "prepare"];
+const PHASES = ["launch", "session", ...SESSION_PARTS, ...JOURNEY_PHASES, ...FRAME_PHASES, "profiles", "windows", "throttle", "churn", "loading", "sample", "prepare"];
 const only = new Set(opt.only.split(",").map((p) => p.trim()).filter(Boolean));
 for (const p of only) if (!PHASES.includes(p)) fail(`--only: no phase "${p}"; phases: ${PHASES.join(", ")}`);
 if (only.has("frames") || only.has("framecounts")) opt.seed ??= "big";
@@ -1316,7 +1361,7 @@ function makeSide(app, label, role) {
   const dir = join(opt.out, label);
   mkdirSync(dir, { recursive: true });
   return { role, label, tag: "", src: resolve(app), dir, template: join(dir, "template"), app: null, bundle: null,
-    results: { meta: {}, profiles: [], launch: [], session: [], windows: [], journeys: [], frames: [], throttle: [], sample: [] } };
+    results: { meta: {}, profiles: [], launch: [], session: [], windows: [], journeys: [], frames: [], throttle: [], loading: [], sample: [] } };
 }
 const candidate = makeSide(opt.app, opt.label ?? labelOf(opt.app), "candidate");
 let control = null;
@@ -1380,6 +1425,7 @@ try {
   if (only.has("windows")) await interleaved(+opt.runs, windowsRun);
   if (only.has("throttle")) await interleaved(1, throttleRun);
   if (only.has("churn")) await interleaved(1, churnRun);
+  if (only.has("loading")) await interleaved(+opt.runs, loadingRun);
   if (only.has("sample")) await interleaved(1, sampleRun);
   for (const side of sides) writeFileSync(join(side.dir, "results.json"), JSON.stringify(side.results, null, 1));
   const rows = summary(candidate.results);
