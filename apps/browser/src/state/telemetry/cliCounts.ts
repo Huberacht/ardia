@@ -2,7 +2,7 @@ import { onConsentPeriodChange, stillValid, type ConsentToken } from "./choice";
 import { consentOrNow, countFor } from "./countFor";
 import { SOCKET_FAMILIES, type SocketFamily } from "../automation/socketCatalog";
 
-const TOKEN_COMMAND_DOMAINS = ["accessibility", "browser", "dom", "emulation", "fetch", "input", "network", "page", "runtime", "storage", "target", "other"] as const;
+const TOKEN_COMMAND_DOMAINS = ["accessibility", "ardia", "browser", "dom", "emulation", "fetch", "input", "network", "page", "runtime", "storage", "target", "other"] as const;
 type TokenCommandDomain = (typeof TOKEN_COMMAND_DOMAINS)[number];
 type TokenCommandTotals = Partial<Record<TokenCommandDomain, number>>;
 
@@ -30,6 +30,14 @@ const NONE = {
   cli_socket_lines_shrunk: 0,
   cli_socket_password_manager_refusals: 0,
   cli_socket_doorbells_shown: 0,
+  cli_page_signal_console_reads: 0,
+  cli_page_signal_focused_origins: 0,
+  cli_page_signal_origin_mismatches: 0,
+  cli_page_signal_hit_tests: 0,
+  cli_page_signal_hit_tests_failed: 0,
+  cli_page_signal_hit_tests_cancelled: 0,
+  cli_page_signal_remote_frames: 0,
+  cli_page_signal_occluded: 0,
   ...(Object.fromEntries(DOORBELL_OUTCOMES.map((outcome) => [`cli_socket_doorbell_${outcome}`, 0])) as Record<`cli_socket_doorbell_${DoorbellOutcome}`, number>),
   ...(Object.fromEntries(DEVTOOLS_ENDPOINT_OUTCOMES.map((outcome) => [`cli_socket_devtools_endpoint_${outcome}`, 0])) as Record<`cli_socket_devtools_endpoint_${DevtoolsEndpointOutcome}`, number>),
   cli_devtools_traces: 0,
@@ -118,9 +126,41 @@ export function noteTokenCommands(totals: TokenCommandTotals | undefined, consen
   if (sent.some(([, delta]) => delta)) countFor(token, () => sent.forEach(([domain, delta]) => (counts[`cli_cdp_commands_${domain}`] += delta)));
 }
 
-export function noteEngineCliTotals(status: { windowlessPages?: { given: number; missed: number }; tokenCommands?: TokenCommandTotals }, consent: ConsentToken) {
+const PAGE_SIGNAL_FIELDS = {
+  consoleReads: "cli_page_signal_console_reads",
+  focusedOrigins: "cli_page_signal_focused_origins",
+  originMismatches: "cli_page_signal_origin_mismatches",
+  hitTests: "cli_page_signal_hit_tests",
+  hitTestsFailed: "cli_page_signal_hit_tests_failed",
+  hitTestsCancelled: "cli_page_signal_hit_tests_cancelled",
+  remoteFrames: "cli_page_signal_remote_frames",
+  occluded: "cli_page_signal_occluded",
+} as const;
+type PageSignalTotals = Partial<Record<keyof typeof PAGE_SIGNAL_FIELDS, number>>;
+
+let pageSignalsSeen: Record<keyof typeof PAGE_SIGNAL_FIELDS, number> = { consoleReads: 0, focusedOrigins: 0, originMismatches: 0, hitTests: 0, hitTestsFailed: 0, hitTestsCancelled: 0, remoteFrames: 0, occluded: 0 };
+let pageSignalsBaselineStale = false;
+onConsentPeriodChange(() => void (pageSignalsBaselineStale = true));
+
+export function notePageSignals(totals: PageSignalTotals | undefined, consent?: ConsentToken | null) {
+  if (!totals) return;
+  const token = consentOrNow(consent);
+  const fresh = stillValid(token) && !pageSignalsBaselineStale;
+  if (stillValid(token)) pageSignalsBaselineStale = false;
+  const keys = Object.keys(PAGE_SIGNAL_FIELDS) as (keyof typeof PAGE_SIGNAL_FIELDS)[];
+  const sent = keys.map((key) => {
+    const total = Number(totals[key]) || 0;
+    const delta = fresh ? Math.max(0, total - pageSignalsSeen[key]) : 0;
+    pageSignalsSeen[key] = Math.max(total, pageSignalsSeen[key]);
+    return [key, delta] as const;
+  });
+  if (sent.some(([, delta]) => delta)) countFor(token, () => sent.forEach(([key, delta]) => (counts[PAGE_SIGNAL_FIELDS[key]] += delta)));
+}
+
+export function noteEngineCliTotals(status: { windowlessPages?: { given: number; missed: number }; tokenCommands?: TokenCommandTotals; pageSignals?: PageSignalTotals }, consent: ConsentToken) {
   noteWindowlessPages(status.windowlessPages, consent);
   noteTokenCommands(status.tokenCommands, consent);
+  notePageSignals(status.pageSignals, consent);
 }
 
 export function takeCliCounts() {

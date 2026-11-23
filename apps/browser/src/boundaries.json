@@ -1642,6 +1642,26 @@
    "detected": false
   },
   {
+   "id": "engine-token-connection:ardia-page-signals",
+   "source": "socket",
+   "guard": "Ardia.consoleDelta, Ardia.focusedFrameOrigin and Ardia.hitTest are answered by the engine, not the page: TokenClient::StartPageSignal takes them only after FilterCommand's framing checks and only on a session this client attached to a page or tab target, so they pass the same inspection gate as that attach (Chrome's DevTools availability policy and the frame checks in ShouldAllowSession); the browser session, an iframe's session and any targetId are refused, and RunPageSignal checks IsInspectionAllowed for the tab again at answer time (ContentsInspectable), the focused frame's own policy before reading its origin, and the ring withholds entries from frames the policy keeps from inspection (FrameInspectable). RunPageSignal refuses any parameter it doesn't know (UnknownParam), takes after, generation and limit only as whole numbers in range (WholeNumber), x and y only as finite numbers within a million CSS pixels (Coordinate), backendNodeId only as a positive integer, and expectedOrigin only as a bare http or https origin that serializes back to itself (the hostile corpus caught chrome:// and chrome-untrusted:// origins getting through before); the focused frame's origin and document id come from the browser's own RenderFrameHost, never from the page; the hit test's DevTools answers are parsed field by field with types checked, its ancestor walk runs in an isolated world the page can't reach, at most 32 ancestors, node names cut to 64 characters, a 3 second deadline, at most 4 probes at once, refused for a frame at the point the policy keeps from inspection (FrameInspectable), re-run when the page scrolled between reading the scroll position and hit-testing, cancelled when the session detaches or the client goes (teardown deferred to a later task) and stopped when the page or the hit frame navigates, and a cross-site iframe is reported as a remote frame rather than a blocker; console text the ring keeps is sliced in UTF-16 before conversion and cut to 2048 bytes and source URLs to 512 at a UTF-8 boundary, at most 200 entries per tab, with a generation so a replaced ring reads as reset. Replies go back only to the asking connection while its session is still attached. Live: packages/ardiacore/scripts/token-signals-check.mjs, which also sends every value of the shared hostile-input corpus as each parameter and as a parameter name and checks each reply is refused unless the value is valid",
+   "checks": [
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_token_policy.cc#StartPageSignal",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_page_signals.cc#UnknownParam",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_page_signals.cc#WholeNumber",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_page_signals.cc#Coordinate",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_page_signals.cc#ReadFocusedFrameOrigin",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_console_ring.cc#ContentsInspectable",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_console_ring.cc#FrameInspectable",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_console_ring.cc#Truncated",
+    "packages/ardiacore/scripts/token-signals-check.mjs#check",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_hit_probe.cc#kMaxProbesInFlight",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_hit_probe_helpers.cc#FrameInspectable",
+    "packages/ardiacore/scripts/token-signals-check.mjs#HOSTILE_VALUES"
+   ],
+   "detected": false
+  },
+  {
    "id": "import:bookmarks",
    "source": "import",
    "guard": "Imported bookmarks keep their URLs; javascript: entries become bookmarklets as in Chrome (C4)",

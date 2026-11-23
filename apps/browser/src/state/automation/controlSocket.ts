@@ -25,7 +25,7 @@ import { automationWindows, type AutomationWindow } from "./automationWindows";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { controlTabTargets } from "../../platform/control";
-import { releaseAllCliHolds } from "../tabs/cliHolds";
+import { releaseAllCliHolds, releaseCliHoldsOf } from "../tabs/cliHolds";
 import { watchCliHoldsForEngine } from "./cliHoldsEngine";
 import { TAB_IDLE_EVENTS, USER_IDLE_EVENTS, type AutomationEventName } from "./eventNames";
 import { clientProtocolProblem, commands, failure, hello, parseRequest, parseSubscription, planRun, type RequestId, type Subscription } from "./automationMethods";
@@ -285,6 +285,7 @@ function takeIdleReplay(connection: number) {
 }
 
 function handleClose({ connection }: { connection: number }) {
+  releaseCliHoldsOf(connection);
   idleReplays.delete(connection);
   openConnections.delete(connection);
   dismissSocketAsks(connection);
