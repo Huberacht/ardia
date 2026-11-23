@@ -41,18 +41,19 @@ engine/ardiacore                          macOS: AppKit only
 
 `engine/engine-key.py` hashes everything under `engine/`, minus what it can prove belongs to the other platform. It knows two platforms, and GN conditions it can't read (`is_win`, `is_linux || is_win`, `!is_win`) count toward both keys. A Mac key move means a Mac engine build, which runs only on the Mac mini's incremental tree, and a new framework for every agent's next build.
 
-So the first change is tooling. It changes no artifact:
+So the first change is tooling. It changes no artifact, and it must not move a published key:
 
-- **Three platforms.** `mac`, `linux`, `win`. Series lines and layers take a selector set (`linux,win`). GN conditions parse into platform sets, so `is_linux || is_win` sources never count toward the Mac key.
-- **A golden test.** It pins the current Mac and Linux keys of the tree, so the tooling change provably moves neither.
-- **Windows gets a real key.** `engine-key.sh --platform win` replaces the hand-pinned commit in `scripts/windows/engine/prebuilt.json`. That lets Windows sources move under `engine/` without moving the Mac key, which retires the AGENTS.md rule that kept them in `scripts/windows/engine`.
+- **Additive, not a rewrite.** `series.py` and every shared `BUILD.gn` are hashed inputs, so editing the parser or a condition moves both keys (`engine-key.test.mjs` asserts exactly that for `series.py`). The Mac and Linux keys keep today's input projection unchanged. Windows is added beside them as a third projection with its own selector handling.
+- **History, not only HEAD.** Nearest-prebuilt lookup (`scripts/linux/fetch-engine.sh`, `mac.yml`) recomputes keys of published revisions with today's code. The test serializes the key inputs and `--paths` for HEAD and for every revision pinned in `prebuilt-engines*.tsv`, and requires them byte-identical before and after.
+- **A key for the build Windows actually runs.** `series_win.py` selects `all` and `mac` lines, applies its own ordered patches and skips, rewrites `BUILD.gn`, and copies inputs from outside `engine/` (`EngineApi.h`). The Windows key hashes that plan's materialized inputs. A test proves the old and new Windows plans produce the same inputs. `prebuilt.json` keeps its source commit for release provenance and gains the key.
+- **Then selector sets.** Once the three projections are pinned, series lines and layers can take `linux,win`, and GN conditions such as `is_linux || is_win` parse into platform sets. A new `linux,win` line moves the Linux and Windows keys only. The Linux syntax checker and the Windows GN checker learn the same selectors, and the AGENTS.md rule that kept Windows sources in `scripts/windows/engine` is retired.
 
 After that, the rule for every later change is:
 
 | Where the change lands | Keys it moves | Build it needs |
 | --- | --- | --- |
 | `engine/ardiacore` | mac | Mac mini, incremental |
-| `engine/ardiacore-desktop` (`linux,win`) | linux, win | Boat builder for Linux; `~/chromium-build-win` for Windows |
+| `engine/ardiacore-desktop` (`linux,win`, after selector sets) | linux, win | Boat builder for Linux; `~/chromium-build-win` for Windows |
 | `engine/ardiacore-linux`, `engine/ardiacore-win` | that one | that one |
 | `engine/chromium` | all | all; batch these |
 | `packages/core-rs` (via `copies.tsv`) | linux, win | as above; macOS links it into the pods instead |
@@ -87,7 +88,11 @@ After that, the rule for every later change is:
 - **Linux and Windows (inside Chromium).** A GN `rust_static_library` on Chromium's own toolchain with the `boringssl` backend, copied in through `copies.tsv`. A cargo-built staticlib can't link into `chrome`: it would bring a second Rust standard library. Only crates Chromium already vendors are used on this path (`serde_json`, `base64`, `zeroize`, `zip`); the crypto comes from BoringSSL, which is why the backend split exists.
 - **CI.** A `core-rs` job on macOS, Linux and Windows runs `cargo fmt --check`, `clippy -D warnings`, `cargo test` and `cbindgen --verify` for `packages/core-rs` and `packages/plugin-broker`.
 
-**Compatibility gate.** Every switch is gated on frozen vectors: `packages/sync/tests/fixtures/sync-vectors`, `sealed-0.2.32.b64`, both `windows-interop` sets and the Kotlin vault. The Rust crate must reproduce every committed byte and open every committed vault before any host links it. Linux's `test_sync.py` reads the same vectors in the first PR, so all four implementations are proven against one set before any is deleted.
+**Compatibility gate.** Every switch is gated on frozen vectors: `packages/sync/tests/fixtures/sync-vectors`, `sealed-0.2.32.b64`, both `windows-interop` sets and the Kotlin vault. The Rust crate must reproduce every committed fixed-nonce byte and open every random-nonce vault before any host links it.
+
+The framing already matches everywhere. Recovery phrase *parsing* does not: Swift splits on Unicode lowercase letters, Windows on Win32 character classes, Linux on ASCII with a hand-kept separator list, so an emoji between two words separates them on the Mac and joins them on Linux. Linux also caps a password field at 65,535 bytes. Rust follows Swift, the reference shipped on Mac and iPhone; a frozen table records each platform's current answer for the divergent inputs, so each host switch states which inputs change.
+
+**Gates before a host switches.** The same vectors run against the GN target with the `boringssl` backend on Linux and Windows (Chromium's rustc 1.101 nightly and LLVM 24, not local cargo's) before either C++ copy is deleted. The Apple framework reaches the Mac pods, `swift test` and the iPhone's `ArdiaKit` package before the Swift copy is deleted. The Swift wordlist stays until `test_sync.py` and `packages/sync/scripts/e2e.mjs` stop reading it. Each final link holds one Rust archive, and its exported symbols are checked.
 
 ## Track 2: one Chromium host
 
@@ -145,19 +150,24 @@ Deleted with RNW: `FocusHold`, key holds, text-revert repair, the JS animation d
 
 **The frontend.** `apps/linux` becomes `apps/desktop` with `src/platform/{linux,win}`; Vite builds `--mode linux` or `--mode win`, resolving `.win.ts` before `.desktop.ts`. Most of its ~190 files are desktop-generic already (transport, shims, viewports, glass, session, menus, window controls). Linux-only: tiling, GTK button layout, keyring/polkit wording, EDS calendar, tarball self-update, sandbox notice. Windows wording comes from the existing `*.windows.ts` terms.
 
-**Never break current users.** Until the cutover PR, the shipped Windows build is the RNW one, and Bonzai's and the team's RNW fixes keep landing. The WebUI build arrives behind `--ardia-shell=webui`, with its own non-blocking CI job that runs the Linux acceptance tour over CDP. The cutover makes it the shipped alpha with a one-time migration of `%LOCALAPPDATA%\Ardia` (session, documents, placement, Credential Manager items). The deletion PR comes after.
+**The hard part is startup and native input, so it is proven first.** Chromium on Windows is Views/Aura (`DesktopWindowTreeHostWin`), but the Linux host still calls Ozone and Wayland directly, and the `window-state` patch mixes Views changes with Wayland code. Windows installs its RNW hooks before Chromium starts, and the profile launch guard runs after the RNW DLL check. So before any patch is widened or the host moved, a **pilot** proves one WebUI window on Windows with a real page: focus and keyboard handoff between the shell and the page, DPI-aware hit testing over the caption and resize edges, snap, and close and relaunch, with shell selection (`--ardia-shell=webui`) and profile protection decided explicitly before RNW is touched.
+
+**Never break current users.** Until the cutover PR, the shipped Windows build is the RNW one, and Bonzai's and the team's RNW fixes keep landing (the Hermes crash fix on `windows-next`, #2540, included). The WebUI build arrives behind `--ardia-shell=webui` with its own profile directory, and a non-blocking CI job runs the Linux acceptance tour over CDP plus the existing Windows real-input tour. CDP covers WebUI flows, not native window behavior.
+
+**Cutover is an upgrade, tested as one.** A restartable one-time migration covers `%LOCALAPPDATA%\Ardia` (session, documents, placement), `%APPDATA%\Ardia` config, `Sync\sync-key-*.dpapi`, and Credential Manager items, which can span several chunks. Chromium's `User Data` and the install identity stay where they are. An installed upgrade from the last RNW alpha with populated data must keep cookies, saved passwords, extensions and the sealed local sync state, and a rollback to the RNW build must still open that data. The existing installer and real-input checks are required before cutover. The deletion PR comes after.
 
 ## Order
 
 Each item is one PR closing one issue. Items on one line can run in parallel.
 
-1. **Design** (this doc). **Engine key: three platforms and selector sets**, Mac and Linux keys unchanged. **Rust core: workspace, `ardia-crypto`, `ardia-sync-core`, `ardia-ffi`, vectors**, plus CI for it and `plugin-broker`, plus Linux `test_sync.py` reading the shared vectors. **Host API: schema, generator, `history`**, zero behavior change.
-2. **macOS links the Rust sync core** (xcframework, Swift wrapper, Swift crypto, phrase and wordlist deleted). **Host API: bookmarks, favicons, then mixed domains.** **`apps/linux` → `apps/desktop`** with platform folders, Linux output identical. **Windows engine sources move to `engine/ardiacore-win`**, Windows engine identical.
-3. **`engine/ardiacore-desktop` layer** with the neutral cores (Linux engine build only). **Linux links the Rust sync core** through GN (Linux engine build; its C++ sync crypto, wordlist and JSON deleted). **Rust import parsers**, one format per PR, each host switching behind the shared fixtures.
-4. **`ShellHostView`, bridge and routes into the desktop layer**, with `ac_desktop_platform.h` and the Linux delegate. **Generated desktop routes.**
-5. **Windows desktop host behind `--ardia-shell=webui`** with the Win delegate and its CI job. **Ed25519 update manifests.**
-6. **Shared cores into `engine/chromium` and one call registry** (Mac engine builds, batched).
-7. **Windows cutover** (WebUI build ships as the alpha, data migration), then **RNW deletion**.
+The order is built around two integration proofs, the Windows WebUI pilot and the Rust GN link, which run early and in parallel with the tooling.
+
+1. **Design** (this doc). **Engine key: an additive Windows projection**, Mac and Linux keys and their history unchanged. **Rust core: workspace, `ardia-crypto`, `ardia-sync-core`, `ardia-ffi`, vectors and the divergence table**, plus CI for it and `plugin-broker`. **Host API: schema, generator, `history`**, zero behavior change.
+2. **Proof: Rust GN link.** The `boringssl` backend as a GN `rust_static_library`, running the vectors on Chromium's toolchain (Linux engine build; nothing switches yet). **Proof: Windows WebUI pilot** behind `--ardia-shell=webui` (Windows engine build). **Engine key: selector sets** (`linux,win`). **Host API: bookmarks, favicons.**
+3. **macOS and iPhone link the Rust sync core** (Apple framework; Swift crypto and phrase deleted). **Linux links it** through GN (its C++ sync crypto and JSON deleted). **`engine/ardiacore-desktop` layer**, extracted against both hosts, with `ac_desktop_platform.h` and the Linux and Win delegates.
+4. **Windows desktop host completed** (Win delegate, wording, Mica, snap, CI job). **Generated desktop routes. Ed25519 update manifests.** **`apps/linux` → `apps/desktop`**, when Windows needs the platform folders.
+5. **Windows cutover** after a verified installed upgrade and rollback, then **RNW deletion**.
+6. Later, each when it unblocks a tested slice: **Rust import parsers** (one format per PR), **shared cores into `engine/chromium` and one call registry** (batched Mac engine builds), **plugin policy**.
 
 ## What to watch
 
