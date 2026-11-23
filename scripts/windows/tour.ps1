@@ -1410,11 +1410,13 @@ function Invoke-TypeStop($Session, [string]$Slug, [string]$Title, [string]$Did, 
     $stop.Facts.Add("report only ($Issues): every key landed and $Submit opened Example Domain: $whole")
     $heldUnderPointer = $false
     if ($RequireGoHold) {
-      $heldUnderPointer = [bool]($rested -and $null -ne $holdMark -and @(Get-LinesSince $Session $holdMark "\[ardia windows\] bar rows pointer over, holding").Count -and $goStayed)
-      $stop.Facts.Add("search engine: $($script:SuggestProfile)")
       $served = Join-Path $Out "suggest-server.log"
+      $servedLate = (Test-Path -LiteralPath $served) -and [bool](Select-String -LiteralPath $served -Pattern "for '$([regex]::Escape($script:LateQuery))', answered \d+ ms with $($script:LateRows.Count) rows after the release" -Quiet)
+      $heldUnderPointer = [bool]($rested -and $null -ne $holdMark -and $servedLate -and @(Get-LinesSince $Session $holdMark "\[ardia windows\] bar rows pointer over, holding").Count -and $goStayed)
+      $stop.Facts.Add("search engine: $($script:SuggestProfile)")
       if (Test-Path -LiteralPath $served) { $stop.Facts.Add("the tour's suggest server: $((Get-Content -LiteralPath $served | Select-Object -Last 4) -join ' / ')") }
-      $stop.Facts.Add("required (#2102): the mouse rested on Go, the bar held the late rows under it after Go's position was noted, and Go stayed put: $heldUnderPointer; $Submit opened Example Domain: $([bool]$loaded)")
+      $stop.Facts.Add("the tour's suggest server served the late rows for '$($script:LateQuery)' after the release: $servedLate")
+      $stop.Facts.Add("required (#2102): the mouse rested on Go, the tour's server served the late rows, the bar held them under it after Go's position was noted, and Go stayed put: $heldUnderPointer; $Submit opened Example Domain: $([bool]$loaded)")
     }
     $laterKept = $false
     if ($JudgeLaterLetters) {
@@ -1491,9 +1493,11 @@ function Start-SuggestServer([string]$Log) {
         if ($line -match "^GET /ac/\?q=([^ &]*)") { $query = [Uri]::UnescapeDataString($Matches[1].Replace("+", " ")) }
         $asked = $clock.ElapsedMilliseconds
         $rows = @()
+        $released = ""
         if ($query -eq $lateQuery) {
           $waited = [System.Diagnostics.Stopwatch]::StartNew()
           while (-not (Test-Path -LiteralPath $release) -and $waited.ElapsedMilliseconds -lt 15000) { Start-Sleep -Milliseconds 50 }
+          if (Test-Path -LiteralPath $release) { $released = " after the release" }
           Start-Sleep -Milliseconds $lateMs
           $rows = $lateRows
         }
@@ -1504,7 +1508,7 @@ function Start-SuggestServer([string]$Log) {
         $stream.Write($head, 0, $head.Length)
         $stream.Write($bytes, 0, $bytes.Length)
         $stream.Flush()
-        Add-Content -LiteralPath $log -Value "asked $asked ms for '$query', answered $($clock.ElapsedMilliseconds) ms with $($rows.Count) rows"
+        Add-Content -LiteralPath $log -Value "asked $asked ms for '$query', answered $($clock.ElapsedMilliseconds) ms with $($rows.Count) rows$released"
       } catch {
       } finally {
         $client.Dispose()
