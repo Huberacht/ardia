@@ -19,7 +19,6 @@ import { openSettings } from "../settings/settingsWindows";
 import { openIconPicker } from "./actions";
 import { activeTabId } from "../browser/model";
 import { hintWhen, sections, sep, withAlternate } from "./menuParts";
-import { byUser } from "../tabs/closeActivation";
 
 export function newLiveFolderMenuItem(): MenuItem {
   return {
@@ -199,7 +198,7 @@ export async function openLiveFolderMenu(windowId: string, folderId: string) {
   }
   else if (choice === "read") markRead(folderId);
   else if (choice === "settings") openSettings("automations");
-  else if (choice === "delete") deleteLiveFolder(folderId, byUser());
+  else if (choice === "delete") deleteLiveFolder(folderId, { consent });
 }
 
 export function liveItemMenuItems(windowId: string, folderId: string, item: LiveItem, tabId: string | null): MenuItem[] {

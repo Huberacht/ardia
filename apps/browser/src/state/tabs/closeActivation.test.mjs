@@ -10,10 +10,12 @@ await import("../../test-native/index.ts");
 let clock = Date.now();
 Date.now = () => (clock += 1000);
 const S = () => useBrowser.getState();
-const { byUser } = await import("./closeActivation.ts");
+const client = await import("../telemetry/client.ts");
+const { userClose } = await import("./closeActivation.ts");
 const folders = await import("../pins/tileFolders.ts");
-const close = (id) => S().closeTab(id, byUser());
-const closeAll = (ids) => S().closeTabs(ids, byUser());
+const you = () => ({ consent: client.consentToken() });
+const close = (id) => S().closeTab(id, userClose([id], you()));
+const closeAll = (ids) => S().closeTabs(ids, userClose(ids, you()));
 const host = (id) => (id ? S().tabs[id]?.url.replace(/^https:\/\/|\.com\/?$/g, "") : undefined);
 const shown = (w) => host(activeTabId(S(), w));
 
@@ -459,7 +461,7 @@ test("a close from the socket, the CLI or launch actions never uses Tab above an
     const { w, ids: [a, , c] } = windowWith("tabAbove", "a", "b", "c", "d");
     S().activate(a);
     S().activate(c);
-    runCommand({ command: "closeTab", arg: null, windowId: w }, user ? { user } : { mayWrite: () => true });
+    runCommand({ command: "closeTab", arg: null, windowId: w }, user ? { user: you() } : { mayWrite: () => true });
     assert.equal(shown(w), expected, user ? "user" : "socket");
   }
   assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 1, close_tab_above_fallbacks: 0 }, "only the user close counts");
@@ -482,7 +484,7 @@ test("closing or deleting the group in front goes through Tab above and never sh
     S().activate(h);
     S().activate(g1);
     S().updateGroup(hidden, { collapsed: true });
-    S()[action](g, user ? byUser() : undefined);
+    S()[action](g, user ? userClose(S().groups[g].tabIds, you()) : undefined);
     assert.equal(shown(w), expected, `${action} ${user ? "by you" : "by Ardia"}`);
   }
 });
@@ -512,7 +514,7 @@ test("deleting a Live Folder from the sidebar goes through Tab above; from the s
     S().activate(q);
     S().activate(r);
     S().activate(x);
-    deleteLiveFolder("lf", user ? byUser() : undefined);
+    deleteLiveFolder("lf", user ? you() : undefined);
     assert.equal(shown(w), expected, user ? "by you" : "by the socket");
     noLive();
   }
@@ -569,4 +571,67 @@ test("the visible rows follow what the sidebar draws: Top Apps and their folder 
   assert.ok(!rowsOf(w).includes("pinned:x"), "a collapsed Live Folder hides its tabs");
   void inner;
   noLive();
+});
+
+test("closing the pinned group in front never wakes an unloaded pinned row above it", () => {
+  for (const action of ["closeGroup", "deleteGroup"]) {
+    const { w, ids: [p, g1, r] } = windowWith("tabAbove", "p", "g1", "r");
+    S().pinTabs([p], true, true);
+    const g = S().groupTabs([g1], { name: "G" });
+    closeAll([p]);
+    assert.equal(S().tabs[p].page.kind, "asleep");
+    S().activate(r);
+    S().activate(g1);
+    S()[action](g, userClose(S().groups[g].tabIds, you()));
+    assert.equal(shown(w), "r", action);
+    assert.equal(S().tabs[p].page.kind, "asleep", `${action} leaves p unloaded`);
+  }
+});
+
+test("closing a Top App with no open Top App beside it prefers a regular tab over a pinned row used more recently", () => {
+  for (const keep of [true, false]) {
+    const { w, ids: [a, p, r] } = windowWith("tabAbove", "a", "p", "r");
+    S().pinTabs([a], true);
+    S().pinTabs([p], true, true);
+    S().updateSettings({ keepTopAppsRunning: keep });
+    S().activate(r);
+    S().activate(p);
+    S().activate(a);
+    close(a);
+    assert.equal(shown(w), "r", keep ? "kept running" : "unloaded");
+  }
+  S().updateSettings({ keepTopAppsRunning: false });
+});
+
+test("moving the group in front to the Bookmarks Bar goes through Tab above and never shows a tab hidden in a collapsed group", () => {
+  for (const [user, expected] of [[true, "x"], [false, "h"]]) {
+    const { w, ids: [, h, g1] } = windowWith("tabAbove", "x", "h", "g1");
+    const hidden = S().createGroup([h], { name: "H" });
+    const g = S().createGroup([g1], { name: "G" });
+    S().activate(h);
+    S().activate(g1);
+    S().updateGroup(hidden, { collapsed: true });
+    S().moveGroupToBookmarksBar(g, user ? userClose(S().groups[g].tabIds, you()) : undefined);
+    assert.equal(shown(w), expected, user ? "from the group menu" : "by Ardia");
+  }
+});
+
+test("a Close Group you start reads consent before its guard waits, so turning sharing on mid-close counts nothing", async () => {
+  const client = await import("../telemetry/client.ts");
+  const { takeCloseActivationCounts } = await import("../telemetry/closeActivationCounts.ts");
+  const { closeGroup } = await import("../browser/actions.ts");
+  client.loadChoice();
+  client.setSharing(false, "settings");
+  const { w, ids: [, g1] } = windowWith("tabAbove", "x", "g1");
+  S().updateSettings({ warnBeforeClosingTabGroup: false });
+  const g = S().createGroup([g1], { name: "G" });
+  S().activate(g1);
+  const closing = closeGroup(g, { user: you() });
+  client.setSharing(true, "settings");
+  takeCloseActivationCounts();
+  await closing;
+  assert.equal(shown(w), "x");
+  assert.deepEqual(takeCloseActivationCounts(), { close_activated_tab_above: 0, close_tab_above_fallbacks: 0 });
+  client.setSharing(false, "settings");
+  S().updateSettings({ warnBeforeClosingTabGroup: true });
 });

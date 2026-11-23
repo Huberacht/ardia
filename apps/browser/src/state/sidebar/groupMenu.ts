@@ -19,7 +19,7 @@ import { urlParts } from "../../lib/urlParts";
 import { isPluginMenuChoice, pluginMenuItems, runPluginMenuChoice, type PluginMenuContext } from "../plugins/menus";
 import { consentToken, type ConsentToken } from "../telemetry/choice";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
-import { byUser } from "../tabs/closeActivation";
+import { userClose } from "../tabs/closeActivation";
 
 type GroupChoice = Destination | { kind: "color"; color: GroupColor | null };
 
@@ -147,8 +147,8 @@ function runGroupChoice(windowId: string, groupId: string, choice: string | Grou
   else if (choice === "copy") copyUrls(g.tabIds, false);
   else if (choice === "copyMd") copyUrls(g.tabIds, true);
   else if (choice === "ungroup") s.ungroup(groupId);
-  else if (choice === "bookmarkBar") s.moveGroupToBookmarksBar(groupId);
+  else if (choice === "bookmarkBar") s.moveGroupToBookmarksBar(groupId, userClose(g.tabIds, { consent }));
   else if (choice === "sleep") void sleepTabsFromMenu(groupTabIds(s.groups, groupId).filter((id) => canSleep(s, id)), "group");
-  else if (choice === "close") void closeGroup(groupId, { user: true });
-  else if (choice === "delete") s.deleteGroup(groupId, byUser());
+  else if (choice === "close") void closeGroup(groupId, { user: { consent } });
+  else if (choice === "delete") s.deleteGroup(groupId, userClose(g.tabIds, { consent }));
 }

@@ -11,7 +11,8 @@ import type { AdoptId } from "../browser/types";
 import { noteSplit } from "../telemetry/usage";
 import { returnFocusToPage } from "../sidebar/actions";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
-import { byUser } from "../tabs/closeActivation";
+import { userClose, type ByUser } from "../tabs/closeActivation";
+import { consentToken } from "../telemetry/client";
 
 const store = () => useBrowser.getState();
 
@@ -90,11 +91,11 @@ export function closePane(tabId: string) {
   void closeTab(tabId, { user: true });
 }
 
-export function closeSplitView(splitId: string) {
+export function closeSplitView(splitId: string, user: ByUser) {
   const split = store().splits[splitId];
   if (!split) return;
   noteSplit("splitViewCloses");
-  store().closeTabs(splitTabIds(split), byUser());
+  store().closeTabs(splitTabIds(split), userClose(splitTabIds(split), user));
 }
 
 export function splitMenuItems(tabId: string): MenuItem[] {
@@ -133,6 +134,7 @@ export function splitMenuItems(tabId: string): MenuItem[] {
 }
 
 export async function showSplitMenu(tabId: string) {
+  const consent = consentToken();
   const s = store();
   const split = splitOf(s, tabId);
   const tab = s.tabs[tabId];
@@ -160,7 +162,7 @@ export async function showSplitMenu(tabId: string) {
     case "close":
       return closePane(tabId);
     case "closeSplit":
-      return closeSplitView(split.id);
+      return closeSplitView(split.id, { consent });
   }
 }
 

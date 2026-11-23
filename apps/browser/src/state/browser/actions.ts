@@ -34,7 +34,7 @@ import { noteTabClosedByUser } from "../sync/openTabCloses";
 import type { Drop } from "../drag/drops";
 import { movesAcrossProfiles } from "../windows/profileMoves";
 import { noteSidebarDrop } from "../telemetry/tabPresses";
-import { asUser } from "../tabs/closeActivation";
+import { userClose, type ByUser } from "../tabs/closeActivation";
 
 const store = () => useBrowser.getState();
 
@@ -55,10 +55,12 @@ export function switchToTab(tabId: string) {
 export const writesFor = (mayWrite?: () => boolean) => (mayWrite ? (write: () => void) => write() : foreignWriteHooks.around);
 
 export type CloseRequest = { mayWrite?: () => boolean; user?: boolean };
+export type GroupCloseRequest = { mayWrite?: () => boolean; user?: ByUser };
 
 export async function closeTab(tabId: string, { mayWrite, user = false }: CloseRequest = {}) {
   const commit = writesFor(mayWrite);
   const consent = consentToken();
+  const close = user ? userClose([tabId], { consent }) : {};
   const s = store();
   const tab = s.tabs[tabId];
   const w = tab && s.windows[tab.windowId];
@@ -80,15 +82,16 @@ export async function closeTab(tabId: string, { mayWrite, user = false }: CloseR
     return closeWindowAnimated(w.id);
   }
   if (splitOf(now, tabId) && closeKind(now, tabId) === "close") noteSplit("splitPaneCloses", consent);
-  commit(() => store().closeTab(tabId, asUser(user)));
+  commit(() => store().closeTab(tabId, close));
 }
 
-export async function closeGroup(groupId: string, { mayWrite, user = false }: CloseRequest = {}) {
+export async function closeGroup(groupId: string, { mayWrite, user }: GroupCloseRequest = {}) {
   const commit = writesFor(mayWrite);
   const s = store();
   const group = s.groups[groupId];
   const w = group && s.windows[group.windowId];
   if (!group || !w) return;
+  const close = user ? userClose(group.tabIds, user) : {};
   if (!(await groupCloseAllowed(w.id, groupId)) || (mayWrite && !mayWrite())) return;
   if (s.settings.warnBeforeClosingTabGroup && !rootOf(s.groups, groupId)?.pinned) {
     const tabs = plural(group.tabIds.length, "tab");
@@ -104,7 +107,7 @@ export async function closeGroup(groupId: string, { mayWrite, user = false }: Cl
     if (!confirmed) return;
     applyHeldReports();
   }
-  if (store().groups[groupId]) commit(() => store().closeGroup(groupId, asUser(user)));
+  if (store().groups[groupId]) commit(() => store().closeGroup(groupId, close));
 }
 
 export function toggleMute(tabId: string) {

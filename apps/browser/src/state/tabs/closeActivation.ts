@@ -1,17 +1,19 @@
 import type { BrowserState } from "../browser/store";
-import { activeTabId, isPinnedRow, tabLayoutOf } from "../browser/model";
+import { activeTabId, inPinnedContainer, isPinnedRow, tabLayoutOf } from "../browser/model";
+import { useBrowser } from "../browser/store";
 import { parseEntry } from "../sidebar/entryKey";
 import { groupEntries, keptEntries, sidebarEntries } from "../sidebar/entries";
 import { pinnedSequence } from "../sidebar/pinnedOrder";
 import { pinnedCollapsed, pinnedKept } from "../sidebar/pinnedFold";
 import { liveFolderTabRows } from "../sidebar/liveRows";
 import { live } from "../live/store";
-import { splitRowPanes, splitTabIdsOf } from "../splits/splits";
+import { splitOf, splitRowPanes, splitTabIdsOf, withPinnedPanes } from "../splits/splits";
 import { folderIdOfCell, shownFolderTab } from "../pins/tileFolders";
 import { noteCloseActivation } from "../telemetry/closeActivationCounts";
-import { consentToken, type ConsentToken } from "../telemetry/consentPeriod";
+import type { ConsentToken } from "../telemetry/consentPeriod";
+import { hasPage } from "./pageSession";
 import { stripEntries, type StripMember } from "./stripEntries";
-import type { CloseOptions, ClosePickRules } from "./tabs";
+import { keptWithTopApp, successorKey, type CloseOptions, type Successor } from "./tabs";
 
 export type VisibleSection = "topApps" | "pinned" | "regular";
 export type VisibleRow = { ids: string[]; section: VisibleSection };
@@ -90,20 +92,41 @@ export function tabAbove(s: BrowserState, rows: VisibleRow[], closedId: string, 
   return undefined;
 }
 
-export function pickAfterClose(s: BrowserState, windowId: string, closedId: string, closing: ReadonlySet<string>, rules: ClosePickRules, consent: ConsentToken | null): string | undefined {
-  const profileId = s.tabs[closedId]?.profileId;
-  if (!activatesTabAbove(s) || !profileId) return undefined;
+function successorFor(s: BrowserState, windowId: string, profileId: string, activeId: string, closing: ReadonlySet<string>, requested: string[], keepTopApps: boolean): Omit<Successor, "shown"> | null {
+  const panes = splitTabIdsOf(splitOf(s, activeId)) ?? [];
+  const insideSplit = requested.every((id) => panes.includes(id)) && panes.some((id) => !closing.has(id) && s.tabs[id]);
+  const topApp = inPinnedContainer(s, activeId) && withPinnedPanes(s, [activeId]).some((id) => s.tabs[id]?.pin?.as === "tile");
+  if (insideSplit || (topApp && keepTopApps)) return null;
+  const candidate = (id: string) => {
+    const t = s.tabs[id];
+    return !!t && !closing.has(id) && t.windowId === windowId && t.profileId === profileId && (!inPinnedContainer(s, id) || hasPage(t)) && !(keepTopApps && keptWithTopApp(s, id));
+  };
   const rows = visibleRows(s, windowId, profileId);
-  const own = (id: string) => s.tabs[id]?.profileId === profileId;
-  const adjacent = tabAbove(s, rows, closedId, closing, (id) => own(id) && rules.adjacent(id));
-  const picked = adjacent ?? latest(s, rows.flatMap((row) => row.ids).filter((id) => !closing.has(id) && own(id) && rules.fallback(id)));
-  if (rules.shown) noteCloseActivation(consent, adjacent ? "above" : "fallback");
-  return picked;
+  const above = tabAbove(s, rows, activeId, closing, candidate);
+  if (above) return { id: above, above: true };
+  const fallback = topApp ? (id: string) => candidate(id) && !inPinnedContainer(s, id) : candidate;
+  return { id: latest(s, rows.flatMap((row) => row.ids).filter(fallback)) ?? null, above: false };
 }
 
-export const asUser = (user: boolean, options: CloseOptions = {}): CloseOptions => (user ? byUser(options) : options);
+export function pickSuccessors(s: BrowserState, ids: string[], keepTopApps = s.settings.keepTopAppsRunning): Map<string, Successor> {
+  const out = new Map<string, Successor>();
+  if (!activatesTabAbove(s)) return out;
+  const requested = ids.filter((id) => s.tabs[id]);
+  const closing = new Set([...requested, ...withPinnedPanes(s, requested.filter((id) => inPinnedContainer(s, id)))]);
+  for (const w of Object.values(s.windows)) {
+    for (const [profileId, activeId] of Object.entries(w.activeTabIds)) {
+      if (!closing.has(activeId)) continue;
+      const pick = successorFor(s, w.id, profileId, activeId, closing, requested, keepTopApps);
+      if (pick) out.set(successorKey(w.id, profileId), { ...pick, shown: profileId === w.profileId });
+    }
+  }
+  return out;
+}
 
-export function byUser(options: CloseOptions = {}): CloseOptions {
-  const consent = consentToken();
-  return { ...options, userClose: { pick: (s, windowId, closedId, closing, rules) => pickAfterClose(s, windowId, closedId, closing, rules, consent) } };
+export type ByUser = { consent: ConsentToken | null };
+
+export function userClose(ids: string[], { consent }: ByUser, options: CloseOptions = {}): CloseOptions {
+  const successors = pickSuccessors(useBrowser.getState(), ids, options.keepTopApps);
+  const noted = (pick: Successor) => void (pick.shown && noteCloseActivation(consent, pick.above ? "above" : "fallback"));
+  return { ...options, userClose: { successors, noted } };
 }

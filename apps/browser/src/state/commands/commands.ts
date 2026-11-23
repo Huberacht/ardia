@@ -67,6 +67,7 @@ import { commandTarget } from "./commandTarget";
 import { runLittleArdiaCommand } from "./littleArdiaCommands";
 import { closeSelectionByKey } from "../sidebar/multiTabMenu";
 import { noteSelectionClosedByKey } from "../telemetry/usage";
+import type { ByUser } from "../tabs/closeActivation";
 
 const newOrId = (arg: string) => (arg === "new" ? null : arg);
 
@@ -86,7 +87,7 @@ const LITTLE_ARDIA_BLOCKED_LAYOUT: ReadonlySet<string> = new Set([
 
 export class NoCommandWindowError extends Error {}
 
-export function runCommand({ command, arg, windowId: given }: CommandEvent, { strictWindow = false, tabId: targetTab = null, mayWrite, user = false }: { strictWindow?: boolean; tabId?: string | null; mayWrite?: () => boolean; user?: boolean } = {}) {
+export function runCommand({ command, arg, windowId: given }: CommandEvent, { strictWindow = false, tabId: targetTab = null, mayWrite, user }: { strictWindow?: boolean; tabId?: string | null; mayWrite?: () => boolean; user?: ByUser } = {}) {
   if (isAppCommand(command)) return APP_COMMAND_HANDLERS[command](given);
   const s = useBrowser.getState();
   const target = commandTarget(s, command, given, targetTab);
@@ -193,16 +194,16 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return ui?.panel.open ? s.closePanel(windowId) : undefined;
     }
     case "closeTab":
-      if (targeted) return void closeTab(targeted, { mayWrite, user });
+      if (targeted) return void closeTab(targeted, { mayWrite, user: !!user });
       if (ui?.panel.newTab) {
         closeNewTabBar(windowId);
         if (NEW_TAB_BAR_POLICY.closeTabKeyOnlyDismissesBar || !tabId) return;
-        return void closeTab(tabId, { mayWrite, user });
+        return void closeTab(tabId, { mayWrite, user: !!user });
       }
       if (ui?.panel.open) return tabId ? closePanelToHeroBar(windowId, tabId, "closeKey") : s.closePanel(windowId);
       const closedSelection = closeSelectionByKey(windowId, user);
       if (closedSelection) return void noteSelectionClosedByKey(closedSelection);
-      return tabId ? void closeTab(tabId, { mayWrite, user }) : undefined;
+      return tabId ? void closeTab(tabId, { mayWrite, user: !!user }) : undefined;
     case "print":
       return void web?.print();
     case "printWithSystemDialog":

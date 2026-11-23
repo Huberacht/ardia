@@ -16,7 +16,6 @@ import { addSharedFolder } from "../sharedFolders/actions";
 import { canAddSharedFolder } from "../sharedFolders/removal";
 import { chooseSidebarSide, switchTabLayout } from "../settings/actions";
 import { minimalismIn } from "../windows/layout";
-import { byUser } from "../tabs/closeActivation";
 
 const store = () => useBrowser.getState();
 
@@ -104,5 +103,5 @@ export async function openSidebarMenu(windowId: string) {
     const id = s.newTab(windowId);
     if (id) newGroupWithSelection(windowId, [id]);
   } else if (choice === "addShared") void addSharedFolder(windowId);
-  else if (choice === "closeAll") closeAllTabs(windowId, byUser());
+  else if (choice === "closeAll") closeAllTabs(windowId, { consent });
 }

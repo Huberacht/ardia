@@ -36,7 +36,7 @@ export type GroupsSlice = {
   moveGroup(groupId: string, placement: GroupPlacement): void;
   duplicateGroup(groupId: string): string;
   newTabInGroup(groupId: string): string;
-  moveGroupToBookmarksBar(groupId: string): void;
+  moveGroupToBookmarksBar(groupId: string, options?: CloseOptions): void;
 };
 
 export function syncGroupOrder(groups: Record<string, TabGroup>, window: BrowserWindow): Record<string, TabGroup> {
@@ -320,7 +320,7 @@ export const createGroupsSlice: StateCreator<BrowserState, [], [], GroupsSlice> 
     return id;
   },
 
-  moveGroupToBookmarksBar(groupId) {
+  moveGroupToBookmarksBar(groupId, options) {
     const s = get();
     const g = s.groups[groupId];
     if (!g) return;
@@ -342,6 +342,6 @@ export const createGroupsSlice: StateCreator<BrowserState, [], [], GroupsSlice> 
       }
     };
     file(g);
-    set(closingGroup(get(), groupId));
+    set(closingGroup(get(), groupId, false, options?.userClose));
   },
 });
