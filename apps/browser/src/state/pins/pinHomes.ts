@@ -1,5 +1,5 @@
 import type { BrowserState } from "../browser/store";
-import { changedIds, linkChanges } from "../browser/changes";
+import { changedIds, linkEdits } from "../browser/changes";
 import { pinnedGroupMembers } from "../browser/structure";
 import type { Tab } from "../browser/types";
 
@@ -24,7 +24,7 @@ export function settlePinHomes(s: HomeSource, prev: HomeSource): Pick<BrowserSta
     tabs[id] = { ...t, pinnedUrl: home };
     homed.push(id);
   }
-  return tabs ? { tabs: linkChanges(tabs, s.tabs, homed) } : null;
+  return tabs ? { tabs: linkEdits(tabs, s.tabs, homed) } : null;
 }
 
 export function pinnedTabsLeaveLive(s: Pick<BrowserState, "tabs">, prev: Pick<BrowserState, "tabs">): Pick<BrowserState, "tabs"> | null {
@@ -39,5 +39,5 @@ export function pinnedTabsLeaveLive(s: Pick<BrowserState, "tabs">, prev: Pick<Br
     tabs[id] = rest;
     left.push(id);
   }
-  return tabs ? { tabs: linkChanges(tabs, s.tabs, left) } : null;
+  return tabs ? { tabs: linkEdits(tabs, s.tabs, left) } : null;
 }

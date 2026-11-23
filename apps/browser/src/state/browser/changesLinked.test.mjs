@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 globalThis.__DEV__ = false;
-const { changedIds, linkChanges, linkedChangedIds, scannedChangedIds, withEntry, withoutEntries, LINKS_KEPT } = await import("./changes.ts");
+const { changedIds, keyOrderBase, linkChanges, linkEdits, linkedChangedIds, scannedChangedIds, withEntry, withoutEntries, LINKS_KEPT } = await import("./changes.ts");
 
 function random(seed) {
   let a = seed >>> 0;
@@ -36,21 +38,24 @@ function mutate(rand, prev, ids) {
   }
   if (roll < 0.6) return withoutEntries(prev, Array.from({ length: 1 + Math.floor(rand() * 3) }, pick));
   if (roll < 0.68) return withoutEntries(prev, new Set([pick(), "never-there"]));
-  if (roll < 0.8) {
+  if (roll < 0.74) {
     const draft = { ...prev };
     const touched = [];
-    const deleted = new Set();
     for (let k = Math.floor(rand() * 4); k >= 0; k--) {
       const id = pick();
-      if (deleted.has(id)) continue;
-      if (rand() < 0.3) {
-        delete draft[id];
-        deleted.add(id);
-      } else draft[id] = { v: rand() };
+      if (rand() < 0.3) delete draft[id];
+      else draft[id] = { v: rand() };
       touched.push(id);
     }
     if (rand() < 0.3) touched.push("never-there", touched[0]);
     return linkChanges(draft, prev, touched);
+  }
+  if (roll < 0.8) {
+    const draft = { ...prev };
+    const touched = Object.keys(prev).filter(() => rand() < 0.2);
+    for (const id of touched) draft[id] = { v: rand() };
+    if (rand() < 0.3) touched.push("never-there");
+    return linkEdits(draft, prev, touched);
   }
   if (roll < 0.9) {
     const draft = { ...prev };
@@ -241,4 +246,38 @@ test("two copies of a pin that wake in one batch hand the page to the same copy 
   } finally {
     Date.now = realNow;
   }
+});
+
+test("a raw draft that deletes and reinserts a key gets the scan's order, not the key's old place", () => {
+  const first = { a: { v: 1 }, b: { v: 2 }, c: { v: 3 } };
+  const ordered = withEntry(withEntry(first, "c", { v: 9 }), "b", { v: 7 });
+  assert.deepEqual(changedIds(ordered, first), ["b", "c"]);
+  const draft = { ...ordered };
+  delete draft.a;
+  draft.a = { v: 5 };
+  draft.b = { v: 6 };
+  linkChanges(draft, ordered, ["a", "b"]);
+  assert.deepEqual(linkedChangedIds(draft, ordered), ["b", "a"], "a moved to the end when it was reinserted");
+});
+
+test("shrinking a big record lets its key order go, so the live record doesn't keep the big map", async () => {
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc");
+  const shrink = () => {
+    const big = Object.fromEntries(Array.from({ length: 10000 }, (_, i) => [`k${i}`, { v: i }]));
+    const edited = withEntry(withEntry(big, "k1", { v: -1 }), "k2", { v: -2 });
+    assert.deepEqual(changedIds(edited, big), ["k1", "k2"]);
+    const base = keyOrderBase(edited);
+    assert.equal(base?.size, 10000, "the edits share the big record's key order");
+    let small = withoutEntries(edited, Array.from({ length: 9998 }, (_, i) => `k${i + 2}`));
+    for (let i = 0; i < 128; i++) small = withoutEntries(withEntry(small, `n${i}`, { v: i }), [`n${i}`]);
+    assert.notEqual(keyOrderBase(small), base, "the small record no longer carries the big map");
+    return { base: new WeakRef(base), small };
+  };
+  const { base, small } = shrink();
+  await new Promise((resolve) => setImmediate(resolve));
+  gc();
+  assert.equal(base.deref(), undefined, "the big map is released");
+  assert.deepEqual(Object.keys(small), ["k0", "k1"]);
+  assert.deepEqual(changedIds(withEntry(withEntry(small, "k1", { v: 0 }), "k0", { v: 0 }), small), ["k0", "k1"]);
 });

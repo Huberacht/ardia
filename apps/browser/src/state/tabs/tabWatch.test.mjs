@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 globalThis.__DEV__ = false;
-const { useBrowser } = await import("../browser/store.ts");
+const { useBrowser, storeTransaction } = await import("../browser/store.ts");
 const { watchTab, watchedTabs, tabSnapshot, shallowEqual } = await import("./tabWatch.ts");
 
 const S = () => useBrowser.getState();
@@ -84,4 +84,25 @@ test("a snapshot keeps its value while the tab object is the same, and an equal 
   assert.equal(third.zoom, 1.25);
   S().closeTab(a);
   assert.equal(get().url, undefined, "a closed tab reads as missing");
+});
+
+test("a watcher that unsubscribes another while two tabs change at once stops it from waking, as before", () => {
+  const { w, a, b } = setup();
+  const c = S().newTab(w, { url: "https://c.com", background: true });
+  const woke = [];
+  let offA = () => {};
+  const offB = watchTab(b, () => {
+    woke.push("b");
+    offA();
+  });
+  offA = watchTab(a, () => woke.push("a"));
+  const offC = watchTab(c, () => woke.push("c"));
+  storeTransaction(() => {
+    S().updateTab(a, { title: "A" });
+    S().updateTab(b, { title: "B" });
+  });
+  assert.deepEqual(woke, ["b"], "b is watched first; its callback unsubscribed a before a's turn");
+  offB();
+  offC();
+  assert.equal(watchedTabs(), 0);
 });

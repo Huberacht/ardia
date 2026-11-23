@@ -17,11 +17,9 @@ let listening = false;
 function wake(s: BrowserState, prev: BrowserState) {
   if (s.tabs === prev.tabs) return;
   const changed = linkedChangedIds(s.tabs, prev.tabs);
-  if (changed && changed.length < watchers.size) {
-    for (const id of changed) {
-      const listeners = watchers.get(id);
-      if (listeners) for (const listener of [...listeners]) listener();
-    }
+  if (changed && changed.length <= 1) {
+    const listeners = changed.length ? watchers.get(changed[0]!) : undefined;
+    if (listeners) for (const listener of [...listeners]) listener();
     return;
   }
   for (const [id, listeners] of watchers) {

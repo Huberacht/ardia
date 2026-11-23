@@ -1,4 +1,4 @@
-import { linkChanges, withEntry, withoutEntries } from "../browser/changes";
+import { linkEdits, withEntry, withoutEntries } from "../browser/changes";
 import type { BrowserState } from "../browser/store";
 import { leaveGroups } from "../groups/groups";
 import { withShownTab } from "../groups/shownTabs";
@@ -202,7 +202,7 @@ function adoptOrphans(tabs: Record<string, Tab>, before: Record<string, Tab>, go
     next[t.id] = { ...t, openerId: opener === t.id ? null : opener };
     adopted.push(t.id);
   }
-  return linkChanges(next, tabs, adopted);
+  return linkEdits(next, tabs, adopted);
 }
 
 export function unloadPinnedTabs(s: BrowserState, requested: string[], keepTopApps = false): BrowserState {
@@ -233,7 +233,7 @@ export function unloadPinnedTabs(s: BrowserState, requested: string[], keepTopAp
   }
   let next: BrowserState = {
     ...s,
-    tabs: linkChanges(tabs, s.tabs, unloading),
+    tabs: linkEdits(tabs, s.tabs, unloading),
     find: without(s.find, unloaded),
     splits: removeFromSplits(s.splits, new Set([...gone].filter((id) => !splitTabIdsOf(splitOf(s, id))?.every((pane) => gone.has(pane))))),
     selection: pruneSelection(s.selection, gone),

@@ -5,7 +5,7 @@ const memo = new WeakMap<object, WeakMap<object, readonly string[]>>();
 const keyLists = new WeakMap<object, readonly string[]>();
 
 type Link = { readonly from: number; readonly ids: readonly string[] };
-type KeyOrder = { readonly base: ReadonlyMap<string, number>; readonly appended: readonly string[] };
+type KeyOrder = { readonly base: ReadonlyMap<string, number>; readonly appended: readonly string[]; readonly dropped: number };
 
 export const LINKS_KEPT = 8;
 export const LINKED_IDS_MAX = 256;
@@ -50,7 +50,7 @@ function freshKeyOrder(record: object): KeyOrder {
   const keys = keysOf(record);
   const base = new Map<string, number>();
   for (let i = 0; i < keys.length; i++) base.set(keys[i]!, i);
-  return { base, appended: NONE };
+  return { base, appended: NONE, dropped: 0 };
 }
 
 function keyOrderOf(record: object): KeyOrder {
@@ -61,12 +61,14 @@ function keyOrderOf(record: object): KeyOrder {
 
 function derivedKeyOrder(order: KeyOrder, next: object, prev: object, ids: readonly string[]): KeyOrder | null {
   let appended = order.appended;
+  let dropped = order.dropped;
   let newcomer: string | null = null;
   for (const id of ids) {
     const was = ownKey(prev, id);
     if (was === ownKey(next, id)) continue;
     if (was) {
       if (appended.includes(id)) appended = appended.filter((key) => key !== id);
+      else if (++dropped * 2 > order.base.size) return null;
       continue;
     }
     if (newcomer !== null && newcomer !== id) return null;
@@ -75,7 +77,7 @@ function derivedKeyOrder(order: KeyOrder, next: object, prev: object, ids: reado
   }
   if (newcomer !== null) appended = [...appended, newcomer];
   if (appended.length > APPENDED_KEPT) return null;
-  return appended === order.appended ? order : { base: order.base, appended };
+  return appended === order.appended && dropped === order.dropped ? order : { base: order.base, appended, dropped };
 }
 
 const rankIn = (order: KeyOrder, id: string): number | undefined => {
@@ -90,9 +92,15 @@ function inKeyOrder(record: object, ids: string[]): string[] {
   return ids.sort((a, b) => rankIn(order, a)! - rankIn(order, b)!);
 }
 
-export function linkChanges<R extends object>(next: R, prev: R, ids: readonly string[]): R {
+export const keyOrderBase = (record: object): ReadonlyMap<string, number> | undefined => keyOrders.get(record)?.base;
+
+export const linkChanges = <R extends object>(next: R, prev: R, ids: readonly string[]): R => link(next, prev, ids, false);
+
+export const linkEdits = <R extends object>(next: R, prev: R, ids: readonly string[]): R => link(next, prev, ids, true);
+
+function link<R extends object>(next: R, prev: R, ids: readonly string[], keyOrderKept: boolean): R {
   if (next === prev || chains.has(next)) return next;
-  const order = keyOrders.get(prev);
+  const order = keyOrderKept ? keyOrders.get(prev) : undefined;
   const derived = order && derivedKeyOrder(order, next, prev, ids);
   if (derived) keyOrders.set(next, derived);
   if (ids.length > LINKED_IDS_MAX) return next;
@@ -110,14 +118,14 @@ export function linkChanges<R extends object>(next: R, prev: R, ids: readonly st
 const NONE_LINKS: readonly Link[] = [];
 
 export function withEntry<T>(record: Record<string, T>, id: string, value: T): Record<string, T> {
-  return linkChanges({ ...record, [id]: value }, record, [id]);
+  return linkEdits({ ...record, [id]: value }, record, [id]);
 }
 
 export function withoutEntries<T>(record: Record<string, T>, ids: Iterable<string>): Record<string, T> {
   const next = { ...record };
   const gone = [...ids];
   for (const id of gone) delete next[id];
-  return linkChanges(next, record, gone);
+  return linkEdits(next, record, gone);
 }
 
 export function linkedChangedIds<T>(next: Record<string, T>, prev: Record<string, T>): readonly string[] | null {
