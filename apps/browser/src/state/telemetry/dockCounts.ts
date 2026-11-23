@@ -7,6 +7,8 @@ type ScreenEdge = NonNullable<Extract<WindowEvent, { type: "sidebarEdge" }>["scr
 const NONE = {
   sidebar_slides: 0,
   sidebar_slides_past_target: 0,
+  sidebar_slides_late: 0,
+  sidebar_slide_landings_overdue: 0,
   sidebar_lights_left_behind: 0,
   sidebar_page_full_screen_peeks: 0,
   sidebar_peek_reveals_held_back: 0,
@@ -25,10 +27,16 @@ export const QUICK_PEEK_CLOSE_MS = 500;
 export const FRAME_UNDER_OLD_PEEK_GAP = 4;
 let counts = { ...NONE };
 
-export function noteSidebarSlide(pastTarget: boolean) {
-  counts.sidebar_slides++;
-  if (pastTarget) counts.sidebar_slides_past_target++;
-}
+export const SLIDE_LATE_MS = 100;
+
+export const noteSidebarSlide = (consent: ConsentToken | null, pastTarget: boolean, overrunMs: number) =>
+  countFor(consent, () => {
+    counts.sidebar_slides++;
+    if (pastTarget) counts.sidebar_slides_past_target++;
+    if (overrunMs > SLIDE_LATE_MS) counts.sidebar_slides_late++;
+  });
+
+export const noteSidebarSlideLandingOverdue = (consent: ConsentToken | null) => countFor(consent, () => void counts.sidebar_slide_landings_overdue++);
 
 export const noteSidebarLightsLeftBehind = () => void counts.sidebar_lights_left_behind++;
 

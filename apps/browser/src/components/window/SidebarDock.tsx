@@ -1,10 +1,10 @@
 import { onWindowEvent, watchSidebarEdge } from "../../state/windows/nativeWindow";
-import { useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Animated, StyleSheet, View } from "react-native";
 import { switchOn } from "../../state/app/switches";
 import { useTheme } from "../ui/theme";
-import { curve, keepAttached, useGated } from "../ui/motion";
-import { Panel, reduceMotion, WindowBackdrop, WindowDragRegion } from "../ui";
+import { useGated } from "../ui/motion";
+import { Panel, WindowBackdrop, WindowDragRegion } from "../ui";
 import { useSidebarSide, useWindowFullScreen, useWindowId } from "../../state/browser/hooks";
 import { useSidebarDockState } from "../../state/windows/hooks";
 import { useShownSidebarWidth } from "../../state/sidebar/shownWidth";
@@ -23,16 +23,15 @@ import {
   noteSidebarPeekFrame,
   noteSidebarPeekRevealHeldBack,
   noteSidebarScreenEdge,
-  noteSidebarSlide,
 } from "../../state/telemetry/dockCounts";
 import { ProfileSwipe } from "./ProfileSwipe";
-import { ARC_HIDE_MS, DOCK_SLIDE, SHADOWS } from "./tokens";
+import { cardSlide, dockStyles as styles, useSidebarDock } from "./useSidebarDock";
+import { SHADOWS } from "./tokens";
 import {
   EDGE_ARMED,
   EDGE_DISARMED,
   PEEK_EDGE_STRIP,
   TAB_DRAG_EDGE_STRIP,
-  dockMove,
   dockState,
   dockedCardInset,
   edgeClosed,
@@ -50,8 +49,6 @@ import {
 import {
   ARC_LIGHTS_CENTER,
   devPeeks,
-  peekShown,
-  setDockMoving,
   setPeekLeaving,
   setPeekShown,
   useDockMotion,
@@ -62,44 +59,6 @@ import { useEmptyWindowPeek } from "./useEmptyWindowPeek";
 import { useSidebarLights, useTopStripLights } from "./useDockLights";
 import { useCardFrame } from "./cardFrame";
 import { forgetSidebarDock, noteSidebarDock } from "./sidebarDockCheck";
-
-function useSidebarDock(open: boolean, animate: boolean, arc: boolean): { dock: Animated.Value; away: boolean } {
-  const windowId = useWindowId();
-  const dock = useRef(new Animated.Value(open ? 1 : 0)).current;
-  const was = useRef(open);
-  const [away, setAway] = useState(!open);
-  useInsertionEffect(() => keepAttached(dock), [dock]);
-  useEffect(() => {
-    if (was.current === open) return;
-    was.current = open;
-    const move = dockMove({ open, animated: animate && !reduceMotion() && switchOn("sidebarSlide"), arc, peekOut: peekShown(windowId) });
-    if (move === "jump") {
-      dock.stopAnimation();
-      dock.setValue(open ? 1 : 0);
-      setDockMoving(windowId, false);
-      setAway(!open);
-      return;
-    }
-    if (open) setAway(false);
-    setDockMoving(windowId, true);
-    let pastTarget = false;
-    const watch = dock.addListener(({ value }) => {
-      if (value > 1 || value < 0) pastTarget = true;
-    });
-    (move === "arcHide"
-      ? Animated.timing(dock, { toValue: 0, duration: ARC_HIDE_MS, easing: curve.enter, useNativeDriver: false })
-      : Animated.timing(dock, { toValue: open ? 1 : 0, ...DOCK_SLIDE, useNativeDriver: false })
-    ).start(({ finished }) => {
-      dock.removeListener(watch);
-      if (!finished) return;
-      noteSidebarSlide(pastTarget);
-      setDockMoving(windowId, false);
-      if (!open) setAway(true);
-    });
-  }, [open]);
-  useEffect(() => () => setDockMoving(windowId, false), []);
-  return { dock, away };
-}
 
 type Inset = { top: number; right: number; bottom: number; left: number };
 
@@ -127,33 +86,30 @@ export function DockedLayout({
   const arc = addressBar && !topTabs && switchOn("sidebarSlide");
   const toolbarLights = useToolbarLightsCenter();
   const lights = addressBar && !topTabs ? ARC_LIGHTS_CENTER : toolbarLights;
-  const { dock, away } = useSidebarDock(open, !fullscreen, arc);
+  const { dock, away, layout, laidOut } = useSidebarDock(open, !fullscreen, arc);
   const frame = useCardFrame();
   const sideInset = right ? inset.right : inset.left;
-  const edge = useMemo(
-    () =>
-      dock.interpolate({
-        inputRange: [0, 1],
-        outputRange: [sideInset, dockedCardInset(width, frame.inset)],
-      }),
-    [dock, width, sideInset, frame.inset],
-  );
+  const dockedInset = dockedCardInset(width, frame.inset);
+  const edge = layout.docked ? dockedInset : sideInset;
   const hiddenTop = useCardTopInset(frame.inset);
-  const top = useMemo(() => dock.interpolate({ inputRange: [0, 1], outputRange: [hiddenTop, inset.top] }), [dock, hiddenTop, inset.top]);
+  const travel = topTabs ? inset.top - hiddenTop : (dockedInset - sideInset) * (right ? -1 : 1);
+  const slide = useMemo(() => cardSlide(dock, travel, topTabs, frame.radius), [dock, travel, topTabs, frame.radius]);
   const stripY = useMemo(() => dock.interpolate({ inputRange: [0, 1], outputRange: [-inset.top, 0] }), [dock, inset.top]);
   const stripShown = topTabs && (open || !away);
   const moving = useDockMotion((m) => !!m.moving[windowId]);
   useTopStripLights(windowId, dock, topTabs && !fullscreen, inset.top, open);
+  const sliding = layout.sliding && !fullscreen;
+  const fill = fullscreen ? styles.column : styles.row;
   return (
     <>
-      <Animated.View
+      <View
         style={
           fullscreen
-            ? { flex: 1 }
+            ? styles.column
             : {
                 flex: 1,
                 flexDirection: "row",
-                paddingTop: topTabs ? top : inset.top,
+                paddingTop: topTabs ? (layout.docked ? inset.top : hiddenTop) : inset.top,
                 paddingRight: !topTabs && right ? edge : inset.right,
                 paddingBottom: inset.bottom,
                 paddingLeft: !topTabs && !right ? edge : inset.left,
@@ -161,8 +117,12 @@ export function DockedLayout({
         }
       >
         {!fullscreen && <WindowDragRegion style={StyleSheet.absoluteFill} />}
-        {children}
-      </Animated.View>
+        <Animated.View style={sliding ? [fill, slide.clip] : fill}>
+          <Animated.View style={sliding ? [fill, slide.content] : fill} onLayout={layout.docked && moving ? laidOut : undefined}>
+            {children}
+          </Animated.View>
+        </Animated.View>
+      </View>
       {topStrip &&
         stripShown && (
           <Animated.View
