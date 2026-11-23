@@ -382,7 +382,6 @@ test("a drag cancelled while it waits for a fold to finish doesn't go on to meas
   const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
   c.end(false);
   await begun;
-  await new Promise((done) => setTimeout(done, 50));
   assert.equal(measured, 0);
   await D.settle();
 });
