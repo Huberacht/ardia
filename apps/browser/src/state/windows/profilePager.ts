@@ -34,7 +34,7 @@ const selectionOf = (r: NativeReport) => ("selectionSequence" in r ? r.selection
 
 class ProfilePager {
   readonly pos: Animated.Value;
-  readonly state = create<{ pages: PagerPage[] | null; ack: number; held: string | null }>()(() => ({ pages: null, ack: 0, held: null }));
+  readonly state = create<{ pages: PagerPage[] | null; ack: number; held: string | null; bypassed: boolean }>()(() => ({ pages: null, ack: 0, held: null, bypassed: false }));
   private surfaces = 0;
   private switching = false;
   private unsubscribe: () => void;
@@ -89,7 +89,7 @@ class ProfilePager {
       const current = this.current();
       if (!current) return;
       this.holdConsent = consentToken();
-      this.state.setState({ held: current });
+      this.state.setState({ held: current, bypassed: false });
       this.idleOffTarget = 0;
       this.holdWatch ??= setInterval(this.watchHold, HOLD_WATCH_MS);
     } else if (!moving && held) this.release();
@@ -101,8 +101,9 @@ class ProfilePager {
       this.idleOffTarget = 0;
       return;
     }
-    if (snapshot && !atRest(snapshot) && ++this.idleOffTarget < IDLE_OFF_TARGET_LOOKS) return;
-    if (this.state.getState().held) notePagerRestSeenByWatch(this.holdConsent);
+    const resting = !snapshot || atRest(snapshot);
+    if (!resting && ++this.idleOffTarget < IDLE_OFF_TARGET_LOOKS) return;
+    if (resting && this.state.getState().held) notePagerRestSeenByWatch(this.holdConsent);
     this.release();
   };
 
@@ -113,7 +114,16 @@ class ProfilePager {
     if (!held) return;
     if (counted && held !== this.current()) notePagerSwitchAfterRest(this.holdConsent);
     const pages = this.warmPages();
-    unstable_batchedUpdates(() => this.state.setState(samePages(pages, this.state.getState().pages) ? { held: null } : { held: null, pages }));
+    unstable_batchedUpdates(() => this.state.setState(samePages(pages, this.state.getState().pages) ? { held: null, bypassed: false } : { held: null, bypassed: false, pages }));
+  }
+
+  holding() {
+    return this.state.getState().held !== null;
+  }
+
+  bypassHold() {
+    const { held, bypassed } = this.state.getState();
+    if (held && !bypassed) this.state.setState({ bypassed: true });
   }
 
   private setWarm(pages: PagerPage[] | null) {
@@ -271,7 +281,7 @@ export function usePagerPages(windowId: string): { pages: PagerPage[]; paging: b
 }
 
 export function useSettledProfile(windowId: string, current: string | null): string | null {
-  const held = pagerFor(windowId).state((s) => (s.held && s.held !== current ? s.held : null));
+  const held = pagerFor(windowId).state((s) => (s.held && !s.bypassed && s.held !== current ? s.held : null));
   return held ?? current;
 }
 

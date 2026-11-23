@@ -23,6 +23,17 @@ export type PageSpot = {
   scroller: ScrollView | null;
 };
 
+export type PageRowsInput = { profileId: string; shown: string | null; current: string; visited: boolean; capRows: number; throughActive: () => number; holding: boolean; peaks: Map<string, number> };
+
+export function pageRowsCap({ profileId, shown, current, visited, capRows, throughActive, holding, peaks }: PageRowsInput): number | undefined {
+  if (profileId === shown) return undefined;
+  const wanted = profileId !== current || visited ? capRows : Math.max(capRows, throughActive() + 1);
+  if (!holding) return wanted;
+  const peak = Math.max(wanted, peaks.get(profileId) ?? 0);
+  if (peak > capRows) peaks.set(profileId, peak);
+  return peak;
+}
+
 export type PageLayoutInput = {
   tiles: number;
   previewed: number;

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type RefObject } from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 import { ClipView, ContextMenuArea, space, WindowDragRegion } from "../ui";
 import { layout, useTheme } from "../ui/theme";
@@ -12,7 +12,7 @@ import { closeAnchoredWhenControlsRowChanges } from "../../state/sidebar/control
 import { DownloadsButton } from "../downloads/DownloadsButton";
 import { profileIndicatorX, ProfileIndicator } from "../profiles/ProfileIndicator";
 import { useWindowChrome } from "../../state/windows/windowButtons";
-import { usePagerPages, useSettledProfile, type PagerPage } from "../../state/windows/profilePager";
+import { pagerFor, usePagerPages, useSettledProfile, type PagerPage } from "../../state/windows/profilePager";
 import { PROFILE_DOTS_HEIGHT, ProfileDots, useProfileDotsShown } from "../profiles/ProfileDots";
 import { SidebarAddressRow, SidebarHeaderTools } from "./AddressBar";
 import { DragGhost } from "./DragGhost";
@@ -28,7 +28,7 @@ import { bottomFieldBand, SIDEBAR_FIELD, SIDEBAR_FIELD_BOTTOM, SIDEBAR_FOOTER_DO
 import { useNewTabAtTop, useSidebarField, useSidebarPart } from "../../state/sidebar/chrome";
 import { closeFolderPanel } from "../../state/sidebar/tileFolderUi";
 import { openSidebarMenu } from "../../state/sidebar/menus";
-import { GLOW_ROOM, rowPitch, type PageSpot, type SidebarGeometry } from "./pageLayout";
+import { GLOW_ROOM, pageRowsCap, rowPitch, type PageSpot, type SidebarGeometry } from "./pageLayout";
 import { SidebarPage } from "./SidebarPage";
 import { sidebarText } from "./SidebarTextScope";
 import { SidebarRowLookContext, useSidebarRowLookSource } from "./rowLook";
@@ -207,17 +207,19 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
   const settled = useSettledProfile(windowId, current);
   const [spots] = useState(() => new Map<string, PageSpot>());
   const claimed = useRef<PageSpot | null>(null);
-  const holding = settled !== current;
-  const [draggedThrough, setDraggedThrough] = useState<string | null>(null);
-  if (holding && dragging && draggedThrough !== settled) setDraggedThrough(settled);
-  if (!holding && draggedThrough !== null) setDraggedThrough(null);
-  const shown = !holding || dragging || draggedThrough === settled || !pages.some((page) => page.id === settled) ? current : settled;
+  const pager = pagerFor(windowId);
+  const [peaks] = useState(() => new Map<string, number>());
+  const [, peaksCleared] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => pager.state.subscribe((s) => void (!s.held && peaks.size && (peaks.clear(), peaksCleared()))), [pager, peaks]);
+  const waiting = settled !== current;
+  useLayoutEffect(() => {
+    if (dragging && waiting) pager.bypassHold();
+  }, [dragging, waiting, pager]);
+  const shown = dragging || !pages.some((page) => page.id === settled) ? current : settled;
   const capRows = Math.ceil(available / rowPitch()) + 1;
-  const rowsOf = (profileId: string) => {
-    if (profileId === shown) return undefined;
-    if (profileId !== current || spots.get(profileId)?.visited) return capRows;
-    return Math.max(capRows, entriesThroughActiveNow(windowId, profileId) + 1);
-  };
+  const holding = pager.holding();
+  const rowsOf = (profileId: string) =>
+    pageRowsCap({ profileId, shown, current, visited: !!spots.get(profileId)?.visited, capRows, throughActive: () => entriesThroughActiveNow(windowId, profileId), holding, peaks });
   useLayoutEffect(() => {
     const spot = spots.get(current) ?? null;
     if (spot === claimed.current) return;

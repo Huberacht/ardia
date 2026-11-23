@@ -73,3 +73,17 @@ test("a free-space reading that arrives before the sidebar has a height is kept 
   assert.match(page, /slack\.current = e\.nativeEvent\.layout\.height;\n\s*applySlack\(\);/);
   assert.match(page, /useEffect\(applySlack, \[height > 0, canDock, resting\]\);/);
 });
+
+test("a page's row cap keeps its peak only while the pager holds: the page that rests drops back to its warm cap, the shown page has none", async () => {
+  const { pageRowsCap } = await import("./pageLayout.ts");
+  const peaks = new Map();
+  const base = { shown: "a", current: "b", visited: false, capRows: 12, throughActive: () => 99, holding: true, peaks };
+  assert.equal(pageRowsCap({ ...base, profileId: "a" }), undefined, "the shown page has every row");
+  assert.equal(pageRowsCap({ ...base, profileId: "b" }), 100, "the arriving page mounts down to its selected tab");
+  assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b" }), 100, "a second swipe in the same hold keeps the page that is still sliding out");
+  assert.equal(pageRowsCap({ ...base, current: "c", profileId: "b", holding: false }), 12, "once the pages rest an unvisited page goes back to its warm cap");
+  assert.equal(pageRowsCap({ ...base, profileId: "b", visited: true }), 100, "a visited page held in the same hold keeps its peak");
+  peaks.clear();
+  assert.equal(pageRowsCap({ ...base, profileId: "d", current: "c" }), 12, "a page that never arrived never grows");
+  assert.equal(peaks.size, 0);
+});

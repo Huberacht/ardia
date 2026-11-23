@@ -129,6 +129,34 @@ test("Linux's pager says selected before it starts settling, still resting on th
   assert.equal(held(), null);
 });
 
+test("a drag lets the sidebar follow for the rest of that hold, even when the pager comes back to where it started and leaves again", () => {
+  const { pager, order, native, held } = threeProfiles();
+  const bypassed = () => pager.state.getState().bypassed;
+  native("tracking", 0, "began");
+  native("settling", 1, "selected", 0.3);
+  pager.bypassHold();
+  assert.equal(bypassed(), true);
+  native("settling", 0, "selected", 0.6);
+  native("settling", 1, "selected", 0.4);
+  assert.equal(held(), order[0], "still the same hold");
+  assert.equal(bypassed(), true, "the bypass lasts as long as the hold");
+  native("idle", 1, "settled");
+  assert.equal(held(), null);
+  assert.equal(bypassed(), false, "a new hold starts waiting again");
+  pager.bypassHold();
+  assert.equal(bypassed(), false, "no hold, nothing to bypass");
+});
+
+test("the watch counts a rest only when it saw one: an idle pager that never reached its target lets go uncounted", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const { native, held } = threeProfiles();
+  native("tracking", 0, "began");
+  native("idle", 1, "selected", 0.5);
+  t.mock.timers.tick(1000);
+  assert.equal(held(), null);
+  assert.equal(takePagerCounts().profile_pager_rests_seen_by_watch, 0);
+});
+
 test("a profile switch from elsewhere during a hold lets the sidebar follow at once", () => {
   const { w, order, native, held } = threeProfiles();
   native("tracking", 0, "began");
