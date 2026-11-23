@@ -4,8 +4,20 @@ import { createRequire } from "node:module";
 const nodeRequire = createRequire(import.meta.url);
 globalThis.require ??= (id) => (id.endsWith("useAnimatedProps") ? { default: (props) => [props, () => {}] } : nodeRequire(id));
 await import("../../test-native/index.ts");
-globalThis.requestAnimationFrame = () => 1;
-globalThis.cancelAnimationFrame = () => {};
+const frames = new Map();
+let nextFrame = 1;
+globalThis.requestAnimationFrame = (run) => {
+  const id = nextFrame++;
+  frames.set(id, run);
+  return id;
+};
+globalThis.cancelAnimationFrame = (id) => void frames.delete(id);
+const drainFrames = () => {
+  const due = [...frames.values()];
+  frames.clear();
+  for (const run of due) run(0);
+  return due.length;
+};
 const { mount } = await import("../../test-hooks.mjs");
 const { Animated } = await import("react-native");
 const { Fold, FoldSettling } = await import("./Fold.tsx");
@@ -47,4 +59,14 @@ test("a fold with every row mounted lets the folds inside it fill in", () => {
   const settled = fold(false);
   assert.equal(settlingFlag(settled.value), false);
   settled.unmount();
+});
+
+test("once its ancestors settle, a deferred fold fills in every row and then lets the folds inside it fill too", () => {
+  const filling = fold(true);
+  let element = filling.setContext(FoldSettling, false);
+  for (let i = 0; i < 400 && drainFrames(); i++) element = filling.value;
+  assert.equal(rowsIn(element), 500);
+  assert.equal(settlingFlag(element), false);
+  assert.equal(frames.size, 0, "nothing left scheduled");
+  filling.unmount();
 });
