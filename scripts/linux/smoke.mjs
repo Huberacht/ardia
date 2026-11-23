@@ -5,7 +5,7 @@ import { closeSync, openSync } from "node:fs";
 import { createServer } from "node:http";
 import { copyFile, mkdir, mkdtemp, open, readdir, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { inflateSync } from "node:zlib";
+import { crc32 as zlibCrc32, inflateSync } from "node:zlib";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { SHELL_PREFIX, closeAllApps, killAllAppsNow, launchArdia, launchArguments, launchEnvironment } from "../../apps/linux/scripts/acceptance/lib/ardia.mjs";
@@ -337,15 +337,63 @@ export function headlessExitArguments({ scratch, output }) {
   return launchArguments({ scratch, extraArgs: ["--headless", `--screenshot=${output}`, "--window-size=400,300", HEADLESS_PAGE] }).filter((arg) => !arg.startsWith("--remote-debugging-"));
 }
 
-export function headlessExitVerdict({ code = null, signal = null, timedOut = false, ms = 0, shot = null } = {}) {
-  const wrote = Buffer.isBuffer(shot) && shot.length > PNG_SIGNATURE.length && shot.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
-  if (timedOut) {
-    if (wrote) return { status: "old", message: `--headless --screenshot wrote its PNG but was still running after ${HEADLESS_EXIT_LIMIT_MS} ms and had to be killed: the engine predates the headless close fix` };
-    return { status: "fail", message: `--headless --screenshot wrote no PNG and was still running after ${HEADLESS_EXIT_LIMIT_MS} ms` };
+const PNG_CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+const PNG_DEPTHS = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
+const ADAM7 = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]];
+
+function pngRawLength({ width, height, bitsPerPixel, interlace }) {
+  const rowBytes = (pixels) => Math.ceil((pixels * bitsPerPixel) / 8) + 1;
+  if (!interlace) return rowBytes(width) * height;
+  let total = 0;
+  for (const [x, y, dx, dy] of ADAM7) {
+    const across = Math.ceil((width - x) / dx);
+    const down = Math.ceil((height - y) / dy);
+    if (across > 0 && down > 0) total += rowBytes(across) * down;
   }
-  if (code !== 0) return { status: "fail", message: `--headless --screenshot exited ${code ?? signal} after ${ms} ms${wrote ? "" : " and wrote no PNG"}` };
-  if (!wrote) return { status: "fail", message: `--headless --screenshot exited 0 after ${ms} ms but wrote no PNG` };
-  return { status: "pass", message: `--headless --screenshot wrote ${shot.length} bytes and exited 0 after ${ms} ms` };
+  return total;
+}
+
+export function pngSize(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < PNG_SIGNATURE.length + 12 || !buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return null;
+  let header = null;
+  const data = [];
+  let closed = false;
+  for (let at = PNG_SIGNATURE.length; at < buffer.length; ) {
+    if (closed || at + 12 > buffer.length) return null;
+    const length = buffer.readUInt32BE(at);
+    const end = at + 12 + length;
+    if (end > buffer.length || zlibCrc32(buffer.subarray(at + 4, at + 8 + length)) !== buffer.readUInt32BE(end - 4)) return null;
+    const type = buffer.toString("latin1", at + 4, at + 8);
+    const body = buffer.subarray(at + 8, at + 8 + length);
+    if (!header) {
+      if (type !== "IHDR" || length !== 13) return null;
+      header = { width: body.readUInt32BE(0), height: body.readUInt32BE(4), depth: body[8], color: body[9], compression: body[10], filter: body[11], interlace: body[12] };
+    } else if (type === "IDAT") data.push(body);
+    else if (type === "IEND") closed = length === 0;
+    else if (type === "IHDR") return null;
+    at = end;
+  }
+  if (!header || !closed || !data.length) return null;
+  const { width, height, depth, color, compression, filter, interlace } = header;
+  if (!width || !height || width > 0x7fffffff || height > 0x7fffffff || compression !== 0 || filter !== 0 || interlace > 1 || !PNG_DEPTHS[color]?.includes(depth)) return null;
+  const expected = pngRawLength({ width, height, bitsPerPixel: depth * PNG_CHANNELS[color], interlace });
+  try {
+    if (inflateSync(Buffer.concat(data), { maxOutputLength: expected }).length !== expected) return null;
+  } catch {
+    return null;
+  }
+  return { width, height };
+}
+
+export function headlessExitVerdict({ code = null, signal = null, timedOut = false, ms = 0, shot = null } = {}) {
+  const size = pngSize(shot);
+  if (timedOut) {
+    if (size) return { status: "old", message: `--headless --screenshot wrote its PNG but was still running after ${HEADLESS_EXIT_LIMIT_MS} ms and had to be killed: the engine predates the headless close fix` };
+    return { status: "fail", message: `--headless --screenshot wrote no valid PNG and was still running after ${HEADLESS_EXIT_LIMIT_MS} ms` };
+  }
+  if (code !== 0) return { status: "fail", message: `--headless --screenshot exited ${code ?? signal} after ${ms} ms${size ? "" : " and wrote no valid PNG"}` };
+  if (!size) return { status: "fail", message: `--headless --screenshot exited 0 after ${ms} ms but wrote no valid PNG` };
+  return { status: "pass", message: `--headless --screenshot wrote a ${size.width}x${size.height} PNG and exited 0 after ${ms} ms` };
 }
 
 export function cliControlSupport(capabilities) {

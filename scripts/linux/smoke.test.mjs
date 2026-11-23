@@ -3,8 +3,11 @@ import { test } from "node:test";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 import { launchArguments, launchEnvironment } from "../../apps/linux/scripts/acceptance/lib/ardia.mjs";
+import { encodePng } from "../lib/png.mjs";
 import { ASSERTIONS, HEADLESS_EXIT_LIMIT_MS, HEADLESS_PAGE, SCRIPT_NAME, SCRIPT_TITLE_PREFIX, UNKNOWN_WINDOW_ERROR, USAGE, USER_SCRIPTS_CAPABILITIES, VERSION_PATTERN, WINDOW_STATE_CAPABILITIES, windowStateProblems, windowStateSupport, windowStateVerdict, appVersionVerdict, cliControlSupport, cliTarball, debLayoutProblems, headlessExitArguments, headlessExitVerdict, privateFolder, packageFormat, formatTable, installerRanAgain, launchRefusal, packageStagedFiles, parseArgs, pipeLaunchArguments, splitPipeMessages, summarize, uboSeedProblems, uboTuningProblems, userScriptSource } from "./smoke.mjs";
+import * as smoke from "./smoke.mjs";
 
 test("the package checks are named in the usage and keep the original eight first", () => {
   assert.deepEqual(ASSERTIONS.slice(0, 8), ["ldd", "shell-ui", "bootstrap", "native-tab", "sandbox", "content-blocker", "restart-restore", "staged-install"]);
@@ -192,8 +195,71 @@ test("headless-exit launches the packaged binary with --headless --screenshot in
   assert.equal(launchRefusal(args, launchEnvironment({ scratch: "/tmp/p", base: { PATH: "/usr/bin" } })), null);
 });
 
+const PNG_SIGNATURE_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function pngOf(width, height) {
+  return encodePng({ width, height, rgba: Buffer.alloc(width * height * 4, 255) });
+}
+
+function pngChunk(type, body) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(body.length);
+  head.write(type, 4, "latin1");
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), body])));
+  return Buffer.concat([head, body, crc]);
+}
+
+function greyPng({ width, height, interlace, raw }) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[12] = interlace;
+  return Buffer.concat([PNG_SIGNATURE_BYTES, pngChunk("IHDR", ihdr), pngChunk("IDAT", deflateSync(raw)), pngChunk("IEND", Buffer.alloc(0))]);
+}
+
+test("headless-exit sizes a PNG by its header: interlaced and grey images count, a wrong amount of image data does not", () => {
+  assert.deepEqual(smoke.pngSize(greyPng({ width: 3, height: 3, interlace: 0, raw: Buffer.alloc(12) })), { width: 3, height: 3 });
+  assert.deepEqual(smoke.pngSize(greyPng({ width: 3, height: 3, interlace: 1, raw: Buffer.alloc(15) })), { width: 3, height: 3 });
+  assert.equal(smoke.pngSize(greyPng({ width: 3, height: 3, interlace: 1, raw: Buffer.alloc(12) })), null);
+  assert.equal(smoke.pngSize(greyPng({ width: 3, height: 3, interlace: 0, raw: Buffer.alloc(15) })), null);
+  assert.equal(smoke.pngSize(greyPng({ width: 0x7fffffff, height: 0x7fffffff, interlace: 0, raw: Buffer.alloc(12) })), null);
+});
+
+test("headless-exit refuses a PNG with a bad checksum or bytes after its closing chunk", () => {
+  const png = pngOf(40, 30);
+  const flipped = Buffer.from(png);
+  flipped[40] ^= 0xff;
+  assert.equal(smoke.pngSize(flipped), null);
+  assert.equal(smoke.pngSize(Buffer.concat([png, Buffer.from([0])])), null);
+  assert.equal(smoke.pngSize(Buffer.concat([png, pngChunk("IDAT", Buffer.alloc(1))])), null);
+  assert.deepEqual(smoke.pngSize(png), { width: 40, height: 30 });
+});
+
+test("headless-exit accepts only a PNG that decodes", () => {
+  const png = pngOf(40, 30);
+  const refused = {
+    "the signature and one byte": Buffer.concat([PNG_SIGNATURE_BYTES, Buffer.from([1])]),
+    "the signature and zero bytes": Buffer.concat([PNG_SIGNATURE_BYTES, Buffer.alloc(32)]),
+    "a header cut off before its image data": png.subarray(0, 33),
+    "image data cut short": png.subarray(0, png.length - 40),
+    "no closing chunk": png.subarray(0, png.length - 12),
+    "an empty image": pngOf(0, 0),
+  };
+  for (const [name, shot] of Object.entries(refused)) {
+    const verdict = headlessExitVerdict({ code: 0, ms: 900, shot });
+    assert.equal(verdict.status, "fail", name);
+    assert.match(verdict.message, /wrote no valid PNG/, name);
+    assert.equal(headlessExitVerdict({ timedOut: true, ms: HEADLESS_EXIT_LIMIT_MS, shot }).status, "fail", name);
+  }
+  const accepted = headlessExitVerdict({ code: 0, ms: 900, shot: png });
+  assert.equal(accepted.status, "pass");
+  assert.match(accepted.message, /wrote a 40x30 PNG/);
+});
+
 test("headless-exit passes on a PNG and a clean exit, is old when the process had to be killed after the PNG, and fails otherwise", () => {
-  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+  const png = pngOf(40, 30);
   const pass = headlessExitVerdict({ code: 0, ms: 900, shot: png });
   assert.equal(pass.status, "pass");
   assert.match(pass.message, /exited 0 after 900 ms/);
@@ -204,5 +270,5 @@ test("headless-exit passes on a PNG and a clean exit, is old when the process ha
   assert.equal(headlessExitVerdict({ code: 0, ms: 900, shot: null }).status, "fail");
   assert.equal(headlessExitVerdict({ code: 0, ms: 900, shot: Buffer.from("not a png at all") }).status, "fail");
   assert.equal(headlessExitVerdict({ code: 1, ms: 900, shot: png }).status, "fail");
-  assert.match(headlessExitVerdict({ code: null, signal: "SIGSEGV", ms: 900, shot: null }).message, /exited SIGSEGV after 900 ms and wrote no PNG/);
+  assert.match(headlessExitVerdict({ code: null, signal: "SIGSEGV", ms: 900, shot: null }).message, /exited SIGSEGV after 900 ms and wrote no valid PNG/);
 });
