@@ -23,7 +23,7 @@ export const BASELINE_PATH = join(ROOT, "apps/browser/src/consent-reach-baseline
 const CONSENT_BASELINE = join(ROOT, "apps/browser/src/consent-baseline.json");
 const REACH_SECTIONS = ["noter", "consentToken", "consentNow", "console"];
 export const SECTIONS = [...REACH_SECTIONS, "queues", "unstampedEvents", "arrivalStamps", "unclearedCounters"];
-const SCOPE = /^apps\/(?:browser|linux)\/src\//;
+const SCOPE = /^apps\/(?:browser|desktop)\/src\//;
 const LATER = new Set(["setTimeout", "setInterval", "requestAnimationFrame", "queueMicrotask", "setImmediate"]);
 const PROMISE = new Set(["then", "catch", "finally"]);
 const LISTENER = /^(?:on[A-Z]\w*|addListener|addEventListener|subscribe|subscribeTo)$/;
@@ -35,8 +35,10 @@ const CONSENT_TYPE = /\bConsentToken\b/;
 function buildProgram() {
   const dir = join(ROOT, "apps/browser");
   const config = ts.parseJsonConfigFileContent(ts.readConfigFile(join(dir, "tsconfig.json"), ts.sys.readFile).config, ts.sys, dir);
-  const linux = walk("apps/linux/src", /\.tsx?$/).filter((rel) => !TEST_FILE.test(rel)).map((rel) => join(ROOT, rel));
-  return ts.createProgram([...config.fileNames, ...linux], { ...config.options, noEmit: true });
+  const desktop = walk("apps/desktop/src", /\.tsx?$/).filter((rel) => !TEST_FILE.test(rel)).map((rel) => join(ROOT, rel));
+  const platform = join(ROOT, "apps/desktop/src/platform");
+  const seams = { "@platform/*": [".linux.ts", ".linux.tsx", ".desktop.ts", ".desktop.tsx"].map((suffix) => `${platform}/*${suffix}`) };
+  return ts.createProgram([...config.fileNames, ...desktop], { ...config.options, paths: { ...config.options.paths, ...seams }, noEmit: true });
 }
 
 function activityListeners() {

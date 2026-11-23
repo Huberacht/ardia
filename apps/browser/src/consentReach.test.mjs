@@ -171,10 +171,10 @@ if (process.argv.includes("--write")) {
 
 test("the uncounted-counter class covers Linux telemetry as well as the browser's", async () => {
   const { COUNTER_SCOPE, telemetryModule } = await import("../scripts/consentStatic.mjs");
-  assert.ok(COUNTER_SCOPE.test("apps/linux/src/hostTelemetry.ts"));
+  assert.ok(COUNTER_SCOPE.test("apps/desktop/src/hostTelemetry.ts"));
   assert.ok(COUNTER_SCOPE.test("apps/browser/src/state/telemetry/usage.ts"));
-  assert.ok(telemetryModule("apps/linux/src/hostTelemetryCounts.ts"));
-  assert.ok(!telemetryModule("apps/linux/src/hostTabs.ts"));
+  assert.ok(telemetryModule("apps/desktop/src/hostTelemetryCounts.ts"));
+  assert.ok(!telemetryModule("apps/desktop/src/hostTabs.ts"));
 });
 
 test("the virtual program finds its files when paths are built Windows-style, as TypeScript asks with forward slashes", () => {
