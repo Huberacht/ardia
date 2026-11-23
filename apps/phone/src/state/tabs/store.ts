@@ -12,7 +12,6 @@ import {
   readOpenTabs,
   readTabState,
   searchArchivedTabs,
-  writeTabState,
 } from "../store/browserDatabase";
 import { tabDatabase } from "../store/database";
 import type { SqlDatabase } from "../../lib/sqlDatabase";
@@ -67,19 +66,24 @@ export const setTabProfile = (profileSyncId: string | null) => {
   tabProfile = profileSyncId;
 };
 
-type PendingWrites = { clearArchived: boolean; put: Map<string, BrowserTab>; remove: Set<string>; releasedPictures: Set<string> };
+type PendingWrites = { clearArchived: boolean; put: Map<string, BrowserTab>; remove: Set<string>; releasedPictures: Set<string>; states: Map<string, string | null> };
 
 const pendingWrites = new Map<SqlDatabase, PendingWrites>();
 let flushQueued = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let failedFlushes = 0;
 let writesStalled = false;
+let stallListener: () => void = () => undefined;
+
+export const onTabWritesStalled = (listener: () => void) => {
+  stallListener = listener;
+};
 
 const RETRY_FIRST_MS = 100;
 const RETRY_LONGEST_MS = 2_000;
 const RETRIES_BEFORE_STALL = 8;
 
-const emptyBatch = (): PendingWrites => ({ clearArchived: false, put: new Map(), remove: new Set(), releasedPictures: new Set() });
+const emptyBatch = (): PendingWrites => ({ clearArchived: false, put: new Map(), remove: new Set(), releasedPictures: new Set(), states: new Map() });
 
 function stageWrites(db: SqlDatabase, change: Pick<TabsChange, "put" | "remove" | "clearArchived">) {
   const batch = pendingWrites.get(db) ?? emptyBatch();
@@ -88,12 +92,14 @@ function stageWrites(db: SqlDatabase, change: Pick<TabsChange, "put" | "remove" 
     for (const [id, tab] of batch.put) {
       if (tab.archivedAt === null) continue;
       batch.put.delete(id);
+      batch.states.delete(id);
       batch.remove.add(id);
       batch.releasedPictures.add(id);
     }
   }
   for (const id of change.remove) {
     batch.put.delete(id);
+    batch.states.delete(id);
     batch.remove.add(id);
     batch.releasedPictures.add(id);
   }
@@ -103,7 +109,35 @@ function stageWrites(db: SqlDatabase, change: Pick<TabsChange, "put" | "remove" 
     batch.releasedPictures.delete(tab.id);
     batch.put.set(tab.id, tab);
   }
-  if (batch.clearArchived || batch.put.size || batch.remove.size || batch.releasedPictures.size) pendingWrites.set(db, batch);
+  if (batch.clearArchived || batch.put.size || batch.remove.size || batch.releasedPictures.size || batch.states.size) pendingWrites.set(db, batch);
+}
+
+function stageState(db: SqlDatabase, id: string, saved: string | null) {
+  const batch = pendingWrites.get(db) ?? emptyBatch();
+  if (batch.remove.has(id)) return;
+  batch.states.set(id, saved);
+  pendingWrites.set(db, batch);
+}
+
+function pendingArchived(db: SqlDatabase, row: BrowserTab): BrowserTab | null {
+  const batch = pendingWrites.get(db);
+  if (!batch) return row;
+  if (batch.remove.has(row.id)) return null;
+  const queued = batch.put.get(row.id);
+  if (queued) return queued.archivedAt !== null ? queued : null;
+  return batch.clearArchived ? null : row;
+}
+
+function archivedThroughPending(db: SqlDatabase, rows: readonly BrowserTab[], matches: (tab: BrowserTab) => boolean, limit: number): BrowserTab[] {
+  const batch = pendingWrites.get(db);
+  if (!batch) return [...rows];
+  const seen = new Set(rows.map((tab) => tab.id));
+  const kept = rows.flatMap((row) => {
+    const tab = pendingArchived(db, row);
+    return tab ? [tab] : [];
+  });
+  const queued = [...batch.put.values()].filter((tab) => tab.archivedAt !== null && !seen.has(tab.id) && matches(tab));
+  return [...kept, ...queued].sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0)).slice(0, limit);
 }
 
 export const isTransientWriteFailure = (error: unknown) => /busy|locked/i.test(error instanceof Error ? error.message : String(error));
@@ -112,8 +146,10 @@ function retryFlushLater(transient: boolean) {
   if (retryTimer) return;
   failedFlushes += 1;
   if (!transient || failedFlushes > RETRIES_BEFORE_STALL) {
+    const announce = !writesStalled;
     writesStalled = true;
-    labTrace(`PAGELAB tab writes stalled after ${failedFlushes} failures, kept for the next change or the app leaving`);
+    labTrace(`PAGELAB tab writes stalled after ${failedFlushes} failures, kept for the next change, the app returning or the app leaving`);
+    if (announce) stallListener();
     return;
   }
   const wait = Math.min(RETRY_FIRST_MS * 2 ** (failedFlushes - 1), RETRY_LONGEST_MS);
@@ -125,7 +161,8 @@ function retryFlushLater(transient: boolean) {
 }
 
 function committed(batch: PendingWrites, put: readonly BrowserTab[], cleared: readonly string[]) {
-  deletePageSnapshots([...batch.releasedPictures, ...cleared]);
+  const kept = new Set(put.map((tab) => tab.id));
+  deletePageSnapshots([...new Set([...batch.releasedPictures, ...cleared])].filter((id) => !kept.has(id)));
   const pictures: Record<string, string> = {};
   for (const tab of put) if (!tab.isPrivate && tab.snapshotFileName) pictures[tab.id] = tab.snapshotFileName;
   snapshotsCommitted(pictures);
@@ -138,7 +175,7 @@ export function flushTabWrites(): boolean {
   for (const [db, batch] of [...pendingWrites]) {
     const put = [...batch.put.values()].map(forTheDatabase);
     try {
-      const cleared = commitTabChanges(db, { clearArchived: batch.clearArchived, put, remove: [...batch.remove] });
+      const cleared = commitTabChanges(db, { clearArchived: batch.clearArchived, put, remove: [...batch.remove], states: [...batch.states] });
       if (pendingWrites.get(db) === batch) pendingWrites.delete(db);
       committed(batch, put, cleared);
     } catch (error) {
@@ -194,15 +231,30 @@ function apply(change: TabsChange, timing: WriteTiming = "now") {
   }
 }
 
+const tabStillKept = (id: string) => {
+  const { open, privates, archive } = data();
+  if (open.some((t) => t.id === id) || privates.some((t) => t.id === id) || archive?.some((t) => t.id === id)) return true;
+  return archive === null && archivedTabById(id) !== null;
+};
+
 async function saveAndEnd(id: string) {
   const saved = await savePageState(id);
-  if (saved) writeTabState(tabDatabase(), id, saved);
+  if (saved && tabStillKept(id)) {
+    stageState(tabDatabase(), id, saved);
+    flushTabWrites();
+  }
   const { open, privates } = data();
   if (!open.some((t) => t.id === id) && !privates.some((t) => t.id === id)) endPages([id]);
 }
 
 export function tabSavedState(id: string): string | null {
-  return privateStates.get(id) ?? (data().privates.some((t) => t.id === id) ? null : readTabState(tabDatabase(), id));
+  if (privateStates.has(id)) return privateStates.get(id)!;
+  if (data().privates.some((t) => t.id === id)) return null;
+  const db = tabDatabase();
+  const batch = pendingWrites.get(db);
+  if (batch?.remove.has(id)) return null;
+  if (batch?.states.has(id)) return batch.states.get(id)!;
+  return readTabState(db, id);
 }
 
 export function saveTabState(id: string, saved: string | null) {
@@ -211,7 +263,9 @@ export function saveTabState(id: string, saved: string | null) {
     else privateStates.delete(id);
     return;
   }
-  if (data().open.some((t) => t.id === id)) writeTabState(tabDatabase(), id, saved);
+  if (!data().open.some((t) => t.id === id)) return;
+  stageState(tabDatabase(), id, saved);
+  flushAfterFrame();
 }
 
 export function pruneExpiredArchive() {
@@ -231,7 +285,8 @@ export function loadTabs() {
   const db = tabDatabase();
   pruneExpiredArchive();
   const stored = readOpenTabs(db);
-  useTabs.setState({ ...withSpaces(launchTabs(stored, countArchivedTabs(db)), data().spaces), incognito: false, listing: 0 });
+  const archivedCount = pendingWrites.has(db) ? archivedThroughPending(db, readArchivedTabs(db, ARCHIVE_LIMIT), () => true, ARCHIVE_LIMIT).length : countArchivedTabs(db);
+  useTabs.setState({ ...withSpaces(launchTabs(stored, archivedCount), data().spaces), incognito: false, listing: 0 });
   snapshotsCommitted(Object.fromEntries(stored.flatMap((tab) => (tab.snapshotFileName ? [[tab.id, tab.snapshotFileName]] : []))));
 }
 
@@ -309,13 +364,20 @@ export function setIncognito(incognito: boolean): boolean {
   return true;
 }
 
-export const archivedTabById = (id: string): BrowserTab | null => readArchivedTab(tabDatabase(), id);
+export function archivedTabById(id: string): BrowserTab | null {
+  const db = tabDatabase();
+  const queued = pendingWrites.get(db)?.put.get(id);
+  if (queued) return queued.archivedAt !== null ? queued : null;
+  const row = readArchivedTab(db, id);
+  return row ? pendingArchived(db, row) : null;
+}
 
 const sameArchive = (before: readonly BrowserTab[] | null, after: readonly BrowserTab[] | null) => before !== null && after !== null && before.length === after.length && before.every((tab, index) => tab === after[index]);
 
 export function loadArchive() {
   const current = data();
-  const next = withArchive(current, readArchivedTabs(tabDatabase(), ARCHIVE_LIMIT));
+  const db = tabDatabase();
+  const next = withArchive(current, archivedThroughPending(db, readArchivedTabs(db, ARCHIVE_LIMIT), () => true, ARCHIVE_LIMIT));
   if (!sameArchive(current.archive, next.archive)) useTabs.setState(next);
 }
 
@@ -338,10 +400,22 @@ export function searchArchive(text: string): BrowserTab[] {
   const query = text.trim();
   const archive = data().archive;
   if (!query && archive) return archive;
-  return query ? searchArchivedTabs(tabDatabase(), query, ARCHIVE_SEARCH_LIMIT) : readArchivedTabs(tabDatabase(), ARCHIVE_SEARCH_LIMIT);
+  const db = tabDatabase();
+  const needle = query.toLowerCase();
+  const matches = (tab: BrowserTab) => !needle || tab.title.toLowerCase().includes(needle) || tab.url.toLowerCase().includes(needle);
+  const rows = query ? searchArchivedTabs(db, query, ARCHIVE_SEARCH_LIMIT) : readArchivedTabs(db, ARCHIVE_SEARCH_LIMIT);
+  return archivedThroughPending(db, rows, matches, ARCHIVE_SEARCH_LIMIT);
 }
 
-export const restoreArchivedTab = (tab: BrowserTab) => apply(restoreArchived(data(), tab, now()));
+export function restoreArchivedTab(tab: BrowserTab): boolean {
+  const current = archivedTabById(tab.id);
+  if (!current) {
+    labTrace(`PAGELAB archived tab ${tab.id} is gone, its restore is ignored`);
+    return false;
+  }
+  apply(restoreArchived(data(), current, now()));
+  return true;
+}
 
 export const deleteArchivedTabsById = (ids: readonly string[]) => apply(deleteArchived(data(), ids));
 

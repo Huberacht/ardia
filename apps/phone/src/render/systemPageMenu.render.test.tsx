@@ -6,7 +6,7 @@ import { pages } from "../platform/pages";
 import { SystemPageMenuHost } from "../components/browsing/SystemPageMenu";
 import { ExpoLibrarySheet } from "../components/library/ExpoLibrary";
 import { DesignProvider } from "../components/ui";
-import { askTranslation, closePageMenu, confirmTranslation, openPageMenu, pageMenuDismissed, pageMenuHidden, pageMenuSheetAppeared, pageMenuSheetDisappeared, printCurrentPage, setBlockersOn, setNightShadeOn, showFind } from "../state/page/actions";
+import { askTranslation, closePageMenu, confirmTranslation, openPageMenu, pageMenuHidden, pageMenuPresentation, printCurrentPage, setBlockersOn, setNightShadeOn, showFind } from "../state/page/actions";
 import { registerPageHandle } from "../state/pages/store";
 import { menuModel } from "../state/page/pageMenu";
 import { usePageUi } from "../state/page/store";
@@ -238,18 +238,88 @@ onIos("a late dismissal from an earlier showing of the sheet can't spend a follo
   jest.spyOn(pages, "canPrint").mockReturnValue(true);
   const print = jest.spyOn(pages, "print").mockResolvedValue(true);
   await act(async () => void openPageMenu());
-  act(() => pageMenuSheetAppeared());
+  const earlier = usePageUi.getState().menuOpening;
+  act(() => pageMenuPresentation({ phase: "appear", token: earlier }));
   act(() => closePageMenu());
-  act(() => pageMenuSheetDisappeared());
   await act(async () => void openPageMenu());
+  const newer = usePageUi.getState().menuOpening;
   act(() => printCurrentPage());
-  act(() => pageMenuDismissed());
+  act(() => pageMenuPresentation({ phase: "disappear", token: earlier }));
+  act(() => pageMenuPresentation({ phase: "dismiss", token: earlier }));
+  act(() => pageMenuPresentation({ phase: "release", token: earlier }));
   await flush();
   expect(print).not.toHaveBeenCalled();
-  act(() => pageMenuSheetAppeared());
-  act(() => pageMenuSheetDisappeared());
+  act(() => pageMenuPresentation({ phase: "appear", token: newer }));
+  act(() => pageMenuPresentation({ phase: "disappear", token: newer }));
   await flush();
   expect(print).toHaveBeenCalledTimes(1);
+});
+
+onIos("a swipe-down reported for an earlier showing of the sheet doesn't close the newer one", async () => {
+  page("https://release.example/", false);
+  await act(async () => void openPageMenu());
+  const earlier = usePageUi.getState().menuOpening;
+  act(() => closePageMenu());
+  await act(async () => void openPageMenu());
+  act(() => pageMenuPresentation({ phase: "release", token: earlier }));
+  expect(usePageUi.getState().menuOpen).toBe(true);
+  act(() => pageMenuPresentation({ phase: "release", token: usePageUi.getState().menuOpening }));
+  expect(usePageUi.getState().menuOpen).toBe(false);
+});
+
+onIos("a site read that lands while the opening still waits for translation details shows at once, and a switch turned after it stays where it was turned", async () => {
+  jest.spyOn(pages, "nightShade").mockResolvedValue({ mode: "disabled" } as never);
+  jest.spyOn(pages, "setNightShade").mockResolvedValue(undefined as never);
+  let answerTranslation: (value: null) => void = () => undefined;
+  jest.spyOn(pages, "translation").mockImplementation(() => new Promise((resolve) => (answerTranslation = resolve as never)) as never);
+  page("https://deferred-menu.example/", false);
+  await flush();
+  const opened = openPageMenu();
+  await flush();
+  act(() => setNightShadeOn(true));
+  answerTranslation(null);
+  await act(async () => void (await opened));
+  expect(usePageUi.getState().menuSite).toMatchObject({ host: "deferred-menu.example", nightShade: "always" });
+});
+
+onIos("when the page under an open menu moves to another site, its switches wait for that site's own state", async () => {
+  let answer: (mode: { mode: string }) => void = () => undefined;
+  page("https://before-move.example/", false);
+  await act(async () => void (await openPageMenu()));
+  jest.spyOn(pages, "nightShade").mockImplementation(() => new Promise((resolve) => (answer = resolve as never)) as never);
+  page("https://after-move.example/", false);
+  await flush();
+  expect(usePageUi.getState().menuSite?.host).toBe("before-move.example");
+  answer({ mode: "always" });
+  await flush();
+  expect(usePageUi.getState().menuSite).toMatchObject({ host: "after-move.example", nightShade: "always" });
+});
+
+onIos("a Translate button kept from a question that was already cleared does nothing, and a granted translation that finds the tab on another page by the time its address is ready doesn't load", async () => {
+  page("https://stale-ask.example/", false);
+  const load = jest.fn(() => Promise.resolve());
+  registerPageHandle("t0", { loadUrl: load } as never);
+  let answerUrl: (url: string) => void = () => undefined;
+  jest.spyOn(pages, "translationUrl").mockImplementation(() => new Promise((resolve) => (answerUrl = resolve as never)) as never);
+  jest.spyOn(pages, "confirmTranslation").mockResolvedValue(undefined as never);
+  await act(async () => void openPageMenu());
+  act(() => usePageUi.setState({ menuTranslation: { languageName: "English", confirmed: false } }));
+  act(() => askTranslation());
+  const kept = usePageUi.getState().translationAsk;
+  act(() => usePageUi.setState({ translationAsk: null }));
+  act(() => confirmTranslation(kept));
+  answerUrl("https://translate.example/kept");
+  await flush();
+  expect(load).not.toHaveBeenCalled();
+  await act(async () => void openPageMenu());
+  act(() => usePageUi.setState({ menuTranslation: { languageName: "English", confirmed: false } }));
+  act(() => askTranslation());
+  act(() => confirmTranslation(usePageUi.getState().translationAsk));
+  page("https://moved-on.example/", false);
+  answerUrl("https://translate.example/late");
+  await flush();
+  expect(load).not.toHaveBeenCalled();
+  registerPageHandle("t0", null);
 });
 
 onIos("the translation question belongs to the page it was asked on: closing the menu clears it, and accepting after the page changed sends nothing to Google", async () => {

@@ -71,22 +71,30 @@ export function writeTabs(db: SqlDatabase, put: readonly BrowserTab[], remove: r
   });
 }
 
-export type TabCommit = { clearArchived: boolean; put: readonly BrowserTab[]; remove: readonly string[] };
+export type TabCommit = { clearArchived: boolean; put: readonly BrowserTab[]; remove: readonly string[]; states?: readonly (readonly [string, string | null])[] };
 
 export function commitTabChanges(db: SqlDatabase, commit: TabCommit): string[] {
   const stored = commit.put.filter((tab) => !tab.isPrivate);
   let cleared: string[] = [];
-  if (!commit.clearArchived && !stored.length && !commit.remove.length) return cleared;
+  const states = commit.states ?? [];
+  if (!commit.clearArchived && !stored.length && !commit.remove.length && !states.length) return cleared;
+  const kept = new Set(stored.map((tab) => tab.id));
   db.transaction(() => {
     if (commit.clearArchived) {
-      cleared = db.all<{ id: string }>("SELECT id FROM tabs WHERE archivedAt IS NOT NULL").map((r) => r.id);
-      db.run("DELETE FROM tab_state WHERE id IN (SELECT id FROM tabs WHERE archivedAt IS NOT NULL)");
-      db.run("DELETE FROM tabs WHERE archivedAt IS NOT NULL");
+      cleared = db.all<{ id: string }>("SELECT id FROM tabs WHERE archivedAt IS NOT NULL").map((r) => r.id).filter((id) => !kept.has(id));
+      for (const id of cleared) {
+        db.run("DELETE FROM tab_state WHERE id = ?", [id]);
+        db.run("DELETE FROM tabs WHERE id = ?", [id]);
+      }
     }
     for (const tab of stored) db.run(`INSERT OR REPLACE INTO tabs (${TAB_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, tabValues(tab));
     for (const id of commit.remove) {
       db.run("DELETE FROM tabs WHERE id = ?", [id]);
       db.run("DELETE FROM tab_state WHERE id = ?", [id]);
+    }
+    for (const [id, data] of states) {
+      if (data === null) db.run("DELETE FROM tab_state WHERE id = ?", [id]);
+      else db.run("INSERT OR REPLACE INTO tab_state (id, data) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM tabs WHERE id = ?)", [id, data, id]);
     }
   });
   return cleared;

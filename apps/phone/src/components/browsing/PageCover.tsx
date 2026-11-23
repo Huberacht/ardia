@@ -46,7 +46,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const tone = usePageTone(tab.id);
   const [frozen] = useState(() => launchArguments().loadFreeze !== null);
   const [picture] = useState(() => findTab(currentTabs(), tab.id)?.snapshotFileName ?? tab.snapshotFileName);
-  const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && !arrivalCovers(tab.id)));
+  const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && (WAITS_FOR_PAINT || !arrivalCovers(tab.id))));
   const [atRest] = useState(() => pageAtRest(pageNavigation(tab.id)));
   const [face] = useState(() => coverFace(tab, frozen ? null : picture, openingCardOf(tab.id)));
   const window = useWindowDimensions();

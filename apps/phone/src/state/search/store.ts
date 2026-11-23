@@ -69,36 +69,75 @@ export const setSearchClearsPagePrefill = (clears: boolean) => {
   clearsPagePrefill = clears;
 };
 
+const SEARCH_WARM_AFTER_LAUNCH_MS = 1500;
+
+type IdleRows = { scope: string; revision: string; rows: TrayRow[] };
+let idleMade: IdleRows | null = null;
+
+const idleScope = () => `${useTabs.getState().incognito}:${useTabs.getState().spaces.current}:${selectedProfile()?.syncId ?? ""}`;
+const idleRevision = () => `${history().revision()}:${syncData().revision}`;
+const idleIsCurrent = () => idleMade !== null && idleMade.scope === idleScope() && idleMade.revision === idleRevision();
+
+function idleRowsNow(): TrayRow[] {
+  if (idleMade && idleIsCurrent()) return idleMade.rows;
+  const rows = useTabs.getState().incognito ? [] : idleRows(recentSearches(history().summary()), idleMacTabs(selectedProfile(), syncData().view.devices));
+  idleMade = { scope: idleScope(), revision: idleRevision(), rows };
+  return rows;
+}
+
+function rowsAtPress(text: string): TrayRow[] {
+  if (text.trim() || !idleMade || idleMade.scope !== idleScope()) return rowsFor(text, []);
+  return withPasteRow(idleMade.rows, text, paste);
+}
+
 export function prepareSearch() {
   if (preparing !== null) return;
   preparing = setTimeout(() => {
     preparing = null;
     if (useSearch.getState().open) return;
     feedSources();
-    rowsFor("", []);
+    idleRowsNow();
   }, 0);
 }
 
-function feedSourcesAfterOpening(session: number) {
-  if (currentSourcesKey() === fedSources) return;
+export function warmSearchWhenIdle(): () => void {
+  const warm = setTimeout(prepareSearch, SEARCH_WARM_AFTER_LAUNCH_MS);
+  return () => clearTimeout(warm);
+}
+
+function refreshAfterOpening(session: number) {
+  const sourcesStale = currentSourcesKey() !== fedSources;
+  const idleStale = !idleIsCurrent();
+  if (!sourcesStale && !idleStale) return;
+  const pressed = useSearch.getState().rows;
   if (sourcesFrame !== null) cancelAnimationFrame(sourcesFrame);
   sourcesFrame = requestAnimationFrame(() => {
     sourcesFrame = null;
     const state = useSearch.getState();
     if (!state.open || state.session !== session) return;
-    feedSources();
-    const now = useSearch.getState();
-    if (now.text.trim()) useSearch.setState({ rows: suggestionsFor(now.text, remote.text && now.text.startsWith(remote.text) ? remote.values : []).rows });
+    const shown = useSearch.getState();
+    if (shown.rows !== pressed) {
+      if (sourcesStale) feedSourcesQuietly();
+      return;
+    }
+    if (sourcesStale) feedSourcesQuietly();
+    if (shown.text.trim()) useSearch.setState({ rows: suggestionsFor(shown.text, remote.text && shown.text.startsWith(remote.text) ? remote.values : []).rows });
+    else useSearch.setState({ rows: rowsFor(shown.text, []) });
   });
 }
 
-export function feedSources() {
+function feedSourcesQuietly() {
   const key = currentSourcesKey();
   if (key === fedSources) return;
   fedSources = key;
   const profile = selectedProfile();
   const local = history().summary();
   setSources(buildSources(spaceTabs(currentTabs()), profile ? mergeSyncedHistory(local, profile.history) : local, profile ? syncedBookmarks(profile) : []));
+}
+
+export function feedSources() {
+  if (currentSourcesKey() === fedSources) return;
+  feedSourcesQuietly();
   const shown = useSearch.getState();
   if (shown.open && !shown.text.trim()) useSearch.setState({ rows: rowsFor(shown.text, []) });
 }
@@ -111,8 +150,7 @@ function suggestionsFor(text: string, remoteValues: readonly string[]): { rows: 
 function rowsFor(text: string, remoteValues: readonly string[]): TrayRow[] {
   const profile = selectedProfile();
   if (text.trim()) return suggest(text, remoteValues, context, macTabIndex(profile, syncData().view.devices), browseForMeOffered()).rows;
-  const idle = useTabs.getState().incognito ? [] : idleRows(recentSearches(history().summary()), idleMacTabs(profile, syncData().view.devices));
-  return withPasteRow(idle, text, paste);
+  return withPasteRow(idleRowsNow(), text, paste);
 }
 
 function offerPaste(session: number) {
@@ -159,14 +197,13 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
   paste = null;
   const editsPage = page?.currentUrl != null;
   const shownText = editsPage && clearsPagePrefill ? "" : text;
-  if (fedSources === "") feedSources();
   useSearch.setState((state) => ({
     open: true,
     ending: "cancelled",
     origin,
     initialText: text,
     text: shownText,
-    rows: rowsFor(shownText, []),
+    rows: rowsAtPress(shownText),
     completion: "",
     completedFor: "",
     session: state.session + 1,
@@ -177,7 +214,7 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
   }));
   markSearchPhase("open");
   offerPaste(useSearch.getState().session);
-  feedSourcesAfterOpening(useSearch.getState().session);
+  refreshAfterOpening(useSearch.getState().session);
 }
 
 export function dismissSearch(ending: SearchEnding = "cancelled") {

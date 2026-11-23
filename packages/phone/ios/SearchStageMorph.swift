@@ -34,6 +34,14 @@ extension SearchStageView {
     return StageAnchor(id: id, frame: frame, style: view.traitCollection.userInterfaceStyle)
   }
 
+  var anchorMissReason: String {
+    guard let id = anchorNativeId else { return "noAnchorId" }
+    guard let root = window else { return "noWindow" }
+    guard let view = Self.find(nativeId: id, in: root) else { return "anchorNotFound" }
+    guard view.window != nil else { return "anchorOffWindow" }
+    return "anchorEmpty"
+  }
+
   func renderFace(of anchor: StageAnchor) -> StageFace? {
     guard let root = window, let view = Self.find(nativeId: faceNativeId ?? anchor.id, in: root), view.bounds.width > 0, view.bounds.height > 0 else { return nil }
     let size = anchor.frame.size

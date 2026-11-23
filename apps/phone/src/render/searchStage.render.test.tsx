@@ -32,7 +32,8 @@ type StageProps = {
   morphLook?: { usesGlass: boolean; panelTint: string; panelDark: boolean; classicPanel: string };
   onLift?: (lift: { lift: number; up: boolean }) => void;
   onReveal?: (reveal: { late: boolean }) => void;
-  onSettled?: (settled: { landed: boolean }) => void;
+  onSettled?: (settled: { landed: boolean; path?: string }) => void;
+  onLanding?: (landing: { lands: boolean; path: string }) => void;
 };
 
 const mockFaceTaken = { then: (taken: () => void) => taken() };
@@ -49,7 +50,7 @@ jest.mock("@ardia/phone-native", () => {
   const SearchStage = React.forwardRef((props: Record<string, unknown>, ref) => {
     React.useImperativeHandle(ref, () => mockStage, []);
     mockSeen.props = props as never;
-    const { onLift, onReveal, onSettled, morphLook, anchorNativeId, faceNativeId, commandTop, fieldCenter, shown, ...rest } = props;
+    const { onLift, onReveal, onSettled, onLanding, morphLook, anchorNativeId, faceNativeId, commandTop, fieldCenter, shown, ...rest } = props;
     return React.createElement(native.View, rest);
   });
   const CompletingField = React.forwardRef((props: Record<string, unknown>, ref) => {
@@ -284,6 +285,31 @@ onIPhone("cancel lands the panel in the bar's pill, Go departs, and without a pi
   open();
   act(() => browse.cancelSearch());
   expect(mockStage.close).toHaveBeenLastCalledWith("drop", 0);
+});
+
+onIPhone("when the stage says the cancelled panel has no pill to land in, the bar's pill and its glass come back at once with the side buttons instead of after the settle", () => {
+  const root = page();
+  open();
+  act(() => browse.cancelSearch());
+  expect(centreSeen(root)).toBe(0);
+  expect(glassOf(root, "floatingBarAddress").props.shown).toBe(false);
+  act(() => stage().onLanding?.({ lands: false, path: "anchorNotFound" }));
+  expect(glassOf(root, "floatingBarAddress").props.shown).toBe(true);
+  expect(glassOf(root, "floatingBarTabs").props.shown).toBe(true);
+  advance(200);
+  expect(centreSeen(root)).toBe(1);
+  act(() => stage().onSettled?.({ landed: false, path: "anchorNotFound" }));
+  expect(centreSeen(root)).toBe(1);
+});
+
+onIPhone("a panel the stage flies into the pill keeps the bar's pill hidden until it lands", () => {
+  const root = page();
+  open();
+  act(() => browse.cancelSearch());
+  act(() => stage().onLanding?.({ lands: true, path: "anchored" }));
+  expect(centreSeen(root)).toBe(0);
+  act(() => stage().onSettled?.({ landed: true, path: "anchored" }));
+  expect(centreSeen(root)).toBe(1);
 });
 
 onIPhone("settling shows the pill at once with no fade, tells the stage to finish in that same hand-over, and only then unmounts the panel's content at low priority", () => {

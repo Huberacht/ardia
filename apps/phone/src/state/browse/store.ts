@@ -41,6 +41,8 @@ import {
   currentTabs,
   flushTabWrites,
   loadTabs,
+  onTabWritesStalled,
+  tabWritesPending,
   openNewTab,
   reopenClosedTab,
   restoreArchivedTab,
@@ -58,6 +60,7 @@ import { copyText, pasteForGo } from "../../platform/system";
 import { pasteTap } from "../search/pasteRow";
 import { anyPicturePainted, noteSnapshotPageTop, noteSnapshotShown, pictureKey, picturePainted } from "../../lib/shownSnapshots";
 import { DECK_PULL } from "../../lib/deckPull";
+import { tabWords } from "../../lib/sharedWords";
 import { runOnUI } from "react-native-reanimated";
 import { showToast } from "../toasts/store";
 import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages";
@@ -76,9 +79,9 @@ import { syncOffered } from "../../platform/system";
 export type Surface = "start" | "browsing" | "deck";
 export type Sheet = "archive" | "spaces" | null;
 
-type BrowseState = { surface: Surface; sheet: Sheet; deckEntrance: string | null; frozenOrder: string[] | null; opening: string | null; openingCardWidth: number | null; veiled: string | null; covered: string | null; arriving: string | null; leaving: string | null };
+type BrowseState = { surface: Surface; sheet: Sheet; deckEntrance: string | null; frozenOrder: string[] | null; opening: string | null; openingCardWidth: number | null; veiled: string | null; covered: string | null; arriving: string | null; arrivalCover: string | null; leaving: string | null };
 
-export const useBrowse = create<BrowseState>()(() => ({ surface: "start", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, openingCardWidth: null, veiled: null, covered: null, arriving: null, leaving: null }));
+export const useBrowse = create<BrowseState>()(() => ({ surface: "start", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, openingCardWidth: null, veiled: null, covered: null, arriving: null, arrivalCover: null, leaving: null }));
 
 const lastVisits = new Map<string, Visit>();
 
@@ -102,6 +105,7 @@ export function startBrowser(beforeOpening: () => void = () => undefined) {
   archiveDueTabs();
   archiveTimer = setInterval(archiveDueTabs, AUTO_ARCHIVE_CHECK_MS);
   listenToPages(pageEvent);
+  onTabWritesStalled(() => showToast(tabWords.notSaved, "warning"));
   if (!SCROLL_REST_IS_REPORTED) watchFrontScroll(frontPageId, pictureScrolledOrQuietPage);
   if (!currentPreferences().hasFinishedOnboarding) showOnboarding();
   else if (currentPreferences().autoOpensKeyboard) presentSearch("home", "", useTabs.getState().incognito, null, "atRest");
@@ -136,6 +140,7 @@ const AUTO_ARCHIVE_CHECK_MS = 15 * 60_000;
 
 export function appBecameActive() {
   appActive = true;
+  if (tabWritesPending()) flushTabWrites();
   if (pruneExpiredArchive() > 0) loadArchive();
   if (archiveTimer) clearInterval(archiveTimer);
   archiveTimer = setInterval(archiveDueTabs, AUTO_ARCHIVE_CHECK_MS);
@@ -288,26 +293,35 @@ export const ARRIVAL_COVER_ID = "pagerArrivalCover";
 
 export type CoverHidden = "drawn" | "cap" | "lost";
 
-const coverWaiters = new Map<string, (reason: CoverHidden) => void>();
+type CoverWaiter = { cover: string | null; hidden: (reason: CoverHidden) => void };
 
-export function whenPageCoverHidden(id: string, capMs: number, then: (reason: CoverHidden) => void): () => void {
+const coverWaiters = new Map<string, CoverWaiter>();
+
+export function whenPageCoverHidden(id: string, capMs: number, then: (reason: CoverHidden) => void, cover: string | null = null): () => void {
   let called = false;
   const stop = () => {
     called = true;
     clearTimeout(cap);
-    if (coverWaiters.get(id) === hidden) coverWaiters.delete(id);
+    if (coverWaiters.get(id) === waiter) coverWaiters.delete(id);
   };
   const hidden = (reason: CoverHidden) => {
     if (called) return;
     stop();
     then(reason);
   };
+  const waiter: CoverWaiter = { cover, hidden };
   const cap = setTimeout(() => hidden("lost"), capMs);
-  coverWaiters.set(id, hidden);
+  coverWaiters.set(id, waiter);
   return stop;
 }
 
-export const pageCoverHidden = (id: string, reason: "drawn" | "cap") => coverWaiters.get(id)?.(reason);
+export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string) {
+  const waiter = coverWaiters.get(id);
+  if (!waiter || (waiter.cover !== null && cover !== undefined && cover !== waiter.cover)) return;
+  waiter.hidden(reason);
+}
+
+let arrivalSeq = 0;
 
 const laidOutWaiters = new Map<string, (laidOut: boolean) => void>();
 
@@ -713,7 +727,7 @@ export const openSpaces = () => {
 };
 
 export function reopenArchived(tab: BrowserTab) {
-  restoreArchivedTab(tab);
+  if (!restoreArchivedTab(tab)) return;
   openTab(tab.id);
 }
 
@@ -752,11 +766,19 @@ export function arriveAtNeighbour(id: string) {
   cancelArrivalWait();
   useBrowse.setState({ frozenOrder: order });
   openTab(id);
-  useBrowse.setState({ covered: id, arriving: id });
-  stopArrivalWait = whenPageCoverHidden(id, ARRIVAL_COVER_LOST_MS, () => {
-    stopArrivalWait = null;
-    if (useBrowse.getState().arriving === id) useBrowse.setState({ arriving: null, covered: useBrowse.getState().covered === id ? null : useBrowse.getState().covered });
-  });
+  arrivalSeq += 1;
+  const cover = `${ARRIVAL_COVER_ID}-${arrivalSeq}`;
+  useBrowse.setState({ covered: id, arriving: id, arrivalCover: cover });
+  stopArrivalWait = whenPageCoverHidden(
+    id,
+    ARRIVAL_COVER_LOST_MS,
+    () => {
+      stopArrivalWait = null;
+      const now = useBrowse.getState();
+      if (now.arriving === id && now.arrivalCover === cover) useBrowse.setState({ arriving: null, arrivalCover: null, covered: now.covered === id ? null : now.covered });
+    },
+    cover,
+  );
   noteTabSwiped(from, id);
 }
 

@@ -88,15 +88,27 @@ enum StageSettlePoll {
 }
 
 @MainActor
+struct StageKeyboardGeometry: Equatable {
+  let windowSize: CGSize
+  let orientation: UIInterfaceOrientation
+}
+
+struct StageKeyboardMemory {
+  let height: CGFloat
+  let geometry: StageKeyboardGeometry
+}
+
 final class StageKeyboardTracker {
   private let minimumHeight: CGFloat
   private let onMove: (CGFloat) -> Void
+  private let onUnchanged: (CGFloat) -> Void
   private var observers: [NSObjectProtocol] = []
   private var height: CGFloat = 0
 
-  init(minimumHeight: CGFloat, onMove: @escaping (CGFloat) -> Void) {
+  init(minimumHeight: CGFloat, onMove: @escaping (CGFloat) -> Void, onUnchanged: @escaping (CGFloat) -> Void) {
     self.minimumHeight = minimumHeight
     self.onMove = onMove
+    self.onUnchanged = onUnchanged
   }
 
   func start() {
@@ -129,7 +141,10 @@ final class StageKeyboardTracker {
 
   private func keyboardWillMove(overlap: CGFloat) {
     let target = overlap > minimumHeight ? overlap : 0
-    guard target != height else { return }
+    guard target != height else {
+      onUnchanged(target)
+      return
+    }
     height = target
     onMove(target)
   }

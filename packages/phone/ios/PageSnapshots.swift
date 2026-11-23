@@ -32,13 +32,16 @@ enum PageSnapshots {
   }
 
   struct Order: Comparable, Sendable {
-    let launch: Int
+    let current: Bool
     let ticket: Int
 
-    static func < (lhs: Order, rhs: Order) -> Bool { (lhs.launch, lhs.ticket) < (rhs.launch, rhs.ticket) }
+    static func < (lhs: Order, rhs: Order) -> Bool {
+      if lhs.current != rhs.current { return !lhs.current }
+      return lhs.current && lhs.ticket < rhs.ticket
+    }
   }
 
-  static let launch = Int(Date.now.timeIntervalSince1970 * 1000)
+  static let process = UUID().uuidString.replacingOccurrences(of: "-", with: "")
 
   private static let tickets = OSAllocatedUnfairLock<Int>(initialState: 0)
   private static let privateSession = OSAllocatedUnfairLock<String>(initialState: UUID().uuidString)
@@ -71,8 +74,10 @@ enum PageSnapshots {
     return written?.payload
   }
 
-  static func delete(_ pageID: String) async {
-    await SnapshotFiles.shared.delete(pageID, before: Order(launch: launch, ticket: nextTicket()))
+  static func deletionOrder() -> Order { Order(current: true, ticket: nextTicket()) }
+
+  static func delete(_ pageID: String, before floor: Order) async {
+    await SnapshotFiles.shared.delete(pageID, before: floor)
   }
 
   static func endPrivateBrowsing() {
@@ -81,8 +86,7 @@ enum PageSnapshots {
   }
 
   static func sweepPrivateLeftovers() {
-    let current = currentPrivateSession()
-    Task { await SnapshotFiles.shared.removePrivateSessions(except: current) }
+    Task { await SnapshotFiles.shared.removeInactivePrivateSessions() }
   }
 
   static func committed(_ entries: [String: String]) {
@@ -90,13 +94,19 @@ enum PageSnapshots {
     Task { await SnapshotFiles.shared.committed(pairs) }
   }
 
-  static func fileName(stem: String, ticket: Int) -> String { "\(stem)-\(launch)-\(ticket).jpg" }
+  static func fileName(stem: String, ticket: Int) -> String { "\(stem)-\(process)-\(ticket).jpg" }
 
   static func order(of file: URL, stem: String) -> Order {
     let parts = file.deletingPathExtension().lastPathComponent.dropFirst(stem.count + 1).split(separator: "-")
-    if parts.count == 2, let launch = Int(parts[0]), let ticket = Int(parts[1]) { return Order(launch: launch, ticket: ticket) }
-    if parts.count == 1, let stamp = Int(parts[0]) { return Order(launch: 0, ticket: stamp) }
-    return Order(launch: 0, ticket: 0)
+    if parts.count == 2, parts[0] == process, let ticket = Int(parts[1]) { return Order(current: true, ticket: ticket) }
+    return Order(current: false, ticket: 0)
+  }
+
+  static func released(_ file: URL, stem: String, keeping kept: URL) -> Bool {
+    guard file.lastPathComponent != kept.lastPathComponent else { return false }
+    let fileOrder = Self.order(of: file, stem: stem)
+    let keptOrder = Self.order(of: kept, stem: stem)
+    return !fileOrder.current || (keptOrder.current && fileOrder.ticket < keptOrder.ticket)
   }
 
   static func filesOf(_ pageID: String, in folder: URL) -> [URL] {
@@ -179,7 +189,7 @@ actor SnapshotFiles {
   private var retiredSessions: Set<String> = []
 
   func publish(_ pageID: String, data: Data, privateSession: String?, width: Int, height: Int, ticket: Int) -> PageSnapshots.Written? {
-    let order = PageSnapshots.Order(launch: PageSnapshots.launch, ticket: ticket)
+    let order = PageSnapshots.Order(current: true, ticket: ticket)
     guard ticket > (newestTicket[pageID] ?? 0) else { return nil }
     if let floor = deletedBefore[pageID], order < floor { return nil }
     if let privateSession, retiredSessions.contains(privateSession) || privateSession != PageSnapshots.currentPrivateSession() { return nil }
@@ -204,8 +214,7 @@ actor SnapshotFiles {
       let stem = PageSnapshots.fileStem(pageID)
       let folder = uri.deletingLastPathComponent()
       guard folder.standardizedFileURL == PageSnapshots.saved.standardizedFileURL, uri.lastPathComponent.hasPrefix("\(stem)-") else { continue }
-      let kept = PageSnapshots.order(of: uri, stem: stem)
-      for file in PageSnapshots.filesOf(pageID, in: PageSnapshots.saved) where file.lastPathComponent != uri.lastPathComponent && PageSnapshots.order(of: file, stem: stem) < kept {
+      for file in PageSnapshots.filesOf(pageID, in: PageSnapshots.saved) where PageSnapshots.released(file, stem: stem, keeping: uri) {
         try? FileManager.default.removeItem(at: file)
       }
     }
@@ -227,7 +236,8 @@ actor SnapshotFiles {
     try? FileManager.default.removeItem(at: PageSnapshots.privateFolder(session))
   }
 
-  func removePrivateSessions(except current: String) {
+  func removeInactivePrivateSessions() {
+    let current = PageSnapshots.currentPrivateSession()
     let manager = FileManager.default
     let entries = (try? manager.contentsOfDirectory(at: PageSnapshots.privateRoot, includingPropertiesForKeys: nil)) ?? []
     for entry in entries where entry.lastPathComponent != current {

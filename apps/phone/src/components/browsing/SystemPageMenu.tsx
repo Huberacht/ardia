@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Platform, StyleSheet, View, type ScrollViewInstance } from "react-native";
 import { BottomSheet, Button, ConfirmationDialog, Group, Host, RNHostView, Text, VStack } from "@expo/ui/swift-ui";
-import { ignoreSafeArea, onAppear, onDisappear, presentationDetents, presentationDragIndicator } from "@expo/ui/swift-ui/modifiers";
-import { askTranslation, cancelTranslationAsk, closePageMenu, confirmTranslation, pageMenuDismissed, pageMenuHostGone, pageMenuSheetAppeared, pageMenuSheetDisappeared } from "../../state/page/actions";
-import { useMenuModel, useMenuOpen, useMenuPage, usePageQuiet, useTranslationAsk } from "../../state/page/hooks";
+import { ignoreSafeArea, presentationDetents, presentationDragIndicator } from "@expo/ui/swift-ui/modifiers";
+import { askTranslation, confirmTranslation, pageMenuHostGone, pageMenuPresentation, releaseTranslationAsk, type MenuPresentation } from "../../state/page/actions";
+import { useMenuModel, useMenuOpen, useMenuOpening, useMenuPage, usePageQuiet, useTranslationAsk } from "../../state/page/hooks";
 import { markMenuPhase } from "../../state/page/menuTiming";
 import { settingsUIAvailable } from "../ui";
 import type { Design } from "../../lib/design";
@@ -11,7 +11,7 @@ import { LibraryNavigation } from "../library/ExpoLibrary";
 import { PageMenuWords, usePageMenuInk } from "./PageMenuWords";
 
 const contentLaidOut = () => markMenuPhase("laidOut");
-const SHEET_EVENTS = [onAppear(pageMenuSheetAppeared), onDisappear(pageMenuSheetDisappeared)];
+const presentationIgnored = () => undefined;
 const MENU_SHEET = [presentationDetents(["medium", "large"]), presentationDragIndicator("visible")];
 const LIBRARY_SHEET = [presentationDetents(["large"], { selection: "large" }), presentationDragIndicator("automatic")];
 
@@ -22,26 +22,29 @@ export function SystemPageMenuHost({ tabId }: { tabId: string }) {
   const [armed, setArmed] = useState(open);
   const quiet = usePageQuiet(tabId, armed);
   if (!armed && (open || quiet)) setArmed(true);
-  useEffect(() => pageMenuHostGone, []);
+  const shownToken = useRef<number | null>(null);
+  useEffect(() => () => pageMenuHostGone(shownToken.current), []);
   if (!armed && !open) return null;
-  return <SystemPageMenu tabId={tabId} open={open} onDismissed={pageMenuDismissed} />;
+  return <SystemPageMenu tabId={tabId} open={open} shownToken={shownToken} onPresentation={pageMenuPresentation} />;
 }
 
-export function SystemPageMenu({ tabId, open, onDismissed }: { tabId: string; open: boolean; onDismissed: () => void }) {
+type SystemPageMenuProps = { tabId: string; open: boolean; shownToken?: RefObject<number | null>; onPresentation: (presentation: MenuPresentation) => void };
+
+export function SystemPageMenu({ tabId, open, shownToken, onPresentation }: SystemPageMenuProps) {
   const scroll = useRef<ScrollViewInstance | null>(null);
+  const token = useMenuOpening();
   useLayoutEffect(() => {
     if (open) markMenuPhase("rendered");
   }, [open]);
-  const dismissed = () => {
-    scroll.current?.scrollTo({ y: 0, animated: false });
-    onDismissed();
+  const presentation = (event: MenuPresentation) => {
+    if (event.phase === "appear" && shownToken) shownToken.current = event.token;
+    if (event.phase === "dismiss") scroll.current?.scrollTo({ y: 0, animated: false });
+    onPresentation(event);
   };
   return (
     <Host testID="systemPageMenuSheet" style={styles.anchor} pointerEvents="none">
-      <BottomSheet isPresented={open} keepsContentMounted onIsPresentedChange={(presented) => (presented ? undefined : closePageMenu())} onDismiss={dismissed}>
-        <Group modifiers={SHEET_EVENTS}>
-          <SystemPageMenuContent tabId={tabId} scroll={scroll} />
-        </Group>
+      <BottomSheet isPresented={open} keepsContentMounted presentationToken={token} onIsPresentedChange={presentationIgnored} onPresentation={presentation}>
+        <SystemPageMenuContent tabId={tabId} scroll={scroll} />
       </BottomSheet>
     </Host>
   );
@@ -68,7 +71,7 @@ function PageMenuSheetWords({ tabId, scroll }: { tabId: string; scroll: RefObjec
   const model = useMenuModel(tabId);
   const ask = useTranslationAsk();
   return (
-    <ConfirmationDialog title="Translate with Google?" isPresented={ask !== null} onIsPresentedChange={(presented) => (presented ? undefined : cancelTranslationAsk())} titleVisibility="visible">
+    <ConfirmationDialog title="Translate with Google?" isPresented={ask !== null} onIsPresentedChange={(presented) => (presented ? undefined : releaseTranslationAsk(ask))} titleVisibility="visible">
       <ConfirmationDialog.Trigger>
         <VStack modifiers={[ignoreSafeArea({ edges: "bottom" })]}>
           <RNHostView>

@@ -68,7 +68,7 @@ function swipeToNeighbour(root: ReactTestRenderer) {
 const hosts = (root: ReactTestRenderer, testID: string) => root.root.findAll((node) => node.props.testID === testID && typeof node.type === "string");
 const pageCoverId = (root: ReactTestRenderer) => root.root.findAll((node) => typeof node.props.coverNativeId !== "undefined" || (typeof node.type !== "string" && "coverNativeId" in node.props)).map((node) => node.props.coverNativeId)[0];
 
-test("where the page reports its first draw, a landed swipe keeps the arriving tab's card over its page, under the arrival's own cover id, until the page draws, then takes it away", () => {
+test("where the page reports its first draw, a landed swipe keeps the arriving tab's card over its page, under a cover id of its own for this arrival, until the page draws it, then takes it away, ignoring a report for an earlier arrival", () => {
   const right = neighbour().id;
   const root = renderSurface(<Page />);
   swipeToNeighbour(root);
@@ -76,9 +76,13 @@ test("where the page reports its first draw, a landed swipe keeps the arriving t
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: right, covered: right });
   const arrival = hosts(root, "pagerArrival");
   expect(arrival).toHaveLength(1);
-  expect(arrival[0]!.props.nativeID).toBe(browse.ARRIVAL_COVER_ID);
-  expect(pageCoverId(root)).toBe(browse.ARRIVAL_COVER_ID);
-  act(() => browse.pageCoverHidden(right, "drawn"));
+  const cover = browse.useBrowse.getState().arrivalCover!;
+  expect(cover.startsWith(browse.ARRIVAL_COVER_ID)).toBe(true);
+  expect(arrival[0]!.props.nativeID).toBe(cover);
+  expect(pageCoverId(root)).toBe(cover);
+  act(() => browse.pageCoverHidden(right, "drawn", `${browse.ARRIVAL_COVER_ID}-stale`));
+  expect(browse.useBrowse.getState()).toMatchObject({ arriving: right, covered: right });
+  act(() => browse.pageCoverHidden(right, "drawn", cover));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: null, covered: null });
   expect(hosts(root, "pagerArrival")).toHaveLength(0);
   expect(pageCoverId(root)).toBeUndefined();
@@ -169,5 +173,24 @@ test("someone who already swipes between tabs never sees the hint", () => {
   loaded(currentTabs().selectedId!);
   act(() => jest.advanceTimersByTime(TAB_SWIPE_HINT.delayMs + 10));
   expect(useToasts.getState().toast).toBeNull();
+  unmount(root);
+});
+
+test("in a quick swipe there and back, the first arrival's late draw report can't end the second arrival", () => {
+  const first = currentTabs().selectedId!;
+  const right = neighbour().id;
+  const root = renderSurface(<Page />);
+  swipeToNeighbour(root);
+  const earlier = browse.useBrowse.getState().arrivalCover!;
+  expect(currentTabs().selectedId).toBe(right);
+  swipeToNeighbour(root);
+  const later = browse.useBrowse.getState().arrivalCover!;
+  expect(later).not.toBe(earlier);
+  const arrived = currentTabs().selectedId!;
+  act(() => browse.pageCoverHidden(arrived, "drawn", earlier));
+  expect(browse.useBrowse.getState().arriving).toBe(arrived);
+  act(() => browse.pageCoverHidden(arrived, "drawn", later));
+  expect(browse.useBrowse.getState().arriving).toBeNull();
+  expect(first).toBeDefined();
   unmount(root);
 });

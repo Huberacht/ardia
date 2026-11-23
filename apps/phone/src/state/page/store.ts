@@ -14,6 +14,7 @@ export type MenuPage = "main" | "siteSettings" | "library";
 
 type PageUi = {
   menuOpen: boolean;
+  menuOpening: number;
   menuPage: MenuPage;
   menuDocked: boolean;
   menuSite: MenuSite | null;
@@ -30,6 +31,7 @@ type PageUi = {
 
 export const usePageUi = create<PageUi>()(() => ({
   menuOpen: false,
+  menuOpening: 0,
   menuPage: "main",
   menuDocked: false,
   menuSite: null,

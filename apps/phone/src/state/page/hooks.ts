@@ -13,6 +13,8 @@ import type { Request } from "./pagePrompts";
 
 export const useMenuOpen = () => usePageUi((s) => s.menuOpen);
 
+export const useMenuOpening = () => usePageUi((s) => s.menuOpening);
+
 export const useDrawnMenuOpen = (systemSheet: boolean) => usePageUi((s) => !systemSheet && s.menuOpen);
 
 export const usePageQuiet = (id: string, already: boolean) => usePages((s) => already || s.navigation[id]?.isLoading === false);

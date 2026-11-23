@@ -4,11 +4,15 @@ import * as browserDatabase from "../state/store/browserDatabase";
 import { tabDatabase } from "../state/store/database";
 import { pages } from "../platform/pages";
 import * as pageStore from "../state/pages/store";
-import { archiveTabById, clearArchivedTabs, currentTabs, flushTabWrites, selectTabById, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
+import { appBecameActive } from "../state/browse/store";
+import { archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, flushTabWrites, loadArchive, onTabWritesStalled, restoreArchivedTab, searchArchive, selectTabById, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
 import { withTabs } from "../../test/render/harness";
 
 beforeEach(() => {
   jest.useFakeTimers();
+  jest.spyOn(pages, "close").mockResolvedValue(undefined);
+  jest.spyOn(pages, "deleteSnapshots").mockResolvedValue(undefined);
+  jest.spyOn(pages, "saveState").mockResolvedValue(null);
   withTabs(3);
   browserDatabase.writeTabs(tabDatabase(), currentTabs().open, []);
 });
@@ -124,4 +128,76 @@ test("the picture a committed row points at is handed to the native side only af
   expect(acknowledged).not.toHaveBeenCalled();
   act(() => jest.advanceTimersByTime(500));
   expect(acknowledged).toHaveBeenCalledWith({ [id]: "file:///snapshots/c.jpg" });
+});
+
+const tick = async () => {
+  for (let turn = 0; turn < 24; turn++) await Promise.resolve();
+};
+
+test("while a Clear Archive waits on a busy database the archive stays empty when reloaded or searched, and restoring a row read before the clear does nothing", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  const id = currentTabs().open[0]!.id;
+  act(() => archiveTabById(id));
+  act(() => loadArchive());
+  const stale = currentTabs().archive!.find((tab) => tab.id === id)!;
+  refuse(2, "SQLITE_BUSY");
+  act(() => clearArchivedTabs());
+  act(() => loadArchive());
+  expect(currentTabs().archive).toEqual([]);
+  expect(searchArchive(stale.title).map((tab) => tab.id)).not.toContain(id);
+  expect(archivedTabById(id)).toBeNull();
+  expect(restoreArchivedTab(stale)).toBe(false);
+  act(() => jest.advanceTimersByTime(1_000));
+  expect(tabWritesPending()).toBe(false);
+  expect(browserDatabase.readOpenTabs(tabDatabase()).map((tab) => tab.id)).not.toContain(id);
+  expect(browserDatabase.readArchivedTab(tabDatabase(), id)).toBeNull();
+});
+
+test("a restore waiting on a busy database survives a Clear Archive in the same batch, with its picture and navigation state", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  const id = currentTabs().open[0]!.id;
+  act(() => updateTabById(id, { snapshotFileName: "file:///snapshots/kept.jpg" }));
+  flushTabWrites();
+  act(() => archiveTabById(id));
+  browserDatabase.writeTabState(tabDatabase(), id, "saved interaction state");
+  const removed = jest.spyOn(pageStore, "deletePageSnapshots");
+  const acknowledged = jest.spyOn(pages, "snapshotsCommitted").mockImplementation(() => undefined);
+  refuse(1, "SQLITE_BUSY");
+  act(() => void restoreArchivedTab(archivedTabById(id)!));
+  act(() => clearArchivedTabs());
+  act(() => jest.advanceTimersByTime(1_000));
+  expect(stored(id).snapshotFileName).toBe("file:///snapshots/kept.jpg");
+  expect(browserDatabase.readTabState(tabDatabase(), id)).toBe("saved interaction state");
+  expect(removed.mock.calls.flatMap(([ids]) => ids)).not.toContain(id);
+  expect(acknowledged).toHaveBeenCalledWith(expect.objectContaining({ [id]: "file:///snapshots/kept.jpg" }));
+});
+
+test("a page state that resolves after Clear Archive removed its tab writes nothing", async () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  let resolve: (saved: string) => void = () => undefined;
+  jest.spyOn(pageStore, "savePageState").mockImplementation(() => new Promise<string | null>((done) => (resolve = done)));
+  const id = currentTabs().open[0]!.id;
+  act(() => archiveTabById(id));
+  act(() => clearArchivedTabs());
+  resolve("saved interaction state");
+  await act(async () => {
+    await tick();
+    jest.advanceTimersByTime(50);
+  });
+  flushTabWrites();
+  expect(browserDatabase.readTabState(tabDatabase(), id)).toBeNull();
+});
+
+test("writes that stall tell the person once, and are tried again when the app comes back", () => {
+  const told = jest.fn();
+  onTabWritesStalled(told);
+  const commits = refuse(100, "SQLITE_IOERR: disk I/O error");
+  act(() => updateTabById(currentTabs().open[0]!.id, { url: "https://later.example/" }));
+  act(() => updateTabById(currentTabs().open[0]!.id, { url: "https://later-still.example/" }));
+  expect(told).toHaveBeenCalledTimes(1);
+  commits.mockRestore();
+  expect(tabWritesPending()).toBe(true);
+  act(() => appBecameActive());
+  expect(tabWritesPending()).toBe(false);
+  onTabWritesStalled(() => undefined);
 });

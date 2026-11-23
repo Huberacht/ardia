@@ -23,7 +23,7 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { searchState, setSearchClearsPagePrefill, setSearchText, typeSearch } from "../../state/search/store";
+import { searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle } from "../../state/search/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
 import { useIncognito, useSelectedTab } from "../../state/tabs/hooks";
@@ -566,6 +566,7 @@ function StagedTray() {
     const keyboardRises = Keyboard.addListener("keyboardWillShow", () => markSearchPhase("keyboard"));
     return () => keyboardRises.remove();
   }, []);
+  useEffect(() => warmSearchWhenIdle(), []);
   useEffect(() => clearHeldRelease, []);
 
   useLayoutEffect(() => {
@@ -613,17 +614,22 @@ function StagedTray() {
     });
   }, [handOver]);
 
-  const settled = ({ landed }: { landed: boolean }) => {
+  const settled = ({ landed, path }: { landed: boolean; path?: string }) => {
     const now = live.current;
     if (!now.closing) return;
     now.closing = false;
     now.mounted = null;
-    markSearchClosePhase(landed ? "landed" : "settled");
+    markSearchClosePhase(`${landed ? "landed" : "settled"} ${path ?? "unknown"}`);
     endSearchTiming();
     clearHeldRelease();
     stageSettled(landed);
     setHoldsScroll(false);
     setHandOver((count) => count + 1);
+  };
+
+  const landing = ({ lands, path }: { lands: boolean; path: string }) => {
+    markSearchClosePhase(`${lands ? "flies" : "stays"} ${path}`);
+    if (!lands && live.current.closing) setStageMorphs(false);
   };
 
   const revealed = ({ late }: { late: boolean }) => {
@@ -634,7 +640,7 @@ function StagedTray() {
   };
 
   const lifted = (next: SearchStageLift) => {
-    if (next.up && next.lift > 0) knownLift = next.lift;
+    if (next.up && !next.predicted && next.lift > safeBottom) knownLift = next.lift;
     setLift((was) => (was.lift === next.lift && was.up === next.up ? was : next));
   };
   const dimUp = arcPanel ? !closing : lift.up;
@@ -784,6 +790,7 @@ function StagedTray() {
       onLift={lifted}
       onReveal={revealed}
       onSettled={settled}
+      onLanding={landing}
     >
       <AnimatedPressable
         testID="trayDim"

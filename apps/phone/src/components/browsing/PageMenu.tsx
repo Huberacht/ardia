@@ -26,7 +26,9 @@ import {
   sendCurrentTab,
   openSiteSettings,
   openSiteSettingsRoute,
-  pageMenuDismissed,
+  pageMenuPresentation,
+  releaseTranslationAsk,
+  type MenuPresentation,
   pageMenuHidden,
   setBlockersOn,
   setDesktopSite,
@@ -71,13 +73,13 @@ const countPageMenuExpansion = () => countUsage("site_settings_sheet_expanded");
 type PageMenuProps = { tabId: string; open: boolean; onHidden: () => void };
 
 export function PageMenu(props: PageMenuProps) {
-  if (usesSystemPageMenu(useDesign())) return <SystemPageMenu tabId={props.tabId} open={props.open} onDismissed={() => hideSystemPageMenu(props.onHidden)} />;
+  if (usesSystemPageMenu(useDesign())) return <SystemPageMenu tabId={props.tabId} open={props.open} onPresentation={(event) => presentSystemPageMenu(event, props.onHidden)} />;
   return <DrawnPageMenu {...props} />;
 }
 
-function hideSystemPageMenu(onHidden: () => void) {
-  onHidden();
-  pageMenuDismissed();
+function presentSystemPageMenu(event: MenuPresentation, onHidden: () => void) {
+  pageMenuPresentation(event);
+  if (event.phase === "dismiss") onHidden();
 }
 
 function DrawnPageMenu({ tabId, open, onHidden }: PageMenuProps) {
@@ -98,7 +100,7 @@ function DrawnPageMenu({ tabId, open, onHidden }: PageMenuProps) {
   const confirmation = ask ? (
     <ConfirmDialog
       confirmation={{ title: "Translate with Google?", message: "Google will see this page’s address.", action: "Translate", destructive: false, run: () => confirmTranslation(ask) }}
-      onClose={cancelTranslationAsk}
+      onClose={() => releaseTranslationAsk(ask)}
     />
   ) : null;
   const tappedAway = isPrivate ? undefined : () => countUsage("page_menu_tapped_away");

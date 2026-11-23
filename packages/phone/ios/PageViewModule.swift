@@ -1,5 +1,6 @@
 import ArdiaBrowser
 import ExpoModulesCore
+import QuartzCore
 import UIKit
 import WebKit
 
@@ -141,7 +142,8 @@ public final class PageViewModule: Module {
         guard let page = PhonePages.shared.page(pageID), let interaction = page.webView?.findInteraction else { return false }
         if let text { interaction.searchText = text }
         page.presentFindInPage()
-        return true
+        if !interaction.isFindNavigatorVisible { PageViewModule.presentFindWhenUncovered(pageID) }
+        return interaction.isFindNavigatorVisible
       }
     }.runOnQueue(.main)
 
@@ -255,9 +257,10 @@ public final class PageViewModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("deleteSnapshots") { (pageID: String, promise: Promise) in
+      let floor = PageSnapshots.deletionOrder()
       PageVisuals.shared.forget(pageID)
       Task {
-        await PageSnapshots.delete(pageID)
+        await PageSnapshots.delete(pageID, before: floor)
         promise.resolve(nil)
       }
     }
@@ -604,5 +607,30 @@ public final class BlockingModule: Module {
     AsyncFunction("blockedCount") { (pageID: String) -> Int? in
       MainActor.assumeIsolated { PhonePages.shared.page(pageID)?.blockedResources.count }
     }.runOnQueue(.main)
+  }
+}
+
+extension PageViewModule {
+  static let findUncoverFrames = 90
+
+  @MainActor
+  static func presentFindWhenUncovered(_ pageID: String) {
+    let started = CACurrentMediaTime()
+    Task { @MainActor in
+      for _ in 0..<PageViewModule.findUncoverFrames {
+        try? await Task.sleep(for: .milliseconds(16))
+        guard let page = PhonePages.shared.page(pageID), let webView = page.webView, let interaction = webView.findInteraction else { return }
+        let waited = Int((CACurrentMediaTime() - started) * 1000)
+        if interaction.isFindNavigatorVisible {
+          NSLog("PAGELAB find navigator visible %ld ms after present", waited)
+          return
+        }
+        if webView.window?.rootViewController?.presentedViewController == nil {
+          page.presentFindInPage()
+          NSLog("PAGELAB find navigator presented again once uncovered, %ld ms after present", waited)
+          return
+        }
+      }
+    }
   }
 }

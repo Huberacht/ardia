@@ -130,6 +130,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   useDemoMotion(pager, width);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
+  const arrivalCover = useBrowse((s) => s.arrivalCover);
   const failed = useNavigation(tab.id, (n) => n?.failure != null);
   const pageTone = failed ? null : shownTone(tone, tab.themeColorHex);
   const underBar = usePageUnderBars();
@@ -226,7 +227,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
           <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: tabsInk.pagerBlack }, pager.dim]} pointerEvents="none" />
         </Animated.View>
         {pagerCards(left, right, arrived ? arrivalTab : null).map(({ card, side }) => (
-          <PagerNeighbour key={card.id} pager={pager} tab={card} side={side} width={width} statusHeight={insets.top} statusOver={underBar} hasLeft={left !== null} hasRight={right !== null} coverId={ARRIVAL_COVER_ID} />
+          <PagerNeighbour key={card.id} pager={pager} tab={card} side={side} width={width} statusHeight={insets.top} statusOver={underBar} hasLeft={left !== null} hasRight={right !== null} coverId={arrivalCover ?? ARRIVAL_COVER_ID} />
         ))}
         <PageProgressLine tabId={tab.id} top={insets.top} />
         </PageStack>

@@ -1,5 +1,6 @@
 import ArdiaDesign
 import ExpoModulesCore
+import GameController
 import QuartzCore
 import SwiftUI
 import UIKit
@@ -35,6 +36,7 @@ final class SearchStageView: ExpoView {
   let onLift = EventDispatcher()
   let onReveal = EventDispatcher()
   let onSettled = EventDispatcher()
+  let onLanding = EventDispatcher()
 
   var shownProp = false
   private var appliedShown = false
@@ -71,7 +73,7 @@ final class SearchStageView: ExpoView {
   private var releaseVelocity: CGFloat = 0
   private var revealsContents = true
   private var hasRevealed = false
-  private var reportedLift: (lift: CGFloat, up: Bool)?
+  private var reportedLift: (lift: CGFloat, up: Bool, predicted: Bool)?
   private var face: StageFace?
   private var emergence: StageEmergence?
   private var morph: StageMorph?
@@ -86,11 +88,11 @@ final class SearchStageView: ExpoView {
   private var revealLink: CADisplayLink?
   private var rise: UIViewPropertyAnimator?
   private var anticipatedLift: CGFloat?
+  private var closingPath = "none"
   private var anticipationTask: Task<Void, Never>?
-  private static var lastKeyboardHeight: CGFloat = 0
+  private static var keyboardMemory: StageKeyboardMemory?
 
   private static let keyboardThreshold: CGFloat = 120
-  private static let keyboardWait: Duration = .milliseconds(220)
   private static let keyboardGrace: Duration = .milliseconds(50)
   private static let keyboardAnticipation: Duration = .milliseconds(600)
   private static let contentDeadline: Duration = .milliseconds(250)
@@ -122,7 +124,7 @@ final class SearchStageView: ExpoView {
       return
     }
     guard keyboard == nil else { return }
-    let tracker = StageKeyboardTracker(minimumHeight: Self.keyboardThreshold) { [weak self] height in self?.keyboardWillMove(to: height) }
+    let tracker = StageKeyboardTracker(minimumHeight: Self.keyboardThreshold, onMove: { [weak self] height in self?.keyboardWillMove(to: height) }, onUnchanged: { [weak self] height in self?.keyboardStayed(at: height) })
     tracker.start()
     keyboard = tracker
   }
@@ -290,25 +292,45 @@ final class SearchStageView: ExpoView {
     focusField()
     releaseStartWaiters()
     guard !hasLanded else { return }
-    if Self.lastKeyboardHeight > 0, focusNativeId != nil, !isCommandBar {
-      riseWithAnticipatedKeyboard(Self.lastKeyboardHeight)
-      return
+    if focusNativeId != nil, !isCommandBar, let predicted = predictedKeyboardHeight {
+      anticipatedLift = predicted
+      anticipationTask = Task { [weak self] in
+        try? await Task.sleep(for: Self.keyboardAnticipation)
+        guard let self, !Task.isCancelled, self.isShown, !self.isClosing, self.anticipatedLift != nil, !self.keyboardUp else { return }
+        self.settleWithoutKeyboard()
+      }
     }
-    landingTask = Task { [weak self] in
-      try? await Task.sleep(for: Self.keyboardWait)
-      guard let self, !Task.isCancelled, isShown, !isClosing, !hasLanded else { return }
-      rise = move(.timing(reduceMotion ? Motion.stageReduced : Motion.riseCurve)) { [self] in self.hasLanded = true }
-    }
+    rise = move(.timing(reduceMotion ? Motion.stageReduced : Motion.riseCurve)) { [self] in self.hasLanded = true }
   }
 
-  private func riseWithAnticipatedKeyboard(_ height: CGFloat) {
-    anticipatedLift = height
-    rise = move(.timing(reduceMotion ? Motion.stageReduced : Motion.riseCurve)) { [self] in self.hasLanded = true }
-    anticipationTask = Task { [weak self] in
-      try? await Task.sleep(for: Self.keyboardAnticipation)
-      guard let self, !Task.isCancelled, isShown, !isClosing, anticipatedLift != nil, !keyboardUp else { return }
-      move(.spring(Motion.smoothSpring, velocity: 0)) { [self] in self.anticipatedLift = nil }
+  private var keyboardGeometry: StageKeyboardGeometry? {
+    guard let window, let scene = window.windowScene else { return nil }
+    return StageKeyboardGeometry(windowSize: window.bounds.size, orientation: scene.effectiveGeometry.interfaceOrientation)
+  }
+
+  private var predictedKeyboardHeight: CGFloat? {
+    guard GCKeyboard.coalesced == nil, let memory = Self.keyboardMemory, let geometry = keyboardGeometry, memory.geometry == geometry else { return nil }
+    return memory.height
+  }
+
+  private func stopRise() {
+    if let rise, rise.isRunning {
+      UIView.performWithoutAnimation { rise.stopAnimation(true) }
     }
+    rise = nil
+  }
+
+  private func settleWithoutKeyboard() {
+    anticipationTask?.cancel()
+    anticipationTask = nil
+    guard anticipatedLift != nil else { return }
+    stopRise()
+    move(.spring(Motion.smoothSpring, velocity: 0)) { [self] in self.anticipatedLift = nil }
+  }
+
+  private func keyboardStayed(at height: CGFloat) {
+    guard window != nil, height == 0, isShown, !isClosing, anticipatedLift != nil else { return }
+    settleWithoutKeyboard()
   }
 
   func holdLift() {
@@ -335,6 +357,7 @@ final class SearchStageView: ExpoView {
     defer { releaseVelocity = 0 }
     let shownSurface = emergence.flatMap { emergence in panel.map { emergence.shownSurface(of: $0, card: card, in: self) } }
     endEmergence()
+    closingPath = exit.rawValue
     if exit == .morph, !reduceMotion, !isCommandBar {
       beginMorph(from: shownSurface)
     } else if exit == .depart, !reduceMotion {
@@ -355,7 +378,13 @@ final class SearchStageView: ExpoView {
         if slidesOut { dragOffset = max(dragOffset, travel) }
       }
     }
+    if exit == .morph, reduceMotion || isCommandBar { reportLanding(false, path: "morphSkipped") }
     watchSettling()
+  }
+
+  private func reportLanding(_ lands: Bool, path: String) {
+    closingPath = path
+    onLanding(["lands": lands, "path": path])
   }
 
   func finish() {
@@ -396,23 +425,20 @@ final class SearchStageView: ExpoView {
     settleTask = Task { [weak self] in
       guard let self else { return }
       guard await StageSettlePoll.until(every: Self.settlePoll, within: Self.settleDeadline, { self.hasSettled }), isClosing else { return }
-      onSettled(["landed": morph?.hasDestination == true])
+      onSettled(["landed": self.morph?.hasDestination == true, "path": self.closingPath])
     }
   }
 
   private func keyboardWillMove(to height: CGFloat) {
     guard window != nil else { return }
-    if height > 0 { Self.lastKeyboardHeight = height }
+    if height > 0, let geometry = keyboardGeometry { Self.keyboardMemory = StageKeyboardMemory(height: height, geometry: geometry) }
     stopAnticipating()
     keyboardHeight = height
     if isShown, keyboardUp, !isClosing, !hasLanded {
       landingTask?.cancel()
       hasLanded = true
     }
-    if let rise, rise.isRunning {
-      UIView.performWithoutAnimation { rise.stopAnimation(true) }
-    }
-    rise = nil
+    stopRise()
     if !isHoldingLift, let held = heldLift, abs(liveLift - held) < 2 {
       heldLift = nil
     }
@@ -422,7 +448,10 @@ final class SearchStageView: ExpoView {
   }
 
   private func beginMorph(from shownSurface: StageMorph.Start?) {
-    guard let panel else { return }
+    guard let panel else {
+      reportLanding(false, path: "noPanel")
+      return
+    }
     morph = StageMorph(card: card, fieldCenter: fieldCenter, corners: corners, of: panel, in: self, look: look, from: shownSurface)
     move(.immediate) { [self] in
       isClosing = true
@@ -448,12 +477,17 @@ final class SearchStageView: ExpoView {
 
   private func flyMorph(velocity: CGFloat) {
     cancelPendingFlight()
-    guard let morph else { return }
+    guard let morph else {
+      reportLanding(false, path: "noMorph")
+      return
+    }
     guard let anchor = resolveAnchor() else {
+      reportLanding(false, path: anchorMissReason)
       morph.vanish()
       hidePanelUnderMorph()
       return
     }
+    reportLanding(true, path: "anchored")
     let target = convert(anchor.frame, from: nil)
     if let panel { morph.restart(fromCard: card, of: panel, in: self) }
     let carried = face.flatMap { $0.fits(anchor) ? $0 : nil }
@@ -611,9 +645,10 @@ final class SearchStageView: ExpoView {
     accessibilityViewIsModal = isShown
     panel.accessibilityViewIsModal = isShown
     let up = isShown && isUp
-    if reportedLift?.lift != lift || reportedLift?.up != up {
-      reportedLift = (lift, up)
-      onLift(["lift": lift, "up": up])
+    let predicted = anticipatedLift != nil && !keyboardUp
+    if reportedLift?.lift != lift || reportedLift?.up != up || reportedLift?.predicted != predicted {
+      reportedLift = (lift, up, predicted)
+      onLift(["lift": lift, "up": up, "predicted": predicted])
     }
   }
 
