@@ -136,7 +136,9 @@ through a real Live refresh into folder status, which `live.list` returns: Live 
 app-owned message (GitHub's GraphQL errors keep at most a validated github.com settings link), and the status message
 goes through the token scrubber. Google's sign-in callback, whose address holds the authorization code, is taken by a
 callback consumer (`state/tabs/callbackUrls.ts`) the moment the page reports it, before tab state, tab events, the
-omnibox or `closed.list` can see it; the tab closes without a recently closed entry and any history visit is removed. Its registry, read with the TypeScript parser so aliased and
+omnibox or `closed.list` can see it; the tab closes without a recently closed entry, and a sign-in another one replaces closes
+its tab the same way. Nothing listens on the loopback callback port, so the page is an error page, which Chromium never
+adds to history; Ardia doesn't delete it either, since a deletion would announce the address in `history.removed`. Its registry, read with the TypeScript parser so aliased and
 namespace imports count, fails when:
 
 - a kind in `SECRET_KINDS` has no source and canary in the test;

@@ -30,15 +30,15 @@ type GithubAccount = { scope: string; token: LiveToken; busy: number };
 const githubAccounts = new Map<string, GithubAccount>();
 let githubAccountCount = 0;
 let githubGeneration = 0;
-let keptGithubScope: string | null = null;
+let keptGithub: { scope: string; generation: number } | null = null;
 
 function releaseGithubAccounts() {
-  for (const [scope, account] of githubAccounts) if (!account.busy && scope !== keptGithubScope) githubAccounts.delete(scope);
+  if (keptGithub && keptGithub.generation !== githubGeneration) keptGithub = null;
+  for (const [scope, account] of githubAccounts) if (!account.busy && scope !== keptGithub?.scope) githubAccounts.delete(scope);
 }
 
 function forgetGithubAccounts() {
   githubGeneration++;
-  keptGithubScope = null;
   releaseGithubAccounts();
 }
 
@@ -50,20 +50,17 @@ async function withStoredGithubAccount<T>(run: (scope: string) => Promise<T>): P
 }
 
 async function withGithubAccount<T>(token: LiveToken, storedGeneration: number | null, run: (scope: string) => Promise<T>): Promise<T> {
-  const stored = storedGeneration !== null;
   let account = [...githubAccounts.values()].find((a) => sameSecret(a.token, token));
   if (!account) {
     account = { scope: `github-account-${++githubAccountCount}`, token, busy: 0 };
     githubAccounts.set(account.scope, account);
   }
-  const generation = storedGeneration ?? githubGeneration;
-  if (stored) keptGithubScope = account.scope;
+  if (storedGeneration === githubGeneration) keptGithub = { scope: account.scope, generation: storedGeneration };
   account.busy++;
   try {
     return await run(account.scope);
   } finally {
     account.busy--;
-    if (stored && generation !== githubGeneration && keptGithubScope === account.scope) keptGithubScope = null;
     releaseGithubAccounts();
   }
 }

@@ -38,19 +38,23 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
     access_type: "offline",
     prompt: "consent",
   })}`;
-  const profileId = useBrowser.getState().windows[windowId]?.profileId ?? null;
   const tabId = useBrowser.getState().newTab(windowId, { url });
   return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const attempt = { cancel: () => finish(new Error("Cancelled")) };
+    const closeTab = () => {
+      if (useBrowser.getState().tabs[tabId]) useBrowser.getState().closeTabs([tabId], { unrecorded: true });
+    };
     const stopWatching = useBrowser.subscribe((s, prev) => {
       if (s.tabs !== prev.tabs && !s.tabs[tabId]) finish(new Error("Sign-in was cancelled"));
     });
     const stopConsuming = consumeCallbackUrls(tabId, (address) => {
       if (!address.startsWith(REDIRECT)) return false;
+      if (settled) return true;
       const params = query(address);
-      stopConsuming();
       stopWatching();
-      useBrowser.getState().closeTabs([tabId], { unrecorded: true });
-      if (profileId) void useBrowser.getState().removeHistory(profileId, [address]).catch(() => {});
+      closeTab();
+      stopConsuming();
       if (params.get("state") !== state) {
         finish(new Error("Sign-in didn't match this request"));
         return true;
@@ -60,16 +64,16 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
       else connectGoogle(clientId.trim(), clientSecret.trim(), asSecret("oauthToken", code), verifier, REDIRECT).then(() => finish(), finish);
       return true;
     });
-    const stop = () => {
-      stopConsuming();
-      stopWatching();
-    };
     const finish = (error?: unknown) => {
-      stop();
-      pending = null;
+      if (settled) return;
+      settled = true;
+      stopWatching();
+      closeTab();
+      stopConsuming();
+      if (pending === attempt) pending = null;
       if (error) reject(error);
       else resolve();
     };
-    pending = { cancel: () => finish(new Error("Cancelled")) };
+    pending = attempt;
   });
 }

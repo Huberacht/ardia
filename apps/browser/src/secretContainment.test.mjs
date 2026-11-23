@@ -45,10 +45,13 @@ const enteredPhrases = [];
 const posted = [];
 let heldGithub = null;
 let heldKeychain = null;
+let heldGoogle = null;
+let githubAnswers = false;
 globalThis.fetch = async (url, init = {}) => {
-  if (heldGithub && String(url).includes("graphql")) {
-    await heldGithub;
-    const body = JSON.stringify({ data: { rateLimit: null, search: { nodes: [] } } });
+  if (heldGoogle && /google\/token|oauth2\.googleapis/.test(String(url))) await heldGoogle;
+  if ((heldGithub || githubAnswers) && String(url).includes("graphql")) {
+    if (heldGithub) await heldGithub;
+    const body = JSON.stringify({ data: { rateLimit: null, search: { nodes: [] }, viewer: { login: "me", name: null, avatarUrl: "" } } });
     return { status: 200, ok: true, headers: new Headers(), text: async () => body, json: async () => JSON.parse(body) };
   }
   posted.push({ url: String(url), headers: JSON.stringify(init.headers ?? {}), body: String(init.body ?? "") });
@@ -374,6 +377,22 @@ test("GitHub tokens are held only while their work runs, the stored account's is
   assert.equal(await reading, "signedOut", "a token read before a disconnect isn't used after it");
   assert.equal(githubAccountsHeld(), 0);
   keychain.set("github", CANARY.oauthToken);
+  let releaseOld;
+  heldGithub = new Promise((resolve) => (releaseOld = resolve));
+  const oldRefresh = LIVE.github.resolveGone([{ source: "github", id: "github:PR_old", section: "authored" }], { interactive: true }).catch(() => null);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await disconnect("github");
+  heldGithub = null;
+  githubAnswers = true;
+  try {
+    await connectGithub(CANARY.oauthToken);
+    await LIVE.github.fetch(folder, { interactive: true });
+  } finally {
+    githubAnswers = false;
+  }
+  releaseOld();
+  await oldRefresh;
+  assert.equal(githubAccountsHeld(), 1, "a refresh from before a reconnect with the same token leaves the new account's kept scope alone");
 });
 
 test("Google's sign-in callback is consumed before tab state, events or recently closed tabs see its code", async () => {
@@ -400,6 +419,35 @@ test("Google's sign-in callback is consumed before tab state, events or recently
   const traces = [...seen, JSON.stringify(useBrowser.getState().closedTabs), JSON.stringify(useBrowser.getState().history ?? {})].join("\n");
   assert.ok(!traces.includes(callback) && !traces.includes("0AcanaryAuthorizationCode"), "no tab state, tab event or closed.list entry ever holds the callback");
   assert.equal(consumedCallbackUrl(tabId, callback), false, "the consumer is gone once the callback is handled");
+});
+
+test("a superseded Google sign-in closes its tab unrecorded, and its late finish can't orphan the newer attempt", async () => {
+  const { useBrowser } = await import("./state/browser/store.ts");
+  const { connectGoogleDrive } = await import("./state/live/googleAuth.ts");
+  const { consumedCallbackUrl } = await import("./state/tabs/callbackUrls.ts");
+  const windowId = useBrowser.getState().createWindow({ url: "https://b.example/" });
+  const opened = () => Object.keys(useBrowser.getState().tabs);
+  const start = () => {
+    const before = new Set(opened());
+    const outcome = connectGoogleDrive(windowId, "client-id", CANARY.oauthClientSecret).then(() => "done", (error) => error.message);
+    const tabId = opened().find((id) => !before.has(id));
+    return { outcome, tabId, state: new URL(useBrowser.getState().tabs[tabId].url).searchParams.get("state") };
+  };
+  let releaseExchange;
+  heldGoogle = new Promise((resolve) => (releaseExchange = resolve));
+  const first = start();
+  assert.equal(consumedCallbackUrl(first.tabId, `http://127.0.0.1:53682/ardia-oauth?state=${first.state}&code=4%2F0Afirst`), true);
+  const second = start();
+  assert.equal(await first.outcome, "Cancelled");
+  heldGoogle = null;
+  releaseExchange();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const third = start();
+  assert.equal(await second.outcome, "Cancelled", "the newer attempt was still the one a later start cancels");
+  assert.equal(useBrowser.getState().tabs[second.tabId], undefined, "a superseded attempt closes its tab");
+  assert.ok(!JSON.stringify(useBrowser.getState().closedTabs).includes(second.state), "and leaves no recently closed entry");
+  useBrowser.getState().closeTab(third.tabId);
+  assert.equal(await third.outcome, "Sign-in was cancelled");
 });
 
 test("TabWebView hands a navigation to a callback consumer before anything records it", () => {
@@ -436,6 +484,7 @@ const WRAP_SITES = {
   "apps/linux/src/syncEngine.ts": ["syncPhrase"],
   "apps/linux/src/syncAuthority.ts": ["*"],
   "apps/browser/src/state/sync/engine.ts": ["syncPhrase"],
+  "apps/browser/src/components/dev/devHarness.ts": ["syncPhrase"],
 };
 
 const REVEAL_SINKS = {
@@ -506,6 +555,10 @@ function secretUses(file, source) {
       if (local.some((e) => bound.has((e.propertyName ?? e.name).text) || namespaces.has((e.propertyName ?? e.name).text))) uses.problems.push("re-exports asSecret or reveal");
       return;
     }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "require") {
+      const target = node.arguments[0];
+      if (!target || !ts.isStringLiteralLike(target) || CORE_MODULE.test(target.text)) uses.problems.push("requires the secret module");
+    }
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       const target = node.arguments[0];
       if (!target || !ts.isStringLiteralLike(target) || CORE_MODULE.test(target.text)) uses.problems.push("imports the secret module dynamically");
@@ -567,8 +620,10 @@ test("the registry scan finds aliased, namespaced and value uses of asSecret and
     'export { reveal } from "@ardia/core";',
     "export { open as opened };",
     'const lazy = await import("@ardia/core");',
+    'const { reveal: viaRequire } = require("@ardia/core");',
+    'const other = require("./unrelated");',
   ].join("\n"));
   assert.deepEqual([...uses.kinds].sort(), ["*", "password"]);
   assert.equal(uses.reveals, 2);
-  assert.deepEqual(uses.problems.sort(), ["imports the secret module dynamically", "namespace core used other than as namespace.member", "namespace core used other than as namespace.member", "re-exports asSecret or reveal", "re-exports asSecret or reveal", "reveal used as a value"].sort());
+  assert.deepEqual(uses.problems.sort(), ["imports the secret module dynamically", "requires the secret module", "namespace core used other than as namespace.member", "namespace core used other than as namespace.member", "re-exports asSecret or reveal", "re-exports asSecret or reveal", "reveal used as a value"].sort());
 });
