@@ -5,15 +5,16 @@ import { layout, useTheme } from "../ui/theme";
 import type { BrowserState } from "../../state/browser/store";
 import { workspaceSnapshot } from "../../state/browser/current";
 import type { Capture, ListSnapshot } from "../../state/sidebar/listCapture";
-import { setSliding, useAnimatedStyle, type ClipSource, type EntryMotion } from "./EntryMotion";
-import { groupEntries } from "../../state/sidebar/entries";
+import { appearOf, setAppearing, setSliding, useAnimatedStyle, type ClipSource, type EntryMotion } from "./EntryMotion";
 import { entryHeight } from "../../state/sidebar/geometry";
 import { ghostEntry, snapshotEntry, type EntrySnapshot } from "./GhostEntry";
 import { curve } from "../ui/motion";
 import { SIDEBAR_MOTION } from "./tokens";
 import { entryId, entryKey, parseEntry } from "../../state/sidebar/entryKey";
-import { splitTabIdsOf } from "../../state/splits/splits";
+import { closedIn, groupChange, groupGrowsAtEnd, openedIn, type GroupChange } from "./listChanges";
 import { noteSidebarMotion } from "../../state/telemetry/usage";
+import { noteTabMotion } from "../../state/telemetry/tabMotionCounts";
+import { reduceMotion } from "../ui/reduceMotion";
 import { settleSlides, type Slide } from "./slideSettle";
 import { seenSliding, shiftedBand, type ListViewport } from "./listViewport";
 import { offsets, prefixHeight, sharedPrefix, type Height, type Offsets } from "./listOffsets";
@@ -22,6 +23,7 @@ export const SLIDE_MS = SIDEBAR_MOTION.listSlide;
 export const FADE_MS = SIDEBAR_MOTION.listFade;
 export const SLIDE_EASING = curve.cssEase;
 export const FADE_EASING = curve.cssEaseOut;
+export const APPEAR_MS = SIDEBAR_MOTION.listAppear;
 const TAIL = "~tail";
 const FRAME_SLACK_MS = 50;
 const devScale = () => (__DEV__ ? ((globalThis as { sidebarMotionScale?: number }).sidebarMotionScale ?? 1) : 1);
@@ -29,7 +31,7 @@ const devScale = () => (__DEV__ ? ((globalThis as { sidebarMotionScale?: number 
 type Ghost = { key: string; anchor: string | null; y: number; snapshot: EntrySnapshot; opacity: Animated.Value; until: number };
 type Snapshot = ListSnapshot;
 type Move = { key: string; from: number };
-type Plan = { moves: Move[]; ghosts: Ghost[]; clipped: string[]; below: number };
+type Plan = { moves: Move[]; ghosts: Ghost[]; clipped: string[]; below: number; appears: string[] };
 type Planner = (before: Snapshot, after: Snapshot, slides: Map<string, Slide>, ghosts: Ghost[], t: number) => Plan | null;
 type InView = (key: string, from: number) => boolean;
 export type ListSlot = { entry: string } | { ghost: Ghost; top: number };
@@ -37,23 +39,6 @@ export type ListMotionScope = { slideBelow: ((entry: string, delta: number) => v
 
 export const ListMotionContext = createContext<ListMotionScope>({ slideBelow: null });
 let ghostIds = 0;
-
-const tabsOf = (s: BrowserState, entry: string): string[] => {
-  const { kind, id } = parseEntry(entry);
-  if (kind === "group") return s.groups[id]?.tabIds ?? [];
-  if (kind === "split") return splitTabIdsOf(s.splits[id]) ?? [];
-  return [id];
-};
-
-const closedIn = (before: BrowserState, after: BrowserState) => (entry: string) => {
-  const ids = tabsOf(before, entry);
-  return ids.length > 0 && ids.every((id) => !after.tabs[id]);
-};
-
-const openedIn = (before: BrowserState, after: BrowserState) => (entry: string) => {
-  const ids = tabsOf(after, entry);
-  return ids.length > 0 && ids.every((id) => !before.tabs[id]);
-};
 
 function shiftAt(slide: Slide | undefined, t: number): number {
   if (!slide) return 0;
@@ -100,13 +85,14 @@ function buildPlan({ before, after, old, next, removed, added, slides, ghosts, t
     const y = old.at.get(e)! + shiftAt(slides.get(e), t);
     return [{ key: `ghost:${++ghostIds}`, anchor: anchorAfter(e), y, snapshot: shot, opacity: new Animated.Value(1), until: 0 }];
   });
-  if (!moves.length) return born.length ? { moves, ghosts: born, clipped: [], below: 0 } : null;
+  const appears = added.filter((e) => next.at.has(e));
+  if (!moves.length) return born.length || appears.length ? { moves, ghosts: born, clipped: [], below: 0, appears } : null;
   const fresh = new Set(added);
   const clipped = [...added, ...clipAfter].flatMap((e) => {
     const following = after.list[after.list.indexOf(e) + 1];
     return following === undefined ? (tail ? [TAIL] : []) : fresh.has(following) ? [] : [following];
   });
-  return { moves, ghosts: born, clipped, below: 0 };
+  return { moves, ghosts: born, clipped, below: 0, appears };
 }
 
 function mergePlans(first: Plan, then: Plan): Plan {
@@ -116,29 +102,8 @@ function mergePlans(first: Plan, then: Plan): Plan {
     ghosts: [...first.ghosts, ...then.ghosts],
     clipped: [...new Set([...first.clipped, ...then.clipped])],
     below: first.below + then.below,
+    appears: [...first.appears, ...then.appears],
   };
-}
-
-type GroupChange = "same" | "grown" | "extended" | "other";
-
-function groupGrowsAtEnd(before: BrowserState, after: BrowserState, groupId: string): boolean {
-  const last = groupEntries(after, groupId).at(-1);
-  return !!last && !groupEntries(before, groupId).includes(last);
-}
-
-function groupChange(before: BrowserState, after: BrowserState, groupId: string): GroupChange {
-  const was = before.groups[groupId];
-  const now = after.groups[groupId];
-  if (!was || !now) return "other";
-  const had = new Set(was.tabIds);
-  const has = new Set(now.tabIds);
-  const gone = was.tabIds.filter((id) => !has.has(id));
-  const came = now.tabIds.filter((id) => !had.has(id));
-  if (!gone.length && !came.length) return "same";
-  const expanded = !was.collapsed && !now.collapsed;
-  if (expanded && !came.length && gone.every((id) => !after.tabs[id])) return "extended";
-  if (!expanded || gone.length || !came.every((id) => !before.tabs[id])) return "other";
-  return groupGrowsAtEnd(before, after, groupId) ? "grown" : "extended";
 }
 
 type Core = {
@@ -155,9 +120,16 @@ type Core = {
 
 function onlySeen(plan: Plan, seen: InView | null, slides: Map<string, Slide>): Plan | null {
   const moves = seen ? plan.moves.filter((m) => m.key === TAIL || slides.get(m.key)?.landed === false || seen(m.key, m.from)) : plan.moves;
-  if (moves.length === plan.moves.length) return plan;
-  if (!moves.length && !plan.ghosts.length && !plan.below) return null;
-  return { ...plan, moves, clipped: moves.length ? plan.clipped : [] };
+  const appears = seen ? plan.appears.filter((e) => seen(e, 0)) : plan.appears;
+  if (moves.length === plan.moves.length && appears.length === plan.appears.length) return plan;
+  if (!moves.length && !plan.ghosts.length && !plan.below && !appears.length) return null;
+  return { ...plan, moves, appears, clipped: moves.length ? plan.clipped : [] };
+}
+
+function stillFor(plan: Plan | null): Plan | null {
+  if (!plan || reduceMotion() !== true) return plan;
+  if (!plan.ghosts.length && !plan.appears.length) return null;
+  return { ...plan, moves: [], clipped: [], below: 0 };
 }
 
 function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail, below, inView }: Core) {
@@ -206,10 +178,16 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
 
   const prepare = (plan: Plan, at: number) => {
     for (const m of plan.moves) if (!slides.has(m.key)) slides.set(m.key, { value: new Animated.Value(m.from), from: m.from, at, until: 0, run: null, landed: false });
+    for (const key of plan.appears) {
+      let slide = slides.get(key);
+      if (!slide) slides.set(key, (slide = { value: new Animated.Value(0), from: 0, at, until: 0, run: null, landed: false }));
+      setAppearing(slide.value, new Animated.Value(0));
+    }
     ghosts.current = [...ghosts.current, ...plan.ghosts];
     const pending = queued.current;
     const next = pending ? mergePlans(pending, plan) : plan;
     if (pending) noteSidebarMotion("merge");
+    if (slides.size && [...slides.values()].some((s) => s.run)) noteTabMotion("sidebar", "interrupt", 1);
     clipped.clear();
     for (const key of next.clipped) clipped.add(key);
     queued.current = next;
@@ -218,7 +196,7 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
   const before = from.pending;
   if (before) {
     from.pending = null;
-    const plan = enabled ? planner(before, { state: workspaceSnapshot(), list: entries }, slides, ghosts.current, Date.now()) : null;
+    const plan = enabled ? stillFor(planner(before, { state: workspaceSnapshot(), list: entries }, slides, ghosts.current, Date.now())) : null;
     if (plan) prepare(plan, Date.now());
   }
   if (entries !== seen.current) {
@@ -235,7 +213,7 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
     if (i < 0) return;
     const t = Date.now();
     const keys = [...list.slice(i + 1), TAIL];
-    const plan = onlySeen({ moves: keys.map((key) => ({ key, from: shiftAt(slides.get(key), t) + delta })), ghosts: [], clipped: [list[i + 1] ?? TAIL], below: 0 }, seenNow.current?.(list) ?? null, slides);
+    const plan = stillFor(onlySeen({ moves: keys.map((key) => ({ key, from: shiftAt(slides.get(key), t) + delta })), ghosts: [], clipped: [list[i + 1] ?? TAIL], below: 0, appears: [] }, seenNow.current?.(list) ?? null, slides));
     if (!plan) return;
     prepare(plan, t);
     rerender((n) => n + 1);
@@ -281,6 +259,22 @@ function useMotion({ devKey, entries, from, planner, height, enabled, nativeTail
       g.until = at + FADE_MS * devScale() + FRAME_SLACK_MS;
       Animated.timing(g.opacity, { toValue: 0, duration: FADE_MS * devScale(), easing: FADE_EASING, useNativeDriver: true }).start();
     }
+    for (const key of plan.appears) {
+      const slide = slides.get(key);
+      const opacity = slide && appearOf(slide.value);
+      if (!slide || !opacity) continue;
+      const appearMs = APPEAR_MS * devScale();
+      if (!slide.run) {
+        slide.at = at;
+        slide.until = at + appearMs + FRAME_SLACK_MS;
+      }
+      setSliding(slide.value, true);
+      Animated.timing(opacity, { toValue: 1, duration: appearMs, easing: FADE_EASING, useNativeDriver: true }).start(() => {
+        if (!slide.run) setSliding(slide.value, false);
+      });
+    }
+    if (plan.appears.length) noteTabMotion("sidebar", "open", plan.appears.length);
+    if (plan.ghosts.length) noteTabMotion("sidebar", "close", plan.ghosts.length);
     announce();
     if (plan.below) below?.(plan.below);
   });
@@ -379,7 +373,7 @@ export function useGroupMotion(windowId: string, profileId: string, groupId: str
     const atEnd = !removed.length && groupGrowsAtEnd(before.state, after.state, groupId);
     const plan = buildPlan({ before, after, old, next, removed, added, slides, ghosts, t, tail: !atEnd, snapshot, clipAfter: [], start: 0 });
     if (!atEnd) return plan;
-    return { ...(plan ?? { moves: [], ghosts: [], clipped: [] }), below: old.end - next.end };
+    return { ...(plan ?? { moves: [], ghosts: [], clipped: [], appears: [] }), below: old.end - next.end };
   };
   const below = scope.slideBelow ? (delta: number) => scope.slideBelow?.(entryKey("group", groupId), delta) : null;
   return useMotion({ devKey: `${windowId}:${groupId}`, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: false, below });

@@ -13,7 +13,7 @@ app, at several tab counts, read while the screen may be locked.
 
   node apps/browser/scripts/perf/sidebar-scroll-bench.mjs run --app <Debug or Release Ardia.app> --scratch <dir>
       [--bundle <main.jsbundle>] [--label <name>] [--tabs 50,150,300] [--profiles 1,2] [--reps 5]
-      [--gestures pan,pan-up,wheel,wheel-up] [--pointer over|away] [--port 9631] [--keep] [--attach]
+      [--gestures pan,pan-up,wheel,wheel-up] [--layout sidebar|top] [--pointer over|away] [--port 9631] [--keep] [--attach]
       [--post app|acperf] [--append] [--out <file.json>]
   node apps/browser/scripts/perf/sidebar-scroll-bench.mjs compare <before.json> <after.json>
 
@@ -34,6 +34,11 @@ events then); --post acperf posts them with acperf postscroll instead. Gestures:
                 locked one stalls it after a few points (the window has no screen)
   wheel         12 wheel notches down, from the top
   wheel-up      12 notches back up
+  open          a tab opened beside the shown one, as the + button does with Add new tabs set to next to the current tab
+                (the fixture sets it whenever a tab action runs, so the new tab lands in view)
+  close         the tab the last open made, closed as its ✕ does
+  close-run     three tabs opened beside the shown one (not measured), then closed one after another 120 ms apart
+--layout top lays the tabs out across the top instead (tabLayout "top"); open and close measure its strip the same way.
 --pointer over (default) parks the hover pointer (ac.shell.devSetPointer, Debug builds) over the sidebar under the
 gesture, as a real pointer is while you scroll; away parks it over the page.
 Per gesture, over the gesture plus 700 ms: main- and JS-thread CPU ms (thread_info, read on each display-link tick) and
@@ -86,6 +91,9 @@ const profileCounts = flag("profiles", "1,2").split(",").map(Number);
 const reps = Number(flag("reps", "5"));
 const gestures = flag("gestures", "pan,pan-up,wheel,wheel-up").split(",");
 const pointerOver = flag("pointer", "over") !== "away";
+const tabLayout = flag("layout", "sidebar") === "top" ? "top" : "sidebar";
+const TAB_ACTIONS = new Set(["open", "close", "close-run"]);
+const CLOSE_RUN_GAP_MS = 120;
 const inProcess = flag("post", "app") === "app";
 const basePort = Number(flag("port", "9631"));
 const keep = has("keep");
@@ -197,7 +205,7 @@ function fixture(origin, count, profiles) {
     windows: [{ id: "w1", frame: [WINDOW.x, WINDOW.y, WINDOW.w, WINDOW.h], sidebarOpen: true }],
     tabs: tabs.map((t) => ({ ...t, windowId: "w1" })),
     groups,
-    settings: { tabLayout: "sidebar", searchSuggestions: false, warnBeforeClosingLastTab: false, warnBeforeClosingWindow: false },
+    settings: { tabLayout, ...(gestures.some((g) => TAB_ACTIONS.has(g)) ? { newTabPosition: "nextToCurrent" } : {}), searchSuggestions: false, warnBeforeClosingLastTab: false, warnBeforeClosingWindow: false },
   });
   s.windows[0].tabIds = [...personal, ...work];
   s.windows[0].activeTabIds = { default: loose[0], ...(work.length ? { work: work[3] } : {}) };
@@ -212,7 +220,7 @@ const HELPERS = `
 
 async function prepare(inst, fx, pointer) {
   await inst.eval(`${HELPERS}
-    st().updateSettings({ tabLayout: "sidebar" });
+    st().updateSettings({ tabLayout: ${JSON.stringify(tabLayout)} });
     const warm = ${JSON.stringify(fx.warm)};
     let chain = Promise.resolve();
     for (const id of warm) chain = chain.then(() => { st().activate(id); return wait(700); });
@@ -320,7 +328,44 @@ class Frames {
   }
 }
 
-async function gesture(inst, frames, win, name, at) {
+let opened = 0;
+const openBeside = (origin) => `${HELPERS} const id = st().newTab(w, { url: "${origin}/p/fresh${++opened}", newTabCommand: true }); (globalThis.__benchOpened ??= []).push(id); return id;`;
+const closeOpened = `${HELPERS} const id = (globalThis.__benchOpened ??= []).pop(); if (id && st().tabs[id]) st().closeTab(id); return id ?? null;`;
+
+async function tabAction(inst, frames, name, origin) {
+  if (name === "close-run") {
+    for (let i = 0; i < 3; i++) await inst.eval(openBeside(origin));
+    await sleep(900);
+  } else if (name === "close" && !(await inst.eval(`return (globalThis.__benchOpened ?? []).length;`))) {
+    await inst.eval(openBeside(origin));
+    await sleep(900);
+  }
+  await sleep(400);
+  await readProbe(inst, true);
+  const c0 = await frames.counters();
+  const cpu0 = cpuMs(inst.pid);
+  const t0 = Date.now();
+  if (name === "open") await inst.eval(openBeside(origin));
+  else if (name === "close") await inst.eval(closeOpened);
+  else await inst.eval(`${HELPERS} const ids = (globalThis.__benchOpened ??= []).splice(-3).reverse(); let chain = Promise.resolve(); for (const id of ids) chain = chain.then(() => { if (st().tabs[id]) st().closeTab(id); return wait(${CLOSE_RUN_GAP_MS}); }); return chain.then(() => ids.length);`, { timeout: 10000 });
+  await sleep(TAIL_MS);
+  const t1 = Date.now();
+  const cpu1 = cpuMs(inst.pid);
+  const c1 = await frames.counters();
+  const probe = await readProbe(inst, false);
+  await sleep(120);
+  const busy = frames.busy(t0, t1);
+  const counter = (k) => (c0 && c1 ? c1[k] - c0[k] : null);
+  return {
+    gesture: name, ms: t1 - t0, moved: null,
+    frames: busy.frames, maxGapMs: round(busy.maxGap), mainCpuMs: round(busy.mainCpu), jsCpuMs: round(busy.jsCpu), mainBusyMs: round(busy.m), jsBusyMs: round(busy.j), mainMaxMs: round(busy.mMax), jsMaxMs: round(busy.jMax), layoutMs: round(busy.layoutMs),
+    cpuMs: round(cpu1 - cpu0), hitTests: counter("rootHitTests"), viewUpdates: counter("viewUpdates"), viewCreates: counter("viewCreates"), layoutPasses: counter("layoutPasses"), uiBlocks: counter("uiBlocks"),
+    ...probe,
+  };
+}
+
+async function gesture(inst, frames, win, name, at, origin) {
+  if (TAB_ACTIONS.has(name)) return tabAction(inst, frames, name, origin);
   const reverse = name.endsWith("-up");
   const kind = name.replace(/-up$/, "");
   if (!reverse) await frames.scrollY(0);
@@ -401,10 +446,10 @@ async function run() {
           const rows = [await idle(inst, frames)];
           for (let r = 0; r < reps; r++)
             for (const g of gestures) {
-              const row = await gesture(inst, frames, win, g, at);
-              if (!(Math.abs(row.moved ?? 0) >= 50)) console.log(`WARNING: ${key} ${g} moved ${row.moved} pt: the list didn't scroll, so this row measures nothing`);
+              const row = await gesture(inst, frames, win, g, at, origin);
+              if (!TAB_ACTIONS.has(g) && !(Math.abs(row.moved ?? 0) >= 50)) console.log(`WARNING: ${key} ${g} moved ${row.moved} pt: the list didn't scroll, so this row measures nothing`);
               rows.push(row);
-              console.log(`${label} ${key} #${r + 1} ${g.padEnd(11)} moved ${String(row.moved).padStart(5)} (${row.delivered} ev)  gap ${row.maxGapMs}  longest ${row.mainMaxMs}  over ${row.mainOver}  late ${row.lateWhileMoving}/${row.movingFrames} moving  mainCpu ${row.mainCpuMs}  jsCpu ${row.jsCpuMs}  main ${String(row.mainBusyMs).padStart(6)} ms  js ${String(row.jsBusyMs).padStart(6)} ms  cpu ${String(row.cpuMs).padStart(6)} ms  commits ${row.commits}  renders ${row.renders}  scrollEv ${row.scrollEvents}  hoverEv ${row.hoverEvents}  viewUpd ${row.viewUpdates}  layouts ${row.layoutPasses}`);
+              console.log(`${label} ${key} #${r + 1} ${g.padEnd(11)} moved ${String(row.moved).padStart(5)} (${row.delivered} ev)  gap ${row.maxGapMs}  frames ${row.frames}  longest ${row.mainMaxMs}  over ${row.mainOver}  late ${row.lateWhileMoving}/${row.movingFrames} moving  mainCpu ${row.mainCpuMs}  jsCpu ${row.jsCpuMs}  main ${String(row.mainBusyMs).padStart(6)} ms  js ${String(row.jsBusyMs).padStart(6)} ms  cpu ${String(row.cpuMs).padStart(6)} ms  commits ${row.commits}  renders ${row.renders}  scrollEv ${row.scrollEvents}  hoverEv ${row.hoverEvents}  viewUpd ${row.viewUpdates}  layouts ${row.layoutPasses}`);
             }
           console.log(`${label} ${key} idle 2.2 s: main ${rows[0].mainBusyMs} ms  js ${rows[0].jsBusyMs} ms  cpu ${rows[0].cpuMs} ms`);
           report.runs.push({ key, tabs, profiles, at: new Date().toISOString(), rows });
@@ -422,7 +467,7 @@ async function run() {
 
 function compare(a, b) {
   const sides = [a, b].map((f) => JSON.parse(readFileSync(f, "utf8")));
-  const metrics = ["maxGapMs", "mainMaxMs", "mainOver", "lateWhileMoving", "movingMaxGapMs", "movingFrames", "hitTests", "mainCpuMs", "jsCpuMs", "mainBusyMs", "jsBusyMs", "cpuMs", "commits", "renders", "scrollEvents", "hoverEvents", "viewUpdates", "layoutPasses", "moved"];
+  const metrics = ["maxGapMs", "mainMaxMs", "frames", "mainOver", "lateWhileMoving", "movingMaxGapMs", "movingFrames", "hitTests", "mainCpuMs", "jsCpuMs", "mainBusyMs", "jsBusyMs", "cpuMs", "commits", "renders", "scrollEvents", "hoverEvents", "viewUpdates", "layoutPasses", "moved"];
   const group = (side) => {
     const out = new Map();
     for (const run of side.runs)

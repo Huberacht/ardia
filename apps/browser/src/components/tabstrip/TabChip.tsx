@@ -28,6 +28,7 @@ import { CELL_STEP, dragRange, leaveIndex, type DragGeometry } from "./stripGrou
 import { AUDIO_BADGE, CHIP_LABEL_GAP, CHIP_PAD, CLOSE_MIN_CHIP, FAVICON, GAP, ITEM_HEIGHT, ITEM_TOP, PINNED_CELL, tabRadius, TITLE_FADE_MAX, TITLE_FADE_MIN, TITLE_MIN_CHIP, TOP_STRIP_HEIGHT } from "./tokens";
 import { useStripDrag } from "./useStripDrag";
 import { StripScrollContext } from "./stripScroll";
+import { useStripSlide } from "./stripMotion";
 import { useStripCardHover } from "./StripHoverCard";
 import { useChipHover, useChipHovered, useOwnChipHover, type ChipHover } from "./reachableHover";
 import { TabPressArea } from "../sidebar/TabPressArea";
@@ -108,11 +109,12 @@ export const DraggableChip = memo(function DraggableChip({
   const card = useStripCardHover(windowId, tabId, drag.ref, hover);
   const dock = drag.crossed ? dockOf() : null;
   const drawn = useChipWidth(width, () => topLevel && !!strip?.current.animateWidths);
+  const [slid, slidRef] = useStripSlide(topLevel ? tabId : null);
   return (
     <Animated.View ref={drag.ref} {...drag.panHandlers} {...card} mouseDownCanMoveWindow={false} style={{ ...drag.style, zIndex: drag.dragging ? 10 : active ? 1 : 0 }}>
-      <Animated.View style={{ opacity: drag.crossed ? 0 : 1 }}>
+      <View {...slid} ref={slidRef} style={[{ opacity: drag.crossed ? 0 : 1 }, slid.style as object]}>
         <TabChip tabId={tabId} width={width} drawn={drawn} tuck={tuck} dragged={drag.dragging} hover={hover} />
-      </Animated.View>
+      </View>
       {dock && (
         <FadeIn
           style={{

@@ -28,11 +28,18 @@ export function useAnimatedStyle(style: object | null, own?: (view: View | null)
 }
 
 const sliding = new WeakSet<Animated.Value>();
+const appearing = new WeakMap<Animated.Value, Animated.Value>();
 
 export const setSliding = (shift: Animated.Value, on: boolean) => void (on ? sliding.add(shift) : sliding.delete(shift));
+export const setAppearing = (shift: Animated.Value, opacity: Animated.Value) => void appearing.set(shift, opacity);
+export const appearOf = (shift: Animated.Value) => appearing.get(shift) ?? null;
 
 export function useShift(shift: Animated.Value | null, own?: (view: View | null) => void): [Record<string, unknown>, Ref<View>] {
-  const style = useMemo(() => (shift ? { transform: [{ translateY: shift }] } : null), [shift]);
+  const style = useMemo(() => {
+    if (!shift) return null;
+    const opacity = appearing.get(shift);
+    return opacity ? { transform: [{ translateY: shift }], opacity } : { transform: [{ translateY: shift }] };
+  }, [shift]);
   const [moved, ref] = useAnimatedStyle(style, own);
   const drawn = useRef(moved);
   if (!shift || !sliding.has(shift)) drawn.current = moved;
