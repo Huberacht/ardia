@@ -83,3 +83,10 @@ test("ratchet: a count with no proof is advisory, one with proof gates", () => {
   const rows = ratchetCheck(runs("tab switch", [{ layoutPasses: 30, uiBlocks: 120 }]), ratchet);
   assert.deepEqual(rows.map((r) => [r.key, r.over, r.proven]), [["layoutPasses", true, false], ["uiBlocks", true, true]]);
 });
+
+test("an interaction a run attempted and measured no repetition of fails the check", () => {
+  const ratchet = { ceilings: { "sidebar collapse": { layoutPasses: 29 } } };
+  const rows = ratchetCheck({ frames: [{ interactions: { "sidebar collapse": [] }, failed: ["sidebar collapse"] }] }, ratchet);
+  assert.deepEqual(rows.map((r) => [r.key, r.over, r.proven]), [["samples", true, true]]);
+  assert.deepEqual(ratchetCheck({ frames: [{ interactions: {} }] }, ratchet), []);
+});

@@ -1,42 +1,44 @@
-import { useEffect, useInsertionEffect, useRef, useState } from "react";
+import { useEffect, useInsertionEffect, useMemo, useRef, useState } from "react";
 import { Animated, StyleSheet } from "react-native";
 import { switchOn } from "../../state/app/switches";
 import { curve, keepAttached } from "../ui/motion";
 import { reduceMotion } from "../ui";
 import { useWindowId } from "../../state/browser/hooks";
-import { consentToken, type ConsentToken } from "../../state/telemetry/consentPeriod";
+import { consentToken } from "../../state/telemetry/consentPeriod";
 import { noteSidebarSlide, noteSidebarSlideLandingOverdue } from "../../state/telemetry/dockCounts";
 import { peekShown, setDockMoving } from "../../state/windows/dockMotion";
 import { ARC_HIDE_MS, DOCK_SLIDE } from "./tokens";
-import { dockMove } from "./dockMotion";
+import { dockMove, dockSlides, type CardMotion } from "./dockMotion";
 
-type DockLayout = { docked: boolean; sliding: boolean };
+export type DockLayout = { docked: boolean; sliding: boolean };
 
-const DOCKED_LAYOUT_DEADLINE_MS = 250;
+const clock = {
+  later: (run: () => void, ms: number) => setTimeout(run, ms),
+  cancel: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
-export function useSidebarDock(open: boolean, animate: boolean, arc: boolean): { dock: Animated.Value; away: boolean; layout: DockLayout; laidOut: () => void } {
+export function useSidebarDock(open: boolean, animate: boolean, arc: boolean, motion: CardMotion): { dock: Animated.Value; away: boolean; layout: DockLayout; laidOut: () => void } {
   const windowId = useWindowId();
-  const dock = useRef(new Animated.Value(open ? 1 : 0)).current;
   const was = useRef(open);
+  const dock = useMemo(() => new Animated.Value(was.current ? 1 : 0), [motion]);
   const [away, setAway] = useState(!open);
   const [layout, setLayout] = useState<DockLayout>({ docked: open, sliding: false });
-  const landing = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const land = (overdue?: ConsentToken | null) => {
-    if (landing.current === null) return;
-    if (overdue !== undefined) noteSidebarSlideLandingOverdue(overdue);
-    clearTimeout(landing.current);
-    landing.current = null;
-    setTimeout(() => setDockMoving(windowId, false), 0);
-  };
-  const stopLanding = () => {
-    if (landing.current !== null) clearTimeout(landing.current);
-    landing.current = null;
-  };
+  const slides = useRef<ReturnType<typeof dockSlides>>(null);
+  slides.current ??= dockSlides(clock, () => setDockMoving(windowId, false));
+  const motionWas = useRef(motion);
   useInsertionEffect(() => keepAttached(dock), [dock]);
+  useEffect(() => {
+    if (motionWas.current === motion) return;
+    motionWas.current = motion;
+    slides.current!.end();
+    setDockMoving(windowId, false);
+    setLayout({ docked: was.current, sliding: false });
+    setAway(!was.current);
+  }, [motion]);
   useEffect(() => {
     if (was.current === open) return;
     was.current = open;
-    stopLanding();
+    const id = slides.current!.begin();
     const move = dockMove({ open, animated: animate && !reduceMotion() && switchOn("sidebarSlide"), arc, peekOut: peekShown(windowId) });
     if (move === "jump") {
       dock.stopAnimation();
@@ -46,8 +48,9 @@ export function useSidebarDock(open: boolean, animate: boolean, arc: boolean): {
       setAway(!open);
       return;
     }
+    const native = motion === "compositor";
     if (open) setAway(false);
-    setLayout({ docked: false, sliding: true });
+    setLayout({ docked: open && !native, sliding: native });
     setDockMoving(windowId, true);
     let pastTarget = false;
     const watch = dock.addListener(({ value }) => {
@@ -57,29 +60,26 @@ export function useSidebarDock(open: boolean, animate: boolean, arc: boolean): {
     const slideMs = move === "arcHide" ? ARC_HIDE_MS : DOCK_SLIDE.duration;
     const startedAt = Date.now();
     (move === "arcHide"
-      ? Animated.timing(dock, { toValue: 0, duration: ARC_HIDE_MS, easing: curve.enter, useNativeDriver: true })
-      : Animated.timing(dock, { toValue: open ? 1 : 0, ...DOCK_SLIDE, useNativeDriver: true })
+      ? Animated.timing(dock, { toValue: 0, duration: ARC_HIDE_MS, easing: curve.enter, useNativeDriver: native })
+      : Animated.timing(dock, { toValue: open ? 1 : 0, ...DOCK_SLIDE, useNativeDriver: native })
     ).start(({ finished }) => {
       dock.removeListener(watch);
-      if (!finished) return;
+      if (!finished || !slides.current!.isCurrent(id)) return;
       noteSidebarSlide(consent, pastTarget, Date.now() - startedAt - slideMs);
       setLayout({ docked: open, sliding: false });
-      if (!open) {
-        setDockMoving(windowId, false);
-        setAway(true);
-        return;
-      }
-      landing.current = setTimeout(() => land(consent), DOCKED_LAYOUT_DEADLINE_MS);
+      if (!open) setAway(true);
+      if (open && native) slides.current!.awaitLayout(id, () => noteSidebarSlideLandingOverdue(consent));
+      else setDockMoving(windowId, false);
     });
   }, [open]);
   useEffect(
     () => () => {
-      stopLanding();
+      slides.current!.end();
       setDockMoving(windowId, false);
     },
     [],
   );
-  return { dock, away, layout, laidOut: () => land() };
+  return { dock, away, layout, laidOut: () => slides.current!.laidOut() };
 }
 
 export const dockStyles = StyleSheet.create({
@@ -87,9 +87,8 @@ export const dockStyles = StyleSheet.create({
   column: { flex: 1 },
 });
 
-export function cardSlide(dock: Animated.Value, travel: number, vertical: boolean, radius: number) {
+export function cardSlide(dock: Animated.Value, travel: number, radius: number) {
   const shift = dock.interpolate({ inputRange: [0, 1], outputRange: [0, travel] });
-  if (vertical) return { clip: { overflow: "hidden" as const, borderRadius: radius }, content: { transform: [{ translateY: shift }] } };
   const back = dock.interpolate({ inputRange: [0, 1], outputRange: [0, -travel] });
   return { clip: { overflow: "hidden" as const, borderRadius: radius, transform: [{ translateX: shift }] }, content: { transform: [{ translateX: back }] } };
 }

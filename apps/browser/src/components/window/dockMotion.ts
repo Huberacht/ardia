@@ -124,3 +124,54 @@ export function dockMove(o: { open: boolean; animated: boolean; arc: boolean; pe
   if (!o.animated || (o.arc && o.open && o.peekOut)) return "jump";
   return o.arc && !o.open ? "arcHide" : "slide";
 }
+
+export type CardMotion = "compositor" | "frames";
+
+export const cardMotionFor = (o: { compositor: boolean; topTabs: boolean; split: boolean; cardToolbar: boolean }): CardMotion =>
+  o.compositor && !o.topTabs && !o.split && !o.cardToolbar ? "compositor" : "frames";
+
+export const DOCKED_LAYOUT_DEADLINE_MS = 250;
+
+export type DockSlideClock = { later(run: () => void, ms: number): unknown; cancel(handle: unknown): void };
+
+export function dockSlides(clock: DockSlideClock, still: () => void) {
+  let current = 0;
+  let landing: { id: number; deadline: unknown; release: unknown } | null = null;
+  const stop = () => {
+    if (!landing) return;
+    clock.cancel(landing.deadline);
+    if (landing.release !== null) clock.cancel(landing.release);
+    landing = null;
+  };
+  const land = (id: number, overdue?: () => void) => {
+    if (!landing || landing.id !== id || landing.release !== null) return;
+    clock.cancel(landing.deadline);
+    overdue?.();
+    landing.release = clock.later(() => {
+      if (landing?.id !== id) return;
+      landing = null;
+      if (id === current) still();
+    }, 0);
+  };
+  return {
+    begin(): number {
+      stop();
+      return ++current;
+    },
+    isCurrent: (id: number) => id === current,
+    awaitLayout(id: number, overdue: () => void): boolean {
+      if (id !== current) return false;
+      stop();
+      landing = { id, deadline: null, release: null };
+      landing.deadline = clock.later(() => land(id, overdue), DOCKED_LAYOUT_DEADLINE_MS);
+      return true;
+    },
+    laidOut() {
+      if (landing) land(landing.id);
+    },
+    end() {
+      stop();
+      current++;
+    },
+  };
+}

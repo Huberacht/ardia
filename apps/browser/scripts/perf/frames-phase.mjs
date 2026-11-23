@@ -138,6 +138,11 @@ function interactions(c) {
   let k = 0;
   const tabsShown = `const s = ac.store.getState(); return !(s.windows[${W}].autoHideTabs ?? s.settings.autoHideTabs);`;
   const tabsHidden = `const s = ac.store.getState(); return s.windows[${W}].autoHideTabs ?? s.settings.autoHideTabs;`;
+  const cardWidth = `(ac.windowLayout.useCardAnchors.getState()[${W}]?.width ?? 0)`;
+  const noteCard = () => run(`globalThis.__frameCardWidth = ${cardWidth}; return 1;`);
+  const settled = (hidden) =>
+    `const s = ac.store.getState(); const hidden = s.windows[${W}].autoHideTabs ?? s.settings.autoHideTabs; const grew = ${cardWidth} - globalThis.__frameCardWidth;
+    return hidden === ${hidden} && (${hidden} ? grew : -grew) >= ${CARD_SETTLED_TRAVEL};`;
   const want = async (open) => {
     if ((await run(tabsShown)) !== open) {
       await run(`ac.store.getState().toggleSidebar(${W}); return 1;`);
@@ -161,10 +166,10 @@ function interactions(c) {
     { name: "tab switch", window: 500, verify: `const s = ac.store.getState(); return s.windows[${W}].activeTabIds[s.windows[${W}].profileId] === globalThis.__frameTarget;`, before: reset, go: () => run(`globalThis.acPerf?.reset(); const t = ac.now(); const s = ac.store.getState(); const w = ${W};
         const ids = s.windows[w].tabIds.filter((id) => !s.tabs[id].pin); const id = ids[(${k++} * 7 + 3) % ids.length];
         globalThis.__frameTarget = id; ac.actions.switchToTab(id); return t;`) },
-    { name: "sidebar collapse", window: 800, verify: tabsHidden, before: async () => { await reset(); await want(true); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`) },
-    { name: "sidebar expand", window: 800, verify: tabsShown, before: async () => { await reset(); await want(false); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`), after: () => sleep(300) },
-    { name: "sidebar collapse (address bar in the sidebar)", window: 800, verify: tabsHidden, before: async () => { await reset(); await arcLayout(true); await want(true); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`) },
-    { name: "sidebar expand (address bar in the sidebar)", window: 800, verify: tabsShown, before: async () => { await reset(); await arcLayout(true); await want(false); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`), after: async () => { await sleep(300); await arcLayout(false); } },
+    { name: "sidebar collapse", window: 800, required: true, verify: settled(true), before: async () => { await reset(); await want(true); await noteCard(); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`) },
+    { name: "sidebar expand", window: 800, required: true, verify: settled(false), before: async () => { await reset(); await want(false); await noteCard(); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`), after: () => sleep(300) },
+    { name: "sidebar collapse (address bar in the sidebar)", window: 800, required: true, verify: settled(true), before: async () => { await reset(); await arcLayout(true); await want(true); await noteCard(); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`) },
+    { name: "sidebar expand (address bar in the sidebar)", window: 800, required: true, verify: settled(false), before: async () => { await reset(); await arcLayout(true); await want(false); await noteCard(); }, go: () => store(`ac.store.getState().toggleSidebar(${W})`), after: async () => { await sleep(300); await arcLayout(false); } },
     { name: "profile swipe (next profile)", window: 1200, verify: `return ${win}.profileId !== globalThis.__frameProfile;`, before: async () => { await reset(); await run(`globalThis.__frameProfile = ${win}.profileId; return 1;`); }, go: () => store(`ac.runCommand({ command: "nextProfile", arg: null, windowId: ${W} })`), after: () => sleep(600) },
     { name: "profile swipe (previous profile)", window: 1200, verify: `return ${win}.profileId !== globalThis.__frameProfile;`, before: () => run(`globalThis.__frameProfile = ${win}.profileId; return 1;`), go: () => store(`ac.runCommand({ command: "previousProfile", arg: null, windowId: ${W} })`), after: () => sleep(600) },
     { name: "sidebar scroll (200 tabs, flick down and back)", window: 2300, before: reset,
@@ -304,6 +309,10 @@ export async function framesRun(c, side, i, { counts }) {
         if (stats.frames) rows.push(stats);
       }
       out.interactions[it.name] = rows;
+      if (it.required && !rows.length) {
+        out.failed = [...(out.failed ?? []), it.name];
+        log(`${side.tag}frames ${i} ${it.name}: FAILED, no repetition measured`);
+      }
       log(`${side.tag}frames ${i} ${it.name}: ${rows.length} reps, frames ${median(rows.map((r) => r.frames))}, >8.33 ${median(rows.map((r) => r.over8))}, worst ${median(rows.map((r) => r.worst)).toFixed?.(1)} ms, main worst ${median(rows.map((r) => r.mainWorst)).toFixed?.(1)} ms`);
     }
     const after = JSON.parse(acperf("display").out || "{}");
@@ -379,6 +388,7 @@ export function frameTable(resultsByLabel) {
   return out.join("\n");
 }
 
+const CARD_SETTLED_TRAVEL = 40;
 const RATCHET_FILE = join(dirname(fileURLToPath(import.meta.url)), "frames-ratchet.json");
 const GATED = ["layoutPasses", "mountBatches", "uiBlocks", "viewUpdates", "commits", "hostUpdates"];
 const NOT_GATED = ["idle (no interaction)", "new window"];
@@ -405,7 +415,9 @@ export function ratchetInit(results) {
 export function ratchetCheck(results, ratchet) {
   const rows = [];
   const proven = (key) => !!ratchet.proof?.[key];
+  const failed = new Set((results.frames ?? []).flatMap((r) => r.failed ?? []));
   for (const [name, limits] of Object.entries(ratchet.ceilings)) {
+    if (failed.has(name)) rows.push({ name, key: "samples", ceiling: 1, got: 0, over: true, proven: true });
     for (const [key, ceiling] of Object.entries(limits)) {
       const values = repsOf(results, name).map((x) => x[key]).filter(Number.isFinite);
       if (!values.length) continue;

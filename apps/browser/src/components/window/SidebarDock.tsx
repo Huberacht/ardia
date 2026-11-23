@@ -5,7 +5,7 @@ import { switchOn } from "../../state/app/switches";
 import { useTheme } from "../ui/theme";
 import { useGated } from "../ui/motion";
 import { Panel, WindowBackdrop, WindowDragRegion } from "../ui";
-import { useSidebarSide, useWindowFullScreen, useWindowId } from "../../state/browser/hooks";
+import { useActiveTabId, useSidebarSide, useWindowFullScreen, useWindowId } from "../../state/browser/hooks";
 import { useSidebarDockState } from "../../state/windows/hooks";
 import { useShownSidebarWidth } from "../../state/sidebar/shownWidth";
 import { useCardTopInset, useSidebarControlsRowIn, useToolbarLightsCenter } from "../../state/windows/layout";
@@ -26,6 +26,8 @@ import {
 } from "../../state/telemetry/dockCounts";
 import { ProfileSwipe } from "./ProfileSwipe";
 import { cardSlide, dockStyles as styles, useSidebarDock } from "./useSidebarDock";
+import { CARD_SLIDES_ON_COMPOSITOR } from "../../state/windows/cardSlide";
+import { useSplitOf } from "../../state/windows/card";
 import { SHADOWS } from "./tokens";
 import {
   EDGE_ARMED,
@@ -33,6 +35,7 @@ import {
   PEEK_EDGE_STRIP,
   TAB_DRAG_EDGE_STRIP,
   dockState,
+  cardMotionFor,
   dockedCardInset,
   edgeClosed,
   edgeEventReveals,
@@ -86,30 +89,43 @@ export function DockedLayout({
   const arc = addressBar && !topTabs && switchOn("sidebarSlide");
   const toolbarLights = useToolbarLightsCenter();
   const lights = addressBar && !topTabs ? ARC_LIGHTS_CENTER : toolbarLights;
-  const { dock, away, layout, laidOut } = useSidebarDock(open, !fullscreen, arc);
+  const split = !!useSplitOf(useActiveTabId());
+  const motion = cardMotionFor({ compositor: CARD_SLIDES_ON_COMPOSITOR, topTabs, split, cardToolbar: !addressBar });
+  const { dock, away, layout, laidOut } = useSidebarDock(open, !fullscreen, arc, motion);
   const frame = useCardFrame();
   const sideInset = right ? inset.right : inset.left;
   const dockedInset = dockedCardInset(width, frame.inset);
-  const edge = layout.docked ? dockedInset : sideInset;
   const hiddenTop = useCardTopInset(frame.inset);
-  const travel = topTabs ? inset.top - hiddenTop : (dockedInset - sideInset) * (right ? -1 : 1);
-  const slide = useMemo(() => cardSlide(dock, travel, topTabs, frame.radius), [dock, travel, topTabs, frame.radius]);
+  const travel = (dockedInset - sideInset) * (right ? -1 : 1);
+  const frames = useMemo(
+    () =>
+      motion === "frames"
+        ? {
+            edge: dock.interpolate({ inputRange: [0, 1], outputRange: [sideInset, dockedInset] }),
+            top: dock.interpolate({ inputRange: [0, 1], outputRange: [hiddenTop, inset.top] }),
+          }
+        : null,
+    [motion, dock, sideInset, dockedInset, hiddenTop, inset.top],
+  );
+  const slide = useMemo(() => (motion === "compositor" ? cardSlide(dock, travel, frame.radius) : null), [motion, dock, travel, frame.radius]);
   const stripY = useMemo(() => dock.interpolate({ inputRange: [0, 1], outputRange: [-inset.top, 0] }), [dock, inset.top]);
   const stripShown = topTabs && (open || !away);
   const moving = useDockMotion((m) => !!m.moving[windowId]);
   useTopStripLights(windowId, dock, topTabs && !fullscreen, inset.top, open);
-  const sliding = layout.sliding && !fullscreen;
+  const sliding = !!slide && layout.sliding && !fullscreen;
+  const edge = frames ? frames.edge : layout.docked ? dockedInset : sideInset;
   const fill = fullscreen ? styles.column : styles.row;
+  const Padded = frames ? Animated.View : View;
   return (
     <>
-      <View
+      <Padded
         style={
           fullscreen
             ? styles.column
             : {
                 flex: 1,
                 flexDirection: "row",
-                paddingTop: topTabs ? (layout.docked ? inset.top : hiddenTop) : inset.top,
+                paddingTop: topTabs ? (frames ? frames.top : layout.docked ? inset.top : hiddenTop) : inset.top,
                 paddingRight: !topTabs && right ? edge : inset.right,
                 paddingBottom: inset.bottom,
                 paddingLeft: !topTabs && !right ? edge : inset.left,
@@ -118,11 +134,11 @@ export function DockedLayout({
       >
         {!fullscreen && <WindowDragRegion style={StyleSheet.absoluteFill} />}
         <Animated.View style={sliding ? [fill, slide.clip] : fill}>
-          <Animated.View style={sliding ? [fill, slide.content] : fill} onLayout={layout.docked && moving ? laidOut : undefined}>
+          <Animated.View style={sliding ? [fill, slide.content] : fill} onLayout={slide && layout.docked && moving ? laidOut : undefined}>
             {children}
           </Animated.View>
         </Animated.View>
-      </View>
+      </Padded>
       {topStrip &&
         stripShown && (
           <Animated.View

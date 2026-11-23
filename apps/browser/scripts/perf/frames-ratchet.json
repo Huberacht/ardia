@@ -42,20 +42,36 @@
    "hostUpdates": 202
   },
   "sidebar collapse": {
-   "layoutPasses": 29,
+   "layoutPasses": 46,
    "mountBatches": 11,
-   "uiBlocks": 66,
-   "viewUpdates": 18,
+   "uiBlocks": 4584,
+   "viewUpdates": 21,
+   "commits": 14,
+   "hostUpdates": 241
+  },
+  "sidebar expand": {
+   "layoutPasses": 54,
+   "mountBatches": 11,
+   "uiBlocks": 4584,
+   "viewUpdates": 21,
+   "commits": 14,
+   "hostUpdates": 241
+  },
+  "sidebar collapse (address bar in the sidebar)": {
+   "layoutPasses": 28,
+   "mountBatches": 28,
+   "uiBlocks": 56,
+   "viewUpdates": 14,
    "commits": 9,
    "hostUpdates": 118
   },
-  "sidebar expand": {
-   "layoutPasses": 33,
-   "mountBatches": 11,
-   "uiBlocks": 69,
-   "viewUpdates": 18,
-   "commits": 9,
-   "hostUpdates": 100
+  "sidebar expand (address bar in the sidebar)": {
+   "layoutPasses": 32,
+   "mountBatches": 32,
+   "uiBlocks": 64,
+   "viewUpdates": 16,
+   "commits": 8,
+   "hostUpdates": 115
   },
   "profile swipe (next profile)": {
    "layoutPasses": 41,
