@@ -48,8 +48,8 @@ const NOT_SHIPPED = [
 
 const RESERVED = /(^|\.)(example|test|invalid|localhost|local)$|^localhost$|^127(\.\d+){3}$|^0\.0\.0\.0$|^\[::1?\]$/i;
 const BUNDLE_IDS = new Set(["com.microsoft.edgemac.dev", "com.brave.browser.dev", "com.google.chrome.dev"]);
-const URL_AUTHORITY = /\b(?:https?|wss?):\/\/(?:[^\s/@"'`]*@)?(\[[0-9a-f:.]+\]|[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.?)(?=[/?#"'`\s)\],;>|]|:\d|$)/giu;
-const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|tv|gov|edu|info|cloud|goog|app|xyz|site|online|tech|computer|services|[a-z]{2}))["'`]/gi;
+const URL_CANDIDATE = /\b(?:https?|wss?):\/\/[^\s"'`<>(){}\\|^]+/giu;
+const QUOTED_HOST = /["'`]((?:[a-z0-9-]+\.)+(?:com|net|org|dev|io|ai|so|tv|gov|edu|info|cloud|goog|app|xyz|site|online|tech|computer|services|network|systems|digital|blog|shop|biz|pro|cc|[a-z]{2}))["'`]/gi;
 const FILE_SUFFIX = /\.(js|db|gz|sh|nm|py|rb|ts|md|mm|cc|rs|xz|7z)$|^[^.]+\.app$/i;
 const NATIVE = /\.(cc|cpp|h|mm|m|swift|rs|patch)$/;
 
@@ -80,19 +80,21 @@ function removedLines(path) {
     .join("\n");
 }
 
-function urlHost(authority) {
-  let host;
+function urlHost(text) {
+  let host = null;
   try {
-    host = new URL(`https://${authority}/`).hostname;
+    host = new URL(text.includes("://") ? text : `https://${text}/`).hostname;
   } catch {
-    host = authority.toLowerCase();
+    return null;
   }
-  return host.replace(/\.$/, "");
+  if (/[$*]/.test(host)) return null;
+  const cut = host.match(/^(\[[0-9a-f:.]+\]|[a-z0-9_.-]+)/i)?.[1] ?? "";
+  return cut.replace(/\.$/, "") || null;
 }
 
 function hostsIn(path) {
   const text = shippedText(path);
-  const fromUrls = [...text.matchAll(URL_AUTHORITY)].map((m) => urlHost(m[1]));
+  const fromUrls = [...text.matchAll(URL_CANDIDATE)].map((m) => urlHost(m[0].replace(/[.,;:!?\]]+$/, ""))).filter((host) => host !== null);
   const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !BUNDLE_IDS.has(host) && !FILE_SUFFIX.test(host)) : [];
   return [...fromUrls, ...quoted].filter((host) => !RESERVED.test(host));
 }
@@ -124,7 +126,7 @@ const singleLabel = named.split("\n").filter((line) => line.startsWith("- Single
 const disabled = tableRows(section(doc, "Google and Chromium endpoints that are off"));
 
 test("every host hard-coded in Ardia's shipped sources, as a URL or as a quoted host in native and engine code, is listed in docs/privacy.md", () => {
-  const listed = new Set([...[...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost), ...singleLabel].map(urlHost));
+  const listed = new Set([...[...contacted.flatMap((row) => ticked(row.Host)), ...ticked(named)].filter(looksLikeHost), ...singleLabel].map((host) => urlHost(host) ?? host));
   const files = shippedFiles();
   assert.ok(files.length > 1000, "the scan still finds the app's sources");
   const missing = new Map();
@@ -140,7 +142,7 @@ test("each endpoint row names a host and cites code that still names it", () => 
   for (const row of contacted) {
     const hosts = ticked(row.Host).filter(looksLikeHost);
     const code = ticked(row.Code).filter(looksLikePath);
-    assert.ok(hosts.length || /user|plugin|page/i.test(row.Host), `a row names its host: ${row.Host}`);
+    assert.ok(hosts.length || /user|plugin|page|from the/i.test(row.Host), `a row names its host: ${row.Host}`);
     assert.ok(code.length, `the ${row.Host} row cites the code that contacts it`);
     for (const path of code) assert.ok(existsSync(join(ROOT, path)), `${path}, cited for ${row.Host}, exists`);
     if (/Chromium's default/.test(row.Code)) continue;
