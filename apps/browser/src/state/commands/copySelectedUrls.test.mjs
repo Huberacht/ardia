@@ -54,6 +54,28 @@ test("Email Page Location mails the page's address without trackers, in the body
   assert.deepEqual(opened, [`mailto:?subject=${encodeURIComponent("https://shop.example/item?id=7")}&body=${encodeURIComponent("https://shop.example/item?id=7")}`]);
 });
 
+test("Email Page Location cleans a subject that is the page's own tracked address or another tracked address", () => {
+  const opened = [];
+  const before = shellNativeModules.ArdiaApp.openExternalURL;
+  shellNativeModules.ArdiaApp.openExternalURL = (url) => (opened.push(url), Promise.resolve(true));
+  const tracked = "https://shop.example/item?id=7&utm_source=mail";
+  try {
+    S().hydrate({});
+    const w = S().createWindow({ url: tracked });
+    S().setFocusedWindow(w);
+    const t = S().windows[w].tabIds[0];
+    for (const title of [tracked, ` ${tracked}\n`, "https://other.example/?gclid=1&q=2", "Item & more"]) {
+      S().updateTab(t, { title });
+      runCommand({ command: "emailPageLocation", arg: null, windowId: w });
+    }
+  } finally {
+    shellNativeModules.ArdiaApp.openExternalURL = before;
+  }
+  const subjects = opened.map((url) => decodeURIComponent(/subject=([^&]*)/.exec(url)[1]));
+  assert.deepEqual(subjects, ["https://shop.example/item?id=7", "https://shop.example/item?id=7", "https://other.example/?q=2", "Item & more"]);
+  for (const url of opened) assert.doesNotMatch(decodeURIComponent(url), /utm_|gclid/);
+});
+
 test("copying several selected tabs counts each address that lost a tracker", async () => {
   const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
   const { takeUrlCopyCounts } = await import("../telemetry/urlCopies.ts");

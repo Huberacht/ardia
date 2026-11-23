@@ -3,7 +3,7 @@ import { downloads, type DownloadEvent } from "../../platform/downloads";
 import { pages, type PageEngineEvent, type PageRequestAnswer } from "../../platform/pages";
 
 export type { ReadableContent } from "../../platform/pages";
-import { cleanUrl } from "@ardia/core/src/cleanUrl.ts";
+import { cleanLinkTitle, cleanUrl } from "@ardia/core/src/cleanUrl.ts";
 import { copyLink, openExternal, preferredLanguage, pressHaptic, shareLink, sharePageWithPrint, successHaptic } from "../../platform/system";
 import { cancelSearch, closeArchive, deckPullCommitted, openTab, showDeck, takeSheetFromSettings, useBrowse } from "../browse/store";
 import { display } from "../search/omnibox";
@@ -299,10 +299,10 @@ export const shareOverPageMenu = () => {
 
 async function shareFrom(tab: BrowserTab) {
   if (!shareOffersPrint()) {
-    await shareLink(cleanUrl(tab.url), tab.title);
+    await shareLink(cleanUrl(tab.url), cleanLinkTitle(tab.title, tab.url));
     return;
   }
-  const activity = await sharePageWithPrint(tab.id, cleanUrl(tab.url), tab.title);
+  const activity = await sharePageWithPrint(tab.id, cleanUrl(tab.url), cleanLinkTitle(tab.title, tab.url));
   if (activity === PRINT_ACTIVITY && !tab.isPrivate) countUsage("pages_printed");
 }
 
@@ -636,7 +636,7 @@ export function pressAction(press: Press, action: PressAction) {
       return;
     }
     case "share":
-      quietly(() => shareLink(cleanUrl(plan.url), ""));
+      quietly(() => shareLink(cleanUrl(plan.url), cleanLinkTitle("", plan.url)));
       return;
     case "download":
       quietly(() => pages.download(plan.pageId, plan.url));

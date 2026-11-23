@@ -971,6 +971,7 @@ function calculate(raw        )                     {
 __define("packages/core/src/cleanUrl.ts", function (exports, __require) {
   __export(exports, "cleanUrlReport", () => cleanUrlReport);
   __export(exports, "cleanUrl", () => cleanUrl);
+  __export(exports, "cleanLinkTitle", () => cleanLinkTitle);
   __export(exports, "markdownLink", () => markdownLink);
   __export(exports, "linkLines", () => linkLines);
 
@@ -1060,11 +1061,17 @@ function markdownDestination(url        )         {
   return /[\s<>]/.test(oneLine) ? `<${oneLine.replace(/[<>\\]/g, "\\$&")}>` : oneLine.replace(/[()\\]/g, "\\$&");
 }
 
+                                                                                      
+
+function cleanLinkTitle(title                           , url        )               {
+  const oneLine = (title ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
+  if (!oneLine) return ""                ;
+  return (oneLine === url.trim() ? cleanUrl(url) : cleanUrl(oneLine))                          ;
+}
+
 function markdownLink(title        , url        )           {
   const clean = cleanUrl(url);
-  const oneLine = title.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
-  const label = !oneLine || oneLine === url.trim() ? clean : cleanUrl(oneLine);
-  return `[${markdownLabel(label)}](${markdownDestination(clean)})`            ;
+  return `[${markdownLabel(cleanLinkTitle(title, url) || clean)}](${markdownDestination(clean)})`            ;
 }
 
 function linkLines(lines                     , markdown         )           {

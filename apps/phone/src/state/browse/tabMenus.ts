@@ -2,7 +2,7 @@ import { copy } from "../../lib/platformCopy";
 import { actionWords } from "../../lib/sharedWords";
 import { iconRoleSymbols as iconRoles } from "../../lib/iconRoles";
 import { hostOf } from "@ardia/core/src/omnibox";
-import { cleanUrl } from "@ardia/core/src/cleanUrl.ts";
+import { cleanLinkTitle, cleanUrl } from "@ardia/core/src/cleanUrl.ts";
 import { copyLink as copyCleanLink, copyText, pressHaptic, shareLink, successHaptic } from "../../platform/system";
 import { linkToCopy } from "../page/linkCopy";
 import { settled } from "../pages/store";
@@ -31,7 +31,7 @@ export function trayRowActions(row: TrayRow): RowAction[] {
   return [
     { label: incognito ? "Open in New Tab" : "Open in Incognito Tab", icon, run: () => openSwitchingMode(row.url, "typed") },
     { label: actionWords.copyLink, icon: iconRoles.copyLink, run: () => copyLink(row.url) },
-    { label: actionWords.share, icon: iconRoles.share, run: () => quietly(() => shareLink(cleanUrl(row.url), row.title)) },
+    { label: actionWords.share, icon: iconRoles.share, run: () => quietly(() => shareLink(cleanUrl(row.url), cleanLinkTitle(row.title, row.url))) },
   ];
 }
 
@@ -54,7 +54,7 @@ export function copyTabLink(tab: BrowserTab) {
 
 export function shareTab(tab: BrowserTab) {
   if (!canShareTab(tab)) return;
-  quietly(() => shareLink(cleanUrl(tab.url), tab.title));
+  quietly(() => shareLink(cleanUrl(tab.url), cleanLinkTitle(tab.title, tab.url)));
 }
 
 export const menuOpenedHaptic = () => quietly(pressHaptic);
@@ -74,4 +74,4 @@ export const deleteArchivedTab = (tab: BrowserTab) => deleteArchivedTabsById([ta
 
 export const deleteArchivedTabs = (tabs: readonly BrowserTab[]) => deleteArchivedTabsById(tabs.map((tab) => tab.id));
 
-export const shareUrl = (url: string, title: string) => quietly(() => shareLink(cleanUrl(url), title));
+export const shareUrl = (url: string, title: string) => quietly(() => shareLink(cleanUrl(url), cleanLinkTitle(title, url)));

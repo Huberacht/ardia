@@ -493,8 +493,8 @@ enum WebKitCopiedAddresses {
     guard request == latest, board.changeCount == latestAskedAt else { return false }
     board.clearContents()
     if let url = URL(string: address), url.scheme != nil { board.writeObjects([url as NSURL]) }
-    board.setString(address, forType: .string)
+    let wrote = board.setString(address, forType: .string)
     latestAskedAt = board.changeCount
-    return true
+    return wrote
   }
 }

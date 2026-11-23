@@ -1,4 +1,5 @@
-import { cleanUrl, cleanUrlReport, linkLines, markdownLink, type CleanedUrl, type LinkText } from "@ardia/core";
+import { call } from "@ardia/ardiacore";
+import { cleanLinkTitle, cleanUrl, cleanUrlReport, linkLines, markdownLink, type CleanedTitle, type CleanedUrl, type LinkText } from "@ardia/core";
 import { copyAddress, copyLink, copyText, copyUncleanedUrl } from "./clipboard";
 import { sharePage, sharePageVia } from "./share";
 
@@ -23,7 +24,15 @@ export function rawStringsAreRefusedAtLinkSinks() {
   linkLines([raw], false);
   // @ts-expect-error
   sharePage(markdownLink("Title", raw), null, null, null);
-  return [forged, forgedText];
+  // @ts-expect-error
+  sharePage(cleanUrl(raw), raw, null, null);
+  // @ts-expect-error
+  sharePageVia("com.apple.share.Mail.compose", cleanUrl(raw), raw, null);
+  // @ts-expect-error
+  const forgedTitle: CleanedTitle = raw;
+  // @ts-expect-error
+  void call("webKit.writeCopiedAddress", { request: 1, url: raw });
+  return [forged, forgedText, forgedTitle];
 }
 
 export function cleanedUrlsReachLinkSinks() {
@@ -32,8 +41,9 @@ export function cleanedUrlsReachLinkSinks() {
   copyLink(markdownLink("Title", raw));
   copyAddress(cleanUrl(raw));
   copyLink(linkLines([cleanUrl(raw), markdownLink("Title", raw)], true));
-  void sharePage(cleanUrl(raw), "Title", null, null);
-  void sharePageVia("com.apple.share.Mail.compose", cleanUrl(raw), null, null);
+  void sharePage(cleanUrl(raw), cleanLinkTitle("Title", raw), null, null);
+  void sharePageVia("com.apple.share.Mail.compose", cleanUrl(raw), cleanLinkTitle(raw, raw), null);
+  void call("webKit.writeCopiedAddress", { request: 1, url: cleanUrl(raw) });
   copyText("123456");
   copyUncleanedUrl(raw);
 }

@@ -1,4 +1,4 @@
-import type { CleanedUrl, LinkText } from "@ardia/core/src/cleanUrl.ts";
+import type { CleanedTitle, CleanedUrl, LinkText } from "@ardia/core/src/cleanUrl.ts";
 import { clipboard, pages, system as nativeSystem, type ClipboardOffer } from "@ardia/phone-native";
 import { getStringAsync, hasStringAsync, setStringAsync } from "expo-clipboard";
 import { requireOptionalNativeModule } from "expo-modules-core";
@@ -10,9 +10,9 @@ export const copyText = (text: string) => setStringAsync(text);
 
 export const copyLink = (url: CleanedUrl) => setStringAsync(url);
 
-export const shareLink = (url: CleanedUrl, title: string) => Share.share({ message: url, url, title });
+export const shareLink = (url: CleanedUrl, title: CleanedTitle) => Share.share({ message: url, url, title });
 
-export const sharePageWithPrint = (pageId: string, url: CleanedUrl, title: string) => pages.sharePage(pageId, url, title);
+export const sharePageWithPrint = (pageId: string, url: CleanedUrl, title: CleanedTitle) => pages.sharePage(pageId, url, title);
 
 export const openExternal = (url: string) => Linking.openURL(url);
 

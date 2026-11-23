@@ -16,7 +16,7 @@ const copied = [];
 const shared = [];
 shellNativeModules.ArdiaShell.copyText = (text) => void copied.push(text);
 shellNativeModules.ArdiaApp.share = (url, title) => void shared.push([url, title]);
-shellNativeModules.ArdiaApp.shareVia = (service, url) => void shared.push([service, url]);
+shellNativeModules.ArdiaApp.shareVia = (service, url, title) => void shared.push(title === undefined || title === null ? [service, url] : [service, url, title]);
 const tracked = "https://shop.example/item?id=7&utm_source=mail&fbclid=abc#reviews";
 const clean = "https://shop.example/item?id=7#reviews";
 const reset = () => {
@@ -88,7 +88,22 @@ test("sharing a page, a link or a tab sends the address without trackers, and a 
     [clean, "Item"],
     ["https://news.example/a?page=2", "A"],
     ["file:///tmp/Ardia%20Shared%20Images/i.png?utm_source=x", null],
-    ["com.apple.share.Mail.compose", clean],
+    ["com.apple.share.Mail.compose", clean, "Item"],
+  ]);
+});
+
+test("a shared page or link whose title is a tracked address shares that title without trackers too", async () => {
+  reset();
+  const tab = { url: tracked, title: tracked, customTitle: null, windowId: "w1" };
+  await shareTab(tab, "w1");
+  await shareTab(tab, "w1", "com.apple.share.Mail.compose");
+  await shareTab({ ...tab, customTitle: "https://other.example/p?ref=1&utm_campaign=z" }, "w1");
+  await shareFromPage(tab, { kind: "link", url: "https://news.example/a?gclid=1&page=2", title: "https://news.example/a?gclid=1&page=2" });
+  assert.deepEqual(shared, [
+    [clean, clean],
+    ["com.apple.share.Mail.compose", clean, clean],
+    [clean, "https://other.example/p?ref=1"],
+    ["https://news.example/a?page=2", "https://news.example/a?page=2"],
   ]);
 });
 

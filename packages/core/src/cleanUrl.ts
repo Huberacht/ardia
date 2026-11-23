@@ -85,11 +85,17 @@ function markdownDestination(url: string): string {
   return /[\s<>]/.test(oneLine) ? `<${oneLine.replace(/[<>\\]/g, "\\$&")}>` : oneLine.replace(/[()\\]/g, "\\$&");
 }
 
+export type CleanedTitle = string & { readonly titleTrackersStripped: unique symbol };
+
+export function cleanLinkTitle(title: string | null | undefined, url: string): CleanedTitle {
+  const oneLine = (title ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
+  if (!oneLine) return "" as CleanedTitle;
+  return (oneLine === url.trim() ? cleanUrl(url) : cleanUrl(oneLine)) as string as CleanedTitle;
+}
+
 export function markdownLink(title: string, url: string): LinkText {
   const clean = cleanUrl(url);
-  const oneLine = title.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
-  const label = !oneLine || oneLine === url.trim() ? clean : cleanUrl(oneLine);
-  return `[${markdownLabel(label)}](${markdownDestination(clean)})` as LinkText;
+  return `[${markdownLabel(cleanLinkTitle(title, url) || clean)}](${markdownDestination(clean)})` as LinkText;
 }
 
 export function linkLines(lines: readonly LinkText[], markdown: boolean): LinkText {

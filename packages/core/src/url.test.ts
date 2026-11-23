@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PSL_TLDS } from "./tlds.ts";
 import { domainToASCII } from "node:url";
-import { cleanUrl, cleanUrlReport, linkLines, markdownLink } from "./cleanUrl.ts";
+import { cleanLinkTitle, cleanUrl, cleanUrlReport, linkLines, markdownLink } from "./cleanUrl.ts";
 import { displayHost, hostSpoofReason, punycodeEncode } from "./idn.ts";
 import { breadcrumb, classifyPaste, fixupUrl, resolveInput, sameAddress, spacedAddressGuess, urlForDisplay } from "./omnibox.ts";
 import { displayUrl } from "./suggest.ts";
@@ -397,6 +397,16 @@ test("every Markdown link reads back as one link whose destination is the clean 
       const shown = title.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
       assert.equal(label, !shown || shown === url ? cleanUrl(url) : cleanUrl(shown), JSON.stringify(title));
     }
+});
+
+test("a link title that is a tracked address loses its trackers, and any other title only its line breaks", () => {
+  const url = "https://shop.example/item?id=7&utm_source=mail";
+  assert.equal(cleanLinkTitle(url, url), "https://shop.example/item?id=7");
+  assert.equal(cleanLinkTitle(`  ${url}\n`, url), "https://shop.example/item?id=7");
+  assert.equal(cleanLinkTitle("https://other.example/p?ref=1&utm_campaign=z", url), "https://other.example/p?ref=1");
+  assert.equal(cleanLinkTitle("Shop\n\nItem ?utm_source=x", url), "Shop Item ?utm_source=x");
+  assert.equal(cleanLinkTitle("Item & more", url), "Item & more");
+  for (const empty of ["", "  \n ", null, undefined]) assert.equal(cleanLinkTitle(empty, url), "");
 });
 
 test("a title that is the page's tracked address with whitespace around it is labelled with the clean address", () => {
