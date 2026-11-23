@@ -1,6 +1,6 @@
 import { engineProfile } from "../browser/model";
 import { clearSiteData, getSiteSettings, resetSiteSettings, setSiteSetting, setZoom, type SiteSettingType, type SiteSettingValue } from "../site/siteSettings";
-import { getSiteSettingsOrigins, getZoomLevels } from "../../platform/siteSettings";
+import { getSiteSettingsOrigins, getZoomLevels, registrableDomainsOf } from "../../platform/siteSettings";
 import { getContentBlocker, isContentBlockerAllowed, setContentBlockerAllowed } from "../../platform/contentBlocker";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { refreshExtensions, reload, removeExtension, setEnabled, setPinned, findExtension } from "../extensions/actions";
@@ -126,13 +126,45 @@ async function adBlocker() {
   return { enabled: state.enabled === true, allowedSites: [...state.allowedHosts].sort() };
 }
 
-async function setAdsAllowed(params: Record<string, unknown>, call: SocketCall, allowed: boolean) {
-  const site = siteOf(params.site);
-  if (!(await adBlocker()).enabled) throw new OpError("refused", "The ad blocker is off in Settings › General, so it blocks nothing on any site.");
+const ANY_PROFILE = "";
+
+async function oneSiteOf(value: unknown): Promise<string> {
+  const site = siteOf(value);
+  const probe = `ardia-probe.${site}`;
+  const { domains } = await registrableDomainsOf(ANY_PROFILE, [site, probe]).catch(() => {
+    throw new OpError("failed", "Ardia couldn't check whether that's one site; try again.");
+  });
+  const registrable = domains?.[0];
+  if (typeof registrable !== "string" || domains[1] !== registrable || !(site === registrable || site.endsWith(`.${registrable}`))) {
+    throw new OpError("bad_request", `${site} isn't one site: it's a public suffix, an IP address or a name outside the public registries, so trusting it would cover sites run by others. Give the site itself, like example.com or app.example.com.`);
+  }
+  return site;
+}
+
+async function allowAds(params: Record<string, unknown>, call: SocketCall) {
+  const site = await oneSiteOf(params.site);
+  await adBlocker();
   call.stillServing();
-  await setContentBlockerAllowed(site, allowed);
-  expect((await isContentBlockerAllowed(site)) === allowed, `ads on ${site} are still ${allowed ? "blocked" : "allowed"}.`);
-  return { site, adsAllowed: allowed, ...(await adBlocker()) };
+  await setContentBlockerAllowed(site, true);
+  expect(await isContentBlockerAllowed(site), `${site} isn't in the ad blocker's trusted list.`);
+  return { site, trusted: true, ...(await adBlocker()) };
+}
+
+async function blockAds(params: Record<string, unknown>, call: SocketCall) {
+  const site = siteOf(params.site);
+  const before = await adBlocker();
+  if (!before.allowedSites.includes(site)) {
+    const broader = before.allowedSites.find((entry) => site.endsWith(`.${entry}`));
+    throw new OpError(
+      "refused",
+      broader ? `${site} isn't in the trusted list itself; ${broader} is, and covers it. Block ads on ${broader} to take that entry out.` : `${site} isn't in the ad blocker's trusted list.`,
+    );
+  }
+  call.stillServing();
+  await setContentBlockerAllowed(site, false);
+  const after = await adBlocker();
+  expect(!after.allowedSites.includes(site), `${site} is still in the ad blocker's trusted list.`);
+  return { site, trusted: false, ...after };
 }
 
 const EXTENSION = { profile: PROFILE, id: id("An extension id from extensions.list") };
@@ -172,18 +204,18 @@ export const SITE_METHODS: MethodSpec[] = [
   {
     name: "sites.allowAds",
     mutates: true,
-    description: "Let a site through the built-in ad blocker, as turning off Block Ads & Trackers in Site Controls does; it covers the site's subdomains, in every profile, from the next page load",
+    description: "Add a site to the built-in ad blocker's trusted list, as turning off Block Ads & Trackers in Site Controls does: it covers the site's subdomains, in every profile, from the next page load. A public suffix or IP address is refused",
     params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
-    result: "{site, adsAllowed, enabled, allowedSites}",
-    run: (p, call) => setAdsAllowed(p, call, true),
+    result: "{site, trusted, enabled, allowedSites}",
+    run: allowAds,
   },
   {
     name: "sites.blockAds",
     mutates: true,
-    description: "Block ads on a site again; this also removes a broader entry that lets the site through, like its parent domain",
+    description: "Take a site out of the built-in ad blocker's trusted list; only an entry sites.adBlocker lists can be taken out",
     params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
-    result: "{site, adsAllowed, enabled, allowedSites}",
-    run: (p, call) => setAdsAllowed(p, call, false),
+    result: "{site, trusted, enabled, allowedSites}",
+    run: blockAds,
   },
   { name: "sites.zoomLevels", mutates: false, description: "Zoom per host", params: obj({ profile: PROFILE }), result: "{host: zoom}", run: (p) => getZoomLevels(engineOf(p)) },
   { name: "sites.setZoom", mutates: true, description: "Set a host's zoom (1 is 100%)", params: obj({ profile: PROFILE, host: text("A host like example.com"), zoom: { type: "number", minimum: 0.25, maximum: 5, description: "1 is 100%" } }, ["host", "zoom"]), result: "{host: zoom}", run: setSiteZoom },

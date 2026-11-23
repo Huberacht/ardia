@@ -73,6 +73,14 @@ export const emitEvent = <E extends EventName>(name: E, data: EventData<E>) => {
 export const chromeWindowList: ChromeWindowState[] = [];
 export const pagerSnapshots = new Map<string, { sequence: number; selectionSequence: number; position: number; selected: number; phase: string; velocity: number; count: number; profileId?: string | null }>();
 export const engineCalls: { domain: string; verb: string; profile: string }[] = [];
+const SUFFIXES_FOR_TESTS = ["com", "net", "org", "io", "example", "uk", "co.uk", "github.io"];
+
+function registrableForTests(host: string): string {
+  if (/^\d+(\.\d+)*$/.test(host)) return host;
+  const suffix = SUFFIXES_FOR_TESTS.filter((s) => host.endsWith(`.${s}`)).sort((a, b) => b.length - a.length)[0];
+  return suffix ? `${host.slice(0, -suffix.length - 1).split(".").pop()}.${suffix}` : host;
+}
+
 export const contentBlockerSites = { enabled: true, allowed: new Set<string>(), written: [] as string[] };
 export const commitReports: boolean[] = [];
 export const commitReportFailures = { next: 0 };
@@ -523,6 +531,7 @@ const fakeModules = {
     setZoom: ({ profile, host, zoom }) => (siteZoomDb.set(`${profile}\n${host}`, zoom), null),
     preloadPages: () => false,
     setPreloadPages: () => null,
+    registrableDomains: ({ hosts }) => ({ domains: hosts.map(registrableForTests) }),
   }),
   ArdiaPasswords: domain(
     "passwords",

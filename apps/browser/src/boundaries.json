@@ -1247,10 +1247,11 @@
   {
    "id": "socket-family:sites",
    "source": "socket",
-   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); URLs through openableUrl; settings through socketSettingRules (D3: any same-user process is the owner); ad blocker sites through siteOf (a plain lowercase host: no scheme, port, path, wildcard or line break) before they reach uBlock's trusted list",
+   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); URLs through openableUrl; settings through socketSettingRules (D3: any same-user process is the owner); ad blocker sites through siteOf (a plain lowercase host: no scheme, port, path, wildcard or line break) and, to be trusted, oneSiteOf (Chromium's registrable domain, so no public suffix, IP or intranet name) before they reach uBlock's trusted list",
    "checks": [
     "apps/browser/src/state/automation/socketSchema.ts#schemaProblem",
-    "apps/browser/src/state/automation/socketSites.ts#siteOf"
+    "apps/browser/src/state/automation/socketSites.ts#siteOf",
+    "apps/browser/src/state/automation/socketSites.ts#oneSiteOf"
    ],
    "findings": [
     "D3"
