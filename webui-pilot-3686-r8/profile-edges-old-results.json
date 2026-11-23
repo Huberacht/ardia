@@ -1,0 +1,14 @@
+{
+    "user-data-dir-policy-refused":  {
+                                         "detail":  "WebUI launch with a UserDataDir policy: exit 0, window False, policy folder exists True, 4 entries written there: \\Crashpad, \\Crashpad\\attachments, \\Crashpad\\reports, \\Crashpad\\settings.dat",
+                                         "ok":  false
+                                     },
+    "user-data-dir-policy-removed":  {
+                                         "detail":  "the test policy is gone from HKCU afterwards: True",
+                                         "ok":  true
+                                     },
+    "cleanup-during-start-still-opens":  {
+                                             "detail":  "0 of 3 launches opened the window; the cleanup of 20000 folders in the profile was still running as 3 of them started",
+                                             "ok":  false
+                                         }
+}

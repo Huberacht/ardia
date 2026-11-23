@@ -1,0 +1,10 @@
+{
+    "fixed-port-collision-reproduced":  {
+                                            "detail":  "both runs asked for port 9555; settled listeners: 3876, 8312; first run\u0027s browser 3876, second run\u0027s browser 8312 (its own DevToolsActivePort: False); with a fixed port either run can drive the other run\u0027s browser",
+                                            "ok":  true
+                                        },
+    "concurrent-runs-get-their-own-ports":  {
+                                                "detail":  "run A port 61107 owned by its own browser True; run B port 61108 owned by its own browser True",
+                                                "ok":  true
+                                            }
+}

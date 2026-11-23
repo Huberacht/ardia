@@ -4,7 +4,7 @@
                                           "ok":  true
                                       },
     "malformed-requests-make-no-page":  {
-                                            "detail":  "15 malformed requests; pages created 1 -\u003e 1; pages: file:///C:/pilot/form.html?bridge",
+                                            "detail":  "15 malformed requests, then a later request answered; pages created 1 -\u003e 1; pages: file:///C:/pilot/form.html?bridge",
                                             "ok":  true
                                         },
     "bridge-answers-after-malformed-requests":  {

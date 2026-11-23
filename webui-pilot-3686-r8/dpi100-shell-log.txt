@@ -1,0 +1,37 @@
+[2940:4740:1123/115510.409:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: window opening; UI from C:\pilot\app\ardia-ui
+[2940:4740:1123/115510.729:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: shell document 2 is live
+[2940:4740:1123/115511.262:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call documents.watch
+[2940:4740:1123/115511.285:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaShell.setActiveProfile
+[2940:4740:1123/115511.286:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call profiles.loaded
+[2940:4740:1123/115511.288:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaShell.readDocument
+[2940:4740:1123/115511.297:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call engine.info
+[2940:4740:1123/115511.299:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaShell.writeDocument
+[2940:4740:1123/115511.324:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaTabs.unclaimedTabs
+[2940:4740:1123/115511.328:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaTabs.claimLaunchTab
+[2940:4740:1123/115511.329:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call webView.setAutoPictureInPicture
+[2940:4740:1123/115511.330:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call webKit.setFraudWarnings
+[2940:4740:1123/115511.331:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaShell.openWindow
+[2940:4740:1123/115511.332:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaShell.setMenuBookmarks
+[2940:4740:1123/115511.333:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call ArdiaShell.setMenuState
+[2940:4740:1123/115511.335:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call downloads.list
+[2940:4740:1123/115511.336:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call engine.memorySaver
+[2940:4740:1123/115511.338:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call engine.systemState
+[2940:4740:1123/115511.490:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call tabs.strips
+[2940:4740:1123/115511.491:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call search.setEngineName
+[2940:4740:1123/115511.492:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call webView.setSelectionPopover
+[2940:4740:1123/115511.492:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call webView.setPeekModifier
+[2940:4740:1123/115511.493:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call webView.setSplitLinkModifier
+[2940:4740:1123/115511.494:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: input regions: 0 pages, 1 overlays, 0 pass-through rects
+[2940:4740:1123/115511.509:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: page 1 created
+[2940:4740:1123/115511.541:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: shell painted; the start is settled
+[2940:4740:1123/115511.547:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call tab.presentations
+[2940:4740:1123/115511.603:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call tab.command setMuted
+[2940:4740:1123/115511.622:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: input regions: 1 pages, 1 overlays, 1 pass-through rects, first 190,50 1065x733
+[2940:4740:1123/115511.862:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call tab.command evaluate
+[2940:4740:1123/115512.774:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call tab.command capturePicture
+[2940:4740:1123/115514.456:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: unhandled host call engine.call profiles.ctrlTabMru
+[2940:4740:1123/115515.051:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: input regions: 1 pages, 2 overlays, 3 pass-through rects, first 190,111 1065x672
+[2940:4740:1123/115515.101:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: input regions: 1 pages, 1 overlays, 1 pass-through rects, first 190,50 1065x733
+[2940:4740:1123/115515.208:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: shell document retired; generation is now 3, 1 pages of the old document dropped
+[2940:4740:1123/115515.209:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: shell torn down while its views were alive
+[2940:4740:1123/115515.210:WARNING:ardia\win\webui\webui_shell.cc:777] Ardia WebUI shell: window closed

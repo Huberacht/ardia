@@ -72,23 +72,23 @@
                                                                            "ok":  true
                                                                        },
     "user-data-dir-into-react-native":  {
-                                            "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                            "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=C:\\pilot\\runs\\c46a8c08553547d18823b1dbfb288e9f\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
                                             "ok":  true
                                         },
     "user-data-dir-spelled-long-path":  {
-                                            "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=\\\\?\\C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                            "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=\\\\?\\C:\\pilot\\runs\\c46a8c08553547d18823b1dbfb288e9f\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
                                             "ok":  true
                                         },
     "user-data-dir-spelled-8.3":  {
-                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui --user-data-dir=C:\\pilot\\runs\\59FE51~1\\local\\Ardia\\USERDA~1: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui --user-data-dir=C:\\pilot\\runs\\C46A8C~1\\local\\Ardia\\USERDA~1: argv as intended True, exit 1, window False, React Native folders unchanged True",
                                       "ok":  true
                                   },
     "user-data-dir-spelled-unc":  {
-                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=\\\\localhost\\C$\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                      "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=\\\\localhost\\C$\\pilot\\runs\\c46a8c08553547d18823b1dbfb288e9f\\local\\Ardia\\User Data\": argv as intended True, exit 1, window False, React Native folders unchanged True",
                                       "ok":  true
                                   },
     "ardia-data-dir-at-react-native":  {
-                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui with ARDIA_DATA_DIR=C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia: argv as intended True, exit 1, window False, React Native folders unchanged True",
+                                           "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui with ARDIA_DATA_DIR=C:\\pilot\\runs\\c46a8c08553547d18823b1dbfb288e9f\\local\\Ardia: argv as intended True, exit 1, window False, React Native folders unchanged True",
                                            "ok":  true
                                        },
     "uncreatable-webui-folder":  {
@@ -116,7 +116,7 @@
                                                 "ok":  true
                                             },
     "control-user-data-dir-with-a-space":  {
-                                               "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08\\local\\Ardia WebUI\\Chromium\": argv as intended True, window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                               "detail":  "C:\\pilot\\app\\chrome.exe --ardia-shell=webui \"--user-data-dir=C:\\pilot\\runs\\c46a8c08553547d18823b1dbfb288e9f\\local\\Ardia WebUI\\Chromium\": argv as intended True, window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
                                                "ok":  true
                                            },
     "react-native-fixture-intact":  {
@@ -128,7 +128,7 @@
                                       "ok":  true
                                   },
     "run-folder-removed-by-marker":  {
-                                         "detail":  "C:\\pilot\\runs\\59fe517720ce4fa0aaac5ead1e28ea08 removed after its .pilot-run marker matched",
+                                         "detail":  "C:\\pilot\\runs\\c46a8c08553547d18823b1dbfb288e9f removed after its .pilot-run marker matched",
                                          "ok":  true
                                      }
 }
