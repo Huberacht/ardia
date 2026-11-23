@@ -88,6 +88,11 @@ public final class ControlDoorbell {
     dispatchPrecondition(condition: .onQueue(queue))
     guard let ask = asks[id], [.once, .halfHour, .always, .deny, .unshown].contains(outcome) else { return false }
     let at = now()
+    dropLeft(of: id)
+    if asks[id]?.connections.isEmpty ?? true || !(tokens[id].map(alive) ?? false) {
+      end(id, .left, admit: false)
+      return false
+    }
     if ask.deadline <= at {
       end(id, .timeout, admit: false)
       quietAll(ask.key, .timeout, at: at)

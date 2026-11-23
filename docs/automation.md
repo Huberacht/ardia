@@ -38,7 +38,7 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   written by an `O_EXCL` temp file and a rename), are listed in Settings › Advanced › Command line and automation ›
   Programs you let in, and removing one there closes its open connections; a 30-minute one also closes them when it
   runs out, at the approval's own end time on the wall clock (sleep included), and after that end no line it sends is
-  run and no new event is sent to it (events already queued before the end still go out). One doorbell shows at a time. Connections share one only when they come
+  run and no new event is sent to it (only a frame already being written to it may finish). One doorbell shows at a time. Connections share one only when they come
   from the same process (pid and pid version from the audit token) with the same identity; another process gets its
   own, and choosing Allow for 30 Minutes or Always Allow then lets in every waiting process with the same key. An
   answer counts only while the ask is live: a click after its deadline, or after the process has gone (its audit token
