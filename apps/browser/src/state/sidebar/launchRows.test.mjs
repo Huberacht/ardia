@@ -233,3 +233,30 @@ test("only the windows the session restored can hold, even one created before th
   assert.equal(rows.launchRowsHolding(late), false);
   assert.equal(rows.joinsLaunchRows(late), false);
 });
+
+test("a window whose selected pin is a frozen copy (its page is in another window) has no load to wait for: the no-page path", () => {
+  S().hydrate({});
+  const a = S().createWindow({ url: "https://mail.com" });
+  const [mail] = S().windows[a].tabIds;
+  S().pinTabs([mail], true);
+  S().activate(mail);
+  const b = S().createWindow({ url: "https://b.com" });
+  const copy = S().windows[b].tabIds.find((id) => S().tabs[id].pinnedUrl === "https://mail.com");
+  S().activate(copy);
+  const frozenIn = S().tabs[mail].windowId === b ? a : b;
+  const selected = S().windows[frozenIn].activeTabIds[S().windows[frozenIn].profileId];
+  assert.equal(S().tabs[selected].page.kind, "frozen");
+  rows.noteRestoredWindows(S().windowOrder);
+  rows.startLaunchRows();
+  advance(rows.HOLD_WITHOUT_PAGE_MS);
+  assert.equal(rows.launchRowsHolding(frozenIn), false);
+  assert.equal(rows.launchRowsReport().release, "nopage");
+});
+
+test("a new window with no restored session (an empty restored set) holds nothing", () => {
+  hydrate({ urls: { a: undefined } });
+  rows.noteRestoredWindows([]);
+  rows.startLaunchRows();
+  assert.equal(rows.launchRowsHolding("a"), false);
+  assert.equal(rows.launchRowsSettled(), true);
+});

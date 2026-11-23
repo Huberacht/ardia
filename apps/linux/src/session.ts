@@ -5,6 +5,9 @@ import { mergeSession } from "./hostSessionMerge";
 
 export const isLinuxUtility = (id: string) => id === "settings" || id === "import";
 
+export const restoredWindowsAtLaunch = ({ bootstrap }: Pick<ArdiaHost, "bootstrap">): string[] =>
+  bootstrap.startup !== false && !isLinuxUtility(bootstrap.windowId) ? [bootstrap.windowId] : [];
+
 export function initialLinuxSession(host: ArdiaHost, saved: HydrateData | null | undefined): HydrateData {
   if (!isLinuxUtility(host.bootstrap.windowId)) return initialHostSession(host, saved);
   return saved ? linuxSessionShape(saved) : {};

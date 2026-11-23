@@ -717,3 +717,10 @@ test("a launch that doesn't restore windows keeps each one as a closed window wi
   assert.equal(fromLaunch.tabs[0].url, "https://example.test/playing");
   assert.equal(launched.windows[windowId], undefined);
 });
+
+test("only the startup window counts as restored for the launch's sidebar hold; a new window or a utility one holds nothing", async () => {
+  const { restoredWindowsAtLaunch } = await import("./session.ts");
+  assert.deepEqual(restoredWindowsAtLaunch({ bootstrap: { windowId: "main", profileId: "default", startup: true } }), ["main"]);
+  assert.deepEqual(restoredWindowsAtLaunch(host("w2")), [], "startup: false is a new window, even with adopted tabs");
+  assert.deepEqual(restoredWindowsAtLaunch({ bootstrap: { windowId: "settings", profileId: "default", startup: true } }), []);
+});

@@ -62,7 +62,7 @@ function stopWatching() {
 function launchTabOf(s: BrowserState, windowId: string): string | null {
   const tabId = activeTabId(s, windowId);
   const url = tabId ? s.tabs[tabId]?.url : undefined;
-  return tabId && url && isWebPageUrl(url) ? tabId : null;
+  return tabId && url && isWebPageUrl(url) && s.tabs[tabId]!.page.kind !== "frozen" ? tabId : null;
 }
 
 function watch() {

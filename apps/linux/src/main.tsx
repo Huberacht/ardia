@@ -74,7 +74,8 @@ import { TrafficLights } from "./TrafficLights";
 import { startWindowButtonStyle } from "../../browser/src/state/windows/windowButtons";
 import { followDesktopButtonLayout } from "./desktopButtonLayout";
 import { followWindowMaximized } from "./windowMaximized";
-import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, setSessionDeparture, setSessionFlush } from "./session";
+import { createUtilitySessionSnapshot, initialLinuxSession, isLinuxUtility, restoredWindowsAtLaunch, setSessionDeparture, setSessionFlush } from "./session";
+import { noteRestoredWindows } from "../../browser/src/state/sidebar/launchRows";
 import { startUtility } from "./utility";
 import { announceShellPainted } from "./shellPainted";
 import { watchActiveProfile } from "./hostWindowProfiles";
@@ -117,6 +118,7 @@ async function start() {
   const restoreSession = launch ? configRestoreSession() : undefined;
   setStoreBatching(unstable_batchedUpdates);
   hydrateLaunchSession(saved, initialLinuxSession(ardiaHost, saved?.settings && restoreSession !== undefined ? { ...saved, settings: { ...saved.settings, restoreSession } } : saved));
+  noteRestoredWindows(restoredWindowsAtLaunch(ardiaHost));
   followDesktopButtonLayout(ardiaHost);
   startWindowButtonStyle();
   followWindowMaximized(ardiaHost, windowId);
