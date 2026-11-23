@@ -22,11 +22,15 @@ patches it applies, in order (the `all` and `mac` lines of `engine/patches/serie
 switches it copies, the offline game, `scripts/windows/engine` (less `check_inputs.py`, `*_test.py` and
 `prebuilt.json`), the app's `EngineApi.h` and the files the resource lists brand with. A Linux-only line, the Linux
 layer or the rest of `engine/ardiacore` leaves it alone. The resource lists themselves are required and can't be
-excluded. `check_inputs.py` proves the declaration covers the build by watching it: it runs `series_win.py apply`
-against an empty tree, with the patching stubbed out, under an audit hook that records every repository file it opens,
-folder it lists and path it hands a subprocess. It also follows each build step (`0?-*`, `toolchain.sh`,
-`debuggers.sh`) through the scripts it sources and runs, and fails on any of those paths the key doesn't hash, judged
-by `engine-key.py`'s own plan. `engine-key.sh` reads the declaration of the commit it keys as data and runs nothing from
+excluded. `check_inputs.py` proves the declaration covers the build by watching it. Under an audit hook that records
+every repository file opened, folder listed and path handed to a subprocess, in a scratch tree it removes afterwards,
+it runs `series_win.py apply` against an empty tree with the patching stubbed out, the offline game's packer
+(`inline.py`), and `03-helium.py`'s resources stage with icon making and copying stubbed out. That stage names the
+resource lists the branding reads, and `key-inputs.json` must list each one. It also follows each build step (`0?-*`,
+`toolchain.sh`, `debuggers.sh`) through the scripts it sources and runs, named through `$AC_MAC_BUILD_DIR`,
+`$AC_WIN_BUILD_DIR`, `$AC_REPO`, the script's own folder, or a variable the script sets to a repository folder with
+`cd … && pwd`; other variables there point into the Chromium build tree. It fails on any path the key doesn't hash,
+judged by `engine-key.py`'s own plan. `engine-key.sh` reads the declaration of the commit it keys as data and runs nothing from
 that commit, so a later declaration never moves an older commit's key. A commit without `key-inputs.json` is read with
 the first declaration, frozen in `engine/engine-key.win-v1.json`. That keys main from `991f98e9e`, the first commit
 with `scripts/windows/engine`, on; older commits, and side-branch commits such as `5ecc45e58` from before the app's

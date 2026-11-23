@@ -9,11 +9,15 @@ series_win.py takes them, and lists every problem with the file and line it come
   accepted-layer-sources.txt and all exist, and every engine call in the Windows call table is defined in one of them;
 - engine/ardiacore's ac_launch_switches.cc still has what launch_switches_source() turns into the Windows copy;
 - the Windows engine key (engine/engine-key.sh --platform win, from key-inputs.json) hashes every repository file this
-  build reads. It is observed, not listed: series_win.py apply runs against an empty tree with its patching stubbed
-  out, under an audit hook that records each file it opens, each folder it lists and each path it hands a subprocess
-  (the patches series-win skips, read only for the report, aside), and the build steps (0?-*, toolchain.sh,
-  debuggers.sh) are followed through what they source and run. Each path is judged by engine-key.py's own plan, so
-  the declaration is normalized and excluded exactly as the key does it.
+  build reads. It is observed, not listed. Under an audit hook that records each file opened, each folder listed and
+  each path handed to a subprocess, in a scratch tree removed afterwards, three parts of the build run for real:
+  series_win.py apply against an empty tree with its patching stubbed out (the patches series-win skips, read only for
+  the report, aside); the offline game's packer, inline.py; and 03-helium.py's resources stage with its icon making
+  and copying stubbed out, which names the resource lists the branding reads, each of which key-inputs.json must list.
+  The build steps (0?-*, toolchain.sh, debuggers.sh) are followed through the scripts they source and run, as named
+  through $AC_MAC_BUILD_DIR, $AC_WIN_BUILD_DIR, $AC_REPO, the script's own folder, or a variable the script sets to
+  a repository folder with `cd … && pwd`; other variables point into the Chromium build tree, outside the repository.
+  Each path is judged by engine-key.py's own plan, so the declaration is normalized and excluded as the key does it.
 
 A change to an accepted list is accepted on purpose: run with --accept and commit the lists. --accept writes
 nothing and fails when any input can't be read.
@@ -22,11 +26,16 @@ Usage: check_inputs.py [--accept]
 """
 import argparse
 import difflib
+import importlib.util
 import json
 import os
+import pathlib
 import re
+import runpy
+import shutil
 import sys
 import tempfile
+import types
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -104,6 +113,9 @@ SCRIPT_REFERENCE = re.compile(
     r'\$\{?(AC_MAC_BUILD_DIR|AC_WIN_BUILD_DIR|AC_REPO)(?::-[^}]*)?\}?/([A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*)'
     r'|\$\(dirname "\$(?:0|\{BASH_SOURCE\[0\][^}]*\})"\)/([A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*)'
     r'|\b(HERE|MAC_DIR|REPO_ROOT|REPO)\s*/\s*[\'"]([^\'"]+)[\'"]')
+SCRIPT_FOLDER = re.compile(
+    r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)="?\$\(cd "\$\(dirname "\$(?:0|\{BASH_SOURCE\[0\][^}]*\})"\)(/[^"]*)?"'
+    r'\s*&&\s*pwd(?: -P)?\)"?', re.M)
 SCRIPT_ROOTS = {'AC_MAC_BUILD_DIR': 'engine/patches/build', 'AC_WIN_BUILD_DIR': 'scripts/windows/engine', 'AC_REPO': '',
                 'MAC_DIR': 'engine/patches/build', 'REPO_ROOT': '', 'REPO': ''}
 
@@ -130,14 +142,19 @@ def script_inputs():
         with open(build.checkout_path(script), encoding='utf-8', errors='replace') as f:
             text = f.read()
         folder = os.path.dirname(script)
+        references = []
         for match in SCRIPT_REFERENCE.finditer(text):
             variable, path, sibling, python_root, python_path = match.groups()
             if variable:
-                base, rest = SCRIPT_ROOTS[variable], path
+                references.append((SCRIPT_ROOTS[variable], path))
             elif sibling:
-                base, rest = folder, sibling
+                references.append((folder, sibling))
             else:
-                base, rest = (folder if python_root == 'HERE' else SCRIPT_ROOTS[python_root]), python_path
+                references.append(((folder if python_root == 'HERE' else SCRIPT_ROOTS[python_root]), python_path))
+        local = {name: os.path.normpath(os.path.join(folder, (rest or '/').lstrip('/'))) for name, rest in SCRIPT_FOLDER.findall(text)}
+        for name, base in local.items():
+            references += [(base, rest) for rest in re.findall(r'\$\{?' + name + r'\}?/([A-Za-z0-9_.@+-][A-Za-z0-9_./@+-]*)', text)]
+        for base, rest in references:
             target = repo_rel(os.path.join(build.REPO, base, rest.rstrip('/.')))
             if target and target != '.' and os.path.exists(build.checkout_path(target)):
                 pending.append(target)
@@ -146,13 +163,22 @@ def script_inputs():
 
 def observe_build():
     tree = tempfile.mkdtemp(prefix='series-win-observed-')
+    start = os.getcwd()
+    try:
+        return observe_into(tree)
+    finally:
+        os.chdir(start)
+        shutil.rmtree(tree, ignore_errors=True)
+
+
+def observe_into(tree):
     owned = os.path.join('chrome', 'browser', 'ardia')
     for rel in build.files_under(os.path.join(build.REPO, 'engine/chromium/src')):
         if rel != owned and not rel.startswith(owned + os.sep):
             target = os.path.join(tree, 'src', rel)
             os.makedirs(os.path.dirname(target), exist_ok=True)
             open(target, 'w').close()
-    files, folders = set(), set()
+    files, folders, listings = set(), set(), set()
 
     def note(path, into):
         if isinstance(path, (str, bytes, os.PathLike)) and os.path.isabs(os.fsdecode(path)):
@@ -181,23 +207,45 @@ def observe_build():
 
     build.apply_one = lambda path, tree: ('clean', '')
     os.environ['CHROMIUM_SRC'] = os.path.join(tree, 'src')
-    report = os.path.join(tree, 'report.tsv')
     os.chdir(tree)
     sys.addaudithook(hook)
     with open(os.devnull, 'w') as quiet:
         stdout, sys.stdout = sys.stdout, quiet
         try:
-            build.cmd_apply(argparse.Namespace(report=report))
+            build.cmd_apply(argparse.Namespace(report=os.path.join(tree, 'report.tsv')))
+            game = build.checkout_path('apps/browser/assets/offline-game-pipeline/inline.py')
+            argv, sys.argv = sys.argv, [game, os.path.join(tree, 'src/components/neterror/resources/game/game.html')]
+            try:
+                runpy.run_path(game, run_name='__main__')
+            finally:
+                sys.argv = argv
+            branding = importlib.util.spec_from_file_location('helium_win', os.path.join(build.HERE, '03-helium.py'))
+            helium = importlib.util.module_from_spec(branding)
+            branding.loader.exec_module(helium)
+            helium.install()
+            helium.mac.generate_icons = lambda ctx: pathlib.Path(tree, 'helium-icons')
+
+            def copy_resources(ctx, listing, roots):
+                note(os.fspath(listing), listings)
+                return 0
+
+            helium.mac.copy_resources = copy_resources
+            work = pathlib.Path(tree)
+            helium.mac.HANDLERS['resources'](types.SimpleNamespace(no_brand=False, hc=work / 'helium', work=work,
+                                                                  tree=work / 'src', platform='win'))
         finally:
             sys.stdout = stdout
-    print(json.dumps({'files': sorted(files), 'folders': sorted(folders)}))
+    print(json.dumps({'files': sorted(files), 'folders': sorted(folders), 'resource_lists': sorted(listings)}))
     return 0
 
 
 def observed_reads(problems):
     run = __import__('subprocess').run(
-        [sys.executable, '-I', os.path.abspath(__file__), '--observe'], capture_output=True, text=True,
+        [sys.executable, '-I', *(f'-W{option}' for option in sys.warnoptions),
+         *(f'-X{name}' if value is True else f'-X{name}={value}' for name, value in sys._xoptions.items()),
+         os.path.abspath(__file__), '--observe'], capture_output=True, text=True,
         env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+    sys.stderr.write(run.stderr)
     if run.returncode != 0:
         problems.append(f'series_win.py apply, run against an empty tree to see what it reads, failed: '
                         f'{(run.stderr or run.stdout).strip()[-600:]}')
@@ -206,7 +254,6 @@ def observed_reads(problems):
 
 
 def engine_key_module():
-    import importlib.util
     spec = importlib.util.spec_from_file_location('engine_key', os.path.join(build.REPO, 'engine', 'engine-key.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -234,13 +281,16 @@ def declared_inputs(problems):
     observed = observed_reads(problems)
     if observed is None:
         return
+    for listing in observed['resource_lists']:
+        if listing not in declared['resource_lists']:
+            problems.append(f'{where}: 03-helium.py brands with {listing}, which resource_lists does not name')
     report_only = {f'engine/patches/{name}' for name in build.skipped()}
     for path in observed['files']:
         if path not in report_only and not hashed(path):
-            problems.append(f'{where}: series_win.py reads {path}, which the Windows key does not hash')
+            problems.append(f'{where}: the Windows build reads {path}, which the Windows key does not hash')
     for folder in observed['folders']:
         if not hashed(folder):
-            problems.append(f'{where}: series_win.py lists {folder}, which no Windows key tree covers')
+            problems.append(f'{where}: the Windows build lists {folder}, which no Windows key tree covers')
 
 
 def main():

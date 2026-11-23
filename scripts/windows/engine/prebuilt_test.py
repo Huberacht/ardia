@@ -5,11 +5,13 @@ Needs the source commit in this checkout (CI checks out with fetch-depth: 0).
 
 Usage: python3 scripts/windows/engine/prebuilt_test.py
 """
+import gc
 import json
 import os
 import subprocess
 import sys
 import unittest
+import warnings
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -26,8 +28,19 @@ def git(*args):
 
 class PrebuiltKeyTest(unittest.TestCase):
     def setUp(self):
+        self.unclosed = []
+        caught = warnings.catch_warnings()
+        caught.__enter__()
+        self.addCleanup(caught.__exit__, None, None, None)
+        warnings.simplefilter('error', ResourceWarning)
+        self.addCleanup(setattr, sys, 'unraisablehook', sys.unraisablehook)
+        sys.unraisablehook = lambda unraisable: self.unclosed.append(repr(unraisable.exc_value))
         with open(PREBUILT) as f:
             self.pin = json.load(f)
+
+    def tearDown(self):
+        gc.collect()
+        self.assertEqual(self.unclosed, [], 'a file was left open')
 
     def test_the_pin_names_its_source_commit_and_key(self):
         self.assertRegex(self.pin.get('source', ''), r'^[0-9a-f]{40}$')
