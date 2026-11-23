@@ -19,7 +19,6 @@ import { isSleeping } from "./sleepingTabs";
 import { engineVeto, MINUTE, sleepRules, sleepVeto, tabsToSleep, type SleepPlan, type SleepRules, type SleepVeto, type TabSleepFacts } from "./sleepPolicy";
 import { liveOf, onLiveChange } from "./tabLive";
 import { countSwitches, forgetSwitchesExcept, switchesOf } from "./tabSwitches";
-import { downloadingIn, forgetTabDownloadsExcept, noteDownloadChanged } from "./tabDownloads";
 
 export type LoadedTabBudget = Pick<SleepRules, "tabs" | "hiddenMs"> & Partial<SleepRules>;
 
@@ -62,7 +61,6 @@ export function sleepFacts(s: BrowserState, id: string, shown: ReadonlySet<strin
     lastAudibleAt: lastAudibleAt.get(id) ?? 0,
     call: capturing(id),
     pictureInPicture: !!useMedia.getState().pipOpen[id],
-    download: downloadingIn(s, id),
     loading: liveOf(id).isLoading,
     askAgainAt: askAgainAt.get(id) ?? 0,
   };
@@ -100,7 +98,7 @@ export function tabsOverBudget(
   return plan.sleep;
 }
 
-const COUNTED_VETOES: ReadonlySet<SleepVeto> = new Set(["call", "pictureInPicture", "audible", "recentlyAudible", "frequentlyUsed", "typedInput", "postedDocument", "beforeUnload", "download", "other"]);
+const COUNTED_VETOES: ReadonlySet<SleepVeto> = new Set(["call", "pictureInPicture", "audible", "recentlyAudible", "frequentlyUsed", "typedInput", "postedDocument", "beforeUnload", "other"]);
 const countedVetoes = new Set<string>();
 let countedIn: ConsentToken | null = null;
 
@@ -139,7 +137,6 @@ export async function sleepTabsOverBudget(budget: LoadedTabBudget | null, now = 
   for (const id of lastAudibleAt.keys()) if (!s.tabs[id]) lastAudibleAt.delete(id);
   for (const key of countedVetoes) if (!s.tabs[vetoedTabOf(key)]) countedVetoes.delete(key);
   forgetSwitchesExcept(s.tabs);
-  forgetTabDownloadsExcept(s.tabs, s.downloads);
   for (const [id, at] of askAgainAt) if (!s.tabs[id] || at <= now) askAgainAt.delete(id);
   for (const [id, at] of keptAt) if (!s.tabs[id] || now - at >= KEPT_RECENTLY_MS) keptAt.delete(id);
   const plan = planOverBudget(s, webviews.keys(), budget, now, seenAt, askAgainAt);
@@ -201,10 +198,6 @@ export function startLoadedTabBudget(system: () => SystemState | null) {
   started = true;
   const budget = () => loadedTabBudget(useBrowser.getState().settings, system());
   useBrowser.subscribeTo(["windows"], (s, prev) => countSwitches(prev, s));
-  useBrowser.subscribeTo(["downloads"], (s, prev) => {
-    for (const d of s.downloads) if (!prev.downloads.includes(d)) noteDownloadChanged(d);
-    forgetTabDownloadsExcept(s.tabs, s.downloads);
-  });
   onLiveChange((tabId, live, prev) => {
     if (prev.playingAudio && !live.playingAudio) noteAudibleEnded(tabId);
   });

@@ -26,7 +26,6 @@ import { currentEngineProfile, currentTab, isTabSilenced } from "../../state/bro
 import { updateLive, updateTab } from "../../state/tabs/actions";
 import { returnRefusedMove, setFind } from "../../state/windows/actions";
 import { activateFocusedPane, currentTabEngine, downloadNavigated, useTabEngine } from "../../state/windows/card";
-import { noteTabNavigationDownload } from "../../state/tabs/tabDownloads";
 import { setPageProgress } from "../../state/tabs/pageProgress";
 import { shallowEqual, useBrowserWhile, useProfilesValue, useTabValue } from "../../state/tabs/tabWatch";
 import { isIncognitoProfile, navigationTo } from "../../state/browser/model";
@@ -265,9 +264,8 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
       onLoadError={() => {
         pending.current = null;
       }}
-      onDownloadNavigation={({ url, committedUrl, skipped }) => {
+      onDownloadNavigation={({ committedUrl, skipped }) => {
         pending.current = null;
-        if (!skipped) noteTabNavigationDownload(tabId, url);
         downloadNavigated(tabId, committedUrl, skipped);
       }}
       onProgress={(progress) => !prewarmOnly() && !heldBySwap(tabId, { progress }) && setPageProgress(tabId, progress)}

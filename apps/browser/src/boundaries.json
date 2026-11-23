@@ -1641,15 +1641,6 @@
     "D9"
    ],
    "detected": false
-  },
-  {
-   "id": "page-event:downloadNavigation",
-   "source": "page",
-   "detected": false,
-   "guard": "The final URL of a tab's navigation that became a download is kept for at most 10 s, only to link that tab to a download the engine itself reports in the same profile starting within that time (URL match first). The link is by the engine's download id and ends when the download finishes, fails, is cancelled, leaves the list or the tab closes; it only keeps that tab loaded",
-   "checks": [
-    "apps/browser/src/state/tabs/tabDownloads.ts#noteNavigationDownload"
-   ]
   }
  ]
 }
