@@ -446,6 +446,91 @@ with `ProgramArguments` `/usr/bin/python3`, `<repo>/engine/patches/series.py`, `
 needs only the repo plus a copy of the base and the tree's touched files: `CHROMIUM_SRC` and `AC_SERIES_BASE` say
 where they are.
 
+### The series base archive
+
+`series.py check` needs a whole Chromium tree. CI has none, so each builder's base is published: the files the
+platform's series reads (each patch's sources, renamed, copied and mode-only ones included), as step 3 left them, in
+`series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>-<inputs12>-<rev12>.tar.xz` on the prerelease
+`series-base-<chromium>-<helium12>`, with a `.sha256` and a manifest of each file's sha256. `helium12` is
+helium-chromium's commit and `helium-platform12` helium-macos's or helium-linux's. `inputs12` is the digest of what
+step 3 reads from the repo: `03-helium.py`, `ardia_namesub.py`, `ardia_resources.txt` and every source it lists,
+`domsub-keep-store.txt`, `helium-pins.ini`, `env.sh` and `target_config.py`. `rev12` is the digest of the files the
+archive holds and of its provenance (the step-3 run and capture it came from), so a re-pack, even of identical files,
+never replaces an archive an older checkout pins. `scripts/engine/series-bases.tsv` pins
+one archive per platform and CPU, by those pins, that digest and its sha256.
+
+`scripts/engine/series-zero-fuzz.py` works out the pins and the input digest from the checkout, fetches the matching
+archives (at most 64 MB each, cached in `~/.cache/ardia/series-base`), checks the table's sha256, then unpacks each one
+under size and entry limits (every byte the tar parser reads counts, headers included; the xz decoder may use at most
+128 MB), with every file checked against the manifest. It refuses an archive whose manifest lacks the builder's
+provenance: every pack check, the step-3 run id, the stamp's sha256 and the capture record's sha256. It applies the series to each archive in a
+scratch directory: every `chromium` line with `git apply` and its exact context, every `layer` line with its
+`apply.sh`. A `git apply` warning fails its step too (a mode change on a file with another mode applies with only a
+warning). It fails when no archive matches the pins and inputs ("the pins moved", or "step 3's inputs changed"), when
+the archive lacks a file the series reads (it names the file), and when a hunk needs fuzz (it names the patch, its
+series line, the file and the hunk). A hunk that lands at an offset from its header fails when it does so on every
+platform that applies the patch. A patch for both platforms can sit exactly on only one when platform-only steps shift
+its file (`chromium-cef-carryover`, `chromium-helium-context-menu-cast` and `chromium-freeze-spares-live-connections`
+on 158).
+
+The Engine series workflow (`.github/workflows/engine-series.yml`, gated like the builds) runs it on Ubuntu for both
+platforms. It runs on every change to `engine/patches`, `engine/chromium`, the layers' `apply.sh`, `copies.tsv` and
+the files it copies (`scripts/engine/tests` checks the list), and `scripts/engine`. It passes `--offsets warn
+--strict-since` the commit the change starts from: a pull request's base, or a push's previous head, which must be
+fetchable or the run fails. A patch the change edits must land exactly, and the 67 patches that already land at an
+offset on 158 are listed as warnings. `series-zero-fuzz.py --refresh-offsets` rewrites those hunks' headers and nothing
+else, after which every hunk lands exactly on at least one platform. It then checks both platforms again and keeps the
+rewrite only if the series still produces the same files on each, so no hunk moves to another identical context. That moves both engine keys, so it goes in with
+the next engine build; after that the workflow can drop `--offsets warn`.
+
+**Re-pack the base on every Chromium or Helium move** (a new `CHROMIUM_VERSION` in `env.sh` or a new commit in
+`helium-pins.ini`) and **on every change to a step-3 input**, after the builders' trees have run step 3 with it. Until
+then the workflow fails. Re-pack too when the series starts reading a file the archive lacks (a new hook): the checker
+names it. A base is captured once per step-3 run, so that re-pack also starts from a fresh tree (step 3, capture,
+step 4); the base can't be topped up later. On each builder, after step 4 and from a full checkout of the commit the tree was built from (the Linux
+layer copies files from `packages/`), run:
+
+    scripts/agent/locked chromium --take <you>
+    python3 scripts/engine/series-base-pack.py pack --platform mac --dest <scratch dir>
+    scripts/agent/locked chromium --release <you>
+
+Use `--platform linux` on the Linux builder, and set `AC_CHROMIUM_BUILD` for a tree outside `~/chromium-build`. Pack
+is read-only on the tree. It refuses unless:
+- `chrome/VERSION` is the pinned Chromium;
+- both Helium checkouts exist, are clean and sit at the pinned commits;
+- the tree's `.helium-stages-src` marker names this tree's inode and shows every mutating step-3 stage for the platform;
+- one full `run-step3.py` run did that step 3: its stamp (`.ardia-step3-src.json` beside the tree) names the same tree,
+  platform and marker, and its input digest is this checkout's;
+- `run-capture.py` captured the base after that run: its record (`.ardia-capture.json` in the base) names that stamp's
+  sha256, and every file in the base has exactly the sha256 and mode it recorded, with none missing or added. Pack
+  reads the base once, checks that snapshot and archives the same snapshot, then reads the base again and fails if
+  anything changed meanwhile;
+- every `ardia_resources.txt` resource is byte for byte in the base (or in the tree, when the series doesn't touch it);
+- `ardia_namesub.py --check-only` finds no Helium left in the tree's strings;
+- `series.py check` reproduces the tree from the base.
+
+It records those checks in the manifest. A change to any step-3 input after step 3 ran (including `03-helium.py`'s logic
+and `domsub-keep-store.txt`, which can't be read back from a tree) makes the checkout's digest differ from the stamp's,
+so pack refuses until step 3 runs again on a fresh tree. Neither wrapper writes or deletes anything before its child
+runs, and both pass the child's exit code and output through. A child that fails its own checks therefore leaves the
+stamp and record as they were. One that fails after starting work changes the stage marker or the base, so the old
+stamp or record no longer matches and pack refuses. `run-step3.py` writes a stamp only after a single full run on a
+fresh tree exits 0 with plain arguments (no `--only`, `--from` or `--no-brand`) and the same input digest before and
+after; any other run that changes the tree deletes the stamp, for good: start again from a fresh tree. `run-capture.py`
+hands series.py the tree and base it resolved and captures once per stamp. It refuses when that stamp already has a
+capture (a marker beside the tree records it, so deleting the base doesn't undo it), when the base already holds
+files, and when the tree already carries any series step (engine/chromium's layer directory, or a patch that
+reverse-applies), so bytes from after step 4 can't enter the base. It records the stamp's sha256 with every file's
+sha256 and mode. The archive and the checker handle a patch that renames, copies or only changes the mode
+of a file, but `series.py` (`capture-base`, `check`) reads only `+++` lines. Such a patch needs `series.py` to learn
+those headers first, which moves both engine keys: until then `capture-base` doesn't record its source and the
+packer's `series.py check` fails on it. Copy the three files
+to a machine where `gh` is signed in (a Boat VM's isn't) and run `python3 scripts/engine/series-base-pack.py publish
+<archive>`. It refuses an archive without that provenance (`--no-verify`) or for other pins or inputs than the
+checkout's, creates
+the prerelease if needed, uploads the files (one already there must match), and writes the row into
+`series-bases.tsv`. Commit that row with the pin or input change.
+
 ## Blocking a compromised certificate
 
 CRLSets and Chrome Root Store updates reach the engine from Google through the component updater
@@ -475,7 +560,12 @@ pathbuilder, which doesn't read CRLSets.
 Everything lives outside the repo in `~/chromium-build`, which carries `.metadata_never_index`.
 The step scripts are copied in `engine/patches/build/`, and each expects `~/chromium-build`. Each refuses to run
 without `--apply` and the chromium lock (`scripts/agent/locked chromium`); `--help` prints its usage. Run them in the
-order 1, 3, 4, 2, 5 on a fresh checkout (`gn gen` once the tree is patched). Helium's checkouts are
+order 1, 3, 4, 2, 5 on a fresh checkout (`gn gen` once the tree is patched). Run step 3 as one full
+`scripts/engine/run-step3.py --apply` run (same arguments as `03-helium.py`), then `scripts/engine/run-capture.py`
+(same arguments as `series.py capture-base`) before step 4, both under the chromium lock. The first stamps the inputs
+step 3 read, the second records the base it captured. A series base can be published only from a tree and base made
+that way ([The series base archive](#the-series-base-archive)).
+Helium's checkouts are
 `~/chromium-build/helium` and `~/chromium-build/helium-macos` (`HELIUM_DIR`, `HELIUM_MACOS_DIR`), at the commits
 `helium-pins.ini` names.
 
@@ -494,7 +584,7 @@ The live tree in `~/chromium-build` has been Helium's since 2026-10-23 (0.2.40-n
 |---|---|---|
 | 1. Fetch Chromium's tag (`CHROMIUM_VERSION` in `env.sh`) at depth 1 and check it out, then `gclient sync --no-history` of its deps for the Mac with the PGO profiles (`checkout_pgo_profiles`), then its hooks; on a version move, sets the old series base aside first | `01-sync.sh` | ~40 min, 30 GB (deps alone, re-cloned: 7 min; 3.5 min for 156 on 2026-10-25, every git dep deleted first) |
 | 2. Write `out/Release_GN_arm64/args.gn` from `gn_defines.sh`, then `gn gen` | `02-gn-args.sh` | 5 s |
-| 3. Helium, as Ardia takes it ([Helium](#helium)), in stages: `pins` (the checkouts are at the pinned commits, unmodified and made for this Chromium, and `deps.ini` downloads nothing we don't leave out), `guard`, `patches` (Helium's series, then helium-macos's, minus the skip list, with no fuzz), `fixups`, `domsub`, `namesub`, `brand-namesub`, `version`, `resources`. It runs once per tree: `.helium-stages-src`, beside the tree, records the stages that ran and refuses a second run or one that died mid-stage. Each patch's result goes to `~/chromium-build/logs/helium-patches.tsv` | `03-helium.py` | 2.5 min (2026-10-25: the patches 15 s, the substitutions and resources 2 min) |
+| 3. Helium, as Ardia takes it ([Helium](#helium)), in stages: `pins` (the checkouts are at the pinned commits, unmodified and made for this Chromium, and `deps.ini` downloads nothing we don't leave out), `guard`, `patches` (Helium's series, then helium-macos's, minus the skip list, with no fuzz), `fixups`, `domsub`, `namesub`, `brand-namesub`, `version`, `resources`. It runs once per tree: `.helium-stages-src`, beside the tree, records the stages that ran and refuses a second run or one that died mid-stage. Each patch's result goes to `~/chromium-build/logs/helium-patches.tsv`. Run it through `scripts/engine/run-step3.py`, then `scripts/engine/run-capture.py`, so the base can be published | `03-helium.py` (`scripts/engine/run-step3.py`) | 2.5 min (2026-10-25: the patches 15 s, the substitutions and resources 2 min) |
 | 4. Our series: `apply-chromium-patches.sh` (`series.py capture-base` and `apply`: the patches, then the layers `engine/chromium/apply.sh` and `engine/ardiacore/apply.sh`) | `04-series.sh` | seconds once every patch applies |
 | 5. Regenerate the offline page (`game-resource.sh`), compile `chrome_framework` (ArdiaCore; the app's build stages it from `out/Release_GN_arm64`) | `05-build.sh` | first build 2.5 h (official, ThinLTO, PGO; 2026-10-18), 2 h for 156 at siso's full parallelism (2026-10-25: 1 h 51 min of compiling, then 7.5 min to the linked framework; free memory never under 59 %), 2 h 24 min for 157 to its first compile errors (2026-11-09), then 11 min to the linked framework once they were fixed; incremental: the compile, then a ThinLTO relink of the framework, about 7 min (its cache, `thinlto-cache`, keeps that short) |
 

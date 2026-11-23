@@ -81,6 +81,10 @@ holds the rest.
   runs. `scripts/ci/workflow-paths.test.mjs` keeps the trigger paths and the filters in step, follows the meadow
   check's site imports, and fails when a Linux fixture or a root test names a file its job doesn't start on. Each share restores the TSX it transpiled last time (`ardia-test-tsx-I-of-6-…`); only pushes to
   `main` save it, so pull requests add no caches. A newer push cancels the run before it, on `main` too.
+- `conventions.yml` runs the conventions check (`docs/conventions.md` › The check) on every pull request and every
+  push to `main`, with no paths filter and no install, so a file in a folder no other workflow watches is checked
+  too. `expiring-skips.yml` runs its expiry part every Monday and lists skips past their date, as warnings, in the
+  run's summary.
 - When GitHub's runners are busy, the long jobs of `checks.yml`, `linux.yml` and `android.yml` move to Boat CI
   (`boat-large`); the `which checks run` job or a `route` job decides, and each run's summary says why
   ([ci-boat-overflow.md](ci-boat-overflow.md)).
@@ -95,9 +99,10 @@ holds the rest.
   workspace manifests, the patches and the lockfile. It builds against this commit's engine, or the nearest published
   one before it, and any compiler error fails it. When `engine/ardiacore/src/ardia/core/public` changed since that
   engine it also fails after the build, asking for the engine to be published first.
-- The heavy workflows (`ios.yml`, `android.yml`, `linux.yml`, `windows.yml`, `mac.yml`, `rust.yml`) run their vouch
+- The heavy workflows (`ios.yml`, `android.yml`, `linux.yml`, `windows.yml`, `mac.yml`, `rust.yml`, `engine-series.yml`) run their vouch
   `gate` job only for pull requests from forks. Pushes, manual runs and branches of this repository skip it and start
-  the build at once. A newer push or pull request run cancels the one before it; manual and release runs each have their own
+  the build at once. A newer push or pull request run cancels the one before it (`engine-series.yml` cancels only
+  superseded pull request runs: each push runs on its own); manual and release runs each have their own
   group and are never cancelled. `windows.yml` reads the `full-ci` label in its `identity` job: from the event on a
   first attempt, with no API call, and live on a re-run, so adding the label and re-running all jobs gives the full run.
 - Caches that would fill the 10 GB limit are saved on pushes to `main` only and pruned to the newest per branch by
