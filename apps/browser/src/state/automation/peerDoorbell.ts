@@ -1,6 +1,5 @@
-import type { ChooseOptions } from "@ardia/shell";
 import { answerControlPeer, onControlPeerAsk, onControlPeerAskEnded, type ControlPeerAnswer, type ControlPeerAsk, type ControlPeerOutcome } from "../../platform/automation";
-import { choose, dismissShownOnlyDialogs } from "../../platform/dialogs";
+import { choose, dismissShownOnlyDialogs, type ChooseOptions } from "../../platform/dialogs";
 import { noteDoorbellOutcome, noteDoorbellShown, type DoorbellOutcome } from "../telemetry/cliCounts";
 import { refreshControlApprovals } from "./controlApprovals";
 import { shownWindowId } from "./socketAsk";

@@ -1,5 +1,7 @@
 import { nativeModule, type ChooseOptions, type ConfirmOptions, type PromptOptions } from "@ardia/shell";
 
+export type { ChooseOptions };
+
 const Dialogs = nativeModule("ArdiaDialogs");
 
 export const confirm = (options: ConfirmOptions) => Dialogs.confirm(options);
