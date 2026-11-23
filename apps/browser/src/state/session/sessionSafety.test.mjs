@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+const realNow = Date.now;
+const startedAt = realNow();
+const midday = new Date(2026, 4, 6, 12).getTime();
+Date.now = () => midday + (realNow() - startedAt);
+
 const setTimeoutHoldingExit = globalThis.setTimeout;
 globalThis.setTimeout = (callback, ms, ...args) => {
   const timer = setTimeoutHoldingExit(callback, ms, ...args);
