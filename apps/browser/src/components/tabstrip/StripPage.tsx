@@ -21,9 +21,8 @@ import { heldWideTab, keyedWidths, namesStayTight, layoutDock, layoutStrip, newT
 import { groupChipWidth } from "./stripToggle";
 import { StripGroup } from "./StripGroup";
 import { DraggableChip } from "./TabChip";
-import { edgeMaskAt, edgeStrength } from "./edgeFade";
 import { EdgeFadeMask } from "../ui/EdgeFadeMask";
-import { devRegister } from "../dev/devRegister";
+import { useStripDevRegistry } from "./stripDevRegistry";
 import { shownHolds, StripScrollContext, type StripScroll } from "./stripScroll";
 import { StripMotionContext, useStripMotion } from "./stripMotion";
 import { StripGhosts } from "./StripGhosts";
@@ -149,32 +148,15 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     holdShown,
     measure: (done) => scroll.current?.getNativeScrollRef()?.measureInWindow((x, _y, width) => done(x + clipShown.current, width - clipShown.current)),
   }));
-  const stripTabIds = () => entries.flatMap((e) => (e.kind === "dock" ? e.ids : e.kind === "group" ? e.members.flatMap(tabsOf) : tabsOf(e)));
-  const latestTabIds = useRef(stripTabIds);
-  latestTabIds.current = stripTabIds;
-  const chipsUnderMask = () => {
-    const box = viewport.current - clipShown.current;
-    const strength = edgeStrength(scrolled.current, viewport.current, content.current);
-    return latestTabIds.current().map((id) => {
-      const span = latestSpan.current(id);
-      if (!span) return { id, start: -1e6, end: -1e6, centre: -1e6, opacity: 1 };
-      const start = span[0];
-      const end = span[0] + span[1];
-      const centre = (start + end) / 2;
-      return { id, start, end, centre, opacity: edgeMaskAt(centre - scrolled.current - clipShown.current, box, strength) };
-    });
-  };
-  useEffect(
-    () =>
-      devRegister("topStripPages", `${windowId}|${profileId}`, {
-        current: () => current,
-        fadeWidth: EDGE_FADE,
-        scroll: () => ({ x: scrolled.current, viewport: viewport.current, content: content.current }),
-        chips: chipsUnderMask,
-        scrollTo: (x: number) => scroller.scrollTo(x),
-      }),
-    [windowId, profileId, current],
-  );
+  useStripDevRegistry(stripKey, current, {
+    tabIds: () => entries.flatMap((e) => (e.kind === "dock" ? e.ids : e.kind === "group" ? e.members.flatMap(tabsOf) : tabsOf(e))),
+    span: (tabId) => latestSpan.current(tabId),
+    scrolled,
+    viewport,
+    content,
+    clipShown,
+    scroller,
+  });
   const latestScroll = useRef((_: NativeSyntheticEvent<NativeScrollEvent>) => {});
   latestScroll.current = (e) => {
     const now = performance.now();

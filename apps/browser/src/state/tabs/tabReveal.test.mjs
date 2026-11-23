@@ -274,9 +274,10 @@ test("a tab that moves to another window after the press is not held back there 
   setup(["a", "b", "c"], "a", { windows: { w2: win("w2", ["z"], "z") }, tabs: [tab("z", "w2", "https://z.com/")] });
   held.holdTabPress("w1", "b", pressAt(9300));
   S().activate("b");
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, { x: 10, y: 10 }), true);
   S().updateTab("b", { windowId: "w2" });
-  assert.equal(held.switchedByPressWithin("w1", "b", 500), false);
-  assert.equal(held.switchedByPressWithin("w2", "b", 500), false);
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, { x: 10, y: 10 }), false);
+  assert.equal(held.switchedByPressWithin("w2", "b", 500, { x: 10, y: 10 }), false);
 });
 
 test("a keyboard close right after a mouse select closes: Return and Space press the close button with no pointer point", async () => {
@@ -319,5 +320,5 @@ test("a press on the tab already in front holds nothing back", async () => {
   const held = await import("../sidebar/heldTabPress.ts");
   setup(["a", "b", "c"], "c");
   held.holdTabPress("w1", "c", pressAt(9400));
-  assert.equal(held.switchedByPressWithin("w1", "c", 500), false);
+  assert.equal(held.switchedByPressWithin("w1", "c", 500, { x: 10, y: 10 }), false);
 });
