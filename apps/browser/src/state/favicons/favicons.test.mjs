@@ -113,6 +113,9 @@ test("an icon stays when the tab finishes loading another page on the icon's sit
 const empty = () => Promise.resolve({ pages: new Map(), icons: new Map() });
 const answering = (icons) => (profile, pages) => Promise.resolve({ pages: new Map(pages.flatMap((p) => (icons[p] ? [[p, { uri: icons[p] }]] : []))), icons: new Map() });
 const settle = () => new Promise((resolve) => setTimeout(resolve, 40));
+const quietWindow = async () => {
+  for (let tick = 0; tick < 10; tick++) await new Promise((resolve) => setTimeout(resolve, 5));
+};
 const cached = (page) => useFavicons.getState().profiles[engineProfile(useBrowser.getState(), "default")]?.pages[page];
 
 test("a lookup that failed is asked again the next time the page is shown", async () => {
@@ -195,7 +198,7 @@ test("a private window looks other profiles' icons up read-only and keeps the an
     rows.push(mount(() => useFavicon(shared, null, "default")));
     await waitFor(() => cached(shared) === "data:image/png;base64,SHARED");
     rows.push(mount(() => useFavicon(shared, null, viewer)));
-    await settle();
+    await quietWindow();
     assert.equal(resolveFavicon(shared, null, viewer)?.uri, "data:image/png;base64,SHARED");
     assert.deepEqual(peeked, [[engine, privatePage]]);
 
@@ -226,7 +229,7 @@ test("an icon drawn for a regular profile inside a private window looks up as th
   const rows = [mount(row(inside), { contexts: [[WindowContext, windowId]] }), mount(row(outside))];
   try {
     await waitFor(() => peeked.length === 1 && touched.length === 1);
-    await settle();
+    await quietWindow();
     assert.equal(viewer.startsWith("incognito:"), true);
     assert.deepEqual(peeked, [inside]);
     assert.deepEqual(touched, [outside]);
@@ -297,9 +300,9 @@ test("a peek refused after its window closed keeps nothing for a retry", async (
   try {
     await waitFor(() => held.length === 1);
     S().closeWindow(windowId);
-    await settle();
+    await quietWindow();
     held[0]();
-    await settle();
+    await quietWindow();
     assert.equal(pendingRetries(), 0);
   } finally {
     console.warn = warn;
@@ -345,7 +348,7 @@ test("a private row whose own profile opens later asks it then, even with Defaul
   const viewer = S().windows[windowId].profileId;
   const row = mount(() => useFavicon(page, null, viewer, "work"));
   try {
-    await settle();
+    await quietWindow();
     assert.equal(peeked.includes("work"), false);
     assert.equal(resolveFavicon(page, null, viewer, "work")?.uri, "data:default");
     openProfile("work");
@@ -376,10 +379,10 @@ test("closing a private window while its row still waits on a missed icon asks n
   const row = mount(() => useFavicon(page, null, viewer));
   try {
     await waitFor(() => peeked.length === 1);
-    await settle();
+    await quietWindow();
     S().closeWindow(windowId);
-    await settle();
-    await settle();
+    await quietWindow();
+    await quietWindow();
     assert.deepEqual(peeked, [page]);
     assert.ok(!Object.keys(useFavicons.getState().profiles).some((key) => key.startsWith(viewer)));
   } finally {
