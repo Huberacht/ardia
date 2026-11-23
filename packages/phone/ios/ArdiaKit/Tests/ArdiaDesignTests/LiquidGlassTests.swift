@@ -128,7 +128,7 @@ struct LiquidGlassTests {
     #expect(!path(metal: false).rim)
     #expect(path(onScreen: false).path == .fallback)
     #expect(path(overBudget: true).path == .fallback)
-    #expect(path(overBudget: true, holdsPage: true).path == .solid)
+    #expect(path(holdsPage: true, overBudget: true).path == .solid)
     #expect(path(overBudget: true).rim)
     #expect(path(holdsPage: true, solidPageAsked: true).path == .solid)
     #expect(path(solidPageAsked: true).path == .live)

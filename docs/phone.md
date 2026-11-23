@@ -1382,24 +1382,31 @@ can't drift apart, checks the uniform struct against the shader's, and compiles 
 Metal.
 
 - **What the lens samples.** iOS has no public way to read the pixels behind a view, and `CABackdropLayer` is private,
-  so the glass captures what it refracts itself. A `FrostSource` now registers under its name, and each frame a
-  `CADisplayLink` (`GlassFrames`) draws the strip under every glass on that source, plus the blur's and the lens's
-  margin, at Android's frost scale (a sixth of the pixels for the 12 point glass frost) into an IOSurface-backed
-  pixel buffer with `drawHierarchy(in:afterScreenUpdates: false)`. MPS blurs it (Android's radius-to-sigma), and the
-  fragment shader refracts it per colour channel at full resolution, then adds the frost tint, the 0.5 point edge,
-  the profile tint and the rim. The capture is redrawn only when a cheap walk of the source's layer tree (positions,
-  bounds, scroll offsets, opacity, transforms, contents) changes, two frames after it settles, and every 0.5 s
-  otherwise. Glass that is hidden does no work.
-- **Where each path runs.** As on Android: the start page's buttons and the deck's chrome refract their sources (the
-  deck's is its backdrop alone; Android fills that one with a gradient tinted from the backdrop, the iPhone refracts
-  the backdrop, which costs nothing while it stands still). The page bar, the host pill and anything else over the
-  page draw the solid page mode: the chrome fill (#FFFFFF, #1E1B1D in dark), tinted and rimmed. Glass inside its own
-  source (toasts, Reader's buttons, the Duo toolbar under `surfaces`) and the search morph draw the frost's flat fill
-  (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim. Classic and Reduce Transparency keep the
-  Classic surface, unchanged. `ArdiaFlatGlass` drops the lens and rim; `ArdiaGlassOverPage` captures the page under
-  the bar every frame, for comparison; `ArdiaGlassCapture layer|none` swaps `drawHierarchy` for `layer.render(in:)`
-  or for no capture, as the control. Each lab build logs `PAGELAB look glass … path=…` and, once a second while any
-  glass captures, `PAGELAB glass frames` with late frames and capture times.
+  so each glass draws what it refracts itself, each frame from a `CADisplayLink` (`GlassFrames`), with
+  `drawHierarchy(in:afterScreenUpdates: false)` into an IOSurface-backed pixel buffer at Android's frost scale (a sixth
+  of the pixels for the 12 point glass frost), the strip under the glass plus the blur's and the lens's margin. MPS
+  blurs it (Android's radius-to-sigma), and the fragment shader refracts it per colour channel at full resolution,
+  then adds the frost tint, the 0.5 point edge, the profile tint and the rim.
+  - A glass outside the `FrostSource` it names draws that source: the page bar and host pill draw the page stack, the
+    WKWebView included; the deck's chrome its backdrop; the start page's buttons its spaces and mark. Glasses on one
+    source share one capture.
+  - A glass inside its source, or with none (toasts, Reader's buttons, the Duo toolbar under `surfaces`, the search
+    morph), draws what lies beneath it in the window: going up from the glass, each ancestor's fill and every sibling
+    below it that overlaps the strip, back to front, starting from the topmost opaque one that covers it
+    (`GlassBackdrop`). Nothing above the glass, and never the glass itself.
+  - The capture is redrawn only when a walk of the drawn layers changes (positions, bounds, scroll offsets, the
+    WKWebView's content offset, opacity, transforms, contents), for two frames after it settles, and every 0.5 s
+    otherwise. Glass that is hidden does no work.
+- **Where each path runs.** Every glass refracts by default. The flat fills are fallbacks only: Classic and Reduce
+  Transparency keep the Classic surface, unchanged; a phone without Metal, or a shader that fails, draws the frost's
+  flat fill (#FFFFFF at 82 %, #3A3A3C at 82 % in dark) with the edge, tint and rim; a capture whose median over its
+  last 30 passes takes more than 4 ms is over budget, and that glass draws the chrome fill over a page (#FFFFFF,
+  #1E1B1D in dark) or the flat fill elsewhere until the app next returns to the foreground
+  (`glass_captures_over_budget`). Lab flags: `ArdiaFlatGlass` drops the lens and rim, `ArdiaGlassSolidPage` keeps the
+  chrome fill over a page, `ArdiaGlassCapture layer|none` swaps `drawHierarchy` for `layer.render(in:)` (which can't
+  see the WKWebView, a separate process) or for no capture, as the control. Each lab build logs
+  `PAGELAB look glass … path=…` and, once a second while any glass captures, `PAGELAB glass frames` with late frames,
+  pieces drawn per capture and the capture's median and worst times.
 - **SwiftUI.** `chromeSurface`, `LookFrost`'s glass variant and the glass button styles (Settings, the share sheet's
   close button, the action extension's Done) draw `LiquidGlassFill`: the flat frost fill, the edge and the rim as an
   angular gradient from the same rim maths. None of them has a source to refract.
@@ -1409,9 +1416,10 @@ Metal.
   (`PendingCounts.swift`, kept only while sharing is on, as Android's are), the glass draws the flat fill and edge with
   `CALayer`, and the compile is tried again when the app returns to the foreground. `glass_render` now reports `lens`,
   `frost` or `solid` on iPhone too.
-- **Not seen yet.** None of this has run on a simulator or a phone: Simlock's iPhone simulators timed out booting for
-  every lease on 2026-11-23. The frame-time cost of the capture, while scrolling a page under the bar and while the
-  deck animates, is unmeasured; the shader's output is seen only offscreen on a Mac GPU.
+- **Not seen yet.** None of this has run on a simulator or a phone: on 2026-11-23 Simlock's iPhone simulators timed
+  out booting for every lease, and shiv's own two booted simulators drew nothing (screenshots hung). The capture's
+  cost, while scrolling a page under the bar and while the deck animates, is unmeasured, and so is the 4 ms budget;
+  the shader's output is seen only offscreen on a Mac GPU.
 
 ## The look's budget
 
@@ -1786,7 +1794,7 @@ Events (service `ardia-phone`, `$lib` `ardia-phone-telemetry`, tags `app: phone`
 | Event | Fields | When |
 | --- | --- | --- |
 | `sharing_turned_on` | `source` (settings, onboarding) | turning sharing on |
-| `app_launched` | `legacy_import` (imported, started_fresh, none), `legacy_import_failures` (failed tries before the app opened), `look_mode` (full, no_blur, no_motion, neither: the look this launch shows, after the look's budget and the system's Reduce Motion and Reduce Transparency), `interface_style` (match_mac, glass, classic) and `color_scheme` (match_mac, system, light, dark): the redesign's Appearance choices, and `material_colors` (wallpaper, profile, fallback, not_material): where Android's Material design took its colours, from the wallpaper, from a picked profile colour, or from Ardia's own palette on phones that give none; not_material on iPhone and in the original design, and `color_choice` (match_mac, preset, custom): the colour row's choice, and `glass_render` (lens, frost, solid, classic, native, none): the best glass this phone can draw this launch, not what each surface drew (the page bar stays solid even on a `lens` phone): the Liquid Glass lens and rim (Android 13+, any iPhone with Metal), plain frost (Android 12 or `ArdiaFlatGlass`) or without blur (below Android 12, over the look budget or with the look off), and otherwise Classic (Classic or Reduce Transparency), Apple's own glass (`native`, iPhone builds before #3950), or none in Material You | each launch with sharing on |
+| `app_launched` | `legacy_import` (imported, started_fresh, none), `legacy_import_failures` (failed tries before the app opened), `look_mode` (full, no_blur, no_motion, neither: the look this launch shows, after the look's budget and the system's Reduce Motion and Reduce Transparency), `interface_style` (match_mac, glass, classic) and `color_scheme` (match_mac, system, light, dark): the redesign's Appearance choices, and `material_colors` (wallpaper, profile, fallback, not_material): where Android's Material design took its colours, from the wallpaper, from a picked profile colour, or from Ardia's own palette on phones that give none; not_material on iPhone and in the original design, and `color_choice` (match_mac, preset, custom): the colour row's choice, and `glass_render` (lens, frost, solid, classic, native, none): the best glass this phone can draw this launch, not what each surface drew (an Android page bar stays solid even on a `lens` phone): the Liquid Glass lens and rim (Android 13+, any iPhone with Metal), plain frost (Android 12 or `ArdiaFlatGlass`) or without blur (below Android 12, over the look budget or with the look off), and otherwise Classic (Classic or Reduce Transparency), Apple's own glass (`native`, iPhone builds before #3950), or none in Material You | each launch with sharing on |
 | `perf_launch` | `launch_ms`, `js_ms` | each launch, once the module gives the process start (`ArdiaPhoneSystem.processStartedAt()`, epoch ms) |
 | `perf_backdrop` | `backdrop_ms` | each launch on iPhone, once the native launch backdrop has shown (`system.launchBackdropShownAt()`, epoch ms on the process start's clock) |
 | `perf_launch_tray` | `tray_ms` | each launch with Auto-Open Keyboard on, once the launch tray is up (process start on `ArdiaPhoneSystem.processStartedAt()`'s clock) |
@@ -1863,6 +1871,7 @@ Every count and timing the phone can send, for the owner to read as one set and 
 | `card_close_tapped` | the × on a card in Android's Material deck | Whether people close tabs with the card's own button rather than a flick; zero across Android testers after a release means the × stopped closing cards, or its tap zone opens the card instead |
 | `material_back_swiped` | a predictive back swipe on Android's Material sheets, dialogs, menus and library | Whether people swipe back out of Material surfaces; zero across Android testers after a release means the swipe stopped reaching them, or Back goes to the wrong surface |
 | `glass_shaders_failed` | Liquid Glass on Android (CodeRabbit on #3759: a lens refused mid-session still reported `lens` at launch) | Counted natively and drained with the pending counts: each time Android refused to build the lens or rim shader, so that glass drew plain frost until the app next came back to the foreground and tried again. `app_launched.glass_render` can't see this, since it's read before any glass draws. Any count on Android 13+ phones means a GPU or driver rejects the AGSL; compare it with the `lens` launches. Since #3950 the iPhone counts its Metal shader failing to compile the same way |
+| `glass_captures_over_budget` | Liquid Glass on iPhone, every glass refracting (#3950 round 2) | Counted natively and drained with the pending counts: each time an iPhone glass's capture of what lies under it took a median of more than 4 ms over 30 passes, so that glass drew its fill until the app came back to the foreground. A rising count means `drawHierarchy` is too slow on those phones (most likely over a page); compare it with the iPhone `lens` launches |
 | `night_shade_verdicts_reused`, `night_shade_verdicts_learned`, `night_shade_verdicts_corrected` | Night Shade's cached verdicts on Android (a tester's report: yahoo.com loaded white until half way) | Counted natively and drained with the pending counts, never for private tabs. `reused` is a page load, with Night Shade not off, whose site's verdict was already known, so the shade was decided before the first paint; `learned` is a site measured for the first time, whose first load can still shade late; `corrected` is a site whose verdict changed, so that load showed the old one until `DOMContentLoaded`. Read `reused` against `learned` for the hit rate, which should climb as testers revisit sites; a `corrected` share that grows means the measurement disagrees with itself between loads |
 
 ## What is left before the Expo app replaces both native apps
