@@ -1,4 +1,4 @@
-import { onConsentPeriodChange, type ConsentToken } from "./choice";
+import { onConsentPeriodChange, stillValid, type ConsentToken } from "./choice";
 import { consentOrNow, countFor } from "./countFor";
 import { SOCKET_FAMILIES, type SocketFamily } from "../automation/socketCatalog";
 
@@ -59,33 +59,40 @@ onConsentPeriodChange(() => {
   tokenCommandsBaselineStale = true;
 });
 
-export function noteWindowlessPages(totals: { given: number; missed: number } | undefined) {
+export function noteWindowlessPages(totals: { given: number; missed: number } | undefined, consent?: ConsentToken | null) {
   if (!totals) return;
+  const token = consentOrNow(consent);
+  const fresh = stillValid(token) && !windowlessBaselineStale;
+  if (stillValid(token)) windowlessBaselineStale = false;
   const given = Number(totals.given) || 0, missed = Number(totals.missed) || 0;
-  if (windowlessBaselineStale) {
-    windowlessBaselineStale = false;
-    windowlessSeen = { given: Math.max(given, windowlessSeen.given), missed: Math.max(missed, windowlessSeen.missed) };
-    return;
-  }
-  counts.windowless_pages_given_geometry += Math.max(0, given - windowlessSeen.given);
-  counts.windowless_pages_missing_geometry += Math.max(0, missed - windowlessSeen.missed);
+  const newlyGiven = fresh ? Math.max(0, given - windowlessSeen.given) : 0;
+  const newlyMissed = fresh ? Math.max(0, missed - windowlessSeen.missed) : 0;
   windowlessSeen = { given: Math.max(given, windowlessSeen.given), missed: Math.max(missed, windowlessSeen.missed) };
-}
-
-export function noteTokenCommands(totals: TokenCommandTotals | undefined) {
-  if (!totals) return;
-  const stale = tokenCommandsBaselineStale;
-  tokenCommandsBaselineStale = false;
-  for (const domain of TOKEN_COMMAND_DOMAINS) {
-    const total = Number(totals[domain]) || 0;
-    if (!stale) counts[`cli_cdp_commands_${domain}`] += Math.max(0, total - tokenCommandsSeen[domain]);
-    tokenCommandsSeen[domain] = Math.max(total, tokenCommandsSeen[domain]);
+  if (newlyGiven || newlyMissed) {
+    countFor(token, () => {
+      counts.windowless_pages_given_geometry += newlyGiven;
+      counts.windowless_pages_missing_geometry += newlyMissed;
+    });
   }
 }
 
-export function noteEngineCliTotals(status: { windowlessPages?: { given: number; missed: number }; tokenCommands?: TokenCommandTotals }) {
-  noteWindowlessPages(status.windowlessPages);
-  noteTokenCommands(status.tokenCommands);
+export function noteTokenCommands(totals: TokenCommandTotals | undefined, consent?: ConsentToken | null) {
+  if (!totals) return;
+  const token = consentOrNow(consent);
+  const fresh = stillValid(token) && !tokenCommandsBaselineStale;
+  if (stillValid(token)) tokenCommandsBaselineStale = false;
+  const sent = TOKEN_COMMAND_DOMAINS.map((domain) => {
+    const total = Number(totals[domain]) || 0;
+    const delta = fresh ? Math.max(0, total - tokenCommandsSeen[domain]) : 0;
+    tokenCommandsSeen[domain] = Math.max(total, tokenCommandsSeen[domain]);
+    return [domain, delta] as const;
+  });
+  if (sent.some(([, delta]) => delta)) countFor(token, () => sent.forEach(([domain, delta]) => (counts[`cli_cdp_commands_${domain}`] += delta)));
+}
+
+export function noteEngineCliTotals(status: { windowlessPages?: { given: number; missed: number }; tokenCommands?: TokenCommandTotals }, consent: ConsentToken) {
+  noteWindowlessPages(status.windowlessPages, consent);
+  noteTokenCommands(status.tokenCommands, consent);
 }
 
 export function takeCliCounts() {
