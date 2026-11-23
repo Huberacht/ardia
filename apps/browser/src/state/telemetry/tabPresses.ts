@@ -53,7 +53,7 @@ const empty = () => ({
   page_refused: 0,
   tile_double_returns: 0,
   tile_double_reloads: 0,
-  tile_double_loading: 0,
+  tile_double_fresh: 0,
   tile_double_missed: 0,
 });
 let tally = empty();
@@ -185,9 +185,9 @@ export function notePagePress(tabId: string) {
   if (ms >= 0 && ms < PAGE_CLICK_WINDOW_MS && toPageClick.length < MAX_SAMPLES) toPageClick.push(ms);
 }
 
-export type TileDoubleClick = "return" | "reload" | "loading" | "missed";
+export type TileDoubleClick = "return" | "reload" | "fresh" | "missed";
 
-const TILE_DOUBLE_FIELD = { return: "tile_double_returns", reload: "tile_double_reloads", loading: "tile_double_loading", missed: "tile_double_missed" } as const;
+const TILE_DOUBLE_FIELD = { return: "tile_double_returns", reload: "tile_double_reloads", fresh: "tile_double_fresh", missed: "tile_double_missed" } as const;
 
 export const noteTileDoubleClick = (what: TileDoubleClick) => void tally[TILE_DOUBLE_FIELD[what]]++;
 

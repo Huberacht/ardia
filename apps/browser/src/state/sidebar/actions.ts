@@ -50,7 +50,7 @@ export function toggleBookmarkInWindow(windowId: string, page: { url: string; ti
   s.toggleBookmark(bookmarkProfileId(s, s.windows[windowId]), page);
 }
 
-export function refreshShownTile(windowId: string, tabId: string) {
+export function refreshShownTile(windowId: string, tabId: string, wasShown: boolean) {
   const s = store();
   const tab = s.tabs[tabId];
   if (!tab || activeTabId(s, windowId) !== tabId) return;
@@ -58,10 +58,9 @@ export function refreshShownTile(windowId: string, tabId: string) {
     noteTileDoubleClick("return");
     return s.returnToPinnedUrl(tabId);
   }
-  if (!tab.url || shownLiveOf(s, tabId).isLoading) return noteTileDoubleClick("loading");
-  noteTileDoubleClick("reload");
+  if (!wasShown || !tab.url || shownLiveOf(s, tabId).isLoading) return noteTileDoubleClick("fresh");
   const consent = consentToken();
-  void withLivePage(tabId, (page) => page.reload()).then((reloaded) => reloaded || (stillValid(consent) && noteTileDoubleClick("missed")));
+  void withLivePage(tabId, (page) => page.reload()).then((reloaded) => stillValid(consent) && noteTileDoubleClick(reloaded ? "reload" : "missed"));
 }
 
 export async function startRename(windowId: string, target: Target) {

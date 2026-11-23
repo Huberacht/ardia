@@ -33,7 +33,29 @@ export type TabPress = {
   answered: boolean;
   out: boolean;
   drift: TabPressDrift;
+  plain: boolean;
+  wasShown: boolean;
+  heldAt: number;
 };
+
+export type TileDoubleClick = (wasShown: boolean) => void;
+
+export const DOUBLE_CLICK_MS = 500;
+
+let lastPlainClick: { press: TabPress; endedAt: number } | null = null;
+
+const near = (a: TabPress["at"], b: TabPress["at"]) => !a || !b || Math.hypot(a.x - b.x, a.y - b.y) < TAB_CLICK_SLOP;
+
+function secondOfPair(press: TabPress | null, release: GestureResponderEvent) {
+  const last = lastPlainClick;
+  const plain = !!press && press.plain && plainPress(release);
+  lastPlainClick = plain ? { press: press!, endedAt: performance.now() } : null;
+  if (!plain || !last || last.press === press) return null;
+  const paired = last.press.windowId === press!.windowId && last.press.tabId === press!.tabId && press!.heldAt - last.endedAt < DOUBLE_CLICK_MS && near(last.press.at, press!.at);
+  if (!paired) return null;
+  lastPlainClick = null;
+  return last.press;
+}
 
 let heldPress: TabPress | null = null;
 
@@ -137,8 +159,9 @@ export function holdTabPress(windowId: string, tabId: string, press: GestureResp
   settleUnansweredPressOut();
   noteRowPressIn(windowId);
   const nativePress = claimPress(tabId, startedAt);
+  const wasShown = activeTabId(useBrowser.getState(), windowId) === tabId;
   const switched = switchesOnPress(windowId, tabId, press);
-  const held: TabPress = { windowId, tabId, startedAt, switched, nativePress, at: pointOf(press), windowKey: windowIsKey(windowId), answered: false, out: false, drift: "unknown" };
+  const held: TabPress = { windowId, tabId, startedAt, switched, nativePress, at: pointOf(press), windowKey: windowIsKey(windowId), answered: false, out: false, drift: "unknown", plain: plainPress(press), wasShown, heldAt: performance.now() };
   heldPress = held;
   notePressStarted(switched, held.windowKey, held);
   if (switched) {
@@ -150,8 +173,9 @@ export function holdTabPress(windowId: string, tabId: string, press: GestureResp
   return held;
 }
 
-export function clickHeldTabPress(windowId: string, tabId: string, release: GestureResponderEvent, press: TabPress | null = null) {
+export function clickHeldTabPress(windowId: string, tabId: string, release: GestureResponderEvent, press: TabPress | null = null, onDoubleClick?: TileDoubleClick) {
   const held = heldPress;
+  const first = secondOfPair(press, release);
   releasePress();
   if (press && !press.answered) {
     press.answered = true;
@@ -161,8 +185,8 @@ export function clickHeldTabPress(windowId: string, tabId: string, release: Gest
   notePressEnded("click", tabId);
   dismissHover();
   const start = pressStart(release);
-  if (held?.switched && held.tabId === tabId && start !== undefined && held.startedAt === start) return;
-  switchingByPress(press?.nativePress ?? 0, () => clickTab(windowId, tabId, modifiersOf(release)));
+  if (!(held?.switched && held.tabId === tabId && start !== undefined && held.startedAt === start)) switchingByPress(press?.nativePress ?? 0, () => clickTab(windowId, tabId, modifiersOf(release)));
+  if (first && onDoubleClick) onDoubleClick(first.wasShown);
 }
 
 export function endPressGesture(press: TabPress | null) {
@@ -183,6 +207,7 @@ export function pressOutTabPress(press: TabPress | null, e: GestureResponderEven
 export function endHeldTabPress(tabIds: string[], release: GestureResponderEvent | null) {
   const held = heldPress;
   releasePress();
+  lastPlainClick = null;
   if (!held) return;
   const dropped = (why: TabPressDrop) => notePressEnded("drag", null, why);
   if (!release) return dropped("no_release");

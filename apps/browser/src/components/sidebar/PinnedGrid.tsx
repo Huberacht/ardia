@@ -168,9 +168,8 @@ const PinnedTile = memo(function PinnedTile({ tabId, width, sliding, x, y }: { t
       <View
         ref={(v) => registerRow(windowId, tabId, v)}
         {...hoverProps}
-        onDoubleClick={() => refreshShownTile(windowId, tabId)}
       >
-        <TabPressArea windowId={windowId} tab={tab} selected={selected}>
+        <TabPressArea windowId={windowId} tab={tab} selected={selected} onDoubleClick={(wasShown) => refreshShownTile(windowId, tabId, wasShown)}>
           {({ pressed }) => (
             <TileFace tabId={tabId} width={width} active={active} selected={selected} hovered={hovered} pressed={pressed} />
           )}
