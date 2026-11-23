@@ -10,7 +10,7 @@ import { useAddressBarInSidebar } from "../../state/windows/layout";
 import { useNewTabAtTop } from "../../state/sidebar/chrome";
 import { ClearDivider } from "./ClearDivider";
 import { DragScope, useDragController, useDragItem } from "./DragProvider";
-import { Fold, useFold } from "./Fold";
+import { Fold, FoldSettling, useFold } from "./Fold";
 import { SidebarEntry } from "./GroupBlock";
 import { GhostSlot, ListMotionContext, useListMotion } from "./ListMotion";
 import { PinnedGrid } from "./PinnedGrid";
@@ -89,6 +89,7 @@ export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, 
   if (geometry) geometry.current.newTabAtTop = newTabButtonAtTop && inlineNewTab;
   return (
     <ListMotionContext.Provider value={scope}>
+      <FoldSettling.Provider value={growing}>
       <View>
         {isIncognitoProfile(profileId) ? <IncognitoBadge /> : null}
         {tiles.length ? (
@@ -150,6 +151,7 @@ export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, 
         {pluginViews && !offScreen && !isIncognitoProfile(profileId) ? <PluginSidebarViews windowId={windowId} /> : null}
         {current ? <CleanUpUpsell windowId={windowId} shift={motion.tail} /> : null}
       </View>
+      </FoldSettling.Provider>
     </ListMotionContext.Provider>
   );
 }

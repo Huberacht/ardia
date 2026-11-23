@@ -112,6 +112,10 @@ export class DragTargeting extends DragGeometry {
 
   private unmeasured = new Set<Item>();
 
+  protected measuredNow(items: Item[]) {
+    for (const item of items) this.unmeasured.delete(item);
+  }
+
   protected markMeasured(session: DragSession) {
     session.measured = true;
     const waiting = [...this.unmeasured];

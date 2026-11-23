@@ -155,6 +155,7 @@ export class DragController extends DragTargeting {
     session.viewport = viewport;
     session.startScrollY = scrollY;
     items.forEach((i, k) => ([i.frame, i.headerFrame] = frames[k]!));
+    this.measuredNow(items);
     for (const [name, frame] of regionFrames) session.regionFrames.set(name, frame);
     session.gridBase = items.some((i) => i.kind === "tile") ? (session.regionFrames.get("tiles") ?? null) : null;
     session.gridGrowth = 0;
