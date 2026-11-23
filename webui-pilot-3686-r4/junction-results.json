@@ -1,0 +1,14 @@
+{
+    "junction-app-data-to-react-native":  {
+                                              "detail":  "exit 1, window False, React Native folder unchanged True",
+                                              "ok":  true
+                                          },
+    "junction-profile-to-react-native":  {
+                                             "detail":  "exit 1, window False, React Native folder unchanged True",
+                                             "ok":  true
+                                         },
+    "control-no-junction-starts":  {
+                                       "detail":  "the same launch without a junction opens the window",
+                                       "ok":  true
+                                   }
+}

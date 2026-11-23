@@ -1,6 +1,6 @@
 {
     "window":  {
-                   "detail":  "dpi 144 frame 9,0 1902x999 outer 0,0 1920x1008",
+                   "detail":  "dpi 96 frame 327,116 1266x793 outer 320,116 1280x800",
                    "ok":  true
                },
     "shell-ui":  {
@@ -8,31 +8,31 @@
                      "ok":  true
                  },
     "hittest-left-edge":  {
-                              "detail":  "(6,500) -\u003e Chrome_WidgetWin_1:10, want 10",
+                              "detail":  "(324,512) -\u003e Chrome_WidgetWin_1:10, want 10",
                               "ok":  true
                           },
     "hittest-right-edge":  {
-                               "detail":  "(1913,500) -\u003e Chrome_WidgetWin_1:11, want 11",
+                               "detail":  "(1595,512) -\u003e Chrome_WidgetWin_1:11, want 11",
                                "ok":  true
                            },
     "hittest-bottom-edge":  {
-                                "detail":  "(960,1001) -\u003e Chrome_WidgetWin_1:15, want 15",
+                                "detail":  "(960,911) -\u003e Chrome_WidgetWin_1:15, want 15",
                                 "ok":  true
                             },
     "hittest-top-edge":  {
-                             "detail":  "(960,1) -\u003e Chrome_RenderWidgetHostHWND:12, want 12",
+                             "detail":  "(960,117) -\u003e Chrome_RenderWidgetHostHWND:12, want 12",
                              "ok":  true
                          },
     "hittest-bottom-right":  {
-                                 "detail":  "(1913,1001) -\u003e Chrome_WidgetWin_1:17, want 17",
+                                 "detail":  "(1595,911) -\u003e Chrome_WidgetWin_1:17, want 17",
                                  "ok":  true
                              },
     "hittest-content":  {
-                            "detail":  "(960,500) -\u003e Chrome_RenderWidgetHostHWND:1, want 1",
+                            "detail":  "(960,512) -\u003e Chrome_RenderWidgetHostHWND:1, want 1",
                             "ok":  true
                         },
     "hittest-maximize-button":  {
-                                    "detail":  "(1820,45) -\u003e Chrome_RenderWidgetHostHWND\u003eChrome_WidgetWin_1:9, want 9",
+                                    "detail":  "(1532,146) -\u003e Chrome_RenderWidgetHostHWND\u003eChrome_WidgetWin_1:9, want 9",
                                     "ok":  true
                                 },
     "shell-typing-navigates":  {
@@ -40,7 +40,7 @@
                                    "ok":  true
                                },
     "page-typing":  {
-                        "detail":  "page input value \u0027hello from SendInput\u0027 (viewport 190,50,1067,606.3333740234375)",
+                        "detail":  "page input value \u0027hello from SendInput\u0027 (viewport 190,50,1065,733)",
                         "ok":  true
                     },
     "ctrl-l-to-shell":  {
@@ -52,43 +52,43 @@
                          "ok":  true
                      },
     "resize-right-edge":  {
-                              "detail":  "9,0 1902x999 -\u003e 9,0 1740x999",
+                              "detail":  "327,116 1266x793 -\u003e 327,116 1104x793",
                               "ok":  true
                           },
     "resize-corner":  {
-                          "detail":  "9,0 1740x999 -\u003e 9,0 1638x917",
+                          "detail":  "327,116 1104x793 -\u003e 327,116 1002x711",
                           "ok":  true
                       },
     "resize-top-edge":  {
-                            "detail":  "9,0 1638x917 -\u003e 9,79 1638x838",
+                            "detail":  "327,116 1002x711 -\u003e 327,195 1002x632",
                             "ok":  true
                         },
     "caption-drag":  {
-                         "detail":  "from (161,679): 9,79 1638x838 -\u003e 144,166 1638x838",
+                         "detail":  "from (428,595): 327,195 1002x632 -\u003e 462,282 1002x632",
                          "ok":  true
                      },
     "caption-drag-to-edge-snaps":  {
-                                       "detail":  "0,0 960x1008",
+                                       "detail":  "0,0 960x1032",
                                        "ok":  true
                                    },
     "drag-out-unsnaps":  {
-                             "detail":  "100,207 1638x838, size before snapping 144,166 1638x838",
+                             "detail":  "147,383 1002x632, size before snapping 462,282 1002x632",
                              "ok":  true
                          },
     "snap-win-left":  {
-                          "detail":  "0,0 960x1008",
+                          "detail":  "0,0 960x1032",
                           "ok":  true
                       },
     "snap-win-right-restores":  {
-                                    "detail":  "100,207 1638x838",
+                                    "detail":  "147,383 1002x632",
                                     "ok":  true
                                 },
     "snap-win-up-maximizes":  {
-                                  "detail":  "zoomed True frame 0,0 1920x1008",
+                                  "detail":  "zoomed True frame 0,0 1920x1032",
                                   "ok":  true
                               },
     "snap-win-down-restores":  {
-                                   "detail":  "zoomed False frame 100,207 1638x838",
+                                   "detail":  "zoomed False frame 147,383 1002x632",
                                    "ok":  true
                                },
     "maximize-button-click":  {
@@ -96,7 +96,7 @@
                                   "ok":  true
                               },
     "close-exits":  {
-                        "detail":  "engine processes gone after 0.6 s",
+                        "detail":  "engine processes gone after 0.8 s",
                         "ok":  true
                     },
     "relaunch-reopens":  {
