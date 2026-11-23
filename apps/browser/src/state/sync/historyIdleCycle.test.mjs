@@ -77,3 +77,42 @@ test("an idle sync cycle reads none of the history list and lists no base keys, 
   assert.equal((await cycle()).published, 1);
   assert.equal((await cycle()).published, 0);
 });
+
+test("a visit the clock brings back inside the 90-day window publishes on the next cycle, as a full extraction would", async () => {
+  const realNow = Date.now;
+  let offset = 0;
+  Date.now = () => realNow() + offset;
+  try {
+    const now = Date.now();
+    const inside = { url: "https://inside.example/", title: "Inside", favicon: null, visits: 1, lastVisit: now - DAY, visitTimes: [now - DAY] };
+    const edge = now - 90 * DAY - 2 * 60_000;
+    const outside = { url: "https://outside.example/", title: "Outside", favicon: null, visits: 1, lastVisit: edge, visitTimes: [edge] };
+    S().hydrate({});
+    useBrowser.setState({ history: { "": { list: [inside, outside], floor: -Infinity, ready: true } } });
+    const clock = new Clock("A");
+    useEditClock(clock);
+    stub.current.device = "A";
+    const state = emptyScope();
+    const transport = folder();
+    const cycle = () => syncScope({ scope: "p", state, transport, adapters: [historyAdapter("default")], clock, device: "A", options: { expired: historyExpired } });
+    assert.equal((await cycle()).published, 1);
+    assert.equal((await cycle()).published, 0);
+    offset = -4 * 60_000;
+    assert.equal((await cycle()).published, 1, "the visit back inside the window wasn't published");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("the tokens a scope keeps for skipping hold neither the bookmark tree nor the history list", () => {
+  S().hydrate({});
+  useBrowser.setState({ history: { "": { list: [], floor: -Infinity, ready: true } }, bookmarksReady: { "": true } });
+  const s = S();
+  const held = new Set([s.bookmarks, s.bookmarks.nodes, s.history[""], s.history[""].list]);
+  for (const token of [bookmarksAdapter("default").extractsOnlyFrom(), historyAdapter("default").extractsOnlyFrom()]) {
+    assert.ok(token && typeof token === "object");
+    for (const value of Object.values(token)) assert.ok(!held.has(value), "a skip token keeps the store's data alive");
+  }
+  assert.equal(bookmarksAdapter("default").extractsOnlyFrom(), bookmarksAdapter("default").extractsOnlyFrom());
+  assert.equal(historyAdapter("default").extractsOnlyFrom(), historyAdapter("default").extractsOnlyFrom());
+});

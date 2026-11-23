@@ -654,31 +654,19 @@ function dropRecord(state            , key        ) {
   touch(state, "records", key);
 }
 
-                                                                           
-const baseIndexes = new WeakMap                       ();
-const DROPPED_BEFORE_SWEEP = 256;
-
-function sweepDropped(state            , index           ) {
-  index.byPrefix.forEach((keys, prefix, byPrefix) => {
-    const left           = [];
-    for (let i = 0; i < keys.length; i++) if (keys[i]  in state.base) left.push(keys[i] );
-    byPrefix.set(prefix, left);
-  });
-  index.dropped.clear();
-}
+                                                                 
+const baseIndexes = new WeakMap                                     ();
 
 function baseKeysWith(state            , prefix        )                    {
-  let index = baseIndexes.get(state);
-  if (!index) baseIndexes.set(state, (index = { byPrefix: new Map(), dropped: new Set() }));
-  if (index.dropped.size > DROPPED_BEFORE_SWEEP) sweepDropped(state, index);
-  let keys = index.byPrefix.get(prefix);
+  let byPrefix = baseIndexes.get(state);
+  if (!byPrefix) baseIndexes.set(state, (byPrefix = new Map()));
+  let keys = byPrefix.get(prefix);
   if (!keys) {
-    if (index.dropped.size) sweepDropped(state, index);
-    keys = [];
-    for (const key in state.base) if (key.startsWith(prefix)) keys.push(key);
-    index.byPrefix.set(prefix, keys);
+    const live = new Set        ();
+    for (const key in state.base) if (key.startsWith(prefix)) live.add(key);
+    byPrefix.set(prefix, (keys = { live, listed: null }));
   }
-  return keys;
+  return (keys.listed ??= [...keys.live]);
 }
 
 function putBase(state            , key        , json        ) {
@@ -687,10 +675,11 @@ function putBase(state            , key        , json        ) {
   state.base[key] = json;
   touch(state, "base", key);
   countBaseWrite(state, key);
-  const index = known === undefined ? baseIndexes.get(state) : undefined;
-  if (!index || index.dropped.delete(key)) return;
-  index.byPrefix.forEach((keys, prefix) => {
-    if (key.startsWith(prefix)) keys.push(key);
+  if (known !== undefined) return;
+  baseIndexes.get(state)?.forEach((keys, prefix) => {
+    if (!key.startsWith(prefix)) return;
+    keys.live.add(key);
+    keys.listed = null;
   });
 }
 
@@ -699,7 +688,9 @@ function dropBase(state            , key        ) {
   delete state.base[key];
   touch(state, "base", key);
   countBaseWrite(state, key);
-  baseIndexes.get(state)?.dropped.add(key);
+  baseIndexes.get(state)?.forEach((keys) => {
+    if (keys.live.delete(key)) keys.listed = null;
+  });
 }
 
 });

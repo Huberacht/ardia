@@ -60,25 +60,24 @@ export function deviceAdapter(deviceId: string, name: () => string, retired = fa
   };
 }
 
-type BookmarksSource = { bookmarks: BrowserState["bookmarks"]; engine: string; ready: boolean };
-const bookmarksSources = new Map<string, BookmarksSource>();
+const bookmarkTokens = new WeakMap<BrowserState["bookmarks"], Map<string, object>>();
 
-function bookmarksSource(profileId: string): BookmarksSource {
+function bookmarksToken(profileId: string): object {
   const s = store();
   const engine = engineProfile(s, profileId);
-  const ready = !!s.bookmarksReady[engine];
-  const last = bookmarksSources.get(profileId);
-  if (last && last.bookmarks === s.bookmarks && last.engine === engine && last.ready === ready) return last;
-  const source = { bookmarks: s.bookmarks, engine, ready };
-  bookmarksSources.set(profileId, source);
-  return source;
+  const key = `${profileId}\n${engine}\n${s.bookmarksReady[engine] ? 1 : 0}`;
+  let byKey = bookmarkTokens.get(s.bookmarks);
+  if (!byKey) bookmarkTokens.set(s.bookmarks, (byKey = new Map()));
+  let token = byKey.get(key);
+  if (!token) byKey.set(key, (token = {}));
+  return token;
 }
 
 export function bookmarksAdapter(profileId: string): Adapter {
   const ready = () => !!store().bookmarksReady[engineProfile(store(), profileId)];
   return withSyncWorkCounts("bookmark", {
     prefix: BOOKMARK,
-    extractsOnlyFrom: () => bookmarksSource(profileId),
+    extractsOnlyFrom: () => bookmarksToken(profileId),
     extract: (base) => {
       if (!ready()) return null;
       const b = store().bookmarks;
