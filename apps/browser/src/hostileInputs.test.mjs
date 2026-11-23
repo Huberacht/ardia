@@ -23,6 +23,10 @@ const { syncedHome } = await import("./state/sync/pinRecords.ts");
 const { sendableUrl } = await import("./state/sync/sentTabsAdapter.ts");
 const { filterListAddress } = await import("./state/site/contentBlocking.ts");
 const { CLEAN_UP_KEY, LEGACY_CLEAN_UP_KEY } = await import("./state/settings/cleanUpAfter.ts");
+const { updateWithin } = await import("./state/plugins/officialUpdate.ts");
+const { readManifest } = await import("./lib/pluginManifest.ts");
+const { copyLinkFromPageMenu } = await import("./state/site/pageLinkCopy.ts");
+const { cleanUrl } = await import("@ardia/core");
 
 const S = () => useBrowser.getState();
 const show = (value) => {
@@ -355,4 +359,183 @@ test("the release's original smuggled hide is refused at every layer", () => {
   assert.equal(hidingFilter(HOST, smuggled), null);
   assert.equal(MAC_WRITE_RULE.test(`${HOST}##${smuggled}`), false);
   assert.equal(LINUX_NATIVE_REFUSES.test(`${HOST}##${smuggled}`), true);
+});
+
+test("an official update's manifest with any hostile value in a field that counts is never approved without a sheet", () => {
+  const steps = [["skills", "install", "--auto"], ["skills", "refresh"], ["computer", "refresh"]];
+  const approved = readManifest(JSON.stringify({ manifest: 1, name: "cli", title: "Command Line", version: "0.4.0", alwaysOn: true, official: true, permissions: ["control"], programs: [{ name: "ardia", path: "bin/ardia", afterUpdate: steps }] })).manifest;
+  const next = readManifest(JSON.stringify({ manifest: 2, name: "cli", title: "Command Line", version: "0.6.0", alwaysOn: true, official: true, main: "dist/main.js", permissions: { control: true }, contributes: { commands: [{ name: "show-status", title: "Status", icon: "terminal", view: "status" }], programs: [{ name: "ardia", path: "bin/ardia", claim: true, afterUpdate: steps }] } })).manifest;
+  assert.equal(updateWithin(approved, next).ok, true, "the real move passes, so the refusals below aren't vacuous");
+  const COSMETIC = new Set(["manifest", "declaredManifest", "title", "description", "version", "requires", "icon", "keywords", "telemetry"]);
+  const unchanged = (a, b) => typeof a === typeof b && JSON.stringify(a) === JSON.stringify(b);
+  let refused = 0;
+  for (const { value } of HOSTILE_VALUES) {
+    for (const key of Object.keys(next).filter((k) => !COSMETIC.has(k) && !unchanged(value, next[k]) && !unchanged(value, approved[k]))) {
+      const verdict = updateWithin(approved, { ...next, [key]: value });
+      assert.equal(verdict.ok, false, `${key} = ${show(value)}`);
+      refused++;
+    }
+    for (const key of Object.keys(next.permissions).filter((k) => !unchanged(value, next.permissions[k]) && !unchanged(value, approved.permissions[k]))) assert.equal(updateWithin(approved, { ...next, permissions: { ...next.permissions, [key]: value } }).ok, false, `permissions.${key} = ${show(value)}`);
+    for (const key of Object.keys(next.contributes).filter((k) => !unchanged(value, next.contributes[k]) && !unchanged(value, approved.contributes[k]))) assert.equal(updateWithin(approved, { ...next, contributes: { ...next.contributes, [key]: value } }).ok, false, `contributes.${key} = ${show(value)}`);
+    assert.equal(updateWithin(approved, { ...next, programs: [{ ...next.programs[0], afterUpdate: [...steps, [value]] }] }).ok, false, `afterUpdate step ${show(value)}`);
+  }
+  for (const key of PROTOTYPE_KEYS) {
+    const extra = JSON.parse(`{${JSON.stringify(key)}: true}`);
+    assert.equal(updateWithin(approved, { ...next, ...extra }).ok, false, `manifest key ${key}`);
+    assert.equal(updateWithin(approved, { ...next, permissions: { ...next.permissions, ...extra } }).ok, false, `permission key ${key}`);
+    assert.equal(updateWithin(approved, { ...next, contributes: { ...next.contributes, ...extra } }).ok, false, `contributes key ${key}`);
+  }
+  assert.ok(refused > 1000);
+});
+
+test("a WebKit page menu address reaches native's writer only as a string the cleaner returned, whatever the page holds", async () => {
+  const { webKitAddressWrites } = stub;
+  webKitAddressWrites.written.length = 0;
+  for (const { id, value } of HOSTILE_VALUES) {
+    webKitAddressWrites.written.length = 0;
+    await copyLinkFromPageMenu(value, 7, null);
+    if (typeof value !== "string" || !value) assert.deepEqual(webKitAddressWrites.written, [], id);
+    else assert.deepEqual(webKitAddressWrites.written, [{ request: 7, url: cleanUrl(value) }], id);
+  }
+  for (const s of strings) {
+    for (const address of [s, `https://a.example/?utm_source=${s}&q=1`, `https://a.example/${s}?fbclid=1`]) {
+      webKitAddressWrites.written.length = 0;
+      await copyLinkFromPageMenu(address, 7, null);
+      assert.deepEqual(webKitAddressWrites.written, address ? [{ request: 7, url: cleanUrl(address) }] : [], show(address));
+    }
+  }
+});
+
+const { logpointCondition, checkedExpression } = await import("./state/automation/devToolsLogpoints.ts");
+const { inlineMapText, SourceMapResolver } = await import("./state/automation/devToolsSourceMaps.ts");
+const { fieldDataOrigin } = await import("./state/automation/devToolsFieldData.ts");
+const { describeIssue } = await import("./state/automation/devToolsIssues.ts");
+const { schemaProblem } = await import("./state/automation/socketSchema.ts");
+const { DEVTOOLS_INSPECT_METHODS } = await import("./state/automation/socketDevToolsInspect.ts");
+const vm = await import("node:vm");
+
+test("no hostile expression or condition makes a logpoint's condition truthy, so it never pauses the page", () => {
+  const run = (code) => {
+    const logged = [];
+    const context = vm.createContext({ console: { log: (...args) => logged.push(args) }, String });
+    return { result: vm.runInContext(`(function () { const total = 3; return ${code}; })()`, context, { timeout: 500 }), logged };
+  };
+  const control = run(logpointCondition("c", "total", null));
+  assert.deepEqual([control.result, control.logged], [false, [["[ardia logpoint c]", 3]]], "a plain logpoint logs");
+  for (const s of strings) {
+    let usable = true;
+    try {
+      checkedExpression(s, "expression");
+    } catch {
+      usable = false;
+    }
+    if (!usable) continue;
+    for (const code of [logpointCondition("h", s, null), logpointCondition("h", "total", s), logpointCondition("h", s, s)]) assert.equal(run(code).result, false, show(s));
+  }
+});
+
+test("a source map is only ever an inline data: map or one the caller passed, and nothing goes to the network, whatever the page names", () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = () => assert.fail("source maps never go to the network");
+  try {
+    const map = JSON.stringify({ version: 3, sources: ["a.ts"], names: [], mappings: "AAAA" });
+    assert.equal(inlineMapText(`data:application/json;base64,${Buffer.from(map).toString("base64")}`), map, "an inline map decodes");
+    for (const s of strings)
+      for (const ref of [s, `${s}.map`, `https://evil.example/${s}`, `\u002f/evil.example/${s}`, `data:application/json;base64,${s}`]) {
+        const text = inlineMapText(ref);
+        if (text !== null) assert.ok(ref.startsWith("data:application/json"), show(ref));
+        const resolver = new SourceMapResolver({ scripts: { "https://shop.example/a.js": `x()\n//# sourceMappingURL=${ref}` } });
+        const parsed = resolver.mapFor("https://shop.example/a.js");
+        if (parsed) assert.ok(ref.startsWith("data:"), show(ref));
+      }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("field data asks only for a web origin, never another scheme, credentials, a path or a query", () => {
+  assert.equal(fieldDataOrigin("https://shop.example/a?b=1#c"), "https://shop.example");
+  for (const s of strings)
+    for (const page of [s, `https://shop.example/${s}`, `${s}://shop.example/`]) {
+      let origin = null;
+      try {
+        origin = fieldDataOrigin(page);
+      } catch {
+        continue;
+      }
+      assert.match(origin, /^https?:\/\/[^/?#@\s]+$/, show(page));
+    }
+});
+
+test("DevTools issue codes and the styles method's property names refuse hostile values", () => {
+  const styles = DEVTOOLS_INSPECT_METHODS.find((m) => m.name === "devtools.styles");
+  assert.equal(schemaProblem(styles.params, { tab: "t", selector: "a", properties: ["color", "--brand-1"] }, "params"), null);
+  for (const { id, value } of HOSTILE_VALUES) {
+    const described = describeIssue({ issue: { code: value, details: {} } });
+    if (described) assert.match(described.code, /^[A-Za-z]+$/, id);
+    if (typeof value === "string" && /^[a-z][a-z-]*$/i.test(value)) continue;
+    assert.notEqual(schemaProblem(styles.params, { tab: "t", selector: "a", properties: [value] }, "params"), null, id);
+  }
+});
+
+const { analyzeTrace } = await import("./state/automation/devToolsInsights.ts");
+const { cascadeFor, declaredProperties } = await import("./state/automation/devToolsCascade.ts");
+
+function assertBoundedTree(value, label, depth = 0) {
+  assert.ok(depth < 12, `${label}: nesting stays shallow`);
+  if (typeof value === "string") assert.ok(value.length <= 4096, `${label}: a string of ${value.length} characters`);
+  else if (typeof value === "number") assert.ok(Number.isFinite(value), `${label}: a finite number`);
+  else if (Array.isArray(value)) {
+    assert.ok(value.length <= 64, `${label}: a list of ${value.length}`);
+    value.forEach((item, i) => assertBoundedTree(item, `${label}[${i}]`, depth + 1));
+  } else if (value && typeof value === "object") for (const [key, item] of Object.entries(value)) assertBoundedTree(item, `${label}.${key}`, depth + 1);
+}
+
+test("every hostile value in a page's trace events gives a bounded, well-shaped analysis and pollutes nothing", () => {
+  const navigation = { name: "navigationStart", ph: "R", pid: 2, tid: 3, ts: 1_000_000, args: { frame: "F", data: { documentLoaderURL: "https://a.example/", isOutermostMainFrame: true, navigationId: "N" } } };
+  const control = analyzeTrace([navigation, { name: "LayoutShift", ph: "I", pid: 2, tid: 3, ts: 1_100_000, args: { frame: "F", data: { score: 0.2, had_recent_input: false } } }]);
+  assert.equal(control.metrics.cls.value, 0.2, "a real shift is measured, so the hostile runs aren't vacuous");
+  for (const { id, value } of HOSTILE_VALUES) {
+    const events = [
+      navigation,
+      { name: value, ph: value, ts: value, dur: value, pid: value, tid: value, args: value },
+      { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_100, args: { data: { requestId: value, url: value, frame: value, renderBlocking: value, priority: value } } },
+      { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: 1_000_200, args: { data: { requestId: "R", url: typeof value === "string" ? `https://a.example/${value}` : value, frame: "F", renderBlocking: "blocking" } } },
+      { name: "ResourceFinish", ph: "I", pid: 2, tid: 3, ts: 1_000_300, args: { data: { requestId: "R", finishTime: value, encodedDataLength: value } } },
+      { name: "largestContentfulPaint::Candidate", ph: "R", pid: 2, tid: 3, ts: 1_200_000, args: { frame: "F", data: { candidateIndex: value, nodeId: value, type: value, url: value, navigationId: "N" } } },
+      { name: "LayoutShift", ph: "I", pid: 2, tid: 3, ts: 1_300_000, args: { frame: value, data: { score: value, weighted_score_delta: value, impacted_nodes: value } } },
+      { name: "EventTiming", ph: "b", pid: 2, tid: 3, ts: 1_400_000, args: { data: { interactionId: value, duration: value, type: value, frame: value, timeStamp: value, processingStart: value, processingEnd: value } } },
+      { name: "RunTask", ph: "X", pid: 2, tid: 3, ts: 1_500_000, dur: 90_000, args: {} },
+      { name: "EvaluateScript", ph: "X", pid: 2, tid: 3, ts: 1_500_100, dur: 80_000, args: { data: { url: value, functionName: value } } },
+      { name: "TracingStartedInBrowser", ph: "I", pid: 1, tid: 1, ts: 999_000, args: { data: { frames: value } } },
+      { name: "FrameCommittedInBrowser", ph: "I", pid: 1, tid: 1, ts: 1_000_050, args: { data: { frame: value, parent: value } } },
+    ];
+    for (const input of [events, { traceEvents: events }, value]) {
+      const result = analyzeTrace(input);
+      assertBoundedTree(JSON.parse(JSON.stringify(result)), id);
+      assert.equal(typeof result.metrics.cls.value, "number", id);
+      for (const insight of result.insights) assert.match(insight.id, /^[a-z-]+$/, id);
+    }
+  }
+  assert.equal({}.ardiaPolluted, undefined);
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("every hostile value in a page's matched styles gives a bounded cascade answer and pollutes nothing", () => {
+  const control = cascadeFor({ matchedCSSRules: [{ rule: { origin: "regular", selectorList: { selectors: [{ text: ".x" }] }, style: { cssProperties: [{ name: "color", value: "red" }] } }, matchingSelectors: [0] }] }, {}, ["color"], new Map());
+  assert.equal(control.winner?.value ?? control[0].winner.value, "red", "a real rule wins, so the hostile runs aren't vacuous");
+  for (const { id, value } of HOSTILE_VALUES) {
+    const prop = { name: value, value, important: value, disabled: value, parsedOk: value, implicit: value, range: value, longhandProperties: value };
+    const rule = { rule: { origin: value, styleSheetId: value, selectorList: { selectors: [{ text: value, specificity: value }], text: value }, style: { styleSheetId: value, cssProperties: [prop, { name: "color", value, longhandProperties: [{ name: value, value }] }] }, layers: value, media: value, supports: value }, matchingSelectors: value };
+    const matched = { inlineStyle: { cssProperties: [prop] }, attributesStyle: value, matchedCSSRules: [rule, value], inherited: [value, { matchedCSSRules: [rule] }], cssPropertyRules: [{ propertyName: { text: value }, style: { cssProperties: [{ name: "inherits", value }] } }, value] };
+    for (const input of [matched, value]) {
+      const properties = typeof value === "string" && value ? ["color", value] : ["color"];
+      const answer = cascadeFor(input, { computedStyle: [{ name: value, value }] }, properties, new Map([[typeof value === "string" ? value : "sheet", { url: value, origin: value, startLine: value, startColumn: value, isInline: value }]]));
+      assertBoundedTree(JSON.parse(JSON.stringify(answer)), id);
+      for (const entry of answer) for (const declaration of [entry.winner, ...entry.overridden].filter(Boolean)) assert.equal(typeof declaration.value, "string", id);
+      assertBoundedTree(declaredProperties(input), `${id} declared`);
+    }
+  }
+  assert.equal({}.ardiaPolluted, undefined);
+  assert.equal(Object.prototype.polluted, undefined);
 });
