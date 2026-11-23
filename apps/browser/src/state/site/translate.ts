@@ -13,6 +13,7 @@ import { errorText } from "../../lib/errors";
 import { capture, consentToken, type ConsentToken } from "../telemetry/client";
 import { noteWebKitCount } from "../telemetry/engineSwitchCounts";
 import { tabEngine } from "../engines/engines";
+import { failureReason, MODEL_ERRORS, TranslateFailure, type FinishStage, type TranslateReason, type TranslateStage } from "./translateReason";
 
 export { translation } from "../../platform/text";
 
@@ -40,32 +41,8 @@ const DOCUMENT_POLL_MS = 250;
 const PROGRESS_AFTER_MS = 1200;
 const PROGRESS_TOAST = "translate-progress";
 
-type TranslateStage = "detect" | "start" | "collect" | "model" | "apply" | "follow";
 const stages: Record<string, TranslateStage | undefined> = {};
 const atStage = (tabId: string, stage: TranslateStage) => void (stages[tabId] = stage);
-
-type FinishStage = TranslateStage | "same_language" | "status" | "prepare" | "open";
-
-export type TranslateReason = "pair_unavailable" | "no_window" | "page_not_ready" | "model_no_answer" | "page_closed" | "other";
-
-export class TranslateFailure extends Error {
-  reason: TranslateReason;
-  constructor(message: string, reason: TranslateReason) {
-    super(message);
-    this.reason = reason;
-  }
-}
-
-function failureReason(error: unknown, stage: FinishStage): TranslateReason {
-  if (error instanceof TranslateFailure) return error.reason;
-  if (stage === "prepare" && /\bno window\b/i.test(errorText(error))) return "no_window";
-  return "other";
-}
-
-const MODEL_ERRORS = [
-  "cancelled", "nothing_to_translate", "unable_to_identify_language", "internal_error", "already_cancelled",
-  "not_installed", "unsupported_source_language", "unsupported_target_language", "unsupported_language_pairing", "unavailable",
-];
 
 export function translateCrashContext(tabId: string) {
   const all = Object.values(useTranslate.getState());

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { translatePassage, TranslateFailure } = await import("./translate.ts");
+const { translatePassage } = await import("./translate.ts");
+const { TranslateFailure } = await import("./translateReason.ts");
 
 const beforeAttributedText = () => {
   const calls = [];

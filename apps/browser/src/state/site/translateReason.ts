@@ -1,0 +1,26 @@
+import { errorText } from "../../lib/errors";
+
+export type TranslateStage = "detect" | "start" | "collect" | "model" | "apply" | "follow";
+
+export type FinishStage = TranslateStage | "same_language" | "status" | "prepare" | "open";
+
+export type TranslateReason = "pair_unavailable" | "no_window" | "page_not_ready" | "model_no_answer" | "page_closed" | "other";
+
+export class TranslateFailure extends Error {
+  reason: TranslateReason;
+  constructor(message: string, reason: TranslateReason) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
+export function failureReason(error: unknown, stage: FinishStage): TranslateReason {
+  if (error instanceof TranslateFailure) return error.reason;
+  if (stage === "prepare" && /\bno window\b/i.test(errorText(error))) return "no_window";
+  return "other";
+}
+
+export const MODEL_ERRORS = [
+  "cancelled", "nothing_to_translate", "unable_to_identify_language", "internal_error", "already_cancelled",
+  "not_installed", "unsupported_source_language", "unsupported_target_language", "unsupported_language_pairing", "unavailable",
+];
