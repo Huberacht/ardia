@@ -560,3 +560,30 @@ test("crossing the budget while a warning is already on wakes the sweep jobs, on
   lifecycle.noteReady(ids[2]);
   webviews.clear();
 });
+
+test("under memory pressure a tab an ardia command session holds is never asked, including a hold taken while an earlier ask is awaited", async (t) => {
+  const { sleepTabsOverBudget, loadedTabBudget } = await import("./loadedTabBudget.ts");
+  const { holdForCli, releaseAllCliHolds } = await import("./cliHolds.ts");
+  const { webviews } = await import("../../platform/webviews.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const now = Date.now() + 2400 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(4, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i * 60) * minute }));
+  const sys = { onBattery: false, batteryLevel: null, lowPowerMode: false, memoryPressure: "warning", physicalMemory: 8 * 2 ** 30 };
+  const warning = { ...loadedTabBudget({ memorySaver: true, memorySaverMode: "maximum" }, sys), tabs: 1 };
+  releaseAllCliHolds();
+  holdForCli("s1", [ids[3]]);
+  const asked = [];
+  webviews.clear();
+  const answers = { [ids[2]]: () => (holdForCli("s2", [ids[1]]), Promise.resolve([26])) };
+  for (const id of [active, ...ids]) webviews.set(id, { sleepIfHidden: () => (asked.push(id), answers[id]?.() ?? Promise.resolve([])) });
+  const done = sleepTabsOverBudget(warning, now);
+  for (let i = 0; i < 8; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(1500);
+  }
+  assert.deepEqual(await done, [ids[0]]);
+  assert.deepEqual(asked, [ids[2], ids[0]], "the held tab is left out of the warning sweep, and a hold taken mid-sweep stops its ask");
+  releaseAllCliHolds();
+  webviews.clear();
+});
