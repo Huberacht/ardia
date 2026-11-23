@@ -73,15 +73,7 @@ function useTabsToggleIcon(windowId: string) {
 const TOOLBAR_HINTS = ["toggleSidebar", "openSplitPane", ...NAV_HINTS] as const;
 
 export const Toolbar = memo(function Toolbar({
-  tabId,
-  geometry,
-  windowId,
-  inSplit,
-  focused,
-  bare,
-  loadFill = true,
-  extensionButtonsVisible = true,
-  paneBounds,
+  tabId, geometry, windowId, inSplit, focused, bare, loadFill = true, extensionButtonsVisible = true, paneBounds,
 }: {
   tabId: string;
   geometry: ToolbarGeometry;
