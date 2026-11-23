@@ -15,6 +15,18 @@ fetched under, so a new file there would make Mac or Linux builds miss their pre
 `03-helium.py` and `game-resource.sh`; they change nothing the Mac scripts do. Everything lives in `~/chromium-build-win`
 (`AC_CHROMIUM_BUILD`, which every Windows script defaults to); the Mac's `~/chromium-build` is never touched.
 
+The Windows engine has its own key, `engine/engine-key.sh --platform win` (`windows` too), beside the Mac's and Linux's,
+which it leaves as they were. It hashes what `series_win.py`'s `key_inputs` says this build reads: the patches it
+applies, in order (the `all` and `mac` lines of `engine/patches/series` less `series-win`'s skips, then `series-win`'s
+own), `engine/chromium/src`, `engine/patches/build` and `series.py`, the ArdiaCore headers and launch switches it
+copies, the offline game, `scripts/windows/engine` (less `check_inputs.py`, `*_test.py` and `prebuilt.json`), the app's
+`EngineApi.h` and the files the resource lists brand with. A Linux-only line, the Linux layer or the rest of
+`engine/ardiacore` leaves it alone. `prebuilt.json` pins it as `key` beside `source`, the commit the engine was built
+from (the release source archive still follows `source`); `prebuilt_test.py` checks that `key` is the Windows key of
+`source`. A new engine release sets both: `source` to the commit built and `key` to
+`engine/engine-key.sh --platform win <source>`. HEAD's key differing from the pinned one means the prebuilt is older
+than this tree's Windows inputs.
+
 **State on 2026-11-10/11 (MacBook Pro, M5 Pro, 24 GB).** Proven: the toolchain zip is accepted by the cross build,
 Helium and our series apply, `gn gen` passes, and `base_unittests.exe` and `chrome` link. `chrome.exe` (3.1 MB) and
 `chrome.dll` (332 MB) are PE32+ x86-64; the output has 525 runtime files (472 MB of `.exe` and `.dll`), and

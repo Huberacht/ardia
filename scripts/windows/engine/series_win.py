@@ -16,6 +16,7 @@ of the engine's ac_* calls in the sources Windows compiles) is copied to //ardia
 Usage: series_win.py apply --report TSV | layer | classify (CHROMIUM_SRC is the tree)
 """
 import argparse
+import io
 import os
 import re
 import shutil
@@ -39,6 +40,16 @@ WINDOWS_FROM_MAC_BLOCK = ('ac_reauth.cc',)
 WINDOWS_CONDITIONS = {'is_win': True, 'is_mac': False, 'is_linux': False, '!is_win': False, '!is_mac': True, '!is_linux': True}
 LAYER_ASSERT = re.compile(r'^assert\(is_mac( \|\| is_linux)?\)$', re.M)
 LAYER_BUILD = 'engine/chromium/src/chrome/browser/ardia/BUILD.gn'
+SERIES_REL = 'engine/patches/series'
+SERIES_WIN_REL = 'scripts/windows/engine/series-win'
+WIN_PATCHES_REL = 'scripts/windows/engine/patches'
+ARDIACORE_SRC_REL = 'engine/ardiacore/src'
+ENGINE_API_REL = 'apps/browser/windows/Ardia/EngineApi.h'
+RESOURCE_LISTS = ('engine/patches/build/ardia_resources.txt', 'scripts/windows/engine/ardia_resources_win.txt')
+KEY_TREES = ('engine/chromium/src', 'engine/patches/build', 'apps/browser/assets/offline-game',
+             'apps/browser/assets/offline-game-pipeline', 'scripts/windows/engine')
+KEY_FILES = ('engine/patches/series.py',)
+KEY_TOOLING = ('engine/patches/build/tests', 'scripts/windows/engine/check_inputs.py', 'scripts/windows/engine/prebuilt.json')
 MAC_FILE = re.compile(r'(\.mm$|_mac(_[a-z]+)?\.(cc|h)$|/mac/|cocoa|_apple\.(cc|h|mm)$|/apple/|keychain|\.icns$|\.car$)')
 
 
@@ -50,11 +61,26 @@ def where(path, line):
     return f'{os.path.relpath(path, REPO)}:{line}'
 
 
+def checkout_path(rel):
+    return os.path.join(REPO, *rel.split('/'))
+
+
+def checkout_text(rel):
+    path = checkout_path(rel)
+    return open(path).read() if os.path.isfile(path) else None
+
+
 def chromium_lines(path, tags=WINDOWS_TAGS):
     if not os.path.isfile(path):
         return []
+    return series_lines(open(path).read(), path, tags)
+
+
+def series_lines(text, path, tags=WINDOWS_TAGS):
+    if text is None:
+        return []
     out = []
-    for n, raw in enumerate(open(path), 1):
+    for n, raw in enumerate(io.StringIO(text), 1):
         fields = raw.split('#', 1)[0].split()
         if not fields or fields[0] != 'chromium':
             continue
@@ -325,8 +351,7 @@ def win_layer(tree):
         for name in files:
             path = os.path.join(root, name)
             wanted[os.path.relpath(path, source)] = path
-    wanted[os.path.join('public', 'EngineApi.h')] = os.path.join(
-        REPO, 'apps', 'browser', 'windows', 'Ardia', 'EngineApi.h')
+    wanted[os.path.join('public', 'EngineApi.h')] = checkout_path(ENGINE_API_REL)
     copied = 0
     for rel, path in wanted.items():
         dst = os.path.join(target, rel)
@@ -350,19 +375,71 @@ def win_layer(tree):
     print(f'ardia/win: {len(wanted) + len(generated)} files, {len(names)} engine calls, {copied} changed')
 
 
-def skipped():
-    path = os.path.join(HERE, 'series-win')
-    if not os.path.isfile(path):
+def skip_names(text):
+    if text is None:
         return set()
-    return {l.split(None, 1)[1].strip() for l in (r.split('#', 1)[0].strip() for r in open(path))
+    return {l.split(None, 1)[1].strip() for l in (r.split('#', 1)[0].strip() for r in io.StringIO(text))
             if l.startswith('skip ')}
 
 
+def skipped():
+    return skip_names(checkout_text(SERIES_WIN_REL))
+
+
+def plan_patches(read):
+    skips = skip_names(read(SERIES_WIN_REL))
+    shared = [n for n in series_lines(read(SERIES_REL), checkout_path(SERIES_REL)) if n not in skips]
+    own = series_lines(read(SERIES_WIN_REL), checkout_path(SERIES_WIN_REL))
+    return [(n, f'engine/patches/{n}') for n in shared] + [(n, f'{WIN_PATCHES_REL}/{n}') for n in own]
+
+
 def names():
-    skips = skipped()
-    return [(n, os.path.join(PATCHES, n)) for n in chromium_lines(os.path.join(PATCHES, 'series'))
-            if n not in skips] + \
-        [(n, os.path.join(WIN_PATCHES, n)) for n in chromium_lines(os.path.join(HERE, 'series-win'))]
+    return [(n, checkout_path(rel)) for n, rel in plan_patches(checkout_text)]
+
+
+def resource_sources(text, rel):
+    sources = []
+    for n, line in enumerate((text or '').splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            raise InputError(f'{rel}:{n}: expected `<source> <dest>`')
+        sources.append(parts[0])
+    return sources
+
+
+def under(path, prefix):
+    return path == prefix or path.startswith(prefix + '/')
+
+
+class KeyInputs:
+    def __init__(self, patches, files, excluded):
+        self.patches, self.files, self.excluded = patches, files, excluded
+        self.trees, self.series, self.listed = KEY_TREES, (SERIES_REL, SERIES_WIN_REL), frozenset(files)
+
+    def counts(self, path):
+        if path in self.series:
+            return False
+        if path in self.listed:
+            return True
+        return any(under(path, tree) for tree in self.trees) and not any(under(path, out) for out in self.excluded)
+
+
+def key_inputs(files, read):
+    patches = [rel for _, rel in plan_patches(read)]
+    applied = set(patches)
+    listed = set(KEY_FILES) | {ENGINE_API_REL}
+    listed |= {f'{ARDIACORE_SRC_REL}/{rel}' for rel in HOOK_HEADERS}
+    listed |= {f'{ARDIACORE_SRC_REL}/{LAUNCH_SWITCHES}{ext}' for ext in ('.cc', '.h')}
+    listed |= applied
+    for listing in RESOURCE_LISTS:
+        listed.update(resource_sources(read(listing), listing))
+    excluded = set(KEY_TOOLING)
+    excluded |= {path for path in files if under(path, WIN_PATCHES_REL) and path not in applied}
+    excluded |= {path for path in files if under(path, 'scripts/windows/engine') and path.endswith('_test.py')}
+    return KeyInputs(patches, sorted(listed), sorted(excluded))
 
 
 def state_path(tree):

@@ -133,6 +133,8 @@ jobs:
               - "packages/shaders/scripts/meadow.mjs"
               - "apps/browser/assets/offline-game/**"
               - "apps/browser/assets/offline-game-pipeline/**"
+              - "apps/browser/windows/Ardia/EngineApi.h"
+              - "apps/browser/windows/Ardia/Ardia.ico"
               - "engine/**"
               - "docs/release-notes/**"
               - "infra/site/**"

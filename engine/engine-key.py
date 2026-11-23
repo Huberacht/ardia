@@ -17,10 +17,12 @@ SERIES = 'engine/patches/series'
 PATCH_DIR = 'engine/patches'
 COPIES = 'copies.tsv'
 UNITS = ('.c', '.cc', '.cpp', '.m', '.mm')
-PLATFORMS = {'mac': 'mac', 'macos': 'mac', 'linux': 'linux'}
+PLATFORMS = {'mac': 'mac', 'macos': 'mac', 'linux': 'linux', 'win': 'win', 'windows': 'win'}
 OTHER = {'mac': 'linux', 'linux': 'mac'}
 GN_PLATFORMS = {'is_mac': 'mac', 'is_linux': 'linux'}
 CHECKOUT = pathlib.Path(__file__).resolve().parents[1]
+WIN_ROOT = 'scripts/windows/engine'
+WIN_PLAN = 'scripts/windows/engine/series_win.py'
 
 
 class Problem(Exception):
@@ -259,9 +261,54 @@ class Plan:
         return not any(under(path, layer) for layer in self.skipped_layers)
 
 
+def series_win_module():
+    path = CHECKOUT / WIN_PLAN
+    if not path.is_file():
+        raise Problem(f'{WIN_PLAN}, the Windows build plan, is not in this checkout')
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('ardia_series_win', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class WinPlan:
+    def __init__(self, tree, rev='the tree'):
+        tree.load((WIN_ROOT,))
+        if not any(under(path, WIN_ROOT) for path in tree.files()):
+            raise Problem(f'{rev} has no {WIN_ROOT}')
+        module = series_win_module()
+
+        def read(path):
+            raw = tree.read(path)
+            return None if raw is None else raw.decode('utf-8', 'surrogateescape').replace('\r\n', '\n').replace('\r', '\n')
+
+        try:
+            self.inputs = module.key_inputs(tree.files(), read)
+        except module.InputError as problem:
+            raise Problem(f'the Windows build plan is invalid: {problem}')
+        except SystemExit as stop:
+            raise Problem(f'the Windows build plan is invalid: {stop.code}')
+        self.steps = [('chromium', path) for path in self.inputs.patches]
+        self.outside = sorted({path for path in self.inputs.files if not in_roots(path) and not under(path, WIN_ROOT)})
+        if self.outside:
+            tree.load(self.outside)
+        missing = [path for path in self.inputs.files if path not in tree.entries]
+        if missing:
+            raise Problem(f'the Windows build reads {", ".join(missing)}, which is not there')
+
+    def counts(self, path):
+        return self.inputs.counts(path)
+
+    def pathspecs(self):
+        specs = list(self.inputs.trees) + list(self.inputs.series)
+        specs += [path for path in self.inputs.files if not any(under(path, tree) for tree in self.inputs.trees)]
+        return specs + [f':(exclude){path}' for path in self.inputs.excluded]
+
+
 def key(platform, rev):
     tree = GitTree(rev)
-    plan = Plan(tree, platform)
+    plan = WinPlan(tree, rev) if platform == 'win' else Plan(tree, platform)
     lines = [f'platform {platform}']
     lines += [f'{kind} {name}' for kind, name in plan.steps]
     lines += [f'{mode} {oid} {path}' for path, (mode, oid) in sorted(tree.entries.items()) if plan.counts(path)]
@@ -290,6 +337,8 @@ def layer_excludes(tree, layer, lent):
 
 def paths(platform):
     tree = WorkTree()
+    if platform == 'win':
+        return WinPlan(tree).pathspecs()
     plan = Plan(tree, platform)
     specs = list(ROOTS) + plan.outside + list(TOOLING_PATHSPECS)
     specs += [f':(exclude){path}' for path in sorted(plan.skipped_patches)]
@@ -308,7 +357,7 @@ def default_platform():
         return 'mac'
     if system == 'Linux':
         return 'linux'
-    raise Problem(f'no engine is built on {system}: pass --platform macos or --platform linux')
+    raise Problem(f'no engine is built on {system}: pass --platform macos, --platform linux or --platform win')
 
 
 def main():
@@ -320,7 +369,7 @@ def main():
     try:
         platform = PLATFORMS.get(args.platform or default_platform())
         if platform is None:
-            raise Problem(f'unknown platform {args.platform or os.environ.get("AC_TARGET_OS")}: macos or linux')
+            raise Problem(f'unknown platform {args.platform or os.environ.get("AC_TARGET_OS")}: macos, linux or win')
         print('\n'.join(paths(platform)) if args.paths else key(platform, args.commit))
     except Problem as problem:
         print(f'engine-key: {problem}', file=sys.stderr)

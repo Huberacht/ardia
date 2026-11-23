@@ -1,11 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { tmpdir } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 const gitEnv = {
@@ -25,12 +26,15 @@ const real = [
   'engine/patches/build/pathguard.py',
   'engine/patches/build/target_config.py',
   'engine/ardiacore-linux/apply.sh',
+  'scripts/windows/engine/series_win.py',
 ]
+const win = 'scripts/windows/engine'
 
 const series = `# fixture series
 chromium chromium-shared.patch
 chromium chromium-mac-only.patch mac
 chromium chromium-linux-only.patch linux
+chromium chromium-skipped-on-win.patch mac
 
 layer engine/chromium
 layer engine/ardiacore mac
@@ -96,6 +100,9 @@ const files = {
   'engine/patches/chromium-shared.patch': 'shared\n',
   'engine/patches/chromium-mac-only.patch': 'mac\n',
   'engine/patches/chromium-linux-only.patch': 'linux\n',
+  'engine/patches/chromium-skipped-on-win.patch': 'skipped on windows\n',
+  'engine/patches/build/ardia_resources.txt': 'engine/patches/build/ardia-icons/app.png chrome/app/app.png\n',
+  'engine/patches/build/ardia-icons/app.png': 'icon\n',
   'engine/patches/build/env.sh': 'export CHROMIUM_VERSION=1.2.3.4\n',
   'engine/patches/build/tests/test_tooling.py': 'pass\n',
   'engine/chromium/apply.sh': '#!/usr/bin/env bash\n',
@@ -118,12 +125,32 @@ const files = {
   'engine/ardiacore/apply.sh': '#!/usr/bin/env bash\n',
   'engine/ardiacore/src/ardia/core/ac_hooks.h': 'hooks\n',
   'engine/ardiacore/src/ardia/core/ardiacore_engine.mm': 'mac engine\n',
+  'engine/ardiacore/src/ardia/core/ac_content_hooks.h': 'content hooks\n',
+  'engine/ardiacore/src/ardia/core/ac_host_visibility.h': 'host visibility\n',
+  'engine/ardiacore/src/ardia/core/ac_launch_switches.cc': 'launch switches\n',
+  'engine/ardiacore/src/ardia/core/ac_launch_switches.h': 'launch switches header\n',
+  'engine/ardiacore/src/ardia/core/ac_mac_only.cc': 'not copied to windows\n',
   'engine/ardiacore-linux/copies.tsv': copies.map((row) => row.join('\t')).join('\n') + '\n',
   'engine/ardiacore-linux/src/ardia/linux/shell.cc': 'linux shell\n',
   'engine/ardiacore-linux/src/ardia/core/ac_linux_core.cc': 'linux core\n',
   'apps/browser/assets/offline-game/game.js': 'game\n',
   'apps/browser/assets/offline-game-pipeline/inline.py': 'inline\n',
   'packages/ardiacore/ios/page_script.js': 'page\n',
+  [`${win}/series-win`]: 'skip chromium-skipped-on-win.patch\nchromium chromium-win-own.patch\n',
+  [`${win}/patches/chromium-win-own.patch`]: 'windows\n',
+  [`${win}/patches/chromium-win-unlisted.patch`]: 'not in series-win\n',
+  [`${win}/ardia-layer-win.patch`]: 'layer fixes\n',
+  [`${win}/ardia_resources_win.txt`]: 'apps/browser/windows/Ardia/Ardia.ico chrome/app/theme/chromium/win/chromium.ico\n',
+  [`${win}/accepted-patches.txt`]: 'chromium-shared.patch\n',
+  [`${win}/env.sh`]: 'export AC_TARGET_OS=mac\n',
+  [`${win}/src/ardia/win/app.cc`]: 'app\n',
+  [`${win}/check_inputs.py`]: 'check\n',
+  [`${win}/check_inputs_test.py`]: 'check test\n',
+  [`${win}/prebuilt_test.py`]: 'prebuilt test\n',
+  [`${win}/prebuilt.json`]: '{}\n',
+  'apps/browser/windows/Ardia/EngineApi.h': 'engine api\n',
+  'apps/browser/windows/Ardia/Ardia.ico': 'ico\n',
+  'apps/browser/windows/Ardia/App.cpp': 'not in the engine\n',
   'README.md': 'fixture\n',
 }
 
@@ -149,7 +176,7 @@ function fixture() {
     assert.equal(result.status, 0, result.stderr)
     return result.stdout.trim()
   }
-  const keys = () => ({ macos: key('macos'), linux: key('linux') })
+  const keys = () => ({ macos: key('macos'), linux: key('linux'), win: key('win') })
   const commit = (message = 'change') => {
     git('add', '-A')
     git('commit', '-q', '-m', message)
@@ -175,9 +202,10 @@ function withFixture(body) {
   }
 }
 
-function assertKeys(before, after, { macos, linux }) {
+function assertKeys(before, after, { macos, linux, win }) {
   assert.equal(before.macos !== after.macos, macos, `macOS key ${macos ? 'should' : 'should not'} change`)
   assert.equal(before.linux !== after.linux, linux, `Linux key ${linux ? 'should' : 'should not'} change`)
+  assert.equal(before.win !== after.win, win, `Windows key ${win ? 'should' : 'should not'} change`)
 }
 
 function moved(expected) {
@@ -185,40 +213,40 @@ function moved(expected) {
 }
 
 const cases = [
-  ['a Linux-only patch', 'engine/patches/chromium-linux-only.patch', { macos: false, linux: true }],
-  ['a macOS-only patch', 'engine/patches/chromium-mac-only.patch', { macos: true, linux: false }],
-  ['a shared patch', 'engine/patches/chromium-shared.patch', { macos: true, linux: true }],
-  ['the Linux layer', 'engine/ardiacore-linux/src/ardia/linux/shell.cc', { macos: false, linux: true }],
-  ['the Linux layer apply.sh', 'engine/ardiacore-linux/apply.sh', { macos: false, linux: true }],
-  ['the Linux layer copies.tsv', 'engine/ardiacore-linux/copies.tsv', { macos: false, linux: true }],
-  ['the macOS layer', 'engine/ardiacore/src/ardia/core/ardiacore_engine.mm', { macos: true, linux: false }],
-  ['a macOS layer file the Linux layer copies', 'engine/ardiacore/src/ardia/core/ac_hooks.h', { macos: true, linux: true }],
-  ['page_script.js, which only the Linux layer copies', 'packages/ardiacore/ios/page_script.js', { macos: false, linux: true }],
-  ['a logo the Linux layer copies from the shared layer', 'engine/chromium/src/chrome/app/theme/chromium/product_logo_16.png', { macos: true, linux: true }],
-  ['ac_external_apps_linux.cc, built only inside is_linux', `${ardia}/ac_external_apps_linux.cc`, { macos: false, linux: true }],
-  ['a unit in a block nested in is_linux', `${ardia}/ac_nested_linux.cc`, { macos: false, linux: true }],
-  ['ac_external_apps.mm, built only inside is_mac', `${ardia}/ac_external_apps.mm`, { macos: true, linux: false }],
-  ['a macOS-only unit without mac in its name', `${ardia}/ac_reauth.cc`, { macos: true, linux: false }],
-  ['a header listed only inside is_mac, which Linux may include', `${ardia}/ac_external_apps.h`, { macos: true, linux: true }],
-  ['a unit in the else of is_linux', `${ardia}/ac_not_linux.cc`, { macos: true, linux: true }],
-  ['a unit inside !is_win', `${ardia}/ac_local_storage.cc`, { macos: true, linux: true }],
-  ['a unit named only in a BUILD.gn comment', `${ardia}/ac_commented_linux.cc`, { macos: true, linux: true }],
-  ['a shared unit', `${ardia}/shared.cc`, { macos: true, linux: true }],
-  ['a unit listed relative under is_mac and from the source root under else if (is_linux)', `${ardia}/both.cc`, { macos: true, linux: true }],
-  ['a unit listed from the source root only under is_linux', `${ardia}/rooted_linux.cc`, { macos: false, linux: true }],
-  ['a unit a source-root path under is_linux names in two layers', 'engine/chromium/src/ardia/core/twice.cc', { macos: true, linux: true }],
-  ['the BUILD.gn', `${ardia}/BUILD.gn`, { macos: true, linux: true }],
-  ['the build scripts', 'engine/patches/build/env.sh', { macos: true, linux: true }],
-  ['series.py, the series parser', 'engine/patches/series.py', { macos: true, linux: true }],
-  ['the offline game', 'apps/browser/assets/offline-game/game.js', { macos: true, linux: true }],
-  ['the offline game pipeline', 'apps/browser/assets/offline-game-pipeline/inline.py', { macos: true, linux: true }],
-  ['the build scripts tests', 'engine/patches/build/tests/test_tooling.py', { macos: false, linux: false }],
-  ['engine-key.py', 'engine/engine-key.py', { macos: false, linux: false }],
-  ['engine-key.test.mjs', 'engine/engine-key.test.mjs', { macos: false, linux: false }],
-  ['a file outside the engine', 'README.md', { macos: false, linux: false }],
+  ['a Linux-only patch', 'engine/patches/chromium-linux-only.patch', { macos: false, linux: true , win: false }],
+  ['a macOS-only patch', 'engine/patches/chromium-mac-only.patch', { macos: true, linux: false , win: true }],
+  ['a shared patch', 'engine/patches/chromium-shared.patch', { macos: true, linux: true , win: true }],
+  ['the Linux layer', 'engine/ardiacore-linux/src/ardia/linux/shell.cc', { macos: false, linux: true , win: false }],
+  ['the Linux layer apply.sh', 'engine/ardiacore-linux/apply.sh', { macos: false, linux: true , win: false }],
+  ['the Linux layer copies.tsv', 'engine/ardiacore-linux/copies.tsv', { macos: false, linux: true , win: false }],
+  ['the macOS layer', 'engine/ardiacore/src/ardia/core/ardiacore_engine.mm', { macos: true, linux: false , win: false }],
+  ['a macOS layer file the Linux layer copies', 'engine/ardiacore/src/ardia/core/ac_hooks.h', { macos: true, linux: true , win: true }],
+  ['page_script.js, which only the Linux layer copies', 'packages/ardiacore/ios/page_script.js', { macos: false, linux: true , win: false }],
+  ['a logo the Linux layer copies from the shared layer', 'engine/chromium/src/chrome/app/theme/chromium/product_logo_16.png', { macos: true, linux: true , win: true }],
+  ['ac_external_apps_linux.cc, built only inside is_linux', `${ardia}/ac_external_apps_linux.cc`, { macos: false, linux: true , win: true }],
+  ['a unit in a block nested in is_linux', `${ardia}/ac_nested_linux.cc`, { macos: false, linux: true , win: true }],
+  ['ac_external_apps.mm, built only inside is_mac', `${ardia}/ac_external_apps.mm`, { macos: true, linux: false , win: true }],
+  ['a macOS-only unit without mac in its name', `${ardia}/ac_reauth.cc`, { macos: true, linux: false , win: true }],
+  ['a header listed only inside is_mac, which Linux may include', `${ardia}/ac_external_apps.h`, { macos: true, linux: true , win: true }],
+  ['a unit in the else of is_linux', `${ardia}/ac_not_linux.cc`, { macos: true, linux: true , win: true }],
+  ['a unit inside !is_win', `${ardia}/ac_local_storage.cc`, { macos: true, linux: true , win: true }],
+  ['a unit named only in a BUILD.gn comment', `${ardia}/ac_commented_linux.cc`, { macos: true, linux: true , win: true }],
+  ['a shared unit', `${ardia}/shared.cc`, { macos: true, linux: true , win: true }],
+  ['a unit listed relative under is_mac and from the source root under else if (is_linux)', `${ardia}/both.cc`, { macos: true, linux: true , win: true }],
+  ['a unit listed from the source root only under is_linux', `${ardia}/rooted_linux.cc`, { macos: false, linux: true , win: true }],
+  ['a unit a source-root path under is_linux names in two layers', 'engine/chromium/src/ardia/core/twice.cc', { macos: true, linux: true , win: true }],
+  ['the BUILD.gn', `${ardia}/BUILD.gn`, { macos: true, linux: true , win: true }],
+  ['the build scripts', 'engine/patches/build/env.sh', { macos: true, linux: true , win: true }],
+  ['series.py, the series parser', 'engine/patches/series.py', { macos: true, linux: true , win: true }],
+  ['the offline game', 'apps/browser/assets/offline-game/game.js', { macos: true, linux: true , win: true }],
+  ['the offline game pipeline', 'apps/browser/assets/offline-game-pipeline/inline.py', { macos: true, linux: true , win: true }],
+  ['the build scripts tests', 'engine/patches/build/tests/test_tooling.py', { macos: false, linux: false , win: false }],
+  ['engine-key.py', 'engine/engine-key.py', { macos: false, linux: false , win: false }],
+  ['engine-key.test.mjs', 'engine/engine-key.test.mjs', { macos: false, linux: false , win: false }],
+  ['a file outside the engine', 'README.md', { macos: false, linux: false , win: false }],
 ]
 
-const appendable = new Set(['engine/patches/series.py', 'engine/engine-key.py', 'engine/ardiacore-linux/apply.sh', 'engine/ardiacore-linux/copies.tsv', `${ardia}/BUILD.gn`])
+const appendable = new Set(['engine/patches/series.py', 'engine/engine-key.py', `${win}/series_win.py`, 'engine/ardiacore-linux/apply.sh', 'engine/ardiacore-linux/copies.tsv', `${ardia}/BUILD.gn`])
 
 for (const [name, path, expected] of cases) {
   test(
@@ -232,16 +260,16 @@ for (const [name, path, expected] of cases) {
 }
 
 const dirtyCases = [
-  ['an uncommitted edit to ac_external_apps_linux.cc', (fx) => appendFileSync(join(fx.root, ardia, 'ac_external_apps_linux.cc'), 'more\n'), { macos: false, linux: true }],
-  ['an uncommitted edit to ac_external_apps.mm', (fx) => appendFileSync(join(fx.root, ardia, 'ac_external_apps.mm'), 'more\n'), { macos: true, linux: false }],
-  ['an uncommitted edit to a Linux-only patch', (fx) => appendFileSync(join(fx.root, 'engine/patches/chromium-linux-only.patch'), 'more\n'), { macos: false, linux: true }],
-  ['an uncommitted edit to a macOS-only patch', (fx) => appendFileSync(join(fx.root, 'engine/patches/chromium-mac-only.patch'), 'more\n'), { macos: true, linux: false }],
-  ['a new untracked file in the Linux layer', (fx) => fx.write('engine/ardiacore-linux/src/ardia/linux/new.cc', 'new\n'), { macos: false, linux: true }],
-  ['a new untracked file in the macOS layer', (fx) => fx.write('engine/ardiacore/src/ardia/core/new.mm', 'new\n'), { macos: true, linux: false }],
-  ['an uncommitted edit to a header the Linux layer copies', (fx) => appendFileSync(join(fx.root, 'engine/ardiacore/src/ardia/core/ac_hooks.h'), 'more\n'), { macos: true, linux: true }],
-  ['an uncommitted edit to page_script.js', (fx) => appendFileSync(join(fx.root, 'packages/ardiacore/ios/page_script.js'), 'more\n'), { macos: false, linux: true }],
-  ['an uncommitted edit to a shared unit', (fx) => appendFileSync(join(fx.root, ardia, 'shared.cc'), 'more\n'), { macos: true, linux: true }],
-  ['an uncommitted edit to engine-key.py', (fx) => appendFileSync(join(fx.root, 'engine/engine-key.py'), '\n'), { macos: false, linux: false }],
+  ['an uncommitted edit to ac_external_apps_linux.cc', (fx) => appendFileSync(join(fx.root, ardia, 'ac_external_apps_linux.cc'), 'more\n'), { macos: false, linux: true , win: true }],
+  ['an uncommitted edit to ac_external_apps.mm', (fx) => appendFileSync(join(fx.root, ardia, 'ac_external_apps.mm'), 'more\n'), { macos: true, linux: false , win: true }],
+  ['an uncommitted edit to a Linux-only patch', (fx) => appendFileSync(join(fx.root, 'engine/patches/chromium-linux-only.patch'), 'more\n'), { macos: false, linux: true , win: false }],
+  ['an uncommitted edit to a macOS-only patch', (fx) => appendFileSync(join(fx.root, 'engine/patches/chromium-mac-only.patch'), 'more\n'), { macos: true, linux: false , win: true }],
+  ['a new untracked file in the Linux layer', (fx) => fx.write('engine/ardiacore-linux/src/ardia/linux/new.cc', 'new\n'), { macos: false, linux: true , win: false }],
+  ['a new untracked file in the macOS layer', (fx) => fx.write('engine/ardiacore/src/ardia/core/new.mm', 'new\n'), { macos: true, linux: false , win: false }],
+  ['an uncommitted edit to a header the Linux layer copies', (fx) => appendFileSync(join(fx.root, 'engine/ardiacore/src/ardia/core/ac_hooks.h'), 'more\n'), { macos: true, linux: true , win: true }],
+  ['an uncommitted edit to page_script.js', (fx) => appendFileSync(join(fx.root, 'packages/ardiacore/ios/page_script.js'), 'more\n'), { macos: false, linux: true , win: false }],
+  ['an uncommitted edit to a shared unit', (fx) => appendFileSync(join(fx.root, ardia, 'shared.cc'), 'more\n'), { macos: true, linux: true , win: true }],
+  ['an uncommitted edit to engine-key.py', (fx) => appendFileSync(join(fx.root, 'engine/engine-key.py'), '\n'), { macos: false, linux: false , win: false }],
 ]
 
 for (const [name, edit, expected] of dirtyCases) {
@@ -250,9 +278,11 @@ for (const [name, edit, expected] of dirtyCases) {
     withFixture((fx) => {
       assert.equal(fx.dirty('macos'), '')
       assert.equal(fx.dirty('linux'), '')
+      assert.equal(fx.dirty('win'), '')
       edit(fx)
       assert.equal(fx.dirty('macos') !== '', expected.macos, `macOS --paths ${expected.macos ? 'should' : 'should not'} be dirty`)
       assert.equal(fx.dirty('linux') !== '', expected.linux, `Linux --paths ${expected.linux ? 'should' : 'should not'} be dirty`)
+      assert.equal(fx.dirty('win') !== '', expected.win, `Windows --paths ${expected.win ? 'should' : 'should not'} be dirty`)
     }),
   )
 }
@@ -263,10 +293,10 @@ test(
     const before = keys()
     writeFileSync(join(root, 'engine/patches/chromium-linux-new.patch'), 'new\n')
     const linuxLine = change('engine/patches/series', series.replace('chromium chromium-linux-only.patch linux\n', 'chromium chromium-linux-only.patch linux\nchromium chromium-linux-new.patch linux\n'))
-    assertKeys(before, linuxLine, { macos: false, linux: true })
+    assertKeys(before, linuxLine, { macos: false, linux: true, win: false })
     writeFileSync(join(root, 'engine/patches/chromium-mac-new.patch'), 'new\n')
     const macLine = change('engine/patches/series', readFileSync(join(root, 'engine/patches/series'), 'utf8').replace('chromium chromium-mac-only.patch mac\n', 'chromium chromium-mac-only.patch mac\nchromium chromium-mac-new.patch mac\n'))
-    assertKeys(linuxLine, macLine, { macos: true, linux: false })
+    assertKeys(linuxLine, macLine, { macos: true, linux: false, win: true })
   }),
 )
 
@@ -275,9 +305,9 @@ test(
   withFixture(({ keys, change }) => {
     const before = keys()
     const commented = change('engine/patches/series', `${series}\n# another comment\n`.replace('chromium chromium-shared.patch', 'chromium chromium-shared.patch  # why'))
-    assertKeys(before, commented, { macos: false, linux: false })
+    assertKeys(before, commented, { macos: false, linux: false, win: false })
     const reordered = change('engine/patches/series', series.replace('layer engine/chromium\n', '').replace('chromium chromium-shared.patch\n', 'layer engine/chromium\nchromium chromium-shared.patch\n'))
-    assertKeys(commented, reordered, { macos: true, linux: true })
+    assertKeys(commented, reordered, { macos: true, linux: true, win: false })
   }),
 )
 
@@ -287,7 +317,7 @@ test(
     const lf = keys()
     const crlf = change('engine/patches/series', series.replaceAll('\n', '\r\n'))
     assert.deepEqual(crlf, lf)
-    assertKeys(crlf, change('engine/patches/chromium-linux-only.patch', 'linux, changed\n'), { macos: false, linux: true })
+    assertKeys(crlf, change('engine/patches/chromium-linux-only.patch', 'linux, changed\n'), { macos: false, linux: true, win: false })
   }),
 )
 
@@ -310,7 +340,7 @@ test(
   'marking a shared patch for Linux drops it from the macOS key only',
   withFixture(({ keys, change }) => {
     const before = keys()
-    assertKeys(before, change('engine/patches/series', series.replace('chromium chromium-shared.patch\n', 'chromium chromium-shared.patch linux\n')), { macos: true, linux: false })
+    assertKeys(before, change('engine/patches/series', series.replace('chromium chromium-shared.patch\n', 'chromium chromium-shared.patch linux\n')), { macos: true, linux: false, win: true })
   }),
 )
 
@@ -402,10 +432,16 @@ test(
     const native = run([])
     if (process.platform === 'darwin') assert.equal(native.stdout.trim(), macos)
     if (process.platform === 'linux') assert.equal(native.stdout.trim(), linux)
-    assert.notEqual(run(['--platform', 'windows']).status, 0)
+    const windows = key('win')
+    assert.match(windows, /^[0-9a-f]{40}$/)
+    assert.notEqual(windows, macos)
+    assert.notEqual(windows, linux)
+    assert.equal(key('windows'), windows)
+    assert.equal(run([], { AC_TARGET_OS: 'win' }).stdout.trim(), windows)
+    assert.notEqual(run(['--platform', 'bsd']).status, 0)
     assert.notEqual(run(['--bogus']).status, 0)
     assert.equal(run(['--help']).status, 0)
-    assert.match(run(['--platform', 'linux', '--help']).stdout, /--platform macos\|linux/)
+    assert.match(run(['--platform', 'linux', '--help']).stdout, /--platform macos\|linux\|win/)
   }),
 )
 
@@ -462,7 +498,7 @@ test('every workflow names the platform of each engine key it computes', () => {
   const dir = join(repo, '.github/workflows')
   for (const name of readdirSync(dir).filter((file) => file.endsWith('.yml'))) {
     for (const line of readFileSync(join(dir, name), 'utf8').split('\n')) {
-      if (line.includes('$(engine/engine-key.sh')) assert.match(line, /engine\/engine-key\.sh --platform (macos|linux)/, `${name}: ${line.trim()}`)
+      if (line.includes('$(engine/engine-key.sh')) assert.match(line, /engine\/engine-key\.sh --platform (macos|linux|win)\b/, `${name}: ${line.trim()}`)
     }
   }
 })
@@ -556,3 +592,88 @@ test(
     assert.notEqual(key('linux'), before)
   }),
 )
+
+const frozenBase = '08f2f45cf61703f8d9b3776d312216b8c01e7eb3'
+const execFileAsync = promisify(execFile)
+const inRepo = (rev) => spawnSync('git', ['cat-file', '-e', `${rev}^{commit}`], { cwd: repo }).status === 0
+
+async function pool(items, size, work) {
+  const results = new Array(items.length)
+  let next = 0
+  const runners = Array.from({ length: Math.min(size, items.length) }, async () => {
+    while (next < items.length) {
+      const at = next++
+      results[at] = await work(items[at])
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+async function keyOf(script, platform, rev) {
+  try {
+    const { stdout } = await execFileAsync('python3', ['-I', script, '--platform', platform, rev], { cwd: repo, env: gitEnv, maxBuffer: 1 << 26 })
+    return stdout.trim()
+  } catch (failure) {
+    return `error ${String(failure.stderr).trim().replaceAll('\n', ' ')}`
+  }
+}
+
+function frozenScript() {
+  const scratch = mkdtempSync(join(tmpdir(), 'engine-key-frozen-'))
+  const source = execFileSync('git', ['show', `${frozenBase}:engine/engine-key.py`], { cwd: repo, encoding: 'utf8' })
+  const anchor = 'CHECKOUT = pathlib.Path(__file__).resolve().parents[1]\n'
+  assert.ok(source.includes(anchor))
+  writeFileSync(join(scratch, 'engine-key.py'), source.replace(anchor, `CHECKOUT = pathlib.Path(${JSON.stringify(repo)}).resolve()\n`))
+  return { script: join(scratch, 'engine-key.py'), cleanup: () => rmSync(scratch, { recursive: true, force: true }) }
+}
+
+test(
+  'the macOS and Linux keys of every revision a prebuilt row was added at are the ones the two-platform code gave',
+  { skip: !inRepo(frozenBase) && `needs the history back to ${frozenBase.slice(0, 12)} (fetch-depth: 0)` },
+  async () => {
+    const golden = readFileSync(join(repo, 'engine/engine-key.golden.tsv'), 'utf8').trim().split('\n').map((line) => line.split('\t'))
+    const absent = golden.filter(([rev]) => !inRepo(rev)).map(([rev]) => rev)
+    assert.deepEqual(absent, [], 'every golden revision is in this checkout')
+    const script = join(repo, 'engine/engine-key.py')
+    const jobs = golden.flatMap(([rev, macos, linux]) => [[rev, 'macos', macos], [rev, 'linux', linux]])
+    const got = await pool(jobs, availableParallelism(), ([rev, platform]) => keyOf(script, platform, rev))
+    const wrong = jobs.flatMap(([rev, platform, want], at) => (got[at] === want ? [] : [`${rev} ${platform}: ${want} -> ${got[at]}`]))
+    assert.deepEqual(wrong, [])
+  },
+)
+
+test(
+  'this checkout has the macOS and Linux keys and --paths the two-platform code gives it',
+  { skip: !inRepo(frozenBase) && `needs ${frozenBase.slice(0, 12)} (fetch-depth: 0)` },
+  async () => {
+    const frozen = frozenScript()
+    try {
+      const current = join(repo, 'engine/engine-key.py')
+      for (const platform of ['macos', 'linux']) {
+        assert.equal(await keyOf(current, platform, 'HEAD'), await keyOf(frozen.script, platform, 'HEAD'), `${platform} key of HEAD`)
+        const pathsOf = (script) => execFileSync('python3', ['-I', script, '--platform', platform, '--paths'], { cwd: repo, env: gitEnv, encoding: 'utf8' })
+        assert.equal(pathsOf(current), pathsOf(frozen.script), `${platform} --paths`)
+      }
+    } finally {
+      frozen.cleanup()
+    }
+  },
+)
+
+test('the real checkout has a Windows key and --paths scoped to the Windows build', () => {
+  const run = (...args) => execFileSync(join(repo, 'engine/engine-key.sh'), ['--platform', 'win', ...args], { cwd: repo, env: gitEnv, encoding: 'utf8' }).trim()
+  assert.match(run(), /^[0-9a-f]{40}$/)
+  const specs = run('--paths').split('\n')
+  for (const spec of ['engine/chromium/src', 'engine/patches/build', 'scripts/windows/engine', 'apps/browser/windows/Ardia/EngineApi.h', 'engine/patches/series.py', `:(exclude)${win}/prebuilt.json`, `:(exclude)${win}/check_inputs.py`]) {
+    assert.ok(specs.includes(spec), spec)
+  }
+  assert.ok(!specs.includes('engine'))
+  assert.ok(!specs.some((spec) => spec.startsWith('engine/ardiacore-linux')))
+  assert.ok(!specs.includes('engine/patches/chromium-linux-window-state.patch'))
+  assert.ok(specs.includes('engine/patches/chromium-window-hosted-mac.patch'))
+  for (const line of readFileSync(join(repo, win, 'series-win'), 'utf8').split('\n')) {
+    const skip = line.match(/^skip (\S+)/)
+    if (skip) assert.ok(!specs.includes(`engine/patches/${skip[1]}`), `${skip[1]} is skipped on Windows`)
+  }
+})
