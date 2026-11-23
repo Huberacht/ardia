@@ -1,4 +1,4 @@
-import { Platform, StyleSheet } from "react-native";
+import { Keyboard, Platform, StyleSheet } from "react-native";
 import * as Reanimated from "react-native-reanimated";
 import { getAnimatedStyle, KeyboardState, makeMutable } from "react-native-reanimated";
 import { act } from "react-test-renderer";
@@ -65,5 +65,16 @@ onIPhone("a toast raised while the keyboard is up sits at the top and stays ther
   keyboardAt(0);
   expect(lifted(root)).toBeCloseTo(0, 5);
   expect(StyleSheet.flatten(placeOf(root).props.style).top).toBe(place.top);
+  unmount(root);
+});
+
+onIPhone("a toast raised while the keyboard is already up sits at the top even though its fresh keyboard subscription starts at zero", () => {
+  jest.spyOn(Keyboard, "isVisible").mockReturnValue(true);
+  jest.spyOn(Keyboard, "metrics").mockReturnValue({ height: 336, width: 402, screenX: 0, screenY: 538 });
+  const root = renderSurface(<ToastHost />);
+  act(() => showToast("Copied Link", "link"));
+  const place = StyleSheet.flatten(placeOf(root).props.style);
+  expect(place.bottom).toBeUndefined();
+  expect(place.top).toBeGreaterThanOrEqual(TOAST_KEYBOARD_TOP);
   unmount(root);
 });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type AccessibilityActionEvent, type ViewInstance } from "react-native";
+import { AccessibilityInfo, Keyboard, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View, type AccessibilityActionEvent, type ViewInstance } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeOut, runOnJS, useAnimatedKeyboard, useAnimatedStyle, useSharedValue, withSpring, type SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -84,10 +84,11 @@ type PlaceProps = { spot: ToastSpot; toastId: number; children: ReactNode };
 
 function KeyboardRidingPlace({ spot, toastId, children }: PlaceProps) {
   const keyboard = useAnimatedKeyboard();
-  const [arrival, setArrival] = useState(() => ({ toastId, overKeyboard: keyboardIsUp(keyboard.height.value) }));
-  if (arrival.toastId !== toastId) setArrival({ toastId, overKeyboard: keyboardIsUp(keyboard.height.value) });
-  const arrivedOverKeyboard = arrival.toastId === toastId ? arrival.overKeyboard : keyboardIsUp(keyboard.height.value);
-  const place = toastPlace({ ...spot, keyboardLift: arrivedOverKeyboard ? keyboard.height.value : null });
+  const keyboardNow = () => Math.max(keyboard.height.value, Keyboard.isVisible() ? (Keyboard.metrics()?.height ?? 0) : 0);
+  const [arrival, setArrival] = useState(() => ({ toastId, overKeyboard: keyboardIsUp(keyboardNow()) }));
+  if (arrival.toastId !== toastId) setArrival({ toastId, overKeyboard: keyboardIsUp(keyboardNow()) });
+  const arrivedOverKeyboard = arrival.toastId === toastId ? arrival.overKeyboard : keyboardIsUp(keyboardNow());
+  const place = toastPlace({ ...spot, keyboardLift: arrivedOverKeyboard ? keyboardNow() : null });
   const resting = "bottom" in place ? place.bottom : 0;
   const ride = useKeyboardRide(spot, resting, arrivedOverKeyboard, keyboard.height);
   return (
