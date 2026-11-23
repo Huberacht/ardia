@@ -23,6 +23,7 @@ public final class LookModule: Module {
             GlassLabScroll.start(after: 8, for: seconds, period: max(period, 0.2))
           }
           if PhoneTestBuild.flag("ArdiaGlassRimProbe") { GlassLabRim.start(after: 6) }
+          if PhoneTestBuild.isOn, let delay = UserDefaults.standard.object(forKey: "ArdiaGlassReload").flatMap({ Double(String(describing: $0)) }), delay > 0 { GlassLabReload.start(after: delay) }
           if PhoneTestBuild.flag("ArdiaGlassProbe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
               MainActor.assumeIsolated {

@@ -34,7 +34,7 @@ final class GlassLabScroll: NSObject {
     }
   }
 
-  private static func pages(in view: UIView) -> [WKWebView] {
+  static func pages(in view: UIView) -> [WKWebView] {
     if view.isHidden || view.alpha <= 0.01 { return [] }
     if let web = view as? WKWebView {
       guard let window = web.window, web.convert(web.bounds, to: window).intersects(window.bounds) else { return [] }
@@ -96,3 +96,18 @@ enum GlassLabRim {
     }
   }
 }
+
+@MainActor
+enum GlassLabReload {
+  static func start(after delay: Double) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+      MainActor.assumeIsolated {
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let web = windows.flatMap(GlassLabScroll.pages).first else { return }
+        NSLog("PAGELAB glass reload %@", web.url?.host ?? "-")
+        web.reload()
+      }
+    }
+  }
+}
+
