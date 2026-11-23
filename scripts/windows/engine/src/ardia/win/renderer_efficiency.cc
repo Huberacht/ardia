@@ -115,7 +115,7 @@ class LauncherState {
       lowered.pid = process.Pid();
     }
     if (priority == base::Process::Priority::kBestEffort) {
-      if (!Changed(lowered)) {
+      if (!FullyLowered(lowered)) {
         ++(Lower(process.Handle(), lowered) ? CountsNow().throttled
                                             : CountsNow().failed);
       }
@@ -138,15 +138,22 @@ class LauncherState {
            lowered.timer_throttled;
   }
 
+  static bool FullyLowered(const Lowered& lowered) {
+    return lowered.memory_priority_when_shown.has_value() &&
+           (lowered.timer_throttled || !TimerThrottleSupported());
+  }
+
   static bool Lower(HANDLE process, Lowered& lowered) {
     bool done = true;
-    std::optional<ULONG> shown = MemoryPriorityOf(process);
-    if (shown && SetMemoryPriority(process, MEMORY_PRIORITY_VERY_LOW)) {
-      lowered.memory_priority_when_shown = *shown;
-    } else {
-      done = false;
+    if (!lowered.memory_priority_when_shown) {
+      std::optional<ULONG> shown = MemoryPriorityOf(process);
+      if (shown && SetMemoryPriority(process, MEMORY_PRIORITY_VERY_LOW)) {
+        lowered.memory_priority_when_shown = *shown;
+      } else {
+        done = false;
+      }
     }
-    if (TimerThrottleSupported()) {
+    if (TimerThrottleSupported() && !lowered.timer_throttled) {
       if (base::win::SetProcessTimerThrottleState(
               process, base::win::ProcessPowerState::kEnabled)) {
         lowered.timer_throttled = true;
