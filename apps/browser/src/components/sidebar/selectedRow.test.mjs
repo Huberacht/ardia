@@ -228,8 +228,8 @@ test("a scroll after the favicon resolves gives the pill the resolved icon, not 
 test("a resized sidebar page tells the pill its new height before the pill judges", () => {
   const page = readFileSync(new URL("./SidebarPage.tsx", import.meta.url), "utf8");
   const layout = page.slice(page.indexOf("onLayout={(e) => {"), page.indexOf("onContentSizeChange"));
-  assert.ok(layout.indexOf("geometry.current.viewport = page.viewport") >= 0);
-  assert.ok(layout.indexOf("geometry.current.viewport = page.viewport") < layout.indexOf("selectedRow.relocate()"), "the viewport is stored before relocate reads it");
+  assert.ok(layout.indexOf("sharedGeometry.current.viewport = page.viewport") >= 0);
+  assert.ok(layout.indexOf("sharedGeometry.current.viewport = page.viewport") < layout.indexOf("selectedRow.relocate()"), "the viewport is stored before relocate reads it");
 });
 
 test("moving the hidden pill's tab out of its group, at the same window index, still brings the pill", async (t) => {
