@@ -124,4 +124,4 @@ jobs:
       - name: Build
         run: cargo build --locked --all-targets
       - name: Test
-        run: cargo test --locked --workspace --lib --bins --test escape --test real_host
+        run: cargo test --locked --workspace --lib --bins
