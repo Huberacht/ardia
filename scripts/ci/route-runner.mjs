@@ -13,7 +13,7 @@ Every error, timeout or missing field picks GitHub. docs/ci-boat-overflow.md has
 
 Reads GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_REPOSITORY, GITHUB_REF, GITHUB_ACTOR,
 GITHUB_TRIGGERING_ACTOR, GITHUB_RUN_ATTEMPT, GITHUB_RUN_ID, GITHUB_TOKEN, BOAT_CI_LIMITS_KEY,
-and the BOAT_OVERFLOW* settings from the environment or from BOAT_OVERFLOW_VARS (toJSON(vars)).`;
+and the BOAT_OVERFLOW* settings from the environment.`;
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const { parseVouchedList } = createRequire(import.meta.url)("../../.github/vouch/vouch.cjs");
@@ -43,6 +43,26 @@ export const DEFAULTS = {
   maxRequests: 30,
 };
 
+export const LINUX_LABELS = ["ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04", "ubuntu-24.04-arm", "ubuntu-22.04-arm"];
+export const WINDOWS_LABELS = ["windows-latest", "windows-2025", "windows-2022", "windows-11-arm"];
+export const MAC_LABELS = [
+  "macos-latest",
+  "macos-26",
+  "macos-15",
+  "macos-14",
+  "macos-latest-intel",
+  "macos-26-intel",
+  "macos-15-intel",
+  "macos-14-intel",
+  "macos-13",
+  "xcode-27",
+];
+const LABEL_KINDS = new Map([
+  ...LINUX_LABELS.map((label) => [label, "linux"]),
+  ...WINDOWS_LABELS.map((label) => [label, "windows"]),
+  ...MAC_LABELS.map((label) => [label, "macos"]),
+]);
+
 const NUMBER_SETTINGS = {
   queued: "BOAT_OVERFLOW_QUEUED",
   busy: "BOAT_OVERFLOW_BUSY",
@@ -54,19 +74,14 @@ const NUMBER_SETTINGS = {
   sandboxes: "BOAT_OVERFLOW_SANDBOXES",
 };
 
+const MODE_SETTING = "BOAT_OVERFLOW";
+const REPOS_SETTING = "BOAT_OVERFLOW_REPOS";
+export const SETTING_NAMES = [MODE_SETTING, REPOS_SETTING, ...Object.values(NUMBER_SETTINGS)];
+
 export class HttpError extends Error {
   constructor(status, url) {
     super(`HTTP ${status} from ${new URL(url).host}${new URL(url).pathname}`);
     this.status = status;
-  }
-}
-
-function varsFrom(env) {
-  try {
-    const parsed = JSON.parse(env.BOAT_OVERFLOW_VARS || "{}");
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
   }
 }
 
@@ -76,11 +91,10 @@ function count(text, fallback) {
 }
 
 export function settingsFrom(env) {
-  const merged = { ...varsFrom(env) };
-  for (const [key, value] of Object.entries(env)) if (key.startsWith("BOAT_OVERFLOW") && value !== "") merged[key] = value;
-  const modeText = String(merged.BOAT_OVERFLOW ?? "").trim().toLowerCase();
+  const merged = Object.fromEntries(SETTING_NAMES.filter((name) => env[name]).map((name) => [name, env[name]]));
+  const modeText = String(merged[MODE_SETTING] ?? "").trim().toLowerCase();
   const mode = modeText === "off" ? "off" : modeText === "label" ? "label" : "auto";
-  const repos = String(merged.BOAT_OVERFLOW_REPOS ?? "")
+  const repos = String(merged[REPOS_SETTING] ?? "")
     .split(",")
     .map((repo) => repo.trim())
     .filter((repo) => /^[\w.-]+\/[\w.-]+$/.test(repo));
@@ -120,14 +134,9 @@ export function forcedByLabel({ eventName, event }) {
   return Array.isArray(labels) && labels.some((label) => label?.name === FORCE_LABEL);
 }
 
-const LARGER_RUNNER = /-(?:large|xlarge)$/;
-
 export function runnerKind(labels) {
   if (!Array.isArray(labels) || labels.length !== 1 || typeof labels[0] !== "string") return null;
-  const label = labels[0].toLowerCase();
-  if (LARGER_RUNNER.test(label)) return null;
-  const found = /^(ubuntu|windows|macos)-[\w.]+(?:-arm)?$/.exec(label);
-  return found ? found[1] : null;
+  return LABEL_KINDS.get(labels[0]) ?? null;
 }
 
 export function pressureOf(jobs, { now, queuedAge }) {
@@ -180,21 +189,25 @@ export function headroomOf(limits, { jobs, settings, machine = BOAT_MACHINE }) {
   return { ok: true, reason: "boat-ok" };
 }
 
+const countOrNothing = (value) => (isCount(value) ? value : undefined);
+
 export function headroomFacts(limits) {
   const starts = limits?.starts;
-  const left = (window) => (starts?.unlimited === true ? "unlimited" : starts?.[window]?.remaining);
+  const left = (window) => (starts?.unlimited === true ? "unlimited" : countOrNothing(starts?.[window]?.remaining));
+  const free = isCount(limits?.maxActiveSandboxes) && isCount(limits?.activeSandboxes) ? limits.maxActiveSandboxes - limits.activeSandboxes : undefined;
   return {
     dayStarts: left("day"),
     hourStarts: left("hour"),
     minuteStarts: left("minute"),
-    vmHours: limits?.planIncluded?.vmHoursRemaining,
-    sandboxes: isCount(limits?.maxActiveSandboxes) && isCount(limits?.activeSandboxes) ? limits.maxActiveSandboxes - limits.activeSandboxes : undefined,
+    vmHours: countOrNothing(limits?.planIncluded?.vmHoursRemaining),
+    sandboxes: free,
   };
 }
 
-export function makeFetchJson(fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS) {
+export function makeFetchJson(fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS, signal) {
   return async (url, headers = {}) => {
-    const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const response = await fetchImpl(url, { headers, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!response.ok) throw new HttpError(response.status, url);
     return response.json();
   };
@@ -206,42 +219,47 @@ function githubHeaders(token) {
   return headers;
 }
 
+export class GithubReadError extends Error {}
+
 export async function githubPressure({ fetchJson, token, settings, ownRepo, ownRunId, now }) {
-  let budget = settings.maxRequests;
-  const errors = [];
+  const budget = { listings: Math.max(1, Math.floor(settings.maxRequests / 3)), jobs: 0 };
+  budget.jobs = Math.max(0, settings.maxRequests - budget.listings);
   const anonymous = new Set();
-  const get = async (repo, path) => {
-    budget -= 1;
+  const spend = (pool) => {
+    if (budget[pool] <= 0) return false;
+    budget[pool] -= 1;
+    return true;
+  };
+  const get = async (repo, path, pool) => {
     const url = `${GITHUB_API}/repos/${repo}${path}`;
     if (anonymous.has(repo)) return fetchJson(url, githubHeaders(null));
     try {
       return await fetchJson(url, githubHeaders(token));
     } catch (error) {
-      if (repo === ownRepo || !(error instanceof HttpError) || (error.status !== 403 && error.status !== 404) || budget <= 0) throw error;
+      const refused = error instanceof HttpError && (error.status === 403 || error.status === 404);
+      if (repo === ownRepo || !refused || !spend(pool)) throw error;
       anonymous.add(repo);
-      budget -= 1;
       return fetchJson(url, githubHeaders(null));
     }
+  };
+  const read = async (repo, path, pool, field) => {
+    let data;
+    try {
+      data = await get(repo, path, pool);
+    } catch {
+      throw new GithubReadError("read failed");
+    }
+    if (!Array.isArray(data?.[field])) throw new GithubReadError("malformed");
+    return data;
   };
   const runs = new Map();
   for (const repo of settings.repos) {
     for (const status of ["queued", "in_progress"]) {
-      for (let page = 1; budget > 0; page += 1) {
-        let data;
-        try {
-          data = await get(repo, `/actions/runs?status=${status}&per_page=100&page=${page}`);
-        } catch (error) {
-          if (repo === ownRepo) throw error;
-          errors.push(`${repo}: ${error.message}`);
-          break;
-        }
-        if (!Array.isArray(data?.workflow_runs)) {
-          if (repo === ownRepo) throw new Error(`malformed runs list from ${repo}`);
-          errors.push(`${repo}: malformed runs list`);
-          break;
-        }
+      for (let page = 1; spend("listings"); page += 1) {
+        const data = await read(repo, `/actions/runs?status=${status}&per_page=100&page=${page}`, "listings", "workflow_runs");
         for (const run of data.workflow_runs) {
-          if (repo === ownRepo && String(run.id) === String(ownRunId)) continue;
+          if (repo === ownRepo && String(run?.id) === String(ownRunId)) continue;
+          if (!Number.isSafeInteger(run?.id)) throw new GithubReadError("malformed");
           runs.set(`${repo}#${run.id}`, { repo, id: run.id, created: Date.parse(run.created_at) || 0 });
         }
         if (data.workflow_runs.length < 100) break;
@@ -249,29 +267,27 @@ export async function githubPressure({ fetchJson, token, settings, ownRepo, ownR
     }
   }
   const newest = [...runs.values()].sort((a, b) => b.created - a.created);
-  const inspected = newest.slice(0, Math.max(0, budget));
-  const jobLists = await Promise.all(
-    inspected.map((run) =>
-      get(run.repo, `/actions/runs/${run.id}/jobs?filter=latest&per_page=100`).then(
-        (data) => (Array.isArray(data?.jobs) ? data.jobs : []),
-        (error) => {
-          errors.push(`${run.repo} run ${run.id}: ${error.message}`);
-          return [];
-        },
-      ),
-    ),
-  );
+  const inspected = newest.filter(() => spend("jobs"));
+  const jobsOf = async (run) => {
+    const jobs = [];
+    for (let page = 1; ; page += 1) {
+      const data = await read(run.repo, `/actions/runs/${run.id}/jobs?filter=latest&per_page=100&page=${page}`, "jobs", "jobs");
+      jobs.push(...data.jobs);
+      const total = isCount(data.total_count) ? data.total_count : jobs.length;
+      if (data.jobs.length < 100 || jobs.length >= total || !spend("jobs")) return jobs;
+    }
+  };
+  const jobLists = await Promise.all(inspected.map(jobsOf));
   return {
     ...pressureOf(jobLists.flat(), { now, queuedAge: settings.queuedAge }),
     runs: runs.size,
     inspected: inspected.length,
-    errors,
   };
 }
 
 const decision = (target, reason, facts = {}) => ({ target, reason, ...facts });
 
-export async function route({ env, event, teamText, jobs, fetchImpl = globalThis.fetch, now = Date.now() }) {
+export async function route({ env, event, teamText, jobs, fetchImpl = globalThis.fetch, now = Date.now(), signal }) {
   const settings = settingsFrom(env);
   if (settings.mode === "off") return decision("github", "overflow-off");
   const context = {
@@ -288,14 +304,14 @@ export async function route({ env, event, teamText, jobs, fetchImpl = globalThis
   const forced = forcedByLabel(context);
   if (settings.mode === "label" && !forced) return decision("github", "overflow-label-only");
   if (!env.BOAT_CI_LIMITS_KEY) return decision("github", "boat-key-missing");
-  const fetchJson = makeFetchJson(fetchImpl);
+  const fetchJson = makeFetchJson(fetchImpl, REQUEST_TIMEOUT_MS, signal);
   let pressure;
   if (!forced) {
     if (!env.GITHUB_TOKEN) return decision("github", "github-token-missing");
     try {
       pressure = await githubPressure({ fetchJson, token: env.GITHUB_TOKEN, settings, ownRepo: context.repository, ownRunId: env.GITHUB_RUN_ID, now });
     } catch {
-      return decision("github", "github-api-error");
+      return decision("github", "github-read-failed");
     }
     if (!overflowOf(pressure, settings)) return decision("github", "github-free", { pressure });
   }
@@ -306,20 +322,28 @@ export async function route({ env, event, teamText, jobs, fetchImpl = globalThis
     return decision("github", "boat-api-error", { pressure });
   }
   const headroom = headroomOf(limits, { jobs, settings });
+  if (headroom.reason === "boat-limits-malformed") return decision("github", headroom.reason, { pressure });
   const boat = headroomFacts(limits);
   if (!headroom.ok) return decision("github", headroom.reason, { pressure, boat });
   return decision("boat", forced ? "forced-label" : "github-busy", { pressure, boat });
 }
 
 export function withDeadline(work, ms) {
+  const controller = new AbortController();
   let timer;
   const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(decision("github", "router-timeout")), ms);
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(decision("github", "router-timeout"));
+    }, ms);
   });
-  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+  const running = Promise.resolve()
+    .then(() => work(controller.signal))
+    .catch(() => decision("github", "router-error"));
+  return Promise.race([running, timeout]).finally(() => clearTimeout(timer));
 }
 
-const show = (value) => (value === undefined || value === null ? "?" : String(value));
+const show = (value) => (isCount(value) || value === "unlimited" ? String(value) : "?");
 
 export function report(result, { fallback, elapsedMs }) {
   const label = result.target === "boat" ? BOAT_LABEL : fallback;
@@ -365,12 +389,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   try {
     const event = env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) : {};
     const teamText = readFileSync(args.team, "utf8");
-    result = await withDeadline(route({ env, event, teamText, jobs: args.jobs }), ROUTE_DEADLINE_MS);
-  } catch (error) {
-    console.log(`router error: ${error?.message ?? error}`);
+    result = await withDeadline((signal) => route({ env, event, teamText, jobs: args.jobs, signal }), ROUTE_DEADLINE_MS);
+  } catch {
     result = decision("github", "router-error");
   }
-  for (const problem of result.pressure?.errors ?? []) console.log(`GitHub read skipped: ${problem}`);
   const { outputs, summary, notice } = report(result, { fallback: args.fallback, elapsedMs: Date.now() - started });
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, outputs);
   if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
@@ -379,8 +401,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
-  await main().catch((error) => {
-    console.log(`router error: ${error?.message ?? error}`);
+  await main().catch(() => {
     if (process.env.GITHUB_OUTPUT) {
       try {
         appendFileSync(process.env.GITHUB_OUTPUT, "target=github\nreason=router-error\n");
@@ -388,4 +409,5 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     }
   });
   process.exitCode = 0;
+  setTimeout(() => process.exit(0), 1000).unref();
 }

@@ -17,13 +17,14 @@ the bots, vouch, CLA, linked-issue, stale, caches, deploy and identity jobs. Job
 ## How a run decides
 
 `scripts/ci/route-runner.mjs` runs once per run: in the `which checks run` job of `checks.yml`, and in a small
-`route` job in `linux.yml` and `android.yml`. It is checked out from `main` (the pull request's base commit), never from
-the pull request, together with `.github/TEAM.td`. It picks GitHub unless every step below says Boat:
+`route` job in `linux.yml` and `android.yml`. It and `.github/TEAM.td` are always checked out from `refs/heads/main`,
+never from the pull request or its base branch, so the step that holds the key runs only main's code. It picks GitHub
+unless every step below says Boat:
 
 1. **Kill switch.** The repo variable `BOAT_OVERFLOW` is `off`: GitHub. Unset or `auto`: carry on. `label`: only
    pull requests with the `boat-ci` label move (for a canary).
 2. **Trust.** The run is in `ardia-browser/ardia` and is one of these:
-   - a pull request from a branch of this repo (never a fork) into `main`;
+   - a pull request from a branch of this repo (never a fork) into `main` (checked case-sensitively);
    - a push to `main`, whose head commit author is on the team;
    - a manual run on `main`.
 
@@ -31,25 +32,34 @@ the pull request, together with `.github/TEAM.td`. It picks GitHub unless every 
    Vouch status and the `run-ci` label don't count.
 3. **First attempt.** Any re-run goes to GitHub.
 4. **`boat-ci` label.** A team pull request with the label skips the busy check below (Boat headroom still applies).
-5. **GitHub is busy.** It reads queued and running runs in this repo and `ardia-browser/plugins` (at most 30 API
-   calls, newest runs first), counting jobs on standard GitHub labels (`ubuntu-*`, `windows-*`, `macos-*`, not
-   `-large` or `-xlarge`) and skipping its own run. It's busy when 3 or more Linux or Windows jobs are queued, 36 or
-   more jobs are queued or running, or one Linux or Windows job has been queued for 20 seconds.
+5. **GitHub is busy.** It reads queued and running runs in this repo and `ardia-browser/plugins`, then their jobs,
+   newest runs first. It makes at most 30 API calls: up to 10 for run lists, the rest for job lists, page by page. It
+   skips its own run and counts only jobs on a fixed list of GitHub-hosted labels: `ubuntu-latest`, `-24.04`,
+   `-22.04` and their `-arm` twins, `windows-latest`, `-2025`, `-2022`, `-11-arm`, `macos-latest`, `-26`, `-15`, `-14`,
+   their `-intel` twins, `macos-13` and `xcode-27`. A test fails if a workflow uses a hosted label that isn't on it.
+   GitHub is busy when 3 or more Linux or Windows jobs are queued, 36 or more jobs are queued or running, or one
+   Linux or Windows job has been queued for 20 seconds. macOS and `xcode-*` jobs count only toward the 36, because
+   they queue on their own cap. If any read fails or comes back malformed, it picks GitHub (`github-read-failed`)
+   rather than deciding from part of the picture.
 6. **Boat has room.** It reads the Boat account's `/limits` with the `BOAT_CI_LIMITS_KEY` secret. After the jobs this
    run would start (4 for Checks, 3 for Linux, 1 for Android), it needs at least 120 starts left today, 20 this hour,
    5 this minute, 50 included VM hours, 5 free sandboxes, `canStart`, and the `large` machine type.
 
-Any error, timeout (5 seconds a request, 25 in all), bad answer or missing secret picks GitHub. Each run's summary has a
-one-line table with the runner, the reason, how long it took and the counts it read; a `Runner` notice says the same.
-That reason is how to watch it: `github-free`, `github-busy`, `forced-label`, `overflow-off`, `untrusted-*`, `rerun`,
-`boat-low-*`, `boat-api-error`, `github-api-error`, `boat-key-missing`.
+Any error, timeout or missing secret picks GitHub. Each request has 5 seconds. After 25 seconds in all, the router
+aborts what is still running and picks GitHub. Each run's summary has a one-line table with the runner, the reason, how
+long it took and the counts it read; a `Runner` notice says the same. It shows only numbers that passed validation and
+the reason, never a raw response. That reason is how to watch it: `github-free`, `github-busy`, `forced-label`,
+`overflow-off`, `untrusted-*`, `rerun`, `boat-low-*`, `boat-limits-malformed`, `boat-api-error`,
+`github-read-failed`, `boat-key-missing`, `router-timeout`, `router-error`.
 
-Each moved job asks for Boat only when the route job succeeded, said `boat`, and the run is on attempt 1. Otherwise it
-uses its usual GitHub label. So a failed or skipped route job never stops a build; it only keeps it on GitHub.
+A last step of the route job always runs. It sets the job's `target` output to `boat` only when the router step
+succeeded and said `boat`, and to `github` otherwise. Each moved job asks for Boat only when the route job succeeded,
+its `target` is `boat`, and the run is on attempt 1. Otherwise it uses its usual GitHub label. So a failed or skipped
+route job never stops a build; it only keeps it on GitHub.
 
 ### Settings
 
-Repo variables, all optional:
+Repo variables, all optional. Each workflow passes these by name to the router step, and nothing else from `vars`:
 
 | Variable | Default | Meaning |
 | - | - | - |
@@ -64,9 +74,9 @@ Repo variables, all optional:
 
 ## The `boat-ci` label
 
-Team only. It moves a pull request's long jobs to Boat on its **next** run, when Boat has room. The workflows don't run
-on `labeled`, so add the label, then push (or close and reopen the pull request). A re-run does not count: it goes to
-GitHub.
+Team only. It moves a pull request's long jobs to Boat, when Boat has room, from the next `pull_request` run on: the
+next push to the branch, or closing and reopening the pull request. Adding the label starts nothing, because the
+workflows don't run on `labeled`. A re-run doesn't count: it is attempt 2 and goes to GitHub.
 
 ## When Boat pauses a job
 
@@ -111,13 +121,15 @@ Anyone with write access to this repo can edit workflow YAML on a branch and rea
 people outside the team have write access. That is why the key is read-only: in their hands it shows the Boat
 account's plan, limits and CI jobs, and nothing else. Boat's own allow list still refuses to run their jobs.
 
-Rotate it when someone outside the team gets write access, when it leaks, and before it expires (the current key
-expires 2027-02-20):
+Replace it when someone outside the team gets write access, when it leaks, and before it expires. The current key
+expires 2027-02-20. `boat api-key rotate` keeps the old expiry, so it can't renew the key. Make a new one instead:
 
-```bash
-boat api-key rotate <key id>
-gh secret set BOAT_CI_LIMITS_KEY -R ardia-browser/ardia
-```
+1. In a browser-backed `boat login` on the account the CI app bills (a browser session allows a longer TTL than an
+   API-key session's 89 days), create a read-only key:
+   `boat api-key create ci-limits --preset read-only --ttl <days>d`
+2. `gh secret set BOAT_CI_LIMITS_KEY -R ardia-browser/ardia` and paste the new key.
+3. Check that the next run's summary reads Boat's limits (a reason other than `boat-api-error`), then revoke the old
+   key with `boat api-key revoke <old key id>`.
 
 ## Code
 

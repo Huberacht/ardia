@@ -61,13 +61,13 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      target: ${{ steps.route.outputs.target }}
+      target: ${{ steps.target.outputs.target }}
     steps:
       - name: The router, from main
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.sha) || 'main' }}
+          ref: refs/heads/main
           path: .route
           persist-credentials: false
           sparse-checkout-cone-mode: false
@@ -82,8 +82,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BOAT_CI_LIMITS_KEY: ${{ secrets.BOAT_CI_LIMITS_KEY }}
-          BOAT_OVERFLOW_VARS: ${{ toJSON(vars) }}
+          BOAT_OVERFLOW: ${{ vars.BOAT_OVERFLOW }}
+          BOAT_OVERFLOW_REPOS: ${{ vars.BOAT_OVERFLOW_REPOS }}
+          BOAT_OVERFLOW_QUEUED: ${{ vars.BOAT_OVERFLOW_QUEUED }}
+          BOAT_OVERFLOW_BUSY: ${{ vars.BOAT_OVERFLOW_BUSY }}
+          BOAT_OVERFLOW_QUEUED_AGE: ${{ vars.BOAT_OVERFLOW_QUEUED_AGE }}
+          BOAT_OVERFLOW_DAY_STARTS: ${{ vars.BOAT_OVERFLOW_DAY_STARTS }}
+          BOAT_OVERFLOW_HOUR_STARTS: ${{ vars.BOAT_OVERFLOW_HOUR_STARTS }}
+          BOAT_OVERFLOW_MINUTE_STARTS: ${{ vars.BOAT_OVERFLOW_MINUTE_STARTS }}
+          BOAT_OVERFLOW_VM_HOURS: ${{ vars.BOAT_OVERFLOW_VM_HOURS }}
+          BOAT_OVERFLOW_SANDBOXES: ${{ vars.BOAT_OVERFLOW_SANDBOXES }}
         run: node .route/scripts/ci/route-runner.mjs --fallback ubuntu-latest --jobs 1
+      - id: target
+        name: The runner the long jobs use
+        if: always()
+        env:
+          OUTCOME: ${{ steps.route.outcome }}
+          PICKED: ${{ steps.route.outputs.target }}
+        run: |
+          if [ "$OUTCOME" = success ] && [ "$PICKED" = boat ]; then
+            echo "target=boat" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=github" >> "$GITHUB_OUTPUT"
+          fi
 
   app:
     needs: [gate, route]
