@@ -13,6 +13,7 @@ import { buildSources, recentSearches, sourcesKey } from "./sources";
 import { spaceTabs } from "../tabs/tabsState";
 import { browseForMeOffered } from "../browseForMe/offer";
 import { markSearchClosing, markSearchPhase, markSearchPressed } from "./searchTiming";
+import { countUsage } from "../telemetry/telemetry";
 
 export type SearchOrigin = "home" | "start" | "page";
 
@@ -213,6 +214,7 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
   paste = null;
   const editsPage = page?.currentUrl != null;
   const shownText = editsPage && clearsPagePrefill ? "" : text;
+  if (!shownText.trim() && !idleMade.has(idleScope()) && !useTabs.getState().incognito) countUsage("search_opens_cold");
   useSearch.setState((state) => ({
     open: true,
     ending: "cancelled",

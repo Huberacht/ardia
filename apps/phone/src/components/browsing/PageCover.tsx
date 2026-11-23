@@ -4,7 +4,7 @@ import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
-import { arrivalCovers, listenForPageDrawn, pageWasDrawn, useBrowse } from "../../state/browse/store";
+import { arrivalCovers, documentWasDrawn, listenForPageDrawn, useBrowse } from "../../state/browse/store";
 import { holdTone, pageNavigation, releaseTone, usePages } from "../../state/pages/store";
 import { display } from "../../state/search/omnibox";
 import { launchArguments } from "../../state/app/launchFlags";
@@ -33,6 +33,8 @@ const openingCardOf = (id: string): OpeningCard | null => {
 type Box = { width: number; height: number };
 
 const WAITS_FOR_PAINT = Platform.OS === "ios";
+
+const COVER_TOUCHES = WAITS_FOR_PAINT ? ("auto" as const) : ("none" as const);
 
 function AtCardScale({ cardWidth, box, children }: { cardWidth: number | null; box: Box; children: ReactNode }) {
   if (!cardWidth || box.width <= 0 || box.height <= 0) return children;
@@ -66,7 +68,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     let deadline: ReturnType<typeof setTimeout> | null = null;
     let settle: ReturnType<typeof setTimeout> | null = null;
     let paintDeadline: ReturnType<typeof setTimeout> | null = null;
-    let unpainted: ReturnType<typeof setTimeout> | null = null;
+    let paintDeadlineFor: string | null = null;
     const fade = () => {
       if (fading) return;
       fading = true;
@@ -80,20 +82,24 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       opacity.value = 0;
       coverGone(tab.id);
     };
-    const fadeUnlessStillLoading = () => {
-      if (pageNavigation(tab.id)?.isLoading && !pageWasDrawn(tab.id)) {
-        if (!unpainted) unpainted = setTimeout(fade, PAGE_COVER.unpaintedLoadMs - PAGE_COVER.deadlineMs);
-        return;
-      }
-      fade();
+    const stopPaintDeadline = () => {
+      if (paintDeadline) clearTimeout(paintDeadline);
+      paintDeadline = null;
+      paintDeadlineFor = null;
     };
     const check = () => {
       if (fading) return;
       const shownAlone = useBrowse.getState().surface === "browsing";
-      if (shownAlone && !deadline) deadline = setTimeout(WAITS_FOR_PAINT ? fadeUnlessStillLoading : fade, PAGE_COVER.deadlineMs);
+      if (shownAlone && !deadline) deadline = setTimeout(fade, PAGE_COVER.deadlineMs);
       const page = pageNavigation(tab.id);
       if (!page?.isLive) return;
+      if (WAITS_FOR_PAINT && shownAlone && documentWasDrawn(tab.id)) {
+        if (atRest && !sawLoading) cut();
+        else fade();
+        return;
+      }
       if (page.isLoading) {
+        stopPaintDeadline();
         sawLoading = true;
         if (settle) clearTimeout(settle);
         settle = null;
@@ -101,10 +107,12 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       }
       if (!shownAlone) return;
       if (WAITS_FOR_PAINT) {
-        if (pageWasDrawn(tab.id)) {
-          if (atRest && !sawLoading) cut();
-          else fade();
-        } else if (!paintDeadline) paintDeadline = setTimeout(fade, PAGE_COVER.paintDeadlineMs);
+        const shownDocument = `${page.document ?? ""}:${page.url ?? ""}`;
+        if (paintDeadlineFor !== shownDocument) {
+          stopPaintDeadline();
+          paintDeadlineFor = shownDocument;
+          paintDeadline = setTimeout(fade, PAGE_COVER.paintDeadlineMs);
+        }
         return;
       }
       if (sawLoading) {
@@ -123,8 +131,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       stopDrawn?.();
       if (deadline) clearTimeout(deadline);
       if (settle) clearTimeout(settle);
-      if (paintDeadline) clearTimeout(paintDeadline);
-      if (unpainted) clearTimeout(unpainted);
+      stopPaintDeadline();
     };
   }, []);
   const coverGone = (id: string) => {
@@ -138,7 +145,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     <Animated.View
       testID="pageCover"
       needsOffscreenAlphaCompositing
-      pointerEvents="none"
+      pointerEvents={COVER_TOUCHES}
       importantForAccessibility="no-hide-descendants"
       accessibilityElementsHidden={!spoken}
       onLayout={face.kind === "card" && face.cardWidth ? laidOut : undefined}

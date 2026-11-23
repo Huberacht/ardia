@@ -48,6 +48,7 @@ final class PageView: ExpoView {
   private var drawnTask: Task<Void, Never>?
   private var drawnSent = false
   private var drawnDelivered = false
+  private var drawnDocument: Int?
   private var coverHandedOver = false
   private weak var hiddenCover: UIView?
   private var hiddenCoverID: String?
@@ -211,6 +212,7 @@ final class PageView: ExpoView {
     drawnTask = nil
     drawnSent = false
     drawnDelivered = false
+    drawnDocument = nil
     coverCapTask?.cancel()
     coverCapTask = nil
     coverRetryTask?.cancel()
@@ -264,8 +266,9 @@ final class PageView: ExpoView {
         guard !self.drawnSent else { return }
         self.drawnSent = true
         self.drawnDelivered = true
+        self.drawnDocument = navigation
         self.handOverCover(reason: "drawn")
-        self.onPageEvent(["name": "drawn"])
+        self.onPageEvent(["name": "drawn", "document": navigation])
         return
       }
       guard !Task.isCancelled, let self else { return }
@@ -397,10 +400,12 @@ final class PageView: ExpoView {
     if !page.isLoading { madeGestures?.pageStoppedLoading() }
     if let session = summaryLayer?.presenter.session, !session.isCurrent(for: page) { dismissSummary(animated: false) }
     if window != nil, !isPrivate { PhoneHandoff.offer(page.url, title: page.title, from: self) } else { PhoneHandoff.withdraw(self) }
-    if wasLoading, !page.isLoading {
-      scheduleToneSample(after: .milliseconds(250))
-      reportDrawnSoon()
+    if drawnSent, let drawnDocument, drawnDocument != page.navigationGeneration {
+      drawnSent = false
+      self.drawnDocument = nil
     }
+    if wasLoading, !page.isLoading { scheduleToneSample(after: .milliseconds(250)) }
+    reportDrawnSoon()
     wasLoading = page.isLoading
     sendTone(theme: page.themeColor, underPage: page.underPageBackgroundColor)
     paintSideMargins()

@@ -4,6 +4,7 @@ import * as browserDatabase from "../state/store/browserDatabase";
 import { tabDatabase } from "../state/store/database";
 import { pages } from "../platform/pages";
 import * as pageStore from "../state/pages/store";
+import * as telemetry from "../state/telemetry/telemetry";
 import { appBecameActive } from "../state/browse/store";
 import { ARCHIVE_RETENTION_MS, ARCHIVE_SEARCH_LIMIT, archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, deleteArchivedTabsById, flushTabWrites, loadArchive, onTabWritesStalled, pruneExpiredArchive, restoreArchivedTab, saveTabState, searchArchive, selectTabById, tabSavedState, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
 import { someTabs, withTabs } from "../../test/render/harness";
@@ -190,11 +191,13 @@ test("a page state that resolves after Clear Archive removed its tab writes noth
 
 test("writes that stall tell the person once, and are tried again when the app comes back", () => {
   const told = jest.fn();
+  const counted = jest.spyOn(telemetry, "countUsage").mockImplementation(() => undefined);
   onTabWritesStalled(told);
   const commits = refuse(100, "SQLITE_IOERR: disk I/O error");
   act(() => updateTabById(currentTabs().open[0]!.id, { url: "https://later.example/" }));
   act(() => updateTabById(currentTabs().open[0]!.id, { url: "https://later-still.example/" }));
   expect(told).toHaveBeenCalledTimes(1);
+  expect(counted.mock.calls.filter(([name]) => name === "tab_writes_stalled")).toHaveLength(1);
   commits.mockRestore();
   expect(tabWritesPending()).toBe(true);
   act(() => appBecameActive());

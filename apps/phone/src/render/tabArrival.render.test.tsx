@@ -97,6 +97,8 @@ test("an arrival the page never reports drawn is still taken away after 400 ms",
   expect(browse.useBrowse.getState().arriving).toBe(right);
   act(() => jest.advanceTimersByTime(400));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: null, covered: null });
+  if (Platform.OS === "ios") expect(counted).toHaveBeenCalledWith("page_covers_capped");
+  else expect(counted).not.toHaveBeenCalledWith("page_covers_capped");
   unmount(root);
 });
 

@@ -33,6 +33,7 @@ export type PageState = PageNavigationState & {
   blockedRequests: number;
   isLive: boolean;
   isPrivate: boolean;
+  document?: number;
 };
 
 export type PageTone = { top: string | null; bottom: string | null };
@@ -72,7 +73,7 @@ export type PageViewProps = ViewProps & {
   onPageState?: (state: PageState) => void;
   onPageTone?: (tone: PageTone) => void;
   onPageError?: (error: PageError) => void;
-  onPageDrawn?: () => void;
+  onPageDrawn?: (document?: number) => void;
   coverNativeId?: string;
   onPageCoverHidden?: (reason: "drawn" | "cap", found: boolean, cover?: string) => void;
 };
@@ -214,7 +215,7 @@ export type PageEventPayload =
   | ({ name: "state" } & Partial<Omit<PageState, "url" | "title" | "progress" | "isLoading" | "canGoBack" | "canGoForward">> &
       Omit<PageNavigationState, "url"> & { url?: string })
   | { name: "tone"; top?: string; bottom?: string }
-  | { name: "drawn" }
+  | { name: "drawn"; document?: number }
   | { name: "coverHidden"; reason: "drawn" | "cap"; found: boolean; cover?: string }
   | { name: "swipedPastHistory"; direction: PageSwipeDirection }
   | ({ name: "error" } & PageError);

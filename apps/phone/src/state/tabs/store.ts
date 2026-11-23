@@ -174,7 +174,10 @@ function retryFlushLater(transient: boolean) {
     const announce = !writesStalled;
     writesStalled = true;
     labTrace(`PAGELAB tab writes stalled after ${failedFlushes} failures, kept for the next change, the app returning or the app leaving`);
-    if (announce) stallListener();
+    if (announce) {
+      if (!useTabs.getState().incognito) countUsage("tab_writes_stalled");
+      stallListener();
+    }
     return;
   }
   const wait = Math.min(RETRY_FIRST_MS * 2 ** (failedFlushes - 1), RETRY_LONGEST_MS);

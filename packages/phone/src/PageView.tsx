@@ -63,7 +63,7 @@ export const PageView = forwardRef<PageViewHandle, PageViewProps>(function PageV
     } else if (nativeEvent.name === "tone") {
       onPageTone?.({ top: nativeEvent.top ?? null, bottom: nativeEvent.bottom ?? null });
     } else if (nativeEvent.name === "drawn") {
-      onPageDrawn?.();
+      onPageDrawn?.(typeof nativeEvent.document === "number" ? nativeEvent.document : undefined);
     } else if (nativeEvent.name === "coverHidden") {
       onPageCoverHidden?.(nativeEvent.reason, nativeEvent.found, typeof nativeEvent.cover === "string" ? nativeEvent.cover : undefined);
     } else if (nativeEvent.name === "swipedPastHistory") {

@@ -101,16 +101,46 @@ onIPhone("on iPhone a draw reported by the page's previous view doesn't lift a n
   unmount(root);
 });
 
-onIPhone("on iPhone a page still loading without a frame keeps its picture past the four second limit, and lets it go once it draws", () => {
+const navigating = (url: string, isLoading: boolean, document: number) => ({ ...state(true, isLoading), url, document }) as unknown as PageState;
+
+onIPhone("on iPhone the picture goes as soon as the page's current document has drawn, even while it still loads, and never lets a tap through to the page it hides", () => {
   const tab = currentTabs().open[0]!;
   updateTabById(tab.id, { snapshotFileName: "file:///snapshots/slow.jpg" });
   const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
-  act(() => storeNavigation(tab.id, state(true, true)));
-  act(() => jest.advanceTimersByTime(6_000));
+  act(() => storeNavigation(tab.id, navigating("https://site0.example/", true, 3)));
+  act(() => jest.advanceTimersByTime(2_000));
+  const shown = root.root.findAll((node) => node.props.testID === "pageCover" && typeof node.type === "string")[0]!;
+  expect(shown.props.pointerEvents).toBe("auto");
+  act(() => pageDrawn(tab.id, 3));
+  act(() => jest.advanceTimersByTime(200));
+  expect(cover(root)).toBe(false);
+  unmount(root);
+});
+
+onIPhone("on iPhone a draw of the document before the current one doesn't lift the picture", () => {
+  const tab = currentTabs().open[0]!;
+  updateTabById(tab.id, { snapshotFileName: "file:///snapshots/before.jpg" });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
+  act(() => storeNavigation(tab.id, navigating("https://site0.example/next", true, 5)));
+  act(() => pageDrawn(tab.id, 4));
+  act(() => jest.advanceTimersByTime(1_500));
   expect(cover(root)).toBe(true);
-  act(() => storeNavigation(tab.id, state(true, false)));
-  act(() => pageDrawn(tab.id));
-  act(() => jest.advanceTimersByTime(400));
+  act(() => pageDrawn(tab.id, 5));
+  act(() => jest.advanceTimersByTime(200));
+  expect(cover(root)).toBe(false);
+  unmount(root);
+});
+
+onIPhone("on iPhone a page that settles and then starts loading a new address keeps its picture until the new document draws, at most until the four second limit", () => {
+  const tab = currentTabs().open[0]!;
+  updateTabById(tab.id, { snapshotFileName: "file:///snapshots/settled.jpg" });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
+  act(() => storeNavigation(tab.id, navigating("https://site0.example/", false, 1)));
+  act(() => jest.advanceTimersByTime(100));
+  act(() => storeNavigation(tab.id, navigating("https://next.example/", true, 2)));
+  act(() => jest.advanceTimersByTime(1_200));
+  expect(cover(root)).toBe(true);
+  act(() => jest.advanceTimersByTime(3_000));
   expect(cover(root)).toBe(false);
   unmount(root);
 });

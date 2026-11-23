@@ -243,11 +243,18 @@ export function unveilOpeningPage(id: string) {
 
 const drawnWaiters = new Map<string, () => void>();
 
-const drawnPages = new Set<string>();
+const drawnPages = new Map<string, number | null>();
 
 export const notePageHosted = (id: string) => void drawnPages.delete(id);
 
 export const pageWasDrawn = (id: string) => drawnPages.has(id);
+
+export function documentWasDrawn(id: string) {
+  if (!drawnPages.has(id)) return false;
+  const drawn = drawnPages.get(id) ?? null;
+  const shown = pageNavigation(id)?.document;
+  return drawn === null || shown === undefined || drawn === shown;
+}
 
 const drawnListeners = new Map<string, Set<() => void>>();
 
@@ -283,8 +290,8 @@ export function whenPageDrawn(id: string, capMs: number, then: (drawn: boolean) 
   return stop;
 }
 
-export function pageDrawn(id: string) {
-  drawnPages.add(id);
+export function pageDrawn(id: string, document?: number) {
+  drawnPages.set(id, document ?? null);
   drawnWaiters.get(id)?.();
   for (const listener of [...(drawnListeners.get(id) ?? [])]) listener();
 }
@@ -799,8 +806,9 @@ export function arriveAtNeighbour(id: string) {
   stopArrivalWait = whenPageCoverHidden(
     id,
     ARRIVAL_COVER_LOST_MS,
-    () => {
+    (reason) => {
       stopArrivalWait = null;
+      if (COVER_ACK_NEEDS_ID && reason !== "drawn" && !isPrivateTab(currentTabs(), id) && !useTabs.getState().incognito) countUsage("page_covers_capped");
       const now = useBrowse.getState();
       if (now.arriving === id && now.arrivalCover === cover) useBrowse.setState({ arriving: null, arrivalCover: null, covered: now.covered === id ? null : now.covered });
     },
@@ -1060,7 +1068,7 @@ useTabs.subscribe((tabs) => {
     hidesFromRecents = hides;
     void settled(() => setHidesFromRecents(hides), false);
   }
-  for (const id of drawnPages) if (!findTab(tabs, id)) drawnPages.delete(id);
+  for (const id of drawnPages.keys()) if (!findTab(tabs, id)) drawnPages.delete(id);
   for (const id of [...lastVisits.keys(), ...loading.keys()]) {
     if (findTab(tabs, id)) continue;
     lastVisits.delete(id);
