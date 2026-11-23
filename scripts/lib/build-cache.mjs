@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export const STAMP_VERSION = 3;
+export const STAMP_VERSION = 4;
 
 const NATIVE = [
   /^apps\/browser\/macos\//,
@@ -41,7 +41,7 @@ const BUILD_ENV = new RegExp(
     "OBJCFLAGS|LDFLAGS|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|OBJC_INCLUDE_PATH|LIBRARY_PATH|CP_HOME_DIR|LANG|LC_ALL)$",
 );
 export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE"];
-const BUNDLING_ENV = /^(SKIP_BUNDLING|FORCE_BUNDLING|BUNDLE_[A-Z_]+|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|ENTRY_FILE|CONFIG_JSON|USE_HERMES|HERMES_CLI_PATH|SOURCEMAP_FILE)$/;
+export const BUNDLING_ENV = /^(SKIP_BUNDLING|FORCE_BUNDLING|BUNDLE_[A-Z_]+|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|ENTRY_FILE|CONFIG_JSON|USE_HERMES|HERMES_CLI_PATH|SOURCEMAP_FILE|NODE_ARGS|CLI_PATH)$/;
 export const UNFINGERPRINTABLE_FILES = ["apps/browser/macos/.xcode.env.local", "apps/browser/macos/.xcode.env.updates"];
 
 export function envFingerprint(env = process.env) {
@@ -144,81 +144,18 @@ export class HashCache {
   }
 }
 
-export function treeDigest(root, cache = new HashCache(null)) {
+export function treeDigest(root, cache = new HashCache(null), { skipTop = [] } = {}) {
   const lines = [];
   const walk = (rel) => {
     const path = rel ? join(root, rel) : root;
     for (const name of fs.readdirSync(path).sort()) {
+      if (!rel && skipTop.includes(name)) continue;
       const childRel = rel ? `${rel}/${name}` : name;
       const child = join(path, name);
       const st = fs.lstatSync(child, { bigint: true });
       if (st.isSymbolicLink()) lines.push(`${childRel}\0l:${fs.readlinkSync(child)}`);
       else if (st.isDirectory()) walk(childRel);
       else lines.push(`${childRel}\0${Number(st.mode) & 0o111 ? "x" : "f"}:${cache.fileHash(child, st)}`);
-    }
-  };
-  walk("");
-  return sha256(lines.join("\n"));
-}
-
-const MACHO_THIN = new Map([
-  [0xfeedfacf, { le: false, header: 32 }],
-  [0xcffaedfe, { le: true, header: 32 }],
-  [0xfeedface, { le: false, header: 28 }],
-  [0xcefaedfe, { le: true, header: 28 }],
-]);
-
-function thinUuid(buf, base) {
-  const kind = MACHO_THIN.get(buf.readUInt32BE(base));
-  if (!kind) return null;
-  const u32 = (at) => (kind.le ? buf.readUInt32LE(at) : buf.readUInt32BE(at));
-  const ncmds = u32(base + 16);
-  let at = base + kind.header;
-  for (let i = 0; i < ncmds && at + 8 <= buf.length; i++) {
-    const cmd = u32(at);
-    const size = u32(at + 4);
-    if (cmd === 0x1b && at + 24 <= buf.length) return buf.subarray(at + 8, at + 24).toString("hex");
-    if (size < 8) return null;
-    at += size;
-  }
-  return null;
-}
-
-export function machoUuids(buf) {
-  if (buf.length < 8) return null;
-  const magic = buf.readUInt32BE(0);
-  if (magic === 0xcafebabe || magic === 0xcafebabf) {
-    const wide = magic === 0xcafebabf;
-    const count = buf.readUInt32BE(4);
-    const uuids = [];
-    for (let i = 0; i < count; i++) {
-      const entry = 8 + i * (wide ? 32 : 20);
-      const offset = wide ? Number(buf.readBigUInt64BE(entry + 8)) : buf.readUInt32BE(entry + 8);
-      const uuid = offset < buf.length ? thinUuid(buf, offset) : null;
-      if (!uuid) return null;
-      uuids.push(uuid);
-    }
-    return uuids.length ? uuids : null;
-  }
-  const uuid = MACHO_THIN.has(magic) ? thinUuid(buf, 0) : null;
-  return uuid ? [uuid] : null;
-}
-
-export function codeDigest(framework, cache = new HashCache(null)) {
-  const lines = [];
-  const walk = (rel) => {
-    const path = rel ? join(framework, rel) : framework;
-    for (const name of fs.readdirSync(path).sort()) {
-      if (name === "_CodeSignature" || name === "CodeResources") continue;
-      const childRel = rel ? `${rel}/${name}` : name;
-      const child = join(path, name);
-      const st = fs.lstatSync(child, { bigint: true });
-      if (st.isSymbolicLink()) lines.push(`${childRel}\0l:${fs.readlinkSync(child)}`);
-      else if (st.isDirectory()) walk(childRel);
-      else {
-        const uuids = machoUuids(fs.readFileSync(child));
-        lines.push(`${childRel}\0${uuids ? `u:${uuids.join(",")}` : `h:${cache.fileHash(child, st)}`}`);
-      }
     }
   };
   walk("");
@@ -257,20 +194,19 @@ export function stampOf({ manifest, config, signing = "default", framework, tool
   ]).slice(0, 32);
 }
 
-const GENERATED_ENV_LINE = /^export NODE_BINARY=[A-Za-z0-9_./@+-]+$/;
+const GENERATED_ENV_FILE = /^export NODE_BINARY=\/[A-Za-z0-9_./@+-]+\n$/;
 
 export function localEnvLines(repo, files = UNFINGERPRINTABLE_FILES) {
   const lines = [];
   for (const rel of files) {
-    let text;
+    let bytes;
     try {
-      text = fs.readFileSync(join(repo, rel), "utf8");
+      bytes = fs.readFileSync(join(repo, rel));
     } catch {
       continue;
     }
-    const content = text.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (!content.every((l) => GENERATED_ENV_LINE.test(l))) return { blocked: `${rel} holds more than the NODE_BINARY line pod install writes` };
-    lines.push(...content.map((l) => `xcode-env ${rel} ${l}`));
+    if (!GENERATED_ENV_FILE.test(bytes.toString("latin1"))) return { blocked: `${rel} isn't the single absolute NODE_BINARY line pod install writes` };
+    lines.push(`xcode-env ${rel} ${sha256(bytes)}`);
   }
   return { lines };
 }
@@ -325,17 +261,13 @@ export function countEntries(root) {
 
 export const cacheEntryDir = (cacheRoot, stamp) => join(cacheRoot, stamp);
 
+const ENTRY_META = ["meta.json", ".used"];
+
 export function lookup(cacheRoot, stamp) {
   const dir = cacheEntryDir(cacheRoot, stamp);
-  let version;
-  try {
-    version = join(dir, fs.readlinkSync(join(dir, "current")));
-  } catch {
-    return null;
-  }
-  const meta = readJson(join(version, "meta.json"));
-  if (!meta || meta.stamp !== stamp || !fs.existsSync(join(version, "Ardia.app/Contents/MacOS"))) return null;
-  return { dir, version, app: join(version, "Ardia.app"), meta };
+  const meta = readJson(join(dir, "meta.json"));
+  if (!meta || meta.stamp !== stamp || !meta.digest || !fs.existsSync(join(dir, "Ardia.app/Contents/MacOS"))) return null;
+  return { dir, app: join(dir, "Ardia.app"), meta };
 }
 
 export function touch(dir, now = new Date()) {
@@ -354,52 +286,62 @@ export function duBytes(path) {
   return r.status === 0 ? Number(r.stdout.split(/\s/)[0]) * 1024 : 0;
 }
 
-export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measure = duBytes, replace = false } = {}) {
+export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measure = duBytes } = {}) {
   const existing = lookup(cacheRoot, stamp);
-  if (existing && !replace) {
-    touch(existing.dir);
-    return existing;
-  }
-  const dir = cacheEntryDir(cacheRoot, stamp);
-  fs.mkdirSync(dir, { recursive: true });
-  const nonce = `v-${process.pid}-${Date.now()}`;
-  const tmp = join(dir, `.tmp-${nonce}`);
+  if (existing) return { ...existing, existed: true };
+  fs.mkdirSync(cacheRoot, { recursive: true });
+  const tmp = join(cacheRoot, `.tmp-${process.pid}-${Date.now()}`);
   fs.mkdirSync(tmp);
   try {
     cloneOrThrow(app, join(tmp, "Ardia.app"));
     if (hermesc && fs.existsSync(hermesc)) cloneOrThrow(hermesc, join(tmp, "hermesc"));
-    const full = { ...meta, stamp, nonce, hermesc: fs.existsSync(join(tmp, "hermesc")), created: new Date().toISOString(), files: countEntries(join(tmp, "Ardia.app")) };
-    full.bytes = measure(tmp);
-    fs.writeFileSync(join(tmp, "meta.json"), JSON.stringify(full, null, 1));
-    fs.renameSync(tmp, join(dir, nonce));
-  } catch (e) {
+    const digest = treeDigest(tmp, undefined, { skipTop: ENTRY_META });
+    fs.writeFileSync(join(tmp, "meta.json"), JSON.stringify({ ...meta, stamp, digest, created: new Date().toISOString(), bytes: measure(tmp) }, null, 1));
+    touch(tmp);
+    fs.renameSync(tmp, cacheEntryDir(cacheRoot, stamp));
+  } catch {
     fs.rmSync(tmp, { recursive: true, force: true });
-    throw e;
   }
-  const link = join(dir, `.current-${process.pid}`);
-  fs.rmSync(link, { force: true });
-  fs.symlinkSync(nonce, link);
-  fs.renameSync(link, join(dir, "current"));
-  touch(dir);
-  for (const name of fs.readdirSync(dir)) {
-    if (name.startsWith("v-") && name !== nonce) fs.rmSync(join(dir, name), { recursive: true, force: true });
-  }
-  return lookup(cacheRoot, stamp);
+  const entry = lookup(cacheRoot, stamp);
+  if (!entry) throw new Error(`publishing ${stamp} left no entry`);
+  return entry;
 }
 
 export function snapshotEntry(entry, dest) {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dirname(dest), { recursive: true });
-  if (cloneTree(entry.version, dest).status !== 0) return null;
+  if (cloneTree(entry.dir, dest).status !== 0) return null;
   try {
     const meta = readJson(join(dest, "meta.json"));
-    if (!meta || meta.stamp !== entry.meta.stamp || meta.nonce !== entry.meta.nonce) return null;
-    if (countEntries(join(dest, "Ardia.app")) !== meta.files) return null;
-    if (meta.hermesc && !fs.existsSync(join(dest, "hermesc"))) return null;
-    return { app: join(dest, "Ardia.app"), hermesc: meta.hermesc ? join(dest, "hermesc") : null, meta };
+    if (!meta || meta.stamp !== entry.meta.stamp || meta.digest !== entry.meta.digest) return null;
+    if (treeDigest(dest, undefined, { skipTop: ENTRY_META }) !== meta.digest) return null;
+    const hermesc = join(dest, "hermesc");
+    return { app: join(dest, "Ardia.app"), hermesc: fs.existsSync(hermesc) ? hermesc : null, meta };
   } catch {
     return null;
   }
+}
+
+export function stageEngine(cacheRoot, framework, cache) {
+  const digest = treeDigest(framework, cache);
+  const dir = join(cacheRoot, "engine-copies", digest.slice(0, 32));
+  const copy = join(dir, "Chromium Framework.framework");
+  if (!fs.existsSync(join(dir, ".complete"))) {
+    const tmp = `${dir}.tmp-${process.pid}`;
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.mkdirSync(tmp, { recursive: true });
+    try {
+      cloneOrThrow(framework, join(tmp, "Chromium Framework.framework"));
+      if (treeDigest(join(tmp, "Chromium Framework.framework"), cache) !== digest) throw new Error(`${framework} changed while it was copied`);
+      fs.writeFileSync(join(tmp, ".complete"), digest);
+      fs.renameSync(tmp, dir);
+    } catch (e) {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      if (!fs.existsSync(join(dir, ".complete"))) throw e;
+    }
+  }
+  touch(dir);
+  return { copy, digest };
 }
 
 function listDirs(root, keep) {
@@ -421,12 +363,10 @@ const usedAt = (dir) => {
 };
 
 export function entries(cacheRoot) {
-  const list = [];
-  for (const dir of listDirs(cacheRoot, (n) => /^[0-9a-f]{32}$/.test(n))) {
+  return listDirs(cacheRoot, (n) => /^[0-9a-f]{32}$/.test(n)).map((dir) => {
     const entry = lookup(cacheRoot, dir.split("/").pop());
-    list.push({ stamp: dir.split("/").pop(), dir, bytes: entry?.meta.bytes ?? 0, usedAt: entry ? usedAt(dir) : 0, meta: entry?.meta ?? {} });
-  }
-  return list;
+    return { stamp: dir.split("/").pop(), dir, bytes: entry?.meta.bytes ?? 0, usedAt: entry ? usedAt(dir) : 0, meta: entry?.meta ?? {} };
+  });
 }
 
 export function evictionPlan(list, { maxBytes, maxEntries, protect = [], graceMs = 0, now = Date.now() }) {
@@ -457,19 +397,23 @@ function removeAtomically(root, dir) {
 export function evict(cacheRoot, opts) {
   const plan = evictionPlan(entries(cacheRoot), opts);
   for (const e of plan.evict) removeAtomically(cacheRoot, e.dir);
-  const engines = join(cacheRoot, "engines");
-  const engineList = listDirs(engines, (n) => /^[0-9a-f]{12}$/.test(n)).map((dir) => ({ stamp: dir, dir, bytes: 0, usedAt: usedAt(dir) }));
-  const enginePlan = evictionPlan(engineList, { maxBytes: Infinity, maxEntries: opts.keepEngines ?? 3, graceMs: opts.graceMs, now: opts.now, protect: opts.protectEngines ?? [] });
-  for (const e of enginePlan.evict) removeAtomically(engines, e.dir);
-  for (const root of [cacheRoot, engines]) {
+  const evictedEngines = [];
+  for (const [sub, pattern] of [["engines", /^[0-9a-f]{12}$/], ["engine-copies", /^[0-9a-f]{32}$/]]) {
+    const root = join(cacheRoot, sub);
+    const list = listDirs(root, (n) => pattern.test(n)).map((dir) => ({ stamp: dir, dir, bytes: 0, usedAt: usedAt(dir) }));
+    const enginePlan = evictionPlan(list, { maxBytes: Infinity, maxEntries: opts.keepEngines ?? 3, graceMs: opts.graceMs, now: opts.now, protect: opts.protectEngines ?? [] });
+    for (const e of enginePlan.evict) removeAtomically(root, e.dir);
+    evictedEngines.push(...enginePlan.evict.map((e) => e.dir));
+  }
+  for (const root of [cacheRoot, join(cacheRoot, "engines"), join(cacheRoot, "engine-copies")]) {
     try {
       for (const name of fs.readdirSync(root)) {
         const path = join(root, name);
-        if (/^(\.tmp-|[0-9a-f]{12}\.tmp-)/.test(name) && Date.now() - fs.statSync(path).mtimeMs > 3600e3) fs.rmSync(path, { recursive: true, force: true });
+        if (/(^\.tmp-|\.tmp-\d+$)/.test(name) && Date.now() - fs.statSync(path).mtimeMs > 3600e3) fs.rmSync(path, { recursive: true, force: true });
       }
     } catch {}
   }
-  return { ...plan, engines: enginePlan.evict.map((e) => e.dir) };
+  return { ...plan, engines: evictedEngines };
 }
 
 export function manifestDiff(from, to) {
@@ -530,6 +474,13 @@ export function groupAlive(pgid) {
 }
 
 export const slotGroup = (slot) => Number(readJson(slotGroupFile(slot), {}).pgid);
+
+export function settleGroup(slot) {
+  if (!fs.existsSync(slotGroupFile(slot))) return false;
+  if (groupAlive(slotGroup(slot))) return true;
+  fs.rmSync(slotGroupFile(slot), { force: true });
+  return false;
+}
 
 export function slotBusy(slot, { root } = {}) {
   const reserved = Number(readJson(join(slot, "reserved.json"), {}).pid);

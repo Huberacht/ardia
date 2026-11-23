@@ -101,14 +101,21 @@ test("the environment fingerprint keeps build variables, drops the rest, and blo
   assert.deepEqual(fp.blocked, []);
   assert.deepEqual(lib.envFingerprint({ XCODE_XCCONFIG_FILE: "/x.xcconfig" }).blocked, ["XCODE_XCCONFIG_FILE"]);
   assert.deepEqual(lib.envFingerprint({ SKIP_BUNDLING: "1", BUNDLE_NAME: "x", FORCE_BUNDLING: "1" }).blocked, ["BUNDLE_NAME", "FORCE_BUNDLING", "SKIP_BUNDLING"]);
+  assert.deepEqual(lib.envFingerprint({ NODE_ARGS: "--max-old-space-size=8192", CLI_PATH: "/x/cli.js" }).blocked, ["CLI_PATH", "NODE_ARGS"]);
   const withLocalEnv = scratch();
   write(withLocalEnv, "apps/browser/fake-macos/.xcode.env.local", "export NODE_BINARY=/opt/node/bin/node\n");
   const files = ["apps/browser/fake-macos/.xcode.env.local"];
   const generated = lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: withLocalEnv, localEnvFiles: files });
   assert.equal(generated.blocked, undefined);
-  assert.deepEqual(generated.env.lines, ["xcode-env apps/browser/fake-macos/.xcode.env.local export NODE_BINARY=/opt/node/bin/node"]);
-  write(withLocalEnv, "apps/browser/fake-macos/.xcode.env.local", "export NODE_BINARY=/opt/node/bin/node\nexport EXTRA=1\n");
-  assert.match(lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: withLocalEnv, localEnvFiles: files }).blocked, /\.xcode\.env\.local/);
+  assert.equal(generated.env.lines.length, 1);
+  assert.match(generated.env.lines[0], /^xcode-env apps\/browser\/fake-macos\/\.xcode\.env\.local [0-9a-f]{64}$/);
+  for (const bad of ["export NODE_BINARY=/opt/node/bin/node\nexport EXTRA=1\n", "export NODE_BINARY=/opt/node/bin/node\r\n", "export NODE_BINARY=node\n", "export NODE_BINARY=/opt/node/bin/node"]) {
+    write(withLocalEnv, "apps/browser/fake-macos/.xcode.env.local", bad);
+    assert.match(lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: withLocalEnv, localEnvFiles: files }).blocked ?? "", /\.xcode\.env\.local/, JSON.stringify(bad));
+  }
+  write(withLocalEnv, "apps/browser/fake-macos/.xcode.env.local", "export NODE_BINARY=/opt/other/bin/node\n");
+  const other = lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: withLocalEnv, localEnvFiles: files });
+  assert.notDeepEqual(other.env.lines, generated.env.lines);
   assert.equal(lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: scratch() }).blocked, undefined);
   assert.match(lib.stampInputs({ framework: framework(), env: { XCODE_XCCONFIG_FILE: "/x" }, toolchain: "t" }).blocked, /XCODE_XCCONFIG_FILE/);
   assert.match(lib.stampInputs({ framework: "/nowhere", env: {}, toolchain: "t" }).blocked, /no engine framework/);
@@ -161,48 +168,47 @@ test("the cache is keyed by stamp: a miss, a store, then a hit", () => {
   assert.equal(lib.lookup(cache, S1), null);
   const stored = lib.store(cache, S1, fakeApp(scratch(), "built"), { config: "Debug", head: "abc" }, { measure: () => 10 });
   assert.equal(stored.meta.stamp, S1);
-  assert.equal(stored.meta.files, 3);
+  assert.match(stored.meta.digest, /^[0-9a-f]{64}$/);
   assert.equal(appText(lib.lookup(cache, S1)), "built");
   assert.equal(lib.lookup(cache, S2), null);
-  assert.deepEqual(fs.readdirSync(join(cache, S1)).filter((n) => n.startsWith(".tmp") || n.startsWith(".current")), []);
+  assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp")), []);
 });
 
-test("store keeps the first app for a stamp unless asked to replace it, and a replacement is a new version", () => {
+test("an entry is never replaced: a second publish of a stamp keeps the first and leaves no temp folder", () => {
   const cache = scratch();
-  const first = lib.store(cache, S1, fakeApp(scratch(), "first"), {}, { measure: one });
-  lib.store(cache, S1, fakeApp(scratch(), "second"), {}, { measure: one });
+  lib.store(cache, S1, fakeApp(scratch(), "first"), {}, { measure: one });
+  const second = lib.store(cache, S1, fakeApp(scratch(), "second"), {}, { measure: one });
+  assert.equal(second.existed, true);
   assert.equal(appText(lib.lookup(cache, S1)), "first");
-  const third = lib.store(cache, S1, fakeApp(scratch(), "third"), {}, { measure: one, replace: true });
-  assert.equal(appText(lib.lookup(cache, S1)), "third");
-  assert.notEqual(third.version, first.version);
-  assert.equal(fs.existsSync(first.version), false);
+  assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp")), []);
 });
 
-test("an entry without its app, its current version or with another stamp is a miss", () => {
+test("an entry without its app or digest, or with another stamp, is a miss", () => {
   const cache = scratch();
-  write(cache, `${S1}/meta.json`, JSON.stringify({ stamp: S1 }));
+  write(cache, `${S1}/meta.json`, JSON.stringify({ stamp: S1, digest: "d" }));
   assert.equal(lib.lookup(cache, S1), null);
-  write(cache, `${S2}/v-1/meta.json`, JSON.stringify({ stamp: "other" }));
-  write(cache, `${S2}/v-1/Ardia.app/Contents/MacOS/Ardia`, "x");
-  fs.symlinkSync("v-1", join(cache, S2, "current"));
+  write(cache, `${S2}/meta.json`, JSON.stringify({ stamp: "other", digest: "d" }));
+  write(cache, `${S2}/Ardia.app/Contents/MacOS/Ardia`, "x");
+  assert.equal(lib.lookup(cache, S2), null);
+  write(cache, `${S2}/meta.json`, JSON.stringify({ stamp: S2 }));
   assert.equal(lib.lookup(cache, S2), null);
 });
 
-test("a restore snapshot is one version: app and hermesc together, or nothing", () => {
+test("a restore snapshot must match the content digest recorded at publish, hermesc included", () => {
   const cache = scratch();
   const hermesc = write(scratch(), "hermesc", "hermesc v1", 0o755);
-  const entry = lib.store(cache, S1, fakeApp(scratch(), "v1"), {}, { measure: one, hermesc });
+  const entry = lib.store(cache, S1, fakeApp(scratch(), "abc"), {}, { measure: one, hermesc });
   const snap = lib.snapshotEntry(entry, join(scratch(), "snap"));
-  assert.equal(fs.readFileSync(join(snap.app, "Contents/MacOS/Ardia"), "utf8"), "v1");
+  assert.equal(fs.readFileSync(join(snap.app, "Contents/MacOS/Ardia"), "utf8"), "abc");
   assert.equal(fs.readFileSync(snap.hermesc, "utf8"), "hermesc v1");
-  lib.store(cache, S1, fakeApp(scratch(), "v2"), {}, { measure: one, replace: true, hermesc: write(scratch(), "hermesc", "hermesc v2") });
-  assert.equal(lib.snapshotEntry(entry, join(scratch(), "stale")), null);
-  const fresh = lib.lookup(cache, S1);
-  const again = lib.snapshotEntry(fresh, join(scratch(), "fresh"));
-  assert.equal(fs.readFileSync(join(again.app, "Contents/MacOS/Ardia"), "utf8"), "v2");
-  assert.equal(fs.readFileSync(again.hermesc, "utf8"), "hermesc v2");
-  fs.rmSync(join(fresh.version, "hermesc"));
-  assert.equal(lib.snapshotEntry(fresh, join(scratch(), "partial")), null);
+  fs.writeFileSync(join(entry.app, "Contents/MacOS/Ardia"), "xyz");
+  assert.equal(lib.snapshotEntry(entry, join(scratch(), "same-size-edit")), null);
+  fs.writeFileSync(join(entry.app, "Contents/MacOS/Ardia"), "abc");
+  assert.ok(lib.snapshotEntry(entry, join(scratch(), "restored")));
+  fs.rmSync(join(entry.dir, "hermesc"));
+  assert.equal(lib.snapshotEntry(entry, join(scratch(), "no-hermesc")), null);
+  fs.rmSync(entry.dir, { recursive: true });
+  assert.equal(lib.snapshotEntry(entry, join(scratch(), "evicted")), null);
 });
 
 test("touching an entry that eviction removed reports it instead of throwing", () => {
@@ -415,43 +421,20 @@ test("a slot under a symlinked slot root is busy by the lock locked takes on its
   assert.notEqual(lib.lockHolderPath(lib.slotDerivedData(slot), locks), holder);
 });
 
-function machO(uuidByte, { fat = false, tail = "" } = {}) {
-  const thin = Buffer.alloc(32 + 24);
-  thin.writeUInt32LE(0xfeedfacf, 0);
-  thin.writeUInt32LE(1, 16);
-  thin.writeUInt32LE(24, 20);
-  thin.writeUInt32LE(0x1b, 32);
-  thin.writeUInt32LE(24, 36);
-  thin.fill(uuidByte, 40, 56);
-  const body = Buffer.concat([thin, Buffer.from(tail)]);
-  if (!fat) return body;
-  const header = Buffer.alloc(8 + 20);
-  header.writeUInt32BE(0xcafebabe, 0);
-  header.writeUInt32BE(1, 4);
-  header.writeUInt32BE(28, 8 + 8);
-  header.writeUInt32BE(body.length, 8 + 12);
-  return Buffer.concat([header, body]);
-}
-
-test("Mach-O UUIDs are read from thin and fat binaries, and nothing else counts as one", () => {
-  assert.deepEqual(lib.machoUuids(machO(0xab)), ["ab".repeat(16)]);
-  assert.deepEqual(lib.machoUuids(machO(0xcd, { fat: true })), ["cd".repeat(16)]);
-  assert.equal(lib.machoUuids(Buffer.from("not a binary at all")), null);
-});
-
-test("the engine code digest ignores re-signing but not a different build or resource", () => {
-  const make = (uuid, { sig = "sig", tail = "", resource = "pak" } = {}) => {
-    const dir = join(scratch(), "Chromium Framework.framework");
-    write(dir, "Versions/A/Chromium Framework", "");
-    fs.writeFileSync(join(dir, "Versions/A/Chromium Framework"), machO(uuid, { tail }));
-    write(dir, "Versions/A/_CodeSignature/CodeResources", sig);
-    write(dir, "Versions/A/Resources/resources.pak", resource);
-    return dir;
-  };
-  const source = lib.codeDigest(make(1));
-  assert.equal(lib.codeDigest(make(1, { sig: "re-signed", tail: "signature blob" })), source);
-  assert.notEqual(lib.codeDigest(make(2)), source);
-  assert.notEqual(lib.codeDigest(make(1, { resource: "other pak" })), source);
+test("the engine is staged into an immutable folder named by its content, so a changed byte is a new path", () => {
+  const cache = scratch();
+  const source = framework();
+  const a = lib.stageEngine(cache, source);
+  assert.ok(a.copy.endsWith(`${a.digest.slice(0, 32)}/Chromium Framework.framework`));
+  assert.equal(fs.readFileSync(join(a.copy, "Versions/A/Chromium Framework"), "utf8"), "engine");
+  assert.equal(lib.stageEngine(cache, source).copy, a.copy);
+  const st = fs.statSync(join(source, "Versions/A/Chromium Framework"));
+  fs.writeFileSync(join(source, "Versions/A/Chromium Framework"), "Engine");
+  fs.utimesSync(join(source, "Versions/A/Chromium Framework"), st.atime, st.mtime);
+  const b = lib.stageEngine(cache, source);
+  assert.notEqual(b.copy, a.copy);
+  assert.equal(fs.readFileSync(join(a.copy, "Versions/A/Chromium Framework"), "utf8"), "engine");
+  assert.equal(lib.frameworkIdentity(b.copy), lib.frameworkIdentity(source));
 });
 
 test("sync scratch files live in the slot's own folder, which the next sync clears", () => {
@@ -478,17 +461,21 @@ test("a relative node_modules link through another symlink is caught by its real
   assert.equal(lib.escapingLinks(dangling).length, 1);
 });
 
-test("a slot whose last owner left children running is busy until that process group is gone", async () => {
+test("a slot stays busy while any of its recorded process group runs, and nobody signals it", async () => {
   const { spawn } = await import("node:child_process");
   const slot = scratch();
   const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
   fs.writeFileSync(lib.slotGroupFile(slot), JSON.stringify({ pgid: child.pid }));
   try {
-    assert.ok(lib.groupAlive(child.pid));
+    assert.equal(lib.settleGroup(slot), true);
+    assert.ok(fs.existsSync(lib.slotGroupFile(slot)));
     assert.ok(lib.slotBusy(slot, { root: scratch() }));
+    assert.ok(lib.groupAlive(child.pid));
   } finally {
     process.kill(-child.pid, "SIGKILL");
   }
   await new Promise((r) => child.on("exit", r));
+  assert.equal(lib.settleGroup(slot), false);
+  assert.ok(!fs.existsSync(lib.slotGroupFile(slot)));
   assert.ok(!lib.slotBusy(slot, { root: scratch() }));
 });

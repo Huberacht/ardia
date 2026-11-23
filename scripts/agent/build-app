@@ -35,13 +35,15 @@
 #    differ are written into it, so Xcode stays incremental across worktrees: a tree near the slot's last build
 #    compiles what changed, not all 1040 files. Each slot is its own `locked xcodebuild` lock; a busy one is skipped
 #    and a new slot reserved when none is free. You always get the app that slot build made; it is published to the
-#    cache only under the stamp of what was synced, so an edit made while waiting is never cached under the old one,
-#    and only when the app embeds the engine that was hashed.
-# Runs with one --as and config take turns (a lock per build-NAME and variant). Before a build touches an app, its
-# record goes, and is written again only when the build succeeds.
+#    cache only under the stamp of what was synced, so an edit made while waiting is never cached under the old one.
 #    Slot builds share Xcode's compilation cache (a CAS under the app cache, slot paths prefix-mapped), so a new slot
 #    or a settings change replays compiles instead of redoing them; AC_COMPILE_CACHE=0 turns it off. Otherwise
 #    (--plain, or build-NAME holds a build) it builds there as before.
+# The engine (ARDIACORE_FRAMEWORK, else ~/chromium-build, else the published one) is first cloned into an immutable
+# folder named by its content, and the build uses that copy, so the engine embedded is the one stamped.
+# Runs into one build-NAME take turns (a lock on it); build-app inside build-app is refused. Only the Debug Metro app
+# is recorded for the JS-only answer, and every run that goes past that answer drops the record first; a build
+# writes it again only after it succeeds (a plain one only if nothing native changed meanwhile).
 # Prints the errors (a failed build script with its last 30 lines), the warnings count, the result, the time and
 # `app: <path>` on its own line (scripts/agent/train reads it). The full log: <derived data>/build-app.log.
 # Run it with run_in_background. Exits 0 when built (or nothing to build), 1 when the build failed, 75 when a lock
@@ -91,27 +93,37 @@ variant=$config
 [[ -n "$bundle" && $config == Debug ]] && variant=$config-bundle
 [[ $config == Release ]] && bundle=""
 prebuilt_out="$dd/Prebuilt/$variant"
-stamp_file="$dd/.ac-native-stamp-$variant"
-app_file="$dd/.ac-app-$variant"
-kind_file="$dd/.ac-kind-$variant"
+stamp_file="$dd/.ac-native-stamp-Debug"
+app_file="$dd/.ac-app-Debug"
+kind_file="$dd/.ac-kind-Debug"
 mkdir -p "$dd"
-if [[ "${AC_BUILD_APP_HELD:-}" != "$dd/$variant" ]]; then
-  AC_BUILD_APP_HELD="$dd/$variant" exec lockf -k -t "$wait" "$dd/.build-app-$variant.lock" "$0" ${original_args[@]+"${original_args[@]}"}
+if [[ -n "${AC_BUILD_APP_LOCKER:-}" && "$AC_BUILD_APP_LOCKER" != "$PPID" ]]; then
+  echo "build-app: already running inside build-app (pid $AC_BUILD_APP_LOCKER); a nested build-app isn't supported" >&2
+  exit 64
+fi
+if [[ -z "${AC_BUILD_APP_LOCKER:-}" ]]; then
+  AC_BUILD_APP_LOCKER=$$ exec lockf -k -t "$wait" "$dd/.build-app.lock" "$0" ${original_args[@]+"${original_args[@]}"}
 fi
 
-prebuilt_engine() {
-  ARDIACORE_FRAMEWORK=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
-  export ARDIACORE_FRAMEWORK
-}
 if [[ -n "$prebuilt_engine" ]]; then
-  prebuilt_engine
-elif [[ -z "${ARDIACORE_FRAMEWORK:-}" ]]; then
-  if [[ -d "$chromium_framework" ]]; then export ARDIACORE_FRAMEWORK=$chromium_framework; else prebuilt_engine; fi
+  source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
+elif [[ -n "${ARDIACORE_FRAMEWORK:-}" ]]; then
+  source_framework=$ARDIACORE_FRAMEWORK
+elif [[ -d "$chromium_framework" ]]; then
+  source_framework=$chromium_framework
+else
+  source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
 fi
+ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework") ||
+  { echo "build-app: couldn't stage the engine from $source_framework" >&2; exit 1; }
+export ARDIACORE_FRAMEWORK
 signing=default
 [[ -n "$adhoc" ]] && signing=adhoc
 
-stamp=$("$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" 2>"$log.stamp")
+stamp_now() {
+  "$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" 2>"$log.stamp"
+}
+stamp=$(stamp_now)
 case $? in
   0) reuse=1 ;;
   3) reuse="" stamp="" mode=plain; echo "build-app: $(sed 's/^build-cache: //' "$log.stamp"); building in place, without the app cache" ;;
@@ -119,22 +131,23 @@ case $? in
 esac
 last_app=$(cat "$app_file" 2>/dev/null)
 [[ $mode == plain && "$(cat "$kind_file" 2>/dev/null)" != plain ]] && last_app=""
-if [[ -n "$reuse" && -z "$force$bundle" && $config == Debug && -n "$last_app" && -d "$last_app" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]]; then
+if [[ -n "$reuse" && -z "$force" && $variant == Debug && -n "$last_app" && -d "$last_app" && -f "$stamp_file" && "$(cat "$stamp_file")" == "$stamp" ]]; then
   echo "JS-only: Metro reloads it; no build needed (no native file changed since $last_app was built; --force builds anyway)"
   echo "app: $last_app"
   exit 0
 fi
+rm -f "$stamp_file" "$app_file" "$kind_file"
 
 record() {
-  rm -f "$stamp_file" "$app_file" "$kind_file"
+  [[ $variant == Debug && -n "$1" ]] || return 0
   echo "$2" >"$app_file"
   echo "$3" >"$kind_file"
-  [[ -n "$1" ]] && echo "$1" >"$stamp_file"
+  echo "$1" >"$stamp_file"
 }
 
 start=$(date +%s)
 if [[ -n "$reuse" && -z "$force" && $mode != plain ]]; then
-  restore_args=(restore --repo "$repo" --stamp "$stamp" --config "$config" --out "$prebuilt_out" --signing "$signing")
+  restore_args=(restore --repo "$repo" --stamp "$stamp" --config "$config" --out "$prebuilt_out")
   [[ -n "$bundle" ]] && restore_args+=(--bundle)
   restored=$("$cache_tool" "${restore_args[@]}" 2>"$log.restore")
   status=$?
@@ -163,8 +176,9 @@ d = {k: v for k, v in d.items() if not k.startswith("com.apple.developer.") and 
 data = plistlib.dumps(d)
 path = os.path.join(sys.argv[2], "adhoc-%s.entitlements" % hashlib.sha256(data).hexdigest()[:12])
 if not os.path.exists(path):
-    open(path + ".tmp", "wb").write(data)
-    os.replace(path + ".tmp", path)
+    tmp = "%s.tmp-%d" % (path, os.getpid())
+    open(tmp, "wb").write(data)
+    os.replace(tmp, path)
 print(path)
 ' "$app_dir/macos/Ardia-macOS/Ardia.entitlements" "$signing_dir") || { echo "build-app: couldn't write the ad hoc entitlements" >&2; exit 1; }
   settings=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= ENABLE_HARDENED_RUNTIME=NO
@@ -177,7 +191,6 @@ if [[ $mode == auto ]]; then
 fi
 
 slot="" built_stamp=$stamp
-rm -f "$stamp_file" "$app_file" "$kind_file"
 if [[ $mode == plain ]]; then
   echo "build-app: $config into ${dd#"$repo"/} (log: ${log#"$repo"/})"
   (
@@ -189,15 +202,9 @@ if [[ $mode == plain ]]; then
   ) >"$log" 2>&1
   status=$?
   app="$dd/Build/Products/$config/Ardia.app"
-  if [[ $status -eq 0 && -n "$built_stamp" ]]; then
-    after=$("$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" 2>/dev/null)
-    if [[ "$after" != "$built_stamp" ]]; then
-      echo "build-app: not recorded: the native files or the engine changed during the build"
-      built_stamp=""
-    elif ! "$cache_tool" verify-engine --app "$app" --framework "$ARDIACORE_FRAMEWORK"; then
-      echo "build-app: not recorded: the engine embedded in the app isn't the one hashed"
-      built_stamp=""
-    fi
+  if [[ $status -eq 0 && -n "$built_stamp" && "$(stamp_now)" != "$built_stamp" ]]; then
+    echo "build-app: not recorded: the native files changed during the build"
+    built_stamp=""
   fi
   if [[ $status -eq 0 && -n "$bundle" ]]; then
     app=$("$cache_tool" finish --repo "$repo" --app "$app" --config "$config" --out "$prebuilt_out" --bundle 2>>"$log") || status=1
@@ -208,7 +215,6 @@ else
   while IFS= read -r line; do candidates+=("$line"); done < <("$cache_tool" slots --repo "$repo")
   slot_args=(--signing "$signing" --framework "$ARDIACORE_FRAMEWORK")
   [[ -n "$bundle" ]] && slot_args+=(--bundle)
-  [[ -n "$force" ]] && slot_args+=(--replace)
   status=75 reserved=""
   i=0
   while :; do
@@ -248,10 +254,6 @@ else
   app="$prebuilt_out/Ardia.app"
   built_stamp=$(sed -n 's/^build-cache: stamp \([0-9a-f]\{32\}\).*/\1/p' "$log" | tail -1)
   grep -q '^build-cache: not cached' "$log" && echo "$(grep -m1 '^build-cache: not cached' "$log" | sed 's/^build-cache: //')"
-  if grep -q '^build-cache: not recorded' "$log"; then
-    grep -m1 '^build-cache: not recorded' "$log" | sed 's/^build-cache: //'
-    built_stamp=""
-  fi
   synced=$(grep '^build-cache: synced' "$log" | tail -1 | sed -E 's/.*: ([0-9]+) written, ([0-9]+) removed.*/\1 files written, \2 removed/')
   echo "slot: $slot${synced:+ ($synced)}"
 fi
