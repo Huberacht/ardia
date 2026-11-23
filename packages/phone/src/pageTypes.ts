@@ -127,9 +127,9 @@ export type PageRequestAnswer =
   | { type: "takePhoto" }
   | { type: "recordVideo" };
 
-export type PageSummaryTrigger = "pinch" | "menu";
+type PageSummaryTrigger = "pinch" | "menu";
 
-export type PageSummaryOutcome = "chatgpt" | "on_device" | "excerpts" | "failed";
+type PageSummaryOutcome = "chatgpt" | "on_device" | "excerpts" | "failed";
 
 export type PageSummaryProvider = "on_device" | "chatgpt";
 
@@ -209,7 +209,8 @@ export type PageEngineEvent =
   | { name: "page.scrollSettled"; pageId: string; y: number }
   | { name: "page.externalAppMissing"; pageId: string; url: string }
   | { name: "page.desktop"; pageId: string; line: string }
-  | { name: "pages.privateSessionEnded" };
+  | { name: "pages.privateSessionEnded" }
+  | { name: "pages.webVideo"; outcome: "floated" | "keptPlaying"; isPrivate: boolean };
 
 export type PageEventPayload =
   | ({ name: "state" } & Partial<Omit<PageState, "url" | "title" | "progress" | "isLoading" | "canGoBack" | "canGoForward">> &

@@ -42,6 +42,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["color_choice"],
       },
       {
+        text: "With each launch, the best glass this phone can draw, not what each surface drew: the Liquid Glass lens, frosted glass or no blur on Android, the system’s own glass, Classic, or none in Material You",
+        fields: ["glass_render"],
+      },
+      {
         text: "On Android, with each launch, whether the Material You design was off, and with it on, whether Dynamic Colors used your wallpaper, Ardia used your custom color, or the phone gave no wallpaper palette and Ardia used its own",
         fields: ["material_colors"],
       },
@@ -106,12 +110,32 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["tab_writes_stalled", "search_opens_cold"],
       },
       {
+        text: "In the same daily counts, on Android with Material You: how often the tab switcher offered its Archive suggestion again when you came back from your Incognito tabs. Counts only",
+        fields: ["archive_card_reoffers"],
+      },
+      {
         text: "In the same daily counts, on iPhone: how often a tab you swiped to kept its saved picture until a time limit instead of handing over to the page the moment it drew. Counts only, and never while browsing privately",
         fields: ["page_covers_capped"],
       },
       {
         text: "In the same daily counts: how often you chose Custom in Settings › Appearance, and how many changes you made on its Theme page. Counts only, never the colors or settings you picked",
         fields: ["custom_theme_chosen", "theme_edits"],
+      },
+      {
+        text: "In the same daily counts, on Android: how often the phone refused to draw the Liquid Glass lens or its rim light, so the glass fell back to plain frost. Counts only",
+        fields: ["glass_shaders_failed"],
+      },
+      {
+        text: "In the same daily counts, on iPhone: how often you opened one of the Settings panes, such as General or Tabs. Counts only, never which pane or what you changed",
+        fields: ["settings_panes_opened"],
+      },
+      {
+        text: "In the same daily counts, on Android: how many actions you chose in menus Ardia draws, never which action or while browsing privately",
+        fields: ["drawn_menu_actions_chosen"],
+      },
+      {
+        text: "In the same daily counts, on iPhone: how often you left Ardia while a web video was in Picture in Picture or full screen, and how often it was still playing 5 seconds later with Ardia in the background. Counts only, never which video or page, and never while browsing privately",
+        fields: ["web_videos_floated", "web_videos_kept_playing"],
       },
       {
         text: "In the same daily counts, on Android: how often you tapped the Ardia logo on the start page to search. Counts only, and never while browsing privately",

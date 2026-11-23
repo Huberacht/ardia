@@ -1,7 +1,7 @@
 export const CLI_HOLD_DEFAULT_S = 120;
 export const CLI_HOLD_MAX_S = 300;
 export const CLI_HOLD_MAX_TABS = 32;
-export const CLI_HOLD_MAX_SESSIONS = 4;
+const CLI_HOLD_MAX_SESSIONS = 4;
 
 type Lease = { tabs: ReadonlySet<string>; until: number; ends: ReturnType<typeof setTimeout> };
 
@@ -41,7 +41,7 @@ function endWhenDue(session: string) {
   else if (drop(session)) changed();
 }
 
-export type HoldOutcome = { started: string[] } | { refused: string };
+type HoldOutcome = { started: string[] } | { refused: string };
 
 export function holdForCli(session: string, tabIds: readonly string[], seconds = CLI_HOLD_DEFAULT_S): HoldOutcome {
   const now = clock();
@@ -73,6 +73,16 @@ export function heldByCli(tabId: string): boolean {
 export function tabsHeldByCli(): string[] {
   const now = clock();
   return [...new Set([...leases.values()].flatMap((lease) => (lease.until > now ? [...lease.tabs] : [])))];
+}
+
+export function cliHoldsLeft(wallNow = Date.now()): { tabId: string; until: number }[] {
+  const now = clock();
+  const left = new Map<string, number>();
+  for (const lease of leases.values()) {
+    if (lease.until <= now) continue;
+    for (const tabId of lease.tabs) left.set(tabId, Math.max(left.get(tabId) ?? 0, lease.until - now));
+  }
+  return [...left].map(([tabId, ms]) => ({ tabId, until: wallNow + ms }));
 }
 
 export function releaseAllCliHolds(): void {

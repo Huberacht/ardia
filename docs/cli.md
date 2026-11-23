@@ -59,7 +59,9 @@ On Linux, Settings › Advanced › Command line installs it from the package (`
 older data folders it means what it always did; Linux keeps its switch in Settings › Advanced. While it is on, `ardia`
 reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
 - **The control socket** (`ArdiaControl.sock`, mode 0600) carries the owner's methods. It has no token: the server
-  only checks that the peer runs as the same user (`getpeereid`), so every process of that user is admitted.
+  checks that the peer runs as the same user (`getpeereid`) and, on macOS, who the program is: a hardened program
+  signed with Ardia's Team ID (the bundled `ardia` and anything else Ardia ships) gets in at once, and any other
+  program waits for you to allow it in the doorbell Ardia shows (`docs/automation.md` › Who the program is). Linux and test instances admit every process of the user.
 - **The engine's token connection** carries `ardia browse`. It listens on loopback with a token written to
   `ArdiaControl.json`, which the user's own processes can read. It is a full DevTools client of the browser, the same
   as a `--remote-debugging-port` client (the owner's decision, #2807): every CDP domain and method, every target
@@ -68,9 +70,24 @@ reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
   (`Browser.setDownloadBehavior`), emulation on any tab, cookies, storage, request interception, screencasts and the
   debugger all work. Events and replies pass through unchanged.
 
+  The control socket's `control.devtoolsEndpoint` hands out the port and token, only to programs the socket admitted
+  (the doorbell's rule, `docs/control-socket.md` › The DevTools token). The command doesn't use it yet. Next it will,
+  falling back to `ArdiaControl.json` only on an `unknown_method` reply to that request; after that the engine stops
+  writing the token into the file, so the file no longer lets a program skip the doorbell.
+
   What still guards it is what keeps other users and web pages off the connection, not what a process running as
-  you may do: the token (32 random bytes per start, compared in constant time, only in the 0600 `ArdiaControl.json`),
-  loopback only, no `Origin` header (so no web page can open the socket), and the `RemoteDebuggingAllowed` policy. The
+  you may do: the token (32 random bytes per start, compared in constant time, kept in the 0600 `ArdiaControl.json` and handed by
+  the control socket's `control.devtoolsEndpoint` to programs it admitted, which keep it until the token connection
+  restarts),
+  loopback only, and nothing a browser sends: a request with an `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Dest` header, or
+  a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, is refused before the token is read. So no web page,
+  extension page, service worker or DNS-rebound name in a browser that sends Fetch Metadata (Chromium, Firefox 90 and
+  later, Safari 16.4 and later) can open the socket or ask `/ardia/active`, even holding the token; a top-level GET from
+  an older Safari still needs the token and can't read the answer. Then the `RemoteDebuggingAllowed` policy, and a data
+  folder only you can write to: the engine opens the folder once, checks it belongs to you, that no one else can write
+  to it, that no macOS access list lets anyone else in, that its disk doesn't ignore ownership, and on Linux that it isn't a mount that skips permission checks for other users (FUSE `allow_other` without `default_permissions`, SMB `noperm`), and creates, checks
+  (0600, owned by you, any inherited macOS ACL removed) and renames the file through that same open folder, so a folder
+  swapped meanwhile is never written to. The
   engine also keeps its bookkeeping: a command must be a JSON object with an integer `id` and a string `method`
   (`params`, if present, an object; `sessionId` naming a session this connection attached), one command per
   (session, id) until its reply, and at most 4096 waiting replies before the connection is closed. Showing a saved

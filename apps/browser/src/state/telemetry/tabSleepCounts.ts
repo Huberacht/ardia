@@ -1,10 +1,11 @@
+import { takeBusyTabCounts } from "./busyTabCounts";
 import { takeCleanUpCounts } from "./cleanUpCounts";
 import type { ConsentToken } from "./choice";
 import { consentOrNow, countFor } from "./countFor";
 import type { KeptAwakeReason } from "../tabs/sleepRefusals";
 import type { MemoryPressure, SleepVeto } from "../tabs/sleepPolicy";
 
-const none = () => ({ captureIndicatorsCleared: 0, mediaCardsCleared: 0, pinnedTabsSleptByMemorySaver: 0, tabsSleptOverBudget: 0, tabsSleptOverBudgetReopened: 0, tabsOverBudgetSkippedLoading: 0, tabsOverBudgetAsksPassedOn: 0, topAppsKeptRunning: 0, topAppWindowsClosedFromNewTab: 0, topAppsUnloadedFromMenu: 0, tabsSleptFromMenu: 0, groupsSleptFromMenu: 0, menuSleepsKeptAwake: 0, menuSleepsPastAutomatic: 0, menuSleepKeptReason: null as KeptAwakeReason | null, sleepVetoes: {} as Partial<Record<SleepVeto, number>>, cliTabsHeld: 0, profilesKeptForCli: 0, tabsSleptUnderWarning: 0, tabsSleptUnderCritical: 0, memoryWarnings: 0, memoryCriticals: 0 });
+const none = () => ({ captureIndicatorsCleared: 0, mediaCardsCleared: 0, pinnedTabsSleptByMemorySaver: 0, tabsSleptOverBudget: 0, tabsSleptOverBudgetReopened: 0, tabsOverBudgetSkippedLoading: 0, tabsOverBudgetAsksPassedOn: 0, topAppsKeptRunning: 0, topAppWindowsClosedFromNewTab: 0, topAppsUnloadedFromMenu: 0, tabsSleptFromMenu: 0, groupsSleptFromMenu: 0, menuSleepsKeptAwake: 0, menuSleepsPastAutomatic: 0, menuSleepKeptReason: null as KeptAwakeReason | null, closesWokeSleepingTab: 0, sleepVetoes: {} as Partial<Record<SleepVeto, number>>, cliTabsHeld: 0, profilesKeptForCli: 0, chromeDiscardsKeptForCli: 0, tabsSleptUnderWarning: 0, tabsSleptUnderCritical: 0, memoryWarnings: 0, memoryCriticals: 0 });
 
 let pending = none();
 
@@ -18,6 +19,10 @@ export function noteMediaCardCleared() {
 
 export function noteTabSlept(pinned: boolean, reason: string | null) {
   if (pinned && reason === "proactive") pending.pinnedTabsSleptByMemorySaver++;
+}
+
+export function noteCloseWokeSleepingTab(consent?: ConsentToken | null) {
+  countFor(consentOrNow(consent), () => void pending.closesWokeSleepingTab++);
 }
 
 export function noteTabSleptOverBudget(consent?: ConsentToken | null, pressure: MemoryPressure = "normal") {
@@ -43,6 +48,10 @@ export function noteProfileKeptForCli(consent?: ConsentToken | null) {
   countFor(consentOrNow(consent), () => void pending.profilesKeptForCli++);
 }
 
+export function noteChromeDiscardsKeptForCli(tabs: number, consent?: ConsentToken | null) {
+  if (tabs > 0) countFor(consentOrNow(consent), () => void (pending.chromeDiscardsKeptForCli += tabs));
+}
+
 export function noteCliTabsHeld(tabs: number, consent?: ConsentToken | null) {
   if (tabs > 0) countFor(consentOrNow(consent), () => void (pending.cliTabsHeld += tabs));
 }
@@ -57,6 +66,7 @@ const VETO_FIELDS: Partial<Record<SleepVeto, string>> = {
   typedInput: "sleep_kept_typed_input",
   postedDocument: "sleep_kept_posted_document",
   beforeUnload: "sleep_kept_before_unload",
+  download: "sleep_kept_download",
   other: "sleep_kept_other",
 };
 
@@ -134,6 +144,7 @@ export function takeTabSleepCounts() {
     ...(taken.menuSleepKeptReason ? { menu_sleep_kept_reason: taken.menuSleepKeptReason } : {}),
     ...takeProfileUnloadCounts(),
     ...takeCleanUpCounts(),
+    ...takeBusyTabCounts(),
     tabs_slept_over_budget: taken.tabsSleptOverBudget,
     tabs_slept_over_budget_reopened: taken.tabsSleptOverBudgetReopened,
     tabs_over_budget_skipped_loading: taken.tabsOverBudgetSkippedLoading,
@@ -141,9 +152,11 @@ export function takeTabSleepCounts() {
     ...vetoCounts(taken.sleepVetoes),
     cli_tabs_held: taken.cliTabsHeld,
     profiles_kept_for_cli: taken.profilesKeptForCli,
+    chrome_discards_kept_for_cli: taken.chromeDiscardsKeptForCli,
     tabs_slept_under_memory_warning: taken.tabsSleptUnderWarning,
     tabs_slept_under_memory_critical: taken.tabsSleptUnderCritical,
     memory_pressure_warnings: taken.memoryWarnings,
     memory_pressure_criticals: taken.memoryCriticals,
+    closes_woke_sleeping_tab: taken.closesWokeSleepingTab,
   };
 }
