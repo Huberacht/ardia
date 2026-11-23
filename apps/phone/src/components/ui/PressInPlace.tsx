@@ -102,6 +102,17 @@ export function PressInPlace({ label, hint, value, longPressLabel, actions, onPr
   );
 }
 
+export function GlyphPressFace({ testID, disabled = false, children }: { testID: string; disabled?: boolean; children: ReactNode }) {
+  const { held, touch } = usePressTouch(testID, disabled);
+  return (
+    <GestureDetector gesture={touch}>
+      <Animated.View testID="glyphPressFace" collapsable={false}>
+        <HeldDown.Provider value={held}>{children}</HeldDown.Provider>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
 export function PressedGlyph({ style, ...rest }: ComponentProps<typeof Animated.View>) {
   const held = useContext(HeldDown);
   const idle = useSharedValue(0);

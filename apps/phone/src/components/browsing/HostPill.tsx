@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { Platform, Pressable, StyleSheet, Text } from "react-native";
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { haptics } from "../../state/app/haptics";
 import { usePageBusy } from "../../state/page/hooks";
 import type { BrowserTab } from "../../state/tabs/tabModels";
@@ -69,18 +69,38 @@ export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
     };
     fold.value = reduceMotion ? withTiming(target, { duration: android ? 0 : tabsMotion.barCollapseReduced, easing: motionAliases.hostPillEase }, settled) : withSpring(target, tabsMotion.barCollapse, settled);
   }, [collapsed, reduceMotion]);
+  const [barGlassHanded, setBarGlassHanded] = useState(false);
+  if (!collapsed && barGlassHanded) setBarGlassHanded(false);
+  const handBarGlass = () => setBarGlassHanded(true);
+  useAnimatedReaction(
+    () => !android && fold.value >= BAR_GLASS_HANDOFF,
+    (past, was) => {
+      if (past && !was) runOnJS(handBarGlass)();
+    },
+  );
   const shrink = reduceMotion ? 1 : hostPillLayout.collapsedScale;
   const bar = useAnimatedStyle(() => {
     const scale = 1 + (shrink - 1) * fold.value;
-    return { opacity: 1 - fold.value, transform: [{ translateY: (floatingBarLayout.control / 2) * (1 - scale) }, { scale }] };
+    const move = { transform: [{ translateY: (floatingBarLayout.control / 2) * (1 - scale) }, { scale }] };
+    return android ? { opacity: 1 - fold.value, ...move } : move;
   }, [shrink]);
   const pill = useAnimatedStyle(() => {
     const scale = 1 / shrink + (1 - 1 / shrink) * fold.value;
     return { opacity: android ? fold.value : 1, transform: [{ translateY: (hostPillLayout.height / 2) * (1 - scale) }, { scale }] };
   }, [shrink]);
   const pillContent = useAnimatedStyle(() => ({ opacity: fold.value }));
-  return { bar, pill, pillContent, pillGlass: android || glass.mounted, progress: fold };
+  const barLook: BarFoldLook = { glass: android || !collapsed || !barGlassHanded, glyphsGone: android ? null : fold };
+  return { bar, barLook, pill, pillContent, pillGlass: android || glass.mounted, progress: fold };
 }
+
+export type BarFoldLook = { glass: boolean; glyphsGone: SharedValue<number> | null };
+
+export function useFoldGlyphs(fold: BarFoldLook | null) {
+  const gone = fold?.glyphsGone ?? null;
+  return useAnimatedStyle(() => (gone ? { opacity: 1 - Math.min(Math.max(gone.value, 0), 1) } : {}), [gone]);
+}
+
+const BAR_GLASS_HANDOFF = 0.5;
 
 const styles = StyleSheet.create({
   pill: { maxWidth: hostPillLayout.maxWidth, height: hostPillLayout.height },

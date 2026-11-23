@@ -12,6 +12,7 @@ import { countUsage } from "../../state/telemetry/telemetry";
 import { noteDeckBarTop, watchDeckBar } from "../../state/toasts/store";
 import { capsule, chromeLayout, ChromeSurface, controlSize, deckChromeLayout, FieldAccessory, font, iconRoles, iPhoneOr, PressInPlace, rolesFor, ToggleIconButton, tabsLayout, tabsMotion, useReduceMotion, useTheme, type MenuItem, SystemGlyph } from "../ui";
 import { MenuTrigger } from "../ui/MenuTrigger";
+import { PressedGlyph } from "../ui/PressInPlace";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
 import { deckLook } from "./deckLook";
 import { useKeyboardTopFromBottom } from "../search/useKeyboardHeight";
@@ -46,10 +47,13 @@ export function IncognitoSwitch({ incognito, dark, onLongPress, glassShown, glas
       longPressLabel={onLongPress ? incognitoWords.closeIncognitoTabs : undefined}
       onPressIn={haptics.barPress}
       visual={controlSize.bar}
+      dims="glyph"
     >
       <ChromeSurface testID="deckBarIncognito" shape="circle" cornerRadius={capsule(controlSize.bar)} incognito={incognito} dark={dark || incognito} shown={glassShown} shownMs={glassShownMs} style={[styles.centered, size]}>
         <FadingGlyphs testID="deckBarIncognitoGlyph" pointerEvents="none" fade={glyphFade} style={[styles.centered, size]}>
-          <IncognitoEyes incognito={incognito} size={deckChromeLayout.incognitoEyes} color={rolesFor(dark).label} />
+          <PressedGlyph>
+            <IncognitoEyes incognito={incognito} size={deckChromeLayout.incognitoEyes} color={rolesFor(dark).label} />
+          </PressedGlyph>
         </FadingGlyphs>
       </ChromeSurface>
     </ToggleIconButton>

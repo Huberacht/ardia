@@ -295,7 +295,7 @@ final class GlassView: ExpoView {
       applyShape()
       return
     }
-    let appearing = applied?.shown == false && shown
+    let turning = applied.map { $0.shown != shown } ?? false
     applied = (tint, interactive, classic, tinted, shown, colors)
     let surface = { [self] in
       if classic {
@@ -311,8 +311,8 @@ final class GlassView: ExpoView {
         effectView.effect = shown ? glass : nil
       }
     }
-    if appearing, window != nil, shownDuration > 0, !UIAccessibility.isReduceMotionEnabled {
-      UIView.animate(withDuration: shownDuration, delay: 0, options: [.curveEaseOut, .beginFromCurrentState], animations: surface)
+    if turning, window != nil, shownDuration > 0, !UIAccessibility.isReduceMotionEnabled {
+      UIView.animate(withDuration: shownDuration, delay: 0, options: [shown ? .curveEaseOut : .curveEaseIn, .beginFromCurrentState], animations: surface)
     } else {
       surface()
     }

@@ -76,6 +76,8 @@ const expectPill = (root: Root, shown: boolean) => {
   expect(moved(host(root, "hostPillFold")!).opacity).toBe(shown ? 1 : 0);
 };
 
+const barGlass = (root: Root, testID: string) => root.root.findAll((node) => node.props.testID === testID && node.props.shown !== undefined && typeof node.type !== "string")[0]!.props.shown !== false;
+
 const showToolbar = (root: Root) => root.root.findAll((node) => node.props.accessibilityLabel === "Show Toolbar" && typeof node.props.onPress === "function")[0];
 
 test("on iPhone's design, scrolling down with Collapse Bottom Bar on shrinks the bar into a 30 point pill with the page's host, centred on the bar's bottom", () => {
@@ -89,7 +91,9 @@ test("on iPhone's design, scrolling down with Collapse Bottom Bar on shrinks the
   expect(StyleSheet.flatten(host(root, "hostPillFold")!.props.style)).toMatchObject({ bottom: 0, height: 30, alignItems: "center" });
   expect(moved(host(root, "hostPillFold")!)).toEqual({ opacity: 1, translateY: 0, scale: 1 });
   const bar = moved(host(root, "floatingBarFold")!);
-  expect(bar.opacity).toBe(0);
+  expect(bar.opacity).toBe(android ? 0 : 1);
+  expect(moved(host(root, "floatingBarFoldGlyphs")!).opacity).toBe(android ? 1 : 0);
+  for (const id of ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"]) expect(barGlass(root, id)).toBe(android);
   expect(bar.scale).toBeCloseTo(0.62, 3);
   expect(bar.translateY).toBeCloseTo(24 * 0.38, 3);
   expect(host(root, "floatingBarFold")!.props.pointerEvents).toBe("none");
@@ -125,6 +129,8 @@ test("the pill reads Show Toolbar with the host as its value, and a tap on it br
   expect(moved(host(root, "floatingBarFold")!)).toEqual({ opacity: 1, translateY: 0, scale: 1 });
   expect(host(root, "floatingBarFold")!.props.pointerEvents).toBe("box-none");
   expectPill(root, false);
+  expect(moved(host(root, "floatingBarFoldGlyphs")!).opacity).toBe(1);
+  for (const id of ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"]) expect(barGlass(root, id)).toBe(true);
   scrolled("down");
   settle();
   expectPill(root, false);

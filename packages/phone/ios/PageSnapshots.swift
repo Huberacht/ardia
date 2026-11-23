@@ -3,6 +3,7 @@ import CryptoKit
 import ExpoModulesCore
 import Foundation
 import Observation
+import os
 import SwiftData
 import UIKit
 import WebKit
@@ -15,37 +16,59 @@ enum PageSnapshots {
     let image: UIImage
   }
 
-  static func write(_ pageID: String, image: UIImage, isPrivate: Bool, quality: Int, priority: TaskPriority = .userInitiated) async -> [String: Any]? {
-    let folder = isPrivate ? privateFolder : saved
-    let stem = fileStem(pageID)
+  struct Written: Sendable {
+    let path: String
+    let uri: String
+    let width: Int
+    let height: Int
+    let bytes: Int
+    let ticket: Int
+
+    var payload: [String: Any] {
+      ["path": path, "uri": uri, "width": width, "height": height, "route": "draw", "bytes": bytes, "generation": ticket]
+    }
+  }
+
+  private static let tickets = OSAllocatedUnfairLock<Int>(initialState: 0)
+
+  static func nextTicket() -> Int {
+    tickets.withLock { last in
+      last += 1
+      return last
+    }
+  }
+
+  static func write(_ pageID: String, image: UIImage, isPrivate: Bool, quality: Int, ticket: Int, priority: TaskPriority = .userInitiated) async -> [String: Any]? {
     let width = Int((image.size.width * image.scale).rounded())
     let height = Int((image.size.height * image.scale).rounded())
     let compression = CGFloat(min(max(quality, 1), 100)) / 100
     let held = HeldImage(image: image)
-    let stamp = Int(Date.now.timeIntervalSince1970 * 1000)
-    return await Task.detached(priority: priority) { () -> [String: Any]? in
-      guard let data = held.image.jpegData(compressionQuality: compression) else { return nil }
-      let manager = FileManager.default
-      guard (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
-      let target = folder.appending(path: "\(stem)-\(stamp).jpg")
-      guard (try? data.write(to: target, options: .atomic)) != nil else { return nil }
-      for old in older(in: folder, stem: stem) where old != target { try? manager.removeItem(at: old) }
-      return ["path": target.path(percentEncoded: false), "uri": target.absoluteString, "width": width, "height": height, "route": "draw", "bytes": data.count]
-    }.value
+    let encoded = await Task.detached(priority: priority) { held.image.jpegData(compressionQuality: compression) }.value
+    guard let encoded else { return nil }
+    let written = await SnapshotFiles.shared.publish(pageID, data: encoded, isPrivate: isPrivate, width: width, height: height, ticket: ticket)
+    return written?.payload
   }
 
   static func delete(_ pageID: String) {
-    let stem = fileStem(pageID)
-    for folder in [saved, privateFolder] {
-      for file in older(in: folder, stem: stem) { try? FileManager.default.removeItem(at: file) }
-    }
+    let ticket = nextTicket()
+    Task { await SnapshotFiles.shared.delete(pageID, ticket: ticket) }
   }
 
   static func endPrivateBrowsing() {
-    try? FileManager.default.removeItem(at: privateFolder)
+    let ticket = nextTicket()
+    Task { await SnapshotFiles.shared.endPrivateBrowsing(ticket: ticket) }
   }
 
-  private static func older(in folder: URL, stem: String) -> [URL] {
+  static func stamp(of file: URL, stem: String) -> Int {
+    let name = file.deletingPathExtension().lastPathComponent
+    return Int(name.dropFirst(stem.count + 1)) ?? 0
+  }
+
+  static func filesOf(_ pageID: String, in folder: URL) -> [URL] {
+    older(in: folder, stem: fileStem(pageID))
+  }
+
+  static func older(in folder: URL, stem: String) -> [URL] {
     let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
     return files.filter { $0.lastPathComponent.hasPrefix("\(stem)-") && $0.pathExtension == "jpg" }
   }
@@ -113,6 +136,44 @@ enum PageSnapshots {
   }
 }
 
+actor SnapshotFiles {
+  static let shared = SnapshotFiles()
+
+  private var newestTicket: [String: Int] = [:]
+  private var privateEndedAt = 0
+  private var lastStamp = 0
+
+  func publish(_ pageID: String, data: Data, isPrivate: Bool, width: Int, height: Int, ticket: Int) -> PageSnapshots.Written? {
+    guard ticket > (newestTicket[pageID] ?? 0) else { return nil }
+    guard !isPrivate || ticket > privateEndedAt else { return nil }
+    let folder = isPrivate ? PageSnapshots.privateFolder : PageSnapshots.saved
+    let stem = PageSnapshots.fileStem(pageID)
+    let manager = FileManager.default
+    guard (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
+    let stamp = max(Int(Date.now.timeIntervalSince1970 * 1000), lastStamp + 1)
+    lastStamp = stamp
+    let target = folder.appending(path: "\(stem)-\(stamp).jpg")
+    guard (try? data.write(to: target, options: .atomic)) != nil else { return nil }
+    newestTicket[pageID] = ticket
+    let others = PageSnapshots.older(in: folder, stem: stem).filter { $0 != target }
+    let previous = others.max { PageSnapshots.stamp(of: $0, stem: stem) < PageSnapshots.stamp(of: $1, stem: stem) }
+    for old in others where old != previous { try? manager.removeItem(at: old) }
+    return PageSnapshots.Written(path: target.path(percentEncoded: false), uri: target.absoluteString, width: width, height: height, bytes: data.count, ticket: ticket)
+  }
+
+  func delete(_ pageID: String, ticket: Int) {
+    newestTicket[pageID] = max(newestTicket[pageID] ?? 0, ticket)
+    for folder in [PageSnapshots.saved, PageSnapshots.privateFolder] {
+      for file in PageSnapshots.filesOf(pageID, in: folder) { try? FileManager.default.removeItem(at: file) }
+    }
+  }
+
+  func endPrivateBrowsing(ticket: Int) {
+    privateEndedAt = max(privateEndedAt, ticket)
+    try? FileManager.default.removeItem(at: PageSnapshots.privateFolder)
+  }
+}
+
 @MainActor
 enum OffscreenCapture {
   static let loadTimeout: Duration = .seconds(10)
@@ -142,7 +203,7 @@ enum OffscreenCapture {
     guard let image = try? await webView.takeSnapshot(configuration: snapshot) else { return nil }
     let theme = webView.themeColor.flatMap(hex)
     let title = webView.title
-    guard let written = await PageSnapshots.write(pageID, image: image, isPrivate: false, quality: 82) else { return nil }
+    guard let written = await PageSnapshots.write(pageID, image: image, isPrivate: false, quality: 82, ticket: PageSnapshots.nextTicket()) else { return nil }
     return ["fileName": written["uri"] ?? nil, "path": written["path"] ?? nil, "title": (title?.isEmpty == false) ? title : nil, "themeColorHex": theme]
   }
 

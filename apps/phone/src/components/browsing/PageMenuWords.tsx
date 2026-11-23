@@ -1,5 +1,5 @@
-import { Children, useState, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Children, useState, type ReactNode, type RefObject } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type ScrollViewInstance, type ScrollViewProps } from "react-native";
 import Animated, { FadeIn, FadeOut, LayoutAnimationConfig } from "react-native-reanimated";
 import { copy } from "../../lib/platformCopy";
 import { actionWords, blockingWords, destinationWords } from "../../lib/sharedWords";
@@ -68,10 +68,14 @@ function useActionColumns(labels: readonly string[]) {
   const estimated = width - pageMenuCards.padding * 2;
   const available = measured ?? estimated;
   const columns = actionColumns(labels, available, pageMenuCards.tileGap, { fontSize: font.caption.fontSize, fontScale, advance: pageMenuCards.captionAdvance, maxLines: pageMenuCards.captionLines });
-  return { columns, measure: (next: number) => setMeasured((now) => (Math.abs((now ?? estimated) - next) < 0.5 ? now : next)) };
+  return { columns, measure: (next: number) => (next > 0 ? setMeasured((now) => (Math.abs((now ?? estimated) - next) < 0.5 ? now : next)) : undefined) };
 }
 
-export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false }: { tabId: string; model: MenuModel; onTranslate: () => void; systemSheet?: boolean }) {
+function MenuScroll({ scrollRef, ...props }: ScrollViewProps & { scrollRef?: RefObject<ScrollViewInstance | null> }) {
+  return scrollRef ? <ScrollView ref={scrollRef} {...props} /> : <SheetScrollView {...props} />;
+}
+
+export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false, scrollRef }: { tabId: string; model: MenuModel; onTranslate: () => void; systemSheet?: boolean; scrollRef?: RefObject<ScrollViewInstance | null> }) {
   const large = useAccessibilityText();
   const devices = useSendTargets(tabId);
   const offersSummary = usePageSummariesEnabled() && canSummarizePages();
@@ -85,7 +89,7 @@ export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false }
   const { columns, measure } = useActionColumns(actions.map((action) => action.label));
   const square = columns === actions.length;
   return (
-    <SheetScrollView testID="pageMenuWords" style={styles.scroll} contentContainerStyle={[styles.column, large ? styles.largeBottom : null]} bounces={false}>
+    <MenuScroll scrollRef={scrollRef} testID="pageMenuWords" style={styles.scroll} contentContainerStyle={[styles.column, large ? styles.largeBottom : null]} bounces={false}>
       <NavigationBar tabId={tabId} model={model} large={large} />
       <View testID="pageMenuActions" style={styles.actionRows} onLayout={(event) => measure(event.nativeEvent.layout.width)}>
         {inRows(actions, columns).map((row, index) => (
@@ -121,7 +125,7 @@ export function PageMenuWords({ tabId, model, onTranslate, systemSheet = false }
           <Row icon="arrowUpForwardAppFill" title="Open in Default Browser" enabled onPress={openInDefaultBrowser} />
         </Group>
       ) : null}
-    </SheetScrollView>
+    </MenuScroll>
   );
 }
 

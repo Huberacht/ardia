@@ -68,28 +68,66 @@ export const setTabProfile = (profileSyncId: string | null) => {
   tabProfile = profileSyncId;
 };
 
-let pendingWrites: { db: SqlDatabase; tabs: Map<string, BrowserTab> } | null = null;
-let writeFlushQueued = false;
+type PendingWrites = { put: Map<string, BrowserTab>; remove: Set<string> };
 
-export function flushTabWrites() {
-  const held = pendingWrites;
-  pendingWrites = null;
-  if (held && held.tabs.size) writeTabs(held.db, [...held.tabs.values()].map(forTheDatabase), []);
+const pendingWrites = new Map<SqlDatabase, PendingWrites>();
+let flushQueued = false;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let failedFlushes = 0;
+
+const RETRY_FIRST_MS = 100;
+const RETRY_LONGEST_MS = 2_000;
+
+function stageWrites(db: SqlDatabase, put: readonly BrowserTab[], remove: readonly string[]) {
+  const batch = pendingWrites.get(db) ?? { put: new Map<string, BrowserTab>(), remove: new Set<string>() };
+  for (const id of remove) {
+    batch.put.delete(id);
+    batch.remove.add(id);
+  }
+  for (const tab of put) {
+    if (tab.isPrivate) continue;
+    batch.remove.delete(tab.id);
+    batch.put.set(tab.id, tab);
+  }
+  if (batch.put.size || batch.remove.size) pendingWrites.set(db, batch);
 }
+
+function retryFlushLater() {
+  if (retryTimer) return;
+  const wait = Math.min(RETRY_FIRST_MS * 2 ** failedFlushes, RETRY_LONGEST_MS);
+  failedFlushes += 1;
+  labTrace(`PAGELAB tab writes failed ${failedFlushes} times, kept and retried in ${wait} ms`);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    flushTabWrites();
+  }, wait);
+}
+
+export function flushTabWrites(): boolean {
+  let flushed = true;
+  for (const [db, batch] of [...pendingWrites]) {
+    try {
+      writeTabs(db, [...batch.put.values()].map(forTheDatabase), [...batch.remove]);
+      if (pendingWrites.get(db) === batch) pendingWrites.delete(db);
+    } catch {
+      flushed = false;
+    }
+  }
+  if (flushed) failedFlushes = 0;
+  else retryFlushLater();
+  return flushed;
+}
+
+export const tabWritesPending = () => pendingWrites.size > 0;
 
 const nextFrame = (run: () => void) => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : setTimeout(run, 0));
 
-function writeAfterFrame(db: SqlDatabase, put: readonly BrowserTab[]) {
-  const stored = put.filter((tab) => !tab.isPrivate);
-  if (!stored.length) return;
-  if (pendingWrites && pendingWrites.db !== db) flushTabWrites();
-  const pending = (pendingWrites ??= { db, tabs: new Map() });
-  for (const tab of stored) pending.tabs.set(tab.id, tab);
-  if (writeFlushQueued) return;
-  writeFlushQueued = true;
+function flushAfterFrame() {
+  if (flushQueued || !pendingWrites.size) return;
+  flushQueued = true;
   nextFrame(() =>
     setTimeout(() => {
-      writeFlushQueued = false;
+      flushQueued = false;
       flushTabWrites();
     }, 0),
   );
@@ -97,18 +135,19 @@ function writeAfterFrame(db: SqlDatabase, put: readonly BrowserTab[]) {
 
 type WriteTiming = "now" | "afterFrame";
 
+const METADATA_ONLY: ReadonlySet<keyof TabPatch> = new Set<keyof TabPatch>(["title", "faviconUrl", "themeColorHex", "snapshotFileName"]);
+
+const patchTiming = (patch: TabPatch): WriteTiming => ((Object.keys(patch) as (keyof TabPatch)[]).every((key) => patch[key] === undefined || METADATA_ONLY.has(key)) ? "afterFrame" : "now");
+
 function apply(change: TabsChange, timing: WriteTiming = "now") {
   const db = tabDatabase();
   const hadPrivate = useTabs.getState().privates.length > 0;
   const listed = change.put.some((t) => !t.isPrivate) || change.remove.length > 0;
   useTabs.setState((s) => ({ ...change.data, listing: listed ? s.listing + 1 : s.listing }));
   forgetPictures(change.remove);
-  const deferred = timing === "afterFrame" && change.remove.length === 0 && !change.clearArchived;
-  if (deferred) writeAfterFrame(db, change.put);
-  else {
-    flushTabWrites();
-    writeTabs(db, change.put.map(forTheDatabase), change.remove);
-  }
+  stageWrites(db, change.put, change.remove);
+  if (timing === "afterFrame" && change.remove.length === 0 && !change.clearArchived) flushAfterFrame();
+  else flushTabWrites();
   const cleared = change.clearArchived ? deleteArchivedTabs(db) : [];
   const archived = new Set(change.put.filter((t) => t.archivedAt !== null && !t.isPrivate).map((t) => t.id));
   endPages(change.endedPages.filter((id) => !archived.has(id)));
@@ -204,11 +243,13 @@ export function reopenClosedTab(): BrowserTab | null {
   return reopened.find((t) => t.id === change.data.selectedId) ?? reopened[reopened.length - 1] ?? null;
 }
 
-export const updateTabById = (id: string, patch: TabPatch) => apply(updateTab(data(), id, patch), "afterFrame");
+export const updateTabById = (id: string, patch: TabPatch) => apply(updateTab(data(), id, patch), patchTiming(patch));
 
 export function rewriteTab(id: string) {
   const tab = findTab(data(), id);
-  if (tab) writeAfterFrame(tabDatabase(), [tab]);
+  if (!tab) return;
+  stageWrites(tabDatabase(), [tab], []);
+  flushAfterFrame();
 }
 
 export const archiveDueTabs = () => apply(runAutoArchive(data(), currentPreferences().autoArchiveInterval, now()));

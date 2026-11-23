@@ -3,7 +3,8 @@ import type { ImportOutcome } from "../legacy/importer";
 import { importOldApp, startWithoutOldApp } from "../legacy/upgrade";
 import { keepWaitingLinks, listenForLinks } from "../links/links";
 import { readPreferences, writePreference } from "../store/browserDatabase";
-import { browserDatabase, browserDatabaseIsDurable } from "../store/database";
+import { browserDatabase, browserDatabaseIsDurable, relaxBrowserDatabase } from "../store/database";
+import { nativeImportState, type NativeImportState } from "../../platform/legacy";
 import { useBoot } from "./bootState";
 import { launchArguments } from "./launchFlags";
 
@@ -12,13 +13,13 @@ export { useBoot };
 let begin: (() => void) | null = null;
 
 const SETTLED_IMPORT_KEY = "legacy.settled";
-const SETTLED_OUTCOMES: readonly ImportOutcome[] = ["none", "imported", "startedFresh"];
+const COMPLETED_OUTCOMES: readonly ImportOutcome[] = ["imported", "startedFresh"];
 
-function importSettledBefore(): ImportOutcome | null {
+function completedImportBefore(): ImportOutcome | null {
   try {
     if (!browserDatabaseIsDurable()) return null;
     const stored = readPreferences(browserDatabase())[SETTLED_IMPORT_KEY];
-    return SETTLED_OUTCOMES.find((outcome) => outcome === stored) ?? null;
+    return COMPLETED_OUTCOMES.find((outcome) => outcome === stored) ?? null;
   } catch {
     return null;
   }
@@ -26,10 +27,19 @@ function importSettledBefore(): ImportOutcome | null {
 
 function rememberImportSettled(outcome: ImportOutcome) {
   try {
-    if (browserDatabaseIsDurable()) writePreference(browserDatabase(), SETTLED_IMPORT_KEY, outcome);
+    if (!browserDatabaseIsDurable()) return;
+    if (COMPLETED_OUTCOMES.includes(outcome)) writePreference(browserDatabase(), SETTLED_IMPORT_KEY, outcome);
+    relaxBrowserDatabase();
   } catch {
     return;
   }
+}
+
+export function settledWithoutWaiting(native: NativeImportState, completed: ImportOutcome | null): ImportOutcome | null {
+  if (native === "none" || native === "imported") return native;
+  if (native === "startedFresh") return completed === "startedFresh" ? "startedFresh" : null;
+  if (native === "unknown") return completed;
+  return null;
 }
 
 export function bootApp(start: () => void) {
@@ -40,7 +50,7 @@ export function bootApp(start: () => void) {
     finish("none");
     return;
   }
-  const settled = importSettledBefore();
+  const settled = settledWithoutWaiting(nativeImportState(), completedImportBefore());
   if (settled) finish(settled);
   else void attempt();
 }

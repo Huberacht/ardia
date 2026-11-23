@@ -255,6 +255,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     showsPlus={staged || !searching}
                     anchors={!folds || !collapse.collapsed}
                     duo={duoBar}
+                    fold={folds ? collapse.fold.barLook : null}
                     onTabs={showDeck}
                     onTabsMenu={openTabsMenu}
                     onStep={stepTab}

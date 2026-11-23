@@ -26,6 +26,7 @@ import {
   sendCurrentTab,
   openSiteSettings,
   openSiteSettingsRoute,
+  pageMenuDismissed,
   pageMenuHidden,
   setBlockersOn,
   setDesktopSite,
@@ -74,7 +75,7 @@ export function PageMenu(props: PageMenuProps) {
 
 function hideSystemPageMenu(onHidden: () => void) {
   onHidden();
-  pageMenuHidden();
+  pageMenuDismissed();
 }
 
 function DrawnPageMenu({ tabId, open, onHidden }: PageMenuProps) {

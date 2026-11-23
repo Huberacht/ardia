@@ -266,6 +266,7 @@ final class PhonePages {
     let page = try require(pageID)
     guard let webView = page.webView, !webView.bounds.isEmpty else { return nil }
     guard PageSnapshots.isOnScreen(webView) else { return ["refused": "hidden"] }
+    let ticket = PageSnapshots.nextTicket()
     let generation = visuals.generation(pageID)
     let hostBounds = webView.superview?.bounds ?? webView.bounds
     let pageFrame = Self.restingFrame(of: webView)
@@ -297,7 +298,8 @@ final class PhonePages {
       route = "engine"
     }
     let image = margined ? Self.withSideMargins(shot, page: pageFrame, screen: hostBounds.size, color: page.underPageBackgroundColor ?? webView.underPageBackgroundColor ?? .black) : shot
-    guard var written = await PageSnapshots.write(pageID, image: image, isPrivate: page.isPrivate, quality: quality ?? 82, priority: quiet ? .utility : .userInitiated) else { return nil }
+    guard tabIDs[pageID] == page.id, !quiet || visuals.generation(pageID) == generation else { return nil }
+    guard var written = await PageSnapshots.write(pageID, image: image, isPrivate: page.isPrivate, quality: quality ?? 82, ticket: ticket, priority: quiet ? .utility : .userInitiated) else { return nil }
     if tabIDs[pageID] == page.id { visuals.captured(pageID, generation: generation) }
     written["route"] = route
     return written

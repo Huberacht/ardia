@@ -12,7 +12,7 @@ import { designFor } from "../../lib/design";
 import { Platform } from "react-native";
 import { listenToPages, openPageInBackground, pageHandle, pageIsFullscreen, pageRequest, settled, storeFind, storeFullscreen, storeRequest, usePages } from "../pages/store";
 import { closeTabById, currentTabs, openNewTab, useTabs } from "../tabs/store";
-import { isSyncableUrl } from "../tabs/tabModels";
+import { isSyncableUrl, type BrowserTab } from "../tabs/tabModels";
 import { findTab } from "../tabs/tabsState";
 import { blockersToast, searchQuery, translationUrl, type NightShadeMode } from "./pageMenu";
 import { backLayer, downloadedToast, downloadFailedToast, downloadingToast, pressPlan, stoppedPrivateDownloadsToast, type PressAction, type Request } from "./pagePrompts";
@@ -23,6 +23,7 @@ import { pinToMac, sendTab } from "../sync/actions";
 import type { SyncedDevice } from "../../platform/sync";
 import { linkToCopy } from "./linkCopy";
 import { pageUi, usePageUi, type MenuSite, type MenuTranslation, type Press } from "./store";
+import { endMenuTiming, markMenuPhase, markMenuPressed } from "./menuTiming";
 import { closeVoiceSearch, useVoice } from "../voice/store";
 import { addOnlineAgainListener } from "../../platform/network";
 import { countUsage } from "../telemetry/telemetry";
@@ -49,7 +50,12 @@ const selectedTab = () => {
 };
 const hostOf = (url: string | null) => (url ? display(url).host || null : null);
 
-let afterMenuHidden: (() => void) | null = null;
+type MenuOpening = { id: number; tabId: string; host: string | null; isPrivate: boolean };
+type AfterMenu = { opening: number; tabId: string; run: () => void };
+
+let openings = 0;
+let opening: MenuOpening | null = null;
+let afterMenu: AfterMenu | null = null;
 
 const knownSites = new Map<string, MenuSite>();
 let preparedSite: string | null = null;
@@ -57,6 +63,7 @@ let preparedSite: string | null = null;
 const sameSite = (a: MenuSite | null, b: MenuSite) => a !== null && a.host === b.host && a.nightShade === b.nightShade && a.blockersEnabled === b.blockersEnabled;
 const sameTranslation = (a: MenuTranslation | null, b: MenuTranslation) => a !== null && a.languageName === b.languageName && a.confirmed === b.confirmed;
 const sameLevels = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((level, index) => level === b[index]);
+const tabUrl = (tab: BrowserTab) => usePages.getState().navigation[tab.id]?.url ?? tab.url;
 
 async function readMenuSite(url: string, host: string | null, isPrivate: boolean): Promise<MenuSite> {
   const [shade, blockers] = await Promise.all([settled(() => pages.nightShade(host, isPrivate), null), settled(() => blocking.isEnabledForSite(url, isPrivate), true)]);
@@ -69,6 +76,11 @@ const rememberSite = (site: MenuSite, isPrivate: boolean) => {
   if (!isPrivate && site.host) knownSites.set(site.host, site);
 };
 
+function showsHost(tabId: string, host: string | null) {
+  const tab = selectedTab();
+  return tab !== null && tab.id === tabId && hostOf(tabUrl(tab)) === host;
+}
+
 export function preparePageMenu() {
   const tab = selectedTab();
   if (!tab || tab.isPrivate) return;
@@ -78,7 +90,10 @@ export function preparePageMenu() {
   const host = hostOf(url);
   if (!host || preparedSite === host) return;
   preparedSite = host;
-  quietly(() => readMenuSite(url, host, false));
+  quietly(async () => {
+    const site = await readMenuSite(url, host, false);
+    if (!pageUi().menuOpen && showsHost(tab.id, host) && !sameSite(pageUi().menuSite, site)) usePageUi.setState({ menuSite: site });
+  });
 }
 
 export const openPageMenu = () => showPageMenu(false);
@@ -86,11 +101,17 @@ export const openPageMenu = () => showPageMenu(false);
 async function showPageMenu(menuDocked: boolean) {
   const tab = selectedTab();
   if (!tab) return;
-  afterMenuHidden = null;
-  const url = usePages.getState().navigation[tab.id]?.url ?? tab.url;
+  markMenuPressed();
+  afterMenu = null;
+  const url = tabUrl(tab);
   const host = hostOf(url);
+  const thisOpening: MenuOpening = { id: ++openings, tabId: tab.id, host, isPrivate: tab.isPrivate };
+  opening = thisOpening;
+  const shown = pageUi().menuSite;
   const known = tab.isPrivate || !host ? null : (knownSites.get(host) ?? null);
-  usePageUi.setState({ menuOpen: true, menuPage: "main", menuDocked, titleFeedback: null, menuSite: known });
+  const startSite = known && sameSite(shown, known) ? shown : known;
+  usePageUi.setState({ menuOpen: true, menuPage: "main", menuDocked, titleFeedback: null, menuSite: startSite });
+  markMenuPhase("open");
   if (menuDocked && !tab.isPrivate) countUsage("site_settings_sheet_opened");
   const [site, capabilities, translation] = await Promise.all([
     readMenuSite(url, host, tab.isPrivate),
@@ -98,32 +119,50 @@ async function showPageMenu(menuDocked: boolean) {
     settled(() => pages.translation(), null),
   ]);
   if (!tab.isPrivate) preparedSite = host;
-  if (materialDesign() && selectedId() !== tab.id) return;
+  if (opening !== thisOpening || !showsHost(tab.id, host)) return;
   const ui = pageUi();
   const levels = capabilities?.pageZoomLevels;
   usePageUi.setState({
-    menuSite: ui.menuSite !== known || sameSite(ui.menuSite, site) ? ui.menuSite : site,
+    menuSite: ui.menuSite !== startSite || sameSite(ui.menuSite, site) ? ui.menuSite : site,
     menuTranslation: translation && !sameTranslation(ui.menuTranslation, translation) ? { languageName: translation.languageName, confirmed: translation.confirmed } : ui.menuTranslation,
     zoomLevels: levels && !sameLevels(levels, ui.zoomLevels) ? levels : ui.zoomLevels,
   });
 }
 
+function menuSiteTarget() {
+  const now = opening;
+  const site = pageUi().menuSite;
+  const tab = selectedTab();
+  if (!now || !site?.host || !tab || tab.id !== now.tabId || site.host !== now.host || !showsHost(tab.id, site.host)) return null;
+  return { tab, site, host: site.host, url: tabUrl(tab) };
+}
+
 export const closePageMenu = () => usePageUi.setState({ menuOpen: false });
 
 export function pageMenuHidden() {
-  const run = afterMenuHidden;
-  afterMenuHidden = null;
-  run?.();
+  const pending = afterMenu;
+  afterMenu = null;
+  if (!pending || pageUi().menuOpen || opening?.id !== pending.opening || selectedId() !== pending.tabId) return;
+  pending.run();
 }
 
+export const pageMenuHostGone = pageMenuHidden;
+
 function afterPageMenu(run: () => void) {
-  if (!pageUi().menuOpen) {
-    afterMenuHidden = null;
+  const tabId = selectedId();
+  if (!pageUi().menuOpen || !opening || tabId === null) {
+    afterMenu = null;
     run();
     return;
   }
-  afterMenuHidden = run;
+  afterMenu = { opening: opening.id, tabId, run };
   closePageMenu();
+}
+
+export function pageMenuDismissed() {
+  pageMenuHidden();
+  endMenuTiming();
+  if (!pageUi().menuOpen && pageUi().menuPage === "library") usePageUi.setState({ menuPage: "main" });
 }
 
 export function openLibraryInMenu(section: LibrarySection) {
@@ -134,9 +173,12 @@ export function openLibraryInMenu(section: LibrarySection) {
 export const shareOverPageMenu = () => {
   const tab = selectedTab();
   if (!tab || !isSyncableUrl(tab.url)) return;
+  const sharedFrom = opening;
   void shareLink(tab.url, tab.title)
     .catch(() => undefined)
-    .finally(closePageMenu);
+    .finally(() => {
+      if (opening === sharedFrom) closePageMenu();
+    });
 };
 
 export function canPrintPages(): boolean {
@@ -270,11 +312,9 @@ function beginPageSearch(arrival: "rises" | "dockedMenu") {
 }
 
 function afterDockedMenu(run: () => void) {
-  const tabId = selectedId();
-  closePageMenu();
-  afterMenuHidden = () => {
-    if (tabId !== null && selectedId() === tabId && useBrowse.getState().surface === "browsing") run();
-  };
+  afterPageMenu(() => {
+    if (useBrowse.getState().surface === "browsing") run();
+  });
 }
 
 export const editDockedPageQuery = () => {
@@ -327,15 +367,12 @@ export function showFind() {
   const findIsPrivate = selectedTab()?.isPrivate ?? true;
   if (usesSystemFind()) {
     countUsage("find_opened_system");
-    afterPageMenu(() => withPage((id) => pages.presentSystemFind(id)));
+    closePageMenu();
+    withPage((id) => pages.presentSystemFind(id));
     return;
   }
   countUsage("find_opened_bar");
-  if (!copy().findWaitsForMenu) {
-    usePageUi.setState({ menuOpen: false, findOpen: true, findIsPrivate, findQuery: "" });
-    return;
-  }
-  afterPageMenu(() => usePageUi.setState({ findOpen: true, findIsPrivate, findQuery: "" }));
+  usePageUi.setState({ menuOpen: false, findOpen: true, findIsPrivate, findQuery: "" });
 }
 
 export function showDockedFind() {
@@ -381,14 +418,14 @@ export function translatePage() {
 }
 
 export function setNightShadeOn(on: boolean) {
-  const tab = selectedTab();
-  const site = pageUi().menuSite;
-  if (!tab || !site?.host) return;
+  const target = menuSiteTarget();
+  if (!target) return;
+  const { tab, site, host } = target;
   const mode: NightShadeMode = on ? "always" : "disabled";
   const next = { ...site, nightShade: mode };
   rememberSite(next, tab.isPrivate);
   usePageUi.setState({ menuSite: next });
-  quietly(() => pages.setNightShade(mode, site.host, tab.isPrivate));
+  quietly(() => pages.setNightShade(mode, host, tab.isPrivate));
 }
 
 export const zoomOut = () => withPage((id) => pages.zoomOut(id));
@@ -401,13 +438,11 @@ export function setDesktopSite(on: boolean) {
 }
 
 export function setBlockersOn(on: boolean) {
-  const tab = selectedTab();
-  const site = pageUi().menuSite;
-  if (!tab || !site?.host) return;
+  const target = menuSiteTarget();
+  if (!target) return;
+  const { tab, site, host, url } = target;
   closePageMenu();
   rememberSite({ ...site, blockersEnabled: on }, tab.isPrivate);
-  const url = usePages.getState().navigation[tab.id]?.url ?? tab.url;
-  const host = site.host;
   quietly(async () => {
     await blocking.setEnabledForSite(url, on, tab.isPrivate);
     showToast(blockersToast(on, host), on ? "blocking" : "warning");
@@ -616,6 +651,8 @@ export function handleSystemBack(): boolean {
 }
 
 function closePageLayers() {
+  afterMenu = null;
+  opening = null;
   const ui = pageUi();
   if (ui.menuOpen || ui.findOpen || ui.readerTabId || ui.press) {
     if (ui.findOpen) closeFind();

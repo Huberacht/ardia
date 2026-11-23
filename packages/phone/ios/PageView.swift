@@ -48,7 +48,7 @@ final class PageView: ExpoView {
   private var drawnTask: Task<Void, Never>?
   private var drawnSent = false
   static let scrollRest: TimeInterval = 0.5
-  static let drawnAfter: Duration = .milliseconds(32)
+  static let drawnProbeWidth: Double = 8
   private var madeGestures: PageGestures?
   private var madePinchWatcher: PagePinchWatcher?
   private var summaryLayer: PageSummaryLayer?
@@ -141,11 +141,7 @@ final class PageView: ExpoView {
     observing += 1
     toneTask?.cancel()
     toneTask = nil
-    scrollRestTask?.cancel()
-    scrollRestTask = nil
-    drawnTask?.cancel()
-    drawnTask = nil
-    drawnSent = false
+    forgetHostedWebView()
     scrollObservation = nil
     contentSizeObservation = nil
     madeGestures?.detach()
@@ -167,6 +163,7 @@ final class PageView: ExpoView {
   private func host(_ webView: WKWebView?) {
     guard webView !== hostedWebView || webView?.superview !== self else { return }
     if let hostedWebView, hostedWebView.superview === self { hostedWebView.removeFromSuperview() }
+    if webView !== hostedWebView { forgetHostedWebView() }
     hostedWebView = webView
     scrollObservation = nil
     contentSizeObservation = nil
@@ -192,16 +189,41 @@ final class PageView: ExpoView {
   }
 
   @MainActor
+  private func forgetHostedWebView() {
+    drawnTask?.cancel()
+    drawnTask = nil
+    drawnSent = false
+    scrollRestTask?.cancel()
+    scrollRestTask = nil
+  }
+
+  @MainActor
+  private func shows(_ webView: WKWebView, since generation: Int) -> Bool {
+    observing == generation && hostedWebView === webView && webView.superview === self && window != nil
+  }
+
+  @MainActor
   private func reportDrawnSoon() {
     guard !drawnSent, drawnTask == nil, window != nil, let webView = hostedWebView, webView.superview === self else { return }
     let generation = observing
-    drawnTask = Task { @MainActor [weak self] in
-      try? await Task.sleep(for: PageView.drawnAfter)
-      guard let self, !Task.isCancelled, self.observing == generation else { return }
+    let probe = WKSnapshotConfiguration()
+    probe.afterScreenUpdates = true
+    probe.snapshotWidth = NSNumber(value: PageView.drawnProbeWidth)
+    drawnTask = Task { @MainActor [weak self, weak webView] in
+      guard let webView else { return }
+      let painted = (try? await webView.takeSnapshot(configuration: probe)) != nil
+      guard let self, !Task.isCancelled else { return }
       self.drawnTask = nil
-      guard !self.drawnSent, self.window != nil, let shown = self.hostedWebView, shown.superview === self else { return }
+      guard painted, !self.drawnSent, self.shows(webView, since: generation) else { return }
       self.drawnSent = true
-      self.onPageEvent(["name": "drawn"])
+      CATransaction.begin()
+      CATransaction.setCompletionBlock { [weak self, weak webView] in
+        MainActor.assumeIsolated {
+          guard let self, let webView, self.shows(webView, since: generation) else { return }
+          self.onPageEvent(["name": "drawn"])
+        }
+      }
+      CATransaction.commit()
     }
   }
 
@@ -268,17 +290,20 @@ final class PageView: ExpoView {
 
   @MainActor
   private func scheduleScrollRest() {
-    guard scrollRestTask == nil else { return }
-    scrollRestTask = Task { @MainActor [weak self] in
-      while let self, !Task.isCancelled {
+    guard scrollRestTask == nil, let webView = hostedWebView else { return }
+    let generation = observing
+    scrollRestTask = Task { @MainActor [weak self, weak webView] in
+      while let self, let webView, !Task.isCancelled, self.hostedWebView === webView {
+        let scroller = webView.scrollView
         let quiet = CACurrentMediaTime() - self.lastScroll
-        let held = self.hostedWebView.map { $0.scrollView.isTracking || $0.scrollView.isDecelerating || $0.scrollView.isZooming } ?? false
+        let held = scroller.isTracking || scroller.isDecelerating || scroller.isZooming
         if quiet >= PageView.scrollRest, !held { break }
         try? await Task.sleep(for: .seconds(max(PageView.scrollRest - quiet, 0.1)))
       }
       guard let self, !Task.isCancelled else { return }
       self.scrollRestTask = nil
-      guard self.window != nil, let pageID = self.registeredPageID, let scroller = self.hostedWebView?.scrollView else { return }
+      guard let webView, self.shows(webView, since: generation), let pageID = self.registeredPageID else { return }
+      let scroller = webView.scrollView
       PhonePages.shared.send(pageID, "page.scrollSettled", ["y": Double(scroller.contentOffset.y + scroller.adjustedContentInset.top)])
     }
   }
