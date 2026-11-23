@@ -147,8 +147,26 @@ from `crates/ardia-import-ffi`, which builds `libardia_import` (static and share
 `libardia_core` so no engine copies it until a host switches: nothing under `engine/` or in `copies.tsv` reads it, and
 the macOS, Linux and Windows engine keys don't move. Every name in it starts with `ardia_import_` or `ARDIA_IMPORT_`,
 so it can share a translation unit with `ardia_core.h` (`tests/c/import_smoke.c` includes both). A final link holds one
-Rust archive, so a host links `libardia_import` or `libardia_core`, not both, until they are merged into one. The
+Rust archive, so a host links `libardia_import` or `libardia_core`, not both, unless it takes the merged one. The
 libraries export exactly the 4 functions the header declares (`tests/check_exports.py`).
+
+The Mac and iPhone link the merged archive: `crates/ardia-apple-ffi` re-exports `ardia-ffi` and `ardia-import-ffi` and
+builds `libardia_apple`, which exports exactly the 19 functions of `ardia_core.h` and `ardia_import.h` together.
+`scripts/build-xcframework.sh` packs it into `ArdiaCoreRS.xcframework` with both headers in the `ArdiaCoreRS` module,
+so `packages/sync` and `packages/import` (`ChromiumBookmarks.swift`, through the `ArdiaSync` pod and the sync
+package's `ArdiaCoreRS` product) share one Rust standard library. The engines never read this crate, so no engine
+key moves.
+
+The Mac calls `ardia_import_chromium_bookmarks` for every Chrome-family profile. Swift still finds the profile and
+reads the two files into owned bytes before the call (`ProfileFile` in `ChromiumBookmarks.swift`): `open` with
+`O_NONBLOCK`, `fstat` to refuse anything but a regular file, then at most 64 MiB + 1 bytes, so nothing is mapped that a
+concurrent truncation could fault and nothing over the cap is held. A file that isn't there is passed as `NULL`, one
+over the cap as `{NULL, len}` (Rust decides it by length), and one that can't be read as `{NULL, 0}`, so a bad
+`Bookmarks` is unreadable and a bad `AccountBookmarks` is skipped, as for bad JSON. A Swift test checks its cap is
+Rust's. `tooLarge` reaches the app as its `unreadable` error, and every read is reported in `ImportResult.importCore`
+(`format`, `backend`, `outcome`) for the `import_core_chromium_bookmarks_*` counts: `_rust` and `_native` count every
+attempted read of a profile with a bookmark file, whatever its outcome, and `_unreadable` and `_too_large` count the
+attempts whose `Bookmarks` file failed, so their ratio to the sum of `_rust` and `_native` is the failure rate.
 
 ### What the caller must guarantee
 
@@ -193,9 +211,11 @@ libraries export exactly the 4 functions the header declares (`tests/check_expor
 ### Parsing rules and where hosts differ today
 
 `tests/import-bookmarks-vectors.json` holds the shared cases. Rust's answer is `expect`; `platforms` records where the
-Mac's Swift, the Windows TypeScript and the Linux C++ answer differently today, so each host switch states which inputs
-change. `tests/import-bookmarks/test_import_bookmarks.py` runs the Swift and TypeScript parsers against their recorded
-answers in CI on macOS; the Linux answers are read from its source. Rust:
+Mac's Swift caller, the Windows TypeScript and the Linux C++ answer differently today, so each host switch states which
+inputs change. Since the Mac switched, its only difference is the oversized `Bookmarks` file, which it reports as
+`unreadable`. `tests/import-bookmarks/test_import_bookmarks.py` runs the Swift caller (linked against
+`libardia_apple`) and the TypeScript parser against their recorded answers in CI on macOS; the Linux answers are read
+from its source. Rust:
 
 - parses RFC 8259 JSON as UTF-8 after one optional UTF-8 BOM (a second one is unreadable), with at most 200 nested arrays and objects, like
   Chromium's own `base::JSONReader`. Invalid UTF-8, lone surrogate escapes, trailing commas, comments and numbers out of

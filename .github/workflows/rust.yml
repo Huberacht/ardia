@@ -107,17 +107,17 @@ jobs:
       - name: Test, vectors and header drift
         run: cargo test --locked --all-features
       - name: Release static libraries
-        run: cargo build --locked --release -p ardia-ffi -p ardia-update-ffi -p ardia-import-ffi
+        run: cargo build --locked --release -p ardia-ffi -p ardia-update-ffi -p ardia-import-ffi -p ardia-apple-ffi
       - name: The shared and static libraries export exactly the header's functions in every build
         if: runner.os != 'Windows'
         run: |
           python3 -I tests/check_exports.py
-          for build in "--all-targets -p ardia-ffi -p ardia-update-ffi -p ardia-import-ffi" "--all-targets --all-features" "--workspace --all-targets --all-features"; do
+          for build in "--all-targets -p ardia-ffi -p ardia-update-ffi -p ardia-import-ffi -p ardia-apple-ffi" "--all-targets --all-features" "--workspace --all-targets --all-features"; do
             echo "cargo build --release $build"
             cargo build --locked --release $build
             python3 -I tests/check_exports.py
           done
-          cargo build --locked --release -p ardia-ffi -p ardia-update-ffi -p ardia-import-ffi
+          cargo build --locked --release -p ardia-ffi -p ardia-update-ffi -p ardia-import-ffi -p ardia-apple-ffi
       - name: C and C++ smoke against the static library
         if: runner.os != 'Windows'
         run: |
@@ -140,6 +140,10 @@ jobs:
           "$RUNNER_TEMP/ardia-import-smoke-asan"
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic $sanitize -I include tests/cpp/import_smoke.cc target/release/libardia_import.a $extra -o "$RUNNER_TEMP/ardia-import-smoke-cpp-asan"
           "$RUNNER_TEMP/ardia-import-smoke-cpp-asan"
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I include tests/c/smoke.c target/release/libardia_apple.a $extra -o "$RUNNER_TEMP/ardia-apple-smoke"
+          "$RUNNER_TEMP/ardia-apple-smoke"
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I include tests/c/import_smoke.c target/release/libardia_apple.a $extra -o "$RUNNER_TEMP/ardia-apple-import-smoke"
+          "$RUNNER_TEMP/ardia-apple-import-smoke"
       - name: Linux's sync keys, linked to the core, against the shared vectors
         if: runner.os == 'Linux'
         env:

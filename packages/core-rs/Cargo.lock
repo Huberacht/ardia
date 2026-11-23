@@ -40,6 +40,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ardia-apple-ffi"
+version = "0.1.0"
+dependencies = [
+ "ardia-ffi",
+ "ardia-import-ffi",
+]
+
+[[package]]
 name = "ardia-crypto"
 version = "0.1.0"
 dependencies = [

@@ -1664,9 +1664,10 @@
   {
    "id": "import:chromium-bookmarks-rust",
    "source": "import",
-   "guard": "Rust Chromium bookmarks parser behind libardia_import, not linked by any host yet: a Bookmarks file over 64 MiB is refused before it is read, RFC JSON only with at most 200 nested containers, 64 folder levels and 250,000 nodes; titles and URLs reach the tree verbatim and scheme policy stays with import:bookmarks; the shared hostile list runs through the static library",
+   "guard": "Rust Chromium bookmarks parser behind libardia_import, which the Mac reads every Chrome-family Bookmarks and AccountBookmarks file through (ChromiumBookmarks.swift, linked as libardia_apple in ArdiaCoreRS.xcframework): a Bookmarks file over 64 MiB is refused before it is read, RFC JSON only with at most 200 nested containers, 64 folder levels and 250,000 nodes; titles and URLs reach the tree verbatim and scheme policy stays with import:bookmarks; the shared hostile list runs through the static library and every vector through the Swift caller",
    "checks": [
     "packages/core-rs/crates/ardia-import-core/src/chromium_bookmarks.rs",
+    "packages/import/ios/Core/ChromiumBookmarks.swift",
     "packages/core-rs/tests/import-bookmarks/test_import_bookmarks.py"
    ],
    "detected": false
