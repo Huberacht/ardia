@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,6 +34,7 @@
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
@@ -161,6 +163,56 @@ AclState ExtendedAcl(int fd) {
 }
 #endif
 
+#if BUILDFLAG(IS_LINUX)
+bool OthersBypassPermissions(int dir_fd) {
+  std::string fdinfo;
+  if (!base::ReadFileToString(
+          base::FilePath(base::StrCat(
+              {"/proc/self/fdinfo/", base::NumberToString(dir_fd)})),
+          &fdinfo)) {
+    return true;
+  }
+  std::string mount_id;
+  for (std::string_view line : base::SplitStringPiece(
+           fdinfo, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    if (base::StartsWith(line, "mnt_id:")) {
+      mount_id = std::string(base::TrimWhitespaceASCII(
+          line.substr(strlen("mnt_id:")), base::TRIM_ALL));
+    }
+  }
+  std::string mounts;
+  if (mount_id.empty() ||
+      !base::ReadFileToString(base::FilePath("/proc/self/mountinfo"),
+                              &mounts)) {
+    return true;
+  }
+  for (std::string_view line : base::SplitStringPiece(
+           mounts, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    const std::vector<std::string_view> fields = base::SplitStringPiece(
+        line, " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    if (fields.empty() || fields[0] != mount_id) {
+      continue;
+    }
+    const auto dash = std::ranges::find(fields, std::string_view("-"));
+    if (dash == fields.end() || fields.end() - dash < 4) {
+      return true;
+    }
+    const std::string_view type = *(dash + 1);
+    if (type != "fuse" && !base::StartsWith(type, "fuse.") &&
+        type != "fuseblk") {
+      return false;
+    }
+    const std::vector<std::string_view> options = base::SplitStringPiece(
+        *(dash + 3), ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    const auto has = [&options](std::string_view option) {
+      return std::ranges::find(options, option) != options.end();
+    };
+    return has("allow_other") && !has("default_permissions");
+  }
+  return true;
+}
+#endif
+
 std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
   struct stat info;
   if (fstat(dir_fd, &info) != 0) {
@@ -175,6 +227,14 @@ std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
   if (info.st_mode & (S_IWGRP | S_IWOTH)) {
     return base::StrCat({"Others can write to ", dir.value(), "."});
   }
+#if BUILDFLAG(IS_LINUX)
+  if (OthersBypassPermissions(dir_fd)) {
+    return base::StrCat(
+        {dir.value(), " is on a shared mount that doesn't check permissions "
+                      "(allow_other without default_permissions), so other "
+                      "users could read the control token there."});
+  }
+#endif
 #if BUILDFLAG(IS_MAC)
   struct statfs volume;
   if (fstatfs(dir_fd, &volume) != 0) {
