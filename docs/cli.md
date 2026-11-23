@@ -70,7 +70,11 @@ reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
 
   What still guards it is what keeps other users and web pages off the connection, not what a process running as
   you may do: the token (32 random bytes per start, compared in constant time, only in the 0600 `ArdiaControl.json`),
-  loopback only, no `Origin` header (so no web page can open the socket), and the `RemoteDebuggingAllowed` policy. The
+  loopback only, and nothing a browser sends: a request with an `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Dest` header, or
+  a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, is refused before the token is read (so no web page,
+  extension, service worker or DNS-rebound name can open the socket or ask `/ardia/active`, even holding the token),
+  the `RemoteDebuggingAllowed` policy, and a data folder only you can write to (the engine won't publish
+  `ArdiaControl.json` into a folder another user owns or can write, as the control socket won't bind there). The
   engine also keeps its bookkeeping: a command must be a JSON object with an integer `id` and a string `method`
   (`params`, if present, an object; `sessionId` naming a session this connection attached), one command per
   (session, id) until its reply, and at most 4096 waiting replies before the connection is closed. Showing a saved

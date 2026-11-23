@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <memory>
@@ -110,11 +111,32 @@ std::string ErrnoText() {
   return base::ToLowerASCII(strerror(errno));
 }
 
+std::string UnsafeControlFolder(const base::FilePath& dir) {
+  struct stat info;
+  if (lstat(dir.value().c_str(), &info) != 0) {
+    return base::StrCat({"Couldn't read ", dir.value(), ": ", ErrnoText()});
+  }
+  if (!S_ISDIR(info.st_mode)) {
+    return base::StrCat({dir.value(), " isn't a real folder."});
+  }
+  if (info.st_uid != geteuid()) {
+    return base::StrCat({dir.value(), " belongs to another user."});
+  }
+  if (info.st_mode & (S_IWGRP | S_IWOTH)) {
+    return base::StrCat({"Others can write to ", dir.value(), "."});
+  }
+  return std::string();
+}
+
 std::string WriteControlFile(const base::FilePath& path,
                              const std::string& contents,
                              uint64_t generation) {
   if (path.empty()) {
     return "Ardia has no data folder.";
+  }
+  if (std::string unsafe = UnsafeControlFolder(path.DirName());
+      !unsafe.empty()) {
+    return unsafe;
   }
   const base::FilePath temp = path.DirName().Append(
       "." + path.BaseName().value() + "." +
