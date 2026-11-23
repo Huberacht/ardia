@@ -852,3 +852,8 @@ test("an LCP image that starts loading before TTFB isn't counted twice", () => {
   assert.deepEqual(lcp.details.phases, { ttfbMs: 1000, loadDelayMs: 0, loadDurationMs: 500, renderDelayMs: 100 });
   assert.match(lcp.summary, /largest phase is ttfb/);
 });
+
+test("a comment-looking line with a backtick ends the trailing scan, so a template literal's directive isn't read", () => {
+  assert.equal(sourceMapRefOf("const s = `\n//# sourceMappingURL=evil.map\n//`;"), null);
+  assert.equal(sourceMapRefOf("x();\n//# sourceMappingURL=app.js.map\n// trailing note"), "app.js.map");
+});

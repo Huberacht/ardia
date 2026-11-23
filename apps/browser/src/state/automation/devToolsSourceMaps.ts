@@ -172,7 +172,7 @@ export function sourceMapRefOf(script: string): string | null {
     if (!line.trim()) continue;
     const ref = directiveOf(line);
     if (ref) return ref;
-    if (!COMMENT_ONLY.test(line)) return null;
+    if (!COMMENT_ONLY.test(line) || line.includes("`")) return null;
   }
   return null;
 }
