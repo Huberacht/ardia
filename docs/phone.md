@@ -1428,12 +1428,18 @@ look surface: it has no frost source to refract.
   layer and then composited, the strip's blur, and the fold views' layers redrawn with the glass inside them
   (`flush layers` is 3.8 ms of the slowest tenth of frames). The WebView's functor runs at most once a frame in
   every trace. An idle page with a GIF now draws 220 frames in 5 s with the bar out, as the solid bar does
-  (433 before), but still 445 against 220 with the bar folded into the pill: the folded bar's glasses keep their
-  places in the strip at opacity 0 (`shown` stays true; only the fold's opacity hides them), and something on that
-  path asks for a frame for each page frame. Dropping the fold views' hardware layers saves two render passes a
+  (433 before). Wikipedia's Newton's cradle page is a poor idle test once scrolled: its pulsing Save hint runs a CSS
+  animation every frame, so main itself draws about 510 frames there with the bar folded. On a page served for the
+  test (one 50 fps GIF and text, `adb reverse` to a local server) main draws 250 frames in 5 s with the bar out and
+  257 folded, and the glass 250 and 251: no doubling. Dropping the fold views' hardware layers saves two render passes a
   frame but doubles the frames with the bar out too, so they stay. The fold views' own
   hardware layers (`renderToHardwareTextureAndroid` on `floatingBarFold` and `hostPillFold`) now redraw with the
   strip, about 0.5 ms a frame; they stay for the fold's fade (b66c3bbdb).
+- **The folded bar's glass.** Android folds the bar into the host pill by crossfading the two by opacity, so both
+  glasses show while the fold moves. Once the fold settles, the side it left hides its glass (`shown` false,
+  `foldGlassShown` in `useBarFold`), so it leaves the strip and draws nothing; it used to stay a live consumer at
+  opacity 0, with all four page glasses holding layers while folded. On the test page: one glass holds a layer
+  folded (four before), 7.7 GPU render passes a frame folded against 10.0, and 9.0 with the bar out.
 - **Over the deck, measured.** The idle deck on the F4 with its five glasses live: the look budget's own sample reads
   20 % busy, median 11.6 ms of work a blob frame, against 24 % and 14.4 ms with the old tinted fill (limit 33 %).
   The first strip build (each glass with its own lens, every glass redrawn on each blob frame) read 34 % and
