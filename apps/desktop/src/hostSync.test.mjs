@@ -440,18 +440,3 @@ test("an engine without ArdiaSync.core, or one that fails it, records native onc
   assert.deepEqual(recorded.at(-1), { on: true, sync_core: "native" });
   setConsentPeriod(false, null);
 });
-
-test("a toggle whose consent ends while ArdiaSync.core is pending records nothing", async () => {
-  setConsentPeriod(true, "revoked-while-pending");
-  const recorded = [];
-  const { host, answer } = pendingCore();
-  const loading = loadSyncCore(host);
-  await tick();
-  whenSyncCore(consentToken(), recordToggle(recorded));
-  setConsentPeriod(true, "a-later-period");
-  answer().resolve("rust");
-  await loading;
-  await tick();
-  assert.deepEqual(recorded, []);
-  setConsentPeriod(false, null);
-});

@@ -7,6 +7,7 @@ import { takeOpenTabSyncCounts, takeSnapshotWrites, useSync, whenSyncCore } from
 import { takeSyncCodeCounts } from "../sync/recoveryKit";
 import { capture, consentNow, consentToken, counted, consentOrNow, countFor, endSession, flush, isSharing, markSettingsSnapshot, settingsSnapshotDay, startClient, stillValid, watchConsentBoundary, withHourlyExtras, type ConsentToken } from "./usageClient";
 import { reportLocalStore, startLocalStore } from "./localStoreReport";
+import { watchSyncToggles } from "./syncToggles";
 import { watchExtensionInstalls } from "./extensionInstalls";
 import { nativeConsent } from "./nativeConsent";
 import { startWatchChecks } from "./watch";
@@ -275,14 +276,7 @@ function watchToolbarAutoHide() {
 }
 
 function watchSync() {
-  let last = useSync.getState().status;
-  useSync.subscribe(({ status }) => {
-    const was = last;
-    last = status;
-    if (was === status) return;
-    if (was === "off" && status !== "unavailable") whenSyncCore(consentNow(), (core, consent) => capture("sync_toggled", { on: true, sync_core: core }, consent));
-    else if (status === "off" && was !== "unavailable") capture("sync_toggled", { on: false }, consentNow());
-  });
+  watchSyncToggles(useSync, whenSyncCore, consentNow, (toggle, consent) => capture("sync_toggled", toggle, consent));
 }
 
 function watchTranslate() {
