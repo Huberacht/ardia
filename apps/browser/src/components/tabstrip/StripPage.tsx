@@ -218,11 +218,21 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     if (userScrolling()) noteTabStripRevealHeldForScroll();
     else reveal(activeId, false);
   };
+  const firstAfterPress = useRef<(() => void) | null>(null);
   const revealOnFirstOverflow = () => {
+    const pressHeld = tabPressHeld(windowId);
+    if (pressHeld && !firstAfterPress.current) {
+      const stop = onTabPressEnd(windowId, () => {
+        firstAfterPress.current = null;
+        latestFirstReveal.current();
+      });
+      firstAfterPress.current = stop;
+    }
     const step = firstOverflowReveal(firstReveal.current, {
       current,
       activeId,
       dragging: tabDragging(),
+      pressHeld,
       overflows: content.current > viewport.current + 0.5,
       measuring,
       userScrollAt: userScrollAt.current,
@@ -231,6 +241,9 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     firstReveal.current = step.state;
     if (step.reveal) latestReveal.current();
   };
+  const latestFirstReveal = useRef(revealOnFirstOverflow);
+  latestFirstReveal.current = revealOnFirstOverflow;
+  useEffect(() => () => firstAfterPress.current?.(), []);
   useEffect(revealOnFirstOverflow, [current]);
   useEffect(() => {
     const step = selectionReveal(revealed.current, activeId, !!held.current && closedTo.current === activeId, current, tabDragging());

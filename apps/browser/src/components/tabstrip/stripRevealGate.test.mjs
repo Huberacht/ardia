@@ -24,7 +24,7 @@ test("a dragged or missing tab and a held close are never revealed", () => {
   assert.equal(selectionReveal("a", "b", true, true, false), "none");
 });
 
-const at = (o) => ({ current: true, activeId: "t", dragging: false, overflows: true, measuring: false, userScrollAt: -Infinity, now: 1000, ...o });
+const at = (o) => ({ current: true, activeId: "t", dragging: false, pressHeld: false, overflows: true, measuring: false, userScrollAt: -Infinity, now: 1000, ...o });
 
 test("the first reveal waits for the page to be current and the strip to overflow", () => {
   assert.equal(firstOverflowReveal(FIRST_REVEAL, at({ current: false })).reveal, false);
@@ -85,4 +85,11 @@ test("a user scroll during a pending reveal leaves the strip where the user put 
   assert.equal(revealStillWanted(pending, { ...still, tabId: "t2" }), false, "another selection");
   assert.equal(revealStillWanted(pending, { ...still, current: false }), false, "another profile in front");
   assert.equal(revealStillWanted(pending, { ...still, dragging: true }), false, "a drag started");
+});
+
+test("a strip that first overflows while a tab press is held reveals once the press ends, as later reveals do", () => {
+  const held = firstOverflowReveal(FIRST_REVEAL, at({ pressHeld: true }));
+  assert.equal(held.reveal, false);
+  assert.equal(held.state, FIRST_REVEAL, "the first reveal stays pending");
+  assert.equal(firstOverflowReveal(held.state, at({ now: 1400 })).reveal, true);
 });

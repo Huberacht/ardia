@@ -12,9 +12,9 @@ export const FIRST_REVEAL: FirstReveal = { shown: false, at: -Infinity, settling
 
 export function firstOverflowReveal(
   state: FirstReveal,
-  o: { current: boolean; activeId: string; dragging: boolean; overflows: boolean; measuring: boolean; userScrollAt: number; now: number },
+  o: { current: boolean; activeId: string; dragging: boolean; pressHeld: boolean; overflows: boolean; measuring: boolean; userScrollAt: number; now: number },
 ): { state: FirstReveal; reveal: boolean } {
-  if (!o.current || !o.activeId || o.dragging || !o.overflows) return { state, reveal: false };
+  if (!o.current || !o.activeId || o.dragging || o.pressHeld || !o.overflows) return { state, reveal: false };
   if (!state.shown) return { state: { shown: true, at: o.now, settling: o.measuring }, reveal: true };
   if (!state.settling) return { state, reveal: false };
   if (o.userScrollAt > state.at) return { state: { ...state, settling: false }, reveal: false };
