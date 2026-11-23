@@ -29,7 +29,7 @@ const snapshotOk = (o: unknown) => isFields(o) && has(o, ["url", "profileId"]);
 const closedTabOk = (o: SavedObject) => isString(o.id) && snapshotOk(o.tab);
 const tabListOk = (o: SavedObject) => isString(o.id) && Array.isArray(o.tabs) && o.tabs.every(snapshotOk);
 const profileOk = (o: SavedObject) => has(o, ["id", "name"]);
-const parkedOk = (o: SavedObject) => Array.isArray(o.tabs) && o.tabs.every(snapshotOk) && Array.isArray(o.groups);
+const parkedOk = (o: SavedObject) => Array.isArray(o.tabs) && o.tabs.every(snapshotOk) && Array.isArray(o.groups) && o.groups.every((g) => isFields(g) && isString(g.id));
 
 export type SavedSession = Omit<HydrateData, "history" | "bookmarks" | "downloads"> & {
   windows: Record<string, BrowserWindow>;

@@ -14,7 +14,7 @@ import { noteDownloadHistoryWrite } from "../telemetry/downloadWork";
 import { noteSessionBackup, noteSessionSetAside, noteSessionSetAsideFailure, noteSessionWrite, timeSessionSave } from "../telemetry/sessionWrites";
 import { saveBeforeQuit } from "../app/quit";
 import { landHeldPins, pinGuard, savedAfterPins } from "./pinGuard";
-import { asideName, keepAsideGate, keepCopy, rollingBackups, writeGate, type WriteGate } from "./sessionSafety";
+import { keepAsideGate, rollingBackups, writeGate, type WriteGate } from "./sessionSafety";
 import { consentToken } from "../telemetry/consentPeriod";
 import { isRegularWindow } from "../windows/small";
 import { savedPage } from "./savedShapes";
@@ -157,12 +157,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
 
   const keepDroppedPins = pinGuard(useBrowser.getState(), (delay) => unstaged() && schedule(delay));
   const gates = new Map<string, WriteGate>();
-  let restoredFrom = launch.restored?.value.partial ? launch.restored.name : null;
-  if (restoredFrom) {
-    const from = restoredFrom;
-    void keepCopy(from, asideName(from), null).then(() => void (restoredFrom = null), () => {});
-  }
-  const backups = rollingBackups(noteSessionBackup, wholeBackup, (name, session) => newerBackup(session) || name === restoredFrom);
+  const backups = rollingBackups(noteSessionBackup, wholeBackup, (_, session) => newerBackup(session));
   pinsLanding = () => gates.get(SESSION_DOCUMENT)?.landing() ?? keepDroppedPins.landing();
   sessionGated = () => !(gates.get(SESSION_DOCUMENT)?.open() ?? true);
   const anyLanding = () => [...gates.values()].map((g) => g.landing()).find((l) => l !== null) ?? keepDroppedPins.landing();
@@ -253,7 +248,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
   };
   for (const [name, found] of [[SESSION_DOCUMENT, launch.session], [DOWNLOADS_DOCUMENT, launch.downloads]] as const) {
     const session = name === SESSION_DOCUMENT;
-    const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) });
+    const gate = keepAsideGate(name, found, (delay) => schedule(delay), { unreadable: () => noteSessionSetAside(session, "unreadable", null, consent), failed: () => noteSessionSetAsideFailure(session, consent) }, session && launch.restored?.value.partial ? launch.restored.name : null);
     if (gate) gates.set(name, gate);
   }
   if (launch.session.state === "usable" && launch.session.from < SESSION_VERSION) {

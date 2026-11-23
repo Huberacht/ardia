@@ -37,6 +37,7 @@ function clean() {
   stub.unreadableDocs.clear();
   stub.copiedDocs.length = 0;
   stub.refusedCopies.on = false;
+  stub.refusedCopies.of.clear();
   stub.refusedSaves.on = false;
   stub.heldCopies.on = false;
   stub.heldCopies.queue.length = 0;
@@ -733,4 +734,63 @@ test("parked pins the reader has to discard keep session.json aside before the f
   await settle();
   stop();
   assert.equal(stub.docs.get(asideCopies()[0]), damaged);
+});
+
+test("while a restored partial backup can't be copied aside, session.json isn't rewritten, so the next launch still has that backup to restore from", async () => {
+  const good = JSON.parse(realSession(["https://loose.example/"], { pin: "https://pin.example/" }));
+  const partial = backupJson(localDay(Date.now()), 1, JSON.stringify({ ...good, tabs: good.tabs.map((t) => (t.pin ? { ...t, profileId: "gone-profile" } : t)) }));
+  const slot = backupName(Date.now());
+  stub.docs.set(slot, partial);
+  stub.docs.set("session.json", "{");
+  stub.refusedCopies.of.add(slot);
+  const stop = startPersistence();
+  S().updateSettings({ appearance: "light" });
+  await settle();
+  assert.equal(stub.docs.get("session.json"), "{", "held while the backup copy fails");
+  assert.equal(stub.docs.get(slot), partial, "the backup is untouched");
+  stub.refusedCopies.of.clear();
+  const now = Date.now;
+  Date.now = () => now() + 120_000;
+  try {
+    await settle();
+  } finally {
+    Date.now = now;
+  }
+  stop();
+  const kept = [...stub.docs.entries()].find(([name]) => name.startsWith(slot.replace(/\.json$/, "-unreadable-")));
+  assert.equal(kept?.[1], partial);
+  assert.notEqual(stub.docs.get("session.json"), "{");
+});
+
+test("a parked pin group that isn't a group with an id is a damaged record, not a restorable backup", async () => {
+  const older = realSession(["https://older.example/"]);
+  const newest = JSON.parse(realSession(["https://newest.example/"]));
+  const profileId = Object.keys(newest.profiles)[0];
+  const broken = { ...newest, parkedPins: { [profileId]: { tabs: [], groups: [null] } } };
+  const { wholeBackup } = await import("./launchSession.ts");
+  assert.equal(wholeBackup(broken), false);
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-03", 1, older));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify(broken)));
+  stub.docs.set("session.json", "{");
+  const stop = startPersistence();
+  await settle();
+  assert.doesNotThrow(() => S().createWindow({ profileId }));
+  stop();
+  assert.ok(tabUrls().includes("https://older.example/"));
+});
+
+test("a pre-migration snapshot never replaces a newer Ardia's migration backup either", async () => {
+  const good = JSON.parse(realSession(["https://v10.example/"]));
+  const newerSlot = backupJson(localDay(Date.now()), 1, JSON.stringify({ ...good, version: SESSION_VERSION + 1 }));
+  const newerMigration = backupJson(localDay(Date.now()), 2, JSON.stringify({ ...good, version: SESSION_VERSION + 2 }));
+  stub.docs.set(backupName(Date.now()), newerSlot);
+  stub.docs.set(MIGRATION_BACKUP, newerMigration);
+  stub.docs.set("session.json", JSON.stringify({ ...good, version: 10 }));
+  const stop = startPersistence();
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(backupName(Date.now())), newerSlot);
+  assert.equal(stub.docs.get(MIGRATION_BACKUP), newerMigration);
+  const own = [...stub.docs.keys()].find((name) => /^session-backup-migration-\d+\.json$/.test(name));
+  assert.equal(JSON.parse(stub.docs.get(own)).session.version, 10);
 });

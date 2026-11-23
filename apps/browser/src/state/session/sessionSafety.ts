@@ -132,18 +132,22 @@ export function writeGate(task: () => Promise<void>, saveAgain: (delay: number) 
   };
 }
 
-export function keepAsideGate(name: string, found: FoundDocument, saveAgain: (delay: number) => void, noted: { unreadable: () => void; failed: () => void }): WriteGate | null {
+export function keepAsideGate(name: string, found: FoundDocument, saveAgain: (delay: number) => void, noted: { unreadable: () => void; failed: () => void }, alsoKeep: string | null = null): WriteGate | null {
   if (found.state !== "unusable" && found.state !== "unknown") return null;
   const aside = asideName(name);
-  if (found.state === "unusable") return writeGate(() => keepCopy(name, aside, found.text), saveAgain, noted.failed);
+  const alsoAside = alsoKeep ? asideName(alsoKeep) : null;
+  const andAlso = (kept: Promise<void>) => kept.then(() => (alsoKeep && alsoAside ? keepCopy(alsoKeep, alsoAside, null) : undefined));
+  if (found.state === "unusable") return writeGate(() => andAlso(keepCopy(name, aside, found.text)), saveAgain, noted.failed);
   let counted = false;
   const keep = () =>
-    found.exists.then((exists) => {
-      if (!exists) return;
-      if (!counted) noted.unreadable();
-      counted = true;
-      return keepCopy(name, aside, null);
-    });
+    andAlso(
+      found.exists.then((exists) => {
+        if (!exists) return;
+        if (!counted) noted.unreadable();
+        counted = true;
+        return keepCopy(name, aside, null);
+      }),
+    );
   return writeGate(keep, saveAgain, noted.failed);
 }
 
@@ -215,13 +219,14 @@ export function rollingBackups(written: (beforeMigration: boolean) => void = () 
   let doneDay: string | null = null;
   let writing = false;
   let retryAt = 0;
-  const keptSlot = (now: number) => {
-    const held = readBackup(backupName(now));
+  const keptFile = (name: string) => {
+    const held = readBackup(name);
     return !!held && kept(held.name, held.session);
   };
+  const keptSlot = (now: number) => keptFile(backupName(now));
   const write = (sessionJson: string, now: number, beforeMigration: boolean) => {
     const day = localDay(now);
-    const name = beforeMigration && keptSlot(now) ? MIGRATION_BACKUP : backupName(now);
+    const name = !beforeMigration || !keptSlot(now) ? backupName(now) : keptFile(MIGRATION_BACKUP) ? `session-backup-migration-${Math.round(now)}.json` : MIGRATION_BACKUP;
     writing = true;
     return saveDocument(name, backupJson(day, now, sessionJson)).then(
       () => {
