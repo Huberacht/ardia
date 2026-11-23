@@ -76,11 +76,15 @@ export function watchFaviconOf(url: string, src: string | null, listener: Listen
 
 export const watchFaviconTheme = (uri: string, listener: Listener): (() => void) => watchFaviconUri(uri, listener);
 
+const CLOSED_WINDOW_PROFILE = "incognito:closed-window";
+
 function usePrivateWindowProfile(): string | undefined {
   const windowId = useContext(WindowContext);
   return useKeyed(watchWindowRecord, windowId, () => {
-    const w = windowId ? useBrowser.getState().windows[windowId] : undefined;
-    return w?.kind === "private" ? w.profileId : undefined;
+    if (!windowId) return undefined;
+    const w = useBrowser.getState().windows[windowId];
+    if (!w) return CLOSED_WINDOW_PROFILE;
+    return w.kind === "private" ? w.profileId : undefined;
   });
 }
 

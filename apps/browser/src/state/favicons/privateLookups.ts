@@ -1,9 +1,9 @@
 import { useBrowser } from "../browser/store";
 import { isIncognitoProfile } from "../browser/model";
 
-export const privateViewer = (profileId?: string) => (profileId && isIncognitoProfile(profileId) ? profileId : undefined);
+type IconMaps = { pages: Record<string, string | null>; srcs: Record<string, string>; appearances: Record<string, [string, string]> };
 
-export const askedAs = (source: string, into: string) => (source === into ? source : `${into}|${source}`);
+export const privateViewer = (profileId?: string) => (profileId && isIncognitoProfile(profileId) ? profileId : undefined);
 
 export function incognitoClosed(key: string): boolean {
   if (!isIncognitoProfile(key)) return false;
@@ -11,22 +11,9 @@ export function incognitoClosed(key: string): boolean {
   return !Object.values(s.windows).some((w) => w.profileId === key) && !Object.values(s.tabs).some((t) => t.profileId === key);
 }
 
-export const shouldWrite = (routed: boolean, known: string | null | undefined, uri: string | null) =>
-  routed ? (uri ? !known : known === undefined) : known !== uri;
+const urisOf = (icons: IconMaps) => [...Object.values(icons.pages), ...Object.values(icons.srcs), ...Object.values(icons.appearances).flat()].filter((uri): uri is string => !!uri);
 
-const askers = new Set<string>();
-const answeredRoutes = new Set<string>();
-const routeId = (into: string, source: string, page: string) => `${into}|${source}|${page}`;
-
-export const notePrivateAsker = (into: string) => void askers.add(into);
-export const noteRouteAnswered = (into: string, source: string, page: string) => void answeredRoutes.add(routeId(into, source, page));
-export const routeAnswered = (into: string, source: string, page: string) => answeredRoutes.has(routeId(into, source, page));
-
-export function takeClosedAskers(): string[] {
-  const closed = [...askers].filter(incognitoClosed);
-  for (const id of closed) {
-    askers.delete(id);
-    for (const route of [...answeredRoutes]) if (route.startsWith(`${id}|`)) answeredRoutes.delete(route);
-  }
-  return closed;
+export function urisOnlyIn(gone: IconMaps[], kept: IconMaps[]): Set<string> {
+  const still = new Set(kept.flatMap(urisOf));
+  return new Set(gone.flatMap(urisOf).filter((uri) => !still.has(uri)));
 }

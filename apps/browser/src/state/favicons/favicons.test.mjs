@@ -9,6 +9,7 @@ const native = import.meta.resolve("../../platform/favicons.ts");
 const stub = `export * from ${JSON.stringify(native)};
 export const faviconsFor = (profile, pages) => globalThis.faviconsForTest(profile, pages);
 export const storeFavicon = (...args) => (globalThis.storedFavicons.push(args), Promise.resolve({ stored: true }));
+export const iconTheme = (request) => (globalThis.iconThemeForTest ? globalThis.iconThemeForTest(request) : Promise.resolve(null));
 export const fetchFavicon = (src, profile) => (globalThis.fetchFaviconForTest ? globalThis.fetchFaviconForTest(src, profile) : Promise.resolve(null));`;
 registerHooks({
   resolve(specifier, context, next) {
@@ -17,7 +18,7 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { adoptFavicons, faviconOutlived, noteFavicon, pruneEngineFavicons, resolveFavicon, startFavicons, useFavicons } = await import("./favicons.ts");
+const { adoptFavicons, askFaviconTheme, faviconOutlived, noteFavicon, pruneEngineFavicons, resolveFavicon, startFavicons, useFavicons } = await import("./favicons.ts");
 const { useFavicon } = await import("./faviconHooks.ts");
 const { seedFavicons } = await import("./launchFavicons.ts");
 const { adoptIconPage, dropOutlivedFavicon, noteIconPage } = await import("./iconPage.ts");
@@ -25,7 +26,7 @@ const { useBrowser } = await import("../browser/store.ts");
 const { engineProfile } = await import("../browser/model.ts");
 const { WindowContext } = await import("../browser/hooks.ts");
 const { webviews } = await import("../../platform/webviews.ts");
-const { useProfileLoading, openProfile } = await import("../profiles/profileLoading.ts");
+const { useFaviconAccents } = await import("./faviconAccent.ts");
 const { markAsked } = await import("./askedFavicons.ts");
 
 const waitFor = async (check) => {
@@ -315,48 +316,53 @@ test("an icon the page reported during a lookup still wins after the cache start
   }
 });
 
-test("a private window's lookups in other profiles land in its own cache and leave with it", async () => {
+const privateWindow = (url) => {
+  const s = useBrowser.getState();
+  const id = s.createWindow({ kind: "private", url });
+  return { id, profile: useBrowser.getState().windows[id].profileId, tab: useBrowser.getState().windows[id].tabIds[0] };
+};
+
+test("a private window shows other profiles' icons already in memory and never asks their stores", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
-  const s = () => useBrowser.getState();
-  const page = "https://secret-lookup.test/x";
-  const known = "https://secret-known.test/";
-  const incognito = s().createWindow({ kind: "private", url: page });
-  const privateProfile = s().windows[incognito].profileId;
-  const own = () => useFavicons.getState().profiles[privateProfile]?.pages ?? {};
+  const known = "https://known-elsewhere.test/";
+  const secret = "https://secret-page.test/";
   const asked = [];
-  globalThis.faviconsForTest = (profile, pages) => (asked.push(profile), answering({ [known]: "data:image/png;base64,KNOWN" })(profile, pages));
+  globalThis.faviconsForTest = (profile, pages) => (asked.push(...pages), answering({ [known]: "data:image/png;base64,KNOWN", [secret]: "data:image/png;base64,SECRET" })(profile, pages));
   try {
-    const rows = [mount(() => useFavicon(page, null, privateProfile)), mount(() => useFavicon(known, null, privateProfile))];
-    await waitFor(() => own()[page] === null && own()[known] === "data:image/png;base64,KNOWN");
-    assert.equal(resolveFavicon(known, null, privateProfile)?.uri, "data:image/png;base64,KNOWN");
-    assert.ok(asked.includes(engineProfile(s(), "default")), "the normal profile's own store was read");
-    assert.ok(!asked.includes(privateProfile), "the private profile has no store to read");
-    assert.equal(cached(page), undefined, "the normal profile's cache keeps nothing about the private page");
-    assert.equal(cached(known), undefined);
+    const normal = mount(() => useFavicon(known, null, "default"));
+    await waitFor(() => cached(known) === "data:image/png;base64,KNOWN");
+    normal.unmount();
+    asked.length = 0;
+    const w = privateWindow(secret);
+    const rows = [mount(() => useFavicon(known, null, w.profile)), mount(() => useFavicon(secret, null, w.profile)), mount(() => useFavicon(secret), { contexts: [[WindowContext, w.id]] })];
+    await settle();
+    assert.equal(resolveFavicon(known, null, w.profile)?.uri, "data:image/png;base64,KNOWN");
+    assert.deepEqual(asked, [], "no profile's icon store was asked, so none of them marks an icon used");
+    assert.equal(cached(secret), undefined);
+    assert.equal(markAsked(engineProfile(useBrowser.getState(), "default"), secret), true, "nothing about the private page is in the asked set");
     for (const row of rows) row.unmount();
-    s().closeWindow(incognito);
-    await waitFor(() => useFavicons.getState().profiles[privateProfile] === undefined);
+    useBrowser.getState().closeWindow(w.id);
   } finally {
     delete globalThis.faviconsForTest;
     stop();
   }
 });
 
-test("an icon drawn in a private window with no profile given asks as that window", async () => {
+test("a row left in a private window's tree after the window is gone still asks nothing", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
-  const s = () => useBrowser.getState();
-  const page = "https://typed-in-private.test/";
-  const incognito = s().createWindow({ kind: "private", url: page });
-  const privateProfile = s().windows[incognito].profileId;
-  globalThis.faviconsForTest = answering({ [page]: "data:image/png;base64,TYPED" });
+  const page = "https://gone-window.test/";
+  const asked = [];
+  globalThis.faviconsForTest = (profile, pages) => (asked.push(...pages), empty());
   try {
-    const row = mount(() => useFavicon(page), { contexts: [[WindowContext, incognito]] });
-    await waitFor(() => useFavicons.getState().profiles[privateProfile]?.pages[page] === "data:image/png;base64,TYPED");
-    assert.equal(cached(page), undefined, "the answer went to the private window, not into the normal profile's cache");
+    const w = privateWindow(page);
+    const row = mount(() => useFavicon(page), { contexts: [[WindowContext, w.id]] });
+    useBrowser.getState().closeWindow(w.id);
+    await settle();
+    assert.deepEqual(asked, []);
+    assert.equal(cached(page), undefined);
     row.unmount();
-    s().closeWindow(incognito);
   } finally {
     delete globalThis.faviconsForTest;
     stop();
@@ -366,101 +372,50 @@ test("an icon drawn in a private window with no profile given asks as that windo
 test("an icon a private tab reports after its window closed doesn't bring the page back into memory", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
-  const s = () => useBrowser.getState();
-  const page = "https://late-icon.test/";
-  const incognito = s().createWindow({ kind: "private", url: page });
-  const privateProfile = s().windows[incognito].profileId;
-  const [tab] = s().windows[incognito].tabIds;
+  const w = privateWindow("https://late-icon.test/");
   let answer;
-  webviews.set(tab, { downloadFavicon: () => new Promise((resolve) => (answer = resolve)) });
+  webviews.set(w.tab, { downloadFavicon: () => new Promise((resolve) => (answer = resolve)) });
   try {
-    noteFavicon(tab, "https://late-icon.test/favicon.ico");
-    s().closeWindow(incognito);
+    noteFavicon(w.tab, "https://late-icon.test/favicon.ico");
+    useBrowser.getState().closeWindow(w.id);
     await waitFor(() => !!answer);
     answer({ uri: "data:image/png;base64,LATE", width: 32, height: 32 });
     await settle();
-    assert.equal(useFavicons.getState().profiles[privateProfile], undefined);
+    assert.equal(useFavicons.getState().profiles[w.profile], undefined);
   } finally {
     webviews.clear();
     stop();
   }
 });
 
-test("a private window closed before its lookup answers leaves no asked marker and no cache behind", async () => {
+test("a private tab's icon leaves the theme and accent caches with its window, late answers included", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
-  const s = () => useBrowser.getState();
-  const page = "https://closed-early.test/";
-  const incognito = s().createWindow({ kind: "private", url: page });
-  const privateProfile = s().windows[incognito].profileId;
-  const source = engineProfile(s(), "default");
+  const shown = "data:image/png;base64,PRIVATESHOWN";
+  const pending = "data:image/png;base64,PRIVATEPENDING";
+  const w = privateWindow("https://private-theme.test/");
+  webviews.set(w.tab, { downloadFavicon: (src) => Promise.resolve({ uri: src.endsWith("a.ico") ? shown : pending, width: 32, height: 32 }) });
   const held = [];
-  globalThis.faviconsForTest = (profile, pages) => new Promise((resolve) => held.push(() => resolve({ pages: new Map(pages.map((p) => [p, { uri: "data:image/png;base64,EARLY" }])), icons: new Map() })));
+  globalThis.iconThemeForTest = ({ uri }) => (uri === pending ? new Promise((resolve) => held.push(() => resolve({ kind: "template" }))) : Promise.resolve({ kind: "full" }));
   try {
-    const row = mount(() => useFavicon(page, null, privateProfile));
-    await waitFor(() => held.length === 1);
-    row.unmount();
-    s().closeWindow(incognito);
-    for (const release of held) release();
+    noteFavicon(w.tab, "https://private-theme.test/a.ico");
+    await waitFor(() => resolveFavicon("https://private-theme.test/", null, w.profile)?.uri === shown);
+    noteFavicon(w.tab, "https://private-theme.test/b.ico");
+    await waitFor(() => Object.values(useFavicons.getState().profiles[w.profile]?.srcs ?? {}).includes(pending));
+    askFaviconTheme(shown);
+    askFaviconTheme(pending);
+    await waitFor(() => useFavicons.getState().themes[shown] !== undefined && held.length === 1);
+    useFaviconAccents.setState({ byUri: { [shown]: "#123456" } });
+    useBrowser.getState().closeWindow(w.id);
+    await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
+    held[0]();
     await settle();
-    assert.equal(useFavicons.getState().profiles[privateProfile], undefined);
-    assert.equal(markAsked(`${privateProfile}|${source}`, page), true, "the marker went with the window");
+    assert.equal(useFavicons.getState().themes[shown], undefined);
+    assert.equal(useFavicons.getState().themes[pending], undefined, "a theme that answered after the close isn't kept");
+    assert.equal(useFaviconAccents.getState().byUri[shown], undefined);
   } finally {
-    delete globalThis.faviconsForTest;
-    stop();
-  }
-});
-
-test("a miss in one profile doesn't stop a private window asking a profile that opens later", async () => {
-  const profiles = {
-    default: { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 },
-    work: { id: "work", name: "Work", color: "blue", icon: null, createdAt: 1 },
-  };
-  useBrowser.getState().hydrate({ profiles, profileOrder: ["default", "work"] });
-  const stop = startFavicons();
-  const s = () => useBrowser.getState();
-  const work = engineProfile(s(), "work");
-  const page = "https://only-at-work.test/";
-  useProfileLoading.setState({ deferred: true, opened: { [engineProfile(s(), "default")]: true }, unloaded: {} });
-  const incognito = s().createWindow({ kind: "private", url: page });
-  const privateProfile = s().windows[incognito].profileId;
-  const asked = [];
-  globalThis.faviconsForTest = (profile, pages) => (asked.push(profile), answering(profile === work ? { [page]: "data:image/png;base64,WORK" } : {})(profile, pages));
-  try {
-    const row = mount(() => useFavicon(page, null, privateProfile));
-    await waitFor(() => useFavicons.getState().profiles[privateProfile]?.pages[page] === null);
-    assert.ok(!asked.includes(work));
-    openProfile(work);
-    await waitFor(() => useFavicons.getState().profiles[privateProfile]?.pages[page] === "data:image/png;base64,WORK");
-    assert.equal(useFavicons.getState().profiles[work]?.pages[page], undefined, "Work's own cache keeps nothing about the private page");
-    row.unmount();
-    s().closeWindow(incognito);
-  } finally {
-    useProfileLoading.setState({ deferred: false, opened: {}, unloaded: {} });
-    delete globalThis.faviconsForTest;
-    stop();
-  }
-});
-
-test("closing a private window while its row still waits after a miss leaves no asked marker", async () => {
-  useBrowser.getState().hydrate({});
-  const stop = startFavicons();
-  const s = () => useBrowser.getState();
-  const page = "https://closed-while-shown.test/";
-  const incognito = s().createWindow({ kind: "private", url: page });
-  const privateProfile = s().windows[incognito].profileId;
-  const source = engineProfile(s(), "default");
-  globalThis.faviconsForTest = (profile, pages) => empty();
-  try {
-    const row = mount(() => useFavicon(page, null, privateProfile));
-    await waitFor(() => useFavicons.getState().profiles[privateProfile]?.pages[page] === null);
-    s().closeWindow(incognito);
-    await settle();
-    row.unmount();
-    assert.equal(useFavicons.getState().profiles[privateProfile], undefined);
-    assert.equal(markAsked(`${privateProfile}|${source}`, page), true, "no marker came back after the close");
-  } finally {
-    delete globalThis.faviconsForTest;
+    delete globalThis.iconThemeForTest;
+    webviews.clear();
     stop();
   }
 });
