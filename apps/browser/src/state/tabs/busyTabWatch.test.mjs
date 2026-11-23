@@ -37,7 +37,8 @@ const { shownTabIds } = await import("./shownTabs.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
 const { slowTimersForTests } = await import("../../platform/slowTimers.ts");
 const { setQuitting } = await import("../app/quit.ts");
-const { keepSiteActive, keptSitesListed, stopKeepingSiteActive } = await import("./memorySaver.ts");
+const { keepSiteActive, stopKeepingSiteActive } = await import("./memorySaver.ts");
+const { keptSitesListed } = await import("./keptSites.ts");
 const { parseSettings } = await import("../settings/settings.ts");
 const { PLATFORM_FEATURES } = await import("../../lib/platformFeatures.ts");
 const { unshownSettings } = await import("../../components/settings/settingsIndex.ts");
@@ -292,6 +293,8 @@ test("query rules match as Chrome's allow filters do: every occurrence of a key 
   assert.ok(!t("https://example.com/?b=2", "example.com/?a=1"), "a key that isn't there doesn't match");
   assert.ok(t("https://example.com/?debug", "example.com/?debug") && !t("https://example.com/?debug=1", "example.com/?debug"), "a bare key matches only the bare key");
   assert.ok(t("https://example.com/?debugger=1", "example.com/?debug*"), "a key with * matches any key it starts");
+  assert.ok(!t("https://example.com/?debug&debugger=1", "example.com/?debug"), "as in url_matcher.cc: every occurrence of the delimited key must be followed by the delimiter, so a longer key that starts the same breaks the match");
+  assert.ok(!t("https://example.com/?debugger=1&debug", "example.com/?debug"));
 });
 
 test("Sleep does nothing once the process has calmed down below the threshold", async () => {
@@ -564,17 +567,23 @@ test("Keep Running relies on the saved site exception: removing it brings warnin
   webviews.clear();
 });
 
-test("the kept-site list shows in Settings whenever Memory Saver or busy-tab warnings read it", () => {
+test("the kept-site header, its Add Site button and the list show in Settings whenever Memory Saver or busy-tab warnings read them", () => {
+  const env = { top: false, glass: true, syncOn: false, calendarAccess: false, officialPlugins: [] };
+  const headerShown = (settings) => !unshownSettings(parseSettings(settings), env).split("\n").includes("advanced.keepActiveSites");
   assert.equal(keptSitesListed({ memorySaver: true, busyTabWarnings: false }), true);
-  assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: true }), true, "Memory Saver off, warnings on: Keep Running's sites stay visible and removable");
+  assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: true }), true, "Memory Saver off, warnings on: Keep Running's sites stay visible, removable and addable");
   assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: false }), false);
+  assert.equal(headerShown({ memorySaver: true, busyTabWarnings: false }), true);
+  assert.equal(headerShown({ memorySaver: false, busyTabWarnings: true }), true, "the header with Add Site shows over the list, never headless rows");
+  assert.equal(headerShown({ memorySaver: false, busyTabWarnings: false }), false);
   PLATFORM_FEATURES.busyTabWatch = false;
   try {
     assert.equal(keptSitesListed({ memorySaver: false, busyTabWarnings: true }), false, "where the platform has no watch, only Memory Saver counts");
+    assert.equal(headerShown({ memorySaver: false, busyTabWarnings: true }), false);
   } finally {
     PLATFORM_FEATURES.busyTabWatch = true;
   }
   const pane = readFileSync(new URL("../../components/settings/panes/Advanced.tsx", import.meta.url), "utf8");
   assert.match(pane, /const sitesListed = useSettings\(keptSitesListed\);/);
-  assert.match(pane, /\{sitesListed &&\s+\[\.\.\.keepActiveSites\]/);
+  assert.match(pane, /\{sitesListed &&\s+\[\.\.\.keepActiveSites\]/, "the list follows the same rule as its header");
 });

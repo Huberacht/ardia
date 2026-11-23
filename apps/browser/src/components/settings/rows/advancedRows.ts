@@ -2,6 +2,7 @@ import { WEBKIT_LIMITS_KEYWORDS, type SettingSection } from "./types";
 import type { SettingsPane } from "../../../state/settings/settingsWindows";
 import type { Settings } from "../../../state/settings/settings";
 import { PLATFORM_FEATURES } from "../../../lib/platformFeatures";
+import { keptSitesListed } from "../../../state/tabs/keptSites";
 
 const webKitOffered = () => PLATFORM_FEATURES.webKit;
 const automaticEngine = (s: Settings) => webKitOffered() && s.engineMode === "automatic";
@@ -41,7 +42,7 @@ export const advancedRows = {
           explained: true,
           description: "These sites never go to sleep.",
           keywords: ["sleep", "never sleep", "keep awake", "exceptions", "discard", "hibernate", "memory saver", "memory", "always keep these sites active"],
-          shown: (s) => s.memorySaver,
+          shown: keptSitesListed,
           needs: "Turn on Memory Saver to use this",
         },
         busyTabWarnings: {
