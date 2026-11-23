@@ -1,37 +1,39 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { readApi, readManifest, typeRows } from "./apiRows.mjs";
 
-const src = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const ios = new URL("../../ios/", import.meta.url);
 const nativeFiles = readdirSync(ios).filter((f) => /\.(swift|mm)$/.test(f));
 const native = (file) => readFileSync(new URL(file, ios), "utf8");
 
-const api = src("./api.ts");
-const manifest = JSON.parse(src("./generated/manifest.json"));
+const api = readApi();
+const manifest = readManifest();
 const capitalized = (name) => name[0].toUpperCase() + name.slice(1);
-const typeHead = (name) => api.match(new RegExp(`^export type ${name} = ((?:\\w+ & )*)\\{$`, "m"));
-const typeBody = (name) => {
-  const head = typeHead(name);
-  assert.ok(head, `${name} is in api.ts`);
-  return api.slice(head.index, api.indexOf("\n};", head.index));
-};
-const keysOf = (body) => new Set([...body.matchAll(/^ {2}"([a-zA-Z]+\.[a-zA-Z]+)":/gm)].map((m) => m[1]));
-const generated = (kind) =>
-  Object.entries(manifest.domains).flatMap(([domain, entry]) => (kind === "calls" ? Object.keys(entry.calls) : entry.events).map((verb) => `${domain}.${verb}`));
-const declared = (name, kind) => new Set([...keysOf(typeBody(name)), ...generated(kind)]);
 const sorted = (set) => [...set].sort();
 
 test("api.ts takes each generated domain's calls and events from packages/hostapi and restates none of them", () => {
+  const calls = typeRows(api, manifest, "EngineCalls");
+  const events = typeRows(api, manifest, "EngineEvents");
+  assert.deepEqual(sorted(calls.operands), sorted(Object.keys(manifest.domains).map((domain) => `${capitalized(domain)}Calls`)));
+  assert.deepEqual(sorted(events.operands), sorted(Object.keys(manifest.domains).map((domain) => `${capitalized(domain)}Events`)));
   for (const domain of Object.keys(manifest.domains)) {
     const name = capitalized(domain);
     assert.match(api, new RegExp(`^import type \\{ ${name}Calls, ${name}Events \\} from "\\./generated/${domain}";$`, "m"));
-    assert.ok(typeHead("EngineCalls")[1].split(" & ").includes(`${name}Calls`), `EngineCalls composes ${name}Calls`);
-    assert.ok(typeHead("EngineEvents")[1].split(" & ").includes(`${name}Events`), `EngineEvents composes ${name}Events`);
-    for (const key of [...keysOf(typeBody("EngineCalls")), ...keysOf(typeBody("EngineEvents"))]) {
-      assert.ok(!key.startsWith(`${domain}.`), `${key} comes from the schema, not a hand row`);
-    }
+    for (const key of [...calls.hand, ...events.hand]) assert.ok(!key.startsWith(`${domain}.`), `${key} comes from the schema, not a hand row`);
   }
+});
+
+test("a type composed from anything but generated domains and one row literal is refused, so no row escapes the parity checks", () => {
+  const head = "export type EngineEvents = HistoryEvents & {";
+  assert.ok(api.includes(head));
+  const extra = `type Extra = {\n  "tabs.windowRequest": { id: string };\n};\n\n`;
+  assert.throws(() => typeRows(extra + api.replace(head, "export type EngineEvents = Extra & HistoryEvents & {"), manifest, "EngineEvents"), /Extra, which isn't a generated domain/);
+  assert.throws(() => typeRows(api.replace(head, "export type EngineEvents = (HistoryEvents) & {"), manifest, "EngineEvents"), /generated domains and one row literal/);
+  const tail = api.indexOf("\n};\n", api.indexOf(head));
+  assert.throws(() => typeRows(`${api.slice(0, tail)}\n} & Extra;\n${api.slice(tail + 4)}`, manifest, "EngineEvents"), /ends its type/);
+  assert.throws(() => typeRows(api.replace(head, `${head}\n  ...Extra,`), manifest, "EngineEvents"), /only rows/);
+  assert.throws(() => typeRows(`${api}\nexport type EngineEvents = {};\n`, manifest, "EngineEvents"), /2 times/);
 });
 
 test("every call in api.ts has a handler in its domain's Swift call table, and nothing else does", () => {
@@ -42,7 +44,7 @@ test("every call in api.ts has a handler in its domain's Swift call table, and n
     if (!domain) continue;
     for (const [, verb] of text.matchAll(/^ {4}"([a-zA-Z]+)": /gm)) swift.add(`${domain}.${verb}`);
   }
-  assert.deepEqual(sorted(swift), sorted(declared("EngineCalls", "calls")));
+  assert.deepEqual(sorted(swift), sorted(typeRows(api, manifest, "EngineCalls").rows));
 });
 
 test("Preload pages loads its profile first, so a profile that isn't open yet is read and written, not skipped", () => {
@@ -72,5 +74,5 @@ test("every event in api.ts is emitted natively under that name, and nothing els
   const between = (from, to) => bridge.slice(bridge.indexOf(from), bridge.indexOf(to, bridge.indexOf(from)));
   const renamed = new Map([...between("NSString *AppEventOfTopic(", "\n}").matchAll(/isEqualToString:@"([^"]+)"\] \? @"([^"]+)"/g)].map((m) => [m[1], m[2]]));
   for (const [, topic] of between("ForwardedTopics()", "];").matchAll(/@"([^"]+)"/g)) emitted.add(renamed.get(topic) ?? topic);
-  assert.deepEqual(sorted(emitted), sorted(declared("EngineEvents", "events")));
+  assert.deepEqual(sorted(emitted), sorted(typeRows(api, manifest, "EngineEvents").rows));
 });

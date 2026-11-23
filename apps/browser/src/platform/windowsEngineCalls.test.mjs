@@ -5,6 +5,7 @@ import { domainCall, domainFunctions, domainsOf, reproduced, topicRouter } from 
 import { watchDownloads } from "../../../../packages/expo-windows/src/engine/domains/downloads.ts";
 import { readArgs } from "../../../../packages/expo-windows/src/engine/domains/calling.ts";
 import { privateWindowShown } from "../../../../packages/expo-windows/src/engine/privateWindows.ts";
+import { typeRows } from "../../../../packages/ardiacore/src/engine/apiRows.mjs";
 
 const repo = new URL("../../../../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, repo), "utf8");
@@ -573,16 +574,10 @@ test("the window list answers an empty list where the engine has none, so a call
 
 test("an event only the Windows host sends is declared apart from the Mac's, and Windows does send it", () => {
   const api = read("packages/ardiacore/src/engine/api.ts");
-  const bodyOf = (name) => {
-    const start = api.search(new RegExp(`^export type ${name} = (?:\\w+ & )*\\{$`, "m"));
-    assert.ok(start >= 0, `${name} is in api.ts`);
-    return api.slice(start, api.indexOf("\n};", start));
-  };
-  const keysOf = (body) => [...body.matchAll(/^ {2}"([a-zA-Z]+\.[a-zA-Z]+)":/gm)].map((m) => m[1]);
-  const windowsOnly = keysOf(bodyOf("WindowsHostEvents"));
+  const manifest = JSON.parse(read("packages/ardiacore/src/engine/generated/manifest.json"));
+  const windowsOnly = [...typeRows(api, manifest, "WindowsHostEvents").rows];
   assert.ok(windowsOnly.length > 0);
-  const generated = Object.entries(JSON.parse(read("packages/ardiacore/src/engine/generated/manifest.json")).domains).flatMap(([domain, entry]) => entry.events.map((event) => `${domain}.${event}`));
-  const mac = new Set([...keysOf(bodyOf("EngineEvents")), ...generated]);
+  const mac = typeRows(api, manifest, "EngineEvents").rows;
   assert.ok(mac.has("history.changed"));
   const sent = readdirSync(new URL(windowsDomains + "../", repo)).filter((file) => /\.tsx?$/.test(file)).map((file) => read("packages/expo-windows/src/engine/" + file)).join("\n");
   for (const name of windowsOnly) {

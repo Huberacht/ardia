@@ -32,6 +32,7 @@ export function validate(name, domain) {
     throw new Error(`schema ${name}: ${message}`);
   };
   if (!NAME.test(name)) fail("the domain's name is lowerCamelCase letters");
+  if (domain.kind !== "engine") fail("kind is engine: JSON calls to ac_* services; positional module domains have no generator yet");
   for (const [path, names] of Object.entries(domain.imports ?? {})) {
     if (!path.startsWith(".")) fail(`import ${path} is relative to the generated folder`);
     for (const type of names) if (!TYPE_NAME.test(type)) fail(`import ${type} from ${path} is a type name`);
@@ -100,6 +101,7 @@ function manifest(domains) {
       calls[verb] = { service: call.service, ...Object.fromEntries(HOSTS.map((host) => [host, bindingOf(call, host)])) };
     }
     out.domains[name] = {
+      kind: domain.kind,
       types: `${GENERATED_TS}${name}.ts`,
       swift: servedByEngine(domain) ? `${SWIFT}${capitalized(name)}Module.swift` : null,
       calls,
@@ -157,4 +159,4 @@ async function main(argv) {
   console.log(`up to date: ${files.size} files`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main(process.argv.slice(2));
+if (import.meta.main) await main(process.argv.slice(2));

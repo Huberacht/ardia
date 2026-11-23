@@ -1,6 +1,7 @@
 import { defineDomain } from "../define.ts";
 
 export const history = defineDomain({
+  kind: "engine",
   imports: {
     "../wire": ["Done", "Profile"],
     "../../history": ["HistoryChangedBatch", "HistoryWireRow"],

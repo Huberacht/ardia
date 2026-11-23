@@ -7,8 +7,28 @@ const read = (path) => readFileSync(ROOT + path, "utf8");
 const manifest = JSON.parse(read(MANIFEST));
 const domains = Object.entries(manifest.domains);
 const linuxContract = read("engine/ardiacore-linux/src/ardia/linux/ac_linux_contract.h");
-const routesBody = linuxContract.slice(linuxContract.indexOf("kRoutes[] = {"), linuxContract.indexOf("\n};", linuxContract.indexOf("kRoutes[] = {")));
-const linuxRoutes = [...routesBody.matchAll(/\{"([\w.]+)", "(ac_\w+)", "(\w*)"\}/g)].map(([, name, service, field]) => ({ name, service, field }));
+export function parseRoutes(header) {
+  const opening = /\bkRoutes\[\]\s*=\s*\{/g;
+  const open = opening.exec(header);
+  if (!open || opening.exec(header)) throw new Error("the header declares kRoutes exactly once");
+  const row = /\s*\{\s*"([^"\\]*)"\s*,\s*"([^"\\]*)"\s*,\s*"([^"\\]*)"\s*\}\s*,?/y;
+  const routes = [];
+  let at = open.index + open[0].length;
+  for (row.lastIndex = at; ; row.lastIndex = at) {
+    const match = row.exec(header);
+    if (!match) break;
+    const [, name, service, field] = match;
+    if (routes.some((route) => route.name === name)) throw new Error(`kRoutes routes ${name} twice; FindRoute would take the first`);
+    routes.push({ name, service, field });
+    at = row.lastIndex;
+  }
+  const close = /\s*\}\s*;/y;
+  close.lastIndex = at;
+  if (!close.test(header)) throw new Error(`kRoutes has a row the scan can't read: ${JSON.stringify(header.slice(at, at + 80))}`);
+  return routes;
+}
+
+const linuxRoutes = parseRoutes(linuxContract);
 const eventNamesBody = linuxContract.slice(linuxContract.indexOf("EventName(std::string_view topic)"), linuxContract.indexOf("\n}", linuxContract.indexOf("EventName(std::string_view topic)")));
 const linuxEvents = new Set([...eventNamesBody.matchAll(/"([\w.]+)"/g)].map((match) => match[1]));
 const windows = JSON.parse(read("packages/expo-windows/src/engine/domains/forwarded.json"));
@@ -18,6 +38,18 @@ test("the scans find the hosts' tables", () => {
   assert.ok(linuxRoutes.length > 30);
   assert.ok(linuxEvents.size > 3);
   assert.ok(Object.keys(windows.forwarded).length > 5);
+});
+
+test("the kRoutes scan reads rows however they're wrapped and refuses what it can't read or a name routed twice", () => {
+  const header = (rows) => `inline constexpr Route kRoutes[] = {\n${rows}\n};\n\ninline const Route* FindRoute(std::string_view name) {}\n`;
+  assert.deepEqual(parseRoutes(header('    {\n"history.query",\n "ac_history_query", ""},\n    {"downloads.pause", "ac_downloads_command", "null"}')), [
+    { name: "history.query", service: "ac_history_query", field: "" },
+    { name: "downloads.pause", service: "ac_downloads_command", field: "null" },
+  ]);
+  assert.throws(() => parseRoutes(header('    {\n"history.query", "ac_evil", ""},\n    {"history.query", "ac_history_query", ""},')), /twice/);
+  assert.throws(() => parseRoutes(header('    {"history.query", "ac_history_query", ""},\n    {kName, "ac_history_add", ""},')), /can't read/);
+  assert.throws(() => parseRoutes(header('    {"history.query", "ac_history_query"},')), /can't read/);
+  assert.throws(() => parseRoutes("struct Route {};"), /exactly once/);
 });
 
 test("the Linux WebUI allowlist routes exactly each generated domain's desktop-routed calls, to the same service", () => {

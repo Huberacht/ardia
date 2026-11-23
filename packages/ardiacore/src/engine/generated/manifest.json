@@ -1,6 +1,7 @@
 {
   "domains": {
     "history": {
+      "kind": "engine",
       "types": "packages/ardiacore/src/engine/generated/history.ts",
       "swift": "packages/ardiacore/ios/HistoryModule.swift",
       "calls": {
