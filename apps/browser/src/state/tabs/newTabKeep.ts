@@ -1,6 +1,7 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useBrowser } from "../browser/store";
 import { watchShownLive } from "../browser/hooks";
+import { focusHeroBar } from "../omnibox/barState";
 import { consentToken } from "../telemetry/client";
 import { notePageOverlay } from "../telemetry/usage";
 import { shownLiveOf } from "./tabLive";
@@ -55,4 +56,12 @@ export function useNewTabKeptForPage(tabId: string, newTabShown: boolean, pageSh
     });
   }, [kept, tabId]);
   return kept;
+}
+
+export function useHeroBarFocusWhenShownAgain(windowId: string, tabId: string, kept: boolean) {
+  const keptBefore = useRef(kept);
+  useLayoutEffect(() => {
+    if (keptBefore.current && !kept) focusHeroBar(windowId, tabId);
+    keptBefore.current = kept;
+  }, [kept, windowId, tabId]);
 }

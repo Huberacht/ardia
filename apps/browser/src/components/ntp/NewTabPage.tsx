@@ -12,6 +12,7 @@ import { Omnibox } from "../omnibox/Omnibox";
 import { NTP_BAR } from "./tokens";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { markNewTabBar } from "../../state/omnibox/newTabMarks";
+import { useHeroBarFocusWhenShownAgain } from "../../state/tabs/newTabKeep";
 
 const BAR_HEIGHT = 112;
 const MARKS = {
@@ -55,6 +56,7 @@ export function NewTabPage({ tabId, toolbar = true, kept = false }: { tabId: str
   const incognito = useWindow(windowId, (w) => w?.kind === "private");
   const onboarding = useOnboarding((s) => s.windowId === windowId);
   const card = useCardAnchors((s) => s[windowId]);
+  useHeroBarFocusWhenShownAgain(windowId, tabId, kept);
   const [size, setSizeState] = useState<Size | null>(() => (lastSize && (!card || sameSize(lastSize.card, card)) ? lastSize.size : null));
   const setSize = (next: Size) => setSizeState((prev) => (prev && sameSize(prev, next) ? prev : next));
   useEffect(() => {
@@ -153,7 +155,7 @@ export function NewTabPage({ tabId, toolbar = true, kept = false }: { tabId: str
           />
         ))}
         <Surface fill={hex(theme.ntpBarSolid)} cornerRadius={NTP_BAR.radius} style={{ padding: NTP_BAR.contentInset }}>
-          {kept ? null : onboarding ? <View style={{ height: BAR_HEIGHT - 2 * NTP_BAR.contentInset }} /> : <Omnibox variant="hero" tabId={tabId} />}
+          {onboarding ? <View style={{ height: BAR_HEIGHT - 2 * NTP_BAR.contentInset }} /> : <Omnibox variant="hero" tabId={tabId} />}
           <View pointerEvents="none" style={{ ...StyleSheet.absoluteFillObject, borderRadius: NTP_BAR.radius, borderWidth: NTP_BAR.border, borderColor: theme.ntpBarBorder }} />
         </Surface>
       </View>
