@@ -955,6 +955,8 @@ if (process.argv.includes("--expired")) {
     assert.equal(house("scripts/hello.sh", misuse).comments, 0);
     const bre = ["#!/bin/sh", "# Usage: hello.sh", "(", "case \"$1\" in -h) sed -n '2,/^($/p' \"$0\" ;; esac", "# stray", ""].join("\n");
     assert.equal(house("scripts/hello.sh", bre).comments, 1);
+    const aliased = ["#!/bin/bash", "# Usage: hello.sh <a>", "#", "#   more help", "set -u", 'here=$(cd "$(dirname "$0")" && pwd)', 'self=$here/$(basename "$0")', "help() { sed -n '2,/^set -u/p' \"$self\" | sed '$d'; }", "# stray", ""].join("\n");
+    assert.equal(house("scripts/hello.sh", aliased).comments, 1);
     const wide = ["#!/bin/sh", "# Usage: hello.sh", "echo hi", "# stray", 'case "$1" in -h) sed -n \'2,$p\' "$0" ;; esac', ""].join("\n");
     assert.equal(house("scripts/hello.sh", wide).comments, 1);
     const bytes = ["#!/usr/bin/env node", "// Not help", 'import { readFileSync } from "node:fs";', 'if (process.argv.includes("--help")) console.log(readFileSync(new URL(import.meta.url), "utf8").length);', ""].join("\n");

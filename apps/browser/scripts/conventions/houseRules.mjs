@@ -45,7 +45,9 @@ export function shellHelpLines(src, strings, context = src) {
   const lines = src.split("\n");
   const exempt = new Set();
   const starts = lineStarts(src);
-  for (const match of src.matchAll(/\$(?:0\b|\{0\}|\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE\b)/g)) {
+  const aliases = [...src.matchAll(/^[ \t]*(?:local[ \t]+|readonly[ \t]+)?([A-Za-z_]\w*)=[^\n]*(?:\$0\b|\$\{0\}|BASH_SOURCE)/gm)].map((match) => match[1]);
+  const selfPath = new RegExp(String.raw`\$(?:0\b|\{0\}|\{BASH_SOURCE(?:\[0\])?\}|BASH_SOURCE\b${aliases.map((name) => `|${name}\\b|\\{${name}\\}`).join("")})`, "g");
+  for (const match of src.matchAll(selfPath)) {
     if (singleQuoted.some((s) => match.index >= s.start && match.index < s.end)) continue;
     const lineIndex = starts.findLastIndex((start) => start <= match.index);
     const line = lines[lineIndex];
