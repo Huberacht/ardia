@@ -1,32 +1,42 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   CACHE_STAMP,
   GUARD_FILE,
+  GUARD_SOURCE,
   MARKER,
-  chooseSource,
+  USERS_DIR,
+  buildCache,
   dependencyKey,
+  installInputs,
   normalizeLockfile,
   planLinks,
   pruneCaches,
   removeTree,
+  runtimeOf,
   setupWorktree,
   undoWorktree,
+  withFileLock,
   workspacePatterns,
   workspaceProjects,
   worktreeStatus,
 } from "./worktree-deps.mjs";
 
+const here = path.dirname(fileURLToPath(import.meta.url));
 const root = fs.realpathSync(fs.mkdtempSync(path.join(tmpdir(), "worktree-deps-")));
 test.after(() => removeTree(root));
 
 const ENV_DOC = "---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    packageManagerDependencies:\n      pnpm:\n        version: 12.21.0\n\n";
-const MAIN_DOC = "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: false\n\npatchedDependencies:\n  left-pad@1.0.0: abc\n";
-const WORKSPACE = 'packages:\n  - apps/*\n  - packages/*\n  - "!apps/site"\n\nnodeLinker: hoisted\n';
+const MAIN_DOC = "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: false\n";
+const LOCKFILE = `${ENV_DOC}---\n${MAIN_DOC}`;
+const WORKSPACE = 'packages:\n  - apps/*\n  - packages/*\n  - "!apps/docs"\n\nnodeLinker: hoisted\n';
+const PROJECTS = ["apps/web", "apps/docs", "packages/base", "packages/kit"];
+const RUNTIME = "darwin-arm64-node24";
 
 const write = (file, text = "") => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -34,60 +44,47 @@ const write = (file, text = "") => {
 };
 let serial = 0;
 const fresh = (name) => path.join(root, `${name}-${serial++}`);
+const quiet = () => {};
 
-function makeRepoFiles(dir, { lockfile = ENV_DOC + "---\n" + MAIN_DOC, patch = "patch v1\n" } = {}) {
+function makeWorktree({ patch = "patch v1\n" } = {}) {
+  const dir = fresh("worktree");
   write(path.join(dir, "package.json"), '{"name":"ardia","private":true}');
-  write(path.join(dir, "pnpm-lock.yaml"), lockfile);
+  write(path.join(dir, "pnpm-lock.yaml"), LOCKFILE);
   write(path.join(dir, "pnpm-workspace.yaml"), WORKSPACE);
   write(path.join(dir, "patches", "left-pad@1.0.0.patch"), patch);
-  for (const project of ["apps/browser", "apps/site", "packages/core", "packages/shell"]) {
-    write(path.join(dir, project, "package.json"), `{"name":"@ardia/${path.basename(project)}"}`);
-  }
-}
-
-function fakeInstall(dir, lockfile) {
-  write(path.join(dir, "node_modules", ".pnpm", "lock.yaml"), normalizeLockfile(lockfile));
-  write(path.join(dir, "node_modules", ".modules.yaml"), "layoutVersion: 5\n");
-  write(path.join(dir, "node_modules", ".cache", "stale"), "x");
-  write(path.join(dir, "node_modules", "react", "package.json"), '{"name":"react"}');
-  write(path.join(dir, "node_modules", "react", "index.js"), "module.exports = 'react from the tree';\n");
-  write(path.join(dir, "node_modules", "@babel", "core", "package.json"), '{"name":"@babel/core"}');
-  write(path.join(dir, "node_modules", "typescript", "bin", "tsc"), "#!/usr/bin/env node\n");
-  fs.mkdirSync(path.join(dir, "node_modules", ".bin"), { recursive: true });
-  fs.symlinkSync("../typescript/bin/tsc", path.join(dir, "node_modules", ".bin", "tsc"));
-  fs.mkdirSync(path.join(dir, "node_modules", "@ardia"), { recursive: true });
-  for (const project of ["apps/browser", "packages/core", "packages/shell"]) {
-    fs.symlinkSync(`../../${project}`, path.join(dir, "node_modules", "@ardia", path.basename(project)));
-  }
-  write(path.join(dir, "apps", "browser", "node_modules", "react-refresh", "package.json"), '{"name":"react-refresh"}');
-  fs.mkdirSync(path.join(dir, "apps", "browser", "node_modules", "@ardia"), { recursive: true });
-  fs.symlinkSync("../../../../packages/core", path.join(dir, "apps", "browser", "node_modules", "@ardia", "core"));
-  write(path.join(dir, "apps", "site", "node_modules", "astro", "package.json"), '{"name":"astro"}');
-}
-
-function makeShared(options) {
-  const dir = fresh("shared");
-  makeRepoFiles(dir, options);
-  fakeInstall(dir, fs.readFileSync(path.join(dir, "pnpm-lock.yaml"), "utf8"));
+  for (const project of PROJECTS) write(path.join(dir, project, "package.json"), `{"name":"@ardia/${path.basename(project)}"}`);
   return dir;
 }
 
-function makeWorktree(options) {
-  const dir = fresh("worktree");
-  makeRepoFiles(dir, options);
-  return dir;
+function fakeInstall(dir) {
+  const nm = path.join(dir, "node_modules");
+  write(path.join(nm, ".pnpm", "lock.yaml"), normalizeLockfile(fs.readFileSync(path.join(dir, "pnpm-lock.yaml"), "utf8")));
+  write(path.join(nm, ".modules.yaml"), "layoutVersion: 5\n");
+  write(path.join(nm, ".cache", "stale"), "x");
+  write(path.join(nm, "react", "index.js"), "module.exports = 'react from the tree';\n");
+  write(path.join(nm, "@babel", "core", "package.json"), '{"name":"@babel/core"}');
+  write(path.join(nm, "typescript", "bin", "tsc"), "#!/usr/bin/env node\n");
+  fs.mkdirSync(path.join(nm, ".bin"), { recursive: true });
+  fs.symlinkSync("../typescript/bin/tsc", path.join(nm, ".bin", "tsc"));
+  fs.mkdirSync(path.join(nm, "@ardia"), { recursive: true });
+  for (const project of ["apps/web", "packages/base", "packages/kit"]) fs.symlinkSync(`../../${project}`, path.join(nm, "@ardia", path.basename(project)));
+  write(path.join(dir, "apps", "web", "node_modules", "react-refresh", "package.json"), '{"name":"react-refresh"}');
+  fs.mkdirSync(path.join(dir, "apps", "web", "node_modules", "@ardia"), { recursive: true });
+  fs.symlinkSync("../../../../packages/base", path.join(dir, "apps", "web", "node_modules", "@ardia", "base"));
 }
 
-function countingInstaller() {
-  const calls = [];
-  const install = ({ staging }) => {
-    calls.push(staging);
-    fakeInstall(staging, fs.readFileSync(path.join(staging, "pnpm-lock.yaml"), "utf8"));
+function harness() {
+  const cacheRoot = fresh("cache");
+  const installs = [];
+  const install = (staging) => {
+    installs.push(staging);
+    fakeInstall(staging);
   };
-  return { calls, install };
+  const build = ({ worktree, cacheRoot: cache, runtime }) => buildCache({ worktree, cacheRoot: cache, runtime, install });
+  const setup = (worktree, extra = {}) => setupWorktree(worktree, { cacheRoot, build, runtime: RUNTIME, log: quiet, ...extra });
+  return { cacheRoot, installs, setup };
 }
 
-const quiet = () => {};
 const snapshot = (dir) =>
   fs
     .readdirSync(dir, { recursive: true, withFileTypes: true })
@@ -95,45 +92,45 @@ const snapshot = (dir) =>
     .sort()
     .join("\n");
 
-test("the lockfile key ignores pnpm's package-manager document, so a checkout's lockfile matches its installed copy", () => {
-  assert.equal(normalizeLockfile(ENV_DOC + "---\n" + MAIN_DOC), MAIN_DOC);
+test("pnpm's installed lockfile reads as the worktree's once the package-manager document is set aside", () => {
+  assert.equal(normalizeLockfile(LOCKFILE), MAIN_DOC);
   assert.equal(normalizeLockfile(MAIN_DOC), MAIN_DOC);
-  const patches = [["a.patch", "1"]];
-  assert.equal(
-    dependencyKey({ lockfile: ENV_DOC + "---\n" + MAIN_DOC, workspace: WORKSPACE, patches }),
-    dependencyKey({ lockfile: MAIN_DOC, workspace: WORKSPACE, patches }),
-  );
 });
 
-test("the key changes with the lockfile, the workspace settings and each patch's name or content, not patch order", () => {
-  const base = { lockfile: MAIN_DOC, workspace: WORKSPACE, patches: [["a.patch", "1"], ["b.patch", "2"]] };
-  const key = dependencyKey(base);
-  assert.match(key, /^[0-9a-f]{16}$/);
-  assert.equal(dependencyKey({ ...base, patches: [...base.patches].reverse() }), key);
-  for (const changed of [
-    { ...base, lockfile: MAIN_DOC + "  other@1.0.0: def\n" },
-    { ...base, workspace: WORKSPACE.replace("hoisted", "isolated") },
-    { ...base, patches: [["a.patch", "1"], ["b.patch", "3"]] },
-    { ...base, patches: [["a.patch", "1"], ["c.patch", "2"]] },
-    { ...base, patches: [["a.patch", "1"]] },
-  ]) {
-    assert.notEqual(dependencyKey(changed), key);
+test("the key covers every install input: lockfile, .npmrc, workspace settings, each manifest, patches and runtime", () => {
+  const dir = makeWorktree();
+  const key = () => dependencyKey(installInputs(dir, RUNTIME));
+  const base = key();
+  assert.match(base, /^[0-9a-f]{16}$/);
+  assert.equal(dependencyKey({ ...installInputs(dir, RUNTIME), files: [...installInputs(dir, RUNTIME).files].reverse() }), base);
+  write(path.join(dir, "apps", "docs", "package.json"), '{"name":"@ardia/docs","dependencies":{"astro":"5"}}');
+  assert.equal(key(), base, "a project outside the workspace isn't an input");
+  const changes = [
+    [() => write(path.join(dir, "pnpm-lock.yaml"), `${ENV_DOC.replace("12.21.0", "12.22.0")}---\n${MAIN_DOC}`), "the package-manager document"],
+    [() => write(path.join(dir, ".npmrc"), "node-linker=isolated\n"), ".npmrc"],
+    [() => write(path.join(dir, "pnpm-workspace.yaml"), WORKSPACE.replace("hoisted", "isolated")), "workspace settings"],
+    [() => write(path.join(dir, "package.json"), '{"name":"ardia","scripts":{"postinstall":"node x"}}'), "the root manifest"],
+    [() => write(path.join(dir, "packages", "kit", "package.json"), '{"name":"@ardia/kit","dependencies":{"left-pad":"1"}}'), "a workspace manifest"],
+    [() => write(path.join(dir, "patches", "left-pad@1.0.0.patch"), "patch v2\n"), "a patch"],
+    [() => write(path.join(dir, "patches", "other@1.0.0.patch"), "new\n"), "a new patch"],
+  ];
+  let previous = base;
+  for (const [change, what] of changes) {
+    change();
+    const next = key();
+    assert.notEqual(next, previous, what);
+    previous = next;
   }
+  assert.notEqual(dependencyKey(installInputs(dir, "linux-x64-node24")), previous, "the platform and CPU");
+  assert.notEqual(dependencyKey(installInputs(dir, "darwin-arm64-node26")), previous, "the Node major version");
+  assert.equal(runtimeOf({ platform: "darwin", arch: "arm64", versions: { node: "24.22.2" } }), "darwin-arm64-node24");
 });
 
 test("workspace projects follow pnpm-workspace.yaml, negations included", () => {
-  assert.deepEqual(workspacePatterns(WORKSPACE), ["apps/*", "packages/*", "!apps/site"]);
+  assert.deepEqual(workspacePatterns(WORKSPACE), ["apps/*", "packages/*", "!apps/docs"]);
   const dir = makeWorktree();
   fs.mkdirSync(path.join(dir, "packages", "no-manifest"), { recursive: true });
-  assert.deepEqual(workspaceProjects(dir, WORKSPACE), ["", "apps/browser", "packages/core", "packages/shell"]);
-});
-
-test("the read-only cache is the default; the shared checkout only on request and only when its install matches", () => {
-  assert.equal(chooseSource({ mode: "cache", worktreeKey: "k", sharedKey: "k" }), "cache");
-  assert.equal(chooseSource({ mode: undefined, worktreeKey: "k", sharedKey: "k" }), "cache");
-  assert.equal(chooseSource({ mode: "shared", worktreeKey: "k", sharedKey: "k" }), "shared");
-  assert.throws(() => chooseSource({ mode: "shared", worktreeKey: "k", sharedKey: "j" }), /don't match/);
-  assert.throws(() => chooseSource({ mode: "shared", worktreeKey: "k", sharedKey: null }), /don't match/);
+  assert.deepEqual(workspaceProjects(dir, WORKSPACE), ["", "apps/web", "packages/base", "packages/kit"]);
 });
 
 test("link plan: entries link to the tree, pnpm state and caches stay out, @ardia points into the worktree", () => {
@@ -142,144 +139,240 @@ test("link plan: entries link to the tree, pnpm state and caches stay out, @ardi
     { name: ".cache", kind: "dir" },
     { name: ".modules.yaml", kind: "file" },
     { name: ".pnpm", kind: "dir" },
-    { name: "@ardia", kind: "workspace-scope", links: [{ name: "core", link: "../../../../packages/core" }, { name: "gone", link: "../../../../packages/gone" }, { name: "out", link: "../../../../../elsewhere" }] },
+    { name: "@ardia", kind: "workspace-scope", links: [{ name: "base", link: "../../../../packages/base" }, { name: "gone", link: "../../../../packages/gone" }, { name: "out", link: "../../../../../elsewhere" }] },
     { name: "@babel", kind: "dir" },
     { name: "react", kind: "dir" },
   ];
-  const { ops, warnings } = planLinks({ sourceRoot: "/tree", worktreeRoot: "/wt", project: "apps/browser", entries, exists: (p) => p === "/wt/packages/core" });
+  const { ops, warnings } = planLinks({ sourceRoot: "/tree", worktreeRoot: "/wt", project: "apps/web", entries, exists: (p) => p === "/wt/packages/base" });
   assert.deepEqual(ops, [
-    { type: "mkdir", path: "/wt/apps/browser/node_modules" },
-    { type: "symlink", path: "/wt/apps/browser/node_modules/.bin", target: "/tree/apps/browser/node_modules/.bin" },
-    { type: "mkdir", path: "/wt/apps/browser/node_modules/@ardia" },
-    { type: "symlink", path: "/wt/apps/browser/node_modules/@ardia/core", target: "../../../../packages/core" },
-    { type: "symlink", path: "/wt/apps/browser/node_modules/@babel", target: "/tree/apps/browser/node_modules/@babel" },
-    { type: "symlink", path: "/wt/apps/browser/node_modules/react", target: "/tree/apps/browser/node_modules/react" },
+    { type: "mkdir", path: "/wt/apps/web/node_modules" },
+    { type: "symlink", path: "/wt/apps/web/node_modules/.bin", target: "/tree/apps/web/node_modules/.bin" },
+    { type: "mkdir", path: "/wt/apps/web/node_modules/@ardia" },
+    { type: "symlink", path: "/wt/apps/web/node_modules/@ardia/base", target: "../../../../packages/base" },
+    { type: "symlink", path: "/wt/apps/web/node_modules/@babel", target: "/tree/apps/web/node_modules/@babel" },
+    { type: "symlink", path: "/wt/apps/web/node_modules/react", target: "/tree/apps/web/node_modules/react" },
   ]);
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /no packages\/gone/);
-  assert.match(warnings[1], /outside its checkout/);
+  assert.match(warnings[1], /outside its tree/);
 });
 
-test("--deps shared links a worktree whose lockfile matches the shared install into the shared checkout", () => {
-  const shared = makeShared();
-  const worktree = makeWorktree();
-  const { calls, install } = countingInstaller();
-  const before = snapshot(shared);
-  const result = setupWorktree(worktree, { shared, cacheRoot: fresh("cache"), install, deps: "shared", log: quiet });
-  assert.equal(result.kind, "shared");
-  assert.equal(calls.length, 0);
-  assert.deepEqual(result.projects, ["", "apps/browser"]);
-  assert.equal(fs.readlinkSync(path.join(worktree, "node_modules", "react")), path.join(shared, "node_modules", "react"));
-  assert.equal(fs.realpathSync(path.join(worktree, "node_modules", ".bin", "tsc")), path.join(shared, "node_modules", "typescript", "bin", "tsc"));
-  assert.equal(fs.realpathSync(path.join(worktree, "node_modules", "@ardia", "core")), path.join(worktree, "packages", "core"));
-  assert.equal(fs.realpathSync(path.join(worktree, "apps", "browser", "node_modules", "@ardia", "core")), path.join(worktree, "packages", "core"));
-  assert.ok(fs.lstatSync(path.join(worktree, "node_modules")).isDirectory());
-  for (const local of [".cache", ".pnpm", ".modules.yaml"]) assert.ok(!fs.existsSync(path.join(worktree, "node_modules", local)), local);
-  assert.ok(!fs.existsSync(path.join(worktree, "apps", "site", "node_modules")), "apps/site is outside the workspace");
-  const marker = JSON.parse(fs.readFileSync(path.join(worktree, "node_modules", MARKER), "utf8"));
-  assert.deepEqual(marker.nodeModules, [path.join(shared, "node_modules"), path.join(shared, "apps", "browser", "node_modules")]);
-  assert.equal(marker.state, "linked");
-  assert.ok(fs.existsSync(path.join(worktree, GUARD_FILE)));
-  assert.ok(fs.existsSync(path.join(worktree, ".metadata_never_index")));
-  assert.equal(snapshot(shared), before);
-  assert.deepEqual(worktreeStatus(worktree).problems, []);
-});
-
-test("setup installs each lockfile once into a read-only cache that later worktrees reuse", () => {
-  const shared = makeShared();
-  const cacheRoot = fresh("cache");
-  const { calls, install } = countingInstaller();
+test("setup installs once per key into a read-only cache, links the worktree into it, and records the worktree", () => {
+  const { cacheRoot, installs, setup } = harness();
   const first = makeWorktree();
-  const result = setupWorktree(first, { shared, cacheRoot, install, log: quiet });
-  assert.equal(result.kind, "cache");
+  const result = setup(first);
   assert.equal(result.createdCache, true);
-  assert.equal(calls.length, 1);
+  assert.equal(installs.length, 1);
   assert.equal(result.sourceRoot, path.join(fs.realpathSync(cacheRoot), result.key));
-  assert.ok(fs.existsSync(path.join(result.sourceRoot, CACHE_STAMP)));
+  const stamp = JSON.parse(fs.readFileSync(path.join(result.sourceRoot, CACHE_STAMP), "utf8"));
+  assert.equal(stamp.key, result.key);
+  assert.equal(stamp.runtime, RUNTIME);
+  assert.ok(stamp.files[".npmrc"] === undefined && stamp.files["packages/kit/package.json"], "the stamp records the inputs it was built from");
+  assert.deepEqual(result.projects, ["", "apps/web"]);
   assert.equal(fs.readlinkSync(path.join(first, "node_modules", "react")), path.join(result.sourceRoot, "node_modules", "react"));
+  assert.equal(fs.realpathSync(path.join(first, "node_modules", ".bin", "tsc")), path.join(result.sourceRoot, "node_modules", "typescript", "bin", "tsc"));
+  assert.equal(fs.realpathSync(path.join(first, "node_modules", "@ardia", "base")), path.join(first, "packages", "base"));
+  assert.equal(fs.realpathSync(path.join(first, "apps", "web", "node_modules", "@ardia", "base")), path.join(first, "packages", "base"));
+  for (const local of [".cache", ".pnpm", ".modules.yaml"]) assert.ok(!fs.existsSync(path.join(first, "node_modules", local)), local);
+  assert.ok(!fs.existsSync(path.join(first, "apps", "docs", "node_modules")), "apps/docs is outside the workspace");
   if (process.getuid?.() !== 0) {
-    assert.throws(() => fs.writeFileSync(path.join(result.sourceRoot, "node_modules", "react", "index.js"), "overwritten"), { code: "EACCES" });
-    assert.throws(() => fs.mkdirSync(path.join(result.sourceRoot, "node_modules", "new-package")), { code: "EACCES" });
+    assert.throws(() => fs.writeFileSync(path.join(first, "node_modules", "react", "index.js"), "through the link"), { code: "EACCES" });
+    assert.throws(() => fs.mkdirSync(path.join(first, "node_modules", "@babel", "new-package")), { code: "EACCES" });
   }
+  assert.equal(fs.readFileSync(path.join(first, GUARD_FILE), "utf8"), GUARD_SOURCE);
+  assert.ok(fs.existsSync(path.join(first, ".metadata_never_index")));
+  assert.equal(fs.readdirSync(path.join(cacheRoot, USERS_DIR)).length, 1);
   assert.deepEqual(fs.readdirSync(cacheRoot).filter((n) => n.startsWith(".staging")), []);
+  assert.deepEqual(worktreeStatus(first).problems, []);
 
-  const second = makeWorktree();
-  const again = setupWorktree(second, { shared, cacheRoot, install, log: quiet });
+  const again = setup(makeWorktree());
   assert.equal(again.sourceRoot, result.sourceRoot);
   assert.equal(again.createdCache, false);
-  assert.equal(calls.length, 1);
+  assert.equal(installs.length, 1);
+  assert.equal(setup(makeWorktree({ patch: "patch v2\n" })).createdCache, true);
+  assert.equal(installs.length, 2);
+});
 
-  const patched = setupWorktree(makeWorktree({ patch: "patch v2\n" }), { shared, cacheRoot, install, log: quiet });
-  assert.notEqual(patched.key, result.key);
-  assert.equal(calls.length, 2);
-  assert.throws(() => setupWorktree(makeWorktree({ patch: "patch v3\n" }), { shared, cacheRoot, install, deps: "shared", log: quiet }), /don't match/);
+test("a relative --cache works", () => {
+  const { setup } = harness();
+  const cwd = process.cwd();
+  process.chdir(root);
+  try {
+    const result = setup(makeWorktree(), { cacheRoot: "relative-cache" });
+    assert.equal(result.sourceRoot, path.join(root, "relative-cache", result.key));
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
+test("setup refuses someone else's pnpmfile before changing anything, and undo keeps a pnpmfile it didn't write", () => {
+  const { cacheRoot, installs, setup } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, GUARD_FILE), "module.exports = { hooks: {} };\n");
+  assert.throws(() => setup(worktree), /someone else's pnpmfile/);
+  assert.equal(installs.length, 0);
+  assert.ok(!fs.existsSync(path.join(worktree, "node_modules")));
+  assert.ok(!fs.existsSync(path.join(cacheRoot, USERS_DIR)));
+  write(path.join(worktree, GUARD_FILE), 'function blocked() {\n  throw new Error("pnpm install is blocked in a worktree linked by scripts/agent/worktree-setup");\n}\n');
+  setup(worktree);
+  assert.equal(fs.readFileSync(path.join(worktree, GUARD_FILE), "utf8"), GUARD_SOURCE, "an older guard of ours is replaced");
+  setup(worktree);
+  write(path.join(worktree, GUARD_FILE), "edited by hand\n");
+  undoWorktree(worktree, { log: quiet });
+  assert.equal(fs.readFileSync(path.join(worktree, GUARD_FILE), "utf8"), "edited by hand\n");
 });
 
 test("setup refuses a worktree's own node_modules unless --replace, and reruns in place", () => {
-  const shared = makeShared();
+  const { setup } = harness();
   const worktree = makeWorktree();
   write(path.join(worktree, "node_modules", "real-install", "index.js"), "x");
-  assert.throws(() => setupWorktree(worktree, { shared, cacheRoot: fresh("cache"), deps: "shared", log: quiet }), /its own install; pass --replace/);
+  assert.throws(() => setup(worktree), /its own install; pass --replace/);
+  const elsewhere = fresh("whole-tree");
+  write(path.join(elsewhere, "react", "index.js"), "x");
   const whole = makeWorktree();
-  fs.symlinkSync(path.join(shared, "node_modules"), path.join(whole, "node_modules"));
-  assert.throws(() => setupWorktree(whole, { shared, cacheRoot: fresh("cache"), deps: "shared", log: quiet }), /link to a whole node_modules/);
-  const before = snapshot(shared);
-  setupWorktree(whole, { shared, cacheRoot: fresh("cache"), deps: "shared", replace: true, log: quiet });
-  assert.equal(snapshot(shared), before, "replacing a whole-folder link never deletes through it");
+  fs.symlinkSync(elsewhere, path.join(whole, "node_modules"));
+  assert.throws(() => setup(whole), /link to a whole node_modules/);
+  const before = snapshot(elsewhere);
+  setup(whole, { replace: true });
+  assert.equal(snapshot(elsewhere), before, "replacing a whole-folder link never deletes through it");
   assert.ok(fs.lstatSync(path.join(whole, "node_modules")).isDirectory());
 
-  setupWorktree(worktree, { shared, cacheRoot: fresh("cache"), deps: "shared", replace: true, log: quiet });
-  write(path.join(worktree, "apps", "browser", "node_modules", ".cache", "ardia-test-tsx", "a.mjs"), "cached");
+  const result = setup(worktree, { replace: true });
+  write(path.join(worktree, "apps", "web", "node_modules", ".cache", "ardia-test-tsx", "a.mjs"), "cached");
   write(path.join(worktree, "node_modules", "react_pacquet-stage_1", "index.js"), "left by a bypassed pnpm install");
   fs.rmSync(path.join(worktree, "node_modules", "@babel"));
   write(path.join(worktree, "node_modules", "@babel", "core", "index.js"), "a real copy");
-  setupWorktree(worktree, { shared, cacheRoot: fresh("cache"), deps: "shared", log: quiet });
-  assert.ok(fs.existsSync(path.join(worktree, "apps", "browser", "node_modules", ".cache", "ardia-test-tsx", "a.mjs")), "local caches survive a rerun");
+  setup(worktree);
+  assert.ok(fs.existsSync(path.join(worktree, "apps", "web", "node_modules", ".cache", "ardia-test-tsx", "a.mjs")), "local caches survive a rerun");
   assert.ok(!fs.existsSync(path.join(worktree, "node_modules", "react_pacquet-stage_1")));
   assert.ok(fs.lstatSync(path.join(worktree, "node_modules", "@babel")).isSymbolicLink());
-  assert.equal(snapshot(shared), before);
+  assert.equal(fs.readlinkSync(path.join(worktree, "node_modules", "react")), path.join(result.sourceRoot, "node_modules", "react"));
 });
 
-test("status notices a moved shared install, and undo removes only the worktree's links", () => {
-  const shared = makeShared();
+test("the marker names every managed folder before the first link, so undo cleans an interrupted setup", (t) => {
+  const { setup } = harness();
   const worktree = makeWorktree();
-  setupWorktree(worktree, { shared, cacheRoot: fresh("cache"), deps: "shared", log: quiet });
-  fs.writeFileSync(path.join(shared, "node_modules", ".pnpm", "lock.yaml"), MAIN_DOC + "  moved@1.0.0: x\n");
-  assert.match(worktreeStatus(worktree).problems.join("\n"), /shared checkout's install moved/);
-  const before = snapshot(shared);
+  setup(makeWorktree());
+  const realSymlink = fs.symlinkSync;
+  let seen = null;
+  t.mock.method(fs, "symlinkSync", (target, file) => {
+    seen ??= JSON.parse(fs.readFileSync(path.join(worktree, "node_modules", MARKER), "utf8"));
+    if (file.includes(`${path.sep}apps${path.sep}web${path.sep}`)) throw new Error("interrupted");
+    return realSymlink(target, file);
+  });
+  assert.throws(() => setup(worktree), /interrupted/);
+  t.mock.restoreAll();
+  assert.deepEqual(seen.projects, ["", "apps/web"]);
+  assert.equal(seen.state, "linking");
+  assert.match(worktreeStatus(worktree).problems.join("\n"), /didn't finish/);
   undoWorktree(worktree, { log: quiet });
-  for (const gone of ["node_modules", "apps/browser/node_modules", GUARD_FILE]) assert.ok(!fs.existsSync(path.join(worktree, gone)), gone);
-  assert.equal(snapshot(shared), before);
+  for (const gone of ["node_modules", "apps/web/node_modules", GUARD_FILE]) assert.ok(!fs.existsSync(path.join(worktree, gone)), gone);
+});
+
+test("re-setup removes the links of a project the workspace no longer lists", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  assert.deepEqual(setup(worktree).projects, ["", "apps/web"]);
+  write(path.join(worktree, "pnpm-workspace.yaml"), WORKSPACE.replace('"!apps/docs"', '"!apps/docs"\n  - "!apps/web"'));
+  const result = setup(worktree);
+  assert.deepEqual(result.projects, [""]);
+  assert.ok(!fs.existsSync(path.join(worktree, "apps", "web", "node_modules")));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(worktree, "node_modules", MARKER), "utf8")).projects, [""]);
+});
+
+test("status notices changed inputs, and undo removes the worktree's links and record but not the tree", () => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  const result = setup(worktree);
+  write(path.join(worktree, ".npmrc"), "save-exact=true\n");
+  assert.match(worktreeStatus(worktree).problems.join("\n"), /install inputs changed/);
+  const before = snapshot(result.sourceRoot);
+  undoWorktree(worktree, { log: quiet });
+  for (const gone of ["node_modules", "apps/web/node_modules", GUARD_FILE]) assert.ok(!fs.existsSync(path.join(worktree, gone)), gone);
+  assert.equal(snapshot(result.sourceRoot), before);
+  assert.deepEqual(fs.readdirSync(path.join(cacheRoot, USERS_DIR)), []);
   assert.throws(() => undoWorktree(worktree, { log: quiet }), /isn't linked/);
 });
 
-test("prune keeps caches a worktree uses or used recently and deletes the rest", () => {
-  const shared = makeShared();
-  const cacheRoot = fresh("cache");
-  const { install } = countingInstaller();
-  const used = makeWorktree({ patch: "used\n" });
-  const usedKey = setupWorktree(used, { shared, cacheRoot, install, log: quiet }).key;
+test("prune keeps a cache any recorded worktree or scratch export still links, git worktree or not", () => {
+  const { cacheRoot, setup } = harness();
+  const exported = makeWorktree({ patch: "export\n" });
+  const exportKey = setup(exported).key;
   const idle = makeWorktree({ patch: "idle\n" });
-  const idleKey = setupWorktree(idle, { shared, cacheRoot, install, log: quiet }).key;
+  const idleKey = setup(idle).key;
   undoWorktree(idle, { log: quiet });
+  const moved = makeWorktree({ patch: "moved\n" });
+  const movedKey = setup(moved).key;
+  undoWorktree(moved, { log: quiet });
+  setup(moved, { replace: true });
   const later = Date.now() + 10 * 24 * 60 * 60 * 1000;
-  assert.deepEqual(pruneCaches({ cacheRoot, shared: null, extraWorktrees: [used], now: Date.now(), log: quiet }), []);
-  const removed = pruneCaches({ cacheRoot, shared: null, extraWorktrees: [used], now: later, log: quiet });
+  assert.deepEqual(pruneCaches({ cacheRoot, now: Date.now(), log: quiet }), []);
+  const removed = pruneCaches({ cacheRoot, now: later, log: quiet });
   assert.deepEqual(removed, [path.join(cacheRoot, idleKey)]);
-  assert.ok(fs.existsSync(path.join(cacheRoot, usedKey, CACHE_STAMP)));
+  assert.ok(fs.existsSync(path.join(cacheRoot, exportKey, CACHE_STAMP)));
+  assert.ok(fs.existsSync(path.join(cacheRoot, movedKey, CACHE_STAMP)));
+  assert.equal(fs.readlinkSync(path.join(exported, "node_modules", "react")).startsWith(fs.realpathSync(cacheRoot)), true);
+  assert.ok(fs.existsSync(path.join(exported, "node_modules", "react", "index.js")));
+});
+
+test("the exclude lock lets one writer in at a time and clears a stale holder", () => {
+  const lockDir = path.join(fresh("lock"), "exclude.lock");
+  fs.mkdirSync(path.dirname(lockDir), { recursive: true });
+  assert.equal(withFileLock(lockDir, () => fs.existsSync(lockDir)), true);
+  assert.ok(!fs.existsSync(lockDir));
+  fs.mkdirSync(lockDir);
+  assert.throws(() => withFileLock(lockDir, () => 1, { waitMs: 100 }), /still held/);
+  const old = new Date(Date.now() - 60000);
+  fs.utimesSync(lockDir, old, old);
+  assert.equal(withFileLock(lockDir, () => 2, { waitMs: 100 }), 2);
+});
+
+const hasLock = spawnSync("sh", ["-c", "command -v lockf || command -v flock"]).status === 0;
+
+test("concurrent setups on one new key build it once under the pod lock, and exclude rules aren't duplicated", { skip: !hasLock && "no lockf or flock" }, async () => {
+  const dir = fresh("concurrent");
+  const bin = path.join(dir, "bin");
+  write(path.join(bin, "pnpm"), `#!/bin/sh\necho install >> "${dir}/installs"\nmkdir -p node_modules/.pnpm node_modules/x && cp pnpm-lock.yaml node_modules/.pnpm/lock.yaml && echo 1 > node_modules/x/index.js\nsleep 1\n`);
+  fs.chmodSync(path.join(bin, "pnpm"), 0o755);
+  fs.mkdirSync(path.join(dir, "locks"));
+  const repo = path.join(dir, "repo");
+  spawnSync("git", ["init", "-q", repo]);
+  const worktrees = [0, 1, 2].map((n) => {
+    const worktree = path.join(repo, `w${n}`);
+    for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) write(path.join(worktree, file), file === "pnpm-lock.yaml" ? LOCKFILE : file === "package.json" ? "{}" : "packages: []\n");
+    return worktree;
+  });
+  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, AC_LOCK_ROOT: path.join(dir, "locks") };
+  const cli = path.join(here, "..", "agent", "worktree-setup");
+  const runs = worktrees.map(
+    (worktree) =>
+      new Promise((resolve) => {
+        const child = spawn(cli, [worktree, "--cache", path.join(dir, "cache")], { env, stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        child.stdout.on("data", (d) => (out += d));
+        child.stderr.on("data", (d) => (out += d));
+        child.on("close", (code) => resolve({ code, out }));
+      }),
+  );
+  const results = await Promise.all(runs);
+  for (const { code, out } of results) assert.equal(code, 0, out);
+  assert.equal(fs.readFileSync(path.join(dir, "installs"), "utf8").trim().split("\n").length, 1);
+  const exclude = fs.readFileSync(path.join(repo, ".git", "info", "exclude"), "utf8").split("\n");
+  assert.equal(exclude.filter((line) => line === `/${GUARD_FILE}`).length, 1);
+  for (const worktree of worktrees) assert.ok(fs.existsSync(path.join(worktree, "node_modules", "x", "index.js")));
 });
 
 test("pnpm install fails loudly in a linked worktree and leaves its links alone", { skip: spawnSync("pnpm", ["--version"]).status !== 0 && "pnpm isn't installed" }, () => {
-  const shared = makeShared();
+  const { setup } = harness();
   const worktree = makeWorktree();
+  const result = setup(worktree);
   fs.writeFileSync(path.join(worktree, "package.json"), '{"name":"ardia","private":true,"dependencies":{"react":"19.1.4"}}');
-  setupWorktree(worktree, { shared, cacheRoot: fresh("cache"), deps: "shared", log: quiet });
   fs.rmSync(path.join(worktree, "pnpm-lock.yaml"));
   const before = snapshot(path.join(worktree, "node_modules"));
-  const sharedBefore = snapshot(shared);
-  const result = spawnSync("pnpm", ["install", "--offline"], { cwd: worktree, encoding: "utf8", env: { ...process.env, CI: "1" } });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stdout + result.stderr, /pnpm install is\s+blocked here/);
+  const treeBefore = snapshot(result.sourceRoot);
+  const run = spawnSync("pnpm", ["install", "--offline"], { cwd: worktree, encoding: "utf8", env: { ...process.env, CI: "1" } });
+  assert.notEqual(run.status, 0);
+  assert.match(run.stdout + run.stderr, /pnpm install is\s+blocked here/);
   assert.equal(snapshot(path.join(worktree, "node_modules")), before);
-  assert.equal(snapshot(shared), sharedBefore);
+  assert.equal(snapshot(result.sourceRoot), treeBefore);
 });

@@ -164,9 +164,10 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
 - **Set up a worktree's dependencies with `scripts/agent/worktree-setup <worktree>`** (`--help`), never by
   copying or APFS-cloning `node_modules` or `Pods`: a `cp -Rc` of the JS dependencies writes about 93k inodes and
   keeps fseventsd above 100% CPU for its length, and its deletion costs the same again. The script links each
-  `node_modules` folder entry by entry, in about 0.1 s, into one read-only pnpm install per lockfile under
-  `~/ardia-scratch/deps.noindex/<key>`. The first worktree on a new lockfile makes that install, about 6 s under
-  `locked pod`. `@ardia/*` links point at the worktree's own packages.
+  `node_modules` folder entry by entry, in about 0.1 s, into one read-only pnpm install per set of install inputs
+  (lockfile, `.npmrc`, workspace manifests, patches, platform and Node major) under `~/ardia-scratch/deps.noindex/<key>`.
+  The first worktree on new inputs builds that install under `locked pod`: about 6 s, plus any wait for running app
+  builds. `@ardia/*` links point at the worktree's own packages.
   - In a linked worktree, never `pnpm install`: its `.pnpmfile.cjs` refuses, and the read-only tree stops a bypass.
     `pnpm run` and `pnpm exec` print the refusal and still run, but calling tools directly is quieter:
     `node_modules/.bin/tsrs -p .`, `node --import ./src/test-loader.mjs --test …` in `apps/browser`, or
