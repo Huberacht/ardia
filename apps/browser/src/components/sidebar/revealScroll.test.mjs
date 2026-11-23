@@ -113,15 +113,20 @@ test("the sidebar's own reveal scroll doesn't drop the next reveal that waits fo
   delete geometry.current.entriesShown;
 });
 
-test("closing a selected tab whose reveal waits for its rows reveals the tab that takes its place instead", () => {
+test("closing a selected tab whose reveal waits for its rows reveals the tab that takes its place instead", async () => {
   atTop();
   const ids = S().windows[w].tabIds;
+  S().activate(ids[49]);
+  runFrames();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  scrollY.current = 0;
+  scrolls.length = 0;
   const rows = waitForRows(20);
   S().activate(ids[50]);
   runFrames();
   S().closeTab(ids[50]);
   const replacement = S().windows[w].activeTabIds[S().windows[w].profileId];
-  assert.notEqual(replacement, ids[50]);
+  assert.ok(S().windows[w].tabIds.indexOf(replacement) >= 40, "the tab that takes its place is deep too");
   grow(rows, 60);
   assert.equal(scrolls.length, 1, "the replacement is revealed once its rows exist");
   assert.ok(scrolls[0].y > 300, JSON.stringify(scrolls));

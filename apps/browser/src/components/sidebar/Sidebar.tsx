@@ -6,7 +6,7 @@ import { useSidebarHighContrast } from "../../state/sidebar/textLook";
 import { TintInk } from "../ui/TintInk";
 import { useWindowId, useWindowProfileId } from "../../state/browser/hooks";
 import { useHasDownloads, useNoTiles } from "../../state/sidebar/hooks";
-import { entriesThroughActiveNow } from "../../state/sidebar/geometry";
+import { throughActiveNow } from "../../state/sidebar/geometry";
 import { collapsedSidebarHeader, useAddressBarInSidebar, useDownloadsInSidebarFooter, usePageFrameInset, useSidebarCaptionRoom, useSidebarHeaderCollapsed, useToolbarLightsCenter } from "../../state/windows/layout";
 import { closeAnchoredWhenControlsRowChanges } from "../../state/sidebar/controlsRowChange";
 import { DownloadsButton } from "../downloads/DownloadsButton";
@@ -219,7 +219,7 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
   const capRows = Math.ceil(available / rowPitch()) + 1;
   const holding = pager.holding();
   const rowsOf = (profileId: string) =>
-    pageRowsCap({ profileId, shown, current, visited: !!spots.get(profileId)?.visited, capRows, throughActive: () => entriesThroughActiveNow(windowId, profileId), holding, peaks });
+    pageRowsCap({ profileId, shown, current, visited: !!spots.get(profileId)?.visited, capRows, screen: available, throughActive: () => throughActiveNow(windowId, profileId), holding, peaks });
   useLayoutEffect(() => {
     const spot = spots.get(current) ?? null;
     if (spot === claimed.current) return;

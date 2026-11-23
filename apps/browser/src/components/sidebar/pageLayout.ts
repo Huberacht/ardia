@@ -27,12 +27,12 @@ export type PageSpot = {
 
 export const PREMOUNT_SCREENS = 2;
 
-export type PageRowsInput = { profileId: string; shown: string | null; current: string; visited: boolean; capRows: number; throughActive: () => number; holding: boolean; peaks: Map<string, number> };
+export type PageRowsInput = { profileId: string; shown: string | null; current: string; visited: boolean; capRows: number; screen: number; throughActive: () => { entries: number; height: number }; holding: boolean; peaks: Map<string, number> };
 
-export function pageRowsCap({ profileId, shown, current, visited, capRows, throughActive, holding, peaks }: PageRowsInput): number | undefined {
+export function pageRowsCap({ profileId, shown, current, visited, capRows, screen, throughActive, holding, peaks }: PageRowsInput): number | undefined {
   if (profileId === shown) return undefined;
-  const through = profileId !== current || visited ? 0 : throughActive() + 1;
-  const wanted = through > capRows && through <= capRows * PREMOUNT_SCREENS ? through : capRows;
+  const through = profileId !== current || visited ? null : throughActive();
+  const wanted = through && through.entries + 1 > capRows && through.height <= screen * PREMOUNT_SCREENS ? through.entries + 1 : capRows;
   if (!holding) return wanted;
   const peak = Math.max(wanted, peaks.get(profileId) ?? 0);
   if (peak > capRows) peaks.set(profileId, peak);

@@ -92,10 +92,18 @@ export function entriesThrough(s: BrowserState, windowId: string, profileId: str
   return tabId ? sidebarEntries(s, windowId, profileId).list.findIndex((entry) => holdsTab(s, entry, tabId)) + 1 : 0;
 }
 
-export const entriesThroughActiveNow = (windowId: string, profileId: string): number => {
-  const s = useBrowser.getState();
-  return entriesThrough(s, windowId, profileId, s.windows[windowId]?.activeTabIds[profileId]);
-};
+export function throughActive(s: BrowserState, windowId: string, profileId: string): { entries: number; height: number } {
+  const tabId = s.windows[windowId]?.activeTabIds[profileId];
+  const list = tabId ? sidebarEntries(s, windowId, profileId).list : [];
+  let height = 0;
+  for (let i = 0; i < list.length; i++) {
+    height += entryHeight(s, windowId, profileId, list[i]!) + SIDEBAR_ROW.gap;
+    if (holdsTab(s, list[i]!, tabId!)) return { entries: i + 1, height };
+  }
+  return { entries: 0, height: 0 };
+}
+
+export const throughActiveNow = (windowId: string, profileId: string) => throughActive(useBrowser.getState(), windowId, profileId);
 
 export const entriesThroughTabNow = (windowId: string, tabId: string): number => {
   const s = useBrowser.getState();
