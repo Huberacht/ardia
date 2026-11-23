@@ -118,11 +118,12 @@ def base_paths(steps):
     created = set()
     for step in steps:
         created |= step.created()
-    required, optional = {}, {}
+    required, optional, created_before = {}, {}, set()
     for step in steps:
         for path in deleted_paths(step):
-            if path not in created:
+            if path not in created_before:
                 required.setdefault(path, step.name)
+        created_before |= step.created()
         for path, is_dir in step.paths():
             if is_dir or path in created:
                 continue

@@ -162,6 +162,13 @@ class StrictApply(Fixture):
         pathlib.Path(step.patch).write_text(text)
         required, _ = series_base.base_paths([step])
         self.assertEqual(required, {"chrome/gone.cc": "deletes"})
+        recreate = self.patch("recreates", path="chrome/gone.cc", before="", after="back\n")
+        text = pathlib.Path(recreate.patch).read_text().replace("--- a/chrome/gone.cc", "--- /dev/null")
+        pathlib.Path(recreate.patch).write_text(text)
+        required, _ = series_base.base_paths([step, recreate])
+        self.assertEqual(required, {"chrome/gone.cc": "deletes"})
+        required, _ = series_base.base_paths([recreate, step])
+        self.assertEqual(required, {})
 
     def test_a_file_a_patch_creates_needs_no_base(self):
         step = self.patch("creates", path="chrome/new.cc", before="", after="hello\n")
