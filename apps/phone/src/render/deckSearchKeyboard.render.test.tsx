@@ -49,7 +49,33 @@ const rise = (root: ReturnType<typeof renderSurface>) => {
 
 const keyboardAt = (fromScreenBottom: number) => act(() => void (liveKeyboard.height.value = fromScreenBottom));
 
-test("a focused Search Tabs field rides the keyboard frame by frame until the deck bar's bottom sits its gap above the keyboard's top, on both phones", () => {
+const onIPhone = Platform.OS === "ios" ? test : test.skip;
+const onAndroid = Platform.OS === "android" ? test : test.skip;
+
+const showKeyboard = (height: number) => act(() => (listeners.get("keyboardDidShow") ?? []).forEach((listener) => listener({ endCoordinates: { height, screenX: 0, screenY: DECK_HEIGHT - height, width: 393 } } as never)));
+
+onAndroid("on Android a focused Search Tabs field rises until the deck bar's bottom sits its gap above the keyboard's top, the keyboard's height leaving out the navigation bar, and the deck never subscribes to the live keyboard, so the window keeps resizing for pages", () => {
+  const keyboardHook = jest.spyOn(Reanimated, "useAnimatedKeyboard");
+  const root = renderSurface(<DeckBottomBar shown barCenterY={BAR_CENTER} deckHeight={DECK_HEIGHT} width={402} layout={{ span: { left: 24, right: 24 }, strip: null }} incognito={false} onQuery={() => undefined} />);
+  expect(rise(root)).toBe(0);
+  const field = root.root.findAll((node) => node.props.testID === "deckSearchField" && typeof node.props.onFocus === "function")[0]!;
+  act(() => field.props.onFocus());
+  showKeyboard(KEYBOARD);
+  act(() => jest.advanceTimersByTime(1000));
+  const barBottom = BAR_CENTER + rise(root) + deckChromeLayout.barCircle / 2;
+  expect(barBottom).toBeCloseTo(DECK_HEIGHT - KEYBOARD - SAFE_BOTTOM - deckChromeLayout.barGap, 5);
+  expect(keyboardHook).not.toHaveBeenCalled();
+  unmount(root);
+});
+
+onIPhone("on iPhone the live keyboard is followed only while the deck is shown", () => {
+  const keyboardHook = jest.spyOn(Reanimated, "useAnimatedKeyboard");
+  const hidden = renderSurface(<DeckBottomBar shown={false} barCenterY={BAR_CENTER} deckHeight={DECK_HEIGHT} width={402} layout={{ span: { left: 24, right: 24 }, strip: null }} incognito={false} onQuery={() => undefined} />);
+  expect(keyboardHook).not.toHaveBeenCalled();
+  unmount(hidden);
+});
+
+onIPhone("a focused Search Tabs field rides the keyboard frame by frame until the deck bar's bottom sits its gap above the keyboard's top", () => {
   const root = renderSurface(<DeckBottomBar shown barCenterY={BAR_CENTER} deckHeight={DECK_HEIGHT} width={402} layout={{ span: { left: 24, right: 24 }, strip: null }} incognito={false} onQuery={() => undefined} />);
   expect(rise(root)).toBe(0);
   const field = root.root.findAll((node) => node.props.testID === "deckSearchField" && typeof node.props.onFocus === "function")[0]!;

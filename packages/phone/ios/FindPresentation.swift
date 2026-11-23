@@ -12,14 +12,21 @@ final class FindPresentation {
   private weak var webView: WKWebView?
   private weak var interaction: UIFindInteraction?
   private let document: URL?
+  private let generation: Int
   private let started = CACurrentMediaTime()
   private var task: Task<Void, Never>?
 
-  init(pageID: String, webView: WKWebView, interaction: UIFindInteraction) {
+  init(pageID: String, webView: WKWebView, interaction: UIFindInteraction, generation: Int) {
     self.pageID = pageID
     self.webView = webView
     self.interaction = interaction
+    self.generation = generation
     document = webView.url
+  }
+
+  static func cancel(for pageID: String) {
+    guard let current, current.pageID == pageID else { return }
+    current.cancel()
   }
 
   func watch() {
@@ -28,7 +35,7 @@ final class FindPresentation {
       for _ in 0..<FindPresentation.uncoverFrames {
         try? await Task.sleep(for: .milliseconds(16))
         guard let self, !Task.isCancelled, FindPresentation.current === self else { return }
-        guard let page = PhonePages.shared.page(self.pageID), let webView = self.webView, page.webView === webView, webView.window != nil, webView.url == self.document, let interaction = self.interaction, webView.findInteraction === interaction else {
+        guard let page = PhonePages.shared.page(self.pageID), let webView = self.webView, page.webView === webView, page.navigationGeneration == self.generation, webView.window != nil, webView.url == self.document, let interaction = self.interaction, webView.findInteraction === interaction else {
           self.finish("dropped")
           return
         }

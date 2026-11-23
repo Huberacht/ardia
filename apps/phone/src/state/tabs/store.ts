@@ -317,27 +317,35 @@ function stateSaveIsCurrent(save: StateSave) {
   return true;
 }
 
-export function saveTabState(id: string, saved: string | null, save: StateSave = reserveStateSave(id)) {
+export function saveTabState(id: string, saved: string | null, save: StateSave = reserveStateSave(id)): boolean {
   if (!stateSaveIsCurrent(save)) {
     labTrace(`PAGELAB page state for ${id} dropped, a newer one or a restore came first`);
-    return;
+    return false;
   }
   if (data().privates.some((t) => t.id === id)) {
     if (saved) privateStates.set(id, saved);
     else privateStates.delete(id);
-    return;
+    return true;
   }
-  if (!data().open.some((t) => t.id === id)) return;
+  if (!data().open.some((t) => t.id === id)) return false;
   stageState(tabDatabase(), id, saved);
   flushAfterFrame();
+  return true;
 }
 
 export function pruneExpiredArchive() {
   const db = tabDatabase();
   const { open, privates } = data();
   const live = new Set([...open, ...privates].map((tab) => tab.id));
-  const queued = pendingWrites.get(db)?.put;
-  const expired = expiredArchivedIds(db, now() - ARCHIVE_RETENTION_MS, ARCHIVE_LIMIT).filter((id) => !live.has(id) && queued?.get(id)?.archivedAt !== null && pendingWrites.get(db)?.remove.has(id) !== true);
+  const batch = pendingWrites.get(db);
+  const cutoff = now() - ARCHIVE_RETENTION_MS;
+  const stillExpired = (id: string) => {
+    if (live.has(id) || batch?.remove.has(id)) return false;
+    const queued = batch?.put.get(id);
+    if (!queued) return true;
+    return queued.archivedAt !== null && queued.archivedAt < cutoff;
+  };
+  const expired = expiredArchivedIds(db, cutoff, ARCHIVE_LIMIT).filter(stillExpired);
   if (!expired.length) return 0;
   const gone = new Set(expired);
   stageWrites(db, { put: [], remove: expired });
@@ -458,7 +466,23 @@ export function prepareArchive() {
   archivePreparedAt = now();
 }
 
+let archivePreparation: ReturnType<typeof requestAnimationFrame> | null = null;
+
+export function prepareArchiveNextFrame() {
+  if (archivePreparation !== null) return;
+  archivePreparation = requestAnimationFrame(() => {
+    archivePreparation = null;
+    prepareArchive();
+  });
+}
+
 export function loadArchiveUnlessPrepared() {
+  if (archivePreparation !== null) {
+    cancelAnimationFrame(archivePreparation);
+    archivePreparation = null;
+    prepareArchive();
+    return;
+  }
   if (data().archive !== null && now() - archivePreparedAt < PREPARED_ARCHIVE_FRESH_MS) return;
   loadArchive();
 }

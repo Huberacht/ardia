@@ -5,7 +5,7 @@ import { currentPreferences } from "../settings/store";
 import { currentTabs, useTabs } from "../tabs/store";
 import { idleMacTabs, macTabIndex, mergeSyncedHistory, syncedBookmarks } from "../sync/spaces";
 import { selectedProfile, syncData } from "../sync/store";
-import { idleRows, remoteSuggestions, setSearchEngine, setSources, setSyncedSearch, suggest, type SuggestContext, type TrayRow } from "./omnibox";
+import { idleRows, remoteSuggestions, searchEngineRevision, setSearchEngine, setSources, setSyncedSearch, suggest, type SuggestContext, type TrayRow } from "./omnibox";
 import { withPasteRow, type PasteOffer } from "./pasteRow";
 import { clipboardOffer } from "../../platform/system";
 import { settled } from "../pages/store";
@@ -79,7 +79,7 @@ type IdleRows = { revision: string; rows: TrayRow[] };
 const idleMade = new Map<string, IdleRows>();
 
 const idleScope = () => `${useTabs.getState().incognito}:${useTabs.getState().spaces.current}:${selectedProfile()?.syncId ?? ""}`;
-const idleRevision = () => `${history().revision()}:${syncData().revision}`;
+const idleRevision = () => `${history().revision()}:${syncData().revision}:${searchEngineRevision()}`;
 const idleIsCurrent = () => idleMade.get(idleScope())?.revision === idleRevision();
 
 function idleRowsNow(): TrayRow[] {

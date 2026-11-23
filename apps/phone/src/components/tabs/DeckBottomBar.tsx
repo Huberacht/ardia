@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { actionWords, incognitoWords } from "../../lib/sharedWords";
-import { Pressable, StyleSheet, TextInput, View, type StyleProp, type TextInputInstance, type ViewInstance, type ViewStyle } from "react-native";
-import Animated, { useAnimatedKeyboard, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import { Platform, Pressable, StyleSheet, TextInput, View, type StyleProp, type TextInputInstance, type ViewInstance, type ViewStyle } from "react-native";
+import Animated, { useAnimatedKeyboard, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { floatingBarCenter } from "../../lib/deckGeometry";
 import { haptics } from "../../state/app/haptics";
@@ -10,7 +10,7 @@ import { switchDeckIncognito } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { noteDeckBarTop, watchDeckBar } from "../../state/toasts/store";
-import { capsule, chromeLayout, ChromeSurface, controlSize, deckChromeLayout, FieldAccessory, font, iconRoles, iPhoneOr, PressInPlace, rolesFor, ToggleIconButton, tabsLayout, tabsMotion, useReduceMotion, useTheme, type MenuItem, SystemGlyph } from "../ui";
+import { capsule, chromeLayout, ChromeSurface, controlSize, deckChromeLayout, deckChromeMotion, FieldAccessory, font, iconRoles, iPhoneOr, PressInPlace, rolesFor, ToggleIconButton, tabsCurve, tabsLayout, tabsMotion, useReduceMotion, useTheme, type MenuItem, SystemGlyph } from "../ui";
 import { MenuTrigger } from "../ui/MenuTrigger";
 import { PressedGlyph } from "../ui/PressInPlace";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
@@ -62,6 +62,25 @@ export function IncognitoSwitch({ incognito, dark, onLongPress, glassShown, glas
 
 
 const switchIncognitoSide = () => switchDeckIncognito();
+
+const LIVE_KEYBOARD = Platform.OS === "ios";
+
+function LiveKeyboardTop({ into }: { into: SharedValue<number> }) {
+  const keyboard = useAnimatedKeyboard();
+  useAnimatedReaction(
+    () => keyboard.height.value,
+    (height) => {
+      into.value = height;
+    },
+  );
+  useEffect(
+    () => () => {
+      into.value = 0;
+    },
+    [into],
+  );
+  return null;
+}
 
 const KEYBOARD_DOWN = 0;
 const KEYBOARD_LEAVING = 1;
@@ -153,8 +172,8 @@ export function DeckBottomBar({ shown, barCenterY, deckHeight, width, layout, in
   const { focused } = search;
   const row = useRef<ViewInstance>(null);
   const reach = duoFieldReach(width, layout, chromeLayout.barSideInset);
-  const keyboard = useKeyboardTopFromBottom(shown && reach !== null);
-  const liveKeyboard = useAnimatedKeyboard({ isStatusBarTranslucentAndroid: true, isNavigationBarTranslucentAndroid: true });
+  const keyboard = useKeyboardTopFromBottom(shown && (!LIVE_KEYBOARD || reach !== null));
+  const keyboardTop = useSharedValue(0);
   const barCenterFromBottom = floatingBarCenter(useSafeAreaInsets().bottom, "android");
   const centerY = iPhoneOr(barCenterY, deckHeight - barCenterFromBottom);
   const rest = iPhoneOr<ViewStyle>({ top: centerY - controlSize.bar / 2 }, { bottom: barCenterFromBottom - controlSize.bar / 2 });
@@ -164,17 +183,26 @@ export function DeckBottomBar({ shown, barCenterY, deckHeight, width, layout, in
     focusedNow.value = focused;
   }, [focused]);
   useAnimatedReaction(
-    () => (focusedNow.value ? KEYBOARD_OURS : liveKeyboard.height.value > 0 ? KEYBOARD_LEAVING : KEYBOARD_DOWN),
+    () => (focusedNow.value ? KEYBOARD_OURS : keyboardTop.value > 0 ? KEYBOARD_LEAVING : KEYBOARD_DOWN),
     (now) => {
       if (now === KEYBOARD_OURS) typing.value = true;
       else if (now === KEYBOARD_DOWN) typing.value = false;
     },
   );
+  const timedLift = focused && keyboard > 0 ? deckBarLift(centerY, deckHeight, keyboard) : 0;
+  const rise = useSharedValue(0);
+  useEffect(() => {
+    if (!LIVE_KEYBOARD) rise.value = withTiming(-timedLift, { duration: deckChromeMotion.keyboard, easing: tabsCurve.easeOut });
+  }, [timedLift]);
   const riseNow = () => {
     "worklet";
-    return typing.value ? -deckBarLift(centerY, deckHeight, liveKeyboard.height.value) : 0;
+    if (!LIVE_KEYBOARD) return rise.value;
+    return typing.value ? -deckBarLift(centerY, deckHeight, keyboardTop.value) : 0;
   };
-  const riseStyle = useAnimatedStyle(() => ({ transform: [{ translateY: typing.value ? -deckBarLift(centerY, deckHeight, liveKeyboard.height.value) : 0 }] }), [centerY, deckHeight]);
+  const riseStyle = useAnimatedStyle(() => {
+    if (!LIVE_KEYBOARD) return { transform: [{ translateY: rise.value }] };
+    return { transform: [{ translateY: typing.value ? -deckBarLift(centerY, deckHeight, keyboardTop.value) : 0 }] };
+  }, [centerY, deckHeight]);
   const { span, strip } = layout;
   const plusTop = strip ? (strip.ends ? strip.plus : strip.tabs) : 0;
   const plusPlace = strip ? { bottom: deckHeight - centerY - controlSize.bar / 2 - plusTop, ...besideStrip(strip, width, tabsLayout.menuWidth, deckChromeLayout.menuGap) } : { bottom: deckHeight - centerY + controlSize.bar / 2 + deckChromeLayout.menuGap, right: span.right, width: tabsLayout.menuWidth };
@@ -214,6 +242,7 @@ export function DeckBottomBar({ shown, barCenterY, deckHeight, width, layout, in
   return (
     <Animated.View pointerEvents="box-none" style={[styles.place, rest, riseStyle]}>
       {shown ? <FabricCatchUp motion={riseNow} testID="deckBarFabricCatchUp" /> : null}
+      {shown && LIVE_KEYBOARD ? <LiveKeyboardTop into={keyboardTop} /> : null}
       <View ref={row} testID="deckBottomBar" onLayout={measure} pointerEvents="box-none" style={[styles.bar, { paddingLeft: span.left, paddingRight: span.right }]}>
         {strip?.ends ? null : incognitoSwitch}
         {ends ? (

@@ -59,6 +59,12 @@ extension PageView {
   }
 
   @MainActor
+  var currentDocumentDrawn: Bool {
+    guard drawnDelivered, let drawnDocument, let page else { return false }
+    return drawnDocument == page.navigationGeneration
+  }
+
+  @MainActor
   func coverChanged() {
     coverCapTask?.cancel()
     coverCapTask = nil
@@ -67,7 +73,7 @@ extension PageView {
     restoreHiddenCover()
     coverHandedOver = false
     guard coverNativeID != nil else { return }
-    if drawnDelivered {
+    if currentDocumentDrawn {
       handOverCover(reason: "drawn")
       return
     }
@@ -90,12 +96,19 @@ extension PageView {
   @MainActor
   func handOverCover(reason: String) {
     guard coverNativeID != nil, !coverHandedOver, coverRetryTask == nil else { return }
+    let forDraw = reason == "drawn"
+    guard !forDraw || currentDocumentDrawn else { return }
     if hideCover(reason: reason) { return }
     let wanted = coverNativeID
+    let document = drawnDocument
     coverRetryTask = Task { @MainActor [weak self] in
       for _ in 0..<PageView.coverRetries {
         try? await Task.sleep(for: PageView.coverRetryGap)
         guard !Task.isCancelled, let self, self.coverNativeID == wanted, !self.coverHandedOver else { return }
+        guard !forDraw || (self.currentDocumentDrawn && self.drawnDocument == document) else {
+          self.coverRetryTask = nil
+          return
+        }
         if self.hideCover(reason: reason) {
           self.coverRetryTask = nil
           return

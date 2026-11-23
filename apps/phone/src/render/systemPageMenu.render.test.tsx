@@ -6,7 +6,8 @@ import { pages } from "../platform/pages";
 import { SystemPageMenuHost } from "../components/browsing/SystemPageMenu";
 import { ExpoLibrarySheet } from "../components/library/ExpoLibrary";
 import { DesignProvider } from "../components/ui";
-import { askTranslation, closePageMenu, confirmTranslation, openPageMenu, pageMenuHidden, pageMenuPresentation, printCurrentPage, setBlockersOn, setNightShadeOn, showFind } from "../state/page/actions";
+import { askTranslation, closePageMenu, confirmTranslation, openPageMenu, openSiteSettingsSheet, pageMenuHidden, pageMenuPresentation, printCurrentPage, setBlockersOn, setNightShadeOn, showFind } from "../state/page/actions";
+import { useSettingsNav } from "../state/settings/nav";
 import { registerPageHandle } from "../state/pages/store";
 import { menuModel } from "../state/page/pageMenu";
 import { usePageUi } from "../state/page/store";
@@ -397,4 +398,39 @@ onIos("the menu sheet takes one detent as tall as its rows, measured only once t
   const group = hosts(sheetIn(again, "systemPageMenuSheet")!, (props) => Array.isArray(props.modifiers) && (props.modifiers as { $type: string }[]).some((modifier) => modifier.$type === "presentationDetents"))[0]!;
   expect((group.props.modifiers as { $type: string; detents?: unknown }[]).find((modifier) => modifier.$type === "presentationDetents")!.detents).toEqual([{ height: 612 }]);
   unmount(again);
+});
+
+onIos("a site read that fails leaves the switches without a value instead of showing defaults, and nothing is remembered from it", async () => {
+  jest.spyOn(pages, "nightShade").mockRejectedValue(new Error("gone"));
+  page("https://read-fails.example/", false);
+  await flush();
+  act(() => usePageUi.setState({ menuSite: null }));
+  await act(async () => void (await openPageMenu()));
+  expect(usePageUi.getState().menuSite).toBeNull();
+  act(() => closePageMenu());
+  act(() => void openPageMenu());
+  expect(usePageUi.getState().menuSite).toBeNull();
+  await flush();
+});
+
+onIos("a Night Shade write that fails forgets the value it hoped for and shows the site's real state again", async () => {
+  page("https://write-fails.example/", false);
+  await act(async () => void (await openPageMenu()));
+  jest.spyOn(pages, "setNightShade").mockRejectedValue(new Error("refused"));
+  jest.spyOn(pages, "nightShade").mockResolvedValue({ mode: "disabled" } as never);
+  act(() => setNightShadeOn(true));
+  expect(usePageUi.getState().menuSite).toMatchObject({ nightShade: "always" });
+  await flush();
+  await flush();
+  expect(usePageUi.getState().menuSite).toMatchObject({ host: "write-fails.example", nightShade: "disabled" });
+});
+
+onIos("Site Settings asked for from the menu still opens if the page moves on while the menu leaves", async () => {
+  page("https://settings-a.example/", false);
+  act(() => useSettingsNav.setState({ open: false, stack: [{ page: "root" }], popping: false }));
+  await act(async () => void openPageMenu());
+  act(() => openSiteSettingsSheet());
+  page("https://settings-b.example/", false);
+  act(() => pageMenuHidden());
+  expect(useSettingsNav.getState().open).toBe(true);
 });

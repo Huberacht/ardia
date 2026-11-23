@@ -74,11 +74,11 @@ export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
     return { opacity: android ? fold.value : 1, transform: [{ translateY: (hostPillLayout.height / 2) * (1 - scale) }, { scale }] };
   }, [shrink]);
   const pillContent = useAnimatedStyle(() => ({ opacity: fold.value }));
-  const barLook: BarFoldLook = { glass: android || !collapsed, glyphsGone: android ? null : fold };
+  const barLook: BarFoldLook = { glass: android || !collapsed, glyphsGone: android ? null : fold, progress: fold };
   return { bar, barLook, pill, pillContent, pillGlass: android || collapsed, progress: fold };
 }
 
-export type BarFoldLook = { glass: boolean; glyphsGone: SharedValue<number> | null };
+export type BarFoldLook = { glass: boolean; glyphsGone: SharedValue<number> | null; progress: SharedValue<number> };
 
 export function useFoldGlyphs(fold: BarFoldLook | null) {
   const gone = fold?.glyphsGone ?? null;

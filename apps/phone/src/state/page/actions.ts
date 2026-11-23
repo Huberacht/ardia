@@ -53,7 +53,7 @@ const hostOf = (url: string | null) => (url ? display(url).host || null : null);
 
 type MenuOpening = { id: number; tabId: string; host: string | null; isPrivate: boolean };
 type MenuDocument = { opening: number; tabId: string; url: string };
-type AfterMenu = MenuDocument & { run: () => void };
+type AfterMenu = MenuDocument & { run: () => void; sameDocument: boolean };
 
 let openings = 0;
 let opening: MenuOpening | null = null;
@@ -81,10 +81,15 @@ const siteRevision = (host: string | null, isPrivate: boolean) => (host ? (siteR
 
 type SiteRead = { site: MenuSite; revision: number };
 
+const READ_FAILED = Symbol("site read failed");
+
 async function readMenuSite(url: string, host: string | null, isPrivate: boolean): Promise<SiteRead | null> {
   const revision = bumpSite(host, isPrivate);
-  const [shade, blockers] = await Promise.all([settled(() => pages.nightShade(host, isPrivate), null), settled(() => blocking.isEnabledForSite(url, isPrivate), true)]);
-  if (siteRevision(host, isPrivate) !== revision) return null;
+  const [shade, blockers] = await Promise.all([
+    settled<Awaited<ReturnType<typeof pages.nightShade>> | typeof READ_FAILED>(() => pages.nightShade(host, isPrivate), READ_FAILED),
+    settled<boolean | typeof READ_FAILED>(() => blocking.isEnabledForSite(url, isPrivate), READ_FAILED),
+  ]);
+  if (shade === READ_FAILED || blockers === READ_FAILED || siteRevision(host, isPrivate) !== revision) return null;
   const site: MenuSite = { host, isPrivate, nightShade: shade?.mode ?? "disabled", blockersEnabled: blockers };
   if (!isPrivate && host) knownSites.set(host, site);
   return { site, revision };
@@ -118,9 +123,16 @@ function followOpenMenuHost() {
   void readOpeningSite(moved, url).catch(() => undefined);
 }
 
-function writeSite(site: MenuSite) {
-  bumpSite(site.host, site.isPrivate);
+function writeSite(site: MenuSite): number {
+  const revision = bumpSite(site.host, site.isPrivate);
   if (!site.isPrivate && site.host) knownSites.set(site.host, site);
+  return revision;
+}
+
+function siteWriteFailed(site: MenuSite, revision: number, url: string) {
+  if (siteRevision(site.host, site.isPrivate) !== revision) return;
+  if (site.host && knownSites.get(site.host) === site) knownSites.delete(site.host);
+  void readMenuSite(url, site.host, site.isPrivate).then(publishSite, () => undefined);
 }
 
 function showsHost(tabId: string, host: string | null) {
@@ -197,20 +209,20 @@ export function pageMenuHidden(token: number | null = null) {
   const pending = afterMenu;
   if (!pending || pageUi().menuOpen || (token !== null && token !== pending.opening)) return;
   afterMenu = null;
-  if (opening?.id !== pending.opening || !showsDocument(pending)) return;
+  if (opening?.id !== pending.opening || (pending.sameDocument ? !showsDocument(pending) : selectedId() !== pending.tabId)) return;
   pending.run();
 }
 
 export const pageMenuHostGone = (token: number | null) => pageMenuHidden(token ?? opening?.id ?? null);
 
-function afterPageMenu(run: () => void) {
+function afterPageMenu(run: () => void, { sameDocument = true }: { sameDocument?: boolean } = {}) {
   const document = currentDocument();
   if (!pageUi().menuOpen || !document) {
     afterMenu = null;
     run();
     return;
   }
-  afterMenu = { ...document, run };
+  afterMenu = { ...document, run, sameDocument };
   closePageMenu();
 }
 
@@ -371,7 +383,7 @@ export const openDockedSiteSettings = () => showPageMenu(true);
 export const closeMenuSubpage = () => usePageUi.setState({ menuPage: "main" });
 
 export function openSiteSettingsSheet() {
-  afterPageMenu(() => openSettingsPage({ page: "siteSettings" }));
+  afterPageMenu(() => openSettingsPage({ page: "siteSettings" }), { sameDocument: false });
 }
 
 export function openSiteSettingsRoute(route: SettingsRoute, { direct = false } = {}) {
@@ -496,6 +508,7 @@ export function showFind() {
     if (!id) return;
     requestAnimationFrame(() => {
       if (selectedId() !== id) return;
+      systemFindTab = id;
       quietly(async () => markFindPhase((await pages.presentSystemFind(id)) ? "navigatorVisible" : "navigatorPending"));
     });
     return;
@@ -555,12 +568,14 @@ function translateDocument(tab: BrowserTab, url: string) {
 export function setNightShadeOn(on: boolean) {
   const target = menuSiteTarget();
   if (!target) return;
-  const { tab, site, host } = target;
+  const { tab, site, host, url } = target;
   const mode: NightShadeMode = on ? "always" : "disabled";
   const next = { ...site, nightShade: mode };
-  writeSite(next);
+  const revision = writeSite(next);
   usePageUi.setState({ menuSite: next });
-  quietly(() => pages.setNightShade(mode, host, tab.isPrivate));
+  void Promise.resolve()
+    .then(() => pages.setNightShade(mode, host, tab.isPrivate))
+    .catch(() => siteWriteFailed(next, revision, url));
 }
 
 export const zoomOut = () => withPage((id) => pages.zoomOut(id));
@@ -577,9 +592,17 @@ export function setBlockersOn(on: boolean) {
   if (!target) return;
   const { tab, site, host, url } = target;
   closePageMenu();
-  writeSite({ ...site, blockersEnabled: on });
+  const next = { ...site, blockersEnabled: on };
+  const revision = writeSite(next);
   quietly(async () => {
-    await blocking.setEnabledForSite(url, on, tab.isPrivate);
+    const written = await settled(async () => {
+      await blocking.setEnabledForSite(url, on, tab.isPrivate);
+      return true;
+    }, false);
+    if (!written) {
+      siteWriteFailed(next, revision, url);
+      return;
+    }
     showToast(blockersToast(on, host), on ? "blocking" : "warning");
     const now = findTab(currentTabs(), tab.id);
     if (now && tabUrl(now) === url) await pageHandle(tab.id)?.reload();
@@ -802,8 +825,18 @@ useBrowse.subscribe((browse, previous) => {
   if (browse.surface !== previous.surface) closePageLayers();
 });
 
+let systemFindTab: string | null = null;
+
+function leaveSystemFind() {
+  const id = systemFindTab;
+  systemFindTab = null;
+  if (id) quietly(() => pages.endFind(id));
+}
+
 useTabs.subscribe((tabs, previous) => {
-  if (tabs.selectedId !== previous.selectedId) closePageLayers();
+  if (tabs.selectedId === previous.selectedId) return;
+  if (systemFindTab !== null && systemFindTab !== tabs.selectedId) leaveSystemFind();
+  closePageLayers();
 });
 
 usePages.subscribe((pagesNow, pagesBefore) => {

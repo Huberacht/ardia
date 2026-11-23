@@ -144,3 +144,20 @@ onIPhone("on iPhone a page that settles and then starts loading a new address ke
   expect(cover(root)).toBe(false);
   unmount(root);
 });
+
+onIPhone("on iPhone the second's wait for a settled page's draw stops while the tab view covers the page, and starts again when the page is shown", () => {
+  const tab = currentTabs().open[0]!;
+  updateTabById(tab.id, { snapshotFileName: "file:///snapshots/deck.jpg" });
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
+  act(() => storeNavigation(tab.id, navigating("https://site0.example/", false, 1)));
+  act(() => jest.advanceTimersByTime(500));
+  act(() => useBrowse.setState({ surface: "deck" }));
+  act(() => jest.advanceTimersByTime(900));
+  expect(cover(root)).toBe(true);
+  act(() => useBrowse.setState({ surface: "browsing" }));
+  act(() => jest.advanceTimersByTime(700));
+  expect(cover(root)).toBe(true);
+  act(() => jest.advanceTimersByTime(600));
+  expect(cover(root)).toBe(false);
+  unmount(root);
+});

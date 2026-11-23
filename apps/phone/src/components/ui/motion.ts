@@ -104,7 +104,7 @@ export const trayLandingDelayMs = TRAY_LIFT.landingDelayMs;
 
 export const startMotion = { rise: 360, reduced: 200, trayScale: 0.96, pageDot: 200 } as const;
 
-export const deckChromeMotion = { pillScale: 0.9, archiveScale: 0.96 } as const;
+export const deckChromeMotion = { pillScale: 0.9, keyboard: 300, archiveScale: 0.96 } as const;
 
 export const pageMenuMotion = { titleFade: 150 } as const;
 

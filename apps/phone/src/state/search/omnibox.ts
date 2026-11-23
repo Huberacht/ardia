@@ -139,10 +139,25 @@ export const display = (url: string) => mobileDisplay(url);
 
 export const setSources = (sources: OmniboxSources) => mobileSetSources(sources);
 
-export const setSearchEngine = (engineId: string) => mobileSetSearch({ engineId });
+let engineIdentity = "";
+let engineRevision = 0;
+
+export const searchEngineRevision = () => engineRevision;
+
+function chooseSearch(search: Parameters<typeof mobileSetSearch>[0]) {
+  const identity = JSON.stringify(search);
+  const chosen = mobileSetSearch(search);
+  if (identity !== engineIdentity) {
+    engineIdentity = identity;
+    engineRevision += 1;
+  }
+  return chosen;
+}
+
+export const setSearchEngine = (engineId: string) => chooseSearch({ engineId });
 
 export const setSyncedSearch = (search: { engineId: string; customURL: string | null; customEngines: { id: string; name: string; keyword: string; url: string }[] }) =>
-  mobileSetSearch({ engineId: search.engineId, customUrl: search.customURL ?? undefined, customEngines: search.customEngines });
+  chooseSearch({ engineId: search.engineId, customUrl: search.customURL ?? undefined, customEngines: search.customEngines });
 
 const REMOTE_TIMEOUT_MS = 4000;
 

@@ -247,8 +247,9 @@ final class PageView: ExpoView {
     if !page.isLoading { madeGestures?.pageStoppedLoading() }
     if let session = summaryLayer?.presenter.session, !session.isCurrent(for: page) { dismissSummary(animated: false) }
     if window != nil, !isPrivate { PhoneHandoff.offer(page.url, title: page.title, from: self) } else { PhoneHandoff.withdraw(self) }
-    if drawnSent, let drawnDocument, drawnDocument != page.navigationGeneration {
+    if let drawnDocument, drawnDocument != page.navigationGeneration {
       drawnSent = false
+      drawnDelivered = false
       self.drawnDocument = nil
     }
     if wasLoading, !page.isLoading { scheduleToneSample(after: .milliseconds(250)) }

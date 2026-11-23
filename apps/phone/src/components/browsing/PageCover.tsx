@@ -87,6 +87,14 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       paintDeadline = null;
       paintDeadlineFor = null;
     };
+    const stopSettle = () => {
+      if (settle) clearTimeout(settle);
+      settle = null;
+    };
+    const shownAloneNow = () => useBrowse.getState().surface === "browsing";
+    const fadeIfShownAlone = () => {
+      if (shownAloneNow()) fade();
+    };
     const check = () => {
       if (fading) return;
       const shownAlone = useBrowse.getState().surface === "browsing";
@@ -101,17 +109,24 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       if (page.isLoading) {
         stopPaintDeadline();
         sawLoading = true;
-        if (settle) clearTimeout(settle);
-        settle = null;
+        stopSettle();
         return;
       }
-      if (!shownAlone) return;
+      if (!shownAlone) {
+        stopPaintDeadline();
+        stopSettle();
+        return;
+      }
       if (WAITS_FOR_PAINT) {
         const shownDocument = `${page.document ?? ""}:${page.url ?? ""}`;
         if (paintDeadlineFor !== shownDocument) {
           stopPaintDeadline();
           paintDeadlineFor = shownDocument;
-          paintDeadline = setTimeout(fade, PAGE_COVER.paintDeadlineMs);
+          paintDeadline = setTimeout(() => {
+            paintDeadline = null;
+            paintDeadlineFor = null;
+            fadeIfShownAlone();
+          }, PAGE_COVER.paintDeadlineMs);
         }
         return;
       }
@@ -119,7 +134,11 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
         fade();
         return;
       }
-      if (!settle) settle = setTimeout(fade, PAGE_COVER.settleMs);
+      if (!settle)
+        settle = setTimeout(() => {
+          settle = null;
+          fadeIfShownAlone();
+        }, PAGE_COVER.settleMs);
     };
     const stopDrawn = WAITS_FOR_PAINT ? listenForPageDrawn(tab.id, check) : null;
     check();
@@ -130,7 +149,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       browse();
       stopDrawn?.();
       if (deadline) clearTimeout(deadline);
-      if (settle) clearTimeout(settle);
+      stopSettle();
       stopPaintDeadline();
     };
   }, []);

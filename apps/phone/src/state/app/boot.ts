@@ -15,13 +15,15 @@ let begin: (() => void) | null = null;
 const SETTLED_IMPORT_KEY = "legacy.settled";
 const COMPLETED_OUTCOMES: readonly ImportOutcome[] = ["imported", "startedFresh"];
 
-function completedImportBefore(): ImportOutcome | null {
+type CompletedLookup = { readable: true; outcome: ImportOutcome | null } | { readable: false };
+
+function completedImportBefore(): CompletedLookup {
   try {
-    if (!browserDatabaseIsDurable()) return null;
+    if (!browserDatabaseIsDurable()) return { readable: true, outcome: null };
     const stored = readPreferences(browserDatabase())[SETTLED_IMPORT_KEY];
-    return COMPLETED_OUTCOMES.find((outcome) => outcome === stored) ?? null;
+    return { readable: true, outcome: COMPLETED_OUTCOMES.find((outcome) => outcome === stored) ?? null };
   } catch {
-    return null;
+    return { readable: false };
   }
 }
 
@@ -50,7 +52,8 @@ export function bootApp(start: () => void) {
     finish("none");
     return;
   }
-  const settled = settledWithoutWaiting(nativeImportState(), completedImportBefore());
+  const completed = completedImportBefore();
+  const settled = completed.readable ? settledWithoutWaiting(nativeImportState(), completed.outcome) : null;
   if (settled) finish(settled);
   else void attempt();
 }

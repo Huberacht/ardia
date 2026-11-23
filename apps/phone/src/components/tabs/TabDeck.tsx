@@ -887,18 +887,22 @@ export const TabDeck = memo(function TabDeck() {
   const settleAnchor = (target: number) => {
     if (deckWindow(target, count) !== deckWindow(anchor, count)) setAnchor(target);
   };
-  const gestureActions = useRef({ open, flownOff, closeFromX, showHeldCardMenu, settleAnchor });
+  const gestureActions = useRef({ order, open, flownOff, closeFromX, showHeldCardMenu, settleAnchor });
   useLayoutEffect(() => {
-    gestureActions.current = { open, flownOff, closeFromX, showHeldCardMenu, settleAnchor };
+    gestureActions.current = { order, open, flownOff, closeFromX, showHeldCardMenu, settleAnchor };
   });
   const panEnabled = !(pulls && reduceMotion && phase.kind === "closing");
   const longPressEnabled = !nativeMenus();
   const deckGesture = useMemo(() => {
     const barBand = { bottom: barBandBottom };
-    const openCard = (at: number) => gestureActions.current.open(at);
+    const withCard = (id: string, act: (at: number) => void) => {
+      const at = gestureActions.current.order.indexOf(id);
+      if (at >= 0) act(at);
+    };
+    const openCard = (id: string) => withCard(id, (at) => gestureActions.current.open(at));
     const flyOff = (id: string, at: number, spec: DeckLeave, next: readonly string[], after: number) => gestureActions.current.flownOff(id, at, spec, next, after);
-    const closeCardFromX = (at: number) => gestureActions.current.closeFromX(at);
-    const holdCardMenu = (at: number, x: number, y: number) => gestureActions.current.showHeldCardMenu(at, x, y);
+    const closeCardFromX = (id: string) => withCard(id, (at) => gestureActions.current.closeFromX(at));
+    const holdCardMenu = (id: string, x: number, y: number) => withCard(id, (at) => gestureActions.current.showHeldCardMenu(at, x, y));
     const anchorAt = (target: number) => gestureActions.current.settleAnchor(target);
     const pan = Gesture.Pan()
       .withTestId("deckPan")
@@ -976,7 +980,8 @@ export const TabDeck = memo(function TabDeck() {
       .minDuration(tabsMotion.longPress)
       .onStart((e) => {
         const card = deckCardAt(g, count, scroll.value, e.x, e.y, anchor, DECK_MOUNT_REACH);
-        if (card >= 0) runOnJS(holdCardMenu)(card, e.absoluteX, e.absoluteY);
+        const id = card >= 0 ? orderIds.value[card] : undefined;
+        if (id !== undefined) runOnJS(holdCardMenu)(id, e.absoluteX, e.absoluteY);
       });
     const tap = Gesture.Manual()
       .withTestId("deckTap")
@@ -990,9 +995,13 @@ export const TabDeck = memo(function TabDeck() {
         if (touch && deckIsTap(touch.x - tapFrom.value.x, touch.y - tapFrom.value.y)) {
           const closing = material ? materialCloseAt(g, count, scroll.value, touch.x, touch.y) : -1;
           const card = deckCardAt(g, count, scroll.value, touch.x, touch.y, anchor, DECK_MOUNT_REACH);
-          if (closing >= 0) runOnJS(closeCardFromX)(closing);
-          else if (card >= 0) runOnJS(openCard)(card);
-          else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();
+          const closingId = closing >= 0 ? orderIds.value[closing] : undefined;
+          const cardId = card >= 0 ? orderIds.value[card] : undefined;
+          if (closing >= 0) {
+            if (closingId !== undefined) runOnJS(closeCardFromX)(closingId);
+          } else if (card >= 0) {
+            if (cardId !== undefined) runOnJS(openCard)(cardId);
+          } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();
         }
         manager.fail();
       });

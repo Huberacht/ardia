@@ -87,24 +87,24 @@ enum StageSettlePoll {
   }
 }
 
-@MainActor
-struct StageKeyboardGeometry: Equatable {
+nonisolated struct StageKeyboardGeometry: Equatable {
   let window: ObjectIdentifier
   let windowSize: CGSize
   let orientation: UIInterfaceOrientation
 }
 
-struct StageKeyboardMemory {
+nonisolated struct StageKeyboardMemory {
   let height: CGFloat
   let geometry: StageKeyboardGeometry
 }
 
-struct StageKeyboardMove {
+nonisolated struct StageKeyboardMove {
   let height: CGFloat
   let duration: TimeInterval
   let curve: UInt
 }
 
+@MainActor
 final class StageKeyboardTracker {
   private let minimumHeight: CGFloat
   private let onMove: (StageKeyboardMove) -> Void

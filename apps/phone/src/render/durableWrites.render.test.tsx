@@ -6,7 +6,7 @@ import { pages } from "../platform/pages";
 import * as pageStore from "../state/pages/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import { appBecameActive } from "../state/browse/store";
-import { ARCHIVE_RETENTION_MS, ARCHIVE_SEARCH_LIMIT, archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, deleteArchivedTabsById, flushTabWrites, loadArchive, onTabWritesStalled, pruneExpiredArchive, restoreArchivedTab, saveTabState, searchArchive, selectTabById, tabSavedState, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
+import { ARCHIVE_RETENTION_MS, ARCHIVE_SEARCH_LIMIT, archivedTabById, archiveTabById, clearArchivedTabs, currentTabs, deleteArchivedTabsById, flushTabWrites, loadArchive, onTabWritesStalled, pruneExpiredArchive, reserveStateSave, restoreArchivedTab, saveTabState, searchArchive, selectTabById, tabSavedState, tabWritesPending, tabWritesStalled, updateTabById } from "../state/tabs/store";
 import { someTabs, withTabs } from "../../test/render/harness";
 
 beforeEach(() => {
@@ -290,4 +290,27 @@ test("a page state captured before a restore can't overwrite the position saved 
   flushTabWrites();
   expect(tabSavedState(id)).toBe("new position");
   expect(browserDatabase.readTabState(tabDatabase(), id)).toBe("new position");
+});
+
+test("a tab archived again while the database is busy isn't pruned by the old archive date the database still has", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  expect(flushTabWrites()).toBe(true);
+  const id = currentTabs().open[0]!.id;
+  act(() => archiveTabById(id));
+  jest.setSystemTime(Date.now() + ARCHIVE_RETENTION_MS + 1);
+  refuse(3, "SQLITE_BUSY");
+  expect(restoreArchivedTab(archivedTabById(id)!)).toBe(true);
+  act(() => archiveTabById(id));
+  act(() => void pruneExpiredArchive());
+  act(() => jest.advanceTimersByTime(2_000));
+  expect(browserDatabase.readArchivedTab(tabDatabase(), id)).not.toBeNull();
+});
+
+test("a page state that lost to a newer one says so, so its scroll position isn't remembered as saved", () => {
+  const id = currentTabs().open[0]!.id;
+  const older = reserveStateSave(id);
+  const newer = reserveStateSave(id);
+  expect(saveTabState(id, "at 200", newer)).toBe(true);
+  expect(saveTabState(id, "at 100", older)).toBe(false);
+  expect(tabSavedState(id)).toBe("at 200");
 });

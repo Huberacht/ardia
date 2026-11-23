@@ -4,6 +4,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeOut, runOnJS, useAnimatedKeyboard, useAnimatedStyle, useSharedValue, withSpring, type SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { keyboardIsUp } from "../../lib/trayMotion";
+import { useBottomLift } from "../search/useKeyboardHeight";
 import { useSurface } from "../../state/browse/hooks";
 import { useDeckBarTop, useToast } from "../../state/toasts/hooks";
 import { pageBarClearance, TOAST_MOTION, toastDragDismisses, toastPlace, type ToastPlacement } from "../../state/toasts/placement";
@@ -79,13 +80,36 @@ function useKeyboardRide(spot: ToastSpot, resting: number, arrivedOverKeyboard: 
   }, [arrivedOverKeyboard, belowHost, resting, spot.gap]);
 }
 
-function ToastView({ spot }: { spot: ToastSpot }) {
-  const toast = useToast();
-  const keyboard = useAnimatedKeyboard({ isStatusBarTranslucentAndroid: true, isNavigationBarTranslucentAndroid: true });
-  const arrivedOverKeyboard = useMemo(() => keyboardIsUp(keyboard.height.value), [toast?.id, keyboard]);
+type PlaceProps = { spot: ToastSpot; toastId: number; children: ReactNode };
+
+function KeyboardRidingPlace({ spot, toastId, children }: PlaceProps) {
+  const keyboard = useAnimatedKeyboard();
+  const [arrival, setArrival] = useState(() => ({ toastId, overKeyboard: keyboardIsUp(keyboard.height.value) }));
+  if (arrival.toastId !== toastId) setArrival({ toastId, overKeyboard: keyboardIsUp(keyboard.height.value) });
+  const arrivedOverKeyboard = arrival.toastId === toastId ? arrival.overKeyboard : keyboardIsUp(keyboard.height.value);
   const place = toastPlace({ ...spot, keyboardLift: arrivedOverKeyboard ? keyboard.height.value : null });
   const resting = "bottom" in place ? place.bottom : 0;
   const ride = useKeyboardRide(spot, resting, arrivedOverKeyboard, keyboard.height);
+  return (
+    <Animated.View testID="toastPlace" style={[styles.host, place, ride]} pointerEvents="box-none">
+      {children}
+    </Animated.View>
+  );
+}
+
+function ResizedPlace({ spot, children }: PlaceProps) {
+  const { lift, keyboard } = useBottomLift();
+  return (
+    <View testID="toastPlace" style={[styles.host, toastPlace({ ...spot, keyboardLift: keyboard ? lift : null })]} pointerEvents="box-none">
+      {children}
+    </View>
+  );
+}
+
+const ToastPlace = Platform.OS === "ios" ? KeyboardRidingPlace : ResizedPlace;
+
+function ToastView({ spot }: { spot: ToastSpot }) {
+  const toast = useToast();
   const theme = useTheme();
   const reduceMotion = useReduceMotion();
   const drag = useSharedValue(0);
@@ -132,7 +156,7 @@ function ToastView({ spot }: { spot: ToastSpot }) {
     </ToastPlate>
   );
   return (
-    <Animated.View testID="toastPlace" style={[styles.host, place, ride]} pointerEvents="box-none">
+    <ToastPlace spot={spot} toastId={toast.id}>
       <GestureDetector gesture={gesture}>
         <Animated.View key={toast.id} entering={reduceMotion ? REDUCED_IN : toastIn} exiting={reduceMotion ? REDUCED_OUT : toastOut} style={[styles.origin, dragged]}>
           {semantics.pressable ? (
@@ -146,7 +170,7 @@ function ToastView({ spot }: { spot: ToastSpot }) {
           )}
         </Animated.View>
       </GestureDetector>
-    </Animated.View>
+    </ToastPlace>
   );
 }
 

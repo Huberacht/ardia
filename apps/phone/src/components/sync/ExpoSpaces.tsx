@@ -40,7 +40,7 @@ import { COLLAPSED_LIMIT, pinnedKeyAt, remoteTitle } from "../../state/sync/spac
 import { showAllDeviceTabs, toggleSpaceRow, useSpaceOpenFor } from "../../state/sync/spaceOpen";
 import { syncBanner, type BannerIcon } from "../../state/sync/syncRules";
 import { countUsage } from "../../state/telemetry/telemetry";
-import { prepareArchive } from "../../state/tabs/store";
+import { prepareArchiveNextFrame } from "../../state/tabs/store";
 import { actionWords, destinationWords, syncWords } from "../../lib/sharedWords";
 import { DoneButton } from "../settings/ExpoSettingsDone";
 import { ExpoSettingsAction } from "../settings/ExpoSettingsParts";
@@ -59,7 +59,7 @@ const shareable = (url: string) => /^https?:\/\//i.test(url);
 
 function openPreparedArchive() {
   openArchive();
-  requestAnimationFrame(prepareArchive);
+  prepareArchiveNextFrame();
 }
 const lookOf = (profile: SyncedProfile | null) => ({ color: profile?.color ?? null, icon: profile?.icon ?? null, themeColors: profile?.theme?.colors ?? [], themeDarkColors: profile?.theme?.darkColors ?? null });
 const shownColor = (color: { light: string; dark: string } | null, dark: boolean) => (color ? (dark ? color.dark : color.light) : null);

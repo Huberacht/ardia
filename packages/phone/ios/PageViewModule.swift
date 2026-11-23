@@ -135,7 +135,7 @@ public final class PageViewModule: Module {
 
     AsyncFunction("endFind") { (pageID: String, promise: Promise) in
       Self.main(promise) {
-        FindPresentation.current?.cancel()
+        FindPresentation.cancel(for: pageID)
         await PhonePages.shared.endFind(pageID)
       }
     }.runOnQueue(.main)
@@ -146,7 +146,7 @@ public final class PageViewModule: Module {
         guard let page = PhonePages.shared.page(pageID), let webView = page.webView, let interaction = webView.findInteraction else { return false }
         if let text { interaction.searchText = text }
         page.presentFindInPage()
-        if !interaction.isFindNavigatorVisible { FindPresentation(pageID: pageID, webView: webView, interaction: interaction).watch() }
+        if !interaction.isFindNavigatorVisible { FindPresentation(pageID: pageID, webView: webView, interaction: interaction, generation: page.navigationGeneration).watch() }
         return interaction.isFindNavigatorVisible
       }
     }.runOnQueue(.main)

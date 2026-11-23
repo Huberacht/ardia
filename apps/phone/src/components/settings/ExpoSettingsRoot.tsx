@@ -13,7 +13,7 @@ import { useAppearanceSummary } from "../../state/settings/appearance";
 import { usePreferences } from "../../state/settings/hooks";
 import { closeSettings, settingsRouteKey, type SettingsRoute } from "../../state/settings/nav";
 import { AUTO_ARCHIVE_INTERVALS, autoArchiveTitle, type AutoArchiveInterval } from "../../state/tabs/tabModels";
-import { prepareArchive } from "../../state/tabs/store";
+import { prepareArchiveNextFrame } from "../../state/tabs/store";
 import { PHONE_SHARING_COPY } from "../../lib/telemetryCopy";
 import { setUsageSharing, useUsageSharing } from "../../state/telemetry/telemetry";
 import { contentMargins, modifierList, PROFILE_COLORS, settingsChrome, settingsLayout, SettingsIconTile, SettingsShortcuts, settingsSwitchStyle, settingsTint, settingsUIAvailable, useWarningInk, type ProfileColor } from "../ui";
@@ -178,7 +178,7 @@ function leaveFor(open: () => void) {
 
 function openPreparedArchive() {
   openArchive();
-  requestAnimationFrame(prepareArchive);
+  prepareArchiveNextFrame();
 }
 
 function SyncRow() {

@@ -1,5 +1,6 @@
 import { act } from "react-test-renderer";
 import * as omnibox from "../state/search/omnibox";
+import { setSearchEngine } from "../state/search/omnibox";
 import { dismissSearch, presentSearch, searchPresented, setSearchClearsPagePrefill, useSearch } from "../state/search/store";
 import { useTabs } from "../state/tabs/store";
 import { withTabs } from "../../test/render/harness";
@@ -50,4 +51,18 @@ test("a blank search with nothing remembered for its scope opens with no rows in
   act(() => useTabs.setState((state) => ({ spaces: { ...state.spaces, current: "never-opened-scope" } })));
   act(() => presentSearch("home"));
   expect(useSearch.getState().rows).toEqual([]);
+});
+
+test("idle rows are made again after the search engine changes, so none carry the old engine's addresses", () => {
+  act(() => presentSearch("home"));
+  act(() => searchPresented(useSearch.getState().session));
+  act(() => dismissSearch());
+  const before = omnibox.searchEngineRevision();
+  setSearchEngine("duckduckgo");
+  setSearchEngine("bing");
+  expect(omnibox.searchEngineRevision()).toBeGreaterThan(before);
+  const idle = jest.spyOn(omnibox, "idleRows");
+  act(() => presentSearch("home"));
+  act(() => searchPresented(useSearch.getState().session));
+  expect(idle).toHaveBeenCalled();
 });

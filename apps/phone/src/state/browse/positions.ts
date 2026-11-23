@@ -15,8 +15,7 @@ export async function saveTabPosition(id: string) {
   const at = await pageScrollPosition(id);
   const saved = await savePageState(id);
   if (!saved || !findTab(currentTabs(), id)) return;
-  saveTabState(id, saved, save);
-  if (at) watches.set(id, { lastSeen: at.y, lastSaved: at.y });
+  if (saveTabState(id, saved, save) && at) watches.set(id, { lastSeen: at.y, lastSaved: at.y });
 }
 
 async function checkFront(frontId: () => string | null, cameToRest: (id: string) => void) {

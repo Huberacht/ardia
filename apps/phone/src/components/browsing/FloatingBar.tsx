@@ -17,7 +17,8 @@ import { glassFadeMs } from "../ui/motion";
 import { useFoldGlyphs, type BarFoldLook } from "./HostPill";
 import { useGlassTrace } from "../../state/search/searchTiming";
 import { TabStack } from "./BottomBar";
-import { barReturnedToPage } from "../../state/browse/deckPull";
+import { barReturnedToPage, deckPull } from "../../state/browse/deckPull";
+import { FabricCatchUp } from "../ui/FabricCatchUp";
 import { useDeckOwnsBar } from "../../state/browse/hooks";
 import { usePageBusy } from "../../state/page/hooks";
 import { PullGhost, PullGlyphs } from "./PagePull";
@@ -155,6 +156,7 @@ export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true
       </Animated.View>
       {inStrip ? null : trailing}
     </View>
+    {fold ? <BarMotionCatchUp fold={fold} /> : null}
     {inStrip ? (
       <Animated.View testID="floatingBarStrip" pointerEvents="box-none" style={[styles.strip, { left: duo.stripLeft, top: duo.stripTop }]}>
         {trailing}
@@ -166,6 +168,15 @@ export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true
 }
 
 type ButtonProps = { tab: BrowserTab; dark: boolean; testID: string; glass?: { shown: boolean; shownMs: number }; glyphs?: ComponentProps<typeof Animated.View>["style"]; fold?: BarFoldLook | null; ghost?: boolean };
+
+function BarMotionCatchUp({ fold }: { fold: BarFoldLook }) {
+  const progress = fold.progress;
+  const barMotionNow = () => {
+    "worklet";
+    return progress.value + deckPull.barBack.value + deckPull.shrink.value + deckPull.stage.value;
+  };
+  return <FabricCatchUp motion={barMotionNow} testID="floatingBarFabricCatchUp" />;
+}
 
 function useFoldedGlass<Back extends { centreGlass: { shown: boolean; shownMs: number }; sidesGlass: { shown: boolean; shownMs: number } }>(back: Back, unfolded: boolean): Back {
   const was = useRef(unfolded);

@@ -24,6 +24,12 @@ public enum LaunchBackdrop {
 
   public static func install(in rootView: UIView) {
     guard host == nil else { return }
+    if let observer { NotificationCenter.default.removeObserver(observer) }
+    observer = nil
+    capTask?.cancel()
+    capTask = nil
+    contentShown = false
+    fading = false
     let host = UIHostingController(rootView: AnyView(LaunchProfileBackdrop(recalled: LaunchLook.recalled()).ignoresSafeArea()))
     host.view.backgroundColor = .clear
     host.view.frame = rootView.bounds

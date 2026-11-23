@@ -1,4 +1,4 @@
-import { StyleSheet } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 import * as Reanimated from "react-native-reanimated";
 import { getAnimatedStyle, KeyboardState, makeMutable } from "react-native-reanimated";
 import { act } from "react-test-renderer";
@@ -31,9 +31,21 @@ const lifted = (root: ReturnType<typeof renderSurface>) => {
 };
 const keyboardAt = (height: number) => act(() => void (liveKeyboard.height.value = height));
 
-test("a toast on screen rides above the keyboard frame by frame as it rises and falls, and never jumps", () => {
+const onIPhone = Platform.OS === "ios" ? test : test.skip;
+
+test("with no toast up nothing follows the live keyboard, and on Android nothing ever does, so the window keeps resizing for pages", () => {
+  const root = renderSurface(<ToastHost />);
+  expect(Reanimated.useAnimatedKeyboard).not.toHaveBeenCalled();
+  act(() => showToast("Copied Link", "link"));
+  if (Platform.OS === "android") expect(Reanimated.useAnimatedKeyboard).not.toHaveBeenCalled();
+  else expect(Reanimated.useAnimatedKeyboard).toHaveBeenCalled();
+  unmount(root);
+});
+
+onIPhone("a toast on screen rides above the keyboard frame by frame as it rises and falls, and never jumps", () => {
   const root = renderSurface(<ToastHost />);
   act(() => showToast("Copied Link", "link"));
+  act(() => jest.advanceTimersByTime(16));
   const resting = StyleSheet.flatten(placeOf(root).props.style).bottom as number;
   expect(lifted(root)).toBeCloseTo(0, 5);
   for (const height of [100, 200, 336, 200, 0]) {
@@ -43,7 +55,7 @@ test("a toast on screen rides above the keyboard frame by frame as it rises and 
   unmount(root);
 });
 
-test("a toast raised while the keyboard is up sits at the top and stays there while the keyboard moves", () => {
+onIPhone("a toast raised while the keyboard is up sits at the top and stays there while the keyboard moves", () => {
   keyboardAt(336);
   const root = renderSurface(<ToastHost />);
   act(() => showToast("Copied Link", "link"));
