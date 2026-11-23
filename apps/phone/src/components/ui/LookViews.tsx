@@ -2,6 +2,7 @@ import {
   DeckBackdrop,
   Frost,
   Glass,
+  GlassBackdrop,
   glassIsNative,
   INCOGNITO_LOOK,
   lookIsNative,
@@ -41,6 +42,13 @@ const GlassSourceContext = createContext<string>(SURFACES_FROST);
 
 export function GlassSource({ name, children }: { name: string; children: ReactNode }) {
   return <GlassSourceContext.Provider value={name}>{children}</GlassSourceContext.Provider>;
+}
+
+export const drawsGlassBehindItsLayers = (os: string, nativeGlass: boolean) => os === "android" && nativeGlass;
+
+export function GlassBehind() {
+  if (!drawsGlassBehindItsLayers(Platform.OS, glassIsNative())) return null;
+  return <GlassBackdrop testID="glassBehind" pointerEvents="none" style={StyleSheet.absoluteFill} />;
 }
 
 function BackdropBase({ color }: { color: string | undefined }) {

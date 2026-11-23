@@ -3,6 +3,7 @@ package com.ardia.phone
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.BlendMode
+import android.graphics.Matrix
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
@@ -11,10 +12,12 @@ import android.graphics.RectF
 import android.graphics.RuntimeShader
 import android.os.Build
 import android.view.View
+import android.view.ViewTreeObserver
 import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
 import androidx.compose.ui.graphics.toArgb
 import expo.modules.kotlin.AppContext
+import expo.modules.kotlin.views.ExpoView
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -205,8 +208,31 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
         invalidateOutline()
     }
 
+    internal var backdrop: GlassBackdropView? = null
+        private set
+
+    private var drawingHosted = false
+
+    override fun invalidate() {
+        val host = backdrop
+        if (host != null) host.invalidate() else super.invalidate()
+    }
+
+    internal fun drawHosted(canvas: Canvas) {
+        drawingHosted = true
+        try {
+            drawSafely(canvas)
+        } finally {
+            drawingHosted = false
+        }
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        backdrop = GlassBackdropView.under(this)?.also {
+            it.host(this)
+            super.invalidate()
+        }
         lastChoice?.let(unsourced::settled)
     }
 
@@ -216,6 +242,10 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     override fun onDetachedFromWindow() {
+        backdrop?.let {
+            backdrop = null
+            it.release(this)
+        }
         unsourced.stop()
         fader?.cancel()
         fader = null
@@ -243,6 +273,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     override fun drawLook(canvas: Canvas) {
+        if (backdrop != null && !drawingHosted) return
         val alpha = surfaceAlpha
         if (alpha <= 0f) return
         radiusPx = GlassRules.radiusDp(shape, glassCornerRadius, width / density, height / density) * density
@@ -301,5 +332,140 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
         paint.strokeWidth = edge
         paint.color = GlassRules.classicEdge(dark)
         canvas.drawPath(outlinePath, paint)
+    }
+}
+
+class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
+    private val hosted = ArrayList<GlassView>()
+    private val drawn = HashMap<GlassView, Placement>()
+    private val global = Matrix()
+    private val own = Matrix()
+    private val ownInverse = Matrix()
+
+    internal val glasses: List<GlassView> get() = hosted.toList()
+
+    internal data class Placement(val matrix: FloatArray, val alpha: Float) {
+        override fun equals(other: Any?): Boolean = other is Placement && alpha == other.alpha && matrix.contentEquals(other.matrix)
+        override fun hashCode(): Int = 31 * matrix.contentHashCode() + alpha.hashCode()
+    }
+
+    init {
+        setWillNotDraw(false)
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+    }
+
+    internal fun host(glass: GlassView) {
+        if (glass in hosted) return
+        hosted += glass
+        hosted.sortWith(GlassBackdropView::treeOrder)
+        invalidate()
+    }
+
+    internal fun release(glass: GlassView) {
+        if (!hosted.remove(glass)) return
+        drawn.remove(glass)
+        invalidate()
+    }
+
+    private val moved = ViewTreeObserver.OnPreDrawListener {
+        if (hosted.any { placement(it) != drawn[it] }) invalidate()
+        true
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        viewTreeObserver.addOnPreDrawListener(moved)
+    }
+
+    override fun onDetachedFromWindow() {
+        viewTreeObserver.removeOnPreDrawListener(moved)
+        drawn.clear()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) =
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) = Unit
+
+    internal fun placement(glass: GlassView): Placement? {
+        if (!glass.isShown || glass.width <= 0 || glass.height <= 0) return null
+        val stop = parent
+        var alpha = 1f
+        var view: View? = glass
+        while (view != null && view !== stop) {
+            alpha *= view.alpha * view.transitionAlpha
+            view = view.parent as? View
+        }
+        if (alpha <= 0f) return null
+        global.reset()
+        glass.transformMatrixToGlobal(global)
+        own.reset()
+        transformMatrixToGlobal(own)
+        if (!own.invert(ownInverse)) return null
+        global.postConcat(ownInverse)
+        val values = FloatArray(9)
+        global.getValues(values)
+        return Placement(values, alpha)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val matrix = Matrix()
+        for (glass in hosted) {
+            val place = placement(glass)
+            if (place == null) {
+                drawn.remove(glass)
+                continue
+            }
+            drawn[glass] = place
+            matrix.setValues(place.matrix)
+            val saved = canvas.save()
+            try {
+                canvas.concat(matrix)
+                if (place.alpha < 1f) canvas.saveLayerAlpha(0f, 0f, glass.width.toFloat(), glass.height.toFloat(), (place.alpha * 255).roundToInt())
+                glass.drawHosted(canvas)
+            } finally {
+                canvas.restoreToCount(saved)
+            }
+        }
+    }
+
+    companion object {
+        fun under(glass: View): GlassBackdropView? {
+            var child: View = glass
+            var parent = glass.parent as? android.view.ViewGroup
+            while (parent != null) {
+                val at = parent.indexOfChild(child)
+                for (index in 0 until at) {
+                    val sibling = parent.getChildAt(index)
+                    if (sibling is GlassBackdropView) return sibling
+                }
+                child = parent
+                parent = parent.parent as? android.view.ViewGroup
+            }
+            return null
+        }
+
+        private fun path(view: View): List<Int> {
+            val indices = ArrayList<Int>()
+            var child = view
+            var parent = view.parent as? android.view.ViewGroup
+            while (parent != null) {
+                indices += parent.indexOfChild(child)
+                child = parent
+                parent = parent.parent as? android.view.ViewGroup
+            }
+            return indices.asReversed()
+        }
+
+        fun treeOrder(a: View, b: View): Int {
+            val first = path(a)
+            val second = path(b)
+            for (index in 0 until minOf(first.size, second.size)) {
+                val compared = first[index].compareTo(second[index])
+                if (compared != 0) return compared
+            }
+            return first.size.compareTo(second.size)
+        }
     }
 }

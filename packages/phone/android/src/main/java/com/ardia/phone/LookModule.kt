@@ -240,6 +240,10 @@ class LookModule : Module() {
             OnViewDidUpdateProps { view -> view.update() }
         }
 
+        View(GlassBackdropView::class) {
+            Name("GlassBackdrop")
+        }
+
         View(FrostSourceView::class) {
             Name("FrostSource")
             Prop("name") { view: FrostSourceView, value: String? -> view.sourceId = value }

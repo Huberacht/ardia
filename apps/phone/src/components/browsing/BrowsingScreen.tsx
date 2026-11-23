@@ -38,6 +38,7 @@ import {
   tabsMotion,
   floatingBarLayout,
   FrostSource,
+  GlassBehind,
   GlassSource,
   PAGE_FROST,
   pageReportsDrawn,
@@ -245,6 +246,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
             accessibilityElementsHidden={barBlocked}
             style={[styles.bar, { height: barHeight(insets.bottom, design) }, underBar ? null : barStyle, finding && design === "material" ? styles.replacedBar : collapse.style]}
           >
+            <GlassBehind />
             {design === "redesigned" ? (
               <Animated.View style={[styles.controls, { bottom: barCenterFromBottom(insets.bottom, design) - floatingBarLayout.control / 2, ...controlsSpan }, pulls ? barShift : null]} pointerEvents="box-none">
                 <Animated.View

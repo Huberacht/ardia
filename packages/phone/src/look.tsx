@@ -136,6 +136,8 @@ export const FilmGrain = look<FilmGrainProps>("FilmGrain");
 
 export const FrostSource = look<FrostSourceProps>("FrostSource");
 
+export const GlassBackdrop = look<ViewProps>("GlassBackdrop");
+
 export const Frost = look<FrostProps>("Frost");
 
 const NativeGlass = look<GlassProps>("Glass");
