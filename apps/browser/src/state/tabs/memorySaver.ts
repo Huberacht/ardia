@@ -1,4 +1,5 @@
 import { isKeepActiveSiteValid, setMemorySaver, type MemorySaverMode } from "../../platform/performance";
+import { isQuitting } from "../app/quit";
 import { useBrowser } from "../browser/store";
 import type { Settings } from "../settings/settings";
 
@@ -41,6 +42,7 @@ export function keepActiveSiteOf(typed: string): string {
 export async function keepSiteActive(typed: string): Promise<string | null> {
   const site = keepActiveSiteOf(typed);
   if (!site || /\s/.test(site) || !(await isKeepActiveSiteValid(site).catch(() => false))) return "Enter a site, like youtube.com.";
+  if (isQuitting()) return null;
   const sites = store().settings.keepActiveSites;
   if (!sites.includes(site)) store().updateSettings({ keepActiveSites: [...sites, site] });
   return null;

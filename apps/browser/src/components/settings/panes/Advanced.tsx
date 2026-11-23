@@ -133,6 +133,7 @@ function PerformanceSection() {
             minWidth={190}
           />
         </Row>
+        <SettingToggle anchor="advanced.busyTabWarnings" />
       </Group>
     </>
   );

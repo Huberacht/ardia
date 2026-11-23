@@ -44,6 +44,13 @@ export const advancedRows = {
           shown: (s) => s.memorySaver,
           needs: "Turn on Memory Saver to use this",
         },
+        busyTabWarnings: {
+          title: "Warn about busy background tabs",
+          explained: true,
+          description: "When a hidden tab keeps the processor busy for 2 minutes.",
+          keywords: ["cpu", "processor", "energy", "power", "battery", "busy", "background tabs", "high cpu", "fan", "hot", "sleep tab", "keep running"],
+          shown: () => PLATFORM_FEATURES.busyTabWatch,
+        },
         batterySaver: {
           title: "Battery Saver",
           keywords: ["energy", "energy saver", "low power mode", "performance", "power"],

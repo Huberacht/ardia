@@ -3,7 +3,7 @@ import { childProcessCpu, listTasks } from "../../platform/performance";
 import { everySlowly } from "../../platform/slowTimers";
 import { onWebviewsChanged, webviews } from "../../platform/webviews";
 import { isQuitting, onQuittingChanged } from "../app/quit";
-import { showToast, useToasts } from "../app/toasts";
+import { hideKeyedToast, showToast, useToasts } from "../app/toasts";
 import { isIncognitoProfile } from "../browser/model";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { noteBusyTab } from "../telemetry/busyTabCounts";
@@ -45,6 +45,8 @@ const isPrivate = (s: BrowserState, id: string) => {
   const tab = s.tabs[id]!;
   return isIncognitoProfile(tab.profileId) || s.windows[tab.windowId]?.kind === "private";
 };
+
+const watchOn = (s: BrowserState) => s.settings.busyTabWarnings !== false;
 
 const hasHiddenLoadedTab = (s: BrowserState) => {
   for (const id of webviews.keys()) if (hasTab(s, id) && !isPrivate(s, id) && canSleep(s, id)) return true;
@@ -94,13 +96,24 @@ async function freshOwners(pids: number[], now: number, consent: ConsentToken | 
   return found;
 }
 
+const stillHot = (pid: number, started: number) => {
+  const h = heat.get(pid);
+  return !!h && h.started === started && h.busySince !== null;
+};
+
 async function stillBusyIn(pid: number, started: number, tabIds: string[], consent: ConsentToken | null, run: number): Promise<string[]> {
-  if (heat.get(pid)?.started !== started) return [];
+  if (run !== generation || !stillHot(pid, started)) return [];
   const owner = (await freshOwners([pid], clock(), consent)).get(pid)!;
-  if (run !== generation || heat.get(pid)?.started !== started) return [];
+  if (run !== generation || !stillHot(pid, started)) return [];
   const s = useBrowser.getState();
   const now = clock();
   return tabIds.filter((id) => owner.tabIds.includes(id) && eligible(s, id, now));
+}
+
+function mayConfirm(windowId: string, warningId: number | null): boolean {
+  if (!useBrowser.getState().windows[windowId]) return false;
+  const slot = useToasts.getState().toasts[windowId];
+  return !slot || slot.id === warningId;
 }
 
 function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: number, consent: ConsentToken | null) {
@@ -109,7 +122,11 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
   const first = s.tabs[tabIds[0]!]!;
   const many = tabIds.length > 1;
   const site = siteToKeepActive(first.url);
-  const name = toastName(first.customTitle || first.title) || toastName(site) || "A background tab";
+  const nameOf = (id: string) => {
+    const tab = useBrowser.getState().tabs[id] ?? first;
+    return toastName(tab.customTitle || tab.title) || toastName(siteToKeepActive(tab.url)) || "A background tab";
+  };
+  const name = nameOf(first.id);
   const run = generation;
   for (const id of tabIds) quietUntil.set(id, now + QUIET_AFTER_WARNING_MS);
   noteBusyTab("busy_tab_warnings", consent);
@@ -125,17 +142,19 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
         void stillBusyIn(pid, started, tabIds, asked, run).then(async (still) => {
           if (!still.length) return noteBusyTab("busy_tab_sleep_moot", asked);
           const results = await Promise.all(still.map(sleepAsked));
-          const slept = results.some((r) => r.outcome === "asleep");
-          noteBusyTab(slept ? "busy_tab_slept" : "busy_tab_stayed_awake", asked);
-          if (run !== generation) return;
-          if (slept) showToast(windowId, many ? `${still.length} tabs are asleep` : `“${name}” is asleep`, undefined, { icon: "moon.zzz" });
-          else if (results.some((r) => r.outcome === "kept")) showToast(windowId, `“${name}” stayed awake`, undefined, { icon: ICON });
+          const asleep = still.filter((_, i) => results[i]!.outcome === "asleep");
+          const kept = still.filter((_, i) => results[i]!.outcome === "kept");
+          noteBusyTab(asleep.length ? "busy_tab_slept" : "busy_tab_stayed_awake", asked);
+          if (run !== generation || !mayConfirm(windowId, warningId)) return;
+          if (asleep.length) showToast(windowId, asleep.length > 1 ? `${asleep.length} tabs are asleep` : `“${nameOf(asleep[0]!)}” is asleep`, undefined, { icon: "moon.zzz" });
+          else if (kept.length) showToast(windowId, `“${nameOf(kept[0]!)}” stayed awake`, undefined, { icon: ICON });
         });
       },
     },
     secondary: {
       title: "Keep Running",
       run: () => {
+        if (run !== generation || isQuitting()) return;
         noteBusyTab("busy_tab_kept_running", consentToken());
         for (const id of tabIds) keptTabs.add(id);
         if (site) void keepSiteActive(site);
@@ -143,6 +162,7 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
       },
     },
   });
+  const warningId = useToasts.getState().toasts[windowId]?.id ?? null;
 }
 
 async function warnFor(pids: number[], now: number, consent: ConsentToken | null, run: number) {
@@ -169,7 +189,7 @@ async function warnFor(pids: number[], now: number, consent: ConsentToken | null
 }
 
 export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknown> = childProcessCpu) {
-  if (ticking || unsupported || isQuitting()) return;
+  if (ticking || unsupported || isQuitting() || !watchOn(useBrowser.getState())) return;
   ticking = true;
   const run = generation;
   lastTickAt = now;
@@ -198,6 +218,12 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
   }
 }
 
+function dropWork() {
+  generation++;
+  heat = new Map();
+  owners.clear();
+}
+
 let started = false;
 
 export function startBusyTabWatch() {
@@ -206,18 +232,25 @@ export function startBusyTabWatch() {
   everySlowly({
     every: BUSY_TICK_MS,
     run: () => void watchBusyTabs(),
-    needed: () => !unsupported && !isQuitting() && hasHiddenLoadedTab(useBrowser.getState()),
+    needed: () => !unsupported && !isQuitting() && watchOn(useBrowser.getState()) && hasHiddenLoadedTab(useBrowser.getState()),
     watch: (changed) => {
       const browser = useBrowser.subscribeTo(["tabs", "windows", "peeks", "splits"], changed);
       const lifecycle = useLifecycle.subscribe(changed);
       const views = onWebviewsChanged(changed);
       const quitting = onQuittingChanged(() => {
-        generation++;
-        heat = new Map();
-        owners.clear();
+        dropWork();
         changed();
       });
-      return () => (browser(), lifecycle(), views(), quitting());
+      const toggled = useBrowser.subscribeTo(["settings"], (s, prev) => {
+        if (watchOn(s) === watchOn(prev)) return;
+        noteBusyTab(watchOn(s) ? "busy_tab_warnings_turned_on" : "busy_tab_warnings_turned_off", consentToken());
+        if (!watchOn(s)) {
+          dropWork();
+          for (const windowId of Object.keys(s.windows)) hideKeyedToast(windowId, TOAST_KEY);
+        }
+        changed();
+      });
+      return () => (browser(), lifecycle(), views(), quitting(), toggled());
     },
   });
   if (__DEV__) (globalThis as { acBusyTabs?: unknown }).acBusyTabs = { watchBusyTabs, heat: () => heat, owners: () => owners, quietUntil, setHotCores: (cores: number) => void (hotCores = cores) };

@@ -55,11 +55,15 @@ const DEFAULT_PORTS: Readonly<Record<string, string>> = { http: "80", https: "44
 const SITE_RULE = /^(?:([a-z][a-z0-9+.-]*):\/\/)?([^/:?#]*)(?::(\*|\d{1,5}))?(\/[^?#]*)?(?:\?([^#]*))?$/i;
 
 function queryHolds(url: URL, query: string): boolean {
-  for (const part of query.split("&")) {
-    if (!part) continue;
-    const [key = "", value] = part.split("=", 2);
-    const values = url.searchParams.getAll(decodeURIComponent(key));
-    if (value === undefined ? !url.searchParams.has(decodeURIComponent(key)) : !values.includes(decodeURIComponent(value))) return false;
+  const pairs = [...url.searchParams].map(([key, value]) => `${key}=${value}`);
+  for (const token of query.split("&")) {
+    if (!token) continue;
+    const prefix = token.endsWith("*");
+    const raw = prefix ? token.slice(0, -1) : token;
+    const eq = raw.indexOf("=");
+    const wanted = eq < 0 ? decodeURIComponent(raw) : `${decodeURIComponent(raw.slice(0, eq))}=${decodeURIComponent(raw.slice(eq + 1))}`;
+    const holds = prefix ? pairs.some((pair) => pair.startsWith(wanted)) : eq < 0 ? url.searchParams.has(wanted) : pairs.includes(wanted);
+    if (!holds) return false;
   }
   return true;
 }

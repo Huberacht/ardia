@@ -9,14 +9,18 @@ const HOSTILE_VALUES = NAMED_VALUES.map((entry) => entry.value);
 globalThis.__DEV__ = false;
 
 const performance = import.meta.resolve("../../platform/performance.ts");
-globalThis.busyTest = { tasks: [], lookups: 0, toasts: [], onLookup: null };
+globalThis.busyTest = { tasks: [], lookups: 0, toasts: [], onLookup: null, slots: {}, trackSlots: false, hidden: [], validate: null, toastSeq: 0 };
 const stubs = {
   "../../platform/performance": `export * from ${JSON.stringify(performance)};
     export const listTasks = async () => { globalThis.busyTest.lookups++; const t = globalThis.busyTest.tasks; globalThis.busyTest.onLookup?.(); return t; };
-    export const isKeepActiveSiteValid = async () => true;
+    export const isKeepActiveSiteValid = () => globalThis.busyTest.validate ? globalThis.busyTest.validate() : Promise.resolve(true);
     export const childProcessCpu = async () => [];`,
-  "../app/toasts": `export const useToasts = { getState: () => ({ toasts: {} }) };
-    export const showToast = (windowId, title, message, options) => globalThis.busyTest.toasts.push({ windowId, title, message, ...options });`,
+  "../app/toasts": `export const useToasts = { getState: () => ({ toasts: globalThis.busyTest.slots }) };
+    export const hideKeyedToast = (windowId, key) => globalThis.busyTest.hidden.push([windowId, key]);
+    export const showToast = (windowId, title, message, options) => {
+      globalThis.busyTest.toasts.push({ windowId, title, message, ...options });
+      if (globalThis.busyTest.trackSlots) globalThis.busyTest.slots[windowId] = { id: ++globalThis.busyTest.toastSeq, title, key: options?.key };
+    };`,
 };
 registerHooks({
   resolve(specifier, context, next) {
@@ -33,6 +37,11 @@ const { shownTabIds } = await import("./shownTabs.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
 const { slowTimersForTests } = await import("../../platform/slowTimers.ts");
 const { setQuitting } = await import("../app/quit.ts");
+const { keepSiteActive } = await import("./memorySaver.ts");
+const { parseSettings } = await import("../settings/settings.ts");
+const { PLATFORM_FEATURES } = await import("../../lib/platformFeatures.ts");
+const { unshownSettings } = await import("../../components/settings/settingsIndex.ts");
+const { readFileSync } = await import("node:fs");
 const { setConsentPeriod } = await import("../telemetry/consentPeriod.ts");
 setConsentPeriod(true, "busy-tab-watch-test");
 
@@ -124,6 +133,8 @@ const reset = () => {
   globalThis.busyTest.toasts.length = 0;
   globalThis.busyTest.lookups = 0;
   globalThis.busyTest.onLookup = null;
+  globalThis.busyTest.slots = {};
+  globalThis.busyTest.trackSlots = false;
   takeBusyTabCounts();
 };
 
@@ -268,6 +279,103 @@ test("hostile task rows and page titles reach neither the toast nor Sleep", asyn
   webviews.clear();
 });
 
+test("query rules match as Chrome's filters do: a trailing * is a prefix, repeated keys match any value", () => {
+  const t = (url, rule) => matchesSiteRule(url, rule);
+  assert.ok(t("https://example.com/?q=workday", "example.com/?q=work*"));
+  assert.ok(!t("https://example.com/?q=play", "example.com/?q=work*"));
+  assert.ok(t("https://example.com/?a=1&a=2", "example.com/?a=2"), "any value of a repeated key");
+  assert.ok(t("https://example.com/?a=1&a=2", "example.com/?a=1&a=2"));
+  assert.ok(!t("https://example.com/?a=1", "example.com/?a=1&a=2"), "every token must hold");
+  assert.ok(t("https://example.com/?a=1&b=2", "example.com/?b=2&a=1"), "token order doesn't matter");
+});
+
+test("Sleep does nothing once the process has calmed down below the threshold", async () => {
+  const start = Date.now() + 5000 * MINUTE;
+  const { hidden, slept } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 41, tabIds: [hidden] }];
+  const used = { v: 0 };
+  const tick = (t, cores) => watchBusyTabs(start + t * 10 * SECOND, async () => [{ pid: 41, started: 9, cpuMs: (used.v += t ? cores * 10_000 : 0) }]);
+  for (let t = 0; t <= 12; t++) await tick(t, 1);
+  const warning = globalThis.busyTest.toasts[0];
+  assert.ok(warning);
+  for (let t = 13; t <= 18; t++) await tick(t, 0);
+  warning.action.run();
+  await settle();
+  assert.deepEqual(slept, [], "the last two minutes average under 0.7 of a core now");
+  assert.equal(globalThis.busyTest.toasts.length, 1);
+  assert.equal(takeBusyTabCounts().busy_tab_sleep_moot, 1);
+  webviews.clear();
+});
+
+test("after quitting starts, Keep Running and a pending kept-site check write nothing", async () => {
+  const start = Date.now() + 5200 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 41, tabIds: [hidden] }];
+  await burn(start, 2);
+  const warning = globalThis.busyTest.toasts[0];
+  setQuitting(true);
+  try {
+    warning.secondary.run();
+    await settle();
+    assert.deepEqual(S().settings.keepActiveSites, []);
+    assert.equal(globalThis.busyTest.toasts.length, 1, "no confirmation either");
+  } finally {
+    setQuitting(false);
+  }
+  let answer;
+  globalThis.busyTest.validate = () => new Promise((resolve) => (answer = resolve));
+  try {
+    const pending = keepSiteActive("late.example");
+    await settle();
+    setQuitting(true);
+    answer(true);
+    await pending;
+    assert.deepEqual(S().settings.keepActiveSites, [], "a validation that finishes after the quit flush doesn't write");
+  } finally {
+    setQuitting(false);
+    globalThis.busyTest.validate = null;
+  }
+  webviews.clear();
+});
+
+test("Sleep confirms only the tabs that really slept, and never covers a newer toast", async () => {
+  const start = Date.now() + 5400 * MINUTE;
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const a = S().newTab(w, { url: "https://miner.example/a", background: true });
+  const b = S().newTab(w, { url: "https://miner.example/b", background: true });
+  S().updateTab(a, { title: "Alpha", lastActiveAt: start - 10 * MINUTE });
+  S().updateTab(b, { title: "Beta", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of Object.keys(S().tabs)) webviews.set(id, { sleepIfHidden: async () => (id === b ? [26] : []), discard: async () => "discarded" });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 41, tabIds: [a, b] }];
+  await burn(start, 2);
+  assert.equal(globalThis.busyTest.toasts[0].title, "2 miner.example tabs are using a lot of power");
+  globalThis.busyTest.toasts[0].action.run();
+  await settle();
+  await settle();
+  assert.equal(globalThis.busyTest.toasts[1].title, "“Alpha” is asleep", "one slept and one was kept for its typed input: name the one that slept");
+  reset();
+  globalThis.busyTest.trackSlots = true;
+  const c = S().newTab(w, { url: "https://other.example/c", background: true });
+  S().updateTab(c, { title: "Gamma", lastActiveAt: start });
+  webviews.set(c, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  globalThis.busyTest.tasks = [{ pid: 42, tabIds: [c] }];
+  await burn(start + 10 * MINUTE, 3, { 42: 1 });
+  const warning = globalThis.busyTest.toasts.at(-1);
+  assert.equal(warning.title, "“Gamma” is using a lot of power");
+  globalThis.busyTest.slots[w] = { id: 999, title: "Undo", key: "undo" };
+  warning.action.run();
+  await settle();
+  await settle();
+  assert.equal(globalThis.busyTest.toasts.at(-1), warning, "a newer toast in the window stays; the confirmation is dropped");
+  webviews.clear();
+});
+
 test("the watch has no timer while no loaded tab is hidden, wakes when a webview registers, and stops when the app quits", () => {
   const timers = slowTimersForTests(() => Date.now());
   timers.clear();
@@ -289,6 +397,42 @@ test("the watch has no timer while no loaded tab is hidden, wakes when a webview
   assert.notEqual(timers.pending(), null);
   ref(null);
   assert.equal(timers.pending(), null, "and the webview going away disarms it again");
+  webviews.clear();
+});
+
+test("Warn about busy background tabs: off stops the watch and its reads, on arms it again; it persists, is counted, and is macOS only", async () => {
+  assert.equal(parseSettings({}).busyTabWarnings, true, "on by default");
+  assert.equal(parseSettings({ busyTabWarnings: false }).busyTabWarnings, false, "a saved off is kept");
+  assert.equal(parseSettings({ busyTabWarnings: "no" }).busyTabWarnings, true, "a bad value falls back");
+  const timers = slowTimersForTests(() => Date.now());
+  const start = Date.now() + 6000 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  startBusyTabWatch();
+  S().updateTab(hidden, { title: "Busy Loop Page, now hidden" });
+  assert.notEqual(timers.pending(), null, "armed: a loaded tab is hidden");
+  S().updateSettings({ busyTabWarnings: false });
+  assert.equal(timers.pending(), null, "off: no timer at all");
+  assert.deepEqual(globalThis.busyTest.hidden.at(-1), [S().tabs[hidden].windowId, "busyTab"], "a warning on screen goes away");
+  let reads = 0;
+  await watchBusyTabs(start, async () => (reads++, []));
+  assert.equal(reads, 0, "and a tick that was already due reads nothing");
+  S().updateSettings({ busyTabWarnings: true });
+  assert.notEqual(timers.pending(), null, "on again: armed again while a tab is hidden");
+  const counts = takeBusyTabCounts();
+  assert.equal(counts.busy_tab_warnings_turned_off, 1);
+  assert.equal(counts.busy_tab_warnings_turned_on, 1);
   timers.clear();
   webviews.clear();
+  const read = (name) => readFileSync(new URL(`../../lib/${name}`, import.meta.url), "utf8");
+  for (const name of ["platformFeatures.linux.ts", "platformFeatures.windows.ts"]) assert.match(read(name), /busyTabWatch: false/, name);
+  assert.match(read("platformFeatures.ts"), /busyTabWatch: true/);
+  const env = { top: false, glass: true, syncOn: false, calendarAccess: false, officialPlugins: [] };
+  assert.ok(!unshownSettings(parseSettings({}), env).split("\n").includes("advanced.busyTabWarnings"), "shown on macOS");
+  PLATFORM_FEATURES.busyTabWatch = false;
+  try {
+    assert.ok(unshownSettings(parseSettings({}), env).split("\n").includes("advanced.busyTabWarnings"), "hidden where the platform has no watch");
+  } finally {
+    PLATFORM_FEATURES.busyTabWatch = true;
+  }
 });

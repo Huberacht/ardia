@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Animated, View } from "react-native";
 import { Button } from "./Button";
 import { curve, duration } from "./motion";
@@ -11,9 +11,15 @@ import { radius, shadow, space, toastLayout } from "./tokens";
 
 const DOCK = { position: "absolute", left: 0, right: 0, bottom: toastLayout.bottom, alignItems: "center" } as const;
 const BODY = { paddingHorizontal: space.xl, paddingVertical: space.ml, flexDirection: "row", alignItems: "center", gap: space.ml, maxWidth: toastLayout.maxWidth } as const;
-const TWO_ACTION_BODY = { ...BODY, maxWidth: toastLayout.twoActionMaxWidth } as const;
 const ICON = { width: 20, height: 20 } as const;
 const TEXT = { flexShrink: 1 } as const;
+const ACTIONS = { flexDirection: "row", flexShrink: 0, gap: space.ml } as const;
+const TITLE_LINES = 2;
+
+export function toastWidth(room: number | null, twoActions: boolean): number {
+  const cap = twoActions ? toastLayout.twoActionMaxWidth : toastLayout.maxWidth;
+  return room === null ? cap : Math.max(0, Math.min(cap, room - 2 * toastLayout.edge));
+}
 const TOAST_FADE = { in: { duration: duration.base, easing: curve.enter }, out: { duration: duration.slow, easing: curve.exit } } as const;
 
 export function Toast({
@@ -43,6 +49,7 @@ export function Toast({
   const appear = useRef(new Animated.Value(0)).current;
   const closed = useRef(onClosed);
   closed.current = onClosed;
+  const [room, setRoom] = useState<number | null>(null);
   const { hovered, hoverProps } = useHover();
   const focused = useRef(new Set<string>());
   const held = useRef(onHeld);
@@ -60,20 +67,24 @@ export function Toast({
     return () => run.stop();
   }, [closing]);
   return (
-    <View pointerEvents={(action || secondary) && !closing ? "box-none" : "none"} style={DOCK}>
+    <View pointerEvents={(action || secondary) && !closing ? "box-none" : "none"} style={DOCK} onLayout={(e) => setRoom(e.nativeEvent.layout.width)}>
       <Animated.View {...(onHeld ? hoverProps : null)} style={{ opacity: appear }}>
-        <Panel fill={theme.toastFill} border={theme.popoverBorder} radius={radius.panel} shadow={shadow.card} material="hudWindow" style={secondary ? TWO_ACTION_BODY : BODY}>
+        <Panel fill={theme.toastFill} border={theme.popoverBorder} radius={radius.panel} shadow={shadow.card} material="hudWindow" style={{ ...BODY, maxWidth: toastWidth(room, !!secondary) }}>
           {icon ? <Symbol name={icon} size={15} color={theme.icon} style={ICON} /> : null}
           <View style={TEXT}>
-            <Text weight="semibold">{title}</Text>
+            <Text weight="semibold" numberOfLines={TITLE_LINES}>{title}</Text>
             {message ? (
               <Text size="small" tone="textSecondary">
                 {message}
               </Text>
             ) : null}
           </View>
-          {secondary && onSecondary ? <Button variant="pill" tone="chip" title={secondary} onPress={onSecondary} onFocusChange={onHeld ? focusOf("secondary") : undefined} /> : null}
-          {action && onAction ? <Button variant="pill" tone="chip" title={action} onPress={onAction} onFocusChange={onHeld ? focusOf("action") : undefined} /> : null}
+          {(secondary && onSecondary) || (action && onAction) ? (
+            <View style={ACTIONS}>
+              {secondary && onSecondary ? <Button variant="pill" tone="chip" title={secondary} onPress={onSecondary} onFocusChange={onHeld ? focusOf("secondary") : undefined} /> : null}
+              {action && onAction ? <Button variant="pill" tone="chip" title={action} onPress={onAction} onFocusChange={onHeld ? focusOf("action") : undefined} /> : null}
+            </View>
+          ) : null}
         </Panel>
       </Animated.View>
     </View>

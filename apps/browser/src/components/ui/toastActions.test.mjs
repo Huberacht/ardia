@@ -9,6 +9,8 @@ const { renderToStaticMarkup } = require("react-dom/server");
 const { createElement } = require("react");
 const { pressables } = await import("react-native");
 const { Button } = await import("./Button.tsx");
+const { toastWidth } = await import("./Toast.tsx");
+const { toastLayout } = await import("./tokens.ts");
 const { SplitToast } = await import("../split/SplitChrome.tsx");
 const { showToast, useToasts } = await import("../../state/app/toasts.ts");
 const { TOAST_ACTION_MS } = await import("../split/tokens.ts");
@@ -54,4 +56,20 @@ test("a one-button toast keeps its old timing and isn't held", (t) => {
   assert.equal(mounted.value.props.onHeld, undefined);
   t.mock.timers.tick(TOAST_ACTION_MS);
   assert.equal(mounted.value.props.closing, true);
+});
+
+test("a toast never outgrows its card: in a 420 pt card both buttons keep their width and the title wraps, then truncates", () => {
+  const card = 420;
+  const width = toastWidth(card, true);
+  assert.ok(width <= card - 2 * toastLayout.edge, `two-button toast fits a ${card} pt card (${width} pt)`);
+  assert.equal(toastWidth(2000, true), toastLayout.twoActionMaxWidth, "a wide card still caps it");
+  assert.equal(toastWidth(2000, false), toastLayout.maxWidth);
+  assert.equal(toastWidth(null, true), toastLayout.twoActionMaxWidth, "before the card is measured");
+  assert.equal(toastWidth(10, true), 0, "never negative");
+  const source = readFileSync(new URL("./Toast.tsx", import.meta.url), "utf8");
+  assert.match(source, /style=\{DOCK\} onLayout=\{\(e\) => setRoom\(e\.nativeEvent\.layout\.width\)\}/, "the toast measures the card it sits in");
+  assert.match(source, /maxWidth: toastWidth\(room, !!secondary\)/);
+  assert.match(source, /const ACTIONS = \{ flexDirection: "row", flexShrink: 0/, "the buttons never shrink");
+  assert.match(source, /const TEXT = \{ flexShrink: 1 \}/, "the title gives way");
+  assert.match(source, /numberOfLines=\{TITLE_LINES\}/, "and truncates past two lines");
 });
