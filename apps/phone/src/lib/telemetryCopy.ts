@@ -42,7 +42,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["color_choice"],
       },
       {
-        text: "With each launch, how Ardia draws its glass: with the Liquid Glass lens, as frosted glass or without blur on Android, the system’s own glass, Classic, or none in Material You",
+        text: "With each launch, the best glass this phone can draw, not what each surface drew: the Liquid Glass lens, frosted glass or no blur on Android, the system’s own glass, Classic, or none in Material You",
         fields: ["glass_render"],
       },
       {
