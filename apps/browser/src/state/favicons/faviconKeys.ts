@@ -7,9 +7,10 @@ import { notePrivateFaviconPeek } from "../telemetry/pageFaviconCounts";
 
 export const cacheKey = (profileId: string) => (isIncognitoProfile(profileId) ? profileId : engineProfile(useBrowser.getState(), profileId));
 
-export function lookupOrder(profileId?: string): string[] {
+export function lookupOrder(profileId?: string, source?: string): string[] {
   if (profileId && !isIncognitoProfile(profileId)) return [profileId];
-  return [...new Set([...(profileId ? [profileId] : []), DEFAULT_PROFILE_ID, ...useBrowser.getState().profileOrder])];
+  const first = source && !isIncognitoProfile(source) ? [source] : [];
+  return [...new Set([...(profileId ? [profileId] : []), ...first, DEFAULT_PROFILE_ID, ...useBrowser.getState().profileOrder])];
 }
 
 export const askable = (id: string) => !isIncognitoProfile(id) && profileOpened(cacheKey(id));
@@ -38,6 +39,7 @@ export function borrowFor(key: string): boolean {
 export const stillBorrowed = (key: string) => borrowed.has(key);
 export const borrowersOf = (engine: string) => [...borrowed].filter((key) => sourceEngineOf(key) === engine);
 export const anyBorrowed = () => borrowed.size > 0;
+export const pendingRetries = () => peekRetries.size;
 
 export function closeViewers(open: Set<string>, before: Iterable<string>): string[] {
   for (const id of before) if (isIncognitoProfile(id) && !open.has(id)) closedViewers.add(id);
@@ -64,6 +66,7 @@ function dropRetries(match: (id: string) => boolean) {
 export function settlePeek(key: string, pages: string[], failed: boolean, consent: ConsentToken | null, retry: (page: string) => void): boolean {
   if (!isBorrowed(key)) return true;
   notePrivateFaviconPeek(failed, consent);
+  if (!stillBorrowed(key)) return false;
   for (const page of pages) {
     const id = `${key}|${page}`;
     if (!failed) {
@@ -72,11 +75,11 @@ export function settlePeek(key: string, pages: string[], failed: boolean, consen
     }
     const entry = peekRetries.get(id) ?? { tries: 0 };
     peekRetries.set(id, entry);
-    if (entry.tries >= PEEK_RETRY_MS.length || entry.timer || !stillBorrowed(key)) continue;
+    if (entry.tries >= PEEK_RETRY_MS.length || entry.timer) continue;
     entry.timer = setTimeout(() => {
       entry.timer = undefined;
       if (stillBorrowed(key)) retry(page);
     }, PEEK_RETRY_MS[entry.tries++]);
   }
-  return stillBorrowed(key);
+  return true;
 }
