@@ -500,7 +500,8 @@ test("the Rust toolchain and its environment are in the stamp, and a redirected 
   const base = stampOf(dir, { rust: "rust rustc 1.100.0 (0ef1bc386 2026-11-09) | cargo 1.100.0" });
   assert.notEqual(stampOf(dir, { rust: "rust rustc 1.101.0 (aaaaaaaaa 2026-12-01) | cargo 1.101.0" }), base);
   assert.notEqual(stampOf(dir, { rust: "rust unavailable" }), base);
-  assert.deepEqual(lib.envFingerprint({ RUSTUP_TOOLCHAIN: "nightly", CARGO_TARGET_DIR: "/t" }).lines, ["env CARGO_TARGET_DIR=/t", "env RUSTUP_TOOLCHAIN=nightly"]);
+  assert.deepEqual(lib.envFingerprint({ RUSTUP_TOOLCHAIN: "nightly", CARGO_HOME: "/h" }).lines, ["env CARGO_HOME=/h", "env RUSTUP_TOOLCHAIN=nightly"]);
+  assert.deepEqual(lib.envFingerprint({ CARGO_TARGET_DIR: "/shared/target" }).blocked, ["CARGO_TARGET_DIR"]);
   assert.deepEqual(lib.envFingerprint({ ARDIA_CORE_RS_XCFRAMEWORK: "/elsewhere" }).blocked, ["ARDIA_CORE_RS_XCFRAMEWORK"]);
   const inputs = lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", rust: "rust r" });
   assert.equal(inputs.rust, "rust r");
@@ -511,7 +512,8 @@ test("the Rust identity reads the toolchain the core pins, and says so when ther
   assert.equal(lib.rustIdentity(noCore), "rust none");
   const core = scratch();
   write(core, `${CORE_RS}/rust-toolchain.toml`, "[toolchain]\nchannel = \"0.0.0-missing\"\n");
-  assert.match(lib.rustIdentity(core, { PATH: "/nonexistent" }), /^rust unavailable/);
+  assert.equal(lib.rustIdentity(core, { PATH: "/nonexistent" }, { toolchain: "xcode x" }), null);
+  assert.match(lib.stampInputs({ framework: framework(), env: {}, toolchain: "t", repo: core, rust: null }).blocked, /Rust toolchain/);
 });
 
 test("staging resolves a symlinked framework, refuses links that leave it, and replaces a copy that is a symlink", () => {
@@ -580,4 +582,89 @@ test("publishing over an entry whose bytes no longer match its digest replaces i
   assert.equal(kept.existed, true);
   assert.equal(appText(lib.lookup(cache, S1)), "new");
   assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp")), []);
+});
+
+const fakeRust = (rustc = "rustc 1.100.0 commit-hash: aaa", cargo = "cargo 1.100.0") => (cmd) => (cmd === "rustc" ? rustc : cmd === "cargo" ? cargo : null);
+
+function rustTree() {
+  const dir = scratch();
+  write(dir, `${CORE_RS}/rust-toolchain.toml`, "[toolchain]\nchannel = \"1.100.0\"\n");
+  return dir;
+}
+
+test("one Rust build identity covers rustc, cargo, Rust variables, the Cargo home config and Xcode", () => {
+  const tree = rustTree();
+  const home = scratch();
+  const id = (env = {}, opts = {}) => lib.rustIdentity(tree, { CARGO_HOME: home, ...env }, { run: fakeRust(), toolchain: "xcode 27B52", ...opts });
+  const base = id();
+  assert.ok(base.startsWith("rust | rustc 1.100.0"));
+  assert.notEqual(id({}, { run: fakeRust("rustc 1.101.0 commit-hash: bbb") }), base);
+  assert.notEqual(id({}, { run: fakeRust(undefined, "cargo 1.101.0") }), base);
+  assert.notEqual(id({ RUSTFLAGS: "-Ctarget-cpu=native" }), base);
+  assert.notEqual(id({}, { toolchain: "xcode 27C1" }), base);
+  write(home, "config.toml", "[build]\njobs = 2\n");
+  const withConfig = id();
+  assert.notEqual(withConfig, base);
+  write(home, "config.toml", "[build]\njobs = 4\n");
+  assert.notEqual(id(), withConfig);
+  assert.equal(lib.rustIdentity(tree, { CARGO_HOME: home }, { run: () => null, toolchain: "x" }), null);
+});
+
+test("the xcframework receipt must name the identity the stamp carries", () => {
+  const tree = rustTree();
+  assert.equal(lib.receiptMatches(tree, "rust | a"), false);
+  lib.writeReceipt(tree, "rust | a");
+  assert.equal(lib.receiptMatches(tree, "rust | a"), true);
+  assert.equal(lib.receiptMatches(tree, "rust | b"), false);
+  assert.equal(lib.receiptMatches(scratch(), "rust | anything"), true);
+});
+
+test("slot attempts: every free slot without waiting, then the best one for at most min(60 s, the budget)", () => {
+  assert.deepEqual(lib.attemptPlan(["/s/2", "/s/1"], 1500), [{ slot: "/s/2", wait: 1 }, { slot: "/s/1", wait: 1 }, { slot: "/s/2", wait: 60 }]);
+  assert.deepEqual(lib.attemptPlan(["/s/2"], 0), [{ slot: "/s/2", wait: 1 }, { slot: "/s/2", wait: 1 }]);
+  assert.deepEqual(lib.attemptPlan(["/s/2"], 20), [{ slot: "/s/2", wait: 1 }, { slot: "/s/2", wait: 20 }]);
+  assert.deepEqual(lib.attemptPlan([], 1500), []);
+});
+
+test("build-app stages the engine, which may take the chromium lock, before it takes its own lock", () => {
+  const script = fs.readFileSync(new URL("../agent/build-app", import.meta.url), "utf8");
+  const stage = script.indexOf("stage-engine --framework");
+  const own = script.indexOf("exec lockf");
+  assert.ok(stage > 0 && own > 0 && stage < own);
+});
+
+test("a framework link that resolves outside it through another link, or not at all, is refused", () => {
+  const outside = scratch();
+  write(outside, "pkg/resources.pak", "x");
+  const fw = framework();
+  fs.symlinkSync(outside, join(fw, "Versions/A/hop"));
+  fs.symlinkSync("hop/pkg/resources.pak", join(fw, "Versions/A/resources.pak"));
+  assert.ok(lib.linksLeaving(fw).some((l) => l.includes("resources.pak")));
+  const dangling = framework();
+  fs.symlinkSync("missing", join(dangling, "Versions/A/missing.pak"));
+  assert.equal(lib.linksLeaving(dangling).length, 1);
+  assert.deepEqual(lib.linksLeaving(framework()), []);
+});
+
+test("an occupied entry path with broken metadata or structure is repaired, under a per-stamp lock", () => {
+  const cache = scratch();
+  write(cache, `${S1}/meta.json`, "not json");
+  const a = lib.store(cache, S1, fakeApp(scratch(), "fresh"), {}, { measure: one });
+  assert.equal(appText(a), "fresh");
+  const b = lib.lookup(cache, S2);
+  assert.equal(b, null);
+  write(cache, `${S2}/meta.json`, JSON.stringify({ stamp: S2, digest: "d" }));
+  assert.equal(appText(lib.store(cache, S2, fakeApp(scratch(), "fixed"), {}, { measure: one })), "fixed");
+  assert.deepEqual(fs.readdirSync(cache).filter((n) => n.startsWith(".tmp") || n.startsWith(".lock")), []);
+});
+
+test("the per-stamp lock waits for a live holder and reclaims a dead one", () => {
+  const dir = scratch();
+  const lock = join(dir, ".lock-x");
+  fs.mkdirSync(lock);
+  fs.writeFileSync(join(lock, "pid"), String(process.pid));
+  assert.deepEqual(lib.withLock(lock, () => 1, { timeoutMs: 200 }), { locked: false });
+  fs.writeFileSync(join(lock, "pid"), "999999");
+  assert.deepEqual(lib.withLock(lock, () => 2, { timeoutMs: 200 }), { locked: true, value: 2 });
+  assert.equal(fs.existsSync(lock), false);
 });

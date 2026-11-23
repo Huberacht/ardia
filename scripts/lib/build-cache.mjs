@@ -4,7 +4,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export const STAMP_VERSION = 5;
+export const STAMP_VERSION = 6;
 
 const NATIVE = [
   /^apps\/browser\/macos\//,
@@ -40,7 +40,7 @@ const BUILD_ENV = new RegExp(
     "ARDIA_PRUNE|CHROMIUM_TAG|TOOLCHAINS|DEVELOPER_DIR|SDKROOT|MACOSX_DEPLOYMENT_TARGET|CC|CXX|LD|CPP|CFLAGS|CXXFLAGS|" +
     "OBJCFLAGS|LDFLAGS|CPATH|C_INCLUDE_PATH|CPLUS_INCLUDE_PATH|OBJC_INCLUDE_PATH|LIBRARY_PATH|CP_HOME_DIR|LANG|LC_ALL)$",
 );
-export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE", "ARDIA_CORE_RS_XCFRAMEWORK"];
+export const UNFINGERPRINTABLE_ENV = ["XCODE_XCCONFIG_FILE", "ARDIA_CORE_RS_XCFRAMEWORK", "CARGO_TARGET_DIR"];
 export const BUNDLING_ENV = /^(SKIP_BUNDLING|FORCE_BUNDLING|BUNDLE_[A-Z_]+|EXTRA_PACKAGER_ARGS|EXTRA_COMPILER_ARGS|ENTRY_FILE|CONFIG_JSON|USE_HERMES|HERMES_CLI_PATH|SOURCEMAP_FILE|NODE_ARGS|CLI_PATH)$/;
 export const UNFINGERPRINTABLE_FILES = ["apps/browser/macos/.xcode.env.local", "apps/browser/macos/.xcode.env.updates"];
 
@@ -183,17 +183,60 @@ export function toolchainIdentity() {
   return `toolchain ${parts.join(" | ").replace(/\s+/g, " ")}`;
 }
 
-export function rustIdentity(repo, env = process.env) {
-  const core = join(repo, "packages/core-rs");
-  if (!fs.existsSync(join(core, "rust-toolchain.toml"))) return "rust none";
+export function cargoConfigLines(env = process.env) {
+  const home = env.CARGO_HOME || join(homedir(), ".cargo");
+  const lines = [];
+  for (const name of ["config.toml", "config"]) {
+    try {
+      lines.push(`cargo-config ${name} ${sha256(fs.readFileSync(join(home, name)))}`);
+    } catch {}
+  }
+  return lines;
+}
+
+function runRust(core, env) {
   const runEnv = { ...env, PATH: `${join(homedir(), ".cargo/bin")}:${env.PATH ?? ""}`, RUSTUP_AUTO_INSTALL: "0" };
-  const run = (cmd, args) => {
+  return (cmd, args) => {
     const r = spawnSync(cmd, args, { cwd: core, env: runEnv, encoding: "utf8" });
     return r.status === 0 ? r.stdout.trim().replace(/\s+/g, " ") : null;
   };
-  const rustc = run("rustc", ["-vV"]);
-  const cargo = run("cargo", ["-V"]);
-  return rustc && cargo ? `rust ${rustc} | ${cargo}` : "rust unavailable";
+}
+
+export function rustIdentity(repo, env = process.env, { run = null, toolchain = undefined } = {}) {
+  const core = join(repo, "packages/core-rs");
+  if (!fs.existsSync(join(core, "rust-toolchain.toml"))) return "rust none";
+  const exec = run ?? runRust(core, env);
+  const rustc = exec("rustc", ["-vV"]);
+  const cargo = exec("cargo", ["-V"]);
+  const xcode = toolchain === undefined ? toolchainIdentity() : toolchain;
+  if (!rustc || !cargo || !xcode) return null;
+  const rustEnv = envFingerprint(env).lines.filter((l) => /^env (RUST|CARGO_)/.test(l));
+  return ["rust", rustc, cargo, ...cargoConfigLines(env), ...rustEnv, xcode].join(" | ");
+}
+
+export const xcframeworkReceipt = (tree) => join(tree, "packages/sync/ios/Frameworks/ArdiaCoreRS.xcframework.ac-identity");
+
+export function receiptMatches(tree, identity) {
+  if (!fs.existsSync(join(tree, "packages/core-rs/rust-toolchain.toml"))) return true;
+  try {
+    return fs.readFileSync(xcframeworkReceipt(tree), "utf8") === identity;
+  } catch {
+    return false;
+  }
+}
+
+export function writeReceipt(tree, identity) {
+  const path = xcframeworkReceipt(tree);
+  fs.mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, identity);
+  fs.renameSync(tmp, path);
+}
+
+export function attemptPlan(candidates, wait) {
+  const plan = candidates.map((slot) => ({ slot, wait: 1 }));
+  if (candidates.length) plan.push({ slot: candidates[0], wait: Math.max(1, Math.min(60, wait)) });
+  return plan;
 }
 
 export function stampOf({ manifest, config, signing = "default", framework, toolchain, rust = "rust none", env, native = isNative }) {
@@ -225,7 +268,7 @@ export function localEnvLines(repo, files = UNFINGERPRINTABLE_FILES) {
   return { lines };
 }
 
-export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity(), repo = null, rust = repo ? rustIdentity(repo, env) : "rust none", localEnvFiles = UNFINGERPRINTABLE_FILES }) {
+export function stampInputs({ framework, env = process.env, hashCache, toolchain = toolchainIdentity(), repo = null, rust = repo ? rustIdentity(repo, env, { toolchain }) : "rust none", localEnvFiles = UNFINGERPRINTABLE_FILES }) {
   const fingerprint = envFingerprint(env);
   if (fingerprint.blocked.length) return { blocked: `${fingerprint.blocked.join(", ")} set` };
   const local = repo ? localEnvLines(repo, localEnvFiles) : { lines: [] };
@@ -234,6 +277,7 @@ export function stampInputs({ framework, env = process.env, hashCache, toolchain
   const identity = frameworkIdentity(framework, hashCache);
   if (!identity) return { blocked: `no engine framework at ${framework || "(none)"}` };
   if (!toolchain) return { blocked: "the Xcode toolchain didn't answer" };
+  if (!rust) return { blocked: "the Rust toolchain rust-toolchain.toml pins didn't answer" };
   return { framework: identity, toolchain, rust, env: fingerprint };
 }
 
@@ -308,6 +352,35 @@ export const entryIntact = (entry) => {
   }
 };
 
+export function withLock(path, fn, { timeoutMs = 60e3 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      fs.mkdirSync(path);
+      fs.writeFileSync(join(path, "pid"), String(process.pid));
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+      const holder = Number(readJson(join(path, "pid"), 0));
+      let age = 0;
+      try {
+        age = Date.now() - fs.statSync(path).mtimeMs;
+      } catch {}
+      if ((holder && !pidAlive(holder)) || (!holder && age > 60e3)) {
+        fs.rmSync(path, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() > deadline) return { locked: false };
+      spawnSync("sleep", ["0.1"]);
+    }
+  }
+  try {
+    return { locked: true, value: fn() };
+  } finally {
+    fs.rmSync(path, { recursive: true, force: true });
+  }
+}
+
 export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measure = duBytes } = {}) {
   const existing = lookup(cacheRoot, stamp);
   if (existing && entryIntact(existing)) return { ...existing, existed: true };
@@ -322,12 +395,14 @@ export function store(cacheRoot, stamp, app, meta = {}, { hermesc = null, measur
     touch(tmp);
     if (treeDigest(tmp, undefined, { skipTop: ENTRY_META }) !== digest) throw new Error("the new entry changed while it was written");
     const dir = cacheEntryDir(cacheRoot, stamp);
-    const stale = lookup(cacheRoot, stamp);
-    if (stale && !entryIntact(stale)) removeAtomically(cacheRoot, dir);
-    fs.renameSync(tmp, dir);
-  } catch {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+    withLock(join(cacheRoot, `.lock-${stamp}`), () => {
+      const current = lookup(cacheRoot, stamp);
+      if (current && entryIntact(current)) return;
+      if (fs.existsSync(dir)) removeAtomically(cacheRoot, dir);
+      fs.renameSync(tmp, dir);
+    });
+  } catch {}
+  fs.rmSync(tmp, { recursive: true, force: true });
   const entry = lookup(cacheRoot, stamp);
   if (!entry) throw new Error(`publishing ${stamp} left no entry`);
   return entry;
@@ -360,12 +435,16 @@ export const isInside = (path, root) => {
 
 export function linksLeaving(root) {
   const found = [];
+  const base = fs.realpathSync(root);
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isSymbolicLink()) {
-        const target = fs.readlinkSync(path);
-        if (isAbsolute(target) || !resolve(dirname(path), target).startsWith(`${root}/`)) found.push(`${path} -> ${target}`);
+        let target = null;
+        try {
+          target = fs.realpathSync(path);
+        } catch {}
+        if (!target || !target.startsWith(`${base}/`)) found.push(`${path} -> ${target ?? "(unresolvable)"}`);
       } else if (entry.isDirectory()) walk(path);
     }
   };

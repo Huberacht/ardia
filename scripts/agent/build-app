@@ -102,26 +102,25 @@ if [[ -n "${AC_BUILD_APP_LOCKER:-}" && "$AC_BUILD_APP_LOCKER" != "$PPID" ]]; the
   exit 64
 fi
 if [[ -z "${AC_BUILD_APP_LOCKER:-}" ]]; then
+  if [[ -n "$prebuilt_engine" ]]; then
+    source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
+  elif [[ -n "${ARDIACORE_FRAMEWORK:-}" ]]; then
+    source_framework=$ARDIACORE_FRAMEWORK
+  elif [[ -d "$chromium_framework" ]]; then
+    source_framework=$chromium_framework
+  else
+    source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
+  fi
+  ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework" --as "$name" --wait "$wait") ||
+    { echo "build-app: couldn't stage the engine from $source_framework" >&2; exit 1; }
+  export ARDIACORE_FRAMEWORK
   AC_BUILD_APP_LOCKER=$$ exec lockf -k -t "$wait" "$dd/.build-app.lock" "$0" ${original_args[@]+"${original_args[@]}"}
 fi
-
-if [[ -n "$prebuilt_engine" ]]; then
-  source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
-elif [[ -n "${ARDIACORE_FRAMEWORK:-}" ]]; then
-  source_framework=$ARDIACORE_FRAMEWORK
-elif [[ -d "$chromium_framework" ]]; then
-  source_framework=$chromium_framework
-else
-  source_framework=$("$cache_tool" engine --repo "$repo") || { echo "build-app: couldn't fetch the prebuilt engine" >&2; exit 1; }
-fi
-ARDIACORE_FRAMEWORK=$("$cache_tool" stage-engine --framework "$source_framework" --as "$name" --wait "$wait") ||
-  { echo "build-app: couldn't stage the engine from $source_framework" >&2; exit 1; }
-export ARDIACORE_FRAMEWORK
 signing=default
 [[ -n "$adhoc" ]] && signing=adhoc
 
 stamp_now() {
-  "$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" 2>"$log.stamp"
+  "$cache_tool" stamp --repo "$repo" --config "$config" --signing "$signing" --framework "$ARDIACORE_FRAMEWORK" "$@" 2>"$log.stamp"
 }
 stamp=$(stamp_now)
 case $? in
@@ -194,7 +193,7 @@ slot="" built_stamp=$stamp
 if [[ $mode == plain ]]; then
   echo "build-app: $config into ${dd#"$repo"/} (log: ${log#"$repo"/})"
   : >"$log"
-  if [[ -x "$repo/packages/core-rs/scripts/build-xcframework.sh" ]] && ! "$repo/packages/core-rs/scripts/build-xcframework.sh" >>"$log" 2>&1; then
+  if ! "$cache_tool" xcframework --repo "$repo" >>"$log" 2>&1; then
     echo "build-app: couldn't build ArdiaCoreRS.xcframework (packages/core-rs/scripts/build-xcframework.sh; log: ${log#"$repo"/})" >&2
     exit 1
   fi
@@ -207,8 +206,8 @@ if [[ $mode == plain ]]; then
   ) >>"$log" 2>&1
   status=$?
   app="$dd/Build/Products/$config/Ardia.app"
-  if [[ $status -eq 0 && -n "$built_stamp" && "$(stamp_now)" != "$built_stamp" ]]; then
-    echo "build-app: not recorded: the native files changed during the build"
+  if [[ $status -eq 0 && -n "$built_stamp" && "$(stamp_now --require-receipt)" != "$built_stamp" ]]; then
+    echo "build-app: not recorded: the native files or the Rust toolchain changed during the build"
     built_stamp=""
   fi
   if [[ $status -eq 0 && -n "$bundle" ]]; then
@@ -216,17 +215,15 @@ if [[ $mode == plain ]]; then
   fi
 else
   echo "build-app: $config in a build slot (log: ${log#"$repo"/})"
-  candidates=()
-  while IFS= read -r line; do candidates+=("$line"); done < <("$cache_tool" slots --repo "$repo")
+  plan=()
+  while IFS= read -r line; do plan+=("$line"); done < <("$cache_tool" slots --repo "$repo" --wait "$wait")
   slot_args=(--signing "$signing" --framework "$ARDIACORE_FRAMEWORK")
   [[ -n "$bundle" ]] && slot_args+=(--bundle)
   status=75 reserved=""
   i=0
   while :; do
-    if [[ $i -lt ${#candidates[@]} ]]; then
-      slot=${candidates[$i]}
-      try_wait=2
-      [[ $i -eq 0 ]] && try_wait=60
+    if [[ $i -lt ${#plan[@]} ]]; then
+      try_wait=${plan[$i]%% *} slot=${plan[$i]#* }
     elif [[ -z "$reserved" ]]; then
       slot=$("$cache_tool" reserve --owner $$) || { echo "build-app: couldn't make a build slot" >&2; exit 1; }
       reserved=$slot try_wait=$wait
@@ -260,6 +257,10 @@ else
   app="$prebuilt_out/Ardia.app"
   built_stamp=$(sed -n 's/^build-cache: stamp \([0-9a-f]\{32\}\).*/\1/p' "$log" | tail -1)
   grep -q '^build-cache: not cached' "$log" && echo "$(grep -m1 '^build-cache: not cached' "$log" | sed 's/^build-cache: //')"
+  if grep -q '^build-cache: not recorded' "$log"; then
+    grep -m1 '^build-cache: not recorded' "$log" | sed 's/^build-cache: //'
+    built_stamp=""
+  fi
   synced=$(grep '^build-cache: synced' "$log" | tail -1 | sed -E 's/.*: ([0-9]+) written, ([0-9]+) removed.*/\1 files written, \2 removed/')
   echo "slot: $slot${synced:+ ($synced)}"
 fi
