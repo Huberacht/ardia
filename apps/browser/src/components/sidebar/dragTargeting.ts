@@ -129,8 +129,9 @@ export class DragTargeting extends DragGeometry {
         if (this.session !== session || this.items.get(item.key) !== item) return;
         const shift = this.scrollY - session.startScrollY;
         const open = frame ? openGapsAbove(item, frame.y + shift, this.items.values()) : 0;
-        item.frame = frame && { ...frame, y: frame.y + shift - open };
-        item.headerFrame = header && { ...header, y: header.y + shift - open };
+        const back = frame ? this.sourcesClosedAbove(item, frame.y + shift - open) : 0;
+        item.frame = frame && { ...frame, y: frame.y + shift - open + back };
+        item.headerFrame = header && { ...header, y: header.y + shift - open + back };
         this.retarget();
       });
     });

@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createRequire } from "node:module";
+const nodeRequire = createRequire(import.meta.url);
+globalThis.require ??= (id) => (id.endsWith("useAnimatedProps") ? { default: (props) => [props, () => {}] } : nodeRequire(id));
+await import("../../test-native/index.ts");
+globalThis.requestAnimationFrame = () => 1;
+globalThis.cancelAnimationFrame = () => {};
+const { mount } = await import("../../test-hooks.mjs");
+const { Animated } = await import("react-native");
+const { Fold, FoldSettling } = await import("./Fold.tsx");
+
+const ROW = 30;
+const entries = (n) => Array.from({ length: n }, (_, i) => ({ key: `tab:t${i}`, node: null }));
+const rowsIn = (element) => {
+  const inner = element.props.children;
+  const provider = [inner.props.children].flat().find((c) => c?.type === FoldSettling.Provider);
+  return provider.props.children.filter((slot) => slot?.key?.startsWith("tab:")).length;
+};
+const fold = (settling, n = 500) =>
+  mount(() => Fold({ fold: { open: new Animated.Value(1), moving: false }, collapsed: false, entries: entries(n), rowHeight: () => ROW }), { contexts: [[FoldSettling, settling]] });
+
+test("an open fold mounted while an ancestor is still moving or filling in mounts one window of rows, not its whole list", () => {
+  const settling = fold(true);
+  const shown = rowsIn(settling.value);
+  assert.ok(shown > 0 && shown < 100, `mounted ${shown} of 500`);
+  settling.unmount();
+});
+
+test("an open fold mounted with nothing above it settling mounts every row, as before", () => {
+  const settled = fold(false);
+  assert.equal(rowsIn(settled.value), 500);
+  settled.unmount();
+});
+
+const settlingFlag = (element) => [element.props.children.props.children].flat().find((c) => c?.type === FoldSettling.Provider).props.value;
+
+test("a fold still filling in after its ancestors settle tells the folds inside it to wait, so a group it reaches mounts in slices too", () => {
+  const filling = fold(true);
+  const element = filling.setContext(FoldSettling, false);
+  assert.ok(rowsIn(element) < 500, "it is still filling in");
+  assert.equal(settlingFlag(element), true);
+  filling.unmount();
+});
+
+test("a fold with every row mounted lets the folds inside it fill in", () => {
+  const settled = fold(false);
+  assert.equal(settlingFlag(settled.value), false);
+  settled.unmount();
+});

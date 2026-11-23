@@ -304,3 +304,34 @@ test("a reveal while the launch holds this window's rows lets them in before it 
   watching();
   launch.resetLaunchRowsForTests();
 });
+
+test("a reveal the scroll view clamped, because a fold was still settling, runs again when the content grows", () => {
+  const ids = S().windows[w].tabIds;
+  const asked = [];
+  const clampedY = { current: 0 };
+  const g = { current: { viewport: 300, regions: { pinnedGroups: 0, list: 0 }, newTabAtTop: false, tilesFixed: false } };
+  const stopRetry = startRevealTabs(w, { current: { scrollTo: (move) => asked.push(move) } }, clampedY, g);
+  runFrames();
+  S().activate(ids[0]);
+  runFrames();
+  asked.length = 0;
+  S().activate(ids[50]);
+  runFrames();
+  assert.equal(asked.length, 1);
+  g.current.contentChanged();
+  runFrames();
+  assert.equal(asked.length, 2, "the clamped reveal asks again once the fold settles");
+  assert.deepEqual(asked[1], asked[0]);
+  clampedY.current = asked[1].y + 120;
+  g.current.contentChanged();
+  runFrames();
+  assert.equal(asked.length, 2, "a row already in view isn't scrolled again");
+  const now = Date.now;
+  Date.now = () => now() + 5000;
+  clampedY.current = 0;
+  g.current.contentChanged();
+  runFrames();
+  Date.now = now;
+  assert.equal(asked.length, 2, "a second later, a layout change no longer pulls the list back");
+  stopRetry();
+});

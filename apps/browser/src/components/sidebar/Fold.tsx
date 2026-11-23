@@ -22,7 +22,7 @@ const REVEAL_AHEAD = 0.25;
 
 type FoldState = { open: Animated.Value; moving: boolean };
 
-const AncestorMoving = createContext(false);
+export const FoldSettling = createContext(false);
 
 type FoldStep = "rest" | "snap" | "move";
 type FoldMotion = { collapsed: boolean; step: FoldStep };
@@ -118,7 +118,7 @@ export function Fold({
   const { open, moving } = fold;
   const gap = layout.rowGap;
   const parentAway = useContext(FoldedAway);
-  const ancestorMoving = useContext(AncestorMoving);
+  const ancestorSettling = useContext(FoldSettling);
   const windowId = useWindowId();
   const measuring = rowHeight === undefined;
   const [measured, setMeasured] = useState<Record<string, number>>({});
@@ -133,7 +133,7 @@ export function Fold({
   const reach = foldReach(windowRootHeightNow(windowId) ?? UNMEASURED_WINDOW_HEIGHT, padTop);
   const travel = Math.min(total, reach);
   const partial = !mountClosed && (!measuring || !!estimate);
-  const [mount, setMount] = useState<FoldMount>(() => ({ collapsed, shown: collapsed ? 0 : ancestorMoving && partial ? rowsWithin(entries, heightOf, gap, reach) : Infinity }));
+  const [mount, setMount] = useState<FoldMount>(() => ({ collapsed, shown: collapsed ? 0 : ancestorSettling && partial ? rowsWithin(entries, heightOf, gap, reach) : Infinity }));
   const now = mount.collapsed === collapsed ? mount : nextFoldMount(mount, collapsed, entries, heightOf, gap, folding || layoutOnCompositor ? reach : travel * FIRST_REVEAL);
   if (now !== mount) setMount(now);
   const revealing = !layoutOnCompositor && partial && moving && !collapsed && !folding;
@@ -148,7 +148,8 @@ export function Fold({
     });
     return () => open.removeListener(id);
   }, [revealing, open, gap]);
-  const growing = partial && !collapsed && !moving && !ancestorMoving && now.shown < entries.length;
+  const unfilled = partial && !collapsed && now.shown < entries.length;
+  const growing = unfilled && !moving && !ancestorSettling;
   useEffect(() => {
     if (!growing) return;
     const frame = requestAnimationFrame(() => setMount((m) => (m.collapsed !== collapsed ? m : nextFoldMount(m, collapsed, entries, heightOf, gap, reach, true))));
@@ -223,7 +224,7 @@ export function Fold({
   return (
     <Animated.View style={outer} pointerEvents={collapsed ? "box-none" : "auto"}>
       <View removeClippedSubviews style={[{ flexShrink: 0, gap, paddingTop: padTop, paddingBottom: padBottom, paddingLeft: indent, paddingRight: indentEnd }, measuring && outer && !moving ? { position: "absolute", left: 0, right: 0, top: 0 } : null, collapsed && !moving && !measuring && !folding ? HIDDEN : null]}>
-        <AncestorMoving.Provider value={ancestorMoving || moving}>
+        <FoldSettling.Provider value={ancestorSettling || moving || unfilled}>
         {plan.map((slot) => {
           if (slot.kind === "spacer") return <Animated.View key={slot.key} style={folding ? HIDDEN : { height: slot.height }} />;
           const { key, node } = entries[slot.index]!;
@@ -249,7 +250,7 @@ export function Fold({
             </FoldedAway.Provider>
           );
         })}
-        </AncestorMoving.Provider>
+        </FoldSettling.Provider>
         {footer}
       </View>
     </Animated.View>

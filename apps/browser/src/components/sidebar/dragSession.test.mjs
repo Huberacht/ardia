@@ -312,3 +312,23 @@ test("a row that registers while the drag's first measurement is still out is me
   c.end(false);
   await D.settle();
 });
+
+test("a row measured during a drag targets where it shows, with the dragged row's collapse not counted twice", async () => {
+  const { DragItems } = await import("./dragItems.ts");
+  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
+  const m = listScene();
+  const { c } = mount({ entries: m.L.entries, regions: m.regions });
+  const items = new DragItems(c, true);
+  const b = frameOf(m, entryKey("tab", m.id.b));
+  await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
+  const source = c.items.get(entryKey("tab", m.id.b));
+  source.size.setValue(0);
+  const late = c.create(entryKey("tab", m.id.d) + ":shown");
+  Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "list" });
+  late.view = D.fakeView({ x: 6, y: 600, w: 180, h: 30 });
+  items.add(late.key, late);
+  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
+  assert.equal(c.shown(late).y, 600, "targeting places the row where it was measured");
+  c.end(false);
+  await D.settle();
+});

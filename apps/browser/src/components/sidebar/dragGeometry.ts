@@ -1,5 +1,6 @@
 import type { ScrollView, View } from "react-native";
 import { layout } from "../ui/theme";
+import { currentValue } from "../ui/motion";
 import { currentSettings } from "../../state/browser/current";
 import { createDragMarks, dragMarksOf, markDrag, type SplitHalfMark } from "../../state/sidebar/dragMarks";
 import { overPins, pinGrid, pinSlot, TILE_GAP } from "./pinZone";
@@ -142,6 +143,16 @@ export class DragGeometry {
   protected get rowPinning() {
     const { drop } = this.drag;
     return drop.type === "tabs" && drop.placement.pinned && !!drop.placement.row;
+  }
+
+  protected sourcesClosedAbove(i: Item, y: number): number {
+    if (this.crossed || this.drag.closedInFrames) return 0;
+    let closed = 0;
+    for (const s of this.drag.sources) {
+      if (s.kind === "tile" || !s.frame || s === i || apart(s, i) || s.frame.y >= y) continue;
+      closed += Math.max(0, s.frame.h + layout.rowGap - currentValue(s.size));
+    }
+    return closed;
   }
 
   protected shown(i: Item): Frame {

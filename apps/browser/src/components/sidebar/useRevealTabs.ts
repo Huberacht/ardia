@@ -18,6 +18,8 @@ export function revealScrollFor(row: { y: number; height: number }, at: { top: n
 
 type Scroller = Pick<ScrollView, "scrollTo">;
 
+const REVEAL_RETRY_MS = 1000;
+
 export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | null>, scrollY: RefObject<number>, geometry: RefObject<SidebarGeometry>, stillMotion: () => boolean | null = reduceMotion) {
     let switched: string | null = null;
     let opened: string | null = null;
@@ -26,6 +28,7 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
     let reveals = 0;
     let atRest: string | null = null;
     let switchedIn: string | null = null;
+    let again: { tabId: string; pill: boolean; until: number } | null = null;
     const show = (row: { y: number; height: number }, pill: boolean) => {
       const { viewport, edgeLift } = geometry.current;
       const move = revealScrollFor(row, { top: scrollY.current ?? 0, viewport, edgeLift }, pill && !stillMotion());
@@ -50,6 +53,7 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
       viaPill = false;
       if (!tabId) return;
       releaseLaunchRows(windowId, "reveal");
+      if (!again || again.tabId !== tabId) again = { tabId, pill, until: Date.now() + REVEAL_RETRY_MS };
       const scroller = scroll.current;
       const from = scrollY.current ?? 0;
       const row = locateTab(windowId, tabId, geometry.current, scroller as ScrollView, () => scrollY.current ?? 0);
@@ -71,11 +75,21 @@ export function startRevealTabs(windowId: string, scroll: RefObject<Scroller | n
       viaPill = pill;
       schedule();
     });
+    const contentChanged = () => {
+      if (!again || switched || opened) return;
+      if (Date.now() > again.until) return void (again = null);
+      switched = again.tabId;
+      switchedIn = windowProfileIn(windowId) ?? null;
+      viaPill = again.pill;
+      schedule();
+    };
     geometry.current.laidOut = schedule;
+    geometry.current.contentChanged = contentChanged;
     return () => {
       cancelAnimationFrame(frame);
       unsubscribe();
       geometry.current.laidOut = undefined;
+      geometry.current.contentChanged = undefined;
     };
 }
 

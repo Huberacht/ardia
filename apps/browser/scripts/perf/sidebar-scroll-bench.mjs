@@ -45,7 +45,8 @@ events then); --post acperf posts them with acperf postscroll instead. Gestures:
                 fold<N>-close), toggled through the store with the list scrolled to the top
   foldsel<N>    the same, with its fourth tab selected before it closes, so that tab stays shown under the closed
                 header (the first tab is selected again after)
-  foldnest      open, then close, the collapsed group --nest N adds: two tabs and an expanded group of N inside it
+  foldnest      open, then close, the collapsed group --nest N adds: --nest-before tabs (2) and then an expanded group
+                of N inside it
 --folds 100,200 adds one collapsed group of each size right after the collapsed group of 4, so its header shows near the
 top of the list; the fixture keeps at least 20 loose tabs below them.
 --pointer over (default) parks the hover pointer (ac.shell.devSetPointer, Debug builds) over the sidebar under the
@@ -104,6 +105,7 @@ const reps = Number(flag("reps", "5"));
 const gestures = flag("gestures", "pan,pan-up,wheel,wheel-up").split(",");
 const folds = flag("folds", "").split(",").filter(Boolean).map(Number);
 const nest = Number(flag("nest", "0"));
+const nestBefore = Number(flag("nest-before", "2"));
 const pointerOver = flag("pointer", "over") !== "away";
 const tabLayout = flag("layout", "sidebar") === "top" ? "top" : "sidebar";
 const TAB_ACTIONS = new Set(["open", "close", "close-run"]);
@@ -219,7 +221,7 @@ function fixture(origin, count, profiles) {
     foldGroups[size] = groups.at(-1).id;
   }
   if (nest) {
-    const outer = many("default", 2);
+    const outer = many("default", nestBefore);
     const inner = many("default", nest);
     personal.push(...group("default", "Nest", [...outer, ...inner], true));
     foldGroups.nest = groups.at(-1).id;
