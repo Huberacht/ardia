@@ -24,7 +24,7 @@ test("api.ts takes each generated domain's calls and events from packages/hostap
   }
 });
 
-test("a type composed from anything but generated domains and one row literal is refused, so no row escapes the parity checks", () => {
+test("a type composed from anything but generated domains and one row literal is refused, and every member of the literal is read as a row or refused, so no row escapes the parity checks", () => {
   const head = "export type EngineEvents = HistoryEvents & {";
   assert.ok(api.includes(head));
   const extra = `type Extra = {\n  "tabs.windowRequest": { id: string };\n};\n\n`;
@@ -35,7 +35,21 @@ test("a type composed from anything but generated domains and one row literal is
   assert.throws(() => typeRows(api.replace(head, `${head}\n  ...Extra,`), manifest, "EngineEvents"), /only rows/);
   assert.throws(() => typeRows(`${api}\nexport type EngineEvents = {};\n`, manifest, "EngineEvents"), /2 times/);
   const row = api.slice(api.indexOf("\n", api.indexOf(head)) + 1).split("\n")[0];
-  assert.throws(() => typeRows(api.replace(row, `${row} "history.undeclared": unknown;`), manifest, "EngineEvents"), /only rows/);
+  for (const extra of ['"history.undeclared": unknown;', "'history.undeclared': unknown;"]) {
+    assert.ok(typeRows(api.replace(row, `${row} ${extra}`), manifest, "EngineEvents").rows.has("history.undeclared"), extra);
+  }
+  for (const extra of ["historyUndeclared: unknown;", '"history.undeclared2": unknown;', '"history_undeclared": unknown;', "[`history.undeclared`]: unknown;", '"history.undeclared"?: unknown;', "[key: string]: unknown;"]) {
+    assert.throws(() => typeRows(api.replace(row, `${row} ${extra}`), manifest, "EngineEvents"), /only rows/, extra);
+  }
+  assert.throws(() => typeRows(api.replace(row, `${row}\n${row}`), manifest, "EngineEvents"), /twice/);
+});
+
+test("a payload whose own keys look like rows doesn't count as a row", () => {
+  const head = "export type EngineEvents = HistoryEvents & {";
+  const nested = api.replace(head, `${head}\n  "bookmarks.nested": { "ui.label": string; 'x.y': number };`);
+  const { hand } = typeRows(nested, manifest, "EngineEvents");
+  assert.ok(hand.includes("bookmarks.nested"));
+  assert.ok(!hand.includes("ui.label") && !hand.includes("x.y"));
 });
 
 test("a checkout with CRLF line endings reads the same rows as LF", () => {
