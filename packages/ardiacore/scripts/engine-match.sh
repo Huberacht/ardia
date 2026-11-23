@@ -75,14 +75,18 @@ disk_entry() {
 public_tree() {
   local root=$1 commit=${2:-}
   if [[ -n "$commit" ]]; then
-    git -C "$root" ls-tree -r "$commit" -- "$public_dir" | awk -F '\t' '{ split($1, meta, " "); print $2 " " meta[1] " " meta[3] }'
+    git -C "$root" ls-tree -r -z "$commit" -- "$public_dir" | while IFS= read -r -d '' entry; do
+      read -r mode _ blob <<<"${entry%%$'\t'*}"
+      printf '%s %s %s\n' "${entry#*$'\t'}" "$mode" "$blob"
+    done
   else
     public_files "$root" | (cd "$root" && while IFS= read -r -d '' file; do disk_entry "$file"; done)
   fi | LC_ALL=C sort | shasum -a 256 | cut -c1-64
 }
 
 resolve() {
-  local root=$1 line=$2 match key want public current_key key_paths
+  local root=$1 line=$2 match key want public pinned current_key pathspec
+  local -a key_paths=()
   match=$(match_of "$line")
   [[ "$match" == local ]] && { echo "match=local"; return 0; }
   key=$(field key "$line")
@@ -90,9 +94,13 @@ resolve() {
   public=unknown
   [[ -z "$want" ]] || { [[ "$(public_tree "$root")" == "$want" ]] && public=same || public=changed; }
   if [[ "$match" != unknown && -n "$key" ]] && is_checkout "$root"; then
-    current_key=$("$root/engine/engine-key.sh" --platform macos 2>/dev/null || true)
-    key_paths=$("$root/engine/engine-key.sh" --platform macos --paths 2>/dev/null || true)
-    if [[ "$current_key" == "$key" && -z "$(cd "$root" && git status --porcelain -- $key_paths 2>/dev/null)" ]]; then
+    pinned=$(git -C "$root" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)
+    current_key=""
+    [[ -z "$pinned" ]] || current_key=$("$root/engine/engine-key.sh" --platform macos "$pinned" 2>/dev/null || true)
+    while IFS= read -r pathspec; do
+      [[ -z "$pathspec" ]] || key_paths+=("$pathspec")
+    done < <("$root/engine/engine-key.sh" --platform macos --paths 2>/dev/null || true)
+    if [[ -n "$current_key" && "$current_key" == "$key" && ${#key_paths[@]} -gt 0 && -z "$(git -C "$root" status --porcelain -z -- "${key_paths[@]}" 2>/dev/null)" ]]; then
       match=exact
     else
       match=nearest

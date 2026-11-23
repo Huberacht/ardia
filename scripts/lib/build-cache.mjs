@@ -281,18 +281,32 @@ export function stampInputs({ framework, env = process.env, hashCache, toolchain
   return { framework: identity, toolchain, rust, env: fingerprint };
 }
 
-export function engineRecordComplete(path) {
+export const engineRecordField = (line, name) =>
+  line
+    .trim()
+    .split(" ")
+    .find((pair) => pair.startsWith(`${name}=`))
+    ?.slice(name.length + 1) ?? "";
+
+export function engineRecordComplete(path, key) {
+  let line;
   try {
-    return /(^| )public_tree=\S/.test(fs.readFileSync(path, "utf8"));
+    line = fs.readFileSync(path, "utf8");
   } catch {
     return false;
   }
+  return engineRecordField(line, "key") === key && engineRecordField(line, "public_tree") !== "";
 }
 
-export function describeEngineOffline(fetchEngine, key) {
-  const r = spawnSync(fetchEngine, ["--describe", "--offline"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60_000 });
+export function describeEngineOffline(fetchEngine, key, commit) {
+  const r = spawnSync(fetchEngine, ["--describe", "--offline"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 60_000,
+    env: { ...process.env, ARDIACORE_ENGINE_COMMIT: commit },
+  });
   const line = r.status === 0 ? r.stdout.trim() : "";
-  return /^match=(exact|nearest|unknown) /.test(line) ? line : `match=unknown key=${key}`;
+  return /^match=(exact|nearest|unknown) /.test(line) && engineRecordField(line, "key") === key ? line : `match=unknown key=${key}`;
 }
 
 export function cloneTree(src, dst) {

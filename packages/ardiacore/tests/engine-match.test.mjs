@@ -26,8 +26,11 @@ const FAKE_KEY = `#!/bin/bash
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 [ "$1" = --platform ] && shift 2
-if [ "\${1:-}" = --paths ]; then echo engine; exit 0; fi
-git -C "$root" ls-tree -r "\${1:-HEAD}" engine | shasum -a 256 | cut -c1-64
+if [ "\${1:-}" = --paths ]; then echo engine; else git -C "$root" ls-tree -r "\${1:-HEAD}" engine | shasum -a 256 | cut -c1-64; fi
+if [ -n "\${MOVE_HEAD_TO:-}" ] && [ ! -e "$root/moved-head" ]; then
+  touch "$root/moved-head"
+  git -C "$root" -c advice.detachedHead=false checkout -q --detach "$MOVE_HEAD_TO"
+fi
 `;
 
 function checkout({ row = true, archive = false } = {}) {
@@ -40,7 +43,7 @@ function checkout({ row = true, archive = false } = {}) {
   write(root, HEADER, "int api(void);\n");
   write(root, "engine/patch.txt", "one\n");
   write(root, "bin/curl", `#!/bin/bash\ncase "$*" in *file://*) exec /usr/bin/curl "$@" ;; esac\necho called >> "${root}/curl-calls"\nexit 22\n`, 0o755);
-  fs.writeFileSync(join(root, ".gitignore"), "curl-calls\nstage/\ncache/\n.DS_Store\n");
+  fs.writeFileSync(join(root, ".gitignore"), "curl-calls\nmoved-head\nstage/\ncache/\n.DS_Store\n");
   git(root, "init", "-q", "-b", "main");
   git(root, "add", "-A");
   git(root, "commit", "-q", "-m", "engine one");
@@ -217,6 +220,7 @@ const cachedEngine = (root, key) => {
   write(dir, "Chromium Framework.framework/Versions/Current/Chromium Framework", "binary");
   write(dir, ".complete", "");
   const engine = () => run(process.execPath, [join(repoRoot, "scripts/agent/build-cache"), "engine", "--repo", root], { env: envFor(root, { AC_APP_CACHE: cache }) });
+  engine.dir = dir;
   return { dir, engine, line: () => fs.readFileSync(join(dir, "engine-match"), "utf8").trim() };
 };
 
@@ -362,4 +366,75 @@ test("a cached record from before the header hash covered modes is rewritten off
   const judged = resolve(root, line()).stdout.trim();
   assert.match(judged, /^match=exact .* public=same$/);
   assert.equal(run(matchScript, ["check", judged]).status, 0);
+});
+
+const withHeadMovingTo = (root) => {
+  const start = git(root, "rev-parse", "HEAD");
+  commitFile(root, HEADER, "int api(long);\n");
+  const moved = git(root, "rev-parse", "HEAD");
+  git(root, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", start);
+  return moved;
+};
+
+test("fetch-engine.sh reads one commit for the key, the row and the header hash even when HEAD moves mid-run", () => {
+  const { root, key, base, store } = checkout();
+  const moved = withHeadMovingTo(root);
+  const r = fetchEngine(root, [], { MOVE_HEAD_TO: moved });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(join(root, "moved-head")), "HEAD did move during the run");
+  assert.equal(field(record(store), "key"), key);
+  assert.equal(field(record(store), "public_tree"), publicHashAt(root, base));
+});
+
+test("build-cache records the engine of the commit it chose its cache entry by, even when HEAD moves mid-run", () => {
+  const { root, key, base } = checkout();
+  const moved = withHeadMovingTo(root);
+  const { engine, line } = cachedEngine(root, key);
+  const r = run(process.execPath, [join(repoRoot, "scripts/agent/build-cache"), "engine", "--repo", root], { env: envFor(root, { AC_APP_CACHE: dirname(dirname(engine.dir)), MOVE_HEAD_TO: moved }) });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(join(root, "moved-head")), "HEAD did move during the run");
+  assert.equal(field(line(), "key"), key);
+  assert.equal(field(line(), "public_tree"), publicHashAt(root, base));
+});
+
+test("a cached record for another engine key is replaced, never trusted", async () => {
+  const lib = await import(join(repoRoot, "scripts/lib/build-cache.mjs"));
+  const { root, key, base } = checkout();
+  const { dir, engine, line } = cachedEngine(root, key);
+  write(dir, "engine-match", `match=exact key=${"b".repeat(64)} version=engine-bbbbbbbbbbbb source= public_tree=${"0".repeat(64)}\n`);
+  assert.equal(lib.engineRecordComplete(join(dir, "engine-match"), key), false);
+  assert.equal(engine().status, 0);
+  assert.equal(field(line(), "key"), key);
+  assert.equal(field(line(), "public_tree"), publicHashAt(root, base));
+  assert.equal(lib.engineRecordComplete(join(dir, "engine-match"), key), true);
+});
+
+test("a clean header with a non-ASCII name hashes the same from its commit and from disk", () => {
+  const { root } = checkout();
+  commitFile(root, "engine/ardiacore/src/ardia/core/public/café.h", "int cafe(void);\n");
+  assert.equal(run(matchScript, ["public-hash", root]).stdout.trim(), publicHashAt(root, "HEAD"));
+  assert.match(resolve(root, `match=exact key=k public_tree=${publicHashAt(root, "HEAD")}`).stdout.trim(), /public=same$/);
+});
+
+test("a tag lookup that never answers ends at its deadline and leaves no helper behind", async () => {
+  const net = await import("node:net");
+  const held = [];
+  const server = net.createServer((socket) => held.push(socket));
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  const remote = `http://127.0.0.1:${server.address().port}/silent.git`;
+  try {
+    const { root, tag, store, assets } = checkout({ archive: true });
+    git(root, "tag", "-d", tag);
+    const started = Date.now();
+    const r = fetchEngine(root, [], { ARDIACORE_PREBUILT_ASSETS: `file://${assets}`, ARDIACORE_ENGINE_TAG_REMOTE: remote, ARDIACORE_ENGINE_TAG_DEADLINE: "2" });
+    const took = Date.now() - started;
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(took < 15_000, `took ${took} ms`);
+    assert.equal(field(record(store), "source"), "");
+    const left = spawnSync("pgrep", ["-f", remote], { encoding: "utf8" });
+    assert.equal(left.stdout.trim(), "", `still running: ${left.stdout}`);
+  } finally {
+    for (const socket of held) socket.destroy();
+    server.close();
+  }
 });
