@@ -8,12 +8,12 @@ const KEPT = 64;
 
 export const useFaviconAccents = create<{ byUri: Record<string, string | null> }>()(() => ({ byUri: {} }));
 
-const asking = new Set<string>();
+const asking = new Map<string, symbol>();
 
-onPrivateIconsDropped((uris) => {
-  for (const uri of uris) asking.delete(uri);
+onPrivateIconsDropped((unheld) => {
+  for (const uri of [...asking.keys()].filter(unheld)) asking.delete(uri);
   const { byUri } = useFaviconAccents.getState();
-  if (Object.keys(byUri).some((uri) => uris.has(uri))) useFaviconAccents.setState({ byUri: Object.fromEntries(Object.entries(byUri).filter(([uri]) => !uris.has(uri))) });
+  if (Object.keys(byUri).some(unheld)) useFaviconAccents.setState({ byUri: Object.fromEntries(Object.entries(byUri).filter(([uri]) => !unheld(uri))) });
 });
 
 function remember(uri: string, accent: string | null) {
@@ -26,11 +26,15 @@ export function useFaviconAccent(url: string, profileId?: string): string | null
   const accent = useFaviconAccents((a) => (uri ? a.byUri[uri] : null));
   useEffect(() => {
     if (!uri || accent !== undefined || asking.has(uri)) return;
-    asking.add(uri);
+    const request = Symbol(uri);
+    asking.set(uri, request);
     void iconAccent(uri)
       .catch(() => null)
-      .then((found) => asking.has(uri) && remember(uri, found ?? null))
-      .finally(() => asking.delete(uri));
+      .then((found) => {
+        if (asking.get(uri) !== request) return;
+        asking.delete(uri);
+        remember(uri, found ?? null);
+      });
   }, [uri, accent]);
   return accent;
 }

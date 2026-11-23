@@ -468,3 +468,32 @@ test("a private icon that already left the cache still takes its theme and accen
     stop();
   }
 });
+
+test("a theme reply from before a private window closed can't overwrite a newer request for the same icon", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const uri = "data:image/png;base64,RACEDTHEME";
+  const w = privateWindow("https://raced-theme.test/");
+  webviews.set(w.tab, { downloadFavicon: () => Promise.resolve({ uri, width: 32, height: 32 }) });
+  const replies = [];
+  globalThis.iconThemeForTest = () => new Promise((resolve) => replies.push(resolve));
+  try {
+    noteFavicon(w.tab, "https://raced-theme.test/a.ico");
+    await waitFor(() => resolveFavicon("https://raced-theme.test/", null, w.profile)?.uri === uri);
+    askFaviconTheme(uri);
+    await waitFor(() => replies.length === 1);
+    useBrowser.getState().closeWindow(w.id);
+    await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
+    askFaviconTheme(uri);
+    await waitFor(() => replies.length === 2);
+    replies[0](null);
+    await settle();
+    replies[1]({ kind: "full" });
+    await settle();
+    assert.deepEqual(useFavicons.getState().themes[uri], { kind: "full" });
+  } finally {
+    delete globalThis.iconThemeForTest;
+    webviews.clear();
+    stop();
+  }
+});
