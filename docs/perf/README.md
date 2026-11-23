@@ -81,38 +81,44 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
    by run, putting the control first on even runs, so both see the same machine. Don't run the apps as two
    separate jobs. The 0.2.22 gate ran 0.2.21 and the RC 15 minutes apart and chased a launch "regression" that
    was only drift. For js-bench, alternate `run --runs 1 --append 1` between the two labels, in a fresh `--out`.
-4. **Prepare before you take the lock.** `--only prepare` builds the bench bundle, copies and signs both apps and makes
-   both template data folders. None of that is a timing, so run it beside `smoke.sh` and `ratchet.mjs`
-   (`.claude/skills/release/SKILL.md` › 4). The timed rounds then run the prepared copies with `--prepared`.
+4. **Take the lock, then prepare inside it.** Take perflab once (`scripts/agent/locked perflab --take <you>`) and hold
+   it through both rounds and the verdict, so no other agent's timing shares the Mac. `--only prepare` builds the
+   bench bundle, copies and signs both apps and makes both template data folders. None of that is a timing, so inside
+   the lock it runs beside `smoke.sh` and `ratchet.mjs` (`.claude/skills/release/SKILL.md` › 4). The timed rounds then
+   run the prepared copies with `--prepared`.
    - Templates are cached in `dist/<v>/bench/templates/` (`<out>/.templates/` for an app outside `dist`), keyed by
      the app's version, build and code signature hash, its bundled uBO, the bench bundle and the page port
-     (`--page-port`, default 9476; a busy port falls back to any port and caches nothing). A cached template is
-     checked again before use: the same key, uBO's store and blobs within limits and unchanged since it was stored,
-     every startup component installed, and under `--template-max-age` hours old (default 12; 0 turns the cache
-     off). The age limit is there because the CRLSet and uBO's lists move: a template from the last gate, days
-     ago, would download them inside every run's idle window. So in practice the cache saves the template
-     (60–90 s a side) on the second round and on every rerun of a gate, not across gates.
-   - Both sides' templates must hold the same startup component versions. When a cached side differs from a new
-     one, the cached one is made again.
+     (`--page-port`, default 9476; a busy port falls back to any port and caches nothing). Runs with `--env` or
+     `--control-env`, `--seed` or `profiles` never use it. Each store is a new generation that is never changed; a
+     run copies the generation it checked and checks the copy again: the same key, uBO's store and blobs within
+     limits and unchanged since it was stored, the installed startup components the same versions it recorded, and
+     under `--template-max-age` hours old (default 12; 0 turns the cache off). The age limit is there because the
+     CRLSet and uBO's lists move: a template from the last gate, days ago, would download them inside every run's
+     idle window.
+   - The two sides' templates are made together, minutes apart, and used only as that pair, so both start from the
+     same component versions and equally fresh uBO lists. When either side has no valid cached template, or the two
+     weren't made together, both are made again. So in practice the cache saves the templates (60–90 s a side) on
+     the second round and on every rerun of a gate, not across gates.
 5. **Use a quiet machine.** Before starting, check `ps` for other agents' builds, benches and test instances. When
    the timing is what you're measuring, run one bench at a time.
    - Pick your own `--port`.
    - Keep the display awake (`caffeinate -d`).
    - If the screen locks or the display sleeps, macOS stops giving windows display-link frames. Pages then paint
-     about once a second. native-bench checks the display before every switch and new tab (`acperf display`:
-     locked or asleep), and rAF-probes the visible page once per session run; a sample taken with the display
-     down, or every sample of a run whose probe saw fewer than 5 frames in 250 ms, is left out and counted in the
-     "samples left out" row. A nonzero count there means rerun with the screen awake; `gate-verdict.mjs` calls
-     such a round invalid.
+     about once a second. native-bench leaves those switches and new tabs out (the visible page drew fewer than 5
+     rAF frames in the 250 ms before) and counts them in the "samples left out" row. A nonzero count there means
+     rerun with the screen awake; `gate-verdict.mjs` calls such a round invalid.
    - WindowServer captures fail while the screen is locked, but the bench doesn't need any.
    - The instances' windows are on screen, usually in front of everything: when the owner is using the Mac, their
      pointer moving over one wakes that app (hover, cursor updates), whichever version it is. The "idle windows:
      someone used the Mac" rows count the seconds of input during each run's idle windows. Don't call an idle
      regression from runs where they're nonzero. The 0.2.26 gate's idle spikes came in a round the owner was using the
      Mac and didn't come back in 16 more interleaved runs, 8 of them with the owner at work.
-6. **Collect two rounds and read them pooled.** A round is one native-bench run with `--only launch,session
-   --launch-runs 6 --runs 2`: 6 launches and 2 session runs per app, interleaved. Run two rounds, back to back.
-   `gate-verdict.mjs` reads them (the rule the 0.2.47 and 0.2.48 gates used). A row fails when:
+6. **Collect two rounds and read them pooled.** A round is one native-bench run with `--only launch,session,windows
+   --launch-runs 6 --runs 2`: 6 launches, 2 session runs and 2 windows runs per app, interleaved. Run two rounds, back
+   to back, each into a new empty folder, and score only when both exited 0. `gate-verdict.mjs` reads them (the rule
+   the 0.2.47 and 0.2.48 gates used). It scores nothing and exits 2 when a round is incomplete: a phase or run
+   missing, any run short of its samples (6 launches, 16 switches, 5 new tabs, 3 + 8 new windows, both idle windows),
+   samples left out, or the rounds measuring different apps. A row fails when:
    - the pooled ranges separate: the candidate's best run is worse than the control's worst, or
    - the candidate is worse in both rounds and its pooled median is worse by more than the control's own
      round-to-round spread of medians.
@@ -120,9 +126,10 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
    separated ranges, which is why the gate runs two: one round on a busy Mac separates some row by a hair, a
    different one each time (0.2.47's three rounds did).
    - Compare runs made with the same `--only`: a sub-phase run settles less than a full session.
-   - The `windows` phase (8 more new windows per run, alone) isn't in the gate: a session run already opens 3. Run
-     `--only windows` when a new-window row needs more samples.
-   - A round takes about 17 minutes, 16 of them the four session runs. Their waits (`--launch-settle 30`, `--idle 60`,
+   - The `windows` phase stays in the gate: it times new windows at one settled tab, which the session's three (at 20
+     tabs) don't cover, and it doubles each new-window row's runs. A regression only in one-tab windows failed all
+     three window rows with it and none without it.
+   - A round takes about 19 minutes, 16 of them the four session runs. Their waits (`--launch-settle 30`, `--idle 60`,
      `--close-settle 30`) are most of that, and each was checked against shorter ones (#3715: three interleaved
      rounds of 0.2.47 against 0.2.48, cumulative rusage and footprint read every 5 s in the same runs, so each
      shorter wait is compared with the full one run by run, 8–12 runs):
@@ -136,19 +143,24 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
    `dist/<v>/bench/`: the next gate's control bundle and templates).
 
 ```sh
-V=0.2.49 PREV=0.2.48 OUT=<your scratch dir>/gate
+V=0.2.49 PREV=0.2.48 OUT=<your scratch dir>/gate ME=<you>
 scripts/release.sh $V --rc
-# Not timed, beside smoke.sh and ratchet.mjs. Omit --control-bundle when both apps share NATIVE_API_VERSION.
+scripts/agent/locked perflab --take $ME --ttl 90 --wait 3600
+# Not timed, inside the lock beside smoke.sh and ratchet.mjs. Omit --control-bundle when both apps share NATIVE_API_VERSION.
 node apps/browser/scripts/perf/native-bench.mjs --out $OUT/prep --port 9478 --only prepare \
   --app dist/$V-rc/export/Ardia.app --label rc \
   --control dist/$PREV/export/Ardia.app --control-label $PREV --control-bundle dist/$PREV/bench/main.jsbundle
-# Timed: two rounds under the perflab lock, then the verdict.
+# Timed: two rounds, each in a new folder, then the verdict only if both finished.
+rounds=()
 for r in 1 2; do
-  scripts/agent/locked perflab --as <you> -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
-    --out $OUT/round$r --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc \
-    --control $OUT/prep/$PREV/app/Ardia.app --control-label $PREV --only launch,session --launch-runs 6 --runs 2
+  R=$(mktemp -d "$OUT/round$r.XXXXXX")
+  scripts/agent/locked perflab --as $ME -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
+    --out "$R" --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc --control $OUT/prep/$PREV/app/Ardia.app \
+    --control-label $PREV --only launch,session,windows --launch-runs 6 --runs 2 || break
+  rounds+=("$R")
 done
-node apps/browser/scripts/perf/gate-verdict.mjs --control $PREV --candidate rc $OUT/round1 $OUT/round2
+[ ${#rounds[@]} = 2 ] && node apps/browser/scripts/perf/gate-verdict.mjs --control $PREV --candidate rc "${rounds[@]}"
+scripts/agent/locked perflab --release $ME
 scripts/agent/unregister-builds
 ```
 

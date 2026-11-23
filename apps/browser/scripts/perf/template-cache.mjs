@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { templateProblems, templateSizes } from "./template-state.mjs";
 
-export const TEMPLATE_CACHE_REVISION = 1;
+export const TEMPLATE_CACHE_REVISION = 2;
 export const TEMPLATE_MAX_AGE_HOURS = 12;
+const PRUNE_AFTER_HOURS = 2 * TEMPLATE_MAX_AGE_HOURS;
 
 const ENTRY = "entry.json";
 
@@ -52,7 +53,18 @@ export function defaultCacheDir(src, out) {
 
 const sameSizes = (a, b) => ["uboStoreMB", "uboBlobsMB", "uboLogMB"].every((k) => Number.isFinite(a?.[k]) && Math.abs(a[k] - b?.[k]) < 1e-9);
 
-export function entryProblems(entry, key, { now = Date.now(), maxAgeHours = TEMPLATE_MAX_AGE_HOURS, sizes = null, validate = templateProblems } = {}) {
+export function cloneTree(from, to) {
+  if (process.platform === "darwin") execFileSync("cp", ["-Rc", from, to]);
+  else cpSync(from, to, { recursive: true });
+}
+
+export function componentDrift(recorded, installed) {
+  if (!recorded || !installed) return [];
+  return Object.entries(recorded).filter(([name, c]) => installed[name]?.version !== c?.version)
+    .map(([name, c]) => `component ${name} is ${installed[name]?.version ?? "missing"}, recorded ${c?.version ?? "none"}`);
+}
+
+export function entryProblems(entry, key, { now = Date.now(), maxAgeHours = TEMPLATE_MAX_AGE_HOURS, sizes = null, components = null, validate = templateProblems } = {}) {
   if (!entry) return ["no cached template"];
   const problems = [];
   for (const k of new Set([...Object.keys(key), ...Object.keys(entry.key ?? {})]))
@@ -65,37 +77,64 @@ export function entryProblems(entry, key, { now = Date.now(), maxAgeHours = TEMP
   else {
     problems.push(...validate(entry.record));
     if (sizes && !sameSizes(sizes, entry.record.sizes)) problems.push("its files changed since it was stored");
+    problems.push(...componentDrift(entry.record.components, components));
   }
   return problems;
 }
 
-export function lookupTemplate(cacheDir, key, { sizesOf = templateSizes, ...opts } = {}) {
-  const dir = join(cacheDir, keyId(key));
-  const template = join(dir, "template");
-  let entry = null;
+const generations = (keyDir) => {
   try {
-    entry = JSON.parse(readFileSync(join(dir, ENTRY), "utf8"));
-  } catch {}
-  const problems = entry && existsSync(template) ? entryProblems(entry, key, { ...opts, sizes: sizesOf(template) }) : ["no cached template"];
-  return problems.length ? { hit: false, problems, dir } : { hit: true, dir, template, entry };
+    return readdirSync(keyDir).filter((g) => /^\d+-\d+-[0-9a-f]+$/.test(g)).sort((a, b) => +b.split("-")[0] - +a.split("-")[0]);
+  } catch {
+    return [];
+  }
+};
+
+export function checkTemplate(dir, entry, key, { sizesOf = templateSizes, componentsOf = null, ...opts } = {}) {
+  if (!existsSync(dir)) return ["no cached template"];
+  return entryProblems(entry, key, { ...opts, sizes: sizesOf(dir), components: componentsOf?.(dir) ?? null });
 }
 
-export function storeTemplate(cacheDir, key, templateDir, record, { now = Date.now() } = {}) {
-  const dir = join(cacheDir, keyId(key));
-  const staging = `${dir}.staging-${process.pid}`;
-  rmSync(staging, { recursive: true, force: true });
+export function lookupTemplate(cacheDir, key, opts = {}) {
+  const keyDir = join(cacheDir, keyId(key));
+  let problems = ["no cached template"];
+  for (const g of generations(keyDir)) {
+    const dir = join(keyDir, g);
+    let entry = null;
+    try {
+      entry = JSON.parse(readFileSync(join(dir, ENTRY), "utf8"));
+    } catch {}
+    const template = join(dir, "template");
+    const found = checkTemplate(template, entry, key, opts);
+    if (!found.length) return { hit: true, dir, template, entry };
+    if (problems[0] === "no cached template") problems = found;
+  }
+  return { hit: false, problems, dir: keyDir };
+}
+
+export function storeTemplate(cacheDir, key, templateDir, record, { now = Date.now(), pair = null } = {}) {
+  const keyDir = join(cacheDir, keyId(key));
+  const dir = join(keyDir, `${now}-${process.pid}-${randomBytes(4).toString("hex")}`);
+  const staging = join(keyDir, `.staging-${basename(dir)}`);
   mkdirSync(staging, { recursive: true });
-  execFileSync("cp", ["-Rc", templateDir, join(staging, "template")]);
-  writeFileSync(join(staging, ENTRY), JSON.stringify({ key, made: new Date(now).toISOString(), record }, null, 2));
-  rmSync(dir, { recursive: true, force: true });
+  cloneTree(templateDir, join(staging, "template"));
+  writeFileSync(join(staging, ENTRY), JSON.stringify({ key, made: new Date(now).toISOString(), pair, record }, null, 2));
   renameSync(staging, dir);
+  for (const g of generations(keyDir)) if (now - +g.split("-")[0] > PRUNE_AFTER_HOURS * 3600_000) rmSync(join(keyDir, g), { recursive: true, force: true });
   return dir;
 }
 
-export function copyCachedTemplate(hit, templateDir) {
+export function copyCachedTemplate(hit, templateDir, opts = {}) {
   rmSync(templateDir, { recursive: true, force: true });
   mkdirSync(dirname(templateDir), { recursive: true });
-  execFileSync("cp", ["-Rc", hit.template, templateDir]);
+  cloneTree(hit.template, templateDir);
+  const problems = checkTemplate(templateDir, hit.entry, hit.entry.key, { ...opts, maxAgeHours: Infinity });
+  if (problems.length) throw new Error(`the cached template copied from ${hit.dir} is off: ${problems.join("; ")}`);
+}
+
+export function sourceChanged(recorded, current) {
+  if (!recorded) return [];
+  return ["version", "build", "cdhash"].filter((k) => recorded[k] !== current?.[k]).map((k) => `its ${k} is ${current?.[k] ?? "unknown"}, the copy was made from ${recorded[k] ?? "unknown"}`);
 }
 
 export const cachedAgeHours = (entry, now = Date.now()) => (now - Date.parse(entry.made)) / 3600_000;

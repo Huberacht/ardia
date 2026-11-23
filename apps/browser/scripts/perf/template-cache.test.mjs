@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { copyCachedTemplate, defaultCacheDir, entryProblems, keyId, keyProblems, lookupTemplate, storeTemplate, templateKey, uboVersion } from "./template-cache.mjs";
-import { componentsMismatch } from "./template-state.mjs";
+import { cloneTree, componentDrift, copyCachedTemplate, defaultCacheDir, sourceChanged, entryProblems, keyId, keyProblems, lookupTemplate, storeTemplate, templateKey, uboVersion } from "./template-cache.mjs";
+import { componentsMismatch, componentsState } from "./template-state.mjs";
 import { UBO_ID } from "./ubo-cache.mjs";
 
 const MB = 1048576;
@@ -112,6 +112,64 @@ test("xbench's templates carry their own check (a restored page) and extra key p
   const validate = (record) => (record?.pages?.length ? [] : ["it restores no page"]);
   storeTemplate(cache, xkey, made, { pages: ["http://127.0.0.1:9462/static?id=seed"], sizes: null });
   assert.equal(lookupTemplate(cache, xkey, { validate, sizesOf: () => null }).hit, true);
-  storeTemplate(cache, xkey, made, { pages: [], sizes: null });
-  assert.deepEqual(lookupTemplate(cache, xkey, { validate, sizesOf: () => null }).problems, ["it restores no page"]);
+  storeTemplate(join(dir, "other"), xkey, made, { pages: [], sizes: null });
+  assert.deepEqual(lookupTemplate(join(dir, "other"), xkey, { validate, sizesOf: () => null }).problems, ["it restores no page"]);
 }));
+
+const installAll = (dir) => {
+  for (const [folder, version] of [["CertificateRevocation", "10918"], ["PKIMetadata", "1839"]]) {
+    mkdirSync(join(dir, "Chromium", folder, version), { recursive: true });
+    writeFileSync(join(dir, "Chromium", folder, version, "manifest.json"), "{}");
+  }
+};
+const installed = { componentsOf: (d) => componentsState(d).components };
+
+test("a stored generation is never changed: a reader copies the one it checked even when a writer stores a newer one meanwhile", withDir((dir) => {
+  const cache = join(dir, "cache");
+  const a = join(dir, "a"), b = join(dir, "b");
+  const recordA = fakeTemplate(a);
+  writeFileSync(join(a, "generation"), "A");
+  storeTemplate(cache, key, a, recordA, { now: Date.now() - 1000 });
+  const hit = lookupTemplate(cache, key);
+  assert.equal(hit.hit, true);
+  const recordB = fakeTemplate(b);
+  writeFileSync(join(b, "generation"), "B");
+  storeTemplate(cache, key, b, recordB);
+  copyCachedTemplate(hit, join(dir, "dest"));
+  assert.equal(readFileSync(join(dir, "dest", "generation"), "utf8"), "A");
+  assert.equal(readFileSync(join(lookupTemplate(cache, key).template, "generation"), "utf8"), "B");
+}));
+
+test("a hit re-reads the installed startup components, before the copy and on the copy", withDir((dir) => {
+  const cache = join(dir, "cache");
+  const made = join(dir, "made");
+  const record = fakeTemplate(made);
+  installAll(made);
+  storeTemplate(cache, key, made, record);
+  const hit = lookupTemplate(cache, key, installed);
+  assert.equal(hit.hit, true, hit.problems?.join());
+  rmSync(join(hit.template, "Chromium", "PKIMetadata"), { recursive: true, force: true });
+  assert.match(lookupTemplate(cache, key, installed).problems.join(), /component PKIMetadata is missing, recorded 1839/);
+  assert.throws(() => copyCachedTemplate(hit, join(dir, "dest"), installed), /PKIMetadata is missing/);
+  assert.deepEqual(componentDrift(components, { CertificateRevocation: { version: "10918" }, PKIMetadata: { version: "1840" } }), ["component PKIMetadata is 1840, recorded 1839"]);
+}));
+
+test("each side's entry remembers the pair it was made with", withDir((dir) => {
+  const made = join(dir, "made");
+  const record = fakeTemplate(made);
+  storeTemplate(join(dir, "cache"), key, made, record, { pair: "p1" });
+  assert.equal(lookupTemplate(join(dir, "cache"), key).entry.pair, "p1");
+}));
+
+test("the clone works where cp has no -c (GNU cp on Linux CI)", withDir((dir) => {
+  mkdirSync(join(dir, "from", "sub"), { recursive: true });
+  writeFileSync(join(dir, "from", "sub", "f"), "x");
+  cloneTree(join(dir, "from"), join(dir, "to"));
+  assert.equal(readFileSync(join(dir, "to", "sub", "f"), "utf8"), "x");
+}));
+
+test("prepared copies made from an older build of the same path are refused, so a rebuilt candidate is prepared again", () => {
+  assert.deepEqual(sourceChanged(identity, { ...identity }), []);
+  assert.deepEqual(sourceChanged(identity, { ...identity, build: "140", cdhash: "cd34" }), ["its build is 140, the copy was made from 139", "its cdhash is cd34, the copy was made from ab12"]);
+  assert.deepEqual(sourceChanged(undefined, identity), []);
+});

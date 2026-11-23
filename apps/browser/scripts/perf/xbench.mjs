@@ -655,9 +655,10 @@ async function makeTemplate(name) {
   const dir = templateDir(name);
   const key = cachedTemplateKey(name);
   if (key) {
-    const found = lookupTemplate(templateCacheDir(), key, { maxAgeHours: +opt["template-max-age"], validate: validTemplate, sizesOf: cachedTemplateSizes(name) });
+    const checks = { validate: validTemplate, sizesOf: cachedTemplateSizes(name) };
+    const found = lookupTemplate(templateCacheDir(), key, { maxAgeHours: +opt["template-max-age"], ...checks });
     if (found.hit) {
-      copyCachedTemplate(found, dir);
+      copyCachedTemplate(found, dir, checks);
       log(`${name} template: cached ${found.entry.made} in ${found.dir}`);
       return;
     }

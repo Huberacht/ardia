@@ -19,9 +19,9 @@ There are two channels (`docs/releasing.md` › Channels):
 - **Nightly** (`0.2.37-nightly.1`): fast iteration, one fix at a time. Only the focused checks for what changed run;
   no perf ratchet, no perf gate, no landing-page refresh. It's a GitHub prerelease, so the site's download,
   the README and fetch-engine (all on `releases/latest`) keep pointing at stable.
-- **Stable** (`0.2.37`): everything below. From the candidate to publish, the checks take about 40 min: the smoke
+- **Stable** (`0.2.37`): everything below. From the candidate to publish, the checks take about 45 min: the smoke
   test, the update test, the ratchet and the perf gate's preparation side by side (about 5 min), then the gate's two
-  timed rounds (about 17 min each).
+  timed rounds (about 19 min each), all under one perflab lock.
   The site's benchmarks run on the Mac mini beside them or after publishing, never in front of it. Its perf is
   compared with the previous **stable** release, never a nightly.
 
@@ -187,20 +187,28 @@ Notarization adds a few minutes per submission.
 
 ## 4. Smoke test the build
 
-For a stable, start three things at once as soon as the candidate exists. None of them is a timing, so none takes the
-perflab lock, and none waits for another:
+For a stable, take the perflab lock first and hold it until 4c's verdict, so no other agent's timing shares the Mac with
+the gate. Inside it, start three things at once as soon as the candidate exists. None of them is a timing and none
+takes the lock itself, so they run side by side:
 
 ```bash
-OUT=$HOME/ardia-scratch/gate-<version>
-.claude/skills/release/scripts/smoke.sh <version> <previous> --rc                                   # 4
-node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/export/Ardia.app       # 4b
-node apps/browser/scripts/perf/native-bench.mjs --out $OUT/prep --port 9478 --only prepare \
+OUT=$HOME/ardia-scratch/gate-<version> ME=<you>; mkdir -p $OUT
+scripts/agent/locked perflab --take $ME --ttl 90 --wait 3600   # held until the verdict: no one else times on this Mac meanwhile
+timeout 3600 .claude/skills/release/scripts/smoke.sh <version> <previous> --rc > $OUT/smoke.log 2>&1 & smoke=$!     # 4
+timeout 3600 node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/export/Ardia.app \
+  > $OUT/ratchet.log 2>&1 & ratchet=$!                                                                            # 4b
+timeout 1800 node apps/browser/scripts/perf/native-bench.mjs --out $OUT/prep --port 9478 --only prepare \
   --app dist/<version>-rc/export/Ardia.app --label rc --control dist/<previous>/export/Ardia.app \
-  --control-label <previous> --control-bundle dist/<previous>/bench/main.jsbundle                 # 4c's copies and templates
+  --control-label <previous> --control-bundle dist/<previous>/bench/main.jsbundle > $OUT/prep.log 2>&1 & prep=$!  # 4c
+wait $smoke; s=$?; wait $ratchet; r=$?; wait $prep; p=$?; echo "smoke $s ratchet $r prep $p"
+[ "$s$r$p" = 000 ] || echo "fix what failed and rerun only that job; keep holding the lock"
 ```
 
-When all three are done (a fail in one doesn't stop the others; fix and rerun only what failed), take the perflab lock
-for 4c's timed rounds. Start 4d on the Mac mini at the same time. A nightly runs only the smoke test.
+When all three exit 0, go on to 4c's timed rounds, still holding the lock. A fail in one doesn't stop the others; fix
+and rerun only what failed. When the fix means a new candidate (a rebuild, a new `--rc`), the prepared copies and
+templates are of the old one: run the prepare again with the smoke test and the ratchet. `--prepared` refuses copies
+made from an older build of the same path (version, build or code signature hash changed), and the templates are
+keyed by the copy's code signature, so a stale one is never reused. Start 4d on the Mac mini at the same time. A nightly runs only the smoke test.
 
 ```bash
 .claude/skills/release/scripts/smoke.sh <version> <previous>     # --rc for dist/<version>-rc
@@ -289,19 +297,25 @@ the lowered ceilings, and say which counts dropped. The wall-clock gate is a sep
 Every stable release is timed against the previous stable one before it publishes (never against a nightly: the
 control is `dist/<previous stable>/export/Ardia.app`), and ships only when every row passes
 (`docs/perf/README.md` › Gating a release). The copies and both templates were made beside the smoke test (step 4);
-the timed part is two rounds of native-bench on the prepared copies, interleaved, launch x6 and session x2 each,
-alone on a quiet Mac under the perflab lock, about 17 minutes a round. Then `gate-verdict.mjs` reads the two rounds
-pooled: a row fails when the pooled ranges separate, or when it's worse in both rounds by more than the previous
-release's own round-to-round spread. It exits 1 on a failed row and 2 on an invalid round (samples left out with the
-screen locked or the display asleep: rerun that round).
+the timed part is two rounds of native-bench on the prepared copies, interleaved, launch x6, session x2 and windows x2
+each, alone on the Mac under the lock you took in step 4, about 19 minutes a round. Each round gets a new empty folder,
+and the verdict runs only when both rounds exited 0, so a retry never scores an earlier round or build.
+`gate-verdict.mjs` reads the two rounds pooled: a row fails when the pooled ranges separate, or when it's worse in
+both rounds by more than the previous release's own round-to-round spread. It exits 1 on a failed row, and 2 on an
+invalid round: a phase, run or sample missing (a row is scored only from complete rounds), samples left out with the
+screen locked or the display asleep, or the rounds measuring different apps. Rerun the gate for a 2.
 
 ```bash
+rounds=()
 for r in 1 2; do
-  scripts/agent/locked perflab --as <you> -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
-    --out $OUT/round$r --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc \
-    --control $OUT/prep/<previous>/app/Ardia.app --control-label <previous> --only launch,session --launch-runs 6 --runs 2
+  R=$(mktemp -d "$OUT/round$r.XXXXXX")
+  scripts/agent/locked perflab --as $ME -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
+    --out "$R" --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc --control $OUT/prep/<previous>/app/Ardia.app \
+    --control-label <previous> --only launch,session,windows --launch-runs 6 --runs 2 || { echo "round $r failed"; break; }
+  rounds+=("$R")
 done
-node apps/browser/scripts/perf/gate-verdict.mjs --control <previous> --candidate rc $OUT/round1 $OUT/round2
+[ ${#rounds[@]} = 2 ] && node apps/browser/scripts/perf/gate-verdict.mjs --control <previous> --candidate rc "${rounds[@]}"
+scripts/agent/locked perflab --release $ME
 ```
 
 js-bench is triage, not a gate step, when the ratchet passed: run its alternating loop (`docs/perf/README.md`) only

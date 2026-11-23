@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GATE_ROWS, gateVerdict, rowVerdict } from "./gate-verdict.mjs";
+import { GATE_ROWS, gateVerdict, roundProblems, roundsProblems, rowVerdict } from "./gate-verdict.mjs";
 
 const side = (values) => ({ values });
 const round = (control, candidate) => ({ control: side(control), candidate: side(candidate) });
@@ -51,4 +51,63 @@ test("the gate reads every row by name, pooled, and calls a round with samples l
   const missing = gateVerdict([{ control: rows(0).slice(1), candidate: rows(0) }]);
   assert.match(missing.problems.join(), /no samples for "launch → window shown"/);
   assert.equal(missing.rows[0].missing, true);
+});
+
+const idle = { total: { cpu: 0.3, wakeups: 6 }, kinds: { browser: { cpu: 0.1, wakeups: 1.5 } } };
+const win = { window: 50, firstPaint: 100, firstFrame: 80 };
+const complete = (app = "/dist/0.2.48/export/Ardia.app") => ({
+  meta: { only: ["launch", "session", "windows"], app },
+  launch: Array.from({ length: 6 }, () => ({ window: 1, withContent: 1, js: 1, firstPaint: 1, firstFrame: 1 })),
+  session: Array.from({ length: 2 }, () => ({ tabSwitch: Array(16).fill(7), newTab: Array(5).fill(80), newTabFrame: Array(5).fill(60), newWindow: Array(3).fill(win), idle: { tabs1: idle, tabs20: idle } })),
+  windows: Array.from({ length: 2 }, () => ({ newWindow: Array(8).fill(win) })),
+});
+
+test("a complete round has no problems", () => {
+  assert.deepEqual(roundProblems(complete()), []);
+});
+
+test("a row with one surviving sample makes the round invalid, it doesn't pass", () => {
+  const r = complete();
+  r.session[0].tabSwitch = r.session[0].tabSwitch.map((x, i) => (i ? NaN : x));
+  assert.deepEqual(roundProblems(r), ["session 0: 1 of 16 tab switches"]);
+});
+
+test("a missing phase, run or idle window, a part-only session, or too few launches makes the round invalid", () => {
+  const r = complete();
+  r.meta.only = ["launch", "session"];
+  r.windows = [];
+  assert.deepEqual(roundProblems(r), ["it didn't run the windows phase", "0 windows runs, wanted 2"]);
+  const s = complete();
+  s.session.pop();
+  s.session[0].idle.tabs20 = undefined;
+  s.launch.pop();
+  s.meta.parts = ["switch"];
+  assert.deepEqual(roundProblems(s), ["its session runs measured only some parts", "5 launches, wanted 6", "1 session runs, wanted 2", "session 0: no tabs20 idle window"]);
+  const w = complete();
+  w.windows[1].newWindow[3] = { ...win, firstFrame: NaN };
+  w.session[1].newWindow = [win, win];
+  assert.deepEqual(roundProblems(w), ["session 1: 2 of 3 new windows", "windows 1: 7 of 8 new windows"]);
+});
+
+test("every round must have measured the same two apps, so a retry can't score an earlier build", () => {
+  const ok = { control: complete("/dist/0.2.47/export/Ardia.app"), candidate: complete() };
+  assert.deepEqual(roundsProblems([ok, ok]), []);
+  const other = { control: ok.control, candidate: complete("/dist/0.2.49-rc/export/Ardia.app") };
+  assert.match(roundsProblems([ok, other]).join(), /the candidate's app differs between rounds/);
+  const prepared = (from) => ({ ...complete("/out/rc/app/Ardia.app"), meta: { ...complete().meta, app: "/out/rc/app/Ardia.app", preparedFrom: { app: from } } });
+  assert.match(roundsProblems([{ control: ok.control, candidate: prepared("/dist/a") }, { control: ok.control, candidate: prepared("/dist/b") }]).join(), /differs between rounds/);
+});
+
+test("the judged rows are exactly the 19 the 0.2.47 and 0.2.48 gates' pooled tables judged; memory is reported beside them", () => {
+  assert.deepEqual(GATE_ROWS.map(([label]) => label), [
+    "launch → window shown", "launch → with content", "launch → JS running", "launch → first page painted", "launch → first frame",
+    "new tab → first paint", "new tab → first frame", "tab switch → shown",
+    "new window → on screen", "new window → first paint", "new window → first frame",
+    "idle CPU 1 tab, all", "idle CPU 1 tab, browser", "idle wakeups 1 tab, all", "idle wakeups 1 tab, browser",
+    "idle CPU 20 tab, all", "idle CPU 20 tab, browser", "idle wakeups 20 tab, all", "idle wakeups 20 tab, browser",
+  ]);
+  const memory = (mb) => [...GATE_ROWS.map(([, name]) => ({ name, values: [1, 2] })), { name: "memory (phys_footprint), 20 tab(s)", values: [mb, mb] }];
+  const v = gateVerdict([{ control: memory(700), candidate: memory(900) }]);
+  assert.deepEqual(v.fails, []);
+  assert.equal(v.reported.find((r) => r.name === "memory (phys_footprint), 20 tab(s)").candidate, 900);
 });

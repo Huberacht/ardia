@@ -106,7 +106,7 @@
 //   Phases          makeTemplate (the seeded data folder each run copies: its instance stays up until uBO's cache is
 //                   written and flushed and the component updater's first check is done, then template.json records
 //                   both and a template whose sizes are off stops the run; template-cache.mjs keeps it), launchRun,
-//                   sessionRun, windowsRun, newWindow, idleWindow, displayDown, throttled, throttleRun, churnRun, sampleRun
+//                   sessionRun, windowsRun, newWindow, idleWindow, throttled, throttleRun, churnRun, sampleRun
 //   Report          native-summary.mjs builds every row below; printTable. gate-verdict.mjs reads rounds pooled
 //   Main            options, the candidate and control sides, interleaved()
 //
@@ -131,9 +131,7 @@
 //                                                        trackpad or keyboard input (HIDIdleTime), and of the pointer
 //                                                        moving over the instance's window. Nonzero means the idle rows
 //                                                        of that run measured the owner's input too
-//   samples left out: page couldn't paint   sessionRun  switch/newtab: displayDown() (screen locked or display asleep) just
-//                                                        before the sample, or throttled() (< 5 rAF frames in 250 ms on
-//                                                        the visible page) once before the run's first switch
+//   samples left out: page couldn't paint   sessionRun  switch/newtab: throttled(), < 5 rAF frames in 250 ms just before
 //   tab switch → shown                      sessionRun  switch: ac.actions.switchToTab → the page's visibilitychange to
 //                                                        visible + 2 rAFs (16 per run, among 20 tabs)
 //   new tab → first paint / first frame     sessionRun  newtab: store newTab → the new page's FCP / first rAF (5 per run)
@@ -169,7 +167,8 @@ import { parseSettings, profileSeed } from "./profile-seed.mjs";
 import { writeSwitches } from "./js-bench.mjs";
 import { frameTable, framesLibrary, framesRun } from "./frames-phase.mjs";
 import { summary } from "./native-summary.mjs";
-import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, storeTemplate, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
+import { appIdentity, copyCachedTemplate, defaultCacheDir, fileSha256, keyProblems, lookupTemplate, sourceChanged, storeTemplate, TEMPLATE_MAX_AGE_HOURS, templateKey, cachedAgeHours } from "./template-cache.mjs";
+import { randomBytes } from "node:crypto";
 import { sideLaunchEnv } from "./launch-env.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -310,14 +309,6 @@ const footprint = (snap) => {
   return { totalMB: total, processes: snap.length, kinds };
 };
 
-const displayDown = () => {
-  try {
-    const d = JSON.parse(acperf("display").out);
-    return !!(d.locked || d.asleep);
-  } catch {
-    return true;
-  }
-};
 
 const PAGE_SCRIPT = `
 window.__ac = { vis: [[Date.now(), document.visibilityState]], shown: [], fcp: null, frame: null, ticks: 0, raf: 0, fast: 0 };
@@ -432,7 +423,7 @@ class Cdp {
 
 function prepareBenchApp(app, out, bundle) {
   const copy = prepareApp(app, out, { bundle, entitlements: INJECTION_ENTITLEMENTS });
-  writeFileSync(join(out, "prepared.json"), JSON.stringify({ app, bundle, date: new Date().toISOString() }));
+  writeFileSync(join(out, "prepared.json"), JSON.stringify({ app, bundle, source: appIdentity(app), date: new Date().toISOString() }));
   return copy;
 }
 
@@ -441,11 +432,15 @@ function checkPrepared(copy) {
   const granted = spawnSync("codesign", ["-d", "--entitlements", "-", "--xml", copy], { encoding: "utf8" }).stdout ?? "";
   if (!granted.includes("<key>com.apple.security.cs.allow-dyld-environment-variables</key>"))
     throw new Error(`${copy} isn't a copy native-bench prepared (run once without --prepared, or with --only prepare)`);
+  let from;
   try {
-    return JSON.parse(readFileSync(join(dirname(copy), "prepared.json"), "utf8"));
+    from = JSON.parse(readFileSync(join(dirname(copy), "prepared.json"), "utf8"));
   } catch {
     return { app: copy, bundle: join(copy, "Contents/Resources/main.jsbundle") };
   }
+  const changed = existsSync(from.app) ? sourceChanged(from.source, appIdentity(from.app)) : [];
+  if (changed.length) throw new Error(`${copy} was prepared from an older build of ${from.app} (${changed.join("; ")}): run --only prepare again`);
+  return from;
 }
 
 function buildBundle(out) {
@@ -616,7 +611,7 @@ function writeBigSeed(side) {
   log(`seeded the big session (${side.label}): ${session.tabs.length} tabs, ${files["history.json"].history.default.length} history entries`);
 }
 
-async function makeTemplate(side, { fresh = false } = {}) {
+async function makeTemplate(side, { pair = null } = {}) {
   const dir = side.template;
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
@@ -626,16 +621,7 @@ async function makeTemplate(side, { fresh = false } = {}) {
     return;
   }
   if (opt.seed) return writeBigSeed(side);
-  const cache = templateCache(side);
-  if (cache && !fresh) {
-    const found = lookupTemplate(cache.dir, cache.key, { maxAgeHours: +opt["template-max-age"] });
-    if (found.hit) {
-      copyCachedTemplate(found, dir);
-      return useTemplateRecord(side, { ...found.entry.record, cached: { dir: found.dir, made: found.entry.made } },
-        `cached ${cachedAgeHours(found.entry).toFixed(1)} h ago in ${found.dir}`);
-    }
-    log(`${side.label}: making a template (${found.problems.join("; ")})`);
-  }
+  const cache = side.cache;
   log(`seeding a session (${side.label})`);
   writeFileSync(join(dir, "onboarding.json"), JSON.stringify({ version: 1, completedAt: 1 }));
   const app = await new Instance(side, dir).launch();
@@ -657,11 +643,17 @@ async function makeTemplate(side, { fresh = false } = {}) {
   for (const f of ["bench-cmd.js", "bench-result.json", "bench-boot.json"]) rmSync(join(dir, f), { force: true });
   const record = { waitedSecs: { ubo: waited.ubo.secs, components: waited.components.secs }, uboSelfies: waited.ubo.selfies, sizes: templateSizes(dir), components: componentsState(dir).components };
   useTemplateRecord(side, record, "made now");
-  if (cache) log(`${side.label}'s template stored in ${storeTemplate(cache.dir, cache.key, dir, record)}`);
+  if (cache) log(`${side.label}'s template stored in ${storeTemplate(cache.dir, cache.key, dir, record, { pair })}`);
 }
 
+const cachedChecks = () => ({ maxAgeHours: +opt["template-max-age"], componentsOf: (dir) => componentsState(dir).components });
+
 function templateCache(side) {
-  if (!(+opt["template-max-age"] > 0)) return null;
+  if (!(+opt["template-max-age"] > 0) || only.has("profiles") || opt.seed) return null;
+  if (opt.env.length || opt["control-env"].length) {
+    log(`${side.label}: not caching its template (--env or --control-env changes what the template's launch ran with)`);
+    return null;
+  }
   const key = templateKey({ identity: appIdentity(side.app), bundleSha: fileSha256(join(side.app, "Contents/Resources/main.jsbundle")), pagePort: server.address().port === +opt["page-port"] ? +opt["page-port"] : 0 });
   const problems = keyProblems(key);
   if (problems.length) {
@@ -682,14 +674,26 @@ function useTemplateRecord(side, record, how) {
 }
 
 async function makeTemplates() {
-  for (const side of sides) await makeTemplate(side);
-  const records = () => sides.map((s) => s.templateRecord).filter(Boolean);
-  if (componentsMismatch(records()).length) {
-    const redo = sides.filter((s) => s.templateRecord?.cached);
-    log(`the sides' startup components differ (${componentsMismatch(records()).join("; ")}): making ${redo.length ? redo.map((s) => s.label).join(" and ") : sides[0].label}'s template again`);
-    for (const side of redo.length ? redo : [sides[0]]) await makeTemplate(side, { fresh: true });
+  for (const side of sides) side.cache = templateCache(side);
+  const found = sides.map((side) => side.cache && lookupTemplate(side.cache.dir, side.cache.key, cachedChecks()));
+  const pairs = new Set(found.map((f) => f?.entry?.pair ?? null));
+  if (found.every((f) => f?.hit) && pairs.size === 1 && !pairs.has(null)) {
+    for (const [i, side] of sides.entries()) {
+      copyCachedTemplate(found[i], side.template, cachedChecks());
+      useTemplateRecord(side, { ...found[i].entry.record, cached: { dir: found[i].dir, made: found[i].entry.made, pair: found[i].entry.pair } },
+        `cached ${cachedAgeHours(found[i].entry).toFixed(1)} h ago with the other side's, ${found[i].dir}`);
+    }
+  } else {
+    if (sides.some((s) => s.cache)) log(`making ${sides.length > 1 ? "both sides' templates together" : "the template"} (${found.map((f, i) => `${sides[i].label}: ${!f ? "not cached" : !f.hit ? f.problems.join("; ") : "cached, but not made with the other side's"}`).join("; ")})`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const pair = randomBytes(8).toString("hex");
+      for (const side of sides) await makeTemplate(side, { pair });
+      if (!componentsMismatch(sides.map((s) => s.templateRecord).filter(Boolean)).length) break;
+      log(`the sides' startup components differ (${componentsMismatch(sides.map((s) => s.templateRecord)).join("; ")}): making both again`);
+    }
   }
-  const mismatch = [...sidesProblems(records()), ...componentsMismatch(records())];
+  const records = sides.map((s) => s.templateRecord).filter(Boolean);
+  const mismatch = [...sidesProblems(records), ...componentsMismatch(records)];
   if (mismatch.length) throw new Error(`the two sides' templates don't match: ${mismatch.join("; ")}`);
 }
 
@@ -1103,14 +1107,12 @@ async function sessionRun(side, i, parts) {
     if (has("idle")) r.idle.tabs20 = await idleWindow(app, secs);
 
     const tabs = has("switch") ? (await tabIds(app)).filter(([, url]) => url.includes("/static?id=t")) : [];
-    const painting = has("switch") || has("newtab") ? (await throttled(app)) !== true : true;
-    r.paintProbe = painting;
     for (let k = 0; k < (has("switch") ? 16 : 0); k++) {
       const [id, url] = tabs[(k * 7 + 3) % tabs.length];
       const marker = url.match(/id=(t\d+)/)[1];
       const target = await app.cdp.find(`id=${marker}`);
       const before = (await app.cdp.state(target))?.shown?.length ?? 0;
-      const hidden = !painting || displayDown();
+      const hidden = await throttled(app);
       const at = await app.run(`const t = ac.now(); ac.actions.switchToTab(${JSON.stringify(id)}); return t;`);
       const s = await app.pageState(`id=${marker}`, 5000, (st) => (st.shown?.length ?? 0) > before);
       const shown = s?.shown.at(-1);
@@ -1121,7 +1123,7 @@ async function sessionRun(side, i, parts) {
     }
 
     for (let k = 0; k < (has("newtab") ? 5 : 0); k++) {
-      const hidden = !painting || displayDown();
+      const hidden = await throttled(app);
       const at = await app.run(`const t = ac.now(); ac.store.getState().newTab(${WINDOW}, { url: "${base()}/static?id=n${k}" }); return t;`);
       const s = await app.pageState(`id=n${k}`, 20_000, (st) => st.fcp);
       if (hidden) r.throttled.newTab++;
@@ -1344,7 +1346,7 @@ try {
     }
     const other = sides.find((s) => s !== side);
     Object.assign(side.results.meta, { app: side.src, bundle: side.bundle, label: side.label, date: new Date().toISOString(),
-      runs: +opt.runs, idleSecs: +opt.idle, only: [...only], env: opt.env, seed: opt.seed ?? null, freshCopy: !!opt["fresh-copy"], ...(other ? { role: side.role, interleavedWith: other.label } : {}) });
+      runs: +opt.runs, launchRuns: +opt["launch-runs"], idleSecs: +opt.idle, launchSettleSecs: +opt["launch-settle"], closeSettleSecs: +opt["close-settle"], only: [...only], env: opt.env, seed: opt.seed ?? null, freshCopy: !!opt["fresh-copy"], ...(other ? { role: side.role, interleavedWith: other.label } : {}) });
   }
   await makeTemplates();
   if (only.has("prepare")) {
