@@ -354,7 +354,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         if (engine === "chromium") noteProtectedVideoRefusal(request, consentToken());
         offerWebKit(tabId, request);
       }}
-      onDrmDiagnostic={trackDrmDiagnostic}
+      onDrmDiagnostic={(diagnostic) => trackDrmDiagnostic(diagnostic, consentToken())}
       onAutoplayBlocked={(count) => noteSiteControls("autoplayPlaysBlocked", count)}
       onFieldProviderOpened={(opened: FieldProviderOpened) => fieldProviderOpened(tabId, opened)}
       onFieldProviderHint={(hint: FieldProviderHint) => fieldProviderHint(tabId, hint)}

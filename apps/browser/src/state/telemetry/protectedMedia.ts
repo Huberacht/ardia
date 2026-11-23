@@ -1,5 +1,6 @@
 import { protectedVideoSite } from "../engines/engines";
-import { capture, useTelemetry } from "./client";
+import { capture } from "./client";
+import { onConsentPeriodChange, type ConsentToken } from "./choice";
 
 export type DrmDiagnosticReport = {
   host: string;
@@ -19,15 +20,14 @@ const STAGES = new Set(["access", "accessDenied", "encrypted", "waitingforkey", 
 let sent = 0;
 const seen = new Set<string>();
 
-useTelemetry.subscribe((s, prev) => {
-  if (!prev.sharing || s.sharing) return;
+onConsentPeriodChange(() => {
   sent = 0;
   seen.clear();
 });
 
 const hostname = (value: unknown) => (typeof value === "string" && HOSTNAME.test(value) ? value : null);
 
-export function trackDrmDiagnostic(report: DrmDiagnosticReport) {
+export function trackDrmDiagnostic(report: DrmDiagnosticReport, consent: ConsentToken | null) {
   const host = hostname(report.host);
   if (!host || !protectedVideoSite(`https://${host}/`)) return;
   const keySystem = typeof report.keySystem === "string" && KEY_SYSTEM.test(report.keySystem) ? report.keySystem : "";
@@ -44,6 +44,7 @@ export function trackDrmDiagnostic(report: DrmDiagnosticReport) {
   capture(
     "protected_media",
     { stage, code, main: report.main === true, blocked_hosts_n: blockedHosts.length },
+    consent,
     { raw: { host, key_system: keySystem, blocked_hosts: blockedHosts } },
   );
 }
