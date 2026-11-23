@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <memory>
@@ -21,6 +22,7 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/json/json_writer.h"
@@ -38,6 +40,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "ardia/core/ac_host_visibility.h"
 #include "ardia/core/ac_windowless_page.h"
 #include "chrome/browser/ardia/ac_cli_owned_tabs.h"
@@ -58,6 +61,10 @@
 #include "net/base/net_errors.h"
 #include "net/log/net_log_source.h"
 #include "net/socket/tcp_server_socket.h"
+
+#if BUILDFLAG(IS_MAC)
+#include <sys/acl.h>
+#endif
 
 namespace ardia {
 namespace {
@@ -111,13 +118,13 @@ std::string ErrnoText() {
   return base::ToLowerASCII(strerror(errno));
 }
 
-std::string UnsafeControlFolder(const base::FilePath& dir) {
+std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
   struct stat info;
-  if (lstat(dir.value().c_str(), &info) != 0) {
+  if (fstat(dir_fd, &info) != 0) {
     return base::StrCat({"Couldn't read ", dir.value(), ": ", ErrnoText()});
   }
   if (!S_ISDIR(info.st_mode)) {
-    return base::StrCat({dir.value(), " isn't a real folder."});
+    return base::StrCat({dir.value(), " isn't a folder."});
   }
   if (info.st_uid != geteuid()) {
     return base::StrCat({dir.value(), " belongs to another user."});
@@ -128,44 +135,72 @@ std::string UnsafeControlFolder(const base::FilePath& dir) {
   return std::string();
 }
 
+bool OnlyOwnerCanRead(int fd) {
+#if BUILDFLAG(IS_MAC)
+  acl_t empty = acl_init(0);
+  if (!empty) {
+    return false;
+  }
+  const bool cleared = acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0;
+  acl_free(empty);
+  if (!cleared) {
+    return false;
+  }
+#endif
+  struct stat info;
+  return fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
+         info.st_uid == geteuid() && (info.st_mode & 077) == 0;
+}
+
 std::string WriteControlFile(const base::FilePath& path,
                              const std::string& contents,
                              uint64_t generation) {
   if (path.empty()) {
     return "Ardia has no data folder.";
   }
-  if (std::string unsafe = UnsafeControlFolder(path.DirName());
+  const base::FilePath dir_path = path.DirName();
+  base::ScopedFD dir(HANDLE_EINTR(
+      open(dir_path.value().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC)));
+  if (!dir.is_valid()) {
+    return base::StrCat({"Couldn't open ", dir_path.value(), ": ", ErrnoText()});
+  }
+  if (std::string unsafe = UnsafeControlFolder(dir.get(), dir_path);
       !unsafe.empty()) {
     return unsafe;
   }
-  const base::FilePath temp = path.DirName().Append(
-      "." + path.BaseName().value() + "." +
-      base::HexEncode(base::RandBytesAsVector(8)));
+  const std::string name = path.BaseName().value();
+  const std::string temp =
+      "." + name + "." + base::HexEncode(base::RandBytesAsVector(8));
   const int fd = HANDLE_EINTR(
-      open(temp.value().c_str(),
-           O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+      openat(dir.get(), temp.c_str(),
+             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
   if (fd < 0) {
     return base::StrCat({"Couldn't write ", path.value(), ": ", ErrnoText()});
   }
-  bool written = base::WriteFileDescriptor(fd, contents) && fsync(fd) == 0;
-  std::string error = written ? std::string() : ErrnoText();
+  bool written = OnlyOwnerCanRead(fd);
+  std::string error =
+      written ? std::string() : "it couldn't be made readable only by you";
+  if (written) {
+    written = base::WriteFileDescriptor(fd, contents) && fsync(fd) == 0;
+    error = written ? std::string() : ErrnoText();
+  }
   if (IGNORE_EINTR(close(fd)) != 0 && written) {
     written = false;
     error = ErrnoText();
   }
   if (!written) {
-    unlink(temp.value().c_str());
+    unlinkat(dir.get(), temp.c_str(), 0);
     return base::StrCat({"Couldn't write ", path.value(), ": ", error});
   }
   {
     base::AutoLock hold(PublishLock());
     if (g_live_generation != generation) {
-      unlink(temp.value().c_str());
+      unlinkat(dir.get(), temp.c_str(), 0);
       return "The control server stopped.";
     }
-    if (rename(temp.value().c_str(), path.value().c_str()) != 0) {
+    if (renameat(dir.get(), temp.c_str(), dir.get(), name.c_str()) != 0) {
       error = ErrnoText();
-      unlink(temp.value().c_str());
+      unlinkat(dir.get(), temp.c_str(), 0);
       return base::StrCat({"Couldn't write ", path.value(), ": ", error});
     }
   }

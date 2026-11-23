@@ -71,10 +71,13 @@ reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
   What still guards it is what keeps other users and web pages off the connection, not what a process running as
   you may do: the token (32 random bytes per start, compared in constant time, only in the 0600 `ArdiaControl.json`),
   loopback only, and nothing a browser sends: a request with an `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Dest` header, or
-  a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, is refused before the token is read (so no web page,
-  extension, service worker or DNS-rebound name can open the socket or ask `/ardia/active`, even holding the token),
-  the `RemoteDebuggingAllowed` policy, and a data folder only you can write to (the engine won't publish
-  `ArdiaControl.json` into a folder another user owns or can write, as the control socket won't bind there). The
+  a `Host` other than `127.0.0.1:<port>` or `localhost:<port>`, is refused before the token is read. So no web page,
+  extension page, service worker or DNS-rebound name in a browser that sends Fetch Metadata (Chromium, Firefox 90 and
+  later, Safari 16.4 and later) can open the socket or ask `/ardia/active`, even holding the token; a top-level GET from
+  an older Safari still needs the token and can't read the answer. Then the `RemoteDebuggingAllowed` policy, and a data
+  folder only you can write to: the engine opens the folder once, checks it belongs to you and that no one else can
+  write to it, and creates, checks (0600, owned by you, any inherited macOS ACL removed) and renames the file through
+  that same open folder, so a folder swapped meanwhile is never written to. The
   engine also keeps its bookkeeping: a command must be a JSON object with an integer `id` and a string `method`
   (`params`, if present, an object; `sessionId` naming a session this connection attached), one command per
   (session, id) until its reply, and at most 4096 waiting replies before the connection is closed. Showing a saved

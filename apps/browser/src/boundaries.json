@@ -1598,10 +1598,11 @@
   {
    "id": "engine-token-connection:ardia-browse",
    "source": "socket",
-   "guard": "Engine token server: loopback only; before the token is read, anything a browser sends (Origin, Sec-Fetch-Site, Sec-Fetch-Dest) or a Host other than 127.0.0.1:<port> or localhost:<port> is refused (ArdiaRequestIsFromProgram), so no page, extension, service worker or DNS-rebound name reaches it; a 32-byte token compared in constant time (ControlServer::Accepts) from the 0600 ArdiaControl.json, published only into a folder no other user owns or can write (UnsafeControlFolder); RemoteDebuggingAllowed policy; then a full DevTools client by the owner's decision (#2807). TokenClient::FilterCommand keeps only framing: a JSON object with an integer id and string method, params an object, a known sessionId, one command per (session, id), 4096 waiting replies at most",
+   "guard": "Engine token server: loopback only; before the token is read, anything a browser sends (Origin, Sec-Fetch-Site, Sec-Fetch-Dest) or a Host other than 127.0.0.1:<port> or localhost:<port> is refused (ArdiaRequestIsFromProgram), so no page, extension, service worker or DNS-rebound name reaches it; a 32-byte token compared in constant time (ControlServer::Accepts) from the 0600 ArdiaControl.json, published through one open descriptor of a folder no other user owns or can write (UnsafeControlFolder), the file stripped of inherited ACLs and checked 0600 (OnlyOwnerCanRead); RemoteDebuggingAllowed policy; then a full DevTools client by the owner's decision (#2807). TokenClient::FilterCommand keeps only framing: a JSON object with an integer id and string method, params an object, a known sessionId, one command per (session, id), 4096 waiting replies at most",
    "checks": [
     "engine/chromium/src/chrome/browser/ardia/ac_cli_control.cc#Accepts",
     "engine/chromium/src/chrome/browser/ardia/ac_cli_control.cc#UnsafeControlFolder",
+    "engine/chromium/src/chrome/browser/ardia/ac_cli_control.cc#OnlyOwnerCanRead",
     "engine/patches/chromium-devtools-control-token.patch#ArdiaRequestIsFromProgram",
     "engine/chromium/src/chrome/browser/ardia/ac_cli_token_policy.cc#FilterCommand"
    ],
