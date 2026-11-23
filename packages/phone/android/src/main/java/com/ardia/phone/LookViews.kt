@@ -1672,6 +1672,8 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     internal open fun pageLive(): Boolean = false
 
+    internal open fun solidFill(dark: Boolean): Int? = null
+
     internal open fun lensEffect(marginPx: Float, scale: Float): RenderEffect? = null
 
     internal open fun forgetLayer() {
@@ -1767,7 +1769,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             if (blurNode != null) forgetLayer()
             removeCallbacks(refresh)
             paint.style = Paint.Style.FILL
-            paint.color = style.fallback.resolve(dark).toArgb()
+            paint.color = solidFill(dark) ?: style.fallback.resolve(dark).toArgb()
             canvas.drawPath(clip, paint)
         }
         style.edge?.let { edge ->

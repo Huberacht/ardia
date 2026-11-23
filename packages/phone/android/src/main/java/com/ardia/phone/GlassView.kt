@@ -68,6 +68,9 @@ internal object GlassRules {
 internal object GlassLaunch {
     @Volatile
     var flat: Boolean = false
+
+    @Volatile
+    var overPage: Boolean = false
 }
 
 class GlassView(context: Context, appContext: AppContext) : FrostView(context, appContext) {
@@ -122,7 +125,9 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
 
     private val lensOn: Boolean get() = LiquidGlassRules.lensWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, livePath = true)
 
-    override fun pageLive(): Boolean = LiquidGlassRules.pageLive(Build.VERSION.SDK_INT, isClassic)
+    override fun pageLive(): Boolean = LiquidGlassRules.pageLive(Build.VERSION.SDK_INT, isClassic, GlassLaunch.overPage)
+
+    override fun solidFill(dark: Boolean): Int? = classicFill?.let { if (dark) it.second else it.first }
 
     override fun lensReach(): Float {
         if (!lensOn) return 0f
@@ -152,6 +157,8 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 
     internal val drawsLens: Boolean get() = lensThisDraw && lastChoice?.path == FrostPage.Path.Live
+
+    private val drawsRim: Boolean get() = LiquidGlassRules.rimWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat)
 
     override fun update() {
         val classic = isClassic
@@ -222,7 +229,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
             paint.color = tinting
             canvas.drawPath(outlinePath, paint)
         }
-        if (drawsLens && Build.VERSION.SDK_INT >= LiquidGlassRules.LENS_MIN_SDK) drawRim(canvas)
+        if (drawsRim) drawRim(canvas)
     }
 
     private fun drawRim(canvas: Canvas) {

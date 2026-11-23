@@ -263,7 +263,9 @@ class LookModule : Module() {
 
     private fun readGlassLaunch() {
         val activity = appContext.currentActivity ?: return
-        GlassLaunch.flat = LiquidGlassRules.flatAsked(LaunchExtras.arguments(LaunchExtras.of(activity.intent)))
+        val arguments = LaunchExtras.arguments(LaunchExtras.of(activity.intent))
+        GlassLaunch.flat = LiquidGlassRules.flatAsked(arguments)
+        GlassLaunch.overPage = LiquidGlassRules.overPageAsked(arguments)
     }
 
     companion object {

@@ -30,11 +30,22 @@ class LiquidGlassRulesTest {
     }
 
     @Test
-    fun glassOverAPageRecordsThePageFromAndroid13WhateverTheLensFlag() {
-        assertTrue(LiquidGlassRules.pageLive(sdk = 34, classic = false))
-        assertTrue(LiquidGlassRules.pageLive(sdk = 33, classic = false))
-        assertFalse("Android 12 keeps the solid page mode the M3 needed", LiquidGlassRules.pageLive(sdk = 32, classic = false))
-        assertFalse(LiquidGlassRules.pageLive(sdk = 34, classic = true))
+    fun glassOverAPageRecordsThePageOnlyWhenTheLabAsksOnAndroid13() {
+        assertFalse("recording the page under the bar tripled the F4's janky frames", LiquidGlassRules.pageLive(sdk = 34, classic = false, overPageAsked = false))
+        assertTrue(LiquidGlassRules.pageLive(sdk = 34, classic = false, overPageAsked = true))
+        assertTrue(LiquidGlassRules.pageLive(sdk = 33, classic = false, overPageAsked = true))
+        assertFalse("Android 12 keeps the solid page mode the M3 needed", LiquidGlassRules.pageLive(sdk = 32, classic = false, overPageAsked = true))
+        assertFalse(LiquidGlassRules.pageLive(sdk = 34, classic = true, overPageAsked = true))
+        assertTrue(LiquidGlassRules.overPageAsked(mapOf("ArdiaGlassOverPage" to true)))
+        assertFalse(LiquidGlassRules.overPageAsked(LaunchExtras.arguments(mapOf("ArdiaGlassOverPage" to true), allowed = false)))
+    }
+
+    @Test
+    fun theRimLightsEveryGlassFromAndroid13ButClassicAndFlat() {
+        assertTrue(LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = false))
+        assertFalse(LiquidGlassRules.rimWanted(sdk = 32, classic = false, flat = false))
+        assertFalse(LiquidGlassRules.rimWanted(sdk = 34, classic = true, flat = false))
+        assertFalse(LiquidGlassRules.rimWanted(sdk = 34, classic = false, flat = true))
     }
 
     @Test

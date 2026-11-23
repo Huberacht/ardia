@@ -14,6 +14,7 @@ import kotlin.math.sqrt
 
 internal object LiquidGlassRules {
     const val FLAT_GLASS_ARGUMENT = "ArdiaFlatGlass"
+    const val GLASS_OVER_PAGE_ARGUMENT = "ArdiaGlassOverPage"
     const val LENS_MIN_SDK = Build.VERSION_CODES.TIRAMISU
     const val BLUR_MIN_SDK = Build.VERSION_CODES.S
     const val CIRCULAR_CORNER_EXPONENT = 2f
@@ -54,6 +55,8 @@ internal object LiquidGlassRules {
 
     fun flatAsked(arguments: Map<String, Any>): Boolean = arguments[FLAT_GLASS_ARGUMENT] == true
 
+    fun overPageAsked(arguments: Map<String, Any>): Boolean = arguments[GLASS_OVER_PAGE_ARGUMENT] == true
+
     fun render(sdk: Int, classic: Boolean, flat: Boolean, blurs: Boolean): Render = when {
         classic -> Render.Classic
         !blurs || sdk < BLUR_MIN_SDK -> Render.Solid
@@ -61,7 +64,9 @@ internal object LiquidGlassRules {
         else -> Render.Lens
     }
 
-    fun pageLive(sdk: Int, classic: Boolean): Boolean = !classic && sdk >= LENS_MIN_SDK
+    fun pageLive(sdk: Int, classic: Boolean, overPageAsked: Boolean): Boolean = overPageAsked && !classic && sdk >= LENS_MIN_SDK
+
+    fun rimWanted(sdk: Int, classic: Boolean, flat: Boolean): Boolean = !classic && !flat && sdk >= LENS_MIN_SDK
 
     fun lensWanted(sdk: Int, classic: Boolean, flat: Boolean, livePath: Boolean): Boolean =
         livePath && render(sdk, classic, flat, blurs = true) == Render.Lens
