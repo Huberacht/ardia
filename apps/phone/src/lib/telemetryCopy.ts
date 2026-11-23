@@ -106,6 +106,10 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["tab_writes_stalled", "search_opens_cold"],
       },
       {
+        text: "In the same daily counts, on Android with Material You: how often the tab switcher offered its Archive suggestion again when you came back from your Incognito tabs. Counts only",
+        fields: ["archive_card_reoffers"],
+      },
+      {
         text: "In the same daily counts, on iPhone: how often a tab you swiped to kept its saved picture until a time limit instead of handing over to the page the moment it drew. Counts only, and never while browsing privately",
         fields: ["page_covers_capped"],
       },

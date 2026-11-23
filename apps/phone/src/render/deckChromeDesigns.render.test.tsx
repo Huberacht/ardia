@@ -438,6 +438,7 @@ test("on the material deck the Archive card a touch on the deck put away comes b
   act(() => jest.advanceTimersByTime(200));
   expect(useTabs.getState().incognito).toBe(false);
   expect(host(root, "archiveCardPlace")).toBeDefined();
+  expect(counted.mock.calls.filter(([name]) => name === "archive_card_reoffers")).toHaveLength(1);
   unmount(root);
 });
 
