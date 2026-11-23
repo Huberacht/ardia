@@ -1489,6 +1489,7 @@ if (Test-Path $checkLog) {
   $failures += "the self-check wrote no log"
 }
 }
+if (-not $httpPages.HasExited) { Stop-Process -Id $httpPages.Id -Force -ErrorAction SilentlyContinue }
 }
 
 function Invoke-LoginData([string]$Sql) {
