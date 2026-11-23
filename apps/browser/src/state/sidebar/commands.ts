@@ -1,7 +1,8 @@
 import type { BrowserCommand } from "../../platform/commands";
 import type { MenuEntry } from "../../platform/menus";
 import { useBrowser, type BrowserState } from "../browser/store";
-import { activeTabId, pinSection, plural } from "../browser/model";
+import { activeTabId, isPinnedRow, pinSection, plural, tabLayoutOf } from "../browser/model";
+import { live } from "../live/store";
 import { recentlyClosedIn } from "../windows/recentlyClosedList";
 import { awayFromPin, selectedTabIds } from "../pins/organize";
 import { groupOf } from "../pins/tabGrouping";
@@ -9,9 +10,23 @@ import { newGroupWithSelection, openIconPicker, startRename } from "./actions";
 import { cleanUpWithUndo, closeAllTabs } from "./clearTabs";
 import { toggleNewTabBar } from "../omnibox/newTabBar";
 import { movePinnedTitle, togglePinnedRows } from "./movePinned";
+import { PINNED_FOLD_TITLES, pinnedCollapsed, togglePinnedFold } from "./pinnedFold";
 import { setSidebarUi } from "./sidebarUi";
 import { tidy } from "./tidyUi";
 import { switcherStep } from "./switcher";
+
+function hasCollapsiblePinned(s: BrowserState, w: BrowserState["windows"][string] | undefined): boolean {
+  if (!w || !s.profiles[w.profileId] || tabLayoutOf(s, w.id) !== "sidebar") return false;
+  for (const id of w.tabIds) {
+    const t = s.tabs[id];
+    if (t && t.profileId === w.profileId && isPinnedRow(t)) return true;
+  }
+  for (const g of Object.values(s.groups)) {
+    if (g.pinned && !g.parentId && g.profileId === w.profileId && g.tabIds.length > 0) return true;
+  }
+  if (w.kind !== "private" && live().folderOrder.some((id) => live().folders[id]?.profileId === w.profileId)) return true;
+  return false;
+}
 
 export function runSidebarCommand(command: BrowserCommand, arg: string | null, windowId: string): boolean {
   const s = useBrowser.getState();
@@ -54,6 +69,11 @@ export function runSidebarCommand(command: BrowserCommand, arg: string | null, w
     case "tabSwitcher":
       switcherStep(windowId, arg === "backward");
       return true;
+    case "togglePinnedFold": {
+      const w = s.windows[windowId];
+      if (hasCollapsiblePinned(s, w)) togglePinnedFold(w!.profileId);
+      return true;
+    }
   }
   return false;
 }
@@ -73,6 +93,8 @@ export function sidebarMenuState(s: BrowserState, windowId: string | undefined) 
     if (selected.length > 1 && !bar?.open && !bar?.newTab) titles.closeTab = `Close ${plural(selected.length, "Tab")}`;
   }
   const w = windowId ? s.windows[windowId] : undefined;
+  if (!hasCollapsiblePinned(s, w)) disabled.push("togglePinnedFold");
+  else if (w && pinnedCollapsed(s, w.profileId)) titles.togglePinnedFold = PINNED_FOLD_TITLES.expand;
   const recentlyClosedGroups: MenuEntry[] = recentlyClosedIn(s, w)
     .groups.reverse()
     .slice(0, 10)

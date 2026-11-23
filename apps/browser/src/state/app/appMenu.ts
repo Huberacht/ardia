@@ -33,7 +33,7 @@ export const appMenuItems = (s: BrowserState, windowId: string): MenuItem[] =>
     [listed("newTab"), listed("newWindow"), listed("newIncognitoWindow")],
     [listed("showHistory"), listed("downloads")],
     [listed("findInPage"), listed("print")],
-    [browserLayoutMenuItem(s, windowId)],
+    s.windows[windowId]?.kind === "small" ? [] : [browserLayoutMenuItem(s, windowId)],
     [
       listed("openSettings"),
       {

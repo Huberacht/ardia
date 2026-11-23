@@ -82,17 +82,33 @@ test("the Ardia, File, View and Help menus carry the Mac menu bar's entries in i
   assert.deepEqual(find(items, "newIncognitoWindow").key, "n");
   assert.deepEqual(top(items, "File").children.find((item) => item.title === "Share").children.map((item) => [item.id, item.title]), [["share:via:copy", "Copy Link"], ["share:via:email", "Email Link"]]);
   const layout = find(items, "menu:Browser Layout").children.map((item) => ("separator" in item ? "-" : item.id));
-  assert.deepEqual(layout, ["toggleTabLayout", "toggleSidebarSide", "toggleSidebar", "-", "toggleAddressBar", "toggleFullUrl", "toggleMinimalism", "-", "menu:Show Bookmarks Bar"]);
+  assert.deepEqual(layout, [
+    "setTabLayout:sidebarLeft",
+    "setTabLayout:sidebarRight",
+    "setTabLayout:top",
+    "-",
+    "toggleAddressBar",
+    "toggleCompactToolbar",
+    "toggleFullUrl",
+    "-",
+    "toggleSidebar",
+    "toggleMinimalism",
+    "menu:Show Bookmarks Bar",
+    "togglePinnedFold",
+  ]);
   assert.deepEqual(find(items, "menu:Split View").children.map((item) => item.id), ["openSplitPane", "focusNextPane", "focusPreviousPane"]);
-  assert.equal(find(items, "toggleSidebarSide").title, "Sidebar on Right");
+  assert.equal(find(items, "setTabLayout:sidebarRight").title, "Sidebar on Right");
   assert.deepEqual(rows(items, "Help"), ["Report a Problem…", "Keyboard Shortcuts", "Tool Tour", "Video Tour", "Release Notes", "-", "Copy Diagnostics"]);
 });
 
-test("sharing is disabled where the page can't be shared, and the sidebar side shows its check", () => {
-  const items = appMenuItems(state({ disabled: ["share"], checked: ["toggleSidebarSide"] }));
+test("sharing is disabled where the page can't be shared, tab layout shows its check, and disabled pinned fold hides", () => {
+  const items = appMenuItems(state({ disabled: ["share", "togglePinnedFold", "setBookmarksBar", "toggleBookmarksBar"], checked: ["setTabLayout:sidebarRight"] }));
   assert.equal(find(items, "share:via:copy").enabled, false);
   assert.equal(find(items, "share:via:email").enabled, false);
-  assert.equal(find(items, "toggleSidebarSide").checked, true);
+  assert.equal(find(items, "setTabLayout:sidebarRight").checked, true);
+  assert.equal(find(items, "togglePinnedFold"), undefined);
+  assert.equal(find(items, "setBookmarksBar:always").enabled, false);
+  assert.equal(find(items, "toggleBookmarksBar").enabled, false);
 });
 
 test("leaving entries out never leaves a doubled or dangling separator", () => {

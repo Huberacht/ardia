@@ -144,14 +144,16 @@ export function appMenuItems(state: MenuState, shortcuts: AppMenuShortcuts = new
       cmd("forceReload"),
       separator,
       sub("Browser Layout", [
-        cmd("toggleTabLayout"),
-        cmd("toggleSidebarSide"),
-        cmd("toggleSidebar"),
+        cmd("setTabLayout", "sidebarLeft"),
+        cmd("setTabLayout", "sidebarRight"),
+        cmd("setTabLayout", "top"),
         separator,
         cmd("toggleAddressBar"),
+        cmd("toggleCompactToolbar"),
         cmd("toggleFullUrl"),
-        cmd("toggleMinimalism"),
         separator,
+        cmd("toggleSidebar"),
+        cmd("toggleMinimalism"),
         sub("Show Bookmarks Bar", [
           cmd("setBookmarksBar", "always"),
           cmd("setBookmarksBar", "newTab"),
@@ -159,6 +161,7 @@ export function appMenuItems(state: MenuState, shortcuts: AppMenuShortcuts = new
           separator,
           cmd("toggleBookmarksBar"),
         ]),
+        ...(disabled.has("togglePinnedFold") ? [] : [cmd("togglePinnedFold")]),
       ]),
       sub("Split View", [
         cmd("openSplitPane"),

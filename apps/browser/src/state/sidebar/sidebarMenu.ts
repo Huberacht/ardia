@@ -60,7 +60,7 @@ export function runBrowserLayoutChoice(windowId: string, choice: string, consent
   if (!choice.startsWith("layout:") && choice !== "pinnedFold") return false;
   const s = store();
   const w = s.windows[windowId];
-  if (!w) return true;
+  if (!w || w.kind === "small") return true;
   if (runPinnedFold(windowId, choice)) return true;
   if (choice === "layout:sidebarLeft") placeTabs(windowId, "sidebar", "left", consent);
   else if (choice === "layout:sidebarRight") placeTabs(windowId, "sidebar", "right", consent);

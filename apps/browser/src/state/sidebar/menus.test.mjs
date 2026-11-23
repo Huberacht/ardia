@@ -6,6 +6,7 @@ const { tabMenuItems } = await import("./tabMenu.ts");
 const { multiTabMenuItems } = await import("./multiTabMenu.ts");
 const { groupMenuItems } = await import("./groupMenu.ts");
 const { sidebarMenuItems, runBrowserLayoutChoice } = await import("./sidebarMenu.ts");
+const { appMenuItems } = await import("../app/appMenu.ts");
 const { tabLayoutOf } = await import("../browser/model.ts");
 const { tileFolderContextItems } = await import("./tileFolderUi.ts");
 const { addToTileFolder } = await import("../pins/tileFolders.ts");
@@ -368,6 +369,12 @@ test("Browser Layout moves the tabs between the sides and the top in one pick, a
   S().updateSettings({ showBookmarks: false });
   assert.ok(!layout().some((l) => l.startsWith("Bookmarks Bar")), "bookmarks off, no bar row");
   S().updateSettings({ showBookmarks: true });
+  const small = S().createWindow({ kind: "small", url: "https://small.example/" });
+  assert.ok(!appMenuItems(S(), small).some((it) => it.id === "browserLayout"), "Little Ardia omits Browser Layout from the app menu");
+  runBrowserLayoutChoice(small, "layout:sidebarRight");
+  assert.equal(S().settings.sidebarSide, "left");
+  runBrowserLayoutChoice(small, "layout:top");
+  assert.equal(tabLayoutOf(S(), w), "sidebar");
   assert.equal(runBrowserLayoutChoice(w, "newTab"), false);
 });
 
