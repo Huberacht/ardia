@@ -475,7 +475,8 @@ the files it copies (`scripts/engine/tests` checks the list), and `scripts/engin
 --strict-since` the commit the change starts from: a pull request's base, or a push's previous head, which must be
 fetchable or the run fails. A patch the change edits must land exactly, and the 67 patches that already land at an
 offset on 158 are listed as warnings. `series-zero-fuzz.py --refresh-offsets` rewrites those hunks' headers and nothing
-else, after which every hunk lands exactly on at least one platform. That moves both engine keys, so it goes in with
+else, after which every hunk lands exactly on at least one platform. It then checks both platforms again and keeps the
+rewrite only if the series still produces the same files on each, so no hunk moves to another identical context. That moves both engine keys, so it goes in with
 the next engine build; after that the workflow can drop `--offsets warn`.
 
 **Re-pack the base on every Chromium or Helium move** (a new `CHROMIUM_VERSION` in `env.sh` or a new commit in
@@ -492,14 +493,16 @@ Use `--platform linux` on the Linux builder, and set `AC_CHROMIUM_BUILD` for a t
 is read-only on the tree. It refuses unless:
 - `chrome/VERSION` is the pinned Chromium;
 - both Helium checkouts exist, are clean and sit at the pinned commits;
-- the tree's `.helium-stages-src` marker shows every mutating step-3 stage for the platform;
+- the tree's `.helium-stages-src` marker names this tree's inode and shows every mutating step-3 stage for the platform;
 - every `ardia_resources.txt` resource is byte for byte in the base (or in the tree, when the series doesn't touch it);
 - `ardia_namesub.py --check-only` finds no Helium left in the tree's strings;
 - `series.py check` reproduces the tree from the base.
 
 It records those checks in the manifest. A change to `03-helium.py`'s logic or to `domsub-keep-store.txt` can't be read
-back from a tree; its digest still forces the re-pack. A file a patch renames, copies or only changes the mode of
-isn't recorded by `capture-base`, so copy it into the base by hand from a tree step 3 just left. Copy the three files
+back from a tree; its digest still forces the re-pack. The archive and the checker handle a patch that renames, copies or only changes the mode
+of a file, but `series.py` (`capture-base`, `check`) reads only `+++` lines. Such a patch needs `series.py` to learn
+those headers first, which moves both engine keys: until then `capture-base` doesn't record its source and the
+packer's `series.py check` fails on it. Copy the three files
 to a machine where `gh` is signed in (a Boat VM's isn't) and run `python3 scripts/engine/series-base-pack.py publish
 <archive>`. It refuses an archive packed with `--no-verify` or for other pins or inputs than the checkout's, creates
 the prerelease if needed, uploads the files (one already there must match), and writes the row into

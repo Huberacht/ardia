@@ -25,6 +25,8 @@ Exit 0: every step applies strictly. 1: a step doesn't. 2: the base is missing, 
 """
 
 import argparse
+import contextlib
+import io
 import os
 import pathlib
 import re
@@ -264,6 +266,37 @@ def stale_message(ident, table=series_base.TABLE):
     return f"no series base for {where} in scripts/engine/series-bases.tsv: the pins moved, so {REPACK} and publish it"
 
 
+def tree_digests(tree):
+    out = {}
+    for path in sorted(pathlib.Path(tree).rglob("*")):
+        if path.is_file() and not path.is_symlink():
+            out[path.relative_to(tree).as_posix()] = series_base.sha256_file(path)
+    return out
+
+
+def refresh_verified(moves, recheck, trees_before):
+    originals = {patch: pathlib.Path(patch).read_bytes() for patch in moves}
+    for patch, offsets in sorted(moves.items()):
+        refresh_offsets(patch, offsets)
+    codes, trees_after, failing = recheck()
+    problems = []
+    if max(codes, default=0):
+        problems.append("a platform's check fails with the rewritten headers")
+    for platform, tree in sorted(trees_before.items()):
+        if trees_after.get(platform) != tree:
+            changed = sorted(path for path in set(tree) | set(trees_after.get(platform, {}))
+                             if tree.get(path) != trees_after.get(platform, {}).get(path))
+            problems.append(f"on {platform} the rewritten headers change what the series produces "
+                            f"({', '.join(changed[:5]) or 'the tree'}): a hunk would land on another identical context")
+    if failing:
+        problems.append(f"{len(failing)} patches still land hunks at an offset on every platform")
+    if problems:
+        for patch, text in originals.items():
+            pathlib.Path(patch).write_bytes(text)
+        return problems
+    return []
+
+
 def tarball_for(tarballs, platform):
     for tarball in tarballs:
         if series_base.read_manifest(tarball).get("platform") == platform:
@@ -324,6 +357,7 @@ def check_platform(args, platform):
             print(f"FAIL: {len(failed)} of {len(steps)} steps need fuzz or don't apply")
             return 1, results
         print(f"{platform}: all {len(steps)} steps apply with zero fuzz")
+        args.final_trees[platform] = tree_digests(scratch)
         return 0, results
     finally:
         if args.keep:
@@ -350,6 +384,7 @@ def main():
     parser.add_argument("--refresh-offsets", action="store_true")
     args = parser.parse_args()
     args.strict = set(args.strict)
+    args.final_trees = {}
     if args.strict_since:
         try:
             args.strict |= changed_patches(args.strict_since)
@@ -378,10 +413,28 @@ def main():
         print(f"FAIL offset {name}")
         for line in describe(verdict):
             print(f"       {line}")
-    if args.refresh_offsets and max(codes) == 0:
-        for patch, offsets in sorted(moves.items()):
-            refresh_offsets(patch, offsets)
-            print(f"refreshed {len(offsets)} hunk headers in {os.path.basename(patch)}")
+    if args.refresh_offsets and max(codes) == 0 and moves:
+        trees_before = dict(args.final_trees)
+
+        def recheck():
+            args.final_trees = {}
+            with contextlib.redirect_stdout(io.StringIO()):
+                again = [(platform, check_platform(args, platform)) for platform in platforms]
+                still, _, _ = judge([(platform, results) for platform, (_, results) in again], set())
+            return [code for _, (code, _) in again], args.final_trees, still
+
+        problems = refresh_verified(moves, recheck, trees_before)
+        for problem in problems:
+            print(f"FAIL refresh: {problem}")
+        if problems:
+            print("left every patch as it was")
+            codes.append(1)
+        else:
+            for patch, offsets in sorted(moves.items()):
+                print(f"refreshed {len(offsets)} hunk headers in {os.path.basename(patch)}")
+            print("checked again on every platform: the series produces the same files, every hunk landing exactly on "
+                  "at least one platform")
+            failing = {}
     if args.refresh_offsets and max(codes):
         print("not refreshing: a platform's check failed, so its offsets are unknown")
     if failing:

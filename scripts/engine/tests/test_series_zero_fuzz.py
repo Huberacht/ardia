@@ -202,6 +202,26 @@ class Refresh(Fixture):
         self.assertEqual(pathlib.Path(self.tree, "chrome/f.cc").read_text(), expected)
 
 
+class RefreshVerified(Fixture):
+    def test_a_refresh_that_moves_a_hunk_to_another_identical_context_is_undone(self):
+        repeated = "".join(f"line {n}\n" for n in range(1, 21)) * 2
+        step = self.patch("twice", before=repeated, after=edited(repeated, l10="changed\n"))
+        original = pathlib.Path(step.patch).read_text()
+        moves = {step.patch: [("chrome/f.cc", 1, 30, 20)]}
+        before = {"mac": {"chrome/f.cc": "a"}}
+        problems = checker.refresh_verified(moves, lambda: ([0], {"mac": {"chrome/f.cc": "b"}}, {}), before)
+        self.assertTrue(any("another identical context" in p for p in problems), problems)
+        self.assertEqual(pathlib.Path(step.patch).read_text(), original)
+
+    def test_a_refresh_that_reproduces_every_tree_is_kept(self):
+        step = self.patch("drifted")
+        original = pathlib.Path(step.patch).read_text()
+        moves = {step.patch: [("chrome/f.cc", 1, 22, 2)]}
+        trees = {"linux": {"chrome/f.cc": "a"}}
+        self.assertEqual(checker.refresh_verified(moves, lambda: ([0], dict(trees), {}), trees), [])
+        self.assertNotEqual(pathlib.Path(step.patch).read_text(), original)
+
+
 class SplitHunks(unittest.TestCase):
     def test_a_removed_line_that_looks_like_a_header_stays_in_its_hunk(self):
         patch = ("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n a\n--- looks like a header\n+b\n c\n"
@@ -495,11 +515,21 @@ class Packer(unittest.TestCase):
             src = os.path.join(root, "src")
             os.makedirs(src)
             marker = pathlib.Path(root, ".helium-stages-src")
-            marker.write_text("tree-inode=1\n" + "\n".join(series_base.STEP3_STAGES) + "\nplatform=mac\n")
+            inode = f"tree-inode={os.stat(src).st_ino}"
+            marker.write_text(inode + "\n" + "\n".join(series_base.STEP3_STAGES) + "\nplatform=mac\n")
             packer.verify_stages(src, "mac")
             with self.assertRaises(SystemExit):
                 packer.verify_stages(src, "linux")
-            marker.write_text("tree-inode=1\npatches\nplatform=mac\n")
+            marker.write_text(inode + "\npatches\nplatform=mac\n")
+            with self.assertRaises(SystemExit):
+                packer.verify_stages(src, "mac")
+
+    def test_a_stage_marker_left_by_another_tree_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            src = os.path.join(root, "src")
+            os.makedirs(src)
+            pathlib.Path(root, ".helium-stages-src").write_text(
+                f"tree-inode={os.stat(src).st_ino + 1}\n" + "\n".join(series_base.STEP3_STAGES) + "\nplatform=mac\n")
             with self.assertRaises(SystemExit):
                 packer.verify_stages(src, "mac")
 

@@ -97,7 +97,11 @@ def verify_stages(src, platform):
     marker = pathlib.Path(os.path.dirname(src), f".helium-stages-{os.path.basename(src)}")
     if not marker.is_file():
         series_base.die(f"no {marker}: step 3 never ran on {src}")
-    recorded = set(marker.read_text().split()[1:])
+    tokens = marker.read_text().split()
+    if tokens[:1] != [f"tree-inode={os.stat(src).st_ino}"]:
+        series_base.die(f"{marker} belongs to another tree ({(tokens or ['nothing'])[0]}, {src} is "
+                        f"inode {os.stat(src).st_ino}): run step 3 on this tree")
+    recorded = set(tokens[1:])
     missing = [stage for stage in series_base.STEP3_STAGES if stage not in recorded]
     if missing or f"platform={platform}" not in recorded:
         series_base.die(f"{marker} doesn't show a whole step 3 for {platform} (missing {missing or ['platform=' + platform]})")
