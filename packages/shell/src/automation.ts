@@ -22,6 +22,7 @@ export type AutomationNative = {
   approvals?(): Promise<ControlApprovals>;
   revokeApproval?(key: string): Promise<boolean>;
   devtoolsEndpoint?(connection: number): Promise<NativeDevtoolsEndpoint>;
+  cutOff?(): boolean;
 };
 
 export const DEVTOOLS_ENDPOINT_PROBLEMS = ["off", "unreadable", "stale", "left"] as const;

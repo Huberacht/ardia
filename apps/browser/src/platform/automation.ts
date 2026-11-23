@@ -8,6 +8,7 @@ const Automation = () => (bound ??= nativeModule("ArdiaAutomation"));
 
 export const startControlSocket = () => Automation().start();
 export const stopControlSocket = () => Automation().stop();
+export const cutOffControlSocket = () => Automation().cutOff?.() ?? false;
 export const replyOnControlSocket = (connection: number, line: string, ticket = 0) => Automation().reply(connection, line, ticket);
 export const broadcastOnControlSocket = (connections: number[], line: string) => Automation().broadcast(connections, line);
 export const onControlRequest = (listener: (request: ControlRequest) => void) => Automation().addListener("onRequest", listener);

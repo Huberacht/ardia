@@ -23,6 +23,10 @@ public class AutomationModule: Module {
       ControlSocket.shared.reply(connection, line, ticket: ticket)
     }
 
+    Function("cutOff") { () -> Bool in
+      ControlSocket.shared.cutOff()
+    }
+
     Function("broadcast") { (connections: [Int], line: String) in
       ControlSocket.shared.broadcast(connections, line)
     }

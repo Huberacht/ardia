@@ -35,6 +35,8 @@ final class ControlSocket {
   private var resolverJobs = 0
   private var expiries: [String: DispatchWorkItem] = [:]
   private var approvedUntil: [Int: Date] = [:]
+  private let cutOffLock = NSLock()
+  private var cutOffFlag = false
   private lazy var doorbell = ControlDoorbell(
     queue: queue,
     capacity: { [weak self] in self.map { Self.maxConnections - $0.connections.count } ?? 0 },
@@ -82,10 +84,38 @@ final class ControlSocket {
     }
   }
 
+  private var isCutOff: Bool {
+    cutOffLock.lock()
+    defer { cutOffLock.unlock() }
+    return cutOffFlag
+  }
+
+  private func setCutOff(_ on: Bool) {
+    cutOffLock.lock()
+    cutOffFlag = on
+    cutOffLock.unlock()
+  }
+
+  func cutOff() -> Bool {
+    setCutOff(true)
+    queue.async { [self] in
+      if isCutOff { for connection in Array(connections.values) { connection.retire() } }
+    }
+    return true
+  }
+
+  private func mayWrite(_ connection: ControlConnection) -> Bool {
+    guard !isCutOff else {
+      connection.retire()
+      return false
+    }
+    return stillApproved(connection)
+  }
+
   func reply(_ connection: Int, _ line: String, ticket: Int) {
     let data = Self.framed(line)
     queue.async { [self] in
-      if let target = connections[connection], stillApproved(target) {
+      if !isCutOff, let target = connections[connection], stillApproved(target) {
         target.reply(data, ticket: ticket)
       } else if ticket > 0 {
         sink?.send("onWritten", ["tickets": [ticket]])
@@ -117,7 +147,9 @@ final class ControlSocket {
   private func answerEndpoint(_ connection: Int, _ done: @escaping ([String: Any]) -> Void, _ read: @escaping () -> Result<DevtoolsEndpoint, DevtoolsEndpoint.Problem>) {
     queue.async { [self] in
       guard admits(connection) else { return done(["problem": "left"]) }
-      switch read() {
+      let result = read()
+      guard admits(connection) else { return done(["problem": "left"]) }
+      switch result {
       case let .success(endpoint): done(endpoint.reply)
       case let .failure(problem): done(["problem": problem.rawValue])
       }
@@ -125,7 +157,7 @@ final class ControlSocket {
   }
 
   private func admits(_ connection: Int) -> Bool {
-    guard bound != nil, !peerFinished.contains(connection), let target = connections[connection] else { return false }
+    guard !isCutOff, bound != nil, !peerFinished.contains(connection), let target = connections[connection] else { return false }
     return stillApproved(target)
   }
 
@@ -224,6 +256,7 @@ final class ControlSocket {
   }
 
   private func startOnQueue() -> [String: Any] {
+    setCutOff(false)
     if let bound { return status("on", path: bound.path) }
     let dir: String
     do {
@@ -385,7 +418,7 @@ final class ControlSocket {
   }
 
   private func open(_ id: Int, fd: Int32, key: String?, until: Date?) -> Bool {
-    guard bound != nil, connections.count < Self.maxConnections else { return false }
+    guard bound != nil, !isCutOff, connections.count < Self.maxConnections else { return false }
     let generation = generation
     let connection = ControlConnection(
       id: id, fd: fd, queue: queue,
@@ -405,7 +438,7 @@ final class ControlSocket {
         guard let self, self.connections[connection.id] != nil, self.peerFinished.insert(connection.id).inserted else { return }
         self.sink?.send("onClose", ["connection": connection.id])
       },
-      mayWrite: { [weak self] connection in self?.stillApproved(connection) ?? false })
+      mayWrite: { [weak self] connection in self?.mayWrite(connection) ?? false })
     connections[id] = connection
     if let key {
       approvalKeys[id] = key

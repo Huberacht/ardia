@@ -570,7 +570,7 @@ process of the user, as for every method. The engine's server restarting moves `
 generation it was given and asks again when a connection is refused.
 
 - **Who gets it.** Only a connection the socket admitted. Native checks again on its own queue, before and after it
-  reads the token, that the connection is still open and its approval still live, and a reply to a connection whose
+  reads the token and once more after reading it, that the connection is still open and its approval still live, and a reply to a connection whose
   approval ran out meanwhile is dropped (`ControlSocket.admits`, `reply`). A 30-minute approval that runs out, or
   one removed in Settings, closes the connection, so the client sees the stream end rather than a reply. Before
   starting each line, native checks the approval, so a line queued behind a slow reader never starts after it ends; a line already being written then is finished, as for every reply, and the token in it was
@@ -579,6 +579,9 @@ generation it was given and asks again when a connection is refused.
   (even one allowed once) can use it until the token connection restarts: control off and on, or Ardia quitting.
   Removing a program's approval stops it asking again; it doesn't take back a token it already has.
 - **Control off** answers `failed` "Control is off.", when the request arrives and again when the read comes back.
+  Turning it off first cuts native off, synchronously and before the rest of the stop (`ArdiaAutomation.cutOff`): from
+  then on native writes no line that hasn't started, hands out no token and admits no connection, until the socket
+  starts again.
   Like every request, this one is abandoned when its peer stops writing (› A request lives only while its connection
   and consent do): keep the write side open until the reply arrives. It then answers `failed` "The connection closed
   before the token was ready." if anything is still written.

@@ -7,6 +7,7 @@ import {
   onControlClose,
   onControlRequest,
   onControlWritten,
+  cutOffControlSocket,
   replyOnControlSocket,
   startControlSocket,
   stopControlSocket,
@@ -341,6 +342,7 @@ function sync() {
   applied = on;
   const consent = consentToken();
   if (!on) {
+    cutOffControlSocket();
     openConnections.clear();
     generation = null;
     dismissSocketAsks();

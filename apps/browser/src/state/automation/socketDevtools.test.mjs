@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
+import { HOSTILE_STRINGS, HOSTILE_VALUES, PROTOTYPE_KEYS } from "../../../../../scripts/security/hostile-inputs.mjs";
 const { S, socketClient, controlOn, tick } = await import("./fixtures/socketHarness.mjs");
 const stub = await import("../../test-native/index.ts");
 const { takeCliCounts } = await import("../telemetry/cliCounts.ts");
@@ -173,4 +174,71 @@ test("the token never reaches telemetry counts, logs or another connection's lin
   assert.ok(!stub.controlSocket.broadcasts.some((b) => b.line.includes(TOKEN)));
   assert.ok(!JSON.stringify(takeCliCounts()).includes(TOKEN));
   assert.ok(!logged.some((line) => line.includes(TOKEN)));
+});
+
+test("turning control off cuts native off at once, before anything else of the stop, so a queued token line can't start", async () => {
+  await fresh();
+  stub.controlSocket.calls.length = 0;
+  S().updateSettings({ cliControl: false });
+  assert.deepEqual(stub.controlSocket.calls, ["cutOff"], "native is cut off synchronously, in the same turn as the setting change");
+  await settle();
+  assert.deepEqual(stub.controlSocket.calls, ["cutOff", "stop"]);
+  await controlOn();
+});
+
+test("every shared hostile input, as params, as a param name or as a request id, is refused before native is asked, and the token reaches only a well-formed request's own reply", async () => {
+  await fresh();
+  stub.controlSocket.devtoolsEndpoint = () => GIVEN;
+  const client = socketClient(411);
+  const control = await client.call(DEVTOOLS_ENDPOINT, {});
+  assert.deepEqual(control.result, GIVEN, "positive control: a well-formed request gets the token through the same path");
+  const sinkSeen = () => stub.controlSocket.devtoolsEndpointAsks.length;
+  const noParams = new Set([undefined, "{}"]);
+  let refused = 0;
+  const send = async (label, line, wellFormed) => {
+    const asked = sinkSeen();
+    stub.controlSocket.replies.length = 0;
+    const reply = await client.fire(label, null, line);
+    const carriesToken = JSON.stringify(reply).includes(TOKEN);
+    if (wellFormed) {
+      assert.deepEqual(reply.result, GIVEN, `${label}: a request with no params still gets the token`);
+      return;
+    }
+    refused++;
+    assert.ok(reply.error, `${label}: refused`);
+    assert.equal(sinkSeen(), asked, `${label}: native was never asked`);
+    assert.ok(!carriesToken, `${label}: no token in the reply`);
+  };
+  for (const { id, value } of HOSTILE_VALUES) {
+    const wire = JSON.stringify(value);
+    await send(`params ${id}`, `{"id":1,"method":"${DEVTOOLS_ENDPOINT}"${wire === undefined ? "" : `,"params":${wire}`}}`, noParams.has(wire));
+  }
+  for (const { id, value } of HOSTILE_STRINGS) {
+    await send(`param name ${id}`, JSON.stringify({ id: 1, method: DEVTOOLS_ENDPOINT, params: { [value]: true } }), false);
+  }
+  for (const key of PROTOTYPE_KEYS) {
+    await send(`own key ${key}`, `{"id":1,"method":"${DEVTOOLS_ENDPOINT}","params":{${JSON.stringify(key)}:{"ardiaPolluted":true}}}`, false);
+  }
+  assert.equal({}.ardiaPolluted, undefined);
+  for (const { id, value } of HOSTILE_VALUES) {
+    const wire = JSON.stringify(value);
+    if (wire === undefined) continue;
+    stub.controlSocket.replies.length = 0;
+    const asked = sinkSeen();
+    stub.emitControlRequest({ connection: 411, generation: stub.controlSocket.generation, line: `{"id":${wire},"method":"${DEVTOOLS_ENDPOINT}"}` });
+    await settle();
+    const lines = stub.controlSocket.replies.map((r) => r.line);
+    assert.equal(lines.length, 1, `id ${id}: one reply`);
+    const reply = JSON.parse(lines[0]);
+    if (reply.result) {
+      assert.deepEqual(reply.result, GIVEN, `id ${id}`);
+      assert.deepEqual(reply.id, JSON.parse(wire), `id ${id}: the token goes back under the id that asked`);
+    } else {
+      assert.equal(reply.id, null, `id ${id}: a refused id isn't echoed`);
+      assert.equal(sinkSeen(), asked, `id ${id}: native was never asked`);
+      assert.ok(!lines[0].includes(TOKEN), `id ${id}`);
+    }
+  }
+  assert.ok(refused > HOSTILE_VALUES.length, "the corpus ran");
+  assert.ok(stub.controlSocket.replies.every((r) => r.connection === 411));
 });

@@ -507,6 +507,7 @@ export const controlSocket = {
   broadcasts: [] as { connections: number[]; line: string }[],
   devtoolsEndpoint: ((_connection: number): NativeDevtoolsEndpoint | Promise<NativeDevtoolsEndpoint> => ({ problem: "off" })) as ((connection: number) => NativeDevtoolsEndpoint | Promise<NativeDevtoolsEndpoint>) | null,
   devtoolsEndpointAsks: [] as number[],
+  calls: [] as string[],
 };
 const controlEvents = nativeEvents();
 export const emitControlRequest = (request: { connection: number; generation: number; line: string }) => controlEvents.emit("onRequest", request);
@@ -524,8 +525,10 @@ const automation: Modules["ArdiaAutomation"] = {
     return { state: "on", generation: controlSocket.generation, path: "/data/ArdiaControl.sock" };
   },
   stop: async () => {
+    controlSocket.calls.push("stop");
     controlSocket.running = false;
   },
+  cutOff: () => (controlSocket.calls.push("cutOff"), true),
   reply: (connection, line, ticket) => {
     controlSocket.replies.push({ connection, line });
     if (ticket > 0) controlSocket.held.push(ticket);
