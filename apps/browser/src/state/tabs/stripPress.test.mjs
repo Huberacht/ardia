@@ -1,21 +1,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-const { markStripPress, nameStripOpen, takeStripPress } = await import("./stripPress.ts");
+const { ackStripPress, markStripPress, matchStripPress, pressStripClose, pressStripOpen } = await import("./stripPress.ts");
 
-test("a ✕ press marks only its own tab's close, once, in its own window", () => {
+test("a ✕ press marks only its own tab's close in its own window; matching doesn't consume, the commit does", () => {
   markStripPress("w1", "close", "t1", 1000);
-  assert.equal(takeStripPress("w2", ["t1"], [], 1010), false);
-  assert.equal(takeStripPress("w1", ["t2"], [], 1010), false);
-  assert.equal(takeStripPress("w1", ["t1"], [], 1010), true);
-  assert.equal(takeStripPress("w1", ["t1"], [], 1020), false);
+  assert.deepEqual(matchStripPress("w2", ["t1"], [], 1010), []);
+  assert.deepEqual(matchStripPress("w1", ["t2"], [], 1010), []);
+  assert.deepEqual(matchStripPress("w1", ["t1"], [], 1010), ["t1"]);
+  assert.deepEqual(matchStripPress("w1", ["t1"], [], 1011), ["t1"], "a render that's retried still finds it");
+  ackStripPress("w1", ["t1"]);
+  assert.deepEqual(matchStripPress("w1", ["t1"], [], 1020), []);
 });
 
-test("a + press marks the tab it opened, and a press that opened nothing runs out", () => {
-  markStripPress("w1", "open", null, 2000);
-  nameStripOpen("w1", "t9");
-  assert.equal(takeStripPress("w1", [], ["t8"], 2010), false);
-  assert.equal(takeStripPress("w1", [], ["t9"], 2010), true);
-  markStripPress("w1", "open", null, 3000);
-  assert.equal(takeStripPress("w1", [], ["t7"], 4500), false, "a link opening a tab later still slides");
+test("two closes in one change are both taken by its commit", () => {
+  markStripPress("w1", "close", "a", 1000);
+  markStripPress("w1", "close", "b", 1000);
+  const ids = matchStripPress("w1", ["a", "b"], [], 1010);
+  assert.deepEqual(ids, ["a", "b"]);
+  ackStripPress("w1", ids);
+  assert.deepEqual(matchStripPress("w1", ["a", "b"], [], 1010), []);
+});
+
+test("a press that changed nothing leaves no mark: + that opened no tab, ✕ that kept the tab", () => {
+  pressStripOpen("w1", () => "", () => true);
+  assert.deepEqual(matchStripPress("w1", [], ["anything"]), []);
+  pressStripClose("w1", "pinned", () => {}, () => true);
+  assert.deepEqual(matchStripPress("w1", ["pinned"], []), []);
+  markStripPress("w1", "close", "", 1000);
+  assert.deepEqual(matchStripPress("w1", [""], [], 1010), []);
+  pressStripOpen("w1", () => "t9", () => true);
+  assert.deepEqual(matchStripPress("w1", [], ["t8"]), []);
+  assert.deepEqual(matchStripPress("w1", [], ["t9"]), ["t9"]);
+  ackStripPress("w1", ["t9"]);
+});
+
+test("an unused mark runs out after a second", () => {
+  markStripPress("w1", "close", "late", 5000);
+  assert.deepEqual(matchStripPress("w1", ["late"], [], 6500), []);
 });

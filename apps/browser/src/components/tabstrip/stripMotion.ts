@@ -3,7 +3,7 @@ import type { View } from "react-native";
 import { workspaceSnapshot } from "../../state/browser/current";
 import type { StripEntry } from "../../state/tabs/topStrip";
 import { reduceMotion } from "../ui/reduceMotion";
-import { takeStripPress } from "../../state/tabs/stripPress";
+import { ackStripPress, matchStripPress } from "../../state/tabs/stripPress";
 import { useAnimatedStyle } from "../sidebar/EntryMotion";
 import type { Dock } from "./model";
 import type { DragGeometry } from "./stripGroups";
@@ -30,12 +30,13 @@ export function useStripMotion({ entries, top, dock, flare, end, viewport, offse
   const now = shot.current;
   const before = last.current;
   const changed = enabled && !!before && before !== now && before.state.tabs !== now.state.tabs;
-  queued.current = changed ? plan(before, now, own.slides, band(offset(), viewport), Date.now(), reduceMotion() === true, (closed, opened) => takeStripPress(windowId, closed, opened)) : null;
+  queued.current = changed ? plan(before, now, own.slides, band(offset(), viewport), Date.now(), reduceMotion() === true, (closed, opened) => matchStripPress(windowId, closed, opened)) : null;
   useLayoutEffect(() => {
     last.current = now;
     const p = queued.current;
     queued.current = null;
     if (p?.stepped) own.motion.land();
+    if (p) ackStripPress(windowId, p.pressed);
     if (p) own.apply(p);
   });
   return own.motion;

@@ -17,7 +17,7 @@ type GhostTab = { title: string; url: string; favicon?: string | null; icon?: st
 export type StripGhost = { key: string; x: number; width: number; tab: GhostTab; opacity: Animated.Value; until: number; started: boolean };
 export type Shot = { keys: string[]; x: Map<string, number>; width: Map<string, number>; tabs: Map<string, string[]>; groups: Set<string>; end: number | null; state: BrowserState };
 type Move = { key: string; from: number };
-export type Plan = { moves: Move[]; appears: string[]; ghosts: StripGhost[]; at: number; stepped: boolean };
+export type Plan = { moves: Move[]; appears: string[]; ghosts: StripGhost[]; at: number; stepped: boolean; pressed: string[] };
 
 export type StripMotion = {
   slide: (key: string) => StripSlide | null;
@@ -68,16 +68,32 @@ function ghostTab(s: BrowserState, tabId: string): GhostTab | null {
   return tab ? { title: tabTitle(tab), url: tab.url, favicon: tab.favicon, icon: tab.customIcon, profileId: tab.profileId } : null;
 }
 
-export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>, band: [number, number], now: number, still: boolean, pressed: (closed: string[], opened: string[]) => boolean = () => false): Plan | null {
+function memberChanges(before: Shot, after: Shot, had: Set<string>) {
+  const closed: string[] = [];
+  const opened: string[] = [];
+  for (const key of after.keys) {
+    if (!had.has(key)) continue;
+    const was = before.tabs.get(key)!;
+    const is = after.tabs.get(key)!;
+    for (const id of was) if (!is.includes(id) && !after.state.tabs[id]) closed.push(id);
+    for (const id of is) if (!was.includes(id) && !before.state.tabs[id]) opened.push(id);
+  }
+  return { closed, opened };
+}
+
+export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>, band: [number, number], now: number, still: boolean, matchPress: (closed: string[], opened: string[]) => string[] = () => []): Plan | null {
   const had = new Set(before.keys);
   const has = new Set(after.keys);
   const removed = before.keys.filter((k) => !has.has(k));
   const added = after.keys.filter((k) => !had.has(k));
-  if (!removed.length && !added.length) return null;
+  const members = memberChanges(before, after, had);
+  const memberChanged = members.closed.length > 0 || members.opened.length > 0;
   const closed = removed.filter((k) => before.tabs.get(k)!.every((id) => !after.state.tabs[id]));
   const opened = added.filter((k) => after.tabs.get(k)!.every((id) => !before.state.tabs[id]));
-  if (!closed.length && !opened.length) return null;
-  const stepped = pressed(closed.flatMap((k) => before.tabs.get(k)!), opened.flatMap((k) => after.tabs.get(k)!));
+  if (!closed.length && !opened.length && !memberChanged) return null;
+  const pressed = matchPress([...closed.flatMap((k) => before.tabs.get(k)!), ...members.closed], [...opened.flatMap((k) => after.tabs.get(k)!), ...members.opened]);
+  if (!removed.length && !added.length) return { moves: [], appears: [], ghosts: [], at: now, stepped: true, pressed };
+  const stepped = pressed.length > 0 || memberChanged;
   const seen = (x: number, width: number) => x + width > band[0] && x < band[1];
   const moves: Move[] = [];
   let blocked = still || stepped;
@@ -97,8 +113,8 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     const from = offsetAt(slides.get(NEW_TAB_SLOT), now) + before.end - after.end;
     if (Math.abs(from) >= 0.5) moves.push({ key: NEW_TAB_SLOT, from });
   }
-  const appears = added.filter((k) => !after.groups.has(k) && seen(after.x.get(k)!, after.width.get(k)!));
-  const ghosts = removed.flatMap((k): StripGhost[] => {
+  const appears = opened.filter((k) => !after.groups.has(k) && seen(after.x.get(k)!, after.width.get(k)!));
+  const ghosts = closed.flatMap((k): StripGhost[] => {
     const ids = before.tabs.get(k)!;
     const x = before.x.get(k)! + offsetAt(slides.get(k), now);
     const width = before.width.get(k)!;
@@ -106,7 +122,7 @@ export function plan(before: Shot, after: Shot, slides: Map<string, StripSlide>,
     return tab && seen(x, width) ? [{ key: `ghost:${++ghostIds}`, x, width, tab, opacity: new Animated.Value(shownAt(slides.get(k), now)), until: 0, started: false }] : [];
   });
   if (!moves.length && !appears.length && !ghosts.length && !stepped) return null;
-  return { moves, appears, ghosts, at: now, stepped };
+  return { moves, appears, ghosts, at: now, stepped, pressed };
 }
 
 export function createMotion() {

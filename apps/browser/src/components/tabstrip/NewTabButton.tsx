@@ -14,7 +14,8 @@ import { perLook, radius } from "../ui/tokens";
 import type { DragGeometry } from "./stripGroups";
 import { registerSlot } from "./stripReorder";
 import { NEW_TAB_SLOT, useStripSlide } from "./stripMotion";
-import { markStripPress, nameStripOpen } from "../../state/tabs/stripPress";
+import { pressStripOpen } from "../../state/tabs/stripPress";
+import { workspaceSnapshot } from "../../state/browser/current";
 import { GAP, ITEM_HEIGHT, ITEM_TOP, NEW_TAB_ICON, OVERFLOW_BUTTON, tabRadius } from "./tokens";
 import { keyText } from "../../state/commands/keyText";
 
@@ -44,10 +45,7 @@ export function NewTabButton({ windowId, geometry, pinned }: { windowId: string;
   useEffect(() => registerSlot(() => latest.current, () => (latestPinned.current ? -1 : latest.current.slots.length), shift), []);
   const open = (modifiers: ClickModifiers) => {
     if (modifiers.altKey && splitViewAvailable) openNewTabInSplit(windowId);
-    else if (!toggleNewTabBar(windowId)) {
-      markStripPress(windowId, "open");
-      nameStripOpen(windowId, newTab(windowId, { newTabCommand: true }));
-    }
+    else if (!toggleNewTabBar(windowId)) pressStripOpen(windowId, () => newTab(windowId, { newTabCommand: true }), (tabId) => !!workspaceSnapshot().tabs[tabId]);
   };
   const openOverflow = () => {
     noteTabStripMenu("overflow");

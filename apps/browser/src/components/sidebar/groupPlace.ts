@@ -1,11 +1,10 @@
 import type { BrowserState } from "../../state/browser/store";
 import { entryKey } from "../../state/sidebar/entryKey";
-import { groupEntries } from "../../state/sidebar/entries";
 import { headGap } from "../../state/sidebar/geometry";
 import { layout } from "../ui/theme";
 import { GROUP_BORDER } from "./geometry";
 import { offsets, type Height } from "./listOffsets";
-import { seenSliding, shiftedBand, type ListViewport } from "./listViewport";
+import { seenSliding, type ListViewport } from "./listViewport";
 
 export type Section = { list: string[]; base: number };
 export type GroupPlaces = { sections: Section[]; membersOf: (s: BrowserState, groupId: string) => string[]; membersTop: (members: string[]) => number; height: Height };
@@ -27,12 +26,12 @@ export function groupMembersTop(s: BrowserState, groupId: string, places: GroupP
 
 export type PlaceInputs = { entries: string[]; viewport: ListViewport | null; above: number; pinned: (() => Section | null) | null };
 
-export const groupSeen = (read: () => PlaceInputs, height: Height) => (groupId: string, y: number, h: number, before: BrowserState) => {
+export const groupSeen = (read: () => PlaceInputs, height: Height, membersOf: GroupPlaces["membersOf"]) => (groupId: string, y: number, h: number, before: BrowserState) => {
   const { entries, viewport, above, pinned } = read();
-  const band = shiftedBand(viewport?.band() ?? null, above);
+  const band = viewport?.band() ?? null;
   if (!band) return true;
   const pinnedSection = pinned?.();
-  const sections = pinnedSection ? [{ list: entries, base: 0 }, pinnedSection] : [{ list: entries, base: 0 }];
-  const top = groupMembersTop(before, groupId, { sections, membersOf: groupEntries, membersTop: (m) => GROUP_BORDER + layout.rowHeight + headGap(m[0]), height });
+  const sections = pinnedSection ? [{ list: entries, base: above }, pinnedSection] : [{ list: entries, base: above }];
+  const top = groupMembersTop(before, groupId, { sections, membersOf, membersTop: (m) => GROUP_BORDER + layout.rowHeight + headGap(m[0]), height });
   return top === null || seenSliding(top + y, h, 0, band);
 };

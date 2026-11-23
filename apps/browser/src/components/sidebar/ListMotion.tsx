@@ -9,6 +9,7 @@ import { appearOf, setAppearing, setSliding, type ClipSource, type EntryMotion }
 import { appearProgress, startAppear } from "./shiftMarks";
 import { entryHeight } from "../../state/sidebar/geometry";
 import { groupSeen, type Section } from "./groupPlace";
+import { groupEntries, keptEntries } from "../../state/sidebar/entries";
 import { snapshotEntry, type EntrySnapshot } from "./GhostEntry";
 
 export { GhostSlot } from "./GhostSlot";
@@ -365,7 +366,7 @@ export function useListMotion(windowId: string, profileId: string, entries: stri
   };
   const committed = useRef({ entries, viewport, above, pinned });
   useLayoutEffect(() => void (committed.current = { entries, viewport, above, pinned }));
-  const seenIn = useRef(groupSeen(() => committed.current, height)).current;
+  const seenIn = useRef(groupSeen(() => committed.current, height, (s, id) => (s.groups[id]?.collapsed ? keptEntries(s, windowId, profileId, id) : groupEntries(s, id)))).current;
   return { ...useMotion({ devKey: windowId, entries, from, planner, height: (e) => height(workspaceSnapshot(), e), enabled, nativeTail: true, inView: (list) => inView(workspaceSnapshot())(list) }), seenIn };
 }
 

@@ -164,11 +164,11 @@ test("only the close a strip press made steps; a close from elsewhere still slid
   const before = shot(["a", "b", "c"], { end: 312 });
   const after = shot(["a", "c"], { end: 208 });
   delete after.state.tabs.b;
-  const pressed = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.includes("b"));
+  const pressed = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.filter((id) => id === "b"));
   assert.equal(pressed.stepped, true);
   assert.deepEqual(pressed.moves, []);
   assert.equal(pressed.ghosts.length, 1);
-  const elsewhere = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.includes("x"));
+  const elsewhere = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.filter((id) => id === "x"));
   assert.equal(elsewhere.stepped, false);
   assert.deepEqual(elsewhere.moves.map((m) => m.key), ["c", "~new"]);
 });
@@ -207,4 +207,28 @@ test("a fading tab that slides keeps its fade's own clock, so its ghost starts w
     assert.equal(ghost.opacity.__getValue(), 90 / 140);
   });
   animations.running = [];
+});
+
+test("a member opened or closed inside a surviving group steps everything at once and takes its press", () => {
+  const before = shot(["a", "group:g", "c"], { tabs: { m1: 1, m2: 1 } });
+  before.tabs.set("group:g", ["m1", "m2"]);
+  before.width.set("group:g", 300);
+  const after = shot(["a", "group:g", "c"], { tabs: { m1: 1 } });
+  after.tabs.set("group:g", ["m1"]);
+  after.x.set("c", before.x.get("c") - 177);
+  delete after.state.tabs.m2;
+  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), false, (closed) => closed.filter((id) => id === "m2"));
+  assert.equal(p.stepped, true);
+  assert.deepEqual(p.moves, []);
+  assert.deepEqual(p.pressed, ["m2"]);
+});
+
+test("a tab pushed into the overflow menu just leaves, and one coming back just appears", () => {
+  const before = shot(["a", "b", "c"]);
+  const after = shot(["a", "n", "b"], { tabs: { c: 1 } });
+  const p = plan(before, after, new Map(), [-48, 1000], Date.now(), false);
+  assert.deepEqual(p.ghosts, [], "c is still open, in the menu: no ghost");
+  assert.deepEqual(p.appears, ["n"]);
+  const back = plan(after, before, new Map(), [-48, 1000], Date.now(), false);
+  assert.deepEqual(back.appears, [], "c comes back without a fade-in");
 });
