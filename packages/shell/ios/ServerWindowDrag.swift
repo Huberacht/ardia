@@ -76,7 +76,7 @@ enum ServerWindowDrag {
     let key = ObjectIdentifier(window)
     let work = DispatchWorkItem { [weak window] in
       guard let window, stale[key] != nil else { return }
-      let wait = untilScrollQuiet()
+      let wait = untilScrollQuiet(for: window)
       guard wait > 0 else { return refresh(window) }
       if !waited { counts.scrollWaits += 1 }
       armStale(window, after: wait, waited: true)
@@ -85,8 +85,8 @@ enum ServerWindowDrag {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
   }
 
-  private static func untilScrollQuiet() -> CFTimeInterval {
-    scrollQuiet - (CACurrentMediaTime() - scrolledAt)
+  private static func untilScrollQuiet(for window: NSWindow) -> CFTimeInterval {
+    inBand(window, pointer()) ? 0 : scrollQuiet - (CACurrentMediaTime() - scrolledAt)
   }
 
   private static let pointerArrives: [Notification.Name] = [
@@ -158,7 +158,7 @@ enum ServerWindowDrag {
     let work = DispatchWorkItem { [weak window] in
       pending[key] = nil
       guard let window else { return }
-      let wait = untilScrollQuiet()
+      let wait = untilScrollQuiet(for: window)
       guard wait > 0 else { return refresh(window) }
       if !waited { counts.scrollWaits += 1 }
       scheduleRefresh(window, after: wait, waited: true)
