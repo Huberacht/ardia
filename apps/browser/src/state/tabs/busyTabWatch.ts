@@ -245,6 +245,7 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
     const s = useBrowser.getState();
     const shown = shownTabIds(s);
     for (const id of hiddenSince.keys()) if (!hasTab(s, id) || shown.has(id)) hiddenSince.delete(id);
+    for (const id of webviews.keys()) if (hasTab(s, id) && !shown.has(id) && s.tabs[id]!.lastActiveAt >= (hiddenSince.get(id) ?? Infinity)) hiddenSince.delete(id);
     for (const id of webviews.keys()) if (hasTab(s, id) && !shown.has(id) && !hiddenSince.has(id)) hiddenSince.set(id, now);
     for (const [id, at] of quietUntil) if (at <= now) quietUntil.delete(id);
     for (const id of keptTabs) if (!hasTab(s, id)) keptTabs.delete(id);
@@ -257,7 +258,8 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
     }
     if (!wanted()) return;
     heat = readHeat(heat, validReadings(raw), now, hotCores);
-    for (const [pid, owner] of owners) if (heat.get(pid)?.started !== owner.started) owners.delete(pid);
+    const current = useBrowser.getState();
+    for (const [pid, owner] of owners) if (heat.get(pid)?.started !== owner.started || ownerMoved(current, owner)) owners.delete(pid);
     const busy = sustainedBusy(heat);
     if (busy.length) await warnFor(busy, now, consent, wanted);
   } finally {
@@ -265,9 +267,15 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
   }
 }
 
-function noteShown(s: BrowserState) {
-  for (const id of shownTabIds(s)) hiddenSince.delete(id);
-  for (const [pid, owner] of owners) if (owner.tabIds.some((id) => !hasTab(s, id) || s.tabs[id]!.url !== owner.urls.get(id))) owners.delete(pid);
+const ownerMoved = (s: BrowserState, owner: Owner) => owner.tabIds.some((id) => !hasTab(s, id) || s.tabs[id]!.url !== owner.urls.get(id));
+
+let rearm = () => {};
+
+export function noteTabVisibility(tabId: string, visible: boolean) {
+  if (!started || !watchOn(useBrowser.getState())) return;
+  if (visible) hiddenSince.delete(tabId);
+  else if (!hiddenSince.has(tabId)) hiddenSince.set(tabId, clock());
+  rearm();
 }
 
 function dropWork() {
@@ -287,10 +295,7 @@ export function startBusyTabWatch() {
     run: () => void watchBusyTabs(),
     needed: () => !unsupported && !isQuitting() && watchOn(useBrowser.getState()) && hasHiddenLoadedTab(useBrowser.getState()),
     watch: (changed) => {
-      const browser = useBrowser.subscribeTo(["tabs", "windows", "peeks", "splits"], (s) => {
-        if (watchOn(s)) noteShown(s);
-        changed();
-      });
+      rearm = changed;
       const lifecycle = useLifecycle.subscribe(changed);
       const views = onWebviewsChanged(changed);
       const quitting = onQuittingChanged(() => {
@@ -307,7 +312,7 @@ export function startBusyTabWatch() {
         }
         changed();
       });
-      return () => (browser(), lifecycle(), views(), quitting(), toggled());
+      return () => ((rearm = () => {}), lifecycle(), views(), quitting(), toggled());
     },
   });
   if (__DEV__) (globalThis as { acBusyTabs?: unknown }).acBusyTabs = { watchBusyTabs, heat: () => heat, owners: () => owners, quietUntil, setHotCores: (cores: number) => void (hotCores = cores) };

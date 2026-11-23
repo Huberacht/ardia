@@ -15,6 +15,7 @@ import { useProfileTheme } from "./ThemeScope";
 import { opaqueCard } from "../ui/opaqueCard";
 import { handOff, takeHandOff, wantsPage } from "../../state/tabs/tabPages";
 import { noteDiscarded, noteGone, noteReady } from "../../state/tabs/tabLifecycle";
+import { noteTabVisibility } from "../../state/tabs/busyTabWatch";
 import { noteWebKitPage, offerWebKit, persistEngine } from "../../state/engines/actions";
 import { heldBySwap, watchFirstPaint } from "../../state/engines/engineSwap";
 import { useRetiringEngine } from "../../state/engines/hooks";
@@ -100,6 +101,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
     return (handle: Parameters<typeof register>[0]) => (handle && peekOf !== undefined && promotedFromPeek(tabId) ? undefined : register(handle));
   }, [tabId]);
   const autoPictureInPicture = useAutoPictureInPicture(tabId, visible);
+  useEffect(() => noteTabVisibility(tabId, visible), [tabId, visible]);
   const pageColor = useProfilesValue(profileId, (profiles) => (isIncognitoProfile(profileId) ? "incognito" : (profiles[profileId]?.color ?? "plum")));
   const theme = useProfileTheme(profileId);
   const backdrop = useMemo(() => opaqueCard(theme), [theme.card, theme.windowTint[0], theme.windowTint[1]]);
