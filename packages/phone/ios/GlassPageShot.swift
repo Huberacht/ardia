@@ -133,3 +133,9 @@ final class GlassPageShot {
     return false
   }
 }
+
+extension PhonePages {
+  func navigationGeneration(of webView: WKWebView) -> Int? {
+    pageIDList.lazy.compactMap { self.page($0) }.first { $0.webView === webView }?.navigationGeneration
+  }
+}

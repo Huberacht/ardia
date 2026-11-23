@@ -191,13 +191,6 @@ final class PhonePages {
     tabIDs[pageID].flatMap(engine.existingWebTab)
   }
 
-  func navigationGeneration(of webView: WKWebView) -> Int? {
-    for id in tabIDs.values {
-      if let tab = engine.existingWebTab(id), tab.webView === webView { return tab.navigationGeneration }
-    }
-    return nil
-  }
-
   func require(_ pageID: String) throws -> WebTab {
     guard let page = page(pageID) else { throw PagePayloads.error("ERR_NO_PAGE", "No page is open with id \(pageID)") }
     return page
