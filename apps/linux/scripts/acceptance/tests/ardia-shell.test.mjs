@@ -7,6 +7,7 @@ import vm from "node:vm";
 import { after, before, describe, it } from "node:test";
 import { launchArdia, launchArguments, launchEnvironment } from "../lib/ardia.mjs";
 import { connectCdp } from "../lib/cdp.mjs";
+import { withSignal } from "../lib/util.mjs";
 import { startMockCdp } from "./mock-cdp.mjs";
 
 function fakeShell({ windowId, startup = false, utility = null }) {
@@ -192,20 +193,59 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
   });
 
   it("aborts a startup connect promptly when the browser exits mid-connect", async () => {
-    let attempts = 0;
-    const hanging = () => { attempts++; return new Promise(() => {}); };
+    let seenSignal = null;
+    const hanging = (url, { signal }) => {
+      seenSignal = signal;
+      sleeper.kill("SIGTERM");
+      return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    };
     const started = Date.now();
-    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(true, 300), startTimeout: 30000, connectImpl: hanging }), /aborted: the browser exited/);
-    assert.equal(attempts, 1);
+    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 30000, connectImpl: hanging }), /CDP connection aborted: the browser exited/);
+    assert.equal(seenSignal.aborted, true);
     assert.ok(Date.now() - started < 5000);
+  });
+
+  it("closes a session that opens after the browser exited", async () => {
+    let lateSession = null;
+    const late = () => {
+      sleeper.kill("SIGTERM");
+      return new Promise((resolve) => setTimeout(() => {
+        lateSession = { closed: false, close() { this.closed = true; return Promise.resolve(); } };
+        resolve(lateSession);
+      }, 300));
+    };
+    const started = Date.now();
+    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 30000, connectImpl: late }), /CDP connection aborted: the browser exited/);
+    assert.ok(Date.now() - started < 5000);
+    for (let waited = 0; !lateSession?.closed && waited < 2000; waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(lateSession?.closed, true);
   });
 
   it("aborts startup connect retries promptly when the browser exits between attempts", async () => {
     let attempts = 0;
-    const refused = (url) => { attempts++; return Promise.reject(new Error(`CDP connection to ${url} failed: ECONNREFUSED`)); };
+    const refused = (url) => {
+      attempts++;
+      sleeper.kill("SIGTERM");
+      return Promise.reject(new Error(`CDP connection to ${url} failed: ECONNREFUSED`));
+    };
     const started = Date.now();
-    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(true, 600), startTimeout: 30000, connectImpl: refused }), /aborted: the browser exited.*ECONNREFUSED/);
-    assert.ok(attempts >= 1);
+    await assert.rejects(launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 30000, connectImpl: refused }), /CDP connection aborted: the browser exited/);
+    assert.equal(attempts, 1);
+    assert.ok(Date.now() - started < 5000);
+  });
+
+  it("stops a startup connect when the check is cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("check stopped");
+    let seenSignal = null;
+    const hanging = (url, { signal }) => {
+      seenSignal = signal;
+      setTimeout(() => controller.abort(reason), 50);
+      return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    };
+    const started = Date.now();
+    await assert.rejects(withSignal(controller.signal, () => launchArdia({ executable: "/bin/true", scratch, spawnImpl: fakeSpawn(), startTimeout: 30000, connectImpl: hanging })), /check stopped/);
+    assert.equal(seenSignal.aborted, true);
     assert.ok(Date.now() - started < 5000);
   });
 });

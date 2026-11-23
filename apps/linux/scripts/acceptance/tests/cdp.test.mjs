@@ -109,6 +109,22 @@ describe("CDP client", () => {
     }
   });
 
+  it("closes the socket and rejects when the signal aborts during the handshake", async () => {
+    let socket = null;
+    class SilentSocket extends EventTarget {
+      constructor() { super(); this.closedByClient = false; socket = this; }
+      close() { this.closedByClient = true; }
+      send() {}
+    }
+    const controller = new AbortController();
+    const reason = new Error("check stopped");
+    const connecting = connectCdp("ws://127.0.0.1:1/devtools/browser/slow", { WebSocketImpl: SilentSocket, signal: controller.signal });
+    controller.abort(reason);
+    await assert.rejects(connecting, (error) => error === reason);
+    assert.equal(socket.closedByClient, true);
+    await assert.rejects(connectCdp("ws://127.0.0.1:1/devtools/browser/slow", { WebSocketImpl: SilentSocket, signal: controller.signal }), (error) => error === reason);
+  });
+
   it("still rejects promptly with an explicit short timeout when the upgrade never answers", async () => {
     const sockets = new Set();
     const server = http.createServer();
