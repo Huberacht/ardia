@@ -3,7 +3,7 @@ use std::mem;
 use crate::bookmark::BookmarkNode;
 use crate::chromium_bookmarks::{Limits, ProfileFile};
 use crate::error::ImportError;
-use crate::html::{decode_entities, decode_text, is_space, Scanner, Tag};
+use crate::html::{decode_entities, decode_text, is_space, Attribute, Scanner, Tag};
 
 const TOP_TITLE: &str = "Bookmarks";
 const SKIPPED_SCHEME: &str = "place:";
@@ -32,12 +32,16 @@ pub fn netscape_bookmarks_with(file: ProfileFile<'_>, limits: &Limits) -> Result
             tree.close_list();
         } else if tag.opens("a") {
             let title = clean(&scanner.text_until("a"));
-            let href = clean(tag.attribute("href").unwrap_or_default());
+            let href = clean(tag.attribute(Attribute::Href).unwrap_or_default());
             if href.is_empty() || starts_with_ignoring_case(&href, SKIPPED_SCHEME) {
                 continue;
             }
             let title = if title.is_empty() { href.clone() } else { title };
-            tree.link(BookmarkNode::link(title, href, seconds(tag.attribute("add_date"))));
+            tree.link(BookmarkNode::link(
+                title,
+                href,
+                seconds(tag.attribute(Attribute::AddDate)),
+            ));
         }
     }
     let top = tree.finish();
@@ -48,15 +52,15 @@ pub fn netscape_bookmarks_with(file: ProfileFile<'_>, limits: &Limits) -> Result
 }
 
 fn folder_from(tag: &Tag<'_>, title: String) -> BookmarkNode {
-    let mut folder = BookmarkNode::folder(title, Vec::new(), seconds(tag.attribute("add_date")));
-    let id = tag.attribute("id");
-    let flag = |name: &str| {
-        tag.attribute(name)
+    let mut folder = BookmarkNode::folder(title, Vec::new(), seconds(tag.attribute(Attribute::AddDate)));
+    let id = tag.attribute(Attribute::Id);
+    let flag = |which: Attribute| {
+        tag.attribute(which)
             .is_some_and(|value| value.eq_ignore_ascii_case("true"))
     };
-    folder.role = if flag("personal_toolbar_folder") || id == Some("com.apple.FavoritesBar") {
+    folder.role = if flag(Attribute::PersonalToolbarFolder) || id == Some("com.apple.FavoritesBar") {
         Some("toolbar")
-    } else if flag("unfiled_bookmarks_folder") {
+    } else if flag(Attribute::UnfiledBookmarksFolder) {
         Some("other")
     } else if id == Some("com.apple.ReadingList") {
         Some("readingList")
@@ -139,7 +143,7 @@ impl<'l> Tree<'l> {
 
     fn folder_heading(&mut self, folder: BookmarkNode) {
         self.flush_pending();
-        self.pending = if self.reserve() {
+        self.pending = if self.can_nest() && self.reserve() {
             Pending::Folder(folder)
         } else {
             Pending::Dropped
@@ -148,11 +152,7 @@ impl<'l> Tree<'l> {
 
     fn open_list(&mut self) {
         match mem::replace(&mut self.pending, Pending::Nothing) {
-            Pending::Folder(folder) if self.can_nest() => self.stack.push(folder),
-            Pending::Folder(_) => {
-                self.nodes -= 1;
-                self.flattened += 1;
-            }
+            Pending::Folder(folder) => self.stack.push(folder),
             Pending::Dropped => self.flattened += 1,
             Pending::Nothing if !self.saw_root_list => self.saw_root_list = true,
             Pending::Nothing => {

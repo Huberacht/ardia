@@ -154,6 +154,34 @@ fn folders_past_the_depth_cap_hand_their_links_to_the_deepest_folder() {
 }
 
 #[test]
+fn a_heading_without_a_list_past_the_depth_cap_is_not_kept() {
+    let html = concat!(
+        "<DL><p><DT><H3>One</H3><DL><p><DT><H3>Lonely</H3><DT><A HREF=\"https://a/\">a</A>",
+        "<DT><H3>Last</H3></DL><p><DT><H3>Sibling</H3></DL><p>"
+    );
+    let node = parse_with(html, &limited(MAX_NODES, 1)).unwrap();
+    assert_eq!(
+        tree(&node),
+        json!({"type":"folder","title":"Bookmarks","children":[
+            {"type":"folder","title":"One","children":[{"type":"url","title":"a","url":"https://a/"}]},
+            {"type":"folder","title":"Sibling","children":[]}]})
+    );
+    let mut deep = String::from("<DL><p>");
+    for level in 1..=MAX_FOLDER_DEPTH {
+        deep.push_str(&format!("<DT><H3>F{level}</H3><DL><p>"));
+    }
+    deep.push_str("<DT><H3>Too deep</H3><DT><A HREF=\"https://deep/\">deep</A><DT><H3>Also too deep</H3>");
+    let node = parse(&deep).unwrap();
+    assert_eq!(
+        support::shape(&tree(&node)),
+        json!({"links": 1, "folders": MAX_FOLDER_DEPTH, "depth": MAX_FOLDER_DEPTH})
+    );
+    assert_eq!(node_count(&tree(&node)), MAX_FOLDER_DEPTH + 1);
+    let budget = parse_with(&deep, &limited(MAX_FOLDER_DEPTH + 1, MAX_FOLDER_DEPTH)).unwrap();
+    assert_eq!(support::shape(&tree(&budget))["links"], 1);
+}
+
+#[test]
 fn a_million_unclosed_lists_parse_without_recursion() {
     let mut html = "<DL>".repeat(1_000_000);
     html.push_str("<DT><A HREF=\"https://deep/\">deep</A>");

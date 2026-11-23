@@ -1686,7 +1686,7 @@
   {
    "id": "import:netscape-html-rust",
    "source": "import",
-   "guard": "Rust Netscape HTML bookmarks parser behind libardia_import, not linked by any host yet: a file over 64 MiB is refused before it is read, 64 folder levels and 250,000 nodes with each folder reserved before its contents, no recursion on the input; entities decode once and titles and URLs reach the tree verbatim, place: queries are skipped and scheme policy stays with import:bookmarks; the shared hostile list runs through the static library",
+   "guard": "Rust Netscape HTML bookmarks parser behind libardia_import, not linked by any host yet: a file over 64 MiB is refused before it is read, 64 folder levels and 250,000 nodes with each folder reserved before its contents, no recursion on the input, and one slot per attribute the parser reads whatever a tag carries; entities decode once and titles and URLs reach the tree verbatim, place: queries are skipped and scheme policy stays with import:bookmarks; the shared hostile list runs through the static library",
    "checks": [
     "packages/core-rs/crates/ardia-import-core/src/netscape_bookmarks.rs",
     "packages/core-rs/tests/import-netscape/test_import_netscape.py"

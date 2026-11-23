@@ -16,6 +16,7 @@ CORE = HERE.parents[1]
 VECTORS = CORE / 'tests/import-netscape-vectors.json'
 HOSTILE = REPO / 'scripts/security/hostile-inputs.mjs'
 SWIFT_CORE = REPO / 'packages/import/ios/Core'
+SWIFT_SOURCES = ['NetscapeBookmarks', 'Model', 'SecretBytes', 'ArcExtras', 'ArcSidebar', 'ChromiumFavicons', 'SQLiteSnapshot']
 WINDOWS_IMPORT = REPO / 'packages/expo-windows/src/import'
 LINUX_SOURCE = REPO / 'engine/ardiacore-linux/src'
 LINUX_SHIM = REPO / 'engine/ardiacore-linux/tests/fixtures/import_base.h'
@@ -121,7 +122,7 @@ class SwiftNetscapeBookmarks(CrossCheck, unittest.TestCase):
             unavailable('swift', 'swiftc on macOS is unavailable')
         cls.scratch = tempfile.TemporaryDirectory(prefix='ardia-import-netscape-swift-')
         cls.binary = pathlib.Path(cls.scratch.name) / 'netscape-bookmarks'
-        sources = sorted(map(str, SWIFT_CORE.glob('*.swift')))
+        sources = [str(SWIFT_CORE / f'{name}.swift') for name in SWIFT_SOURCES]
         built = subprocess.run([compiler, '-Onone', '-module-name', 'ArdiaImportCore', '-o', str(cls.binary),
                                 str(HERE / 'main.swift'), *sources, '-lsqlite3'],
                                capture_output=True, text=True, timeout=900)

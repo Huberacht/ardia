@@ -152,9 +152,9 @@ libraries export exactly the 4 functions the header declares (`tests/check_expor
 
 ### What the caller must guarantee
 
-- `bookmarks`, `account_bookmarks` and `html` are `NULL` or point to an `ardia_import_bytes` whose `len` is readable. Its
-  `ptr` is read only when `len` is from 1 to `ARDIA_IMPORT_MAX_INPUT_BYTES`, so it may be left uninitialized
-  otherwise; in that range it points to `len` bytes that stay readable and unchanged for the whole call.
+- `bookmarks`, `account_bookmarks` and `html` are `NULL` or point to an `ardia_import_bytes` whose `len` is
+  readable. Its `ptr` is read only when `len` is from 1 to `ARDIA_IMPORT_MAX_INPUT_BYTES`, so it may be left
+  uninitialized otherwise; in that range it points to `len` bytes that stay readable and unchanged for the whole call.
 - `out` is `NULL` or points to aligned, writable memory for one `ardia_import_buf` that nothing else touches during the
   call. The library only writes it and never reads it, so uninitialized memory is fine. A buffer the slot held before
   is not freed: free it first or it leaks.
@@ -225,24 +225,30 @@ and a folder or link with nothing else around it still counts. Rust:
   Swift and Linux. Windows falls back to windows-1252, so bytes 0x80 to 0x9F read as curly quotes and the euro sign
   there and as C1 controls everywhere else.
 - refuses a file over 64 MiB (Linux refuses over 32 MiB, Windows calls over 64 MiB unreadable, Swift has no cap), reads
-  64 folder levels and hands the links of deeper folders to the deepest one as Linux does, and returns at most 250,000
-  nodes. A folder takes its slot when its heading is read, before anything inside it. Linux counts a folder when it
-  closes, so a folder holding 250,000 links comes back empty there. Swift and Windows have neither cap; 100,000 nested
-  `<DL>`s overflow Swift's stack and Windows' `JSON.stringify`. Nothing in Rust recurses on the input.
-- matches tag and attribute names without case, takes a tag name starting with an ASCII letter, allows spaces around
-  `=`, and keeps the first of a repeated attribute as HTML does (Swift and Windows keep the last). `<!--` to `-->` is
-  skipped, an unterminated one hides the rest of the file (Windows reads on), and `<!`, `<?` and `</` without a letter
-  run to the next `>` as HTML's bogus comments do. A quoted value without its closing quote runs to the next quote.
+  64 folder levels, drops a heading past them and hands the links of deeper folders to the deepest one as Linux does,
+  and returns at most 250,000 nodes. A folder takes its slot when its heading is read, before anything inside it.
+  Linux counts a folder when it closes, so when 250,000 links sit inside a folder, Linux drops that folder with them
+  and returns a `Bookmarks` folder with no links and no folders below it. Swift and Windows have neither cap; 100,000
+  nested `<DL>`s overflow Swift's stack and Windows' `JSON.stringify`. Nothing in Rust recurses on the input.
+- keeps one slot per attribute it reads (`HREF`, `ADD_DATE`, `ID`, `PERSONAL_TOOLBAR_FOLDER`,
+  `UNFILED_BOOKMARKS_FOLDER`) and stores nothing for any other, so a tag costs the same however many attributes it
+  carries. It matches tag and attribute names without case, takes a tag name starting with an ASCII letter, allows
+  spaces around `=`, and keeps the first of a repeated attribute as HTML does (Swift and Windows keep the last).
+  `<!--` to `-->` is skipped, an unterminated one hides the rest of the file (Windows reads on), and `<!`, `<?` and
+  `</` without a letter run to the next `>` as HTML's bogus comments do. A quoted value without its closing quote runs
+  to the next quote.
 - takes a title from the text up to the tag's own close or the next `<DT>`, `<DD>`, `<DL>`, `</DL>`, `<H3>` or `<A>`,
   drops tags and comments inside it but keeps the text around them, and keeps a `<` that starts no tag. Swift and Linux
   lose the text after a comment or a `<!` and swallow a `</DL>` an unclosed link runs into, all three read a `<DD>`
   description into an unclosed link's title, and Swift and Windows drop the text after a `<` that starts no tag.
-- decodes `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;` and decimal or hex references whose `;` is at most 10
-  characters after the `&`, once, in titles and `HREF` only. A reference to 0, a surrogate or past U+10FFFF stays as
-  text: Swift and Windows decode 0 to NUL and Windows makes lone surrogates, Swift reads `&#+65;`, and Linux takes at
-  most 8 digits.
-- trims Unicode whitespace from titles and URLs after decoding, like Swift (Windows also trims U+FEFF; Linux trims
-  ASCII only), and a blank title takes the URL. A link needs a non-empty `HREF`; `place:` queries in any case are
-  skipped like Linux's lowercase check. Every other scheme, bookmarklets included, is kept; scheme policy stays with
-  `import:bookmarks`.
-- reads `ADD_DATE` as whole seconds after 1970, like Linux. Swift and Windows also take fractions, exponents and hex.
+- decodes `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;` and decimal or hex references whose body between `&`
+  and `;` is at most 10 bytes (`&#000000065;` decodes, `&#0000000065;` stays), once, in titles and `HREF` only. A
+  reference to 0, a surrogate or past U+10FFFF stays as text: Swift and Windows decode 0 to NUL and Windows makes lone
+  surrogates, Swift reads `&#+65;`, and Linux takes at most 8 digits.
+- trims Unicode whitespace from titles after decoding, like Swift (Windows also trims U+FEFF; Linux trims ASCII
+  only), and a blank title takes the URL. URLs are trimmed the same way; Linux trims them of ASCII whitespace, and Swift
+  and Windows keep their whitespace, literal or decoded. A link needs a non-empty `HREF`; `place:` queries in any case
+  are skipped like Linux's lowercase check. Every other scheme, bookmarklets included, is kept; scheme policy stays
+  with `import:bookmarks`.
+- reads `ADD_DATE` as whole seconds after 1970 with surrounding ASCII spaces allowed, like Linux. Swift and Windows
+  also take a leading `+`, fractions, exponents, hex and values past 64 bits, and Swift refuses surrounding spaces.

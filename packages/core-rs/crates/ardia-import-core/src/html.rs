@@ -17,11 +17,46 @@ pub(crate) fn is_space(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\x0B' | b'\x0C')
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Attribute {
+    Href,
+    AddDate,
+    Id,
+    PersonalToolbarFolder,
+    UnfiledBookmarksFolder,
+}
+
+impl Attribute {
+    const ALL: [Attribute; 5] = [
+        Attribute::Href,
+        Attribute::AddDate,
+        Attribute::Id,
+        Attribute::PersonalToolbarFolder,
+        Attribute::UnfiledBookmarksFolder,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Attribute::Href => "href",
+            Attribute::AddDate => "add_date",
+            Attribute::Id => "id",
+            Attribute::PersonalToolbarFolder => "personal_toolbar_folder",
+            Attribute::UnfiledBookmarksFolder => "unfiled_bookmarks_folder",
+        }
+    }
+
+    fn named(key: &str) -> Option<Attribute> {
+        Attribute::ALL
+            .into_iter()
+            .find(|attribute| key.eq_ignore_ascii_case(attribute.name()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Tag<'a> {
     pub closing: bool,
     pub name: &'a str,
-    attributes: Vec<(&'a str, &'a str)>,
+    attributes: [Option<&'a str>; Attribute::ALL.len()],
 }
 
 impl<'a> Tag<'a> {
@@ -37,11 +72,8 @@ impl<'a> Tag<'a> {
         self.closing && self.is(name)
     }
 
-    pub fn attribute(&self, key: &str) -> Option<&'a str> {
-        self.attributes
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(key))
-            .map(|(_, value)| *value)
+    pub fn attribute(&self, which: Attribute) -> Option<&'a str> {
+        self.attributes[which as usize]
     }
 
     fn ends_text(&self) -> bool {
@@ -158,7 +190,7 @@ impl<'a> Scanner<'a> {
             return None;
         }
         let name = &text[name_start..at];
-        let mut attributes = Vec::new();
+        let mut attributes = [None; Attribute::ALL.len()];
         while let Some(&byte) = bytes.get(at) {
             if byte == b'>' {
                 at += 1;
@@ -204,8 +236,8 @@ impl<'a> Scanner<'a> {
                     }
                 }
             }
-            if !key.is_empty() {
-                attributes.push((key, value));
+            if let Some(which) = Attribute::named(key) {
+                attributes[which as usize].get_or_insert(value);
             }
         }
         Some((
@@ -281,10 +313,9 @@ mod tests {
         let mut scanner = Scanner::new(text);
         let mut out = Vec::new();
         while let Some(tag) = scanner.next_tag() {
-            let attributes = tag
-                .attributes
-                .iter()
-                .map(|(key, value)| (key.to_ascii_lowercase(), (*value).to_owned()))
+            let attributes = Attribute::ALL
+                .into_iter()
+                .filter_map(|which| Some((which.name().to_owned(), tag.attribute(which)?.to_owned())))
                 .collect();
             out.push((tag.closing, tag.name.to_ascii_lowercase(), attributes));
         }
@@ -323,7 +354,10 @@ mod tests {
     #[test]
     fn tags_and_attributes_are_case_insensitive_and_the_first_attribute_wins() {
         assert_eq!(
-            tags(r#"<DT><A HREF="x" href='y' ADD_DATE = 5 empty data-x=a"b/></a>"#),
+            tags(concat!(
+                r#"<DT><A HREF="x" href='y' ADD_DATE = 5 empty data-x=a"b/ Id=i>"#,
+                r#"<H3 personal_TOOLBAR_folder unfiled_bookmarks_folder=true PERSONAL_TOOLBAR_FOLDER=true></a>"#
+            )),
             vec![
                 (false, "dt".into(), vec![]),
                 (
@@ -331,17 +365,38 @@ mod tests {
                     "a".into(),
                     vec![
                         ("href".into(), "x".into()),
-                        ("href".into(), "y".into()),
                         ("add_date".into(), "5".into()),
-                        ("empty".into(), "".into()),
-                        ("data-x".into(), "a\"b/".into()),
+                        ("id".into(), "i".into()),
+                    ]
+                ),
+                (
+                    false,
+                    "h3".into(),
+                    vec![
+                        ("personal_toolbar_folder".into(), "".into()),
+                        ("unfiled_bookmarks_folder".into(), "true".into()),
                     ]
                 ),
                 (true, "a".into(), vec![]),
             ]
         );
         let mut scanner = Scanner::new(r#"<a HREF="first" href="second">"#);
-        assert_eq!(scanner.next_tag().unwrap().attribute("href"), Some("first"));
+        assert_eq!(scanner.next_tag().unwrap().attribute(Attribute::Href), Some("first"));
+    }
+
+    #[test]
+    fn a_tag_keeps_one_slot_per_attribute_it_reads_however_many_it_carries() {
+        assert!(size_of::<Tag<'_>>() <= 128);
+        let mut text = String::from("<A ");
+        for index in 0..200_000 {
+            text.push_str(&format!("x{index}=1 HREF=\"later{index}\" add_date=9 "));
+        }
+        text.insert_str(3, "href=\"first\" ");
+        text.push('>');
+        let tag = Scanner::new(&text).next_tag().unwrap();
+        assert_eq!(tag.attribute(Attribute::Href), Some("first"));
+        assert_eq!(tag.attribute(Attribute::AddDate), Some("9"));
+        assert_eq!(tag.attribute(Attribute::Id), None);
     }
 
     #[test]
