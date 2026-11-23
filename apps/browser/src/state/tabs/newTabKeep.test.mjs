@@ -163,3 +163,17 @@ test("a New Tab page shown again after a hold refocuses its bar keeping the fiel
   page.unmount();
   unregister();
 });
+
+test("an earlier navigation's start and end that arrive only after a newer one was issued are taken as the newer one's, so its hold ends early, never late", async () => {
+  const tab = aTab();
+  const disarm = armLoadRecord(tab);
+  S().navigate(tab, "https://a3.com");
+  S().navigate(tab, "https://b3.com");
+  const calls = [];
+  watchPageDrawn(tab, seqOf(tab), (timedOut) => calls.push(timedOut), 1000, 20);
+  S().updateLive(tab, { isLoading: true });
+  S().updateLive(tab, { isLoading: false });
+  await wait(60);
+  assert.deepEqual(calls, [false], "load events carry no navigation identity: a3.com's late start and end release b3.com's hold, as main's teardown would");
+  disarm();
+});
