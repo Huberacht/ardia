@@ -1387,7 +1387,7 @@ Metal.
   radius-to-sigma), and the fragment shader refracts it per colour channel at full resolution, then adds the frost
   tint, the 0.5 point edge, the profile tint and the rim (added onto what is behind, as Android's PLUS does).
   - A glass outside the `FrostSource` it names draws that whole source, once, and again only when it changes, so a
-    glass moving over a still backdrop (the deck opening) only moves where it samples. The page bar and host pill
+    glass moving over a still backdrop (the deck opening) only moves where it samples; a backdrop that keeps changing is redrawn at most once a second. The page bar and host pill
     draw the page from WebKit's own `takeSnapshot` (the viewport plus 320 points above and below, at the capture's
     scale), which runs off the main thread; while a newer snapshot is on its way, the last one is moved by how far the
     page has scrolled since, so the strip stays lined up with the page. The deck's chrome draws its backdrop and the

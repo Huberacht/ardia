@@ -90,7 +90,7 @@ public enum LiquidGlassRules {
   public static let maxFrostScale = 8.0
   public static let idleRefresh: TimeInterval = 3
   public static let pageCheckInterval: TimeInterval = 0.25
-  public static let backdropRefresh: TimeInterval = 0.25
+  public static let backdropRefresh: TimeInterval = 1
   public static let pageRefresh: TimeInterval = 0.5
   public static let settleFrames = 2
   public static let pressedLight = 0.08
