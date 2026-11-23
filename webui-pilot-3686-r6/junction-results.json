@@ -1,0 +1,74 @@
+{
+    "junction-app-data-to-react-native":  {
+                                              "detail":  "--ardia-shell=webui: exit 1, window False, React Native folders unchanged True",
+                                              "ok":  true
+                                          },
+    "switch-spelling --ARDIA-SHELL=webui with the junction":  {
+                                                                  "detail":  "--ARDIA-SHELL=webui: exit 1, window False, React Native folders unchanged True",
+                                                                  "ok":  true
+                                                              },
+    "switch-spelling -ardia-shell=webui with the junction":  {
+                                                                 "detail":  "-ardia-shell=webui: exit 1, window False, React Native folders unchanged True",
+                                                                 "ok":  true
+                                                             },
+    "switch-spelling /ardia-shell=webui with the junction":  {
+                                                                 "detail":  "/ardia-shell=webui: exit 1, window False, React Native folders unchanged True",
+                                                                 "ok":  true
+                                                             },
+    "switch-spelling --Ardia-Shell=webui with the junction":  {
+                                                                  "detail":  "--Ardia-Shell=webui: exit 1, window False, React Native folders unchanged True",
+                                                                  "ok":  true
+                                                              },
+    "junction-profile-to-react-native":  {
+                                             "detail":  "--ardia-shell=webui: exit 1, window False, React Native folders unchanged True",
+                                             "ok":  true
+                                         },
+    "user-data-dir-into-react-native":  {
+                                            "detail":  "--ardia-shell=webui --user-data-dir=C:\\pilot\\runs\\f636895d8b1e4f3e99d012f4de1a5dfb\\local\\Ardia\\User Data: exit 1, window False, React Native folders unchanged True",
+                                            "ok":  true
+                                        },
+    "user-data-dir-spelled-long-path":  {
+                                            "detail":  "--ardia-shell=webui --user-data-dir=\\\\?\\C:\\pilot\\runs\\f636895d8b1e4f3e99d012f4de1a5dfb\\local\\Ardia\\User Data: exit 1, window False, React Native folders unchanged True",
+                                            "ok":  true
+                                        },
+    "user-data-dir-spelled-8.3":  {
+                                      "detail":  "--ardia-shell=webui --user-data-dir=C:\\pilot\\runs\\F63689~1\\local\\Ardia\\USERDA~1: exit 1, window False, React Native folders unchanged True",
+                                      "ok":  true
+                                  },
+    "user-data-dir-spelled-unc":  {
+                                      "detail":  "--ardia-shell=webui --user-data-dir=\\\\localhost\\C$\\pilot\\runs\\f636895d8b1e4f3e99d012f4de1a5dfb\\local\\Ardia\\User Data: exit 1, window False, React Native folders unchanged True",
+                                      "ok":  true
+                                  },
+    "ardia-data-dir-at-react-native":  {
+                                           "detail":  "--ardia-shell=webui with ARDIA_DATA_DIR=C:\\pilot\\runs\\f636895d8b1e4f3e99d012f4de1a5dfb\\local\\Ardia: exit 1, window False, React Native folders unchanged True",
+                                           "ok":  true
+                                       },
+    "uncreatable-webui-folder":  {
+                                     "detail":  "--ardia-shell=webui: exit 1, window False, React Native folders unchanged True",
+                                     "ok":  true
+                                 },
+    "relocated-react-native-profile":  {
+                                           "detail":  "--ardia-shell=webui: exit 1, window False, React Native folders unchanged True",
+                                           "ok":  true
+                                       },
+    "control-starts-in-webui-folder":  {
+                                           "detail":  "--ardia-shell=webui: window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                           "ok":  true
+                                       },
+    "control-switch-spelling-uppercase":  {
+                                              "detail":  "--ARDIA-SHELL=webui: window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                              "ok":  true
+                                          },
+    "control-switch-spelling-single-dash":  {
+                                                "detail":  "-ardia-shell=webui: window True, profile in Ardia WebUI\\Chromium True, folder pinned against rename True, React Native folders unchanged True",
+                                                "ok":  true
+                                            },
+    "account-folders-untouched":  {
+                                      "detail":  "the account\u0027s own LOCALAPPDATA lists the same entries before and after",
+                                      "ok":  true
+                                  },
+    "run-folder-removed-by-marker":  {
+                                         "detail":  "C:\\pilot\\runs\\f636895d8b1e4f3e99d012f4de1a5dfb removed after its .pilot-run marker matched",
+                                         "ok":  true
+                                     }
+}

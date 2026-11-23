@@ -1,0 +1,114 @@
+{
+    "valid-create-reaches-the-sink":  {
+                                          "detail":  "tab.create answered {\"ok\":true,\"r\":{\"browserId\":1,\"chromeTabId\":1,\"lease\":{\"bindingGeneration\":\"1\",\"claim\":\"bridge-claim\",\"documentEpoch\":\"1\",\"rendererGeneration\":\"1\"},\"snapshot\":{\"events\":[{\"data\":{\"canGoBack\":false,\"canGoForward\":false,\"committedUrl\":\"\",\"isLoading\":true,\"themeColor\":null,\"themeColorSource\":null,\"title\":\"\",\"url\":\"file:///C:/pilot/form.html?bridge\"},\"name\":\"navigation\"}],\"watermark\":1}}}; pages: file:///C:/pilot/form.html?bridge",
+                                          "ok":  true
+                                      },
+    "malformed-requests-make-no-page":  {
+                                            "detail":  "15 malformed requests; pages created 1 -\u003e 1; pages: file:///C:/pilot/form.html?bridge",
+                                            "ok":  true
+                                        },
+    "bridge-answers-after-malformed-requests":  {
+                                                    "detail":  "ArdiaShell.windowIdentity answered \u0027main\u0027",
+                                                    "ok":  true
+                                                },
+    "bad-create-arguments-refused":  {
+                                         "detail":  "6 of 6 refused with an answer; pages: file:///C:/pilot/form.html?bridge",
+                                         "ok":  true
+                                     },
+    "reserved-create javascript:alert(1)":  {
+                                                "detail":  "Invalid or reserved tab URL",
+                                                "ok":  true
+                                            },
+    "reserved-create JavaScript:alert(1)":  {
+                                                "detail":  "Invalid or reserved tab URL",
+                                                "ok":  true
+                                            },
+    "reserved-create chrome://ardia/":  {
+                                            "detail":  "Invalid or reserved tab URL",
+                                            "ok":  true
+                                        },
+    "reserved-create CHROME://ARDIA/index.html":  {
+                                                      "detail":  "Invalid or reserved tab URL",
+                                                      "ok":  true
+                                                  },
+    "reserved-create chrome://ardia./":  {
+                                             "detail":  "Invalid or reserved tab URL",
+                                             "ok":  true
+                                         },
+    "reserved-create ardia://ardia/":  {
+                                           "detail":  "Invalid or reserved tab URL",
+                                           "ok":  true
+                                       },
+    "reserved-create ArDiA://ardia/":  {
+                                           "detail":  "Invalid or reserved tab URL",
+                                           "ok":  true
+                                       },
+    "reserved-create view-source:chrome://ardia/":  {
+                                                        "detail":  "Invalid or reserved tab URL",
+                                                        "ok":  true
+                                                    },
+    "reserved-create view-source:javascript:alert(1)":  {
+                                                            "detail":  "Invalid or reserved tab URL",
+                                                            "ok":  true
+                                                        },
+    "reserved-create view-source:view-source:chrome://ardia/":  {
+                                                                    "detail":  "Invalid or reserved tab URL",
+                                                                    "ok":  true
+                                                                },
+    "reserved-create http://[not a host":  {
+                                               "detail":  "Invalid or reserved tab URL",
+                                               "ok":  true
+                                           },
+    "reserved-create not a url at all":  {
+                                             "detail":  "Invalid or reserved tab URL",
+                                             "ok":  true
+                                         },
+    "reserved-tab-urls-refused":  {
+                                      "detail":  "12 of 12 refused; pages: file:///C:/pilot/form.html?bridge",
+                                      "ok":  true
+                                  },
+    "reserved-url-loads-no-profile":  {
+                                          "detail":  "Ardia reservedprofile on disk: False; profile folders Ardia default -\u003e Ardia default",
+                                          "ok":  true
+                                      },
+    "reserved-load \u0027javascript:document.title=\"owned\"\u0027":  {
+                                                                          "detail":  "Invalid or reserved URL",
+                                                                          "ok":  true
+                                                                      },
+    "reserved-load \u0027chrome://ardia/\u0027":  {
+                                                      "detail":  "Invalid or reserved URL",
+                                                      "ok":  true
+                                                  },
+    "reserved-load \u0027ArDiA://ardia/\u0027":  {
+                                                     "detail":  "Invalid or reserved URL",
+                                                     "ok":  true
+                                                 },
+    "reserved-load \u0027view-source:chrome://ardia/\u0027":  {
+                                                                  "detail":  "Invalid or reserved URL",
+                                                                  "ok":  true
+                                                              },
+    "reserved-load \u0027\u0027":  {
+                                       "detail":  "Invalid or reserved URL",
+                                       "ok":  true
+                                   },
+    "reserved-navigation-refused":  {
+                                        "detail":  "5 of 5 refused; page still at file:///C:/pilot/form.html?bridge, title \u0027Pilot form\u0027",
+                                        "ok":  true
+                                    },
+    "wrong-claim-cannot-navigate":  {
+                                        "detail":  "answer {\"ok\":false,\"e\":\"No owned live tab\"}",
+                                        "ok":  true
+                                    },
+    "loadurl-without-a-list-does-nothing":  {
+                                                "detail":  "answer {\"ok\":true,\"r\":null}; pages: file:///C:/pilot/form.html?bridge",
+                                                "ok":  true
+                                            },
+    "valid-navigation-reaches-the-sink":  {
+                                              "detail":  "answer {\"ok\":true,\"r\":null}; pages: file:///C:/pilot/form.html?loaded",
+                                              "ok":  true
+                                          },
+    "valid-create-after-hostile-input":  {
+                                             "detail":  "pages: file:///C:/pilot/form.html?second | file:///C:/pilot/form.html?loaded",
+                                             "ok":  true
+                                         }
+}
