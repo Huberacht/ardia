@@ -15,13 +15,13 @@ final class WebVideoFloat {
   private var observer: NSObjectProtocol?
   private var departure = 0
 
-  init(shownWebView: @escaping @MainActor () -> WKWebView?, report: @escaping @MainActor (Outcome) -> Void) {
+  init(liveWebViews: @escaping @MainActor () -> [WKWebView], report: @escaping @MainActor (Outcome) -> Void) {
     observer = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-      MainActor.assumeIsolated { self?.leftForeground(shownWebView, report) }
+      MainActor.assumeIsolated { self?.leftForeground(liveWebViews, report) }
     }
   }
 
-  private func leftForeground(_ shownWebView: @escaping @MainActor () -> WKWebView?, _ report: @escaping @MainActor (Outcome) -> Void) {
+  private func leftForeground(_ liveWebViews: @escaping @MainActor () -> [WKWebView], _ report: @escaping @MainActor (Outcome) -> Void) {
     departure += 1
     guard Self.isPresentingWebVideo else { return }
     report(.floated)
@@ -29,7 +29,7 @@ final class WebVideoFloat {
     Task { @MainActor [weak self] in
       try? await Task.sleep(for: .seconds(Self.keptPlayingCheck))
       guard let self, self.departure == departed, UIApplication.shared.applicationState == .background, Self.isPresentingWebVideo,
-            let webView = shownWebView(), await Self.isPlaying(webView),
+            await Self.anyPlaying(liveWebViews()),
             self.departure == departed, UIApplication.shared.applicationState == .background else { return }
       report(.keptPlaying)
     }
@@ -42,6 +42,11 @@ final class WebVideoFloat {
       .contains { window in
         !window.isHidden && window.rootViewController?.children.contains { $0 is AVPlayerViewController } == true
       }
+  }
+
+  private static func anyPlaying(_ webViews: [WKWebView]) async -> Bool {
+    for webView in webViews where await isPlaying(webView) { return true }
+    return false
   }
 
   private static func isPlaying(_ webView: WKWebView) async -> Bool {
@@ -72,12 +77,11 @@ private final class FirstAnswer: Sendable {
 }
 
 extension PhonePages {
-  func shownWebView() -> WKWebView? {
-    engine.tabs.selectedTabID.flatMap(engine.existingWebTab)?.webView
+  func liveWebViews() -> [WKWebView] {
+    tabIDs.values.compactMap(engine.existingWebTab).compactMap(\.webView)
   }
 
   func webVideoLeftForeground(_ outcome: WebVideoFloat.Outcome) {
-    let shown = engine.tabs.selectedTabID
-    pageSink?(["name": "pages.webVideo", "outcome": outcome.rawValue, "isPrivate": shown.map(engine.tabs.isPrivate) ?? false])
+    pageSink?(["name": "pages.webVideo", "outcome": outcome.rawValue, "isPrivate": !engine.tabs.privateTabs.isEmpty])
   }
 }
