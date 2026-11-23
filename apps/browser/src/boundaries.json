@@ -1801,6 +1801,19 @@
    "detected": false
   },
   {
+   "id": "windows-webui-platform:desktopPlatform",
+   "source": "frame",
+   "guard": "Windows WebUI host (--ardia-shell=webui): only the trusted shell document's ardiaRequest reaches ardia::desktop::Platform(); ArdiaApp.openExternalURL takes exactly one string, refuses control characters, quotes, more than 32 KB, unparsable URLs, file, javascript, data, view-source, chrome, shell, ms-msdt, search-ms, ms-settings and the other denied schemes and web URLs without a host before ShellExecuteExW sees the canonical spec, and does nothing in a background instance; setLaunchAtLogin takes one boolean and writes only HKCU Run 'Ardia WebUI' as the quoted executable path (refusing a path with quotes or control characters) plus --ardia-shell=webui, never RNW's 'Ardia' value; the default browser calls take no arguments and only open ms-settings:defaultapps; DPAPI secrets accept account names of 1-64 [A-Za-z0-9_-] only, live under the WebUI data folder's Sync, are bound to the ardia-sync-key/v1 purpose and instance, and are zeroed after use; scripts/windows/webui-pilot/bridge.ps1 sends the hostile cases in a Windows guest",
+   "checks": [
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#ExternalUrlAllowed",
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#InvokeOpenExternal",
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#LoginItemCommand",
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#SecretAccountAllowed",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#CapabilityFor"
+   ],
+   "detected": false
+  },
+  {
    "id": "native-monitor:pinchFromOtherApp",
    "source": "other-app",
    "guard": "A magnify event seen while another app is in front only resizes a Picture in Picture window: the monitor exists only while Ardia is inactive with a zoomable window, a missing CGEvent falls back to the mouse location, a non-finite or far-off pointer is refused before hit-testing, the window must be the topmost under the pointer, and a non-finite or huge magnification becomes a factor between 0.05 and 4 before the clamped, finite-checked resize",
