@@ -39,7 +39,11 @@ export function pngImage(base64: string): { uri: string; width: number; height: 
 const later = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export const faviconCalls: Handlers = {
-  peek: (args, engine) => passed(engine, "ac_favicons_get", args.profile, args.json),
+  peek: (args, engine) =>
+    passed(engine, "ac_favicons_peek", args.profile, args.json).catch((error: unknown) => {
+      if (error instanceof Error && error.message === "unknown call") return passed(engine, "ac_favicons_get", args.profile, args.json);
+      throw error;
+    }),
   fetch: async (args, engine) => {
     const url = args.text("url");
     if (url.startsWith(PNG_DATA)) return ok(pngImage(url.slice(PNG_DATA.length)));
