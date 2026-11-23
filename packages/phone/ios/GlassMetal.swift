@@ -144,6 +144,12 @@ enum GlassSources {
     return holds
   }
 
+  static func page(in view: UIView) -> WKWebView? {
+    if view.isHidden || view.alpha <= 0 { return nil }
+    if let web = view as? WKWebView { return web.bounds.width > 0 && web.bounds.height > 0 ? web : nil }
+    return view.subviews.lazy.compactMap(page).max { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }
+  }
+
   private static func walkForPage(_ view: UIView) -> Bool {
     if view.isHidden || view.alpha <= 0 { return false }
     if view is WKWebView { return view.bounds.width > 0 && view.bounds.height > 0 }

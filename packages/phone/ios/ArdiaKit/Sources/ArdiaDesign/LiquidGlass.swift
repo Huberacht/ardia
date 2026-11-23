@@ -88,7 +88,7 @@ public enum LiquidGlassRules {
   public static let darkRimShare = 0.7
   public static let minLowResBlur = 6.0
   public static let maxFrostScale = 8.0
-  public static let idleRefresh: TimeInterval = 0.5
+  public static let idleRefresh: TimeInterval = 3
   public static let pageCheckInterval: TimeInterval = 0.25
   public static let settleFrames = 2
   public static let pressedLight = 0.08
@@ -154,8 +154,8 @@ public enum LiquidGlassRules {
     return pick(.live, "no page under the glass")
   }
 
-  public static let budgetSamples = 30
-  public static let captureBudgetMs = 4.0
+  public static let budgetWindow: TimeInterval = 2
+  public static let captureBudgetShare = 0.12
 
   public static func median(_ samples: [Double]) -> Double {
     guard !samples.isEmpty else { return 0 }
@@ -164,9 +164,25 @@ public enum LiquidGlassRules {
     return sorted.count % 2 == 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
   }
 
-  public static func overBudget(captureMs: [Double]) -> Bool {
-    guard captureMs.count >= budgetSamples else { return false }
-    return median(captureMs) > captureBudgetMs
+  public struct CaptureSample: Equatable, Sendable {
+    public var at: TimeInterval
+    public var ms: Double
+
+    public init(at: TimeInterval, ms: Double) {
+      self.at = at
+      self.ms = ms
+    }
+  }
+
+  public static func recentSamples(_ samples: [CaptureSample], now: TimeInterval) -> [CaptureSample] {
+    samples.filter { now - $0.at <= budgetWindow }
+  }
+
+  public static func overBudget(_ samples: [CaptureSample], now: TimeInterval) -> Bool {
+    let recent = recentSamples(samples, now: now)
+    guard let first = recent.first, now - first.at >= budgetWindow * 0.75 else { return false }
+    let spent = recent.reduce(0) { $0 + $1.ms }
+    return spent > budgetWindow * 1000 * captureBudgetShare
   }
 
   public static func acceptsCapture(_ path: Path) -> Bool { path == .live }

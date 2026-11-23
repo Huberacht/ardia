@@ -143,11 +143,15 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.backdrop(hasSource: false, insideSource: false) == .beneath)
   }
 
-  @Test func `a capture is over budget when its median of the last 30 passes 4 ms`() {
-    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 9, count: 29)))
-    #expect(LiquidGlassRules.overBudget(captureMs: Array(repeating: 4.5, count: 30)))
-    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 1, count: 16) + Array(repeating: 20, count: 14)))
-    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 4, count: 30)))
+  @Test func `a capture is over budget only when it keeps the main thread busy for two seconds`() {
+    func samples(every gap: Double, ms: Double, for seconds: Double) -> [LiquidGlassRules.CaptureSample] {
+      stride(from: 0.0, through: seconds, by: gap).map { LiquidGlassRules.CaptureSample(at: $0, ms: ms) }
+    }
+    #expect(LiquidGlassRules.overBudget(samples(every: 1.0 / 60, ms: 12, for: 2), now: 2))
+    #expect(!LiquidGlassRules.overBudget(samples(every: 3, ms: 30, for: 9), now: 9))
+    #expect(!LiquidGlassRules.overBudget(samples(every: 1.0 / 60, ms: 12, for: 1), now: 1), "a one second burst is not enough")
+    #expect(!LiquidGlassRules.overBudget(samples(every: 1.0 / 60, ms: 1.5, for: 2), now: 2))
+    #expect(LiquidGlassRules.recentSamples(samples(every: 1, ms: 5, for: 10), now: 10).count == 3)
   }
 
   @Test func `the render reported at launch is the best the phone can draw`() {
@@ -193,8 +197,6 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.median([3]) == 3)
     #expect(LiquidGlassRules.median([1, 9, 2]) == 2)
     #expect(LiquidGlassRules.median([1, 2, 6, 9]) == 4)
-    #expect(LiquidGlassRules.overBudget(captureMs: Array(repeating: 3, count: 15) + Array(repeating: 5.2, count: 15)))
-    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 3, count: 15) + Array(repeating: 4.8, count: 15)))
   }
 
   @Test func `a glass takes captures only while it refracts, and a failed one backs off`() {

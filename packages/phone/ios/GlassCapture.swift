@@ -132,7 +132,7 @@ enum GlassBackdrop {
 
 @MainActor
 enum GlassProbe {
-  private static var ownAlpha: [GlassLaunch.Capture: Bool] = [.hierarchy: false, .layer: false]
+  private static var ownAlpha: [GlassLaunch.Capture: Bool] = [.hierarchy: true, .layer: true]
 
   static func appliesOwnAlpha(_ method: GlassLaunch.Capture) -> Bool { ownAlpha[method] ?? false }
 
@@ -182,25 +182,33 @@ final class GlassCapture {
   private var poolSize: (Int, Int) = (0, 0)
   private var output: MTLTexture?
   private(set) var lastMs = 0.0
-  private var recentMs: [Double] = []
+  private var samples: [LiquidGlassRules.CaptureSample] = []
+  let page = GlassPageShot()
 
-  var overBudget: Bool { LiquidGlassRules.overBudget(captureMs: recentMs) }
+  func overBudget(now: CFTimeInterval) -> Bool { LiquidGlassRules.overBudget(samples, now: now) }
+
+  private(set) var signatureValue = 0
 
   func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect) {
     var hasher = Hasher()
     var budget = 4000
     hasher.combine(wanted.minX.rounded())
     hasher.combine(wanted.minY.rounded())
+    hasher.combine(wanted.width.rounded())
+    hasher.combine(wanted.height.rounded())
     for piece in pieces {
       for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
       if let view = piece.view { Self.walk(view.layer, into: &hasher, budget: &budget) }
     }
     let value = hasher.finalize()
+    signatureValue = value
     if value != signature {
       signature = value
       settle = LiquidGlassRules.settleFrames
     }
   }
+
+  var isIdle: Bool { settle == 0 }
 
   func wants(_ wanted: CGRect, now: CFTimeInterval) -> Bool {
     if now < retryAt { return false }
@@ -245,12 +253,12 @@ final class GlassCapture {
     capturedAt = now
     settle = max(settle - 1, 0)
     lastMs = (CACurrentMediaTime() - started) * 1000
-    recentMs.append(lastMs)
-    if recentMs.count > LiquidGlassRules.budgetSamples { recentMs.removeFirst(recentMs.count - LiquidGlassRules.budgetSamples) }
+    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: lastMs)]
     return .captured
   }
 
   func release() {
+    page.release()
     texture = nil
     output = nil
     rect = .null
@@ -354,3 +362,69 @@ final class GlassCapture {
     for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget) }
   }
 }
+
+@MainActor
+final class GlassPageShot {
+  static let reach: CGFloat = 320
+
+  private(set) var image: CGImage?
+  private var rect: CGRect = .null
+  private var offset: CGPoint = .zero
+  private var zoom: CGFloat = 1
+  private var pending = false
+  private var requestedSignature: Int?
+  private var requestedAt: CFTimeInterval = 0
+  private(set) var latencies: [Double] = []
+
+  func request(_ web: WKWebView, pixelsPerPoint: CGFloat, signature: Int, now: CFTimeInterval) {
+    guard !pending else { return }
+    guard image == nil || signature != requestedSignature || now - requestedAt > LiquidGlassRules.idleRefresh else { return }
+    pending = true
+    requestedSignature = signature
+    requestedAt = now
+    let rect = web.bounds.insetBy(dx: 0, dy: -Self.reach)
+    let configuration = WKSnapshotConfiguration()
+    configuration.rect = rect
+    configuration.afterScreenUpdates = false
+    configuration.snapshotWidth = NSNumber(value: Double(rect.width * pixelsPerPoint / max(web.traitCollection.displayScale, 1)))
+    let offset = web.scrollView.contentOffset
+    let zoom = web.scrollView.zoomScale
+    let started = CACurrentMediaTime()
+    web.takeSnapshot(with: configuration) { [weak self] image, _ in
+      MainActor.assumeIsolated {
+        guard let self else { return }
+        self.pending = false
+        guard let picture = image?.cgImage else { return }
+        self.image = picture
+        self.rect = rect
+        self.offset = offset
+        self.zoom = zoom
+        if PhoneTestBuild.isOn { self.latencies.append((CACurrentMediaTime() - started) * 1000) }
+      }
+    }
+  }
+
+  func takeLatencies() -> [Double] {
+    defer { latencies.removeAll() }
+    return latencies
+  }
+
+  func draw(_ web: WKWebView, transform: CGAffineTransform, in context: CGContext) -> Bool {
+    guard let image, web.scrollView.zoomScale == zoom else { return false }
+    let shift = CGPoint(x: web.scrollView.contentOffset.x - offset.x, y: web.scrollView.contentOffset.y - offset.y)
+    context.saveGState()
+    defer { context.restoreGState() }
+    context.concatenate(transform)
+    context.setFillColor((web.underPageBackgroundColor ?? .white).resolvedColor(with: web.traitCollection).cgColor)
+    context.fill(web.bounds)
+    UIImage(cgImage: image).draw(in: rect.offsetBy(dx: -shift.x, dy: -shift.y))
+    return true
+  }
+
+  func release() {
+    image = nil
+    rect = .null
+    requestedSignature = nil
+  }
+}
+

@@ -2,6 +2,7 @@ import ArdiaDesign
 import Metal
 import QuartzCore
 import UIKit
+import WebKit
 
 @MainActor
 final class GlassFrames: NSObject {
@@ -187,25 +188,40 @@ final class GlassFrames: NSObject {
     }
     wanted = wanted.intersection(space.bounds)
     guard !wanted.isNull, !wanted.isEmpty else { return }
+    let method = GlassLaunch.capture
     let pieces: [GlassLayerPiece]
+    let web: WKWebView?
     if members[0].backdropMode == .beneath, let root = members[0].backdropRoot {
       pieces = GlassBackdrop.pieces(under: members[0], root: root, covering: wanted)
+      web = nil
     } else {
+      wanted = space.bounds
       pieces = [GlassLayerPiece(view: space, transform: .identity, bounds: space.bounds, radius: 0, fill: nil, alpha: 1, clips: [])]
+      web = method == .none ? nil : GlassSources.page(in: space)
     }
     capture.survey(pieces, rect: wanted)
+    if let web { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, signature: capture.signatureValue, now: now) }
     guard capture.wants(wanted, now: now) else { return }
-    let method = GlassLaunch.capture
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
+      if let web {
+        if let fill = space.layer.backgroundColor {
+          context.setFillColor(fill)
+          context.fill(space.bounds)
+        }
+        return capture.page.draw(web, transform: GlassBackdrop.transform(of: web.layer, to: space.layer), in: context)
+      }
       var drew = true
       for piece in pieces where !GlassBackdrop.draw(piece, method: method, in: context) { drew = false }
       return drew
     }
     switch outcome {
     case .captured:
-      if PhoneTestBuild.isOn { stats.noteCapture(ms: capture.lastMs, pieces: pieces.count) }
-      if capture.overBudget, !overBudget.contains(owner) {
+      if PhoneTestBuild.isOn {
+        stats.noteCapture(ms: capture.lastMs, pieces: pieces.count)
+        stats.snapshotMs += capture.page.takeLatencies()
+      }
+      if capture.overBudget(now: now), !overBudget.contains(owner) {
         overBudget.add(owner)
         PendingCounts.add(PendingCounts.glassCapturesOverBudget)
         NSLog("PAGELAB look glass capture over budget: %@ falls back to its fill until the app returns", members.map(\.label).joined(separator: ","))
@@ -230,6 +246,7 @@ final class GlassFrames: NSObject {
     var captures = 0
     var pieces = 0
     var captureMs: [Double] = []
+    var snapshotMs: [Double] = []
     var tickMs: [Double] = []
     var since: CFTimeInterval = 0
 
@@ -252,7 +269,7 @@ final class GlassFrames: NSObject {
     mutating func report(now: CFTimeInterval, surfaces: Int) -> String? {
       if since == 0 { since = now }
       guard now - since >= 1, frames > 0 else { return nil }
-      let line = String(format: "PAGELAB glass frames method=%@ surfaces=%d frames=%d late=%d dropped=%d worst_frame_ms=%.1f captures=%d failed=%d pieces_avg=%.1f capture_ms_p50=%.2f capture_ms_max=%.2f tick_ms_p50=%.2f tick_ms_max=%.2f", GlassLaunch.capture.rawValue, surfaces, frames, late, dropped, worstInterval * 1000, captures, failed, captures > 0 ? Double(pieces) / Double(captures) : 0, LiquidGlassRules.median(captureMs), captureMs.max() ?? 0, LiquidGlassRules.median(tickMs), tickMs.max() ?? 0)
+      let line = String(format: "PAGELAB glass frames method=%@ surfaces=%ld frames=%ld late=%ld dropped=%ld worst_frame_ms=%.1f captures=%ld failed=%ld snapshots=%ld snapshot_ms_p50=%.1f pieces_avg=%.1f capture_ms_p50=%.2f capture_ms_max=%.2f tick_ms_p50=%.2f tick_ms_max=%.2f", GlassLaunch.capture.rawValue, surfaces, frames, late, dropped, worstInterval * 1000, captures, failed, snapshotMs.count, LiquidGlassRules.median(snapshotMs), captures > 0 ? Double(pieces) / Double(captures) : 0, LiquidGlassRules.median(captureMs), captureMs.max() ?? 0, LiquidGlassRules.median(tickMs), tickMs.max() ?? 0)
       self = FrameStats()
       since = now
       return line
