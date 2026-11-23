@@ -326,3 +326,38 @@ test("Browser Layout menu bar commands switch tab placement in one pick, gate Co
   runCommand({ command: "togglePinnedFold", arg: null, windowId: w });
   assert.equal(menuState(S()).titles.togglePinnedFold, undefined);
 });
+
+test("Little Ardia direct command dispatch ignores Browser Layout commands", async () => {
+  const { runCommand } = await import("./commands.ts");
+  S().hydrate({});
+  const main = S().createWindow({ url: "https://a.example/" });
+  const tabId = model.activeTabId(S(), main);
+  S().pinTabs([tabId], true, true);
+  const small = S().createWindow({ kind: "small", url: "https://little.example/" });
+  S().setFocusedWindow(small);
+  runCommand({ command: "setTabLayout", arg: "top", windowId: small });
+  runCommand({ command: "setTabLayout", arg: "sidebarRight", windowId: small });
+  runCommand({ command: "toggleCompactToolbar", arg: null, windowId: small });
+  runCommand({ command: "togglePinnedFold", arg: null, windowId: small });
+  runCommand({ command: "toggleMinimalism", arg: null, windowId: small });
+  assert.equal(model.tabLayoutOf(S(), main), "sidebar");
+  assert.equal(S().settings.sidebarSide, "left");
+  assert.equal(S().settings.compactToolbar, false);
+  assert.equal(S().settings.minimalismMode, false);
+  assert.equal(!!S().profiles.default.pinnedCollapsed, false);
+});
+
+test("Collapse Pinned Tabs stays disabled when a pinned group holds only a hidden empty tab", async () => {
+  const { pinnedFoldMenuItem } = await import("../sidebar/pinnedFold.ts");
+  S().hydrate({});
+  S().updateSettings({ newTabOpens: "commandBar" });
+  const w = S().createWindow({ url: "https://a.example/" });
+  const blank = S().newTab(w, { url: "", background: true });
+  S().groupTabs([blank], { name: "Empty", pinned: true });
+  S().setFocusedWindow(w);
+  assert.deepEqual(pinnedFoldMenuItem(S(), w), []);
+  assert.ok(menuState(S()).disabled.includes("togglePinnedFold"));
+  S().updateTab(blank, { url: "https://real.example/" });
+  assert.equal(pinnedFoldMenuItem(S(), w).length, 1);
+  assert.ok(!menuState(S()).disabled.includes("togglePinnedFold"));
+});

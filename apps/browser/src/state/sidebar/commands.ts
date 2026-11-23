@@ -2,6 +2,7 @@ import type { BrowserCommand } from "../../platform/commands";
 import type { MenuEntry } from "../../platform/menus";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { activeTabId, isPinnedRow, pinSection, plural, tabLayoutOf } from "../browser/model";
+import { groupIndex } from "../browser/structure";
 import { live } from "../live/store";
 import { recentlyClosedIn } from "../windows/recentlyClosedList";
 import { awayFromPin, selectedTabIds } from "../pins/organize";
@@ -9,6 +10,7 @@ import { groupOf } from "../pins/tabGrouping";
 import { newGroupWithSelection, openIconPicker, startRename } from "./actions";
 import { cleanUpWithUndo, closeAllTabs } from "./clearTabs";
 import { toggleNewTabBar } from "../omnibox/newTabBar";
+import { hiddenEmptyCard, newTabOpensBar } from "../omnibox/newTabBarPolicy";
 import { movePinnedTitle, togglePinnedRows } from "./movePinned";
 import { PINNED_FOLD_TITLES, pinnedCollapsed, togglePinnedFold } from "./pinnedFold";
 import { setSidebarUi } from "./sidebarUi";
@@ -17,14 +19,15 @@ import { switcherStep } from "./switcher";
 
 function hasCollapsiblePinned(s: BrowserState, w: BrowserState["windows"][string] | undefined): boolean {
   if (!w || !s.profiles[w.profileId] || tabLayoutOf(s, w.id) !== "sidebar") return false;
+  if (w.kind !== "private" && live().folderOrder.some((id) => live().folders[id]?.profileId === w.profileId)) return true;
+  const rootGroups = groupIndex(s.groups);
+  const hideEmpty = newTabOpensBar(s);
   for (const id of w.tabIds) {
     const t = s.tabs[id];
-    if (t && t.profileId === w.profileId && isPinnedRow(t)) return true;
+    if (!t || t.profileId !== w.profileId) continue;
+    if (isPinnedRow(t)) return true;
+    if (!t.pin && rootGroups.get(id)?.pinned && (!hideEmpty || !hiddenEmptyCard(s, t))) return true;
   }
-  for (const g of Object.values(s.groups)) {
-    if (g.pinned && !g.parentId && g.profileId === w.profileId && g.tabIds.length > 0) return true;
-  }
-  if (w.kind !== "private" && live().folderOrder.some((id) => live().folders[id]?.profileId === w.profileId)) return true;
   return false;
 }
 

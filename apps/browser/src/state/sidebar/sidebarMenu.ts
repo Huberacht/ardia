@@ -29,9 +29,9 @@ export function browserLayoutItems(s: BrowserState, windowId: string): MenuItem[
   const addressInToolbar = !minimal && (!inSidebar || s.settings.addressBar === "toolbar");
   return sections(
     [
-      { id: "layout:sidebarLeft", title: "Sidebar on Left", symbol: "sidebar.left", checked: inSidebar && !right },
-      { id: "layout:sidebarRight", title: "Sidebar on Right", symbol: "sidebar.right", checked: inSidebar && right },
-      { id: "layout:top", title: "Top Tab Bar", symbol: "menubar.rectangle", checked: !inSidebar, ...menuShortcut("toggleTabLayout", s) },
+      { id: "layout:sidebarLeft", title: "Sidebar on Left", symbol: "sidebar.left", checked: inSidebar && !right, ...(!inSidebar && !right ? menuShortcut("toggleTabLayout", s) : {}) },
+      { id: "layout:sidebarRight", title: "Sidebar on Right", symbol: "sidebar.right", checked: inSidebar && right, ...(!inSidebar && right ? menuShortcut("toggleTabLayout", s) : {}) },
+      { id: "layout:top", title: "Top Tab Bar", symbol: "menubar.rectangle", checked: !inSidebar, ...(inSidebar ? menuShortcut("toggleTabLayout", s) : {}) },
     ],
     [
       inSidebar && !minimal && { id: "layout:addressToolbar", title: "Address Bar in Toolbar", symbol: "menubar.rectangle", checked: s.settings.addressBar === "toolbar" },

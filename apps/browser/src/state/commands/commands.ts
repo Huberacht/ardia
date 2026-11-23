@@ -70,6 +70,19 @@ import { runLittleArdiaCommand } from "./littleArdiaCommands";
 
 const newOrId = (arg: string) => (arg === "new" ? null : arg);
 
+const LITTLE_ARDIA_BLOCKED_LAYOUT: ReadonlySet<string> = new Set([
+  "setTabLayout",
+  "toggleTabLayout",
+  "toggleSidebarSide",
+  "toggleSidebar",
+  "toggleAddressBar",
+  "toggleCompactToolbar",
+  "toggleMinimalism",
+  "setBookmarksBar",
+  "toggleBookmarksBar",
+  "togglePinnedFold",
+]);
+
 export class NoCommandWindowError extends Error {}
 
 export function runCommand({ command, arg, windowId: given }: CommandEvent, { strictWindow = false, tabId: targetTab = null, mayWrite }: { strictWindow?: boolean; tabId?: string | null; mayWrite?: () => boolean } = {}) {
@@ -92,7 +105,8 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
   const requested = target.invokedFrom;
   const targeted = target.targeted;
   const invokedWindow = s.windows[resolveWindowId(s, requested) ?? ""];
-  if ((command === "setBookmarksBar" || command === "toggleBookmarksBar") && (invokedWindow?.kind === "private" || invokedWindow?.kind === "small")) return;
+  if (invokedWindow?.kind === "small" && LITTLE_ARDIA_BLOCKED_LAYOUT.has(command)) return;
+  if ((command === "setBookmarksBar" || command === "toggleBookmarksBar") && invokedWindow?.kind === "private") return;
   if (command === "toggleCompactToolbar" && (s.settings.minimalismMode || (invokedWindow && tabLayoutOf(s, invokedWindow.id) === "sidebar" && s.settings.addressBar === "sidebar"))) return;
   const settings = settingChange(command, arg, s.settings);
   if (settings) return s.updateSettings(settings);

@@ -340,12 +340,15 @@ test("Browser Layout moves the tabs between the sides and the top in one pick, a
   const layout = () => sub(sidebarMenuItems(S(), w), "browserLayout");
   runBrowserLayoutChoice(w, "layout:top");
   assert.equal(tabLayoutOf(S(), w), "top");
-  assert.ok(layout().includes("Top Tab Bar [menubar.rectangle] ⇧⌘S ✓"));
+  assert.ok(layout().includes("Top Tab Bar [menubar.rectangle] ✓"));
+  assert.ok(layout().includes("Sidebar on Left [sidebar.left] ⇧⌘S"), "the layout toggle shortcut moves to the layout it switches to");
   assert.ok(!layout().some((l) => l.startsWith("Address Bar in")), "with tabs on top the address bar is in the toolbar");
   assert.ok(layout().includes("Compact Toolbar [rectangle.compress.vertical]"));
   runBrowserLayoutChoice(w, "layout:sidebarRight");
   assert.equal(tabLayoutOf(S(), w), "sidebar");
   assert.equal(S().settings.sidebarSide, "right");
+  runBrowserLayoutChoice(w, "layout:top");
+  assert.ok(layout().includes("Sidebar on Right [sidebar.right] ⇧⌘S"));
   runBrowserLayoutChoice(w, "layout:sidebarLeft");
   assert.equal(S().settings.sidebarSide, "left");
   assert.equal(tabLayoutOf(S(), w), "sidebar");
