@@ -93,7 +93,7 @@ test("on iPhone's design, scrolling down with Collapse Bottom Bar on shrinks the
   const bar = moved(host(root, "floatingBarFold")!);
   expect(bar.opacity).toBe(android ? 0 : 1);
   expect(moved(host(root, "floatingBarFoldGlyphs")!).opacity).toBe(android ? 1 : 0);
-  for (const id of ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"]) expect(barGlass(root, id)).toBe(android);
+  for (const id of ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"]) expect(barGlass(root, id)).toBe(false);
   expect(bar.scale).toBeCloseTo(0.62, 3);
   expect(bar.translateY).toBeCloseTo(24 * 0.38, 3);
   expect(host(root, "floatingBarFold")!.props.pointerEvents).toBe("none");
@@ -264,6 +264,30 @@ test("the 30 point pill reaches the 44 point touch target without growing: a tap
   act(() => reachPress.props.onPress());
   settle();
   expect(host(root, "floatingBarFold")!.props.pointerEvents).toBe("box-none");
+  unmount(root);
+});
+
+test("on Android a fold's glass stays through the crossfade and leaves once the fold settles, so the hidden bar or pill samples nothing", () => {
+  if (!android) return;
+  const root = page("redesigned");
+  const pillShown = () => root.root.findAll((node) => node.props.testID === "hostPill" && node.props.shown !== undefined && typeof node.type !== "string")[0]!.props.shown;
+  const bars = () => ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"].map((id) => barGlass(root, id));
+  expect(pillShown()).toBe(false);
+  expect(bars()).toEqual([true, true, true]);
+  scrolled("down");
+  act(() => jest.advanceTimersByTime(16));
+  expect(pillShown()).toBe(true);
+  expect(bars()).toEqual([true, true, true]);
+  settle();
+  expect(pillShown()).toBe(true);
+  expect(bars()).toEqual([false, false, false]);
+  scrolled("up");
+  act(() => jest.advanceTimersByTime(16));
+  expect(pillShown()).toBe(true);
+  expect(bars()).toEqual([true, true, true]);
+  settle();
+  expect(pillShown()).toBe(false);
+  expect(bars()).toEqual([true, true, true]);
   unmount(root);
 });
 
