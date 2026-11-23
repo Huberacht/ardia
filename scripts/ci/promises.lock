@@ -66,7 +66,7 @@ issue	hash	file	test
 956	e572c37f61531cb7	apps/browser/src/platform/pageScriptDrm.test.mjs	an access whose keys can't be created counts as a refusal, so stalled playback prompts
 956	6440ddb37b45c4a2	apps/browser/src/platform/pageScriptDrm.test.mjs	keys that are created, Clear Key's refused keys and a wrong receiver keep the page quiet
 957	f2ecac5aff0915b3	apps/browser/src/state/windows/windowClose.test.mjs	a closing window that gains a new tab before its animation ends stays open and is focused
-957	92983642a3e9f22c	apps/browser/src/state/windows/windowClose.test.mjs	closing two windows that share tabs closes both when the ${order} one's animation ends first
+957	97cda0342bf384d7	apps/browser/src/state/windows/windowClose.test.mjs	closing two windows that share tabs closes both when the ${order} one's animation ends first
 965	f1af45bb90ce896f	apps/browser/src/state/automation/controlSocket.test.mjs	the pill names the app that runs the command, the most recent one, and forgets it once it hides
 970	af82d340108f4f68	apps/browser/src/state/drag/newTabDrop.test.mjs	a drop with nothing usable leaves the New Tab page as it was
 970	f58c2e2c19f10eca	apps/browser/src/state/drag/newTabDrop.test.mjs	a link dropped on a New Tab page navigates it, and text searches
@@ -85,7 +85,7 @@ issue	hash	file	test
 1190	f655e60f86e99956	apps/browser/src/state/tabs/tabs.test.mjs	a tab opened behind joins the ⌃Tab order only once it is shown, so ⌃Tab still returns to the tab before (#1190)
 1192	28bf5dbc850cc09b	apps/browser/src/components/window/dockMotion.test.mjs	while the peek slides away only the window's edge brings it back, not the column it is leaving (#1192)
 1197	dd246ab55f5204e1	apps/browser/src/state/sync/profileRemoval.test.mjs	a profile deleted on the only Mac can be removed from sync: its records go, and no Mac is offered it again (#1197, #1175)
-1239	2b8661d7fb498a04	apps/browser/src/state/windows/sidebarFieldPlace.test.mjs	the address panel's anchor follows the sidebar field when the sidebar changes side or the window is resized, on ${name} (#2021, #1239)
+1239	0864cecf30371cbb	apps/browser/src/state/windows/sidebarFieldPlace.test.mjs	the address panel's anchor follows the sidebar field when the sidebar changes side or the window is resized, on ${name} (#2021, #1239)
 1301	87427c3db87b0d1b	apps/browser/src/state/windows/toolbarAutoHide.test.mjs	a scroller that snaps vertically and mandatorily (a Shorts or Reels feed) never reports down (#1301)
 1454	5ed56f65501a040c	apps/browser/src/state/tabs/popupsOpenAsTabs.test.mjs	a ⇧-clicked link that asks for a new window opens as a Peek when ⇧ is the Peek key, from frames the page script can't reach (#1454)
 1630	d789bc3985d65b0d	apps/browser/src/components/window/dockMotion.test.mjs	the slide is an ease-in-out over 200 ms that never passes its final width (#1630: an overshoot laid pages out too wide and back)
@@ -164,5 +164,5 @@ issue	hash	file	test
 3528	fe11d5a673b7a83e	apps/browser/src/components/tabstrip/stripWidths.test.mjs	closing the last tab while the pointer stays widens the new last tab into the freed room, so its × is under the pointer and the left edge stays put
 3562	ae49d1c8c48d95d1	apps/browser/src/state/reader/readerPage.test.mjs	the reader page draws no text size or font controls, and nothing it draws changes the look
 3588	ad2b5cdf87c4f8bd	apps/linux/src/readerService.test.mjs	every browser window starts the shared reader service, as the Mac app does
-3631	4f0b4dc64419d868	apps/browser/src/components/window/dockMotion.test.mjs	${arc ? "Arc's" : "Dia's"} layout: the peek usePeek starts slides in on an ease-out over 150 ms that never passes its final width or pulls back (#3631: Arc's 1.5 % overshoot detached the panel from the window's edge)
+3631	cda635e9398a7543	apps/browser/src/components/window/dockMotion.test.mjs	${arc ? "Arc's" : "Dia's"} layout: the peek usePeek starts slides in on an ease-out over 150 ms that never passes its final width or pulls back (#3631: Arc's 1.5 % overshoot detached the panel from the window's edge)
 3649	848a05e22c2b4b62	apps/browser/src/platform/commandBarFieldEditor.test.mjs	the command bar's field editor keeps its undo to its own editing session, so ⌘Z never reaches a closed field's text

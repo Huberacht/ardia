@@ -44,6 +44,7 @@ test("a test file named by its bare name, outside a code span, inside other code
       "| Row | `import-flow-test.mjs arc` |",
       "| Row | `WindowDragPacingTests` |",
       "| Row | `usage_counts.peek_opens` and `WindowMove.swift` |",
+      "| Row | `test_window_corners.py` |",
     ].join("\n"),
   );
   assert.equal(problems.length, 3);
@@ -51,6 +52,8 @@ test("a test file named by its bare name, outside a code span, inside other code
   assert.match(problems[1], /:3: .* holds a test file among other text/);
   assert.match(problems[2], /:4: .* names a Swift test class/);
   assert.match(check(ROOT, "| Row | `peek.test.mjs` |").problems[0], /not a file in the repo/);
+  assert.match(check(ROOT, "| Row | `test_window_corners.py` |").problems[0], /not a file in the repo/);
+  assert.deepEqual(check(ROOT, "| Row | `engine/ardiacore-linux/tests/test_window_corners.py` |").problems, []);
 });
 
 test("the windowDragPacing JS test the doc used to cite is gone and its row cites the Swift tests that replaced it", () => {

@@ -72,6 +72,29 @@ test("a skipped assertion, a regex after a condition and an elision all change t
   assert.equal(hash("const n = (a + b) / 2; f(n);"), hash("const n = (a + b) / 2;\nf(n);"));
 });
 
+test("a guard or suite option that stops a test registering changes its hash, an unrelated statement before it doesn't", () => {
+  const hash = (source, name) => hashOf(pickTest(findTests("x.test.mjs", source), name).test);
+  const group = 'describe("s", () => {\n  test("t", () => { f(); });\n});\n';
+  assert.notEqual(hash(group.replace('describe("s", ', 'describe("s", { skip: true }, '), "s › t"), hash(group, "s › t"));
+  assert.notEqual(hash('if (false) test("t", () => { f(); });', "t"), hash('test("t", () => { f(); });', "t"));
+  assert.equal(hash(`import a from "a"\nimport "node:path"\n${group}`, "s › t"), hash(`import a from "a"\n${group}`, "s › t"));
+  const loop = 'for (const o of [1]) {\n  test(`t ${o}`, () => { f(o); });\n}\n';
+  assert.equal(hash(`const other = 1\n${loop}`, "t ${o}"), hash(loop, "t ${o}"));
+  assert.equal(hash(group.replace("  test(", '  test("u", () => {});\n  test('), "s › t"), hash(group, "s › t"));
+  const swift = (text) => hashOf(findTests("x.swift", text)[0]);
+  const marked = "@Test func `t`() { f() }\n";
+  assert.notEqual(swift(`#if false\n${marked}#endif\n`), swift(marked));
+  assert.equal(swift(`import Testing\nimport struct Foundation.Date\n@Suite struct S {\n${marked}}\n`), swift(`import Testing\n@Suite struct S {\n${marked}}\n`));
+  assert.notEqual(swift(`@Suite(.disabled())\nstruct S {\n${marked}}\n`), swift(`@Suite\nstruct S {\n${marked}}\n`));
+});
+
+test("a regex opening an interpolation or after x++ is read right, and async before a line break counts", () => {
+  const hash = (body) => hashOf(findTests("x.test.mjs", `test("t", async () => { ${body} });`)[0]);
+  assert.notEqual(hash('const s = `${/[)]/.test(")")}`; g(1);'), hash('const s = `${/[)]/.test(")")}`; g(2);'));
+  assert.notEqual(hash("let x = 8; assert.equal(x++ / 2, 4);"), hash("let x = 8; assert.equal(x++ / 2, 5);"));
+  assert.notEqual(hash("async\nfunction f() {} await f();"), hash("async function f() {} await f();"));
+});
+
 test("a test is found by its name with its whitespace changed, as a template title reformatted", () => {
   const tests = findTests("x.test.mjs", "test(`runs ${n + 1}`, () => {});");
   assert.equal(pickTest(tests, "runs ${n+1}").test?.name, "runs ${n + 1}");
@@ -110,6 +133,9 @@ test("after the element", () => {});
   const before = hashes("x.render.test.tsx", source)["shows the toast"];
   assert.equal(hashes("x.render.test.tsx", source.replace("<View style", "<View\n      style"))["shows the toast"], before);
   assert.notEqual(hashes("x.render.test.tsx", source.replace("Don't", "Do not"))["shows the toast"], before);
+  assert.notEqual(hashes("x.render.test.tsx", source.replace("Don't {count", "Don't  {count"))["shows the toast"], before);
+  assert.notEqual(hashes("x.render.test.tsx", source.replace("flex: 1", "flex: 2"))["shows the toast"], before);
+  assert.equal(hashes("x.render.test.tsx", source.replace("</Text>\n  </View>", "</Text></View>"))["shows the toast"], before);
 });
 
 test("Swift tests are XCTest test methods and @Test functions, raw strings and interpolation included", () => {

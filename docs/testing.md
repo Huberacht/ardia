@@ -75,7 +75,8 @@ holds the rest.
   sources, `apps/linux/src`, `scripts/{lib,security,windows}`, `tests/` and two docs; and `repository, vouch and
   stale tests` (`test:root`, no install) for `scripts/`, `engine/`, `.github/`, `.claude/`, the site, the release
   notes, `docs/dia-feature-parity.md` and any test file (for the promises lock and the parity citations). A
-  docs-only, phone-app, dashboard or videos change starts none of them. When the filter can't tell (an API error, a
+  docs-only change (other than the parity doc), phone-app, dashboard or videos change starts none of them, unless it
+  touches a test file. When the filter can't tell (an API error, a
   force push it can't diff, a pull request of 3,000 files or more) or the `which checks run` job fails, every job
   runs. `scripts/ci/workflow-paths.test.mjs` keeps the trigger paths and the filters in step, follows the meadow
   check's site imports, and fails when a Linux fixture or a root test names a file its job doesn't start on. Each share restores the TSX it transpiled last time (`ardia-test-tsx-I-of-6-…`); only pushes to
@@ -322,8 +323,11 @@ lose or leak data, or when the bug is invisible by eye and has shipped before.
 One tab-separated line per promise: the closed issue, a hash, the test file and the test's name (its describe path,
 `outer › inner`, when the name alone isn't unique in the file; a name is found with its whitespace changed too). The
 hash covers the test's source, a Swift test's attributes, and the head of every block it sits in: a loop and the
-list it walks, a `describe.skip`, an `if` around it, a Swift `@Suite(.disabled())`. Data a test reads from outside
-those (a table defined above the loop) isn't covered. Whitespace, comments, trailing commas and quote style don't
+list it walks, a `describe.skip`, an `if` around it, a Swift `@Suite(.disabled())`. Also covered: a guard in front of the test
+(`if (…) test(…)`), a suite's options (`describe("…", { skip: true }, …)`) and a Swift `#if` around it. Not
+covered: data a test reads from outside those (a table defined above the loop), `before`/`beforeEach` hooks and
+other setup, and the code that runs before a test registers (a `try` around it); an edit there needs no `--update`,
+so a reviewer reads those changes by eye. Whitespace, comments, trailing commas and quote style don't
 count, so reformatting is free; semicolons do, and a line break after `return`, `break`, `continue` or `throw`
 counts as one. node:test `test(…)` and `it(…)` in JavaScript, TypeScript and TSX, XCTest `func test…` and Swift
 Testing `@Test` functions can be locked.
@@ -343,7 +347,7 @@ counts, perf harnesses and incidental tests those commits also brought. `node sc
 the lock in about 0.2 s.
 
 `docs/dia-feature-parity.md` cites tests the same checked way: a code span holding the test file's repo path, or
-`path#test name` for one test in it. `scripts/ci/parity-tests.test.mjs` fails when a cited file or test is gone or a
+`path#test name` for one test in it (Python `test_*.py` files by path only). `scripts/ci/parity-tests.test.mjs` fails when a cited file or test is gone or a
 test file is named any other way (a bare name, outside a code span), and `node scripts/ci/parity-tests.mjs --list`
 prints each row with its tests.
 

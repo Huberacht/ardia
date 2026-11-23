@@ -16,7 +16,7 @@ fails the check.
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const DOC = "docs/dia-feature-parity.md";
 
-const TEST_FILE = String.raw`(?:[A-Za-z0-9_.@-]+\/)*[A-Za-z0-9_.@-]+(?:\.test\.[cm]?[jt]sx?|\.test\.cc|\.test\.swift|-test\.mjs|Tests\.swift)`;
+const TEST_FILE = String.raw`(?:[A-Za-z0-9_.@-]+\/)*(?:[A-Za-z0-9_.@-]+(?:\.test\.[cm]?[jt]sx?|\.test\.cc|\.test\.swift|-test\.mjs|Tests\.swift)|test_[A-Za-z0-9_]+\.py)`;
 const CITED = new RegExp(`^(${TEST_FILE})(?:#(.+))?$`);
 const LOOSE = new RegExp(`(?<![A-Za-z0-9_./@-])${TEST_FILE}(?![A-Za-z0-9_])`, "g");
 const BARE_SWIFT = /^[A-Z][A-Za-z0-9]*Tests$/;
