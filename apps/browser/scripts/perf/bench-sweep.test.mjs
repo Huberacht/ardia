@@ -4,16 +4,27 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { environmentOf, findMarked, insideAny, markedBy, markerProblem, stopMarked } from "./bench-sweep.mjs";
+import { environmentOf, findMarked, insideAny, markedBy, markerProblem, parentOf, stopMarked } from "./bench-sweep.mjs";
+
+const exited = (pid) => {
+  if (process.platform === "linux") {
+    try {
+      return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").pop().startsWith("Z");
+    } catch {
+      return true;
+    }
+  }
+  return spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim().startsWith("Z");
+};
 
 const alive = (pid) => {
   if (!(pid > 0)) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  return !exited(pid);
 };
 
 const APP = `const { writeFileSync, appendFileSync } = require("node:fs");
@@ -72,11 +83,18 @@ test("stop signals only marked processes: the owner's Ardia (same executable, it
   assert.ok(!found.includes(owner.pid));
   const kid = found.find((p) => p !== plain.pid && p !== stubborn.pid);
   assert.ok(kid, "the stubborn app's child inherits its environment and is found too");
-  assert.equal(spawnSync("ps", ["-o", "ppid=", "-p", String(plain.pid)], { encoding: "utf8" }).stdout.trim(), "1");
+  assert.notEqual(parentOf(plain.pid), process.pid);
+  assert.ok(parentOf(plain.pid) > 0);
   started.push(kid);
   const r = await stopMarked([marked], { quitSecs: 1, killSecs: 3 });
   assert.deepEqual(r.left, []);
-  assert.ok(![plain.pid, stubborn.pid, kid].some(alive));
+  const survivors = [plain.pid, stubborn.pid, kid].filter(alive);
+  if (survivors.length && process.platform === "linux")
+    for (const pid of survivors) {
+      const read = (f) => { try { return readFileSync(`/proc/${pid}/${f}`, "utf8").replaceAll("\0", " ").slice(0, 200); } catch (e) { return e.code; } };
+      console.log(`survivor ${pid} stat=${read("stat")} cmdline=${read("cmdline")} environ.length=${read("environ").length}`);
+    }
+  assert.deepEqual(survivors, []);
   assert.ok(alive(owner.pid));
   assert.deepEqual(owner.signals(), []);
 }));

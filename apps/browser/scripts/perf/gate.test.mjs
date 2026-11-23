@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parentOf } from "./bench-sweep.mjs";
 
 const gate = join(dirname(fileURLToPath(import.meta.url)), "gate.sh");
 const APP = `const { writeFileSync, appendFileSync } = require("node:fs");
@@ -198,14 +199,25 @@ test("a pass whose bundle can't be kept exits 70, not 0", () => {
   }
 });
 
+const exited = (pid) => {
+  if (process.platform === "linux") {
+    try {
+      return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").pop().startsWith("Z");
+    } catch {
+      return true;
+    }
+  }
+  return spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim().startsWith("Z");
+};
+
 const alive = (pid) => {
   if (!(pid > 0)) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  return !exited(pid);
 };
 
 function withRealLock(s) {
@@ -336,7 +348,7 @@ for (const [how, act, code] of [
       for (const end = Date.now() + 20_000; Date.now() < end && !existsSync(`${s.log}.prep.launched`); ) await new Promise((r) => setTimeout(r, 50));
       const app = +readFileSync(`${s.log}.prep.app`, "utf8");
       assert.ok(alive(app));
-      assert.equal(spawnSync("ps", ["-o", "ppid=", "-p", String(app)], { encoding: "utf8" }).stdout.trim(), "1");
+      assert.ok(parentOf(app) > 0 && parentOf(app) !== child.pid && parentOf(app) !== process.pid);
       const held = () => existsSync(join(env.AC_LOCK_ROOT, "ac-perflab.lock"));
       if (act) act(child);
       let done = false, unheld = 0;

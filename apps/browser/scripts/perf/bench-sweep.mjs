@@ -68,7 +68,7 @@ export function markedBy(env, dirs) {
 
 function parsePsEnvironment(line) {
   const env = {};
-  for (const m of line.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(\S*)/g)) if (MARKER_VARIABLES.includes(m[1])) env[m[1]] = m[2];
+  for (const m of line.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(\S*)/g)) env[m[1]] = m[2];
   return env;
 }
 
@@ -94,16 +94,21 @@ function environments() {
   return out.split("\n").map((l) => l.match(/^\s*(\d+)\s(.*)$/)).filter(Boolean).map(([, pid, rest]) => [+pid, parsePsEnvironment(rest)]);
 }
 
+export function parentOf(pid) {
+  try {
+    if (process.platform === "linux") return +readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").pop().split(" ")[1];
+    return +execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return NaN;
+  }
+}
+
 function ancestors() {
   const mine = new Set([process.pid]);
   let pid = process.ppid;
   for (let i = 0; i < 64 && pid > 1 && !mine.has(pid); i++) {
     mine.add(pid);
-    try {
-      pid = +execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim();
-    } catch {
-      break;
-    }
+    pid = parentOf(pid);
   }
   return mine;
 }
@@ -114,6 +119,20 @@ export function findMarked(dirs, { exclude = ancestors() } = {}) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function exited(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return true;
+  }
+  try {
+    if (process.platform === "linux") return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ").pop().startsWith("Z");
+    return execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim().startsWith("Z");
+  } catch {
+    return true;
+  }
+}
 
 export async function stopMarked(dirs, { quitSecs = 15, killSecs = 5 } = {}) {
   const all = dirs.flatMap(forms);
@@ -133,7 +152,12 @@ export async function stopMarked(dirs, { quitSecs = 15, killSecs = 5 } = {}) {
   };
   const found = findMarked(dirs, { exclude });
   for (const pid of found) signal(pid, "SIGTERM");
-  const left = () => findMarked(dirs, { exclude });
+  const stillThere = (pid) => {
+    if (exited(pid)) return false;
+    const env = environmentOf(pid);
+    return !env || !Object.keys(env).length || markedBy(env, all);
+  };
+  const left = () => [...new Set([...found.filter(stillThere), ...findMarked(dirs, { exclude })])];
   for (const end = Date.now() + quitSecs * 1000; left().length && Date.now() < end; ) await sleep(250);
   for (const pid of left()) signal(pid, "SIGKILL");
   let remaining = left();
