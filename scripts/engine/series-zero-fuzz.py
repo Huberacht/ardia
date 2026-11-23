@@ -326,6 +326,7 @@ def stage_base(args, ident, scratch):
             raise series_base.Problem(stale_message(ident))
         tarball = fetch(row, args.cache, args.repo)
     manifest = series_base.extract(tarball, scratch)
+    series_base.require_provenance(manifest, tarball)
     for key in series_base.IDENTITY:
         if manifest.get(key) != ident[key]:
             raise series_base.Problem(f"{tarball} is for {key} {manifest.get(key)}, not {ident[key]}")

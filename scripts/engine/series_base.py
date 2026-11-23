@@ -30,6 +30,9 @@ MAX_EXPANDED_BYTES = 512 << 20
 MAX_MEMBER_BYTES = 64 << 20
 MAX_MANIFEST_BYTES = 16 << 20
 MAX_MEMBERS = 20000
+MAX_DECODER_MEMORY = 128 << 20
+VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-stamp", "capture-record", "step3-resources",
+            "brand-namesub", "series-check")
 
 
 class Problem(Exception):
@@ -105,7 +108,11 @@ def default_src():
     return os.environ.get("CHROMIUM_SRC", os.path.join(chromium_build(), "chromium_git/chromium/src"))
 
 
-def base_file_hashes(base):
+def normal_mode(st_mode):
+    return 0o755 if st_mode & stat.S_IXUSR else 0o644
+
+
+def snapshot_base(base):
     out = {}
     for top, dirs, files in os.walk(base):
         dirs.sort()
@@ -116,8 +123,19 @@ def base_file_hashes(base):
                 continue
             if os.path.islink(full) or not os.path.isfile(full):
                 raise Problem(f"{full} isn't a regular file: the series base holds regular files only")
-            out[path] = sha256_file(full)
+            with open(full, "rb") as handle:
+                mode = normal_mode(os.fstat(handle.fileno()).st_mode)
+                out[path] = (handle.read(), mode)
     return out
+
+
+def snapshot_hashes(snapshot):
+    return {path: {"sha256": hashlib.sha256(data).hexdigest(), "mode": f"{mode:o}"}
+            for path, (data, mode) in snapshot.items()}
+
+
+def base_file_hashes(base):
+    return snapshot_hashes(snapshot_base(base))
 
 
 def stage_marker(tree):
@@ -149,8 +167,19 @@ def asset_prefix(ident):
 
 
 def content_revision(manifest):
-    files = json.dumps({"files": manifest["files"], "absent": manifest["absent"]}, sort_keys=True)
+    files = json.dumps({"files": manifest["files"], "absent": manifest["absent"],
+                        "provenance": manifest.get("provenance")}, sort_keys=True)
     return hashlib.sha256(files.encode()).hexdigest()[:12]
+
+
+def require_provenance(manifest, name):
+    provenance = manifest.get("provenance")
+    keys = ("step3_run", "step3_stamp_sha256", "capture_sha256")
+    if manifest.get("verified") != list(VERIFIED) or not isinstance(provenance, dict) or \
+            not all(isinstance(provenance.get(key), str) and provenance[key] for key in keys):
+        raise Problem(f"{name} was packed without the builder's provenance (checks {manifest.get('verified')}, "
+                      f"provenance {provenance}): pack it again from a tree run-step3.py stamped and a base "
+                      "run-capture.py recorded")
 
 
 def asset_name(ident, revision):
@@ -292,18 +321,15 @@ def _tar_info(name, size=0, mode=0o644, kind=tarfile.REGTYPE, link=""):
     return info
 
 
-def write_tarball(base, paths, manifest_fields, out):
+def write_tarball(source, paths, manifest_fields, out):
+    snapshot = source if isinstance(source, dict) else snapshot_base(source)
     files, absent = {}, []
     entries = []
     for path in sorted(paths):
         if not safe_relative(path):
             raise Problem(f"unsafe path in the series: {path!r}")
-        full = os.path.join(base, path)
-        if os.path.islink(full):
-            raise Problem(f"{full} is a symlink: the series base holds regular files only")
-        if os.path.isfile(full):
-            data = pathlib.Path(full).read_bytes()
-            mode = 0o755 if os.stat(full).st_mode & stat.S_IXUSR else 0o644
+        if path in snapshot:
+            data, mode = snapshot[path]
             files[path] = {"sha256": hashlib.sha256(data).hexdigest(), "mode": f"{mode:o}"}
             entries.append((path, data, mode))
         else:
@@ -328,14 +354,30 @@ def check_archive_size(tarball):
         raise Problem(f"{tarball} is {size} bytes, over the {MAX_ARCHIVE_BYTES} a series base may be")
 
 
-class CappedStream(io.RawIOBase):
-    def __init__(self, inner, limit, name):
+class XzStream(io.RawIOBase):
+    def __init__(self, path, limit, memlimit):
         super().__init__()
-        self.inner, self.limit, self.name = inner, limit, name
+        self.path, self.limit, self.memlimit = path, limit, memlimit
+        self.raw = None
+        self.restart()
 
-    def check(self):
-        if self.inner.tell() > self.limit:
-            raise Problem(f"{self.name} expands past {self.limit} bytes, headers included")
+    def restart(self):
+        if self.raw:
+            self.raw.close()
+        self.raw = open(self.path, "rb")
+        self.decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=self.memlimit)
+        self.buffer, self.position = b"", 0
+
+    def fill(self, wanted):
+        while len(self.buffer) < wanted and not self.decoder.eof:
+            chunk = b""
+            if self.decoder.needs_input:
+                chunk = self.raw.read(1 << 16)
+                if not chunk:
+                    raise Problem(f"{self.path} ends in the middle of its xz stream")
+            self.buffer += self.decoder.decompress(chunk, max_length=1 << 20)
+            if self.position + len(self.buffer) > self.limit:
+                raise Problem(f"{self.path} expands past {self.limit} bytes, headers included")
 
     def readable(self):
         return True
@@ -345,9 +387,10 @@ class CappedStream(io.RawIOBase):
 
     def read(self, size=-1):
         if size is None or size < 0:
-            size = self.limit + 1 - self.inner.tell()
-        data = self.inner.read(min(size, max(self.limit + 1 - self.inner.tell(), 0)))
-        self.check()
+            size = self.limit + 1 - self.position
+        self.fill(size)
+        data, self.buffer = self.buffer[:size], self.buffer[size:]
+        self.position += len(data)
         return data
 
     def readinto(self, buffer):
@@ -356,27 +399,31 @@ class CappedStream(io.RawIOBase):
         return len(data)
 
     def seek(self, offset, whence=io.SEEK_SET):
-        target = {io.SEEK_SET: offset, io.SEEK_CUR: self.inner.tell() + offset}.get(whence)
+        target = {io.SEEK_SET: offset, io.SEEK_CUR: self.position + offset}.get(whence)
         if target is None:
             raise io.UnsupportedOperation("a series base archive is read forwards or from its start")
         if target > self.limit:
-            raise Problem(f"{self.name} expands past {self.limit} bytes, headers included")
-        position = self.inner.seek(target)
-        self.check()
-        return position
+            raise Problem(f"{self.path} expands past {self.limit} bytes, headers included")
+        if target < self.position:
+            self.restart()
+        while self.position < target:
+            if not self.read(min(target - self.position, 1 << 20)):
+                break
+        return self.position
 
     def tell(self):
-        return self.inner.tell()
+        return self.position
 
     def close(self):
-        self.inner.close()
+        if self.raw:
+            self.raw.close()
         super().close()
 
 
 @contextlib.contextmanager
 def open_archive(tarball):
     check_archive_size(tarball)
-    with CappedStream(lzma.open(tarball, "rb"), MAX_EXPANDED_BYTES, tarball) as stream:
+    with XzStream(tarball, MAX_EXPANDED_BYTES, MAX_DECODER_MEMORY) as stream:
         with tarfile.open(fileobj=stream, mode="r:") as tar:
             yield tar
 

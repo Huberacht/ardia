@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import lzma
 import os
 import re
 import pathlib
@@ -521,6 +522,29 @@ class Limits(unittest.TestCase):
                 series_base.MAX_EXPANDED_BYTES = saved
             self.assertEqual(series_base.read_manifest(out)["files"], {})
 
+    def test_an_xz_dictionary_over_the_decoder_memory_limit_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            out = os.path.join(root, "dict.tar.xz")
+            manifest = json.dumps({"format": series_base.FORMAT, "files": {}, "absent": []}).encode()
+            raw = io.BytesIO()
+            with tarfile.open(fileobj=raw, mode="w") as tar:
+                info = tarfile.TarInfo("manifest.json")
+                info.size = len(manifest)
+                tar.addfile(info, io.BytesIO(manifest))
+            filters = [{"id": lzma.FILTER_LZMA2, "dict_size": 64 << 20, "mf": lzma.MF_HC3}]
+            pathlib.Path(out).write_bytes(lzma.compress(raw.getvalue(), format=lzma.FORMAT_XZ, filters=filters))
+            self.assertLess(os.path.getsize(out), 4096)
+            saved = series_base.MAX_DECODER_MEMORY
+            try:
+                series_base.MAX_DECODER_MEMORY = 8 << 20
+                with self.assertRaises(series_base.Problem):
+                    series_base.read_manifest(out)
+                with self.assertRaises(series_base.Problem):
+                    series_base.extract(out, tempfile.mkdtemp(dir=root))
+            finally:
+                series_base.MAX_DECODER_MEMORY = saved
+            self.assertEqual(series_base.read_manifest(out)["files"], {})
+
     def test_a_declared_length_over_the_cap_is_refused_before_reading(self):
         class Source(io.BytesIO):
             headers = {"Content-Length": "999"}
@@ -555,6 +579,39 @@ class Limits(unittest.TestCase):
                     series_base.extract(out, tempfile.mkdtemp(dir=root))
             finally:
                 series_base.MAX_ARCHIVE_BYTES, series_base.MAX_MEMBERS, series_base.MAX_EXPANDED_BYTES = saved
+
+
+class Provenance(unittest.TestCase):
+    def test_an_archive_without_provenance_is_refused(self):
+        provenance = {"step3_run": "r", "step3_stamp_sha256": "s", "capture_sha256": "c"}
+        series_base.require_provenance({"verified": list(series_base.VERIFIED), "provenance": provenance}, "a")
+        for manifest in ({}, {"verified": list(series_base.VERIFIED)},
+                         {"verified": list(series_base.VERIFIED)[:-1], "provenance": provenance},
+                         {"verified": list(series_base.VERIFIED), "provenance": dict(provenance, step3_run="")}):
+            with self.assertRaises(series_base.Problem):
+                series_base.require_provenance(manifest, "a")
+
+    def test_the_same_files_from_another_run_get_their_own_asset(self):
+        manifest = {"files": {"chrome/f.cc": {"sha256": "0" * 64, "mode": "644"}}, "absent": [],
+                    "provenance": {"step3_run": "one"}}
+        other = dict(manifest, provenance={"step3_run": "two"})
+        self.assertNotEqual(series_base.content_revision(manifest), series_base.content_revision(other))
+
+    def test_the_archive_is_built_from_the_verified_snapshot(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = os.path.join(root, "base")
+            os.makedirs(os.path.join(base, "chrome"))
+            pathlib.Path(base, "chrome/f.cc").write_text("verified\n")
+            snapshot = series_base.snapshot_base(base)
+            pathlib.Path(base, "chrome/f.cc").write_text("swapped\n")
+            os.chmod(os.path.join(base, "chrome/f.cc"), 0o755)
+            ident = series_base.identity("linux")
+            _, out = series_base.write_tarball(snapshot, {"chrome/f.cc"}, ident, root)
+            dest = tempfile.mkdtemp(dir=root)
+            series_base.extract(out, dest)
+            self.assertEqual(pathlib.Path(dest, "chrome/f.cc").read_text(), "verified\n")
+            self.assertFalse(os.access(os.path.join(dest, "chrome/f.cc"), os.X_OK))
+            self.assertNotEqual(series_base.snapshot_base(base), snapshot)
 
 
 class Packer(unittest.TestCase):
@@ -607,7 +664,7 @@ class Packer(unittest.TestCase):
             ident = series_base.identity("linux")
             _, out = series_base.write_tarball(base, {"chrome/f.cc"}, dict(ident, verified=[]), root)
             args = type("Args", (), {"archive": out, "repo": "nobody/nothing"})()
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(series_base.Problem):
                 packer.cmd_publish(args)
 
 
@@ -618,12 +675,15 @@ tree = argv[argv.index("--tree") + 1]
 if not os.path.isdir(tree):
     sys.exit(2)
 stages = [s for s in os.environ["FAKE_STAGES"].split(",") if s]
+if not stages:
+    sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 marker = os.path.join(os.path.dirname(tree), ".helium-stages-" + os.path.basename(tree))
 done = []
 if os.path.exists(marker):
     done = open(marker).read().split()[1:]
 with open(marker, "w") as handle:
-    handle.write("\\n".join(["tree-inode=%d" % os.stat(tree).st_ino] + done + stages + ["platform=linux"]) + "\\n")
+    platform = argv[argv.index("--platform") + 1] if "--platform" in argv else "linux"
+    handle.write("\\n".join(["tree-inode=%d" % os.stat(tree).st_ino] + done + stages + ["platform=" + platform]) + "\\n")
 sys.exit(int(os.environ.get("FAKE_EXIT", "0")))
 """
 
@@ -681,7 +741,8 @@ class Step3Stamp(unittest.TestCase):
             return capturer.run(["--platform", "linux"], series=self.series)
 
     def verify(self, digest=None):
-        packer.verify_step3_stamp(self.src, self.base, "linux", digest or self.digest)
+        _, stamp_sha = packer.verify_step3_stamp(self.src, "linux", digest or self.digest)
+        return packer.verify_capture(self.base, stamp_sha, series_base.snapshot_base(self.base))
 
     def test_one_full_run_is_stamped_and_its_capture_packs(self):
         self.assertEqual(self.step3(), 0)
@@ -713,11 +774,63 @@ class Step3Stamp(unittest.TestCase):
             self.step3(extra=extra)
             self.assertFalse(self.stamped(), extra)
 
-    def test_a_new_run_deletes_the_old_stamp_before_it_starts(self):
+    def test_a_run_that_fails_before_any_work_keeps_the_stamp_and_the_record(self):
         self.step3()
+        self.capture()
+        self.assertEqual(self.step3(stages=[], exit_code=2), 2)
         self.assertTrue(self.stamped())
-        self.assertEqual(self.step3(stages=[], exit_code=1), 1)
-        self.assertFalse(self.stamped())
+        self.verify()
+
+    def test_a_run_that_fails_after_starting_work_leaves_a_stamp_that_no_longer_packs(self):
+        self.step3()
+        self.capture()
+        self.assertEqual(self.step3(stages=["started:patches"], exit_code=1), 1)
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_an_unknown_option_keeps_both_records(self):
+        self.step3()
+        self.capture()
+        record = pathlib.Path(self.base, series_base.CAPTURE_RECORD).read_bytes()
+        result = subprocess.run([sys.executable, str(ENGINE / "run-step3.py"), "--apply", "--platform", "linux",
+                                 "--tree", self.src, "--bogus"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments: --bogus", result.stderr)
+        result = subprocess.run([sys.executable, str(ENGINE / "run-capture.py"), "--platform", "linux", "--bogus"],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue(self.stamped())
+        self.assertEqual(pathlib.Path(self.base, series_base.CAPTURE_RECORD).read_bytes(), record)
+        self.verify()
+
+    def test_a_mode_change_after_capture_is_refused(self):
+        self.step3()
+        self.capture()
+        os.chmod(os.path.join(self.base, "chrome/f.cc"), 0o755)
+        with self.assertRaises(SystemExit):
+            self.verify()
+
+    def test_capture_hands_the_child_the_tree_whose_stamp_it_records(self):
+        build = os.path.join(self.root, "build")
+        tree = os.path.join(build, "chromium_git/chromium/src")
+        os.makedirs(os.path.join(tree, "chrome"))
+        pathlib.Path(tree, "chrome/f.cc").write_text(ORIGINAL)
+        os.environ["FAKE_STAGES"] = ",".join(series_base.STEP3_STAGES)
+        os.environ.pop("CHROMIUM_SRC")
+        os.environ.pop("AC_SERIES_BASE")
+        os.environ["AC_CHROMIUM_BUILD"] = build
+        self.saved.setdefault("AC_CHROMIUM_BUILD", None)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            step3.run(["--apply", "--platform", "mac", "--tree", tree], helium=self.helium)
+            try:
+                capturer.run(["--platform", "mac"], series=self.series)
+            except SystemExit:
+                self.fail(err.getvalue())
+        base = os.path.join(build, "series-base")
+        self.assertEqual(pathlib.Path(base, "chrome/f.cc").read_text(), ORIGINAL)
+        record = json.loads(pathlib.Path(base, series_base.CAPTURE_RECORD).read_text())
+        self.assertEqual(record["step3_stamp_sha256"], series_base.sha256_file(series_base.step3_stamp(tree)))
 
     def test_a_step3_input_edited_after_step3_ran_is_refused(self):
         self.step3()

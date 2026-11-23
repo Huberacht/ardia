@@ -455,13 +455,15 @@ platform's series reads (each patch's sources, renamed, copied and mode-only one
 helium-chromium's commit and `helium-platform12` helium-macos's or helium-linux's. `inputs12` is the digest of what
 step 3 reads from the repo: `03-helium.py`, `ardia_namesub.py`, `ardia_resources.txt` and every source it lists,
 `domsub-keep-store.txt`, `helium-pins.ini`, `env.sh` and `target_config.py`. `rev12` is the digest of the files the
-archive holds, so a re-pack never replaces an archive an older checkout pins. `scripts/engine/series-bases.tsv` pins
+archive holds and of its provenance (the step-3 run and capture it came from), so a re-pack, even of identical files,
+never replaces an archive an older checkout pins. `scripts/engine/series-bases.tsv` pins
 one archive per platform and CPU, by those pins, that digest and its sha256.
 
 `scripts/engine/series-zero-fuzz.py` works out the pins and the input digest from the checkout, fetches the matching
 archives (at most 64 MB each, cached in `~/.cache/ardia/series-base`), checks the table's sha256, then unpacks each one
-under size and entry limits (every byte the tar parser reads counts, headers included), with every file checked
-against the manifest. It applies the series to each archive in a
+under size and entry limits (every byte the tar parser reads counts, headers included; the xz decoder may use at most
+128 MB), with every file checked against the manifest. It refuses an archive whose manifest lacks the builder's
+provenance: every pack check, the step-3 run id, the stamp's sha256 and the capture record's sha256. It applies the series to each archive in a
 scratch directory: every `chromium` line with `git apply` and its exact context, every `layer` line with its
 `apply.sh`. A `git apply` warning fails its step too (a mode change on a file with another mode applies with only a
 warning). It fails when no archive matches the pins and inputs ("the pins moved", or "step 3's inputs changed"), when
@@ -499,22 +501,29 @@ is read-only on the tree. It refuses unless:
 - one full `run-step3.py` run did that step 3: its stamp (`.ardia-step3-src.json` beside the tree) names the same tree,
   platform and marker, and its input digest is this checkout's;
 - `run-capture.py` captured the base after that run: its record (`.ardia-capture.json` in the base) names that stamp's
-  sha256, and every file in the base has exactly the sha256 it recorded, with none missing or added;
+  sha256, and every file in the base has exactly the sha256 and mode it recorded, with none missing or added. Pack
+  reads the base once, checks that snapshot and archives the same snapshot, then reads the base again and fails if
+  anything changed meanwhile;
 - every `ardia_resources.txt` resource is byte for byte in the base (or in the tree, when the series doesn't touch it);
 - `ardia_namesub.py --check-only` finds no Helium left in the tree's strings;
 - `series.py check` reproduces the tree from the base.
 
 It records those checks in the manifest. A change to any step-3 input after step 3 ran (including `03-helium.py`'s logic
 and `domsub-keep-store.txt`, which can't be read back from a tree) makes the checkout's digest differ from the stamp's,
-so pack refuses until step 3 runs again on a fresh tree. `run-step3.py` deletes the stamp before it runs and writes one
-only after a single full run on a fresh tree exits 0 with plain arguments (no `--only`, `--from` or `--no-brand`) and
-the same input digest before and after. Any other run leaves the tree unstamped for good: start again from a fresh
-tree. `run-capture.py` refuses a base holding a file it didn't record. The archive and the checker handle a patch that renames, copies or only changes the mode
+so pack refuses until step 3 runs again on a fresh tree. Neither wrapper writes or deletes anything before its child
+runs, and both pass the child's exit code and output through. A child that fails its own checks therefore leaves the
+stamp and record as they were. One that fails after starting work changes the stage marker or the base, so the old
+stamp or record no longer matches and pack refuses. `run-step3.py` writes a stamp only after a single full run on a
+fresh tree exits 0 with plain arguments (no `--only`, `--from` or `--no-brand`) and the same input digest before and
+after; any other run that changes the tree deletes the stamp, for good: start again from a fresh tree. `run-capture.py`
+hands series.py the tree and base it resolved, refuses a base holding a file it didn't record, and records the stamp's
+sha256 with every file's sha256 and mode. The archive and the checker handle a patch that renames, copies or only changes the mode
 of a file, but `series.py` (`capture-base`, `check`) reads only `+++` lines. Such a patch needs `series.py` to learn
 those headers first, which moves both engine keys: until then `capture-base` doesn't record its source and the
 packer's `series.py check` fails on it. Copy the three files
 to a machine where `gh` is signed in (a Boat VM's isn't) and run `python3 scripts/engine/series-base-pack.py publish
-<archive>`. It refuses an archive packed with `--no-verify` or for other pins or inputs than the checkout's, creates
+<archive>`. It refuses an archive without that provenance (`--no-verify`) or for other pins or inputs than the
+checkout's, creates
 the prerelease if needed, uploads the files (one already there must match), and writes the row into
 `series-bases.tsv`. Commit that row with the pin or input change.
 

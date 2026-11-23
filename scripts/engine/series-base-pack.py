@@ -59,8 +59,7 @@ def git_head(path):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-VERIFIED = ("chromium-version", "helium-checkouts", "step3-stages", "step3-stamp", "capture-record", "step3-resources",
-            "brand-namesub", "series-check")
+VERIFIED = series_base.VERIFIED
 
 
 def run_checked(command, what, env=None):
@@ -97,7 +96,7 @@ def verify_stages(src, platform):
         series_base.die(f"{marker} doesn't show a whole step 3 for {platform} (missing {missing or ['platform=' + platform]})")
 
 
-def verify_step3_stamp(src, base, platform, inputs):
+def verify_step3_stamp(src, platform, inputs):
     stamp_file = series_base.step3_stamp(src)
     if not stamp_file.is_file():
         series_base.die(f"no {stamp_file}: step 3 didn't run on {src} through scripts/engine/run-step3.py, so what it "
@@ -115,10 +114,12 @@ def verify_step3_stamp(src, base, platform, inputs):
     if stamp.get("inputs") != inputs:
         series_base.die(f"step 3 ran on {src} with inputs {str(stamp.get('inputs'))[:12]}, but this checkout's are "
                         f"{inputs[:12]}: run step 3 again on a fresh tree with these inputs, then step 4")
-    verify_capture(base, series_base.sha256_file(stamp_file))
+    if not stamp.get("run"):
+        series_base.die(f"{stamp_file} has no run id: run step 3 again through run-step3.py on a fresh tree")
+    return stamp, series_base.sha256_file(stamp_file)
 
 
-def verify_capture(base, stamp_sha):
+def verify_capture(base, stamp_sha, snapshot):
     record_file = pathlib.Path(base, series_base.CAPTURE_RECORD)
     if not record_file.is_file():
         series_base.die(f"no {record_file}: capture the base with scripts/engine/run-capture.py after run-step3.py")
@@ -130,27 +131,31 @@ def verify_capture(base, stamp_sha):
         series_base.die(f"{record_file} was recorded for another step 3 run than this tree's stamp: set the base aside "
                         "and run run-capture.py again")
     recorded = record.get("files", {})
-    present = series_base.base_file_hashes(base)
+    present = series_base.snapshot_hashes(snapshot)
     changed = sorted(path for path in set(recorded) | set(present) if recorded.get(path) != present.get(path))
     if changed:
-        series_base.die(f"{len(changed)} files in {base} aren't what run-capture.py captured (e.g. {changed[0]}): set the "
-                        "base aside and run run-capture.py again")
+        series_base.die(f"{len(changed)} files in {base} aren't what run-capture.py captured, in content or mode (e.g. "
+                        f"{changed[0]}): set the base aside and run run-capture.py again")
+    return series_base.sha256_file(record_file)
 
 
-def verify_resources(src, base):
+def verify_resources(src, snapshot):
     wrong = []
     for source, dest in series_base.resource_pairs():
         expected = (series_base.REPO / source).read_bytes()
-        in_base = os.path.join(base, dest)
-        actual_path = in_base if os.path.isfile(in_base) else os.path.join(src, dest)
-        if not os.path.isfile(actual_path) or pathlib.Path(actual_path).read_bytes() != expected:
-            wrong.append(f"{dest} ({'base' if actual_path == in_base else 'tree'}) isn't {source}")
+        if dest in snapshot:
+            actual, where = snapshot[dest][0], "base"
+        else:
+            in_tree = pathlib.Path(src, dest)
+            actual, where = (in_tree.read_bytes() if in_tree.is_file() else None), "tree"
+        if actual != expected:
+            wrong.append(f"{dest} ({where}) isn't {source}")
     if wrong:
         series_base.die("step 3 ran with other resources than this checkout's ardia_resources.txt names:\n  " +
                         "\n  ".join(wrong))
 
 
-def verify_tree(ident, src, base, platform, cpu):
+def verify_tree(ident, src, base, platform, cpu, snapshot):
     version = tree_version(src)
     if version != ident["chromium"]:
         series_base.die(f"{src} is Chromium {version}, but the pins say {ident['chromium']}")
@@ -159,8 +164,9 @@ def verify_tree(ident, src, base, platform, cpu):
     for name, key in (("helium", "helium_chromium"), (series_base.PLATFORM_HELIUM[platform], "helium_platform")):
         verify_helium(os.path.join(helium_root, name), ident[key], key)
     verify_stages(src, platform)
-    verify_step3_stamp(src, base, platform, ident["inputs"])
-    verify_resources(src, base)
+    stamp, stamp_sha = verify_step3_stamp(src, platform, ident["inputs"])
+    capture_sha = verify_capture(base, stamp_sha, snapshot)
+    verify_resources(src, snapshot)
     marker = pathlib.Path(base, ".ardia-series-target")
     if marker.exists() and json.loads(marker.read_text()) != {"platform": platform, "cpu": cpu}:
         series_base.die(f"{base} is the base for {marker.read_text().strip()}, not {platform}/{cpu}")
@@ -173,7 +179,7 @@ def verify_tree(ident, src, base, platform, cpu):
     last = run_checked([sys.executable, str(series_base.REPO / "engine/patches/series.py"), "check", "--platform",
                         platform, "--cpu", cpu], "series.py check doesn't reproduce the tree from this base", env)
     print(f"series.py check: {last[0]}")
-    return list(VERIFIED)
+    return list(VERIFIED), {"step3_run": stamp["run"], "step3_stamp_sha256": stamp_sha, "capture_sha256": capture_sha}
 
 
 def source_commit():
@@ -194,8 +200,9 @@ def cmd_pack(args):
     steps = series.read_series(args.platform)
     required, optional = series_base.base_paths(steps)
     paths = set(required) | set(optional)
-    verified = [] if args.no_verify else verify_tree(ident, src, base, args.platform, cpu)
-    missing = sorted(path for path in required if not os.path.lexists(os.path.join(base, path)))
+    snapshot = series_base.snapshot_base(base)
+    verified, provenance = ([], None) if args.no_verify else verify_tree(ident, src, base, args.platform, cpu, snapshot)
+    missing = sorted(path for path in required if path not in snapshot)
     if missing:
         for path in missing:
             print(f"error: {path} (changed by {required[path]}) isn't in {base}", file=sys.stderr)
@@ -204,10 +211,13 @@ def cmd_pack(args):
     commit = source_commit()
     dest = os.path.abspath(args.dest or tempfile.mkdtemp(prefix="ac-series-base-"))
     os.makedirs(dest, exist_ok=True)
-    fields = dict(ident, verified=verified, series_commit=commit,
+    fields = dict(ident, verified=verified, provenance=provenance, series_commit=commit,
                   packed_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   steps=len(steps))
-    manifest, out = series_base.write_tarball(base, paths, fields, dest)
+    manifest, out = series_base.write_tarball(snapshot, paths, fields, dest)
+    if series_base.snapshot_base(base) != snapshot:
+        os.unlink(out)
+        series_base.die(f"{base} changed while it was being packed: pack it again")
     digest = series_base.sha256_file(out)
     pathlib.Path(out + ".sha256").write_text(f"{digest}  {os.path.basename(out)}\n")
     pathlib.Path(out + ".manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
@@ -240,9 +250,7 @@ def download(tag, repo, name, directory):
 def cmd_publish(args):
     archive = os.path.abspath(args.archive)
     manifest = series_base.read_manifest(archive)
-    if manifest.get("verified") != list(VERIFIED):
-        series_base.die(f"{archive} was packed without every builder check ({manifest.get('verified')}): pack it again "
-                        "without --no-verify")
+    series_base.require_provenance(manifest, archive)
     ident = {key: manifest[key] for key in series_base.IDENTITY}
     current = series_base.identity(ident["platform"], ident["cpu"])
     if current != ident:

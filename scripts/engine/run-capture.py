@@ -3,12 +3,16 @@
 
   run-capture.py [--platform linux|mac] [--cpu arm64|x64] [--force]
 
-Run it after run-step3.py and before step 4 (04-series.sh runs capture-base again, which then adds nothing). It deletes
-the base's record (<base>/.ardia-capture.json) first. It needs a complete step-3 stamp for the tree, and a base that is
-either new or exactly what an earlier record listed: a file put there by hand stops it. After capture-base exits 0, it
-writes a new record: the step-3 stamp's sha256 and the sha256 of every file in the base. The child's exit code and
-output pass through unchanged. series-base-pack.py packs only a base whose files and stamp match its record exactly.
-Tree and base come from CHROMIUM_SRC, AC_SERIES_BASE and AC_CHROMIUM_BUILD, as for series.py.
+Run it after run-step3.py and before step 4 (04-series.sh runs capture-base again, which then adds nothing). The tree
+is CHROMIUM_SRC, else AC_CHROMIUM_BUILD's (default ~/chromium-build) chromium_git/chromium/src. The base is
+AC_SERIES_BASE, else that build directory's series-base for the platform. Both are passed to series.py explicitly, so
+the child captures from the tree whose stamp is recorded.
+
+It needs a complete step-3 stamp for the tree, and a base that is new or holds only files an earlier record for that
+same stamp listed, with the same content and mode. A file put there any other way stops it. Nothing is written or
+deleted before capture-base runs, and the child's exit code and output pass through unchanged. Once capture-base
+exits 0, <base>/.ardia-capture.json is replaced: the stamp's sha256, and every base file's sha256 and mode.
+series-base-pack.py packs only a base whose files match that record exactly.
 """
 
 import json
@@ -77,12 +81,12 @@ def run(argv, series=None):
     record = pathlib.Path(base, series_base.CAPTURE_RECORD)
     present = series_base.base_file_hashes(base) if os.path.isdir(base) else {}
     earlier = earlier_files(record, stamp_sha)
-    record.unlink(missing_ok=True)
     if any(earlier.get(path) != digest for path, digest in present.items()):
         series_base.die(f"{base} holds files no capture after this step 3 recorded: set it aside and run run-capture.py "
                         "again on a fresh base", 2)
+    env = dict(os.environ, CHROMIUM_SRC=src, AC_SERIES_BASE=os.path.abspath(base))
     code = subprocess.run([sys.executable, str(series or series_base.REPO / "engine/patches/series.py"), "capture-base",
-                           *argv]).returncode
+                           *argv], env=env).returncode
     if code:
         return code
     if series_base.sha256_file(stamp) != stamp_sha:
