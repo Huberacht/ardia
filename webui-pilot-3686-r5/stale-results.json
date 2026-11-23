@@ -16,7 +16,11 @@
                                        "ok":  true
                                    },
     "new-document-answers":  {
-                                 "detail":  "new document (time origin 1795418911311.5 -\u003e 1795418931332.9) answers \u0027main\u0027",
+                                 "detail":  "new document (time origin 1795423599989.4 -\u003e 1795423620346.6) answers \u0027main\u0027",
                                  "ok":  true
-                             }
+                             },
+    "retired-document-makes-no-page":  {
+                                           "detail":  "WebUI shell: page creation dropped: shell document 4 is not the live one (6); targets: chrome://ardia/",
+                                           "ok":  true
+                                       }
 }

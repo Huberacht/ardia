@@ -96,7 +96,7 @@
                                   "ok":  true
                               },
     "close-exits":  {
-                        "detail":  "engine processes gone after 0.8 s",
+                        "detail":  "engine processes gone after 1.4 s",
                         "ok":  true
                     },
     "relaunch-reopens":  {
