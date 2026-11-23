@@ -29,7 +29,7 @@ test("run through a symlinked path, the generator still runs, so a check can't p
   const dir = mkdtempSync(join(tmpdir(), "hostapi-link-"));
   try {
     const link = join(dir, "hostapi");
-    symlinkSync(fileURLToPath(new URL(".", import.meta.url)), link, "dir");
+    symlinkSync(fileURLToPath(new URL(".", import.meta.url)), link, process.platform === "win32" ? "junction" : "dir");
     const linked = join(link, "generate.mjs");
     assert.equal(runAt(linked, "--force").status, 2);
     const result = runAt(linked, "--check");
