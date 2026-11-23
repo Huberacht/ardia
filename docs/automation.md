@@ -45,7 +45,8 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   running code doesn't validate has no cdhash and can only be allowed once.
   They live in `<data dir>/ArdiaControlApprovals.json` (0600 with no access list, read only if it's a private regular
   file of the user's with no access list letting anyone else in, from a folder that passes the same check, and written
-  by an `O_EXCL` temp file stripped of any inherited access list, then a rename), are listed in Settings › Advanced › Command line and automation ›
+  by an `O_EXCL` temp file stripped of any inherited access list and flushed to disk (`F_FULLFSYNC`, `fsync` where
+  that isn't supported), then a rename and a flush of the folder, so a grant reported saved survives a power loss), are listed in Settings › Advanced › Command line and automation ›
   Programs you let in, and removing one there closes its open connections; a 30-minute one also closes them when it
   runs out, at the approval's own end time on the wall clock (sleep included), and after that end no line it sends is
   run and no new event is sent to it (only a frame already being written to it may finish). One doorbell shows at a time. Connections share one only when they come

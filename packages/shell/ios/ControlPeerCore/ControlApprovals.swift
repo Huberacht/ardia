@@ -106,11 +106,17 @@ public final class ControlApprovals {
     let fd = openat(folder.fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { return false }
     let wrote = PrivateFolder.onlyOwnerCanRead(fd) ? data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, data.count) } : -1
+    let durable = wrote == data.count && Self.flush(fd)
     Darwin.close(fd)
-    guard wrote == data.count, renameat(folder.fd, temporary, folder.fd, Self.fileName) == 0 else {
+    guard durable, renameat(folder.fd, temporary, folder.fd, Self.fileName) == 0 else {
       unlinkat(folder.fd, temporary, 0)
       return false
     }
-    return true
+    return Self.flush(folder.fd)
+  }
+
+  static func flush(_ fd: Int32) -> Bool {
+    if fcntl(fd, F_FULLFSYNC) == 0 { return true }
+    return errno == ENOTSUP && fsync(fd) == 0
   }
 }
