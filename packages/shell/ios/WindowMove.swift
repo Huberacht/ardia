@@ -11,10 +11,7 @@ let installWindowMoveFallback: Void = {
   let original = unsafeBitCast(method_getImplementation(method), to: PerformDrag.self)
   let block: @convention(block) (NSWindow, NSEvent) -> Void = { window, event in
     if WindowMove.askingWindowServer { return original(window, selector, event) }
-    if WindowMove.windowServerMoves(window, from: event) {
-      WindowMove.announceDrag(of: window)
-      return
-    }
+    if WindowMove.windowServerMoves(window, from: event) { return }
     if WindowMove.asksWindowServer(window, from: event) { return }
     if !WindowMove.follow(window, from: event) { original(window, selector, event) }
   }
@@ -148,10 +145,12 @@ enum WindowMove {
     placements.removeObject(forKey: window)
     askingWindowServer = true
     defer { askingWindowServer = false }
-    dragWithCompletion(window, dragWithCompletionSelector, event) { [weak window] completed in
-      let endedBeforeRelease = NSEvent.pressedMouseButtons & 1 != 0
+    let pressedAt = event.timestamp
+    dragWithCompletion(window, dragWithCompletionSelector, event) { [weak window] _ in
+      let endedBeforeRelease = WindowDragTakeover.takesOver(
+        pressedAt: pressedAt, lastDownAt: lastHardwareDown(), held: NSEvent.pressedMouseButtons & 1 != 0)
       #if DEBUG
-      if nativeDrags.count < 256 { nativeDrags.append(["completed": completed, "endedBeforeRelease": endedBeforeRelease, "t": CACurrentMediaTime()]) }
+      if nativeDrags.count < 256 { nativeDrags.append(["endedBeforeRelease": endedBeforeRelease, "t": CACurrentMediaTime()]) }
       #endif
       guard endedBeforeRelease else {
         ShellEvents.send(.app, stamp.onto(["type": "windowDragNative"]))
@@ -160,11 +159,17 @@ enum WindowMove {
       guard window != nil else { return }
       ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
       DispatchQueue.main.async {
-        guard let window else { return }
+        guard let window, WindowDragTakeover.pressIsLatest(pressedAt: pressedAt, lastDownAt: lastHardwareDown()) else { return }
         _ = follow(window, from: event, stamp: stamp)
       }
     }
     return true
+  }
+
+  private static func lastHardwareDown() -> TimeInterval? {
+    let since = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
+    guard since.isFinite, since >= 0 else { return nil }
+    return ProcessInfo.processInfo.systemUptime - since
   }
 
   static func follow(_ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin()) -> Bool {
