@@ -43,6 +43,7 @@ import { fittedEvent, fittedReply } from "./socketWire";
 import { dismissSocketAsks } from "./socketAsk";
 import { dropAllHistoryHandles, dropHistoryHandles } from "./historyHandles";
 import { dropLateResults, forgetTabCalls } from "./tabCalls";
+import { dropAllLogpoints, dropLogpoints } from "./devToolsLogpoints";
 import { backgroundInstance } from "../app/appSettings";
 import { programControlOn } from "../app/programControlSetting";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
@@ -291,6 +292,7 @@ function handleClose({ connection }: { connection: number }) {
   dropResponder(connection);
   dropHistoryHandles(connection);
   dropLateResults(connection);
+  void dropLogpoints(connection);
   if (subscriptions.delete(connection)) refreshFeed();
 }
 
@@ -327,6 +329,7 @@ async function stop() {
   dropAllHistoryHandles();
   forgetTabCalls();
   releaseAllCliHolds();
+  void dropAllLogpoints();
   noteSocketServing(false);
   void capturePageMenus(false).catch(() => undefined);
   subscriptions.clear();
@@ -351,6 +354,7 @@ function sync() {
     dropAllHistoryHandles();
     forgetTabCalls();
     releaseAllCliHolds();
+    void dropAllLogpoints();
     noteSocketServing(false);
     void capturePageMenus(false).catch(() => undefined);
     stopResponders();

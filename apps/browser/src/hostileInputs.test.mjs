@@ -405,3 +405,70 @@ test("a WebKit page menu address reaches native's writer only as a string the cl
     }
   }
 });
+
+const { logpointCondition, checkedExpression } = await import("./state/automation/devToolsLogpoints.ts");
+const { mapLocation } = await import("./state/automation/devToolsSourceMaps.ts");
+const { fieldDataKey } = await import("./state/automation/devToolsFieldData.ts");
+const { describeIssue } = await import("./state/automation/devToolsIssues.ts");
+const { schemaProblem } = await import("./state/automation/socketSchema.ts");
+const { DEVTOOLS_INSPECT_METHODS } = await import("./state/automation/socketDevToolsInspect.ts");
+const vm = await import("node:vm");
+
+test("no hostile expression or condition makes a logpoint's condition truthy, so it never pauses the page", () => {
+  const run = (code) => {
+    const logged = [];
+    const context = vm.createContext({ console: { log: (...args) => logged.push(args) }, String });
+    return { result: vm.runInContext(`(function () { const total = 3; return ${code}; })()`, context, { timeout: 500 }), logged };
+  };
+  const control = run(logpointCondition("c", "total", null));
+  assert.deepEqual([control.result, control.logged], [false, [["[ardia logpoint c]", 3]]], "a plain logpoint logs");
+  for (const s of strings) {
+    let usable = true;
+    try {
+      checkedExpression(s, "expression");
+    } catch {
+      usable = false;
+    }
+    if (!usable) continue;
+    for (const code of [logpointCondition("h", s, null), logpointCondition("h", "total", s), logpointCondition("h", s, s)]) assert.equal(run(code).result, false, show(s));
+  }
+});
+
+test("a source map is only ever an inline map or a same-origin http(s) address, whatever the page names", () => {
+  const script = "https://shop.example/js/app.js";
+  assert.deepEqual(mapLocation(script, "app.js.map"), { kind: "remote", url: "https://shop.example/js/app.js.map" });
+  for (const s of strings)
+    for (const ref of [s, `${s}.map`, `https://evil.example/${s}`, `\u002f/evil.example/${s}`]) {
+      const location = mapLocation(script, ref);
+      if (!location || location.kind === "inline") continue;
+      const url = new URL(location.url);
+      assert.equal(url.origin, "https://shop.example", show(ref));
+      assert.equal(url.username + url.password, "", show(ref));
+    }
+});
+
+test("field data asks only for a web origin or path, never another scheme, credentials or a query", () => {
+  assert.equal(fieldDataKey("https://shop.example/a?b=1#c", "origin"), "https://shop.example");
+  for (const s of strings)
+    for (const page of [s, `https://shop.example/${s}`, `${s}://shop.example/`])
+      for (const scope of ["origin", "url"]) {
+        let key = null;
+        try {
+          key = fieldDataKey(page, scope);
+        } catch {
+          continue;
+        }
+        assert.match(key, /^https?:\/\/[^/?#@\s]+(\/[^?#\s]*)?$/, show(page));
+      }
+});
+
+test("DevTools issue codes and the styles method's property names refuse hostile values", () => {
+  const styles = DEVTOOLS_INSPECT_METHODS.find((m) => m.name === "devtools.styles");
+  assert.equal(schemaProblem(styles.params, { tab: "t", selector: "a", properties: ["color", "--brand-1"] }, "params"), null);
+  for (const { id, value } of HOSTILE_VALUES) {
+    const described = describeIssue({ issue: { code: value, details: {} } });
+    if (described) assert.match(described.code, /^[A-Za-z]+$/, id);
+    if (typeof value === "string" && /^[a-z][a-z-]*$/i.test(value)) continue;
+    assert.notEqual(schemaProblem(styles.params, { tab: "t", selector: "a", properties: [value] }, "params"), null, id);
+  }
+});

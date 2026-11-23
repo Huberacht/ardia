@@ -1401,6 +1401,20 @@
    ]
   },
   {
+   "id": "socket-family:devtools",
+   "source": "socket",
+   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); tabs through tabOf; reload and logpoints only on tabs the command opened (controlOwnsTab); a session sends only INSPECTION_METHODS, never an emulation or network override; logpoint conditions always answer false (D3: any same-user process is the owner)",
+   "checks": [
+    "apps/browser/src/state/automation/socketSchema.ts#schemaProblem",
+    "apps/browser/src/state/automation/devToolsSession.ts#INSPECTION_METHODS",
+    "apps/browser/src/state/automation/devToolsLogpoints.ts#logpointCondition",
+    "apps/browser/src/state/automation/socketDevToolsLogpoints.ts#controlOwnsTab"
+   ],
+   "findings": [
+    "D3"
+   ]
+  },
+  {
    "id": "raw-settings-write:state/engines/actions.ts",
    "source": "native",
    "guard": "Sets engineMode to one of the engine modes from a user action",
@@ -1724,6 +1738,43 @@
     "apps/browser/src/state/tabs/busyTabWatch.ts#freshOwners",
     "apps/browser/src/state/tabs/busyTabWatch.ts#toastName",
     "apps/browser/src/state/tabs/busyTabWatch.ts#stillBusyIn"
+   ],
+   "detected": false
+  },
+  {
+   "id": "devtools-page-data:trace",
+   "source": "page",
+   "guard": "Trace events describe what the page did: each field is type-checked and length-capped, event count capped at MAX_TRACE_EVENTS, and only numbers, enums and capped URLs reach the reply; nothing is stored",
+   "checks": [
+    "apps/browser/src/state/automation/devToolsInsights.ts#analyzeTrace"
+   ],
+   "detected": false
+  },
+  {
+   "id": "devtools-page-data:issues",
+   "source": "page",
+   "guard": "Audits issues are read field by field into a fixed shape; codes must be letters only; cookie names, domains and paths only, never the raw cookie line or value; capped at MAX_ISSUES",
+   "checks": [
+    "apps/browser/src/state/automation/devToolsIssues.ts#describeIssue"
+   ],
+   "detected": false
+  },
+  {
+   "id": "devtools-page-data:styles",
+   "source": "page",
+   "guard": "Matched styles are read into a fixed shape with capped strings, rule and inheritance counts; the selector goes to DOM.querySelector as data and property names must match a CSS identifier pattern",
+   "checks": [
+    "apps/browser/src/state/automation/devToolsCascade.ts#cascadeFor"
+   ],
+   "detected": false
+  },
+  {
+   "id": "devtools-page-data:source-maps",
+   "source": "page",
+   "guard": "Source maps come from the caller, an inline data: URL, or a same-origin http(s) fetch without cookies or redirects, size and count capped; a malformed map resolves nothing",
+   "checks": [
+    "apps/browser/src/state/automation/devToolsSourceMaps.ts#mapLocation",
+    "apps/browser/src/state/automation/devToolsSourceMaps.ts#parseSourceMap"
    ],
    "detected": false
   }

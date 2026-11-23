@@ -781,6 +781,46 @@ macOS, can't be answered by any app, and shouldn't be: they are the proof that t
 at listing Ardia's own step, and the owner touches the sensor. A virtual authenticator (`WebAuthn.addVirtualAuthenticator`
 over DevTools) remains the way to test, never the owner's real keys.
 
+## DevTools inspection
+
+The `devtools` family (`cli_socket_calls_devtools`) inspects a tab in its own DevTools session and answers structured
+results instead of raw protocol data. Every method is in `methods` with its schema.
+
+| Method | What it answers |
+| --- | --- |
+| `devtools.perfTrace` | Records a trace (`Tracing.start`/`Tracing.end`, `durationMs` 250–30000) and answers FCP, LCP, TTFB, TBT, INP and CLS with insights: `lcp-breakdown` (TTFB, load delay, load duration, render delay), `cls-culprits` (worst session window, shifted nodes, fonts or images that finished just before), `inp-breakdown` (input delay, processing, presentation), `long-tasks` (with the script or function that ran longest), `render-blocking`, `document-latency`, `network-bottlenecks`. `reload` only on a tab the command opened |
+| `devtools.perfInsight` | The same analysis for trace events you pass (`[…]` or `{traceEvents}`, within the 1 MiB line) |
+| `devtools.issues` | A tab's DevTools Issues (CORS, cookies and SameSite, CSP, mixed content, deprecations, …), each with an explanation, a fix and the affected request, element, source line or cookie (name, domain, path; never the value or raw cookie line). Or explains `issues` you pass |
+| `devtools.stackTrace` | An error and its `Error.cause` chain with every frame mapped through source maps: given in `sourceMaps`, inline `data:` maps, or same-origin http(s) maps fetched without cookies or redirects (`fetchSourceMaps: false` turns fetching off) |
+| `devtools.causeChainFunction` | A function declaration for `Runtime.callFunctionOn` on an error that answers its cause chain in the shape `devtools.stackTrace` takes |
+| `devtools.styles` | For the first element matching `selector`, which declaration wins each property (selector, specificity, origin, stylesheet line), each overridden one with why it lost, and the computed value |
+| `devtools.logpoint`, `devtools.logpoints`, `devtools.clearLogpoint` | Non-pausing logpoints on a tab the command opened; `url` may be an original source path its source map names. The condition wraps the expression so it always answers `false`, so the page never pauses. Logpoints belong to the connection and end when it closes or control stops |
+
+**Isolation.** `InspectionSession` (`state/automation/devToolsSession.ts`) sends only `INSPECTION_METHODS`, never an
+emulation, network or audit override, so it can't reset what the command or DevTools set. When it closes it removes its
+breakpoints, ends its trace and disables only the domains it enabled. Each trace is recorded into a buffer owned by
+that call and analysed into a model built for that call, so nothing carries over from one trace to the next.
+
+**Field data is opt-in.** `includeFieldData: true` with your `fieldDataKey` asks the public field-data service for
+real-user metrics: for the page's origin by default, or for its address without the query when `fieldDataScope` is `url`.
+Nothing is sent without it, and never for a private window's page.
+
+**Engine.** The tab-reading methods need an event-capable inspection session from the engine (#3993); until it lands
+they answer `failed` with "This Ardia can't open a DevTools inspection session on a tab yet." The analysers
+(`perfInsight`, `issues` given `issues`, `stackTrace`, `causeChainFunction`) work now.
+
+**Why not the DevTools frontend's own trace engine.** `third_party/devtools-frontend`'s `models/trace` handlers and
+insights depend on its `core/i18n`, `core/platform` and `lantern` modules. Bundling them into the app's Hermes bundle
+would add megabytes to launch for a feature only the command uses. The analyser here reads the same trace events
+(`navigationStart`, `largestContentfulPaint::Candidate`, `LayoutShift`, `EventTiming`, `RunTask`, `Resource*`)
+with the same thresholds. To adopt the frontend's engine later, build `front_end/models/trace/trace.ts` with esbuild
+into a separate bundle that is loaded only when a `devtools.*` method first runs, and keep `analyzeTrace`'s answer shape.
+
+**Telemetry** (counts only): `cli_devtools_traces`, `cli_devtools_trace_failures`, `cli_devtools_trace_analysis_ms`,
+`cli_devtools_field_data_requests`, `cli_devtools_issues_reported`, `cli_devtools_source_maps_resolved`,
+`cli_devtools_source_maps_failed`, `cli_devtools_style_lookups`, `cli_devtools_logpoints_set`,
+`cli_devtools_logpoints_refused`.
+
 ## Next
 
 Designed, not built in this round, each in its own file under `state/automation/socket<Area>.ts`:
