@@ -307,7 +307,7 @@ final class SearchStageView: ExpoView {
     anticipationTask = Task { [weak self] in
       try? await Task.sleep(for: Self.keyboardAnticipation)
       guard let self, !Task.isCancelled, isShown, !isClosing, anticipatedLift != nil, !keyboardUp else { return }
-      move(.spring(Motion.smoothSpring, velocity: 0)) { [self] in anticipatedLift = nil }
+      move(.spring(Motion.smoothSpring, velocity: 0)) { [self] in self.anticipatedLift = nil }
     }
   }
 
