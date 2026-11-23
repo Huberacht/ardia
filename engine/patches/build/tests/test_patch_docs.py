@@ -19,6 +19,7 @@ PATCH_CELL = re.compile(r'^`([^`\s]+\.patch)`$')
 UNESCAPED_PIPE = re.compile(r'(?<!\\)\|')
 DELIMITER_CELL = re.compile(r'^:?-{3,}:?$')
 FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
+COMMENT_OPEN = re.compile(r'^ {0,3}<!--')
 SERIES_TAGS = ('all', 'mac', 'linux')
 
 
@@ -49,19 +50,24 @@ def cells(row):
     return [cell.strip() for cell in UNESCAPED_PIPE.split(row.strip().removeprefix('|').removesuffix('|'))]
 
 
-def fenced(lines):
-    inside, opener = set(), None
+def hidden(lines):
+    inside, opener, in_comment = {}, None, False
     for n, line in enumerate(lines):
-        match = FENCE.match(line)
-        if opener is None:
-            if match:
-                opener = match.group(1)
-                inside.add(n)
-        else:
-            inside.add(n)
-            if match and match.group(1)[0] == opener[0] and len(match.group(1)) >= len(opener) \
-                    and not line.strip()[len(match.group(1)):].strip():
+        fence = FENCE.match(line)
+        if in_comment:
+            inside[n] = 'an HTML comment'
+            in_comment = '-->' not in line
+        elif opener is not None:
+            inside[n] = 'a code fence'
+            if fence and fence.group(1)[0] == opener[0] and len(fence.group(1)) >= len(opener) \
+                    and not line.strip()[len(fence.group(1)):].strip():
                 opener = None
+        elif fence:
+            opener = fence.group(1)
+            inside[n] = 'a code fence'
+        elif COMMENT_OPEN.match(line):
+            inside[n] = 'an HTML comment'
+            in_comment = '-->' not in line.split('<!--', 1)[1]
     return inside
 
 
@@ -74,12 +80,12 @@ def is_delimiter(line, width):
 
 def table(doc_text, header, where):
     lines = doc_text.splitlines()
-    inside = fenced(lines)
+    inside = hidden(lines)
     headed = [n for n, line in enumerate(lines) if line.startswith('|') and tuple(cells(line)) == header]
     starts = [n for n in headed if n not in inside]
     title = f'`| {" | ".join(header)} |`'
     if not starts and headed:
-        return None, [f'{where}:{headed[0] + 1}: the table headed {title} is inside a code fence']
+        return None, [f'{where}:{headed[0] + 1}: the table headed {title} is inside {inside[headed[0]]}']
     if len(starts) != 1:
         return None, [f'{where}: expected one table headed {title}, found {len(starts)}']
     start = starts[0]
@@ -262,6 +268,26 @@ class EngineChecker(unittest.TestCase):
         self.assertEqual(self.check(doc='```markdown\n' + ENGINE_DOC_SAMPLE + '```\n'),
                          ['doc:4: the table headed `| Patch | What it does | Removable when |` is inside a code fence'])
 
+    def test_a_table_inside_a_multiline_html_comment_fails(self):
+        self.assertEqual(self.check(doc='<!--\n' + ENGINE_DOC_SAMPLE + '-->\n'),
+                         ['doc:4: the table headed `| Patch | What it does | Removable when |` is inside an HTML comment'])
+
+    def test_a_comment_closing_later_on_a_text_line_still_hides_the_table(self):
+        doc = '<!-- old inventory\n' + ENGINE_DOC_SAMPLE.replace('After.', 'After. -->')
+        self.assertEqual(len(self.check(doc=doc)), 1)
+
+    def test_a_one_line_comment_before_the_table_passes(self):
+        self.assertEqual(self.check(doc='<!-- note -->\n' + ENGINE_DOC_SAMPLE), [])
+
+    def test_a_table_after_a_closed_multiline_comment_passes(self):
+        self.assertEqual(self.check(doc='<!--\nhidden\n-->\n\n' + ENGINE_DOC_SAMPLE), [])
+
+    def test_a_comment_marker_inside_a_fence_hides_nothing_after_it(self):
+        self.assertEqual(self.check(doc='```\n<!--\n```\n\n' + ENGINE_DOC_SAMPLE), [])
+
+    def test_a_fence_marker_inside_a_comment_opens_no_fence(self):
+        self.assertEqual(self.check(doc='<!--\n```\n-->\n\n' + ENGINE_DOC_SAMPLE), [])
+
     def test_a_tilde_fence_counts_too(self):
         self.assertEqual(len(self.check(doc='~~~\n' + ENGINE_DOC_SAMPLE + '~~~\n')), 1)
 
@@ -367,6 +393,10 @@ class WindowsChecker(unittest.TestCase):
 
     def test_a_table_inside_a_code_fence_fails(self):
         self.assertEqual(len(self.check(doc='```\n' + WINDOWS_DOC_SAMPLE + '```\n')), 1)
+
+    def test_a_table_inside_an_html_comment_fails(self):
+        self.assertEqual(self.check(doc='<!--\n' + WINDOWS_DOC_SAMPLE + '-->\n'),
+                         ['doc:2: the table headed `| Patch | Line | What it does | Removable when |` is inside an HTML comment'])
 
 
 if __name__ == '__main__':
