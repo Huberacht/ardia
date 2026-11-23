@@ -4,7 +4,8 @@ const internals = React.__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_
 const sameDeps = (a, b) => !!a && !!b && a.length === b.length && a.every((d, i) => Object.is(d, b[i]));
 
 export function mount(render, { props, contexts = [] } = {}) {
-  const slots = [];
+  let slots = [];
+  const refSlots = new WeakSet();
   const provided = new Map(contexts);
   let at = 0;
   let current = props;
@@ -35,7 +36,11 @@ export function mount(render, { props, contexts = [] } = {}) {
     },
     useCallback: (fn, deps) => dispatcher.useMemo(() => fn, deps),
     useRef(initial) {
-      const s = slot(() => ({ current: initial }));
+      const s = slot(() => {
+        const ref = { current: initial };
+        refSlots.add(ref);
+        return ref;
+      });
       at++;
       return s;
     },
@@ -43,6 +48,7 @@ export function mount(render, { props, contexts = [] } = {}) {
       const s = slot(() => {
         const state = { value: typeof initial === "function" ? initial() : initial };
         state.set = (next) => {
+          if (discarding) return;
           const v = typeof next === "function" ? next(state.value) : next;
           if (Object.is(v, state.value)) return;
           state.value = v;
@@ -154,6 +160,9 @@ export function mount(render, { props, contexts = [] } = {}) {
     },
     discard(next = current) {
       const previous = internals.H;
+      const committed = slots;
+      const wasDirty = dirty;
+      slots = committed.map((s) => (s && !refSlots.has(s) ? { ...s } : s));
       internals.H = dispatcher;
       at = 0;
       discarding = true;
@@ -161,6 +170,8 @@ export function mount(render, { props, contexts = [] } = {}) {
         return render(next);
       } finally {
         discarding = false;
+        slots = committed;
+        dirty = wasDirty;
         internals.H = previous;
         effects = [];
       }

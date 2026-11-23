@@ -35,16 +35,17 @@ export function SelectionPopover({ tabId }: { tabId: string }) {
     counted.current = true;
     notePageOverlay("paneOverlayOpened", shown.consent);
   };
+  const noteHidden = () => void (counted.current = false);
   if (!selection && !shown) return null;
 
   return (
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill} onLayout={(e) => setArea(e.nativeEvent.layout)}>
-      {shown && area.width > 0 && <SelectionBar key={`${shown.selection.rect.x},${shown.selection.rect.y}`} tabId={tabId} selection={shown.selection} zoom={zoom} area={area} onShown={noteShown} />}
+      {shown && area.width > 0 && <SelectionBar key={`${shown.selection.rect.x},${shown.selection.rect.y}`} tabId={tabId} selection={shown.selection} zoom={zoom} area={area} onShown={noteShown} onHidden={noteHidden} />}
     </View>
   );
 }
 
-export function SelectionBar({ tabId, selection, zoom, area, onShown }: { tabId: string; selection: PageSelection; zoom: number; area: { width: number; height: number }; onShown: () => void }) {
+export function SelectionBar({ tabId, selection, zoom, area, onShown, onHidden }: { tabId: string; selection: PageSelection; zoom: number; area: { width: number; height: number }; onShown: () => void; onHidden: () => void }) {
   const [width, setWidth] = useState(0);
   const appear = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -57,7 +58,8 @@ export function SelectionBar({ tabId, selection, zoom, area, onShown }: { tabId:
   const visible = inPane && width > 0;
   useEffect(() => {
     if (visible) onShown();
-  }, [visible]);
+    else if (!inPane) onHidden();
+  }, [visible, inPane]);
   if (!inPane) return null;
   const above = top - GAP - HEIGHT >= 4;
   const y = above ? top - GAP - HEIGHT : Math.min(bottom + GAP, area.height - HEIGHT - 4);

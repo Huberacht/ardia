@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { mount } from "../../test-hooks.mjs";
 const { usePanelsPresence } = await import("../ui/Popover.tsx");
 const { BEHIND_NEW_TAB, OVERLAY, nextShownOverlays, overlayBits, overlayCount, pageOverlays, useEligibleGate, useKeptOverlays, useKeptWhile, useShownOverlaysCount } = await import("./overlayGate.ts");
@@ -175,4 +175,15 @@ test("a discarded render subscribes to and unsubscribes from no store", () => {
   assert.deepEqual([subscribed, unsubscribed], [1, 0]);
   hook.rerender({ key: "b" });
   assert.deepEqual([subscribed, unsubscribed], [2, 1], "a committed render moves the subscription");
+});
+
+test("a state update made inside a discarded render doesn't survive it", () => {
+  const hook = mount(({ see }) => {
+    const [seen, setSeen] = useState(false);
+    if (see && !seen) setSeen(true);
+    return seen;
+  }, { props: { see: false } });
+  hook.discard({ see: true });
+  assert.equal(hook.pending, false, "nothing is left to render");
+  assert.equal(hook.rerender({ see: false }), false);
 });

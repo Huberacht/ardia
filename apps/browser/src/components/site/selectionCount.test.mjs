@@ -7,11 +7,15 @@ import { sessionEnding } from "../../state/telemetry/usage.ts";
 const { setPageSelection } = await import("../../state/site/selection.ts");
 const { SelectionPopover } = await import("./SelectionPopover.tsx");
 
+let opensSeen = 0;
 const opens = async () => {
   sessionEnding();
   await client.saveQueueNow();
   const events = JSON.parse(docs.get("telemetry-queue.json") ?? '{"events":[]}').events.filter((event) => event.event === "usage_counts");
-  return events.reduce((sum, event) => sum + (event.properties.pane_overlay_opens ?? 0), 0);
+  const total = events.reduce((sum, event) => sum + (event.properties.pane_overlay_opens ?? 0), 0);
+  const since = total - opensSeen;
+  opensSeen = total;
+  return since;
 };
 
 after(() => client.setSharing(false, "settings"));
@@ -80,6 +84,30 @@ test("a bar that became due while sharing was off isn't counted when sharing tur
     popover.value.props.onLayout({ nativeEvent: { layout: AREA } });
     layOut(popover.value.props.children);
     assert.equal(await opens(), 0, "the opening belongs to the moment its delay ended, when sharing was off");
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test("a bar that leaves the pane and comes back counts again, and only then", async () => {
+  client.loadChoice();
+  client.setSharing(true, "onboarding");
+  await opens();
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const { bar } = showBar("zoomed", { x: 10, y: 200, width: 40, height: 12 });
+    const drawn = layOut(bar);
+    assert.equal(await opens(), 1);
+    drawn.rerender();
+    assert.equal(await opens(), 0, "laying out again counts nothing");
+    const element = (zoom) => bar.type({ ...bar.props, zoom });
+    const zoomed = mount(({ zoom }) => element(zoom), { props: { zoom: 1 } });
+    zoomed.value?.props.onLayout({ nativeEvent: { layout: { width: 120 } } });
+    void zoomed.value;
+    await opens();
+    assert.equal(zoomed.rerender({ zoom: 10 }), null, "zoomed in, the selection is below the pane");
+    zoomed.rerender({ zoom: 1 });
+    assert.equal(await opens(), 1, "back in the pane, it shows again");
   } finally {
     mock.timers.reset();
   }
