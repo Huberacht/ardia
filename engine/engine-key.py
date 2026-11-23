@@ -273,7 +273,7 @@ def series_win_module():
 
 
 class WinPlan:
-    def __init__(self, tree, rev='the tree'):
+    def __init__(self, tree, rev='the tree', complete=True):
         tree.load((WIN_ROOT,))
         if not any(under(path, WIN_ROOT) for path in tree.files()):
             raise Problem(f'{rev} has no {WIN_ROOT}')
@@ -294,7 +294,7 @@ class WinPlan:
         if self.outside:
             tree.load(self.outside)
         missing = [path for path in self.inputs.files if path not in tree.entries]
-        if missing:
+        if missing and complete:
             raise Problem(f'the Windows build reads {", ".join(missing)}, which is not there')
 
     def counts(self, path):
@@ -338,7 +338,7 @@ def layer_excludes(tree, layer, lent):
 def paths(platform):
     tree = WorkTree()
     if platform == 'win':
-        return WinPlan(tree).pathspecs()
+        return WinPlan(tree, complete=False).pathspecs()
     plan = Plan(tree, platform)
     specs = list(ROOTS) + plan.outside + list(TOOLING_PATHSPECS)
     specs += [f':(exclude){path}' for path in sorted(plan.skipped_patches)]
