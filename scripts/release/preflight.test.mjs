@@ -270,12 +270,15 @@ test("the CLI refuses a bad version and finishes the repo's own checks in under 
   assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
 });
 
-test("a feed cut off mid-item, or with an item missing its build, is refused before it reaches Sparkle", async () => {
+test("a feed cut off, not well-formed, without items, or with items appcast.py would read differently is refused before it reaches Sparkle", async () => {
   const root = fixture();
   const cut = LIVE.slice(0, LIVE.indexOf("</item>"));
   const unclosed = LIVE.replace("</channel>", "        <item>\n            <title>half</title>\n    </channel>");
   const buildless = LIVE.replace("<sparkle:version>40</sparkle:version>", "");
-  for (const body of [cut, unclosed, buildless]) {
+  const itemless = feed([]);
+  const attributed = LIVE.replace("<item>", '<item id="x">').replace("</item>", "</item >");
+  const mismatched = LIVE.replace("<sparkle:shortVersionString>1.2.2</sparkle:shortVersionString>", "<sparkle:shortVersionString>1.2.2</sparkle:version>");
+  for (const body of [cut, unclosed, buildless, itemless, attributed, mismatched]) {
     const feedOut = join(root, "base.xml");
     const result = await run({ version: "1.2.3", root, feedOut, mode: "dry-run", responses: [{ status: 200, body }] });
     assert.match(result.fails.join("\n"), /isn't a whole Sparkle appcast/);

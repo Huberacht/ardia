@@ -24,9 +24,9 @@ valid_id() { [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 status_of() { awk '$1 == "status:" { sub(/^[[:space:]]*status:[[:space:]]*/, ""); print; exit }' "$1"; }
 
 staple() {
-  local attempt
+  local path="${1:-$target}" attempt
   for attempt in 1 2 3 4 5; do
-    xcrun stapler staple "$target" && return 0
+    xcrun stapler staple "$path" && return 0
     [ "$attempt" = 5 ] || { echo "stapler couldn't fetch the ticket yet (attempt $attempt); asking again"; sleep "$delay"; }
   done
   return 1
@@ -80,7 +80,11 @@ resume() {
     Accepted) echo "Apple already accepted submission $id of this code" ;;
     "In Progress") echo "Submission $id of this code is still in Apple's queue; waiting on it instead of uploading again"; wait_for "$id" "$log" "$record" ;;
     Invalid | Rejected) rejected "$id" "$log" "$record" ;;
-    *) echo "Apple doesn't know submission $id (status '${status:-none}'); submitting again"; return 1 ;;
+    *)
+      [ "$missing" = 1 ] || die "Apple answered '$status' about submission $id, which this script doesn't know; it stays recorded in $record, so nothing is uploaded again"
+      echo "Apple doesn't know submission $id; submitting again"
+      return 1
+      ;;
   esac
 }
 
@@ -130,7 +134,8 @@ team_of() { { codesign -d -vv "$1" 2>&1 || true; } | sed -n 's/^TeamIdentifier=/
 kept_matches() {
   local saved="$1" expected="$2" team mnt ok=1
   team="$(team_of "$packed_app")"
-  [ -n "$team" ] && [ "$(team_of "$saved")" = "$team" ] || return 1
+  [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || return 1
+  codesign --verify --strict -R="=anchor apple generic and certificate leaf[subject.OU] = \"$team\"" "$saved" >/dev/null 2>&1 || return 1
   mnt="$(mktemp -d "${TMPDIR:-/tmp}/ac-notary-kept.XXXXXX")"
   hdiutil attach "$saved" -readonly -nobrowse -noautoopen -noverify -mountpoint "$mnt" >/dev/null 2>&1 || { rmdir "$mnt"; return 1; }
   [ "$(cd "$mnt" && ls -A | sort | tr '\n' ' ')" = ".DS_Store .VolumeIcon.icns .background.tiff .fseventsd Applications Ardia.app " ] || ok=0
@@ -162,13 +167,20 @@ notarize() {
     fi
   fi
   if [ -n "$id" ] && resume "$id" "$log" "$record"; then
-    if [ -n "$saved" ]; then
-      cp "$saved" "$target"
-      echo "$(basename "$target") is now the copy submission $id was made from (the same app, packed in an earlier run)"
-    fi
-    if staple; then
-      [ -z "$saved" ] || rm -f "$saved"
-      return 0
+    if [ -z "$saved" ]; then
+      staple && return 0
+    else
+      local scratch restored
+      scratch="$(mktemp -d "$logs/.kept.XXXXXX")"
+      restored="$scratch/$(basename "$target")"
+      cp "$saved" "$restored"
+      if staple "$restored"; then
+        mv -f "$restored" "$target"
+        rm -rf "$scratch" "$saved"
+        echo "$(basename "$target") is now the copy submission $id was made from (the same app and packing inputs, packed in an earlier attempt)"
+        return 0
+      fi
+      rm -rf "$scratch"
     fi
     echo "Apple accepted $id but has no ticket for this file; submitting again"
   fi
@@ -198,7 +210,9 @@ case "$target" in
     ;;
   *.dmg)
     if [ -n "$packed_app" ] && cdhash="$(cdhash_of "$packed_app")"; then
-      notarize "$target" "dmg-of-cdhash-$cdhash" "$state/dmg-of-cdhash-$cdhash.dmg" "$cdhash"
+      packing="$( { printf '%s\n' "$(basename "$target")" "$(git -C "$root" rev-parse HEAD 2>/dev/null || echo none)"; git -C "$root" status --porcelain -- scripts/dmg scripts/release/package.sh 2>/dev/null || true; for input in "$root/scripts/release/package.sh" "$root"/scripts/dmg/*; do [ -f "$input" ] && sha256_of "$input"; done; } | { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi; } | cut -c1-16)"
+      key="dmg-of-cdhash-$cdhash-packing-$packing"
+      notarize "$target" "$key" "$state/$key.dmg" "$cdhash"
     else
       notarize "$target" "sha256-$(sha256_of "$target")"
     fi

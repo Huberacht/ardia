@@ -59,19 +59,44 @@ export function plistString(text, key) {
   return match ? match[1] : null;
 }
 
+const PARSE_FEED = `
+import json, sys
+import xml.etree.ElementTree as ET
+SPARKLE = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
+try:
+    root = ET.fromstring(sys.stdin.buffer.read())
+except ET.ParseError as error:
+    print(json.dumps({"error": str(error)}))
+    sys.exit(0)
+channels = root.findall("channel") if root.tag == "rss" else []
+if len(channels) != 1:
+    print(json.dumps({"error": "not one rss channel"}))
+    sys.exit(0)
+print(json.dumps({"items": [[item.findtext(SPARKLE + "shortVersionString"), item.findtext(SPARKLE + "version")] for item in channels[0].iter("item")]}))
+`;
+
+function parsedItems(xml) {
+  const run = spawnSync("python3", ["-I", "-c", PARSE_FEED], { input: xml, encoding: "utf8" });
+  if (run.status !== 0) return null;
+  const parsed = JSON.parse(run.stdout);
+  return parsed.error ? null : parsed.items;
+}
+
 export function feedFacts(xml, version) {
-  if (!xml.includes("xmlns:sparkle") || !/<channel>[\s\S]*<\/channel>\s*<\/rss>\s*$/.test(xml)) return null;
-  const opened = (xml.match(/<item>/g) ?? []).length;
+  if (!xml.includes("xmlns:sparkle")) return null;
+  const parsed = parsedItems(xml);
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-  if (opened !== items.length || (xml.match(/<\/item>/g) ?? []).length !== items.length) return null;
+  if (!parsed || parsed.length === 0 || parsed.length !== items.length) return null;
+  if ((xml.match(/<item[\s>]/g) ?? []).length !== items.length || (xml.match(/<\/item\s*>/g) ?? []).length !== items.length) return null;
   let newest = null;
   let newestOther = null;
   const listedBuilds = [];
-  for (const item of items) {
-    const build = /<sparkle:version>(\d+)<\/sparkle:version>/.exec(item);
-    if (!build || !/<sparkle:shortVersionString>[^<]+</.test(item)) return null;
-    const number = Number(build[1]);
-    const mine = /<sparkle:shortVersionString>([^<]+)</.exec(item)[1] === version;
+  for (const [index, item] of items.entries()) {
+    const build = /<sparkle:version>(\d+)<\/sparkle:version>/.exec(item)?.[1];
+    const short = /<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/.exec(item)?.[1];
+    if (!build || !short || parsed[index][0] !== short || parsed[index][1] !== build) return null;
+    const number = Number(build);
+    const mine = short === version;
     if (mine) listedBuilds.push(number);
     newest = Math.max(newest ?? 0, number);
     if (!mine) newestOther = Math.max(newestOther ?? 0, number);
@@ -212,7 +237,7 @@ export async function preflight({ version, mode = "release", feed, feedOut, valu
   if (xml) {
     const facts = feedFacts(xml, version);
     if (!facts) {
-      fail(`${source} isn't a whole Sparkle appcast (cut off, or an item without its version and build)`);
+      fail(`${source} isn't a whole Sparkle appcast (not well-formed XML, no items, or an item without its version and build)`);
       xml = "";
     } else if (releaseBuild !== null) {
       if (facts.newestOther === null || releaseBuild > facts.newestOther) {

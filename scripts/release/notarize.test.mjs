@@ -49,7 +49,11 @@ esac
 `;
 
 const CODESIGN = `#!/usr/bin/env bash
-path="$3"
+path="\${@: -1}"
+if [ "$1" = --verify ]; then
+  [ -f "$NOTARY_STUB/dmg-team" ] && { echo "$path: test-requirement: code failed to satisfy specified code requirement(s)" >&2; exit 3; }
+  exit 0
+fi
 hash="$NOTARY_STUB/cdhash"
 [ -f "$path/stub-cdhash" ] && hash="$path/stub-cdhash"
 team=U5L5T3NGVV
@@ -110,6 +114,16 @@ function scratch() {
   };
   const records = () => (existsSync(state) ? Object.fromEntries(readdirSync(state).map((f) => [f, readFileSync(join(state, f), "utf8").trim()])) : {});
   return { dir, dmg, state, stub, set, calls, notarize, records, ticket: (name = "Ardia-1.2.3.dmg") => writeFileSync(join(stub, "ticket"), `${name}\n`) };
+}
+
+function dmgKey(s, app) {
+  const probe = scratch();
+  writeFileSync(join(probe.stub, "cdhash"), readFileSync(join(s.stub, "cdhash"), "utf8"));
+  probe.set("submit", [FIRST]);
+  probe.ticket();
+  const run = probe.notarize(probe.dmg, {}, [app]);
+  assert.equal(run.status, 0, run.output);
+  return Object.keys(probe.records()).find((name) => !name.endsWith(".dmg"));
 }
 
 function sha256(path) {
@@ -314,7 +328,8 @@ test("a DMG packed again resumes the submission of the copy it kept, and swaps t
   s.set(`wait-${FIRST}`, ["drop", "drop", "drop", "drop", "drop"]);
   const first = s.notarize(s.dmg, {}, [app]);
   assert.notEqual(first.status, 0);
-  const key = "dmg-of-cdhash-c0c480061bc60ca0bdb4e8a609fabb4168eebd52";
+  const key = Object.keys(s.records()).find((name) => !name.endsWith(".dmg"));
+  assert.match(key, /^dmg-of-cdhash-c0c480061bc60ca0bdb4e8a609fabb4168eebd52-packing-[0-9a-f]{16}$/);
   assert.equal(s.records()[key], FIRST);
   assert.equal(s.records()[`${key}.dmg`], "the first packing");
   writeFileSync(s.dmg, "the second packing, other bytes");
@@ -363,7 +378,7 @@ test("a kept DMG that isn't this app, this team's signature or the usual volume 
     const app = join(s.dir, "dist", "Ardia.app");
     mkdirSync(join(app, "Contents"), { recursive: true });
     writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
-    const key = "dmg-of-cdhash-c0c480061bc60ca0bdb4e8a609fabb4168eebd52";
+    const key = dmgKey(s, app);
     mkdirSync(s.state);
     writeFileSync(join(s.state, key), `${FIRST}\n`);
     writeFileSync(join(s.state, `${key}.dmg`), "planted");
@@ -377,4 +392,37 @@ test("a kept DMG that isn't this app, this team's signature or the usual volume 
     assert.equal(readFileSync(s.dmg, "utf8"), "a disk image", name);
     assert.deepEqual(s.calls(), ["notarytool submit", "notarytool wait", "stapler staple"], name);
   }
+});
+
+test("an info status this script doesn't know stops with the record kept, never uploading again", () => {
+  const s = scratch();
+  mkdirSync(s.state);
+  writeFileSync(join(s.state, sha256(s.dmg)), `${FIRST}\n`);
+  writeFileSync(join(s.stub, `status-${FIRST}`), "Processing\n");
+  const run = s.notarize();
+  assert.notEqual(run.status, 0);
+  assert.match(run.output, /Apple answered 'Processing' about submission 11111111.*nothing is uploaded again/);
+  assert.deepEqual(s.calls(), ["notarytool info"]);
+  assert.deepEqual(s.records(), { [sha256(s.dmg)]: FIRST });
+});
+
+test("a kept DMG that won't staple leaves this run's DMG in place, and that one is submitted", () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  const key = dmgKey(s, app);
+  mkdirSync(s.state, { recursive: true });
+  writeFileSync(join(s.state, key), `${FIRST}\n`);
+  writeFileSync(join(s.state, `${key}.dmg`), "the earlier packing");
+  writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
+  volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  s.set("submit", [SECOND]);
+  const xcrun = join(s.dir, "bin", "xcrun");
+  writeFileSync(xcrun, readFileSync(xcrun, "utf8").replace('"stapler staple")', '"stapler staple")\n    [ "$(cat "$3")" = "a disk image" ] && [ -f "$stub/status-66666666-7777-4888-9999-aaaaaaaaaaaa" ] && { echo ok; exit 0; }'));
+  const run = s.notarize(s.dmg, {}, [app]);
+  assert.equal(run.status, 0, run.output);
+  assert.equal(readFileSync(s.dmg, "utf8"), "a disk image");
+  assert.deepEqual(s.calls().filter((c) => c !== "stapler staple"), ["notarytool info", "notarytool submit", "notarytool wait"]);
+  assert.deepEqual(readdirSync(join(s.dir, "dist")).filter((n) => n.startsWith(".kept")), []);
 });

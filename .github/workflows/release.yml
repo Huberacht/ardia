@@ -238,10 +238,10 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ runner.temp }}/notary-state
-          key: notary-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: notary-${{ inputs.version }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            notary-${{ inputs.version }}-${{ github.run_id }}-
-            notary-${{ inputs.version }}-
+            notary-${{ inputs.version }}-${{ github.sha }}-${{ github.run_id }}-
+            notary-${{ inputs.version }}-${{ github.sha }}-
       - name: Signing
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -283,7 +283,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ runner.temp }}/notary-state
-          key: notary-${{ inputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: notary-${{ inputs.version }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Checkout untouched
         run: |
           changed=$(git status --porcelain --untracked-files=all -- . ':!dist')
