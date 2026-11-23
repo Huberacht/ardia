@@ -266,3 +266,30 @@ test("the 30 point pill reaches the 44 point touch target without growing: a tap
   expect(host(root, "floatingBarFold")!.props.pointerEvents).toBe("box-none");
   unmount(root);
 });
+
+test("on iPhone the bar's glass and the pill's glass cross over the moment the bar turns, however fast scrolls reverse, with no callback from an earlier fold left to flip them later", () => {
+  if (android) return;
+  const root = page("redesigned");
+  const pillGlass = () => root.root.findAll((node) => node.props.testID === "hostPill" && node.props.shown !== undefined && typeof node.type !== "string")[0]!.props;
+  const expectHandoff = (collapsed: boolean) => {
+    expect(pillGlass().shown).toBe(collapsed);
+    expect(pillGlass().shownMs).toBe(150);
+    for (const id of ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"]) expect(barGlass(root, id)).toBe(!collapsed);
+  };
+  expectHandoff(false);
+  scrolled("down");
+  expectHandoff(true);
+  for (let frame = 0; frame < 3; frame++) act(() => jest.advanceTimersByTime(16));
+  scrolled("up");
+  expectHandoff(false);
+  for (let frame = 0; frame < 3; frame++) act(() => jest.advanceTimersByTime(16));
+  scrolled("down");
+  expectHandoff(true);
+  settle();
+  expectHandoff(true);
+  scrolled("up");
+  expectHandoff(false);
+  settle();
+  expectHandoff(false);
+  unmount(root);
+});

@@ -47,8 +47,19 @@ final class PageView: ExpoView {
   private var scrollRestTask: Task<Void, Never>?
   private var drawnTask: Task<Void, Never>?
   private var drawnSent = false
+  private var drawnDelivered = false
+  private var coverHandedOver = false
+  private weak var hiddenCover: UIView?
+  private var coverCapTask: Task<Void, Never>?
+  var coverNativeID: String? {
+    didSet { if coverNativeID != oldValue { coverChanged() } }
+  }
+  static let coverCap: Duration = .milliseconds(200)
+  static let drawnProbeTries = 8
+  static let flatProbesAccepted = 3
+  static let drawnProbeGap: Duration = .milliseconds(50)
   static let scrollRest: TimeInterval = 0.5
-  static let drawnProbeWidth: Double = 8
+  static let drawnProbeWidth: Double = 64
   private var madeGestures: PageGestures?
   private var madePinchWatcher: PagePinchWatcher?
   private var summaryLayer: PageSummaryLayer?
@@ -142,6 +153,7 @@ final class PageView: ExpoView {
     toneTask?.cancel()
     toneTask = nil
     forgetHostedWebView()
+    restoreHiddenCover()
     scrollObservation = nil
     contentSizeObservation = nil
     madeGestures?.detach()
@@ -193,6 +205,9 @@ final class PageView: ExpoView {
     drawnTask?.cancel()
     drawnTask = nil
     drawnSent = false
+    drawnDelivered = false
+    coverCapTask?.cancel()
+    coverCapTask = nil
     scrollRestTask?.cancel()
     scrollRestTask = nil
   }
@@ -204,27 +219,90 @@ final class PageView: ExpoView {
 
   @MainActor
   private func reportDrawnSoon() {
-    guard !drawnSent, drawnTask == nil, window != nil, let webView = hostedWebView, webView.superview === self else { return }
+    guard !drawnSent, drawnTask == nil, window != nil, let webView = hostedWebView, webView.superview === self, !webView.bounds.isEmpty else { return }
+    startCoverCap()
     let generation = observing
-    let probe = WKSnapshotConfiguration()
-    probe.afterScreenUpdates = true
-    probe.snapshotWidth = NSNumber(value: PageView.drawnProbeWidth)
     drawnTask = Task { @MainActor [weak self, weak webView] in
-      guard let webView else { return }
-      let painted = (try? await webView.takeSnapshot(configuration: probe)) != nil
+      var flatProbes = 0
+      for attempt in 0..<PageView.drawnProbeTries {
+        if attempt > 0 { try? await Task.sleep(for: PageView.drawnProbeGap) }
+        guard let probed = webView, !Task.isCancelled else { return }
+        let probe = WKSnapshotConfiguration()
+        probe.afterScreenUpdates = true
+        probe.snapshotWidth = NSNumber(value: PageView.drawnProbeWidth)
+        guard let image = try? await probed.takeSnapshot(configuration: probe) else { continue }
+        let flat = await PageSnapshots.isFlatAwayFromMain(image)
+        if flat {
+          flatProbes += 1
+          if flatProbes < PageView.flatProbesAccepted { continue }
+        }
+        await NextFramePresented.wait()
+        guard let self, !Task.isCancelled else { return }
+        self.drawnTask = nil
+        guard let shown = webView, self.shows(shown, since: generation), !self.drawnSent else { return }
+        self.drawnSent = true
+        self.drawnDelivered = true
+        self.hideCover(reason: "drawn")
+        self.onPageEvent(["name": "drawn"])
+        return
+      }
       guard let self, !Task.isCancelled else { return }
       self.drawnTask = nil
-      guard painted, !self.drawnSent, self.shows(webView, since: generation) else { return }
-      self.drawnSent = true
-      CATransaction.begin()
-      CATransaction.setCompletionBlock { [weak self, weak webView] in
-        MainActor.assumeIsolated {
-          guard let self, let webView, self.shows(webView, since: generation) else { return }
-          self.onPageEvent(["name": "drawn"])
-        }
-      }
-      CATransaction.commit()
     }
+  }
+
+  private func coverChanged() {
+    coverCapTask?.cancel()
+    coverCapTask = nil
+    restoreHiddenCover()
+    coverHandedOver = false
+    guard coverNativeID != nil else { return }
+    if drawnDelivered {
+      hideCover(reason: "drawn")
+      return
+    }
+    if window != nil, hostedWebView?.superview === self { startCoverCap() }
+  }
+
+  private func startCoverCap() {
+    guard coverNativeID != nil, !coverHandedOver, coverCapTask == nil else { return }
+    coverCapTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: PageView.coverCap)
+      guard let self, !Task.isCancelled else { return }
+      self.coverCapTask = nil
+      self.hideCover(reason: "cap")
+    }
+  }
+
+  private func hideCover(reason: String) {
+    guard let id = coverNativeID, !coverHandedOver else { return }
+    coverCapTask?.cancel()
+    coverCapTask = nil
+    coverHandedOver = true
+    let found = window.flatMap { PageView.view(withNativeID: id, in: $0) }
+    found?.isHidden = true
+    hiddenCover = found
+    onPageEvent(["name": "coverHidden", "reason": reason, "found": found != nil])
+  }
+
+  private func restoreHiddenCover() {
+    hiddenCover?.isHidden = false
+    hiddenCover = nil
+  }
+
+  private static let nativeIDKey = "nativeId"
+
+  static func view(withNativeID id: String, in root: UIView) -> UIView? {
+    let selector = NSSelectorFromString(nativeIDKey)
+    var queue: [UIView] = [root]
+    var index = 0
+    while index < queue.count {
+      let view = queue[index]
+      index += 1
+      if view.responds(to: selector), (view.value(forKey: nativeIDKey) as? String) == id { return view }
+      queue.append(contentsOf: view.subviews)
+    }
+    return nil
   }
 
   @MainActor
@@ -253,7 +331,10 @@ final class PageView: ExpoView {
     if !page.isLoading { madeGestures?.pageStoppedLoading() }
     if let session = summaryLayer?.presenter.session, !session.isCurrent(for: page) { dismissSummary(animated: false) }
     if window != nil, !isPrivate { PhoneHandoff.offer(page.url, title: page.title, from: self) } else { PhoneHandoff.withdraw(self) }
-    if wasLoading, !page.isLoading { scheduleToneSample(after: .milliseconds(250)) }
+    if wasLoading, !page.isLoading {
+      scheduleToneSample(after: .milliseconds(250))
+      reportDrawnSoon()
+    }
     wasLoading = page.isLoading
     sendTone(theme: page.themeColor, underPage: page.underPageBackgroundColor)
     paintSideMargins()
@@ -334,6 +415,7 @@ final class PageView: ExpoView {
     super.didMoveToWindow()
     guard window != nil else {
       MainActor.assumeIsolated {
+        forgetHostedWebView()
         PhoneHandoff.withdraw(self)
         madePinchWatcher?.reset()
         dismissSummary(animated: false)
@@ -355,6 +437,7 @@ final class PageView: ExpoView {
     if pinsSafeArea { applyObscuredInsets() }
     MainActor.assumeIsolated {
       if let presenter = summaryLayer?.presenter, presenter.bottomInset != summaryBottomInset { presenter.bottomInset = summaryBottomInset }
+      reportDrawnSoon()
     }
   }
 
@@ -547,5 +630,31 @@ final class PageView: ExpoView {
   func load(_ address: String) {
     guard let url = URL(string: address) else { return }
     page?.load(url)
+  }
+}
+
+@MainActor
+final class NextFramePresented: NSObject {
+  private var link: CADisplayLink?
+  private var continuation: CheckedContinuation<Void, Never>?
+
+  static func wait() async {
+    await NextFramePresented().run()
+  }
+
+  private func run() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      self.continuation = continuation
+      let link = CADisplayLink(target: self, selector: #selector(presented))
+      link.add(to: .main, forMode: .common)
+      self.link = link
+    }
+  }
+
+  @objc private func presented() {
+    link?.invalidate()
+    link = nil
+    continuation?.resume()
+    continuation = nil
   }
 }

@@ -10,7 +10,9 @@ import WebKit
 
 enum PageSnapshots {
   static var saved: URL { URL.applicationSupportDirectory.appending(path: "PageSnapshots", directoryHint: .isDirectory) }
-  static var privateFolder: URL { URL.cachesDirectory.appending(path: "PrivatePageSnapshots", directoryHint: .isDirectory) }
+  static var privateRoot: URL { URL.cachesDirectory.appending(path: "PrivatePageSnapshots", directoryHint: .isDirectory) }
+
+  static func privateFolder(_ session: String) -> URL { privateRoot.appending(path: session, directoryHint: .isDirectory) }
 
   struct HeldImage: @unchecked Sendable {
     let image: UIImage
@@ -29,7 +31,17 @@ enum PageSnapshots {
     }
   }
 
+  struct Order: Comparable, Sendable {
+    let launch: Int
+    let ticket: Int
+
+    static func < (lhs: Order, rhs: Order) -> Bool { (lhs.launch, lhs.ticket) < (rhs.launch, rhs.ticket) }
+  }
+
+  static let launch = Int(Date.now.timeIntervalSince1970 * 1000)
+
   private static let tickets = OSAllocatedUnfairLock<Int>(initialState: 0)
+  private static let privateSession = OSAllocatedUnfairLock<String>(initialState: UUID().uuidString)
 
   static func nextTicket() -> Int {
     tickets.withLock { last in
@@ -38,30 +50,53 @@ enum PageSnapshots {
     }
   }
 
-  static func write(_ pageID: String, image: UIImage, isPrivate: Bool, quality: Int, ticket: Int, priority: TaskPriority = .userInitiated) async -> [String: Any]? {
+  static func currentPrivateSession() -> String { privateSession.withLock { $0 } }
+
+  static func retirePrivateSession() -> String {
+    privateSession.withLock { session in
+      let retired = session
+      session = UUID().uuidString
+      return retired
+    }
+  }
+
+  static func write(_ pageID: String, image: UIImage, isPrivate: Bool, quality: Int, ticket: Int, session: String, priority: TaskPriority = .userInitiated) async -> [String: Any]? {
     let width = Int((image.size.width * image.scale).rounded())
     let height = Int((image.size.height * image.scale).rounded())
     let compression = CGFloat(min(max(quality, 1), 100)) / 100
     let held = HeldImage(image: image)
     let encoded = await Task.detached(priority: priority) { held.image.jpegData(compressionQuality: compression) }.value
     guard let encoded else { return nil }
-    let written = await SnapshotFiles.shared.publish(pageID, data: encoded, isPrivate: isPrivate, width: width, height: height, ticket: ticket)
+    let written = await SnapshotFiles.shared.publish(pageID, data: encoded, privateSession: isPrivate ? session : nil, width: width, height: height, ticket: ticket)
     return written?.payload
   }
 
-  static func delete(_ pageID: String) {
-    let ticket = nextTicket()
-    Task { await SnapshotFiles.shared.delete(pageID, ticket: ticket) }
+  static func delete(_ pageID: String) async {
+    await SnapshotFiles.shared.delete(pageID, before: Order(launch: launch, ticket: nextTicket()))
   }
 
   static func endPrivateBrowsing() {
-    let ticket = nextTicket()
-    Task { await SnapshotFiles.shared.endPrivateBrowsing(ticket: ticket) }
+    let retired = retirePrivateSession()
+    Task { await SnapshotFiles.shared.removePrivateSession(retired) }
   }
 
-  static func stamp(of file: URL, stem: String) -> Int {
-    let name = file.deletingPathExtension().lastPathComponent
-    return Int(name.dropFirst(stem.count + 1)) ?? 0
+  static func sweepPrivateLeftovers() {
+    let current = currentPrivateSession()
+    Task { await SnapshotFiles.shared.removePrivateSessions(except: current) }
+  }
+
+  static func committed(_ entries: [String: String]) {
+    let pairs = entries.compactMap { pageID, uri in URL(string: uri).map { (pageID, $0) } }
+    Task { await SnapshotFiles.shared.committed(pairs) }
+  }
+
+  static func fileName(stem: String, ticket: Int) -> String { "\(stem)-\(launch)-\(ticket).jpg" }
+
+  static func order(of file: URL, stem: String) -> Order {
+    let parts = file.deletingPathExtension().lastPathComponent.dropFirst(stem.count + 1).split(separator: "-")
+    if parts.count == 2, let launch = Int(parts[0]), let ticket = Int(parts[1]) { return Order(launch: launch, ticket: ticket) }
+    if parts.count == 1, let stamp = Int(parts[0]) { return Order(launch: 0, ticket: stamp) }
+    return Order(launch: 0, ticket: 0)
   }
 
   static func filesOf(_ pageID: String, in folder: URL) -> [URL] {
@@ -140,37 +175,69 @@ actor SnapshotFiles {
   static let shared = SnapshotFiles()
 
   private var newestTicket: [String: Int] = [:]
-  private var privateEndedAt = 0
-  private var lastStamp = 0
+  private var deletedBefore: [String: PageSnapshots.Order] = [:]
+  private var retiredSessions: Set<String> = []
 
-  func publish(_ pageID: String, data: Data, isPrivate: Bool, width: Int, height: Int, ticket: Int) -> PageSnapshots.Written? {
+  func publish(_ pageID: String, data: Data, privateSession: String?, width: Int, height: Int, ticket: Int) -> PageSnapshots.Written? {
+    let order = PageSnapshots.Order(launch: PageSnapshots.launch, ticket: ticket)
     guard ticket > (newestTicket[pageID] ?? 0) else { return nil }
-    guard !isPrivate || ticket > privateEndedAt else { return nil }
-    let folder = isPrivate ? PageSnapshots.privateFolder : PageSnapshots.saved
+    if let floor = deletedBefore[pageID], order < floor { return nil }
+    if let privateSession, retiredSessions.contains(privateSession) || privateSession != PageSnapshots.currentPrivateSession() { return nil }
+    let folder = privateSession.map(PageSnapshots.privateFolder) ?? PageSnapshots.saved
     let stem = PageSnapshots.fileStem(pageID)
     let manager = FileManager.default
     guard (try? manager.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else { return nil }
-    let stamp = max(Int(Date.now.timeIntervalSince1970 * 1000), lastStamp + 1)
-    lastStamp = stamp
-    let target = folder.appending(path: "\(stem)-\(stamp).jpg")
+    let target = folder.appending(path: PageSnapshots.fileName(stem: stem, ticket: ticket))
     guard (try? data.write(to: target, options: .atomic)) != nil else { return nil }
     newestTicket[pageID] = ticket
-    let others = PageSnapshots.older(in: folder, stem: stem).filter { $0 != target }
-    let previous = others.max { PageSnapshots.stamp(of: $0, stem: stem) < PageSnapshots.stamp(of: $1, stem: stem) }
-    for old in others where old != previous { try? manager.removeItem(at: old) }
+    if privateSession != nil { keepNewestPrivate(stem: stem, in: folder) }
     return PageSnapshots.Written(path: target.path(percentEncoded: false), uri: target.absoluteString, width: width, height: height, bytes: data.count, ticket: ticket)
   }
 
-  func delete(_ pageID: String, ticket: Int) {
-    newestTicket[pageID] = max(newestTicket[pageID] ?? 0, ticket)
-    for folder in [PageSnapshots.saved, PageSnapshots.privateFolder] {
-      for file in PageSnapshots.filesOf(pageID, in: folder) { try? FileManager.default.removeItem(at: file) }
+  private func keepNewestPrivate(stem: String, in folder: URL) {
+    let files = PageSnapshots.older(in: folder, stem: stem).sorted { PageSnapshots.order(of: $0, stem: stem) > PageSnapshots.order(of: $1, stem: stem) }
+    for old in files.dropFirst(2) { try? FileManager.default.removeItem(at: old) }
+  }
+
+  func committed(_ entries: [(String, URL)]) {
+    for (pageID, uri) in entries {
+      let stem = PageSnapshots.fileStem(pageID)
+      let folder = uri.deletingLastPathComponent()
+      guard folder.standardizedFileURL == PageSnapshots.saved.standardizedFileURL, uri.lastPathComponent.hasPrefix("\(stem)-") else { continue }
+      let kept = PageSnapshots.order(of: uri, stem: stem)
+      for file in PageSnapshots.filesOf(pageID, in: PageSnapshots.saved) where file.lastPathComponent != uri.lastPathComponent && PageSnapshots.order(of: file, stem: stem) < kept {
+        try? FileManager.default.removeItem(at: file)
+      }
     }
   }
 
-  func endPrivateBrowsing(ticket: Int) {
-    privateEndedAt = max(privateEndedAt, ticket)
-    try? FileManager.default.removeItem(at: PageSnapshots.privateFolder)
+  func delete(_ pageID: String, before floor: PageSnapshots.Order) {
+    deletedBefore[pageID] = max(deletedBefore[pageID] ?? floor, floor)
+    let stem = PageSnapshots.fileStem(pageID)
+    let folders = [PageSnapshots.saved] + privateSessionFolders()
+    for folder in folders {
+      for file in PageSnapshots.filesOf(pageID, in: folder) where PageSnapshots.order(of: file, stem: stem) < floor {
+        try? FileManager.default.removeItem(at: file)
+      }
+    }
+  }
+
+  func removePrivateSession(_ session: String) {
+    retiredSessions.insert(session)
+    try? FileManager.default.removeItem(at: PageSnapshots.privateFolder(session))
+  }
+
+  func removePrivateSessions(except current: String) {
+    let manager = FileManager.default
+    let entries = (try? manager.contentsOfDirectory(at: PageSnapshots.privateRoot, includingPropertiesForKeys: nil)) ?? []
+    for entry in entries where entry.lastPathComponent != current {
+      if entry.pathExtension != "jpg" { retiredSessions.insert(entry.lastPathComponent) }
+      try? manager.removeItem(at: entry)
+    }
+  }
+
+  private func privateSessionFolders() -> [URL] {
+    (try? FileManager.default.contentsOfDirectory(at: PageSnapshots.privateRoot, includingPropertiesForKeys: nil)) ?? []
   }
 }
 
@@ -180,6 +247,7 @@ enum OffscreenCapture {
   static let settleDelay: Duration = .milliseconds(700)
 
   static func capture(url: String, pageID: String, blocker: ContentBlocker) async -> [String: Any?]? {
+    let ticket = PageSnapshots.nextTicket()
     guard let target = URL(string: url), BrowserURL.isSyncable(url) else { return nil }
     await blocker.prepare()
     guard let window = keyWindow() else { return nil }
@@ -203,7 +271,7 @@ enum OffscreenCapture {
     guard let image = try? await webView.takeSnapshot(configuration: snapshot) else { return nil }
     let theme = webView.themeColor.flatMap(hex)
     let title = webView.title
-    guard let written = await PageSnapshots.write(pageID, image: image, isPrivate: false, quality: 82, ticket: PageSnapshots.nextTicket()) else { return nil }
+    guard let written = await PageSnapshots.write(pageID, image: image, isPrivate: false, quality: 82, ticket: ticket, session: PageSnapshots.currentPrivateSession()) else { return nil }
     return ["fileName": written["uri"] ?? nil, "path": written["path"] ?? nil, "title": (title?.isEmpty == false) ? title : nil, "themeColorHex": theme]
   }
 

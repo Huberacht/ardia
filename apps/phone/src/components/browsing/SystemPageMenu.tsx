@@ -2,21 +2,18 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { Platform, StyleSheet, View, type ScrollViewInstance } from "react-native";
 import { BottomSheet, Button, ConfirmationDialog, Group, Host, RNHostView, Text, VStack } from "@expo/ui/swift-ui";
 import { ignoreSafeArea, onAppear, onDisappear, presentationDetents, presentationDragIndicator } from "@expo/ui/swift-ui/modifiers";
-import { closePageMenu, pageMenuDismissed, pageMenuHidden, pageMenuHostGone, translatePage } from "../../state/page/actions";
-import { useMenuModel, useMenuOpen, useMenuPage, usePageQuiet, useTranslationConfirmed } from "../../state/page/hooks";
+import { askTranslation, cancelTranslationAsk, closePageMenu, confirmTranslation, pageMenuDismissed, pageMenuHostGone, pageMenuSheetAppeared, pageMenuSheetDisappeared } from "../../state/page/actions";
+import { useMenuModel, useMenuOpen, useMenuPage, usePageQuiet, useTranslationAsk } from "../../state/page/hooks";
 import { markMenuPhase } from "../../state/page/menuTiming";
-import { translationAsks } from "../../state/page/pageMenu";
-import { useTab } from "../../state/tabs/hooks";
 import { settingsUIAvailable } from "../ui";
 import type { Design } from "../../lib/design";
 import { LibraryNavigation } from "../library/ExpoLibrary";
 import { PageMenuWords, usePageMenuInk } from "./PageMenuWords";
 
-const sheetAppeared = () => markMenuPhase("appeared");
 const contentLaidOut = () => markMenuPhase("laidOut");
-const sheetEvents = [onAppear(sheetAppeared), onDisappear(pageMenuHidden)];
-const MENU_SHEET = [presentationDetents(["medium", "large"]), presentationDragIndicator("visible"), ...sheetEvents];
-const LIBRARY_SHEET = [presentationDetents(["large"], { selection: "large" }), presentationDragIndicator("automatic"), ...sheetEvents];
+const SHEET_EVENTS = [onAppear(pageMenuSheetAppeared), onDisappear(pageMenuSheetDisappeared)];
+const MENU_SHEET = [presentationDetents(["medium", "large"]), presentationDragIndicator("visible")];
+const LIBRARY_SHEET = [presentationDetents(["large"], { selection: "large" }), presentationDragIndicator("automatic")];
 
 export const usesSystemPageMenu = (design: Design) => design === "redesigned" && Platform.OS === "ios" && settingsUIAvailable();
 
@@ -42,7 +39,9 @@ export function SystemPageMenu({ tabId, open, onDismissed }: { tabId: string; op
   return (
     <Host testID="systemPageMenuSheet" style={styles.anchor} pointerEvents="none">
       <BottomSheet isPresented={open} keepsContentMounted onIsPresentedChange={(presented) => (presented ? undefined : closePageMenu())} onDismiss={dismissed}>
-        <SystemPageMenuContent tabId={tabId} scroll={scroll} />
+        <Group modifiers={SHEET_EVENTS}>
+          <SystemPageMenuContent tabId={tabId} scroll={scroll} />
+        </Group>
       </BottomSheet>
     </Host>
   );
@@ -67,23 +66,20 @@ function SystemPageMenuContent({ tabId, scroll }: { tabId: string; scroll: RefOb
 function PageMenuSheetWords({ tabId, scroll }: { tabId: string; scroll: RefObject<ScrollViewInstance | null> }) {
   const ink = usePageMenuInk();
   const model = useMenuModel(tabId);
-  const isPrivate = useTab(tabId)?.isPrivate ?? false;
-  const confirmed = useTranslationConfirmed();
-  const [asksTranslation, setAsksTranslation] = useState(false);
-  const translate = () => (translationAsks(isPrivate, confirmed) ? setAsksTranslation(true) : translatePage());
+  const ask = useTranslationAsk();
   return (
-    <ConfirmationDialog title="Translate with Google?" isPresented={asksTranslation} onIsPresentedChange={setAsksTranslation} titleVisibility="visible">
+    <ConfirmationDialog title="Translate with Google?" isPresented={ask !== null} onIsPresentedChange={(presented) => (presented ? undefined : cancelTranslationAsk())} titleVisibility="visible">
       <ConfirmationDialog.Trigger>
         <VStack modifiers={[ignoreSafeArea({ edges: "bottom" })]}>
           <RNHostView>
             <View testID="systemPageMenuFill" style={[styles.fill, { backgroundColor: ink.solid }]} onLayout={contentLaidOut}>
-              <PageMenuWords tabId={tabId} model={model} onTranslate={translate} systemSheet scrollRef={scroll} />
+              <PageMenuWords tabId={tabId} model={model} onTranslate={askTranslation} systemSheet scrollRef={scroll} />
             </View>
           </RNHostView>
         </VStack>
       </ConfirmationDialog.Trigger>
       <ConfirmationDialog.Actions>
-        <Button label="Translate" onPress={translatePage} />
+        <Button label="Translate" onPress={() => confirmTranslation(ask)} />
       </ConfirmationDialog.Actions>
       <ConfirmationDialog.Message>
         <Text>Google will see this page’s address.</Text>

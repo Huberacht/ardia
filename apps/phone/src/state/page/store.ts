@@ -2,7 +2,9 @@ import { create } from "zustand";
 import type { NightShadeMode } from "./pageMenu";
 import type { PressTarget } from "./pagePrompts";
 
-export type MenuSite = { host: string | null; nightShade: NightShadeMode; blockersEnabled: boolean };
+export type MenuSite = { host: string | null; isPrivate: boolean; nightShade: NightShadeMode; blockersEnabled: boolean };
+
+export type TranslationAsk = { opening: number; tabId: string; url: string };
 
 export type MenuTranslation = { languageName: string | null; confirmed: boolean };
 
@@ -12,11 +14,11 @@ export type MenuPage = "main" | "siteSettings" | "library";
 
 type PageUi = {
   menuOpen: boolean;
-  menuArmed: boolean;
   menuPage: MenuPage;
   menuDocked: boolean;
   menuSite: MenuSite | null;
   menuTranslation: MenuTranslation | null;
+  translationAsk: TranslationAsk | null;
   titleFeedback: string | null;
   findOpen: boolean;
   findIsPrivate: boolean;
@@ -28,11 +30,11 @@ type PageUi = {
 
 export const usePageUi = create<PageUi>()(() => ({
   menuOpen: false,
-  menuArmed: false,
   menuPage: "main",
   menuDocked: false,
   menuSite: null,
   menuTranslation: null,
+  translationAsk: null,
   titleFeedback: null,
   findOpen: false,
   findIsPrivate: true,

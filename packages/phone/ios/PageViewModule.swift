@@ -30,6 +30,8 @@ public final class PageViewModule: Module {
 
     Constant("obscuresInsets") { true }
 
+    Constant("reportsDrawn") { true }
+
     Events("onPageEngineEvent")
 
     OnCreate {
@@ -252,9 +254,16 @@ public final class PageViewModule: Module {
       Self.main(promise) { await OffscreenCapture.capture(url: url, pageID: pageID, blocker: PhonePages.shared.engine.blocker) }
     }.runOnQueue(.main)
 
-    AsyncFunction("deleteSnapshots") { (pageID: String) in
+    AsyncFunction("deleteSnapshots") { (pageID: String, promise: Promise) in
       PageVisuals.shared.forget(pageID)
-      PageSnapshots.delete(pageID)
+      Task {
+        await PageSnapshots.delete(pageID)
+        promise.resolve(nil)
+      }
+    }
+
+    Function("snapshotsCommitted") { (entries: [String: String]) in
+      PageSnapshots.committed(entries)
     }
 
     Function("snapshotIsCurrent") { (pageID: String) -> Bool? in
@@ -427,6 +436,10 @@ public final class PageViewModule: Module {
 
       Prop("topClearance") { (view: PageView, clearance: Double?) in
         view.topClearance = max(CGFloat(clearance ?? 0), 0)
+      }
+
+      Prop("coverNativeId") { (view: PageView, id: String?) in
+        view.coverNativeID = id
       }
 
       Prop("obscuresSafeTop") { (view: PageView, follows: Bool?) in

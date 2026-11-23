@@ -6,7 +6,7 @@ export type { ReadableContent } from "../../platform/pages";
 import { copyText, openExternal, preferredLanguage, pressHaptic, shareLink, successHaptic } from "../../platform/system";
 import { cancelSearch, closeArchive, deckPullCommitted, openTab, showDeck, takeSheetFromSettings, useBrowse } from "../browse/store";
 import { display } from "../search/omnibox";
-import { presentSearch, searchState } from "../search/store";
+import { prepareSearch, presentSearch, searchState } from "../search/store";
 import { currentPreferences, setPreference } from "../settings/store";
 import { designFor } from "../../lib/design";
 import { Platform } from "react-native";
@@ -14,7 +14,7 @@ import { listenToPages, openPageInBackground, pageHandle, pageIsFullscreen, page
 import { closeTabById, currentTabs, openNewTab, useTabs } from "../tabs/store";
 import { isSyncableUrl, type BrowserTab } from "../tabs/tabModels";
 import { findTab } from "../tabs/tabsState";
-import { blockersToast, searchQuery, translationUrl, type NightShadeMode } from "./pageMenu";
+import { blockersToast, searchQuery, translationAsks, translationUrl, type NightShadeMode } from "./pageMenu";
 import { backLayer, downloadedToast, downloadFailedToast, downloadingToast, pressPlan, stoppedPrivateDownloadsToast, type PressAction, type Request } from "./pagePrompts";
 import { onboardingBack } from "../onboarding/store";
 import { refreshSettings } from "../settings/actions";
@@ -22,7 +22,7 @@ import { openSettings, openSettingsPage, popSettings, type SettingsRoute } from 
 import { pinToMac, sendTab } from "../sync/actions";
 import type { SyncedDevice } from "../../platform/sync";
 import { linkToCopy } from "./linkCopy";
-import { pageUi, usePageUi, type MenuSite, type MenuTranslation, type Press } from "./store";
+import { pageUi, usePageUi, type MenuSite, type MenuTranslation, type Press, type TranslationAsk } from "./store";
 import { endMenuTiming, markMenuPhase, markMenuPressed } from "./menuTiming";
 import { closeVoiceSearch, useVoice } from "../voice/store";
 import { addOnlineAgainListener } from "../../platform/network";
@@ -51,37 +51,69 @@ const selectedTab = () => {
 const hostOf = (url: string | null) => (url ? display(url).host || null : null);
 
 type MenuOpening = { id: number; tabId: string; host: string | null; isPrivate: boolean };
-type AfterMenu = { opening: number; tabId: string; run: () => void };
+type MenuDocument = { opening: number; tabId: string; url: string };
+type AfterMenu = MenuDocument & { run: () => void };
+
+const SHEET_TOKENS_KEPT = 4;
 
 let openings = 0;
 let opening: MenuOpening | null = null;
 let afterMenu: AfterMenu | null = null;
+const disappearTokens: number[] = [];
+const dismissTokens: number[] = [];
 
 const knownSites = new Map<string, MenuSite>();
+const siteRevisions = new Map<string, number>();
 let preparedSite: string | null = null;
 
-const sameSite = (a: MenuSite | null, b: MenuSite) => a !== null && a.host === b.host && a.nightShade === b.nightShade && a.blockersEnabled === b.blockersEnabled;
+const sameSite = (a: MenuSite | null, b: MenuSite) => a !== null && a.host === b.host && a.isPrivate === b.isPrivate && a.nightShade === b.nightShade && a.blockersEnabled === b.blockersEnabled;
 const sameTranslation = (a: MenuTranslation | null, b: MenuTranslation) => a !== null && a.languageName === b.languageName && a.confirmed === b.confirmed;
 const sameLevels = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((level, index) => level === b[index]);
 const tabUrl = (tab: BrowserTab) => usePages.getState().navigation[tab.id]?.url ?? tab.url;
+const siteKey = (host: string, isPrivate: boolean) => `${isPrivate ? "private" : "regular"} ${host}`;
 
-async function readMenuSite(url: string, host: string | null, isPrivate: boolean): Promise<MenuSite> {
+function bumpSite(host: string | null, isPrivate: boolean): number {
+  if (!host) return 0;
+  const key = siteKey(host, isPrivate);
+  const next = (siteRevisions.get(key) ?? 0) + 1;
+  siteRevisions.set(key, next);
+  return next;
+}
+
+const siteRevision = (host: string | null, isPrivate: boolean) => (host ? (siteRevisions.get(siteKey(host, isPrivate)) ?? 0) : 0);
+
+async function readMenuSite(url: string, host: string | null, isPrivate: boolean): Promise<MenuSite | null> {
+  const revision = bumpSite(host, isPrivate);
   const [shade, blockers] = await Promise.all([settled(() => pages.nightShade(host, isPrivate), null), settled(() => blocking.isEnabledForSite(url, isPrivate), true)]);
-  const site: MenuSite = { host, nightShade: shade?.mode ?? "disabled", blockersEnabled: blockers };
+  if (siteRevision(host, isPrivate) !== revision) return null;
+  const site: MenuSite = { host, isPrivate, nightShade: shade?.mode ?? "disabled", blockersEnabled: blockers };
   if (!isPrivate && host) knownSites.set(host, site);
   return site;
 }
 
-const rememberSite = (site: MenuSite, isPrivate: boolean) => {
-  if (!isPrivate && site.host) knownSites.set(site.host, site);
-};
+function writeSite(site: MenuSite) {
+  bumpSite(site.host, site.isPrivate);
+  if (!site.isPrivate && site.host) knownSites.set(site.host, site);
+}
 
 function showsHost(tabId: string, host: string | null) {
   const tab = selectedTab();
   return tab !== null && tab.id === tabId && hostOf(tabUrl(tab)) === host;
 }
 
+function showsDocument(document: MenuDocument) {
+  const tab = selectedTab();
+  return tab !== null && tab.id === document.tabId && tabUrl(tab) === document.url;
+}
+
+function currentDocument(): MenuDocument | null {
+  const tab = selectedTab();
+  if (!tab || !opening || opening.tabId !== tab.id) return null;
+  return { opening: opening.id, tabId: tab.id, url: tabUrl(tab) };
+}
+
 export function preparePageMenu() {
+  if (pageUi().menuOpen) return;
   const tab = selectedTab();
   if (!tab || tab.isPrivate) return;
   const navigation = usePages.getState().navigation[tab.id];
@@ -92,7 +124,7 @@ export function preparePageMenu() {
   preparedSite = host;
   quietly(async () => {
     const site = await readMenuSite(url, host, false);
-    if (!pageUi().menuOpen && showsHost(tab.id, host) && !sameSite(pageUi().menuSite, site)) usePageUi.setState({ menuSite: site });
+    if (site && !pageUi().menuOpen && showsHost(tab.id, host) && !sameSite(pageUi().menuSite, site)) usePageUi.setState({ menuSite: site });
   });
 }
 
@@ -110,7 +142,7 @@ async function showPageMenu(menuDocked: boolean) {
   const shown = pageUi().menuSite;
   const known = tab.isPrivate || !host ? null : (knownSites.get(host) ?? null);
   const startSite = known && sameSite(shown, known) ? shown : known;
-  usePageUi.setState({ menuOpen: true, menuPage: "main", menuDocked, titleFeedback: null, menuSite: startSite });
+  usePageUi.setState({ menuOpen: true, menuPage: "main", menuDocked, titleFeedback: null, menuSite: startSite, translationAsk: null });
   markMenuPhase("open");
   if (menuDocked && !tab.isPrivate) countUsage("site_settings_sheet_opened");
   const [site, capabilities, translation] = await Promise.all([
@@ -123,7 +155,7 @@ async function showPageMenu(menuDocked: boolean) {
   const ui = pageUi();
   const levels = capabilities?.pageZoomLevels;
   usePageUi.setState({
-    menuSite: ui.menuSite !== startSite || sameSite(ui.menuSite, site) ? ui.menuSite : site,
+    menuSite: !site || sameSite(ui.menuSite, site) ? ui.menuSite : site,
     menuTranslation: translation && !sameTranslation(ui.menuTranslation, translation) ? { languageName: translation.languageName, confirmed: translation.confirmed } : ui.menuTranslation,
     zoomLevels: levels && !sameLevels(levels, ui.zoomLevels) ? levels : ui.zoomLevels,
   });
@@ -133,37 +165,74 @@ function menuSiteTarget() {
   const now = opening;
   const site = pageUi().menuSite;
   const tab = selectedTab();
-  if (!now || !site?.host || !tab || tab.id !== now.tabId || site.host !== now.host || !showsHost(tab.id, site.host)) return null;
+  if (!now || !site?.host || !tab || tab.id !== now.tabId || site.host !== now.host || site.isPrivate !== tab.isPrivate || !showsHost(tab.id, site.host)) return null;
   return { tab, site, host: site.host, url: tabUrl(tab) };
 }
 
-export const closePageMenu = () => usePageUi.setState({ menuOpen: false });
+export const closePageMenu = () => usePageUi.setState({ menuOpen: false, translationAsk: null });
 
-export function pageMenuHidden() {
+export function pageMenuHidden(token: number | null = null) {
   const pending = afterMenu;
+  if (!pending || pageUi().menuOpen || (token !== null && token !== pending.opening)) return;
   afterMenu = null;
-  if (!pending || pageUi().menuOpen || opening?.id !== pending.opening || selectedId() !== pending.tabId) return;
+  if (opening?.id !== pending.opening || !showsDocument(pending)) return;
   pending.run();
 }
 
-export const pageMenuHostGone = pageMenuHidden;
+export const pageMenuHostGone = () => pageMenuHidden(opening?.id ?? null);
 
 function afterPageMenu(run: () => void) {
-  const tabId = selectedId();
-  if (!pageUi().menuOpen || !opening || tabId === null) {
+  const document = currentDocument();
+  if (!pageUi().menuOpen || !document) {
     afterMenu = null;
     run();
     return;
   }
-  afterMenu = { opening: opening.id, tabId, run };
+  afterMenu = { ...document, run };
   closePageMenu();
 }
 
+const keepToken = (tokens: number[], token: number) => {
+  tokens.push(token);
+  if (tokens.length > SHEET_TOKENS_KEPT) tokens.shift();
+};
+
+export function pageMenuSheetAppeared() {
+  const token = opening?.id ?? 0;
+  keepToken(disappearTokens, token);
+  keepToken(dismissTokens, token);
+  markMenuPhase("appeared");
+}
+
+export function pageMenuSheetDisappeared() {
+  pageMenuHidden(disappearTokens.shift() ?? opening?.id ?? null);
+}
+
 export function pageMenuDismissed() {
-  pageMenuHidden();
+  pageMenuHidden(dismissTokens.shift() ?? opening?.id ?? null);
   endMenuTiming();
   if (!pageUi().menuOpen && pageUi().menuPage === "library") usePageUi.setState({ menuPage: "main" });
 }
+
+export function askTranslation() {
+  const document = currentDocument();
+  const tab = selectedTab();
+  if (!document || !tab || !isSyncableUrl(document.url)) return;
+  if (translationAsks(tab.isPrivate, pageUi().menuTranslation?.confirmed ?? false)) usePageUi.setState({ translationAsk: document });
+  else translateDocument(tab, document.url);
+}
+
+export function confirmTranslation(asked: TranslationAsk | null = pageUi().translationAsk) {
+  const ask = asked;
+  cancelTranslationAsk();
+  const tab = selectedTab();
+  if (!ask || !tab || opening?.id !== ask.opening || !showsDocument(ask)) return;
+  translateDocument(tab, ask.url);
+}
+
+export const cancelTranslationAsk = () => {
+  if (pageUi().translationAsk) usePageUi.setState({ translationAsk: null });
+};
 
 export function openLibraryInMenu(section: LibrarySection) {
   usePageUi.setState({ menuPage: "library" });
@@ -191,7 +260,7 @@ export function canPrintPages(): boolean {
 
 export function printCurrentPage() {
   const tab = selectedTab();
-  const url = tab ? (usePages.getState().navigation[tab.id]?.url ?? tab.url) : null;
+  const url = tab ? tabUrl(tab) : null;
   if (!tab || !url || !isSyncableUrl(url)) return;
   afterPageMenu(() =>
     quietly(async () => {
@@ -402,9 +471,13 @@ export function closeFind() {
 
 export function translatePage() {
   const tab = selectedTab();
-  if (!tab || !isSyncableUrl(tab.url)) return;
+  if (!tab || !isSyncableUrl(tabUrl(tab))) return;
+  translateDocument(tab, tabUrl(tab));
+}
+
+function translateDocument(tab: BrowserTab, url: string) {
   closePageMenu();
-  const { id, url, isPrivate } = tab;
+  const { id, isPrivate } = tab;
   const translation = pageUi().menuTranslation;
   if (!isPrivate && translation && !translation.confirmed) usePageUi.setState({ menuTranslation: { ...translation, confirmed: true } });
   void (async () => {
@@ -423,7 +496,7 @@ export function setNightShadeOn(on: boolean) {
   const { tab, site, host } = target;
   const mode: NightShadeMode = on ? "always" : "disabled";
   const next = { ...site, nightShade: mode };
-  rememberSite(next, tab.isPrivate);
+  writeSite(next);
   usePageUi.setState({ menuSite: next });
   quietly(() => pages.setNightShade(mode, host, tab.isPrivate));
 }
@@ -442,11 +515,12 @@ export function setBlockersOn(on: boolean) {
   if (!target) return;
   const { tab, site, host, url } = target;
   closePageMenu();
-  rememberSite({ ...site, blockersEnabled: on }, tab.isPrivate);
+  writeSite({ ...site, blockersEnabled: on });
   quietly(async () => {
     await blocking.setEnabledForSite(url, on, tab.isPrivate);
     showToast(blockersToast(on, host), on ? "blocking" : "warning");
-    await pageHandle(tab.id)?.reload();
+    const now = findTab(currentTabs(), tab.id);
+    if (now && tabUrl(now) === url) await pageHandle(tab.id)?.reload();
   });
 }
 
@@ -653,6 +727,7 @@ export function handleSystemBack(): boolean {
 function closePageLayers() {
   afterMenu = null;
   opening = null;
+  cancelTranslationAsk();
   const ui = pageUi();
   if (ui.menuOpen || ui.findOpen || ui.readerTabId || ui.press) {
     if (ui.findOpen) closeFind();
@@ -673,7 +748,10 @@ usePages.subscribe((pagesNow, pagesBefore) => {
   const id = selectedId();
   if (!id) return;
   const navigation = pagesNow.navigation[id];
-  if (navigation && navigation !== pagesBefore.navigation[id] && !navigation.isLoading) preparePageMenu();
+  const before = pagesBefore.navigation[id];
+  if (!navigation || navigation === before || navigation.isLoading) return;
+  preparePageMenu();
+  if (!before || before.isLoading || before.url !== navigation.url) prepareSearch();
 });
 
 useLibrary.subscribe((library, before) => {

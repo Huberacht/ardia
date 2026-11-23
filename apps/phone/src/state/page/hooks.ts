@@ -19,6 +19,8 @@ export const usePageQuiet = (id: string, already: boolean) => usePages((s) => al
 
 export const useTranslationConfirmed = () => usePageUi((s) => s.menuTranslation?.confirmed ?? false);
 
+export const useTranslationAsk = () => usePageUi((s) => s.translationAsk);
+
 export const useMenuPage = () => usePageUi((s) => s.menuPage);
 export const useMenuDocked = () => usePageUi((s) => s.menuDocked);
 export const useTitleFeedback = () => usePageUi((s) => s.titleFeedback);
@@ -47,13 +49,15 @@ export function useMenuModel(id: string): MenuModel {
     }),
   );
   const tabUrl = useTabs((s) => s.open.find((t) => t.id === id)?.url ?? s.privates.find((t) => t.id === id)?.url ?? "");
+  const isPrivate = useTabs((s) => s.privates.some((t) => t.id === id));
   const site = usePageUi((s) => s.menuSite);
   const levels = usePageUi((s) => s.zoomLevels);
   const translationLanguageName = usePageUi((s) => s.menuTranslation?.languageName ?? null);
   const browserStatus = useDefaultBrowser((s) => s.status);
   const isDefault = browserStatus?.isDefault ?? false;
+  const url = state.url ?? tabUrl;
   return menuModel({
-    url: state.url ?? tabUrl,
+    url,
     hasPage: state.hasPage,
     canGoBack: state.canGoBack,
     canGoForward: state.canGoForward,
@@ -64,6 +68,7 @@ export function useMenuModel(id: string): MenuModel {
     nightShade: site?.nightShade ?? "disabled",
     systemDark: dark,
     blockersEnabled: site?.blockersEnabled ?? true,
+    siteKnown: site !== null && site.isPrivate === isPrivate && site.host === (display(url).host || null),
     blockedRequests: state.blockedRequests,
     isDefaultBrowser: isDefault,
     canOfferDefaultBrowser: offersDefaultBrowser(browserStatus),

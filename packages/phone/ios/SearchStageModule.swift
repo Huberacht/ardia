@@ -85,10 +85,14 @@ final class SearchStageView: ExpoView {
   private var revealHold: Task<Void, Never>?
   private var revealLink: CADisplayLink?
   private var rise: UIViewPropertyAnimator?
+  private var anticipatedLift: CGFloat?
+  private var anticipationTask: Task<Void, Never>?
+  private static var lastKeyboardHeight: CGFloat = 0
 
   private static let keyboardThreshold: CGFloat = 120
   private static let keyboardWait: Duration = .milliseconds(220)
   private static let keyboardGrace: Duration = .milliseconds(50)
+  private static let keyboardAnticipation: Duration = .milliseconds(600)
   private static let contentDeadline: Duration = .milliseconds(250)
   private static let contentCap: Duration = .milliseconds(750)
   private static let settlePoll: Duration = .milliseconds(16)
@@ -131,6 +135,7 @@ final class SearchStageView: ExpoView {
 
   private func tearDown() {
     releaseStartWaiters()
+    stopAnticipating()
     landingTask?.cancel()
     releaseTask?.cancel()
     settleTask?.cancel()
@@ -195,7 +200,13 @@ final class SearchStageView: ExpoView {
 
   private var liveLift: CGFloat {
     let restsWithoutKeyboard = hasLanded && !keyboardUp && !isClosing
-    return restsWithoutKeyboard ? max(keyboardHeight, safeBottom) : keyboardHeight
+    return restsWithoutKeyboard ? max(anticipatedLift ?? keyboardHeight, safeBottom) : keyboardHeight
+  }
+
+  private func stopAnticipating() {
+    anticipationTask?.cancel()
+    anticipationTask = nil
+    anticipatedLift = nil
   }
 
   private var card: CGRect {
@@ -239,6 +250,7 @@ final class SearchStageView: ExpoView {
     landingTask?.cancel()
     releaseTask?.cancel()
     settleTask?.cancel()
+    stopAnticipating()
     dropMorph()
     endEmergence()
     let anchor = resolveAnchor()
@@ -262,6 +274,7 @@ final class SearchStageView: ExpoView {
     focusPending = focusNativeId != nil
     startWaitingForContent()
     startIfLaidOut()
+    DispatchQueue.main.async { [weak self] in self?.startIfLaidOut() }
   }
 
   private func startIfLaidOut() {
@@ -277,10 +290,24 @@ final class SearchStageView: ExpoView {
     focusField()
     releaseStartWaiters()
     guard !hasLanded else { return }
+    if Self.lastKeyboardHeight > 0, focusNativeId != nil, !isCommandBar {
+      riseWithAnticipatedKeyboard(Self.lastKeyboardHeight)
+      return
+    }
     landingTask = Task { [weak self] in
       try? await Task.sleep(for: Self.keyboardWait)
       guard let self, !Task.isCancelled, isShown, !isClosing, !hasLanded else { return }
       rise = move(.timing(reduceMotion ? Motion.stageReduced : Motion.riseCurve)) { [self] in self.hasLanded = true }
+    }
+  }
+
+  private func riseWithAnticipatedKeyboard(_ height: CGFloat) {
+    anticipatedLift = height
+    rise = move(.timing(reduceMotion ? Motion.stageReduced : Motion.riseCurve)) { [self] in self.hasLanded = true }
+    anticipationTask = Task { [weak self] in
+      try? await Task.sleep(for: Self.keyboardAnticipation)
+      guard let self, !Task.isCancelled, isShown, !isClosing, anticipatedLift != nil, !keyboardUp else { return }
+      move(.spring(Motion.smoothSpring, velocity: 0)) { [self] in anticipatedLift = nil }
     }
   }
 
@@ -299,6 +326,8 @@ final class SearchStageView: ExpoView {
 
   func close(_ exit: Exit, velocity: CGFloat) {
     guard isShown, !isClosing else { return }
+    if anticipatedLift != nil, !keyboardUp { heldLift = heldLift ?? liveLift }
+    stopAnticipating()
     landingTask?.cancel()
     releaseTask?.cancel()
     foldDragIntoStage()
@@ -331,6 +360,7 @@ final class SearchStageView: ExpoView {
 
   func finish() {
     releaseStartWaiters()
+    stopAnticipating()
     landingTask?.cancel()
     releaseTask?.cancel()
     settleTask?.cancel()
@@ -372,6 +402,8 @@ final class SearchStageView: ExpoView {
 
   private func keyboardWillMove(to height: CGFloat) {
     guard window != nil else { return }
+    if height > 0 { Self.lastKeyboardHeight = height }
+    stopAnticipating()
     keyboardHeight = height
     if isShown, keyboardUp, !isClosing, !hasLanded {
       landingTask?.cancel()

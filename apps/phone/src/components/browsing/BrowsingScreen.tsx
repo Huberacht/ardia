@@ -61,7 +61,7 @@ import { SystemPageMenuHost, usesSystemPageMenu } from "./SystemPageMenu";
 import { PageRequestHost, PressMenu } from "./PageRequests";
 import { ReaderView, useLeavingReader } from "./ReaderView";
 import { PageFailureView } from "./PageFailureView";
-import { cutPageCover, PageCover } from "./PageCover";
+import { PageCover } from "./PageCover";
 import { PageSurface } from "./PageSurface";
 import { PagePull, PullBlocker, usePullBarShift } from "./PagePull";
 import { redesignedBarCenterFromBottom } from "../../lib/deckGeometry";
@@ -158,7 +158,6 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     menuOpenedHaptic();
     setTabsMenu(true);
   }, []);
-  const cutCoverOnTouch = useCallback(() => cutPageCover(tab.id), [tab.id]);
   const neighbourIds = useRef(around);
   neighbourIds.current = around;
   const stepTab = useCallback((delta: -1 | 1) => {
@@ -187,8 +186,13 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const pullReleased = (lands: boolean) => deckPullReleased(tab.id, lands);
   const barPull = tracks ? { id: tab.id, prepare: refreshHiddenDeck, began: pullBegan, released: pullReleased, settled: deckPullSettled } : null;
   const barGesture = useMemo(() => Gesture.Race(pager.gesture, barSwipeUp(swipesUp, pager.active, openDeckFromBar, barPull, pulls && reduceMotion)), [pager.gesture, swipesUp, incognito, tracks, tab.id]);
-  const statusStyle = useAnimatedStyle(() => ({ backgroundColor: painted.value ? withTiming(top, { duration: tabsMotion.barTone }) : top }), [top]);
-  const barStyle = useAnimatedStyle(() => ({ backgroundColor: painted.value ? withTiming(bottom, { duration: tabsMotion.barTone }) : bottom }), [bottom]);
+  const toneTab = useRef(tab.id);
+  const toneSwitchesTab = toneTab.current !== tab.id;
+  useEffect(() => {
+    toneTab.current = tab.id;
+  }, [tab.id]);
+  const statusStyle = useAnimatedStyle(() => ({ backgroundColor: painted.value && !toneSwitchesTab ? withTiming(top, { duration: tabsMotion.barTone }) : top }), [top, toneSwitchesTab]);
+  const barStyle = useAnimatedStyle(() => ({ backgroundColor: painted.value && !toneSwitchesTab ? withTiming(bottom, { duration: tabsMotion.barTone }) : bottom }), [bottom, toneSwitchesTab]);
   const { scheme: materialScheme } = useMaterialTheme(tab.isPrivate);
   const pageMenu = systemMenu ? <SystemPageMenuHost tabId={tab.id} /> : menu.mounted ? <PageMenu tabId={tab.id} open={menuOpen} onHidden={menu.hidden} /> : null;
   const siteSettingsSheet = design === "material" && menuDocked ? pageMenu : null;
@@ -213,7 +217,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
         <PagerBackdrop />
         <Animated.View style={[StyleSheet.absoluteFill, styles.outgoing, { backgroundColor: theme.canvas }, pager.outgoing]}>
           {underBar ? null : <Animated.View testID="pageStatusStrip" style={[{ height: insets.top }, statusStyle]} />}
-          <View testID="pageArea" style={[styles.page, { marginBottom: layout.pageBottom }]} onTouchStart={cutCoverOnTouch}>
+          <View testID="pageArea" style={[styles.page, { marginBottom: layout.pageBottom }]}>
             <PageSurface key={tab.id} tab={tab} toneBottom={layout.toneBottom} obscured={obscured} summaryBottomInset={summaryBottomInset} pinsSafeArea={pulls ? true : undefined} />
             <PageCover key={`${tab.id}:cover`} tab={tab} />
             <PageFailureView key={`${tab.id}:failure`} tabId={tab.id} />

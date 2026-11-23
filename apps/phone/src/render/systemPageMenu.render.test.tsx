@@ -6,7 +6,9 @@ import { pages } from "../platform/pages";
 import { SystemPageMenuHost } from "../components/browsing/SystemPageMenu";
 import { ExpoLibrarySheet } from "../components/library/ExpoLibrary";
 import { DesignProvider } from "../components/ui";
-import { openPageMenu, pageMenuHidden, printCurrentPage, setNightShadeOn, showFind } from "../state/page/actions";
+import { askTranslation, closePageMenu, confirmTranslation, openPageMenu, pageMenuDismissed, pageMenuHidden, pageMenuSheetAppeared, pageMenuSheetDisappeared, printCurrentPage, setBlockersOn, setNightShadeOn, showFind } from "../state/page/actions";
+import { registerPageHandle } from "../state/pages/store";
+import { menuModel } from "../state/page/pageMenu";
 import { usePageUi } from "../state/page/store";
 import { usePages } from "../state/pages/store";
 import { useBrowse } from "../state/browse/store";
@@ -87,7 +89,7 @@ onIos("a settled page's Night Shade and blocker state is read ahead, so the menu
   page("https://site0.example/", false);
   await flush();
   act(() => void openPageMenu());
-  expect(usePageUi.getState().menuSite).toEqual({ host: "site0.example", nightShade: "always", blockersEnabled: false });
+  expect(usePageUi.getState().menuSite).toMatchObject({ host: "site0.example", nightShade: "always", blockersEnabled: false });
   await flush();
 });
 
@@ -180,4 +182,97 @@ onIos("History opens inside the page menu's own sheet at full height instead of 
   act(() => library.closeLibrary());
   expect(usePageUi.getState().menuOpen).toBe(false);
   unmount(root);
+});
+
+onIos("a site read that started before a switch was turned never replaces what the switch wrote, in the menu or in the next opening", async () => {
+  page("https://rewritten.example/", false);
+  await flush();
+  let answerLate: (mode: { mode: string }) => void = () => undefined;
+  jest.spyOn(pages, "nightShade")
+    .mockImplementationOnce(() => new Promise((resolve) => (answerLate = resolve as never)) as never)
+    .mockResolvedValueOnce({ mode: "disabled" } as never)
+    .mockImplementation(() => new Promise(() => undefined) as never);
+  jest.spyOn(pages, "setNightShade").mockResolvedValue(undefined as never);
+  const first = openPageMenu();
+  act(() => closePageMenu());
+  await act(async () => void (await openPageMenu()));
+  act(() => setNightShadeOn(true));
+  answerLate({ mode: "disabled" });
+  await act(async () => void (await first));
+  act(() => closePageMenu());
+  act(() => void openPageMenu());
+  expect(usePageUi.getState().menuSite).toMatchObject({ host: "rewritten.example", nightShade: "always" });
+});
+
+onIos("turning blockers off reloads only the page it was turned off for: if the tab has moved on by then, nothing reloads", async () => {
+  page("https://first-site.example/", false);
+  let finishWrite: () => void = () => undefined;
+  jest.spyOn(blocking, "setEnabledForSite").mockImplementation(() => new Promise<void>((resolve) => (finishWrite = resolve)) as never);
+  const reload = jest.fn(() => Promise.resolve());
+  registerPageHandle("t0", { reload } as never);
+  await act(async () => void (await openPageMenu()));
+  await flush();
+  act(() => setBlockersOn(false));
+  await flush();
+  page("https://second-site.example/", false);
+  finishWrite();
+  await flush();
+  expect(reload).not.toHaveBeenCalled();
+  registerPageHandle("t0", null);
+});
+
+onIos("Print asked for on one page doesn't run on the page the tab moved to while the menu left", async () => {
+  page("https://print-a.example/", false);
+  jest.spyOn(pages, "canPrint").mockReturnValue(true);
+  const print = jest.spyOn(pages, "print").mockResolvedValue(true);
+  await act(async () => void openPageMenu());
+  act(() => printCurrentPage());
+  page("https://print-b.example/", false);
+  act(() => pageMenuHidden());
+  await flush();
+  expect(print).not.toHaveBeenCalled();
+});
+
+onIos("a late dismissal from an earlier showing of the sheet can't spend a follow-up asked for in a newer one", async () => {
+  page("https://tokens.example/", false);
+  jest.spyOn(pages, "canPrint").mockReturnValue(true);
+  const print = jest.spyOn(pages, "print").mockResolvedValue(true);
+  await act(async () => void openPageMenu());
+  act(() => pageMenuSheetAppeared());
+  act(() => closePageMenu());
+  act(() => pageMenuSheetDisappeared());
+  await act(async () => void openPageMenu());
+  act(() => printCurrentPage());
+  act(() => pageMenuDismissed());
+  await flush();
+  expect(print).not.toHaveBeenCalled();
+  act(() => pageMenuSheetAppeared());
+  act(() => pageMenuSheetDisappeared());
+  await flush();
+  expect(print).toHaveBeenCalledTimes(1);
+});
+
+onIos("the translation question belongs to the page it was asked on: closing the menu clears it, and accepting after the page changed sends nothing to Google", async () => {
+  page("https://translate-a.example/", false);
+  const load = jest.fn(() => Promise.resolve());
+  registerPageHandle("t0", { loadUrl: load } as never);
+  jest.spyOn(pages, "translationUrl").mockResolvedValue(null as never);
+  await act(async () => void openPageMenu());
+  act(() => usePageUi.setState({ menuTranslation: { languageName: "English", confirmed: false } }));
+  act(() => askTranslation());
+  const ask = usePageUi.getState().translationAsk;
+  expect(ask).toMatchObject({ tabId: "t0", url: "https://translate-a.example/" });
+  act(() => closePageMenu());
+  expect(usePageUi.getState().translationAsk).toBeNull();
+  page("https://translate-b.example/", false);
+  act(() => confirmTranslation(ask));
+  await flush();
+  expect(load).not.toHaveBeenCalled();
+  registerPageHandle("t0", null);
+});
+
+test("the menu's site switches stay off until the site's own state has loaded", () => {
+  const base = { url: "https://a.example/", hasPage: true, canGoBack: false, canGoForward: false, isLoading: false, pageZoom: 1, zoomLevels: [], isDesktopSite: false, nightShade: "disabled" as const, systemDark: false, blockersEnabled: true, blockedRequests: 0 };
+  expect(menuModel({ ...base, siteKnown: false }).siteSwitches).toBe(false);
+  expect(menuModel({ ...base, siteKnown: true }).siteSwitches).toBe(true);
 });

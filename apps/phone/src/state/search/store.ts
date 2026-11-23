@@ -12,6 +12,7 @@ import { settled } from "../pages/store";
 import { buildSources, recentSearches, sourcesKey } from "./sources";
 import { spaceTabs } from "../tabs/tabsState";
 import { browseForMeOffered } from "../browseForMe/offer";
+import { markSearchClosing, markSearchPhase, markSearchPressed } from "./searchTiming";
 
 export type SearchOrigin = "home" | "start" | "page";
 
@@ -58,8 +59,41 @@ let context: SuggestContext = { currentUrl: null, currentTabId: null };
 let paste: PasteOffer | null = null;
 let pasteReadIn: number | null = null;
 
+const currentSourcesKey = () => `${sourcesKey(useTabs.getState().listing, history().revision(), syncData().revision)}:${useTabs.getState().spaces.current}`;
+
+let clearsPagePrefill = false;
+let sourcesFrame: ReturnType<typeof requestAnimationFrame> | null = null;
+let preparing: ReturnType<typeof setTimeout> | null = null;
+
+export const setSearchClearsPagePrefill = (clears: boolean) => {
+  clearsPagePrefill = clears;
+};
+
+export function prepareSearch() {
+  if (preparing !== null) return;
+  preparing = setTimeout(() => {
+    preparing = null;
+    if (useSearch.getState().open) return;
+    feedSources();
+    rowsFor("", []);
+  }, 0);
+}
+
+function feedSourcesAfterOpening(session: number) {
+  if (currentSourcesKey() === fedSources) return;
+  if (sourcesFrame !== null) cancelAnimationFrame(sourcesFrame);
+  sourcesFrame = requestAnimationFrame(() => {
+    sourcesFrame = null;
+    const state = useSearch.getState();
+    if (!state.open || state.session !== session) return;
+    feedSources();
+    const now = useSearch.getState();
+    if (now.text.trim()) useSearch.setState({ rows: suggestionsFor(now.text, remote.text && now.text.startsWith(remote.text) ? remote.values : []).rows });
+  });
+}
+
 export function feedSources() {
-  const key = `${sourcesKey(useTabs.getState().listing, history().revision(), syncData().revision)}:${useTabs.getState().spaces.current}`;
+  const key = currentSourcesKey();
   if (key === fedSources) return;
   fedSources = key;
   const profile = selectedProfile();
@@ -117,31 +151,37 @@ export function applySearchEngine() {
 }
 
 export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel: boolean | null = null, page: SuggestContext | null = null, arrival: TrayArrival = "rises") {
+  markSearchPressed();
   beginInteraction("tray open", INTERACTION_WINDOW_MS.trayOpen);
   inFlight?.abort();
   remote = { text: "", values: [] };
   context = page ?? { currentUrl: null, currentTabId: null };
   paste = null;
-  feedSources();
+  const editsPage = page?.currentUrl != null;
+  const shownText = editsPage && clearsPagePrefill ? "" : text;
+  if (fedSources === "") feedSources();
   useSearch.setState((state) => ({
     open: true,
     ending: "cancelled",
     origin,
     initialText: text,
-    text,
-    rows: rowsFor(text, []),
+    text: shownText,
+    rows: rowsFor(shownText, []),
     completion: "",
     completedFor: "",
     session: state.session + 1,
     fieldVersion: 0,
     incognitoOnCancel,
     arrival,
-    editsPage: page?.currentUrl != null,
+    editsPage,
   }));
+  markSearchPhase("open");
   offerPaste(useSearch.getState().session);
+  feedSourcesAfterOpening(useSearch.getState().session);
 }
 
 export function dismissSearch(ending: SearchEnding = "cancelled") {
+  if (useSearch.getState().open) markSearchClosing();
   inFlight?.abort();
   useSearch.setState({ open: false, ending, incognitoOnCancel: null });
 }
@@ -153,6 +193,7 @@ let frame: ReturnType<typeof requestAnimationFrame> | null = null;
 let remoteTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showRows(text: string) {
+  catchUpSources();
   const carried = remote.text && text.startsWith(remote.text) ? remote.values : [];
   const suggested = suggestionsFor(text, carried);
   useSearch.setState({ text, rows: suggested.rows, completion: suggested.completion, completedFor: text });
@@ -189,6 +230,13 @@ export function setSearchText(text: string) {
   typed = null;
   useSearch.setState((state) => ({ fieldVersion: state.fieldVersion + 1 }));
   showRows(text);
+}
+
+function catchUpSources() {
+  if (sourcesFrame === null) return;
+  cancelAnimationFrame(sourcesFrame);
+  sourcesFrame = null;
+  feedSources();
 }
 
 export const searchState = () => useSearch.getState();

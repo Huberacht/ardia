@@ -90,6 +90,7 @@ type PagesNative = {
   livePageIds(): Promise<string[]>;
   deleteSnapshots(pageId: string): Promise<void>;
   snapshotIsCurrent?(pageId: string): boolean | null;
+  snapshotsCommitted?(entries: Record<string, string>): void;
   saveState(pageId: string): Promise<string | null>;
   answerRequest(pageId: string, requestId: string, answer: PageRequestAnswer): Promise<boolean>;
   openPopup(pageId: string, popupId: string): Promise<boolean>;
@@ -197,6 +198,7 @@ export const pages = {
   livePageIds: () => native().livePageIds(),
   deleteSnapshots: (pageId: string) => native().deleteSnapshots(pageId),
   snapshotIsCurrent: (pageId: string): boolean | null => native().snapshotIsCurrent?.(pageId) ?? null,
+  snapshotsCommitted: (entries: Record<string, string>): void => native().snapshotsCommitted?.(entries),
   saveState: (pageId: string) => native().saveState(pageId),
   answerRequest: (pageId: string, requestId: string, answer: PageRequestAnswer) => native().answerRequest(pageId, requestId, answer),
   openPopup: (pageId: string, popupId: string) => native().openPopup(pageId, popupId),

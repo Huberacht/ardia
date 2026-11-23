@@ -236,7 +236,29 @@ export function unveilOpeningPage(id: string) {
 
 const drawnWaiters = new Map<string, () => void>();
 
+const drawnPages = new Set<string>();
+
+export const notePageHosted = (id: string) => void drawnPages.delete(id);
+
+export const pageWasDrawn = (id: string) => drawnPages.has(id);
+
+const drawnListeners = new Map<string, Set<() => void>>();
+
+export function listenForPageDrawn(id: string, listener: () => void): () => void {
+  const listeners = drawnListeners.get(id) ?? new Set<() => void>();
+  listeners.add(listener);
+  drawnListeners.set(id, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size && drawnListeners.get(id) === listeners) drawnListeners.delete(id);
+  };
+}
+
 export function whenPageDrawn(id: string, capMs: number, then: (drawn: boolean) => void): () => void {
+  if (drawnPages.has(id)) {
+    then(true);
+    return () => undefined;
+  }
   let called = false;
   const stop = () => {
     called = true;
@@ -254,7 +276,11 @@ export function whenPageDrawn(id: string, capMs: number, then: (drawn: boolean) 
   return stop;
 }
 
-export const pageDrawn = (id: string) => drawnWaiters.get(id)?.();
+export function pageDrawn(id: string) {
+  drawnPages.add(id);
+  drawnWaiters.get(id)?.();
+  for (const listener of [...(drawnListeners.get(id) ?? [])]) listener();
+}
 
 export const OPENING_COVER_ID = "openingCover";
 
@@ -985,6 +1011,7 @@ useTabs.subscribe((tabs) => {
     hidesFromRecents = hides;
     void settled(() => setHidesFromRecents(hides), false);
   }
+  for (const id of drawnPages) if (!findTab(tabs, id)) drawnPages.delete(id);
   for (const id of [...lastVisits.keys(), ...loading.keys()]) {
     if (findTab(tabs, id)) continue;
     lastVisits.delete(id);

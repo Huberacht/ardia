@@ -4,7 +4,7 @@ import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
-import { arrivalCovers, useBrowse, whenPageDrawn } from "../../state/browse/store";
+import { arrivalCovers, listenForPageDrawn, pageWasDrawn, useBrowse } from "../../state/browse/store";
 import { holdTone, pageNavigation, releaseTone, usePages } from "../../state/pages/store";
 import { display } from "../../state/search/omnibox";
 import { launchArguments } from "../../state/app/launchFlags";
@@ -32,11 +32,7 @@ const openingCardOf = (id: string): OpeningCard | null => {
 
 type Box = { width: number; height: number };
 
-const CUTS_WHEN_DRAWN = Platform.OS === "ios";
-
-const coverCuts = new Map<string, () => void>();
-
-export const cutPageCover = (id: string) => coverCuts.get(id)?.();
+const WAITS_FOR_PAINT = Platform.OS === "ios";
 
 function AtCardScale({ cardWidth, box, children }: { cardWidth: number | null; box: Box; children: ReactNode }) {
   if (!cardWidth || box.width <= 0 || box.height <= 0) return children;
@@ -51,7 +47,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const [frozen] = useState(() => launchArguments().loadFreeze !== null);
   const [picture] = useState(() => findTab(currentTabs(), tab.id)?.snapshotFileName ?? tab.snapshotFileName);
   const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && !arrivalCovers(tab.id)));
-  const [atRest] = useState(() => CUTS_WHEN_DRAWN && !frozen && pageAtRest(pageNavigation(tab.id)));
+  const [atRest] = useState(() => pageAtRest(pageNavigation(tab.id)));
   const [face] = useState(() => coverFace(tab, frozen ? null : picture, openingCardOf(tab.id)));
   const window = useWindowDimensions();
   const [box, setBox] = useState<Box>(() => ({ width: window.width, height: window.height }));
@@ -67,10 +63,9 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     if (!needed || frozen) return;
     let fading = false;
     let sawLoading = false;
-    let drawn = false;
-    let touched = false;
     let deadline: ReturnType<typeof setTimeout> | null = null;
     let settle: ReturnType<typeof setTimeout> | null = null;
+    let paintDeadline: ReturnType<typeof setTimeout> | null = null;
     const fade = () => {
       if (fading) return;
       fading = true;
@@ -97,27 +92,20 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
         return;
       }
       if (!shownAlone) return;
+      if (WAITS_FOR_PAINT) {
+        if (pageWasDrawn(tab.id)) {
+          if (atRest && !sawLoading) cut();
+          else fade();
+        } else if (!paintDeadline) paintDeadline = setTimeout(fade, PAGE_COVER.paintDeadlineMs);
+        return;
+      }
       if (sawLoading) {
         fade();
         return;
       }
-      if (atRest && (drawn || touched)) {
-        cut();
-        return;
-      }
       if (!settle) settle = setTimeout(fade, PAGE_COVER.settleMs);
     };
-    const stopDrawn = atRest
-      ? whenPageDrawn(tab.id, PAGE_COVER.deadlineMs, (wasDrawn) => {
-          drawn = wasDrawn;
-          check();
-        })
-      : null;
-    const cutOnTouch = () => {
-      touched = true;
-      check();
-    };
-    if (atRest) coverCuts.set(tab.id, cutOnTouch);
+    const stopDrawn = WAITS_FOR_PAINT ? listenForPageDrawn(tab.id, check) : null;
     check();
     const pages = usePages.subscribe(check);
     const browse = useBrowse.subscribe(check);
@@ -125,9 +113,9 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       pages();
       browse();
       stopDrawn?.();
-      if (coverCuts.get(tab.id) === cutOnTouch) coverCuts.delete(tab.id);
       if (deadline) clearTimeout(deadline);
       if (settle) clearTimeout(settle);
+      if (paintDeadline) clearTimeout(paintDeadline);
     };
   }, []);
   const coverGone = (id: string) => {

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet } from "react-native";
-import { ARRIVAL_COVER_ID, OPENING_COVER_ID, pageCoverHidden, pageDrawn, pageOpenFailed, pageStateChanged, pageToneChanged, swipedPastHistory } from "../../state/browse/store";
+import { ARRIVAL_COVER_ID, notePageHosted, OPENING_COVER_ID, pageCoverHidden, pageDrawn, pageOpenFailed, pageStateChanged, pageToneChanged, swipedPastHistory } from "../../state/browse/store";
 import { useNavigation, usePageArriving, usePageCovered, usePageTone, usePageVeiled } from "../../state/browse/hooks";
 import { shownTone } from "../../lib/pageTone";
 import { registerPageHandle, type PageState, type PageTone } from "../../state/pages/store";
@@ -38,6 +38,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
   const onPageError = useCallback((error: { code: string }) => pageOpenFailed(id, error.code), [id]);
   const onPageCoverHidden = useCallback((reason: "drawn" | "cap") => pageCoverHidden(id, reason), [id]);
   const [setup] = useState(() => ({ url: tab.url, title: tab.title, saved: tabSavedState(id) ?? undefined }));
+  useLayoutEffect(() => notePageHosted(id), [id]);
   useEffect(() => {
     registerPageHandle(id, handle.current);
     return () => registerPageHandle(id, null);

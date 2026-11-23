@@ -2,7 +2,7 @@ import { StyleSheet } from "react-native";
 import { getAnimatedStyle } from "react-native-reanimated";
 import { act, type ReactTestInstance } from "react-test-renderer";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
-import { useBrowse } from "../state/browse/store";
+import { pageDrawn, useBrowse } from "../state/browse/store";
 import { storeNavigation, storeTone, usePages, type PageState } from "../state/pages/store";
 import { rememberPageTones, restorePageTones } from "../state/pages/toneMemory";
 import { currentTabs } from "../state/tabs/store";
@@ -51,6 +51,7 @@ test("while a page's cover is up its reports don't reach the bars; they keep the
   expect(shows(root, "#304050", "rgba(48, 64, 80, 1)")).toBe(false);
   act(() => storeNavigation(tab.id, page(tab, true)));
   act(() => storeNavigation(tab.id, page(tab, false)));
+  act(() => pageDrawn(tab.id));
   act(() => jest.advanceTimersByTime(330));
   expect(root.root.findAll((node) => node.props.testID === "pageCover" && typeof node.type === "string")).toHaveLength(0);
   expect(usePages.getState().heldTones[tab.id]).toBeUndefined();
@@ -66,6 +67,7 @@ test("if the page hasn't reported since its cover went up, the bars keep the tab
   act(() => jest.advanceTimersByTime(16));
   act(() => storeNavigation(tab.id, page(tab, true)));
   act(() => storeNavigation(tab.id, page(tab, false)));
+  act(() => pageDrawn(tab.id));
   act(() => jest.advanceTimersByTime(330));
   act(() => jest.advanceTimersByTime(5000));
   expect(usePages.getState().heldTones[tab.id]).toEqual({ top: "#101820", bottom: "#203040" });

@@ -1,10 +1,10 @@
 import { create } from "zustand";
 import { newUuid } from "../../lib/ids";
-import { deletePageSnapshots, endPages, endPrivateSession, savePageState } from "../pages/store";
+import { deletePageSnapshots, endPages, endPrivateSession, savePageState, snapshotsCommitted } from "../pages/store";
 import { currentPreferences, setPreference } from "../settings/store";
 import {
+  commitTabChanges,
   countArchivedTabs,
-  deleteArchivedTabs,
   expiredArchivedIds,
   knownReceivedKeys,
   readArchivedTab,
@@ -13,7 +13,6 @@ import {
   readTabState,
   searchArchivedTabs,
   writeTabState,
-  writeTabs,
 } from "../store/browserDatabase";
 import { tabDatabase } from "../store/database";
 import type { SqlDatabase } from "../../lib/sqlDatabase";
@@ -68,34 +67,56 @@ export const setTabProfile = (profileSyncId: string | null) => {
   tabProfile = profileSyncId;
 };
 
-type PendingWrites = { put: Map<string, BrowserTab>; remove: Set<string> };
+type PendingWrites = { clearArchived: boolean; put: Map<string, BrowserTab>; remove: Set<string>; releasedPictures: Set<string> };
 
 const pendingWrites = new Map<SqlDatabase, PendingWrites>();
 let flushQueued = false;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let failedFlushes = 0;
+let writesStalled = false;
 
 const RETRY_FIRST_MS = 100;
 const RETRY_LONGEST_MS = 2_000;
+const RETRIES_BEFORE_STALL = 8;
 
-function stageWrites(db: SqlDatabase, put: readonly BrowserTab[], remove: readonly string[]) {
-  const batch = pendingWrites.get(db) ?? { put: new Map<string, BrowserTab>(), remove: new Set<string>() };
-  for (const id of remove) {
+const emptyBatch = (): PendingWrites => ({ clearArchived: false, put: new Map(), remove: new Set(), releasedPictures: new Set() });
+
+function stageWrites(db: SqlDatabase, change: Pick<TabsChange, "put" | "remove" | "clearArchived">) {
+  const batch = pendingWrites.get(db) ?? emptyBatch();
+  if (change.clearArchived) {
+    batch.clearArchived = true;
+    for (const [id, tab] of batch.put) {
+      if (tab.archivedAt === null) continue;
+      batch.put.delete(id);
+      batch.remove.add(id);
+      batch.releasedPictures.add(id);
+    }
+  }
+  for (const id of change.remove) {
     batch.put.delete(id);
     batch.remove.add(id);
+    batch.releasedPictures.add(id);
   }
-  for (const tab of put) {
+  for (const tab of change.put) {
     if (tab.isPrivate) continue;
     batch.remove.delete(tab.id);
+    batch.releasedPictures.delete(tab.id);
     batch.put.set(tab.id, tab);
   }
-  if (batch.put.size || batch.remove.size) pendingWrites.set(db, batch);
+  if (batch.clearArchived || batch.put.size || batch.remove.size || batch.releasedPictures.size) pendingWrites.set(db, batch);
 }
 
-function retryFlushLater() {
+export const isTransientWriteFailure = (error: unknown) => /busy|locked/i.test(error instanceof Error ? error.message : String(error));
+
+function retryFlushLater(transient: boolean) {
   if (retryTimer) return;
-  const wait = Math.min(RETRY_FIRST_MS * 2 ** failedFlushes, RETRY_LONGEST_MS);
   failedFlushes += 1;
+  if (!transient || failedFlushes > RETRIES_BEFORE_STALL) {
+    writesStalled = true;
+    labTrace(`PAGELAB tab writes stalled after ${failedFlushes} failures, kept for the next change or the app leaving`);
+    return;
+  }
+  const wait = Math.min(RETRY_FIRST_MS * 2 ** (failedFlushes - 1), RETRY_LONGEST_MS);
   labTrace(`PAGELAB tab writes failed ${failedFlushes} times, kept and retried in ${wait} ms`);
   retryTimer = setTimeout(() => {
     retryTimer = null;
@@ -103,22 +124,38 @@ function retryFlushLater() {
   }, wait);
 }
 
+function committed(batch: PendingWrites, put: readonly BrowserTab[], cleared: readonly string[]) {
+  deletePageSnapshots([...batch.releasedPictures, ...cleared]);
+  const pictures: Record<string, string> = {};
+  for (const tab of put) if (!tab.isPrivate && tab.snapshotFileName) pictures[tab.id] = tab.snapshotFileName;
+  snapshotsCommitted(pictures);
+}
+
 export function flushTabWrites(): boolean {
+  flushQueued = false;
   let flushed = true;
+  let transient = true;
   for (const [db, batch] of [...pendingWrites]) {
+    const put = [...batch.put.values()].map(forTheDatabase);
     try {
-      writeTabs(db, [...batch.put.values()].map(forTheDatabase), [...batch.remove]);
+      const cleared = commitTabChanges(db, { clearArchived: batch.clearArchived, put, remove: [...batch.remove] });
       if (pendingWrites.get(db) === batch) pendingWrites.delete(db);
-    } catch {
+      committed(batch, put, cleared);
+    } catch (error) {
       flushed = false;
+      transient = transient && isTransientWriteFailure(error);
     }
   }
-  if (flushed) failedFlushes = 0;
-  else retryFlushLater();
+  if (flushed) {
+    failedFlushes = 0;
+    writesStalled = false;
+  } else retryFlushLater(transient);
   return flushed;
 }
 
 export const tabWritesPending = () => pendingWrites.size > 0;
+
+export const tabWritesStalled = () => writesStalled;
 
 const nextFrame = (run: () => void) => (typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : setTimeout(run, 0));
 
@@ -127,8 +164,7 @@ function flushAfterFrame() {
   flushQueued = true;
   nextFrame(() =>
     setTimeout(() => {
-      flushQueued = false;
-      flushTabWrites();
+      if (flushQueued) flushTabWrites();
     }, 0),
   );
 }
@@ -145,14 +181,12 @@ function apply(change: TabsChange, timing: WriteTiming = "now") {
   const listed = change.put.some((t) => !t.isPrivate) || change.remove.length > 0;
   useTabs.setState((s) => ({ ...change.data, listing: listed ? s.listing + 1 : s.listing }));
   forgetPictures(change.remove);
-  stageWrites(db, change.put, change.remove);
+  stageWrites(db, change);
   if (timing === "afterFrame" && change.remove.length === 0 && !change.clearArchived) flushAfterFrame();
   else flushTabWrites();
-  const cleared = change.clearArchived ? deleteArchivedTabs(db) : [];
   const archived = new Set(change.put.filter((t) => t.archivedAt !== null && !t.isPrivate).map((t) => t.id));
   endPages(change.endedPages.filter((id) => !archived.has(id)));
   for (const id of change.endedPages) if (archived.has(id)) void saveAndEnd(id);
-  deletePageSnapshots([...change.remove, ...cleared]);
   for (const id of change.endedPages) privateStates.delete(id);
   if (hadPrivate && change.data.privates.length === 0) {
     endPrivateSession();
@@ -182,8 +216,13 @@ export function saveTabState(id: string, saved: string | null) {
 
 export function pruneExpiredArchive() {
   const db = tabDatabase();
-  const expired = expiredArchivedIds(db, now() - ARCHIVE_RETENTION_MS, ARCHIVE_LIMIT);
-  if (expired.length) writeTabs(db, [], expired);
+  const { open, privates } = data();
+  const live = new Set([...open, ...privates].map((tab) => tab.id));
+  const queued = pendingWrites.get(db)?.put;
+  const expired = expiredArchivedIds(db, now() - ARCHIVE_RETENTION_MS, ARCHIVE_LIMIT).filter((id) => !live.has(id) && queued?.get(id)?.archivedAt !== null);
+  if (!expired.length) return 0;
+  stageWrites(db, { put: [], remove: expired });
+  flushTabWrites();
   return expired.length;
 }
 
@@ -191,7 +230,9 @@ export function loadTabs() {
   flushTabWrites();
   const db = tabDatabase();
   pruneExpiredArchive();
-  useTabs.setState({ ...withSpaces(launchTabs(readOpenTabs(db), countArchivedTabs(db)), data().spaces), incognito: false, listing: 0 });
+  const stored = readOpenTabs(db);
+  useTabs.setState({ ...withSpaces(launchTabs(stored, countArchivedTabs(db)), data().spaces), incognito: false, listing: 0 });
+  snapshotsCommitted(Object.fromEntries(stored.flatMap((tab) => (tab.snapshotFileName ? [[tab.id, tab.snapshotFileName]] : []))));
 }
 
 let tabsOpenedThisRun = 0;
@@ -248,7 +289,7 @@ export const updateTabById = (id: string, patch: TabPatch) => apply(updateTab(da
 export function rewriteTab(id: string) {
   const tab = findTab(data(), id);
   if (!tab) return;
-  stageWrites(tabDatabase(), [tab], []);
+  stageWrites(tabDatabase(), { put: [tab], remove: [] });
   flushAfterFrame();
 }
 

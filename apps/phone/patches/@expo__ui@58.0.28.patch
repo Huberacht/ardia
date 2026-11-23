@@ -1,70 +1,50 @@
 diff --git a/build/swift-ui/BottomSheet/index.d.ts b/build/swift-ui/BottomSheet/index.d.ts
-index c39af1a4010e20bcf702b52582f6de25c1eb73ba..7555fa16ec4a738218541a9fc82f47e8e5ecd025 100644
+index c39af1a4010e20bcf702b52582f6de25c1eb73ba..86176175b80277b643833210596b6f5905e9e280 100644
 --- a/build/swift-ui/BottomSheet/index.d.ts
 +++ b/build/swift-ui/BottomSheet/index.d.ts
-@@ -35,6 +35,12 @@ export interface BottomSheetProps extends CommonViewModifierProps {
-      * @default false
+@@ -29,6 +29,7 @@ export interface BottomSheetProps extends CommonViewModifierProps {
+      * Callback function that is called after the `BottomSheet` has been fully dismissed.
       */
-     fitToContents?: boolean;
-+    /**
-+     * When `true`, the content mounts with the sheet and stays mounted after dismiss, so presenting
-+     * the sheet again doesn't wait for React to mount it.
-+     * @default false
-+     */
+     onDismiss?: () => void;
 +    keepsContentMounted?: boolean;
- }
- /**
-  * `BottomSheet` presents content from the bottom of the screen.
+     /**
+      * When `true`, the sheet will automatically size itself to fit its content.
+      * This sets the presentation detent to match the height of the children.
 diff --git a/build/swift-ui/BottomSheet/index.js b/build/swift-ui/BottomSheet/index.js
-index 74ef9a48ef6d8208dadb445b27283e559adca96f..9dca13ba94937acfa3115c3de5d745a1119affc9 100644
+index 74ef9a48ef6d8208dadb445b27283e559adca96f..efc0856bbd8b2d9008915729bcd69f84d07ae05b 100644
 --- a/build/swift-ui/BottomSheet/index.js
 +++ b/build/swift-ui/BottomSheet/index.js
-@@ -8,9 +8,9 @@ const BottomSheetNativeView = requireNativeView('ExpoUI', 'BottomSheetView');
+@@ -8,7 +8,7 @@ const BottomSheetNativeView = requireNativeView('ExpoUI', 'BottomSheetView');
  /**
   * `BottomSheet` presents content from the bottom of the screen.
   */ function BottomSheet(props) {
 -    const { modifiers, onIsPresentedChange, onDismiss, anchor, presentationBackground, children, ...restProps } = props;
--    const [isMounted, setIsMounted] = useState(props.isPresented);
--    if (props.isPresented && !isMounted) {
 +    const { modifiers, onIsPresentedChange, onDismiss, anchor, presentationBackground, keepsContentMounted, children, ...restProps } = props;
-+    const [isMounted, setIsMounted] = useState(props.isPresented || keepsContentMounted === true);
-+    if ((props.isPresented || keepsContentMounted === true) && !isMounted) {
+     const [isMounted, setIsMounted] = useState(props.isPresented);
+     if (props.isPresented && !isMounted) {
          setIsMounted(true);
-     }
-     // The anchor stays mounted so it's always visible; the content mounts on present and unmounts
-@@ -23,7 +23,7 @@ const BottomSheetNativeView = requireNativeView('ExpoUI', 'BottomSheetView');
-             onIsPresentedChange?.(isPresented);
-         },
-         onDismiss: ()=>{
--            setIsMounted(false);
-+            if (keepsContentMounted !== true) setIsMounted(false);
-             onDismiss?.();
-         },
-         children: [
+@@ -31,7 +31,7 @@ const BottomSheetNativeView = requireNativeView('ExpoUI', 'BottomSheetView');
+                 name: "anchor",
+                 children: anchor
+             }) : null,
+-            isMounted ? /*#__PURE__*/ _jsxs(PresentedContent, {
++            isMounted || keepsContentMounted === true ? /*#__PURE__*/ _jsxs(PresentedContent, {
+                 children: [
+                     presentationBackground != null ? /*#__PURE__*/ _jsx(Slot, {
+                         name: "presentationBackground",
 diff --git a/src/swift-ui/BottomSheet/index.tsx b/src/swift-ui/BottomSheet/index.tsx
-index 3f111f57a556deae32d7a45ff2901dcf013d1eac..20f22def7412a08e40bf75f17a7207cbb0704360 100644
+index 3f111f57a556deae32d7a45ff2901dcf013d1eac..7d3aaf94e64f1a8274479cebafa2d9e5dfc7720e 100644
 --- a/src/swift-ui/BottomSheet/index.tsx
 +++ b/src/swift-ui/BottomSheet/index.tsx
-@@ -42,11 +42,17 @@ export interface BottomSheetProps extends CommonViewModifierProps {
-    * @default false
+@@ -36,6 +36,7 @@ export interface BottomSheetProps extends CommonViewModifierProps {
+    * Callback function that is called after the `BottomSheet` has been fully dismissed.
     */
-   fitToContents?: boolean;
-+  /**
-+   * When `true`, the content mounts with the sheet and stays mounted after dismiss, so presenting
-+   * the sheet again doesn't wait for React to mount it.
-+   * @default false
-+   */
+   onDismiss?: () => void;
 +  keepsContentMounted?: boolean;
- }
- 
- type NativeBottomSheetProps = Omit<
-   BottomSheetProps,
--  'onIsPresentedChange' | 'onDismiss' | 'anchor' | 'presentationBackground'
-+  'onIsPresentedChange' | 'onDismiss' | 'anchor' | 'presentationBackground' | 'keepsContentMounted'
- > & {
-   onIsPresentedChange: (event: NativeSyntheticEvent<{ isPresented: boolean }>) => void;
-   onDismiss: (event: NativeSyntheticEvent<object>) => void;
-@@ -67,12 +73,13 @@ function BottomSheet(props: BottomSheetProps) {
+   /**
+    * When `true`, the sheet will automatically size itself to fit its content.
+    * This sets the presentation detent to match the height of the children.
+@@ -67,6 +68,7 @@ function BottomSheet(props: BottomSheetProps) {
      onDismiss,
      anchor,
      presentationBackground,
@@ -72,20 +52,12 @@ index 3f111f57a556deae32d7a45ff2901dcf013d1eac..20f22def7412a08e40bf75f17a7207cb
      children,
      ...restProps
    } = props;
--  const [isMounted, setIsMounted] = useState(props.isPresented);
-+  const [isMounted, setIsMounted] = useState(props.isPresented || keepsContentMounted === true);
- 
--  if (props.isPresented && !isMounted) {
-+  if ((props.isPresented || keepsContentMounted === true) && !isMounted) {
-     setIsMounted(true);
-   }
- 
-@@ -87,7 +94,7 @@ function BottomSheet(props: BottomSheetProps) {
-         onIsPresentedChange?.(isPresented);
-       }}
-       onDismiss={() => {
--        setIsMounted(false);
-+        if (keepsContentMounted !== true) setIsMounted(false);
-         onDismiss?.();
-       }}>
+@@ -93,7 +95,7 @@ function BottomSheet(props: BottomSheetProps) {
        {anchor != null ? <Slot name="anchor">{anchor}</Slot> : null}
+       {/* Only the sheet's content is presented in its own view controller. The anchor renders in
+           place, in the React Native surface, so it stays outside `PresentedContent`. */}
+-      {isMounted ? (
++      {isMounted || keepsContentMounted === true ? (
+         <PresentedContent>
+           {presentationBackground != null ? (
+             <Slot name="presentationBackground">{presentationBackground}</Slot>

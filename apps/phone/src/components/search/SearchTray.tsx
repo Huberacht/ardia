@@ -23,7 +23,8 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { searchState, setSearchText, typeSearch } from "../../state/search/store";
+import { searchState, setSearchClearsPagePrefill, setSearchText, typeSearch } from "../../state/search/store";
+import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
 import { useIncognito, useSelectedTab } from "../../state/tabs/hooks";
 import { useTabs } from "../../state/tabs/store";
@@ -83,6 +84,8 @@ function SearchPanelFace({ incognito, dark, panelRadius, corners }: { incognito:
     </View>
   );
 }
+
+const stagedContentLaidOut = () => markSearchPhase("laidOut");
 
 const clearPagePrefill = () => {
   const now = searchState();
@@ -180,6 +183,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   useLayoutEffect(() => {
     if (arcPanel && !closing) clearPagePrefill();
   }, []);
+  useLayoutEffect(() => setSearchClearsPagePrefill(arcPanel), [arcPanel]);
   const trayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
   const extend = placement === "underKeyboard" ? window.height : 0;
   const closedOnPressIn = useRef(false);
@@ -542,6 +546,7 @@ function StagedTray() {
   };
 
   const presentStage = (presentation: number) => {
+    markSearchPhase("present");
     live.current.presentation = presentation;
     setPresentation(presentation);
     if (!editsPage && searchPanelShown(phoneLayout, command !== null) && !useTabs.getState().incognito) countUsage("new_tab_search_opened");
@@ -550,10 +555,17 @@ function StagedTray() {
     void stage.current?.present().then(() => {
       if (live.current.presentation !== presentation || live.current.closing) return;
       if (launch) launchTrayUp();
+      markSearchPhase("presented");
       setPresented(true);
       stagePresented();
     });
   };
+  const clearsPrefill = searchPanelShown(phoneLayout, command !== null);
+  useLayoutEffect(() => setSearchClearsPagePrefill(clearsPrefill), [clearsPrefill]);
+  useEffect(() => {
+    const keyboardRises = Keyboard.addListener("keyboardWillShow", () => markSearchPhase("keyboard"));
+    return () => keyboardRises.remove();
+  }, []);
   useEffect(() => clearHeldRelease, []);
 
   useLayoutEffect(() => {
@@ -577,6 +589,7 @@ function StagedTray() {
     }
     if (now.mounted === null || now.closing) return;
     now.closing = true;
+    markSearchClosePhase("closing");
     clearHeldRelease();
     setClosing(true);
     setHoldsScroll(true);
@@ -605,6 +618,8 @@ function StagedTray() {
     if (!now.closing) return;
     now.closing = false;
     now.mounted = null;
+    markSearchClosePhase(landed ? "landed" : "settled");
+    endSearchTiming();
     clearHeldRelease();
     stageSettled(landed);
     setHoldsScroll(false);
@@ -612,6 +627,7 @@ function StagedTray() {
   };
 
   const revealed = ({ late }: { late: boolean }) => {
+    markSearchPhase(late ? "revealedLate" : "revealed");
     live.current.revealed = true;
     if (!live.current.closing) setHoldsScroll(false);
     if (late && !useTabs.getState().incognito) countUsage("search_reveals_late");
@@ -792,6 +808,7 @@ function StagedTray() {
               key={presentation}
               style={command ? { marginLeft: command.left, width: command.width } : { paddingLeft: insets.left + place.cardInset, paddingRight: insets.right + place.cardInset, paddingBottom: place.cardGap }}
               testID="trayStagedContent"
+              onLayout={stagedContentLaidOut}
               {...closingGate(closing)}
             >
               <View testID="traySurface" style={[panelCornerStyle(panelRadius, corners), { height: trayHeight + underKeyboard, boxShadow: shadowCss("floating", incognito) }]}>
