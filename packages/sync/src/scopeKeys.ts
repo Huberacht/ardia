@@ -40,6 +40,23 @@ function touch(state: ScopeState, kind: keyof TouchedKeys, key: string) {
   if (all) for (const touched of all) touched[kind].add(key);
 }
 
+const baseWrites = new WeakMap<ScopeState, Map<string, number>>();
+
+export function baseWritesUnder(state: ScopeState, prefix: string): number {
+  let counts = baseWrites.get(state);
+  if (!counts) baseWrites.set(state, (counts = new Map()));
+  const count = counts.get(prefix);
+  if (count !== undefined) return count;
+  counts.set(prefix, 0);
+  return 0;
+}
+
+function countBaseWrite(state: ScopeState, key: string) {
+  baseWrites.get(state)?.forEach((count, prefix, counts) => {
+    if (key.startsWith(prefix)) counts.set(prefix, count + 1);
+  });
+}
+
 export function putRecord(state: ScopeState, key: string, record: SyncRecord) {
   state.records[key] = record;
   touch(state, "records", key);
@@ -51,17 +68,28 @@ export function dropRecord(state: ScopeState, key: string) {
   touch(state, "records", key);
 }
 
-type BaseIndex = { keys: string[]; byPrefix: Map<string, string[]> };
+type BaseIndex = { byPrefix: Map<string, string[]>; dropped: Set<string> };
 const baseIndexes = new WeakMap<ScopeState, BaseIndex>();
+const DROPPED_BEFORE_SWEEP = 256;
+
+function sweepDropped(state: ScopeState, index: BaseIndex) {
+  index.byPrefix.forEach((keys, prefix, byPrefix) => {
+    const left: string[] = [];
+    for (let i = 0; i < keys.length; i++) if (keys[i]! in state.base) left.push(keys[i]!);
+    byPrefix.set(prefix, left);
+  });
+  index.dropped.clear();
+}
 
 export function baseKeysWith(state: ScopeState, prefix: string): readonly string[] {
-  const index = baseIndexes.get(state);
-  if (!index) return Object.keys(state.base).filter((key) => key.startsWith(prefix));
+  let index = baseIndexes.get(state);
+  if (!index) baseIndexes.set(state, (index = { byPrefix: new Map(), dropped: new Set() }));
+  if (index.dropped.size > DROPPED_BEFORE_SWEEP) sweepDropped(state, index);
   let keys = index.byPrefix.get(prefix);
   if (!keys) {
+    if (index.dropped.size) sweepDropped(state, index);
     keys = [];
-    const all = index.keys;
-    for (let i = 0; i < all.length; i++) if (all[i]!.startsWith(prefix)) keys.push(all[i]!);
+    for (const key in state.base) if (key.startsWith(prefix)) keys.push(key);
     index.byPrefix.set(prefix, keys);
   }
   return keys;
@@ -70,11 +98,11 @@ export function baseKeysWith(state: ScopeState, prefix: string): readonly string
 export function putBase(state: ScopeState, key: string, json: string) {
   const known = state.base[key];
   if (known === json) return;
-  const index = known === undefined ? baseIndexes.get(state) : undefined;
   state.base[key] = json;
   touch(state, "base", key);
-  if (!index) return;
-  index.keys.push(key);
+  countBaseWrite(state, key);
+  const index = known === undefined ? baseIndexes.get(state) : undefined;
+  if (!index || index.dropped.delete(key)) return;
   index.byPrefix.forEach((keys, prefix) => {
     if (key.startsWith(prefix)) keys.push(key);
   });
@@ -84,13 +112,6 @@ export function dropBase(state: ScopeState, key: string) {
   if (!(key in state.base)) return;
   delete state.base[key];
   touch(state, "base", key);
-}
-
-export async function withBaseIndex<T>(state: ScopeState, run: () => Promise<T>): Promise<T> {
-  baseIndexes.set(state, { keys: Object.keys(state.base), byPrefix: new Map() });
-  try {
-    return await run();
-  } finally {
-    baseIndexes.delete(state);
-  }
+  countBaseWrite(state, key);
+  baseIndexes.get(state)?.dropped.add(key);
 }

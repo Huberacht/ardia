@@ -77,6 +77,7 @@ export function historyAdapter(profileId: string): Adapter {
   };
   return withSyncWorkCounts("history", {
     prefix: HISTORY,
+    extractsOnlyFrom: () => historyViewOf(store(), profileId),
     extract: (_base, _queued, _now, _known, _remote, _stamp, baseJson) => {
       if (!ready()) return null;
       const since = Date.now() - HISTORY_WINDOW_MS;
