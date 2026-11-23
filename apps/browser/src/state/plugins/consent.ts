@@ -28,7 +28,8 @@ export function fullControlLine(m: PluginManifest): ConsentLine | null {
   if (m.permissions.control) return { icon: "hand.raised", text: `Lets any program you run fully control Ardia while control is on in Settings › Advanced: ${FULL_CONTROL_REACH}` };
   if (!m.programs.length) return null;
   const names = m.programs.map((p) => p.name).join(" and ");
-  return { icon: "hand.raised", text: `${names} ${m.programs.length === 1 ? "runs" : "run"} as you, so while control is on in Settings › Advanced ${m.programs.length === 1 ? "it" : "they"} can fully control Ardia: ${FULL_CONTROL_REACH}` };
+  const one = m.programs.length === 1;
+  return { icon: "hand.raised", text: `The ${names} ${one ? "command runs" : "commands run"} as you, so while control is on in Settings › Advanced, ${one ? "it" : "they"} can fully control Ardia: ${FULL_CONTROL_REACH}` };
 }
 
 export const FULL_CONTROL_SUMMARY = "Can fully control Ardia";

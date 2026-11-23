@@ -647,7 +647,7 @@ Ardia never runs a plugin's program itself, with one exception for official plug
   control socket, which checks only that its peer runs as the same user, and the engine's token connection, whose token
   sits in `ArdiaControl.json` for the user's processes to read (`docs/cli.md`, `docs/control-socket.md`). Nothing can
   hold a program running as you to less, so a plugin with programs says so first, whether or not it asks for `control`
-  ("<name> runs as you, so while control is on in Settings › Advanced it can fully control Ardia: …"), and its row in
+  ("The <name> command runs as you, so while control is on in Settings › Advanced, it can fully control Ardia: …"), and its row in
   Settings › Plugins says "Can fully control Ardia". A plugin's own code (main, a sidecar, its pages) runs in the
   sandbox and can't reach either: the sandbox denies `ArdiaControl.json` and Unix sockets outside the plugin's folder
   (`PluginSandboxEscapeTests`), and the token is the only way into the engine's connection from a sidecar that has the
