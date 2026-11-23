@@ -278,6 +278,16 @@ struct LiquidGlassTests {
     #expect(gate.failures == 0)
   }
 
+  @Test func `WebKit renders only the strip around the glass, and is asked again every 180 points of scroll`() {
+    let needed = CGRect(x: 0, y: 536, width: 402, height: 496)
+    #expect(GlassFlowRules.snapshotRect(around: needed) == CGRect(x: 0, y: 136, width: 402, height: 1296))
+    #expect(GlassFlowRules.snapshotBucket(CGPoint(x: 0, y: 179), zoom: 1) == GlassFlowRules.snapshotBucket(.zero, zoom: 1))
+    #expect(GlassFlowRules.snapshotBucket(CGPoint(x: 0, y: 181), zoom: 1) != GlassFlowRules.snapshotBucket(.zero, zoom: 1))
+    #expect(GlassFlowRules.snapshotBucket(.zero, zoom: 1.5) != GlassFlowRules.snapshotBucket(.zero, zoom: 1))
+    let captured = needed
+    #expect(GlassFlowRules.snapshotCovers(image: GlassFlowRules.snapshotRect(around: needed), shift: CGPoint(x: 0, y: GlassFlowRules.snapshotStep), needed: captured), "a capture a full step later is still covered")
+  }
+
   @Test func `a shifted snapshot must cover the strip, so a fast fling shows the fill`() {
     let viewport = CGRect(x: 0, y: 0, width: 402, height: 874)
     let image = viewport.insetBy(dx: 0, dy: -320)

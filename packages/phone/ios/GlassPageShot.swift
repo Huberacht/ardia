@@ -5,8 +5,6 @@ import WebKit
 
 @MainActor
 final class GlassPageShot {
-  static let reach: CGFloat = 320
-
   private var gate = GlassSnapshotGate()
   private weak var web: WKWebView?
   private(set) var image: CGImage?
@@ -39,14 +37,14 @@ final class GlassPageShot {
 
   private var requestedBucket: [Int] = []
 
-  func request(_ web: WKWebView, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
-    let bucket = GlassFlowRules.scrollBucket(web.scrollView.contentOffset) + [Int(web.scrollView.zoomScale * 100)]
+  func request(_ web: WKWebView, around needed: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
+    let bucket = GlassFlowRules.snapshotBucket(web.scrollView.contentOffset, zoom: web.scrollView.zoomScale)
     let changed = image == nil || bucket != requestedBucket
     guard gate.mayRequest(now: now, changed: changed, pending: pending), let key = gate.key else { return }
     requestedBucket = bucket
     let token = gate.begin(now: now)
     pending = true
-    let rect = web.bounds.insetBy(dx: 0, dy: -Self.reach)
+    let rect = GlassFlowRules.snapshotRect(around: needed.intersection(web.bounds).isNull ? web.bounds : needed.intersection(web.bounds))
     let configuration = WKSnapshotConfiguration()
     configuration.rect = rect
     configuration.afterScreenUpdates = GlassLaunch.snapshotAfterUpdates

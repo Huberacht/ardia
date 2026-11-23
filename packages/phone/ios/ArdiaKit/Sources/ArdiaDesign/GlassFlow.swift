@@ -84,6 +84,16 @@ public enum GlassFlowRules {
   public static let quietFramesForRecapture = 2
   public static let scrollReach: CGFloat = 200
   public static let scrollStep: CGFloat = 120
+  public static let snapshotReach: CGFloat = 400
+  public static let snapshotStep: CGFloat = 180
+
+  public static func snapshotBucket(_ offset: CGPoint, zoom: CGFloat) -> [Int] {
+    [Int((offset.x / snapshotStep).rounded(.down)), Int((offset.y / snapshotStep).rounded(.down)), Int((zoom * 100).rounded())]
+  }
+
+  public static func snapshotRect(around needed: CGRect) -> CGRect {
+    needed.insetBy(dx: 0, dy: -snapshotReach)
+  }
 
   public static func scrollBucket(_ offset: CGPoint) -> [Int] {
     [Int((offset.x / scrollStep).rounded(.down)), Int((offset.y / scrollStep).rounded(.down))]
