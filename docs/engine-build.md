@@ -611,15 +611,21 @@ leaves out stay out, as before: `disable-download-quarantine` (Chrome quarantine
 
 The pins live in four files that have to agree: `env.sh` (`CHROMIUM_VERSION`, `HELIUM_TAG`, `HELIUM_MACOS_TAG`,
 `HELIUM_LINUX_TAG`), this folder's `helium-pins.ini` (macOS and Linux), `scripts/windows/engine/helium-pins.ini` and
-the `chromium` of `scripts/windows/engine/prebuilt.json`. `scripts/engine/upstream-pins.mjs --check` fails, offline,
-when they disagree on the Chromium version, the helium-chromium tag or commit, or a platform tag that isn't a release
-of the pinned helium-chromium; its test runs it in every pull request (Checks, "repository, vouch and stale tests").
-Bump them in one pull request, with the Windows engine published for the new `prebuilt.json` first.
+`scripts/windows/engine/prebuilt.json` (its `chromium`, and its `source`, a full commit). `scripts/engine/upstream-pins.mjs --check`
+fails, offline, when one is missing or malformed (versions and tags are dotted numbers, commits full hashes) or when
+they disagree on the Chromium version, the helium-chromium tag or commit, or a platform tag that isn't a release of the
+pinned helium-chromium; its test runs it in every pull request (Checks, "repository, vouch and stale tests"). Bump
+them in one pull request.
 
 The Upstream pins workflow (`.github/workflows/upstream.yml`) runs every Monday and compares the pins with the latest
-releases of helium-chromium, helium-macos, helium-linux and helium-windows and with `chromium_version.txt` at the newest
-helium-chromium release, with Chromium stable from chromiumdash as context. While a platform is behind it keeps one
-open issue, labelled `todo`, up to date; once every pin is current it comments and closes it. Run it locally with
+published releases of helium-chromium, helium-macos, helium-linux and helium-windows and with `chromium_version.txt` at
+the newest helium-chromium release, with Chromium stable from chromiumdash as context. The published Windows engine
+gets its own line: the helium-windows that `helium-pins.ini` pins at `prebuilt.json`'s `source` commit, held to the
+newer of our pin and upstream's, so a Windows engine not yet rebuilt after a bump (as in
+[engine-build-windows.md](engine-build-windows.md#helium-for-windows)) reads as behind. While anything is behind it
+keeps one issue (found by a marker in its body, whatever its labels; opened labelled `todo`, reopened if closed) up to
+date; once nothing is behind it comments once and closes it. A run that can't read every value, or every page of
+issues, exits 1 and changes no issue; a GitHub rate limit stops it cleanly. Run it locally with
 `GITHUB_TOKEN=$(gh auth token) node scripts/engine/upstream-pins.mjs`, or dispatch the workflow with `dry_run` to see
 what it would change on the issue. The script and the workflow sit outside every engine key.
 

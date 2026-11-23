@@ -4,9 +4,11 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  CLOSE_MARKER,
   ISSUE_LABEL,
   ISSUE_MARKER,
   ISSUE_TITLE,
+  REOPEN_MARKER,
   RateLimited,
   checkPinConsistency,
   compare,
@@ -26,6 +28,19 @@ import {
 
 const SCRIPT = fileURLToPath(new URL("./upstream-pins.mjs", import.meta.url));
 const HC = "f32f2c066787492b9ba112dc1be1ad230b53658a";
+const SOURCE = "38e436c33f5ff1174eb0e2125c189b6e241ed8d3";
+
+const windowsIni = (heliumChromium, heliumWindows, commit = HC) => `[chromium]
+version = 158.0.8127.36
+
+[helium-chromium]
+tag = ${heliumChromium}
+commit = ${commit}
+
+[helium-windows]
+tag = ${heliumWindows}
+commit = 35ea155749e86c5bca6d5c80034709b0fe762432
+`;
 
 const FILES = {
   env: [
@@ -53,28 +68,21 @@ tag = 0.22.2.1
 commit = d77f716db31b6009e88c75ce94d5a2bf21794286
 helium_chromium_commit = ${HC}
 `,
-  windowsIni: `[chromium]
-version = 158.0.8127.36
-
-[helium-chromium]
-tag = 0.22.2
-commit = ${HC}
-
-[helium-windows]
-tag = 0.22.2.1
-commit = 35ea155749e86c5bca6d5c80034709b0fe762432
-`,
-  windowsPrebuilt: JSON.stringify({ release: "windows-engine-20261119-1", chromium: "158.0.8127.36" }),
+  windowsIni: windowsIni("0.22.2", "0.22.2.1"),
+  windowsPrebuilt: JSON.stringify({ release: "windows-engine-20261119-1", chromium: "158.0.8127.36", source: SOURCE }),
 };
 
 const CURRENT = {
   latest: { "helium-chromium": "0.22.2", "helium-macos": "0.22.2.1", "helium-linux": "0.22.2.1", "helium-windows": "0.22.2.1" },
   heliumChromiumChromium: "158.0.8127.36",
   chromiumStable: "159.0.8154.13",
+  prebuilt: { heliumChromium: "0.22.2", heliumWindows: "0.22.2.1" },
   errors: [],
 };
 
 const pins = (edit = (files) => files) => pinsFromFiles(edit({ ...FILES }));
+const upstreamWith = (changes) => ({ ...CURRENT, ...changes, latest: { ...CURRENT.latest, ...(changes.latest ?? {}) } });
+const partOf = (report, platform, part) => report.platforms.find((p) => p.id === platform).parts.find((x) => x.part === part);
 
 test("ini and env.sh parsing reads the pinned values and skips derived exports", () => {
   assert.deepEqual(parseIni("[a]\nx = 1\n; note\n[b]\ny=two = three\n"), { a: { x: "1" }, b: { y: "two = three" } });
@@ -85,7 +93,7 @@ test("ini and env.sh parsing reads the pinned values and skips derived exports",
   assert.equal(env.HELIUM_DIR, undefined);
 });
 
-test("version order is numeric per dotted part", () => {
+test("version order is numeric per dotted part and anything else is unknown", () => {
   assert.equal(compareVersions("0.22.2.1", "0.22.10.1"), -1);
   assert.equal(compareVersions("158.0.8127.36", "158.0.8127.36"), 0);
   assert.equal(compareVersions("0.22.2", "0.22.2.0"), 0);
@@ -93,6 +101,9 @@ test("version order is numeric per dotted part", () => {
   assert.equal(stateOf("0.22.1", "0.22.2"), "behind");
   assert.equal(stateOf("0.22.3", "0.22.2"), "ahead");
   assert.equal(stateOf("0.22.2", null), "unknown");
+  assert.equal(stateOf("0.22.2", ""), "unknown");
+  assert.equal(stateOf("0.22.2", "0.23.0-beta"), "unknown");
+  assert.equal(stateOf("0.22.2.foo", "0.22.2.1"), "unknown");
 });
 
 test("the fixture pins agree", () => {
@@ -104,12 +115,12 @@ test("the repository's pin files agree with each other", () => {
 });
 
 test("the consistency check names each file that disagrees", () => {
-  const chromium = checkPinConsistency(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "157.0.1.2" }) })));
+  const chromium = checkPinConsistency(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "157.0.1.2", source: SOURCE }) })));
   assert.equal(chromium.length, 1);
   assert.match(chromium[0], /Chromium version: scripts\/windows\/engine\/prebuilt\.json chromium is 157\.0\.1\.2/);
 
-  const commit = checkPinConsistency(pins((f) => ({ ...f, windowsIni: f.windowsIni.replace(`commit = ${HC}`, `commit = ${"a".repeat(40)}`) })));
-  assert.deepEqual(commit.length, 1);
+  const commit = checkPinConsistency(pins((f) => ({ ...f, windowsIni: windowsIni("0.22.2", "0.22.2.1", "a".repeat(40)) })));
+  assert.equal(commit.length, 1);
   assert.match(commit[0], /helium-chromium commit: scripts\/windows\/engine\/helium-pins\.ini/);
 
   const linuxBase = checkPinConsistency(pins((f) => ({ ...f, macLinuxIni: f.macLinuxIni.replace(`helium_chromium_commit = ${HC}`, `helium_chromium_commit = ${"b".repeat(40)}`) })));
@@ -123,7 +134,26 @@ test("the consistency check names each file that disagrees", () => {
   assert.match(macTag.join("\n"), /helium-macos tag: engine\/patches\/build\/helium-pins\.ini \[helium-macos\] tag is 0\.22\.2\.1/);
 
   const missing = checkPinConsistency(pins((f) => ({ ...f, windowsIni: "[chromium]\nversion = 158.0.8127.36\n" })));
-  assert.ok(missing.some((problem) => problem === "scripts/windows/engine/helium-pins.ini [helium-windows] tag is missing"));
+  assert.ok(missing.includes("scripts/windows/engine/helium-pins.ini [helium-windows] tag is missing"));
+
+  const noSource = checkPinConsistency(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "158.0.8127.36" }) })));
+  assert.deepEqual(noSource, ["scripts/windows/engine/prebuilt.json source is missing"]);
+});
+
+test("the lint rejects malformed tags and versions even when every file agrees", () => {
+  const malformed = checkPinConsistency(
+    pins((f) => ({
+      ...f,
+      env: f.env.replace("HELIUM_MACOS_TAG=0.22.2.1", "HELIUM_MACOS_TAG=0.22.2.foo"),
+      macLinuxIni: f.macLinuxIni.replace("[helium-macos]\ntag = 0.22.2.1", "[helium-macos]\ntag = 0.22.2.foo"),
+    })),
+  );
+  assert.deepEqual(malformed, [
+    "engine/patches/build/env.sh HELIUM_MACOS_TAG 0.22.2.foo is not a dotted numeric version",
+    "engine/patches/build/helium-pins.ini [helium-macos] tag 0.22.2.foo is not a dotted numeric version",
+  ]);
+  const shortSource = checkPinConsistency(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "158.0.8127.36", source: "38e436c" }) })));
+  assert.deepEqual(shortSource, ["scripts/windows/engine/prebuilt.json source 38e436c is not a full commit hash"]);
 });
 
 test("--check passes offline on the repository", () => {
@@ -131,41 +161,76 @@ test("--check passes offline on the repository", () => {
   assert.match(out, /the pin files agree/);
 });
 
-test("every platform is current when upstream matches the pins", () => {
+test("every platform is current when upstream and the published engine match the pins", () => {
   const report = compare(pins(), CURRENT);
   assert.deepEqual(report.platforms.map((p) => [p.id, p.state]), [["macos", "current"], ["linux", "current"], ["windows", "current"]]);
+  assert.equal(report.complete, true);
   assert.equal(report.behind, false);
   assert.equal(report.chromiumStable, "159.0.8154.13");
   assert.match(renderReport(report), /Summary: macOS current, Linux current, Windows current\./);
   assert.match(renderReport(report), /Chromium stable is 159\.0\.8154\.13 \(context only/);
 });
 
+test("a published Windows engine built from older Helium is behind even when the build pins are current", () => {
+  const report = compare(pins(), upstreamWith({ prebuilt: { heliumChromium: "0.22.1", heliumWindows: "0.22.1.1" } }));
+  assert.deepEqual(partOf(report, "windows", "windows-prebuilt"), { part: "windows-prebuilt", pinned: "0.22.1.1", upstream: "0.22.2.1", state: "behind" });
+  assert.equal(partOf(report, "windows", "helium-windows").state, "current");
+  assert.equal(report.platforms.find((p) => p.id === "windows").state, "behind");
+  assert.equal(report.behind, true);
+  assert.match(planIssue(report, null).body, /- Windows: published engine \(helium-windows at prebuilt\.json's source\) 0\.22\.1\.1 → 0\.22\.2\.1/);
+});
+
+test("the published engine is held to upstream when upstream is newer than our build pins", () => {
+  const report = compare(pins(), upstreamWith({ latest: { "helium-windows": "0.22.2.3" } }));
+  assert.equal(partOf(report, "windows", "windows-prebuilt").upstream, "0.22.2.3");
+  assert.equal(partOf(report, "windows", "windows-prebuilt").state, "behind");
+});
+
 test("a new platform release marks only that platform behind", () => {
-  const report = compare(pins(), { ...CURRENT, latest: { ...CURRENT.latest, "helium-linux": "0.22.2.2" } });
+  const report = compare(pins(), upstreamWith({ latest: { "helium-linux": "0.22.2.2" } }));
   assert.deepEqual(report.platforms.map((p) => [p.id, p.state]), [["macos", "current"], ["linux", "behind"], ["windows", "current"]]);
-  const linux = report.platforms.find((p) => p.id === "linux").parts.find((part) => part.part === "helium-linux");
-  assert.deepEqual(linux, { part: "helium-linux", pinned: "0.22.2.1", upstream: "0.22.2.2", state: "behind" });
+  assert.deepEqual(partOf(report, "linux", "helium-linux"), { part: "helium-linux", pinned: "0.22.2.1", upstream: "0.22.2.2", state: "behind" });
 });
 
 test("a new helium-chromium on a new Chromium puts every platform behind", () => {
-  const report = compare(pins(), {
-    ...CURRENT,
-    latest: { "helium-chromium": "0.23.0", "helium-macos": "0.23.0.1", "helium-linux": "0.22.2.1", "helium-windows": "0.22.2.1" },
-    heliumChromiumChromium: "159.0.8154.13",
-  });
+  const report = compare(
+    pins(),
+    upstreamWith({ latest: { "helium-chromium": "0.23.0", "helium-macos": "0.23.0.1" }, heliumChromiumChromium: "159.0.8154.13" }),
+  );
   assert.ok(report.platforms.every((p) => p.state === "behind"));
   assert.ok(report.platforms.every((p) => p.parts.find((part) => part.part === "chromium").state === "behind"));
-  assert.equal(report.platforms.find((p) => p.id === "linux").parts.find((part) => part.part === "helium-linux").state, "current");
+  assert.equal(partOf(report, "linux", "helium-linux").state, "current");
 });
 
-test("pins newer than the latest release read as ahead, not behind", () => {
-  const report = compare(pins(), { ...CURRENT, latest: { ...CURRENT.latest, "helium-macos": "0.22.1.1" } });
+test("an unreadable upstream value is unknown, never hidden behind a behind platform, and writes nothing", () => {
+  const report = compare(
+    pins(),
+    upstreamWith({ latest: { "helium-chromium": "0.23.0", "helium-macos": "0.23.0.1", "helium-linux": "0.23.0.1", "helium-windows": "0.23.0.1" }, heliumChromiumChromium: null }),
+  );
+  assert.equal(report.behind, true);
+  assert.equal(report.complete, false);
+  assert.ok(report.platforms.every((p) => p.state === "unknown"));
+  assert.equal(planIssue(report, null).action, "fail");
+  assert.equal(planIssue(report, { number: 9, state: "open", body: "x" }).action, "fail");
+
+  const noPrebuilt = compare(pins(), upstreamWith({ prebuilt: null }));
+  assert.equal(partOf(noPrebuilt, "windows", "windows-prebuilt").state, "unknown");
+  assert.equal(planIssue(noPrebuilt, null).action, "fail");
+});
+
+test("pins newer than the latest release read as ahead, and the close comment says so", () => {
+  const report = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.1.1" } }));
   assert.equal(report.platforms.find((p) => p.id === "macos").state, "ahead");
   assert.equal(report.behind, false);
+  const close = planIssue(report, { number: 9, state: "open", body: "x" });
+  assert.equal(close.action, "close");
+  assert.doesNotMatch(close.comment, /Every engine pin/);
+  assert.match(close.comment, /No engine pin is behind upstream any more/);
+  assert.match(close.comment, /- macOS: helium-macos 0\.22\.2\.1 → 0\.22\.1\.1/);
 });
 
-test("the issue is opened, updated, left alone or closed from the report", () => {
-  const behind = compare(pins(), { ...CURRENT, latest: { ...CURRENT.latest, "helium-windows": "0.22.2.3" } });
+test("the issue is opened, updated, reopened, left alone or closed from the report", () => {
+  const behind = compare(pins(), upstreamWith({ latest: { "helium-windows": "0.22.2.3" } }));
   const create = planIssue(behind, null);
   assert.equal(create.action, "create");
   assert.equal(create.title, ISSUE_TITLE);
@@ -173,26 +238,31 @@ test("the issue is opened, updated, left alone or closed from the report", () =>
   assert.ok(create.body.startsWith(ISSUE_MARKER));
   assert.match(create.body, /- Windows: helium-windows 0\.22\.2\.1 → 0\.22\.2\.3/);
 
-  assert.deepEqual(planIssue(behind, { number: 9, body: create.body }), { action: "none", reason: "#9 is already up to date" });
-  assert.equal(planIssue(behind, { number: 9, body: `${ISSUE_MARKER}\nold` }).action, "update");
+  assert.deepEqual(planIssue(behind, { number: 9, state: "open", body: create.body }), { action: "none", reason: "#9 is already up to date" });
+  assert.equal(planIssue(behind, { number: 9, state: "open", body: `${ISSUE_MARKER}\nold` }).action, "update");
+  const reopen = planIssue(behind, { number: 9, state: "closed", body: `${ISSUE_MARKER}\nold` });
+  assert.equal(reopen.action, "reopen");
+  assert.ok(reopen.comment.startsWith(REOPEN_MARKER));
 
   const current = compare(pins(), CURRENT);
-  const close = planIssue(current, { number: 9, body: create.body });
+  const close = planIssue(current, { number: 9, state: "open", body: create.body });
   assert.equal(close.action, "close");
-  assert.match(close.comment, /Every engine pin is current/);
+  assert.ok(close.comment.startsWith(CLOSE_MARKER));
+  assert.match(close.comment, /Every engine pin matches upstream's latest release again/);
   assert.equal(planIssue(current, null).action, "none");
-
-  const partial = compare(pins(), { ...CURRENT, latest: { ...CURRENT.latest, "helium-macos": undefined }, errors: ["imputnet/helium-macos: HTTP 502"] });
-  assert.equal(planIssue(partial, { number: 9, body: create.body }).action, "none");
+  assert.equal(planIssue(current, { number: 9, state: "closed", body: create.body }).action, "none");
 });
 
-test("the tracking issue is found by its marker among open issues, never a pull request", () => {
+test("the tracking issue is found by its marker, open first, never a pull request, whatever its labels", () => {
   const issues = [
-    { number: 1, state: "open", body: "unrelated" },
+    { number: 1, state: "open", body: "unrelated", labels: [{ name: "todo" }] },
     { number: 2, state: "open", body: `${ISSUE_MARKER} x`, pull_request: {} },
-    { number: 3, state: "open", body: `${ISSUE_MARKER}\nbody` },
+    { number: 3, state: "closed", body: `${ISSUE_MARKER}\nold` },
+    { number: 4, state: "open", body: `${ISSUE_MARKER}\nbody`, labels: [] },
+    { number: 5, state: "closed", body: `${ISSUE_MARKER}\nnewer` },
   ];
-  assert.equal(findTrackingIssue(issues).number, 3);
+  assert.equal(findTrackingIssue(issues).number, 4);
+  assert.equal(findTrackingIssue(issues.filter((issue) => issue.number !== 4)).number, 5);
   assert.equal(findTrackingIssue(issues.slice(0, 2)), null);
 });
 
@@ -202,80 +272,182 @@ function fakeFetch(routes) {
     calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(init.body) : undefined });
     const route = routes.find(([pattern]) => pattern.test(`${init?.method ?? "GET"} ${url}`));
     const [, status, payload, headers = {}] = route ?? [null, 404, { message: "Not Found" }];
+    const resolved = typeof payload === "function" ? payload(url) : payload;
     return {
       status,
       ok: status >= 200 && status < 300,
       headers: { get: (name) => headers[name.toLowerCase()] ?? null },
-      json: async () => payload,
-      text: async () => (typeof payload === "string" ? payload : JSON.stringify(payload)),
+      json: async () => resolved,
+      text: async () => (typeof resolved === "string" ? resolved : JSON.stringify(resolved)),
     };
   };
   return { impl, calls };
 }
 
-test("upstream is read from latest releases, tags when there is no release, and chromium_version.txt", async () => {
+const RELEASES = [
+  [/GET .*helium-chromium\/releases\/latest$/, 200, { tag_name: "0.22.3", draft: false, prerelease: false }],
+  [/GET .*helium-macos\/releases\/latest$/, 200, { tag_name: "0.22.3.1", draft: false, prerelease: false }],
+  [/GET .*helium-linux\/releases\/latest$/, 200, { tag_name: "0.22.2.1", draft: false, prerelease: false }],
+  [/GET .*helium-windows\/releases\/latest$/, 200, { tag_name: "0.22.2.1", draft: false, prerelease: false }],
+];
+
+test("upstream is read from latest releases, chromium_version.txt and the published engine's source pins", async () => {
   const { impl, calls } = fakeFetch([
-    [/GET .*helium-chromium\/releases\/latest$/, 200, { tag_name: "0.22.3" }],
-    [/GET .*helium-macos\/releases\/latest$/, 200, { tag_name: "0.22.3.1" }],
-    [/GET .*helium-linux\/releases\/latest$/, 404, {}],
-    [/GET .*helium-linux\/tags/, 200, [{ name: "0.22.2.1" }, { name: "0.22.10.1" }, { name: "0.22.3.1" }]],
-    [/GET .*helium-windows\/releases\/latest$/, 200, { tag_name: "0.22.2.1" }],
+    ...RELEASES,
     [/GET .*helium-chromium\/contents\/chromium_version\.txt\?ref=0\.22\.3$/, 200, "158.0.8127.40\n"],
+    [/GET .*\/repos\/o\/r\/contents\/scripts\/windows\/engine\/helium-pins\.ini\?ref=38e436c/, 200, windowsIni("0.22.1", "0.22.1.1")],
     [/GET https:\/\/chromiumdash/, 200, [{ version: "159.0.8154.13" }]],
   ]);
-  const upstream = await fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl });
-  assert.deepEqual(upstream.latest, { "helium-chromium": "0.22.3", "helium-macos": "0.22.3.1", "helium-linux": "0.22.10.1", "helium-windows": "0.22.2.1" });
+  const upstream = await fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl, prebuiltSource: SOURCE, repo: "o/r" });
+  assert.deepEqual(upstream.latest, { "helium-chromium": "0.22.3", "helium-macos": "0.22.3.1", "helium-linux": "0.22.2.1", "helium-windows": "0.22.2.1" });
   assert.equal(upstream.heliumChromiumChromium, "158.0.8127.40");
   assert.equal(upstream.chromiumStable, "159.0.8154.13");
+  assert.deepEqual(upstream.prebuilt, { heliumChromium: "0.22.1", heliumWindows: "0.22.1.1" });
   assert.deepEqual(upstream.errors, []);
-  const raw = calls.find((call) => call.url.includes("chromium_version.txt"));
-  assert.ok(raw);
+  assert.ok(!calls.some((call) => call.url.includes("/tags")));
 });
 
-test("a rate limit stops the run instead of reading as an error", async () => {
-  const { impl } = fakeFetch([[/releases\/latest$/, 403, {}, { "x-ratelimit-remaining": "0" }]]);
-  await assert.rejects(fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl }), RateLimited);
+test("the published engine's pins come from the local commit first, the API only when it is missing", async () => {
+  const { impl, calls } = fakeFetch([...RELEASES, [/chromium_version\.txt/, 200, "158.0.8127.36"]]);
+  const readAtCommit = (commit, path) => {
+    assert.equal(commit, SOURCE);
+    assert.equal(path, "scripts/windows/engine/helium-pins.ini");
+    return windowsIni("0.22.1", "0.22.1.1");
+  };
+  const upstream = await fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl, prebuiltSource: SOURCE, repo: "o/r", readAtCommit });
+  assert.deepEqual(upstream.prebuilt, { heliumChromium: "0.22.1", heliumWindows: "0.22.1.1" });
+  assert.ok(!calls.some((call) => call.url.includes("/repos/o/r/contents")));
 });
 
-test("a failed upstream read is reported and leaves Chromium stable optional", async () => {
-  const { impl } = fakeFetch([
-    [/helium-chromium\/releases\/latest$/, 502, {}],
-    [/helium-macos\/releases\/latest$/, 200, { tag_name: "0.22.2.1" }],
-    [/helium-linux\/releases\/latest$/, 200, { tag_name: "0.22.2.1" }],
-    [/helium-windows\/releases\/latest$/, 200, { tag_name: "0.22.2.1" }],
+test("a missing latest release, a prerelease or a malformed tag is incomplete data, with no tag fallback", async () => {
+  const { impl, calls } = fakeFetch([
+    [/helium-chromium\/releases\/latest$/, 200, { tag_name: "0.22.3", draft: false, prerelease: false }],
+    [/helium-macos\/releases\/latest$/, 404, {}],
+    [/helium-linux\/releases\/latest$/, 200, { tag_name: "0.22.3.1", draft: false, prerelease: true }],
+    [/helium-windows\/releases\/latest$/, 200, { tag_name: "0.22.3.foo", draft: false, prerelease: false }],
+    [/helium-linux\/tags/, 200, [{ name: "0.22.9.1" }]],
+    [/chromium_version\.txt/, 200, "\n"],
   ]);
   const upstream = await fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl });
-  assert.deepEqual(upstream.errors, ["imputnet/helium-chromium: GET /repos/imputnet/helium-chromium/releases/latest: HTTP 502"]);
-  assert.equal(upstream.chromiumStable, null);
-  const report = compare(pins(), upstream);
-  assert.equal(report.unknown, true);
-  assert.equal(planIssue(report, null).action, "none");
+  assert.deepEqual(upstream.latest, { "helium-chromium": "0.22.3" });
+  assert.deepEqual(upstream.errors.sort(), [
+    'chromium_version.txt at helium-chromium 0.22.3: "" is not a dotted numeric version',
+    "imputnet/helium-linux: no published release",
+    "imputnet/helium-macos: GET /repos/imputnet/helium-macos/releases/latest: HTTP 404",
+    'imputnet/helium-windows: latest release tag "0.22.3.foo" is not a dotted numeric version',
+  ]);
+  assert.ok(!calls.some((call) => call.url.includes("/tags")));
+  assert.equal(compare(pins(), upstream).complete, false);
 });
 
-test("syncIssue writes nothing in a dry run and opens, then closes, the issue for real", async () => {
-  const behind = compare(pins(), { ...CURRENT, latest: { ...CURRENT.latest, "helium-macos": "0.22.2.2" } });
+test("primary and secondary rate limits stop the run instead of reading as an error", async () => {
+  for (const [status, payload, headers] of [
+    [403, {}, { "x-ratelimit-remaining": "0" }],
+    [403, {}, { "retry-after": "60" }],
+    [403, { message: "You have exceeded a secondary rate limit." }, {}],
+    [429, {}, {}],
+  ]) {
+    const { impl } = fakeFetch([[/releases\/latest$/, status, payload, headers]]);
+    await assert.rejects(fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl }), RateLimited);
+  }
+  const { impl } = fakeFetch([[/releases\/latest$/, 403, { message: "Resource not accessible by integration" }, {}]]);
+  const upstream = await fetchUpstream({ client: makeClient({ token: "t", fetchImpl: impl }), fetchImpl: impl });
+  assert.equal(upstream.errors.length, 4);
+});
+
+const issuePages = (pages) => (url) => pages[Number(new URL(url).searchParams.get("page")) - 1] ?? [];
+const filler = (from, count) => Array.from({ length: count }, (_, at) => ({ number: from + at, state: "closed", body: "other", labels: [] }));
+
+test("syncIssue writes nothing in a dry run or on incomplete data, and opens the issue for real", async () => {
+  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
   const quiet = () => {};
 
-  const dry = fakeFetch([[/GET .*\/issues\?state=open&labels=todo/, 200, []]]);
+  const dry = fakeFetch([[/GET .*\/issues\?state=all/, 200, []]]);
   await syncIssue({ client: makeClient({ token: "t", fetchImpl: dry.impl }), repo: "o/r", report: behind, dryRun: true, log: quiet });
   assert.deepEqual(dry.calls.map((call) => call.method), ["GET"]);
 
+  const incomplete = fakeFetch([]);
+  const plan = await syncIssue({
+    client: makeClient({ token: "t", fetchImpl: incomplete.impl }),
+    repo: "o/r",
+    report: compare(pins(), upstreamWith({ heliumChromiumChromium: null })),
+    dryRun: false,
+    log: quiet,
+  });
+  assert.equal(plan.action, "fail");
+  assert.deepEqual(incomplete.calls, []);
+
   const open = fakeFetch([
-    [/GET .*\/issues\?state=open&labels=todo/, 200, []],
+    [/GET .*\/issues\?state=all/, 200, []],
     [/POST .*\/repos\/o\/r\/issues$/, 201, { html_url: "https://github.com/o/r/issues/5" }],
   ]);
   await syncIssue({ client: makeClient({ token: "t", fetchImpl: open.impl }), repo: "o/r", report: behind, dryRun: false, log: quiet });
   const created = open.calls.find((call) => call.method === "POST");
   assert.equal(created.body.title, ISSUE_TITLE);
   assert.deepEqual(created.body.labels, ["todo"]);
+});
 
-  const existing = { number: 5, state: "open", body: created.body.body };
-  const close = fakeFetch([
-    [/GET .*\/issues\?state=open&labels=todo/, 200, [existing]],
+test("an open tracking issue past page 10 with its label removed is updated, not duplicated", async () => {
+  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
+  const pages = Array.from({ length: 12 }, (_, page) => filler(page * 100 + 100, 100));
+  pages.push([{ number: 42, state: "open", body: `${ISSUE_MARKER}\nold`, labels: [] }]);
+  const run = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, issuePages(pages)],
+    [/PATCH .*\/issues\/42$/, 200, {}],
+  ]);
+  const plan = await syncIssue({ client: makeClient({ token: "t", fetchImpl: run.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {} });
+  assert.equal(plan.action, "update");
+  assert.equal(run.calls.filter((call) => call.method === "GET").length, 13);
+  assert.ok(!run.calls.some((call) => call.method === "POST"));
+  assert.ok(run.calls.every((call) => !call.url.includes("labels=")));
+});
+
+test("a closed tracking issue is reopened with a comment instead of opening another", async () => {
+  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
+  const run = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [{ number: 7, state: "closed", body: `${ISSUE_MARKER}\nold`, labels: [] }]],
+    [/PATCH .*\/issues\/7$/, 200, {}],
+    [/POST .*\/issues\/7\/comments$/, 201, {}],
+  ]);
+  await syncIssue({ client: makeClient({ token: "t", fetchImpl: run.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {} });
+  assert.deepEqual(run.calls.map((call) => call.method), ["GET", "PATCH", "POST"]);
+  assert.equal(run.calls[1].body.state, "open");
+  assert.ok(run.calls[2].body.body.startsWith(REOPEN_MARKER));
+});
+
+test("the issue scan fails rather than create when it can't reach the last page", async () => {
+  const behind = compare(pins(), upstreamWith({ latest: { "helium-macos": "0.22.2.2" } }));
+  const run = fakeFetch([[/GET .*\/issues\?state=all/, 200, (url) => filler(Number(new URL(url).searchParams.get("page")) * 100, 100)]]);
+  await assert.rejects(
+    syncIssue({ client: makeClient({ token: "t", fetchImpl: run.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {}, maxPages: 3 }),
+    /more than 3 pages of issues/,
+  );
+  assert.ok(!run.calls.some((call) => call.method === "POST"));
+
+  const broken = fakeFetch([[/GET .*\/issues\?state=all/, 502, {}]]);
+  await assert.rejects(syncIssue({ client: makeClient({ token: "t", fetchImpl: broken.impl }), repo: "o/r", report: behind, dryRun: false, log: () => {} }), /HTTP 502/);
+  assert.ok(!broken.calls.some((call) => call.method === "POST"));
+});
+
+test("closing comments once: a retry after a failed close only closes", async () => {
+  const current = compare(pins(), CURRENT);
+  const existing = { number: 5, state: "open", body: `${ISSUE_MARKER}\nold`, labels: [] };
+
+  const first = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [existing]],
+    [/GET .*\/issues\/5\/comments/, 200, [{ body: `${REOPEN_MARKER}\nagain` }]],
     [/POST .*\/issues\/5\/comments$/, 201, {}],
     [/PATCH .*\/issues\/5$/, 200, {}],
   ]);
-  await syncIssue({ client: makeClient({ token: "t", fetchImpl: close.impl }), repo: "o/r", report: compare(pins(), CURRENT), dryRun: false, log: quiet });
-  assert.deepEqual(close.calls.map((call) => call.method), ["GET", "POST", "PATCH"]);
-  assert.deepEqual(close.calls[2].body, { state: "closed", state_reason: "completed" });
+  await syncIssue({ client: makeClient({ token: "t", fetchImpl: first.impl }), repo: "o/r", report: current, dryRun: false, log: () => {} });
+  assert.deepEqual(first.calls.map((call) => call.method), ["GET", "GET", "POST", "PATCH"]);
+  assert.deepEqual(first.calls[3].body, { state: "closed", state_reason: "completed" });
+
+  const retry = fakeFetch([
+    [/GET .*\/issues\?state=all/, 200, [existing]],
+    [/GET .*\/issues\/5\/comments/, 200, [{ body: "someone" }, { body: `${CLOSE_MARKER}\ndone` }]],
+    [/PATCH .*\/issues\/5$/, 200, {}],
+  ]);
+  await syncIssue({ client: makeClient({ token: "t", fetchImpl: retry.impl }), repo: "o/r", report: current, dryRun: false, log: () => {} });
+  assert.deepEqual(retry.calls.map((call) => call.method), ["GET", "GET", "PATCH"]);
 });

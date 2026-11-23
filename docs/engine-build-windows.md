@@ -198,7 +198,7 @@ must not be published, and the repo is public.
 ## Helium for Windows
 
 helium-windows 0.22.2.1 (`35ea155`) is Helium's Windows packaging for 0.22.2; its `helium-chromium` submodule is exactly
-the 0.22.2 tag we pin (`f32f2c0`). No Windows engine has been built from it yet: the prebuilt in `prebuilt.json` is from 0.22.1 (its `source`, `38e436c`, pins 0.22.1, and the release source archive follows it), and 0.22.2.1 adds `helium/windows/bundle-hyphenation-data` to the Windows series. Under 0.21.1.1 (`d6806de`) the submodule sat one commit past the tag (`42da6c5`, only `devutils/set_quilt_vars`), so
+the 0.22.2 tag we pin (`f32f2c0`). No Windows engine has been built from it yet: the prebuilt in `prebuilt.json` is from 0.22.1 (its `source`, `38e436c`, pins 0.22.1, and the release source archive follows it), and 0.22.2.1 adds `helium/windows/bundle-hyphenation-data` to the Windows series. The weekly Upstream pins workflow reports that lag as the Windows published engine behind ([engine-build.md](engine-build.md#tracking-upstream)). Under 0.21.1.1 (`d6806de`) the submodule sat one commit past the tag (`42da6c5`, only `devutils/set_quilt_vars`), so
 the patches are the same. `helium-pins.ini` pins both. Over helium-chromium's series it adds:
 
 - ungoogled-chromium's Windows patches: build fixes (`windows-fix-*`, `windows-disable-reorder-fix-linking`,
