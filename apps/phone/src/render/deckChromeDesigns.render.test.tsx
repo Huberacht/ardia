@@ -442,6 +442,34 @@ test("on the material deck the Archive card a touch on the deck put away comes b
   unmount(root);
 });
 
+test("on the material deck the Archive card comes back from Incognito while a search shows fewer than 8 of the 9 normal tabs, since it counts every open tab", () => {
+  withPrivateTabs(2);
+  const root = deck("material");
+  act(() => jest.advanceTimersByTime(600));
+  act(() =>
+    fireGestureHandler(getByGestureTestId("deckPan"), [
+      { state: State.BEGAN, x: 100, y: 400, absoluteX: 100, absoluteY: 400 },
+      { state: State.ACTIVE, x: 100, y: 400, absoluteX: 60, absoluteY: 400 },
+      { state: State.END, x: 100, y: 400, absoluteX: 60, absoluteY: 400 },
+    ]),
+  );
+  act(() => jest.advanceTimersByTime(600));
+  expect(host(root, "archiveCardPlace")).toBeUndefined();
+  search(root, "Site 3");
+  act(() => jest.advanceTimersByTime(600));
+  expect(hosts(root, "deckCard")).toHaveLength(1);
+  const materialSwitch = () => root.root.findAll((node) => node.props.testID === "materialDeckIncognito" && typeof node.props.onPress === "function")[0]!;
+  act(() => materialSwitch().props.onPress());
+  act(() => jest.advanceTimersByTime(600));
+  act(() => materialSwitch().props.onPress());
+  act(() => jest.advanceTimersByTime(600));
+  act(() => jest.advanceTimersByTime(200));
+  expect(useTabs.getState().incognito).toBe(false);
+  expect(host(root, "archiveCardPlace")).toBeDefined();
+  expect(counted.mock.calls.filter(([name]) => name === "archive_card_reoffers")).toHaveLength(1);
+  unmount(root);
+});
+
 test("closing the last Incognito card from the deck keeps the empty Incognito side, as Safari's Private does", () => {
   withPrivateTabs(1);
   const closed = jest.spyOn(browse, "closeTabFromDeck").mockImplementation((id) => useTabs.setState((state) => ({ ...state, privates: state.privates.filter((tab) => tab.id !== id), incognito: false })));
