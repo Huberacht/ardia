@@ -61,9 +61,7 @@ impl Crypto for BoringSsl {
 
     #[cfg(feature = "ed25519")]
     fn ed25519_verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
-        let mut r = [0u8; 32];
-        r.copy_from_slice(&signature[..32]);
-        if crate::small_order::is_small_order(public_key) || crate::small_order::is_small_order(&r) {
+        if crate::small_order::has_small_order_key_or_r(public_key, signature) {
             return false;
         }
         bssl_crypto::ed25519::PublicKey::from_bytes(public_key)

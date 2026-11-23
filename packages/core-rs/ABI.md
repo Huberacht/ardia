@@ -56,13 +56,19 @@ The library keeps no globals and starts no threads. It reads no files. The only 
 OS for random bytes, in `ardia_sync_seal`, `ardia_sync_new_file_id` and `ardia_phrase_generate_entropy`. A panic aborts
 the process in release builds.
 
+If the OS can't supply random bytes, what happens depends on the crypto backend:
+- RustCrypto, used in cargo builds, returns `ARDIA_STATUS_RANDOM`.
+- BoringSSL, used in Chromium's GN build, aborts the process. Its CSPRNG treats an entropy failure as fatal, as the rest
+  of Chromium does.
+
 ## Nonces
 
 Files and local state are sealed only with nonces drawn from the crypto backend's `fill_random`. In every shipped
 build that backend is the OS. Passwords are sealed with their HMAC-derived deterministic nonce. No function in
 `ardia-sync-core` or `ardia-ffi` takes a nonce. To reproduce the committed fixed-nonce vectors, the test crate
-`ardia-sync-vectors` builds `SyncKeysWith<FixtureCrypto>`, a test-only backend that wraps RustCrypto and returns the
-fixture's nonce from `fill_random`, and then calls the normal `seal`.
+`ardia-sync-vectors` builds `SyncKeysWith<FixtureCrypto>`, a test-only backend that wraps the build's selected backend
+and returns the fixture's nonce from `fill_random`, and then calls the normal `seal`. The selected backend is RustCrypto
+under cargo and BoringSSL in Chromium's GN build.
 
 ## Reading what other platforms wrote
 

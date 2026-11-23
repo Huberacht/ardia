@@ -25,10 +25,14 @@ const SMALL_ORDER_Y: [[u8; 32]; 7] = [
     ],
 ];
 
-pub(crate) fn is_small_order(encoding: &[u8; 32]) -> bool {
+fn is_small_order(encoding: &[u8]) -> bool {
     SMALL_ORDER_Y
         .iter()
         .any(|y| y[..31] == encoding[..31] && y[31] == encoding[31] & 0x7f)
+}
+
+pub(crate) fn has_small_order_key_or_r(public_key: &[u8; 32], signature: &[u8; 64]) -> bool {
+    is_small_order(public_key) || is_small_order(&signature[..32])
 }
 
 #[cfg(test)]
@@ -64,5 +68,19 @@ mod tests {
         let mut near = [0u8; 32];
         near[0] = 2;
         assert!(!is_small_order(&near));
+    }
+
+    #[test]
+    fn the_key_and_r_are_checked_independently() {
+        let mut key = [0u8; 32];
+        key[0] = 2;
+        let mut signature = [0u8; 64];
+        signature[0] = 2;
+        assert!(!has_small_order_key_or_r(&key, &signature));
+        signature[0] = 1;
+        assert!(has_small_order_key_or_r(&key, &signature));
+        signature[0] = 2;
+        key[0] = 1;
+        assert!(has_small_order_key_or_r(&key, &signature));
     }
 }

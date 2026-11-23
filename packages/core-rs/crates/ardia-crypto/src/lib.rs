@@ -50,7 +50,7 @@ pub use rustcrypto::RustCrypto;
 #[cfg(feature = "boringssl")]
 mod boringssl;
 
-#[cfg(all(feature = "ed25519", any(feature = "boringssl", test)))]
+#[cfg(feature = "ed25519")]
 mod small_order;
 
 #[cfg(feature = "boringssl")]

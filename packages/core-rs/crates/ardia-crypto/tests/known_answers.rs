@@ -172,3 +172,59 @@ fn ed25519_rejects_small_order_keys_and_their_trivial_signatures() {
     with_order_two[..32].copy_from_slice(&order_two);
     assert!(!Backend::ed25519_verify(&order_two, b"", &with_order_two));
 }
+
+#[cfg(feature = "ed25519")]
+const RFC_8032_TEST_1_KEY: &str = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+
+#[cfg(feature = "ed25519")]
+const IDENTITY_R_UNDER_TEST_1_KEY: [(&[u8], &str); 2] = [
+    (
+        b"",
+        concat!(
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "756cf9b1d6f0d7a979b9d2af3dc2bc1294ec7cb6daa20eaff534c024fc57920f"
+        ),
+    ),
+    (
+        b"small order R",
+        concat!(
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "f0a69ddebb802c89e405561d3315c191f2a6a984f8b7999f1f271e28c0a9850d"
+        ),
+    ),
+];
+
+#[cfg(feature = "ed25519")]
+#[test]
+fn ed25519_rejects_a_small_order_r_under_a_valid_key() {
+    let public_key: [u8; 32] = hex(RFC_8032_TEST_1_KEY).try_into().unwrap();
+    for (message, signature) in IDENTITY_R_UNDER_TEST_1_KEY {
+        let signature: [u8; 64] = hex(signature).try_into().unwrap();
+        assert!(!Backend::ed25519_verify(&public_key, message, &signature));
+    }
+}
+
+#[cfg(all(feature = "ed25519", feature = "rustcrypto"))]
+#[test]
+fn the_identity_r_signatures_pass_the_cofactorless_equation() {
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&hex(RFC_8032_TEST_1_KEY).try_into().unwrap()).unwrap();
+    for (message, signature) in IDENTITY_R_UNDER_TEST_1_KEY {
+        let signature: [u8; 64] = hex(signature).try_into().unwrap();
+        let signature = ed25519_dalek::Signature::from_bytes(&signature);
+        assert!(ed25519_dalek::Verifier::verify(&key, message, &signature).is_ok());
+        assert!(key.verify_strict(message, &signature).is_err());
+    }
+}
+
+#[cfg(feature = "ed25519")]
+#[test]
+fn ed25519_rejects_a_non_canonical_s() {
+    let public_key: [u8; 32] = hex(RFC_8032_TEST_1_KEY).try_into().unwrap();
+    let s_plus_l: [u8; 64] = hex(concat!(
+        "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155",
+        "4c8c7872aa064e049dbb3013fbf29380d25bf5f0595bbe24655141438e7a101b"
+    ))
+    .try_into()
+    .unwrap();
+    assert!(!Backend::ed25519_verify(&public_key, b"", &s_plus_l));
+}

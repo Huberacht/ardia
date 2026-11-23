@@ -811,7 +811,11 @@ Rust standard library. Nothing in `ac_linux_*` calls it yet.
   the checkout that the GN arg `ardia_core_rs_checkout` names. Without that arg they aren't defined. The first build
   of the targets took 1,083 steps and 57 s on a warm 16-core Boat VM.
 
+  `AC_REPO` must be the absolute path of an Ardia checkout on the builder at the commit being built. On the Boat
+  builder that's `/home/user/ardia`.
+
   ```bash
+  export AC_REPO=/home/user/ardia
   echo "ardia_core_rs_checkout = \"$AC_REPO\"" >> out/Release_GN_linux_x64/args.gn
   autoninja -C out/Release_GN_linux_x64 ardia/core_rs:tests
   out/Release_GN_linux_x64/ardia_crypto_known_answers

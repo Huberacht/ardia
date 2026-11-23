@@ -57,6 +57,9 @@ impl Crypto for RustCrypto {
     #[cfg(feature = "ed25519")]
     fn ed25519_verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
         use ed25519_dalek::{Signature, VerifyingKey};
+        if crate::small_order::has_small_order_key_or_r(public_key, signature) {
+            return false;
+        }
         VerifyingKey::from_bytes(public_key)
             .map(|key| key.verify_strict(message, &Signature::from_bytes(signature)).is_ok())
             .unwrap_or(false)
