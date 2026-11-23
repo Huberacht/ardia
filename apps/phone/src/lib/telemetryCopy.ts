@@ -134,7 +134,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["drawn_menu_actions_chosen"],
       },
       {
-        text: "In the same daily counts, on iPhone: how often you left Ardia while a web video was in Picture in Picture or full screen, and how often it was still playing 5 seconds later. Counts only, never which video or page, and never while browsing privately",
+        text: "In the same daily counts, on iPhone: how often you left Ardia while a web video was in Picture in Picture or full screen, and how often it was still playing 5 seconds later with Ardia in the background. Counts only, never which video or page, and never while browsing privately",
         fields: ["web_videos_floated", "web_videos_kept_playing"],
       },
       {

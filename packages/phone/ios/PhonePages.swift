@@ -74,7 +74,7 @@ final class PhonePages {
     engine.onPopup = { [weak self] opener, popup in self?.popupOpened(from: opener, popup: popup) }
     engine.onOpenLink = { [weak self] url, opener, inBackground in self?.linkOpened(url, from: opener, inBackground: inBackground) }
     engine.onPrivateBrowsingEnded = { [weak self] in self?.privateBrowsingEnded() }
-    videoFloat = WebVideoFloat { [weak self] outcome in self?.webVideoLeftForeground(outcome) }
+    videoFloat = WebVideoFloat(shownWebView: { [weak self] in self?.shownWebView() }) { [weak self] outcome in self?.webVideoLeftForeground(outcome) }
     engine.downloads.onStart = { [weak self] start, webView in self?.downloadStarted(start, in: webView) }
     engine.downloads.onProgress = { [weak self] list in
       self?.downloadSink?(["name": "downloads.progress", "downloads": list.map(PagePayloads.download)])
