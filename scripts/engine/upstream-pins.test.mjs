@@ -160,6 +160,10 @@ test("the lint rejects malformed tags and versions even when every file agrees",
   ]);
   const shortSource = checkPinConsistency(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "158.0.8127.36", source: "38e436c" }) })));
   assert.deepEqual(shortSource, ["scripts/windows/engine/prebuilt.json source 38e436c is not a full commit hash"]);
+  const arraySource = checkPinConsistency(pins((f) => ({ ...f, windowsPrebuilt: JSON.stringify({ chromium: "158.0.8127.36", source: ["38e436c33f5ff1174eb0e2125c189b6e241ed8d3"] }) })));
+  assert.deepEqual(arraySource, ['scripts/windows/engine/prebuilt.json source ["38e436c33f5ff1174eb0e2125c189b6e241ed8d3"] is not a full commit hash']);
+  const longTag = checkPinConsistency(pins((f) => ({ ...f, windowsIni: windowsIni("0.22.2", "0.22.2.1.9") })));
+  assert.ok(longTag.some((problem) => problem.startsWith("helium-windows tag 0.22.2.1.9 is not a release of helium-chromium 0.22.2")), longTag.join("\n"));
 });
 
 test("--check passes offline on the repository", () => {

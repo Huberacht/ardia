@@ -150,10 +150,10 @@ export function checkPinConsistency(pins) {
   for (const [where, value] of [...versions, ...commits]) if (!value) problems.push(`${where} is missing`);
   if (problems.length) return problems;
   for (const [where, value] of versions) {
-    if (!isVersion(value)) problems.push(`${where} ${value} is not a dotted numeric version`);
+    if (typeof value !== "string" || !isVersion(value)) problems.push(`${where} ${typeof value === "string" ? value : JSON.stringify(value)} is not a dotted numeric version`);
   }
   for (const [where, value] of commits) {
-    if (!COMMIT.test(value)) problems.push(`${where} ${value} is not a full commit hash`);
+    if (typeof value !== "string" || !COMMIT.test(value)) problems.push(`${where} ${typeof value === "string" ? value : JSON.stringify(value)} is not a full commit hash`);
   }
   if (problems.length) return problems;
 
@@ -192,7 +192,7 @@ export function checkPinConsistency(pins) {
     ["helium-linux", pins.macLinuxIni.heliumLinux.tag],
     ["helium-windows", pins.windowsIni.heliumWindows.tag],
   ]) {
-    if (!tag.startsWith(`${pins.env.heliumChromium}.`)) {
+    if (typeof tag !== "string" || !tag.startsWith(`${pins.env.heliumChromium}.`) || !/^\d+$/.test(tag.slice(pins.env.heliumChromium.length + 1))) {
       problems.push(`${name} tag ${tag} is not a release of helium-chromium ${pins.env.heliumChromium} (expected ${pins.env.heliumChromium}.<n>)`);
     }
   }
