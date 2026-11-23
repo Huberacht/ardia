@@ -3,7 +3,7 @@ import { closeSync, openSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { CDP_CONNECT_TIMEOUT, connectCdp, evaluate, fetchJson } from "./cdp.mjs";
+import { CDP_CONNECT_TIMEOUT, CdpError, connectCdp, evaluate, fetchJson } from "./cdp.mjs";
 import { currentSignal, js, pause, throwIfCancelled, until, whenCancelled } from "./util.mjs";
 
 export const SHELL_PREFIX = "chrome://ardia/";
@@ -58,6 +58,8 @@ const STARTUP_CONNECT_RETRY_DELAY = 250;
 const STARTUP_CONNECT_FIRST_ATTEMPT = 5000;
 const PROBE_CONNECT_TIMEOUT = 5000;
 const PROBE_EVALUATE_TIMEOUT = 3000;
+const PROBE_SETUP_TIMEOUT = 10000;
+const TARGET_LIST_TIMEOUT = 3000;
 
 function probeBudget(deadline, limit) {
   if (deadline === undefined) return limit;
@@ -123,7 +125,14 @@ export async function launchArdia({ executable, uiDir, scratch, background = tru
     const active = await until(() => readFile(join(scratch, "DevToolsActivePort"), "utf8").then((text) => text.includes("\n") && text), { timeout: startTimeout, label: "DevToolsActivePort", abort: () => app.exitReason() });
     const [port, path] = active.trim().split("\n");
     app.port = Number(port);
-    app.browser = await connectWhileAlive(app, `ws://127.0.0.1:${port}${path}`, { deadline, connect: connectImpl });
+    const browser = await connectWhileAlive(app, `ws://127.0.0.1:${port}${path}`, { deadline, connect: connectImpl });
+    const signal = currentSignal();
+    if (app.exitReason() || signal?.aborted) {
+      await browser.close().catch(() => {});
+      if (app.exitReason()) throw new Error(`CDP connection aborted: ${app.exitReason()}`);
+      throw signal.reason;
+    }
+    app.browser = browser;
     return app;
   } catch (error) {
     await app.close();
@@ -166,8 +175,10 @@ export class ArdiaApp {
     return readFile(this.logPath, "utf8").catch(() => "");
   }
 
-  async targets() {
-    return fetchJson(`http://127.0.0.1:${this.port}/json/list`, 3000);
+  async targets({ deadline } = {}) {
+    const budget = probeBudget(deadline, TARGET_LIST_TIMEOUT);
+    if (budget <= 0) return [];
+    return fetchJson(`http://127.0.0.1:${this.port}/json/list`, budget);
   }
 
   async browserTargets() {
@@ -175,10 +186,12 @@ export class ArdiaApp {
     return targetInfos;
   }
 
-  async connect(target, { timeout } = {}) {
+  async connect(target, { deadline } = {}) {
     const existing = this.connections.get(target.id);
     if (existing && !existing.closed) return existing;
-    const session = await connectCdp(target.webSocketDebuggerUrl, timeout === undefined ? {} : { timeout });
+    const connectBudget = probeBudget(deadline, CDP_CONNECT_TIMEOUT);
+    if (connectBudget <= 0) throw new Error(`no time left to connect to ${target.id}`);
+    const session = await connectCdp(target.webSocketDebuggerUrl, { timeout: connectBudget });
     session.problems = [];
     session.on("Runtime.exceptionThrown", ({ exceptionDetails }) => session.problems.push({ kind: "exception", text: exceptionDetails?.exception?.description ?? exceptionDetails?.text }));
     session.on("Runtime.consoleAPICalled", ({ type, args }) => {
@@ -187,19 +200,25 @@ export class ArdiaApp {
     session.on("Log.entryAdded", ({ entry }) => {
       if (entry?.level === "error" || entry?.level === "warning") session.problems.push({ kind: `log-${entry.level}`, text: entry.text, source: entry.source, url: entry.url ?? null });
     });
-    await session.send("Runtime.enable").catch(() => {});
-    await session.send("Log.enable").catch(() => {});
+    for (const method of ["Runtime.enable", "Log.enable"]) {
+      const budget = probeBudget(deadline, PROBE_SETUP_TIMEOUT);
+      const failure = budget > 0 ? await session.send(method, {}, { timeout: budget }).then(() => null, (error) => error) : new Error(`no time left for ${method}`);
+      if (failure && deadline !== undefined && !(failure instanceof CdpError)) {
+        await session.close().catch(() => {});
+        throw failure;
+      }
+    }
     this.connections.set(target.id, session);
     return session;
   }
 
   async shells({ deadline } = {}) {
-    const targets = (await this.targets()).filter((t) => t.url.startsWith(SHELL_PREFIX) && t.type === "page");
+    const targets = (await this.targets({ deadline })).filter((t) => t.url.startsWith(SHELL_PREFIX) && t.type === "page");
     const shells = [];
     for (const target of targets) {
-      const connectBudget = probeBudget(deadline, PROBE_CONNECT_TIMEOUT);
-      if (connectBudget <= 0) break;
-      const session = await this.connect(target, { timeout: connectBudget }).catch(() => null);
+      const probeDeadline = Math.min(deadline ?? Infinity, Date.now() + PROBE_CONNECT_TIMEOUT);
+      if (probeDeadline <= Date.now()) break;
+      const session = await this.connect(target, { deadline: probeDeadline }).catch(() => null);
       if (!session) continue;
       const evaluateBudget = probeBudget(deadline, PROBE_EVALUATE_TIMEOUT);
       if (evaluateBudget <= 0) break;
@@ -214,6 +233,12 @@ export class ArdiaApp {
     const cached = this.shellCache.get(windowId);
     if (cached && !cached.session.closed) return cached;
     const found = await until(async ({ deadline }) => (await this.shells({ deadline })).find((s) => s.ready && (windowId === undefined || s.windowId === windowId)), { timeout, label: `shell renderer ${windowId ?? "(any)"}`, abort: () => this.exitReason() });
+    return this.cacheShell(found);
+  }
+
+  cacheShell(found) {
+    const cached = this.shellCache.get(found.windowId);
+    if (cached && !cached.session.closed) return cached;
     const shell = new Shell(this, found);
     this.shellCache.set(found.windowId, shell);
     return shell;
@@ -225,7 +250,7 @@ export class ArdiaApp {
       return list.length ? list : false;
     }, { timeout: options?.timeout ?? 25000, label: "a browser shell renderer", abort: () => this.exitReason() });
     const chosen = shells.find((s) => s.startup) ?? shells.find((s) => s.windowId === "main") ?? shells[0];
-    return this.shell(chosen.windowId);
+    return this.cacheShell(chosen);
   }
 
   async pageTarget(predicate, { timeout = 15000, label = "page target" } = {}) {
@@ -235,13 +260,14 @@ export class ArdiaApp {
   async pageLoaded(url, { timeout = 20000, prefix = false } = {}) {
     const matches = (candidate) => (prefix ? candidate.startsWith(url) : candidate === url);
     return until(async ({ deadline }) => {
-      const target = (await this.targets()).find((t) => t.type === "page" && matches(t.url));
+      const target = (await this.targets({ deadline })).find((t) => t.type === "page" && matches(t.url));
       const connectBudget = probeBudget(deadline, PROBE_CONNECT_TIMEOUT);
       const session = target && connectBudget > 0 ? await connectCdp(target.webSocketDebuggerUrl, { timeout: connectBudget }).catch(() => null) : null;
       if (!session) return false;
       try {
         const href = prefix ? `location.href.startsWith(${js(url)})` : `location.href === ${js(url)}`;
-        const loaded = await evaluate(session, `${href} && document.readyState === "complete"`, { timeout: 2000, userGesture: false }).catch(() => false);
+        const evaluateBudget = probeBudget(deadline, 2000);
+        const loaded = evaluateBudget > 0 && await evaluate(session, `${href} && document.readyState === "complete"`, { timeout: evaluateBudget, userGesture: false }).catch(() => false);
         return loaded ? target : false;
       } finally {
         await session.close().catch(() => {});

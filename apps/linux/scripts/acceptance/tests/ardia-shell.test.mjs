@@ -264,6 +264,30 @@ describe("Ardia launch plumbing and shell driver against a mock host", () => {
     for (let waited = 0; !session.closed && waited < 2000; waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
     assert.equal(session.closed, true);
   });
+
+  it("returns the main shell from its own scan instead of scanning again", async () => {
+    const stuck = await startMockCdp({
+      targets: [
+        { id: "shell-main", type: "page", url: "chrome://ardia/index.html" },
+        { id: "shell-stuck", type: "page", url: "chrome://ardia/index.html" },
+      ],
+      handlers: {
+        "Runtime.evaluate": (params, { targetId }) => (targetId === "shell-stuck" ? stuck.NO_REPLY : evaluateIn(shells.main.context, params.expression)),
+      },
+    });
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "stuck" });
+    app.port = stuck.port;
+    try {
+      const started = Date.now();
+      const main = await app.mainShell({ timeout: 1000 });
+      assert.equal(main.windowId, "main");
+      assert.ok(Date.now() - started < 2500, `took ${Date.now() - started} ms`);
+      assert.equal(stuck.received.filter((m) => m.method === "Runtime.evaluate" && m.targetId === "shell-stuck").length, 1);
+    } finally {
+      for (const session of app.connections.values()) await session.close().catch(() => {});
+      await stuck.close();
+    }
+  });
 });
 
 describe("shell probes against stalled renderers", () => {
@@ -283,10 +307,31 @@ describe("shell probes against stalled renderers", () => {
       const started = Date.now();
       await assert.rejects(app.mainShell({ timeout: 300 }), /Timed out after 300 ms waiting for a browser shell renderer/);
       assert.ok(Date.now() - started < 1500, `took ${Date.now() - started} ms`);
+      assert.equal(sockets.size, 1);
     } finally {
       for (const socket of sockets) socket.destroy();
       server.closeAllConnections();
       await new Promise((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe("shell probes against renderers that never finish setup", () => {
+  it("drop a session whose setup outlives the polling deadline", async () => {
+    const mock = await startMockCdp({
+      targets: [{ id: "shell-1", type: "page", url: "chrome://ardia/index.html" }, { id: "shell-2", type: "page", url: "chrome://ardia/index.html" }],
+      handlers: { "Runtime.enable": () => mock.NO_REPLY },
+    });
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "setup" });
+    app.port = mock.port;
+    try {
+      const started = Date.now();
+      await assert.rejects(app.mainShell({ timeout: 300 }), /Timed out after 300 ms/);
+      assert.ok(Date.now() - started < 1500, `took ${Date.now() - started} ms`);
+      assert.equal(app.connections.size, 0);
+      assert.equal(mock.received.filter((m) => m.method === "Runtime.enable").length, 1);
+    } finally {
+      await mock.close();
     }
   });
 });
