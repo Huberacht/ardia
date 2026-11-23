@@ -69,7 +69,7 @@ function Opens([string]$name, [string[]]$arguments) {
   $before = Snapshot
   $p = Start-Pilot $arguments
   $h = $null
-  try { $h = Wait-ShellReady 60 } catch {}
+  try { $h = Wait-Shell 60 } catch {}
   Wait-Until { Test-Path -LiteralPath (Join-Path $web 'Chromium\Local State') } 30 'the WebUI profile to be written' -NoThrow | Out-Null
   $pinned = $false
   if ($h) {
