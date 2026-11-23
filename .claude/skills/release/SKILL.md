@@ -157,6 +157,21 @@ scripts/release.sh <version>     # ~15–25 min with notarization; run it in the
 For a nightly, set `MARKETING_VERSION` to `<version>` (`0.2.37-nightly.1`) the same way, commit as "Nightly <version>",
 and run `scripts/release.sh <version>`: the version alone makes it a nightly.
 
+Before any of that, check the commit in about a second:
+
+```bash
+scripts/release/preflight.mjs <version>    # --mode dry-run as the CI dry run checks it
+```
+
+It reads the published appcast once and fails on everything that would stop the release later: a version that fits
+no channel, missing, empty or unreadable notes, `MARKETING_VERSION` or `CURRENT_PROJECT_VERSION` with more than one
+value across the project's configurations or a version that isn't `<version>`, an `Info.plist` that stopped reading
+them from the build settings, an Arch `pkgver` that `update-pkgbuild.sh` wouldn't derive from `<version>`, a stable
+that isn't above the latest stable in the feed, and a build number that isn't above every build in it (stable and
+nightly share one feed). `release.sh` and the
+Release workflow's `preflight` job run it first, so a stale build number fails in seconds instead of after the engine
+fetch and `pod install`.
+
 `release.sh` checks everything first, then runs the stages in `scripts/release/` in order: `archive.sh`,
 `export-sign.sh`, `verify.sh`, `launch-check.sh`, `notarize.sh`, `package.sh`, `notes.sh`, `appcast.sh`. When one
 fails, read its log in `dist/<version>/` and rerun that stage alone (each prints its usage); `notes.sh` prints the
@@ -330,8 +345,11 @@ it refuses to run alongside another publish, local or CI, naming the holder; `--
 2 h left by a publish that died. The build job has no secrets; a separate sign job, which installs nothing, holds the
 keys and deletes them before the launch check (`docs/releasing.md` › CI releases).
 
-**Smoke-testing CI's build.** Dispatch with `dry_run=true` (the default): the same build as a release candidate
-(`release.sh --rc`: the next build number, signed and notarized), published nowhere. Download it and run the smoke test
+**Smoke-testing CI's build.** Commit the bump and the notes first, then dispatch with `dry_run=true` (the default):
+the same build as a release candidate (`release.sh --rc`, signed and notarized), published nowhere. Its preflight
+fails on everything a real run would, except a nightly that's already released at the checkout's build and still the
+newest build (the feed must list it; a published tag alone fails), which
+only warns (`publish.sh --dry-run` refuses an already released stable anyway). Download it and run the smoke test
 on it:
 
 ```bash
