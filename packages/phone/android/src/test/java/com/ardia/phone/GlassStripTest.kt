@@ -125,7 +125,7 @@ class GlassStripTest {
     }
 
     @Test
-    fun theContentRefreshFollowsWhatMovesUnderTheGlassAndAsksForADrawOnlyWhenNothingElseWill() {
+    fun theContentRefreshFollowsWhatMovesUnderTheGlassOnceAFrame() {
         val scene = bar()
         live(scene)
         val strip = scene.source.stripsHeld.single()
@@ -136,15 +136,28 @@ class GlassStripTest {
         assertFalse("once a frame however many ask", scene.source.refreshStrips(frameTime = 1_000L, drawPending = true))
         assertEquals(recorded + 1, strip.records)
         scene.glasses.forEach(::onHardware)
-        assertFalse(scene.glasses.any { it.isDirty })
         scene.source.contentMoved()
-        assertTrue("a trailing refresh with no draw coming", scene.source.refreshStrips(frameTime = 1_016L, drawPending = false))
-        assertTrue("asks one glass to draw so the new sample reaches the screen", scene.glasses.count { it.isDirty } == 1)
+        assertTrue(scene.source.refreshStrips(frameTime = 1_016L, drawPending = false))
+        assertFalse("a refresh an invalidation started has its draw coming", scene.glasses.any { it.isDirty })
         scene.source.release()
         assertEquals("releasing the source drops its strips", 0, scene.source.stripsHeld.size)
         assertEquals(0, scene.source.stripStats.count)
         scene.source.contentMoved()
         assertFalse(scene.source.refreshStrips(frameTime = 1_032L, drawPending = true))
+    }
+
+    @Test
+    fun overAPageTheLastSampleTheCadenceHeldBackAsksOneGlassToDraw() {
+        val scene = bar()
+        live(scene)
+        scene.glasses.forEach(::onHardware)
+        scene.source.contentMoved()
+        assertTrue(scene.source.refreshStrips(frameTime = 1_000L, drawPending = true, paced = true))
+        scene.source.contentMoved()
+        assertFalse("120 Hz: the next frame is held back", scene.source.refreshStrips(frameTime = 1_008L, drawPending = true, paced = true))
+        assertFalse(scene.glasses.any { it.isDirty })
+        assertTrue("the held-back sample goes out a frame later", scene.source.refreshStrips(frameTime = 1_017L, drawPending = false, paced = true))
+        assertEquals("with no draw coming, one glass draws so it reaches the screen", 1, scene.glasses.count { it.isDirty })
     }
 
     @Test

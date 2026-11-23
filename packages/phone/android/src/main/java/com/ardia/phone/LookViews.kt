@@ -1491,6 +1491,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
 
     private val cadence = StripCadence(FrostRefresh.PAGE_STRIP_HZ)
     private var contentChanged = false
+    private var heldBack = false
     private var refreshPosted = false
     private val stripRefresh = Runnable {
         refreshPosted = false
@@ -1506,6 +1507,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
     internal fun contentMoved() {
         if (strips.isEmpty() || recorder == null) return
         contentChanged = true
+        heldBack = false
         postStripRefresh()
     }
 
@@ -1584,17 +1586,20 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
 
     private var refreshedAt = Long.MIN_VALUE
 
-    internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis(), drawPending: Boolean = isDirty): Boolean {
+    internal fun refreshStrips(frameTime: Long = android.view.animation.AnimationUtils.currentAnimationTimeMillis(), drawPending: Boolean = isDirty, paced: Boolean = holdsPage): Boolean {
         val content = recorder ?: return false
         if (strips.isEmpty() || !contentChanged || frameTime == refreshedAt) return false
-        if (holdsPage && !cadence.offer(frameTime)) {
+        if (paced && !cadence.offer(frameTime)) {
+            heldBack = true
             postStripRefresh()
             return false
         }
+        val trailing = heldBack && !drawPending
         contentChanged = false
+        heldBack = false
         refreshedAt = frameTime
         for (strip in strips.values) if (strip.stale) layout(strip, frameTime, null) else strip.refresh(content)
-        if (!drawPending) strips.values.firstNotNullOfOrNull { it.consumers.firstOrNull() }?.invalidate()
+        if (trailing) strips.values.firstNotNullOfOrNull { it.consumers.firstOrNull() }?.invalidate()
         return true
     }
 

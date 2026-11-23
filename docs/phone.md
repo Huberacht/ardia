@@ -1378,8 +1378,9 @@ look surface: it has no frost source to refract.
   clip, so the strip is two nodes: one holds the source with the effect, and the compositing layer every glass draws
   holds that one, filtered once a frame. The source refreshes its strips when something inside it is invalidated (the
   WebView scrolling or animating, a deck backdrop frame: `onDescendantInvalidated`), at most once a frame, and only
-  then, so a still page costs nothing; when no draw is coming that frame (the last frame of a fling held back by the
-  cadence below) it asks one glass to draw so the new sample reaches the screen. A glass redraws only when it moves
+  then, so a still page costs nothing; when the cadence below held a sample back and nothing has been invalidated
+  since (the last frame of a fling), no draw is coming, so it asks one glass to draw and the sample reaches the
+  screen. A refresh an invalidation started never asks: that invalidation's draw is already coming. A glass redraws only when it moves
   or changes, and its draw records the strip only when the strip's extent, lenses or slots change, comparing
   extents clamped to the source, so a glass near the edge doesn't re-record it on every draw. Each strip knows the
   glasses that draw it: one that leaves (detached, hidden, trimmed, or moved to another strip after a density change)
