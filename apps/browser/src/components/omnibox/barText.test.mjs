@@ -131,6 +131,12 @@ test("copying a visited page shown without its scheme copies the page's full add
   assert.equal(fullUrlShown("example.com", { kind: "page", url: "http://www.example.com/" }), "http://www.example.com/");
 });
 
+test("a typed address with its scheme that matches the page row also counts as the whole address, so copying it is cleaned", () => {
+  const page = { kind: "page", url: "https://shop.example/item?id=7&utm_source=mail" };
+  assert.equal(fullUrlShown("https://shop.example/item?id=7&utm_source=mail", page), page.url);
+  assert.equal(fullUrlShown("https://shop.example/item?id=7", page), null);
+});
+
 test("text that is not a page row's address, such as a search or a partial edit, is copied as typed", () => {
   const page = { kind: "page", url: "https://example.com/docs" };
   assert.equal(fullUrlShown("example.com/doc", page), null);

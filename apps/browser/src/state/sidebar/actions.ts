@@ -1,5 +1,5 @@
 import { foreignWriteHooks } from "../browser/foreignWriteHooks";
-import { cleanUrl, linkLines, markdownLink } from "@ardia/core";
+import { cleanUrlReport, linkLines, markdownLink } from "@ardia/core";
 import { copyLink } from "../../platform/clipboard";
 import { prompt } from "../../platform/dialogs";
 import { updateFolder } from "../live/store";
@@ -126,9 +126,10 @@ export function newGroupWithSelection(windowId: string, ids = selectedTabIds(sto
 export function copyUrls(ids: string[], markdown: boolean) {
   const tabs = ids.map((id) => store().tabs[id]).filter((t): t is Tab => !!t?.url);
   if (!tabs.length) return;
-  const lines = tabs.map((t) => (markdown ? markdownLink(tabTitle(t), t.url) : cleanUrl(t.url)));
+  const reports = tabs.map((t) => cleanUrlReport(t.url));
+  const lines = tabs.map((t, i) => (markdown ? markdownLink(tabTitle(t), t.url) : reports[i]!.url));
   copyLink(linkLines(lines, markdown));
-  for (const t of tabs) noteUrlCopied(awaitsFirstPage(t.id));
+  tabs.forEach((t, i) => noteUrlCopied(awaitsFirstPage(t.id), reports[i]!.removedTracker));
 }
 
 export async function bookmarkTabs(windowId: string, ids: string[], folder: BookmarkFolderChoice) {

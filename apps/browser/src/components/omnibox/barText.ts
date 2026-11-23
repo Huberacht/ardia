@@ -45,7 +45,7 @@ export function previewText(s: Suggestion | undefined): string | null {
   return null;
 }
 
-export const fullUrlShown = (value: string, s: Suggestion | undefined): string | null => (s?.kind === "page" && value === displayUrl(s.url) ? s.url : null);
+export const fullUrlShown = (value: string, s: Suggestion | undefined): string | null => (s?.kind === "page" && (value === s.url || value === displayUrl(s.url)) ? s.url : null);
 
 const caret = (at: number): Selection => ({ start: at, end: at });
 

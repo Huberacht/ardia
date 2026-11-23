@@ -3,7 +3,7 @@ import { copyLink } from "../../platform/clipboard";
 import { openExternalURL } from "../../platform/app";
 import { pickFiles, prompt } from "../../platform/dialogs";
 import type { CommandEvent } from "../../platform/commands";
-import { markdownLink } from "@ardia/core";
+import { cleanUrlReport, markdownLink } from "@ardia/core";
 import { useBrowser } from "../browser/store";
 import { requestCreateProfile } from "../profiles/createProfileRequest";
 import { activeTabId, bookmarkProfileId, isPinnedRow, resolveWindowId, tabLayoutOf } from "../browser/model";
@@ -231,7 +231,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return (!targeted && copySelectedTabUrls(s, windowId, false)) || !page ? undefined : void copyPageUrl(page.id);
     case "copyUrlAsMarkdown":
       if ((!targeted && copySelectedTabUrls(s, windowId, true)) || !page) return;
-      noteUrlCopied(awaitsFirstPage(page.id));
+      noteUrlCopied(awaitsFirstPage(page.id), cleanUrlReport(page.url).removedTracker);
       return copyLink(markdownLink(page.customTitle || page.title, page.url));
     case "findInPage":
       if (page) expectFocus(windowId, findFocus(page.id));
