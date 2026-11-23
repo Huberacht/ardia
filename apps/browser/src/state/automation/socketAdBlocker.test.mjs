@@ -28,7 +28,7 @@ test("a site added to the ad blocker's trusted list is listed, and taking it out
   assert.deepEqual(await ok("sites.allowAds", { site: "WWW.AppLovin.com" }), { site: "www.applovin.com", trusted: true, covers: "www.applovin.com and its subdomains", enabled: true, allowedSites: ["www.applovin.com"] });
   await ok("sites.allowAds", { site: "dash.ironsrc.com" });
   assert.deepEqual((await ok("sites.adBlocker", {})).allowedSites, ["dash.ironsrc.com", "www.applovin.com"]);
-  assert.deepEqual(await ok("sites.blockAds", { site: "www.applovin.com" }), { site: "www.applovin.com", trusted: false, covers: "www.applovin.com and its subdomains", enabled: true, allowedSites: ["dash.ironsrc.com"] });
+  assert.deepEqual(await ok("sites.blockAds", { site: "www.applovin.com" }), { site: "www.applovin.com", removed: true, trusted: false, enabled: true, allowedSites: ["dash.ironsrc.com"] });
   assert.deepEqual(blocker.removed, ["www.applovin.com"], "the exact-remove sink got only that entry");
 });
 
@@ -36,7 +36,10 @@ test("blockAds takes out only an entry the list shows, and names the broader ent
   await freshWindow();
   reset();
   await ok("sites.allowAds", { site: "applovin.com" });
+  await ok("sites.allowAds", { site: "shop.applovin.com" });
+  assert.deepEqual(await ok("sites.blockAds", { site: "shop.applovin.com" }), { site: "shop.applovin.com", removed: true, trusted: true, coveredBy: "applovin.com", enabled: true, allowedSites: ["applovin.com"] }, "the parent still lets it through, and the answer says so");
   blocker.written.length = 0;
+  blocker.removed.length = 0;
   const covered = await call("sites.blockAds", { site: "www.applovin.com" });
   assert.equal(covered.error?.code, "refused");
   assert.match(covered.error.message, /applovin\.com is, and covers it/);

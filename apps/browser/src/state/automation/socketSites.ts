@@ -173,7 +173,8 @@ async function blockAds(params: Record<string, unknown>, call: SocketCall) {
   if (!removed) throw new OpError("refused", `${site} isn't an entry the ardia command can take out of the trusted list.`);
   const after = await adBlocker();
   expect(!after.allowedSites.includes(site), `${site} is still in the ad blocker's trusted list.`);
-  return { site, trusted: false, covers: covering(site), ...after };
+  const stillCoveredBy = after.allowedSites.find((entry) => site.endsWith(`.${entry}`));
+  return { site, removed: true, trusted: !!stillCoveredBy, ...(stillCoveredBy ? { coveredBy: stillCoveredBy } : {}), ...after };
 }
 
 const EXTENSION = { profile: PROFILE, id: id("An extension id from extensions.list") };
@@ -221,9 +222,9 @@ export const SITE_METHODS: MethodSpec[] = [
   {
     name: "sites.blockAds",
     mutates: true,
-    description: "Take a site out of the built-in ad blocker's trusted list. Only that entry goes: an entry sites.adBlocker lists, never a broader one or one uBlock ships with",
+    description: "Take a site out of the built-in ad blocker's trusted list. Only that entry goes: an entry sites.adBlocker lists, never a broader one or one uBlock ships with. trusted says whether a broader entry (coveredBy) still lets the site through",
     params: obj({ site: text("A host like example.com: no scheme, port, path or wildcard") }, ["site"]),
-    result: "{site, trusted, covers, enabled, allowedSites}",
+    result: "{site, removed, trusted, coveredBy?, enabled, allowedSites}",
     run: blockAds,
   },
   { name: "sites.zoomLevels", mutates: false, description: "Zoom per host", params: obj({ profile: PROFILE }), result: "{host: zoom}", run: (p) => getZoomLevels(engineOf(p)) },
