@@ -75,9 +75,10 @@ reaches Ardia two ways (`docs/automation.md`, `docs/control-socket.md`):
   extension page, service worker or DNS-rebound name in a browser that sends Fetch Metadata (Chromium, Firefox 90 and
   later, Safari 16.4 and later) can open the socket or ask `/ardia/active`, even holding the token; a top-level GET from
   an older Safari still needs the token and can't read the answer. Then the `RemoteDebuggingAllowed` policy, and a data
-  folder only you can write to: the engine opens the folder once, checks it belongs to you and that no one else can
-  write to it, and creates, checks (0600, owned by you, any inherited macOS ACL removed) and renames the file through
-  that same open folder, so a folder swapped meanwhile is never written to. The
+  folder only you can write to: the engine opens the folder once, checks it belongs to you, that no one else can write
+  to it, that no macOS access list lets anyone else in and that its disk doesn't ignore ownership, and creates, checks
+  (0600, owned by you, any inherited macOS ACL removed) and renames the file through that same open folder, so a folder
+  swapped meanwhile is never written to. The
   engine also keeps its bookkeeping: a command must be a JSON object with an integer `id` and a string `method`
   (`params`, if present, an object; `sessionId` naming a session this connection attached), one command per
   (session, id) until its reply, and at most 4096 waiting replies before the connection is closed. Showing a saved

@@ -64,6 +64,7 @@
 
 #if BUILDFLAG(IS_MAC)
 #include <sys/acl.h>
+#include <sys/mount.h>
 #endif
 
 namespace ardia {
@@ -118,6 +119,30 @@ std::string ErrnoText() {
   return base::ToLowerASCII(strerror(errno));
 }
 
+#if BUILDFLAG(IS_MAC)
+enum class AclState { kNone, kDenyOnly, kAllows, kUnknown };
+
+AclState ExtendedAcl(int fd) {
+  acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+  if (!acl) {
+    return errno == ENOENT || errno == ENOTSUP ? AclState::kNone
+                                               : AclState::kUnknown;
+  }
+  AclState state = AclState::kDenyOnly;
+  acl_entry_t entry;
+  for (int id = ACL_FIRST_ENTRY; acl_get_entry(acl, id, &entry) == 0;
+       id = ACL_NEXT_ENTRY) {
+    acl_tag_t tag;
+    if (acl_get_tag_type(entry, &tag) != 0 || tag != ACL_EXTENDED_DENY) {
+      state = AclState::kAllows;
+      break;
+    }
+  }
+  acl_free(acl);
+  return state;
+}
+#endif
+
 std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
   struct stat info;
   if (fstat(dir_fd, &info) != 0) {
@@ -132,24 +157,51 @@ std::string UnsafeControlFolder(int dir_fd, const base::FilePath& dir) {
   if (info.st_mode & (S_IWGRP | S_IWOTH)) {
     return base::StrCat({"Others can write to ", dir.value(), "."});
   }
+#if BUILDFLAG(IS_MAC)
+  struct statfs volume;
+  if (fstatfs(dir_fd, &volume) != 0) {
+    return base::StrCat({"Couldn't read ", dir.value(), ": ", ErrnoText()});
+  }
+  if (volume.f_flags & MNT_IGNORE_OWNERSHIP) {
+    return base::StrCat(
+        {dir.value(), " is on a disk that ignores ownership, so anyone "
+                      "could read the control token there."});
+  }
+  if (const AclState acl = ExtendedAcl(dir_fd);
+      acl != AclState::kNone && acl != AclState::kDenyOnly) {
+    return base::StrCat({dir.value(),
+                         " has an access list that lets other users in."});
+  }
+#endif
   return std::string();
 }
 
 bool OnlyOwnerCanRead(int fd) {
-#if BUILDFLAG(IS_MAC)
-  acl_t empty = acl_init(0);
-  if (!empty) {
+  if (fchmod(fd, S_IRUSR | S_IWUSR) != 0) {
     return false;
   }
-  const bool cleared = acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0;
-  acl_free(empty);
-  if (!cleared) {
-    return false;
+#if BUILDFLAG(IS_MAC)
+  if (ExtendedAcl(fd) != AclState::kNone) {
+    acl_t empty = acl_init(0);
+    if (!empty) {
+      return false;
+    }
+    const bool cleared = acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0;
+    acl_free(empty);
+    if (!cleared || ExtendedAcl(fd) != AclState::kNone) {
+      return false;
+    }
   }
 #endif
   struct stat info;
   return fstat(fd, &info) == 0 && S_ISREG(info.st_mode) &&
-         info.st_uid == geteuid() && (info.st_mode & 077) == 0;
+         info.st_uid == geteuid() &&
+         (info.st_mode & 07777) == (S_IRUSR | S_IWUSR);
+}
+
+base::ScopedFD& PublishedFolder() {
+  static base::NoDestructor<base::ScopedFD> folder;
+  return *folder;
 }
 
 std::string WriteControlFile(const base::FilePath& path,
@@ -204,12 +256,20 @@ std::string WriteControlFile(const base::FilePath& path,
       return base::StrCat({"Couldn't write ", path.value(), ": ", error});
     }
   }
+  PublishedFolder() = std::move(dir);
   return std::string();
 }
 
 void DeleteControlFile(const base::FilePath& path) {
-  if (!path.empty() && unlink(path.value().c_str()) != 0 && errno != ENOENT &&
-      errno != EISDIR && errno != EPERM) {
+  if (path.empty()) {
+    return;
+  }
+  base::ScopedFD published = std::move(PublishedFolder());
+  const int result =
+      published.is_valid()
+          ? unlinkat(published.get(), path.BaseName().value().c_str(), 0)
+          : unlink(path.value().c_str());
+  if (result != 0 && errno != ENOENT && errno != EISDIR && errno != EPERM) {
     PLOG(ERROR) << "[ardia] can't delete " << path;
   }
 }
