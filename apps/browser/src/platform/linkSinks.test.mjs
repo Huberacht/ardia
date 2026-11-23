@@ -39,8 +39,14 @@ test("the sources scanned cover the Mac, Linux and phone UI and the shared packa
     assert.ok(files.some((f) => f.path === path), path);
 });
 
-test("only the downloads menu copies an address without cleaning it, since download links are often signed", () => {
-  assert.deepEqual(callersOf(/\bcopyUncleanedUrl\(/), ["apps/browser/src/state/downloads/downloadMenu.ts"]);
+const UNCLEANED_COPIES = {
+  "apps/browser/src/state/downloads/downloadMenu.ts": "download links are often signed, so dropping a parameter breaks them",
+  "apps/browser/src/state/omnibox/paste.ts": "address bar copies what it shows (owner decision)",
+};
+
+test("only the listed callers copy an address without cleaning it, each for its stated reason", () => {
+  assert.deepEqual(callersOf(/\bcopyUncleanedUrl\(/), Object.keys(UNCLEANED_COPIES).sort());
+  for (const reason of Object.values(UNCLEANED_COPIES)) assert.ok(reason.length > 0);
 });
 
 const BRANDS = new Set(["CleanedUrl", "LinkText"]);

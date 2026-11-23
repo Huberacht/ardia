@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EDIT_ITEMS, createEditTargets, editField, editMenu } from "./editCommands.ts";
-import { copyFieldAs } from "./fieldCopy.ts";
 
 const element = (kind, extra = {}) => ({
   matches: (selector) => kind === "field" ? selector.startsWith("textarea") : false,
@@ -69,79 +68,4 @@ test("a shell text field is edited with the web platform after it gets its focus
   run.length = 0;
   assert.equal(await editField(field, "copy", port(true)), false);
   assert.deepEqual(run, []);
-});
-
-const addressField = (value, start, end) => element("field", { value, selectionStart: start, selectionEnd: end, getAttribute: (name) => (name === "data-testid" ? "ardia-address-field" : null) });
-
-function fieldCopyDocument() {
-  const listeners = {};
-  const doc = {
-    activeElement: null,
-    depth: 0,
-    deleted: [],
-    addEventListener: (type, listener) => void (listeners[type] = listener),
-    execCommand(command) {
-      if (this.depth > 0) return false;
-      this.deleted.push(command);
-      return true;
-    },
-    fire(type) {
-      const event = { type, data: null, prevented: false, clipboardData: { setData: (_, data) => void (event.data = data) }, preventDefault: () => void (event.prevented = true) };
-      listeners[type](event);
-      return event;
-    },
-  };
-  return doc;
-}
-
-test("copying or cutting the whole address field puts the cleaned address on the clipboard, as the Mac's native swap does", async () => {
-  const doc = fieldCopyDocument();
-  const shown = "shop.example/item?id=7&utm_source=mail";
-  copyFieldAs(shown, "https://shop.example/item?id=7", doc);
-  doc.activeElement = addressField(shown, 0, shown.length);
-  assert.equal(doc.fire("copy").data, "https://shop.example/item?id=7");
-  assert.equal(doc.fire("cut").data, "https://shop.example/item?id=7");
-  await Promise.resolve();
-  assert.deepEqual(doc.deleted, ["delete"]);
-  doc.activeElement = addressField(shown, 3, shown.length);
-  const partial = doc.fire("copy");
-  assert.deepEqual([partial.data, partial.prevented], [null, false]);
-  doc.activeElement = addressField("typed text", 0, 10);
-  assert.equal(doc.fire("copy").prevented, false);
-  copyFieldAs(null, null, doc);
-  doc.activeElement = addressField(shown, 0, shown.length);
-  assert.equal(doc.fire("copy").prevented, false);
-});
-
-test("another field holding the same text as the address field is copied as it is", () => {
-  const doc = fieldCopyDocument();
-  copyFieldAs("example.com", "https://example.com/", doc);
-  doc.activeElement = element("field", { value: "example.com", selectionStart: 0, selectionEnd: 11, getAttribute: () => null });
-  const event = doc.fire("copy");
-  assert.deepEqual([event.data, event.prevented], [null, false]);
-});
-
-test("Edit > Cut on the whole address puts the cleaned address on the clipboard and still empties the field, outside the cut command", async () => {
-  const doc = fieldCopyDocument();
-  const shown = "shop.example/item?id=7&utm_source=mail";
-  copyFieldAs(shown, "https://shop.example/item?id=7", doc);
-  const field = addressField(shown, 0, shown.length);
-  doc.activeElement = field;
-  let clipboard = null;
-  const port = {
-    exec(command) {
-      doc.depth++;
-      try {
-        if (command === "cut") clipboard = doc.fire("cut").data;
-        return true;
-      } finally {
-        doc.depth--;
-      }
-    },
-    readClipboard: async () => "",
-  };
-  assert.equal(await editField(field, "cut", port), true);
-  await Promise.resolve();
-  assert.equal(clipboard, "https://shop.example/item?id=7");
-  assert.deepEqual(doc.deleted, ["delete"]);
 });

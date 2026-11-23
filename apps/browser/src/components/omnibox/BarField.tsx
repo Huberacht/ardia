@@ -48,7 +48,6 @@ export function BarField({
   return (
     <TextInput
       ref={inputRef}
-      testID="ardia-address-field"
       {...events}
       onChangeText={repair.changed}
       onFocus={(e) => (barFieldMarks.field("focus", variant, tag()), claimOnFocus(), events.onFocus?.(e))}

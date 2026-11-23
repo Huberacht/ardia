@@ -4,7 +4,6 @@ let copies = 0;
 let whilePending = 0;
 let selectedTabs = 0;
 let trackersRemoved = 0;
-let fromAddressField = 0;
 let fromWebKitMenu = 0;
 let uncleaned = 0;
 
@@ -20,10 +19,9 @@ export function noteUrlCopied(firstPagePending: boolean, removedTracker = false)
   if (removedTracker) countFor(consentOrNow(undefined), () => void trackersRemoved++);
 }
 
-export function noteLinkCopiedFrom(route: "addressField" | "webKitMenu", removedTracker: boolean, consent?: ConsentToken | null) {
+export function noteWebKitMenuLinkCopied(removedTracker: boolean, consent?: ConsentToken | null) {
   countFor(consentOrNow(consent), () => {
-    if (route === "addressField") fromAddressField++;
-    else fromWebKitMenu++;
+    fromWebKitMenu++;
     if (removedTracker) trackersRemoved++;
   });
 }
@@ -36,7 +34,6 @@ export function takeUrlCopyCounts() {
     url_copies_while_pending: whilePending,
     url_copies_of_selected_tabs: selectedTabs,
     url_copies_cleaned: trackersRemoved,
-    url_copies_from_address_field: fromAddressField,
     url_copies_from_webkit_menu: fromWebKitMenu,
     url_copies_uncleaned: uncleaned,
   };
@@ -44,7 +41,6 @@ export function takeUrlCopyCounts() {
   whilePending = 0;
   selectedTabs = 0;
   trackersRemoved = 0;
-  fromAddressField = 0;
   fromWebKitMenu = 0;
   uncleaned = 0;
   return taken;

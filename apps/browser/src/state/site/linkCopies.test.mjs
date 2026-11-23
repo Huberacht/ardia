@@ -4,7 +4,6 @@ const { shellNativeModules } = await import("../../test-native/index.ts");
 const { copyLinkFromPageMenu, startPageLinkCopies } = await import("./pageLinkCopy.ts");
 const { emitEvent } = await import("../../test-native/ardiacore.ts");
 const { copyFieldSelection } = await import("../omnibox/paste.ts");
-const { cleanUrlReport } = await import("@ardia/core");
 const { shareFromPage, shareTab } = await import("./share.ts");
 const { takeUrlCopyCounts } = await import("../telemetry/urlCopies.ts");
 const { useBrowser } = await import("../browser/store.ts");
@@ -44,24 +43,17 @@ test("a WebKit menu copy with no address, or one that isn't text, copies nothing
   assert.equal(takeUrlCopyCounts().url_copies_from_webkit_menu, 0);
 });
 
-test("copying the whole address from the address field copies it without trackers", () => {
+test("the address field copies what it shows, trackers included, as Chrome and Safari do (owner decision)", () => {
   reset();
   const shown = "shop.example/item?id=7&utm_source=mail&fbclid=abc#reviews";
-  copyFieldSelection(shown, 0, shown.length, cleanUrlReport(tracked), consentToken());
-  assert.deepEqual(copied, [clean]);
+  copyFieldSelection(shown, 0, shown.length, tracked);
+  copyFieldSelection(shown, 18, 38, tracked);
+  copyFieldSelection(shown, 0, 12, tracked);
+  copyFieldSelection("typed?utm_source=x", 0, 18, null);
+  assert.deepEqual(copied, [tracked, "id=7&utm_source=mail", "shop.example", "typed?utm_source=x"]);
   const counts = takeUrlCopyCounts();
-  assert.equal(counts.url_copies_from_address_field, 1);
-  assert.equal(counts.url_copies_cleaned, 1);
-});
-
-test("copying part of the address field copies exactly what was selected", () => {
-  reset();
-  const shown = "shop.example/item?id=7&utm_source=mail";
-  copyFieldSelection(shown, 18, shown.length, cleanUrlReport(tracked), consentToken());
-  copyFieldSelection(shown, 0, 12, cleanUrlReport(tracked), consentToken());
-  copyFieldSelection("typed?utm_source=x", 0, 18, null, consentToken());
-  assert.deepEqual(copied, ["id=7&utm_source=mail", "shop.example", "typed?utm_source=x"]);
-  assert.equal(takeUrlCopyCounts().url_copies_from_address_field, 0);
+  assert.equal(counts.url_copies_cleaned, 0);
+  assert.equal(counts.url_copies_uncleaned, 0);
 });
 
 test("sharing a page, a link or a tab sends the address without trackers, and a shared image file as it is", async () => {
@@ -85,13 +77,11 @@ test("a single cleaned address goes to the native URL writer when the build has 
   shellNativeModules.ArdiaShell.copyURL = (address) => void urls.push(address);
   try {
     copyLinkFromPageMenu(tracked, null, consentToken());
-    const shown = "shop.example/item?id=7&utm_source=mail&fbclid=abc#reviews";
-    copyFieldSelection(shown, 0, shown.length, cleanUrlReport(tracked), consentToken());
-    copyFieldSelection(shown, 0, 4, cleanUrlReport(tracked), consentToken());
+    copyFieldSelection("shop.example/item?id=7&utm_source=mail&fbclid=abc#reviews", 0, 4, tracked);
   } finally {
     delete shellNativeModules.ArdiaShell.copyURL;
   }
-  assert.deepEqual(urls, [clean, clean]);
+  assert.deepEqual(urls, [clean]);
   assert.deepEqual(copied, ["shop"]);
 });
 
