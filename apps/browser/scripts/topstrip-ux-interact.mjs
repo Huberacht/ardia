@@ -167,10 +167,10 @@ export async function runInteractions(ctx) {
       record("backgroundTab", { selectedShift: after.detail.selSpan[0] - before.detail.selSpan[0], selInViewAfter: after.detail.selSpan[0] >= 0 ? 1 : 0, selTitleBefore: before.selTitlePt });
     }
 
-    if (want("revealYieldsToScroll")) {
+    if (want("revealYieldsToScroll")) for (const [name, dy] of [["", -4], ["Precise", -0.6]]) {
       await prepare("c120", WIDTH, "mid");
       const r = await run(`const w = st().windows.c120; const loose = stripOrder("c120").filter((t) => !st().tabs[t].pin);
-        const steps = Array.from({ length: 30 }, (_, i) => ({ phase: "wheel", dy: -4, timestampMs: i * 16 }));
+        const steps = Array.from({ length: 30 }, (_, i) => ({ phase: "wheel", dy: ${dy}, timestampMs: i * 16 }));
         const page = globalThis.topStripPages["c120|default"];
         const before = Math.round(page.scroll().x);
         return D.devSetWindowFrame("c120", [40 + Object.keys(st().windows).indexOf("c120") * 11, 60 + Object.keys(st().windows).indexOf("c120") * 7, w.frame[2], ${HEIGHT}]).then((frame) => nativeOf(frame)).then((n) => {
@@ -180,7 +180,7 @@ export async function runInteractions(ctx) {
           const sc = page.scroll(); const chip = page.chips().find((c) => c.id === loose[3]);
           return { before, afterWheel: atEnd, settled: Math.round(sc.x), selectedShown: chip.start >= sc.x - 1 && chip.end <= sc.x + sc.viewport + 1, active: st().windows.c120.activeTabIds.default.split("-").pop() };
         }); });`, 60000);
-      record("revealYieldsToScroll", { ...r, snappedBack: r.settled !== r.afterWheel });
+      record(`revealYieldsToScroll${name}`, { ...r, dy, snappedBack: r.settled !== r.afterWheel });
     }
 
     if (want("groupEdgeDrag")) {

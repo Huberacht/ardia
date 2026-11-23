@@ -59,11 +59,10 @@ export function useStripDrag(item: StripDrag) {
     raiseView(tag, latest.current.levels ?? (latest.current.groupId ? 1 : 0), on);
     raised.current = on ? tag : null;
   };
-  const shownHeld = useRef(false);
+  const shownHold = useRef<(() => void) | null>(null);
   const releaseShown = () => {
-    if (!shownHeld.current) return;
-    shownHeld.current = false;
-    latest.current.scroll?.holdShown(false);
+    shownHold.current?.();
+    shownHold.current = null;
   };
   const rest = () => {
     dx.setValue(0);
@@ -193,10 +192,8 @@ export function useStripDrag(item: StripDrag) {
           drag.current = mine;
           phase.current = { kind: "dragging" };
           setLook("dragging");
-          if (!shownHeld.current && latest.current.scroll) {
-            shownHeld.current = true;
-            latest.current.scroll.holdShown(true);
-          }
+          releaseShown();
+          shownHold.current = latest.current.scroll?.holdShown() ?? null;
           if (latest.current.from >= 0) raise(true);
           latest.current.scroll?.measure((x, width) => {
             if (drag.current === mine) mine.viewport = [x, x + width];
@@ -255,10 +252,10 @@ export function useStripDrag(item: StripDrag) {
           });
         },
         onPanResponderTerminate: () => {
-          endHeldTabPress([], null);
           const local = latest.current.local;
           reset();
           if (!local) cancelTabDrag();
+          endHeldTabPress([], null);
         },
       }),
     [],

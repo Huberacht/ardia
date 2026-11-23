@@ -25,22 +25,31 @@ export function endSettling(state: FirstReveal): FirstReveal {
   return state.settling ? { ...state, settling: false } : state;
 }
 
-export type OwnScroll = { from: number; to: number; until: number };
+export type ScrollCommand = { from: number; to: number; animated: boolean; furthest: number; until: number };
 
-export const NO_OWN_SCROLL: OwnScroll = { from: NaN, to: NaN, until: -Infinity };
+export type ScrollIntent = { baseline: number; command: ScrollCommand | null };
 
-export function ownScroll(from: number, x: number, animated: boolean, until: number): OwnScroll {
-  const to = Math.max(0, x);
-  return { from: animated ? from : to, to, until };
+export const scrollIntentAt = (x: number): ScrollIntent => ({ baseline: x, command: null });
+
+export function commandScroll(from: number, to: number, animated: boolean, until: number): ScrollIntent {
+  return { baseline: from, command: { from, to: Math.max(0, to), animated, furthest: 0, until } };
 }
 
-export function isOwnScroll(own: OwnScroll, x: number, previous: number, max: number, now: number): boolean {
+export function observeScroll(intent: ScrollIntent, x: number, max: number, now: number): { intent: ScrollIntent; user: boolean } {
   const end = Math.max(0, max);
-  if (previous > end + 0.5 && Math.abs(x - end) < 1) return true;
-  const to = Math.min(own.to, end);
-  if (Math.abs(x - to) < 1) return true;
-  if (now > own.until) return false;
-  return x >= Math.min(own.from, to) - 1 && x <= Math.max(own.from, to) + 1;
+  const command = intent.command;
+  if (!command) {
+    if (intent.baseline > end + 0.5 && Math.abs(x - end) < 1) return { intent: scrollIntentAt(x), user: false };
+    if (Math.abs(x - intent.baseline) >= 1) return { intent: scrollIntentAt(x), user: true };
+    return { intent, user: false };
+  }
+  const to = Math.min(command.to, end);
+  if (Math.abs(x - to) < 0.5) return { intent: scrollIntentAt(to), user: false };
+  if (!command.animated || now > command.until) return { intent: scrollIntentAt(x), user: true };
+  const way = Math.abs(to - command.from);
+  const progress = (x - command.from) * Math.sign(to - command.from);
+  if (progress < -0.5 || progress > way + 0.5 || progress < command.furthest - 1) return { intent: scrollIntentAt(x), user: true };
+  return { intent: { ...intent, command: { ...command, furthest: Math.max(command.furthest, progress) } }, user: false };
 }
 
 export type PendingReveal = { tabId: string; scrolls: number };

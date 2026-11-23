@@ -1,7 +1,7 @@
 import { memo, useContext, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Animated, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollView, StyleSheet, View } from "react-native";
 import { PageProfileContext, useWindowId } from "../../state/browser/hooks";
-import { tabDragging } from "../../state/drag/tabDrag";
+import { tabDragging, useTabDrag } from "../../state/drag/tabDrag";
 import { useShownTabIdFor, useStripEntries, useStripTitleNeeds } from "../../state/tabs/topStrip";
 import { setMeasuredWidth, useMeasuredWidths } from "../../state/windows/measuredWidths";
 import { dismissStripHoverIn, stripPageOffstage } from "../../state/tabs/stripHover";
@@ -24,10 +24,10 @@ import { DraggableChip } from "./TabChip";
 import { edgeMaskAt, edgeStrength } from "./edgeFade";
 import { EdgeFadeMask } from "../ui/EdgeFadeMask";
 import { devRegister } from "../dev/devRegister";
-import { StripScrollContext, type StripScroll } from "./stripScroll";
+import { shownHolds, StripScrollContext, type StripScroll } from "./stripScroll";
 import { StripMotionContext, useStripMotion } from "./stripMotion";
 import { StripGhosts } from "./StripGhosts";
-import { endSettling, FIRST_REVEAL, firstOverflowReveal, isOwnScroll, NO_OWN_SCROLL, ownScroll, revealStillWanted, selectionReveal } from "./stripRevealGate";
+import { commandScroll, endSettling, FIRST_REVEAL, firstOverflowReveal, observeScroll, revealStillWanted, scrollIntentAt, selectionReveal } from "./stripRevealGate";
 import { COMPACT_CHIP, GROUP_TITLE_MAX, GROUP_TITLE_TIGHT, EDGE_FADE, EDGE_FADE_FLOOR, EDGE_FADE_ONSET, FLARE, GAP, NEW_TAB_ROOM, STRIP_SCROLL_ID } from "./tokens";
 
 type Wide = { tabId: string; slot: number };
@@ -120,12 +120,13 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const viewport = useRef(pageWidth + flare * 2);
   const content = useRef(0);
   const motion = useStripMotion({ entries, top, dock, flare, end: pinned ? null : stripEnd(top) + GAP, viewport: viewport.current, offset: () => scrolled.current, windowId, enabled: current && !resting });
-  const own = useRef(NO_OWN_SCROLL);
+  const intent = useRef(scrollIntentAt(0));
+  const offsetNow = useRef(0);
   const userScrolls = useRef(0);
   const userScrollAt = useRef(-Infinity);
   const userScrolling = () => performance.now() - userScrollAt.current < USER_SCROLL_QUIET_MS;
   const scrollStrip = (x: number, animated: boolean) => {
-    own.current = ownScroll(scrolled.current, x, animated, performance.now() + (animated ? OWN_ANIMATED_SCROLL_MS : OWN_SCROLL_MS));
+    intent.current = commandScroll(offsetNow.current, x, animated, performance.now() + (animated ? OWN_ANIMATED_SCROLL_MS : OWN_SCROLL_MS));
     scrolled.current = x;
     scroll.current?.scrollTo({ x, animated });
   };
@@ -139,12 +140,13 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const onStage = useRef(current);
   onStage.current = current;
   const [shownHeld, setShownHeld] = useState(false);
+  const [holdShown] = useState(() => shownHolds(setShownHeld));
   const [scroller] = useState<StripScroll>(() => ({
     active: () => onStage.current,
     offset: () => scrolled.current,
     max: () => Math.max(0, content.current - viewport.current),
     scrollTo: (x) => scrollStrip(x, false),
-    holdShown: (held) => setShownHeld(held),
+    holdShown,
     measure: (done) => scroll.current?.getNativeScrollRef()?.measureInWindow((x, _y, width) => done(x + clipShown.current, width - clipShown.current)),
   }));
   const stripTabIds = () => entries.flatMap((e) => (e.kind === "dock" ? e.ids : e.kind === "group" ? e.members.flatMap(tabsOf) : tabsOf(e)));
@@ -177,18 +179,19 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   latestScroll.current = (e) => {
     const now = performance.now();
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    if (Math.abs(contentOffset.x - scrolled.current) >= 1) {
-      dismissStripHoverIn(windowId);
-      if (!isOwnScroll(own.current, contentOffset.x, scrolled.current, contentSize.width - layoutMeasurement.width, now)) {
-        userScrollAt.current = now;
-        userScrolls.current++;
-        own.current = NO_OWN_SCROLL;
-        firstReveal.current = endSettling(firstReveal.current);
-        if (revealed.current !== activeId && !(held.current && closedTo.current === activeId)) revealed.current = activeId;
-        noteTabStripScrolled(stripKey, now);
-      }
+    const x = contentOffset.x;
+    if (Math.abs(x - offsetNow.current) >= 1) dismissStripHoverIn(windowId);
+    const step = observeScroll(intent.current, x, contentSize.width - layoutMeasurement.width, now);
+    intent.current = step.intent;
+    if (step.user) {
+      userScrollAt.current = now;
+      userScrolls.current++;
+      firstReveal.current = endSettling(firstReveal.current);
+      if (revealed.current !== activeId && !(held.current && closedTo.current === activeId)) revealed.current = activeId;
+      noteTabStripScrolled(stripKey, now);
     }
-    scrolled.current = e.nativeEvent.contentOffset.x;
+    offsetNow.current = x;
+    scrolled.current = x;
     const clip = scrolled.current < 0.5 ? 0 : flare;
     if (clip !== clipShown.current) {
       clipShown.current = clip;
@@ -244,6 +247,14 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const latestFirstReveal = useRef(revealOnFirstOverflow);
   latestFirstReveal.current = revealOnFirstOverflow;
   useEffect(() => () => firstAfterPress.current?.(), []);
+  useEffect(
+    () =>
+      useTabDrag.subscribe((now, before) => {
+        if (now.phase !== "idle" && before.phase === "idle") firstReveal.current = endSettling(firstReveal.current);
+        if (now.phase === "idle" && before.phase !== "idle") latestFirstReveal.current();
+      }),
+    [],
+  );
   useEffect(revealOnFirstOverflow, [current]);
   useEffect(() => {
     const step = selectionReveal(revealed.current, activeId, !!held.current && closedTo.current === activeId, current, tabDragging());

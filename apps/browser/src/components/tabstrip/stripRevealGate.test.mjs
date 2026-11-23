@@ -52,27 +52,52 @@ test("a user scroll after the first reveal ends the rechecks", () => {
   assert.equal(firstOverflowReveal(scrolled.state, at({ now: 1300 })).reveal, false);
 });
 
-const { endSettling, isOwnScroll, NO_OWN_SCROLL, ownScroll, revealStillWanted } = await import("./stripRevealGate.ts");
+const { commandScroll, endSettling, observeScroll, revealStillWanted, scrollIntentAt } = await import("./stripRevealGate.ts");
 
-test("a scroll the strip made is its own, and a wheel step during its window is the user's", () => {
-  const jump = ownScroll(0, 4585, false, 1080);
-  assert.equal(isOwnScroll(jump, 4585, 4585, 6000, 1010), true);
-  assert.equal(isOwnScroll(jump, 4625, 4585, 6000, 1010), false, "a step past the target inside the 80 ms window");
-  assert.equal(isOwnScroll(jump, 4545, 4585, 6000, 1010), false, "a step back inside the window");
-  assert.equal(isOwnScroll(jump, 3200, 4585, 3200, 1010), true, "landing on the native end when the target was past it");
-  const glide = ownScroll(100, 900, true, 1600);
-  assert.equal(isOwnScroll(glide, 500, 400, 6000, 1300), true, "on the way of an animated reveal");
-  assert.equal(isOwnScroll(glide, 1100, 900, 6000, 1300), false);
-  assert.equal(isOwnScroll(glide, 500, 900, 6000, 1700), false, "back over the way once the glide is done");
-  assert.equal(isOwnScroll(NO_OWN_SCROLL, 300, 0, 6000, 0), false);
-  assert.equal(isOwnScroll(NO_OWN_SCROLL, 1800, 2400, 1800, 0), true, "AppKit clamping to a shorter strip's end");
+const run = (intent, steps, max = 6000) => {
+  let users = 0;
+  for (const [x, now] of steps) {
+    const step = observeScroll(intent, x, max, now);
+    intent = step.intent;
+    if (step.user) users++;
+  }
+  return { intent, users };
+};
+
+test("many sub-pixel wheel steps add up against a stable baseline and count as the user's", () => {
+  const steps = Array.from({ length: 30 }, (_, i) => [500 + (i + 1) * 0.5, 1000 + i * 16]);
+  assert.ok(run(scrollIntentAt(500), steps).users > 0);
+  assert.equal(run(scrollIntentAt(500), [[500.5, 1000]]).users, 0, "half a point alone is not yet a scroll");
+});
+
+test("a scroll the strip asked for is its own, and it is retired once it lands", () => {
+  const jump = commandScroll(0, 4585, false, 1080);
+  const landed = run(jump, [[4585, 1010]]);
+  assert.equal(landed.users, 0);
+  assert.equal(landed.intent.command, null);
+  assert.equal(run(landed.intent, [[4584.5, 1020], [4584, 1030]]).users, 1, "later movement either way is the user's, even inside the old window");
+  assert.equal(run(jump, [[4625, 1010]]).users, 1, "a step past a jump's target");
+  assert.equal(run(commandScroll(2400, 4585, false, 1080), [[3200, 1010]], 3200).users, 0, "landing on the native end when the target was past it");
+  assert.equal(run(scrollIntentAt(2400), [[1800, 1000]], 1800).users, 0, "AppKit clamping to a shorter strip's end");
+});
+
+test("a reverse wheel step during an animated reveal counts as the user's", () => {
+  const glide = commandScroll(100, 900, true, 1600);
+  assert.equal(run(glide, [[300, 1100], [500, 1200]]).users, 0, "forward along the way");
+  assert.equal(run(glide, [[300, 1100], [500, 1200], [460, 1210]]).users, 1, "back from 500 to 460");
+  assert.equal(run(glide, [[300, 1100], [500, 1200], [499.6, 1210], [499.2, 1220], [498.8, 1230], [498.4, 1240]]).users, 1, "back in sub-pixel steps");
+  const arrived = run(glide, [[500, 1200], [900, 1300]]);
+  assert.equal(arrived.intent.command, null);
+  assert.equal(run(arrived.intent, [[860, 1350]]).users, 1, "a reverse step after it arrived, with the window still open");
+  assert.equal(run(glide, [[950, 1300]]).users, 1, "past the target");
+  assert.equal(run(glide, [[500, 1700]]).users, 1, "still moving after the glide's time");
 });
 
 test("a wheel step during the first reveal's own scroll cancels the measuring recheck", () => {
   const first = firstOverflowReveal(FIRST_REVEAL, at({ measuring: true, now: 1000 }));
   assert.equal(first.reveal, true);
-  const jump = ownScroll(0, 4585, false, 1080);
-  assert.equal(isOwnScroll(jump, 4625, 4585, 6000, 1020), false);
+  const wheel = observeScroll(commandScroll(0, 4585, false, 1080), 4625, 6000, 1020);
+  assert.equal(wheel.user, true);
   const taken = endSettling(first.state);
   assert.equal(firstOverflowReveal(taken, at({ measuring: false, userScrollAt: -Infinity, now: 1200 })).reveal, false, "the group finishing its measure doesn't undo the user's scroll");
 });

@@ -165,6 +165,13 @@ export function clickHeldTabPress(windowId: string, tabId: string, release: Gest
   switchingByPress(press?.nativePress ?? 0, () => clickTab(windowId, tabId, modifiersOf(release)));
 }
 
+export function endPressGesture(press: TabPress | null) {
+  if (!press) return;
+  setTimeout(() => {
+    if (heldPress === press && !press.answered) releasePress();
+  }, 0);
+}
+
 export function pressOutTabPress(press: TabPress | null, e: GestureResponderEvent) {
   if (!press || press.out) return;
   press.out = true;

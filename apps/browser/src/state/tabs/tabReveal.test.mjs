@@ -289,6 +289,32 @@ test("a keyboard close right after a mouse select closes: Return and Space press
   assert.equal(held.switchedByPressWithin("w1", "b", 500, held.pressPoint({ nativeEvent: {} })), false);
 });
 
+test("a press whose gesture ends without a press or a drag releases the hold", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup();
+  const press = held.holdTabPress("w1", "b", pressAt(9500));
+  assert.equal(held.tabPressHeld("w1"), true);
+  let ended = 0;
+  held.onTabPressEnd("w1", () => ended++);
+  held.pressOutTabPress(press, pressAt(9500, 200));
+  held.endPressGesture(press);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(held.tabPressHeld("w1"), false);
+  assert.equal(ended, 1, "what waited for the press to end runs");
+});
+
+test("a press answered by its click is not released twice by the end of its gesture", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup();
+  const press = held.holdTabPress("w1", "c", pressAt(9600));
+  held.clickHeldTabPress("w1", "c", pressAt(9600), press);
+  const next = held.holdTabPress("w1", "a", pressAt(9700));
+  held.endPressGesture(press);
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(held.tabPressHeld("w1"), true, "the newer press is left alone");
+  held.clickHeldTabPress("w1", "a", pressAt(9700), next);
+});
+
 test("a press on the tab already in front holds nothing back", async () => {
   const held = await import("../sidebar/heldTabPress.ts");
   setup(["a", "b", "c"], "c");
