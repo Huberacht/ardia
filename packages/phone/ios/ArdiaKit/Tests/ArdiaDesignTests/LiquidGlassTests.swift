@@ -187,4 +187,97 @@ struct LiquidGlassTests {
     #expect(library.makeFunction(name: LiquidGlassShader.vertexName) != nil)
     #expect(library.makeFunction(name: LiquidGlassShader.fragmentName) != nil)
   }
+
+  @Test func `the median of an even count averages the two middle samples`() {
+    #expect(LiquidGlassRules.median([]) == 0)
+    #expect(LiquidGlassRules.median([3]) == 3)
+    #expect(LiquidGlassRules.median([1, 9, 2]) == 2)
+    #expect(LiquidGlassRules.median([1, 2, 6, 9]) == 4)
+    #expect(LiquidGlassRules.overBudget(captureMs: Array(repeating: 3, count: 15) + Array(repeating: 5.2, count: 15)))
+    #expect(!LiquidGlassRules.overBudget(captureMs: Array(repeating: 3, count: 15) + Array(repeating: 4.8, count: 15)))
+  }
+
+  @Test func `a glass takes captures only while it refracts, and a failed one backs off`() {
+    func path(overBudget: Bool = false, classic: Bool = false, metal: Bool = true) -> LiquidGlassRules.Path {
+      LiquidGlassRules.choose(classic: classic, metal: metal, flat: false, lensFailed: false, rimFailed: false, holdsPage: true, overBudget: overBudget).path
+    }
+    let steps = [path(), path(overBudget: true), path()]
+    #expect(steps == [.live, .solid, .live])
+    #expect(steps.map(LiquidGlassRules.acceptsCapture) == [true, false, true])
+    #expect(!LiquidGlassRules.acceptsCapture(path(classic: true)))
+    #expect(!LiquidGlassRules.acceptsCapture(path(metal: false)))
+    #expect(LiquidGlassRules.captureRetryDelay(failures: 0) == 0)
+    #expect(LiquidGlassRules.captureRetryDelay(failures: 1) == 0.05)
+    #expect(LiquidGlassRules.captureRetryDelay(failures: 3) == 0.2)
+    #expect(LiquidGlassRules.captureRetryDelay(failures: 40) == 1)
+  }
+
+  @Test func `only siblings drawn under the glass are captured, by zPosition then index`() {
+    let siblings = [GlassStacking.Sibling(index: 0, zPosition: 0), GlassStacking.Sibling(index: 1, zPosition: 5), GlassStacking.Sibling(index: 2, zPosition: 0), GlassStacking.Sibling(index: 3, zPosition: -1), GlassStacking.Sibling(index: 4, zPosition: 0)]
+    #expect(GlassStacking.below(siblings[2], among: siblings) == [3, 0])
+    #expect(GlassStacking.below(siblings[1], among: siblings) == [3, 0, 2, 4])
+    #expect(GlassStacking.below(siblings[3], among: siblings) == [])
+    #expect(GlassStacking.drawOrder(siblings).map(\.index) == [3, 0, 2, 4, 1])
+  }
+
+  @Test func `the capture starts at the topmost opaque piece that truly covers the strip`() {
+    let strip = CGRect(x: 20, y: 700, width: 360, height: 60)
+    let screen = CGRect(x: 0, y: 0, width: 402, height: 874)
+    let pieces = [
+      GlassStacking.Coverage(rect: screen, opaque: true),
+      GlassStacking.Coverage(rect: screen, opaque: true, clips: [CGRect(x: 0, y: 0, width: 402, height: 600)]),
+      GlassStacking.Coverage(rect: screen, radius: 30, opaque: true),
+      GlassStacking.Coverage(rect: screen, axisAligned: false, opaque: true),
+      GlassStacking.Coverage(rect: screen, opaque: false),
+    ]
+    #expect(GlassStacking.opaqueFloor(pieces, covering: strip) == 2)
+    #expect(!pieces[2].covers(CGRect(x: 0, y: 850, width: 402, height: 24)))
+    #expect(!pieces[1].covers(strip))
+    #expect(!pieces[3].covers(strip))
+    #expect(GlassStacking.opaqueFloor([GlassStacking.Coverage(rect: screen, opaque: false)], covering: strip) == nil)
+  }
+
+  @Test func `the rim adds light onto the backdrop as Android's PLUS does, without darkening it`() throws {
+    guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
+    let library = try device.makeLibrary(source: LiquidGlassShader.source, options: nil)
+    let descriptor = MTLRenderPipelineDescriptor()
+    descriptor.vertexFunction = library.makeFunction(name: LiquidGlassShader.vertexName)
+    descriptor.fragmentFunction = library.makeFunction(name: LiquidGlassShader.fragmentName)
+    descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+    let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+    func render(rim: Bool) -> [Float] {
+      let frame = LiquidGlassShader.Frame(width: 48, height: 48, scale: 1, radius: 24, live: false, lens: false, rim: rim, dark: false, fill: GlassFrostStyle.glass.fallback(dark: false))
+      let target = device.makeTexture(descriptor: { let made = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 48, height: 48, mipmapped: false); made.usage = [.renderTarget, .shaderRead]; made.storageMode = .shared; return made }())!
+      let blank = device.makeTexture(descriptor: MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false))!
+      let buffer = queue.makeCommandBuffer()!
+      let pass = MTLRenderPassDescriptor()
+      pass.colorAttachments[0].texture = target
+      pass.colorAttachments[0].loadAction = .clear
+      pass.colorAttachments[0].storeAction = .store
+      let encoder = buffer.makeRenderCommandEncoder(descriptor: pass)!
+      encoder.setRenderPipelineState(pipeline)
+      let uniforms = frame.uniforms
+      uniforms.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }
+      encoder.setFragmentTexture(blank, index: 0)
+      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+      encoder.endEncoding()
+      buffer.commit()
+      buffer.waitUntilCompleted()
+      var pixel = [UInt8](repeating: 0, count: 4)
+      target.getBytes(&pixel, bytesPerRow: 4 * 48, from: MTLRegionMake2D(0, 24, 1, 1), mipmapLevel: 0)
+      return pixel.map { Float($0) / 255 }
+    }
+    let lit = render(rim: true)
+    let plain = render(rim: false)
+    #expect(abs(lit[3] - plain[3]) < 0.01, "the rim keeps the glass's alpha, so the page behind is not darkened")
+    let added = (0..<3).map { lit[$0] - plain[$0] }
+    #expect(added.allSatisfy { $0 > 0.02 })
+    #expect(added.max()! - added.min()! < 0.02, "the rim adds the same white to every channel")
+    let backdrop: Float = 0.2
+    for channel in 0..<3 {
+      let android = (plain[channel] + backdrop * (1 - plain[3])) + added[channel]
+      let ours = lit[channel] + backdrop * (1 - lit[3])
+      #expect(abs(android - ours) < 0.01)
+    }
+  }
 }

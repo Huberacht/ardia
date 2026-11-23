@@ -157,11 +157,29 @@ public enum LiquidGlassRules {
   public static let budgetSamples = 30
   public static let captureBudgetMs = 4.0
 
+  public static func median(_ samples: [Double]) -> Double {
+    guard !samples.isEmpty else { return 0 }
+    let sorted = samples.sorted()
+    let middle = sorted.count / 2
+    return sorted.count % 2 == 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
+  }
+
   public static func overBudget(captureMs: [Double]) -> Bool {
     guard captureMs.count >= budgetSamples else { return false }
-    let sorted = captureMs.sorted()
-    return sorted[sorted.count / 2] > captureBudgetMs
+    return median(captureMs) > captureBudgetMs
   }
+
+  public static func acceptsCapture(_ path: Path) -> Bool { path == .live }
+
+  public static let captureRetryBase: TimeInterval = 0.05
+  public static let captureRetryLongest: TimeInterval = 1
+
+  public static func captureRetryDelay(failures: Int) -> TimeInterval {
+    guard failures > 0 else { return 0 }
+    return min(captureRetryBase * pow(2, Double(min(failures - 1, 16))), captureRetryLongest)
+  }
+
+  public static let framesInFlight = 2
 
   public static func bezel(_ params: LiquidGlassParams = .defaults, width: Double, height: Double) -> Double {
     min(params.bezel, max(min(width, height), 0) * bezelShareOfShortSide)

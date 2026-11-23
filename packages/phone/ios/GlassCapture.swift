@@ -6,78 +6,175 @@ import QuartzCore
 import UIKit
 import WebKit
 
+struct GlassClip {
+  let transform: CGAffineTransform
+  let bounds: CGRect
+  let radius: CGFloat
+
+  var path: CGPath {
+    var transform = transform
+    let radius = min(self.radius, min(bounds.width, bounds.height) / 2)
+    return CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: &transform)
+  }
+
+  var solidRect: CGRect {
+    let scaled = radius * max(abs(transform.a), abs(transform.d))
+    return bounds.applying(transform).insetBy(dx: scaled, dy: scaled)
+  }
+}
+
 struct GlassLayerPiece {
   let view: UIView?
-  let rect: CGRect
+  let transform: CGAffineTransform
+  let bounds: CGRect
+  let radius: CGFloat
   let fill: CGColor?
+  let alpha: CGFloat
+  let clips: [GlassClip]
+
+  var axisAligned: Bool { transform.b == 0 && transform.c == 0 }
+
+  var coverage: GlassStacking.Coverage {
+    let opaque = alpha >= 1 && (fill?.alpha ?? 0) >= 1
+    return GlassStacking.Coverage(rect: bounds.applying(transform), radius: radius * max(abs(transform.a), abs(transform.d)), axisAligned: axisAligned, opaque: opaque, clips: clips.map(\.solidRect))
+  }
 }
 
 @MainActor
 enum GlassBackdrop {
   static func space(for surface: LiquidGlassSurface) -> UIView? {
-    switch surface.backdrop {
-    case .source(let source): source
-    case .beneath(let root): root
+    switch surface.backdropMode {
+    case .source: surface.backdropSource
+    case .beneath: surface.backdropRoot
     case nil: nil
     }
   }
 
   static func pieces(under glass: UIView, root: UIView, covering wanted: CGRect) -> [GlassLayerPiece] {
-    var chain: [(parent: UIView, child: UIView)] = []
-    var child = glass
-    while let parent = child.superview {
-      chain.append((parent, child))
-      if parent === root { break }
-      child = parent
+    var chain: [UIView] = []
+    var current: UIView? = glass
+    while let view = current {
+      chain.append(view)
+      if view === root { break }
+      current = view.superview
     }
-    guard chain.last?.parent === root else { return [] }
+    guard chain.last === root, chain.count > 1 else { return [] }
+    let usesPresentation = chain.allSatisfy { $0.layer.presentation() != nil }
+    func shown(_ view: UIView) -> CALayer? { usesPresentation ? view.layer.presentation() : view.layer }
+    guard let rootLayer = shown(root) else { return [] }
     var pieces: [GlassLayerPiece] = []
-    for (parent, child) in chain.reversed() {
-      if let fill = shownFill(of: parent), let rect = rect(of: parent, in: root) { pieces.append(GlassLayerPiece(view: nil, rect: rect, fill: fill)) }
-      for sibling in parent.subviews {
-        if sibling === child { break }
-        guard isShown(sibling), let rect = rect(of: sibling, in: root), rect.intersects(wanted) else { continue }
-        pieces.append(GlassLayerPiece(view: sibling, rect: rect, fill: nil))
+    var clips: [GlassClip] = []
+    var alpha: CGFloat = 1
+    for level in stride(from: chain.count - 1, to: 0, by: -1) {
+      let parent = chain[level]
+      let child = chain[level - 1]
+      guard let parentLayer = shown(parent), !parentLayer.isHidden else { return [] }
+      alpha *= CGFloat(parentLayer.opacity)
+      let parentTransform = transform(of: parentLayer, to: rootLayer)
+      if let fill = parentLayer.backgroundColor, fill.alpha > 0 {
+        pieces.append(GlassLayerPiece(view: nil, transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius, fill: fill, alpha: alpha, clips: clips))
+      }
+      if parentLayer.masksToBounds {
+        clips.append(GlassClip(transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius))
+      }
+      let subviews = parent.subviews
+      guard let childIndex = subviews.firstIndex(where: { $0 === child }) else { return [] }
+      let siblings = subviews.enumerated().map { GlassStacking.Sibling(index: $0.offset, zPosition: Double((shown($0.element) ?? $0.element.layer).zPosition)) }
+      let visible = clips.reduce(rootLayer.bounds) { $0.intersection($1.bounds.applying($1.transform)) }
+      for index in GlassStacking.below(siblings[childIndex], among: siblings) {
+        let sibling = subviews[index]
+        guard !sibling.isHidden, let layer = usesPresentation ? sibling.layer.presentation() : sibling.layer else { continue }
+        guard !layer.isHidden, layer.opacity > 0.01, layer.bounds.width > 0, layer.bounds.height > 0 else { continue }
+        let siblingTransform = transform(of: layer, to: rootLayer)
+        let area = layer.bounds.applying(siblingTransform).intersection(visible)
+        guard !area.isNull, area.intersects(wanted) else { continue }
+        pieces.append(GlassLayerPiece(view: sibling, transform: siblingTransform, bounds: layer.bounds, radius: layer.cornerRadius, fill: layer.backgroundColor, alpha: alpha * CGFloat(layer.opacity), clips: clips))
       }
     }
-    if let floor = pieces.lastIndex(where: { covers($0, wanted) }) { pieces.removeFirst(floor) }
+    if let floor = GlassStacking.opaqueFloor(pieces.map(\.coverage), covering: wanted) { pieces.removeFirst(floor) }
     return pieces
   }
 
-  private static func covers(_ piece: GlassLayerPiece, _ wanted: CGRect) -> Bool {
-    guard piece.rect.contains(wanted) else { return false }
-    if let fill = piece.fill { return fill.alpha >= 1 }
-    guard let view = piece.view, let fill = shownFill(of: view), fill.alpha >= 1 else { return false }
-    let shown = view.layer.presentation() ?? view.layer
-    return shown.opacity >= 1 && shown.cornerRadius == 0 && CATransform3DIsIdentity(shown.transform)
+  static func transform(of layer: CALayer, to root: CALayer) -> CGAffineTransform {
+    let origin = layer.convert(CGPoint.zero, to: root)
+    let across = layer.convert(CGPoint(x: 1, y: 0), to: root)
+    let down = layer.convert(CGPoint(x: 0, y: 1), to: root)
+    return CGAffineTransform(a: across.x - origin.x, b: across.y - origin.y, c: down.x - origin.x, d: down.y - origin.y, tx: origin.x, ty: origin.y)
   }
 
-  private static func shownFill(of view: UIView) -> CGColor? {
-    guard let color = (view.layer.presentation() ?? view.layer).backgroundColor, color.alpha > 0 else { return nil }
-    return color
-  }
-
-  private static func isShown(_ view: UIView) -> Bool {
-    let shown = view.layer.presentation() ?? view.layer
-    return !view.isHidden && !shown.isHidden && shown.opacity > 0.01 && view.bounds.width > 0 && view.bounds.height > 0
-  }
-
-  static func rect(of view: UIView, in root: UIView) -> CGRect? {
-    let region: CGRect
-    if let mine = view.layer.presentation(), let theirs = root.layer.presentation() {
-      region = mine.convert(mine.bounds, to: theirs)
-    } else {
-      region = view.convert(view.bounds, to: root)
+  static func draw(_ piece: GlassLayerPiece, method: GlassLaunch.Capture, in context: CGContext) -> Bool {
+    context.saveGState()
+    defer { context.restoreGState() }
+    for clip in piece.clips {
+      context.addPath(clip.path)
+      context.clip()
     }
-    return region.isNull || region.isEmpty ? nil : region
+    context.concatenate(piece.transform)
+    guard let view = piece.view else {
+      guard let fill = piece.fill else { return true }
+      let radius = min(piece.radius, min(piece.bounds.width, piece.bounds.height) / 2)
+      context.setAlpha(piece.alpha)
+      context.setFillColor(fill)
+      context.addPath(CGPath(roundedRect: piece.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
+      context.fillPath()
+      return true
+    }
+    let alpha = piece.alpha / (GlassProbe.appliesOwnAlpha(method) ? max(CGFloat(view.layer.opacity), 0.01) : 1)
+    let layered = alpha < 1
+    if layered {
+      context.setAlpha(alpha)
+      context.beginTransparencyLayer(auxiliaryInfo: nil)
+    }
+    defer { if layered { context.endTransparencyLayer() } }
+    return GlassCapture.draw(view, method: method, context: context)
+  }
+}
+
+@MainActor
+enum GlassProbe {
+  private static var ownAlpha: [GlassLaunch.Capture: Bool] = [.hierarchy: false, .layer: false]
+
+  static func appliesOwnAlpha(_ method: GlassLaunch.Capture) -> Bool { ownAlpha[method] ?? false }
+
+  static func run(in window: UIWindow) {
+    let probe = UIView(frame: CGRect(x: 0, y: 0, width: 8, height: 8))
+    probe.backgroundColor = .red
+    probe.alpha = 0.5
+    probe.isUserInteractionEnabled = false
+    window.addSubview(probe)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+      MainActor.assumeIsolated {
+        var line = "PAGELAB glass probe"
+        for method in [GlassLaunch.Capture.hierarchy, .layer] {
+          let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+          context.translateBy(x: 0, y: 1)
+          context.scaleBy(x: 1 / 8, y: -1 / 8)
+          UIGraphicsPushContext(context)
+          let drew = GlassCapture.draw(probe, method: method, context: context)
+          UIGraphicsPopContext()
+          let alpha = context.data.map { Double($0.load(fromByteOffset: 3, as: UInt8.self)) / 255 } ?? -1
+          line += String(format: " %@: drew=%@ own_alpha_pixel=%.2f", method.rawValue, drew ? "yes" : "no", alpha)
+        }
+        probe.removeFromSuperview()
+        NSLog("%@", line)
+      }
+    }
   }
 }
 
 @MainActor
 final class GlassCapture {
+  enum Outcome {
+    case captured
+    case failed
+    case waiting
+  }
+
   private(set) var texture: MTLTexture?
   private(set) var rect: CGRect = .null
   private(set) var generation = 0
+  private(set) var failures = 0
+  private var retryAt: CFTimeInterval = 0
   private var signature: Int?
   private var settle = 0
   private var capturedAt: CFTimeInterval = 0
@@ -87,16 +184,17 @@ final class GlassCapture {
   private(set) var lastMs = 0.0
   private var recentMs: [Double] = []
 
-  var overBudget: Bool {
-    recentMs.count >= LiquidGlassRules.budgetSamples && LiquidGlassRules.overBudget(captureMs: recentMs)
-  }
+  var overBudget: Bool { LiquidGlassRules.overBudget(captureMs: recentMs) }
 
-  func survey(_ layers: [CALayer], rect wanted: CGRect) {
+  func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect) {
     var hasher = Hasher()
     var budget = 4000
     hasher.combine(wanted.minX.rounded())
     hasher.combine(wanted.minY.rounded())
-    for layer in layers { Self.walk(layer, into: &hasher, budget: &budget) }
+    for piece in pieces {
+      for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
+      if let view = piece.view { Self.walk(view.layer, into: &hasher, budget: &budget) }
+    }
     let value = hasher.finalize()
     if value != signature {
       signature = value
@@ -105,23 +203,24 @@ final class GlassCapture {
   }
 
   func wants(_ wanted: CGRect, now: CFTimeInterval) -> Bool {
+    if now < retryAt { return false }
     if texture == nil || !rect.contains(wanted) || rect.width > wanted.width * 1.5 + 64 || rect.height > wanted.height * 1.5 + 64 { return true }
     if settle > 0 { return true }
     return now - capturedAt > LiquidGlassRules.idleRefresh
   }
 
-  func capture(rect wanted: CGRect, pixelsPerPoint: CGFloat, sigma: Double, method: GlassLaunch.Capture, into buffer: MTLCommandBuffer, now: CFTimeInterval, draw: (CGContext) -> Void) -> Bool {
-    guard method != .none else { return false }
+  func capture(rect wanted: CGRect, pixelsPerPoint: CGFloat, sigma: Double, into buffer: MTLCommandBuffer, now: CFTimeInterval, draw: (CGContext) -> Bool) -> Outcome {
+    if now < retryAt { return .waiting }
     let started = CACurrentMediaTime()
     let width = max(Int((wanted.width * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
     let height = max(Int((wanted.height * pixelsPerPoint / 16).rounded(.up)) * 16, 16)
-    guard width <= 2048, height <= 2048 else { return false }
+    guard width <= 2048, height <= 2048 else { return fail(now) }
     let captured = CGRect(x: wanted.minX, y: wanted.minY, width: CGFloat(width) / pixelsPerPoint, height: CGFloat(height) / pixelsPerPoint)
-    guard let pixels = makeBuffer(width: width, height: height) else { return false }
+    guard let pixels = makeBuffer(width: width, height: height) else { return fail(now) }
     CVPixelBufferLockBaseAddress(pixels, [])
-    guard let context = CGContext(data: CVPixelBufferGetBaseAddress(pixels), width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else {
+    guard let base = CVPixelBufferGetBaseAddress(pixels), let context = CGContext(data: base, width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else {
       CVPixelBufferUnlockBaseAddress(pixels, [])
-      return false
+      return fail(now)
     }
     context.clear(CGRect(x: 0, y: 0, width: width, height: height))
     context.interpolationQuality = .low
@@ -129,44 +228,65 @@ final class GlassCapture {
     context.scaleBy(x: pixelsPerPoint, y: -pixelsPerPoint)
     context.translateBy(x: -captured.minX, y: -captured.minY)
     UIGraphicsPushContext(context)
-    draw(context)
+    let drew = draw(context)
     UIGraphicsPopContext()
+    let inked = drew && Self.hasInk(base, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), width: width, height: height)
     CVPixelBufferUnlockBaseAddress(pixels, [])
-    guard let (input, holder) = GlassMetal.shared.texture(of: pixels) else { return false }
+    guard inked, let (input, holder) = GlassMetal.shared.texture(of: pixels), let blurred = outputTexture(like: input), let blur = GlassMetal.shared.blur(sigma: sigma) else { return fail(now) }
     GlassMetal.shared.flushTextures()
-    let blurred = outputTexture(like: input)
-    if let blur = GlassMetal.shared.blur(sigma: sigma), let blurred {
-      blur.encode(commandBuffer: buffer, sourceTexture: input, destinationTexture: blurred)
-      texture = blurred
-    } else {
-      texture = input
-    }
+    blur.encode(commandBuffer: buffer, sourceTexture: input, destinationTexture: blurred)
     let held = holder
     buffer.addCompletedHandler { _ in _ = held }
+    texture = blurred
     rect = captured
     generation += 1
+    failures = 0
+    retryAt = 0
     capturedAt = now
     settle = max(settle - 1, 0)
     lastMs = (CACurrentMediaTime() - started) * 1000
     recentMs.append(lastMs)
     if recentMs.count > LiquidGlassRules.budgetSamples { recentMs.removeFirst(recentMs.count - LiquidGlassRules.budgetSamples) }
-    return true
+    return .captured
   }
 
-  static func draw(_ view: UIView, in rect: CGRect, method: GlassLaunch.Capture, context: CGContext) {
+  func release() {
+    texture = nil
+    output = nil
+    rect = .null
+    pool = nil
+    poolSize = (0, 0)
+    signature = nil
+    generation += 1
+  }
+
+  private func fail(_ now: CFTimeInterval) -> Outcome {
+    failures += 1
+    retryAt = now + LiquidGlassRules.captureRetryDelay(failures: failures)
+    texture = nil
+    rect = .null
+    generation += 1
+    return .failed
+  }
+
+  static func draw(_ view: UIView, method: GlassLaunch.Capture, context: CGContext) -> Bool {
     switch method {
     case .hierarchy:
-      view.drawHierarchy(in: rect, afterScreenUpdates: false)
+      return view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
     case .layer:
-      context.saveGState()
-      context.translateBy(x: rect.minX, y: rect.minY)
-      context.scaleBy(x: rect.width / max(view.bounds.width, 1), y: rect.height / max(view.bounds.height, 1))
-      context.translateBy(x: -view.bounds.minX, y: -view.bounds.minY)
       view.layer.render(in: context)
-      context.restoreGState()
+      return true
     case .none:
-      break
+      return false
     }
+  }
+
+  private static func hasInk(_ base: UnsafeMutableRawPointer, bytesPerRow: Int, width: Int, height: Int) -> Bool {
+    for row in stride(from: 0, to: height, by: 2) {
+      let line = base.advanced(by: row * bytesPerRow)
+      for column in stride(from: 0, to: width, by: 2) where line.load(fromByteOffset: column * 4 + 3, as: UInt8.self) > 0 { return true }
+    }
+    return false
   }
 
   private func makeBuffer(width: Int, height: Int) -> CVPixelBuffer? {
@@ -187,12 +307,13 @@ final class GlassCapture {
     }
     guard let pool else { return nil }
     var buffer: CVPixelBuffer?
-    CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+    guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess else { return nil }
     return buffer
   }
 
   private func outputTexture(like input: MTLTexture) -> MTLTexture? {
     if let output, output.width == input.width, output.height == input.height { return output }
+    output = nil
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: input.width, height: input.height, mipmapped: false)
     descriptor.usage = [.shaderRead, .shaderWrite]
     descriptor.storageMode = .private
@@ -215,6 +336,7 @@ final class GlassCapture {
     hasher.combine(shown.bounds.width)
     hasher.combine(shown.bounds.height)
     hasher.combine(shown.opacity)
+    hasher.combine(shown.zPosition)
     let transform = shown.transform
     hasher.combine(transform.m11)
     hasher.combine(transform.m12)

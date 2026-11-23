@@ -29,8 +29,9 @@ public enum LiquidGlassShader {
     public var tint: GlassInk
     public var style: GlassFrostStyle
     public var params: LiquidGlassParams
+    public var bound: LiquidGlassBound?
 
-    public init(width: Double, height: Double, scale: Double, radius: Double, live: Bool, lens: Bool, rim: Bool, dark: Bool, uv: (left: Double, top: Double, width: Double, height: Double) = (0, 0, 1, 1), fill: GlassInk, tint: GlassInk = .clear, style: GlassFrostStyle = .glass, params: LiquidGlassParams = .defaults) {
+    public init(width: Double, height: Double, scale: Double, radius: Double, live: Bool, lens: Bool, rim: Bool, dark: Bool, uv: (left: Double, top: Double, width: Double, height: Double) = (0, 0, 1, 1), fill: GlassInk, tint: GlassInk = .clear, style: GlassFrostStyle = .glass, params: LiquidGlassParams = .defaults, bound: LiquidGlassBound? = nil) {
       self.width = width
       self.height = height
       self.scale = scale
@@ -44,6 +45,7 @@ public enum LiquidGlassShader {
       self.tint = tint
       self.style = style
       self.params = params
+      self.bound = bound
     }
 
     public static func == (lhs: Frame, rhs: Frame) -> Bool {
@@ -51,8 +53,11 @@ public enum LiquidGlassShader {
     }
 
     public var uniforms: [Float] {
-      var bound = LiquidGlassBound(params: params)
-      bound.measure(width: width, height: height)
+      let bound = self.bound ?? {
+        var measured = LiquidGlassBound(params: params)
+        measured.measure(width: width, height: height)
+        return measured
+      }()
       let light = LiquidGlassRules.light(params.lightAngle)
       var values = [Float](repeating: 0, count: Uniform.allCases.count)
       func set(_ uniform: Uniform, _ value: Double) { values[uniform.rawValue] = Float(value) }
@@ -220,7 +225,7 @@ fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant Gla
       float lit = clamp(pow(max(dot(normal, light), 0.0), u.sharpness) * (u.strength - fade), 0.0, 1.0);
       float back = clamp(pow(max(dot(normal, -light), 0.0), u.sharpness) * (u.opposite - fade), 0.0, 1.0);
       float alpha = clamp((lit + back) * mask, 0.0, 1.0) * u.rimOpacity;
-      color = clamp(color + float4(alpha), 0.0, 1.0);
+      color.rgb = min(color.rgb + alpha, 1.0);
     }
   }
   return color * coverage;

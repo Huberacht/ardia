@@ -18,13 +18,11 @@ final class LiquidGlassSurface: UIView {
   private let fillLayer = CALayer()
   private let lensLayer = CAMetalLayer()
   private let bound = LiquidGlassSurfaceBound()
-  enum Backdrop {
-    case source(FrostSourceView)
-    case beneath(UIView)
-  }
-
   private(set) var choice = LiquidGlassRules.choose(classic: false, metal: false, flat: false, lensFailed: false, rimFailed: false, holdsPage: false)
-  private(set) var backdrop: Backdrop?
+  private(set) var backdropMode: LiquidGlassRules.Backdrop?
+  private(set) weak var backdropSource: FrostSourceView?
+  private(set) weak var backdropRoot: UIView?
+  private(set) var stillPending = false
   private var drawnUniforms: [Float]?
   private var drawnGeneration = -1
   private var drawnSize: CGSize = .zero
@@ -44,6 +42,7 @@ final class LiquidGlassSurface: UIView {
     lensLayer.framebufferOnly = true
     lensLayer.isOpaque = false
     lensLayer.allowsNextDrawableTimeout = true
+    lensLayer.maximumDrawableCount = 3
     lensLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
     layer.addSublayer(fillLayer)
     layer.addSublayer(lensLayer)
@@ -60,6 +59,11 @@ final class LiquidGlassSurface: UIView {
       layoutLayers(size: bounds.size)
       needsPath()
     } else {
+      backdropMode = nil
+      backdropSource = nil
+      backdropRoot = nil
+      stillPending = false
+      drawnUniforms = nil
       GlassFrames.shared.detach(self)
     }
   }
@@ -92,22 +96,23 @@ final class LiquidGlassSurface: UIView {
 
   var wantsPathChecks: Bool { window != nil && !classic && !wantsFrames }
 
-  var captureKey: ObjectIdentifier? {
-    switch backdrop {
-    case .source(let source): ObjectIdentifier(source)
-    case .beneath: ObjectIdentifier(self)
+  var captureOwner: AnyObject? {
+    switch backdropMode {
+    case .source: backdropSource
+    case .beneath: backdropRoot == nil ? nil : self
     case nil: nil
     }
   }
 
   var isShownOnScreen: Bool {
-    guard window != nil else { return false }
+    guard let window else { return false }
     var view: UIView? = self
     while let current = view {
       if current.isHidden || current.alpha <= 0.01 { return false }
       view = current.superview
     }
-    return true
+    guard let shown = region(in: window) else { return false }
+    return shown.intersects(window.bounds)
   }
 
   private var hasRunningAnimations: Bool {
@@ -144,10 +149,10 @@ final class LiquidGlassSurface: UIView {
     let metal = GlassMetal.shared
     let found = GlassSources.find(source)
     let inside = found.map { isDescendant(of: $0) } ?? false
-    switch LiquidGlassRules.backdrop(hasSource: found != nil, insideSource: inside) {
-    case .source: backdrop = found.map(Backdrop.source)
-    case .beneath: backdrop = window.map(Backdrop.beneath)
-    }
+    let mode = LiquidGlassRules.backdrop(hasSource: found != nil, insideSource: inside)
+    backdropMode = window == nil ? nil : mode
+    backdropSource = mode == .source ? found : nil
+    backdropRoot = mode == .beneath ? window : nil
     let next = LiquidGlassRules.choose(
       classic: classic,
       metal: metal.hasMetal,
@@ -156,7 +161,7 @@ final class LiquidGlassSurface: UIView {
       rimFailed: metal.failures > 0,
       holdsPage: found.map(GlassSources.holdsPage) ?? false,
       solidPageAsked: GlassLaunch.solidPage,
-      overBudget: GlassFrames.shared.isOverBudget(captureKey),
+      overBudget: GlassFrames.shared.isOverBudget(captureOwner),
       onScreen: window != nil
     )
     let changed = next != choice
@@ -208,7 +213,7 @@ final class LiquidGlassSurface: UIView {
     var uv = (left: 0.0, top: 0.0, width: 1.0, height: 1.0)
     var live = false
     var texture: MTLTexture?
-    if let capture, let space, let captured = capture.texture, isShownOnScreen, let region = region(in: space), !capture.rect.isNull {
+    if LiquidGlassRules.acceptsCapture(choice.path), let capture, let space, let captured = capture.texture, let region = region(in: space), !capture.rect.isNull {
       let rect = capture.rect
       uv = (Double((region.minX - rect.minX) / rect.width), Double((region.minY - rect.minY) / rect.height), Double(region.width / rect.width), Double(region.height / rect.height))
       live = true
@@ -244,9 +249,20 @@ final class LiquidGlassSurface: UIView {
   }
 
   private func drawStill() {
-    guard GlassMetal.shared.isReady, !classic, let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else { return }
+    guard window != nil, GlassMetal.shared.isReady, !classic else { return }
+    guard GlassFrames.shared.canSubmit, let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
+      stillPending = true
+      GlassFrames.shared.waitForRoom()
+      return
+    }
+    stillPending = false
     draw(with: nil, space: nil, into: buffer)
-    buffer.commit()
+    GlassFrames.shared.submit(buffer)
+  }
+
+  func drawPendingStill() {
+    guard stillPending, !wantsFrames else { return }
+    drawStill()
   }
 
   private func makeFrame(size: CGSize, live: Bool, uv: (left: Double, top: Double, width: Double, height: Double)) -> LiquidGlassShader.Frame {
@@ -263,7 +279,8 @@ final class LiquidGlassSurface: UIView {
       dark: dark,
       uv: uv,
       fill: fill,
-      tint: tint.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? .clear
+      tint: tint.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? .clear,
+      bound: bound.measure(size)
     )
   }
 

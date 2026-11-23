@@ -18,6 +18,14 @@ public final class LookModule: Module {
         MainActor.assumeIsolated {
           GlassMetal.shared.onFailed = { PendingCounts.add(PendingCounts.glassShadersFailed) }
           GlassMetal.shared.prepare()
+          if PhoneTestBuild.flag("ArdiaGlassProbe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+              MainActor.assumeIsolated {
+                let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+                if let window = windows.first(where: \.isKeyWindow) ?? windows.first { GlassProbe.run(in: window) }
+              }
+            }
+          }
         }
       }
     }

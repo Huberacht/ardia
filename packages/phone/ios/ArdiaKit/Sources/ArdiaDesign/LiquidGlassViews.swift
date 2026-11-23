@@ -29,7 +29,6 @@ public struct LiquidGlassFill<S: Shape>: View {
       shape.stroke(Color(glassInk: style.edge(dark: dark)), lineWidth: style.edgeWidth * 2).clipShape(shape)
       shape.stroke(Self.rim(dark: dark), lineWidth: params.specularWidth * 2).clipShape(shape).blendMode(.plusLighter)
     }
-    .compositingGroup()
     .allowsHitTesting(false)
     .accessibilityHidden(true)
   }
