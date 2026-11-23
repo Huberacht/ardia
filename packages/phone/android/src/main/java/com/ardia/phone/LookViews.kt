@@ -1496,6 +1496,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
         val node = recorder ?: RenderNode("ardiaFrostSource").also { recorder = it }
         LookActivity.sourceRecordings += 1
         node.setPosition(0, 0, width, height)
+        node.setUseCompositingLayer(holdsPage, null)
         val recording = node.beginRecording(width, height)
         try {
             super.dispatchDraw(recording)
