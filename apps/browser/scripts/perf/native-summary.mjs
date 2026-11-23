@@ -7,6 +7,12 @@ export const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
 
+export const LOADING_FIXTURE = "/hang?id=load";
+
+const onFixture = (s) => !!(s?.loading && s.id && s.url?.includes(LOADING_FIXTURE));
+
+export const loadingThroughout = (r) => onFixture(r.loadingBefore) && onFixture(r.loadingAfter) && r.loadingBefore.id === r.loadingAfter.id;
+
 export function summary(res) {
   const rows = [];
   const add = (name, xs, unit, digits = 0) => {
@@ -39,9 +45,30 @@ export function summary(res) {
     add(`idle wakeups/s, ${t.slice(4)} tab(s) (GPU process)`, S.map((r) => r.idle[t]?.kinds["gpu-process"]?.wakeups), "/s", 1);
     add(`idle wakeups/s, ${t.slice(4)} tab(s) (renderers)`, S.map((r) => r.idle[t]?.kinds.renderer?.wakeups), "/s", 1);
   }
+  const L = res.loading ?? [];
+  const heldLoading = L.filter(loadingThroughout);
+  for (const [k, what, runs] of [["loaded", "seed tab loaded", L], ["loading", "active tab loading", heldLoading]]) {
+    if (!L.length) break;
+    add(`${what}: wakeups/s (browser process)`, runs.map((r) => r[k]?.kinds.browser?.wakeups), "/s", 1);
+    add(`${what}: CPU (browser process)`, runs.map((r) => r[k]?.kinds.browser?.cpu), "%", 2);
+    add(`${what}: wakeups/s (all processes)`, runs.map((r) => r[k]?.total.wakeups), "/s", 1);
+    add(`${what}: CPU (all processes)`, runs.map((r) => r[k]?.total.cpu), "%", 2);
+    add(`${what}: wakeups/s (GPU process)`, runs.map((r) => r[k]?.kinds["gpu-process"]?.wakeups), "/s", 1);
+  }
+  if (L.length) {
+    add("active tab loading: runs where the same tab was active and loading throughout (the rest are left out)", [heldLoading.length], "");
+    add("active tab loading: someone used the Mac (s, per run)", L.map((r) => (r.loaded?.input?.inputSecs ?? NaN) + (r.loading?.input?.inputSecs ?? NaN)), "s", 2);
+    add("active tab loading: 1-minute load average (start and end of each run)", L.flatMap((r) => r.load), "", 1);
+  }
   for (const m of ["tabs1", "tabs10", "tabs20", "closed"]) add(`memory (phys_footprint), ${m === "closed" ? "after closing back to 1 tab" : m.slice(4) + " tab(s)"}`, S.map((r) => r.memory[m]?.totalMB), "MB");
+  add("memory, browser process, 10 tabs", S.map((r) => r.memory.tabs10?.kinds.browser), "MB");
   add("memory, browser process, 20 tabs", S.map((r) => r.memory.tabs20?.kinds.browser), "MB");
   add("memory, browser process, after closing", S.map((r) => r.memory.closed?.kinds.browser), "MB");
+  for (const m of ["tabs1", "tabs10", "tabs20", "closed"]) {
+    const at = m === "closed" ? "after closing" : `${m.slice(4)} tab(s)`;
+    add(`JS heap (Hermes), ${at}`, S.map((r) => r.heap?.[m]?.heapMB), "MB", 1);
+    add(`JS allocated, incl. garbage not yet collected (Hermes), ${at}`, S.map((r) => r.heap?.[m]?.allocatedMB), "MB", 2);
+  }
   const used = (r, k) => {
     const windows = [r.idle.tabs1, r.idle.tabs20].filter(Boolean);
     return windows.length ? windows.reduce((n, w) => n + (w.input?.[k] ?? NaN), 0) : NaN;

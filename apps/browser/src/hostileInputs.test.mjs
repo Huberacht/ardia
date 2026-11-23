@@ -25,6 +25,8 @@ const { filterListAddress } = await import("./state/site/contentBlocking.ts");
 const { CLEAN_UP_KEY, LEGACY_CLEAN_UP_KEY } = await import("./state/settings/cleanUpAfter.ts");
 const { updateWithin } = await import("./state/plugins/officialUpdate.ts");
 const { readManifest } = await import("./lib/pluginManifest.ts");
+const { copyLinkFromPageMenu } = await import("./state/site/pageLinkCopy.ts");
+const { cleanUrl } = await import("@ardia/core");
 
 const S = () => useBrowser.getState();
 const show = (value) => {
@@ -384,4 +386,22 @@ test("an official update's manifest with any hostile value in a field that count
     assert.equal(updateWithin(approved, { ...next, contributes: { ...next.contributes, ...extra } }).ok, false, `contributes key ${key}`);
   }
   assert.ok(refused > 1000);
+});
+
+test("a WebKit page menu address reaches native's writer only as a string the cleaner returned, whatever the page holds", async () => {
+  const { webKitAddressWrites } = stub;
+  webKitAddressWrites.written.length = 0;
+  for (const { id, value } of HOSTILE_VALUES) {
+    webKitAddressWrites.written.length = 0;
+    await copyLinkFromPageMenu(value, 7, null);
+    if (typeof value !== "string" || !value) assert.deepEqual(webKitAddressWrites.written, [], id);
+    else assert.deepEqual(webKitAddressWrites.written, [{ request: 7, url: cleanUrl(value) }], id);
+  }
+  for (const s of strings) {
+    for (const address of [s, `https://a.example/?utm_source=${s}&q=1`, `https://a.example/${s}?fbclid=1`]) {
+      webKitAddressWrites.written.length = 0;
+      await copyLinkFromPageMenu(address, 7, null);
+      assert.deepEqual(webKitAddressWrites.written, address ? [{ request: 7, url: cleanUrl(address) }] : [], show(address));
+    }
+  }
 });
