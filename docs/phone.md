@@ -33,6 +33,9 @@ macOS and react-native-macos stops at 0.83):
 - `apps/phone/pnpm-workspace.yaml` holds `apps/phone` and `packages/phone`, with its own `pnpm-lock.yaml` and a
   hoisted `apps/phone/node_modules`. `@ardia/core` comes in as `link:../../packages/core`; it imports only `node:`
   modules. The root workspace leaves both out. Install with `scripts/agent/locked pod -- pnpm -C apps/phone install`.
+- On corex, run the phone's Jest with `--maxWorkers=2` (`pnpm -C apps/phone exec jest --config jest.config.js --ci
+  --maxWorkers=2`) and one run at a time. Each worker holds about 1.8 GB, and the default count runs corex out of
+  memory: the kernel kills the workers and the Gradle and Metro builds beside them.
 - Nothing of the Mac's is on the phone's resolution path. Metro reads only `apps/phone/node_modules` and watches
   `packages/phone` and `packages/core`. TypeScript keeps symlinks (`preserveSymlinks` in the three tsconfigs), so
   `packages/phone` is read through `apps/phone/node_modules/@ardia/phone-native` and its imports find the phone's
