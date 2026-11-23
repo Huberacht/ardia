@@ -130,6 +130,8 @@ jobs:
               - "apps/linux/scripts/**"
               - "apps/browser/official-plugins.json"
               - "apps/browser/official-plugins-history.json"
+              - "apps/browser/macos/Ardia.xcodeproj/project.pbxproj"
+              - "apps/browser/macos/Ardia-macOS/Info.plist"
               - "packages/ardiacore/ios/ArdiaLaunchConfig.mm"
               - "packages/sync/ios/Core/LegacyMigration.swift"
               - "packages/ardiacore/ios/page_script.js"

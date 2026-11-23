@@ -44,6 +44,14 @@ if [ "$phase" = check ]; then
   exit 0
 fi
 
+work="$(mktemp -d "${TMPDIR:-/tmp}/ac-release-work.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+base_feed="$work/appcast.xml"
+preflight_mode=release
+[ "$rc" = 1 ] && preflight_mode=candidate
+node "$stages/preflight.mjs" "$version" --mode "$preflight_mode" --feed "${APPCAST_BASE:-$LATEST_DOWNLOAD_URL/appcast.xml}" --feed-out "$base_feed" \
+  || die "preflight stopped the release (above)"
+
 sparkle="${SPARKLE_BIN:-$macos/Pods/Sparkle/bin}"
 sparkle_key_file="${SPARKLE_KEY_FILE:-}"
 if [ "$phase" = build ]; then
@@ -74,18 +82,14 @@ read -r -a extra_build_settings <<<"${RELEASE_BUILD_SETTINGS:-}"
 pbx="$macos/Ardia.xcodeproj/project.pbxproj"
 project_version="$(sed -n 's/.*MARKETING_VERSION = "\{0,1\}\([^";]*\)"\{0,1\};/\1/p' "$pbx" | sort -u)"
 min_macos="$(sed -n 's/.*MACOSX_DEPLOYMENT_TARGET = \([0-9]*\)\.0;/\1/p' "$pbx" | sort -u)"
-[[ "$min_macos" =~ ^[0-9]+$ ]] || die "the project's MACOSX_DEPLOYMENT_TARGET isn't one whole macOS version: '$min_macos'"
 project_build="$(sed -n 's/.*CURRENT_PROJECT_VERSION = \(.*\);/\1/p' "$pbx" | sort -u)"
 version_settings=()
 release_build="$project_build"
-if [ "$rc" = 1 ]; then
-  [ "$project_version" = "$version" ] || { release_build="$((project_build + 1))"; version_settings=(MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$release_build"); }
-elif [ "$project_version" != "$version" ]; then
-  die "MARKETING_VERSION is '$project_version'. Set it to $version (and bump CURRENT_PROJECT_VERSION) first."
+if [ "$project_version" != "$version" ]; then
+  release_build="$((project_build + 1))"
+  version_settings=(MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$release_build")
 fi
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/ac-release-work.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
 notes_body="$work/notes-body.md"
 notes="$root/docs/release-notes/$version.md"
 notes_video=""
@@ -148,21 +152,6 @@ if [ "$phase" != build ]; then
     exit 1
   fi
 fi
-
-feed_base="${APPCAST_BASE:-$LATEST_DOWNLOAD_URL/appcast.xml}"
-base_feed="$work/appcast.xml"
-case "$feed_base" in
-  none) : > "$base_feed" ;;
-  http://* | https://*) curl -fsL "$feed_base" -o "$base_feed" || : > "$base_feed" ;;
-  *) cp "$feed_base" "$base_feed" ;;
-esac
-if [ ! -s "$base_feed" ] && [ "$rc" = 0 ] && [ "$feed_base" != none ]; then
-  die "couldn't read the published appcast ($feed_base): every release builds on it, or earlier versions and the other channel drop out of the feed"
-fi
-newest_listed=""
-[ -s "$base_feed" ] && newest_listed="$(appcast newest-build "$base_feed")"
-[ -z "$newest_listed" ] || [ "$release_build" -gt "$newest_listed" ] \
-  || die "the build number ($release_build) must be above every build in the feed, nightly or stable (newest: $newest_listed): bump CURRENT_PROJECT_VERSION"
 
 if [ "$phase" != sign ]; then
   rm -rf "$dist"
