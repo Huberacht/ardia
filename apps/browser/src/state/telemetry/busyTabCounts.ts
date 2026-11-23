@@ -8,9 +8,7 @@ const NO_COUNTS = {
   busy_tab_slept: 0,
   busy_tab_kept_running: 0,
   busy_tab_stayed_awake: 0,
-  busy_extension_warnings: 0,
-  busy_extension_managed: 0,
-  busy_extension_ignored: 0,
+  busy_tab_sleep_moot: 0,
 };
 
 type BusyTabCount = keyof typeof NO_COUNTS;

@@ -319,15 +319,16 @@ export const SplitToast = memo(function SplitToast({ windowId }: { windowId: str
   const toast = useToasts((s) => s.toasts[windowId] ?? null);
   const [shown, setShown] = useState(toast);
   const [closing, setClosing] = useState(false);
+  const [held, setHeld] = useState(false);
   if (toast && toast !== shown) {
     setShown(toast);
     setClosing(false);
   } else if (!toast && shown && !closing) setClosing(true);
   useEffect(() => {
-    if (!toast || toast.sticky) return;
+    if (!toast || toast.sticky || (held && toast.secondary)) return;
     const timer = setTimeout(() => setClosing(true), toast.holdMs ?? (toast.action ? TOAST_ACTION_MS : TOAST_MS));
     return () => clearTimeout(timer);
-  }, [toast?.id]);
+  }, [toast?.id, held && !!toast?.secondary]);
   if (!shown) return null;
   const { action, secondary } = shown;
   const pick = (chosen: typeof action) => () => {
@@ -345,6 +346,7 @@ export const SplitToast = memo(function SplitToast({ windowId }: { windowId: str
       onAction={pick(action)}
       secondary={secondary?.title}
       onSecondary={pick(secondary)}
+      onHeld={secondary ? setHeld : undefined}
       closing={closing}
       onClosed={() => {
         setShown(null);

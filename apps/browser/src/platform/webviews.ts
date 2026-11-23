@@ -14,6 +14,17 @@ const webviewsChanged = () => {
   for (const listener of changeListeners) listener();
 };
 
+const webviewListeners = new Set<() => void>();
+
+export function onWebviewsChanged(listener: () => void) {
+  webviewListeners.add(listener);
+  return () => void webviewListeners.delete(listener);
+}
+
+const webviewsChanged = () => {
+  for (const listener of [...webviewListeners]) listener();
+};
+
 export const webviewMount = (tabId: string) => mounts.get(tabId);
 
 export function webviewRef(tabId: string) {

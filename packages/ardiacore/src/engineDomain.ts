@@ -39,7 +39,6 @@ export type EngineTask = {
 export type ChildProcessCpu = {
   pid: number;
   started: number;
-  kind: "renderer" | "extension";
   cpuMs: number;
 };
 
