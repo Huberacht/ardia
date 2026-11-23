@@ -12,16 +12,35 @@ test("on macOS 27.2+ a window drag asks macOS first and only falls back to Ardia
   assert.match(swizzle, /if WindowMove\.askingWindowServer \{ return original\(window, selector, event\) \}/);
 });
 
-test("Ardia takes the drag over only when macOS ended it before the button was released", () => {
+test("every press the app dispatches is recorded, so a completion knows whether its press is still the latest", () => {
+  assert.match(move, /NSEvent\.addLocalMonitorForEvents\(matching: \.leftMouseDown\) \{ event in\s*notePress\(event\)\s*return event\s*\}/);
+  assert.match(move, /latestPressAt = max\(latestPressAt \?\? event\.timestamp, event\.timestamp\)/);
+  const swizzle = move.slice(move.indexOf("let block: @convention(block) (NSWindow, NSEvent) -> Void"), move.indexOf("method_setImplementation(method, imp_implementationWithBlock(block))"));
+  assert.match(swizzle, /WindowMove\.notePress\(event\)/);
+  assert.match(move, /_ = WindowMove\.pressWatch/);
+});
+
+test("a completion is bound to its own press: a newer press, dispatched or still queued, makes it stale and it counts as neither", () => {
   const asking = move.slice(move.indexOf("static func asksWindowServer"), move.indexOf("static func follow"));
   assert.match(move, /NSSelectorFromString\("performWindowDragWithEvent:completionHandler:"\)/);
-  assert.match(asking, /dragWithCompletion\(window, dragWithCompletionSelector, event\)/);
-  assert.match(asking, /let endedBeforeRelease = WindowDragTakeover\.takesOver\(\s*pressedAt: pressedAt, lastDownAt: lastHardwareDown\(\), held: NSEvent\.pressedMouseButtons & 1 != 0\)/);
   assert.match(asking, /let pressedAt = event\.timestamp/);
-  assert.match(asking, /guard endedBeforeRelease else \{\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragNative"\]\)\)/);
-  assert.match(asking, /DispatchQueue\.main\.async \{\s*guard let window, WindowDragTakeover\.pressIsLatest\(pressedAt: pressedAt, lastDownAt: lastHardwareDown\(\)\) else \{ return \}\s*_ = follow\(window, from: event, stamp: stamp\)/);
+  assert.match(asking, /let outcome = WindowDragTakeover\.outcome\(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: nil, held: NSEvent\.pressedMouseButtons & 1 != 0\)/);
+  assert.match(asking, /switch outcome \{/);
+  assert.match(asking, /case \.stale:\s*return/);
+  assert.match(asking, /case \.native:\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragNative"\]\)\)/);
+  assert.match(
+    asking,
+    /DispatchQueue\.main\.async \{\s*guard let window,\s*WindowDragTakeover\.outcome\(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: queuedPressAt\(\), held: true\) == \.takeOver\s*else \{ return \}\s*ShellEvents\.send\(\.app, stamp\.onto\(\["type": "windowDragTakeover"\]\)\)\s*_ = follow\(window, from: event, stamp: stamp\)/,
+  );
+  assert.match(move, /NSApp\.nextEvent\(matching: \.leftMouseDown, until: \.distantPast, inMode: \.eventTracking, dequeue: false\)\?\.timestamp/);
+  assert.ok(!/lastHardwareDown|secondsSinceLastEventType/.test(move), "no wall-clock guess at which press is current");
   assert.ok(!/completed/.test(asking), "the handler's completed flag is true even for a drag macOS never began, so nothing reads it");
   assert.ok(!asking.includes("announceDrag"), "a press handed to macOS announces nothing: AppKit's willMove covers a real move, and a click must not stop Little Ardia's landing fit");
+});
+
+test("Ardia's loop consumes only events of its own press: an older event ends it, as a new press does", () => {
+  const follow = move.slice(move.indexOf("static func follow"), move.indexOf("private static let gestureEvents"));
+  assert.match(follow, /if !WindowDragTakeover\.belongs\(eventAt: next\.timestamp, pressedAt: event\.timestamp\) \|\| next\.type != \.leftMouseDragged \|\| next\.windowNumber != window\.windowNumber \{\s*NSApp\.postEvent\(next, atStart: true\)\s*return true\s*\}/);
 });
 
 test("a press the window server owns in the title bar announces nothing, so a click there keeps Little Ardia's landing fit", () => {

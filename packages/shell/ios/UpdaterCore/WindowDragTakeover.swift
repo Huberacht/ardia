@@ -1,14 +1,15 @@
 import Foundation
 
 enum WindowDragTakeover {
-  static let samePress: TimeInterval = 0.03
+  enum Outcome: Equatable { case native, takeOver, stale }
 
-  static func pressIsLatest(pressedAt: TimeInterval, lastDownAt: TimeInterval?) -> Bool {
-    guard let lastDownAt else { return true }
-    return lastDownAt <= pressedAt + samePress
+  static func outcome(pressedAt: TimeInterval, latestPressAt: TimeInterval?, queuedPressAt: TimeInterval?, held: Bool) -> Outcome {
+    if let latestPressAt, latestPressAt > pressedAt { return .stale }
+    if let queuedPressAt, queuedPressAt > pressedAt { return .stale }
+    return held ? .takeOver : .native
   }
 
-  static func takesOver(pressedAt: TimeInterval, lastDownAt: TimeInterval?, held: Bool) -> Bool {
-    held && pressIsLatest(pressedAt: pressedAt, lastDownAt: lastDownAt)
+  static func belongs(eventAt: TimeInterval, pressedAt: TimeInterval) -> Bool {
+    eventAt >= pressedAt
   }
 }

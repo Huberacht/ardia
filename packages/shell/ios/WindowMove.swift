@@ -11,11 +11,13 @@ let installWindowMoveFallback: Void = {
   let original = unsafeBitCast(method_getImplementation(method), to: PerformDrag.self)
   let block: @convention(block) (NSWindow, NSEvent) -> Void = { window, event in
     if WindowMove.askingWindowServer { return original(window, selector, event) }
+    WindowMove.notePress(event)
     if WindowMove.windowServerMoves(window, from: event) { return }
     if WindowMove.asksWindowServer(window, from: event) { return }
     if !WindowMove.follow(window, from: event) { original(window, selector, event) }
   }
   method_setImplementation(method, imp_implementationWithBlock(block))
+  _ = WindowMove.pressWatch
   if WindowMove.holdsPlacement { WindowMove.holdAppKitPlacement() }
 }()
 
@@ -137,6 +139,21 @@ enum WindowMove {
   static var nativeDrags: [[String: Any]] = []
   #endif
 
+  private static var latestPressAt: TimeInterval?
+  static let pressWatch: Any? = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+    notePress(event)
+    return event
+  }
+
+  static func notePress(_ event: NSEvent) {
+    guard event.type == .leftMouseDown else { return }
+    latestPressAt = max(latestPressAt ?? event.timestamp, event.timestamp)
+  }
+
+  private static func queuedPressAt() -> TimeInterval? {
+    NSApp.nextEvent(matching: .leftMouseDown, until: .distantPast, inMode: .eventTracking, dequeue: false)?.timestamp
+  }
+
   static func asksWindowServer(_ window: NSWindow, from event: NSEvent) -> Bool {
     guard !following, let dragWithCompletion, event.type == .leftMouseDown, event.clickCount < 2,
           window.isMovable, !window.styleMask.contains(.fullScreen), window.isVisible
@@ -147,29 +164,27 @@ enum WindowMove {
     defer { askingWindowServer = false }
     let pressedAt = event.timestamp
     dragWithCompletion(window, dragWithCompletionSelector, event) { [weak window] _ in
-      let endedBeforeRelease = WindowDragTakeover.takesOver(
-        pressedAt: pressedAt, lastDownAt: lastHardwareDown(), held: NSEvent.pressedMouseButtons & 1 != 0)
+      let outcome = WindowDragTakeover.outcome(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: nil, held: NSEvent.pressedMouseButtons & 1 != 0)
       #if DEBUG
-      if nativeDrags.count < 256 { nativeDrags.append(["endedBeforeRelease": endedBeforeRelease, "t": CACurrentMediaTime()]) }
+      if nativeDrags.count < 256 { nativeDrags.append(["outcome": "\(outcome)", "t": CACurrentMediaTime()]) }
       #endif
-      guard endedBeforeRelease else {
-        ShellEvents.send(.app, stamp.onto(["type": "windowDragNative"]))
+      switch outcome {
+      case .stale:
         return
-      }
-      guard window != nil else { return }
-      ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
-      DispatchQueue.main.async {
-        guard let window, WindowDragTakeover.pressIsLatest(pressedAt: pressedAt, lastDownAt: lastHardwareDown()) else { return }
-        _ = follow(window, from: event, stamp: stamp)
+      case .native:
+        ShellEvents.send(.app, stamp.onto(["type": "windowDragNative"]))
+      case .takeOver:
+        guard window != nil else { return }
+        DispatchQueue.main.async {
+          guard let window,
+                WindowDragTakeover.outcome(pressedAt: pressedAt, latestPressAt: latestPressAt, queuedPressAt: queuedPressAt(), held: true) == .takeOver
+          else { return }
+          ShellEvents.send(.app, stamp.onto(["type": "windowDragTakeover"]))
+          _ = follow(window, from: event, stamp: stamp)
+        }
       }
     }
     return true
-  }
-
-  private static func lastHardwareDown() -> TimeInterval? {
-    let since = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
-    guard since.isFinite, since >= 0 else { return nil }
-    return ProcessInfo.processInfo.systemUptime - since
   }
 
   static func follow(_ window: NSWindow, from event: NSEvent, stamp: ArdiaConsentStamp = ArdiaConsentStamp.begin()) -> Bool {
@@ -211,19 +226,21 @@ enum WindowMove {
         continue
       }
       var latest: NSEvent?
-      while next.type == .leftMouseDragged, next.windowNumber == window.windowNumber {
+      while next.type == .leftMouseDragged, next.windowNumber == window.windowNumber,
+            WindowDragTakeover.belongs(eventAt: next.timestamp, pressedAt: event.timestamp) {
         latest = next
         guard ProcessInfo.processInfo.systemUptime - next.timestamp > staleAfter,
               let queued = NSApp.nextEvent(matching: gestureEvents, until: .distantPast, inMode: .eventTracking, dequeue: true)
         else { break }
         next = queued
       }
-      if next.type == .leftMouseUp, next.windowNumber == window.windowNumber {
+      if next.type == .leftMouseUp, next.windowNumber == window.windowNumber,
+         WindowDragTakeover.belongs(eventAt: next.timestamp, pressedAt: event.timestamp) {
         pacer.finish(at: screenPoint(next))
       } else if let latest {
         pacer.moved(to: screenPoint(latest))
       }
-      if next.type != .leftMouseDragged || next.windowNumber != window.windowNumber {
+      if !WindowDragTakeover.belongs(eventAt: next.timestamp, pressedAt: event.timestamp) || next.type != .leftMouseDragged || next.windowNumber != window.windowNumber {
         NSApp.postEvent(next, atStart: true)
         return true
       }

@@ -3,31 +3,34 @@ import XCTest
 
 final class WindowDragTakeoverTests: XCTestCase {
   func testARefusedDragStillHeldIsTakenOver() {
-    XCTAssertTrue(WindowDragTakeover.takesOver(pressedAt: 100, lastDownAt: 100, held: true))
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 100, queuedPressAt: nil, held: true), .takeOver)
   }
 
   func testADragEndedAtTheReleaseStaysWithMacOS() {
-    XCTAssertFalse(WindowDragTakeover.takesOver(pressedAt: 100, lastDownAt: 100, held: false))
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 100, queuedPressAt: nil, held: false), .native)
   }
 
-  func testALateCompletionNeverTakesTheNextPress() {
-    let firstPress: TimeInterval = 100, secondPress: TimeInterval = 100.4
-    XCTAssertFalse(WindowDragTakeover.takesOver(pressedAt: firstPress, lastDownAt: secondPress, held: true))
-    XCTAssertTrue(WindowDragTakeover.takesOver(pressedAt: secondPress, lastDownAt: secondPress, held: true))
+  func testASecondPress22MillisecondsLaterMakesTheFirstCompletionStale() {
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 100.022, queuedPressAt: nil, held: true), .stale)
   }
 
-  func testTheSamePressReadByTheHardwareClockAFewMillisecondsLaterStillCounts() {
-    XCTAssertTrue(WindowDragTakeover.takesOver(pressedAt: 100, lastDownAt: 100.004, held: true))
-    XCTAssertFalse(WindowDragTakeover.takesOver(pressedAt: 100, lastDownAt: 100 + WindowDragTakeover.samePress + 0.001, held: true))
+  func testASecondPressStillQueuedMakesTheFirstCompletionStale() {
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 100, queuedPressAt: 100.022, held: true), .stale)
   }
 
-  func testAPressPostedByTheAppItselfIsNewerThanTheLastHardwarePress() {
-    XCTAssertTrue(WindowDragTakeover.takesOver(pressedAt: 200, lastDownAt: 150, held: true))
-    XCTAssertTrue(WindowDragTakeover.takesOver(pressedAt: 200, lastDownAt: nil, held: true))
+  func testAStaleCompletionAfterTheReleaseCountsAsNeither() {
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 100.3, queuedPressAt: nil, held: true), .stale)
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 100.3, queuedPressAt: nil, held: false), .stale)
   }
 
-  func testANewPressDuringTheHopToTheLoopEndsTheTakeover() {
-    XCTAssertTrue(WindowDragTakeover.pressIsLatest(pressedAt: 100, lastDownAt: 100))
-    XCTAssertFalse(WindowDragTakeover.pressIsLatest(pressedAt: 100, lastDownAt: 100.2))
+  func testAPressThatIsStillTheLatestAndHeldIsTakenOverHoweverLateTheCompletion() {
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: 99, queuedPressAt: nil, held: true), .takeOver)
+    XCTAssertEqual(WindowDragTakeover.outcome(pressedAt: 100, latestPressAt: nil, queuedPressAt: nil, held: true), .takeOver)
+  }
+
+  func testAnEventOlderThanThePressIsNotPartOfItsGesture() {
+    XCTAssertFalse(WindowDragTakeover.belongs(eventAt: 99.99, pressedAt: 100))
+    XCTAssertTrue(WindowDragTakeover.belongs(eventAt: 100, pressedAt: 100))
+    XCTAssertTrue(WindowDragTakeover.belongs(eventAt: 100.4, pressedAt: 100))
   }
 }
