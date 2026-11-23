@@ -156,6 +156,13 @@ class StrictApply(Fixture):
         [result] = self.run_tree([step])
         self.assertIn("isn't in the scratch tree", result.problems[0])
 
+    def test_a_file_a_patch_deletes_must_be_in_the_base(self):
+        step = self.patch("deletes", path="chrome/gone.cc", before="bye\n", after="")
+        text = pathlib.Path(step.patch).read_text().replace("+++ b/chrome/gone.cc", "+++ /dev/null")
+        pathlib.Path(step.patch).write_text(text)
+        required, _ = series_base.base_paths([step])
+        self.assertEqual(required, {"chrome/gone.cc": "deletes"})
+
     def test_a_file_a_patch_creates_needs_no_base(self):
         step = self.patch("creates", path="chrome/new.cc", before="", after="hello\n")
         text = pathlib.Path(step.patch).read_text()
@@ -208,14 +215,14 @@ class Archive(unittest.TestCase):
         os.chmod(os.path.join(self.base, "chrome/run.sh"), 0o755)
         self.ident = {"platform": "linux", "cpu": "x64", "chromium": "1.2.3.4", "helium_chromium": "a" * 40,
                       "helium_platform": "b" * 40}
-        self.out = os.path.join(self.dir, series_base.asset_name(self.ident))
+        self.out = os.path.join(self.dir, "archive.tar.xz")
 
     def tearDown(self):
         subprocess.run(["rm", "-rf", self.dir])
 
     def test_round_trip_keeps_content_and_modes_and_lists_absent_paths(self):
-        manifest = series_base.write_tarball(self.base, {"chrome/f.cc", "chrome/run.sh", "ardia/new.cc"}, self.ident,
-                                             self.out)
+        manifest, _ = series_base.write_tarball(self.base, {"chrome/f.cc", "chrome/run.sh", "ardia/new.cc"}, self.ident,
+                                                self.out)
         self.assertEqual(manifest["absent"], ["ardia/new.cc"])
         dest = os.path.join(self.dir, "out")
         os.makedirs(dest)
@@ -227,6 +234,38 @@ class Archive(unittest.TestCase):
         os.unlink(self.out)
         series_base.write_tarball(self.base, {"chrome/f.cc", "chrome/run.sh", "ardia/new.cc"}, self.ident, self.out)
         self.assertEqual(series_base.sha256_file(self.out), first)
+
+    def test_a_directory_destination_names_the_archive_by_pins_and_content(self):
+        directory = os.path.join(self.dir, "dest")
+        os.makedirs(directory)
+        manifest, out = series_base.write_tarball(self.base, {"chrome/f.cc"}, self.ident, directory)
+        self.assertEqual(os.path.basename(out), series_base.asset_name(self.ident, series_base.content_revision(manifest)))
+        pathlib.Path(self.base, "chrome/f.cc").write_text(ORIGINAL + "captured later\n")
+        other = os.path.join(self.dir, "dest2")
+        os.makedirs(other)
+        _, second = series_base.write_tarball(self.base, {"chrome/f.cc"}, self.ident, other)
+        self.assertNotEqual(os.path.basename(second), os.path.basename(out))
+
+    def test_symlinks_are_neither_packed_nor_extracted(self):
+        os.symlink("f.cc", os.path.join(self.base, "chrome/link.cc"))
+        with self.assertRaises(series_base.Problem):
+            series_base.write_tarball(self.base, {"chrome/link.cc"}, self.ident, self.out)
+        manifest = dict(self.ident, format=series_base.FORMAT, files={"chrome/link.cc": {"sha256": "0" * 64}}, absent=[])
+        body = json.dumps(manifest).encode()
+        with tarfile.open(self.out, "w:xz") as tar:
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+            link = tarfile.TarInfo("src/chrome/link.cc")
+            link.type, link.linkname = tarfile.SYMTYPE, "../../outside"
+            tar.addfile(link)
+        self.extract_fails("isn't a regular file")
+
+    def test_an_archive_without_a_manifest_is_a_clear_error(self):
+        with tarfile.open(self.out, "w:xz") as tar:
+            info = tarfile.TarInfo("src/x")
+            tar.addfile(info, io.BytesIO(b""))
+        self.extract_fails("isn't a series base archive")
 
     def write_raw(self, files, entries):
         manifest = dict(self.ident, format=series_base.FORMAT, files=files, absent=[])
@@ -265,8 +304,9 @@ class Pins(unittest.TestCase):
         ident = series_base.identity("linux")
         self.assertEqual(ident["cpu"], "x64")
         self.assertRegex(ident["helium_platform"], r"^[0-9a-f]{40}$")
-        self.assertTrue(series_base.asset_name(ident).startswith(f"series-base-{ident['chromium']}-"))
-        self.assertTrue(series_base.asset_name(ident).endswith("-linux-" + ident["helium_platform"][:12] + "-x64.tar.xz"))
+        self.assertEqual(series_base.asset_name(ident, "0123456789ab"),
+                         f"series-base-{ident['chromium']}-{ident['helium_chromium'][:12]}-linux-"
+                         f"{ident['helium_platform'][:12]}-x64-0123456789ab.tar.xz")
 
     def test_mismatched_pins_are_refused(self):
         with tempfile.TemporaryDirectory() as build:
@@ -278,7 +318,8 @@ class Pins(unittest.TestCase):
     def test_every_table_row_names_its_pins(self):
         for row in series_base.read_table():
             ident = {k: row[k] for k in ("platform", "cpu", "chromium", "helium_chromium", "helium_platform")}
-            self.assertEqual(row["asset"], series_base.asset_name(ident))
+            self.assertTrue(row["asset"].startswith(series_base.asset_prefix(ident)), row["asset"])
+            self.assertRegex(row["asset"][len(series_base.asset_prefix(ident)):], r"^[0-9a-f]{12}\.tar\.xz$")
             self.assertEqual(row["tag"], series_base.tag_name(ident))
             self.assertRegex(row["sha256"], r"^[0-9a-f]{64}$")
 

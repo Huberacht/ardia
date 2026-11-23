@@ -6,16 +6,19 @@
 
 pack runs on the builder, read-only on its tree. It takes from the series base (AC_SERIES_BASE, default
 ~/chromium-build/series-base for mac/arm64 and ~/chromium-build/series-base-<os>-<cpu> otherwise) only the files the
-platform's series touches and writes series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>.tar.xz
-into --dest (default: a new temporary directory), its .sha256, and its manifest: each file's sha256, the pins, the
+platform's series touches and writes series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>-<rev12>.tar.xz
+(rev12: the digest of the files it holds, so a re-pack after capture-base gets a new name and the old archive stays
+for the checkouts that pin it) into --dest (default: a new temporary directory), its .sha256, and its manifest: each
+file's sha256, the pins, the
 branding inputs' digest and the commit of this checkout (or, for a plain copy, of <copy>.commit). First it checks
 that the tree is at the pins in engine/patches/build/env.sh and helium-pins.ini (chrome/VERSION, and the Helium
 checkouts beside it when present) and that `series.py check` reproduces the tree from the base; --no-verify skips
 both. A file a patch changes that the base lacks stops it: run `series.py capture-base` first.
 
 publish runs where gh is signed in. It creates the prerelease series-base-<chromium>-<helium12> if needed, uploads
-the archive, its .sha256 and manifest (an asset already there must be identical), and writes the archive's row into
-scripts/engine/series-bases.tsv, for you to commit.
+the archive, its .sha256 and manifest (each one already there must match; an archive of the same files packed
+again keeps the one published), and writes the archive's row into scripts/engine/series-bases.tsv in place of the
+row for the same pins, for you to commit.
 """
 
 import argparse
@@ -108,13 +111,11 @@ def cmd_pack(args):
                         f"--platform {args.platform}` first")
     commit = source_commit()
     dest = os.path.abspath(args.dest or tempfile.mkdtemp(prefix="ac-series-base-"))
-    out = os.path.join(dest, series_base.asset_name(ident))
-    if os.path.exists(out):
-        series_base.die(f"{out} exists; give --dest a new directory")
+    os.makedirs(dest, exist_ok=True)
     fields = dict(ident, branding=series_base.branding_digest(), series_commit=commit,
                   packed_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   steps=len(steps))
-    manifest = series_base.write_tarball(base, set(required) | set(optional), fields, out)
+    manifest, out = series_base.write_tarball(base, set(required) | set(optional), fields, dest)
     digest = series_base.sha256_file(out)
     pathlib.Path(out + ".sha256").write_text(f"{digest}  {os.path.basename(out)}\n")
     pathlib.Path(out + ".manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
@@ -131,21 +132,31 @@ def gh(*args, check=True):
     return result
 
 
+def sidecars(name, digest, manifest, scratch):
+    sha_file = os.path.join(scratch, name + ".sha256")
+    pathlib.Path(sha_file).write_text(f"{digest}  {name}\n")
+    manifest_file = os.path.join(scratch, name + ".manifest.json")
+    pathlib.Path(manifest_file).write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
+    return [sha_file, manifest_file]
+
+
+def download(tag, repo, name, directory):
+    gh("release", "download", tag, "-R", repo, "-p", name, "-D", directory)
+    return os.path.join(directory, name)
+
+
 def cmd_publish(args):
     archive = os.path.abspath(args.archive)
     manifest = series_base.read_manifest(archive)
-    ident = {key: manifest[key] for key in ("platform", "cpu", "chromium", "helium_chromium", "helium_platform")}
-    name = series_base.asset_name(ident)
+    ident = {key: manifest[key] for key in series_base.IDENTITY}
+    name = series_base.asset_name(ident, series_base.content_revision(manifest))
     if os.path.basename(archive) != name:
         series_base.die(f"{archive} should be named {name} for its manifest")
     digest = series_base.sha256_file(archive)
+    tag = series_base.tag_name(ident)
     with tempfile.TemporaryDirectory(prefix="ac-series-publish-") as scratch:
-        series_base.extract(archive, scratch)
-        sha_file = os.path.join(scratch, name + ".sha256")
-        pathlib.Path(sha_file).write_text(f"{digest}  {name}\n")
-        manifest_file = os.path.join(scratch, name + ".manifest.json")
-        pathlib.Path(manifest_file).write_text(json.dumps(manifest, indent=1, sort_keys=True) + "\n")
-        tag = series_base.tag_name(ident)
+        os.mkdir(os.path.join(scratch, "files"))
+        series_base.extract(archive, os.path.join(scratch, "files"))
         if gh("release", "view", tag, "-R", args.repo, "--json", "tagName", check=False).returncode:
             gh("release", "create", tag, "-R", args.repo, "--prerelease", "--latest=false", "--title", tag, "--notes",
                f"The series base for Chromium {ident['chromium']} on Helium {ident['helium_chromium'][:12]}: the files "
@@ -153,19 +164,28 @@ def cmd_publish(args):
                "Not an app release.")
         assets = json.loads(gh("release", "view", tag, "-R", args.repo, "--json", "assets").stdout)["assets"]
         names = {asset["name"] for asset in assets}
+        existing = os.path.join(scratch, "existing")
+        os.mkdir(existing)
+        uploads = []
         if name in names:
-            with tempfile.TemporaryDirectory(prefix="ac-series-existing-") as existing:
-                gh("release", "download", tag, "-R", args.repo, "-p", name, "-D", existing)
-                if series_base.sha256_file(os.path.join(existing, name)) != digest:
-                    series_base.die(f"{tag} already holds a different {name}; pack into a new Helium or Chromium pin, "
-                                    "or delete that asset by hand if it is known bad")
-            print(f"{name} is already on {tag}, identical")
-        uploads = [path for path in (archive, sha_file, manifest_file) if os.path.basename(path) not in names]
+            published = download(tag, args.repo, name, existing)
+            manifest = series_base.read_manifest(published)
+            if series_base.content_revision(manifest) != series_base.content_revision(series_base.read_manifest(archive)):
+                series_base.die(f"{tag} holds a {name} with other files under the same name")
+            digest = series_base.sha256_file(published)
+            print(f"{name} is already on {tag} with the same files; keeping it")
+        else:
+            uploads.append(archive)
+        for sidecar in sidecars(name, digest, manifest, scratch):
+            sidecar_name = os.path.basename(sidecar)
+            if sidecar_name not in names:
+                uploads.append(sidecar)
+            elif pathlib.Path(download(tag, args.repo, sidecar_name, existing)).read_bytes() != \
+                    pathlib.Path(sidecar).read_bytes():
+                series_base.die(f"{tag}'s {sidecar_name} doesn't describe {name}: delete that sidecar and publish again")
         if uploads:
             gh("release", "upload", tag, "-R", args.repo, *uploads)
-    row = {"platform": ident["platform"], "cpu": ident["cpu"], "chromium": ident["chromium"],
-           "helium_chromium": ident["helium_chromium"], "helium_platform": ident["helium_platform"], "tag": tag,
-           "asset": name, "sha256": digest}
+    row = dict(ident, tag=tag, asset=name, sha256=digest)
     series_base.write_row(row)
     print(f"https://github.com/{args.repo}/releases/download/{tag}/{name}")
     print(f"wrote its row into {series_base.TABLE.relative_to(series_base.REPO)}")

@@ -8,6 +8,8 @@ on:
       - "engine/ardiacore/apply.sh"
       - "engine/ardiacore-linux/apply.sh"
       - "engine/ardiacore-linux/copies.tsv"
+      - "packages/ardiacore/ios/page_script.js"
+      - "packages/core-rs/**"
       - "scripts/engine/**"
       - ".github/workflows/engine-series.yml"
   push:
@@ -57,6 +59,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
+      - name: The commit this change starts from
+        id: since
+        env:
+          BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: |
+          if [[ -n "$BEFORE" && "$BEFORE" != 0000000000000000000000000000000000000000 ]] && git fetch -q --depth=1 origin "$BEFORE"; then
+            echo "ref=$BEFORE" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=HEAD^" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/ardia/series-base
@@ -65,4 +77,6 @@ jobs:
       - name: Checker tests
         run: python3 -m unittest discover -s scripts/engine/tests -v
       - name: Every step applies to the published series base with zero fuzz; patches this change edits land exactly
-        run: python3 scripts/engine/series-zero-fuzz.py --platform all --offsets warn --strict-since HEAD^
+        env:
+          SINCE: ${{ steps.since.outputs.ref }}
+        run: python3 scripts/engine/series-zero-fuzz.py --platform all --offsets warn --strict-since "$SINCE"

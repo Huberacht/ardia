@@ -449,9 +449,10 @@ where they are.
 ### The series base archive
 
 `series.py check` needs a whole Chromium tree. CI has none, so each builder's base is published: only the files the
-platform's series touches, as step 3 left them, in `series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>.tar.xz`
+platform's series touches, as step 3 left them, in `series-base-<chromium>-<helium12>-<platform>-<helium-platform12>-<cpu>-<rev12>.tar.xz`
 on the prerelease `series-base-<chromium>-<helium12>` (`helium12` is helium-chromium's commit, `helium-platform12`
-helium-macos's or helium-linux's), with a `.sha256` and a manifest of each file's sha256.
+helium-macos's or helium-linux's, `rev12` the digest of the files it holds, so a re-pack never replaces an archive an
+older checkout pins), with a `.sha256` and a manifest of each file's sha256.
 `scripts/engine/series-bases.tsv` pins each archive's sha256 for its Chromium version, Helium commits, platform and CPU.
 `scripts/engine/series-zero-fuzz.py` reads the pins in `env.sh` and `helium-pins.ini`, fetches and verifies the
 matching archives (cached in `~/.cache/ardia/series-base`), and applies the series to each in a scratch directory:
@@ -462,17 +463,19 @@ one when platform-only steps shift its file (`chromium-cef-carryover`, `chromium
 `chromium-freeze-spares-live-connections` on 158).
 
 The Engine series workflow (`.github/workflows/engine-series.yml`, gated like the builds) runs it on Ubuntu for both
-platforms on every change to `engine/patches`, the layers' `apply.sh` and `copies.tsv`, `engine/chromium` and
-`scripts/engine`, with `--offsets warn --strict-since HEAD^`: a patch the change edits must land exactly, and the 67
+platforms on every change to `engine/patches`, the layers' `apply.sh`, `copies.tsv` and the files it copies from
+outside `engine/`, `engine/chromium` and `scripts/engine`, with `--offsets warn --strict-since` the commit the change
+starts from (a pull request's base, a push's previous head): a patch the change edits must land exactly, and the 67
 patches that already land at an offset on 158 are listed as warnings. `series-zero-fuzz.py --refresh-offsets` rewrites
 those hunks' headers and nothing else (every hunk then lands exactly on at least one platform); that moves both
 engine keys, so it goes in with the next engine build, after which the workflow can drop `--offsets warn`.
 
 **Re-pack the base on every Chromium or Helium move** (a new `CHROMIUM_VERSION` in `env.sh` or a new commit in
-`helium-pins.ini`), and when a step-3 input changes (`03-helium.py`, `ardia_namesub.py`, `ardia_resources.txt`,
-`domsub-keep-store.txt`, `ardia-icons`; the checker notes a digest mismatch). Until then the workflow fails with "no
-series base for …". Also re-pack when the series starts changing a file the archive lacks (a new hook): the
-checker names the file and asks for it. On each builder (the Mac tree and the Linux builder), after step 4, run:
+`helium-pins.ini`): until then the workflow fails with "no series base for …". Re-pack too when a step-3 input changes
+(`03-helium.py`, `ardia_namesub.py`, `ardia_resources.txt`, `domsub-keep-store.txt`, `ardia-icons`). The pins haven't
+moved, so the checker still uses the old archive and only prints a note that the branding digest differs; a check that
+passes then says nothing about the new branding. Also re-pack when the series starts changing a file the archive lacks
+(a new hook): the checker names the file and asks for it. On each builder (the Mac tree and the Linux builder), after step 4, run:
 
     scripts/agent/locked chromium --take <you>
     python3 scripts/engine/series-base-pack.py pack --platform mac --dest <scratch dir>

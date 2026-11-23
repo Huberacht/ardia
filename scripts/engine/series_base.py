@@ -63,9 +63,18 @@ def tag_name(ident):
     return f"series-base-{ident['chromium']}-{ident['helium_chromium'][:12]}"
 
 
-def asset_name(ident):
+def asset_prefix(ident):
     return (f"series-base-{ident['chromium']}-{ident['helium_chromium'][:12]}-{ident['platform']}-"
-            f"{ident['helium_platform'][:12]}-{ident['cpu']}.tar.xz")
+            f"{ident['helium_platform'][:12]}-{ident['cpu']}-")
+
+
+def content_revision(manifest):
+    files = json.dumps({"files": manifest["files"], "absent": manifest["absent"]}, sort_keys=True)
+    return hashlib.sha256(files.encode()).hexdigest()[:12]
+
+
+def asset_name(ident, revision):
+    return f"{asset_prefix(ident)}{revision}.tar.xz"
 
 
 def branding_digest(build=BUILD):
@@ -92,12 +101,28 @@ def safe_relative(path):
         all(part not in ("", ".", "..") for part in path.split("/"))
 
 
+def deleted_paths(step):
+    if step.kind != "chromium":
+        return []
+    out, old = [], None
+    for line in pathlib.Path(step.patch).read_text(encoding="utf-8", errors="surrogateescape").splitlines():
+        if line.startswith("--- "):
+            match = re.match(r"^--- (?:a/)?(\S+)", line)
+            old = match.group(1) if match else None
+        elif line.startswith("+++ ") and line.split()[1] == "/dev/null" and old and old != "/dev/null":
+            out.append(old)
+    return out
+
+
 def base_paths(steps):
     created = set()
     for step in steps:
         created |= step.created()
     required, optional = {}, {}
     for step in steps:
+        for path in deleted_paths(step):
+            if path not in created:
+                required.setdefault(path, step.name)
         for path, is_dir in step.paths():
             if is_dir or path in created:
                 continue
@@ -124,15 +149,18 @@ def read_table(table=TABLE):
     return rows
 
 
+IDENTITY = ("platform", "cpu", "chromium", "helium_chromium", "helium_platform")
+
+
 def find_row(ident, table=TABLE):
     for row in read_table(table):
-        if all(row[key] == ident[key] for key in ("platform", "cpu", "chromium", "helium_chromium", "helium_platform")):
+        if all(row[key] == ident[key] for key in IDENTITY):
             return row
     return None
 
 
 def write_row(row, table=TABLE):
-    rows = [r for r in read_table(table) if r["asset"] != row["asset"]] + [row]
+    rows = [r for r in read_table(table) if any(r[key] != row[key] for key in IDENTITY)] + [row]
     rows.sort(key=lambda r: (r["chromium"], r["platform"], r["cpu"], r["asset"]))
     pathlib.Path(table).write_text("".join("\t".join(r[k] for k in TABLE_FIELDS) + "\n" for r in rows))
 
@@ -152,10 +180,8 @@ def write_tarball(base, paths, manifest_fields, out):
             raise Problem(f"unsafe path in the series: {path!r}")
         full = os.path.join(base, path)
         if os.path.islink(full):
-            target = os.readlink(full)
-            files[path] = {"symlink": target}
-            entries.append((path, None, target))
-        elif os.path.isfile(full):
+            raise Problem(f"{full} is a symlink: the series base holds regular files only")
+        if os.path.isfile(full):
             data = pathlib.Path(full).read_bytes()
             mode = 0o755 if os.stat(full).st_mode & stat.S_IXUSR else 0o644
             files[path] = {"sha256": hashlib.sha256(data).hexdigest(), "mode": f"{mode:o}"}
@@ -164,23 +190,30 @@ def write_tarball(base, paths, manifest_fields, out):
             absent.append(path)
     manifest = dict(manifest_fields, format=FORMAT, files=files, absent=absent)
     body = (json.dumps(manifest, indent=1, sort_keys=True) + "\n").encode()
+    if os.path.isdir(out):
+        out = os.path.join(out, asset_name(manifest_fields, content_revision(manifest)))
+    if os.path.exists(out):
+        raise Problem(f"{out} exists; give a new destination")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with tarfile.open(out, "w:xz", format=tarfile.PAX_FORMAT, preset=9) as tar:
         tar.addfile(_tar_info(MANIFEST, len(body)), io.BytesIO(body))
-        for path, data, extra in entries:
-            if data is None:
-                tar.addfile(_tar_info(FILES_ROOT + path, kind=tarfile.SYMTYPE, mode=0o777, link=extra))
-            else:
-                tar.addfile(_tar_info(FILES_ROOT + path, len(data), extra), io.BytesIO(data))
-    return manifest
+        for path, data, mode in entries:
+            tar.addfile(_tar_info(FILES_ROOT + path, len(data), mode), io.BytesIO(data))
+    return manifest, out
 
 
 def read_manifest(tarball):
-    with tarfile.open(tarball, "r:xz") as tar:
-        member = tar.getmember(MANIFEST)
-        manifest = json.loads(tar.extractfile(member).read())
-    if manifest.get("format") != FORMAT:
-        raise Problem(f"{tarball}: manifest format {manifest.get('format')}, expected {FORMAT}")
+    try:
+        with tarfile.open(tarball, "r:xz") as tar:
+            member = tar.getmember(MANIFEST)
+            if not member.isfile():
+                raise Problem(f"{tarball}: {MANIFEST} isn't a file")
+            manifest = json.loads(tar.extractfile(member).read())
+    except (OSError, KeyError, ValueError, tarfile.TarError) as error:
+        raise Problem(f"{tarball} isn't a series base archive: {error}")
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT or \
+            not isinstance(manifest.get("files"), dict) or not isinstance(manifest.get("absent"), list):
+        raise Problem(f"{tarball}: not a format {FORMAT} series base manifest")
     return manifest
 
 
@@ -189,6 +222,8 @@ def extract(tarball, dest):
     files = manifest["files"]
     seen = set()
     dest = os.path.realpath(dest)
+    if os.listdir(dest):
+        raise Problem(f"{dest} isn't empty")
     with tarfile.open(tarball, "r:xz") as tar:
         for member in tar:
             if member.name == MANIFEST:
@@ -198,28 +233,23 @@ def extract(tarball, dest):
             path = member.name[len(FILES_ROOT):]
             if not safe_relative(path) or path not in files or path in seen:
                 raise Problem(f"{tarball}: entry {member.name!r} isn't in its manifest, or is unsafe or repeated")
+            if not member.isfile():
+                raise Problem(f"{tarball}: {path} isn't a regular file")
             seen.add(path)
+            parent = dest
+            for part in path.split("/")[:-1]:
+                parent = os.path.join(parent, part)
+                if os.path.islink(parent) or (os.path.exists(parent) and not os.path.isdir(parent)):
+                    raise Problem(f"{tarball}: {path} goes through something that isn't a directory")
+                if not os.path.exists(parent):
+                    os.mkdir(parent)
+            data = tar.extractfile(member).read()
+            if hashlib.sha256(data).hexdigest() != files[path].get("sha256"):
+                raise Problem(f"{tarball}: {path} doesn't match its manifest's sha256")
             target = os.path.join(dest, path)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            if os.path.realpath(os.path.dirname(target)) != os.path.dirname(target) or \
-                    not os.path.dirname(target).startswith(dest + os.sep):
-                raise Problem(f"{tarball}: {path} leaves the scratch tree")
-            entry = files[path]
-            if member.issym():
-                link = member.linkname
-                resolved = os.path.normpath(os.path.join(os.path.dirname(target), link))
-                if entry.get("symlink") != link or os.path.isabs(link) or not resolved.startswith(dest + os.sep):
-                    raise Problem(f"{tarball}: symlink {path} -> {link} is unsafe or doesn't match its manifest")
-                os.symlink(link, target)
-            elif member.isfile():
-                data = tar.extractfile(member).read()
-                if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
-                    raise Problem(f"{tarball}: {path} doesn't match its manifest's sha256")
-                with open(target, "xb") as handle:
-                    handle.write(data)
-                os.chmod(target, int(entry.get("mode", "644"), 8) & 0o755)
-            else:
-                raise Problem(f"{tarball}: {path} is neither a file nor a symlink")
+            with open(target, "xb") as handle:
+                handle.write(data)
+            os.chmod(target, int(files[path].get("mode", "644"), 8) & 0o755)
     missing = sorted(set(files) - seen)
     if missing:
         raise Problem(f"{tarball}: its manifest lists {len(missing)} files it doesn't hold, e.g. {missing[0]}")

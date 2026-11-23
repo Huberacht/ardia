@@ -53,11 +53,13 @@ class Result:
 
 
 def git_env(tree):
-    return dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(os.path.abspath(tree)), LC_ALL="C")
+    return dict(os.environ, GIT_CEILING_DIRECTORIES=os.path.dirname(os.path.abspath(tree)), LC_ALL="C",
+                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
 
 def run_git_apply(args, patch, tree):
-    return subprocess.run(["git", "apply", "--whitespace=nowarn", *args, os.path.abspath(patch)],
+    return subprocess.run(["git", "-c", "apply.ignoreWhitespace=no", "apply", "--whitespace=nowarn", *args,
+                           os.path.abspath(patch)],
                           cwd=tree, env=git_env(tree), capture_output=True, text=True)
 
 
@@ -249,7 +251,8 @@ def fetch(row, cache, repo):
     if os.path.exists(path) and series_base.sha256_file(path) == row["sha256"]:
         return path
     url = f"https://github.com/{repo}/releases/download/{row['tag']}/{row['asset']}"
-    partial = path + ".part"
+    handle, partial = tempfile.mkstemp(prefix=row["asset"] + ".", suffix=".part", dir=cache)
+    os.close(handle)
     try:
         with urllib.request.urlopen(url, timeout=120) as response, open(partial, "wb") as handle:
             shutil.copyfileobj(response, handle)
@@ -258,6 +261,7 @@ def fetch(row, cache, repo):
                                                    "-O", partial, "--clobber"], capture_output=True).returncode == 0:
             pass
         else:
+            os.unlink(partial)
             raise series_base.Problem(f"couldn't download {url}: {error}")
     got = series_base.sha256_file(partial)
     if got != row["sha256"]:
@@ -387,10 +391,12 @@ def main():
         print(f"FAIL offset {name}")
         for line in describe(verdict):
             print(f"       {line}")
-    if args.refresh_offsets:
+    if args.refresh_offsets and max(codes) == 0:
         for patch, offsets in sorted(moves.items()):
             refresh_offsets(patch, offsets)
             print(f"refreshed {len(offsets)} hunk headers in {os.path.basename(patch)}")
+    if args.refresh_offsets and max(codes):
+        print("not refreshing: a platform's check failed, so its offsets are unknown")
     if failing:
         print(f"FAIL: {len(failing)} patches land hunks at an offset on every platform that applies them")
         codes.append(1)
