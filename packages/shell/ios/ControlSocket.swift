@@ -299,7 +299,10 @@ final class ControlSocket {
 
   private func resolved(_ id: Int, _ peer: ControlPeer, _ token: audit_token_t, _ generation: Int) {
     guard let fd = resolving.removeValue(forKey: id) else { return }
-    guard bound != nil, generation == self.generation else { return Darwin.close(fd) }
+    guard bound != nil, generation == self.generation else {
+      Darwin.close(fd)
+      return
+    }
     let store = approvalStore()
     let now = Date()
     let approvals = store?.load(now: now) ?? []
