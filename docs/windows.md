@@ -894,7 +894,8 @@ is plain Chromium.
   CPU's zip with its SHA-256, `fetch-engine.ps1` downloads and checks it, and the Windows workflow assembles the app
   with it, launches it with the self-check (which then loads a page through the engine) and runs the tour's pages
   part. The release is a draft, so only the repository's own runs can fetch it; a fork's pull request skips those
-  steps. A new engine build is a new release and a new `prebuilt.json`, whose `source` is the commit it was built from.
+  steps. A new engine build is a new release and a new `prebuilt.json`, whose `source` is the commit it was built from
+  and `key` that commit's Windows engine key (`engine/engine-key.sh --platform win <source>`).
 - A tab opened with no address shows a committed `about:blank` until its first load, which replaces that entry, so
   the first real page reports `canGoBack: false` and Back never leads to a blank page (the Mac's "ahead blank" rule).
   `downloadNavigation`'s `committedUrl` is the tab's last committed page, empty while it has only that opening page.
@@ -1407,7 +1408,7 @@ does run in a test instance. A scratch folder with the marker must get both powe
   self-check launch.
 - A pull request gets the fast run. For a pull request from a fork the `gate` job waits for a vouch, like the iPhone
   build; a branch of this repository skips it. Then a Linux job (`javascript`) bundles the app's JavaScript with
-  Metro, once for both CPUs, while `identity` reads the version and, live, the `full-ci` label. After `identity`, each
+  Metro, once for both CPUs, while `identity` reads the version and the `full-ci` label (from the event, or live on a re-run). After `identity`, each
   CPU's build job (`app`, `arm64-app`, both on x64 runners) looks in the Actions cache for an app built from the same native code
   (`windows-app-<cpu>-<hash>`; the hash covers `apps/browser/windows`, each package's `package.json` and `windows`
   folder, the lockfile, the patches and the workflow) and compiles only when none is there, then saves it.
