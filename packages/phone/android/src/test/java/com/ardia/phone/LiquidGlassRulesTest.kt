@@ -30,6 +30,14 @@ class LiquidGlassRulesTest {
     }
 
     @Test
+    fun glassOverAPageRecordsThePageFromAndroid13WhateverTheLensFlag() {
+        assertTrue(LiquidGlassRules.pageLive(sdk = 34, classic = false))
+        assertTrue(LiquidGlassRules.pageLive(sdk = 33, classic = false))
+        assertFalse("Android 12 keeps the solid page mode the M3 needed", LiquidGlassRules.pageLive(sdk = 32, classic = false))
+        assertFalse(LiquidGlassRules.pageLive(sdk = 34, classic = true))
+    }
+
+    @Test
     fun flatGlassIsOnlyAskedForByItsLaunchArgument() {
         assertTrue(LiquidGlassRules.flatAsked(mapOf("ArdiaFlatGlass" to true)))
         assertFalse(LiquidGlassRules.flatAsked(mapOf("ArdiaFlatGlass" to "true")))

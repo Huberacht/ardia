@@ -1669,6 +1669,8 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     internal open fun lensReach(): Float = 0f
 
+    internal open fun pageLive(): Boolean = false
+
     internal open fun lensEffect(marginPx: Float, scale: Float): RenderEffect? = null
 
     internal open fun forgetLayer() {
@@ -1720,7 +1722,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             hardware = canvas.isHardwareAccelerated,
             insideSource = from != null && isInside(from),
             holdsPage = blurs && from?.holdsPage == true,
-            pageMode = FrostSources.pageMode,
+            pageMode = if (pageLive()) FrostSources.PageMode.Live else FrostSources.pageMode,
             lookOff = lookIsOff,
             onScreen = onScreen(),
         )

@@ -31,7 +31,7 @@ export type GlassSurface = "glass" | "classic";
 
 export type LookDynamicColor = { dynamic: { light: string; dark: string } };
 
-export type ClassicChrome = { edgeWidth?: number; edge?: string | LookDynamicColor; shadowRadius?: number; shadowY?: number; shadow?: string | LookDynamicColor };
+export type ClassicChrome = { fill?: string | LookDynamicColor; edgeWidth?: number; edge?: string | LookDynamicColor; shadowRadius?: number; shadowY?: number; shadow?: string | LookDynamicColor };
 
 export type GlassProps = FrostProps & { shape?: GlassShape; tint?: string; interactive?: boolean; surface?: GlassSurface; tinted?: boolean; barShadow?: boolean; classicChrome?: ClassicChrome; shown?: boolean; shownMs?: number };
 

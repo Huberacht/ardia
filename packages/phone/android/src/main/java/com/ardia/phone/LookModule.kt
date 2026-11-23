@@ -254,6 +254,7 @@ class LookModule : Module() {
             Prop("surface") { view: GlassView, value: String? -> view.surface = value }
             Prop("tinted") { view: GlassView, value: Boolean? -> view.tinted = value == true }
             Prop("barShadow") { view: GlassView, value: Boolean? -> view.barShadow = value == true }
+            Prop("classicChrome") { view: GlassView, value: Map<String, Any?>? -> view.classicFill = GlassRules.chromeFill(value) }
             Prop("shown") { view: GlassView, value: Boolean? -> view.shown = value ?: true }
             Prop("shownMs") { view: GlassView, value: Float? -> view.shownMs = (value ?: GlassRules.DEFAULT_SHOWN_MS).coerceAtLeast(0f) }
             OnViewDidUpdateProps { view -> view.update() }

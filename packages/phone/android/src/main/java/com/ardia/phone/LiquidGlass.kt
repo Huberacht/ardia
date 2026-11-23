@@ -61,6 +61,8 @@ internal object LiquidGlassRules {
         else -> Render.Lens
     }
 
+    fun pageLive(sdk: Int, classic: Boolean): Boolean = !classic && sdk >= LENS_MIN_SDK
+
     fun lensWanted(sdk: Int, classic: Boolean, flat: Boolean, livePath: Boolean): Boolean =
         livePath && render(sdk, classic, flat, blurs = true) == Render.Lens
 

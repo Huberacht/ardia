@@ -37,6 +37,9 @@ import {
   tabsLayout,
   tabsMotion,
   floatingBarLayout,
+  FrostSource,
+  GlassSource,
+  PAGE_FROST,
   pageReportsDrawn,
   useDesign,
   usePageUnderBars,
@@ -195,6 +198,7 @@ export const BrowsingScreen = memo(function BrowsingScreen({ tab }: { tab: Brows
   return (
     <View style={[StyleSheet.absoluteFill, pulls ? null : { backgroundColor: theme.canvas }]} onLayout={() => pageLaidOut(tab.id)}>
       <Shade shaded={menuOpen || dockedSearch || readerId === tab.id || pressing || tabsMenu}>
+        <FrostSource name={PAGE_FROST} style={StyleSheet.absoluteFill} pointerEvents="box-none" collapsable={false}>
         <PageStack pulledTab={pulls ? tab.id : null} barTop={barTop}>
         <PagerBackdrop />
         <Animated.View style={[StyleSheet.absoluteFill, styles.outgoing, { backgroundColor: theme.canvas }, pager.outgoing]}>
@@ -212,6 +216,8 @@ export const BrowsingScreen = memo(function BrowsingScreen({ tab }: { tab: Brows
         ))}
         <PageProgressLine tabId={tab.id} top={insets.top} />
         </PageStack>
+        </FrostSource>
+        <GlassSource name={PAGE_FROST}>
         {materialBarHosted && design === "material" ? null : (
         <GestureDetector gesture={barGesture}>
           <Animated.View
@@ -282,6 +288,7 @@ export const BrowsingScreen = memo(function BrowsingScreen({ tab }: { tab: Brows
           </Animated.View>
         </GestureDetector>
         )}
+        </GlassSource>
         {finding && design !== "material" ? <FindBar tabId={tab.id} /> : null}
         {pulls ? <PullBlocker /> : null}
       </Shade>

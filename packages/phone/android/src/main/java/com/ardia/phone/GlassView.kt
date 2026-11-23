@@ -29,10 +29,32 @@ internal object GlassRules {
     fun radiusDp(shape: String?, cornerRadiusDp: Float, widthDp: Float, heightDp: Float): Float =
         if (shape == "rounded") cornerRadiusDp.coerceAtLeast(0f) else min(widthDp, heightDp).coerceAtLeast(0f) / 2f
 
-    fun classicFill(tinted: Boolean, dark: Boolean, lookSurface: Int): Int = when {
+    fun classicFill(tinted: Boolean, dark: Boolean, lookSurface: Int, chromeFill: Pair<Int, Int>? = null): Int = when {
         tinted -> lookSurface
+        chromeFill != null -> if (dark) chromeFill.second else chromeFill.first
         dark -> 0xFF000000.toInt()
         else -> 0xFFFFFFFF.toInt()
+    }
+
+    fun hex(raw: String?): Int? {
+        val digits = raw?.trim()?.removePrefix("#") ?: return null
+        if (digits.any { !it.isLetterOrDigit() }) return null
+        val value = digits.toLongOrNull(16) ?: return null
+        return when (digits.length) {
+            6 -> (0xFF000000L or value).toInt()
+            8 -> (((value and 0xFFL) shl 24) or (value ushr 8)).toInt()
+            else -> null
+        }
+    }
+
+    fun chromeFill(classicChrome: Map<String, Any?>?): Pair<Int, Int>? = when (val fill = classicChrome?.get("fill")) {
+        is String -> hex(fill)?.let { it to it }
+        is Map<*, *> -> (fill["dynamic"] as? Map<*, *>)?.let { both ->
+            val light = hex(both["light"] as? String)
+            val dark = hex(both["dark"] as? String)
+            if (light != null && dark != null) light to dark else null
+        }
+        else -> null
     }
 
     fun classicEdge(dark: Boolean): Int = if (dark) 0x1FFFFFFF else 0x1F000000
@@ -56,6 +78,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     var tinted: Boolean = false
     var barShadow: Boolean = false
     var shownMs: Float = GlassRules.DEFAULT_SHOWN_MS
+    var classicFill: Pair<Int, Int>? = null
     var surface: String? = null
         set(value) {
             if (field == value) return
@@ -98,6 +121,8 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     override fun canBlur(): Boolean = !isClassic && super.canBlur()
 
     private val lensOn: Boolean get() = LiquidGlassRules.lensWanted(Build.VERSION.SDK_INT, isClassic, GlassLaunch.flat, livePath = true)
+
+    override fun pageLive(): Boolean = LiquidGlassRules.pageLive(Build.VERSION.SDK_INT, isClassic)
 
     override fun lensReach(): Float {
         if (!lensOn) return 0f
@@ -222,7 +247,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
         outlinePath.reset()
         outlinePath.addRoundRect(box, radiusPx, radiusPx, Path.Direction.CW)
         paint.style = Paint.Style.FILL
-        paint.color = GlassRules.classicFill(tinted, dark, look.surface.resolve(dark).toArgb())
+        paint.color = GlassRules.classicFill(tinted, dark, look.surface.resolve(dark).toArgb(), classicFill)
         canvas.drawPath(outlinePath, paint)
         val edge = GlassRules.CLASSIC_EDGE_DP * density
         box.inset(edge / 2f, edge / 2f)
