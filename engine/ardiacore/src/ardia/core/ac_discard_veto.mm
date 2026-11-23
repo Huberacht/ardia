@@ -1,8 +1,6 @@
 #include "ardia/core/ac_discard_veto.h"
 
-#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "components/download/public/common/download_item.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "content/public/browser/browser_context.h"
@@ -13,6 +11,10 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/frame/sudden_termination_disabler_type.mojom-shared.h"
+
+namespace performance_manager::policies {
+extern bool (*g_ardia_keeps_page)(const PageNode* page_node);
+}
 
 namespace ardiacore {
 
@@ -97,8 +99,7 @@ void NotePostedDocument(content::NavigationHandle* handle) {
 }
 
 void InstallDiscardVeto() {
-  performance_manager::policies::SetEmbedderDiscardVeto(
-      base::BindRepeating(&PageVetoed));
+  performance_manager::policies::g_ardia_keeps_page = &PageVetoed;
 }
 
 ScopedDiscardVetoBypass::ScopedDiscardVetoBypass() : was_bypassed_(g_bypassed) {
