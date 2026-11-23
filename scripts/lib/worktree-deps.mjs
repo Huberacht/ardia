@@ -97,14 +97,44 @@ export function workspacePatterns(workspaceYaml) {
   return patterns;
 }
 
+function insideReal(realRoot, target) {
+  let current = target;
+  while (!lstatOrNull(current)) current = path.dirname(current);
+  try {
+    const relative = path.relative(realRoot, fs.realpathSync(current));
+    return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  } catch {
+    return false;
+  }
+}
+
+export function checkedProject(root, project) {
+  if (typeof project !== "string") throw new Error(`workspace project ${JSON.stringify(project)} isn't a path`);
+  const resolved = path.resolve(root, project);
+  const relative = path.relative(root, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !insideReal(fs.realpathSync(root), resolved)) {
+    throw new Error(`workspace project "${project}" leaves the worktree ${root}`);
+  }
+  return relative.split(path.sep).join("/");
+}
+
 export function workspaceProjects(root, workspaceYaml) {
   const patterns = workspacePatterns(workspaceYaml);
-  const excluded = new Set(patterns.filter((p) => p.startsWith("!")).map((p) => p.slice(1).replace(/\/$/, "")));
+  const baseOf = (pattern) => {
+    const plain = pattern.replace(/^!/, "").replace(/\/$/, "");
+    const base = plain.endsWith("/*") ? plain.slice(0, -2) : plain;
+    if (/[*?[\]{}]/.test(base)) throw new Error(`unsupported workspace pattern "${pattern}" in pnpm-workspace.yaml; worktree-setup takes literal paths and dir/*`);
+    return { base, children: plain.endsWith("/*") };
+  };
+  const excluded = new Set(patterns.filter((p) => p.startsWith("!")).map((p) => checkedProject(root, baseOf(p).base)));
   const projects = new Set([""]);
   for (const pattern of patterns.filter((p) => !p.startsWith("!"))) {
-    const candidates = pattern.endsWith("/*") ? listDirs(path.join(root, pattern.slice(0, -2))).map((name) => `${pattern.slice(0, -2)}/${name}`) : [pattern.replace(/\/$/, "")];
+    const { base, children } = baseOf(pattern);
+    checkedProject(root, base);
+    const candidates = children ? listDirs(path.join(root, base)).map((name) => `${base}/${name}`) : [base];
     for (const candidate of candidates) {
-      if (!excluded.has(candidate) && fs.existsSync(path.join(root, candidate, "package.json"))) projects.add(candidate);
+      const project = checkedProject(root, candidate);
+      if (!excluded.has(project) && fs.existsSync(path.join(root, project, "package.json"))) projects.add(project);
     }
   }
   return [...projects].sort();
@@ -235,20 +265,11 @@ export function ownInstallDirs(worktree, projects, replace) {
   return dirs;
 }
 
-function prepareTarget(worktree, projects, previous, replace) {
-  const managed = [...new Set([...projects, ...(previous?.projects ?? [])])];
-  const dirs = managed.map((project) => path.join(worktree, project, "node_modules")).filter((dir) => lstatOrNull(dir));
-  if (previous === null) {
-    if (dirs.length && !replace) {
-      const what = lstatOrNull(dirs[0]).isSymbolicLink() ? "is a link to a whole node_modules" : "is its own install";
-      throw new Error(`${dirs[0]} ${what}; pass --replace to swap it for per-entry links`);
-    }
-    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
-    return;
-  }
-  const dropped = new Set(managed.filter((project) => !projects.includes(project)).map((project) => path.join(worktree, project, "node_modules")));
-  for (const dir of dirs) {
-    if (lstatOrNull(dir).isSymbolicLink() || dropped.has(dir)) {
+function prepareTarget(worktree, projects, previous) {
+  for (const project of previous?.projects ?? []) {
+    const dir = path.join(worktree, project, "node_modules");
+    if (!lstatOrNull(dir)) continue;
+    if (lstatOrNull(dir).isSymbolicLink() || !projects.includes(project)) {
       fs.rmSync(dir, { recursive: true, force: true });
       continue;
     }
@@ -298,7 +319,9 @@ export function isOurGuard(text) {
 export function checkGuardSlot(worktree) {
   const tracked = spawnSync("git", ["-C", worktree, "ls-files", "--error-unmatch", GUARD_FILE], { stdio: "ignore" }).status === 0;
   if (tracked) throw new Error(`${worktree} tracks its own ${GUARD_FILE}, so its pnpm install can't be blocked; link it by hand or not at all`);
-  const existing = readIfExists(path.join(worktree, GUARD_FILE));
+  const stat = lstatOrNull(path.join(worktree, GUARD_FILE));
+  if (stat && !stat.isFile()) throw new Error(`${path.join(worktree, GUARD_FILE)} isn't a regular file; move it away first`);
+  const existing = stat ? readIfExists(path.join(worktree, GUARD_FILE)) : null;
   if (existing !== null && !isOurGuard(existing)) {
     throw new Error(`${path.join(worktree, GUARD_FILE)} is someone else's pnpmfile; move it away first (setup would replace it and --undo would delete it)`);
   }
@@ -387,7 +410,7 @@ export function pnpmInstall(staging) {
 function stageInputs(staging, files) {
   for (const [name, content] of files) {
     fs.mkdirSync(path.dirname(path.join(staging, name)), { recursive: true });
-    fs.writeFileSync(path.join(staging, name), content);
+    fs.writeFileSync(path.join(staging, name), content, { mode: name === ".npmrc" ? 0o600 : 0o644, flag: "wx" });
   }
 }
 
@@ -416,6 +439,7 @@ export function buildCache({ worktree, cacheRoot, install = pnpmInstall, runtime
   try {
     stageInputs(staging, inputs.files);
     install(staging);
+    fs.rmSync(path.join(staging, ".npmrc"), { force: true });
     const installed = readIfExists(path.join(staging, "node_modules", ".pnpm", "lock.yaml"));
     if (installed === null || normalizeLockfile(installed) !== normalizeLockfile(inputs.lockfile)) throw new Error("the cache install's lockfile doesn't match the worktree's");
     setWritable(inputs.projects.map((project) => path.join(staging, project, "node_modules")).filter((dir) => fs.existsSync(dir)), false);
@@ -473,8 +497,8 @@ function planAll(worktree, sourceRoot, projects) {
   return plans;
 }
 
-function linkInto(worktree, sourceRoot, key, projects, plans, previous, replace) {
-  prepareTarget(worktree, projects, previous, replace);
+function linkInto(worktree, sourceRoot, key, projects, plans, previous) {
+  prepareTarget(worktree, projects, previous);
   const rootModules = path.join(worktree, "node_modules");
   fs.mkdirSync(rootModules, { recursive: true });
   const markerFile = path.join(rootModules, MARKER);
@@ -504,7 +528,8 @@ export function setupWorktree(worktreeArg, options = {}) {
   const inputs = installInputs(worktree, runtime);
   const key = dependencyKey(inputs);
   const previous = markerOf(worktree);
-  const ownInstall = previous === null ? ownInstallDirs(worktree, inputs.projects, options.replace ?? false) : [];
+  const previouslyManaged = (previous?.projects ?? []).map((project) => checkedProject(worktree, project));
+  const ownInstall = ownInstallDirs(worktree, inputs.projects.filter((project) => !previouslyManaged.includes(project)), options.replace ?? false);
 
   fs.mkdirSync(cacheRoot, { recursive: true });
   dropNeverIndex(cacheRoot);
@@ -527,13 +552,16 @@ export function setupWorktree(worktreeArg, options = {}) {
     fs.utimesSync(stamp, new Date(), new Date());
     const claimed = readJson(recordFile(cacheRoot, identity))?.keys ?? [];
     const record = writeClaim(cacheRoot, worktree, identity, [...new Set([...claimed, ...(previous?.key ? [previous.key] : []), key])]);
-    const linked = linkInto(worktree, fs.realpathSync(final), key, inputs.projects, plans, previous, options.replace ?? false);
+    const linked = linkInto(worktree, fs.realpathSync(final), key, inputs.projects, plans, previous);
     writeClaim(cacheRoot, worktree, identity, [key]);
     return { record, ...linked };
   });
 
-  fs.writeFileSync(path.join(worktree, GUARD_FILE), GUARD_SOURCE);
-  const neverIndexed = [worktree, path.join(os.homedir(), "ardia-scratch"), path.join(os.homedir(), "ardia-wt")].filter(dropNeverIndex);
+  const guardPartial = path.join(worktree, `${GUARD_FILE}.${process.pid}.partial`);
+  fs.writeFileSync(guardPartial, GUARD_SOURCE, { flag: "wx" });
+  fs.renameSync(guardPartial, path.join(worktree, GUARD_FILE));
+  const home = options.home ?? os.homedir();
+  const neverIndexed = [worktree, path.join(home, "ardia-scratch"), path.join(home, "ardia-wt")].filter(dropNeverIndex);
   const exclude = excludeFromGit(worktree, [GUARD_FILE, NEVER_INDEX]);
 
   const ms = Date.now() - started;
@@ -552,10 +580,10 @@ export function undoWorktree(worktreeArg, { log = console.log } = {}) {
   const worktree = fs.realpathSync(worktreeArg);
   const marker = markerOf(worktree);
   if (!marker) throw new Error(`${worktree} isn't linked by worktree-setup (no node_modules/${MARKER})`);
-  const projects = new Set(["", ...(marker.projects ?? [])]);
+  const projects = new Set(["", ...(Array.isArray(marker.projects) ? marker.projects : [])].map((project) => checkedProject(worktree, project)));
   for (const project of [...projects].sort().reverse()) fs.rmSync(path.join(worktree, project, "node_modules"), { recursive: true, force: true });
   const guard = path.join(worktree, GUARD_FILE);
-  if (isOurGuard(readIfExists(guard))) fs.rmSync(guard);
+  if (lstatOrNull(guard)?.isFile() && isOurGuard(readIfExists(guard))) fs.rmSync(guard);
   if (marker.root) {
     const cacheRoot = path.dirname(marker.root);
     withKernelLock(registryLock(cacheRoot), () => fs.rmSync(recordFile(cacheRoot, identityOf(worktree)), { force: true }));
@@ -573,6 +601,19 @@ export function worktreeStatus(worktreeArg, { runtime = runtimeOf() } = {}) {
   if (!marker.root || !fs.existsSync(path.join(marker.root, CACHE_STAMP))) problems.push(`the cached install ${marker.root} is gone; run worktree-setup again`);
   if (marker.state !== "linked") problems.push("setup didn't finish; run worktree-setup again");
   if (readIfExists(path.join(worktree, GUARD_FILE)) !== GUARD_SOURCE) problems.push(`${GUARD_FILE} is missing or changed, so pnpm install isn't blocked`);
+  if (marker.root && fs.existsSync(marker.root) && Array.isArray(marker.projects)) {
+    for (const plan of planAll(worktree, marker.root, marker.projects.map((project) => checkedProject(worktree, project)))) {
+      for (const op of plan.ops.filter((o) => o.type === "symlink")) {
+        const name = path.relative(worktree, op.path);
+        let actual = null;
+        try {
+          actual = fs.readlinkSync(op.path);
+        } catch {}
+        if (actual === null) problems.push(`${name} is missing (or isn't a link); run worktree-setup again`);
+        else if (actual !== op.target) problems.push(`${name} points at ${actual}, not ${op.target}; run worktree-setup again`);
+      }
+    }
+  }
   return { linked: true, worktree, marker, key, problems };
 }
 

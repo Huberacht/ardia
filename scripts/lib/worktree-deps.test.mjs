@@ -83,7 +83,8 @@ function harness() {
     fakeInstall(staging);
   };
   const build = ({ worktree, cacheRoot: cache, runtime }) => buildCache({ worktree, cacheRoot: cache, runtime, install });
-  const setup = (worktree, extra = {}) => setupWorktree(worktree, { cacheRoot, build, runtime: RUNTIME, log: quiet, ...extra });
+  const home = fresh("home");
+  const setup = (worktree, extra = {}) => setupWorktree(worktree, { cacheRoot, build, runtime: RUNTIME, log: quiet, home, ...extra });
   return { cacheRoot, installs, setup };
 }
 
@@ -593,6 +594,7 @@ test("every workspace project's node_modules is made read-only, literal and deep
     cacheRoot,
     runtime: RUNTIME,
     log: quiet,
+    home: fresh("home"),
     build: ({ worktree: from, cacheRoot: cache, runtime }) =>
       buildCache({ worktree: from, cacheRoot: cache, runtime, install: (staging) => {
         fakeInstall(staging);
@@ -645,7 +647,8 @@ test("concurrent setups on one new key build it once under the pod lock, and exc
     for (const file of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) write(path.join(worktree, file), file === "pnpm-lock.yaml" ? LOCKFILE : file === "package.json" ? "{}" : "packages: []\n");
     return worktree;
   });
-  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, AC_LOCK_ROOT: path.join(dir, "locks") };
+  fs.mkdirSync(path.join(dir, "home"));
+  const env = { ...process.env, HOME: path.join(dir, "home"), PATH: `${bin}${path.delimiter}${process.env.PATH}`, AC_LOCK_ROOT: path.join(dir, "locks") };
   const cli = path.join(here, "..", "agent", "worktree-setup");
   const runs = worktrees.map(
     (worktree) =>
@@ -678,4 +681,128 @@ test("pnpm install fails loudly in a linked worktree and leaves its links alone"
   assert.match(run.stdout + run.stderr, /pnpm install is\s+blocked here/);
   assert.equal(snapshot(path.join(worktree, "node_modules")), before);
   assert.equal(snapshot(result.sourceRoot), treeBefore);
+});
+
+test("CR1: an unsupported workspace pattern fails setup instead of matching nothing", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, "pnpm-workspace.yaml"), "packages:\n  - packages/**\n");
+  assert.throws(() => setup(worktree), /unsupported workspace pattern "packages\/\*\*"/);
+  assert.ok(!fs.existsSync(path.join(worktree, "node_modules")));
+});
+
+test("CR2: a workspace project outside the worktree fails setup before anything is read or written", () => {
+  const { setup } = harness();
+  const parent = fresh("parent");
+  const worktree = path.join(parent, "wt");
+  fs.cpSync(makeWorktree(), worktree, { recursive: true });
+  write(path.join(parent, "sibling", "package.json"), "{}");
+  write(path.join(worktree, "pnpm-workspace.yaml"), "packages:\n  - ../sibling\n");
+  assert.throws(() => setup(worktree), /leaves the worktree/);
+  write(path.join(worktree, "pnpm-workspace.yaml"), "packages:\n  - escape\n");
+  fs.symlinkSync(path.join(parent, "sibling"), path.join(worktree, "escape"));
+  assert.throws(() => setup(worktree), /leaves the worktree/);
+});
+
+test("CR3: undo refuses a marker whose inventory leaves the worktree, before changing anything", () => {
+  const { setup } = harness();
+  const parent = fresh("parent");
+  const worktree = path.join(parent, "wt");
+  fs.cpSync(makeWorktree(), worktree, { recursive: true });
+  setup(worktree);
+  const victim = path.join(parent, "victim", "node_modules", "keep.js");
+  write(victim, "x");
+  const markerFile = path.join(worktree, "node_modules", MARKER);
+  const marker = JSON.parse(fs.readFileSync(markerFile, "utf8"));
+  fs.writeFileSync(markerFile, JSON.stringify({ ...marker, projects: [...marker.projects, "../victim"] }));
+  assert.throws(() => undoWorktree(worktree, { log: quiet }), /leaves the worktree/);
+  assert.ok(fs.existsSync(victim));
+  assert.ok(fs.existsSync(path.join(worktree, "node_modules", "react")), "nothing was removed");
+});
+
+test("CR4: re-setup needs --replace before it removes a newly managed project's own install", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  setup(worktree);
+  write(path.join(worktree, "packages", "kit", "node_modules", "own", "index.js"), "mine");
+  write(path.join(worktree, "packages", "kit", "package.json"), '{"name":"@ardia/kit","dependencies":{"left-pad":"1"}}');
+  const install = (staging) => {
+    fakeInstall(staging);
+    write(path.join(staging, "packages", "kit", "node_modules", "left-pad", "index.js"), "x");
+  };
+  const build = ({ worktree: from, cacheRoot, runtime }) => buildCache({ worktree: from, cacheRoot, runtime, install });
+  assert.throws(() => setup(worktree, { build }), /packages\/kit\/node_modules is its own install; pass --replace/);
+  assert.equal(fs.readFileSync(path.join(worktree, "packages", "kit", "node_modules", "own", "index.js"), "utf8"), "mine");
+  setup(worktree, { build, replace: true });
+  assert.ok(fs.lstatSync(path.join(worktree, "packages", "kit", "node_modules", "left-pad")).isSymbolicLink());
+});
+
+test("CR5: a failed cleanup during re-setup keeps the old marker, so undo still works", (t) => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  setup(worktree);
+  write(path.join(worktree, "packages", "base", "package.json"), '{"name":"@ardia/base","version":"2"}');
+  const realRm = fs.rmSync;
+  t.mock.method(fs, "rmSync", (file, ...rest) => {
+    if (String(file).includes(`${path.sep}apps${path.sep}web${path.sep}node_modules${path.sep}`)) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+    return realRm(file, ...rest);
+  });
+  assert.throws(() => setup(worktree), /busy/);
+  t.mock.restoreAll();
+  assert.ok(markerState(worktree).key, "the old marker is still there");
+  undoWorktree(worktree, { log: quiet });
+  assert.ok(!fs.existsSync(path.join(worktree, "apps", "web", "node_modules")));
+});
+
+test("CR6: a pnpmfile symlink, dangling or not, is refused and never written through", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  const target = path.join(fresh("outside"), "pnpmfile.cjs");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.symlinkSync(target, path.join(worktree, GUARD_FILE));
+  assert.throws(() => setup(worktree), /isn't a regular file/);
+  assert.ok(!fs.existsSync(target));
+  fs.writeFileSync(target, GUARD_SOURCE);
+  assert.throws(() => setup(worktree), /isn't a regular file/);
+});
+
+test("CR7: the staged .npmrc is private while installing and gone from the published cache", () => {
+  const { cacheRoot } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, ".npmrc"), "//registry.example/:_authToken=secret\n");
+  let mode = null;
+  const result = setupWorktree(worktree, {
+    cacheRoot,
+    runtime: RUNTIME,
+    log: quiet,
+    home: fresh("home"),
+    build: ({ worktree: from, cacheRoot: cache, runtime }) =>
+      buildCache({ worktree: from, cacheRoot: cache, runtime, install: (staging) => {
+        mode = fs.statSync(path.join(staging, ".npmrc")).mode & 0o777;
+        fakeInstall(staging);
+      } }),
+  });
+  assert.equal(mode, 0o600);
+  assert.ok(!fs.existsSync(path.join(result.sourceRoot, ".npmrc")));
+});
+
+test("CR10: --status reports a missing or changed dependency link", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  setup(worktree);
+  assert.deepEqual(worktreeStatus(worktree, { runtime: RUNTIME }).problems, []);
+  fs.rmSync(path.join(worktree, "node_modules", "react"));
+  fs.rmSync(path.join(worktree, "node_modules", "@babel"));
+  fs.symlinkSync("/elsewhere", path.join(worktree, "node_modules", "@babel"));
+  const problems = worktreeStatus(worktree, { runtime: RUNTIME }).problems.join("\n");
+  assert.match(problems, /node_modules\/react is missing/);
+  assert.match(problems, /node_modules\/@babel points at \/elsewhere/);
+});
+
+test("CR12: setup drops .metadata_never_index into the given home, not the real one", () => {
+  const { setup } = harness();
+  const home = fresh("home");
+  fs.mkdirSync(path.join(home, "ardia-scratch"), { recursive: true });
+  setup(makeWorktree(), { home });
+  assert.ok(fs.existsSync(path.join(home, "ardia-scratch", ".metadata_never_index")));
 });
