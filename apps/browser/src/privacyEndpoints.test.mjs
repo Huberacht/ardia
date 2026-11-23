@@ -41,6 +41,7 @@ const NOT_SHIPPED = [
   /\.(test|spec)\.[^/]+$/,
   /_test\.[^/]+$/,
   /(^|\/)engine\/patches\/build\//,
+  /^packages\/core\/src\/bangList\.ts$/,
   /\.(md|lock|podspec|png|jpe?g|gif|ico|icns|webp|pak|zip|car|mp4|wasm|ttf|otf|woff2?|pdf)$/i,
   /(^|\/)(package|turbo|tsconfig[^/]*)\.json$/,
   /(^|\/)(THIRD_PARTY_NOTICES|LICENSE|NOTICE)[^/]*$/,
@@ -80,6 +81,11 @@ function removedLines(path) {
     .join("\n");
 }
 
+const trimUrl = (text) => {
+  const trimmed = text.replace(/[.,;:!?]+$/, "");
+  return trimmed.endsWith("]") && !trimmed.includes("[") ? trimmed.slice(0, -1) : trimmed;
+};
+
 function urlHost(text) {
   let host = null;
   try {
@@ -94,7 +100,7 @@ function urlHost(text) {
 
 function hostsIn(path) {
   const text = shippedText(path);
-  const fromUrls = [...text.matchAll(URL_CANDIDATE)].map((m) => urlHost(m[0].replace(/[.,;:!?\]]+$/, ""))).filter((host) => host !== null);
+  const fromUrls = [...text.matchAll(URL_CANDIDATE)].map((m) => urlHost(trimUrl(m[0]))).filter((host) => host !== null);
   const quoted = NATIVE.test(path) ? [...text.matchAll(QUOTED_HOST)].map((m) => m[1].toLowerCase()).filter((host) => !BUNDLE_IDS.has(host) && !FILE_SUFFIX.test(host)) : [];
   return [...fromUrls, ...quoted].filter((host) => !RESERVED.test(host));
 }
