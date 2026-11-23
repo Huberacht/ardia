@@ -53,7 +53,11 @@ fi
 command -v rustup >/dev/null || { echo "build-xcframework: rustup isn't installed (https://rustup.rs)" >&2; exit 1; }
 unset SDKROOT RUSTC_WRAPPER CARGO_BUILD_TARGET
 cd "$core"
-rustup toolchain install --profile minimal --no-self-update >/dev/null 2>&1
+if ! installing="$(rustup toolchain install --profile minimal --no-self-update 2>&1)"; then
+  echo "$installing" >&2
+  echo "build-xcframework: rustup couldn't install the toolchain in rust-toolchain.toml" >&2
+  exit 1
+fi
 installed="$(rustup target list --installed)"
 missing=()
 for target in "${targets[@]}"; do

@@ -29,24 +29,21 @@ public enum RecoveryPhrase {
   }
 
   public static func entropy(from text: String) throws -> Data {
+    let tokens = tokens(in: text)
+    guard tokens.count == wordCount else { throw Problem.wordCount(tokens.count) }
+    let words = tokens.map { token in
+      token.count <= longestWord && token.unicodeScalars.allSatisfy { ("a"..."z").contains($0) } ? token : unknownToken
+    }.joined(separator: " ")
     do {
-      return try CoreCall.data { out in CoreCall.bytes(text) { ardia_phrase_to_entropy($0, $1, out) } }
+      return try CoreCall.data { out in CoreCall.bytes(words) { ardia_phrase_to_entropy($0, $1, out) } }
     } catch let refused as CoreCall.Refused {
-      throw problem(refused, in: text)
+      guard refused.detail["code"] as? String == "unknownWord", let index = refused.detail["index"] as? Int, tokens.indices.contains(index) else {
+        throw Problem.checksum
+      }
+      throw Problem.unknownWord(tokens[index])
     }
   }
 
-  static func problem(_ refused: CoreCall.Refused, in text: String) -> Problem {
-    switch refused.detail["code"] as? String {
-    case "wordCount":
-      return .wordCount((refused.detail["count"] as? Int) ?? tokens(in: text).count)
-    case "unknownWord":
-      let tokens = tokens(in: text)
-      let index = refused.detail["index"] as? Int ?? -1
-      return .unknownWord(tokens.indices.contains(index) ? tokens[index] : "")
-    default:
-      let count = tokens(in: text).count
-      return count == wordCount ? .checksum : .wordCount(count)
-    }
-  }
+  static let longestWord = Wordlist.english.map(\.count).max() ?? 0
+  static let unknownToken = "x"
 }

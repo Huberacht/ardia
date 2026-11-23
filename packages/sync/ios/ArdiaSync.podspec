@@ -1,4 +1,4 @@
-system(File.expand_path('../../core-rs/scripts/build-xcframework.sh', __dir__), exception: true)
+system(File.expand_path('../../core-rs/scripts/build-xcframework.sh', __dir__), exception: true, out: :err)
 
 Pod::Spec.new do |s|
   s.name           = 'ArdiaSync'

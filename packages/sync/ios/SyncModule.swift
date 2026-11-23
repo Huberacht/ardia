@@ -11,7 +11,10 @@ public class SyncModule: Module {
   public func definition() -> ModuleDefinition {
     Name("ArdiaSync")
 
-    OnCreate { Self.work.async { Self.removeTemporaryKits() } }
+    OnCreate {
+      SyncKeys.consentEpoch = { ArdiaEvents.consentEpoch }
+      Self.work.async { Self.removeTemporaryKits() }
+    }
 
     AsyncFunction("folderInfo") { (path: String?) -> [String: Any] in
       let url = path.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.defaultFolder

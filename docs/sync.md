@@ -14,10 +14,15 @@ the folder takes the servers' place and devices pair by entering the recovery ph
 
 Code:
 - `packages/sync/ios/Core`: plain Swift, also built by `packages/sync/Package.swift`.
-  - `RecoveryPhrase.swift`: the phrase (BIP-39), through the Rust core; it names the unknown word from the user's own
-    input at the index the core reports.
+  - `RecoveryPhrase.swift`: the phrase (BIP-39). Swift still splits the text into words exactly as it always has
+    (`CharacterSet.lowercaseLetters`), then hands the Rust core only those words, with any that can't be a list word
+    replaced by `x`, so trailing whitespace, letters Unicode tables disagree on and the core's 4 KB phrase cap never
+    change what restores; the unknown word shown is the user's own at the index the core reports.
   - `SyncCrypto.swift`: `SyncKeys`, a thin wrapper over the Rust core's C ABI (`ArdiaCoreRS`): keys, the file format
-    and names, and open failures counted by code for telemetry.
+    and names. Passwords decode without dropping a second leading U+FEFF (the core drops the one Foundation did).
+    Every refusal throws, `scopeTag` included. Open failures are counted by code only while sharing is on, under the
+    consent period they happened in (`SyncKeys.consentEpoch`, set by `SyncModule` from `ArdiaEvents.consentEpoch`;
+    nothing sets it on the iPhone, so it never counts there).
   - `Wordlist.swift`: the English list, kept for `test_sync.py`, `scripts/e2e.mjs` and the wordlist checks.
   - `SyncVault.swift`: the folder, with file coordination and partial files.
   - `SyncKeyStore.swift`: Keychain.

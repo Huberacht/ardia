@@ -137,7 +137,7 @@ final class SyncVectorsTests: XCTestCase {
   static func wordlistDigest() -> String { hexString(Data(SHA256.hash(data: Data(Wordlist.english.joined(separator: "\n").utf8)))) }
 
   static func vaultPath(_ keys: SyncKeys, scope: String, name: String) -> String {
-    "vault/\(keys.chainTag)/\(keys.scopeTag(scope))/\(name)"
+    "vault/\(keys.chainTag)/\(try! keys.scopeTag(scope))/\(name)"
   }
 
   static func chains(_ inputs: Inputs) -> [String: Chain] {
@@ -146,7 +146,7 @@ final class SyncVectorsTests: XCTestCase {
       return (name, Chain(
         phrase: RecoveryPhrase.words(for: hex(entropy)).joined(separator: " "),
         chainTag: keys.chainTag,
-        scopeTags: Dictionary(uniqueKeysWithValues: inputs.scopes.map { ($0, keys.scopeTag($0)) })))
+        scopeTags: Dictionary(uniqueKeysWithValues: inputs.scopes.map { ($0, try! keys.scopeTag($0)) })))
     })
   }
 
@@ -203,7 +203,7 @@ final class SyncVectorsTests: XCTestCase {
       entropy: hexString(entropy),
       phrase: RecoveryPhrase.words(for: entropy).joined(separator: " "),
       chainTag: keys.chainTag,
-      scopeTags: Dictionary(uniqueKeysWithValues: inputs.scopes.map { ($0, keys.scopeTag($0)) }),
+      scopeTags: Dictionary(uniqueKeysWithValues: try inputs.scopes.map { ($0, try keys.scopeTag($0)) }),
       files: files,
       password: login,
       sealedPassword: try keys.sealPassword(login.password, origin: login.origin, username: login.username),
@@ -267,7 +267,7 @@ final class SyncVectorsTests: XCTestCase {
       let keys = SyncKeys(entropy: entropy)
       XCTAssertEqual(keys.chainTag, chain.chainTag)
       XCTAssertEqual(Set(chain.scopeTags.keys), Set(inputs.scopes))
-      for (scope, tag) in chain.scopeTags { XCTAssertEqual(keys.scopeTag(scope), tag) }
+      for (scope, tag) in chain.scopeTags { XCTAssertEqual(try keys.scopeTag(scope), tag) }
     }
   }
 
@@ -374,7 +374,7 @@ final class SyncVectorsTests: XCTestCase {
     let keys = SyncKeys(entropy: entropy)
     XCTAssertEqual(keys.chainTag, set.chainTag)
     XCTAssertEqual(Set(set.scopeTags.keys), Set(inputs.scopes))
-    for (scope, tag) in set.scopeTags { XCTAssertEqual(keys.scopeTag(scope), tag) }
+    for (scope, tag) in set.scopeTags { XCTAssertEqual(try keys.scopeTag(scope), tag) }
     let vault = SyncVault(folder: folder.appendingPathComponent("vault", isDirectory: true), keys: keys)
     for scope in inputs.scopes {
       let mine = set.files.filter { $0.scope == scope }

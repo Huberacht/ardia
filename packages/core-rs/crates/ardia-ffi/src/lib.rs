@@ -12,9 +12,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub const ARDIA_ABI_VERSION: u32 = 1;
 pub const ARDIA_ENTROPY_BYTES: usize = 32;
-pub const ARDIA_MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
-pub const ARDIA_MAX_SEALED_FILE_BYTES: usize = 64 * 1024 * 1024;
-pub const ARDIA_MAX_LABEL_BYTES: usize = 512;
+pub const ARDIA_MAX_PAYLOAD_BYTES: usize = 1024 * 1024 * 1024;
+pub const ARDIA_MAX_SEALED_FILE_BYTES: usize = ARDIA_MAX_PAYLOAD_BYTES + 4096;
+pub const ARDIA_MAX_LABEL_BYTES: usize = 64 * 1024;
 pub const ARDIA_MAX_PASSWORD_FIELD_BYTES: usize = 65535;
 pub const ARDIA_MAX_SEALED_PASSWORD_BYTES: usize = 131072;
 pub const ARDIA_MAX_PHRASE_BYTES: usize = 4096;

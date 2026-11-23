@@ -9,6 +9,7 @@ public final class SyncKeys: @unchecked Sendable {
   }
 
   public static let backend = "rust"
+  public static var consentEpoch: () -> String = { "" }
 
   private let handle: OpaquePointer
   public let chainTag: String
@@ -24,8 +25,8 @@ public final class SyncKeys: @unchecked Sendable {
 
   deinit { ardia_sync_keys_free(handle) }
 
-  public func scopeTag(_ scope: String) -> String {
-    CoreCall.text { out in CoreCall.bytes(scope) { ardia_sync_scope_tag(handle, $0, $1, out) } }
+  public func scopeTag(_ scope: String) throws -> String {
+    try CoreCall.string { out in CoreCall.bytes(scope) { ardia_sync_scope_tag(handle, $0, $1, out) } }
   }
 
   public func seal(_ payload: Data, scopeTag: String, fileId: String) throws -> Data {
@@ -95,6 +96,7 @@ enum Base32 {
 enum OpenFailures {
   private static let lock = NSLock()
   private static var counts: [String: Int] = [:]
+  private static var countedEpoch = ""
 
   static func note(_ status: ardia_status) {
     let code: String
@@ -104,15 +106,22 @@ enum OpenFailures {
     case ARDIA_STATUS_TOO_LARGE: code = "too_large"
     default: code = "other"
     }
+    let epoch = SyncKeys.consentEpoch()
+    guard !epoch.isEmpty else { return }
     lock.lock()
+    defer { lock.unlock() }
+    if epoch != countedEpoch {
+      counts = [:]
+      countedEpoch = epoch
+    }
     counts[code, default: 0] += 1
-    lock.unlock()
   }
 
   static func take() -> [String: Int] {
+    let epoch = SyncKeys.consentEpoch()
     lock.lock()
     defer { lock.unlock() }
-    let taken = counts
+    let taken = !epoch.isEmpty && epoch == countedEpoch ? counts : [:]
     counts = [:]
     return taken
   }
@@ -161,7 +170,9 @@ enum CoreCall {
   }
 
   static func string(_ call: (UnsafeMutablePointer<ardia_buf>) -> ardia_status) throws -> String {
-    guard let text = String(data: try mapped(call), encoding: .utf8) else { throw SyncKeys.Failure.format }
+    let bytes = try mapped(call)
+    let text = String(decoding: bytes, as: UTF8.self)
+    guard text.utf8.elementsEqual(bytes) else { throw SyncKeys.Failure.format }
     return text
   }
 
