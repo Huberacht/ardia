@@ -1,4 +1,4 @@
-import { urlParts } from "../../lib/urlParts";
+import { canonicalIpv6, urlParts } from "../../lib/urlParts";
 import type { ChildProcessCpu } from "../../platform/performance";
 
 type Reading = { at: number; cpuMs: number };
@@ -58,21 +58,25 @@ export function sustainedBusy(heat: ReadonlyMap<number, ProcessHeat>): number[] 
   return pids;
 }
 
-const webHost = (address: string) => {
+const webParts = (address: string) => {
   const parts = urlParts(address);
-  return parts && (parts.scheme === "http" || parts.scheme === "https") ? parts.host.replace(/\.$/, "") : null;
+  return parts && (parts.scheme === "http" || parts.scheme === "https") ? { scheme: parts.scheme, host: parts.host.replace(/\.$/, "") } : null;
 };
 
-const HOST_RULE = /^(?:https?:\/\/)?(\.?)([a-z0-9_-]+(?:\.[a-z0-9_-]+)*)\.?\/?$/;
+const webHost = (address: string) => webParts(address)?.host ?? null;
+
+const HOST_RULE = /^(?:(https?):\/\/)?(?:(\[[0-9a-f:]+\])|(\.?)([a-z0-9_-]+(?:\.[a-z0-9_-]+)*)\.?)\/?$/;
 
 export function keptActive(address: string, rules: readonly unknown[]): boolean {
-  const host = webHost(address);
-  if (!host) return false;
+  const page = webParts(address);
+  if (!page) return false;
   return rules.some((rule) => {
     const m = typeof rule === "string" ? HOST_RULE.exec(rule.trim().toLowerCase()) : null;
     if (!m) return false;
-    const [, exact, kept = ""] = m;
-    return host === kept || (!exact && host.endsWith(`.${kept}`));
+    const [, scheme, literal, exact, kept = ""] = m;
+    if (scheme && scheme !== page.scheme) return false;
+    if (literal) return canonicalIpv6(literal.slice(1, -1)) === literal.slice(1, -1) && page.host === literal;
+    return page.host === kept || (!exact && page.host.endsWith(`.${kept}`));
   });
 }
 

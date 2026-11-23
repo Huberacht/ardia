@@ -9,12 +9,15 @@ const HOSTILE_VALUES = NAMED_VALUES.map((entry) => entry.value);
 globalThis.__DEV__ = false;
 
 const performance = import.meta.resolve("../../platform/performance.ts");
+const realShownTabs = import.meta.resolve("./shownTabs.ts");
 globalThis.busyTest = { tasks: [], lookups: 0, toasts: [], onLookup: null, slots: {}, trackSlots: false, hidden: [], validate: null, toastSeq: 0 };
 const stubs = {
   "../../platform/performance": `export * from ${JSON.stringify(performance)};
     export const listTasks = async () => { globalThis.busyTest.lookups++; if (globalThis.busyTest.failLookups > 0) { globalThis.busyTest.failLookups--; throw new Error("task manager unavailable"); } const t = globalThis.busyTest.tasks; globalThis.busyTest.onLookup?.(); return t; };
     export const isKeepActiveSiteValid = () => globalThis.busyTest.validate ? globalThis.busyTest.validate() : Promise.resolve(true);
     export const childProcessCpu = async () => [];`,
+  "./shownTabs": `import * as real from ${JSON.stringify(realShownTabs)};
+    export const shownTabIds = (s) => ((globalThis.busyTest.shownCalls = (globalThis.busyTest.shownCalls ?? 0) + 1), real.shownTabIds(s));`,
   "../app/toasts": `export const useToasts = { getState: () => ({ toasts: globalThis.busyTest.slots }) };
     export const hideKeyedToast = (windowId, key) => globalThis.busyTest.hidden.push([windowId, key]);
     export const showToast = (windowId, title, message, options) => {
@@ -740,4 +743,111 @@ test("a tab that leaves the warned site while Keep Running's site check is pendi
     globalThis.busyTest.validate = null;
   }
   webviews.clear();
+});
+
+function windowWithTwoHosts(start, pid) {
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const a = S().newTab(w, { url: "https://a.example/x", background: true });
+  const b = S().newTab(w, { url: "https://b.example/y", background: true });
+  S().updateTab(a, { title: "Alpha", lastActiveAt: start - 10 * MINUTE });
+  S().updateTab(b, { title: "Beta", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of Object.keys(S().tabs)) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  reset();
+  globalThis.busyTest.tasks = [{ pid, tabIds: [a, b] }];
+  return { w, a, b };
+}
+
+test("R5-S1: a warning and a Keep Running for one host neither quiet nor keep the other host the same process holds", async () => {
+  const start = Date.now() + 13000 * MINUTE;
+  windowWithTwoHosts(start, 131);
+  const tick = steadyTicks(131, start);
+  for (let t = 0; t <= 120; t += 10) await tick(t);
+  assert.equal(globalThis.busyTest.toasts[0].title, "“Alpha” is using a lot of power");
+  globalThis.busyTest.toasts[0].secondary.run();
+  await settle();
+  assert.deepEqual(S().settings.keepActiveSites, ["a.example"]);
+  await tick(130);
+  assert.equal(globalThis.busyTest.toasts.at(-1).title, "“Beta” is using a lot of power", "b.example was never named, so it is neither quiet nor kept");
+  webviews.clear();
+});
+
+test("R5-S2: Sleep never discards a page the tab moved to while Chrome was answering", async () => {
+  const start = Date.now() + 13500 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  let answer;
+  const calls = [];
+  webviews.set(hidden, { sleepIfHidden: () => (calls.push("sleepIfHidden"), new Promise((resolve) => (answer = resolve))), discard: async () => (calls.push("discard"), "discarded") });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 132, tabIds: [hidden] }];
+  await burn(start, 2, { 132: 1 });
+  globalThis.busyTest.toasts[0].action.run();
+  await settle();
+  assert.deepEqual(calls, ["sleepIfHidden"]);
+  S().updateTab(hidden, { url: "https://miner.example/next" });
+  globalThis.busyTest.tasks = [{ pid: 133, tabIds: [hidden] }];
+  answer([25]);
+  await settle();
+  assert.deepEqual(calls, ["sleepIfHidden"], "the tab navigated to another page in another process, so the fallback discard isn't sent");
+  webviews.clear();
+});
+
+test("R5-S3: owners looked up while one of their tabs navigated aren't cached, so the hidden tab left behind is warned about next tick", async () => {
+  const start = Date.now() + 14000 * MINUTE;
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const a = S().newTab(w, { url: "https://miner.example/a", background: true });
+  const b = S().newTab(w, { url: "https://miner.example/b", background: true });
+  S().updateTab(a, { title: "Alpha", lastActiveAt: start - 10 * MINUTE });
+  S().updateTab(b, { title: "Beta", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of Object.keys(S().tabs)) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 134, tabIds: [a, b] }];
+  let first = true;
+  globalThis.busyTest.onLookup = () => {
+    if (!first) return;
+    first = false;
+    S().updateTab(b, { url: "https://other.example/" });
+    S().activate(b);
+    globalThis.busyTest.tasks = [{ pid: 134, tabIds: [a] }];
+  };
+  const tick = steadyTicks(134, start);
+  for (let t = 0; t <= 120; t += 10) await tick(t);
+  assert.equal(globalThis.busyTest.toasts.length, 0, "the lookup at 120 s raced Beta's navigation");
+  await tick(130);
+  assert.equal(globalThis.busyTest.toasts.length, 1, "the stale pairing wasn't cached, so the next tick looks again and warns about Alpha");
+  assert.equal(globalThis.busyTest.toasts[0].title, "“Alpha” is using a lot of power");
+  webviews.clear();
+});
+
+test("R5-S4: a saved scheme must match the page's", () => {
+  assert.ok(keptActive("https://example.com/", ["https://example.com"]));
+  assert.ok(!keptActive("http://example.com/", ["https://example.com"]), "Chromium applies an https:// exception to HTTPS only");
+  assert.ok(keptActive("http://example.com/", ["example.com"]) && keptActive("https://example.com/", ["example.com"]), "a rule without a scheme covers both");
+});
+
+test("R5-S5: a saved IPv6 literal keeps that address", () => {
+  assert.equal(siteToKeepActive("http://[::1]:8080/"), "[::1]");
+  assert.ok(keptActive("http://[::1]:8080/", ["[::1]"]), "what Keep Running saves for an IPv6 page is recognised");
+  assert.ok(!keptActive("http://[::2]/", ["[::1]"]));
+  assert.ok(!keptActive("http://[::1]/", ["[0:0::1]"]), "only the canonical literal counts");
+});
+
+test("R5-S6: with warnings off, store updates don't recompute which tabs are shown", () => {
+  S().hydrate({});
+  const w = S().createWindow({ url: "https://front.example/" });
+  const tab = S().newTab(w, { url: "https://other.example/", background: true });
+  startBusyTabWatch();
+  S().updateSettings({ busyTabWarnings: false });
+  try {
+    const before = globalThis.busyTest.shownCalls ?? 0;
+    for (let i = 0; i < 5; i++) S().updateTab(tab, { title: `Title ${i}` });
+    assert.equal(globalThis.busyTest.shownCalls ?? 0, before);
+  } finally {
+    S().updateSettings({ busyTabWarnings: true });
+  }
 });

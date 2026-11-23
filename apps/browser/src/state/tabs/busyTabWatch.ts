@@ -76,21 +76,33 @@ export function toastName(raw: unknown): string {
 
 const quiet = (id: string, now: number) => (quietUntil.get(id) ?? 0) > now;
 
-function eligible(s: BrowserState, id: string, now: number): boolean {
-  if (!hasTab(s, id) || isPrivate(s, id) || !canSleep(s, id) || inUse(s, id) || keptTabs.has(id)) return false;
-  const tab = s.tabs[id]!;
-  const rules = Array.isArray(s.settings.keepActiveSites) ? s.settings.keepActiveSites : [];
+function hiddenAndIdle(s: BrowserState, id: string, now: number): boolean {
+  if (!hasTab(s, id) || isPrivate(s, id) || !canSleep(s, id) || inUse(s, id)) return false;
   const since = hiddenSince.get(id);
-  return !keptActive(tab.url, rules) && since !== undefined && now - since >= SUSTAINED_MS && now - tab.lastActiveAt >= SUSTAINED_MS;
+  return since !== undefined && now - since >= SUSTAINED_MS && now - s.tabs[id]!.lastActiveAt >= SUSTAINED_MS;
 }
 
+function kept(s: BrowserState, id: string): boolean {
+  const rules = Array.isArray(s.settings.keepActiveSites) ? s.settings.keepActiveSites : [];
+  return keptTabs.has(id) || keptActive(s.tabs[id]!.url, rules);
+}
+
+const eligible = (s: BrowserState, id: string, now: number) => hiddenAndIdle(s, id, now) && !kept(s, id);
+
 function busyTabsOf(s: BrowserState, owner: Owner, now: number): string[] | null {
-  if (!owner.tabIds.length || !owner.tabIds.every((id) => eligible(s, id, now)) || owner.tabIds.some((id) => quiet(id, now))) return null;
-  return owner.tabIds;
+  if (!owner.tabIds.length || !owner.tabIds.every((id) => hiddenAndIdle(s, id, now))) return null;
+  const groups = new Map<string, string[]>();
+  for (const id of owner.tabIds) {
+    const host = siteToKeepActive(s.tabs[id]!.url) ?? "";
+    groups.set(host, [...(groups.get(host) ?? []), id]);
+  }
+  for (const group of groups.values()) if (!group.some((id) => kept(s, id) || quiet(id, now))) return group;
+  return null;
 }
 
 async function freshOwners(pids: number[], now: number, consent: ConsentToken | null): Promise<Map<number, Owner> | null> {
   noteBusyTab("busy_tab_owner_lookups", consent);
+  const before = new Map(Object.values(useBrowser.getState().tabs).map((t) => [t.id, t.url]));
   const tasks: unknown = await listTasks().catch(() => null);
   if (!Array.isArray(tasks)) return null;
   const found = new Map<number, Owner>();
@@ -103,7 +115,10 @@ async function freshOwners(pids: number[], now: number, consent: ConsentToken | 
     for (const id of tabIds) if (typeof id === "string" && id && !owner.tabIds.includes(id)) owner.tabIds.push(id);
   }
   const s = useBrowser.getState();
-  for (const owner of found.values()) for (const id of owner.tabIds) if (hasTab(s, id)) owner.urls.set(id, s.tabs[id]!.url);
+  for (const [pid, owner] of found) {
+    if (owner.tabIds.some((id) => before.has(id) && (!hasTab(s, id) || s.tabs[id]!.url !== before.get(id)))) found.delete(pid);
+    else for (const id of owner.tabIds) if (hasTab(s, id)) owner.urls.set(id, s.tabs[id]!.url);
+  }
   return found;
 }
 
@@ -130,9 +145,10 @@ function mayConfirm(windowId: string, warningId: number | null): boolean {
 function warnAboutTabs(windowId: string, pid: number, ownerTabIds: string[], now: number, consent: ConsentToken | null) {
   const s = useBrowser.getState();
   const started = heat.get(pid)!.started;
-  const first = s.tabs[ownerTabIds[0]!]!;
+  const tabIds = ownerTabIds;
+  const first = s.tabs[tabIds[0]!]!;
   const site = siteToKeepActive(first.url);
-  const tabIds = ownerTabIds.filter((id) => siteToKeepActive(s.tabs[id]!.url) === site);
+  const warnedUrls = new Map(tabIds.map((id) => [id, s.tabs[id]!.url]));
   const many = tabIds.length > 1;
   const nameOf = (id: string) => {
     const tab = useBrowser.getState().tabs[id] ?? first;
@@ -140,7 +156,7 @@ function warnAboutTabs(windowId: string, pid: number, ownerTabIds: string[], now
   };
   const name = nameOf(first.id);
   const wanted = wantedNow();
-  for (const id of ownerTabIds) quietUntil.set(id, now + QUIET_AFTER_WARNING_MS);
+  for (const id of tabIds) quietUntil.set(id, now + QUIET_AFTER_WARNING_MS);
   noteBusyTab("busy_tab_warnings", consent);
   const title = many ? `${tabIds.length} ${toastName(site) || "background"} tabs are using a lot of power` : `“${name}” is using a lot of power`;
   showToast(windowId, title, undefined, {
@@ -154,7 +170,11 @@ function warnAboutTabs(windowId: string, pid: number, ownerTabIds: string[], now
         const asked = consentToken();
         void stillBusyIn(pid, started, tabIds, asked, wanted).then(async (still) => {
           if (!still.length) return noteBusyTab("busy_tab_sleep_moot", asked);
-          const results = await Promise.all(still.map((id) => sleepAsked(id, () => wanted() && eligible(useBrowser.getState(), id, clock()))));
+          const sameNavigation = (id: string) => {
+            const now = useBrowser.getState();
+            return hasTab(now, id) && now.tabs[id]!.url === warnedUrls.get(id) && heat.get(pid)?.started === started && !!owners.get(pid)?.tabIds.includes(id);
+          };
+          const results = await Promise.all(still.map((id) => sleepAsked(id, () => wanted() && sameNavigation(id) && eligible(useBrowser.getState(), id, clock()))));
           if (results.every((r) => r.outcome === "dropped")) return noteBusyTab("busy_tab_sleep_moot", asked);
           const asleep = still.filter((_, i) => results[i]!.outcome === "asleep");
           const kept = still.filter((_, i) => results[i]!.outcome === "kept");
@@ -206,8 +226,8 @@ async function warnFor(pids: number[], now: number, consent: ConsentToken | null
   const confirmed = candidates.every((pid) => stale.includes(pid)) ? new Map(candidates.map((pid) => [pid, owners.get(pid)!])) : await freshOwners(candidates, now, consent);
   if (!confirmed || !wanted() || !free()) return;
   for (const pid of candidates) {
-    const owner = confirmed.get(pid)!;
-    if (owner.started !== heat.get(pid)?.started) continue;
+    const owner = confirmed.get(pid);
+    if (!owner || owner.started !== heat.get(pid)?.started) continue;
     owners.set(pid, owner);
     const tabIds = busyTabsOf(useBrowser.getState(), owner, now);
     if (tabIds) return warnAboutTabs(windowId, pid, tabIds, now, consent);
@@ -268,7 +288,7 @@ export function startBusyTabWatch() {
     needed: () => !unsupported && !isQuitting() && watchOn(useBrowser.getState()) && hasHiddenLoadedTab(useBrowser.getState()),
     watch: (changed) => {
       const browser = useBrowser.subscribeTo(["tabs", "windows", "peeks", "splits"], (s) => {
-        noteShown(s);
+        if (watchOn(s)) noteShown(s);
         changed();
       });
       const lifecycle = useLifecycle.subscribe(changed);
