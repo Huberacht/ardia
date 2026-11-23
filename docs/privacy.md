@@ -69,8 +69,8 @@ Sync makes no network request: it writes sealed files to a folder you pick and t
   that is already loaded with its history database open, so it never loads a profile or opens, creates or migrates a
   favicon database. Every icon drawn inside a private window uses it, including the rows (bookmarks, history) that
   name a regular profile. The answers stay in that window's own icon cache, which leaves with the window, and never
-  enter the regular profiles' caches. On Windows, until its engine has the call (#3881), the read still marks the icon
-  used, as before. `packages/ardiacore/scripts/favicon-peek-check.mjs` checks on a hidden instance that the regular
+  enter the regular profiles' caches. On Windows, until its engine has the call (#3881), the read falls back to `ac_favicons_get`
+  and still marks the icon used, as on main, so private windows there keep their icons. `packages/ardiacore/scripts/favicon-peek-check.mjs` checks on a hidden instance that the regular
   profile's `Favicons` file keeps its size, modification time and `last_requested`.
 - A private window's own icons, and the themes and accents worked out from them, leave Ardia's icon caches when it
   closes, even an icon that already left the cache before; a theme or accent asked for one after the close is never

@@ -2,8 +2,6 @@ import { useBrowser } from "../browser/store";
 import { engineProfile, isIncognitoProfile } from "../browser/model";
 import { DEFAULT_PROFILE_ID } from "../settings/settings";
 import { profileOpened } from "../profiles/profileLoading";
-import type { ConsentToken } from "../telemetry/choice";
-import { notePrivateFaviconPeek } from "../telemetry/pageFaviconCounts";
 import { incognitoClosed } from "./privateLookups";
 
 export const cacheKey = (profileId: string) => (isIncognitoProfile(profileId) ? profileId : engineProfile(useBrowser.getState(), profileId));
@@ -61,9 +59,9 @@ function dropRetries(match: (id: string) => boolean) {
     }
 }
 
-export function settlePeek(key: string, pages: string[], failed: boolean, consent: ConsentToken | null, retry: (page: string) => void): boolean {
+export function settlePeek(key: string, pages: string[], failed: boolean, settled: () => void, retry: (page: string) => void): boolean {
   if (!isBorrowed(key)) return true;
-  notePrivateFaviconPeek(failed, consent);
+  settled();
   if (!stillBorrowed(key)) return false;
   for (const page of pages) {
     const id = `${key}|${page}`;

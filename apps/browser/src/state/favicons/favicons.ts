@@ -12,7 +12,7 @@ import { onProfilesOpened, profileOpened } from "../profiles/profileLoading";
 import { removeLegacyFiles } from "./legacyFavicons";
 import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
-import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
+import { notePageFavicon, notePageFaviconFailed, notePrivateFaviconPeek } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
 import { incognitoClosed, takeRequest, unheldBy, unheldIn } from "./privateLookups";
 
@@ -111,7 +111,7 @@ function lookUpPages(key: string, list: string[]) {
   });
   void (isBorrowed(key) ? peekFavicons(sourceEngineOf(key), list) : faviconsFor(key, list))
     .then((found) => {
-      if (!settlePeek(key, list, false, consent, retryPeek(key))) return;
+      if (!settlePeek(key, list, false, () => notePrivateFaviconPeek(false, consent), retryPeek(key))) return;
       update(key, (icons) => {
         const writes: [string, string | null][] = [];
         for (const [i, page] of list.entries()) {
@@ -124,7 +124,7 @@ function lookUpPages(key: string, list: string[]) {
     })
     .catch((error) => {
       for (const page of list) unmarkAsked(key, page);
-      settlePeek(key, list, true, consent, retryPeek(key));
+      settlePeek(key, list, true, () => notePrivateFaviconPeek(true, consent), retryPeek(key));
       warnFor(consent, "[favicons] lookup failed", error);
     })
     .finally(() => {
@@ -347,7 +347,7 @@ export function pruneEngineFavicons(engine: string) {
 }
 
 export function startFavicons() {
-  removeLegacyFiles(useBrowser.getState());
+  removeLegacyFiles(useBrowser.getState(), consentToken());
   const history = onHistoryChanged((change) => {
     if (change.kind !== "deleted") return;
     if (change.all) return pruneEngineFavicons(change.profile);
