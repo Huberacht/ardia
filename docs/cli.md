@@ -40,13 +40,12 @@ Plugins, "On your PATH. It can control Ardia.", or why it isn't on PATH, with Tr
 the signed digest), and runs its after-update actions once per version (`ardia skills install --auto`,
 `ardia skills refresh`, `ardia computer refresh`). **Installed means control is on**: installing turns `cliControl` on
 (the sheet says so), and each launch turns it back on while Command Line is installed. The control pill's Stop turns
-it off until the next launch. An install you approved (0.2.47's Python 0.4.0, or any later version) moves to the version
-this Ardia pins by itself when the new version asks for nothing you hadn't approved (`docs/plugins.md` › Official
-plugins, #3868). Python 0.4.0 to Bun 0.6.0 is such a move: the same control and the same `ardia` on PATH with the
-same after-update actions, plus a command-bar entry whose sandboxed, offline view starts only when you open it.
-Command Line's page in Settings › Plugins then says "Updated by itself to 0.6.0" and lists what's new. A version
-that asks for more waits for **Update…**. The 0.4.0 daemon keeps running beside the new one until Ardia quits
-(#3472). An `ardia` installed the old way (`~/Library/Application Support/Ardia/CLI/current`) that was never approved
+it off until the next launch. An install you approved moves to the version this Ardia pins by itself when the new version asks
+for nothing you hadn't approved (`docs/plugins.md` › Official plugins, #3868), and Command Line's page in Settings ›
+Plugins then says "Updated by itself" and lists what's new. Bun 0.5.0 to 0.6.0 is such a move. Python 0.4.0 to Bun 0.6.0
+isn't, by default: 0.6.0 adds a sandboxed `main` (the Show Status view), a new runtime that can show toasts and dialogs,
+so it waits for **Update…** unless `FIRST_MAIN_POLICY.autoApprove` is turned on. The 0.4.0 daemon keeps running beside
+the new one until Ardia quits (#3472). An `ardia` installed the old way (`~/Library/Application Support/Ardia/CLI/current`) that was never approved
 in Ardia isn't adopted by itself: there's no approval to compare with. It stays on PATH, untouched, and Command Line
 shows as available, its row in Settings › Plugins saying "An older ardia is installed. Install Command Line to update
 it." Installing it moves the link to the new copy and points `CLI/current` into the store, so paths saved through it

@@ -176,12 +176,15 @@ is the only source of which version may be fetched.
       changes which other plugins may call its tools; only the order of network hosts doesn't count), programs with
       their paths and after-update steps, hooks, tools and their timeouts, settings defaults and rows, menus, toolbar,
       sidebar views, panels, omnibox, themes, site switches, the page bar, the page, `main` and sidecar specs with
-      their memory budgets, every activation event other than `onCommand:`, and every approved command. The one
-      addition is a first `main` whose only way in is the command bar, with the new view or handler commands that
-      reach it: all its activation events `onCommand:`, no page, panels, sidebar views, toolbar, omnibox, menus,
-      tools, hooks or sidecar, and no permission it could use (only `control`, which is the separate program-control
-      setting). Title, description, version, `requires`, icon, keywords, the telemetry text and a program's
-      `example` and `claim` don't count. Any field the comparison doesn't know, or a malformed one, prompts. The
+      their memory budgets, every activation event other than `onCommand:`, and every approved command. A program's
+      `example` must stay what Settings offers to copy (the pin's example stands in for a manifest without one).
+      A first `main` is a new runtime: even sandboxed and offline it can show toasts and dialogs, relink its own
+      programs and call other plugins' tools, so it prompts. `FIRST_MAIN_POLICY.autoApprove` in `officialUpdate.ts`
+      (off) would let one through when its only way in is the command bar, with the new view or handler commands
+      that reach it: all its activation events `onCommand:`, no page, panels, sidebar views, toolbar, omnibox, menus,
+      tools, hooks or sidecar, and no permission it could use (only `control`). That is the Python 0.4.0 to Bun 0.6.0
+      move, which therefore waits for **Update…** while the switch is off. Title, description, version, `requires`,
+      icon, keywords, the telemetry text and a program's `claim` don't count. Any field the comparison doesn't know, or a malformed one, prompts. The
       boundary row is `plugin-update:official-auto`.
     - The record keeps `previous` for a rollback and an `updated` note (`from`, `to`, and the consent lines that are
       new). While that copy is the one installed, the plugin's page shows "Updated by itself to 0.6.0", that it asks

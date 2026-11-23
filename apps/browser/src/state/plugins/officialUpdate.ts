@@ -5,7 +5,10 @@ export const UPDATE_PROMPT_REASONS = ["baseline", "permissions", "network", "run
 export type UpdatePromptReason = (typeof UPDATE_PROMPT_REASONS)[number];
 export type UpdateVerdict = { ok: true; added: string[] } | { ok: false; reason: UpdatePromptReason };
 
-type Rule<T> = (approved: T, next: T, both: { approved: PluginManifest; next: PluginManifest }) => UpdatePromptReason | null;
+type Both = { approved: PluginManifest; next: PluginManifest; fallbackExample: string | null };
+type Rule<T> = (approved: T, next: T, both: Both) => UpdatePromptReason | null;
+
+export const FIRST_MAIN_POLICY = { autoApprove: false };
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -38,11 +41,12 @@ const MAIN_USES = PERMISSION_KEYS.filter((key) => key !== "control");
 
 const grantsMainNothing = (p: PluginPermissions) => MAIN_USES.every((key) => p[key] === false);
 
-const firstMain = ({ approved, next }: { approved: PluginManifest; next: PluginManifest }) => approved.main === null && next.main !== null;
+const firstMain = ({ approved, next }: Both) => FIRST_MAIN_POLICY.autoApprove && approved.main === null && next.main !== null;
 
-const runs = (programs: readonly ProgramSpec[]) => programs.map((p) => ({ name: p.name, path: p.path, afterUpdate: p.afterUpdate }));
+const runs = (programs: readonly ProgramSpec[], fallbackExample: string | null) =>
+  programs.map((p) => ({ name: p.name, path: p.path, afterUpdate: p.afterUpdate, example: p.example ?? fallbackExample }));
 
-const programsWithin: Rule<ProgramSpec[]> = (a, b) => (same(runs(a), runs(b)) ? null : "programs");
+const programsWithin: Rule<ProgramSpec[]> = (a, b, { fallbackExample }) => (same(runs(a, fallbackExample), runs(b, fallbackExample)) ? null : "programs");
 
 const isAddableCommand = (c: CommandSpec) => "view" in c.action || "handler" in c.action;
 
@@ -101,7 +105,7 @@ const isMainSpec = (m: unknown): boolean =>
   !!m && typeof m === "object" && Object.keys(m).sort().join() === "entry,memoryMB" && typeof (m as MainSpec).entry === "string" && isPluginPath((m as MainSpec).entry) && Number.isSafeInteger((m as MainSpec).memoryMB);
 
 const mainWithin: Rule<PluginManifest["main"]> = (a, b, { approved, next }) => {
-  if (a === null && b !== null) return !approved.sidecar && isMainSpec(b) && firstMainOnDemand(next) ? null : "runtime";
+  if (a === null && b !== null) return FIRST_MAIN_POLICY.autoApprove && !approved.sidecar && isMainSpec(b) && firstMainOnDemand(next) ? null : "runtime";
   return same(a, b) ? null : "runtime";
 };
 
@@ -134,17 +138,17 @@ const MANIFEST_RULES: { [K in keyof PluginManifest]: Rule<PluginManifest[K]> } =
   process: identical("runtime"),
 };
 
-export function updateWithin(approved: PluginManifest, next: PluginManifest): UpdateVerdict {
+export function updateWithin(approved: PluginManifest, next: PluginManifest, fallbackExample: string | null = null): UpdateVerdict {
   try {
-    return compare(approved, next);
+    return compare({ approved, next, fallbackExample });
   } catch {
     return { ok: false, reason: "unknown" };
   }
 }
 
-function compare(approved: PluginManifest, next: PluginManifest): UpdateVerdict {
+function compare(both: Both): UpdateVerdict {
+  const { approved, next } = both;
   for (const key of new Set([...Object.keys(approved), ...Object.keys(next)])) if (!Object.hasOwn(MANIFEST_RULES, key)) return { ok: false, reason: "unknown" };
-  const both = { approved, next };
   for (const key of Object.keys(MANIFEST_RULES) as (keyof PluginManifest)[]) {
     const reason = (MANIFEST_RULES[key] as Rule<unknown>)(approved[key], next[key], both);
     if (reason) return { ok: false, reason };

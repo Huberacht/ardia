@@ -275,7 +275,7 @@ export function officialUpdateVerdict(s: Pick<PluginsStore, "listings" | "record
   if (listing.hash !== record.approved && listing.legacyHash !== record.approved) return { ok: false, reason: "baseline" };
   if (!candidate.official || !next?.official || !candidate.hash || candidate.problems.length || candidate.folderId !== pinned.folderId) return { ok: false, reason: "baseline" };
   if (candidate.name !== name || next.name !== name || baseline.name !== name || candidate.hash === listing.hash) return { ok: false, reason: "baseline" };
-  return updateWithin(baseline, next);
+  return updateWithin(baseline, next, Object.hasOwn(OFFICIAL_EXAMPLES, name) ? OFFICIAL_EXAMPLES[name]! : null);
 }
 
 function noteAutoUpdate(name: string, candidate: PluginListing, consent: ConsentToken | null) {
@@ -323,12 +323,13 @@ export function reconcileOfficial(consent: ConsentToken | null, now = Date.now()
         promoteWithRetry(name, candidate, consent);
       } else if (s.consent?.name !== name) {
         const verdict = officialUpdateVerdict(s, name, candidate);
-        if (verdict.ok && approveOfficialUpdate(name, candidate, verdict.added, consent)) {
-          promoteWithRetry(name, candidate, consent);
+        if (verdict.ok) {
+          if (approveOfficialUpdate(name, candidate, verdict.added, consent)) promoteWithRetry(name, candidate, consent);
+          else retryLater(`approve:${name}`, FIRST_RETRY_MS, consent);
         } else if (!waitingNoted.has(candidate.hash)) {
           waitingNoted.add(candidate.hash);
           notePlugin("official_updates_waiting", consent);
-          notePlugin(PROMPT_COUNTS[verdict.ok ? "baseline" : verdict.reason], consent);
+          notePlugin(PROMPT_COUNTS[verdict.reason], consent);
         }
       }
       continue;
