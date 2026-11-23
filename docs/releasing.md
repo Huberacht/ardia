@@ -1,6 +1,6 @@
 # Releasing
 
-Releases are GitHub releases of `mantrakp04/ardia`, tagged `v<version>`, on two channels: **stable** (`0.2.37`, a full
+Releases are GitHub releases of `ardia-browser/ardia`, tagged `v<version>`, on two channels: **stable** (`0.2.37`, a full
 release) and **nightly** (`0.2.37-nightly.1`, a GitHub prerelease: one fix, shipped the day it's made; "Channels" below).
 Since the Release workflow (`.github/workflows/release.yml`, "CI releases" below) a release is built and published in
 GitHub Actions. Each has these assets:
@@ -12,8 +12,8 @@ GitHub Actions. Each has these assets:
   (a nightly rewrites that asset; "Channels" below). Builds after 0.2.13 poll
   `https://ardia.dev/appcast.xml` (`SUFeedURL`), which counts the check by version and day (and whether
   it's the copy's first) and redirects to
-  `https://github.com/mantrakp04/ardia/releases/latest/download/appcast.xml`, the URL 0.2.13 and
-  earlier poll directly. The count can't block an update: see `infra/site/nginx.conf` and `docs/growth.md`
+  `https://github.com/ardia-browser/ardia/releases/latest/download/appcast.xml`. 0.2.13 and earlier
+  poll the same file under the repo's old name, `mantrakp04/ardia`, which GitHub redirects. The count can't block an update: see `infra/site/nginx.conf` and `docs/growth.md`
   › Installs.
 - `ArdiaCore-<engine tree>.tar.xz`, only in a release built locally from a Chromium tree whose `engine/` changed since
   the last one: the release's engine (Chrome's framework, stripped), so the app builds without a Chromium tree. Engines
@@ -157,7 +157,7 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
 - The engine: ArdiaCore's `Chromium Framework.framework` built in `~/chromium-build` (`scripts/agent/engine-build`;
   `docs/engine-build.md`), and `pod install` in `apps/browser/macos`. A framework built elsewhere goes in through
   `ARDIACORE_FRAMEWORK`. That skips the tree checks and ships no engine archive, unless `ARDIACORE_FRAMEWORK_ENGINE`
-  names the `engine/` git tree it was built from (`engine/engine-key.sh`: one hash of `engine/` and the offline game it packs, checked against HEAD). Then the
+  names the macOS engine key it was built from (`engine/engine-key.sh --platform macos`: one hash of what the macOS engine is built from, `engine/` but for Linux's lines of the series and the offline game it packs, checked against HEAD). Then the
   release packs that engine, and its source when it's Helium, as a build from the tree would.
 
 ## Cutting a release
@@ -292,8 +292,8 @@ The first stable release after that creates `ardia-bin` on the AUR. To create it
 
 The script refuses what `release.sh` refuses: a missing notes file or one whose frontmatter doesn't read, a
 `MARKETING_VERSION` other than `<version>`, and uncommitted changes (here under `apps/browser`, `apps/linux`,
-`plugins`, `packages`, `engine` or `scripts/linux`). It uses the exact Linux engine for HEAD's engine key
-(`engine/engine-key.sh`), published in ardia-browser/ardia. Without one the `linux` job fails and the macOS release
+`plugins`, `packages`, `engine` or `scripts/linux`). It uses the exact Linux engine for HEAD's Linux engine key
+(`engine/engine-key.sh --platform linux`), published in ardia-browser/ardia. Without one the `linux` job fails and the macOS release
 ships alone; build the engine, then run `scripts/linux/release.sh <version>` on a Linux machine at the release commit
 and the `gh release upload` command it prints. A nightly and a stable go the same way.
 See [linux-ci.md](linux-ci.md) › Linux releases.
@@ -379,10 +379,13 @@ steps (the build with no keys, then signing and packaging, then the launch check
 
 The app links a prebuilt Chromium Framework, which a normal CI job can't build. It's built here
 (`docs/engine-build.md`); after building it, `scripts/publish-engine.sh` (`--dry-run` first) packs it as release.sh
-packs one (stripped, unpruned) with its Helium source, uploads both to the prerelease `engine-<engine tree:12>` (never
-latest, so the feed and the download links never move to it) and appends `<tree> engine-<tree:12> <sha256>` to
-`packages/ardiacore/prebuilt-engines.tsv`: commit and push that line before dispatching. A release whose `engine/`
-tree has no engine fails its build at once, saying which script to run.
+packs one (stripped, unpruned) with its Helium source, uploads both to the prerelease `engine-<key:12>` (never
+latest, so the feed and the download links never move to it) and appends `<key> engine-<key:12> <sha256>` to
+`packages/ardiacore/prebuilt-engines.tsv`: commit and push that line before dispatching. The key is the macOS one
+(`engine/engine-key.sh --platform macos`), so a Linux-only engine change needs no new Mac engine. A row may carry a
+fourth field, the key its engine was published under (its archive is `ArdiaCore-<that key:12>.tar.xz`): such rows map
+engines published before the per-platform keys to the new key of the commit they were built from. A release whose
+macOS key has no engine fails its build at once, saying which script to run.
 
 The same script uploads the engine's symbols: `ArdiaCore-<tree:12>-symbols.tar.xz`, the dSYMs the official build writes
 beside the framework in `out/Release_GN_arm64` (`Chromium Framework.dSYM` and the helpers'; function names only, as
@@ -404,8 +407,9 @@ uploads the two files and refuses a `dist` that lacks either one, dry runs inclu
 CI the build job's `build.tar` carries the whole `Ardia.xcarchive`, dSYMs included, `unpack-build.py` keeps them, the
 sign job packs the pair, checks both exist and its `release` artifact lists them, and the publish job checks them again
 after the download, before it tags; `scripts/symbolicate-crash.test.mjs` fails if that chain loses them. Releases from
-before the app's symbols were uploaded have none: the build artifact that held their archive has expired, so their
-`Ardia + 0x…` frames stay unnamed.
+before the app's symbols were uploaded have none: the build artifact that held their archive has expired. Their
+`Ardia + 0x…` frames can still be named from the shipped binary with `scripts/symbols/name-stripped-build.mjs`
+(`docs/symbolication.md`). The dashboard names every published frame by itself through `scripts/symbolicate-frames.mjs`.
 
 Engines published before the symbols were uploaded have none: the next build
 overwrites `out/`'s dSYMs. To backfill one, rebuild its engine key; if the framework comes back with the published UUID,
@@ -417,7 +421,7 @@ key=<tree:12> dir="dist/engine-$key-backfill" release_out="$HOME/chromium-build/
 mkdir -p "$dir/dsyms"
 scripts/agent/locked chromium -- bash -c 'cp -cR "$1/Chromium Framework.framework" "$2/" && cp -cR "$1"/*.dSYM "$2/dsyms/"' copy "$release_out" "$dir"
 scripts/lib/pack-symbols.sh "$dir/Chromium Framework.framework" "$dir/dsyms" "$dir/ArdiaCore-$key-symbols.tar.xz" "$dir/ArdiaCore-$key-uuids.txt"
-gh release upload "engine-$key" -R mantrakp04/ardia --clobber "$dir/ArdiaCore-$key-symbols.tar.xz" "$dir/ArdiaCore-$key-uuids.txt"
+gh release upload "engine-$key" -R ardia-browser/ardia --clobber "$dir/ArdiaCore-$key-symbols.tar.xz" "$dir/ArdiaCore-$key-uuids.txt"
 ```
 
 ## The engine switch (0.2.21 → 0.2.22)
