@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { prepareApp, untouchedCopy } from "./app-copy.mjs";
 
+const macTest = (name, fn) => test(name, { skip: process.platform !== "darwin" && "codesign is macOS only" }, fn);
+
 const PLIST = `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Fake</string><key>CFBundleIdentifier</key><string>dev.ardia.fake</string></dict></plist>`;
 const entitlements = (keys) => `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>${keys.map((k) => `<key>${k}</key><true/>`).join("")}</dict></plist>`;
 
@@ -29,7 +31,7 @@ function fakeApp({ debug = false } = {}) {
 
 const birth = (path) => statSync(path).birthtimeMs;
 
-test("a release app run with its own bundle and no injection is cloned untouched: no ip.txt, no re-sign", () => {
+macTest("a release app run with its own bundle and no injection is cloned untouched: no ip.txt, no re-sign", () => {
   const { dir, app, own } = fakeApp();
   const copy = prepareApp(app, join(dir, "out"), { bundle: own });
   assert.equal(existsSync(join(copy, "Contents/Resources/ip.txt")), false);
@@ -37,7 +39,7 @@ test("a release app run with its own bundle and no injection is cloned untouched
   assert.equal(readFileSync(join(copy, "Contents/Resources/main.jsbundle"), "utf8"), "shipped");
 });
 
-test("the untouched copy is reused on the next run instead of cloned again", () => {
+macTest("the untouched copy is reused on the next run instead of cloned again", () => {
   const { dir, app, own } = fakeApp();
   const first = prepareApp(app, join(dir, "out"), { bundle: own });
   const made = birth(join(first, "Contents/Info.plist"));
@@ -46,7 +48,7 @@ test("the untouched copy is reused on the next run instead of cloned again", () 
   assert.equal(birth(join(second, "Contents/Info.plist")), made);
 });
 
-test("a copy left from another bundle is cloned fresh, not reused", () => {
+macTest("a copy left from another bundle is cloned fresh, not reused", () => {
   const { dir, app, own, other } = fakeApp();
   prepareApp(app, join(dir, "out"), { bundle: other });
   const copy = prepareApp(app, join(dir, "out"), { bundle: own });
@@ -55,7 +57,7 @@ test("a copy left from another bundle is cloned fresh, not reused", () => {
   execFileSync("codesign", ["--verify", "--strict", copy]);
 });
 
-test("another bundle is swapped in and the copy re-signed", () => {
+macTest("another bundle is swapped in and the copy re-signed", () => {
   const { dir, app, other } = fakeApp();
   const copy = prepareApp(app, join(dir, "out"), { bundle: other });
   assert.equal(readFileSync(join(copy, "Contents/Resources/main.jsbundle"), "utf8"), "the tree");
@@ -63,20 +65,20 @@ test("another bundle is swapped in and the copy re-signed", () => {
   execFileSync("codesign", ["--verify", "--strict", copy]);
 });
 
-test("a debug build still gets ip.txt, so it can't load Metro's code instead of its bundle", () => {
+macTest("a debug build still gets ip.txt, so it can't load Metro's code instead of its bundle", () => {
   const { dir, app, own } = fakeApp({ debug: true });
   const copy = prepareApp(app, join(dir, "out"), { bundle: own });
   assert.equal(existsSync(join(copy, "Contents/Resources/ip.txt")), true);
   execFileSync("codesign", ["--verify", "--strict", copy]);
 });
 
-test("the injection entitlements still force a re-sign", () => {
+macTest("the injection entitlements still force a re-sign", () => {
   const { dir, app, own } = fakeApp();
   const copy = prepareApp(app, join(dir, "out"), { bundle: own, entitlements: ["com.apple.security.cs.disable-library-validation"] });
   assert.match(execFileSync("codesign", ["-d", "--entitlements", "-", "--xml", copy], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }), /disable-library-validation/);
 });
 
-test("untouchedCopy: only an unchanged release bundle without missing entitlements skips the re-sign", () => {
+macTest("untouchedCopy: only an unchanged release bundle without missing entitlements skips the re-sign", () => {
   const { app, own, other } = fakeApp();
   const granted = "<plist><dict></dict></plist>";
   assert.equal(untouchedCopy({ source: app, bundle: null, granted, missing: [] }), true);
@@ -86,7 +88,7 @@ test("untouchedCopy: only an unchanged release bundle without missing entitlemen
   assert.equal(untouchedCopy({ source: app, bundle: own, granted: "<key>com.apple.security.get-task-allow</key>", missing: [] }), false);
 });
 
-test("a cached copy whose resources were changed after cloning is cloned again, not reused", () => {
+macTest("a cached copy whose resources were changed after cloning is cloned again, not reused", () => {
   const { dir, app, own } = fakeApp();
   const first = prepareApp(app, join(dir, "out"), { bundle: own });
   writeFileSync(join(first, "Contents/Resources/main.jsbundle"), "tampered");
