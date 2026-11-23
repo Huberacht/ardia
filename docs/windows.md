@@ -1530,7 +1530,7 @@ Issue #3686, part of #3678 (Track 4 of the cross-platform design: Windows on the
 Windows can drop React Native Windows and run the Linux model: Chromium is the app, and the shared desktop UI
 (`apps/desktop`, built in its Linux mode) is served from `chrome://ardia/`. It proves the hard parts on one window before any
 Linux patch is widened or the host is moved. Proven on 2026-11-23 in a fresh Windows 11 guest (`dockurr/windows` on
-a Boat VM, 1920×1080) with a Windows x64 engine and UI bundle built from this change on `main` at `14db917`: the
+a Boat VM, 1920×1080) with a Windows x64 engine and UI bundle built from this change on `main` at `5b1e984`: the
 real-input run (28 checks; 28 at 150% on the previous engine of this change, which differs only in the folder checks
 below), the junction check (31, every launch's real argv checked), the bridge's hostile-input check (11 checks over
 15 malformed requests, 6 bad arguments, 12 reserved tab URLs and 5 reserved navigations), the stale-document check
