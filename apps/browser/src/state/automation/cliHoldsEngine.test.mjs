@@ -17,7 +17,7 @@ let kept = 0;
 let answerWith = null;
 globalThis.acTestCliHeld = (tabs) => {
   pushed.push(tabs.map((t) => t.tabId).sort());
-  seconds.push(Object.fromEntries(tabs.map((t) => [t.tabId, t.seconds])));
+  seconds.push(Object.fromEntries(tabs.map((t) => [t.tabId, Math.round((t.until - Date.now()) / 1000)])));
   const next = answerWith;
   answerWith = null;
   if (next) return next();
@@ -135,4 +135,17 @@ test("a drain that fails leaves its counts to the period they were made in", asy
   kept = 1;
   await settled();
   assert.equal(takeTabSleepCounts().chrome_discards_kept_for_cli, 1);
+});
+
+test("a one-second hold reaches the engine with the time it ends, not a rounded-down nothing", async () => {
+  releaseAllCliHolds();
+  await settled();
+  const { windowId } = await freshWindow("https://shown.example/");
+  const id = S().newTab(windowId, { url: "https://brief.example/", background: true });
+  const reply = await ok("tabs.hold", { session: "brief", tabs: [id], seconds: 1 });
+  assert.equal(reply.engineKeeps, true);
+  assert.deepEqual(pushed.at(-1), [id], "the engine got the tab");
+  assert.equal(seconds.at(-1)[id], 1);
+  releaseAllCliHolds();
+  await settled();
 });

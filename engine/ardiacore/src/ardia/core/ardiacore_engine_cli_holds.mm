@@ -11,11 +11,12 @@
 @implementation ArdiaCoreEngine (CliHolds)
 
 + (NSInteger)holdTabsForCli:(NSArray<ArdiaCoreTab*>*)tabs
-                    seconds:(NSArray<NSNumber*>*)seconds {
-  std::vector<std::pair<content::WebContents*, base::TimeDelta>> held;
-  for (NSUInteger i = 0; i < tabs.count && i < seconds.count; ++i) {
+                      until:(NSArray<NSNumber*>*)untilMs {
+  std::vector<std::pair<content::WebContents*, base::Time>> held;
+  for (NSUInteger i = 0; i < tabs.count && i < untilMs.count; ++i) {
     if (content::WebContents* contents = tabs[i].contents) {
-      held.emplace_back(contents, base::Seconds(seconds[i].doubleValue));
+      held.emplace_back(contents, base::Time::FromMillisecondsSinceUnixEpoch(
+                                      untilMs[i].doubleValue));
     }
   }
   ardiacore::SetCliHeldTabs(held);

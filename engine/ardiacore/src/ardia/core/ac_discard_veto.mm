@@ -59,6 +59,8 @@ std::vector<base::WeakPtr<content::WebContents>>& HeldTabs() {
 
 int g_cli_hold_vetoes = 0;
 
+constexpr base::TimeDelta kLongestCliHold = base::Seconds(300);
+
 CliHeldTab* HeldNow(content::WebContents* contents) {
   CliHeldTab* held = CliHeldTab::FromWebContents(contents);
   return held && base::TimeTicks::Now() < held->until ? held : nullptr;
@@ -132,19 +134,23 @@ std::vector<DiscardVeto> DiscardVetoesFor(content::WebContents* contents) {
 }
 
 void SetCliHeldTabs(
-    const std::vector<std::pair<content::WebContents*, base::TimeDelta>>& held) {
+    const std::vector<std::pair<content::WebContents*, base::Time>>& held) {
   std::vector<base::WeakPtr<content::WebContents>>& marked = HeldTabs();
   for (const base::WeakPtr<content::WebContents>& contents : marked) {
     if (contents &&
-        std::ranges::find(held, contents.get(),
-                          &std::pair<content::WebContents*,
-                                     base::TimeDelta>::first) == held.end()) {
+        std::ranges::find(
+            held, contents.get(),
+            &std::pair<content::WebContents*, base::Time>::first) ==
+            held.end()) {
       contents->RemoveUserData(CliHeldTab::UserDataKey());
     }
   }
   marked.clear();
   const base::TimeTicks now = base::TimeTicks::Now();
-  for (const auto& [contents, lasts] : held) {
+  const base::Time wall_now = base::Time::Now();
+  for (const auto& [contents, until] : held) {
+    const base::TimeDelta lasts =
+        std::min(until - wall_now, kLongestCliHold);
     if (!contents || !lasts.is_positive()) {
       continue;
     }
