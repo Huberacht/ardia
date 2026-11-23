@@ -239,7 +239,83 @@ struct LiquidGlassTests {
     #expect(GlassStacking.opaqueFloor([GlassStacking.Coverage(rect: screen, opaque: false)], covering: strip) == nil)
   }
 
-  @Test func `the rim adds light onto the backdrop as Android's PLUS does, without darkening it`() throws {
+  @Test func `a snapshot is kept only for the page and navigation it was asked for`() {
+    var gate = GlassSnapshotGate()
+    let first = GlassPageKey(page: 1, navigation: 4)
+    #expect(gate.observe(first))
+    #expect(!gate.observe(first))
+    let asked = gate.begin(now: 0)
+    #expect(gate.accepts(token: asked, key: first))
+    #expect(gate.observe(GlassPageKey(page: 2, navigation: 4)), "another tab")
+    #expect(!gate.accepts(token: asked, key: first), "a late completion from the old tab is refused")
+    #expect(!gate.accepts(token: asked, key: GlassPageKey(page: 2, navigation: 4)))
+    #expect(gate.observe(GlassPageKey(page: 2, navigation: 5)), "a new document in the same tab")
+    let again = gate.begin(now: 1)
+    let newer = gate.begin(now: 1.1)
+    #expect(!gate.accepts(token: again, key: GlassPageKey(page: 2, navigation: 5)), "only the newest request counts")
+    #expect(gate.accepts(token: newer, key: GlassPageKey(page: 2, navigation: 5)))
+  }
+
+  @Test func `snapshot requests are throttled while scrolling and back off after failures`() {
+    var gate = GlassSnapshotGate()
+    gate.observe(GlassPageKey(page: 1, navigation: 1))
+    #expect(gate.mayRequest(now: 0, changed: true, pending: false))
+    _ = gate.begin(now: 0)
+    #expect(!gate.mayRequest(now: 0.01, changed: true, pending: false), "at most twenty a second while scrolling")
+    #expect(gate.mayRequest(now: 0.06, changed: true, pending: false))
+    #expect(!gate.mayRequest(now: 0.06, changed: true, pending: true))
+    #expect(!gate.mayRequest(now: 0.3, changed: false, pending: false), "a still page refreshes twice a second")
+    #expect(gate.mayRequest(now: 0.6, changed: false, pending: false))
+    gate.failed(now: 1)
+    gate.failed(now: 1)
+    #expect(!gate.mayRequest(now: 1.05, changed: true, pending: false))
+    #expect(gate.mayRequest(now: 1.11, changed: true, pending: false))
+    gate.succeeded()
+    #expect(gate.failures == 0)
+  }
+
+  @Test func `a shifted snapshot must cover the strip, so a fast fling shows the fill`() {
+    let viewport = CGRect(x: 0, y: 0, width: 402, height: 874)
+    let image = viewport.insetBy(dx: 0, dy: -320)
+    let bar = CGRect(x: 0, y: 760 - 24, width: 402, height: 48 + 48)
+    #expect(GlassFlowRules.snapshotCovers(image: image, shift: .zero, needed: bar))
+    #expect(GlassFlowRules.snapshotCovers(image: image, shift: CGPoint(x: 0, y: 300), needed: bar))
+    #expect(!GlassFlowRules.snapshotCovers(image: image, shift: CGPoint(x: 0, y: 520), needed: bar), "the image ends at 674 points and the bar is at 760")
+    #expect(!GlassFlowRules.snapshotCovers(image: .null, shift: .zero, needed: bar))
+  }
+
+  @Test func `at most two frames are in flight and a drawable is taken only when one is free`() {
+    var flight = GlassFlight(limit: 2)
+    #expect(flight.reserve())
+    #expect(flight.reserve())
+    #expect(!flight.reserve(), "the third waits")
+    flight.finish()
+    #expect(flight.reserve())
+    #expect(flight.inFlight == 2)
+    flight.finish()
+    flight.finish()
+    flight.finish()
+    #expect(flight.inFlight == 0)
+    #expect(GlassFlowRules.canAcquireDrawable(outstanding: 0, maximum: 3))
+    #expect(GlassFlowRules.canAcquireDrawable(outstanding: 1, maximum: 3))
+    #expect(!GlassFlowRules.canAcquireDrawable(outstanding: 2, maximum: 3), "one is on screen and two are queued")
+  }
+
+  @Test func `one capture longer than a frame is over budget`() {
+    let frameMs = 1000.0 / 60
+    #expect(LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 35)], now: 1.2, frameMs: frameMs))
+    #expect(!LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 12)], now: 1.2, frameMs: frameMs))
+    #expect(!LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 35)], now: 4, frameMs: frameMs), "it ages out of the window")
+  }
+
+  @Test func `a changing backdrop is recaptured when its change ends, not a second later`() {
+    #expect(!GlassFlowRules.recaptureNow(changed: false, quietFrames: 9, sinceCapture: 9, gap: 1))
+    #expect(!GlassFlowRules.recaptureNow(changed: true, quietFrames: 0, sinceCapture: 0.2, gap: 1), "mid crossfade it waits")
+    #expect(GlassFlowRules.recaptureNow(changed: true, quietFrames: 2, sinceCapture: 0.2, gap: 1), "the crossfade ended")
+    #expect(GlassFlowRules.recaptureNow(changed: true, quietFrames: 0, sinceCapture: 1.1, gap: 1))
+  }
+
+  @Test func `the rim is its own pass of white light, so compositing it with plus lighter is Android's PLUS`() throws {
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return }
     let library = try device.makeLibrary(source: LiquidGlassShader.source, options: nil)
     let descriptor = MTLRenderPipelineDescriptor()
@@ -247,8 +323,9 @@ struct LiquidGlassTests {
     descriptor.fragmentFunction = library.makeFunction(name: LiquidGlassShader.fragmentName)
     descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-    func render(rim: Bool) -> [Float] {
-      let frame = LiquidGlassShader.Frame(width: 48, height: 48, scale: 1, radius: 24, live: false, lens: false, rim: rim, dark: false, fill: GlassFrostStyle.glass.fallback(dark: false))
+    func render(rim: Bool, rimOnly: Bool) -> [Float] {
+      var frame = LiquidGlassShader.Frame(width: 48, height: 48, scale: 1, radius: 24, live: false, lens: false, rim: rim, dark: false, fill: GlassFrostStyle.glass.fallback(dark: false))
+      frame.rimOnly = rimOnly
       let target = device.makeTexture(descriptor: { let made = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 48, height: 48, mipmapped: false); made.usage = [.renderTarget, .shaderRead]; made.storageMode = .shared; return made }())!
       let blank = device.makeTexture(descriptor: MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false))!
       let buffer = queue.makeCommandBuffer()!
@@ -269,17 +346,18 @@ struct LiquidGlassTests {
       target.getBytes(&pixel, bytesPerRow: 4 * 48, from: MTLRegionMake2D(0, 24, 1, 1), mipmapLevel: 0)
       return pixel.map { Float($0) / 255 }
     }
-    let lit = render(rim: true)
-    let plain = render(rim: false)
-    #expect(abs(lit[3] - plain[3]) < 0.01, "the rim keeps the glass's alpha, so the page behind is not darkened")
-    let added = (0..<3).map { lit[$0] - plain[$0] }
-    #expect(added.allSatisfy { $0 > 0.02 })
-    #expect(added.max()! - added.min()! < 0.02, "the rim adds the same white to every channel")
-    let backdrop: Float = 0.2
-    for channel in 0..<3 {
-      let android = (plain[channel] + backdrop * (1 - plain[3])) + added[channel]
-      let ours = lit[channel] + backdrop * (1 - lit[3])
-      #expect(abs(android - ours) < 0.01)
+    let glass = render(rim: true, rimOnly: false)
+    #expect(glass == render(rim: false, rimOnly: false), "the glass pass carries no rim")
+    let light = render(rim: true, rimOnly: true)
+    #expect(light[3] > 0.05)
+    #expect(light.allSatisfy { abs($0 - light[3]) < 0.01 }, "premultiplied white: the same value in all four channels")
+    #expect(render(rim: false, rimOnly: true).allSatisfy { $0 == 0 })
+    for backdrop: [Float] in [[0.2, 0.3, 0.4, 1], [0.2, 0.3, 0.4, 0.5]] {
+      let under = (0..<4).map { glass[$0] + backdrop[$0] * (1 - glass[3]) }
+      let android = (0..<4).map { min(under[$0] + light[3], 1) }
+      let ours = (0..<4).map { min(under[$0] + light[$0], 1) }
+      for channel in 0..<4 { #expect(abs(android[channel] - ours[channel]) < 0.01) }
+      #expect(ours[3] >= under[3], "PLUS adds to alpha too")
     }
   }
 }

@@ -6,162 +6,6 @@ import QuartzCore
 import UIKit
 import WebKit
 
-struct GlassClip {
-  let transform: CGAffineTransform
-  let bounds: CGRect
-  let radius: CGFloat
-
-  var path: CGPath {
-    var transform = transform
-    let radius = min(self.radius, min(bounds.width, bounds.height) / 2)
-    return CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: &transform)
-  }
-
-  var solidRect: CGRect {
-    let scaled = radius * max(abs(transform.a), abs(transform.d))
-    return bounds.applying(transform).insetBy(dx: scaled, dy: scaled)
-  }
-}
-
-struct GlassLayerPiece {
-  let view: UIView?
-  let transform: CGAffineTransform
-  let bounds: CGRect
-  let radius: CGFloat
-  let fill: CGColor?
-  let alpha: CGFloat
-  let clips: [GlassClip]
-
-  var axisAligned: Bool { transform.b == 0 && transform.c == 0 }
-
-  var coverage: GlassStacking.Coverage {
-    let opaque = alpha >= 1 && (fill?.alpha ?? 0) >= 1
-    return GlassStacking.Coverage(rect: bounds.applying(transform), radius: radius * max(abs(transform.a), abs(transform.d)), axisAligned: axisAligned, opaque: opaque, clips: clips.map(\.solidRect))
-  }
-}
-
-@MainActor
-enum GlassBackdrop {
-  static func space(for surface: LiquidGlassSurface) -> UIView? {
-    switch surface.backdropMode {
-    case .source: surface.backdropSource
-    case .beneath: surface.backdropRoot
-    case nil: nil
-    }
-  }
-
-  static func pieces(under glass: UIView, root: UIView, covering wanted: CGRect) -> [GlassLayerPiece] {
-    var chain: [UIView] = []
-    var current: UIView? = glass
-    while let view = current {
-      chain.append(view)
-      if view === root { break }
-      current = view.superview
-    }
-    guard chain.last === root, chain.count > 1 else { return [] }
-    let usesPresentation = chain.allSatisfy { $0.layer.presentation() != nil }
-    func shown(_ view: UIView) -> CALayer? { usesPresentation ? view.layer.presentation() : view.layer }
-    guard let rootLayer = shown(root) else { return [] }
-    var pieces: [GlassLayerPiece] = []
-    var clips: [GlassClip] = []
-    var alpha: CGFloat = 1
-    for level in stride(from: chain.count - 1, to: 0, by: -1) {
-      let parent = chain[level]
-      let child = chain[level - 1]
-      guard let parentLayer = shown(parent), !parentLayer.isHidden else { return [] }
-      alpha *= CGFloat(parentLayer.opacity)
-      let parentTransform = transform(of: parentLayer, to: rootLayer)
-      if let fill = parentLayer.backgroundColor, fill.alpha > 0 {
-        pieces.append(GlassLayerPiece(view: nil, transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius, fill: fill, alpha: alpha, clips: clips))
-      }
-      if parentLayer.masksToBounds {
-        clips.append(GlassClip(transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius))
-      }
-      let subviews = parent.subviews
-      guard let childIndex = subviews.firstIndex(where: { $0 === child }) else { return [] }
-      let siblings = subviews.enumerated().map { GlassStacking.Sibling(index: $0.offset, zPosition: Double((shown($0.element) ?? $0.element.layer).zPosition)) }
-      let visible = clips.reduce(rootLayer.bounds) { $0.intersection($1.bounds.applying($1.transform)) }
-      for index in GlassStacking.below(siblings[childIndex], among: siblings) {
-        let sibling = subviews[index]
-        guard !sibling.isHidden, let layer = usesPresentation ? sibling.layer.presentation() : sibling.layer else { continue }
-        guard !layer.isHidden, layer.opacity > 0.01, layer.bounds.width > 0, layer.bounds.height > 0 else { continue }
-        let siblingTransform = transform(of: layer, to: rootLayer)
-        let area = layer.bounds.applying(siblingTransform).intersection(visible)
-        guard !area.isNull, area.intersects(wanted) else { continue }
-        pieces.append(GlassLayerPiece(view: sibling, transform: siblingTransform, bounds: layer.bounds, radius: layer.cornerRadius, fill: layer.backgroundColor, alpha: alpha * CGFloat(layer.opacity), clips: clips))
-      }
-    }
-    if let floor = GlassStacking.opaqueFloor(pieces.map(\.coverage), covering: wanted) { pieces.removeFirst(floor) }
-    return pieces
-  }
-
-  static func transform(of layer: CALayer, to root: CALayer) -> CGAffineTransform {
-    let origin = layer.convert(CGPoint.zero, to: root)
-    let across = layer.convert(CGPoint(x: 1, y: 0), to: root)
-    let down = layer.convert(CGPoint(x: 0, y: 1), to: root)
-    return CGAffineTransform(a: across.x - origin.x, b: across.y - origin.y, c: down.x - origin.x, d: down.y - origin.y, tx: origin.x, ty: origin.y)
-  }
-
-  static func draw(_ piece: GlassLayerPiece, method: GlassLaunch.Capture, in context: CGContext) -> Bool {
-    context.saveGState()
-    defer { context.restoreGState() }
-    for clip in piece.clips {
-      context.addPath(clip.path)
-      context.clip()
-    }
-    context.concatenate(piece.transform)
-    guard let view = piece.view else {
-      guard let fill = piece.fill else { return true }
-      let radius = min(piece.radius, min(piece.bounds.width, piece.bounds.height) / 2)
-      context.setAlpha(piece.alpha)
-      context.setFillColor(fill)
-      context.addPath(CGPath(roundedRect: piece.bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
-      context.fillPath()
-      return true
-    }
-    let alpha = piece.alpha / (GlassProbe.appliesOwnAlpha(method) ? max(CGFloat(view.layer.opacity), 0.01) : 1)
-    let layered = alpha < 1
-    if layered {
-      context.setAlpha(alpha)
-      context.beginTransparencyLayer(auxiliaryInfo: nil)
-    }
-    defer { if layered { context.endTransparencyLayer() } }
-    return GlassCapture.draw(view, method: method, context: context)
-  }
-}
-
-@MainActor
-enum GlassProbe {
-  private static var ownAlpha: [GlassLaunch.Capture: Bool] = [.hierarchy: true, .layer: true, .auto: true]
-
-  static func appliesOwnAlpha(_ method: GlassLaunch.Capture) -> Bool { ownAlpha[method] ?? false }
-
-  static func run(in window: UIWindow) {
-    let probe = UIView(frame: CGRect(x: 0, y: 0, width: 8, height: 8))
-    probe.backgroundColor = .red
-    probe.alpha = 0.5
-    probe.isUserInteractionEnabled = false
-    window.addSubview(probe)
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-      MainActor.assumeIsolated {
-        var line = "PAGELAB glass probe"
-        for method in [GlassLaunch.Capture.hierarchy, .layer] {
-          let context = CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
-          context.translateBy(x: 0, y: 1)
-          context.scaleBy(x: 1 / 8, y: -1 / 8)
-          UIGraphicsPushContext(context)
-          let drew = GlassCapture.draw(probe, method: method, context: context)
-          UIGraphicsPopContext()
-          let alpha = context.data.map { Double($0.load(fromByteOffset: 3, as: UInt8.self)) / 255 } ?? -1
-          line += String(format: " %@: drew=%@ own_alpha_pixel=%.2f", method.rawValue, drew ? "yes" : "no", alpha)
-        }
-        probe.removeFromSuperview()
-        NSLog("%@", line)
-      }
-    }
-  }
-}
-
 @MainActor
 final class GlassCapture {
   enum Outcome {
@@ -183,56 +27,61 @@ final class GlassCapture {
   private var output: MTLTexture?
   private(set) var lastMs = 0.0
   private var samples: [LiquidGlassRules.CaptureSample] = []
+  private var quiet = 0
   let page = GlassPageShot()
 
-  func overBudget(now: CFTimeInterval) -> Bool { LiquidGlassRules.overBudget(samples, now: now) }
+  func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs) }
+
+  func noteMainThread(ms: Double, now: CFTimeInterval) {
+    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: ms)]
+  }
+
+  var isChanging: Bool { settle > 0 }
+
+  func showFill() {
+    guard texture != nil else { return }
+    texture = nil
+    rect = .null
+    generation += 1
+  }
 
   private(set) var signatureValue = 0
 
   func survey(_ pieces: [GlassLayerPiece], rect wanted: CGRect) {
     var hasher = Hasher()
-    var budget = 4000
+    var budget = 1500
     hasher.combine(wanted.minX.rounded())
     hasher.combine(wanted.minY.rounded())
     hasher.combine(wanted.width.rounded())
     hasher.combine(wanted.height.rounded())
     for piece in pieces {
       for value in [piece.transform.a, piece.transform.b, piece.transform.c, piece.transform.d, piece.transform.tx, piece.transform.ty, piece.alpha] { hasher.combine(value) }
-      if let view = piece.view {
+      if let web = piece.page {
+        for value in [web.scrollView.contentOffset.x, web.scrollView.contentOffset.y, web.scrollView.zoomScale] { hasher.combine(value) }
+        hasher.combine(page.generation)
+      } else if let view = piece.view {
         if let contents = view.layer.contents { hasher.combine(ObjectIdentifier(contents as AnyObject)) }
         for sublayer in view.layer.sublayers ?? [] { Self.walk(sublayer, into: &hasher, budget: &budget) }
       }
     }
-    let value = hasher.finalize()
+    note(hasher.finalize())
+  }
+
+  private func note(_ value: Int) {
     signatureValue = value
     if value != signature {
       signature = value
       settle = LiquidGlassRules.settleFrames
-    }
-  }
-
-  var isIdle: Bool { settle == 0 }
-
-  func surveyPage(_ web: WKWebView, in space: UIView) {
-    let place = GlassBackdrop.transform(of: web.layer.presentation() ?? web.layer, to: space.layer.presentation() ?? space.layer)
-    let values = [place.a, place.d, place.tx, place.ty, web.scrollView.contentOffset.x, web.scrollView.contentOffset.y, web.scrollView.zoomScale, web.bounds.width, web.bounds.height]
-    var placeHasher = Hasher()
-    values.forEach { placeHasher.combine($0) }
-    signatureValue = placeHasher.finalize()
-    var hasher = Hasher()
-    hasher.combine(signatureValue)
-    hasher.combine(page.generation)
-    let value = hasher.finalize()
-    if value != signature {
-      signature = value
-      settle = LiquidGlassRules.settleFrames
+      quiet = 0
+    } else {
+      quiet += 1
     }
   }
 
   func wants(_ wanted: CGRect, now: CFTimeInterval, gap: TimeInterval = 0) -> Bool {
     if now < retryAt { return false }
     if texture == nil || !rect.contains(wanted) || rect.width > wanted.width * 1.5 + 64 || rect.height > wanted.height * 1.5 + 64 { return true }
-    if settle > 0 { return now - capturedAt >= gap }
+    if settle > 0 { return GlassFlowRules.recaptureNow(changed: true, quietFrames: quiet, sinceCapture: now - capturedAt, gap: gap) }
     return now - capturedAt > LiquidGlassRules.idleRefresh
   }
 
@@ -272,7 +121,6 @@ final class GlassCapture {
     capturedAt = now
     settle = max(settle - 1, 0)
     lastMs = (CACurrentMediaTime() - started) * 1000
-    samples = LiquidGlassRules.recentSamples(samples, now: now) + [LiquidGlassRules.CaptureSample(at: now, ms: lastMs)]
     return .captured
   }
 
@@ -381,71 +229,3 @@ final class GlassCapture {
     for sublayer in layer.sublayers ?? [] { walk(sublayer, into: &hasher, budget: &budget) }
   }
 }
-
-@MainActor
-final class GlassPageShot {
-  static let reach: CGFloat = 320
-
-  private(set) var image: CGImage?
-  private(set) var generation = 0
-  private var rect: CGRect = .null
-  private var offset: CGPoint = .zero
-  private var zoom: CGFloat = 1
-  private var pending = false
-  private var requestedSignature: Int?
-  private var requestedAt: CFTimeInterval = 0
-  private(set) var latencies: [Double] = []
-
-  func request(_ web: WKWebView, pixelsPerPoint: CGFloat, signature: Int, now: CFTimeInterval) {
-    guard !pending else { return }
-    guard image == nil || signature != requestedSignature || now - requestedAt > LiquidGlassRules.pageRefresh else { return }
-    pending = true
-    requestedSignature = signature
-    requestedAt = now
-    let rect = web.bounds.insetBy(dx: 0, dy: -Self.reach)
-    let configuration = WKSnapshotConfiguration()
-    configuration.rect = rect
-    configuration.afterScreenUpdates = false
-    configuration.snapshotWidth = NSNumber(value: Double(rect.width * pixelsPerPoint / max(web.traitCollection.displayScale, 1)))
-    let offset = web.scrollView.contentOffset
-    let zoom = web.scrollView.zoomScale
-    let started = CACurrentMediaTime()
-    web.takeSnapshot(with: configuration) { [weak self] image, _ in
-      MainActor.assumeIsolated {
-        guard let self else { return }
-        self.pending = false
-        guard let picture = image?.cgImage else { return }
-        self.image = picture
-        self.generation += 1
-        self.rect = rect
-        self.offset = offset
-        self.zoom = zoom
-        if PhoneTestBuild.isOn { self.latencies.append((CACurrentMediaTime() - started) * 1000) }
-      }
-    }
-  }
-
-  func takeLatencies() -> [Double] {
-    defer { latencies.removeAll() }
-    return latencies
-  }
-
-  func draw(_ web: WKWebView, transform: CGAffineTransform, in context: CGContext) -> Bool {
-    guard let image, web.scrollView.zoomScale == zoom else { return false }
-    let shift = CGPoint(x: web.scrollView.contentOffset.x - offset.x, y: web.scrollView.contentOffset.y - offset.y)
-    context.saveGState()
-    defer { context.restoreGState() }
-    context.concatenate(transform)
-    context.setFillColor((web.underPageBackgroundColor ?? .white).resolvedColor(with: web.traitCollection).cgColor)
-    context.fill(web.bounds)
-    UIImage(cgImage: image).draw(in: rect.offsetBy(dx: -shift.x, dy: -shift.y))
-    return true
-  }
-
-  func release() {
-    image = nil
-    rect = .null
-    requestedSignature = nil
-  }
-}
-

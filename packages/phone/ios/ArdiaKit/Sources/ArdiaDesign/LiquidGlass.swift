@@ -187,6 +187,10 @@ public enum LiquidGlassRules {
     return spent > budgetWindow * 1000 * captureBudgetShare
   }
 
+  public static func overBudget(_ samples: [CaptureSample], now: TimeInterval, frameMs: Double) -> Bool {
+    overBudget(samples, now: now) || recentSamples(samples, now: now).contains { GlassFlowRules.overFrame(captureMs: $0.ms, frameMs: frameMs) }
+  }
+
   public static func acceptsCapture(_ path: Path) -> Bool { path == .live }
 
   public static let captureRetryBase: TimeInterval = 0.05

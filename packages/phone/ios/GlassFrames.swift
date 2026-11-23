@@ -15,8 +15,12 @@ final class GlassFrames: NSObject {
   private var slowTimer: Timer?
   private var stats = FrameStats()
   private var lastTimestamp: CFTimeInterval = 0
-  private(set) var inFlight = 0
+  private var flight = GlassFlight()
   private var stillsWaiting = false
+  private var framing = false
+  private var framedStills: [LiquidGlassSurface] = []
+
+  var inFlight: Int { flight.inFlight }
 
   override init() {
     super.init()
@@ -58,18 +62,25 @@ final class GlassFrames: NSObject {
     for surface in surfaces.allObjects { surface.needsPath() }
   }
 
-  var canSubmit: Bool { inFlight < LiquidGlassRules.framesInFlight }
+  func reserve() -> Bool { flight.reserve() }
 
   func submit(_ buffer: MTLCommandBuffer) {
-    inFlight += 1
     buffer.addCompletedHandler { _ in
       DispatchQueue.main.async { MainActor.assumeIsolated { GlassFrames.shared.finished() } }
     }
     buffer.commit()
   }
 
+  func release() { finished() }
+
+  func drawsInThisFrame(_ surface: LiquidGlassSurface) -> Bool {
+    guard framing else { return false }
+    if !framedStills.contains(where: { $0 === surface }) { framedStills.append(surface) }
+    return true
+  }
+
   private func finished() {
-    inFlight = max(inFlight - 1, 0)
+    flight.finish()
     if stillsWaiting {
       stillsWaiting = false
       for surface in surfaces.allObjects where surface.window != nil && surface.stillPending { surface.drawPendingStill() }
@@ -131,8 +142,9 @@ final class GlassFrames: NSObject {
   @objc private func frame(_ link: CADisplayLink) {
     let started = CACurrentMediaTime()
     let now = link.timestamp
+    let frameMs = max(link.targetTimestamp - link.timestamp, 1.0 / 120) * 1000
     if PhoneTestBuild.isOn, lastTimestamp > 0 {
-      stats.note(interval: now - lastTimestamp, target: max(link.targetTimestamp - link.timestamp, 1.0 / 120))
+      stats.note(interval: now - lastTimestamp, target: frameMs / 1000)
     }
     lastTimestamp = now
     let live = surfaces.allObjects.filter { $0.window != nil && $0.wantsFrames }
@@ -140,10 +152,15 @@ final class GlassFrames: NSObject {
       schedule()
       return
     }
-    guard canSubmit, let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
+    guard flight.reserve() else {
       if PhoneTestBuild.isOn { stats.dropped += 1 }
       return
     }
+    guard let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
+      flight.finish()
+      return
+    }
+    framing = true
     var groups: [ObjectIdentifier: (owner: AnyObject, space: UIView, members: [LiquidGlassSurface])] = [:]
     var still: [LiquidGlassSurface] = []
     for surface in live {
@@ -157,16 +174,16 @@ final class GlassFrames: NSObject {
     for entry in groups.values {
       let capture = captures.object(forKey: entry.owner) ?? GlassCapture()
       captures.setObject(capture, forKey: entry.owner)
-      collect(capture, entry.space, entry.members, owner: entry.owner, into: buffer, now: now)
+      collect(capture, entry.space, entry.members, owner: entry.owner, into: buffer, now: now, frameMs: frameMs)
       for surface in entry.members {
-        if LiquidGlassRules.acceptsCapture(surface.choice.path) {
-          surface.draw(with: capture, space: entry.space, into: buffer)
-        } else {
-          surface.draw(with: nil, space: nil, into: buffer)
-        }
+        surface.draw(with: LiquidGlassRules.acceptsCapture(surface.choice.path) ? capture : nil, space: entry.space, into: buffer)
       }
     }
     for surface in still { surface.draw(with: nil, space: nil, into: buffer) }
+    framing = false
+    let stills = framedStills
+    framedStills.removeAll()
+    for surface in stills where surface.window != nil { surface.draw(with: nil, space: nil, into: buffer) }
     submit(buffer)
     trimCaptures(keeping: groups.values.map(\.owner))
     if PhoneTestBuild.isOn {
@@ -176,7 +193,19 @@ final class GlassFrames: NSObject {
     schedule()
   }
 
-  private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, into buffer: MTLCommandBuffer, now: CFTimeInterval) {
+  private func collect(_ capture: GlassCapture, _ space: UIView, _ members: [LiquidGlassSurface], owner: AnyObject, into buffer: MTLCommandBuffer, now: CFTimeInterval, frameMs: Double) {
+    let started = CACurrentMediaTime()
+    defer {
+      let spent = (CACurrentMediaTime() - started) * 1000
+      capture.noteMainThread(ms: spent, now: now)
+      if PhoneTestBuild.isOn { stats.mainMs.append(spent) }
+      if capture.overBudget(now: now, frameMs: frameMs), !overBudget.contains(owner) {
+        overBudget.add(owner)
+        PendingCounts.add(PendingCounts.glassCapturesOverBudget)
+        NSLog("PAGELAB look glass capture over budget: %@ falls back to its fill until the app returns (last %.1f ms)", members.map(\.label).joined(separator: ","), spent)
+        members.forEach { $0.needsPath() }
+      }
+    }
     var wanted = CGRect.null
     var sigma = 0.0
     var pixelsPerPoint: CGFloat = 1
@@ -186,50 +215,38 @@ final class GlassFrames: NSObject {
       sigma = max(sigma, surface.blurSigma)
       pixelsPerPoint = surface.capturePixelsPerPoint
     }
-    wanted = wanted.intersection(space.bounds)
-    guard !wanted.isNull, !wanted.isEmpty else { return }
+    let strip = wanted.intersection(space.bounds)
+    guard !strip.isNull, !strip.isEmpty else { return }
     let method = GlassLaunch.capture
+    let sourceWhole = members[0].backdropMode == .source
     let pieces: [GlassLayerPiece]
     let web: WKWebView?
-    if members[0].backdropMode == .beneath, let root = members[0].backdropRoot {
-      pieces = GlassBackdrop.pieces(under: members[0], root: root, covering: wanted)
-      web = method == .auto ? pieces.lazy.compactMap { $0.view.flatMap(GlassSources.page(in:)) }.first : nil
-    } else {
-      wanted = space.bounds
-      pieces = [GlassLayerPiece(view: space, transform: .identity, bounds: space.bounds, radius: 0, fill: nil, alpha: 1, clips: [])]
+    if sourceWhole {
       web = method == .auto ? GlassSources.page(in: space) : nil
-    }
-    let sourceWhole = members[0].backdropMode == .source
-    if sourceWhole, let web {
-      capture.surveyPage(web, in: space)
+      wanted = web == nil ? space.bounds : strip
+      pieces = GlassBackdrop.pieces(of: space, covering: wanted, web: web)
+    } else if let root = members[0].backdropRoot {
+      wanted = strip
+      let found = method == .auto ? GlassSources.page(in: root) : nil
+      web = found.flatMap { candidate in members.contains { $0.isDescendant(of: candidate) } ? nil : candidate }
+      pieces = GlassBackdrop.pieces(under: members[0], root: root, covering: wanted, web: web)
     } else {
-      capture.survey(pieces, rect: wanted)
+      return
     }
-    if let web { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, signature: capture.signatureValue, now: now) }
+    let page = pieces.first { $0.page != nil }
+    if let web, page != nil, capture.page.observe(web) { capture.showFill() }
+    capture.survey(pieces, rect: wanted)
+    if let web, page != nil { capture.page.request(web, pixelsPerPoint: pixelsPerPoint, changed: capture.isChanging, now: now) }
     guard capture.wants(wanted, now: now, gap: sourceWhole && web == nil ? LiquidGlassRules.backdropRefresh : 0) else { return }
+    if let web, let page, !capture.page.covers(wanted.applying(page.transform.inverted()), of: web) {
+      capture.showFill()
+      return
+    }
+    let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole && web == nil ? .hierarchy : .layer) : method
     let outcome = capture.capture(rect: wanted, pixelsPerPoint: pixelsPerPoint, sigma: sigma, into: buffer, now: now) { context in
       guard method != .none, !pieces.isEmpty else { return false }
-      if sourceWhole, let web {
-        if let fill = space.layer.backgroundColor {
-          context.setFillColor(fill)
-          context.fill(space.bounds)
-        }
-        return capture.page.draw(web, transform: GlassBackdrop.transform(of: web.layer, to: space.layer), in: context)
-      }
-      let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole ? .hierarchy : .layer) : method
       var drew = true
-      for piece in pieces {
-        if !GlassBackdrop.draw(piece, method: pieceMethod, in: context) { drew = false }
-        if let web, let view = piece.view, web.isDescendant(of: view) {
-          context.saveGState()
-          for clip in piece.clips {
-            context.addPath(clip.path)
-            context.clip()
-          }
-          if !capture.page.draw(web, transform: GlassBackdrop.transform(of: web.layer, to: space.layer), in: context) { drew = false }
-          context.restoreGState()
-        }
-      }
+      for piece in pieces where !GlassBackdrop.draw(piece, method: pieceMethod, page: capture.page, in: context) { drew = false }
       return drew
     }
     switch outcome {
@@ -237,12 +254,9 @@ final class GlassFrames: NSObject {
       if PhoneTestBuild.isOn {
         stats.noteCapture(ms: capture.lastMs, pieces: pieces.count)
         stats.snapshotMs += capture.page.takeLatencies()
-      }
-      if capture.overBudget(now: now), !overBudget.contains(owner) {
-        overBudget.add(owner)
-        PendingCounts.add(PendingCounts.glassCapturesOverBudget)
-        NSLog("PAGELAB look glass capture over budget: %@ falls back to its fill until the app returns", members.map(\.label).joined(separator: ","))
-        members.forEach { $0.needsPath() }
+        let counts = capture.page.takeCounts()
+        stats.rejected += counts.rejected
+        stats.uncovered += counts.uncovered
       }
     case .failed:
       if PhoneTestBuild.isOn {
@@ -259,6 +273,9 @@ final class GlassFrames: NSObject {
     var late = 0
     var dropped = 0
     var failed = 0
+    var rejected = 0
+    var uncovered = 0
+    var mainMs: [Double] = []
     var worstInterval = 0.0
     var captures = 0
     var pieces = 0
@@ -287,7 +304,7 @@ final class GlassFrames: NSObject {
       if since == 0 { since = now }
       guard now - since >= 1, frames > 0 else { return nil }
       func fixed(_ value: Double) -> String { String(format: "%.2f", value) }
-      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
+      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
       self = FrameStats()
       since = now
       return line

@@ -1,3 +1,4 @@
+import ArdiaBrowser
 import QuartzCore
 import UIKit
 import WebKit
@@ -8,15 +9,17 @@ final class GlassLabScroll: NSObject {
 
   private let web: WKWebView
   private let seconds: Double
+  private let period: Double
   private var link: CADisplayLink?
   private var started: CFTimeInterval = 0
 
-  private init(web: WKWebView, seconds: Double) {
+  private init(web: WKWebView, seconds: Double, period: Double) {
     self.web = web
     self.seconds = seconds
+    self.period = period
   }
 
-  static func start(after delay: Double, for seconds: Double) {
+  static func start(after delay: Double, for seconds: Double, period: Double = 4) {
     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
       MainActor.assumeIsolated {
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
@@ -24,7 +27,7 @@ final class GlassLabScroll: NSObject {
           NSLog("PAGELAB glass scroll found no page")
           return
         }
-        let scroll = GlassLabScroll(web: web, seconds: seconds)
+        let scroll = GlassLabScroll(web: web, seconds: seconds, period: period)
         running = scroll
         scroll.begin()
       }
@@ -42,6 +45,7 @@ final class GlassLabScroll: NSObject {
 
   private func begin() {
     started = CACurrentMediaTime()
+    WebTab.labScrollCountsAsTouch = true
     let made = CADisplayLink(target: self, selector: #selector(tick(_:)))
     made.add(to: .main, forMode: .common)
     link = made
@@ -52,11 +56,12 @@ final class GlassLabScroll: NSObject {
     let elapsed = CACurrentMediaTime() - started
     let scroll = web.scrollView
     let reach = max(min(scroll.contentSize.height - scroll.bounds.height, 2400), 0)
-    let wave = (1 - cos(elapsed / 4 * 2 * Double.pi)) / 2
+    let wave = (1 - cos(elapsed / period * 2 * Double.pi)) / 2
     scroll.contentOffset = CGPoint(x: scroll.contentOffset.x, y: CGFloat(wave) * reach - scroll.adjustedContentInset.top)
     guard elapsed >= seconds else { return }
     link.invalidate()
     self.link = nil
+    WebTab.labScrollCountsAsTouch = false
     Self.running = nil
     NSLog("PAGELAB glass scroll done")
   }

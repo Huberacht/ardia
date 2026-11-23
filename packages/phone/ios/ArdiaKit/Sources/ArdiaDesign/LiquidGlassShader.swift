@@ -13,6 +13,7 @@ public enum LiquidGlassShader {
     case frostRed, frostGreen, frostBlue, frostAlpha
     case edgeRed, edgeGreen, edgeBlue, edgeAlpha
     case tintRed, tintGreen, tintBlue, tintAlpha
+    case rimOnly
   }
 
   public struct Frame: Equatable, Sendable {
@@ -30,6 +31,7 @@ public enum LiquidGlassShader {
     public var style: GlassFrostStyle
     public var params: LiquidGlassParams
     public var bound: LiquidGlassBound?
+    public var rimOnly = false
 
     public init(width: Double, height: Double, scale: Double, radius: Double, live: Bool, lens: Bool, rim: Bool, dark: Bool, uv: (left: Double, top: Double, width: Double, height: Double) = (0, 0, 1, 1), fill: GlassInk, tint: GlassInk = .clear, style: GlassFrostStyle = .glass, params: LiquidGlassParams = .defaults, bound: LiquidGlassBound? = nil) {
       self.width = width
@@ -96,6 +98,7 @@ public enum LiquidGlassShader {
       set(.frostRed, ink: style.tint(dark: dark))
       set(.edgeRed, ink: style.edge(dark: dark))
       set(.tintRed, ink: tint)
+      set(.rimOnly, rimOnly ? 1 : 0)
       return values
     }
   }
@@ -115,6 +118,7 @@ struct GlassUniforms {
   float frostRed; float frostGreen; float frostBlue; float frostAlpha;
   float edgeRed; float edgeGreen; float edgeBlue; float edgeAlpha;
   float tintRed; float tintGreen; float tintBlue; float tintAlpha;
+  float rimOnly;
 };
 
 struct GlassVertexOut {
@@ -181,6 +185,20 @@ static float4 over(float4 top, float4 under) {
   return top + under * (1.0 - top.a);
 }
 
+static float rimLight(float2 p, float edge, float inward, float feather, constant GlassUniforms &u) {
+  float outer = 1.0 - smoothstep(0.0, feather, edge);
+  float inner = 1.0 - smoothstep(u.band, u.band + feather, inward);
+  float mask = outer * inner;
+  if (mask <= 0.0) return 0.0;
+  float2 normal = shapeNormal(p, u);
+  float2 light = float2(u.lightX, u.lightY);
+  float progress = clamp(inward / max(u.band, feather), 0.0, 1.0);
+  float fade = u.falloff * progress * progress;
+  float lit = clamp(pow(max(dot(normal, light), 0.0), u.sharpness) * (u.strength - fade), 0.0, 1.0);
+  float back = clamp(pow(max(dot(normal, -light), 0.0), u.sharpness) * (u.opposite - fade), 0.0, 1.0);
+  return clamp((lit + back) * mask, 0.0, 1.0) * u.rimOpacity;
+}
+
 fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant GlassUniforms &u [[buffer(0)]], texture2d<float> source [[texture(0)]]) {
   constexpr sampler smooth(coord::normalized, address::clamp_to_edge, filter::linear);
   float2 p = in.position.xy / u.scale;
@@ -189,6 +207,7 @@ fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant Gla
   float coverage = 1.0 - smoothstep(-0.5 * feather, 0.5 * feather, edge);
   if (coverage <= 0.0) return float4(0.0);
   float inward = max(-edge, 0.0);
+  if (u.rimOnly > 0.5) return float4(u.rim > 0.5 ? rimLight(p, edge, inward, feather, u) : 0.0) * coverage;
   float4 color;
   if (u.live > 0.5) {
     float progress = clamp(inward / u.bezel, 0.0, 1.0);
@@ -213,21 +232,6 @@ fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant Gla
   float edgeMask = 1.0 - smoothstep(u.edgeWidth, u.edgeWidth + feather, inward);
   color = over(float4(u.edgeRed, u.edgeGreen, u.edgeBlue, u.edgeAlpha) * edgeMask, color);
   color = over(float4(u.tintRed, u.tintGreen, u.tintBlue, u.tintAlpha), color);
-  if (u.rim > 0.5) {
-    float outer = 1.0 - smoothstep(0.0, feather, edge);
-    float inner = 1.0 - smoothstep(u.band, u.band + feather, inward);
-    float mask = outer * inner;
-    if (mask > 0.0) {
-      float2 normal = shapeNormal(p, u);
-      float2 light = float2(u.lightX, u.lightY);
-      float progress = clamp(inward / max(u.band, feather), 0.0, 1.0);
-      float fade = u.falloff * progress * progress;
-      float lit = clamp(pow(max(dot(normal, light), 0.0), u.sharpness) * (u.strength - fade), 0.0, 1.0);
-      float back = clamp(pow(max(dot(normal, -light), 0.0), u.sharpness) * (u.opposite - fade), 0.0, 1.0);
-      float alpha = clamp((lit + back) * mask, 0.0, 1.0) * u.rimOpacity;
-      color.rgb = min(color.rgb + alpha, 1.0);
-    }
-  }
   return color * coverage;
 }
 """

@@ -73,6 +73,7 @@ public final class WebTab: DiscardablePage, Identifiable {
   public private(set) var pageZoom = 1.0
   public private(set) var isFindingInPage = false
   public private(set) var navigationGeneration = 0
+  public static var labScrollCountsAsTouch = false
   public private(set) var hasCommittedLoad = true
   public var request: PageRequest?
   public let blockedResources = BlockedResourceCounter()
@@ -537,7 +538,7 @@ public final class WebTab: DiscardablePage, Identifiable {
     let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
     let atTop = offset <= 1
     if atTop != isScrolledToTop { isScrolledToTop = atTop }
-    guard scrollView.isTracking || scrollView.isDecelerating else { return }
+    guard scrollView.isTracking || scrollView.isDecelerating || Self.labScrollCountsAsTouch else { return }
     if let next = scrollTracker.offer(offset: offset, contentHeight: scrollView.contentSize.height, viewportHeight: scrollView.bounds.height - scrollView.adjustedContentInset.top - scrollView.adjustedContentInset.bottom) {
       scrollDirection = next
     }

@@ -16,16 +16,22 @@ final class LiquidGlassSurface: UIView {
   var label: String = "-"
 
   private let fillLayer = CALayer()
-  private let lensLayer = CAMetalLayer()
+  private let lens = GlassTarget(adds: false)
+  private let rim = GlassTarget(adds: true)
+  private var lensLayer: CAMetalLayer { lens.layer }
   private let bound = LiquidGlassSurfaceBound()
   private(set) var choice = LiquidGlassRules.choose(classic: false, metal: false, flat: false, lensFailed: false, rimFailed: false, holdsPage: false)
   private(set) var backdropMode: LiquidGlassRules.Backdrop?
   private(set) weak var backdropSource: FrostSourceView?
   private(set) weak var backdropRoot: UIView?
   private(set) var stillPending = false
-  private var drawnUniforms: [Float]?
-  private var drawnGeneration = -1
-  private var drawnSize: CGSize = .zero
+  private var drawnUniforms: [Float]? {
+    get { lens.drawn }
+    set {
+      lens.drawn = newValue
+      rim.drawn = newValue
+    }
+  }
   private var reportedPath: String?
   private var batching = 0
   private var batchedPath = false
@@ -38,14 +44,9 @@ final class LiquidGlassSurface: UIView {
     isAccessibilityElement = false
     backgroundColor = .clear
     fillLayer.cornerCurve = .circular
-    lensLayer.pixelFormat = .bgra8Unorm
-    lensLayer.framebufferOnly = true
-    lensLayer.isOpaque = false
-    lensLayer.allowsNextDrawableTimeout = true
-    lensLayer.maximumDrawableCount = 3
-    lensLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
     layer.addSublayer(fillLayer)
-    layer.addSublayer(lensLayer)
+    layer.addSublayer(lens.layer)
+    layer.addSublayer(rim.layer)
     registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: LiquidGlassSurface, _: UITraitCollection) in view.invalidate() }
   }
 
@@ -105,14 +106,18 @@ final class LiquidGlassSurface: UIView {
   }
 
   var isShownOnScreen: Bool {
-    guard let window else { return false }
+    guard let window, var shown = region(in: window) else { return false }
+    shown = shown.intersection(window.bounds)
     var view: UIView? = self
     while let current = view {
       if current.isHidden || current.alpha <= 0.01 { return false }
+      if current !== self, current.clipsToBounds || current.layer.masksToBounds {
+        shown = shown.intersection(current.convert(current.bounds, to: window))
+      }
+      if shown.isNull || shown.isEmpty { return false }
       view = current.superview
     }
-    guard let shown = region(in: window) else { return false }
-    return shown.intersects(window.bounds)
+    return true
   }
 
   private var hasRunningAnimations: Bool {
@@ -219,40 +224,31 @@ final class LiquidGlassSurface: UIView {
       live = true
       texture = captured
     }
-    let frame = makeFrame(size: size, live: live, uv: uv)
-    let uniforms = frame.uniforms
     let generation = capture?.generation ?? -1
-    if uniforms == drawnUniforms, generation == drawnGeneration, size == drawnSize { return }
-    guard let drawable = lensLayer.nextDrawable() else { return }
-    let pass = MTLRenderPassDescriptor()
-    pass.colorAttachments[0].texture = drawable.texture
-    pass.colorAttachments[0].loadAction = .clear
-    pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-    pass.colorAttachments[0].storeAction = .store
-    guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return }
-    encoder.setRenderPipelineState(pipeline)
-    uniforms.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }
-    if let texture { encoder.setFragmentTexture(texture, index: 0) } else { encoder.setFragmentTexture(GlassBlank.texture, index: 0) }
-    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-    encoder.endEncoding()
-    buffer.present(drawable)
-    drawnUniforms = uniforms
-    drawnGeneration = generation
-    drawnSize = size
-    if lensLayer.isHidden || !fillLayer.isHidden {
-      CATransaction.begin()
-      CATransaction.setDisableActions(true)
+    let drewLens = lens.draw(makeFrame(size: size, live: live, uv: uv, rimOnly: false).uniforms, generation: generation, size: size, texture: texture, pipeline: pipeline, into: buffer)
+    let rimShown = choice.rim
+    if rimShown { rim.draw(makeFrame(size: size, live: false, uv: uv, rimOnly: true).uniforms, generation: 0, size: size, texture: nil, pipeline: pipeline, into: buffer) }
+    guard drewLens || rim.layer.isHidden == rimShown else { return }
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    if lens.hasDrawn {
       lensLayer.isHidden = false
       fillLayer.isHidden = true
-      CATransaction.commit()
     }
+    rim.layer.isHidden = !(rimShown && rim.hasDrawn)
+    CATransaction.commit()
   }
 
   private func drawStill() {
     guard window != nil, GlassMetal.shared.isReady, !classic else { return }
-    guard GlassFrames.shared.canSubmit, let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
+    if GlassFrames.shared.drawsInThisFrame(self) { return }
+    guard GlassFrames.shared.reserve() else {
       stillPending = true
       GlassFrames.shared.waitForRoom()
+      return
+    }
+    guard let buffer = GlassMetal.shared.queue?.makeCommandBuffer() else {
+      GlassFrames.shared.release()
       return
     }
     stillPending = false
@@ -265,10 +261,10 @@ final class LiquidGlassSurface: UIView {
     drawStill()
   }
 
-  private func makeFrame(size: CGSize, live: Bool, uv: (left: Double, top: Double, width: Double, height: Double)) -> LiquidGlassShader.Frame {
+  private func makeFrame(size: CGSize, live: Bool, uv: (left: Double, top: Double, width: Double, height: Double), rimOnly: Bool) -> LiquidGlassShader.Frame {
     let dark = isDark
     let fill = choice.path == .solid ? (solidFill.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? GlassFrostStyle.glass.fallback(dark: dark)) : GlassFrostStyle.glass.fallback(dark: dark)
-    return LiquidGlassShader.Frame(
+    var frame = LiquidGlassShader.Frame(
       width: Double(size.width),
       height: Double(size.height),
       scale: Double(lensLayer.contentsScale),
@@ -282,6 +278,8 @@ final class LiquidGlassSurface: UIView {
       tint: tint.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? .clear,
       bound: bound.measure(size)
     )
+    frame.rimOnly = rimOnly
+    return frame
   }
 
   private func traits(_ dark: Bool) -> UITraitCollection { UITraitCollection(userInterfaceStyle: dark ? .dark : .light) }
@@ -299,10 +297,7 @@ final class LiquidGlassSurface: UIView {
     CATransaction.setDisableActions(true)
     let frame = CGRect(origin: .zero, size: size)
     fillLayer.frame = frame
-    lensLayer.frame = frame
-    lensLayer.contentsScale = scale
-    lensLayer.drawableSize = CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
-    lensLayer.device = GlassMetal.shared.device
+    for target in [lens, rim] { target.lay(out: frame, scale: scale) }
     CATransaction.commit()
     invalidate()
   }
@@ -323,6 +318,7 @@ final class LiquidGlassSurface: UIView {
     if !metal {
       fillLayer.isHidden = false
       lensLayer.isHidden = true
+      rim.layer.isHidden = true
     }
     CATransaction.commit()
   }
@@ -383,3 +379,63 @@ extension GlassInk {
     return GlassInk(red: mix(red, under.red), green: mix(green, under.green), blue: mix(blue, under.blue), alpha: alpha)
   }
 }
+
+@MainActor
+final class GlassTarget {
+  let layer = CAMetalLayer()
+  var drawn: [Float]?
+  private var drawnGeneration = -1
+  private var drawnSize: CGSize = .zero
+  private(set) var outstanding = 0
+  private(set) var hasDrawn = false
+
+  init(adds: Bool) {
+    layer.pixelFormat = .bgra8Unorm
+    layer.framebufferOnly = true
+    layer.isOpaque = false
+    layer.allowsNextDrawableTimeout = true
+    layer.maximumDrawableCount = 3
+    layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
+    layer.isHidden = true
+    if adds { layer.compositingFilter = "plusL" }
+  }
+
+  func lay(out frame: CGRect, scale: CGFloat) {
+    layer.frame = frame
+    layer.contentsScale = scale
+    layer.drawableSize = CGSize(width: (frame.width * scale).rounded(), height: (frame.height * scale).rounded())
+    layer.device = GlassMetal.shared.device
+  }
+
+  @discardableResult
+  func draw(_ uniforms: [Float], generation: Int, size: CGSize, texture: MTLTexture?, pipeline: MTLRenderPipelineState, into buffer: MTLCommandBuffer) -> Bool {
+    if uniforms == drawn, generation == drawnGeneration, size == drawnSize { return false }
+    guard GlassFlowRules.canAcquireDrawable(outstanding: outstanding, maximum: layer.maximumDrawableCount), let drawable = layer.nextDrawable() else { return false }
+    let pass = MTLRenderPassDescriptor()
+    pass.colorAttachments[0].texture = drawable.texture
+    pass.colorAttachments[0].loadAction = .clear
+    pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+    pass.colorAttachments[0].storeAction = .store
+    guard let encoder = buffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+    encoder.setRenderPipelineState(pipeline)
+    uniforms.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }
+    encoder.setFragmentTexture(texture ?? GlassBlank.texture, index: 0)
+    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    encoder.endEncoding()
+    outstanding += 1
+    drawable.addPresentedHandler { [weak self] _ in
+      DispatchQueue.main.async { MainActor.assumeIsolated { self?.presented() } }
+    }
+    buffer.present(drawable)
+    drawn = uniforms
+    drawnGeneration = generation
+    drawnSize = size
+    hasDrawn = true
+    return true
+  }
+
+  private func presented() {
+    outstanding = max(outstanding - 1, 0)
+  }
+}
+
