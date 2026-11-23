@@ -837,3 +837,18 @@ test("the frame cap counts frames seen only in isolated worlds too", () => {
   assert.ok(book.scripts.has("known"), "a frame already counted still takes new scripts");
   logpointBook.discardScriptBook(book);
 });
+
+test("an LCP image that starts loading before TTFB isn't counted twice", () => {
+  const start = 11_000_000_000;
+  const events = [
+    navStart(start, "M", "https://a.example/", { id: "L" }),
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 1000, args: { data: { requestId: "L", url: "https://a.example/", frame: "M" } } },
+    { name: "ResourceReceiveResponse", ph: "I", pid: 2, tid: 3, ts: start + 1_000_000, args: { data: { requestId: "L", statusCode: 200, timing: { requestTime: (start + 1000) / 1e6, receiveHeadersEnd: 999 } } } },
+    { name: "ResourceSendRequest", ph: "I", pid: 2, tid: 3, ts: start + 100_000, args: { data: { requestId: "IMG", url: "https://a.example/hero.jpg", frame: "M" } } },
+    { name: "ResourceFinish", ph: "I", pid: 2, tid: 3, ts: start + 1_500_000, args: { data: { requestId: "IMG", finishTime: (start + 1_500_000) / 1e6 } } },
+    { name: "largestContentfulPaint::Candidate", ph: "R", pid: 2, tid: 3, ts: start + 1_600_000, args: { frame: "M", data: { candidateIndex: 1, navigationId: "L", type: "image", nodeId: 9, url: "https://a.example/hero.jpg" } } },
+  ];
+  const lcp = analyzeTrace(events).insights.find((i) => i.id === "lcp-breakdown");
+  assert.deepEqual(lcp.details.phases, { ttfbMs: 1000, loadDelayMs: 0, loadDurationMs: 500, renderDelayMs: 100 });
+  assert.match(lcp.summary, /largest phase is ttfb/);
+});

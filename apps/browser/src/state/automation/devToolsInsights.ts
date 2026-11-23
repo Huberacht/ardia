@@ -45,9 +45,12 @@ function lcpInsight(model: Model, lcp: Lcp | null, doc: RequestRow | null): Insi
     if (value > biggest[1]) biggest = [key, value];
   };
   if (resource && resource.finishTs !== null) {
-    note("loadDelayMs", resource.sendTs - (ttfbEnd ?? model.origin));
-    note("loadDurationMs", resource.finishTs - resource.sendTs);
-    note("renderDelayMs", lcp.ts - resource.finishTs);
+    const documentReady = ttfbEnd ?? model.origin;
+    const loadStart = Math.min(Math.max(resource.sendTs, documentReady), lcp.ts);
+    const loadEnd = Math.min(Math.max(resource.finishTs, loadStart), lcp.ts);
+    note("loadDelayMs", loadStart - documentReady);
+    note("loadDurationMs", loadEnd - loadStart);
+    note("renderDelayMs", lcp.ts - loadEnd);
   } else {
     note("renderDelayMs", lcp.ts - (ttfbEnd ?? model.origin));
   }
