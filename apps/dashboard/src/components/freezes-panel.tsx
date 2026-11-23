@@ -16,7 +16,7 @@ function Signatures({ data }: { data: Freezes }) {
       <p className="mb-2 text-sm text-muted-foreground">
         {formatExact(data.freezes)} freezes, {formatMs(data.frozenMs)} frozen in all, across {formatExact(data.signatures.length)} places. Top first: most people affected, then most time frozen.
         {" "}
-        {data.namedPlaces === data.signatures.length ? "Every place is named." : `${formatExact(data.namedPlaces)} of ${formatExact(data.signatures.length)} places named; the rest come from builds without published symbols.`}
+        {`${formatExact(data.namedPlaces)} of ${formatExact(data.signatures.length)} places named.`}
       </p>
       <DataTable
         dense

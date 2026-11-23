@@ -107,7 +107,7 @@ test("names go to the Swift and C++ demanglers that are there, and stay as they 
   };
   const demanglers = { swift: [["/nonexistent/swift-demangle", []], [fake("swift", "swift:"), []]], cxx: [[fake("cxx", "cxx:"), []]] };
   const names = ["_$s5Ardia1AC", "__ZN4base5ValueD2Ev", "____ZN4base1FEv_block_invoke_2", "-[Foo bar:]", "___49+[Foo baz]_block_invoke", "_main"];
-  assert.deepEqual(demangle(names, demanglers), ["swift:$s5Ardia1AC", "cxx:_ZN4base5ValueD2Ev", "cxx:___ZN4base1FEv_block_invoke_2", "-[Foo bar:]", "__49+[Foo baz]_block_invoke", "main"]);
+  assert.deepEqual(demangle(names, demanglers), ["swift:$s5Ardia1AC", "cxx:_ZN4base5ValueD2Ev", "invocation function for block in cxx:_ZN4base1FEv", "-[Foo bar:]", "__49+[Foo baz]_block_invoke", "main"]);
   assert.deepEqual(demangle(names, NO_DEMANGLERS), ["$s5Ardia1AC", "_ZN4base5ValueD2Ev", "___ZN4base1FEv_block_invoke_2", "-[Foo bar:]", "__49+[Foo baz]_block_invoke", "main"]);
 });
 
@@ -289,4 +289,52 @@ test("hostile telemetry never reaches SQL or the stored rows as anything but a c
     }
     if (typeof value === "string") assert.equal(knownSql("sandbox", [value]), knownSql("sandbox", []), id);
   }
+});
+
+test("a function the linker folded with identical ones says so instead of passing for the one name it kept", () => {
+  const binary = machO({
+    uuid: ENGINE_UUID,
+    base: 0,
+    textAddr: 0x4000,
+    text: Buffer.alloc(0x100),
+    symbols: [
+      { name: "<deduplicated_symbol>", address: 0x4000 },
+      { name: "__ZN5blink21ScriptEvaluationResultC2Ev", address: 0x4000, type: 0x0e },
+      { name: "_only_one", address: 0x4080 },
+    ],
+  });
+  const map = buildMap(binary, ENGINE_UUID, { demanglers: NO_DEMANGLERS });
+  assert.deepEqual(map.entries.map((e) => e.name), ["_ZN5blink21ScriptEvaluationResultC2Ev (identical code folded)", "only_one"]);
+});
+
+test("a cached match map gives way to a dSYM a release publishes later, and stays when that download fails", { skip: !haveXz && "needs tar and xz" }, async () => {
+  const dwarf = "Ardia.app.dSYM/Contents/Resources/DWARF/Ardia";
+  const release = join(scratch, "later-release");
+  mkdirSync(join(release, "Ardia.app.dSYM/Contents/Resources/DWARF"), { recursive: true });
+  writeFileSync(join(release, dwarf), appBinary());
+  const archive = join(scratch, "Ardia-0.2.49-symbols.tar.xz");
+  assert.equal(spawnSync("tar", ["-cJf", archive, "-C", release, "Ardia.app.dSYM"]).status, 0);
+  const releases = [
+    { tag_name: "v0.2.50", assets: [{ name: "Ardia-0.2.50-uuids.txt" }, { name: "Ardia-0.2.50-symbols.tar.xz" }] },
+    { tag_name: "v0.2.49", assets: [{ name: "Ardia-0.2.49-uuids.txt" }, { name: "Ardia-0.2.49-symbols.tar.xz" }] },
+  ];
+  let serveArchive = false;
+  const fetch = async (url) => {
+    const u = decodeURIComponent(String(url));
+    if (u.startsWith("https://api.github.com/")) return new Response(JSON.stringify(u.endsWith("page=1") ? releases : []), { status: 200 });
+    if (u.endsWith("Ardia-0.2.50-uuids.txt")) return new Response("gone", { status: 404 });
+    if (u.endsWith("Ardia-0.2.49-uuids.txt")) return new Response(`${APP_UUID}\tarm64\t${dwarf}\n`, { status: 200 });
+    if (u.endsWith("Ardia-0.2.49-symbols.tar.xz") && serveArchive) return new Response(readFileSync(archive), { status: 200 });
+    return new Response("missing", { status: 404 });
+  };
+  const cache = join(scratch, "later-cache");
+  const matched = { ...buildMap(appBinary(), APP_UUID, { demanglers: NO_DEMANGLERS }), source: "match", entries: [{ start: 0x1000, end: 0x1100, name: "guess" }] };
+  const store = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch });
+  store.saveMap(matched);
+  assert.equal((await store.maps([APP_UUID])).get(APP_UUID).source, "match", "a failed dSYM download keeps the match map, and a missing manifest doesn't stop the index");
+  serveArchive = true;
+  const later = new SymbolStore({ cache, repo: "ardia-browser/ardia", fetch });
+  const map = (await later.maps([APP_UUID])).get(APP_UUID);
+  assert.equal(map.source, "dsym");
+  assert.deepEqual(lookup(map, 0x1104), { name: "-[MenuTarget undo:]", delta: 4 });
 });

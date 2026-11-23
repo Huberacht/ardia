@@ -5,7 +5,8 @@ export const MAP_HEADER = "# ardia-symbol-map 1";
 
 const SWIFT = /^(\$[sSe]|_T0)/;
 const CXX = /^_Z/;
-const CXX_BLOCK = /^___Z.*_block_invoke(_\d+)?$/;
+const CXX_BLOCK = /^__(_Z.*)_block_invoke(?:_\d+)?$/;
+const FOLDED = " (identical code folded)";
 
 function machoName(name) {
   return name.startsWith("_") ? name.slice(1) : name;
@@ -31,15 +32,17 @@ export function demangle(names, demanglers = DEMANGLERS) {
   const out = plain.slice();
   const groups = [
     ["swift", (i) => SWIFT.test(plain[i]), (i) => plain[i]],
-    ["cxx", (i) => CXX.test(plain[i]) || CXX_BLOCK.test(plain[i]), (i) => plain[i]],
+    ["cxx", (i) => CXX.test(plain[i]) || CXX_BLOCK.test(plain[i]), (i) => plain[i].match(CXX_BLOCK)?.[1] ?? plain[i]],
   ];
   for (const [kind, wanted, input] of groups) {
     const indexes = plain.flatMap((_, i) => (wanted(i) ? [i] : []));
     if (!indexes.length) continue;
-    const named = runDemangler(demanglers[kind], indexes.map(input));
+    const inputs = indexes.map(input);
+    const named = runDemangler(demanglers[kind], inputs);
     if (!named) continue;
     indexes.forEach((i, k) => {
-      if (named[k]) out[i] = named[k];
+      if (!named[k] || named[k] === inputs[k]) return;
+      out[i] = CXX_BLOCK.test(plain[i]) ? `invocation function for block in ${named[k]}` : named[k];
     });
   }
   return out;
@@ -52,12 +55,14 @@ export function buildMap(buffer, uuid, { demanglers } = {}) {
   if (image.base == null || !image.text) throw new Error("the image has no __TEXT,__text section");
   const rank = (symbol) => (symbol.name.startsWith("<") ? 0 : 2) + (symbol.external ? 1 : 0);
   const best = new Map();
+  const folded = new Set();
   for (const symbol of functionSymbols(slice, image)) {
+    if (symbol.name.startsWith("<deduplicated_symbol>")) folded.add(symbol.address);
     const held = best.get(symbol.address);
     if (!held || rank(symbol) > rank(held)) best.set(symbol.address, symbol);
   }
   const starts = [...best.keys()].sort((a, b) => a - b);
-  const names = demangle(starts.map((a) => best.get(a).name), demanglers);
+  const names = demangle(starts.map((a) => best.get(a).name), demanglers).map((name, i) => (folded.has(starts[i]) && !name.startsWith("<") ? `${name}${FOLDED}` : name));
   const textEnd = image.text.addr + image.text.size;
   const entries = starts.map((address, i) => ({
     start: address - image.base,

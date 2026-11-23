@@ -99,7 +99,14 @@ export class SymbolStore {
         for (const name of names.filter((n) => UUIDS_ASSET.test(n))) {
           const archive = name.replace(/-uuids\.txt$/, "-symbols.tar.xz");
           if (!names.includes(archive)) continue;
-          for (const row of parseUuids(await this.uuidsText(tag, name))) index.set(row.uuid, [...(index.get(row.uuid) ?? []), { ...row, tag, archive }]);
+          let text;
+          try {
+            text = await this.uuidsText(tag, name);
+          } catch (error) {
+            this.log(`skipping ${tag}/${name}: ${error.message}`);
+            continue;
+          }
+          for (const row of parseUuids(text)) index.set(row.uuid, [...(index.get(row.uuid) ?? []), { ...row, tag, archive }]);
         }
       }
     }
@@ -158,9 +165,8 @@ export class SymbolStore {
     this.importMapDirs();
     const missing = [];
     for (const uuid of uuids) {
-      if (this.loaded.has(uuid)) continue;
-      if (existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
-      else missing.push(uuid);
+      if (!this.loaded.has(uuid) && existsSync(this.mapPath(uuid))) this.loaded.set(uuid, readMapFile(this.mapPath(uuid)));
+      if (this.loaded.get(uuid)?.source !== "dsym") missing.push(uuid);
     }
     if (missing.length) {
       const index = await this.releaseIndex();
@@ -169,7 +175,7 @@ export class SymbolStore {
       for (let round = 0; round < 8; round++) {
         const byArchive = new Map();
         for (const uuid of missing) {
-          if (this.loaded.has(uuid)) continue;
+          if (this.loaded.get(uuid)?.source === "dsym") continue;
           const entry = (index.get(uuid) ?? []).find((e) => !failed.has(`${e.tag}/${e.archive}`));
           if (!entry) continue;
           const key = `${entry.tag}/${entry.archive}`;

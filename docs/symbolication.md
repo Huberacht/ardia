@@ -68,7 +68,15 @@ node scripts/symbolicate-frames.mjs --help
 The workflow needs three repository secrets: `TELEMETRY_CLICKHOUSE_URL` (the public ClickHouse HTTPS endpoint, as in
 `~/.config/ardia/telemetry.env`), `TELEMETRY_CLICKHOUSE_READER_PASSWORD` (the `reader` user) and
 `TELEMETRY_CLICKHOUSE_SANDBOX_PASSWORD` (the `sandbox` user, which can only write `sandbox.*`). Until all three are
-set, it logs a notice and does nothing. The job creates the table itself. Each run's summary lists how many frames it
+set, it logs a notice and does nothing.
+
+The `sandbox` user doesn't have its own password yet. `infra/telemetry/hexclave.deploy.ts` sets
+`CLICKHOUSE_SANDBOX_PASSWORD`, and `infra/dashboard/hexclave.deploy.ts` sets `TRIAGE_CLICKHOUSE_PASSWORD`, both from
+`TELEMETRY_CLICKHOUSE_ADMIN_PASSWORD`. So putting that value into GitHub would hand Actions the admin password. Before
+enabling the workflow:
+1. Create a new Hexclave secret, for example `TELEMETRY_CLICKHOUSE_SANDBOX_PASSWORD`.
+2. Point both of those deploy entries at it (`SECRETS` in `infra/shared.ts`) and deploy telemetry and the dashboard.
+3. Store that same value as the repository secret. The job creates the table itself. Each run's summary lists how many frames it
 named by source and image, and which builds had no symbols.
 
 Tests: `node --test scripts/symbols/symbols.test.mjs`. It covers Mach-O parsing and offset math on generated
