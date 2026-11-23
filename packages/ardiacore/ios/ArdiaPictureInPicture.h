@@ -3,6 +3,7 @@
 #import <AppKit/AppKit.h>
 
 @class ArdiaWebView;
+@class ArdiaConsentStamp;
 
 namespace ardia_pip {
 
@@ -10,10 +11,10 @@ void WatchZoom();
 
 NSWindow *GrabbedWindow();
 
-void VideoEntered(ArdiaWebView *view, NSString *host);
+void VideoEntered(ArdiaWebView *view, NSString *host, ArdiaConsentStamp *stamp);
 
-void DocumentEntered(ArdiaWebView *view);
+void DocumentEntered(ArdiaWebView *view, ArdiaConsentStamp *stamp);
 
-void TabRequestedActivation(ArdiaWebView *view);
+BOOL TabRequestedActivation(ArdiaWebView *view, BOOL *fromOtherApp);
 
 }

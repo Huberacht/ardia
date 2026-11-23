@@ -1,3 +1,5 @@
+import { incognitoEyesLidded } from "./IncognitoEyes";
+
 export type SymbolLayer = { d: string; stroke?: number; fill?: boolean; evenOdd?: boolean; rotate?: number; scale?: number; shift?: number };
 
 const STROKE = 1.9;
@@ -10,15 +12,19 @@ const polyline = (...points: number[]) =>
 
 const circle = (cx: number, cy: number, r: number) => `M${cx - r} ${cy}A${r} ${r} 0 1 1 ${cx + r} ${cy}A${r} ${r} 0 1 1 ${cx - r} ${cy}Z`;
 
-function incognitoEyes(): string {
-  const side = 24;
-  const eye = { width: side * 0.2, height: side * 0.42, gap: side * 0.12, pupil: (side * 0.13) / 2, pupilLift: side * 0.04 };
-  const left = (side - eye.width * 2 - eye.gap) / 2;
-  const top = (side - eye.height) / 2;
+const EYES_SIDE = 24;
+const EYE = { width: EYES_SIDE * 0.2, height: EYES_SIDE * 0.42, gap: EYES_SIDE * 0.12, lidAt: 0.62, lidSag: 0.24, lidReach: 0.6 };
+const EYES_LEFT = (EYES_SIDE - EYE.width * 2 - EYE.gap) / 2;
+const EYES_TOP = (EYES_SIDE - EYE.height) / 2;
+const eyeLeft = (index: number) => EYES_LEFT + index * (EYE.width + EYE.gap);
+
+function incognitoEyesClosed(): string {
+  const lid = EYES_TOP + EYE.height * EYE.lidAt;
   return [0, 1]
     .map((index) => {
-      const x = left + index * (eye.width + eye.gap);
-      return roundRect(x, top, eye.width, eye.height, eye.width / 2) + circle(x + eye.width / 2, top + eye.height - eye.pupilLift - eye.pupil, eye.pupil);
+      const from = eyeLeft(index) - EYE.lidReach;
+      const to = eyeLeft(index) + EYE.width + EYE.lidReach;
+      return `M${from} ${lid}Q${(from + to) / 2} ${lid + EYE.height * EYE.lidSag} ${to} ${lid}`;
     })
     .join("");
 }
@@ -101,7 +107,8 @@ export const SYMBOLS = {
     },
   ],
   ellipsis: [{ d: circle(5.5, 12, 1.75) + circle(12, 12, 1.75) + circle(18.5, 12, 1.75), fill: true }],
-  eyes: [{ d: incognitoEyes(), fill: true, evenOdd: true }],
+  eyes: [{ d: incognitoEyesLidded(), fill: true, evenOdd: true }],
+  eyesClosed: [{ d: incognitoEyesClosed(), stroke: STROKE }],
   chevronDown: [{ d: polyline(5.5, 8.5, 12, 15, 18.5, 8.5), stroke: BOLD }],
   minus: [{ d: line(5, 12, 19, 12), stroke: BOLD }],
   link: [{ d: roundRect(3.6, 9.2, 9.8, 5.6, 2.8) + roundRect(10.6, 9.2, 9.8, 5.6, 2.8), stroke: STROKE, rotate: -45 }],
@@ -195,6 +202,11 @@ export const SYMBOLS = {
     { d: circle(10.5, 10.5, 6.5), stroke: STROKE },
     { d: line(15.3, 15.3, 20, 20), stroke: 2.2 },
   ],
+  sparkleMagnifyingglass: [
+    { d: circle(10.5, 10.5, 6.5), stroke: STROKE },
+    { d: line(15.3, 15.3, 20, 20), stroke: 2.2 },
+    { d: sparkle(10.5, 10.5, 3.6), fill: true },
+  ],
   globe: [
     {
       d:
@@ -283,6 +295,7 @@ export const SYMBOLS = {
     },
     { d: line(4.39, 17.1, 7.62, 14.58), stroke: 2.5, rotate: -15, scale: 0.62, shift: 4.5 },
   ],
+  sidebarLeft: [{ d: roundRect(2.5, 5.5, 19, 13, 2) + line(9, 5.5, 9, 18.5) + line(5, 9, 7, 9) + line(5, 11.5, 7, 11.5) + line(5, 14, 7, 14), stroke: 1.6 }],
 } satisfies Record<string, SymbolLayer[]>;
 
 export type SymbolName = keyof typeof SYMBOLS;

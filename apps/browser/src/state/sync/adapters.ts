@@ -1,9 +1,7 @@
-import { addHistoryVisits, deleteHistoryUrls } from "../../platform/history";
 import { deletePassword } from "../../platform/passwords";
 import { orWarn } from "../../lib/fallback";
-import { assignPositions, SyncNative, type Adapter, type SealedLogin } from "../../platform/sync";
+import { assignPositions, folderChildren, SyncNative, type Adapter, type SealedLogin } from "../../platform/sync";
 import { bookmarkRoots, bookmarkUuidFor, ensureRoots, isBookmarkUuid } from "../bookmarks/bookmarks";
-import { historyOf, historyViewOf, MAX_HISTORY, MAX_VISIT_TIMES, withHistoryList } from "../history/history";
 import { useBrowser } from "../browser/store";
 import { engineProfile } from "../browser/model";
 import { profileOpened } from "../profiles/profileLoading";
@@ -11,12 +9,11 @@ import { isPeekTab } from "../peek/peek";
 import { fromSync } from "../pins/pinOrderChoices";
 import { fromLegacy } from "../../lib/legacy";
 import { thisDeviceDetails } from "./deviceDetails";
-import type { BookmarkNode, HistoryEntry } from "../browser/types";
+import type { BookmarkNode } from "../browser/types";
 import { isWebPageUrl } from "../../lib/url";
-import { BOOKMARK, DEVICE, DEVICE_TABS, HISTORY, RECEIVES_TABS, SHARE, bookmarkValue, historyValue, passwordValue, recordId, type BookmarkValue, type DeviceRecord, type DeviceTabs, type HistoryValue, type PasswordValue, type ShareRecord } from "./records";
+import { BOOKMARK, DEVICE, DEVICE_TABS, RECEIVES_TABS, SHARE, bookmarkValue, passwordValue, recordId, type BookmarkValue, type DeviceRecord, type DeviceTabs, type PasswordValue, type ShareRecord } from "./records";
 import { isAsleep } from "../tabs/pageSession";
 import { withSyncWorkCounts } from "../telemetry/workCounts";
-import { historyExtractsOf } from "./historyExtracts";
 
 const store = () => useBrowser.getState();
 
@@ -80,9 +77,9 @@ export function bookmarksAdapter(profileId: string): Adapter {
         return key && bookmarkUuidFor(key) === id ? key : id;
       };
       const seen = new Set<string>();
-      const walk = (folderId: string) => {
+      const open = (folderId: string) => {
         const folder = b.nodes[folderId];
-        if (folder?.kind !== "folder" || seen.has(folderId)) return;
+        if (folder?.kind !== "folder" || seen.has(folderId)) return null;
         seen.add(folderId);
         const parent = keyOf(folderId);
         const children = folder.children.filter((id) => b.nodes[id]);
@@ -92,21 +89,32 @@ export function bookmarksAdapter(profileId: string): Adapter {
             return known?.p === parent ? known.pos : undefined;
           }),
         );
-        children.forEach((id, i) => {
+        return { parent, children, positions, next: 0 };
+      };
+      for (const root of [roots.bar, roots.other]) {
+        const first = open(root);
+        const stack = first ? [first] : [];
+        while (stack.length) {
+          const top = stack.at(-1)!;
+          if (top.next === top.children.length) {
+            stack.pop();
+            continue;
+          }
+          const i = top.next++;
+          const id = top.children[i]!;
           const node = b.nodes[id]!;
           values.set(`${BOOKMARK}${keyOf(id)}`, {
             k: node.kind === "url" ? "u" : "f",
-            p: parent,
+            p: top.parent,
             t: node.title,
             ...(node.kind === "url" ? { u: node.url } : {}),
             a: node.addedAt,
-            pos: positions[i]!,
+            pos: top.positions[i]!,
           } satisfies BookmarkValue);
-          if (node.kind === "folder") walk(id);
-        });
-      };
-      walk(roots.bar);
-      walk(roots.other);
+          const inner = node.kind === "folder" ? open(id) : null;
+          if (inner) stack.push(inner);
+        }
+      }
       return { values };
     },
     apply: (visible) => {
@@ -124,22 +132,8 @@ export function bookmarksAdapter(profileId: string): Adapter {
         const parent = root ? null : bookmarkUuidFor(v.p);
         parentOf.set(id, root ?? (parent && values.get(parent)?.k === "f" ? parent : roots.other));
       }
-      for (const id of [...values.keys()].sort()) {
-        const seen = new Set<string>([id]);
-        for (let at = parentOf.get(id)!; parentOf.has(at); at = parentOf.get(at)!) {
-          if (seen.has(at)) {
-            parentOf.set(id, roots.other);
-            break;
-          }
-          seen.add(at);
-        }
-      }
-      const children = new Map<string, string[]>([[roots.bar, []], [roots.other, []]]);
-      for (const id of values.keys()) {
-        const siblings = children.get(parentOf.get(id)!);
-        if (siblings) siblings.push(id);
-        else children.set(parentOf.get(id)!, [id]);
-      }
+      const children = folderChildren(parentOf, [...values.keys()].sort(), roots.other);
+      for (const root of [roots.bar, roots.other]) if (!children.has(root)) children.set(root, []);
       const byPosition = (a: string, z: string) => {
         const pa = values.get(a)!.pos;
         const pz = values.get(z)!.pos;
@@ -148,13 +142,13 @@ export function bookmarksAdapter(profileId: string): Adapter {
         return pa < pz ? -1 : pa > pz ? 1 : ka < kz ? -1 : 1;
       };
       const nodes: Record<string, BookmarkNode> = { ...b.nodes };
-      const drop = (id: string) => {
+      const dropping = [roots.bar, roots.other];
+      while (dropping.length) {
+        const id = dropping.pop()!;
         const node = nodes[id];
-        if (node?.kind === "folder") node.children.forEach(drop);
+        if (node?.kind === "folder") for (const child of node.children) dropping.push(child);
         if (id !== roots.bar && id !== roots.other) delete nodes[id];
-      };
-      drop(roots.bar);
-      drop(roots.other);
+      }
       for (const [id, v] of values) {
         const old = b.nodes[id];
         const key = keys.get(id)!;
@@ -169,124 +163,6 @@ export function bookmarksAdapter(profileId: string): Adapter {
         if (folder?.kind === "folder") nodes[parent] = { ...folder, children: ids.sort(byPosition) };
       }
       useBrowser.setState({ bookmarks: { ...b, nodes } });
-    },
-  });
-}
-
-const HISTORY_WINDOW_MS = 90 * 86_400_000;
-
-const lastVisitOf = (v: HistoryValue) => Math.max(0, ...v.vt);
-const SAME_VISIT_MS = 1;
-const sameVisits = (a: number[], b: number[]) => a.length === b.length && a.every((t, i) => Math.abs(b[i]! - t) <= SAME_VISIT_MS);
-
-export function historyExpired(key: string, value: unknown, now: number) {
-  const v = key.startsWith(HISTORY) ? historyValue(value) : null;
-  return !!v && lastVisitOf(v) < now - HISTORY_WINDOW_MS;
-}
-
-export function historyAdapter(profileId: string): Adapter {
-  const ready = () => !!historyViewOf(store(), profileId)?.ready;
-  const extracts = historyExtractsOf(profileId);
-  const { parsed, knownJson } = extracts;
-  const knownOf = (key: string, json: string | undefined) => {
-    if (json === undefined) return null;
-    const cached = parsed.get(key);
-    if (cached?.json === json) return cached.known;
-    const known = historyValue(JSON.parse(json));
-    parsed.set(key, { json, known });
-    if (known) knownJson.set(known, json);
-    return known;
-  };
-  const visitOf = (key: string, e: HistoryEntry, json: string | undefined): HistoryValue => {
-    const local: HistoryValue = { t: e.title, n: e.visits, vt: e.visitTimes?.length ? e.visitTimes : [e.lastVisit] };
-    const known = knownOf(key, json);
-    const edited = !known || (!sameVisits(local.vt, known.vt) && local.vt.some((t) => !known.vt.some((k) => Math.abs(k - t) <= SAME_VISIT_MS)));
-    return edited ? local : known;
-  };
-  return withSyncWorkCounts("history", {
-    prefix: HISTORY,
-    extract: (_base, _queued, _now, _known, _remote, _stamp, baseJson) => {
-      if (!ready()) return null;
-      const since = Date.now() - HISTORY_WINDOW_MS;
-      const values = new Map<string, unknown>();
-      const older = new Set<string>();
-      const { list: view, floor } = historyViewOf(store(), profileId)!;
-      for (let i = 0; i < view.length; i++) {
-        const e = view[i]!;
-        let visit = extracts.visits.get(e);
-        if (!visit) extracts.visits.set(e, (visit = { key: isWebPageUrl(e.url) ? `${HISTORY}${e.url}` : null, json: undefined, value: null }));
-        const { key } = visit;
-        if (key === null) continue;
-        if (e.lastVisit < since) {
-          older.add(key);
-          continue;
-        }
-        const json = baseJson(key);
-        if (visit.value === null || visit.json !== json) Object.assign(visit, { json, value: visitOf(key, e, json) });
-        values.set(key, visit.value);
-      }
-      if (parsed.size > 2 * values.size + 1000) for (const key of parsed.keys()) if (!values.has(key) && baseJson(key) === undefined) parsed.delete(key);
-      const ignore = (key: string) => {
-        if (older.has(key) || !isWebPageUrl(recordId(HISTORY, key))) return true;
-        const known = knownOf(key, baseJson(key));
-        return !!known && (lastVisitOf(known) < since || lastVisitOf(known) <= floor);
-      };
-      const json = (_key: string, value: unknown) => knownJson.get(value as HistoryValue);
-      return { values, ignore, json };
-    },
-    editedAt: (v) => {
-      const value = historyValue(v);
-      return value ? lastVisitOf(value) : undefined;
-    },
-    apply: async (visible, changed) => {
-      if (!ready()) return false;
-      const since = Date.now() - HISTORY_WINDOW_MS;
-      const byUrl = new Map(historyOf(store(), profileId).map((e) => [e.url, e]));
-      const add: { url: string; title: string; visitTimes: number[] }[] = [];
-      const remove: string[] = [];
-      const updates = new Map<string, HistoryEntry | null>();
-      for (const key of changed) {
-        const url = recordId(HISTORY, key);
-        if (!isWebPageUrl(url)) continue;
-        const v = historyValue(visible.get(key));
-        if (visible.has(key) && !v) return false;
-        const old = byUrl.get(url);
-        if (v) {
-          const have = old?.visitTimes ?? [];
-          const fresh = v.vt.filter((t) => t >= since && !have.some((h) => Math.abs(h - t) <= SAME_VISIT_MS));
-          if (fresh.length) add.push({ url, title: v.t, visitTimes: fresh });
-          const times = [...have, ...fresh].sort((a, z) => a - z).slice(-MAX_VISIT_TIMES);
-          if (!times.length) continue;
-          updates.set(url, {
-            url,
-            title: v.t || old?.title || "",
-            favicon: null,
-            visits: Math.max(v.n, old?.visits ?? 0),
-            lastVisit: times[times.length - 1]!,
-            visitTimes: times,
-          });
-        } else if (old && old.lastVisit >= since) {
-          remove.push(url);
-          updates.set(url, null);
-        }
-      }
-      if (!updates.size) return;
-      const engine = engineProfile(useBrowser.getState(), profileId);
-      await Promise.all([addHistoryVisits(engine, add, SAME_VISIT_MS), deleteHistoryUrls(engine, remove)]);
-      useBrowser.setState((s) => {
-        const current = new Map(historyOf(s, profileId).map((e) => [e.url, e]));
-        for (const [url, update] of updates) {
-          const now = current.get(url);
-          if (!update) current.delete(url);
-          else if (!now) current.set(url, update);
-          else {
-            const times = [...new Set([...(now.visitTimes ?? []), ...(update.visitTimes ?? [])])].sort((a, z) => a - z).slice(-MAX_VISIT_TIMES);
-            current.set(url, { ...update, visits: Math.max(now.visits, update.visits), lastVisit: times[times.length - 1]!, visitTimes: times });
-          }
-        }
-        const list = [...current.values()].sort((a, z) => z.lastVisit - a.lastVisit).slice(0, MAX_HISTORY);
-        return withHistoryList(s, engine, list);
-      });
     },
   });
 }

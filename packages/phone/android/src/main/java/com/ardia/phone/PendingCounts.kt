@@ -1,6 +1,7 @@
 package com.ardia.phone
 
 import android.content.Context
+import com.ardia.browser.NightShadeVerdictUse
 
 object UsageConsent {
     private const val PREFERENCES = "ardia-usage-consent"
@@ -9,11 +10,13 @@ object UsageConsent {
 
     private fun preferences(context: Context) = (context.applicationContext ?: context).getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
-    fun set(context: Context, sharing: Boolean) = synchronized(this) {
-        val stored = preferences(context)
-        if (stored.getBoolean(SHARING, false) == sharing && stored.contains(GENERATION)) return@synchronized
-        stored.edit().putBoolean(SHARING, sharing).putLong(GENERATION, stored.getLong(GENERATION, 0L) + 1).commit()
-        if (!sharing) PendingCounts.clear(context)
+    fun set(context: Context, sharing: Boolean) = synchronized(PendingCounts) {
+        synchronized(this) {
+            val stored = preferences(context)
+            if (stored.getBoolean(SHARING, false) == sharing && stored.contains(GENERATION)) return@synchronized
+            stored.edit().putBoolean(SHARING, sharing).putLong(GENERATION, stored.getLong(GENERATION, 0L) + 1).commit()
+            if (!sharing) PendingCounts.clear(context)
+        }
     }
 
     fun state(context: Context): Pair<Boolean, Long> = synchronized(this) {
@@ -29,6 +32,15 @@ object UsageConsent {
 
 object PendingCounts {
     const val TABS_SENT = "tabs_sent"
+    const val NIGHT_SHADE_VERDICTS_REUSED = "night_shade_verdicts_reused"
+    const val NIGHT_SHADE_VERDICTS_LEARNED = "night_shade_verdicts_learned"
+    const val NIGHT_SHADE_VERDICTS_CORRECTED = "night_shade_verdicts_corrected"
+
+    fun nightShadeField(use: NightShadeVerdictUse): String = when (use) {
+        NightShadeVerdictUse.Reused -> NIGHT_SHADE_VERDICTS_REUSED
+        NightShadeVerdictUse.Learned -> NIGHT_SHADE_VERDICTS_LEARNED
+        NightShadeVerdictUse.Corrected -> NIGHT_SHADE_VERDICTS_CORRECTED
+    }
 
     interface Store {
         fun all(): Map<String, Int>

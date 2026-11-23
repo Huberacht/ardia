@@ -16,6 +16,7 @@ using namespace ardia_window;
 namespace {
 
 BOOL (^gShouldClose)(NSWindow *);
+BOOL (^gPlaysForAutoPictureInPicture)(NSWindow *);
 
 void (^gSwapped)(NSWindow *, NSWindow *);
 
@@ -126,6 +127,10 @@ NSView *ArdiaWindowRootView(NSWindow *window) {
 
 + (CGFloat)windowCornerRadius {
   return WindowCornerRadius(nil);
+}
+
++ (CGFloat)drawnWindowCornerRadius {
+  return DrawnWindowCornerRadius(nil);
 }
 
 + (CGFloat)frameCornerRadiusOfWindow:(NSWindow *)window {
@@ -254,6 +259,7 @@ NSView *ArdiaWindowRootView(NSWindow *window) {
     objc_setAssociatedObject(window, kLightsShownKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(window, kLightsMoveKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     TranslateTrafficLights(window, 0);
+    TuckTrafficLightsOutsideWindow(window);
   }
   if (!placed) {
     objc_setAssociatedObject(window, kLightsTrailingKey, trailing ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -312,12 +318,32 @@ NSView *ArdiaWindowRootView(NSWindow *window) {
   else [window close];
 }
 
++ (BOOL)windowIsFullScreen:(NSWindow *)window {
+  return IsWindowFullScreen(window);
+}
+
 + (BOOL)windowFullScreenIsForPage:(NSWindow *)window {
   return [objc_getAssociatedObject(window, kWindowFullScreenKey) enteredForPage];
 }
 
 + (BOOL)userSeesWindow:(NSWindow *)window {
   return [ArdiaWindowController userSees:window];
+}
+
++ (BOOL)userSeesOnlyThroughWindowServer:(NSWindow *)window {
+  return [ArdiaWindowController userSeesOnlyThroughWindowServer:window];
+}
+
++ (void)reconsiderSightOfWindow:(NSWindow *)window {
+  [ArdiaWindowController reconsiderSightOf:window];
+}
+
++ (void)setPlaysForAutoPictureInPictureHandler:(BOOL (^)(NSWindow *))handler {
+  gPlaysForAutoPictureInPicture = [handler copy];
+}
+
++ (BOOL (^)(NSWindow *))playsForAutoPictureInPictureHandler {
+  return gPlaysForAutoPictureInPicture;
 }
 
 + (void)setShouldCloseHandler:(BOOL (^)(NSWindow *))handler {

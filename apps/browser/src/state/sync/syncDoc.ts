@@ -1,4 +1,4 @@
-import type { ScopeState } from "../../platform/sync";
+import type { HLC, ScopeState } from "../../platform/sync";
 import type { Profile } from "../browser/types";
 import { unchanged, type Migrations } from "../../lib/savedDocument";
 import type { DeviceKind, SendRecord } from "./records";
@@ -59,9 +59,11 @@ export type SyncDoc = {
   seqs?: Record<string, number>;
   sends?: Record<string, SendLedger>;
   tabCloses?: Record<string, string[]>;
-  removing?: string[];
-  removingDevices?: string[];
+  removing?: string[] | Record<string, ProfileRemoval>;
+  removingDevices?: string[] | Record<string, HLC>;
 };
+
+export type ProfileRemoval = { keys: Record<string, HLC>; returned?: boolean };
 
 export const DOC = "sync.json";
 export const DOC_VERSION = 1;
@@ -108,3 +110,18 @@ export type SyncUi = {
   remoteTabs: Record<string, RemoteTabs[]>;
   remoteProfiles: RemoteProfile[];
 };
+
+export const emptyUi = (status: SyncStatus): SyncUi => ({
+  status,
+  enabled: false,
+  joining: false,
+  folder: null,
+  types: defaultTypes(),
+  profiles: {},
+  lastSyncedAt: null,
+  error: null,
+  pending: 0,
+  devices: [],
+  remoteTabs: {},
+  remoteProfiles: [],
+});

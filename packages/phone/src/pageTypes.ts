@@ -33,6 +33,7 @@ export type PageState = PageNavigationState & {
   blockedRequests: number;
   isLive: boolean;
   isPrivate: boolean;
+  document?: number;
 };
 
 export type PageTone = { top: string | null; bottom: string | null };
@@ -47,6 +48,8 @@ export type PageError = { code: string; message: string };
 
 export type SwipeNavigation = "anywhere" | "edges" | "off";
 
+export type PageSwipeDirection = "back" | "forward";
+
 export type PageViewProps = ViewProps & {
   pageId: string;
   initialUrl?: string;
@@ -54,19 +57,25 @@ export type PageViewProps = ViewProps & {
   isPrivate?: boolean;
   savedState?: string;
   toneInsets?: PageToneInsets;
+  bottomInsetTransitionMs?: number;
+  summaryBottomInset?: number;
   obscuredInsets?: PageObscuredInsets;
   obscuredColors?: PageObscuredColors;
   topClearance?: number;
   obscuresSafeTop?: boolean;
+  pinsSafeArea?: boolean;
   swipeNavigation?: SwipeNavigation;
+  closesOnSwipeBack?: boolean;
+  reopensOnSwipeForward?: boolean;
   pullToRefresh?: boolean;
   surfaceColor?: ColorValue;
+  onSwipedPastHistory?: (direction: PageSwipeDirection) => void;
   onPageState?: (state: PageState) => void;
   onPageTone?: (tone: PageTone) => void;
   onPageError?: (error: PageError) => void;
-  onPageDrawn?: () => void;
+  onPageDrawn?: (document?: number) => void;
   coverNativeId?: string;
-  onPageCoverHidden?: (reason: "drawn" | "cap", found: boolean) => void;
+  onPageCoverHidden?: (reason: "drawn" | "cap", found: boolean, cover?: string) => void;
 };
 
 export type PageViewHandle = {
@@ -118,6 +127,12 @@ export type PageRequestAnswer =
   | { type: "takePhoto" }
   | { type: "recordVideo" };
 
+export type PageSummaryTrigger = "pinch" | "menu";
+
+export type PageSummaryOutcome = "chatgpt" | "on_device" | "excerpts" | "failed";
+
+export type PageSummaryProvider = "on_device" | "chatgpt";
+
 export type PressTarget = { kind: "link"; url: string; text: string | null } | { kind: "image"; url: string; linkUrl: string | null };
 
 export type ReadableContent = {
@@ -139,13 +154,17 @@ export type PageSnapshot = {
   uri: string;
   width: number;
   height: number;
-  route?: "draw" | "windowCopy";
+  route?: "draw" | "windowCopy" | "screenCopy" | "engine" | "quiet";
   bytes?: number;
   kept?: boolean;
   durable?: boolean;
   generation?: number;
   frame?: { x: number; y: number; width: number; height: number } | null;
 };
+
+export type RefusedSnapshot = { refused: "hidden" | "blank" };
+
+export const isRefusedSnapshot = (taken: PageSnapshot | RefusedSnapshot): taken is RefusedSnapshot => "refused" in taken;
 
 export type PageScrollPosition = { y: number; viewportWidth?: number; viewportHeight: number; contentHeight: number };
 
@@ -184,7 +203,10 @@ export type PageEngineEvent =
     }
   | { name: "page.longPress"; pageId: string; target: PressTarget; x: number; y: number }
   | { name: "page.closeRequested"; pageId: string }
+  | { name: "page.summaryOpened"; pageId: string; trigger: PageSummaryTrigger; isPrivate: boolean }
+  | { name: "page.summarySettled"; pageId: string; trigger: PageSummaryTrigger; outcome: PageSummaryOutcome; chatGPTFellBack?: boolean; geminiNanoMissing?: string | null; isPrivate: boolean }
   | { name: "page.snapshotLanded"; pageId: string; uri: string; generation: number }
+  | { name: "page.scrollSettled"; pageId: string; y: number }
   | { name: "page.externalAppMissing"; pageId: string; url: string }
   | { name: "page.desktop"; pageId: string; line: string }
   | { name: "pages.privateSessionEnded" };
@@ -193,8 +215,9 @@ export type PageEventPayload =
   | ({ name: "state" } & Partial<Omit<PageState, "url" | "title" | "progress" | "isLoading" | "canGoBack" | "canGoForward">> &
       Omit<PageNavigationState, "url"> & { url?: string })
   | { name: "tone"; top?: string; bottom?: string }
-  | { name: "drawn" }
-  | { name: "coverHidden"; reason: "drawn" | "cap"; found: boolean }
+  | { name: "drawn"; document?: number }
+  | { name: "coverHidden"; reason: "drawn" | "cap"; found: boolean; cover?: string }
+  | { name: "swipedPastHistory"; direction: PageSwipeDirection }
   | ({ name: "error" } & PageError);
 
 export type DownloadProgress = {

@@ -1,16 +1,17 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from "react-native";
+import { ActivityIndicator, type GestureResponderEvent, Pressable, RefreshControl, ScrollView, StyleSheet, Text, useWindowDimensions, View, type StyleProp, type TextStyle } from "react-native";
 import Animated, { FadeIn, FadeOut, LayoutAnimationConfig, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { rememberSettingsScroll, settingsScroll } from "../../state/settings/nav";
 import { MenuTrigger } from "../ui/MenuTrigger";
-import { duration, LookBackdrop, settingsMotion, useSheetFrame, font, ink, settingsLayout, space, Symbol, tabsLayout, ToggleTrack, useTheme, type MenuItem, type SymbolName } from "../ui";
+import { MaterialBarButton, MaterialButtonRow, MaterialEmptyState, MaterialGroup, MaterialIconTile, MaterialNavRow, MaterialPickerRow, MaterialSettingsPage, MaterialToggleRow, MaterialValueRow } from "./MaterialSettingsKit";
+import { duration, LookBackdrop, settingsMotion, useSheetFrame, font, ink, settingsLayout, space, Symbol, tabsLayout, ToggleRow as SharedToggleRow, useDesign, useTheme, type MenuItem, type SymbolName, Tappable, smoothCorners, slotAround, controlSize } from "../ui";
 
 export const SettingsHostedContext = createContext(false);
 
-type PageProps = { title: string; onBack?: () => void; leading?: ReactNode; trailing?: ReactNode; children: ReactNode; scroll?: boolean; onRefresh?: () => Promise<unknown>; heroTitle?: boolean; overlay?: ReactNode; dismissesKeyboard?: boolean };
+type PageProps = { title: string; onBack?: () => void; onClose?: () => void; leading?: ReactNode; trailing?: ReactNode; children: ReactNode; scroll?: boolean; onRefresh?: () => Promise<unknown>; heroTitle?: boolean; mediumAppBar?: boolean; overlay?: ReactNode; dismissesKeyboard?: boolean };
 
-export function SettingsPage({ title, onBack, leading, trailing, children, scroll = true, onRefresh, heroTitle = false, overlay, dismissesKeyboard = false }: PageProps) {
+function ClassicSettingsPage({ title, onBack, leading, trailing, children, scroll = true, onRefresh, heroTitle = false, overlay, dismissesKeyboard = false }: PageProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [startOffset] = useState(() => ({ x: 0, y: settingsScroll(title) }));
@@ -45,9 +46,9 @@ export function SettingsPage({ title, onBack, leading, trailing, children, scrol
       <View style={[styles.top, { paddingTop: frame ? 0 : insets.top }]}>
         <View style={styles.topSide}>
           {onBack ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={onBack} style={styles.back}>
+            <Tappable kind="icon" label="Back" onPress={onBack} style={styles.back}>
               <Symbol name="chevronLeft" size={22} color={theme.formAccent} />
-            </Pressable>
+            </Tappable>
           ) : null}
           {leading}
         </View>
@@ -100,16 +101,16 @@ export function CrossfadeText({ text, style, testID }: { text: string; style: St
   );
 }
 
-export function BarButton({ title, onPress, emphasized, enabled = true }: { title: string; onPress: () => void; emphasized?: boolean; enabled?: boolean }) {
+function ClassicBarButton({ title, onPress, emphasized, enabled = true }: { title: string; onPress: () => void; emphasized?: boolean; enabled?: boolean }) {
   const theme = useTheme();
   return (
-    <Pressable accessibilityRole="button" disabled={!enabled} onPress={onPress} style={styles.barButton}>
+    <Tappable kind="text" label={title} disabled={!enabled} onPress={onPress} style={styles.barButton}>
       <Text style={[font.body, emphasized ? styles.bold : null, { color: enabled ? theme.formAccent : theme.tertiaryLabel }]}>{title}</Text>
-    </Pressable>
+    </Tappable>
   );
 }
 
-export function Group({ header, footer, children }: { header?: string; footer?: string | null; children: ReactNode }) {
+function ClassicGroup({ header, footer, children }: { header?: string; footer?: string | null; children: ReactNode }) {
   const theme = useTheme();
   return (
     <View style={styles.groupOuter}>
@@ -124,7 +125,7 @@ export function Group({ header, footer, children }: { header?: string; footer?: 
   );
 }
 
-export function IconTile({ icon, tint, side = settingsLayout.tile }: { icon: SymbolName; tint: string; side?: number }) {
+function ClassicIconTile({ icon, tint, side = settingsLayout.tile }: { icon: SymbolName; tint: string; side?: number }) {
   return (
     <View style={[styles.tile, { width: side, height: side, borderRadius: side * 0.26, backgroundColor: tint }]}>
       <Symbol name={icon} size={side * 0.62} color={ink.white} />
@@ -142,14 +143,14 @@ function Label({ title, icon, tint, color }: { title: string; icon?: SymbolName;
   );
 }
 
-export function Divider({ inset = settingsLayout.rowInset }: { inset?: number }) {
+function ClassicDivider({ inset = settingsLayout.rowInset }: { inset?: number }) {
   const theme = useTheme();
   return <View style={[styles.divider, { marginLeft: inset, backgroundColor: theme.separator }]} />;
 }
 
 type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: boolean };
 
-export function NavRow({ title, icon, tint, value, divider, onPress }: RowBase & { value?: string; onPress: () => void }) {
+function ClassicNavRow({ title, icon, tint, value, divider, onPress }: RowBase & { value?: string; onPress: () => void }) {
   const theme = useTheme();
   return (
     <View>
@@ -171,30 +172,18 @@ export function NavRow({ title, icon, tint, value, divider, onPress }: RowBase &
   );
 }
 
-export function ToggleRow({ title, icon, tint, divider, value, onChange, detail }: RowBase & { value: boolean; onChange: (value: boolean) => void; detail?: string }) {
-  const theme = useTheme();
+function ClassicToggleRow({ title, icon, tint, divider, value, onChange, detail }: RowBase & { value: boolean; onChange: (value: boolean) => void; detail?: string }) {
   return (
     <View>
-      <Pressable
-        accessibilityRole="switch"
-        accessibilityLabel={title}
-        accessibilityHint={detail}
-        accessibilityState={{ checked: value }}
-        onPress={() => onChange(!value)}
-        style={({ pressed }) => [styles.row, pressed ? { backgroundColor: theme.rowHighlight } : null]}
-      >
-        <View style={styles.fill} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-          <Label title={title} icon={icon} tint={tint} />
-          {detail ? <Text style={[font.footnote, { color: theme.secondaryLabel, marginLeft: icon ? settingsLayout.tile + settingsLayout.labelGap : 0 }]}>{detail}</Text> : null}
-        </View>
-        <ToggleTrack value={value} />
-      </Pressable>
+      <SharedToggleRow label={title} detail={detail} detailInset={icon ? settingsLayout.tile + settingsLayout.labelGap : 0} value={value} onChange={onChange} style={styles.row}>
+        <Label title={title} icon={icon} tint={tint} />
+      </SharedToggleRow>
       {divider ? <Divider /> : null}
     </View>
   );
 }
 
-export function ButtonRow({ title, onPress, destructive, enabled = true, busy, divider }: { title: string; onPress: () => void; destructive?: boolean; enabled?: boolean; busy?: boolean; divider?: boolean }) {
+function ClassicButtonRow({ title, onPress, destructive, enabled = true, busy, divider }: { title: string; onPress: (event?: GestureResponderEvent) => void; destructive?: boolean; enabled?: boolean; busy?: boolean; divider?: boolean }) {
   const theme = useTheme();
   const color = !enabled ? theme.tertiaryLabel : destructive ? theme.destructive : theme.formAccent;
   return (
@@ -208,7 +197,7 @@ export function ButtonRow({ title, onPress, destructive, enabled = true, busy, d
   );
 }
 
-export function ValueRow({ title, value, divider }: { title: string; value: string; divider?: boolean }) {
+function ClassicValueRow({ title, value, divider }: { title: string; value: string; divider?: boolean }) {
   const theme = useTheme();
   return (
     <View>
@@ -223,14 +212,14 @@ export function ValueRow({ title, value, divider }: { title: string; value: stri
 
 type PickerProps<T extends string> = RowBase & { options: { id: T; title: string }[]; selected: T; onSelect: (id: T) => void };
 
-export function PickerRow<T extends string>({ title, icon, tint, divider, options, selected, onSelect }: PickerProps<T>) {
+function ClassicPickerRow<T extends string>({ title, icon, tint, divider, options, selected, onSelect }: PickerProps<T>) {
   const theme = useTheme();
   const { width } = useWindowDimensions();
   const current = options.find((option) => option.id === selected)?.title ?? "";
   const items: MenuItem[] = options.map((option) => ({ label: option.title, checked: option.id === selected, onPress: () => onSelect(option.id) }));
   return (
     <View>
-      <MenuTrigger items={items} trigger="tap" place={{ right: space.l * 2, width: Math.min(tabsLayout.menuWidth, width - space.huge * 2) }}>
+      <MenuTrigger items={items} trigger="tap" restoresAfterChoice align={{ trailing: true, inset: settingsLayout.rowInset }} place={{ width: Math.min(tabsLayout.menuWidth, width - space.huge * 2) }}>
         {({ onPress }) => (
           <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityValue={{ text: current }} onPress={onPress} style={({ pressed }) => [styles.row, pressed ? { backgroundColor: theme.rowHighlight } : null]}>
             <Label title={title} icon={icon} tint={tint} />
@@ -246,7 +235,7 @@ export function PickerRow<T extends string>({ title, icon, tint, divider, option
   );
 }
 
-export function EmptyState({ title, message, icon }: { title: string; message: string; icon: SymbolName }) {
+function ClassicEmptyState({ title, message, icon }: { title: string; message: string; icon: SymbolName }) {
   const theme = useTheme();
   return (
     <View style={styles.empty} accessible accessibilityRole="header" accessibilityLabel={message ? `${title}. ${message}` : title}>
@@ -257,22 +246,66 @@ export function EmptyState({ title, message, icon }: { title: string; message: s
   );
 }
 
+export function SettingsPage(props: Parameters<typeof ClassicSettingsPage>[0]) {
+  return useDesign() === "material" ? <MaterialSettingsPage {...props} /> : <ClassicSettingsPage {...props} />;
+}
+
+export function BarButton(props: Parameters<typeof ClassicBarButton>[0]) {
+  return useDesign() === "material" ? <MaterialBarButton {...props} /> : <ClassicBarButton {...props} />;
+}
+
+export function Group(props: Parameters<typeof ClassicGroup>[0]) {
+  return useDesign() === "material" ? <MaterialGroup {...props} /> : <ClassicGroup {...props} />;
+}
+
+export function IconTile(props: Parameters<typeof ClassicIconTile>[0]) {
+  return useDesign() === "material" ? <MaterialIconTile {...props} /> : <ClassicIconTile {...props} />;
+}
+
+export function Divider(props: Parameters<typeof ClassicDivider>[0]) {
+  return useDesign() === "material" ? null : <ClassicDivider {...props} />;
+}
+
+export function NavRow(props: Parameters<typeof ClassicNavRow>[0]) {
+  return useDesign() === "material" ? <MaterialNavRow {...props} /> : <ClassicNavRow {...props} />;
+}
+
+export function ToggleRow(props: Parameters<typeof ClassicToggleRow>[0]) {
+  return useDesign() === "material" ? <MaterialToggleRow {...props} /> : <ClassicToggleRow {...props} />;
+}
+
+export function ButtonRow(props: Parameters<typeof ClassicButtonRow>[0]) {
+  return useDesign() === "material" ? <MaterialButtonRow {...props} /> : <ClassicButtonRow {...props} />;
+}
+
+export function ValueRow(props: Parameters<typeof ClassicValueRow>[0]) {
+  return useDesign() === "material" ? <MaterialValueRow {...props} /> : <ClassicValueRow {...props} />;
+}
+
+export function EmptyState(props: Parameters<typeof ClassicEmptyState>[0]) {
+  return useDesign() === "material" ? <MaterialEmptyState {...props} /> : <ClassicEmptyState {...props} />;
+}
+
+export function PickerRow<T extends string>(props: PickerProps<T>) {
+  return useDesign() === "material" ? <MaterialPickerRow {...props} /> : <ClassicPickerRow {...props} />;
+}
+
 const styles = StyleSheet.create({
   hostedActions: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: space.s },
   top: { flexDirection: "row", alignItems: "center", minHeight: settingsLayout.topBar, paddingHorizontal: space.s },
   topSide: { flex: 1, flexDirection: "row", alignItems: "center" },
   end: { justifyContent: "flex-end" },
   title: { maxWidth: settingsLayout.titleWidth, textAlign: "center" },
-  back: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  barButton: { minHeight: 44, justifyContent: "center", paddingHorizontal: space.s },
+  back: slotAround(controlSize.hitTarget),
+  barButton: { minHeight: controlSize.hitTarget, justifyContent: "center", paddingHorizontal: space.s },
   bold: { fontWeight: "600" },
   content: { paddingTop: space.m, gap: space.xxl },
   fill: { flex: 1 },
   groupOuter: { paddingHorizontal: space.l },
   groupHeader: { paddingLeft: settingsLayout.rowInset, paddingBottom: space.s, fontWeight: "600" },
-  group: { borderRadius: settingsLayout.groupRadius, overflow: "hidden" },
+  group: { borderRadius: settingsLayout.groupRadius, ...smoothCorners, overflow: "hidden" },
   groupFooter: { paddingHorizontal: settingsLayout.rowInset, paddingTop: space.s },
-  tile: { alignItems: "center", justifyContent: "center" },
+  tile: { alignItems: "center", justifyContent: "center", ...smoothCorners },
   label: { flexDirection: "row", alignItems: "center", gap: settingsLayout.labelGap, flexShrink: 1, flexGrow: 1 },
   labelText: { flexShrink: 1 },
   divider: { height: StyleSheet.hairlineWidth },

@@ -1,5 +1,5 @@
 import { registerSessionCloseHooks } from "./sessionClose";
-import type { BrowserState, HydrateData } from "../../browser/src/state/browser/store";
+import { useBrowser, type BrowserState, type HydrateData } from "../../browser/src/state/browser/store";
 import type { BrowserWindow, MainWindow, Tab } from "../../browser/src/state/browser/types";
 import type { ArdiaHost } from "./host";
 import { reportHostError } from "./host.ts";
@@ -13,11 +13,12 @@ import { withPrivateWindow } from "./hostWindowProfiles.ts";
 import { withSmallWindow } from "./hostSmallWindows.ts";
 import { sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins } from "../../browser/src/state/session/savedShapes";
 import { splitTabIds } from "../../browser/src/state/splits/splits";
-import { sessionWithPinChoiceStamps } from "../../browser/src/state/pins/pinChoices";
+import { withPinChoiceStamps, withPinChoicesOnDisk } from "./hostPinChoices.ts";
 import { upgraded, type SavedObject } from "../../browser/src/lib/savedDocument";
 import { SESSION_MIGRATIONS, SESSION_VERSION } from "../../browser/src/state/session/persist";
 import { unclaimedAdoptId } from "./unclaimedTabs.ts";
 import { adoptedPage } from "../../browser/src/state/tabs/pageSession";
+import { noteSavedTopAppsMerged } from "../../browser/src/state/telemetry/topAppsSharing";
 
 type StoredWindow = Partial<BrowserWindow> & { incognito?: unknown; originalProfileId?: unknown; sidebarOpen?: unknown };
 
@@ -86,11 +87,6 @@ const legacySession = (session: HydrateData) =>
   Object.values(session.tabs ?? {}).some(legacyTab) || Object.values(session.windows ?? {}).some(legacyWindow) ||
   Object.values(session.splits ?? {}).some(legacySplit) || legacyEntries(session);
 
-const legacyPinChoices = (session: HydrateData) =>
-  Object.values(session.pinChoices ?? {}).some((mine) => Object.values(mine ?? {}).some((choice) => typeof choice !== "string"));
-const withPinChoiceStamps = (session: HydrateData) =>
-  legacyPinChoices(session) ? sessionWithPinChoiceStamps(session as unknown as SavedObject) as unknown as HydrateData : session;
-
 const withAutoHideTabsSetting = (session: HydrateData): HydrateData => {
   const windows = Object.values(session.windows ?? {});
   const settings = session.settings;
@@ -144,6 +140,7 @@ export const linuxSessionShape = (saved: HydrateData): HydrateData => {
 };
 
 export const unmigratedSessionShape = (saved: HydrateData): HydrateData => sniffedSessionShape(saved);
+const sessionOnDisk = (saved: HydrateData): HydrateData => withPinChoicesOnDisk(linuxSessionShape(saved), saved);
 
 const inClosingOrder = <T extends { closedAt: number }>(entries: T[]) => [...entries].sort((a, b) => a.closedAt - b.closedAt).slice(-MAX_CLOSED_WINDOWS);
 
@@ -248,6 +245,11 @@ const savedPageKind = (tab: Tab): Tab["page"] => ({ kind: tab.page.kind === "asl
 const publicTabs = (entry: { tabs: { profileId: string }[] }) => entry.tabs.every((tab) => publicProfile(tab.profileId));
 const publicTable = <T,>(table: Record<string, T>) => Object.fromEntries(Object.entries(table).filter(([id]) => publicProfile(id)));
 
+export function hydrateLaunchSession(saved: HydrateData | null | undefined, initial: HydrateData) {
+  noteSavedTopAppsMerged(saved?.topAppsMerged ?? "");
+  useBrowser.getState().hydrate(initial);
+}
+
 export function snapshotHostSession(s: BrowserState): HydrateData {
   const windows = Object.fromEntries(Object.values(s.windows).filter((w): w is MainWindow => w.kind === "main").map(({ chromeWindow: _, ...w }) => [w.id, w]));
   const tabs = Object.fromEntries(Object.values(s.tabs)
@@ -318,9 +320,9 @@ export function createSessionWriter(host: ArdiaHost, initial: HydrateData = {}, 
         if (finalized) return;
         const reconciled = generation;
         if (observed === observation && sessionObject(reply)) {
-          const shaped = linuxSessionShape(reply);
-          acceptCanonical(shaped);
-          onCanonical?.(pair.session, shaped);
+          const onDisk = sessionOnDisk(reply);
+          acceptCanonical(onDisk);
+          onCanonical?.(pair.session, onDisk);
         } else if (sessionObject(reply)) {
           canonical = mergeSession(pair.base, pair.session, canonical);
         }
@@ -416,7 +418,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
   let canonical = initial;
   let standIn = windowStandIn(host, store.getState(), initial);
   const snapshotOf = (state: BrowserState) => snapshot(withoutStandIn(state, standIn), canonical);
-  const written = linuxSessionVersion(stored) === linuxSessionVersion(initial) ? initial : unmigratedSessionShape(stored);
+  const written = withPinChoicesOnDisk(linuxSessionVersion(stored) === linuxSessionVersion(initial) ? initial : unmigratedSessionShape(stored), stored);
   const writer = createSessionWriter(host, written, (base, session) => receive(base, session));
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = canonicalSessionValue(equalSessionValue({ ...initial, version: undefined }, { ...written, version: undefined }) ? initial : written)!;
@@ -442,8 +444,9 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     writer.queue(session);
     timer ??= setTimeout(flush, 300);
   };
-  const receive = (base: HydrateData, session: HydrateData) => {
+  const receive = (base: HydrateData, onDisk: HydrateData) => {
     if (closing) return;
+    const session = withPinChoiceStamps(onDisk);
     const state = store.getState();
     const local = frozen ?? snapshotOf(state);
     canonical = session;
@@ -460,7 +463,7 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     const current = store.getState();
     const snapshot = snapshotOf(current);
     if (closeTokens.size) frozen = snapshot;
-    const outstanding = !equalSessionValue(withoutFocus(snapshot), withoutFocus(session));
+    const outstanding = !equalSessionValue(withoutFocus(snapshot), withoutFocus(onDisk));
     lastSources = sessionSources(current);
     last = canonicalSessionValue(snapshot)!;
     writer.reconcile(snapshot, outstanding);
@@ -493,14 +496,14 @@ export function startHostPersistence(host: ArdiaHost, store: SessionStore, store
     if (closing || module !== "ArdiaHost" || event !== "session" || !sessionObject(payload)) return;
     const update = payload as { base?: unknown; session?: unknown };
     if (!sessionObject(update.base) || !sessionObject(update.session)) return;
-    const session = linuxSessionShape(update.session);
+    const session = sessionOnDisk(update.session);
     writer.acceptCanonical(session);
     receive(linuxSessionShape(update.base), session);
   });
   if (standIn) {
     void Promise.resolve(host.invoke("session.read", {})).then((saved) => {
       if (closing || !sessionObject(saved)) return;
-      const session = linuxSessionShape(saved);
+      const session = sessionOnDisk(saved);
       writer.acceptCanonical(session);
       receive(canonical, session);
     }).catch(reportHostError);

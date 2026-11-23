@@ -1,6 +1,7 @@
 import { hoverHeld } from "../app/transientUi";
 import { noteTabHoverCardShown } from "../telemetry/hoverCardCounts";
-import { noteSidebarHoverHeld, noteSidebarScrolled } from "../telemetry/sidebarScrollCounts";
+import { consentToken } from "../telemetry/client";
+import { noteSidebarHoverHeld, noteSidebarScrolled, noteSidebarTeardownHeld } from "../telemetry/sidebarScrollCounts";
 import { sidebarSliding, useDockMotion } from "../windows/dockMotion";
 import { cardReach, pointInRect, type Point, type Rect } from "./hoverAim";
 import { measureRow, setSidebarUi, sidebarUi, type Target } from "./sidebarUi";
@@ -135,12 +136,13 @@ export function suppressHover(value: boolean) {
 }
 
 async function show(windowId: string, target: Target, mine: number) {
+  const consent = consentToken();
   const anchor = await measureRow(windowId, target.id);
   if (mine !== ticket || suppressed || !anchor || hoverHeld(windowId) || sliding(windowId)) return;
   if (card.pointerOn && sidebarUi().hover) return;
   card.exit = null;
   setSidebarUi({ hover: { windowId, ...target, anchor } });
-  if (target.kind === "tab" || target.kind === "folder") noteTabHoverCardShown();
+  if (target.kind === "tab" || target.kind === "folder") noteTabHoverCardShown(consent);
 }
 
 export function hoverEnter(windowId: string, target: Target) {
@@ -232,8 +234,10 @@ const scrolledAt = new Map<string, number>();
 const settleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const heldEnters = new Map<string, Map<object, () => void>>();
 
+const stillFor = (windowId: string) => Date.now() - (scrolledAt.get(windowId) ?? -Infinity);
+
 function settleWhenStill(windowId: string) {
-  const left = (scrolledAt.get(windowId) ?? 0) + SCROLL_SETTLE_MS - Date.now();
+  const left = SCROLL_SETTLE_MS - stillFor(windowId);
   if (left > 0) return void settleTimers.set(windowId, setTimeout(() => settleWhenStill(windowId), left));
   settleTimers.delete(windowId);
   scrolledAt.delete(windowId);
@@ -246,17 +250,32 @@ export function noteRowsScrolled(windowId: string) {
   const now = Date.now();
   noteSidebarScrolled(now);
   scrolledAt.set(windowId, now);
-  if (!settleTimers.has(windowId)) settleTimers.set(windowId, setTimeout(() => settleWhenStill(windowId), SCROLL_SETTLE_MS));
 }
 
-export const rowsScrolling = (windowId: string) => scrolledAt.has(windowId);
+export const forgetRowsScrolled = (windowId: string) => void scrolledAt.delete(windowId);
+
+export function whenRowsStill(windowId: string, run: () => void): () => void {
+  const consent = consentToken();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let held = false;
+  const check = () => {
+    const left = SCROLL_SETTLE_MS - stillFor(windowId);
+    if (left <= 0) return run();
+    if (!held) noteSidebarTeardownHeld(consent);
+    held = true;
+    timer = setTimeout(check, left);
+  };
+  check();
+  return () => clearTimeout(timer);
+}
 
 export function holdEnterWhileScrolling(windowId: string, row: object, enter: () => void): boolean {
-  if (!scrolledAt.has(windowId)) return false;
+  if (stillFor(windowId) >= SCROLL_SETTLE_MS) return false;
   let held = heldEnters.get(windowId);
   if (!held) heldEnters.set(windowId, (held = new Map()));
   if (!held.has(row)) noteSidebarHoverHeld();
   held.set(row, enter);
+  if (!settleTimers.has(windowId)) settleWhenStill(windowId);
   return true;
 }
 

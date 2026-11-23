@@ -9,6 +9,7 @@ import {
   type TabPatch,
 } from "./tabModels.ts";
 import { sameSpaces, tabsInSpace, UNSYNCED, type TabSpaces } from "./spaces.ts";
+import { pageWords } from "../../lib/sharedWords.ts";
 
 export type ClosedTab = { tab: BrowserTab; wasSelected: boolean };
 
@@ -64,11 +65,18 @@ export const RECENT_TABS_LIMIT = 8;
 
 export const recentOtherTabs = (order: readonly BrowserTab[]): BrowserTab[] => order.slice(0, -1).slice(-RECENT_TABS_LIMIT).reverse();
 
-export const tabMenuTitle = (tab: BrowserTab, host: string, byAddress = false): string => tab.title.trim() || host || (byAddress ? tab.url : "New Tab");
+export const tabMenuTitle = (tab: BrowserTab, host: string, byAddress = false): string => tab.title.trim() || host || (byAddress ? tab.url : pageWords.untitledTab);
 
 export const spaceTabs = (data: Pick<TabsData, "open" | "spaces">): readonly BrowserTab[] => tabsInSpace(data.open, data.spaces);
 
 export const deckOrder = (data: TabsData): BrowserTab[] => recencyOrder([...spaceTabs(data), ...data.privates], data.selectedId);
+
+export function tabBefore(data: TabsData, id: string): BrowserTab | null {
+  const closing = findTab(data, id);
+  const others = deckOrder(data).filter((t) => t.id !== id);
+  const sameKind = others.filter((t) => t.isPrivate === (closing?.isPrivate ?? false));
+  return sameKind[sameKind.length - 1] ?? others[others.length - 1] ?? null;
+}
 
 const mostRecent = (tabs: readonly BrowserTab[]) => tabs.reduce<BrowserTab | null>((best, tab) => (best === null || tab.lastActive > best.lastActive ? tab : best), null);
 

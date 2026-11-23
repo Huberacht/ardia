@@ -38,6 +38,8 @@ class SnapshotOptionsRecord : Record {
     @Field val quality: Int? = null
 
     @Field val coveredInsets: List<Double>? = null
+
+    @Field val windowCopy: Boolean? = null
 }
 
 class RequestAnswerRecord : Record {
@@ -189,6 +191,25 @@ class PageViewModule : Module() {
             PagePrinting.print(activity, page).also { shown -> if (PhoneLab.isOn) android.util.Log.i("PAGELAB", "PAGELAB print ${if (shown) "sheet shown" else "refused"} for page $pageId") }
         }.runOnQueue(Queues.MAIN)
 
+        AsyncFunction("summarizePage") { pageId: String -> PhonePages.summarize(pageId) }.runOnQueue(Queues.MAIN)
+
+        AsyncFunction("dismissPageSummaries") { -> PhonePages.dismissSummaries() }.runOnQueue(Queues.MAIN)
+
+        AsyncFunction("pageSummariesEnabled") { -> PageSummaryChoice.isEnabled(context) }.runOnQueue(Queues.MAIN)
+
+        AsyncFunction("setPageSummariesEnabled") { enabled: Boolean ->
+            PageSummaryChoice.enable(context, enabled)
+            if (!enabled) PhonePages.dismissSummaries()
+            PageSummaryChoice.isEnabled(context)
+        }.runOnQueue(Queues.MAIN)
+
+        AsyncFunction("pageSummaryProvider") { -> PageSummaryChoice.stored(context).raw }.runOnQueue(Queues.MAIN)
+
+        AsyncFunction("setPageSummaryProvider") { provider: String ->
+            PageSummaryChoice.choose(context, PageSummaryProvider.of(provider))
+            PageSummaryChoice.stored(context).raw
+        }.runOnQueue(Queues.MAIN)
+
         AsyncFunction("translation") { -> PhonePages.translation(context).state() }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("translationUrl") { pageUrl: String -> PhonePages.translation(context).url(pageUrl) }.runOnQueue(Queues.MAIN)
@@ -209,7 +230,7 @@ class PageViewModule : Module() {
         AsyncFunction("snapshot") Coroutine { pageId: String, options: SnapshotOptionsRecord ->
             withContext(Dispatchers.Main) {
                 val covered = options.coveredInsets?.takeIf { it.size == 2 }?.let { it[0] to it[1] }
-                PhonePages.snapshot(pageId, options.maxWidth ?: com.ardia.browser.Page.SNAPSHOT_WIDTH, options.quality ?: SNAPSHOT_QUALITY, covered)
+                PhonePages.snapshot(pageId, options.maxWidth ?: com.ardia.browser.Page.SNAPSHOT_WIDTH, options.quality ?: SNAPSHOT_QUALITY, covered, options.windowCopy ?: true)
             }
         }
 
@@ -312,6 +333,12 @@ class PageViewModule : Module() {
             engine.refreshSitePreferences()
         }.runOnQueue(Queues.MAIN)
 
+        AsyncFunction("forgetNightShadeVerdicts") { since: Double? ->
+            val engine = PhonePages.engine(context)
+            PhonePages.sitePreferences.forgetNightShadeVerdicts(since?.toLong())
+            engine.refreshSitePreferences()
+        }.runOnQueue(Queues.MAIN)
+
         AsyncFunction("setOpensLinksInApps") { host: String, opens: Boolean? ->
             PhonePages.engine(context)
             PhonePages.sitePreferences.setOpensLinksInApps(host, opens)
@@ -359,6 +386,10 @@ class PageViewModule : Module() {
 
             Prop("swipeNavigation") { view: PageView, mode: String? -> view.swipeMode = SwipeMode.of(mode) }
 
+            Prop("closesOnSwipeBack") { view: PageView, closes: Boolean? -> view.closesOnSwipeBack = closes == true }
+
+            Prop("reopensOnSwipeForward") { view: PageView, reopens: Boolean? -> view.reopensOnSwipeForward = reopens == true }
+
             Prop("pullToRefresh") { view: PageView, enabled: Boolean? -> view.pullToRefresh = enabled == true }
 
             Prop("surfaceColor") { view: PageView, colour: Int? -> view.surfaceColor = colour }
@@ -375,6 +406,10 @@ class PageViewModule : Module() {
                 view.toneInsets = insets?.takeIf { it.size == 2 }?.let { it[0] to it[1] } ?: (0.0 to 0.0)
             }
 
+            Prop("bottomInsetTransitionMs") { view: PageView, millis: Int? -> view.bottomInsetTransitionMs = (millis ?: 0).coerceIn(0, 300) }
+
+            Prop("summaryBottomInset") { view: PageView, inset: Double? -> view.summaryBottomInset = (inset ?: 0.0).coerceAtLeast(0.0) }
+
             Prop("obscuredInsets") { view: PageView, insets: List<Double>? ->
                 view.obscuredInsets = insets?.takeIf { it.size == 2 }?.let { it[0].coerceAtLeast(0.0) to it[1].coerceAtLeast(0.0) } ?: (0.0 to 0.0)
             }
@@ -384,7 +419,10 @@ class PageViewModule : Module() {
                 view.obscuredColours = (pair?.get(0)?.toLong()?.toInt()) to (pair?.get(1)?.toLong()?.toInt())
             }
 
-            OnViewDidUpdateProps { view -> view.bind() }
+            OnViewDidUpdateProps { view ->
+                view.updateObscuredInsets()
+                view.bind()
+            }
 
             OnViewDestroys { view -> view.unbind() }
 

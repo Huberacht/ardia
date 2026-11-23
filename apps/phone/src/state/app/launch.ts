@@ -1,20 +1,25 @@
 import type { InterfaceStyleChoice, SchemeChoice } from "../../lib/appearance";
 import { deckSteps, LAUNCH_TIMING, TRUSTED_SITES_SAMPLE, type DeckStep, type LaunchArguments } from "../../lib/launchArguments";
 import { neighbourAt } from "../../lib/pagerPhysics";
+import { demoTheme } from "../../lib/themeEditor";
 import { sendDeckCommand } from "../browse/deckCommands";
 import { captureSnapshot, newTab, openArchive, openPage, openSpaces, openTab, showDeck, swipeOrder, switchToNeighbour, useBrowse } from "../browse/store";
 import { openLibrary } from "../library/store";
 import { openPageMenu, showReader } from "../page/actions";
 import { presentSearch } from "../search/store";
+import { startBrowseForMe } from "../browseForMe/store";
+import { presentHeardVoiceSearch } from "../voice/store";
 import { trustSite } from "../settings/actions";
 import { openSettings, settingsRouteFromKey } from "../settings/nav";
 import { acceptsPreference, type ColorChoice } from "../settings/preferences";
-import { setPreference } from "../settings/store";
+import { currentPreferences, setPreference } from "../settings/store";
 import { closeEveryTab, closeTabById, currentTabs, openNewTab, receiveSentTabs, setIncognito, updateTabById } from "../tabs/store";
 import { deckOrder } from "../tabs/tabsState";
 import { showToast } from "../toasts/store";
 import { pages } from "../../platform/pages";
 import { launchArguments } from "./launchFlags";
+import { isLabBuild } from "../../platform/lab";
+import { runDeckPullScript } from "../browse/deckPullScript";
 import { DEMO_PRIVATE_URLS, manyTabTitle, sampleToast } from "./launchRules";
 
 
@@ -28,6 +33,7 @@ export function applyLaunchSettings() {
   if (!args.showsOnboarding) setPreference("hasFinishedOnboarding", true);
   if (args.restingStart) setPreference("autoOpensKeyboard", false);
   const color = args.color?.toLowerCase() ?? null;
+  if (color === "custom" && !currentPreferences().customTheme) setPreference("customTheme", demoTheme());
   if (color && acceptsPreference("colorChoice", color)) setPreference("colorChoice", color as ColorChoice);
   if (args.interfaceStyle && acceptsPreference("interfaceStyle", args.interfaceStyle)) setPreference("interfaceStyle", args.interfaceStyle as InterfaceStyleChoice);
   if (args.colorScheme && acceptsPreference("schemeChoice", args.colorScheme)) setPreference("schemeChoice", args.colorScheme as SchemeChoice);
@@ -38,6 +44,7 @@ export function runLaunchScenario() {
   if (args.isDemo) void runDemoScenario(args);
   void runLaunchHooks(args);
   if (args.deckScript) void runDeckScript(args.deckScript);
+  if (isLabBuild && args.browseDeckPull !== null) void runDeckPullScript(args.browseDeckPull);
 }
 
 let demoWarming: Promise<void> | null = null;
@@ -57,7 +64,7 @@ async function warmDemoPictures() {
 
 async function runDemoScenario(args: LaunchArguments) {
   demoWarming = warmDemoPictures();
-  if (args.browseIncognito) setIncognito(true);
+  if (args.browseIncognito && !setIncognito(true)) return;
   if (args.browseOpen) openPage(args.browseOpen, "typed");
   if (args.browseQuery !== null) presentSearch("home", args.browseQuery);
   if (args.browseSurface === "browsing") {
@@ -90,8 +97,10 @@ async function runDemoScenario(args: LaunchArguments) {
 
 async function runLaunchHooks(args: LaunchArguments) {
   if (args.trustedSitesSample) for (const host of TRUSTED_SITES_SAMPLE) void trustSite(host, true);
-  if (!args.opensSettings && args.settingsPage === null && args.openSheet === null && args.toast === null) return;
+  if (!args.opensSettings && args.settingsPage === null && args.openSheet === null && args.toast === null && args.browseResearch === null && args.voiceHeard === null) return;
   await wait(LAUNCH_TIMING.sheetMs);
+  if (args.browseResearch !== null) startBrowseForMe(args.browseResearch);
+  if (args.voiceHeard !== null) presentHeardVoiceSearch(args.voiceHeard);
   if (args.opensSettings || args.openSheet === "settings") openSettings();
   const page = args.settingsPage === null ? null : settingsRouteFromKey(args.settingsPage);
   if (page) openSettings(page);
@@ -149,6 +158,16 @@ async function deckStep({ kind, argument }: DeckStep) {
     case "archivecard":
       sendDeckCommand({ kind: "showArchiveCard" });
       return;
+    case "switch": {
+      const order = deckOrder(currentTabs());
+      const at = order.findIndex((tab) => tab.id === currentTabs().selectedId);
+      const other = order[at > 0 ? at - 1 : at + 1];
+      if (!other || useBrowse.getState().surface !== "browsing") return;
+      openTab(other.id);
+      await wait((Number(argument) || 0) * 1000);
+      await showDeck();
+      return;
+    }
     case "browse": {
       const selected = currentTabs().selectedId;
       if (selected) openTab(selected);

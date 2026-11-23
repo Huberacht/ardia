@@ -43,6 +43,10 @@ NSString *DevHoverState() {
     @"episodeReason" : gEpisode.open ? ReasonName(gEpisode.first.reason) : @"",
     @"healed" : @(gEpisode.healed),
     @"healWorked" : @(gEpisode.healWorked),
+    @"healRefused" : HealRefusalName(gEpisode.firstRefusal),
+    @"healRefusedLast" : HealRefusalName(gEpisode.lastRefusal),
+    @"healRefusedWindow" : MenuWindowName(gEpisode.refusedWindow),
+    @"otherWindowClicks" : @(gEpisode.otherWindowClicks),
     @"pending" : ReasonName(gPendingReason),
     @"watching" : @(gHoverMonitor != nil),
     @"emitted" : gDevHoverEvents ?: @[],
@@ -149,7 +153,7 @@ NSString *HoverProbeDev(NSWindow *window, NSString *argument) {
     if (gHoverWatchInBackground) StartHoverWatch();
     else if (Background()) StopHoverWatch();
   } else if ([command isEqualToString:@"check"]) {
-    HandleHoverCheck(window, TopLeftPoint(window, rest), [rest hasSuffix:@",click"] ? HoverTrigger::click : HoverTrigger::move);
+    HandleHoverCheck(window, TopLeftPoint(window, rest), [rest hasSuffix:@",click"] ? HoverTrigger::click : HoverTrigger::move, [ArdiaConsentStamp begin]);
   } else if ([command isEqualToString:@"preventKey"]) {
     [window setValue:@([rest isEqualToString:@"1"]) forKey:@"preventKeyWindow"];
     return DescribeFocusWindow(window);

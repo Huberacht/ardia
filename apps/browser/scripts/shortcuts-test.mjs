@@ -125,10 +125,11 @@ const shortcuts = [
   ["⇧⌘Z", cmd("Z", 6, "shift"), { title: "Redo" }, "⇧⌘Z"],
   ["⌘X", cmd("x", 7), { title: "Cut" }, "⌘X", "clipboard"],
   ["⌘C", cmd("c", 8), { title: "Copy" }, "⌘C", "clipboard"],
-  ["⇧⌘C", cmd("C", 8, "shift"), { command: "copyUrl" }, "⇧⌘C"],
+  ["⇧⌘C", cmd("C", 8, "shift"), { command: "copyUrl" }, "⇧⌘C", "devtools-own"],
   ["⌥⇧⌘C", cmd("C", 8, "shift", "option"), { command: "copyUrlAsMarkdown" }, "⌥⇧⌘C"],
   ["⌘V", cmd("v", 9), { title: "Paste" }, "⌘V", "clipboard"],
   ["⇧⌘V", cmd("V", 9, "shift"), { title: "Paste and Match Style" }, "⇧⌘V", "clipboard"],
+  ["⌥⇧⌘V", cmd("V", 9, "shift", "option"), { title: "Paste and Match Style" }, "(macOS's)", "clipboard"],
   ["⌘A", cmd("a", 0), { title: "Select All" }, "⌘A"],
   ["⌘F", cmd("f", 3), { command: "findInPage" }, "⌘F"],
   ["⌥⌘F", cmd("f", 3, "option"), { command: "findAndReplace" }, "⌥⌘F"],
@@ -654,6 +655,14 @@ await post("v", 9);
 await sleep(600);
 const afterEscape = await pageField("f.value");
 check("Escape out of the command bar gives the page its focus back", responder.startsWith("RenderWidgetHostViewCocoa") && afterEscape === "after-escape", `first responder ${responder}, page field "${afterEscape}"`);
+for (const [name, modifiers] of [["⇧⌘V", ["command", "shift"]], ["⌥⇧⌘V", ["command", "shift", "option"]]]) {
+  await resetToPageField("", [0, 0]);
+  await clipboard.set(`plain-${modifiers.length}`);
+  await post("V", 9, modifiers);
+  await sleep(600);
+  const pastedPlain = await pageField("f.value");
+  check(`${name} pastes and matches style into a page field`, pastedPlain === `plain-${modifiers.length}`, `page field "${pastedPlain}"`);
+}
 await resetToPageField("", [0, 0]);
 
 for (const where of ["the find field", "the page"]) {
@@ -800,10 +809,10 @@ await sleep(1000);
   let loaded = false;
   for (let i = 0; i < 80 && !loaded; i++) {
     await sleep(250);
-    loaded = await ac(`const s = ac.store.getState(), id = globalThis.wkTab; return s.tabs[id]?.title === "wk" && !s.live[id]?.isLoading && !!ac.webviews.get(id);`);
+    loaded = await ac(`const s = ac.store.getState(), id = globalThis.wkTab; return s.tabs[id]?.title === "wk" && !ac.tabLive.liveOf(id).isLoading && !!ac.webviews.get(id);`);
   }
   if (!loaded) {
-    const seenAs = await ac(`const s = ac.store.getState(), id = globalThis.wkTab; return JSON.stringify({ title: s.tabs[id]?.title, loading: s.live[id]?.isLoading, view: !!ac.webviews.get(id) });`);
+    const seenAs = await ac(`const s = ac.store.getState(), id = globalThis.wkTab; return JSON.stringify({ title: s.tabs[id]?.title, loading: ac.tabLive.liveOf(id).isLoading, view: !!ac.webviews.get(id) });`);
     check("the WebKit tab for the WebKit checks loads", false, `${wkUrl} never finished loading in 20 s: ${seenAs}`);
   } else {
     await sleep(500);

@@ -1,15 +1,17 @@
 import { diagnosticsSample, hardwareInfo, type HardwareInfo } from "../../platform/app";
 import { onHoverLost, onWindowUnpainted, systemState, type HoverLostEpisode, type WindowUnpaintedRecord } from "../../platform/performance";
-import { cliControlStatus } from "../../platform/cli";
+import { controlStatus } from "../../platform/control";
 import { call } from "../../platform/engine";
 import { withDeadline } from "../../lib/deadline";
 import { hermesHeapMegabytes } from "../../lib/hermesHeap";
 import { activeTab } from "../browser/model";
 import { useBrowser } from "../browser/store";
-import { capture, isSharing, saveContext, useTelemetry } from "./client";
+import { capture, consentNow, consentToken, counted, isSharing, saveContext, stillValid, onConsentPeriodChange } from "./client";
+import { nativeConsent } from "./nativeConsent";
+import { hoverLostProperties, oneOf } from "./hoverLost";
 import { formatRecentPages, readRecentPages, type RecentPage, type SavedContext } from "./savedContext";
 import { noteDragsEnded } from "./stuckDrags";
-import { noteWindowlessPages } from "./cliCounts";
+import { noteEngineCliTotals } from "./cliCounts";
 import { mainProcessWork } from "./mainProcessWork";
 import { appInfo } from "./transport";
 import { readDocument } from "../../platform/documents";
@@ -19,7 +21,6 @@ const FIRST_CONTEXT_MS = 3_000;
 const HARDWARE_WAIT_MS = 1_000;
 const MAX_PAGE_PROCESS_EVENTS = 30;
 const MAX_HOVER_LOST_EVENTS = 20;
-const MAX_HOVER_LOST_SECONDS = 24 * 60 * 60;
 const MAX_WINDOW_UNPAINTED_EVENTS = 20;
 const MAX_WINDOW_VIEWS = 1_000;
 const MINUTE_MS = 60_000;
@@ -34,7 +35,7 @@ const startedAt = Date.now();
 export const sessionStart = () => appInfo().processStart ?? startedAt;
 let appMemoryMb: number | null = null;
 let pageProcessesGone = 0;
-let pageProcessEvents = 0;
+const pageProcessEvents = { shared: 0, local: 0 };
 let hoverLostEvents = 0;
 let windowUnpaintedEvents = 0;
 let samples: SavedContext[] = [];
@@ -81,14 +82,15 @@ function noteWebuiPage(page: string, at: number) {
 export const noteAppMemory = (totalMb: number) => (appMemoryMb = totalMb);
 
 export async function recordContext(): Promise<SavedContext | null> {
-  if (!isSharing()) return null;
-  void cliControlStatus().then((status) => {
+  const consent = consentToken();
+  if (!consent) return null;
+  void controlStatus().then((status) => counted(consent, () => {
     noteDragsEnded(status.dragsEnded);
-    noteWindowlessPages(status.windowlessPages);
-  }, () => {});
+    noteEngineCliTotals(status, consent);
+  }), () => {});
   const epoch = contextEpoch;
   const [sample, pressure] = await Promise.all([diagnosticsSample().catch(() => ({ footprintMB: undefined, freeDiskGB: undefined })), memoryPressure()]);
-  if (!isSharing() || epoch !== contextEpoch) return null;
+  if (!stillValid(consent) || epoch !== contextEpoch) return null;
   const now = Date.now();
   const page = activeWebuiPage();
   if (page) noteWebuiPage(page, now);
@@ -116,13 +118,36 @@ function keepRecent(list: SavedContext[], now: number): SavedContext[] {
   return (recent.length >= MIN_SAMPLES ? recent : list.slice(-MIN_SAMPLES)).slice(-MAX_SAMPLES);
 }
 
-export const takeMainProcessWork = async () => mainProcessWork(await diagnosticsSample().catch(() => ({})), Date.now());
+let reads: Promise<unknown> = Promise.resolve();
 
-export async function takeContentDriftCounts(): Promise<Record<string, number>> {
-  const drift = await call("webView.takeContentDrift", {}).catch(() => null);
-  if (!drift) return {};
-  return { content_layer_layouts: drift.layouts, content_layer_refits: drift.fits, content_layer_drift_max_pt: drift.maxPoints };
+function inTurn<T>(read: () => Promise<T>): Promise<T> {
+  const next = reads.then(read, read);
+  reads = next.catch(() => null);
+  return next;
 }
+
+export const takeMainProcessWork = () => inTurn(async () => mainProcessWork(await diagnosticsSample().catch(() => ({})), Date.now()));
+
+export const takeContentDriftCounts = (): Promise<Record<string, number>> =>
+  inTurn(async (): Promise<Record<string, number>> => {
+    const drift = await call("webView.takeContentDrift", {}).catch(() => null);
+    if (!drift) return {};
+    return { content_layer_layouts: drift.layouts, content_layer_refits: drift.fits, content_layer_drift_max_pt: drift.maxPoints };
+  });
+
+export const takeColdTabHoldCounts = (): Promise<Record<string, number>> =>
+  inTurn(async (): Promise<Record<string, number>> => {
+    const holds = await call("webView.takeFirstPaintHolds", {}).catch(() => null);
+    if (!holds) return {};
+    return {
+      cold_tab_holds: holds.held,
+      cold_tab_holds_painted: holds.painted,
+      cold_tab_holds_loaded: holds.loaded,
+      cold_tab_holds_pressed: holds.pressed,
+      cold_tab_holds_timed_out: holds.timedOut,
+      cold_tab_hold_ms: holds.heldMs,
+    };
+  });
 
 export const contextSamples = () => samples;
 
@@ -135,9 +160,12 @@ function forgetContext() {
   pageProcessesGone = 0;
 }
 
-useTelemetry.subscribe((s, prev) => prev.sharing !== s.sharing && forgetContext());
+onConsentPeriodChange(() => {
+  forgetContext();
+  hoverLostEvents = windowUnpaintedEvents = 0;
+});
 
-useBrowser.subscribe((s, prev) => {
+useBrowser.subscribeTo(["profiles"], (s, prev) => {
   if (s.profiles === prev.profiles || size(s.profiles) >= size(prev.profiles)) return;
   forgetContext();
   saveContext(null);
@@ -155,7 +183,7 @@ function recordForWebuiPage() {
 
 function watchWebuiPage() {
   shownPage = activeWebuiPage();
-  unwatchWebuiPage = useBrowser.subscribe((s, prev) => {
+  unwatchWebuiPage = useBrowser.subscribeTo(["tabs", "windows", "ui"], (s, prev) => {
     if (s.tabs === prev.tabs && s.windows === prev.windows && s.ui === prev.ui) return;
     const page = activeWebuiPage(s);
     if (page === shownPage) return;
@@ -235,9 +263,10 @@ const GONE_REASONS = new Set(["abnormal", "killed", "crashed", "oom", "launchFai
 export type PageTranslateContext = { translate: string; translate_stage: string | null; translating_tabs: number; translated_tabs: number };
 
 export function trackPageProcessGone(info: { reason: string; code: number }, visible: boolean, translate?: PageTranslateContext) {
-  pageProcessesGone++;
-  if (pageProcessEvents >= MAX_PAGE_PROCESS_EVENTS) return;
-  pageProcessEvents++;
+  const consent = consentNow();
+  if (isSharing()) pageProcessesGone++;
+  const cap = isSharing() ? "shared" : "local";
+  if (pageProcessEvents[cap]++ >= MAX_PAGE_PROCESS_EVENTS) return;
   const reason = GONE_REASONS.has(info.reason) ? info.reason : "unknown";
   const props = {
     process: "renderer",
@@ -249,49 +278,15 @@ export function trackPageProcessGone(info: { reason: string; code: number }, vis
     session_min: sessionMinutes(),
     gone_this_session: pageProcessesGone,
   };
-  void memoryPressure().then((memory_pressure) => capture("page_process_gone", { ...props, memory_pressure }));
-}
-
-const HOVER_REASONS = new Set(["halfActive", "staleMenu", "notKeyOrMain", "coveredByView", "responderLost", "coveredByWindow"]);
-const HOVER_RESPONDERS = new Set(["none", "window", "otherWindow", "page", "control"]);
-const HOVER_WINDOW_KINDS = new Set(["none", "hidden", "blockerPage", "internal", "ardiaPanel", "popup", "browser", "other"]);
-const HOVER_COVERS = new Set(["none", "reactNative", "chromium", "other"]);
-const HOVER_ENDINGS = new Set(["hover", "heal", "appInactive", "windowClosed"]);
-
-const oneOf = (allowed: Set<string>, value: unknown) => (typeof value === "string" && allowed.has(value) ? value : "unknown");
-
-export function hoverLostProperties(e: HoverLostEpisode) {
-  return {
-    reason: oneOf(HOVER_REASONS, e.reason),
-    trigger: e.trigger === "click" ? "click" : "move",
-    key_window: oneOf(HOVER_WINDOW_KINDS, e.keyWindow),
-    main_window: oneOf(HOVER_WINDOW_KINDS, e.mainWindow),
-    prevent_key: e.preventKey === true,
-    can_key: e.canKey === true,
-    window_main: e.windowMain === true,
-    half_active: e.halfActive === true,
-    app_active: e.appActive === true,
-    running_active: e.runningActive === true,
-    frontmost: e.frontmost === true,
-    menu_active: e.menuActive === true,
-    over_page: e.overPage === true,
-    cover: oneOf(HOVER_COVERS, e.cover),
-    cover_clear: e.coverClear === true,
-    responder: oneOf(HOVER_RESPONDERS, e.responder),
-    cover_window: oneOf(HOVER_WINDOW_KINDS, e.coverWindow ?? "none"),
-    healed: e.healed === true,
-    heal_worked: typeof e.healWorked === "boolean" ? e.healWorked : null,
-    ended_by: oneOf(HOVER_ENDINGS, e.endedBy),
-    lost_seconds: Number.isFinite(e.seconds) ? Math.min(Math.max(0, Math.round(e.seconds)), MAX_HOVER_LOST_SECONDS) : null,
-    episode: Number.isSafeInteger(e.episode) ? e.episode : null,
-    session_min: sessionMinutes(),
-  };
+  void memoryPressure().then((memory_pressure) => capture("page_process_gone", { ...props, memory_pressure }, consent));
 }
 
 export function trackHoverLost(e: HoverLostEpisode) {
+  const consent = nativeConsent(e);
   if (hoverLostEvents >= MAX_HOVER_LOST_EVENTS) return;
-  hoverLostEvents++;
-  capture("page_hover_lost", hoverLostProperties(e));
+  const valid = stillValid(consent);
+  if (valid) hoverLostEvents++;
+  capture("page_hover_lost", { ...hoverLostProperties(e, sessionMinutes()), episode: valid ? hoverLostEvents : null }, consent);
 }
 
 const UNPAINTED_WINDOWS = new Set(["regular", "private"]);
@@ -326,9 +321,10 @@ export function windowUnpaintedProperties(r: WindowUnpaintedRecord) {
 }
 
 export function trackWindowUnpainted(r: WindowUnpaintedRecord) {
+  const consent = nativeConsent(r);
   if (windowUnpaintedEvents >= MAX_WINDOW_UNPAINTED_EVENTS) return;
-  windowUnpaintedEvents++;
-  capture("window_unpainted", windowUnpaintedProperties(r));
+  if (stillValid(consent)) windowUnpaintedEvents++;
+  capture("window_unpainted", windowUnpaintedProperties(r), consent);
 }
 
 export function watchEngineReports() {
