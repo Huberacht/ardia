@@ -181,3 +181,23 @@ test("a double-click whose page never arrives does nothing once the wait runs ou
     webviews.delete(mail);
   }
 });
+
+test("a double-click whose hand-off is cancelled never resets the page a later single click brings across", async () => {
+  const { b, mail, copy, calls } = pageAwayInB();
+  const navs = watchNavigations();
+  try {
+    await doubleClickTile(b, copy);
+    S().openPanel(b);
+    await advance(400);
+    assert.notEqual(S().tabs[mail].windowId, b, "opening the command bar cancelled the hand-off");
+    S().closePanel(b);
+    S().activate(copy);
+    assert.ok(await until(() => S().tabs[mail].windowId === b && model.activeTabId(S(), b) === mail, 1000), "the single click brings the page across");
+    await advance(200);
+    assert.deepEqual(navs.seen, [], "and it stays where it was");
+    assert.deepEqual(calls, []);
+  } finally {
+    navs.stop();
+    webviews.delete(mail);
+  }
+});

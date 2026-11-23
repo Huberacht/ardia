@@ -21,6 +21,7 @@ import { withLivePage } from "../tabs/livePage";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { holderOfPage } from "../tabs/pageSession";
 import { holderOf } from "../pins/pinShare";
+import { pinHandOffOf } from "../pins/pinHandoff";
 import { noteTextOnlyRow } from "../telemetry/tabStripCounts";
 import { NO_ROW_ICON } from "../pins/rowIcons";
 import type { BookmarkFolderChoice } from "./menuParts";
@@ -64,10 +65,15 @@ export function refreshShownTile(windowId: string, tabId: string, wasShown: bool
 }
 
 function whenPinLands(windowId: string, family: string): Promise<string | null> {
+  const flight = pinHandOffOf(family);
+  if (!flight) return Promise.resolve(null);
   const before = activeTabId(store(), windowId);
   return new Promise((done) => {
+    let settled = false;
     let stop = () => {};
     const finish = (landed: string | null) => {
+      if (settled) return;
+      settled = true;
       stop();
       clearTimeout(deadline);
       done(landed);
@@ -79,6 +85,7 @@ function whenPinLands(windowId: string, family: string): Promise<string | null> 
       if (shown && tab && familyKeyOf(tab) === family && !holderOfPage(tab)) finish(shown);
       else if (shown !== before) finish(null);
     });
+    void flight.then((landed) => landed || finish(null));
   });
 }
 
