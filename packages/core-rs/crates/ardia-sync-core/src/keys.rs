@@ -119,7 +119,7 @@ impl SyncKeys {
         self.seal_with(payload, scope_tag, file_id, &nonce)
     }
 
-    #[cfg(feature = "fixtures")]
+    #[cfg(any(test, feature = "fixtures"))]
     pub fn seal_with_nonce(
         &self,
         payload: &[u8],

@@ -137,29 +137,7 @@ fn tags_seals_and_opens_reproduce_the_vectors() {
 
     let state = &inputs["localStates"][0];
     let payload = b64(inputs["payloads"][state["payload"].as_str().unwrap()].as_str().unwrap());
-    let nonce = hex(state["nonce"].as_str().unwrap());
-    let mut sealed = Buf::new();
-    let status = unsafe {
-        ardia_sync_seal_with_nonce(
-            keys.0,
-            payload.as_ptr(),
-            payload.len(),
-            b"local".as_ptr(),
-            5,
-            b"state".as_ptr(),
-            5,
-            nonce.as_ptr(),
-            nonce.len(),
-            sealed.out(),
-        )
-    };
-    assert_eq!(status, ardia_status::Ok);
-    assert_eq!(
-        sealed.bytes(),
-        b64(expected["localStates"][0]["sealed"].as_str().unwrap())
-    );
-
-    let file = sealed.bytes();
+    let file = b64(expected["localStates"][0]["sealed"].as_str().unwrap());
     let mut opened = Buf::new();
     let status = unsafe {
         ardia_sync_open(
@@ -367,23 +345,6 @@ fn every_input_has_a_size_cap_and_text_must_be_utf8() {
         unsafe { ardia_sync_chain_tag(keys.0, ptr::null_mut()) },
         ardia_status::InvalidArgument
     );
-    let mut out = Buf::new();
-    let nonce = [0u8; 11];
-    let status = unsafe {
-        ardia_sync_seal_with_nonce(
-            keys.0,
-            ptr::null(),
-            0,
-            b"a".as_ptr(),
-            1,
-            b"b".as_ptr(),
-            1,
-            nonce.as_ptr(),
-            11,
-            out.out(),
-        )
-    };
-    assert_eq!(status, ardia_status::InvalidArgument);
 }
 
 #[test]

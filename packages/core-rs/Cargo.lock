@@ -57,7 +57,6 @@ dependencies = [
 name = "ardia-ffi"
 version = "0.1.0"
 dependencies = [
- "ardia-ffi",
  "ardia-sync-core",
  "cbindgen",
  "serde",
@@ -70,10 +69,18 @@ name = "ardia-sync-core"
 version = "0.1.0"
 dependencies = [
  "ardia-crypto",
+ "base64",
+ "zeroize",
+]
+
+[[package]]
+name = "ardia-sync-vectors"
+version = "0.1.0"
+dependencies = [
+ "ardia-crypto",
  "ardia-sync-core",
  "base64",
  "serde_json",
- "zeroize",
 ]
 
 [[package]]

@@ -12,7 +12,6 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub const ARDIA_ABI_VERSION: u32 = 1;
 pub const ARDIA_ENTROPY_BYTES: usize = 32;
-pub const ARDIA_NONCE_BYTES: usize = 12;
 pub const ARDIA_MAX_PAYLOAD_BYTES: usize = 32 * 1024 * 1024;
 pub const ARDIA_MAX_SEALED_FILE_BYTES: usize = 64 * 1024 * 1024;
 pub const ARDIA_MAX_LABEL_BYTES: usize = 512;
@@ -231,36 +230,6 @@ pub unsafe extern "C" fn ardia_sync_seal(
             let scope_tag = text(scope_tag, scope_tag_len, ARDIA_MAX_LABEL_BYTES)?;
             let file_id = text(file_id, file_id_len, ARDIA_MAX_LABEL_BYTES)?;
             Ok(Zeroizing::new(keys.seal(payload, scope_tag, file_id)?))
-        })
-    }
-}
-
-#[cfg(feature = "fixtures")]
-#[no_mangle]
-pub unsafe extern "C" fn ardia_sync_seal_with_nonce(
-    keys: *const ardia_sync_keys,
-    payload: *const u8,
-    payload_len: usize,
-    scope_tag: *const u8,
-    scope_tag_len: usize,
-    file_id: *const u8,
-    file_id_len: usize,
-    nonce: *const u8,
-    nonce_len: usize,
-    out: *mut ardia_buf,
-) -> ardia_status {
-    unsafe {
-        run(out, || {
-            let keys = self::keys(keys)?;
-            let payload = bytes(payload, payload_len, ARDIA_MAX_PAYLOAD_BYTES)?;
-            let scope_tag = text(scope_tag, scope_tag_len, ARDIA_MAX_LABEL_BYTES)?;
-            let file_id = text(file_id, file_id_len, ARDIA_MAX_LABEL_BYTES)?;
-            let nonce: &[u8; ARDIA_NONCE_BYTES] = bytes(nonce, nonce_len, ARDIA_NONCE_BYTES)?
-                .try_into()
-                .map_err(|_| Failure::argument("argument"))?;
-            Ok(Zeroizing::new(
-                keys.seal_with_nonce(payload, scope_tag, file_id, nonce)?,
-            ))
         })
     }
 }

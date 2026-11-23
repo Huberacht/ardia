@@ -13,6 +13,3 @@ prefix_with_name = true
 
 [parse]
 parse_deps = false
-
-[export]
-exclude = ["ardia_sync_seal_with_nonce"]

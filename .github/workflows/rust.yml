@@ -85,13 +85,16 @@ jobs:
         run: cargo test --locked --all-features
       - name: Release static library
         run: cargo build --locked --release -p ardia-ffi
-      - name: The shipped library has no caller-chosen nonce
+      - name: The library exports exactly the header's functions in every build
         if: runner.os != 'Windows'
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then exports=$(nm -D --defined-only target/release/libardia_core.so); else exports=$(nm -gU target/release/libardia_core.dylib); fi
-          echo "$exports" | grep -q ardia_sync_seal
-          if echo "$exports" | grep -i nonce; then exit 1; fi
-          if grep -i nonce_len include/ardia_core.h; then exit 1; fi
+          python3 -I tests/check_exports.py
+          for build in "--all-targets -p ardia-ffi" "--all-targets --all-features" "--workspace --all-targets --all-features"; do
+            echo "cargo build --release $build"
+            cargo build --locked --release $build
+            python3 -I tests/check_exports.py
+          done
+          cargo build --locked --release -p ardia-ffi
       - name: C and C++ smoke against the static library
         if: runner.os != 'Windows'
         run: |
