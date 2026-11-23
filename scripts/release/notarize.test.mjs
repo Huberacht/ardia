@@ -436,3 +436,44 @@ test("the DMG's key changes with the packing settings, so an image packed anothe
   assert.equal(dmgKey(s, app, { ARDIA_DMG_CHUNK: "on" }), on);
   assert.notEqual(dmgKey(s, app, { ARDIA_DMG_CHUNK: "off" }), on);
 });
+
+test("a fresh DMG upload that fails drops the old accepted record first, so the retry never pairs it with the new image", () => {
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  const key = dmgKey(s, app);
+  mkdirSync(s.state, { recursive: true });
+  writeFileSync(join(s.state, key), `${FIRST}\n`);
+  writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
+  writeFileSync(s.dmg, "rebuilt after the earlier one was stapled");
+  s.set("submit", ["", "", ""]);
+  const cut = s.notarize(s.dmg, {}, [app]);
+  assert.notEqual(cut.status, 0);
+  assert.match(cut.output, /couldn't submit/);
+  assert.ok(!existsSync(join(s.state, key)), "the old record is gone");
+  assert.equal(readFileSync(join(s.state, `${key}.dmg`), "utf8"), "rebuilt after the earlier one was stapled");
+  writeFileSync(join(s.stub, "calls"), "");
+  s.set("submit", [SECOND]);
+  s.ticket();
+  const retry = s.notarize(s.dmg, {}, [app]);
+  assert.equal(retry.status, 0, retry.output);
+  assert.deepEqual(s.calls(), ["notarytool submit", "notarytool wait", "stapler staple"]);
+  assert.deepEqual(s.records(), { [key]: SECOND });
+});
+
+test("a packing input that can't be hashed keys the DMG by its own bytes instead", () => {
+  const real = spawnSync("bash", ["-c", "command -v shasum"], { encoding: "utf8" }).stdout.trim();
+  if (!real) return;
+  const s = scratch();
+  const app = join(s.dir, "dist", "Ardia.app");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+  writeFileSync(join(s.dir, "bin", "shasum"), `#!/usr/bin/env bash\ncase "$*" in *background.tiff*) exit 1 ;; esac\nexec ${real} "$@"\n`);
+  chmodSync(join(s.dir, "bin", "shasum"), 0o755);
+  s.set("submit", [FIRST]);
+  s.ticket();
+  const run = s.notarize(s.dmg, {}, [app]);
+  assert.equal(run.status, 0, run.output);
+  assert.deepEqual(Object.keys(s.records()), [sha256(s.dmg)]);
+});

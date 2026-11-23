@@ -310,3 +310,14 @@ test("a stable that isn't above the latest stable in the feed fails, as publish.
   const nightly = await run({ version: "1.2.1-nightly.1", root: fixture({ version: "1.2.1-nightly.1", builds: [42, 42] }) });
   assert.deepEqual(nightly.fails, []);
 });
+
+test("the 8 MB cap counts UTF-8 bytes while the body streams, and applies to a feed file too", async () => {
+  const root = fixture();
+  const body = LIVE.replace("<title>Ardia</title>", `<title>${"é".repeat(4_500_000)}</title>`);
+  const result = await preflight({ version: "1.2.3", root, feed: FEED_URL, fetchImpl: async () => new Response(body, { status: 200 }) });
+  assert.match(result.results.filter((r) => r.level === "fail").map((r) => r.message).join("\n"), /is over 8388608 bytes/);
+  const file = join(root, "big.xml");
+  writeFileSync(file, body);
+  const local = await run({ version: "1.2.3", root, feed: file });
+  assert.match(local.fails.join("\n"), /big\.xml is over 8388608 bytes/);
+});

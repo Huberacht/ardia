@@ -91,7 +91,7 @@ function parsedItems(xml) {
 }
 
 export function feedFacts(xml, version) {
-  if (xml.length > MAX_FEED_BYTES || !xml.includes("xmlns:sparkle") || /<!(?:DOCTYPE|ENTITY)/i.test(xml)) return null;
+  if (Buffer.byteLength(xml, "utf8") > MAX_FEED_BYTES || !xml.includes("xmlns:sparkle") || /<!(?:DOCTYPE|ENTITY)/i.test(xml)) return null;
   if ((xml.match(/<channel>/g) ?? []).length !== 1 || (xml.match(/<\/channel>/g) ?? []).length !== 1) return null;
   const parsed = parsedItems(xml);
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
@@ -115,10 +115,32 @@ export function feedFacts(xml, version) {
   return { newest, newestOther, listed: listedBuilds.length > 0, listedBuilds, latestStable, items: items.length };
 }
 
+async function boundedText(response) {
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    return Buffer.byteLength(text, "utf8") > MAX_FEED_BYTES ? null : text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_FEED_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function readFeed(source, { fetchImpl, allowNoFeed }) {
   if (source === "none") return { xml: "", none: true, note: "no feed (--feed none): this release starts it" };
   if (!/^https?:\/\//.test(source)) {
     if (!existsSync(source)) return { error: `no feed file at ${source}` };
+    if (statSync(source).size > MAX_FEED_BYTES) return { error: `${source} is over ${MAX_FEED_BYTES} bytes` };
     return { xml: readFileSync(source, "utf8") };
   }
   try {
@@ -126,8 +148,8 @@ async function readFeed(source, { fetchImpl, allowNoFeed }) {
     if (response.status === 404 && allowNoFeed) return { xml: "", none: true, note: `${source} answers 404: no feed yet, this release starts it` };
     if (!response.ok) return { error: `${source} answered HTTP ${response.status}` };
     if (Number(response.headers?.get?.("content-length") ?? 0) > MAX_FEED_BYTES) return { error: `${source} is over ${MAX_FEED_BYTES} bytes` };
-    const text = await response.text();
-    if (text.length > MAX_FEED_BYTES) return { error: `${source} is over ${MAX_FEED_BYTES} bytes` };
+    const text = await boundedText(response);
+    if (text === null) return { error: `${source} is over ${MAX_FEED_BYTES} bytes` };
     return { xml: text };
   } catch (error) {
     return { error: `couldn't fetch ${source} within ${FETCH_TIMEOUT_MS / 1000} s: ${error?.message ?? error}` };

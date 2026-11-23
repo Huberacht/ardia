@@ -186,7 +186,10 @@ notarize() {
     fi
     die "Apple accepted submission $id, but stapler couldn't fetch its ticket for $(basename "$target") (above): run this again once Apple's ticket service answers. If the ticket really isn't this file's, delete $record to submit it fresh."
   fi
-  [ -z "$saved" ] || keep_payload "$saved"
+  if [ -n "$saved" ]; then
+    rm -f "$record"
+    keep_payload "$saved"
+  fi
   submit "$file" "$log" "$record"
   staple || die "stapler couldn't staple $(basename "$target") after Apple accepted it"
   [ -z "$saved" ] || rm -f "$saved"
@@ -211,15 +214,21 @@ case "$target" in
     rm -f "$zip"
     ;;
   *.dmg)
-    if [ -n "$packed_app" ] && cdhash="$(cdhash_of "$packed_app")"; then
-      packing_inputs() {
-        printf '%s\n' "$(basename "$target")" "$(git -C "$root" rev-parse HEAD 2>/dev/null || echo none)" "chunk ${ARDIA_DMG_CHUNK:-on}"
-        local input
-        for input in scripts/release/package.sh scripts/dmg/background.tiff scripts/dmg/DS_Store; do
-          if [ -f "$root/$input" ]; then echo "$input $(sha256_of "$root/$input")"; else echo "$input missing"; fi
-        done
-      }
-      packing="$(packing_inputs | { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi; } | cut -c1-16)"
+    packing_of() {
+      local input digest inputs
+      inputs="$(basename "$target")"$'\n'"$(git -C "$root" rev-parse HEAD 2>/dev/null || echo none)"$'\n'"chunk ${ARDIA_DMG_CHUNK:-on}"
+      for input in scripts/release/package.sh scripts/dmg/background.tiff scripts/dmg/DS_Store; do
+        if [ -f "$root/$input" ]; then
+          digest="$(sha256_of "$root/$input")" && [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+          inputs+=$'\n'"$input $digest"
+        else
+          inputs+=$'\n'"$input missing"
+        fi
+      done
+      digest="$(printf '%s\n' "$inputs" | { if command -v shasum >/dev/null; then shasum -a 256; else sha256sum; fi; } | cut -c1-16)" && [[ "$digest" =~ ^[0-9a-f]{16}$ ]] || return 1
+      echo "$digest"
+    }
+    if [ -n "$packed_app" ] && cdhash="$(cdhash_of "$packed_app")" && packing="$(packing_of)"; then
       key="dmg-of-cdhash-$cdhash-packing-$packing"
       notarize "$target" "$key" "$state/$key.dmg" "$cdhash"
     else

@@ -178,7 +178,7 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
    right or the committed `.SRCINFO` drifted, the feed can't be read or is empty (only `APPCAST_BASE=none`, or a 404
    with `RELEASE_FEED_MAY_BE_MISSING=1`, means there's no feed yet), the version is already in it, a stable isn't above the latest
    stable in it (`publish.sh` would refuse it), or the build number isn't above every other build in it, stable or
-   nightly. The feed is one request with a 4-second limit and an 8 MB cap, parsed
+   nightly. The feed is one request with a 4-second limit and an 8 MB cap (counted in bytes as it streams, and on a feed file), parsed
    with Python's ElementTree (no DTD, one plain `<channel>` with its items directly in it, as `appcast.py` reads it). Every later step takes the version, build number and
    minimum macOS from the values it checked. Then it stops if if the tree under `apps/browser`, `plugins`, `packages`, `engine` or `scripts/dmg` has uncommitted changes, or if the engine
    framework is older than the tree's ArdiaCore sources or the Chromium tree differs from `engine/ardiacore`
@@ -228,7 +228,9 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      exact DMG it sent (`package.sh` never makes the same bytes twice, so a retry staples that copy and only then puts
      it in place of the new one; the copy goes once it's stapled). A kept copy is used only when its signature
      verifies against the packed app's team and it mounts as exactly the volume `package.sh` makes, holding an app with
-     the same CDHash; anything else is discarded and the new DMG submitted. A
+     the same CDHash; anything else is discarded and the new DMG submitted. Before a DMG is submitted fresh, its old record
+     is dropped, so an upload that fails can't leave an old accepted id beside a new image; a packing input that can't
+     be hashed keys the DMG by its own bytes. A
      retry asks Apple about that id before uploading: Accepted staples, In Progress waits, Invalid or Rejected prints
      Apple's log and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist
      submits fresh, and when notarytool can't answer, or answers a status the script doesn't know, it stops with the
