@@ -198,11 +198,17 @@ test("the window-button layout and window state reach the engine as calls and co
 
 test("an event only the Linux engine sends is declared apart from the Mac's, and the Linux engine does send it", () => {
   const api = readFileSync(new URL("../../../packages/ardiacore/src/engine/api.ts", import.meta.url), "utf8");
-  const bodyOf = (name) => api.slice(api.indexOf(`export type ${name} = {`), api.indexOf("\n};", api.indexOf(`export type ${name} = {`)));
+  const bodyOf = (name) => {
+    const start = api.search(new RegExp(`^export type ${name} = (?:\\w+ & )*\\{$`, "m"));
+    assert.ok(start >= 0, `${name} is in api.ts`);
+    return api.slice(start, api.indexOf("\n};", start));
+  };
   const keysOf = (body) => [...body.matchAll(/^ {2}"([a-zA-Z]+\.[a-zA-Z]+)":/gm)].map((match) => match[1]);
   const linuxOnly = keysOf(bodyOf("LinuxHostEvents"));
   assert.ok(linuxOnly.length > 0);
-  const mac = new Set(keysOf(bodyOf("EngineEvents")));
+  const generated = Object.entries(JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8")).domains).flatMap(([domain, entry]) => entry.events.map((event) => `${domain}.${event}`));
+  const mac = new Set([...keysOf(bodyOf("EngineEvents")), ...generated]);
+  assert.ok(mac.has("history.changed"));
   const engine = new URL("../../../engine/chromium/src/chrome/browser/ardia/", import.meta.url);
   const sent = readdirSync(engine).filter((file) => /_linux\.cc$/.test(file)).map((file) => readFileSync(new URL(file, engine), "utf8")).join("\n");
   for (const name of linuxOnly) {

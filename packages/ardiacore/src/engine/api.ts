@@ -6,7 +6,6 @@ import type {
   ActionPopupRequest, ActionState, ChromeSearchEngine, ExtensionActionChange, ExtensionInstallPrompt, ExtensionPackage, ExtensionsChange, ExtensionsLoadHealth, ExtensionsSyncApplied, ExtensionsSyncApply,
   ExtensionsSyncState, ExtensionSyncIntent, InstalledExtension, SidePanelRequest, TabsRequest,
 } from "../extensions";
-import type { HistoryChangedBatch, HistoryWireRow } from "../history";
 import type { FaviconImage } from "../favicons";
 import type { Download, DownloadSettings } from "../downloads";
 import type {
@@ -22,12 +21,12 @@ import type {
   CookieRemoval, PageCookie, PageEngine, PasskeyAccess, SiteData, SiteDataWritten, StorageChange, StorageItems, WebKitCount,
 } from "../webkit";
 import type { DisplayMediaSource, OpenWindowRequest, WebNotification } from "../pageTypes";
+import type { HistoryCalls, HistoryEvents } from "./generated/history";
+import type { Done, Profile } from "./wire";
 
-type Profile = { profile: string };
-type Done = Record<string, never> | null;
 type VideoUpscalingState = { enabled: boolean; lowPower: boolean; thermalPressure: boolean; appActive: boolean; tabs: { tabId: number; allowed: boolean; capturing: boolean }[] };
 
-export type EngineCalls = {
+export type EngineCalls = HistoryCalls & {
   "engine.info": [{}, EngineInfo];
   "engine.components": [{}, EngineComponent[]];
   "engine.tasks": [{}, EngineTask[]];
@@ -179,12 +178,6 @@ export type EngineCalls = {
   "contentBlocker.devFailNextMessage": [{}, null];
   "contentBlocker.devDelayNextLoad": [{ ms: number }, null];
 
-  "history.query": [Profile & { maxUrls: number; maxVisits: number }, { entries: (HistoryWireRow & { v: number[] })[] }];
-  "history.add": [Profile & { pages: { u: string; t: string; v: number[] }[]; toleranceMs: number }, { added: number }];
-  "history.import": [Profile & { rows: { u: string; t: string; n: number; l: number }[] }, Done];
-  "history.deleteUrls": [Profile & { urls: string[] }, Done];
-  "history.watch": [Profile, Done];
-
   "bookmarks.tree": [Profile, { bar: EngineBookmark; other: EngineBookmark }];
   "bookmarks.apply": [Profile & { ops: BookmarkOp[] }, { applied: number; skipped: number; invalid: string[] }];
   "bookmarks.watch": [Profile, Done];
@@ -231,7 +224,7 @@ export type EngineCalls = {
   "webKit.requestPasskeyAccess": [{}, PasskeyAccess];
 };
 
-export type EngineEvents = {
+export type EngineEvents = HistoryEvents & {
   "engine.systemState": SystemState;
   "engine.cliControl": CliControlStatus;
   "engine.hoverLost": HoverLostEpisode;
@@ -260,7 +253,6 @@ export type EngineEvents = {
   "extensions.actionShortcut": ActionPopupRequest;
   "extensions.action": ExtensionActionChange;
   "extensions.sync": { profile: string } & ExtensionSyncIntent;
-  "history.changed": HistoryChangedBatch;
   "bookmarks.changed": { profile: string };
   "profiles.loaded": { profile: string };
   "media.deviceChooser": DeviceChooser;

@@ -1,0 +1,43 @@
+{
+  "domains": {
+    "history": {
+      "types": "packages/ardiacore/src/engine/generated/history.ts",
+      "swift": "packages/ardiacore/ios/HistoryModule.swift",
+      "calls": {
+        "query": {
+          "service": "ac_history_query",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
+        "add": {
+          "service": "ac_history_add",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
+        "import": {
+          "service": "ac_history_import",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
+        "deleteUrls": {
+          "service": "ac_history_delete_urls",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
+        "watch": {
+          "service": "ac_history_watch",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        }
+      },
+      "events": [
+        "changed"
+      ]
+    }
+  }
+}

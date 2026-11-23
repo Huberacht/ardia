@@ -133,6 +133,12 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   `ardia::OffTheRecord::kAllow`: the engine alone decides which calls serve a private session; (2) `scripts/agent/engine-build`; (3) call it with
   `ArdiaEngineBridge call:` (`callWithSecret:` for secrets); for JS, add `"verb": EngineCall.passing("ac_<domain>_<verb>")`
   to the domain module's call table and its `"domain.verb": [args, result]` row to `packages/ardiacore/src/engine/api.ts`.
+  **Host API schema:** for a domain in `packages/hostapi/schema` (`history` so far), add the row there instead, with
+  its `service`, its explicit `desktop` binding (`route`, `custom` or `absent`) and any `mac`/`windows` override, then
+  run `node packages/hostapi/generate.mjs --write`. It writes the domain's TS types and manifest in
+  `packages/ardiacore/src/engine/generated/` and its whole Swift module when every call is `passing`; never edit those
+  by hand. `pnpm -C packages/hostapi test` checks they're current and that Linux's `kRoutes` and Windows'
+  `forwarded.json` agree with the schema; those two tables stay hand-written until the desktop host generates them.
 - **The page script** is `packages/ardiacore/ios/page_script.js`, a pod resource: `ArdiaHostEngineDelegate.mm` hands it to the
   engine at launch and the renderer runs it in every http(s) and file frame. Changing it needs an app rebuild, not an
   engine one. Its `post(kind, json)` crosses the page channel to `-[ArdiaWebView tab:didReceivePageMessage:…]` (`ArdiaWebView+PageMessages.mm`),

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { callHost } from "./host.ts";
 import { resolveHostModule } from "./hostModules.ts";
@@ -27,6 +28,18 @@ test("domain adapter preserves argument JSON and scalar, string, null and object
     host.call = async (name, profile, args) => { requests.push({ name, profile, args }); return reply; };
     assert.equal(await call("query", "default", '{"maxUrls":5}'), reply);
     assert.deepEqual(requests.at(-1), { name: "history.query", profile: "default", args: '{"maxUrls":5}' });
+  }
+});
+
+test("every call of a schema-generated domain reaches the host under its own name, with its arguments untouched", async () => {
+  const manifest = JSON.parse(readFileSync(new URL("../../../packages/ardiacore/src/engine/generated/manifest.json", import.meta.url), "utf8"));
+  for (const [domain, entry] of Object.entries(manifest.domains)) {
+    const { host, requests } = fixture();
+    const call = resolveHostModule(host, `Ardia${domain[0].toUpperCase()}${domain.slice(1)}`, "call");
+    for (const verb of Object.keys(entry.calls)) {
+      assert.equal(await call(verb, "default", '{"profile":"default"}'), "null");
+      assert.deepEqual(requests.at(-1), { name: `${domain}.${verb}`, profile: "default", args: '{"profile":"default"}' });
+    }
   }
 });
 
