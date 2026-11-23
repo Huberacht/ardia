@@ -14,6 +14,9 @@ export function refusedAtCompileTime(token: Secret<"oauthToken">) {
   // @ts-expect-error a branded secret is refused nested inside telemetry events
   capture("fixture", { nested: { list: [password] } }, null);
   capture("fixture", { kind: token.kind, count: 1 }, null);
+  // @ts-expect-error a branded secret is refused in raw telemetry properties
+  capture("fixture", {}, null, { raw: { frames: [{ token }] } });
+  capture("fixture", {}, null, { raw: { frames: [{ name: "f" }] } });
   // @ts-expect-error a branded secret is refused by log attributes
   queueLog("error", "fixture", { token }, null);
   // @ts-expect-error a branded secret is refused by control-socket replies

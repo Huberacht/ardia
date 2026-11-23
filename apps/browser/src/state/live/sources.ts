@@ -25,24 +25,41 @@ async function secret(source: LiveSourceId): Promise<LiveToken> {
   return value;
 }
 
-const GITHUB_SCOPES_KEPT = 4;
-const githubScopes: { scope: string; token: LiveToken }[] = [];
-let githubScopeCount = 0;
+type GithubAccount = { scope: string; token: LiveToken; busy: number };
 
-function githubScope(token: LiveToken): string {
-  const known = githubScopes.find((s) => sameSecret(s.token, token));
-  if (known) return known.scope;
-  const scope = `github-account-${++githubScopeCount}`;
-  githubScopes.unshift({ scope, token });
-  githubScopes.length = Math.min(githubScopes.length, GITHUB_SCOPES_KEPT);
-  return scope;
+const githubAccounts = new Map<string, GithubAccount>();
+let githubAccountCount = 0;
+let keptGithubScope: string | null = null;
+
+function releaseGithubAccounts() {
+  for (const [scope, account] of githubAccounts) if (!account.busy && scope !== keptGithubScope) githubAccounts.delete(scope);
+}
+
+async function withGithubAccount<T>(token: LiveToken, keep: "always" | "onSuccess", run: (scope: string) => Promise<T>): Promise<T> {
+  let account = [...githubAccounts.values()].find((a) => sameSecret(a.token, token));
+  if (!account) {
+    account = { scope: `github-account-${++githubAccountCount}`, token, busy: 0 };
+    githubAccounts.set(account.scope, account);
+  }
+  account.busy++;
+  if (keep === "always") keptGithubScope = account.scope;
+  try {
+    const result = await run(account.scope);
+    keptGithubScope = account.scope;
+    return result;
+  } finally {
+    account.busy--;
+    releaseGithubAccounts();
+  }
 }
 
 function githubToken(scope: string): LiveToken {
-  const token = githubScopes.find((s) => s.scope === scope)?.token;
+  const token = githubAccounts.get(scope)?.token;
   if (!token) throw new LiveError("signedOut", "Not signed in");
   return token;
 }
+
+export const githubAccountsHeld = () => githubAccounts.size;
 
 const githubClient = createGithubClient((scope, payload, onHeaders) =>
   request(endpoints.githubGraphql, { method: "POST", headers: { Authorization: bearer(githubToken(scope)), "Content-Type": "application/json" }, body: JSON.stringify(payload) }, onHeaders),
@@ -54,11 +71,11 @@ const github: LiveSource = {
   kind: "pullRequests",
   site: "https://github.com",
   async fetch(folder, options) {
-    return githubClient.fetchFolder(githubScope(await secret("github")), folder, !!options?.interactive);
+    return withGithubAccount(await secret("github"), "always", (scope) => githubClient.fetchFolder(scope, folder, !!options?.interactive));
   },
   async resolveGone(items, options) {
     if (!items.some((it) => it.source === "github")) return {};
-    return githubClient.resolveGone(githubScope(await secret("github")), items, !!options?.interactive);
+    return withGithubAccount(await secret("github"), "always", (scope) => githubClient.resolveGone(scope, items, !!options?.interactive));
   },
   pausedUntil: () => githubClient.pausedUntil(),
   warning: () => githubClient.warning(),
@@ -172,7 +189,7 @@ const account = (login: string, name: string | null, avatar: string | null): Liv
 
 export async function connectGithub(typed: string) {
   const token = asSecret("oauthToken", typed.trim());
-  const viewer = await githubClient.viewer(githubScope(token));
+  const viewer = await withGithubAccount(token, "onSuccess", (scope) => githubClient.viewer(scope));
   if (!viewer) throw new LiveError("signedOut", "GitHub didn't accept the token");
   await setSecret("github", token);
   setAccount("github", account(viewer.login, viewer.name, viewer.avatarUrl));
@@ -252,6 +269,10 @@ export async function connectGoogle(clientId: string, typedClientSecret: string,
 }
 
 export async function disconnect(source: LiveSourceId) {
+  if (source === "github") {
+    keptGithubScope = null;
+    releaseGithubAccounts();
+  }
   await deleteSecret(source);
   setAccount(source, null);
 }

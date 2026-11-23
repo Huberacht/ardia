@@ -1,4 +1,4 @@
-import { reveal, type Secret } from "@ardia/core";
+import { asSecret, reveal, type Secret } from "@ardia/core";
 import { emptyScope, EXTENSION_PREFIX, folderTransport, syncScope, SyncNative, visible, type FolderInfo, type PhraseResult } from "../../platform/sync";
 import { create } from "zustand";
 import { useBrowser } from "../browser/store";
@@ -395,5 +395,5 @@ export function startSync() {
     if (closed || (!cycle && (s.bookmarks !== prev.bookmarks || s.settings !== prev.settings || s.profiles !== prev.profiles || s.profileOrder !== prev.profileOrder || s.groups !== prev.groups))) scheduleSync();
   });
   if (__DEV__)
-    exposeDevSync({ useSync, syncNow, turnOnSync, enterRecoveryPhrase, stopSync, setTypeSynced, setProfileSynced, setOpenTabsSynced, addRemoteProfile, removeRemoteProfile, removeSyncedDevice, setSyncFolder, moveSyncFolder, folderInfo, doc: () => doc, native: SyncNative });
+    exposeDevSync({ useSync, syncNow, turnOnSync, enterRecoveryPhrase: (folder: string, text: string) => enterRecoveryPhrase(folder, asSecret("syncPhrase", text)), stopSync, setTypeSynced, setProfileSynced, setOpenTabsSynced, addRemoteProfile, removeRemoteProfile, removeSyncedDevice, setSyncFolder, moveSyncFolder, folderInfo, doc: () => doc, native: SyncNative });
 }

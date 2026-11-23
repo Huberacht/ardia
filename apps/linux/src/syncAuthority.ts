@@ -1,4 +1,4 @@
-import { asSecret, isSecret, reveal, SECRET_KINDS, type SecretKind } from "@ardia/core";
+import { asSecret, isSecret, reveal, type SecretKind } from "@ardia/core";
 
 export const SYNC_AUTHORITY_LOCK = "ardia.linux.sync-authority";
 export const SYNC_CHANNEL = "ardia.linux.sync";
@@ -79,11 +79,24 @@ type Message<S> =
 
 type RelayedSecret = { relayedSecret: SecretKind; value: string };
 
-const isRelayedSecret = (value: unknown): value is RelayedSecret =>
-  !!value && typeof value === "object" && SECRET_KINDS.includes((value as RelayedSecret).relayedSecret) && typeof (value as RelayedSecret).value === "string";
+const SECRET_ARGUMENTS: Partial<Record<RemoteMethod, { index: number; kind: SecretKind }>> = { enterRecoveryPhrase: { index: 1, kind: "syncPhrase" } };
 
-export const relayedArgs = (args: unknown[]): unknown[] => args.map((arg) => (isSecret(arg) ? ({ relayedSecret: arg.kind, value: reveal(arg) } satisfies RelayedSecret) : arg));
-export const receivedArgs = (args: unknown[]): unknown[] => args.map((arg) => (isRelayedSecret(arg) ? asSecret(arg.relayedSecret, arg.value) : arg));
+const isRelayedSecret = (value: unknown, kind: SecretKind): value is RelayedSecret =>
+  !!value && typeof value === "object" && (value as RelayedSecret).relayedSecret === kind && typeof (value as RelayedSecret).value === "string";
+
+export function relayedArgs(method: RemoteMethod, args: unknown[]): unknown[] {
+  const slot = SECRET_ARGUMENTS[method];
+  return args.map((arg, index) => {
+    if (!isSecret(arg)) return arg;
+    if (slot?.index !== index || slot.kind !== arg.kind) throw new TypeError(`${method} takes no secret in argument ${index}`);
+    return { relayedSecret: arg.kind, value: reveal(arg) } satisfies RelayedSecret;
+  });
+}
+
+export function receivedArgs(method: RemoteMethod, args: unknown[]): unknown[] {
+  const slot = SECRET_ARGUMENTS[method];
+  return args.map((arg, index) => (slot?.index === index && isRelayedSecret(arg, slot.kind) ? asSecret(slot.kind, arg.value) : arg));
+}
 
 const PERMANENT_CLAIM_ERRORS = new Set(["ERR_PRIVATE_SERVICE", "ERR_UNKNOWN_CALL"]);
 const isRemote = (method: unknown): method is RemoteMethod => typeof method === "string" && (REMOTE_METHODS as readonly string[]).includes(method);
@@ -155,7 +168,7 @@ export function startSyncAuthority<S>(options: AuthorityOptions<S>) {
     } else if (message.kind === "hello" && role === "authority" && remote) {
       post({ kind: "state", from: id, state: present(mirror.getState()) });
     } else if (message.kind === "call" && role === "authority" && message.from !== id && isRemote(message.method)) {
-      void runRemote(message.method, Array.isArray(message.args) ? receivedArgs(message.args) : []).then(
+      void runRemote(message.method, Array.isArray(message.args) ? receivedArgs(message.method, message.args) : []).then(
         (value) => post({ kind: "result", to: message.from, id: message.id, ok: true, value }),
         (error: unknown) => post({ kind: "result", to: message.from, id: message.id, ok: false, error: error instanceof Error ? error.message : String(error) }),
       );
@@ -271,7 +284,7 @@ export function startSyncAuthority<S>(options: AuthorityOptions<S>) {
           if (pending.delete(callId)) reject(new Error(NO_AUTHORITY_MESSAGE));
         }, timeoutMs);
         pending.set(callId, { resolve, reject, timer });
-        post({ kind: "call", from: id, id: callId, method, args: relayedArgs(args) });
+        post({ kind: "call", from: id, id: callId, method, args: relayedArgs(method, args) });
       });
     },
     stop() {

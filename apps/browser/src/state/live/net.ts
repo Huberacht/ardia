@@ -39,7 +39,7 @@ export async function request<T>(url: string, init: RequestInit = {}, onHeaders?
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     if (res.status === 403 && namesRateLimit(text)) throw new LiveError("rateLimited", "Rate Limit Exceeded");
-    throw new LiveError(res.status === 403 ? "signedOut" : "other", `${res.status} ${text.slice(0, 200)}`.trim());
+    throw new LiveError(res.status === 403 ? "signedOut" : "other", `The server answered ${res.status}`);
   }
   return (await res.json()) as T;
 }

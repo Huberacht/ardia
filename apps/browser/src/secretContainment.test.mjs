@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 globalThis.__DEV__ = false;
 
@@ -40,8 +41,11 @@ const enteredPhrases = [];
 const posted = [];
 globalThis.fetch = async (url, init = {}) => {
   posted.push({ url: String(url), headers: JSON.stringify(init.headers ?? {}), body: String(init.body ?? "") });
-  return { status: 503, ok: false, headers: new Headers(), text: async () => "", json: async () => ({}) };
+  const echoed = `Bad credentials: ${JSON.stringify(init.headers ?? {})} ${String(init.body ?? "")}`;
+  const status = acceptTelemetry && String(url).includes("otel") ? 200 : 503;
+  return { status, ok: status === 200, headers: new Headers(), text: async () => echoed, json: async () => ({}) };
 };
+let acceptTelemetry = false;
 
 const stub = await import("./test-native/index.ts");
 Object.assign(stub.appInfo, { appVersion: "0.3.0", appBuild: "300", osVersion: "27.0.1", arch: "arm64", isolatedInstance: false });
@@ -49,7 +53,7 @@ stub.passwordStores.set(stub.current.device, new Map());
 stub.docs.set("telemetry.json", JSON.stringify({ version: 1, sharing: true, decidedAt: 1, askDoneAt: 1, installId: "install-1", crashCursor: 0, lastVersion: "0.3.0", sessionOpen: false }));
 
 const core = await import("../../../packages/core/src/secret.ts");
-const { asSecret, reveal, isSecret, SECRET_KINDS, SecretEscapeError, setSecretEscapeMode } = core;
+const { asSecret, reveal, isSecret, SECRET_KINDS, SecretEscapeError, secretsDropped, setSecretEscapeMode } = core;
 const client = await import("./state/telemetry/client.ts");
 const local = await import("./state/telemetry/localStore.ts");
 const { recordLog } = await import("./state/telemetry/logs.ts");
@@ -94,11 +98,13 @@ const SOURCES = {
 
 const SHAPED = new Set(["oauthToken"]);
 
-function telemetryText() {
-  client.saveQueueNow();
+async function telemetryText() {
+  await client.saveQueueNow();
   local.flushLocal();
   return [stub.docs.get("telemetry-queue.json") ?? "", JSON.stringify(stub.telemetryLocal.records()), ...posted.filter((p) => p.url.includes("otel")).map((p) => p.body)].join("\n");
 }
+
+const queued = () => JSON.parse(stub.docs.get("telemetry-queue.json") ?? '{"events":[],"logs":[]}');
 
 const leaked = (text, kind) => [CANARY[kind], CANARY[kind].slice(6, 22)].filter((needle) => text.includes(needle));
 
@@ -132,13 +138,63 @@ function memoryTransport() {
   };
 }
 
-async function syncWith(value) {
+async function syncWith(mark, value) {
   const { files, transport } = memoryTransport();
   const t = 1_000_000;
-  const adapter = { prefix: "x:", extract: () => ({ values: new Map([["x:held", value]]) }), apply: () => {} };
+  const adapter = { prefix: "x:", extract: () => ({ values: new Map([[`x:${mark}`, value]]) }), apply: () => {} };
   await syncScope({ scope: "s", state: emptyScope(), transport, adapters: [adapter], clock: new Clock("A", null, () => t), device: "A", now: () => t });
   return files.join("\n");
 }
+
+const SINKS = {
+  async telemetryEvent(secret, mark) {
+    client.capture(`containment_${mark}`, { value: secret, label: `with ${secret}` }, client.consentNow(), { raw: { raw_value: secret, nested: { deep: secret } } });
+    await client.saveQueueNow();
+    return JSON.stringify(queued().events.filter((e) => e.event === `containment_${mark}`));
+  },
+  async localStore(secret, mark) {
+    client.capture(`containment_local_${mark}`, { value: secret, label: `with ${secret}` }, client.consentNow());
+    local.flushLocal();
+    return JSON.stringify(stub.telemetryLocal.records().filter((r) => JSON.stringify(r).includes(`containment_local_${mark}`)));
+  },
+  async logLine(secret, mark) {
+    recordLog("error", [`[containment ${mark}] failed with ${secret}`, secret, new Error(`refresh failed for ${secret}`)], client.consentToken());
+    await client.saveQueueNow();
+    return JSON.stringify(queued().logs.filter((l) => JSON.stringify(l).includes(mark)));
+  },
+  async consoleHook(secret, mark) {
+    console.error(`[containment ${mark}] console with ${secret}`, new Error(`console reason ${secret}`));
+    await client.saveQueueNow();
+    return JSON.stringify(queued().logs.filter((l) => JSON.stringify(l).includes(mark)));
+  },
+  async crashReport(secret, mark) {
+    captureException(Object.assign(new Error(`crash ${mark} while holding ${secret}`), { token: secret, cause: secret }), "onerror");
+    await client.saveQueueNow();
+    return JSON.stringify(queued().events.filter((e) => JSON.stringify(e).includes(mark)));
+  },
+  async network(secret, mark) {
+    client.capture(`containment_sent_${mark}`, { value: secret }, client.consentNow());
+    posted.length = 0;
+    acceptTelemetry = true;
+    try {
+      await client.flush();
+    } finally {
+      acceptTelemetry = false;
+    }
+    return posted.filter((p) => p.url.includes("otel") && p.body.includes(`containment_sent_${mark}`)).map((p) => p.body).join("\n");
+  },
+  async socketReply(secret, mark) {
+    return fittedReply(2, { result: { mark, secret, list: [secret] } }, undefined, null);
+  },
+  async socketEvent(secret, mark) {
+    return fittedEvent("tab.idle", 0, { mark, secret }, null);
+  },
+  async syncFiles(secret, mark) {
+    return syncWith(mark, { s: secret, list: [secret] });
+  },
+};
+
+const UNCOUNTED = new Set(["localStore", "network"]);
 
 for (const kind of SECRET_KINDS) {
   test(`a ${kind} canary from its real source never reaches telemetry, logs, crash reports, sync files or the control socket`, async () => {
@@ -149,34 +205,59 @@ for (const kind of SECRET_KINDS) {
 
     assert.throws(() => JSON.stringify({ secret }), SecretEscapeError, "JSON refuses it in tests");
     assert.throws(() => `${secret}`, SecretEscapeError, "text refuses it in tests");
+    assert.throws(() => client.capture("containment_throws", { secret }, client.consentNow()), SecretEscapeError, "capture doesn't swallow the refusal");
     assert.throws(() => fittedReply(1, { result: { secret } }, undefined, null), SecretEscapeError);
     assert.throws(() => fittedEvent("tab.idle", 0, { nested: [secret] }, null), SecretEscapeError);
-    await assert.rejects(syncWith({ v: secret }), SecretEscapeError);
+    await assert.rejects(syncWith("throws", { v: secret }), SecretEscapeError);
 
     takeSecretValuesDropped();
-    const sinkText = await droppingAsync(async () => {
-      client.capture("secret_containment", { value: secret, label: `with ${secret}` }, client.consentNow(), { raw: { raw_value: secret, nested: { deep: secret } } });
-      recordLog("error", [`[containment] failed with ${secret}`, secret, new Error(`refresh failed for ${secret}`)], client.consentToken());
-      console.error(`[containment] console with ${secret}`, new Error(`console reason ${secret}`));
-      captureException(new Error(`crash while holding ${secret}`), "onerror");
-      captureException(Object.assign(new Error("thrown with a secret field"), { token: secret }), "onerror");
-      const reply = fittedReply(2, { result: { secret, list: [secret] } }, undefined, null);
-      const event = fittedEvent("tab.idle", 0, { secret }, null);
-      const synced = await syncWith({ s: secret, list: [secret] });
-      return [telemetryText(), reply, event, synced].join("\n");
-    });
-    assert.deepEqual(leaked(sinkText, kind), []);
-    assert.ok(takeSecretValuesDropped() > 0, "dropped values are counted");
+    for (const [sink, run] of Object.entries(SINKS)) {
+      const mark = `mk${sink}${kind}`;
+      const before = secretsDropped();
+      const output = await droppingAsync(() => run(secret, mark));
+      assert.ok(output.includes(mark), `${sink} produced its output`);
+      assert.deepEqual(leaked(output, kind), [], `${sink} leaked the canary`);
+      if (!UNCOUNTED.has(sink)) assert.ok(secretsDropped() > before, `${sink} counted the dropped secret`);
+    }
+    assert.ok(takeSecretValuesDropped() > 0, "drops reach usage_counts while sharing");
+    assert.deepEqual(leaked(await telemetryText(), kind), []);
 
     if (SHAPED.has(kind)) {
       const plain = reveal(secret);
       recordLog("error", ["[containment] shaped", new Error(`Bad credentials: ${plain}`)], client.consentToken());
       captureException(new Error(`request with ${plain} failed`), "onerror");
       client.capture("secret_containment_shaped", { reason: `token ${plain}` }, client.consentNow());
-      assert.deepEqual(leaked(telemetryText(), kind), [], "the scrubber catches the token's shape even once revealed");
+      assert.deepEqual(leaked(await telemetryText(), kind), [], "the scrubber catches the token's shape even once revealed");
     }
   });
 }
+
+test("a Linux follower window strips secrets before it relays telemetry to the leader", async () => {
+  const { setTelemetryRelay } = await import("./state/telemetry/relay.ts");
+  const relayed = [];
+  setTelemetryRelay({
+    capture: (event, props, _consent, options) => relayed.push({ event, props, raw: options.raw }),
+    log: (_level, message, attributes) => relayed.push({ message, attributes }),
+    resetId: async () => "",
+    change: async () => true,
+    installId: () => "install-1",
+  });
+  try {
+    const secret = asSecret("apiToken", CANARY.apiToken);
+    const before = secretsDropped();
+    dropping(() => {
+      client.capture("containment_relay", { value: secret, keep: 1 }, client.consentNow(), { raw: { deep: { secret } } });
+      client.queueLog("error", "relay", { token: secret, keep: "yes" }, client.consentToken());
+    });
+    assert.deepEqual(relayed, [
+      { event: "containment_relay", props: { keep: 1 }, raw: { deep: {} } },
+      { message: "relay", attributes: { keep: "yes" } },
+    ]);
+    assert.equal(secretsDropped() - before, 3);
+  } finally {
+    setTelemetryRelay(null);
+  }
+});
 
 test("dropped secrets are counted for usage_counts in production mode, and only while sharing", () => {
   takeSecretValuesDropped();
@@ -208,6 +289,35 @@ test("the legitimate sinks get the plaintext and nothing else does", async () =>
   assert.deepEqual(enteredPhrases, [CANARY.syncPhrase], "the native sync module gets the phrase");
 });
 
+test("a provider that echoes the credential back can't put it into a Live folder's status or the socket's live.list", async () => {
+  const { createFolder, live } = await import("./state/live/store.ts");
+  const { refreshFolder } = await import("./state/live/engine.ts");
+  const { useBrowser } = await import("./state/browser/store.ts");
+  const profileId = useBrowser.getState().profileOrder[0] ?? "default";
+  const folderId = createFolder(profileId, "documents", ["notion"]);
+  posted.length = 0;
+  await refreshFolder(folderId, true);
+  const sent = posted.find((p) => p.url.includes("notion"));
+  assert.ok(sent && sent.headers.includes(CANARY.apiToken), "positive control: the provider got the token");
+  const status = live().status[folderId];
+  assert.equal(status?.state, "error");
+  assert.deepEqual(leaked(JSON.stringify(status), "apiToken"), []);
+  assert.deepEqual(leaked(fittedReply(3, { result: { status } }, undefined, null), "apiToken"), []);
+});
+
+test("GitHub tokens are held only while their work runs, the stored account's is kept, and disconnecting lets it go", async () => {
+  const { SOURCES: LIVE, connectGithub, disconnect, githubAccountsHeld } = await import("./state/live/sources.ts");
+  const folder = { id: "f", profileId: "default", kind: "pullRequests", sources: ["github"], filters: { authored: true, review: true, team: false }, name: "PRs" };
+  await LIVE.github.fetch(folder, { interactive: true }).catch(() => null);
+  assert.equal(githubAccountsHeld(), 1, "the stored account's token stays held, so its rate limits are kept");
+  const attempts = await Promise.allSettled(["a", "b", "c", "d", "e"].map((n) => connectGithub(`ghp_attempt${n}0123456789abcdefABCDEF`)));
+  assert.ok(attempts.every((a) => a.status === "rejected"));
+  assert.equal(githubAccountsHeld(), 1, "failed connection attempts don't keep their tokens");
+  await disconnect("github");
+  assert.equal(githubAccountsHeld(), 0);
+  keychain.set("github", CANARY.oauthToken);
+});
+
 test("an unreadable Google sign-in fails without echoing the stored value", () => {
   for (const stored of [`{"access_token": ${CANARY.oauthClientSecret}`, JSON.stringify({ access_token: CANARY.oauthClientSecret })]) {
     assert.throws(
@@ -234,17 +344,18 @@ const WRAP_SITES = {
   "apps/browser/src/components/settings/panes/SyncSheets.tsx": ["syncPhrase"],
   "apps/linux/src/syncEngine.ts": ["syncPhrase"],
   "apps/linux/src/syncAuthority.ts": ["*"],
+  "apps/browser/src/state/sync/engine.ts": ["syncPhrase"],
 };
 
 const REVEAL_SINKS = {
-  "apps/browser/src/platform/keychain.ts": "the Keychain stores the plaintext",
-  "apps/browser/src/platform/passwords.ts": "Chrome's password store saves and updates the plaintext",
-  "apps/browser/src/state/live/net.ts": "Authorization headers and token request bodies to the account's own provider, and the Keychain copy of Google's tokens",
-  "apps/browser/src/state/plugins/channelData.ts": "secrets.get answers the plugin that owns the secret",
-  "apps/browser/src/state/sync/engine.ts": "the native sync module unlocks with the recovery phrase",
-  "apps/browser/src/components/settings/panes/ProfilePasswords.tsx": "the password sheet shows and edits the password the user unlocked",
-  "apps/browser/src/components/settings/panes/SyncSheets.tsx": "Show Words displays the recovery phrase to the user",
-  "apps/linux/src/syncAuthority.ts": "a Linux window hands a sync call's secret to the window that runs sync, over the app's own channel, and it is branded again on arrival",
+  "apps/browser/src/platform/keychain.ts": { calls: 1, why: "the Keychain stores the plaintext" },
+  "apps/browser/src/platform/passwords.ts": { calls: 2, why: "Chrome's password store saves and updates the plaintext" },
+  "apps/browser/src/state/live/net.ts": { calls: 7, why: "Authorization headers and token request bodies to the account's own provider, and the Keychain copy of Google's tokens" },
+  "apps/browser/src/state/plugins/channelData.ts": { calls: 1, why: "secrets.get answers the plugin that owns the secret" },
+  "apps/browser/src/state/sync/engine.ts": { calls: 2, why: "the native sync module unlocks with the recovery phrase" },
+  "apps/browser/src/components/settings/panes/ProfilePasswords.tsx": { calls: 1, why: "the password sheet shows and edits the password the user unlocked" },
+  "apps/browser/src/components/settings/panes/SyncSheets.tsx": { calls: 1, why: "Show Words displays the recovery phrase to the user" },
+  "apps/linux/src/syncAuthority.ts": { calls: 1, why: "a Linux window hands the recovery phrase to the window that runs sync, over the app's own channel, and it is branded again on arrival" },
 };
 
 function sourceFiles() {
@@ -266,24 +377,81 @@ function sourceFiles() {
   return out;
 }
 
-const importsFromCore = (source, name) => new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*"(?:@ardia/core|[./]+secret(?:\\.ts)?)"`).test(source);
+const ts = createRequire(import.meta.url)("typescript");
+const CORE_MODULE = /^(?:@ardia\/core|.*\/packages\/core\/src(?:\/index(?:\.ts)?)?|\.{1,2}\/(?:.*\/)?secret(?:\.ts)?)$/;
+const TRACKED = new Set(["asSecret", "reveal"]);
+
+function secretUses(file, source) {
+  const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const bound = new Map();
+  const namespaces = new Set();
+  const uses = { kinds: new Set(), reveals: 0, problems: [] };
+  for (const statement of tree.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || !CORE_MODULE.test(statement.moduleSpecifier.text)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
+    if (bindings && ts.isNamedImports(bindings)) for (const element of bindings.elements) {
+      const imported = (element.propertyName ?? element.name).text;
+      if (TRACKED.has(imported)) bound.set(element.name.text, imported);
+    }
+  }
+  const trackedName = (node) => {
+    if (ts.isIdentifier(node) && bound.has(node.text)) return bound.get(node.text);
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && namespaces.has(node.expression.text) && TRACKED.has(node.name.text)) return node.name.text;
+    return null;
+  };
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node)) return;
+    if (ts.isCallExpression(node)) {
+      const name = trackedName(node.expression);
+      if (name === "reveal") uses.reveals++;
+      if (name === "asSecret") {
+        const kind = node.arguments[0];
+        uses.kinds.add(kind && ts.isStringLiteral(kind) ? kind.text : "*");
+      }
+      if (name) {
+        node.arguments.forEach(visit);
+        return;
+      }
+    }
+    if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) && trackedName(node) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) {
+      uses.problems.push(`${trackedName(node)} used as a value`);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(tree);
+  return uses;
+}
 
 test("every secret kind has a containment case, and every place that makes or reveals a secret is registered", () => {
   assert.deepEqual(Object.keys(SOURCES).sort(), [...SECRET_KINDS].sort(), "a new secret kind needs a source in SOURCES and a canary in CANARY");
   assert.deepEqual(Object.keys(CANARY).sort(), [...SECRET_KINDS].sort());
   const wraps = {};
-  const reveals = new Set();
+  const reveals = {};
+  const problems = [];
   for (const file of sourceFiles()) {
-    if (file === "packages/core/src/secret.ts") continue;
-    const source = readFileSync(join(ROOT, file), "utf8");
-    if (importsFromCore(source, "asSecret")) {
-      const kinds = [...source.matchAll(/\basSecret\(\s*"([A-Za-z]+)"/g)].map((m) => m[1]);
-      wraps[file] = /\basSecret\(\s*(?:kind|[\w.]+\.relayedSecret)\b/.test(source) ? ["*"] : [...new Set(kinds)].sort();
-    }
-    if (importsFromCore(source, "reveal") && /\breveal\(/.test(source)) reveals.add(file);
+    if (file.startsWith("packages/core/src/")) continue;
+    const uses = secretUses(file, readFileSync(join(ROOT, file), "utf8"));
+    if (uses.kinds.size) wraps[file] = [...uses.kinds].sort();
+    if (uses.reveals) reveals[file] = uses.reveals;
+    for (const problem of uses.problems) problems.push(`${file}: ${problem}`);
   }
+  assert.deepEqual(problems, [], "call asSecret and reveal directly, so each call site is counted");
   const registered = Object.fromEntries(Object.entries(WRAP_SITES).map(([file, kinds]) => [file, [...kinds].sort()]));
   assert.deepEqual(wraps, registered, "a file that makes secrets is listed in WRAP_SITES with the kinds it makes");
   for (const kinds of Object.values(wraps)) for (const kind of kinds) assert.ok(kind === "*" || SECRET_KINDS.includes(kind), kind);
-  assert.deepEqual([...reveals].sort(), Object.keys(REVEAL_SINKS).sort(), "reveal() runs only at a registered sink; add the file and why it needs the plaintext");
+  assert.deepEqual(reveals, Object.fromEntries(Object.entries(REVEAL_SINKS).map(([file, sink]) => [file, sink.calls])), "reveal() runs only at a registered sink, as many times as REVEAL_SINKS says; add the call and why it needs the plaintext");
+});
+
+test("the registry scan finds aliased, namespaced and value uses of asSecret and reveal", () => {
+  const uses = secretUses("x.ts", [
+    'import { asSecret as brand, reveal as open } from "@ardia/core";',
+    'import * as core from "../../packages/core/src/index.ts";',
+    'brand("password", a); core.asSecret(kind, b); open(c); core.reveal(d);',
+    "const leak = [x].map(open);",
+  ].join("\n"));
+  assert.deepEqual([...uses.kinds].sort(), ["*", "password"]);
+  assert.equal(uses.reveals, 2);
+  assert.deepEqual(uses.problems, ["reveal used as a value"]);
 });

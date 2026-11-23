@@ -107,7 +107,7 @@ ciphertext and stay plain strings.
 | --- | --- | --- |
 | Any `JSON.stringify` (sync payloads, the telemetry queue, socket and plugin lines) | | `Secret.toJSON` leaves it out |
 | Any string it is put into (log text, error messages, template strings) | `Secret` isn't a `string` | `toString` gives `<secret>` |
-| Telemetry events (`capture`) | `props` is `SecretFree` | `cleanProperties` and `raw` leave it out |
+| Telemetry events (`capture`) | `props` and `raw` are `SecretFree` | `cleanProperties` and `raw` leave it out; a Linux follower window strips secrets before it relays to the leader |
 | Log attributes (`queueLog`), `recordLog` arguments | attributes are text, numbers or flags | left out |
 | Control socket replies and events (`fittedReply`, `fittedEvent`) | `SecretFree` | `toJSON` |
 | Sync writes (`Transport.write`, `SyncNative.write`) | payload is text | `toJSON` |
@@ -127,20 +127,29 @@ guard.
 **The containment test** (`apps/browser/src/secretContainment.test.mjs`) plants a canary of every kind in its real
 source (the password store, the Keychain for plugin secrets and live accounts, the stored Google tokens, the native
 recovery words), takes the branded value the source hands out, and drives it through the real telemetry client and
-queue, the local telemetry store, `recordLog`, the console hook, `captureException`, `fittedReply`, `fittedEvent` and
-a real sync cycle with its files. No sink's output may hold the canary, a positive control checks each legitimate
-sink still gets the plaintext, and token-shaped kinds are also checked once revealed. Its registry fails when:
+queue, the local telemetry store, the network send, `recordLog`, the console hook, `captureException`, `fittedReply`,
+`fittedEvent` and a real sync cycle with its files. Each sink must produce its own output, carrying a marker, without
+the canary, and must count the drop; a positive control checks each legitimate sink still gets the plaintext, and
+token-shaped kinds are also checked once revealed. A provider that echoes a credential in an error body is driven
+through a real Live refresh into folder status, which `live.list` returns: Live errors carry only the status code, and
+the status message goes through the token scrubber. Its registry, read with the TypeScript parser so aliased and
+namespace imports count, fails when:
 
 - a kind in `SECRET_KINDS` has no source and canary in the test;
 - a file starts making secrets (`asSecret`) without a `WRAP_SITES` row naming the kinds it makes;
-- a file starts calling `reveal` without a `REVEAL_SINKS` row saying why it needs the plaintext.
+- a file calls `reveal` more or fewer times than its `REVEAL_SINKS` row says, or has no row saying why it needs the
+  plaintext;
+- `asSecret` or `reveal` is passed around as a value instead of called, so a call site can't be counted.
 
 A new secret: add its kind to `SECRET_KINDS`, brand it where it enters JS, reveal it only at its sink, and add its
 source, canary and rows to the test.
 
 **Linux.** Sync runs in one window; the others forward their calls over a `BroadcastChannel`, which would clone a
-`Secret` into an empty object. `apps/linux/src/syncAuthority.ts` carries a secret argument across as its kind and text
-and brands it again on arrival (`hostSync.test.mjs`).
+`Secret` into an empty object. `apps/linux/src/syncAuthority.ts` carries only the phrase argument of
+`enterRecoveryPhrase` across, as its kind and text, and brands it again on arrival only in that position; a secret in
+any other argument is refused before it is sent (`hostSync.test.mjs`). The channel reaches every window of the app's
+own origin, as it did before secrets were branded; moving the phrase to a host route bound to the sync window is left
+for later.
 
 **Not covered.** Native code (Swift `SecretBytes`, Rust `Zeroize`, `callWithSecret`) keeps its own handling; this
 guard starts where a secret reaches JS. Plaintext a user types sits in a text field's state until it is branded, and

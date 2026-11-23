@@ -13,7 +13,7 @@ const TOKEN_RULES: [RegExp, string][] = [
   [/\bAIza[\w-]{30,}|\bya29\.[\w-]{20,}|\b1\/\/0[\w-]{20,}/g, "<token>"],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "<token>"],
   [/\beyJ[\w-]{6,}\.[\w-]{6,}(?:\.[\w-]*)?/g, "<token>"],
-  [/\b((?:pass(?:word|wd|phrase)?|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token)\s*[=:]\s*)[^\s,;&<>]{6,}/gi, "$1<secret>"],
+  [/\b((?:pass(?:word|wd|phrase)?|pwd|secret|client[_-]?secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token)\s*[=:]\s*)(?:(?=[^\s,;&<>]*[\d!#$%*+./=?@^_~-])[^\s,;&<>]{6,}|[^\s,;&<>]{16,})/gi, "$1<secret>"],
 ];
 
 const LONG_TOKEN = /[A-Za-z0-9+/_-]{32,}={0,2}/g;

@@ -223,6 +223,9 @@ test("a recovery phrase entered in another window reaches the sync window as a b
   assert.ok(isSecret(phrase));
   assert.equal(phrase.kind, "syncPhrase");
   assert.equal(reveal(phrase), PHRASE);
+  await settings.authority.call("setOpenTabsSynced", ["work", { relayedSecret: "syncPhrase", value: PHRASE }]);
+  assert.equal(isSecret(a.calls.at(-1).args[1]), false, "only the phrase argument of enterRecoveryPhrase is branded on arrival");
+  await assert.rejects(settings.authority.call("setOpenTabsSynced", ["work", asSecret("syncPhrase", PHRASE)]), TypeError);
 });
 
 test("one renderer runs sync, the others mirror it and forward their actions, and it fails over when that window closes", async (t) => {
