@@ -1,4 +1,4 @@
-import { linkChanges, withEntry } from "../browser/changes";
+import { linkChanges, withEntry, withoutEntries } from "../browser/changes";
 import type { BrowserState } from "../browser/store";
 import { leaveGroups } from "../groups/groups";
 import { withShownTab } from "../groups/shownTabs";
@@ -164,7 +164,7 @@ export function removeTabs(s: BrowserState, ids: string[], record: boolean): Bro
     }
     windows[w.id] = { ...w, tabIds, activeTabIds };
   }
-  tabs = adoptOrphans(without(tabs, gone), s.tabs, gone);
+  tabs = adoptOrphans(withoutEntries(tabs, gone), s.tabs, gone);
 
   let next: BrowserState = {
     ...s,

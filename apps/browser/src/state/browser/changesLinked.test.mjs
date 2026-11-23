@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 globalThis.__DEV__ = false;
-const { changedIds, linkChanges, linkedChangedIds, scannedChangedIds, withEntry, LINKS_KEPT } = await import("./changes.ts");
-const { without } = await import("./model.ts");
+const { changedIds, linkChanges, linkedChangedIds, scannedChangedIds, withEntry, withoutEntries, LINKS_KEPT } = await import("./changes.ts");
 
 function random(seed) {
   let a = seed >>> 0;
@@ -22,11 +21,8 @@ function assertSameAsScan(next, prev, where) {
   const scanned = scannedChangedIds(next, prev);
   assert.equal(new Set(scanned).size, scanned.length, `${where}: the scan lists each id once`);
   const linked = linkedChangedIds(next, prev);
-  if (linked) {
-    assert.equal(new Set(linked).size, linked.length, `${where}: the linked answer lists each id once`);
-    assert.deepEqual(sorted(linked), sorted(scanned), `${where}: linked`);
-  }
-  assert.deepEqual(sorted(changedIds(next, prev)), sorted(scanned), `${where}: changedIds`);
+  if (linked) assert.deepEqual([...linked], [...scanned], `${where}: linked, in the scan's order`);
+  assert.deepEqual([...changedIds(next, prev)], [...scanned], `${where}: changedIds, in the scan's order`);
   return !!linked;
 }
 
@@ -38,15 +34,19 @@ function mutate(rand, prev, ids) {
     const id = pick();
     return prev[id] ? withEntry(prev, id, prev[id]) : withEntry(prev, id, { v: rand() });
   }
-  if (roll < 0.6) return without(prev, Array.from({ length: 1 + Math.floor(rand() * 3) }, pick));
-  if (roll < 0.68) return without(prev, new Set([pick(), "never-there"]));
+  if (roll < 0.6) return withoutEntries(prev, Array.from({ length: 1 + Math.floor(rand() * 3) }, pick));
+  if (roll < 0.68) return withoutEntries(prev, new Set([pick(), "never-there"]));
   if (roll < 0.8) {
     const draft = { ...prev };
     const touched = [];
+    const deleted = new Set();
     for (let k = Math.floor(rand() * 4); k >= 0; k--) {
       const id = pick();
-      if (rand() < 0.3) delete draft[id];
-      else draft[id] = { v: rand() };
+      if (deleted.has(id)) continue;
+      if (rand() < 0.3) {
+        delete draft[id];
+        deleted.add(id);
+      } else draft[id] = { v: rand() };
       touched.push(id);
     }
     if (rand() < 0.3) touched.push("never-there", touched[0]);
@@ -67,12 +67,17 @@ test("on random edit sequences the linked answer always equals the full scan, fo
   let pairs = 0;
   for (let seed = 1; seed <= 40; seed++) {
     const rand = random(seed);
-    const ids = Array.from({ length: 4 + Math.floor(rand() * 40) }, (_, i) => `t${i}`);
+    const ids = Array.from({ length: 4 + Math.floor(rand() * 40) }, (_, i) => (i % 9 === 4 ? String(i) : `t${i}`));
     const first = Object.fromEntries(ids.filter(() => rand() < 0.7).map((id) => [id, { v: rand() }]));
     const history = [first];
     for (let step = 0; step < 45; step++) {
       const from = rand() < 0.2 ? history[Math.floor(rand() * history.length)] : history.at(-1);
-      history.push(mutate(rand, from, ids));
+      const made = mutate(rand, from, ids);
+      history.push(made);
+      for (let back = 1; back <= 3 && back < history.length; back++) {
+        pairs++;
+        if (assertSameAsScan(made, history.at(-1 - back), `seed ${seed} step ${step} back ${back}`)) linkedPairs++;
+      }
     }
     for (let j = 0; j < history.length; j++) {
       for (let i = 0; i < history.length; i++) {
@@ -200,5 +205,40 @@ test("the everyday tab actions on a big profile never compare every tab, and are
   } finally {
     setConsentPeriod(false, null);
     off();
+  }
+});
+
+test("a record edited after it was made, like a bookmark delete rewriting the parent folder, still lists every change", async () => {
+  const { removeBookmarkTree } = await import("../bookmarks/bookmarks.ts");
+  const tree = { nodes: { root: { id: "root", kind: "folder", children: ["leaf", "keep"] }, leaf: { id: "leaf", kind: "url" }, keep: { id: "keep", kind: "url" } } };
+  const after = removeBookmarkTree(tree, ["leaf"]);
+  assert.deepEqual(changedIds(after.nodes, tree.nodes), ["root", "leaf"], "the parent folder lost a child, and the leaf went");
+});
+
+test("two copies of a pin that wake in one batch hand the page to the same copy as the full scan did", async () => {
+  const { useBrowser, storeTransaction } = await import("./store.ts");
+  const model = await import("./model.ts");
+  const { wokenPage } = await import("../tabs/pageSession.ts");
+  const S = () => useBrowser.getState();
+  const realNow = Date.now;
+  Date.now = () => 1000;
+  try {
+    S().hydrate({});
+    const a = S().createWindow({ url: "https://mail.com" });
+    const [mail] = S().windows[a].tabIds;
+    S().newTab(a, { url: "https://a.com" });
+    S().pinTabs([mail], true);
+    const b = S().createWindow({ url: "https://b.com" });
+    const copy = model.viewTabIds(S(), b).find((id) => !!S().tabs[id].pin);
+    S().closeTabs([mail], { lastClosesWindow: false });
+    assert.ok(Object.keys(S().tabs).indexOf(mail) < Object.keys(S().tabs).indexOf(copy), "the first copy comes first in the tabs record");
+    storeTransaction(() => {
+      S().updateTab(copy, { page: wokenPage(S().tabs[copy]) });
+      S().updateTab(mail, { page: wokenPage(S().tabs[mail]) });
+    });
+    assert.equal(S().tabs[copy].page.kind, "loaded", "the copy keeps the page, as with the full scan's order");
+    assert.equal(S().tabs[mail].page.holderId, copy, "the first copy shows it frozen");
+  } finally {
+    Date.now = realNow;
   }
 });

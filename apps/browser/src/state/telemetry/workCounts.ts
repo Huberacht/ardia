@@ -81,6 +81,7 @@ let pending = none();
 onConsentPeriodChange(() => {
   syncPending = noSync();
   pending = none();
+  takeChangeDetectionCounts();
 });
 
 const count = (key: keyof ReturnType<typeof none>, consent?: ConsentToken | null) =>
