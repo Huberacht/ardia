@@ -109,7 +109,7 @@ export function copySelectedTabUrls(s: BrowserState, windowId: string, markdown:
     .map((t) => ({ url: t!.url, title: ownTabTitle(t!) }));
   if (links.length < 2) return false;
   copyLinks(links, markdown);
-  noteSelectedTabUrlsCopied();
+  noteSelectedTabUrlsCopied(links.filter((link) => cleanUrlReport(link.url).removedTracker).length);
   showToast(windowId, `Copied ${links.length} Links`, undefined, { icon: "link" });
   return true;
 }

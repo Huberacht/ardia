@@ -8,9 +8,10 @@ let fromAddressField = 0;
 let fromWebKitMenu = 0;
 let uncleaned = 0;
 
-export function noteSelectedTabUrlsCopied() {
+export function noteSelectedTabUrlsCopied(cleaned = 0) {
   copies++;
   selectedTabs++;
+  if (cleaned > 0) countFor(consentOrNow(undefined), () => void (trackersRemoved += cleaned));
 }
 
 export function noteUrlCopied(firstPagePending: boolean, removedTracker = false) {

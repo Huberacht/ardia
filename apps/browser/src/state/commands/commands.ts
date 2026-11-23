@@ -3,7 +3,7 @@ import { copyLink } from "../../platform/clipboard";
 import { openExternalURL } from "../../platform/app";
 import { pickFiles, prompt } from "../../platform/dialogs";
 import type { CommandEvent } from "../../platform/commands";
-import { cleanUrlReport, markdownLink } from "@ardia/core";
+import { cleanUrl, cleanUrlReport, markdownLink, type CleanedUrl } from "@ardia/core";
 import { useBrowser } from "../browser/store";
 import { requestCreateProfile } from "../profiles/createProfileRequest";
 import { activeTabId, bookmarkProfileId, isPinnedRow, resolveWindowId, tabLayoutOf } from "../browser/model";
@@ -220,9 +220,7 @@ export function runCommand({ command, arg, windowId: given }: CommandEvent, { st
       return void web?.runPageCommand("caretBrowsing");
     case "emailPageLocation":
       if (!page || !/^https?:/i.test(page.url)) return;
-      return void openExternalURL(
-        `mailto:?subject=${encodeURIComponent(page.customTitle || page.title || page.url)}&body=${encodeURIComponent(page.url)}`,
-      );
+      return void openExternalURL(emailPageLink(page.customTitle || page.title, cleanUrl(page.url)));
     case "stop":
       return void web?.stopLoading();
     case "share":
@@ -398,3 +396,5 @@ async function openFiles(windowId: string | null) {
     if (last) useBrowser.getState().activate(last);
   });
 }
+
+export const emailPageLink = (title: string | null | undefined, url: CleanedUrl) => `mailto:?subject=${encodeURIComponent(title || url)}&body=${encodeURIComponent(url)}`;
