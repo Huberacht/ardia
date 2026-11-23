@@ -14,7 +14,6 @@ const windowsDomains = "packages/expo-windows/src/engine/domains/";
 const engineSources = "engine/chromium/src/chrome/browser/ardia/";
 const rows = JSON.parse(read(`${windowsDomains}forwarded.json`));
 const MAC_ONLY = new Set(["swipe", "webKit"]);
-const WINDOWS_ONLY = { extensions: ["toolbarContext"] };
 const ENGINE_CALL = /^AC_(?:PROFILE|ARGS)_CALL\(\s*(ac_\w+)/gm;
 const windowsEngineCalls = new Set(
   read("scripts/windows/engine/accepted-layer-sources.txt")
@@ -98,12 +97,12 @@ test("every verb the Mac passes straight to the engine goes to the same engine c
   }
 });
 
-test("Windows implements the Mac's call table and its platform-specific calls", () => {
+test("every verb of the Mac's tables is forwarded, reproduced or listed as missing on Windows, and nothing else is", () => {
   assert.deepEqual(domainsOf(rows), sorted(Object.keys(mac)));
   for (const [domain, table] of Object.entries(mac)) {
     const kinds = [Object.keys(rows.forwarded[domain] ?? {}), Object.keys(reproduced[domain] ?? {}), rows.missing[domain] ?? []];
     const onWindows = kinds.flat();
-    assert.deepEqual(sorted(onWindows), sorted([...table.verbs, ...(WINDOWS_ONLY[domain] ?? [])]), `${domain} has its expected verbs`);
+    assert.deepEqual(sorted(onWindows), sorted(table.verbs), `${domain} has the Mac's verbs`);
     assert.equal(new Set(onWindows).size, onWindows.length, `${domain} answers each verb one way`);
   }
 });

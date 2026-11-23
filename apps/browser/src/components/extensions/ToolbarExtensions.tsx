@@ -15,6 +15,7 @@ import { TOOLBAR_TRAILING } from "../../lib/toolbarRow";
 import { isLight } from "../../lib/color";
 import { dropToolbarAnchor, setToolbarAnchor } from "../../state/extensions/toolbarAnchors";
 import { onInterfaceScaleSettled } from "../../state/settings/interfaceScale";
+import { consentToken } from "../../state/telemetry/client";
 import { useMeasuredWindowRootSize } from "../../state/windows/rootSize";
 import type { Rect } from "../window/geometry";
 import {
@@ -265,8 +266,9 @@ function ExtensionButton({ ext, index, pitch, reorder, windowId, tabId, ready, p
           onPressIn={pressMotion.onPressIn}
           onPressOut={pressMotion.onPressOut}
           onPress={async () => {
+            const consent = consentToken();
             onActivate?.();
-            return activateExtension(windowId, ext, await measure(), fetched?.[ext.id], tabId);
+            return activateExtension(windowId, ext, await measure(), fetched?.[ext.id], tabId, consent);
           }}
           badge={badge ? <Badge text={badge.slice(0, 4)} size="s" fit={badgeRoom} fill={fill} color={state?.badgeTextColor ?? contrastText(fill)} style={BADGE_PLACE} /> : null}
         >
@@ -327,13 +329,14 @@ export function OverflowButton({
 }) {
   const { ref, measure } = useAnchor(windowId, tabId, slot);
   const onPress = async () => {
+    const consent = consentToken();
     const anchor = await measure();
     const enabled = currentWindowExtensions(windowId);
     const choice = await chooseFromMenu(extensionOverflowItems(enabled));
     if (choice && typeof choice === "object") {
       if (mayActivate && !mayActivate()) return;
       onActivate?.();
-      void activateExtension(windowId, choice, anchor, undefined, tabId);
+      void activateExtension(windowId, choice, anchor, undefined, tabId, consent);
     } else runExtensionListChoice(choice, windowId);
   };
   return (

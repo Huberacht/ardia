@@ -181,6 +181,7 @@ export async function activateExtension(
   anchor: Anchor,
   state?: ActionState | null,
   tabId = shownPageId(useBrowser.getState(), windowId),
+  consent: ConsentToken | null = null,
 ) {
   const current = useExtensions.getState().popup;
   if (current?.windowId === windowId && current.extensionId === ext.id) return closeExtensionPopup();
@@ -188,7 +189,6 @@ export async function activateExtension(
   if (!shownIn(windowId, ext.id)) return;
   if (isPrivate(useBrowser.getState(), windowId)) notePrivateWindowExtensionOpen();
   const web = tabId ? webviews.get(tabId) : undefined;
-  const consent = consentToken();
   const result = web ? await web.executeExtensionAction(ext.id, anchor) : null;
   if (result === "nativePopup") return noteWindowsExtensionPopup(consent);
   const readyTab = readyTabOf(tabId);

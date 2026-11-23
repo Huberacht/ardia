@@ -59,7 +59,9 @@ export function startExtensionsBridge() {
 
 export function openExtensionFromMenu(windowId: string, extensionId: string, tabId?: string) {
   const ext = findExtension(extensionProfile(useBrowser.getState(), windowId), extensionId);
-  if (ext) void toolbarAnchor(windowId, ext.id, tabId).then((anchor) => activateExtension(windowId, ext, anchor, undefined, tabId));
+  if (!ext) return;
+  const consent = consentToken();
+  void toolbarAnchor(windowId, ext.id, tabId).then((anchor) => activateExtension(windowId, ext, anchor, undefined, tabId, consent));
 }
 
 function startActionPopups() {

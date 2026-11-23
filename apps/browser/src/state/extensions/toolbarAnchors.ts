@@ -9,7 +9,7 @@ import { consentToken } from "../telemetry/client";
 
 type AnchorEntry = { windowId: string; tabId: string; slot: string; anchor: Anchor; measure: () => Promise<Anchor> };
 const toolbarAnchors = new Map<string, AnchorEntry>();
-const queuedToolbarContexts = new Set<string>();
+const toolbarContextsToSend = new Set<string>();
 export const DEVELOPER_BAR_ANCHOR = "developerBar";
 const anchorKey = (windowId: string, tabId: string, slot: string) => `${windowId}|${tabId}|${slot}`;
 const isExtensionButton = (slot: string) => slot !== "*" && slot !== DEVELOPER_BAR_ANCHOR;
@@ -18,10 +18,10 @@ const MEASURE_WAIT_MS = 100;
 const OFF_TOOLBAR: Anchor = { x: 100_000, y: 13, width: 28, height: 28 };
 
 function queueToolbarContext(windowId: string) {
-  if (Platform.OS !== "windows" || queuedToolbarContexts.has(windowId)) return;
-  queuedToolbarContexts.add(windowId);
+  if (Platform.OS !== "windows" || toolbarContextsToSend.has(windowId)) return;
+  toolbarContextsToSend.add(windowId);
   void Promise.resolve().then(() => {
-    queuedToolbarContexts.delete(windowId);
+    toolbarContextsToSend.delete(windowId);
     const s = useBrowser.getState();
     if (!s.windows[windowId]) return;
     const tabId = shownPageId(s, windowId) ?? "";
