@@ -4,6 +4,7 @@ const JS_PUNCT = ["===", "!==", "**=", "...", "<<=", ">>=", ">>>", "=>", "==", "
 const REGEX_AFTER_WORD = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "yield", "await", "instanceof"]);
 const IDENT_START = /[A-Za-z_$\u0080-\uffff]/;
 const IDENT_PART = /[A-Za-z0-9_$\u0080-\uffff]/;
+const TYPE_PARAMETERS = /^<[A-Za-z_$][\w$]*\s*(?:,|extends\s)/;
 
 export function languageOf(path) {
   if (/\.(?:[cm]?js|[cm]?ts|tsx|jsx)$/.test(path)) return "js";
@@ -18,10 +19,52 @@ function regexAllowed(previous) {
   return false;
 }
 
-export function tokenizeJs(source) {
+export function tokenizeJs(source, { jsx = false } = {}) {
+  return lexJs(source, 0, false, jsx).tokens;
+}
+
+function scanJsx(source, start) {
+  let index = start;
+  let depth = 0;
+  for (;;) {
+    if (source[index + 1] === "/") {
+      const end = source.indexOf(">", index);
+      if (end < 0) throw new Error(`unterminated JSX closing tag at ${index}`);
+      index = end + 1;
+      depth--;
+    } else {
+      index++;
+      let selfClosing = false;
+      while (index < source.length) {
+        const char = source[index];
+        if (char === '"' || char === "'") {
+          const end = source.indexOf(char, index + 1);
+          if (end < 0) throw new Error(`unterminated JSX attribute at ${index}`);
+          index = end + 1;
+        } else if (char === "{") index = lexJs(source, index + 1, true, true).end + 1;
+        else if (char === "/" && source[index + 1] === ">") {
+          selfClosing = true;
+          index += 2;
+          break;
+        } else if (char === ">") {
+          index++;
+          break;
+        } else index++;
+      }
+      if (!selfClosing) depth++;
+    }
+    if (depth <= 0) return index;
+    while (index < source.length && source[index] !== "<") {
+      index = source[index] === "{" ? lexJs(source, index + 1, true, true).end + 1 : index + 1;
+    }
+    if (index >= source.length) throw new Error(`unterminated JSX element at ${start}`);
+  }
+}
+
+function lexJs(source, from, untilBrace, jsx) {
   const tokens = [];
   const stack = [];
-  let at = 0;
+  let at = from;
   const push = (type, start, end, extra = {}) => tokens.push({ type, text: source.slice(start, end), start, end, ...extra });
   const scanTemplate = (start) => {
     let index = start;
@@ -70,6 +113,13 @@ export function tokenizeJs(source) {
       at = end;
       continue;
     }
+    if (untilBrace && char === "}" && !stack.length) return { tokens, end: at };
+    if (jsx && char === "<" && /[A-Za-z>]/.test(next ?? "") && !TYPE_PARAMETERS.test(source.slice(at, at + 80)) && regexAllowed(tokens.at(-1))) {
+      const end = scanJsx(source, at);
+      tokens.push({ type: "jsx", text: source.slice(at, end).replace(/\s+/g, ""), start: at, end });
+      at = end;
+      continue;
+    }
     if (char === "/" && regexAllowed(tokens.at(-1))) {
       let index = at + 1;
       let inClass = false;
@@ -109,7 +159,8 @@ export function tokenizeJs(source) {
     push("punct", at, end);
     at = end;
   }
-  return tokens;
+  if (untilBrace) throw new Error(`unterminated JSX expression at ${from}`);
+  return { tokens, end: at };
 }
 
 export function tokenizeSwift(source) {
@@ -252,8 +303,8 @@ function titleAt(source, tokens, at) {
 const JS_CALLS = new Set(["test", "it", "describe", "suite"]);
 const JS_GROUPS = new Set(["describe", "suite"]);
 
-function findJsTests(source) {
-  const tokens = tokenizeJs(source);
+function findJsTests(path, source) {
+  const tokens = tokenizeJs(source, { jsx: /\.[jt]sx$/.test(path) });
   const found = [];
   const groups = [];
   for (let index = 0; index < tokens.length; index++) {
@@ -309,7 +360,7 @@ function findSwiftTests(source) {
 
 export function findTests(path, source) {
   const language = languageOf(path);
-  if (language === "js") return findJsTests(source);
+  if (language === "js") return findJsTests(path, source);
   if (language === "swift") return findSwiftTests(source);
   throw new Error(`${path}: only JavaScript, TypeScript and Swift tests can be read`);
 }

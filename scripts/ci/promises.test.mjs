@@ -70,6 +70,22 @@ t.test("a subtest", () => {});
   assert.deepEqual(findTests("x.test.mjs", source).map((found) => found.path), ["${side} sidebar: the field follows", "outer › inner › twice", "outer › twice"]);
 });
 
+test("JSX in a .tsx test is read as one element, its text and its type-parameter arrows included", () => {
+  const source = `const deferred = <T,>(): Deferred<T> => ({ promise: null as unknown as Promise<T> });
+it("shows the toast", () => {
+  const tree = render(<View style={{ flex: 1 }}>
+    <Text>Don't {count > 1 ? <Badge n={count} /> : "none"} go</Text>
+  </View>);
+  expect(tree.find("x")).toBe(/a/.test("a"));
+});
+test("after the element", () => {});
+`;
+  assert.deepEqual(findTests("x.render.test.tsx", source).map((found) => found.name), ["shows the toast", "after the element"]);
+  const before = hashes("x.render.test.tsx", source)["shows the toast"];
+  assert.equal(hashes("x.render.test.tsx", source.replace("<View style", "<View\n      style"))["shows the toast"], before);
+  assert.notEqual(hashes("x.render.test.tsx", source.replace("Don't", "Do not"))["shows the toast"], before);
+});
+
 test("Swift tests are XCTest test methods and @Test functions, raw strings and interpolation included", () => {
   const source = `import XCTest
 final class PacingTests: XCTestCase {
