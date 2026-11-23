@@ -110,6 +110,7 @@ function lexJs(source, from, untilBrace, jsx) {
   const tokens = [];
   const stack = [];
   const parens = [];
+  const pendingDo = [];
   let at = from;
   let newline = false;
   const push = (type, start, end, extra = {}) => {
@@ -193,7 +194,12 @@ function lexJs(source, from, untilBrace, jsx) {
     if (IDENT_START.test(char)) {
       let index = at + 1;
       while (index < source.length && IDENT_PART.test(source[index])) index++;
-      push("word", at, index);
+      const word = source.slice(at, index);
+      const member = tokens.at(-1)?.text === "." || tokens.at(-1)?.text === "?.";
+      if (word === "do" && !member) pendingDo.push(stack.length);
+      const closesDo = word === "while" && !member && pendingDo.at(-1) === stack.length;
+      if (closesDo) pendingDo.pop();
+      push("word", at, index, closesDo ? { closesDo } : {});
       at = index;
       continue;
     }
@@ -209,7 +215,10 @@ function lexJs(source, from, untilBrace, jsx) {
     const long = JS_PUNCT.find((punct) => source.startsWith(punct, at));
     const end = at + (long ? long.length : 1);
     const previous = tokens.at(-1);
-    if (char === "(") parens.push(previous?.type === "word" && CONTROL_WORDS.has(previous.text));
+    if (char === "(") {
+      const forAwait = previous?.text === "await" && tokens.at(-2)?.text === "for";
+      parens.push(previous?.type === "word" && !previous.closesDo && (CONTROL_WORDS.has(previous.text) || forAwait));
+    }
     push("punct", at, end, char === ")" ? { control: parens.pop() === true } : {});
     at = end;
   }
@@ -360,11 +369,15 @@ const CONTINUING_WORDS = new Set(["else", "do", "await", "return", "yield", "voi
 
 function labelEnd(tokens, at) {
   let depth = 0;
+  let ternaries = 0;
   for (let index = at + 1; index < tokens.length; index++) {
     const text = tokens[index].type === "punct" ? tokens[index].text : null;
     if (text && OPENERS.has(text)) depth++;
     else if (text && CLOSERS.has(text)) depth--;
+    else if (text === "?" && depth === 0) ternaries++;
+    else if (text === ":" && depth === 0 && ternaries) ternaries--;
     else if (text === ":" && depth === 0) return index;
+    else if (text === ";" && depth === 0) return -1;
     if (depth < 0) return -1;
   }
   return -1;
@@ -385,6 +398,13 @@ function ancestry(tokens, language) {
     return open > 0 && tokens[open - 1].text.startsWith("@");
   };
   const inBlock = () => !stack.length || tokens[stack.at(-1).opener].text === "{";
+  const labelEnds = new Map();
+  const inSwitch = () => {
+    if (!stack.length) return false;
+    const opener = stack.at(-1).opener;
+    if (tokens[opener].text !== "{" || tokens[opener - 1]?.text !== ")") return false;
+    return tokens[opening(tokens, opener - 1) - 1]?.text === "switch";
+  };
   const continues = (previous) =>
     previous.control || (previous.type === "punct" && ![";", "}", ")", "]"].includes(previous.text)) || (previous.type === "word" && CONTINUING_WORDS.has(previous.text));
   const startsStatement = (index) => {
@@ -398,7 +418,7 @@ function ancestry(tokens, language) {
     boundary[boundary.length - 1] = at;
   };
   const forget = (depth) => {
-    for (const map of [chains, labels]) for (const key of map.keys()) if (key > depth) map.delete(key);
+    for (const map of [chains, labels, labelEnds]) for (const key of map.keys()) if (key > depth) map.delete(key);
   };
   const slice = (start, end) => [...(prepend.get(start) ?? []), ...tokens.slice(start, end)];
   return {
@@ -408,15 +428,16 @@ function ancestry(tokens, language) {
       if (startsStatement(index)) setBoundary(index);
       if (language === "js" && token.type === "word" && inBlock()) {
         if (token.text === "if" && tokens[index + 1]?.text === "(") {
-          const condition = tokens.slice(index, closing(tokens, index + 1) + 1);
-          chains.set(depth, tokens[index - 1]?.text === "else" ? [...(chains.get(depth) ?? []), ...condition] : condition);
+          chains.set(depth, slice(boundary.at(-1), closing(tokens, index + 1) + 1));
         } else if (token.text === "else") {
           prepend.set(index, [...(chains.get(depth) ?? [])]);
           setBoundary(index);
-        } else if ((token.text === "case" || token.text === "default") && tokens[index - 1]?.text !== ".") {
+        } else if ((token.text === "case" || token.text === "default") && inSwitch() && ["{", ";", ":", "}"].includes(tokens[index - 1]?.text)) {
           const end = labelEnd(tokens, index);
           if (end > index) {
-            labels.set(depth, tokens.slice(index, end + 1));
+            const shared = labelEnds.get(depth) === index - 1;
+            labels.set(depth, [...(shared ? labels.get(depth) : []), ...tokens.slice(index, end + 1)]);
+            labelEnds.set(depth, end);
             setBoundary(index);
           }
         }
@@ -431,7 +452,7 @@ function ancestry(tokens, language) {
         if (!boundary.length) boundary.push(index + 1);
         forget(boundary.length);
         const next = tokens[index + 1];
-        if (token.text === "}" && next && (next.newline || next.type === "word")) setBoundary(index + 1);
+        if (token.text === "}" && next && inBlock() && (next.newline || next.type === "word")) setBoundary(index + 1);
       } else if (token.text === ";") setBoundary(index + 1);
     },
     headers(index) {

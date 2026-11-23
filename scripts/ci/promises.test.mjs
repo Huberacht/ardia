@@ -87,6 +87,15 @@ test("a guard or suite option that stops a test registering changes its hash, an
   assert.notEqual(hash(`switch (x) {\n  case 1:\n    g();\n    ${plain}\n}`, "t"), hash(`switch (x) {\n  case 2:\n    g();\n    ${plain}\n}`, "t"));
   const suite = (skip) => `describe("s", { skip: ${skip} },\n  function () {\n    test("t", () => { f(); });\n  });`;
   assert.notEqual(hash(suite(true), "s › t"), hash(suite(false), "s › t"));
+  const leading = (skip) => `describe("s", { skip: ${skip} }\n, () => { test("t", () => { f(); }); });`;
+  assert.notEqual(hash(leading(true), "s › t"), hash(leading(false), "s › t"));
+  assert.notEqual(hash(`for await (const x of [])\n  ${plain}`, "t"), hash(`for await (const x of [1])\n  ${plain}`, "t"));
+  assert.notEqual(hash(`if (false) if (false) {} else { ${plain} }`, "t"), hash(`if (true) if (false) {} else { ${plain} }`, "t"));
+  assert.notEqual(hash(`switch (1) { case 3: case 2: void 0; ${plain} }`, "t"), hash(`switch (1) { case 1: case 2: void 0; ${plain} }`, "t"));
+  assert.notEqual(hash(`switch (2) { case false ? 1 : 3: void 0; ${plain} }`, "t"), hash(`switch (2) { case false ? 1 : 2: void 0; ${plain} }`, "t"));
+  assert.equal(hash(`({})?.case; true ? 1 : 0;\n${plain}`, "t"), hash(`({})?.kind; true ? 1 : 0;\n${plain}`, "t"));
+  assert.equal(hash(`do f(); while (false)\n${plain}`, "t"), hash(`do f(); while (0)\n${plain}`, "t"));
+  assert.notEqual(hash(`while (!a)\n  ${plain}`, "t"), hash(`while (a)\n  ${plain}`, "t"));
   assert.notEqual(hash('describe(\n  "s",\n  { skip: true },\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"), hash('describe(\n  "s",\n  () => {\n    test("t", () => { f(); });\n  },\n);', "s › t"));
   assert.equal(hash(`import a from "a"\nimport "node:path"\n${group}`, "s › t"), hash(`import a from "a"\n${group}`, "s › t"));
   const loop = 'for (const o of [1]) {\n  test(`t ${o}`, () => { f(o); });\n}\n';
