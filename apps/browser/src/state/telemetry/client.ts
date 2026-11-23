@@ -235,6 +235,7 @@ async function drain<T>(
 }
 
 export async function flush() {
+  clearTimeout(flushTimer);
   flushTimer = undefined;
   if (!saved().sharing || flushing) return;
   flushing = true;

@@ -278,13 +278,14 @@ export function startSyncAuthority<S>(options: AuthorityOptions<S>) {
       if (role === "authority") return runRemote(method, args);
       if (!channel || stopped || !(await whenLeaderKnown())) throw new Error(NO_AUTHORITY_MESSAGE);
       if ((role as Role) === "authority") return runRemote(method, args);
+      const wire = relayedArgs(method, args);
       const callId = `${id}:${++sequence}`;
       return new Promise((resolve, reject) => {
         const timer = timers.set(() => {
           if (pending.delete(callId)) reject(new Error(NO_AUTHORITY_MESSAGE));
         }, timeoutMs);
         pending.set(callId, { resolve, reject, timer });
-        post({ kind: "call", from: id, id: callId, method, args: relayedArgs(method, args) });
+        post({ kind: "call", from: id, id: callId, method, args: wire });
       });
     },
     stop() {

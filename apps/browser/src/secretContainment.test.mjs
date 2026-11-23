@@ -147,33 +147,48 @@ async function syncWith(mark, value) {
 }
 
 const SINKS = {
-  async telemetryEvent(secret, mark) {
-    client.capture(`containment_${mark}`, { value: secret, label: `with ${secret}` }, client.consentNow(), { raw: { raw_value: secret, nested: { deep: secret } } });
+  async telemetryProps(secret, mark) {
+    client.capture(`containment_${mark}`, { value: secret, label: "plain" }, client.consentNow());
+    await client.saveQueueNow();
+    return JSON.stringify(queued().events.filter((e) => e.event === `containment_${mark}`));
+  },
+  async telemetryRaw(secret, mark) {
+    client.capture(`containment_${mark}`, { label: "plain" }, client.consentNow(), { raw: { nested: { deep: secret }, list: [secret] } });
     await client.saveQueueNow();
     return JSON.stringify(queued().events.filter((e) => e.event === `containment_${mark}`));
   },
   async localStore(secret, mark) {
-    client.capture(`containment_local_${mark}`, { value: secret, label: `with ${secret}` }, client.consentNow());
+    client.capture(`containment_${mark}`, { value: secret, label: "plain" }, client.consentNow());
     local.flushLocal();
-    return JSON.stringify(stub.telemetryLocal.records().filter((r) => JSON.stringify(r).includes(`containment_local_${mark}`)));
+    return JSON.stringify(stub.telemetryLocal.records().filter((r) => JSON.stringify(r).includes(`containment_${mark}`)));
   },
-  async logLine(secret, mark) {
-    recordLog("error", [`[containment ${mark}] failed with ${secret}`, secret, new Error(`refresh failed for ${secret}`)], client.consentToken());
+  async logArgument(secret, mark) {
+    recordLog("error", [`[containment ${mark}] plain`, secret], client.consentToken());
+    await client.saveQueueNow();
+    return JSON.stringify(queued().logs.filter((l) => JSON.stringify(l).includes(mark)));
+  },
+  async logText(secret, mark) {
+    recordLog("error", [`[containment ${mark}] failed with ${secret}`], client.consentToken());
     await client.saveQueueNow();
     return JSON.stringify(queued().logs.filter((l) => JSON.stringify(l).includes(mark)));
   },
   async consoleHook(secret, mark) {
-    console.error(`[containment ${mark}] console with ${secret}`, new Error(`console reason ${secret}`));
+    console.error(`[containment ${mark}] plain`, secret);
     await client.saveQueueNow();
     return JSON.stringify(queued().logs.filter((l) => JSON.stringify(l).includes(mark)));
   },
-  async crashReport(secret, mark) {
-    captureException(Object.assign(new Error(`crash ${mark} while holding ${secret}`), { token: secret, cause: secret }), "onerror");
+  async crashFields(secret, mark) {
+    captureException(Object.assign(new Error(`crash ${mark}`), { token: secret, cause: secret }), "onerror");
+    await client.saveQueueNow();
+    return JSON.stringify(queued().events.filter((e) => JSON.stringify(e).includes(mark)));
+  },
+  async crashMessage(secret, mark) {
+    captureException(new Error(`crash ${mark} while holding ${secret}`), "onerror");
     await client.saveQueueNow();
     return JSON.stringify(queued().events.filter((e) => JSON.stringify(e).includes(mark)));
   },
   async network(secret, mark) {
-    client.capture(`containment_sent_${mark}`, { value: secret }, client.consentNow());
+    client.capture(`containment_${mark}`, { value: secret }, client.consentNow());
     posted.length = 0;
     acceptTelemetry = true;
     try {
@@ -181,7 +196,7 @@ const SINKS = {
     } finally {
       acceptTelemetry = false;
     }
-    return posted.filter((p) => p.url.includes("otel") && p.body.includes(`containment_sent_${mark}`)).map((p) => p.body).join("\n");
+    return posted.filter((p) => p.url.includes("otel") && p.body.includes(`containment_${mark}`)).map((p) => p.body).join("\n");
   },
   async socketReply(secret, mark) {
     return fittedReply(2, { result: { mark, secret, list: [secret] } }, undefined, null);
@@ -194,7 +209,7 @@ const SINKS = {
   },
 };
 
-const UNCOUNTED = new Set(["localStore", "network"]);
+const UNCOUNTED = new Set(["localStore", "network", "crashFields"]);
 
 for (const kind of SECRET_KINDS) {
   test(`a ${kind} canary from its real source never reaches telemetry, logs, crash reports, sync files or the control socket`, async () => {
@@ -318,6 +333,25 @@ test("GitHub tokens are held only while their work runs, the stored account's is
   keychain.set("github", CANARY.oauthToken);
 });
 
+test("Google's sign-in callback hands its code to the token request and leaves no trace in recently closed tabs", async () => {
+  const { useBrowser } = await import("./state/browser/store.ts");
+  const { connectGoogleDrive } = await import("./state/live/googleAuth.ts");
+  const code = "4/0AcanaryAuthorizationCode";
+  const windowId = useBrowser.getState().createWindow({ url: "https://a.example/" });
+  const before = new Set(Object.keys(useBrowser.getState().tabs));
+  posted.length = 0;
+  const signIn = connectGoogleDrive(windowId, "client-id", CANARY.oauthClientSecret).catch(() => null);
+  const tabId = Object.keys(useBrowser.getState().tabs).find((id) => !before.has(id));
+  const state = new URL(useBrowser.getState().tabs[tabId].url).searchParams.get("state");
+  useBrowser.getState().updateTab(tabId, { url: `http://127.0.0.1:53682/ardia-oauth?state=${state}&code=${encodeURIComponent(code)}` });
+  await signIn;
+  assert.equal(useBrowser.getState().tabs[tabId], undefined, "the callback tab is closed");
+  const token = posted.find((p) => p.url.includes("google/token") || p.url.includes("oauth2.googleapis.com"));
+  assert.ok(token?.body.includes(encodeURIComponent(code)) && token.body.includes("code_verifier="), "positive control: the token request gets the code and verifier");
+  const closed = JSON.stringify(useBrowser.getState().closedTabs);
+  assert.ok(!closed.includes(code) && !closed.includes(encodeURIComponent(code)) && !closed.includes("ardia-oauth"), "closed.list never lists the callback");
+});
+
 test("an unreadable Google sign-in fails without echoing the stored value", () => {
   for (const stored of [`{"access_token": ${CANARY.oauthClientSecret}`, JSON.stringify({ access_token: CANARY.oauthClientSecret })]) {
     assert.throws(
@@ -339,6 +373,7 @@ const WRAP_SITES = {
   "apps/browser/src/components/settings/panes/ProfilePasswords.tsx": ["password"],
   "apps/browser/src/state/live/net.ts": ["oauthToken", "oauthClientSecret"],
   "apps/browser/src/state/live/sources.ts": ["oauthToken", "apiToken", "oauthClientSecret"],
+  "apps/browser/src/state/live/googleAuth.ts": ["oauthToken"],
   "apps/browser/src/state/plugins/secrets.ts": ["pluginSecret"],
   "apps/browser/src/state/sync/recoveryKit.ts": ["syncPhrase"],
   "apps/browser/src/components/settings/panes/SyncSheets.tsx": ["syncPhrase"],
@@ -395,13 +430,19 @@ function secretUses(file, source) {
       if (TRACKED.has(imported)) bound.set(element.name.text, imported);
     }
   }
+  for (const statement of tree.statements) {
+    if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier) || !CORE_MODULE.test(statement.moduleSpecifier.text)) continue;
+    const named = statement.exportClause && ts.isNamedExports(statement.exportClause) ? statement.exportClause.elements.map((e) => (e.propertyName ?? e.name).text) : null;
+    if (!named || named.some((name) => TRACKED.has(name))) uses.problems.push("re-exports asSecret or reveal");
+  }
   const trackedName = (node) => {
     if (ts.isIdentifier(node) && bound.has(node.text)) return bound.get(node.text);
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && namespaces.has(node.expression.text) && TRACKED.has(node.name.text)) return node.name.text;
     return null;
   };
+  const namespaceMember = (node) => ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node;
   const visit = (node) => {
-    if (ts.isImportDeclaration(node)) return;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
     if (ts.isCallExpression(node)) {
       const name = trackedName(node.expression);
       if (name === "reveal") uses.reveals++;
@@ -413,6 +454,10 @@ function secretUses(file, source) {
         node.arguments.forEach(visit);
         return;
       }
+    }
+    if (ts.isIdentifier(node) && namespaces.has(node.text) && !namespaceMember(node)) {
+      uses.problems.push(`namespace ${node.text} used other than as namespace.member`);
+      return;
     }
     if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node)) && trackedName(node) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)) {
       uses.problems.push(`${trackedName(node)} used as a value`);
@@ -450,8 +495,11 @@ test("the registry scan finds aliased, namespaced and value uses of asSecret and
     'import * as core from "../../packages/core/src/index.ts";',
     'brand("password", a); core.asSecret(kind, b); open(c); core.reveal(d);',
     "const leak = [x].map(open);",
+    'const sneaky = core["reveal"](e);',
+    "const { reveal: pulled } = core;",
+    'export { reveal } from "@ardia/core";',
   ].join("\n"));
   assert.deepEqual([...uses.kinds].sort(), ["*", "password"]);
   assert.equal(uses.reveals, 2);
-  assert.deepEqual(uses.problems, ["reveal used as a value"]);
+  assert.deepEqual(uses.problems.sort(), ["namespace core used other than as namespace.member", "namespace core used other than as namespace.member", "re-exports asSecret or reveal", "reveal used as a value"].sort());
 });

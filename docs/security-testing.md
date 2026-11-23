@@ -97,8 +97,9 @@ Ardia holds must never go out through telemetry, a log line, a crash report, a s
 (`packages/core/src/secret.ts`), made with `asSecret(kind, text)` where it enters and turned back into text with
 `reveal(secret)` only at a sink that needs the plaintext: the Keychain, Chrome's password store, the native sync
 module, an Authorization header or token request to the account's own provider, the plugin that owns the secret, and
-the settings sheet that shows it to the user. The kinds are `SECRET_KINDS`: saved passwords, OAuth access and refresh
-tokens, OAuth client secrets, API tokens, plugin secrets and the sync recovery phrase. Sealed logins in sync files are
+the settings sheet that shows it to the user. The kinds are `SECRET_KINDS`: saved passwords, OAuth tokens and grants
+(access and refresh tokens, authorization codes, PKCE verifiers, device codes), OAuth client secrets, API tokens,
+plugin secrets and the sync recovery phrase. Sealed logins in sync files are
 ciphertext and stay plain strings.
 
 **What refuses a secret.**
@@ -131,8 +132,10 @@ queue, the local telemetry store, the network send, `recordLog`, the console hoo
 `fittedEvent` and a real sync cycle with its files. Each sink must produce its own output, carrying a marker, without
 the canary, and must count the drop; a positive control checks each legitimate sink still gets the plaintext, and
 token-shaped kinds are also checked once revealed. A provider that echoes a credential in an error body is driven
-through a real Live refresh into folder status, which `live.list` returns: Live errors carry only the status code, and
-the status message goes through the token scrubber. Its registry, read with the TypeScript parser so aliased and
+through a real Live refresh into folder status, which `live.list` returns: Live errors carry only the status code or an
+app-owned message (GitHub's GraphQL errors keep at most a validated github.com settings link), and the status message
+goes through the token scrubber. Google's sign-in callback, whose address holds the authorization code, is closed
+without a recently closed entry, so `closed.list` never returns it. Its registry, read with the TypeScript parser so aliased and
 namespace imports count, fails when:
 
 - a kind in `SECRET_KINDS` has no source and canary in the test;

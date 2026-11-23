@@ -1,3 +1,4 @@
+import { asSecret } from "@ardia/core";
 import { useBrowser } from "../browser/store";
 import { endpoints, form } from "./net";
 import { connectGoogle } from "./sources";
@@ -21,14 +22,16 @@ function query(url: string): Map<string, string> {
 
 export function connectGoogleDrive(windowId: string, clientId: string, clientSecret: string): Promise<void> {
   pending?.cancel();
-  const verifier = secureRandomHex(64);
+  const plainVerifier = secureRandomHex(64);
+  const challenge = base64Url(sha256(plainVerifier));
+  const verifier = asSecret("oauthToken", plainVerifier);
   const state = secureRandomHex(32);
   const url = `${endpoints.googleAuth}?${form({
     client_id: clientId.trim(),
     redirect_uri: REDIRECT,
     response_type: "code",
     scope: SCOPE,
-    code_challenge: base64Url(sha256(verifier)),
+    code_challenge: challenge,
     code_challenge_method: "S256",
     state,
     access_type: "offline",
@@ -45,9 +48,9 @@ export function connectGoogleDrive(windowId: string, clientId: string, clientSec
       if (params.get("state") !== state) return finish(new Error("Sign-in didn't match this request"));
       const code = params.get("code");
       stop();
-      useBrowser.getState().closeTab(tabId);
-      if (!code) return finish(new Error(params.get("error") ?? "Google didn't grant access"));
-      connectGoogle(clientId.trim(), clientSecret.trim(), code, verifier, REDIRECT).then(() => finish(), finish);
+      useBrowser.getState().closeTabs([tabId], { unrecorded: true });
+      if (!code) return finish(new Error("Google didn't grant access"));
+      connectGoogle(clientId.trim(), clientSecret.trim(), asSecret("oauthToken", code), verifier, REDIRECT).then(() => finish(), finish);
     });
     const finish = (error?: unknown) => {
       stop();

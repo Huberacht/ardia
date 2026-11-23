@@ -29,26 +29,33 @@ type GithubAccount = { scope: string; token: LiveToken; busy: number };
 
 const githubAccounts = new Map<string, GithubAccount>();
 let githubAccountCount = 0;
+let githubGeneration = 0;
 let keptGithubScope: string | null = null;
 
 function releaseGithubAccounts() {
   for (const [scope, account] of githubAccounts) if (!account.busy && scope !== keptGithubScope) githubAccounts.delete(scope);
 }
 
-async function withGithubAccount<T>(token: LiveToken, keep: "always" | "onSuccess", run: (scope: string) => Promise<T>): Promise<T> {
+function forgetGithubAccounts() {
+  githubGeneration++;
+  keptGithubScope = null;
+  releaseGithubAccounts();
+}
+
+async function withGithubAccount<T>(token: LiveToken, stored: boolean, run: (scope: string) => Promise<T>): Promise<T> {
   let account = [...githubAccounts.values()].find((a) => sameSecret(a.token, token));
   if (!account) {
     account = { scope: `github-account-${++githubAccountCount}`, token, busy: 0 };
     githubAccounts.set(account.scope, account);
   }
+  const generation = githubGeneration;
+  if (stored) keptGithubScope = account.scope;
   account.busy++;
-  if (keep === "always") keptGithubScope = account.scope;
   try {
-    const result = await run(account.scope);
-    keptGithubScope = account.scope;
-    return result;
+    return await run(account.scope);
   } finally {
     account.busy--;
+    if (stored && generation !== githubGeneration && keptGithubScope === account.scope) keptGithubScope = null;
     releaseGithubAccounts();
   }
 }
@@ -71,11 +78,11 @@ const github: LiveSource = {
   kind: "pullRequests",
   site: "https://github.com",
   async fetch(folder, options) {
-    return withGithubAccount(await secret("github"), "always", (scope) => githubClient.fetchFolder(scope, folder, !!options?.interactive));
+    return withGithubAccount(await secret("github"), true, (scope) => githubClient.fetchFolder(scope, folder, !!options?.interactive));
   },
   async resolveGone(items, options) {
     if (!items.some((it) => it.source === "github")) return {};
-    return withGithubAccount(await secret("github"), "always", (scope) => githubClient.resolveGone(scope, items, !!options?.interactive));
+    return withGithubAccount(await secret("github"), true, (scope) => githubClient.resolveGone(scope, items, !!options?.interactive));
   },
   pausedUntil: () => githubClient.pausedUntil(),
   warning: () => githubClient.warning(),
@@ -189,9 +196,10 @@ const account = (login: string, name: string | null, avatar: string | null): Liv
 
 export async function connectGithub(typed: string) {
   const token = asSecret("oauthToken", typed.trim());
-  const viewer = await withGithubAccount(token, "onSuccess", (scope) => githubClient.viewer(scope));
+  const viewer = await withGithubAccount(token, false, (scope) => githubClient.viewer(scope));
   if (!viewer) throw new LiveError("signedOut", "GitHub didn't accept the token");
   await setSecret("github", token);
+  forgetGithubAccounts();
   setAccount("github", account(viewer.login, viewer.name, viewer.avatarUrl));
 }
 
@@ -202,6 +210,7 @@ export async function startGithubDeviceFlow(clientId: string): Promise<DeviceFlo
     `${endpoints.githubWeb}/login/device/code`,
     { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form({ client_id: clientId, scope: "repo read:org" }) },
   );
+  const deviceCode = asSecret("oauthToken", code.device_code);
   let cancelled = false;
   let interval = Math.max(code.interval, 1) * 1000;
   const expiresAt = Date.now() + code.expires_in * 1000;
@@ -212,11 +221,11 @@ export async function startGithubDeviceFlow(clientId: string): Promise<DeviceFlo
       const json = await request<{ access_token?: string; error?: string; interval?: number }>(`${endpoints.githubWeb}/login/oauth/access_token`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form({ client_id: clientId, device_code: code.device_code, grant_type: "urn:ietf:params:oauth:grant-type:device_code" }),
+        body: form({ client_id: clientId, device_code: deviceCode, grant_type: "urn:ietf:params:oauth:grant-type:device_code" }),
       });
       if (json.access_token) return connectGithub(json.access_token);
       if (json.error === "slow_down") interval = (json.interval ?? interval / 1000 + 5) * 1000;
-      else if (json.error && json.error !== "authorization_pending") throw new LiveError("signedOut", json.error === "access_denied" ? "Access was denied" : json.error);
+      else if (json.error && json.error !== "authorization_pending") throw new LiveError("signedOut", json.error === "access_denied" ? "Access was denied" : "GitHub didn't finish signing in");
     }
     throw new LiveError("signedOut", cancelled ? "Cancelled" : "The code expired");
   })();
@@ -251,7 +260,7 @@ export async function connectConfluence(site: string, email: string, typed: stri
   setAccount("confluence", account(me.accountId, me.displayName, null));
 }
 
-export async function connectGoogle(clientId: string, typedClientSecret: string, code: string, verifier: string, redirectUri: string) {
+export async function connectGoogle(clientId: string, typedClientSecret: string, code: LiveToken, verifier: LiveToken, redirectUri: string) {
   const clientSecret = asSecret("oauthClientSecret", typedClientSecret);
   const json = await request<{ access_token: string; refresh_token?: string; expires_in: number }>(endpoints.googleToken, {
     method: "POST",
@@ -269,10 +278,7 @@ export async function connectGoogle(clientId: string, typedClientSecret: string,
 }
 
 export async function disconnect(source: LiveSourceId) {
-  if (source === "github") {
-    keptGithubScope = null;
-    releaseGithubAccounts();
-  }
+  if (source === "github") forgetGithubAccounts();
   await deleteSecret(source);
   setAccount(source, null);
 }
