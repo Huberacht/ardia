@@ -9,6 +9,7 @@ public final class ControlDoorbell {
   public struct Ask {
     public let id: Int
     public let key: String?
+    public let process: String
     public let peer: ControlPeer
     public let deadline: Date
     public fileprivate(set) var connections: Set<Int>
@@ -18,7 +19,7 @@ public final class ControlDoorbell {
   public static let maxWaiting = 8
   public static let quietAfterRefusal: TimeInterval = 30
 
-  public typealias Open = (_ connection: Int, _ fd: Int32, _ key: String?) -> Void
+  public typealias Open = (_ connection: Int, _ fd: Int32, _ key: String?, _ until: Date?) -> Bool
   public typealias Send = (_ name: String, _ body: [String: Any]) -> Bool
 
   private let queue: DispatchQueue
@@ -27,46 +28,57 @@ public final class ControlDoorbell {
   private let now: () -> Date
   private let open: Open
   private let send: Send
+  private let capacity: () -> Int
+  private let alive: (audit_token_t) -> Bool
+  private let dismiss: (Int) -> Void
   private var waiting: [Int: (fd: Int32, ask: Int)] = [:]
   private var asks: [Int: Ask] = [:]
+  private var tokens: [Int: audit_token_t] = [:]
   private var quiet: [String: Date] = [:]
   private var nextAsk = 0
   private var timer: DispatchSourceTimer?
 
   public init(
     queue: DispatchQueue, deadline: TimeInterval = ControlDoorbell.defaultDeadline, tick: TimeInterval = 1, now: @escaping () -> Date = Date.init,
+    capacity: @escaping () -> Int = { Int.max }, alive: @escaping (audit_token_t) -> Bool = ControlPeer.alive, dismiss: @escaping (Int) -> Void = { _ in },
     open: @escaping Open, send: @escaping Send
   ) {
     self.queue = queue
-    self.open = open
-    self.send = send
     self.deadline = deadline
     self.tick = tick
     self.now = now
+    self.capacity = capacity
+    self.alive = alive
+    self.dismiss = dismiss
+    self.open = open
+    self.send = send
   }
 
   public var waitingCount: Int { waiting.count }
   public var openAsks: [Ask] { asks.values.sorted { $0.id < $1.id } }
 
-  public func ring(connection: Int, fd: Int32, peer: ControlPeer, key: String?) {
+  public func ring(connection: Int, fd: Int32, peer: ControlPeer, key: String?, token: audit_token_t) {
     dispatchPrecondition(condition: .onQueue(queue))
     let at = now()
     quiet = quiet.filter { $0.value > at }
     if let key, quiet[key] != nil { return Self.refuse(fd, .quiet) }
     guard waiting.count < Self.maxWaiting else { return Self.refuse(fd, .full) }
-    if let key, let shared = asks.values.first(where: { $0.key == key }) {
+    let process = ControlPeer.process(of: token)
+    if let shared = asks.values.first(where: { $0.process == process && $0.key == key && $0.peer == peer }) {
       asks[shared.id]?.connections.insert(connection)
       waiting[connection] = (fd, shared.id)
       return
     }
     nextAsk += 1
-    let ask = Ask(id: nextAsk, key: key, peer: peer, deadline: at.addingTimeInterval(deadline), connections: [connection])
+    let ask = Ask(id: nextAsk, key: key, process: process, peer: peer, deadline: at.addingTimeInterval(deadline), connections: [connection])
     let told = send("onPeerAsk", [
-      "ask": ask.id, "name": peer.name, "signedBy": peer.signedBy, "path": peer.path ?? "", "identifier": peer.identifier ?? "",
-      "remember": key != nil, "deadline": ask.deadline.timeIntervalSince1970 * 1000,
+      "ask": ask.id, "name": peer.name, "signedBy": peer.signedBy, "path": peer.path.map { ControlPeer.plain($0, limit: 300) } ?? "",
+      "identifier": peer.identifier.map { ControlPeer.plain($0, limit: 120) } ?? "", "remember": key != nil,
+      "deadline": ask.deadline.timeIntervalSince1970 * 1000,
     ])
     guard told else { return Self.refuse(fd, .unshown) }
     asks[ask.id] = ask
+    tokens[ask.id] = token
     waiting[connection] = (fd, ask.id)
     arm()
   }
@@ -74,42 +86,54 @@ public final class ControlDoorbell {
   @discardableResult
   public func answer(_ id: Int, _ outcome: Outcome, approvals: ControlApprovals?) -> Bool {
     dispatchPrecondition(condition: .onQueue(queue))
-    guard let ask = asks[id] else { return false }
-    switch outcome {
-    case .once:
-      end(id, .once, admit: true, key: nil)
-    case .halfHour, .always:
-      let decision: ControlPeerDecision = outcome == .always ? .always : .halfHour
-      if let key = ask.key, let approval = decision.approval(for: ask.peer, key: key, now: now()), approvals?.add(approval, now: now()) == true {
-        end(id, outcome, admit: true, key: key)
-      } else {
-        end(id, .unsaved, admit: true, key: nil)
-      }
-    case .deny:
-      if let key = ask.key { quiet[key] = now().addingTimeInterval(Self.quietAfterRefusal) }
-      end(id, .deny, admit: false, key: nil)
-    case .unshown:
-      end(id, .unshown, admit: false, key: nil)
-    default:
+    guard let ask = asks[id], [.once, .halfHour, .always, .deny, .unshown].contains(outcome) else { return false }
+    let at = now()
+    if ask.deadline <= at {
+      if let key = ask.key { quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal) }
+      end(id, .timeout, admit: false)
       return false
+    }
+    if outcome == .deny || outcome == .unshown {
+      if outcome == .deny, let key = ask.key { quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal) }
+      end(id, outcome, admit: false)
+      return true
+    }
+    dropLeft(of: id)
+    guard let live = asks[id], !live.connections.isEmpty, let token = tokens[id], alive(token) else {
+      end(id, .left, admit: false)
+      return false
+    }
+    guard capacity() > 0 else {
+      end(id, .full, admit: false)
+      return false
+    }
+    guard outcome != .once else {
+      end(id, .once, admit: true)
+      return true
+    }
+    let decision: ControlPeerDecision = outcome == .always ? .always : .halfHour
+    guard let key = live.key, let approval = decision.approval(for: live.peer, key: key, now: at), approvals?.add(approval, now: at) == true else {
+      end(id, .unsaved, admit: true)
+      return true
+    }
+    let until = approval.until.map { Date(timeIntervalSince1970: $0) }
+    end(id, outcome, admit: true, key: key, until: until)
+    for other in openAsks where other.key == key {
+      end(other.id, outcome, admit: true, key: key, until: until)
     }
     return true
   }
 
   public func check() {
     dispatchPrecondition(condition: .onQueue(queue))
-    for (connection, entry) in waiting where Self.peerLeft(entry.fd) {
-      Darwin.close(entry.fd)
-      waiting[connection] = nil
-      asks[entry.ask]?.connections.remove(connection)
-    }
+    for id in asks.keys { dropLeft(of: id) }
     let at = now()
     for ask in openAsks {
-      if ask.connections.isEmpty {
-        end(ask.id, .left, admit: false, key: nil)
+      if ask.connections.isEmpty || !(tokens[ask.id].map(alive) ?? false) {
+        end(ask.id, .left, admit: false)
       } else if ask.deadline <= at {
         if let key = ask.key { quiet[key] = at.addingTimeInterval(Self.quietAfterRefusal) }
-        end(ask.id, .timeout, admit: false, key: nil)
+        end(ask.id, .timeout, admit: false)
       }
     }
     if asks.isEmpty { disarm() }
@@ -117,11 +141,21 @@ public final class ControlDoorbell {
 
   public func stop() {
     dispatchPrecondition(condition: .onQueue(queue))
-    for ask in openAsks { end(ask.id, .stopped, admit: false, key: nil) }
+    for ask in openAsks { end(ask.id, .stopped, admit: false) }
     for entry in waiting.values { Darwin.close(entry.fd) }
     waiting.removeAll()
     quiet.removeAll()
     disarm()
+  }
+
+  private func dropLeft(of id: Int) {
+    guard let ask = asks[id] else { return }
+    for connection in ask.connections {
+      guard let entry = waiting[connection], Self.peerLeft(entry.fd) else { continue }
+      Darwin.close(entry.fd)
+      waiting[connection] = nil
+      asks[id]?.connections.remove(connection)
+    }
   }
 
   private func arm() {
@@ -138,17 +172,29 @@ public final class ControlDoorbell {
     timer = nil
   }
 
-  private func end(_ id: Int, _ outcome: Outcome, admit: Bool, key: String?) {
+  private func end(_ id: Int, _ outcome: Outcome, admit: Bool, key: String? = nil, until: Date? = nil) {
     guard let ask = asks.removeValue(forKey: id) else { return }
+    tokens[id] = nil
+    var admitted = 0
     for connection in ask.connections.sorted() {
       guard let entry = waiting.removeValue(forKey: connection) else { continue }
-      if admit { open(connection, entry.fd, key) } else { Self.refuse(entry.fd, outcome) }
+      if !admit {
+        Self.refuse(entry.fd, outcome)
+      } else if open(connection, entry.fd, key, until) {
+        admitted += 1
+      } else {
+        Self.refuse(entry.fd, .full)
+      }
     }
-    _ = send("onPeerAskEnded", ["ask": id, "outcome": outcome.rawValue])
+    let reported: Outcome = admit && admitted == 0 ? .full : outcome
+    dismiss(id)
+    _ = send("onPeerAskEnded", ["ask": id, "outcome": reported.rawValue])
     if asks.isEmpty { disarm() }
   }
 
   public static func peerLeft(_ fd: Int32) -> Bool {
+    var probe = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+    if poll(&probe, 1, 0) > 0, probe.revents & Int16(POLLHUP | POLLERR | POLLNVAL) != 0 { return true }
     var byte: UInt8 = 0
     let got = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT)
     if got == 0 { return true }
@@ -161,7 +207,7 @@ public final class ControlDoorbell {
     case .deny, .quiet: return "You chose Don't Allow when Ardia asked whether this program may control it."
     case .timeout: return "Ardia asked whether this program may control it, and nobody answered in time."
     case .unshown: return "Ardia has to ask before this program may control it, and nobody can see the question (no Ardia window is on screen, or Ardia runs in the background)."
-    case .full: return "Too many programs are waiting for Ardia to let them in. Try again in a minute."
+    case .full: return "Too many programs are connected to Ardia or waiting to be let in. Try again in a minute."
     case .stopped: return "Control was turned off before anyone answered."
     default: return "Ardia didn't let this program control it."
     }

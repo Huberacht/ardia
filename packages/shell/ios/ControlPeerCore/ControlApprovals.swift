@@ -19,7 +19,9 @@ public struct ControlApproval: Codable, Equatable {
   }
 
   public init(peer: ControlPeer, key: String, added: Date, until: Date?) {
-    self.init(key: key, name: peer.name, signedBy: peer.signedBy, path: peer.path, added: added.timeIntervalSince1970, until: until?.timeIntervalSince1970)
+    self.init(
+      key: key, name: peer.name, signedBy: peer.signedBy, path: peer.path.map { ControlPeer.plain($0, limit: 1024) }, added: added.timeIntervalSince1970,
+      until: until?.timeIntervalSince1970)
   }
 
   public func live(at now: Date) -> Bool {
@@ -51,7 +53,7 @@ public final class ControlApprovals {
 
   public func load(now: Date = Date()) -> [ControlApproval] {
     problem = nil
-    let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    let fd = Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
     guard fd >= 0 else {
       if errno != ENOENT { problem = "Couldn't read \(Self.fileName) (\(String(cString: strerror(errno))))." }
       return []

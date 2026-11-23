@@ -72,7 +72,10 @@ public class DialogsModule: Module {
       let alert = DialogsModule.alert(title: options.title, message: options.message)
       for choice in options.choices { alert.addButton(withTitle: choice) }
       if options.noDefault { alert.buttons.first?.keyEquivalent = "" }
-      if let cancel = options.cancelChoice, alert.buttons.indices.contains(cancel) { alert.buttons[cancel].keyEquivalent = "\u{1b}" }
+      if let cancel = options.cancelChoice, alert.buttons.indices.contains(cancel) {
+        alert.buttons[cancel].keyEquivalent = "\u{1b}"
+        alert.window.initialFirstResponder = alert.buttons[cancel]
+      }
       let answer = { (response: NSApplication.ModalResponse) in
         DialogsModule.shownOnly.removeAll { $0.alert === alert }
         let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
@@ -122,6 +125,12 @@ public class DialogsModule: Module {
       if let current { panel.directoryURL = URL(fileURLWithPath: current, isDirectory: true) }
       panel.begin { response in promise.resolve(response == .OK ? panel.url?.path : nil) }
     }.runOnQueue(.main)
+  }
+
+  static func dismissShownOnly(key: String) {
+    for (window, alert, shownKey) in shownOnly where shownKey == key {
+      window.endSheet(alert.window, returnCode: .cancel)
+    }
   }
 
   static func alert(title: String, message: String) -> NSAlert {

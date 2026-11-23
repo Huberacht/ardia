@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-const { createDoorbell, doorbellOptions, answerFor, DOORBELL_CHOICES, startPeerDoorbell } = await import("./peerDoorbell.ts");
+const { createDoorbell, doorbellOptions, answerFor, DOORBELL_CHOICES, startPeerDoorbell, plainText } = await import("./peerDoorbell.ts");
 const { useControlApprovals, refreshControlApprovals, revokeApproval, approvalLine } = await import("./controlApprovals.ts");
 const { takeCliCounts } = await import("../telemetry/cliCounts.ts");
 const stub = await import("../../test-native/index.ts");
@@ -43,10 +43,10 @@ function harness() {
   return { doorbell, calls, pending };
 }
 
-test("the doorbell names the program, has no default button and Escape means Don't Allow", () => {
+test("the doorbell names the program beside who signed it, has no default button and Escape means Don't Allow", () => {
   const options = doorbellOptions(ask(1));
-  assert.equal(options.title, "Allow “tool” to control Ardia?");
-  assert.match(options.message, /Signed by X Inc \(XXXXXXXXXX\)\n\/opt\/tool/);
+  assert.equal(options.title, "A program wants to control Ardia");
+  assert.ok(options.message.startsWith("“tool”: Signed by X Inc (XXXXXXXXXX)\n/opt/tool\n\n"));
   assert.deepEqual(options.choices, ["Allow Once", "Allow for 30 Minutes", "Always Allow", "Don't Allow"]);
   assert.equal(options.cancelChoice, 3);
   assert.equal(options.noDefault, true);
@@ -55,6 +55,9 @@ test("the doorbell names the program, has no default button and Escape means Don
   assert.deepEqual(once.choices, ["Allow Once", "Don't Allow"]);
   assert.equal(once.cancelChoice, 1);
   assert.match(once.message, /only be allowed once/);
+  const spoof = doorbellOptions(ask(3, { name: "ard\u202eia\nOK", signedBy: "Not signed by an identified developer", path: "x".repeat(400) }));
+  assert.ok(spoof.message.startsWith("“ardiaOK”: Not signed by an identified developer\n"));
+  assert.equal([...plainText("x".repeat(400), 300)].length, 300);
 });
 
 test("a choice maps to the socket's answer; dismissal answers nothing", () => {
@@ -82,7 +85,7 @@ test("one doorbell at a time, in order, and each is answered once", async () => 
   assert.deepEqual(calls.answers, [[1, "always"]]);
   assert.equal(calls.shown, 1);
   assert.equal(calls.chosen.length, 2);
-  assert.equal(calls.chosen[1].title, "Allow “other” to control Ardia?");
+  assert.ok(calls.chosen[1].message.startsWith("“other”"));
   pending.shift()({ choice: 3 });
   await settle();
   assert.deepEqual(calls.answers, [[1, "always"], [2, "deny"]]);
@@ -131,7 +134,7 @@ test("wired up: the native ask reaches the dialog, the answer reaches the socket
   stub.controlPeers.chooseResult = { choice: 1 };
   stub.emitControlPeerAsk(ask(41));
   await settle();
-  assert.equal(stub.controlPeers.chosen.at(-1).title, "Allow “tool” to control Ardia?");
+  assert.equal(stub.controlPeers.chosen.at(-1).title, "A program wants to control Ardia");
   assert.deepEqual(stub.controlPeers.answers.at(-1), [41, "halfHour"]);
   stub.emitControlPeerAskEnded(41, "halfHour");
   stub.controlPeers.chooseResult = { choice: -1, unshown: true };

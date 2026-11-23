@@ -19,15 +19,20 @@ export const DOORBELL_CHOICES: Record<"remember" | "once", readonly (readonly [s
 
 const choicesFor = (ask: ControlPeerAsk) => DOORBELL_CHOICES[ask.remember ? "remember" : "once"];
 
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g;
+
+export function plainText(text: string, limit: number): string {
+  const kept = [...text.replace(CONTROLS, "")];
+  return kept.length > limit ? `${kept.slice(0, limit - 1).join("")}…` : kept.join("");
+}
+
 export function doorbellOptions(ask: ControlPeerAsk): Omit<ChooseOptions, "windowId" | "dismissKey"> {
   const choices = choicesFor(ask);
-  const lines = [
-    "It could open, read and change your tabs and pages, with your logins, as the ardia command can.",
-    [ask.signedBy, ask.path].filter(Boolean).join("\n"),
-  ];
+  const who = [`“${plainText(ask.name, 64)}”: ${plainText(ask.signedBy, 120)}`, plainText(ask.path, 300)].filter(Boolean).join("\n");
+  const lines = [who, "It could open, read and change your tabs and pages, with your logins, as the ardia command can."];
   if (!ask.remember) lines.push("Ardia can't recognize this program next time, so it can only be allowed once.");
   return {
-    title: `Allow “${ask.name}” to control Ardia?`,
+    title: "A program wants to control Ardia",
     message: lines.join("\n\n"),
     choices: choices.map(([title]) => title),
     cancelChoice: choices.length - 1,

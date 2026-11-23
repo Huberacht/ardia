@@ -86,6 +86,13 @@ final class ControlPeerTests: XCTestCase {
     XCTAssertEqual(ControlPeerPolicy(ownTeam: "U5L5T3NGVV", sameUserIsEnough: true).verdict(unsigned, approvals: [], now: now), .sameUser)
   }
 
+  func testDisplayTextIsPlainAndBounded() {
+    XCTAssertEqual(ControlPeer.plain("ar\u{202E}dia\n\u{0007}x", limit: 64), "ardiax")
+    XCTAssertEqual(ControlPeer.plain(String(repeating: "a", count: 100), limit: 10).count, 10)
+    let spoof = ControlPeer(pid: 1, path: "/tmp/\u{202E}ardia", identifier: nil, signer: .other, developer: nil, cdhash: nil, hardened: false)
+    XCTAssertEqual(spoof.name, "ardia")
+  }
+
   func testDeveloperName() {
     XCTAssertEqual(ControlPeer.developerName("Developer ID Application: mantra patel (U5L5T3NGVV)"), "mantra patel")
     XCTAssertEqual(ControlPeer.developerName("Apple Development: A (B) (TEAM123456)"), "A (B)")

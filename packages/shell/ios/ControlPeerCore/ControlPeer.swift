@@ -46,16 +46,16 @@ public struct ControlPeer: Equatable {
   }
 
   public var name: String {
-    if let bundleName, !bundleName.isEmpty { return bundleName }
-    if let path { return (path as NSString).lastPathComponent }
-    if let identifier { return identifier }
+    if let bundleName, !bundleName.isEmpty { return Self.plain(bundleName, limit: 64) }
+    if let path { return Self.plain((path as NSString).lastPathComponent, limit: 64) }
+    if let identifier { return Self.plain(identifier, limit: 64) }
     return "An unknown program"
   }
 
   public var signedBy: String {
     switch signer {
     case let .team(team):
-      if let developer, !developer.isEmpty { return "Signed by \(developer) (\(team))" }
+      if let developer, !developer.isEmpty { return "Signed by \(Self.plain(developer, limit: 80)) (\(team))" }
       return "Signed by developer team \(team)"
     case .apple:
       return "Part of macOS, signed by Apple"
@@ -75,6 +75,22 @@ public struct ControlPeer: Equatable {
 
   public static func pid(of token: audit_token_t) -> pid_t {
     pid_t(bitPattern: token.val.5)
+  }
+
+  public static func process(of token: audit_token_t) -> String {
+    "\(token.val.5):\(token.val.7)"
+  }
+
+  public static func alive(_ token: audit_token_t) -> Bool {
+    var copy = token
+    let tokenData = withUnsafeBytes(of: &copy) { Data($0) } as CFData
+    var code: SecCode?
+    return SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributeAudit: tokenData] as CFDictionary, [], &code) == errSecSuccess && code != nil
+  }
+
+  public static func plain(_ text: String, limit: Int) -> String {
+    let kept = String(String.UnicodeScalarView(text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !CharacterSet.illegalCharacters.contains($0) && $0.properties.generalCategory != .format }))
+    return kept.count > limit ? String(kept.prefix(limit - 1)) + "…" : kept
   }
 
   public static func resolve(_ token: audit_token_t) -> ControlPeer {
@@ -104,7 +120,7 @@ public struct ControlPeer: Equatable {
     let info = (information as? [String: Any]) ?? [:]
     let path = (info[kSecCodeInfoMainExecutable as String] as? URL)?.path ?? pathOf(staticCode)
     let identifier = info[kSecCodeInfoIdentifier as String] as? String
-    let cdhash = (info[kSecCodeInfoUnique as String] as? Data).map(hex)
+    let declaredHash = (info[kSecCodeInfoUnique as String] as? Data).map(hex)
     let codeFlags = (info[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
     let team = info[kSecCodeInfoTeamIdentifier as String] as? String
     let plist = info[kSecCodeInfoPList as String] as? [String: Any]
@@ -118,6 +134,7 @@ public struct ControlPeer: Equatable {
     } else {
       signer = .other
     }
+    let cdhash = declaredHash.flatMap { satisfies(code, "cdhash H\"\($0)\"") ? $0 : nil }
     let developer: String? = {
       guard case .team = signer, let leaf = certificates?.first, let summary = SecCertificateCopySubjectSummary(leaf) as String? else { return nil }
       return developerName(summary)

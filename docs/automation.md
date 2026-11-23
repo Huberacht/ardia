@@ -23,20 +23,32 @@ Issue #717. Config files and themes are `docs/config.md`; page scripting over CD
   a reused pid can't stand in for it: a token whose process has gone resolves to nothing) and resolves its code with
   Security.framework off the socket queue (`ControlPeerCore/ControlPeer.swift`): Team ID, signing identifier, path,
   cdhash, hardened runtime, and whether the signature is valid against an Apple anchor. A hardened program signed with
-  Ardia's own Team ID (the bundled `ardia` and its runtime, signed by the release's `sign` job) is the owner, as before.
-  Any other program waits, unread, while Ardia rings a **doorbell**: a sheet on the last focused window, "Allow “name”
-  to control Ardia?", naming who signed it and its path, with Allow Once, Allow for 30 Minutes, Always Allow and Don't
-  Allow (Return does nothing and Escape is Don't Allow, so a keystroke meant for a page never lets a program in).
+  Ardia's own Team ID (the bundled `ardia` and its runtime, and any other code Ardia ships, all signed by the release's
+  `sign` job) is the owner, as before. Any other program waits, unread, while Ardia rings a **doorbell**: a sheet on
+  the last focused window, "A program wants to control Ardia", with the program's name right beside who signed it
+  ("Not signed by an identified developer" for anything else) and its path, control and direction characters stripped
+  and lengths bounded, so a program can't pass itself off as `ardia` in the headline. Its buttons are Allow Once, Allow
+  for 30 Minutes, Always Allow and Don't Allow; Return does nothing, Escape and the initial keyboard focus are Don't
+  Allow, so a keystroke meant for a page never lets a program in.
   Approvals are keyed by Team ID + identifier for a program signed by an identified developer, `apple:` + identifier
-  for one of macOS's own, and path + cdhash for anything else; a program with no cdhash can only be allowed once.
+  for one of macOS's own, and path + cdhash for anything else. That cdhash is checked against the running process
+  (a `cdhash H"…"` requirement on the dynamic code), so a file swapped on disk can't borrow an approval; a program whose
+  running code doesn't validate has no cdhash and can only be allowed once.
   They live in `<data dir>/ArdiaControlApprovals.json` (0600, read only if it's a private regular file of the user's,
   written by an `O_EXCL` temp file and a rename), are listed in Settings › Advanced › Command line and automation ›
   Programs you let in, and removing one there closes its open connections; a 30-minute one also closes them when it
-  runs out. One doorbell shows at a time; connections from the same program share it. A waiting connection is
+  runs out, at the approval's own end time. One doorbell shows at a time. Connections share one only when they come
+  from the same process (pid and pid version from the audit token) with the same identity; another process gets its
+  own, and choosing Allow for 30 Minutes or Always Allow then lets in every waiting process with the same key. An
+  answer counts only while the ask is live: a click after its deadline, or after the process has gone (its audit token
+  no longer resolves, or its socket hung up even with a request still buffered), lets nothing in and saves nothing,
+  and nothing is saved when there's no room for a new connection. A waiting connection is
   refused (a `{"id": null, "error": {"code": "refused", …}}` line, then close) when you choose Don't Allow, after 60 s,
   when nobody can see the question (no window on screen, or a background instance), or when control goes off; it's
   dropped without a word if the program leaves. After Don't Allow or a timeout the same program is refused without
-  asking for 30 s. At most 8 connections wait and 8 resolve at once.
+  asking for 30 s. At most 8 connections wait and 8 identity look-ups run at once (counted until each look-up returns,
+  across stop and start); one that takes over 10 s is refused. When the JS bridge changes (a reload), its open asks
+  end and Ardia takes their sheets away natively.
   What it doesn't stop: a process of the user's can still run the bundled `ardia` (or its signed runtime) itself and
   get in as it does, and can still read `ArdiaControl.json` for the token connection (`docs/cli.md`). The doorbell is
   so a program never drives Ardia without the user seeing its name, not a wall against malware running as the user.

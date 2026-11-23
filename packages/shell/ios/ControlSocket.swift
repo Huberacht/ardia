@@ -11,6 +11,8 @@ final class ControlSocket {
   static let maxPathBytes = 103
   static let acceptsPerCallback = 8
   static let maxResolving = 8
+  static let resolveDeadline: TimeInterval = 10
+  static let doorbellKey = "peer-doorbell-"
 
   typealias Sink = (_ name: String, _ body: [String: Any]) -> Void
 
@@ -28,9 +30,13 @@ final class ControlSocket {
   private var resolving: [Int: Int32] = [:]
   private var approvalKeys: [Int: String] = [:]
   private let resolver = DispatchQueue(label: "ardia.control.peers", qos: .userInitiated, attributes: .concurrent)
+  private var resolverJobs = 0
+  private var expiries: [String: DispatchWorkItem] = [:]
   private lazy var doorbell = ControlDoorbell(
     queue: queue,
-    open: { [weak self] connection, fd, key in self?.open(connection, fd: fd, key: key) },
+    capacity: { [weak self] in self.map { Self.maxConnections - $0.connections.count } ?? 0 },
+    dismiss: { id in DispatchQueue.main.async { DialogsModule.dismissShownOnly(key: "\(Self.doorbellKey)\(id)") } },
+    open: { [weak self] connection, fd, key, until in self?.open(connection, fd: fd, key: key, until: until) ?? false },
     send: { [weak self] name, body in
       guard let sink = self?.sink else { return false }
       sink.send(name, body)
@@ -42,7 +48,10 @@ final class ControlSocket {
 
   func attach(_ owner: AnyObject, send: @escaping Sink) {
     let id = ObjectIdentifier(owner)
-    queue.sync { sink = (id, send) }
+    queue.sync {
+      if let previous = sink, previous.owner != id { doorbell.stop() }
+      sink = (id, send)
+    }
     if quitObserver == nil {
       quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
         self?.queue.sync { self?.stopOnQueue() }
@@ -127,13 +136,21 @@ final class ControlSocket {
     }
   }
 
-  private func expireLater(_ key: String) {
-    queue.asyncAfter(deadline: .now() + ControlPeerDecision.halfHourSeconds + 1) { [weak self] in
-      guard let self, let store = self.approvalStore() else { return }
+  private func expire(_ key: String, at until: Date) {
+    guard expiries[key] == nil else { return }
+    let item = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.expiries[key] = nil
       let now = Date()
-      guard !store.load(now: now).contains(where: { $0.key == key && $0.live(at: now) }) else { return }
+      let live = self.approvalStore()?.load(now: now).first { $0.key == key && $0.live(at: now) }
+      if let live {
+        if let later = live.until { self.expire(key, at: Date(timeIntervalSince1970: later)) }
+        return
+      }
       self.retireApproved { $0 == key }
     }
+    expiries[key] = item
+    queue.asyncAfter(deadline: .now() + max(0, until.timeIntervalSinceNow) + 0.5, execute: item)
   }
 
   private static let decidePrefix = Data("{\"decide\":".utf8)
@@ -227,6 +244,8 @@ final class ControlSocket {
     connections.removeAll()
     peerFinished.removeAll()
     approvalKeys.removeAll()
+    for item in expiries.values { item.cancel() }
+    expiries.removeAll()
     for fd in resolving.values { Darwin.close(fd) }
     resolving.removeAll()
     doorbell.stop()
@@ -247,7 +266,7 @@ final class ControlSocket {
       if fd < 0 { return }
       var uid: uid_t = 0
       var gid: gid_t = 0
-      guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid(), connections.count < Self.maxConnections, resolving.count < Self.maxResolving,
+      guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid(), connections.count < Self.maxConnections, resolverJobs < Self.maxResolving,
         let token = ControlPeer.auditToken(of: fd)
       else {
         Darwin.close(fd)
@@ -257,35 +276,47 @@ final class ControlSocket {
       nextConnection += 1
       let id = nextConnection
       if policy.sameUserIsEnough {
-        open(id, fd: fd, key: nil)
+        _ = open(id, fd: fd, key: nil, until: nil)
         continue
       }
       resolving[id] = fd
+      resolverJobs += 1
       let generation = generation
       resolver.async { [weak self] in
         let peer = ControlPeer.resolve(token)
-        self?.queue.async { self?.resolved(id, peer, generation) }
+        self?.queue.async {
+          self?.resolverJobs -= 1
+          self?.resolved(id, peer, token, generation)
+        }
+      }
+      queue.asyncAfter(deadline: .now() + Self.resolveDeadline) { [weak self] in
+        guard let fd = self?.resolving.removeValue(forKey: id) else { return }
+        NSLog("[control] gave up on identifying a program after %.0f s", Self.resolveDeadline)
+        ControlDoorbell.refuse(fd, .full)
       }
     }
   }
 
-  private func resolved(_ id: Int, _ peer: ControlPeer, _ generation: Int) {
+  private func resolved(_ id: Int, _ peer: ControlPeer, _ token: audit_token_t, _ generation: Int) {
     guard let fd = resolving.removeValue(forKey: id) else { return }
     guard bound != nil, generation == self.generation else { return Darwin.close(fd) }
     let store = approvalStore()
-    switch policy.verdict(peer, approvals: store?.load() ?? [], now: Date()) {
+    let now = Date()
+    let approvals = store?.load(now: now) ?? []
+    switch policy.verdict(peer, approvals: approvals, now: now) {
     case .ardia, .sameUser:
-      open(id, fd: fd, key: nil)
+      if !open(id, fd: fd, key: nil, until: nil) { ControlDoorbell.refuse(fd, .full) }
     case let .approved(key):
-      open(id, fd: fd, key: key)
+      let until = approvals.first { $0.key == key }?.until.map { Date(timeIntervalSince1970: $0) }
+      if !open(id, fd: fd, key: key, until: until) { ControlDoorbell.refuse(fd, .full) }
     case let .ask(key):
       NSLog("[control] asking whether %@ (%@) may control Ardia", peer.name, peer.signedBy)
-      doorbell.ring(connection: id, fd: fd, peer: peer, key: key)
+      doorbell.ring(connection: id, fd: fd, peer: peer, key: key, token: token)
     }
   }
 
-  private func open(_ id: Int, fd: Int32, key: String?) {
-    guard bound != nil, connections.count < Self.maxConnections else { return Darwin.close(fd) }
+  private func open(_ id: Int, fd: Int32, key: String?, until: Date?) -> Bool {
+    guard bound != nil, connections.count < Self.maxConnections else { return false }
     let generation = generation
     let connection = ControlConnection(
       id: id, fd: fd, queue: queue,
@@ -306,9 +337,10 @@ final class ControlSocket {
     connections[id] = connection
     if let key {
       approvalKeys[id] = key
-      if let approval = approvalStore()?.load().first(where: { $0.key == key }), approval.until != nil { expireLater(key) }
+      if let until { expire(key, at: until) }
     }
     connection.open()
+    return true
   }
 
   private static func prepare(_ fd: Int32) {

@@ -7,6 +7,10 @@ final class ControlDoorbellTests: XCTestCase {
   private let queue = DispatchQueue(label: "doorbell-tests")
   private var clock = Date(timeIntervalSince1970: 5_000_000)
   private var opened: [(Int, Int32, String?)] = []
+  private var untils: [Date?] = []
+  private var aliveNow = true
+  private var room = Int.max
+  private var dismissed: [Int] = []
   private var events: [(String, [String: Any])] = []
   private var listening = true
   private var clients: [Int32] = []
@@ -26,7 +30,12 @@ final class ControlDoorbellTests: XCTestCase {
   private func doorbell(deadline: TimeInterval = 60, tick: TimeInterval = 3600) -> ControlDoorbell {
     ControlDoorbell(
       queue: queue, deadline: deadline, tick: tick, now: { [unowned self] in self.clock },
-      open: { [unowned self] connection, fd, key in self.opened.append((connection, fd, key)) },
+      capacity: { [unowned self] in self.room }, alive: { [unowned self] _ in self.aliveNow }, dismiss: { [unowned self] in self.dismissed.append($0) },
+      open: { [unowned self] connection, fd, key, until in
+        self.opened.append((connection, fd, key))
+        self.untils.append(until)
+        return true
+      },
       send: { [unowned self] name, body in
         guard self.listening else { return false }
         self.events.append((name, body))
@@ -49,14 +58,21 @@ final class ControlDoorbellTests: XCTestCase {
     return (object["error"] as? [String: Any])?["code"] as? String
   }
 
+  private func token(_ pid: UInt32, _ version: UInt32 = 1) -> audit_token_t {
+    var token = audit_token_t()
+    token.val.5 = pid
+    token.val.7 = version
+    return token
+  }
+
   private let tool = ControlPeer(pid: 9, path: "/opt/tool", identifier: "com.x.tool", signer: .team("XXXXXXXXXX"), developer: "X Inc", cdhash: "cc", hardened: true)
 
   func testAllowOnceOpensEveryConnectionOfTheAskWithoutRemembering() {
     let bell = doorbell()
     let a = pair(), b = pair()
     queue.sync {
-      bell.ring(connection: 1, fd: a, peer: tool, key: tool.approvalKey)
-      bell.ring(connection: 2, fd: b, peer: tool, key: tool.approvalKey)
+      bell.ring(connection: 1, fd: a, peer: tool, key: tool.approvalKey, token: token(9))
+      bell.ring(connection: 2, fd: b, peer: tool, key: tool.approvalKey, token: token(9))
     }
     XCTAssertEqual(events.map(\.0), ["onPeerAsk"])
     XCTAssertEqual(events[0].1["name"] as? String, "tool")
@@ -74,13 +90,14 @@ final class ControlDoorbellTests: XCTestCase {
   func testAlwaysAndHalfHourAreSavedAndKeyed() {
     let store = ControlApprovals(directory: scratch.path)
     let bell = doorbell()
-    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey) }
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
     XCTAssertTrue(queue.sync { bell.answer(events[0].1["ask"] as! Int, .halfHour, approvals: store) })
     XCTAssertEqual(opened.map(\.2), [tool.approvalKey])
+    XCTAssertEqual(untils.first??.timeIntervalSince1970, clock.timeIntervalSince1970 + 1800)
     let saved = store.load(now: clock)
     XCTAssertEqual(saved.map(\.key), [tool.approvalKey!])
     XCTAssertEqual(saved.first?.until, clock.timeIntervalSince1970 + 1800)
-    queue.sync { bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey) }
+    queue.sync { bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
     XCTAssertTrue(queue.sync { bell.answer(events.last!.1["ask"] as! Int, .always, approvals: store) })
     XCTAssertNil(store.load(now: clock.addingTimeInterval(1_000_000)).first?.until)
   }
@@ -88,7 +105,7 @@ final class ControlDoorbellTests: XCTestCase {
   func testAnUnrememberablePeerIsOpenedOnceEvenForAlways() {
     let bell = doorbell()
     let unsigned = ControlPeer(pid: 3, path: "/c/tool", identifier: nil, signer: .other, developer: nil, cdhash: nil, hardened: false)
-    queue.sync { bell.ring(connection: 1, fd: pair(), peer: unsigned, key: nil) }
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: unsigned, key: nil, token: token(9)) }
     XCTAssertEqual(events[0].1["remember"] as? Bool, false)
     XCTAssertTrue(queue.sync { bell.answer(events[0].1["ask"] as! Int, .always, approvals: ControlApprovals(directory: scratch.path)) })
     XCTAssertEqual(opened.map(\.2), [nil])
@@ -99,15 +116,15 @@ final class ControlDoorbellTests: XCTestCase {
     let bell = doorbell()
     let fd = pair()
     let client = clients.last!
-    queue.sync { bell.ring(connection: 1, fd: fd, peer: tool, key: tool.approvalKey) }
+    queue.sync { bell.ring(connection: 1, fd: fd, peer: tool, key: tool.approvalKey, token: token(9)) }
     XCTAssertTrue(queue.sync { bell.answer(events[0].1["ask"] as! Int, .deny, approvals: nil) })
     XCTAssertEqual(refusal(client), "refused")
     XCTAssertTrue(opened.isEmpty)
-    queue.sync { bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey) }
+    queue.sync { bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
     XCTAssertEqual(refusal(clients.last!), "refused")
     XCTAssertEqual(events.filter { $0.0 == "onPeerAsk" }.count, 1)
     clock = clock.addingTimeInterval(ControlDoorbell.quietAfterRefusal + 1)
-    queue.sync { bell.ring(connection: 3, fd: pair(), peer: tool, key: tool.approvalKey) }
+    queue.sync { bell.ring(connection: 3, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
     XCTAssertEqual(events.filter { $0.0 == "onPeerAsk" }.count, 2)
   }
 
@@ -117,8 +134,8 @@ final class ControlDoorbellTests: XCTestCase {
     let leftClient = clients.last!
     let other = ControlPeer(pid: 4, path: "/d/other", identifier: "com.y.other", signer: .team("YYYYYYYYYY"), developer: nil, cdhash: "dd", hardened: true)
     queue.sync {
-      bell.ring(connection: 1, fd: left, peer: tool, key: tool.approvalKey)
-      bell.ring(connection: 2, fd: pair(), peer: other, key: other.approvalKey)
+      bell.ring(connection: 1, fd: left, peer: tool, key: tool.approvalKey, token: token(9))
+      bell.ring(connection: 2, fd: pair(), peer: other, key: other.approvalKey, token: token(9))
     }
     let waitingClient = clients.last!
     close(leftClient)
@@ -136,12 +153,12 @@ final class ControlDoorbellTests: XCTestCase {
   func testNobodyListeningAndTooManyWaitingAreRefused() {
     listening = false
     let bell = doorbell()
-    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey) }
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
     XCTAssertEqual(refusal(clients.last!), "refused")
     listening = true
     queue.sync {
-      for n in 0..<ControlDoorbell.maxWaiting { bell.ring(connection: 10 + n, fd: pair(), peer: tool, key: nil) }
-      bell.ring(connection: 99, fd: pair(), peer: tool, key: nil)
+      for n in 0..<ControlDoorbell.maxWaiting { bell.ring(connection: 10 + n, fd: pair(), peer: tool, key: nil, token: token(UInt32(100 + n))) }
+      bell.ring(connection: 99, fd: pair(), peer: tool, key: nil, token: token(99))
     }
     XCTAssertEqual(refusal(clients.last!), "refused")
     XCTAssertEqual(queue.sync { bell.waitingCount }, ControlDoorbell.maxWaiting)
@@ -153,17 +170,86 @@ final class ControlDoorbellTests: XCTestCase {
 
   func testTimerEndsAnUnansweredAsk() {
     let bell = ControlDoorbell(
-      queue: queue, deadline: 0.2, tick: 0.05,
-      open: { _, _, _ in XCTFail("nothing opens") },
+      queue: queue, deadline: 0.2, tick: 0.05, alive: { _ in true },
+      open: { _, _, _, _ in
+        XCTFail("nothing opens")
+        return false
+      },
       send: { [unowned self] name, body in
         self.events.append((name, body))
         return true
       })
     let ended = expectation(description: "ended")
-    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: nil) }
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: nil, token: token(9)) }
     queue.asyncAfter(deadline: .now() + 0.6) {
       if self.events.contains(where: { $0.0 == "onPeerAskEnded" && $0.1["outcome"] as? String == "timeout" }) { ended.fulfill() }
     }
     wait(for: [ended], timeout: 2)
+  }
+
+  func testAClickAfterTheDeadlineSavesNothing() {
+    let store = ControlApprovals(directory: scratch.path)
+    let bell = doorbell(deadline: 10)
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
+    clock = clock.addingTimeInterval(11)
+    XCTAssertFalse(queue.sync { bell.answer(events[0].1["ask"] as! Int, .always, approvals: store) })
+    XCTAssertEqual(store.load(now: clock), [])
+    XCTAssertTrue(opened.isEmpty)
+    XCTAssertEqual(refusal(clients.last!), "refused")
+    XCTAssertEqual(events.last?.1["outcome"] as? String, "timeout")
+  }
+
+  func testAnotherProcessWithTheSameKeyGetsItsOwnAskAndAGrantLetsItIn() {
+    let store = ControlApprovals(directory: scratch.path)
+    let bell = doorbell()
+    queue.sync {
+      bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9))
+      bell.ring(connection: 2, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9, 2))
+    }
+    XCTAssertEqual(events.filter { $0.0 == "onPeerAsk" }.count, 2)
+    XCTAssertTrue(queue.sync { bell.answer(events[0].1["ask"] as! Int, .once, approvals: store) })
+    XCTAssertEqual(opened.map(\.0), [1])
+    XCTAssertEqual(queue.sync { bell.waitingCount }, 1)
+    XCTAssertTrue(queue.sync { bell.answer(events.first { $0.0 == "onPeerAsk" && $0.1["ask"] as? Int == 2 }!.1["ask"] as! Int, .always, approvals: store) })
+    XCTAssertEqual(opened.map(\.0), [1, 2])
+    queue.sync {
+      bell.ring(connection: 3, fd: pair(), peer: tool, key: tool.approvalKey, token: token(11))
+      bell.ring(connection: 4, fd: pair(), peer: tool, key: tool.approvalKey, token: token(12))
+    }
+    let third = events.filter { $0.0 == "onPeerAsk" }.map { $0.1["ask"] as! Int }[2]
+    XCTAssertTrue(queue.sync { bell.answer(third, .halfHour, approvals: store) })
+    XCTAssertEqual(opened.map(\.0), [1, 2, 3, 4])
+    XCTAssertEqual(dismissed.count, 4)
+  }
+
+  func testAGonePeerIsNotLetInByALateClick() {
+    let bell = doorbell()
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
+    aliveNow = false
+    XCTAssertFalse(queue.sync { bell.answer(events[0].1["ask"] as! Int, .once, approvals: nil) })
+    XCTAssertTrue(opened.isEmpty)
+    XCTAssertEqual(events.last?.1["outcome"] as? String, "left")
+  }
+
+  func testNoRoomMeansNoGrantIsSaved() {
+    let store = ControlApprovals(directory: scratch.path)
+    let bell = doorbell()
+    queue.sync { bell.ring(connection: 1, fd: pair(), peer: tool, key: tool.approvalKey, token: token(9)) }
+    room = 0
+    XCTAssertFalse(queue.sync { bell.answer(events[0].1["ask"] as! Int, .always, approvals: store) })
+    XCTAssertEqual(store.load(now: clock), [])
+    XCTAssertEqual(refusal(clients.last!), "refused")
+    XCTAssertEqual(events.last?.1["outcome"] as? String, "full")
+  }
+
+  func testAPeerThatWroteThenClosedCountsAsGone() {
+    let fd = pair()
+    let client = clients.last!
+    _ = "{\"id\":1}\n".withCString { send(client, $0, 9, 0) }
+    XCTAssertFalse(ControlDoorbell.peerLeft(fd))
+    close(client)
+    clients.removeAll { $0 == client }
+    XCTAssertTrue(ControlDoorbell.peerLeft(fd))
+    close(fd)
   }
 }
