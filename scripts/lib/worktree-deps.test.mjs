@@ -17,7 +17,7 @@ import {
   normalizeLockfile,
   planLinks,
   pruneCaches,
-  currentPathOf,
+  markerState,
   removeTree,
   runtimeOf,
   setupWorktree,
@@ -433,7 +433,88 @@ test("a git worktree's claim follows it through git worktree move, even when ano
   assert.ok(fs.existsSync(path.join(moved, "node_modules", "react", "index.js")));
   assert.ok(fs.existsSync(path.join(place, "node_modules", "react", "index.js")));
   const records = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
-  assert.deepEqual(records.map(currentPathOf).sort(), [fs.realpathSync(moved), fs.realpathSync(place)].sort());
+  assert.equal(records.length, 2);
+  for (const record of records) assert.ok(fs.existsSync(record.gitDir), "each record names its worktree's own git dir");
+});
+
+const gitIn = (cwd, ...args) => spawnSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", ...args], { encoding: "utf8" });
+function gitRepo(dir) {
+  const scratch = makeWorktree();
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "patches"]) fs.cpSync(path.join(scratch, name), path.join(dir, name), { recursive: true });
+  gitIn(dir, "init", "-q");
+  gitIn(dir, "add", ".");
+  gitIn(dir, "commit", "-q", "-m", "init");
+  return dir;
+}
+const LATER = () => Date.now() + 10 * 24 * 60 * 60 * 1000;
+
+test("a git worktree moved while prune runs keeps its cache", (t) => {
+  const { cacheRoot, setup } = harness();
+  const repo = gitRepo(fresh("repo"));
+  const place = path.join(fresh("wt"), "place");
+  gitIn(repo, "worktree", "add", "-q", place);
+  setup(place);
+  const moved = path.join(path.dirname(place), "moved");
+  const realRead = fs.readFileSync;
+  let done = false;
+  t.mock.method(fs, "readFileSync", (file, ...rest) => {
+    const out = realRead(file, ...rest);
+    if (!done && String(file).includes(`${USERS_DIR}${path.sep}`)) {
+      done = true;
+      assert.equal(gitIn(repo, "worktree", "move", place, moved).status, 0);
+    }
+    return out;
+  });
+  assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), []);
+  t.mock.restoreAll();
+  assert.ok(done);
+  assert.ok(fs.existsSync(path.join(moved, "node_modules", "react", "index.js")));
+});
+
+test("a submodule and a --separate-git-dir checkout keep their caches while their git dirs exist", () => {
+  const { cacheRoot, setup } = harness();
+  const superproject = gitRepo(fresh("super"));
+  const source = gitRepo(fresh("module-source"));
+  write(path.join(source, "patches", "left-pad@1.0.0.patch"), "module patch\n");
+  gitIn(source, "commit", "-qam", "module");
+  assert.equal(gitIn(superproject, "submodule", "add", "-q", source, "mod").status, 0);
+  const submodule = path.join(superproject, "mod");
+  const separate = fresh("separate");
+  const separateGit = `${separate}.git`;
+  fs.mkdirSync(separate);
+  for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]) fs.cpSync(path.join(superproject, name), path.join(separate, name));
+  write(path.join(separate, "patches", "left-pad@1.0.0.patch"), "separate patch\n");
+  assert.equal(gitIn(root, "init", "-q", "--separate-git-dir", separateGit, separate).status, 0);
+  const keys = [setup(submodule).key, setup(separate).key];
+  assert.equal(new Set(keys).size, 2);
+  assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), []);
+  for (const dir of [submodule, separate]) assert.ok(fs.existsSync(path.join(dir, "node_modules", "react", "index.js")), dir);
+  removeTree(separateGit);
+  removeTree(separate);
+  assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), [path.join(cacheRoot, keys[1])], "proven dead once its git dir and checkout are gone");
+});
+
+test("prune keeps a cache whose claim it can't judge and stops on a record it can't read", () => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  const { key } = setup(worktree);
+  fs.writeFileSync(path.join(worktree, "node_modules", MARKER), "{ not json");
+  assert.deepEqual(markerState(worktree), { unknown: true });
+  assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), []);
+  assert.deepEqual(markerState(fresh("nowhere")), { absent: true });
+  write(path.join(cacheRoot, USERS_DIR, "broken.json"), "{");
+  assert.throws(() => pruneCaches({ cacheRoot, now: LATER(), log: quiet }), /pruned nothing/);
+  assert.ok(fs.existsSync(path.join(cacheRoot, key, CACHE_STAMP)));
+});
+
+test("a checkout whose path ends in a space is set up as a git worktree", () => {
+  const { cacheRoot, setup } = harness();
+  const repo = gitRepo(path.join(fresh("spaced"), "repo "));
+  setup(repo);
+  const [record] = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
+  assert.equal(record.gitDir, path.join(fs.realpathSync(repo), ".git"));
+  assert.ok(fs.existsSync(path.join(repo, "node_modules", "react", "index.js")));
 });
 
 test("a scratch export is recorded by its path", () => {
@@ -442,7 +523,8 @@ test("a scratch export is recorded by its path", () => {
   setup(exported);
   const [record] = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
   assert.equal(record.gitDir, null);
-  assert.equal(currentPathOf(record), exported);
+  assert.equal(record.worktree, exported);
+  assert.equal(record.id, `path:${exported}`);
 });
 
 test("raw patch bytes key and stage exactly", () => {

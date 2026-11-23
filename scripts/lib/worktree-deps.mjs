@@ -50,8 +50,10 @@ What it does to <worktree>:
 
 --status   says which tree the worktree uses and whether it still matches its install inputs.
 --undo     removes the links, the guard, the marker and the worktree's record; the dependency tree is left alone.
---prune    deletes cached trees unused for --older-than days (default 7) unless a recorded worktree's marker still
-           names them. A scratch export (no git dir of its own) that moved must run setup again from its new path.
+--prune    deletes a cached tree unused for --older-than days (default 7) only when every claim on it is provably
+           dead: a git worktree's claims last while its git dir exists (moves, submodules and separate git dirs
+           included); anything else's while its path holds a marker naming the tree. An unreadable marker keeps the
+           tree, an unreadable record stops the prune. A scratch export that moved must run setup again.
 --replace  lets setup replace a worktree's own node_modules (a real install or a whole-folder link), e.g. to link
            again after --undo and a real pnpm install.
 `;
@@ -338,7 +340,7 @@ export function withKernelLock(lockFile, action, { waitSeconds = 300 } = {}) {
 function excludeFromGit(worktree, names) {
   const result = spawnSync("git", ["-C", worktree, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8" });
   if (result.status !== 0) return null;
-  const file = path.resolve(worktree, result.stdout.trim());
+  const file = path.resolve(worktree, gitLine(result.stdout));
   withKernelLock(path.join(path.dirname(file), "exclude.worktree-setup.lock"), () => {
     const current = readIfExists(file) ?? "";
     const lines = new Set(current.split(/\r?\n/));
@@ -434,19 +436,14 @@ function readJson(file) {
   }
 }
 
+export const gitLine = (output) => output.replace(/\r?\n$/, "");
+
 export function identityOf(worktree) {
   const git = (...args) => spawnSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", ...args], { encoding: "utf8" });
   const top = git("--show-toplevel");
   const gitDir = git("--git-dir");
-  if (top.status === 0 && gitDir.status === 0 && fs.realpathSync(top.stdout.trim()) === worktree) return { id: `git:${gitDir.stdout.trim()}`, gitDir: gitDir.stdout.trim() };
+  if (top.status === 0 && gitDir.status === 0 && fs.realpathSync(gitLine(top.stdout)) === worktree) return { id: `git:${gitLine(gitDir.stdout)}`, gitDir: gitLine(gitDir.stdout) };
   return { id: `path:${worktree}`, gitDir: null };
-}
-
-export function currentPathOf(record) {
-  if (!record.gitDir) return record.worktree;
-  const pointer = readIfExists(path.join(record.gitDir, "gitdir"));
-  if (pointer !== null) return path.dirname(path.resolve(record.gitDir, pointer.trim()));
-  return path.basename(record.gitDir) === ".git" && fs.existsSync(record.gitDir) ? path.dirname(record.gitDir) : null;
 }
 
 const recordFile = (cacheRoot, identity) => path.join(cacheRoot, USERS_DIR, `${createHash("sha256").update(identity.id).digest("hex").slice(0, 16)}.json`);
@@ -494,7 +491,7 @@ export function setupWorktree(worktreeArg, options = {}) {
   const inputs = installInputs(worktree, runtime);
   const key = dependencyKey(inputs);
   const previous = markerOf(worktree);
-  if (previous === null && !options.replace) prepareTarget(worktree, inputs.projects, null, false);
+  if (previous === null) prepareTarget(worktree, inputs.projects, null, options.replace ?? false);
 
   fs.mkdirSync(cacheRoot, { recursive: true });
   dropNeverIndex(cacheRoot);
@@ -562,9 +559,28 @@ export function worktreeStatus(worktreeArg, { runtime = runtimeOf() } = {}) {
   return { linked: true, worktree, marker, key, problems };
 }
 
-function namedKey(dir) {
-  const marker = dir ? markerOf(dir) : null;
-  return marker?.key && marker.root && path.basename(marker.root) === marker.key ? marker.key : null;
+const missing = (file) => {
+  try {
+    fs.lstatSync(file);
+    return false;
+  } catch (error) {
+    return error.code === "ENOENT" || error.code === "ENOTDIR";
+  }
+};
+
+export function markerState(dir) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dir, "node_modules", MARKER), "utf8");
+  } catch (error) {
+    return error.code === "ENOENT" || error.code === "ENOTDIR" ? { absent: true } : { unknown: true };
+  }
+  try {
+    const marker = JSON.parse(text);
+    return { key: marker.key && marker.root && path.basename(marker.root) === marker.key ? marker.key : null };
+  } catch {
+    return { unknown: true };
+  }
 }
 
 export function liveKeys(cacheRoot) {
@@ -572,16 +588,37 @@ export function liveKeys(cacheRoot) {
   let names = [];
   try {
     names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
-  } catch {
-    return new Set();
+  } catch (error) {
+    if (error.code === "ENOENT") return new Set();
+    throw error;
   }
   const live = new Set();
   for (const name of names) {
     const file = path.join(dir, name);
-    const record = readJson(file);
-    const key = record ? namedKey(currentPathOf(record)) : null;
-    if (key && record.keys?.includes(key)) live.add(key);
-    else fs.rmSync(file, { force: true });
+    let record;
+    try {
+      record = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw new Error(`can't read ${file} (${error.message}); pruned nothing`);
+    }
+    const claims = Array.isArray(record?.keys) ? record.keys : null;
+    if (!claims) throw new Error(`${file} has no claims list; pruned nothing`);
+    const keepAll = () => claims.forEach((key) => live.add(key));
+    if (record.gitDir && !missing(record.gitDir)) {
+      keepAll();
+      continue;
+    }
+    const state = typeof record.worktree === "string" ? markerState(record.worktree) : { unknown: true };
+    if (state.unknown) {
+      keepAll();
+      continue;
+    }
+    if (state.key && claims.includes(state.key)) {
+      live.add(state.key);
+      continue;
+    }
+    fs.rmSync(file, { force: true });
   }
   return live;
 }
