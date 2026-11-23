@@ -4,7 +4,7 @@ import { Animated, StyleSheet, View } from "react-native";
 import { switchOn } from "../../state/app/switches";
 import { useTheme } from "../ui/theme";
 import { useGated } from "../ui/motion";
-import { Panel, WindowBackdrop, WindowDragRegion } from "../ui";
+import { Panel, WindowBackdrop } from "../ui";
 import { useActiveTabId, useSidebarSide, useWindowFullScreen, useWindowId } from "../../state/browser/hooks";
 import { useSidebarDockState } from "../../state/windows/hooks";
 import { useShownSidebarWidth } from "../../state/sidebar/shownWidth";
@@ -26,6 +26,7 @@ import {
 } from "../../state/telemetry/dockCounts";
 import { ProfileSwipe } from "./ProfileSwipe";
 import { cardSlide, dockStyles as styles, useSidebarDock } from "./useSidebarDock";
+import { DockFrame } from "./DockFrame";
 import { CARD_SLIDES_ON_COMPOSITOR } from "../../state/windows/cardSlide";
 import { useSplitOf } from "../../state/windows/card";
 import { SHADOWS } from "./tokens";
@@ -115,11 +116,10 @@ export function DockedLayout({
   const sliding = !!slide && layout.sliding && !fullscreen;
   const edge = frames ? frames.edge : layout.docked ? dockedInset : sideInset;
   const fill = fullscreen ? styles.column : styles.row;
-  const Padded = frames ? Animated.View : View;
   return (
     <>
-      <Padded
-        style={
+      <DockFrame
+        padding={
           fullscreen
             ? styles.column
             : {
@@ -131,14 +131,13 @@ export function DockedLayout({
                 paddingLeft: !topTabs && !right ? edge : inset.left,
               }
         }
+        clip={sliding ? [fill, slide.clip] : fill}
+        content={sliding ? [fill, slide.content] : fill}
+        dragRegion={!fullscreen}
+        onLayout={slide && layout.docked && moving ? laidOut : undefined}
       >
-        {!fullscreen && <WindowDragRegion style={StyleSheet.absoluteFill} />}
-        <Animated.View style={sliding ? [fill, slide.clip] : fill}>
-          <Animated.View style={sliding ? [fill, slide.content] : fill} onLayout={slide && layout.docked && moving ? laidOut : undefined}>
-            {children}
-          </Animated.View>
-        </Animated.View>
-      </Padded>
+        {children}
+      </DockFrame>
       {topStrip &&
         stripShown && (
           <Animated.View

@@ -81,3 +81,35 @@ test("unmounting drops a pending landing", () => {
   clock.advance(DOCKED_LAYOUT_DEADLINE_MS);
   assert.equal(still, 0);
 });
+
+test("switching between the glide and the compositor slide keeps the card's element path, so the page isn't remounted (#3732: split view flips the motion)", async () => {
+  const React = await import("react");
+  const { Animated } = await import("react-native");
+  const { DockFrame } = await import("./DockFrame.tsx");
+  const page = React.createElement("page", { key: "page" });
+  const dock = new Animated.Value(1);
+  const glide = DockFrame({ padding: { paddingLeft: dock.interpolate({ inputRange: [0, 1], outputRange: [6, 200] }) }, clip: {}, content: {}, dragRegion: true, children: page });
+  const compositor = DockFrame({
+    padding: { paddingLeft: 6 },
+    clip: [{ overflow: "hidden", transform: [{ translateX: dock }] }],
+    content: [{ transform: [{ translateX: dock }] }],
+    dragRegion: true,
+    onLayout: () => {},
+    children: page,
+  });
+  const path = (el) => {
+    const out = [];
+    for (let at = el; at && typeof at === "object"; ) {
+      out.push([at.type, at.key]);
+      const kids = [at.props.children].flat().filter(Boolean);
+      at = kids.find((k) => k === page || (typeof k === "object" && k.type === Animated.View)) ?? null;
+      if (at === page) {
+        out.push(["page", page.key]);
+        break;
+      }
+    }
+    return out;
+  };
+  assert.deepEqual(path(glide), path(compositor));
+  assert.equal(path(glide).length, 4, "three Animated.Views, then the page");
+});
