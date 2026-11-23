@@ -125,8 +125,24 @@ submit() {
   wait_for "$id" "$log" "$record"
 }
 
+team_of() { { codesign -d -vv "$1" 2>&1 || true; } | sed -n 's/^TeamIdentifier=//p' | head -1; }
+
+kept_matches() {
+  local saved="$1" expected="$2" team mnt ok=1
+  team="$(team_of "$packed_app")"
+  [ -n "$team" ] && [ "$(team_of "$saved")" = "$team" ] || return 1
+  mnt="$(mktemp -d "${TMPDIR:-/tmp}/ac-notary-kept.XXXXXX")"
+  hdiutil attach "$saved" -readonly -nobrowse -noautoopen -noverify -mountpoint "$mnt" >/dev/null 2>&1 || { rmdir "$mnt"; return 1; }
+  [ "$(cd "$mnt" && ls -A | sort | tr '\n' ' ')" = ".DS_Store .VolumeIcon.icns .background.tiff .fseventsd Applications Ardia.app " ] || ok=0
+  [ "$(readlink "$mnt/Applications")" = /Applications ] || ok=0
+  [ "$(cdhash_of "$mnt/Ardia.app")" = "$expected" ] || ok=0
+  hdiutil detach "$mnt" >/dev/null 2>&1 || hdiutil detach "$mnt" -force >/dev/null 2>&1 || true
+  rmdir "$mnt" 2>/dev/null || true
+  [ "$ok" = 1 ]
+}
+
 notarize() {
-  local file="$1" key="$2" saved="${3:-}" log record id=""
+  local file="$1" key="$2" saved="${3:-}" expected="${4:-}" log record id=""
   log="$logs/notary-$(basename "$target").log"
   record="$state/$key"
   echo "Notarizing $(basename "$target") ($key)"
@@ -135,9 +151,15 @@ notarize() {
     id="$(head -c 64 "$record" | tr -d '[:space:]')"
     valid_id "$id" || { echo "ignoring $record: '$id' isn't a submission id"; id=""; }
   fi
-  if [ -n "$id" ] && [ -n "$saved" ] && { [ ! -f "$saved" ] || [ -L "$saved" ]; }; then
-    echo "no kept copy of the file submission $id was made from; submitting this one"
-    id=""
+  if [ -n "$id" ] && [ -n "$saved" ]; then
+    if [ ! -f "$saved" ] || [ -L "$saved" ]; then
+      echo "no kept copy of the file submission $id was made from; submitting this one"
+      id=""
+    elif ! kept_matches "$saved" "$expected"; then
+      echo "the kept copy for submission $id isn't this app packed by this team (another app, another signer or other files); submitting this one"
+      rm -f "$saved"
+      id=""
+    fi
   fi
   if [ -n "$id" ] && resume "$id" "$log" "$record"; then
     if [ -n "$saved" ]; then
@@ -176,7 +198,7 @@ case "$target" in
     ;;
   *.dmg)
     if [ -n "$packed_app" ] && cdhash="$(cdhash_of "$packed_app")"; then
-      notarize "$target" "dmg-of-cdhash-$cdhash" "$state/dmg-of-cdhash-$cdhash.dmg"
+      notarize "$target" "dmg-of-cdhash-$cdhash" "$state/dmg-of-cdhash-$cdhash.dmg" "$cdhash"
     else
       notarize "$target" "sha256-$(sha256_of "$target")"
     fi

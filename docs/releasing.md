@@ -222,7 +222,9 @@ stays up. That's GPL-3.0 §6(d) for the GPL parts (uBlock Origin today), and it'
      `dist/<version>`, so it survives the next run's wipe; `NOTARY_STATE_DIR` moves it): the app's under its code's
      CDHash, which signing the same code again keeps although the zip's bytes change, the DMG's under the CDHash of the
      app it packs, next to a copy of the exact DMG it sent (`package.sh` never makes the same bytes twice, so a retry
-     swaps that copy back in and staples it; the copy goes once it's stapled). A
+     swaps that copy back in and staples it; the copy goes once it's stapled). A kept copy is used only when it's
+     signed by the packed app's team and mounts as exactly the volume `package.sh` makes, holding an app with the same
+     CDHash; anything else is discarded and the new DMG submitted. A
      retry asks Apple about that id before uploading: Accepted staples, In Progress waits, Invalid or Rejected prints
      Apple's log and stops (delete the record it names to submit the same code anyway), an id Apple says doesn't exist
      submits fresh, and when notarytool can't answer it stops with the record kept. An `.app` Apple already holds a

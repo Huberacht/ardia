@@ -49,10 +49,31 @@ esac
 `;
 
 const CODESIGN = `#!/usr/bin/env bash
-echo "Executable=$4/Contents/MacOS/Ardia" >&2
-[ -f "$NOTARY_STUB/cdhash" ] || { echo "$4: code object is not signed at all" >&2; exit 1; }
-echo "CDHash=$(cat "$NOTARY_STUB/cdhash")" >&2
+path="$3"
+hash="$NOTARY_STUB/cdhash"
+[ -f "$path/stub-cdhash" ] && hash="$path/stub-cdhash"
+team=U5L5T3NGVV
+case "$path" in *.dmg) [ -f "$NOTARY_STUB/dmg-team" ] && team="$(cat "$NOTARY_STUB/dmg-team")"; echo "TeamIdentifier=$team" >&2; exit 0 ;; esac
+[ -f "$hash" ] || { echo "$path: code object is not signed at all" >&2; exit 1; }
+echo "CDHash=$(cat "$hash")" >&2
+echo "TeamIdentifier=$team" >&2
 `;
+
+const HDIUTIL = `#!/usr/bin/env bash
+case "$1" in
+  attach) mnt="$(printf '%s\\n' "$@" | awk 'prev == "-mountpoint" { print } { prev = $0 }')"; cp -R "$NOTARY_STUB/volume/." "$mnt/" ;;
+  detach) find "$2" -mindepth 1 -delete ;;
+esac
+`;
+
+function volume(stub, cdhash, extra = []) {
+  const dir = join(stub, "volume");
+  mkdirSync(join(dir, "Ardia.app"), { recursive: true });
+  writeFileSync(join(dir, "Ardia.app", "stub-cdhash"), cdhash);
+  for (const name of [".DS_Store", ".VolumeIcon.icns", ".background.tiff", ...extra]) writeFileSync(join(dir, name), "");
+  mkdirSync(join(dir, ".fseventsd"));
+  spawnSync("ln", ["-s", "/Applications", join(dir, "Applications")]);
+}
 
 function scratch() {
   const dir = mkdtempSync(join(tmpdir(), "ac-notarize-"));
@@ -63,6 +84,8 @@ function scratch() {
   chmodSync(join(bin, "xcrun"), 0o755);
   writeFileSync(join(bin, "codesign"), CODESIGN);
   chmodSync(join(bin, "codesign"), 0o755);
+  writeFileSync(join(bin, "hdiutil"), HDIUTIL);
+  chmodSync(join(bin, "hdiutil"), 0o755);
   const dmg = join(dir, "dist", "Ardia-1.2.3.dmg");
   writeFileSync(dmg, "a disk image");
   const state = join(dir, "state");
@@ -296,6 +319,7 @@ test("a DMG packed again resumes the submission of the copy it kept, and swaps t
   assert.equal(s.records()[`${key}.dmg`], "the first packing");
   writeFileSync(s.dmg, "the second packing, other bytes");
   writeFileSync(join(s.stub, "calls"), "");
+  volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
   s.ticket();
   const retry = s.notarize(s.dmg, {}, [app]);
   assert.equal(retry.status, 0, retry.output);
@@ -327,4 +351,30 @@ test("an app codesign can't read falls back to its zip's hash instead of stoppin
   const run = s.notarize(app);
   assert.equal(run.status, 0, run.output);
   assert.match(Object.keys(s.records())[0], /^sha256-[0-9a-f]{64}$/);
+});
+
+test("a kept DMG that isn't this app, this team's signature or the usual volume is discarded and the new one submitted", () => {
+  for (const [name, setup] of [
+    ["another app", (s) => volume(s.stub, "7f53ab0b1b9c9ffe40361bbe96a84fc7a4df9e00")],
+    ["another signer", (s) => { volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52"); writeFileSync(join(s.stub, "dmg-team"), "ABCDE12345"); }],
+    ["an extra file", (s) => volume(s.stub, "c0c480061bc60ca0bdb4e8a609fabb4168eebd52", ["install-me.command"])],
+  ]) {
+    const s = scratch();
+    const app = join(s.dir, "dist", "Ardia.app");
+    mkdirSync(join(app, "Contents"), { recursive: true });
+    writeFileSync(join(s.stub, "cdhash"), "c0c480061bc60ca0bdb4e8a609fabb4168eebd52");
+    const key = "dmg-of-cdhash-c0c480061bc60ca0bdb4e8a609fabb4168eebd52";
+    mkdirSync(s.state);
+    writeFileSync(join(s.state, key), `${FIRST}\n`);
+    writeFileSync(join(s.state, `${key}.dmg`), "planted");
+    writeFileSync(join(s.stub, `status-${FIRST}`), "Accepted\n");
+    setup(s);
+    s.set("submit", [SECOND]);
+    s.ticket();
+    const run = s.notarize(s.dmg, {}, [app]);
+    assert.equal(run.status, 0, `${name}: ${run.output}`);
+    assert.match(run.output, /isn't this app packed by this team/, name);
+    assert.equal(readFileSync(s.dmg, "utf8"), "a disk image", name);
+    assert.deepEqual(s.calls(), ["notarytool submit", "notarytool wait", "stapler staple"], name);
+  }
 });
