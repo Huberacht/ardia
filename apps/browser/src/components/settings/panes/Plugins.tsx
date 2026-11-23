@@ -270,7 +270,7 @@ function PluginPage({ name }: { name: string }) {
         <>
           <SectionHeader title="What it gets" />
           <Group>
-            {consentLines(m, { controlOff, official: !!listing.official && !active, movesProfiles }).map((line) => (
+            {consentLines(m, { controlOff, official: !!listing.official && !active, movesProfiles, installed: active }).map((line) => (
               <Row key={line.text} title={line.text} icon={<Symbol name={line.icon} size={13} color={theme.icon} style={ICON} />} />
             ))}
           </Group>

@@ -28,7 +28,7 @@ export function fullControlLine(m: PluginManifest, context: ConsentContext = {})
   const afterUpdates = m.programs.some((p) => p.afterUpdate.length > 0);
   if (m.permissions.control) {
     const who = afterUpdates ? "any program you run, and the commands Ardia runs for it after updates," : "any program you run";
-    const when = context.controlOff ? "While control is on in Settings › Advanced" : "Turns on control in Settings › Advanced. While it's on";
+    const when = context.controlOff || context.installed ? "While control is on in Settings › Advanced" : "Turns on control in Settings › Advanced. While it's on";
     return { icon: "hand.raised", text: `${when}, ${who} can fully control Ardia: ${FULL_CONTROL_REACH}` };
   }
   if (!m.programs.length) return null;
@@ -76,7 +76,7 @@ function permissionLines(m: PluginManifest): ConsentLine[] {
   return lines;
 }
 
-export type ConsentContext = { controlOff?: boolean; official?: boolean; movesProfiles?: number };
+export type ConsentContext = { controlOff?: boolean; official?: boolean; movesProfiles?: number; installed?: boolean };
 
 export const CONTROL_OFF_LINE = "Control is off, as you set it, and installing this leaves it off. To let programs drive Ardia, turn on “Let programs control Ardia” in Settings › Advanced";
 

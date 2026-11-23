@@ -399,6 +399,7 @@ test("a plugin whose programs run as you says first that they can fully control 
   assert.equal(FULL_CONTROL_SUMMARY, "Can fully control Ardia");
   const cli = readManifest(CLI).manifest;
   assert.ok(consentLines(cli, { controlOff: true })[0].text.startsWith("While control is on in Settings › Advanced, any program you run"), "an Off you chose stays off, so the line doesn't say it turns control on");
+  assert.ok(consentLines(cli, { installed: true })[0].text.startsWith("While control is on in Settings › Advanced, any program you run"), "an installed plugin's page describes the access it has, not what turning it on does");
   const pair = readManifest(JSON.stringify({ manifest: 1, name: "pair", title: "Pair", programs: [{ name: "a", path: "bin/a", afterUpdate: [["sync"]] }, { name: "b", path: "bin/b" }] })).manifest;
   assert.ok(fullControlLine(pair)?.text.startsWith("The a and b commands run as you, as do the commands Ardia runs for it after updates, so while control is on in Settings › Advanced, they can fully control Ardia"));
   const sandboxed = readManifest(JSON.stringify({ manifest: 1, name: "boxed", title: "Boxed", main: "dist/index.js", permissions: { tabs: "read" } })).manifest;
