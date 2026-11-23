@@ -1,6 +1,6 @@
 import { PlatformColor } from "react-native";
 import { Form, HStack, Image, NavigationLink, Section, Text, VStack } from "@expo/ui/swift-ui";
-import { accessibilityElement, contentTransition, font, foregroundStyle, frame, listSectionSpacing, multilineTextAlignment, navigationBarTitleDisplayMode, navigationTitle, padding, tint } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityElement, contentTransition, font, foregroundStyle, listSectionSpacing, navigationBarTitleDisplayMode, navigationTitle, padding, tint } from "@expo/ui/swift-ui/modifiers";
 import { useSyncStatus } from "../../state/sync/hooks";
 import { syncRowSubtitle } from "../../state/sync/syncRules";
 import { settingsRouteKey, type SettingsRoute } from "../../state/settings/nav";
@@ -11,7 +11,6 @@ import { syncOffered } from "../../state/sync/offer";
 import { browseForMeOffered } from "../../state/browseForMe/store";
 import { pageSummariesSwitchable } from "../../state/pageSummary/enabled";
 import { destinationWords } from "../../lib/sharedWords";
-import { appVersion } from "../../state/settings/actions";
 
 type SettingsPaneRoute = Extract<SettingsRoute["page"], "general" | "tabs" | "appearance" | "search" | "siteSettings" | "experimental">;
 
@@ -27,7 +26,6 @@ const SETTINGS_PANES: readonly PaneLook[] = [
 ];
 
 const SYNC_TILE = 56;
-const FILL = Number.MAX_SAFE_INTEGER;
 const TOP_SECTION_SPACING = 12;
 
 const experimentalOffered = () => browseForMeOffered() || pageSummariesSwitchable();
@@ -45,7 +43,7 @@ export function ExpoSettingsRoot() {
             </NavigationLink>
           </Section>
         ) : null}
-        <Section footer={<Text modifiers={[frame({ maxWidth: FILL }), multilineTextAlignment("center")]}>{appVersion()}</Text>}>
+        <Section>
           {SETTINGS_PANES.filter(paneShown).map((pane) => (
             <NavigationLink key={pane.page} value={settingsRouteKey({ page: pane.page })}>
               <ExpoPaneLabel title={pane.title} systemImage={pane.systemImage} tint={pane.tint} />

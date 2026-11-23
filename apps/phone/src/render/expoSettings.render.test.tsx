@@ -9,6 +9,7 @@ import * as telemetry from "../state/telemetry/telemetry";
 import { openSettings, pushSettings, settingsNav } from "../state/settings/nav";
 import { usePreferences } from "../state/settings/store";
 import { PHONE_SHARING_COPY } from "../lib/telemetryCopy";
+import { appVersion } from "../state/settings/actions";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const onIos = Platform.OS === "ios" ? test : test.skip;
@@ -35,17 +36,18 @@ const sectionTitles = (node: ReactTestInstance, titles: string[]) => node.findAl
 const paneOf = (root: Root, page: string) => hosts(root, (props) => props.name === "destination" && (props.extraProps as { value?: string } | undefined)?.value === page)[0]!;
 const linksIn = (node: ReactTestInstance) => node.findAll((inner) => typeof inner.type === "string" && typeof inner.props.value === "string" && !("path" in inner.props)).map((inner) => inner.props.value);
 
-onIos("on iPhone the Settings root is the Mac's pane list: the Sync card, then General, Tabs, Appearance, Search and Site settings, each a tinted tile linking to its pane, Experimental only when it has something, and nothing else", () => {
+onIos("on iPhone the Settings root is the Mac's pane list: the Sync card, then General, Tabs, Appearance, Search and Site settings, each a tinted tile linking to its pane, Experimental only when it has something, and nothing else, not even the version", () => {
   openSettings();
   const root = renderSurface(<SettingsView />);
   expect(paneTitles(stackOf(root))).toEqual(["General", "Tabs", "Appearance", "Search", "Site settings"]);
   expect(linksIn(stackOf(root))).toEqual(["sync", "general", "tabs", "appearance", "search", "siteSettings"]);
   expect(root.root.findAll((node) => node.type === SettingsShortcuts)).toHaveLength(0);
   expect(hosts(root, (props) => typeof props.isOn === "boolean")).toHaveLength(0);
+  expect(textsIn(stackOf(root))).not.toContain(appVersion());
   unmount(root);
 });
 
-onIos("General holds Default browser when offered, app links, privacy with What's Sent and no sharing summary, and About with the version, each a plain row", () => {
+onIos("General holds Default browser when offered, app links, privacy with What's Sent and no sharing summary, and About with Set up Ardia again and About Ardia, each a plain row", () => {
   openSettings({ page: "general" });
   const root = renderSurface(<SettingsView />);
   const pane = paneOf(root, "general");
