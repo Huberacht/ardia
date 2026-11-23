@@ -3,8 +3,6 @@ import { isIncognitoProfile } from "../browser/model";
 
 type IconMaps = { pages: Record<string, string | null>; srcs: Record<string, string>; appearances: Record<string, [string, string]> };
 
-export const privateViewer = (profileId?: string) => (profileId && isIncognitoProfile(profileId) ? profileId : undefined);
-
 export function incognitoClosed(key: string): boolean {
   if (!isIncognitoProfile(key)) return false;
   const s = useBrowser.getState();

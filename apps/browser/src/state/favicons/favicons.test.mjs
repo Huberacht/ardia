@@ -25,7 +25,6 @@ const { seedFavicons } = await import("./launchFavicons.ts");
 const { adoptIconPage, dropOutlivedFavicon, noteIconPage } = await import("./iconPage.ts");
 const { useBrowser } = await import("../browser/store.ts");
 const { engineProfile } = await import("../browser/model.ts");
-const { WindowContext } = await import("../browser/hooks.ts");
 const { webviews } = await import("../../platform/webviews.ts");
 const { askFaviconAccent, useFaviconAccent, useFaviconAccents } = await import("./faviconAccent.ts");
 const { markAsked } = await import("./askedFavicons.ts");
@@ -324,55 +323,6 @@ const privateWindow = (url) => {
   return { id, profile: useBrowser.getState().windows[id].profileId, tab: useBrowser.getState().windows[id].tabIds[0] };
 };
 
-test("a private window shows other profiles' icons already in memory and never asks their stores", async () => {
-  useBrowser.getState().hydrate({});
-  const stop = startFavicons();
-  const known = "https://known-elsewhere.test/";
-  const secret = "https://secret-page.test/";
-  const asked = [];
-  globalThis.faviconsForTest = (profile, pages) => (asked.push(...pages), answering({ [known]: "data:image/png;base64,KNOWN", [secret]: "data:image/png;base64,SECRET" })(profile, pages));
-  try {
-    const normal = mount(() => useFavicon(known, null, "default"));
-    await waitFor(() => cached(known) === "data:image/png;base64,KNOWN");
-    normal.unmount();
-    asked.length = 0;
-    const w = privateWindow(secret);
-    const rows = [mount(() => useFavicon(known, null, w.profile)), mount(() => useFavicon(secret, null, w.profile)), mount(() => useFavicon(secret), { contexts: [[WindowContext, w.id]] })];
-    await settle();
-    assert.equal(resolveFavicon(known, null, w.profile)?.uri, "data:image/png;base64,KNOWN");
-    assert.deepEqual(asked, [], "no profile's icon store was asked, so none of them marks an icon used");
-    assert.equal(cached(secret), undefined);
-    assert.equal(markAsked(engineProfile(useBrowser.getState(), "default"), secret), true, "nothing about the private page is in the asked set");
-    for (const row of rows) row.unmount();
-    useBrowser.getState().closeWindow(w.id);
-  } finally {
-    delete globalThis.faviconsForTest;
-    stop();
-  }
-});
-
-test("a row left in a private window's tree after the window is gone still asks nothing", async () => {
-  useBrowser.getState().hydrate({});
-  const stop = startFavicons();
-  const page = "https://gone-window.test/";
-  const asked = [];
-  globalThis.faviconsForTest = (profile, pages) => (asked.push(...pages), empty());
-  try {
-    const w = privateWindow(page);
-    const row = mount(() => useFavicon(page), { contexts: [[WindowContext, w.id]] });
-    useBrowser.getState().closeWindow(w.id);
-    row.rerender();
-    await settle();
-    assert.equal(row.value, null);
-    assert.deepEqual(asked, []);
-    assert.equal(cached(page), undefined);
-    row.unmount();
-  } finally {
-    delete globalThis.faviconsForTest;
-    stop();
-  }
-});
-
 test("an icon a private tab reports after its window closed doesn't bring the page back into memory", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
@@ -424,29 +374,6 @@ test("a private tab's icon leaves the theme and accent caches with its window, l
   }
 });
 
-test("a row in a private window that names a regular profile still asks no store", async () => {
-  useBrowser.getState().hydrate({});
-  const stop = startFavicons();
-  const page = "https://bookmarked-elsewhere.test/";
-  const asked = [];
-  const fetched = [];
-  globalThis.faviconsForTest = (profile, pages) => (asked.push(...pages), empty());
-  globalThis.fetchFaviconForTest = (src) => (fetched.push(src), Promise.resolve(null));
-  try {
-    const w = privateWindow("https://private-start.test/");
-    const row = mount(() => useFavicon(page, "https://bookmarked-elsewhere.test/icon.png", "default"), { contexts: [[WindowContext, w.id]] });
-    await settle();
-    assert.deepEqual(asked, []);
-    assert.deepEqual(fetched, []);
-    row.unmount();
-    useBrowser.getState().closeWindow(w.id);
-  } finally {
-    delete globalThis.faviconsForTest;
-    delete globalThis.fetchFaviconForTest;
-    stop();
-  }
-});
-
 test("a private icon that already left the cache still takes its theme and accent with it at close", async () => {
   useBrowser.getState().hydrate({});
   const stop = startFavicons();
@@ -489,6 +416,7 @@ test("closing a private window cancels no other window's theme or accent request
   const accents = new Map();
   globalThis.iconThemeForTest = ({ uri }) => new Promise((resolve) => themes.set(uri, resolve));
   globalThis.iconAccentForTest = (uri) => new Promise((resolve) => accents.set(uri, resolve));
+  globalThis.faviconsForTest = () => empty();
   try {
     noteFavicon(normalTab, "https://shared-icon.test/a.ico");
     noteFavicon(w.tab, "https://shared-icon.test/a.ico");
@@ -511,6 +439,7 @@ test("closing a private window cancels no other window's theme or accent request
   } finally {
     delete globalThis.iconThemeForTest;
     delete globalThis.iconAccentForTest;
+    delete globalThis.faviconsForTest;
     webviews.clear();
     stop();
   }

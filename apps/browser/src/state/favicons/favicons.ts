@@ -14,7 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
-import { incognitoClosed, privateViewer, takeRequest, unheldBy, unheldIn } from "./privateLookups";
+import { incognitoClosed, takeRequest, unheldBy, unheldIn } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -251,7 +251,6 @@ export function resolveFavicon(url: string, src?: string | null, profileId?: str
 export const useAppearanceDark = () => useKeyed(watchAppDark, ALL, () => useBrowser.getState().ui.appDark);
 
 function answered(url: string, profileId?: string): boolean {
-  if (privateViewer(profileId)) return true;
   const { profiles } = useFavicons.getState();
   const page = withoutFragment(url);
   return lookupOrder(profileId).every((id) => !askable(id) || profiles[cacheKey(id)]?.pages[page] !== undefined);
