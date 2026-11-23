@@ -226,6 +226,15 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(partial, file);
 }
 
+export function ownInstallDirs(worktree, projects, replace) {
+  const dirs = projects.map((project) => path.join(worktree, project, "node_modules")).filter((dir) => lstatOrNull(dir));
+  if (dirs.length && !replace) {
+    const what = lstatOrNull(dirs[0]).isSymbolicLink() ? "is a link to a whole node_modules" : "is its own install";
+    throw new Error(`${dirs[0]} ${what}; pass --replace to swap it for per-entry links`);
+  }
+  return dirs;
+}
+
 function prepareTarget(worktree, projects, previous, replace) {
   const managed = [...new Set([...projects, ...(previous?.projects ?? [])])];
   const dirs = managed.map((project) => path.join(worktree, project, "node_modules")).filter((dir) => lstatOrNull(dir));
@@ -436,7 +445,7 @@ function readJson(file) {
   }
 }
 
-export const gitLine = (output) => output.replace(/\r?\n$/, "");
+export const gitLine = (output) => (output.endsWith("\n") ? output.slice(0, -1) : output);
 
 export function identityOf(worktree) {
   const git = (...args) => spawnSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", ...args], { encoding: "utf8" });
@@ -455,12 +464,16 @@ function writeClaim(cacheRoot, worktree, identity, keys) {
   return file;
 }
 
-function linkInto(worktree, sourceRoot, key, projects, previous, replace) {
+function planAll(worktree, sourceRoot, projects) {
   const plans = [];
   for (const project of projects) {
     const sourceDir = path.join(sourceRoot, project, "node_modules");
     if (fs.existsSync(sourceDir)) plans.push({ project, sourceDir, ...planLinks({ sourceRoot, worktreeRoot: worktree, project, entries: readEntries(sourceDir) }) });
   }
+  return plans;
+}
+
+function linkInto(worktree, sourceRoot, key, projects, plans, previous, replace) {
   prepareTarget(worktree, projects, previous, replace);
   const rootModules = path.join(worktree, "node_modules");
   fs.mkdirSync(rootModules, { recursive: true });
@@ -491,7 +504,7 @@ export function setupWorktree(worktreeArg, options = {}) {
   const inputs = installInputs(worktree, runtime);
   const key = dependencyKey(inputs);
   const previous = markerOf(worktree);
-  if (previous === null) prepareTarget(worktree, inputs.projects, null, options.replace ?? false);
+  const ownInstall = previous === null ? ownInstallDirs(worktree, inputs.projects, options.replace ?? false) : [];
 
   fs.mkdirSync(cacheRoot, { recursive: true });
   dropNeverIndex(cacheRoot);
@@ -503,6 +516,10 @@ export function setupWorktree(worktreeArg, options = {}) {
     build({ worktree, cacheRoot, runtime });
     createdCache = true;
   }
+  if (!fs.existsSync(path.join(final, CACHE_STAMP))) throw new Error(`building ${final} didn't publish ${CACHE_STAMP}`);
+  fs.utimesSync(path.join(final, CACHE_STAMP), new Date(), new Date());
+  const plans = planAll(worktree, fs.realpathSync(final), inputs.projects);
+  for (const dir of ownInstall) fs.rmSync(dir, { recursive: true, force: true });
   const identity = identityOf(worktree);
   const { record, sourceRoot, marker, markerFile, links, warnings } = withKernelLock(registryLock(cacheRoot), () => {
     const stamp = path.join(final, CACHE_STAMP);
@@ -510,7 +527,7 @@ export function setupWorktree(worktreeArg, options = {}) {
     fs.utimesSync(stamp, new Date(), new Date());
     const claimed = readJson(recordFile(cacheRoot, identity))?.keys ?? [];
     const record = writeClaim(cacheRoot, worktree, identity, [...new Set([...claimed, ...(previous?.key ? [previous.key] : []), key])]);
-    const linked = linkInto(worktree, fs.realpathSync(final), key, inputs.projects, previous, options.replace ?? false);
+    const linked = linkInto(worktree, fs.realpathSync(final), key, inputs.projects, plans, previous, options.replace ?? false);
     writeClaim(cacheRoot, worktree, identity, [key]);
     return { record, ...linked };
   });
@@ -575,12 +592,23 @@ export function markerState(dir) {
   } catch (error) {
     return error.code === "ENOENT" || error.code === "ENOTDIR" ? { absent: true } : { unknown: true };
   }
+  let marker;
   try {
-    const marker = JSON.parse(text);
-    return { key: marker.key && marker.root && path.basename(marker.root) === marker.key ? marker.key : null };
+    marker = JSON.parse(text);
   } catch {
     return { unknown: true };
   }
+  const valid =
+    marker !== null &&
+    typeof marker === "object" &&
+    typeof marker.key === "string" &&
+    /^[0-9a-f]{16}$/.test(marker.key) &&
+    typeof marker.root === "string" &&
+    path.isAbsolute(marker.root) &&
+    path.basename(marker.root) === marker.key &&
+    Array.isArray(marker.projects) &&
+    Array.isArray(marker.nodeModules);
+  return valid ? { key: marker.key } : { unknown: true };
 }
 
 export function liveKeys(cacheRoot) {

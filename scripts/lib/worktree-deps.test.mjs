@@ -17,6 +17,7 @@ import {
   normalizeLockfile,
   planLinks,
   pruneCaches,
+  gitLine,
   markerState,
   removeTree,
   runtimeOf,
@@ -390,7 +391,7 @@ test("prune holds the registry lock throughout, a claim needs the cache to still
   pruneCaches({ cacheRoot, log: quiet });
   t.mock.restoreAll();
   assert.ok(probed && vanished);
-  assert.throws(() => setup(makeWorktree({ patch: "never built\n" }), { build: () => {} }), /isn't built \(or was just pruned\)/);
+  assert.throws(() => setup(makeWorktree({ patch: "never built\n" }), { build: () => {} }), /didn't publish/);
   assert.ok(fs.existsSync(path.join(cacheRoot, result.key, CACHE_STAMP)));
 });
 
@@ -506,6 +507,51 @@ test("prune keeps a cache whose claim it can't judge and stops on a record it ca
   write(path.join(cacheRoot, USERS_DIR, "broken.json"), "{");
   assert.throws(() => pruneCaches({ cacheRoot, now: LATER(), log: quiet }), /pruned nothing/);
   assert.ok(fs.existsSync(path.join(cacheRoot, key, CACHE_STAMP)));
+});
+
+test("a marker that parses but isn't valid keeps every claim; a valid marker naming another cache proves the claim dead", () => {
+  const { cacheRoot, setup } = harness();
+  const exported = makeWorktree();
+  const { key } = setup(exported);
+  const markerFile = path.join(exported, "node_modules", MARKER);
+  const good = JSON.parse(fs.readFileSync(markerFile, "utf8"));
+  for (const bad of [{}, null, [], { key }, { ...good, root: "relative/path" }, { ...good, key: "not-a-key" }, { ...good, projects: "x" }]) {
+    fs.writeFileSync(markerFile, JSON.stringify(bad));
+    assert.deepEqual(markerState(exported), { unknown: true }, JSON.stringify(bad));
+    assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), [], JSON.stringify(bad));
+  }
+  fs.writeFileSync(markerFile, JSON.stringify(good));
+  assert.deepEqual(markerState(exported), { key });
+  const other = "0123456789abcdef";
+  fs.writeFileSync(markerFile, JSON.stringify({ ...good, key: other, root: path.join(path.dirname(good.root), other) }));
+  assert.deepEqual(pruneCaches({ cacheRoot, now: LATER(), log: quiet }), [path.join(cacheRoot, key)]);
+});
+
+test("--replace keeps the worktree's own install until the replacement cache is built", () => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  write(path.join(worktree, "node_modules", "real-install", "index.js"), "mine");
+  write(path.join(worktree, "apps", "web", "node_modules", "local", "index.js"), "mine too");
+  assert.throws(() => setup(worktree, { replace: true, build: () => { throw new Error("build failed"); } }), /build failed/);
+  assert.equal(fs.readFileSync(path.join(worktree, "node_modules", "real-install", "index.js"), "utf8"), "mine");
+  assert.ok(fs.existsSync(path.join(worktree, "apps", "web", "node_modules", "local", "index.js")));
+  assert.throws(() => setup(worktree, { replace: true, build: () => {} }), /didn't publish/);
+  assert.ok(fs.existsSync(path.join(worktree, "node_modules", "real-install", "index.js")));
+  setup(worktree, { replace: true });
+  assert.ok(!fs.existsSync(path.join(worktree, "node_modules", "real-install")));
+  assert.ok(fs.lstatSync(path.join(worktree, "node_modules", "react")).isSymbolicLink());
+});
+
+test("git output loses exactly one final newline, so a path ending in a carriage return works", () => {
+  assert.equal(gitLine("/a/b\n"), "/a/b");
+  assert.equal(gitLine("/a/b\r\n"), "/a/b\r");
+  assert.equal(gitLine("/a/b \n"), "/a/b ");
+  assert.equal(gitLine("/a/b"), "/a/b");
+  const { cacheRoot, setup } = harness();
+  const repo = gitRepo(path.join(fresh("cr"), "repo\r"));
+  setup(repo);
+  const [record] = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
+  assert.equal(record.gitDir, path.join(fs.realpathSync(repo), ".git"));
 });
 
 test("a checkout whose path ends in a space is set up as a git worktree", () => {

@@ -177,7 +177,9 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
     `pnpm install` under `scripts/agent/locked pod`; to link again afterwards, run the setup with `--replace`, which
     swaps that real install for links. After pulling a new lockfile, run the setup again;
     `--status` says when a worktree no longer matches. `--prune` deletes cached installs no worktree uses. A git
-    worktree moved with `git worktree move` is found again; a scratch export that moves must run the setup again.
+    worktree's cache stays claimed while git still has the worktree (`git worktree move` included); `git worktree
+    remove` clears that, while a worktree deleted by hand keeps its cache until `git worktree prune` runs. A scratch
+    export that moves must run the setup again.
   - A native build needs the worktree's own `Pods`: `pod install` under `locked pod` works against the linked,
     read-only `node_modules`. If a later build step must write into `node_modules`, it fails loudly on the
     read-only tree rather than changing it: use a real install (`--undo`) for that worktree.
