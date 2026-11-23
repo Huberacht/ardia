@@ -73,7 +73,7 @@ test("a FAIL or INVALID verdict is the block's exit status, not cleanup's", () =
   }
 });
 
-test("a failed round stops the gate with its status, before the second round and the verdict", () => {
+test("a failed round stops the gate with its code (13 for round 1), before the second round and the verdict", () => {
   const s = setup();
   try {
     const r = run(s, { STUB_EXIT_native_bench: "3" });
@@ -87,7 +87,7 @@ test("a failed round stops the gate with its status, before the second round and
   }
 });
 
-test("a failed prep job waits for the others, then exits with the first failure's status and no round", () => {
+test("a failed prep job waits for the others, then exits with the first failed step's code (11 ratchet) and no round", () => {
   const s = setup();
   try {
     const r = run(s, { STUB_EXIT_ratchet: "5", STUB_EXIT_prep: "6" });
