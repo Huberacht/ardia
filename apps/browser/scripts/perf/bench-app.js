@@ -65,15 +65,32 @@ async function timersSettled(stepMs = 1000, timeoutMs = 15000) {
   return { settled: false, last: previous };
 }
 
-async function settleWindow({ hold = false } = {}) {
+const FLUSH_DEADLINE_MS = 5000;
+
+async function persisted(persistence) {
+  if (!persistence) return false;
+  if (typeof persistence.sessionSaved !== "function") {
+    persistence.flushPersistence();
+    return true;
+  }
+  let deadline;
+  const late = new Promise((resolve) => (deadline = setTimeout(function benchSettleStep() {
+    resolve(false);
+  }, FLUSH_DEADLINE_MS)));
+  await Promise.race([persistence.sessionSaved().catch(() => false), late]);
+  clearTimeout(deadline);
+  return true;
+}
+
+async function settleWindow({ hold = false, quietMs = 3000, stepMs = 1000 } = {}) {
+  const started = Date.now();
   const persistence = ac.persistence;
-  const flushed = !!persistence;
-  persistence?.flushPersistence();
-  const writes = await writesSettled();
-  const timers = await timersSettled();
+  const flushed = await persisted(persistence);
+  const writes = await writesSettled(quietMs);
+  const timers = await timersSettled(stepMs);
   const held = hold && !!persistence?.holdPersistence;
   if (held) persistence.holdPersistence();
-  return { flushed, writes, timers, held };
+  return { flushed, writes, timers, held, ms: Date.now() - started };
 }
 
 function release(settled) {
@@ -728,5 +745,6 @@ function censusScenarios() {
 globalThis.acBench = {
   names: Object.keys(scenarios),
   run: (name, options) => scenarios[name](options ?? {}),
+  settleWindow,
 };
 return globalThis.acBench.names;

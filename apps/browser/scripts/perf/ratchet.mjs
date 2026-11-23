@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isHarnessTimer } from "./js-bench.mjs";
 
@@ -12,7 +12,14 @@ const repo = resolve(appDir, "../..");
 const ceilingsFile = join(here, "ratchet.json");
 
 export const JOURNEYS = ["startup", "launch", "idle", "typing", "switchTabs", "scroll", "hover", "pageLoad", "openClose", "nodeChurn"];
+export const SMALL_JOURNEYS = ["startup", "launch"];
 const OPTIONS = '{"seconds":5}';
+const DEFAULT_PORT = 47831;
+const CDP_OFFSET = 2000;
+const CDP_PORTS_PER_LANE = 20;
+const BASELINE_LANES = 4;
+const BIG_RUN_WEIGHT = 6;
+const SMALL_RUN_WEIGHT = 1;
 
 const EXACT_SHARE = 1;
 const NOISY_SPREAD = 0.3;
@@ -99,10 +106,12 @@ const isTotal = (key) => {
 
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
 
+const seedOf = (key) => (key.startsWith("small.") ? "small" : "big");
+
 function collect(reports) {
   const values = {};
   const ran = new Set();
-  let runs = 0;
+  const runsBySeed = { big: 0, small: 0 };
   for (const seed of ["big", "small"]) {
     const group = reports.filter((r) => (r.seed ?? "big") === seed);
     if (!group.length) continue;
@@ -112,10 +121,46 @@ function collect(reports) {
     for (const r of flat) for (const s of [...sharedRan]) if (!r.ran.has(s)) sharedRan.delete(s);
     for (const s of sharedRan) ran.add(s);
     for (const key of new Set(flat.flatMap((r) => Object.keys(r.counts)))) values[key] = flat.map((r) => r.counts[key] ?? 0);
-    if (seed === "big") runs = flat.length;
+    runsBySeed[seed] = flat.length;
   }
-  return { values, runs, ran };
+  return { values, runs: runsBySeed.big, runsBySeed, ran };
 }
+
+export function withRetry(first, retry) {
+  const values = { ...first.values };
+  const zeros = (c, key) => Array(c.runsBySeed[seedOf(key)]).fill(0);
+  for (const key of new Set([...Object.keys(first.values), ...Object.keys(retry.values)])) {
+    if (!retry.ran.has(scenarioOf(key)) || !first.ran.has(scenarioOf(key))) continue;
+    values[key] = [...(first.values[key] ?? zeros(first, key)), ...(retry.values[key] ?? zeros(retry, key))];
+  }
+  return { ...first, values };
+}
+
+export function retryPlan(rows) {
+  const failed = new Set(rows.filter((r) => r.kind === "over" && (r.tier === "exact" || r.tier === "noisy")).map((r) => scenarioOf(r.key)));
+  const rerunnable = (s) => s !== "startup" && ![...WORST_RUN].some((key) => scenarioOf(key) === s);
+  const last = JOURNEYS.findLastIndex((s) => rerunnable(s) && failed.has(s));
+  const small = SMALL_JOURNEYS.some((s) => s !== "startup" && failed.has(`small.${s}`));
+  return { big: last > 0 ? JOURNEYS.slice(0, last + 1) : null, small: small ? SMALL_JOURNEYS : null };
+}
+
+export function planLanes({ bigRuns, smallRuns, lanes, bigWeight = BIG_RUN_WEIGHT, smallWeight = SMALL_RUN_WEIGHT }) {
+  const plan = Array.from({ length: Math.max(1, lanes) }, (_, lane) => ({ lane, big: 0, small: 0, load: 0 }));
+  const lightest = () => plan.reduce((a, b) => (b.load < a.load ? b : a));
+  for (let i = 0; i < bigRuns; i++) {
+    const l = lightest();
+    l.big++;
+    l.load += bigWeight;
+  }
+  for (let i = 0; i < smallRuns; i++) {
+    const l = lightest();
+    l.small++;
+    l.load += smallWeight;
+  }
+  return plan.filter((l) => l.big || l.small);
+}
+
+export const lanePorts = (base, lane) => ({ port: base + lane, cdpPort: base + CDP_OFFSET + lane * CDP_PORTS_PER_LANE });
 
 const sorted = (xs) => [...xs].sort((a, b) => a - b);
 const lowerMedian = (xs) => sorted(xs)[(xs.length - 1) >> 1];
@@ -177,7 +222,7 @@ function parseArgs(argv) {
   return { positional, flags };
 }
 
-function evaluate(ceilings, { files = [], micro = null, instr = null }) {
+export function evaluate(ceilings, { files = [], retryFiles = [], micro = null, instr = null }) {
   const rows = [];
   const notes = [];
   let ran = null;
@@ -188,7 +233,7 @@ function evaluate(ceilings, { files = [], micro = null, instr = null }) {
     const rev = reportRevisions(reports);
     if (String(ceilings.revisions.probe) !== rev.probe || String(ceilings.revisions.bench) !== rev.bench)
       notes.push(`WARNING: ratchet.json is for probe revision ${ceilings.revisions.probe}, bench revision ${ceilings.revisions.bench}; this report has probe ${rev.probe}, bench ${rev.bench}. If a counter was redefined (not just added), the ceilings mean something else now: rebuild them with \`ratchet.mjs init\` on a fresh census.`);
-    const c = collect(reports);
+    const c = retryFiles.length ? withRetry(collect(reports), collect(retryFiles.map(readJson))) : collect(reports);
     ran = c.ran;
     runs = c.runs;
     counts = Object.fromEntries(Object.entries(c.values).map(([k, v]) => [k, judged(k, v)]));
@@ -342,7 +387,22 @@ function census(files) {
   for (const r of wobbly.filter((r) => !isTotal(r.key)).sort((a, b) => a.key.localeCompare(b.key))) console.log(line(r));
 }
 
-const sh = (cmd, args, options = {}) => execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...options });
+export function spawnAsync(cmd, args, { cwd, env, capture = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, env, stdio: ["ignore", capture ? "pipe" : "ignore", "inherit"] });
+    let out = "";
+    if (capture) child.stdout.setEncoding("utf8").on("data", (d) => (out += d));
+    child.once("error", reject);
+    child.once("close", (code, signal) => (code === 0 ? resolve(out) : reject(new Error(`${basename(args[0] ?? cmd)} ${args.slice(1, 3).join(" ")} exited with ${code ?? signal}`))));
+  });
+}
+
+export async function allFinished(tasks) {
+  const settled = await Promise.allSettled(tasks);
+  const failed = settled.find((s) => s.status === "rejected");
+  if (failed) throw failed.reason;
+  return settled.map((s) => s.value);
+}
 
 function newestApp() {
   const dist = join(repo, "dist");
@@ -356,28 +416,26 @@ function newestApp() {
   throw new Error("no dist/<version>/export/Ardia.app: pass --app");
 }
 
-function jsSetup(flags, out, mark) {
+async function jsSetup(flags, out, mark) {
   const app = flags.app ? resolve(flags.app) : newestApp();
   let jsbundle = flags.bundle ? resolve(flags.bundle) : join(app, "Contents/Resources/main.jsbundle");
   if (!flags.own && !flags.bundle) {
     const bundle = join(out, "bundle");
     mark("bundling the tree");
-    sh(process.execPath, [join(here, "js-bench.mjs"), "bundle", bundle], { stdio: ["ignore", "ignore", "inherit"] });
+    await spawnAsync(process.execPath, [join(here, "js-bench.mjs"), "bundle", bundle]);
     jsbundle = join(bundle, "main.jsbundle");
   }
-  const scenarios = JOURNEYS.join(",");
   const libs = [flags.lib ? resolve(flags.lib) : join(here, "bench-app.js"), join(here, "ratchet-app.js")].join(",");
   const label = flags.label ?? "ratchet";
-  const smallLabel = `s${label.slice(1)}`;
-  const args = (runs, append, small = false) => {
-    const a = [join(here, "js-bench.mjs"), "run", "--app", app, "--bundle", jsbundle, "--label", small ? smallLabel : label, "--runs", String(runs), "--port", flags.port ?? "47831", "--out", out, "--scenarios", small ? "startup,launch" : scenarios, "--options", OPTIONS];
-    if (small) a.push("--seed", "small");
-    else a.push("--probe", "selectors");
-    if (append) a.push("--append", "1");
-    a.push("--lib", libs);
-    return a;
+  const base = Number(flags.port ?? DEFAULT_PORT);
+  const lane = ({ seed = "big", runs = 1, scenarios = seed === "small" ? SMALL_JOURNEYS : JOURNEYS, name = label, slot = 0 }) => {
+    const labelled = seed === "small" ? `s${name.slice(1)}` : name;
+    const { port, cdpPort } = lanePorts(base, slot);
+    const args = [join(here, "js-bench.mjs"), "run", "--app", app, "--bundle", jsbundle, "--label", labelled, "--runs", String(runs), "--port", String(port), "--cdp-port", String(cdpPort), "--out", out, "--scenarios", scenarios.join(","), "--options", OPTIONS];
+    args.push(...(seed === "small" ? ["--seed", "small"] : ["--probe", "selectors"]), "--lib", libs);
+    return { report: join(out, `${labelled}.json`), run: () => spawnAsync(process.execPath, args) };
   };
-  return { app, scenarios, report: join(out, `${label}.json`), smallReport: join(out, `${smallLabel}.json`), args };
+  return { app, lane };
 }
 
 async function run(flags) {
@@ -386,28 +444,26 @@ async function run(flags) {
   mkdirSync(out, { recursive: true });
   const mark = (what) => console.error(`[ratchet +${((Date.now() - started) / 1000).toFixed(0)}s] ${what}`);
   const ceilings = readCeilings();
-  let setup = null;
-  if (!flags["skip-js"]) {
-    setup = jsSetup(flags, out, mark);
-    mark(`running ${setup.scenarios} on ${setup.app}`);
-    sh(process.execPath, setup.args(1, false), { stdio: ["ignore", "ignore", "inherit"] });
-    sh(process.execPath, setup.args(1, false, true), { stdio: ["ignore", "ignore", "inherit"] });
-  }
-  let micro = null;
-  let instr = null;
-  if (!flags["skip-micro"]) {
-    mark("counting the Node hot paths");
-    micro = microCounts();
-    if (flags.instr) instr = Math.max(instrPerRound(), instrPerRound());
-  }
+  const setup = flags["skip-js"] ? null : await jsSetup(flags, out, mark);
+  const big = setup?.lane({ seed: "big", slot: 0 });
+  const small = setup?.lane({ seed: "small", slot: 1 });
+  if (setup) mark(`running ${JOURNEYS.join(",")} and the one-tab launch side by side on ${setup.app}`);
+  if (!flags["skip-micro"]) mark("counting the Node hot paths alongside");
+  const [, , micro] = await allFinished([big?.run(), small?.run(), flags["skip-micro"] ? null : microCountsAsync()]);
+  const instr = !flags["skip-micro"] && flags.instr ? Math.max(instrPerRound(), instrPerRound()) : null;
   mark("checking");
-  const reports = () => (setup ? [setup.report, setup.smallReport] : []);
-  let result = evaluate(ceilings, { files: reports(), micro, instr });
-  if (setup && result.rows.some((r) => r.kind === "over" && ["exact", "noisy"].includes(r.tier))) {
-    mark("some counts are over: running the scenarios once more (only a count over in both runs fails)");
-    sh(process.execPath, setup.args(1, true), { stdio: ["ignore", "ignore", "inherit"] });
-    sh(process.execPath, setup.args(1, true, true), { stdio: ["ignore", "ignore", "inherit"] });
-    result = evaluate(ceilings, { files: reports(), micro, instr });
+  const files = setup ? [big.report, small.report] : [];
+  let result = evaluate(ceilings, { files, micro, instr });
+  const again = setup ? retryPlan(result.rows) : { big: null, small: null };
+  if (again.big || again.small) {
+    mark(`some counts are over: running ${[again.big && `the journeys up to ${again.big.at(-1)}`, again.small && "the one-tab launch"].filter(Boolean).join(" and ")} once more (only a count over in both runs fails)`);
+    const name = `${flags.label ?? "ratchet"}-again`;
+    const retry = [
+      again.big && setup.lane({ seed: "big", scenarios: again.big, name, slot: 0 }),
+      again.small && setup.lane({ seed: "small", scenarios: again.small, name, slot: 1 }),
+    ].filter(Boolean);
+    await allFinished(retry.map((l) => l.run()));
+    result = evaluate(ceilings, { files, retryFiles: retry.map((l) => l.report), micro, instr });
   }
   const ok = printCheck(result, ceilings, { quiet: true });
   console.error(`[ratchet] ${((Date.now() - started) / 1000).toFixed(0)}s`);
@@ -419,31 +475,50 @@ async function baseline(flags) {
   const out = resolve(flags.out ?? join(process.env.TMPDIR ?? "/tmp", "ac-ratchet-baseline"));
   mkdirSync(out, { recursive: true });
   const mark = (what) => console.error(`[ratchet baseline +${((Date.now() - started) / 1000).toFixed(0)}s] ${what}`);
-  const setup = jsSetup(flags, out, mark);
-  mark(`running ${setup.scenarios} ${flags.runs ?? 8} times on ${setup.app}`);
-  sh(process.execPath, setup.args(flags.runs ?? 8, false), { stdio: ["ignore", "ignore", "inherit"] });
-  sh(process.execPath, setup.args(flags.runs ?? 8, false, true), { stdio: ["ignore", "ignore", "inherit"] });
-  if (flags["measure-only"]) return console.log(`${setup.report} ${setup.smallReport}`);
-  mark("counting the Node hot paths and instructions");
-  init([setup.report, setup.smallReport], [microCounts(), microCounts()], Math.max(instrPerRound(), instrPerRound(), instrPerRound()));
+  const setup = await jsSetup(flags, out, mark);
+  const runs = Number(flags.runs ?? 8);
+  const plan = planLanes({ bigRuns: runs, smallRuns: runs, lanes: Number(flags.lanes ?? BASELINE_LANES) });
+  const name = flags.label ?? "ratchet";
+  const lanes = plan.map((p) => ({
+    big: p.big ? setup.lane({ seed: "big", runs: p.big, name: `${name}-${p.lane}`, slot: p.lane }) : null,
+    small: p.small ? setup.lane({ seed: "small", runs: p.small, name: `${name}-${p.lane}`, slot: p.lane }) : null,
+  }));
+  mark(`running ${JOURNEYS.join(",")} ${runs} times and the one-tab launch ${runs} times on ${setup.app}, ${lanes.length} instances at once`);
+  const counting = flags["measure-only"] ? null : allFinished([microCountsAsync(), microCountsAsync()]);
+  await allFinished([...lanes.map(async (l) => {
+    if (l.big) await l.big.run();
+    if (l.small) await l.small.run();
+  }), counting]);
+  const reports = lanes.flatMap((l) => [l.big?.report, l.small?.report]).filter(Boolean);
+  if (flags["measure-only"]) return console.log(reports.join(" "));
+  mark("counting instructions");
+  init(reports, await counting, Math.max(instrPerRound(), instrPerRound(), instrPerRound()));
 }
 
-export function microCounts() {
-  const text = sh(process.execPath, ["--no-warnings", "--import", "./src/test-loader.mjs", "scripts/perf/micro-bench.mjs", "counts"], { cwd: appDir });
+const MICRO_ARGS = ["--no-warnings", "--import", "./src/test-loader.mjs", "scripts/perf/micro-bench.mjs", "counts"];
+
+function parseMicro(text) {
   const line = text.split("\n").find((l) => l.startsWith("COUNTS "));
   if (!line) throw new Error("micro-bench counts printed no COUNTS line");
   return JSON.parse(line.slice("COUNTS ".length));
 }
 
+export function microCounts() {
+  return parseMicro(spawnSync(process.execPath, MICRO_ARGS, { cwd: appDir, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).stdout);
+}
+
+export const microCountsAsync = () => spawnAsync(process.execPath, MICRO_ARGS, { cwd: appDir, capture: true }).then(parseMicro);
+
+const INSTR_ARGS = ["-l", process.execPath, "--no-warnings", "--predictable", "--import", "./src/test-loader.mjs", "scripts/perf/micro-bench.mjs", "instr"];
+
+function retiredFrom(stderr) {
+  const m = /(\d+)\s+instructions retired/.exec(stderr);
+  if (!m) throw new Error(`/usr/bin/time -l printed no "instructions retired": ${stderr.slice(-300)}`);
+  return Number(m[1]);
+}
+
 export function instrPerRound(rounds = 10) {
-  const retired = (n) => {
-    const r = spawnSync("/usr/bin/time", ["-l", process.execPath, "--no-warnings", "--predictable", "--import", "./src/test-loader.mjs", "scripts/perf/micro-bench.mjs", "instr"], {
-      cwd: appDir, encoding: "utf8", env: { ...process.env, INSTR_ROUNDS: String(n) },
-    });
-    const m = /(\d+)\s+instructions retired/.exec(r.stderr);
-    if (!m) throw new Error(`/usr/bin/time -l printed no "instructions retired": ${r.stderr.slice(-300)}`);
-    return Number(m[1]);
-  };
+  const retired = (n) => retiredFrom(spawnSync("/usr/bin/time", INSTR_ARGS, { cwd: appDir, encoding: "utf8", env: { ...process.env, INSTR_ROUNDS: String(n) } }).stderr);
   return Math.round((retired(rounds) - retired(0)) / rounds);
 }
 

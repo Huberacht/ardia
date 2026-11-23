@@ -14,12 +14,40 @@ process.on("exit", () => {
 
 export const signingIdentity = (app) => spawnSync("codesign", ["-dvv", app], { encoding: "utf8" }).stderr.match(/^Authority=(.+)$/m)?.[1] ?? "-";
 
+const DEBUG_ENTITLEMENT = "com.apple.security.get-task-allow";
+
+export function untouchedCopy({ source, bundle, granted, missing }) {
+  if (missing.length) return false;
+  if (!bundle) return true;
+  if (granted.includes(`<key>${DEBUG_ENTITLEMENT}</key>`)) return false;
+  const shipped = join(source, "Contents/Resources/main.jsbundle");
+  return existsSync(shipped) && readFileSync(bundle).equals(readFileSync(shipped));
+}
+
+const cdhashOf = (app) => spawnSync("codesign", ["-dvvv", app], { encoding: "utf8" }).stderr.match(/^CDHash=(\w+)$/m)?.[1] ?? null;
+
+function reuseOrClone(source, dir, copy) {
+  const stampFile = join(dir, "source.txt");
+  const hash = cdhashOf(source);
+  const stamp = `${source}\n${hash}\n`;
+  copiesToUnregister.add(copy);
+  if (hash && existsSync(stampFile) && readFileSync(stampFile, "utf8") === stamp && cdhashOf(copy) === hash) return copy;
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  execFileSync("cp", ["-cR", source, copy]);
+  writeFileSync(stampFile, stamp);
+  return copy;
+}
+
 export function prepareApp(app, dir, { bundle = null, entitlements: extra = [] } = {}) {
   const installed = (path) => path.startsWith("/Applications/");
   if (installed(resolve(app))) throw new Error(`${app} is installed in /Applications: pass a build or a copy`);
   const source = realpathSync(resolve(app));
   if (installed(source)) throw new Error(`${app} is installed in /Applications: pass a build or a copy`);
   const copy = join(dir, "Ardia.app");
+  const granted = execFileSync("codesign", ["-d", "--entitlements", "-", "--xml", source], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const missing = extra.filter((key) => !granted.includes(`<key>${key}</key>`));
+  if (untouchedCopy({ source, bundle, granted, missing })) return reuseOrClone(source, dir, copy);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   execFileSync("cp", ["-cR", source, copy]);
@@ -28,9 +56,6 @@ export function prepareApp(app, dir, { bundle = null, entitlements: extra = [] }
   const swapped = !!bundle && !(existsSync(shipped) && readFileSync(bundle).equals(readFileSync(shipped)));
   if (swapped) cpSync(bundle, shipped);
   if (bundle) writeFileSync(join(copy, "Contents/Resources/ip.txt"), `${NO_METRO}\n`);
-  const granted = execFileSync("codesign", ["-d", "--entitlements", "-", "--xml", source], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  const missing = extra.filter((key) => !granted.includes(`<key>${key}</key>`));
-  if (!bundle && !missing.length) return copy;
   const plist = join(dir, "entitlements.plist");
   writeFileSync(plist, granted.replace(/<\/dict>\s*<\/plist>\s*$/, `${missing.map((key) => `<key>${key}</key><true/>`).join("")}</dict></plist>`));
   execFileSync("codesign", ["--force", "--sign", signingIdentity(source), "--timestamp=none", "--options", "runtime", "--entitlements", plist, copy], { stdio: "inherit" });

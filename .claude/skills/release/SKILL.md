@@ -291,9 +291,8 @@ candidate also needs the full `gate.sh` before publishing, because its rounds me
 
 ### 4b. Perf ratchet (stable only)
 
-Check the candidate's counts against the ceilings before publishing, beside the smoke test (about five minutes; B1's
-speed-up of `ratchet.mjs`, `bench-app.js` and `ratchet-app.js` makes it shorter; no perflab lock needed: they are
-counts, not timings):
+Check the candidate's counts against the ceilings before publishing, beside the smoke test (about two minutes, four
+with a retry; no perflab lock needed: they are counts, not timings):
 
 ```bash
 node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/export/Ardia.app   # dist/<version>/export without an rc
@@ -301,7 +300,7 @@ node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/exp
 
 `--own` runs the app's own `main.jsbundle`, so it checks what ships. It must print `ratchet: ok`. It runs the launch,
 idle, command bar, tab switch, navigate, scroll, hover and native-node churn scenarios in a hidden instance, and a count over its ceiling
-gets one more run (a stray window event isn't a regression; a count over in both is). A failure is a real regression
+gets one more run of the journeys up to that scenario (a stray window event isn't a regression; a count over in both is). A failure is a real regression
 (find the commit that added the commit, render, store update or timer, and fix it) or an intended increase: raise that
 one ceiling by hand in `apps/browser/scripts/perf/ratchet.json` and say why in the commit and the release report. When
 the release made counts go down, run `ratchet.mjs lower <the run's report>` (`$TMPDIR/ac-ratchet/ratchet.json`; under
