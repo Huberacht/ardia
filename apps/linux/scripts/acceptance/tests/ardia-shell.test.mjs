@@ -406,4 +406,25 @@ describe("shell probes against slow or dropped renderers", () => {
       await mock.close();
     }
   });
+
+  it("keeps live candidates from the first scan when the recovery scan has no time left", async () => {
+    let calls = 0;
+    const app = new ArdiaApp({ child: new EventEmitter(), scratch: tmpdir(), logPath: "/dev/null", label: "keep-live" });
+    const liveSession = { closed: false, close: async () => {} };
+    const closedSession = { closed: true, close: async () => {} };
+    app.shells = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return [
+          { target: { id: "shell-main" }, session: liveSession, windowId: "main", profileId: "default", pageProfile: null, startup: true, utility: null, privateWindow: false, ready: true },
+          { target: { id: "shell-second" }, session: closedSession, windowId: "second", profileId: "default", pageProfile: null, startup: false, utility: null, privateWindow: false, ready: true },
+        ];
+      }
+      return [];
+    };
+    const main = await app.mainShell({ timeout: 1000 });
+    assert.equal(calls, 2);
+    assert.equal(main.windowId, "main");
+    assert.equal(main.session, liveSession);
+  });
 });

@@ -246,9 +246,13 @@ export class ArdiaApp {
   async mainShell(options) {
     const chosen = await until(async ({ deadline }) => {
       const regular = (shells) => shells.filter((s) => s.ready && !s.utility);
-      let scanned = regular(await this.shells({ deadline }));
-      if (scanned.some((s) => s.session.closed)) scanned = regular(await this.shells({ deadline }));
-      const list = scanned.filter((s) => !s.session.closed);
+      const live = (shells) => shells.filter((s) => !s.session.closed);
+      const scanned = regular(await this.shells({ deadline }));
+      let list = live(scanned);
+      if (scanned.some((s) => s.session.closed)) {
+        const recovered = live(regular(await this.shells({ deadline })));
+        if (recovered.length) list = recovered;
+      }
       return list.find((s) => s.startup) ?? list.find((s) => s.windowId === "main") ?? list[0] ?? false;
     }, { timeout: options?.timeout ?? 25000, label: "a browser shell renderer", abort: () => this.exitReason() });
     return this.cacheShell(chosen);
