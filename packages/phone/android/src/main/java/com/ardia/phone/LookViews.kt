@@ -1945,6 +1945,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     private fun onScreen(): Boolean = isAttachedToWindow && width > 0 && height > 0 && getGlobalVisibleRect(seen)
 
     private val moved = ViewTreeObserver.OnPreDrawListener {
+        if (!samplesNow) return@OnPreDrawListener true
         if (lastChoice?.reason == FrostPage.OFF_SCREEN) {
             if (onScreen()) invalidate()
             return@OnPreDrawListener true

@@ -389,7 +389,7 @@ class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(con
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) = Unit
 
     internal fun placement(glass: GlassView): Placement? {
-        if (!glass.isShown || glass.width <= 0 || glass.height <= 0) return null
+        if (!glass.samplesNow || glass.width <= 0 || glass.height <= 0) return null
         val stop = parent
         var alpha = 1f
         var view: View? = glass

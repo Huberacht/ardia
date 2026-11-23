@@ -153,6 +153,25 @@ class GlassBackdropTest {
     }
 
     @Test
+    fun aHiddenGlassWhoseFoldMovesAsksForNothing() {
+        val scene = bar()
+        live(scene)
+        scene.pill.shownMs = 0f
+        scene.pill.shown = false
+        onHardware(scene.backdrop)
+        onHardware(scene.pillFold)
+        assertFalse(scene.backdrop.isDirty)
+        scene.pillFold.scaleX = 1.6f
+        scene.pillFold.translationY = 12f
+        scene.backdrop.viewTreeObserver.dispatchOnPreDraw()
+        assertFalse("a hidden glass's fold can move without redrawing the backdrop", scene.backdrop.isDirty)
+        assertFalse("nor the glass itself", scene.pill.isDirty)
+        assertNull(scene.backdrop.placement(scene.pill))
+        scene.pill.shown = true
+        assertTrue("showing it again draws it", scene.backdrop.isDirty)
+    }
+
+    @Test
     fun aGlassThatLeavesGoesBackToDrawingItself() {
         val scene = bar()
         live(scene)
