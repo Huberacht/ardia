@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use zeroize::Zeroizing;
 
@@ -15,8 +15,30 @@ pub enum CryptoError {
 }
 
 pub fn wipe(bytes: &mut [u8]) {
-    bytes.fill(0);
-    std::hint::black_box(&*bytes);
+    #[cfg(target_vendor = "apple")]
+    apple::erase(bytes);
+    #[cfg(not(target_vendor = "apple"))]
+    zeroize::Zeroize::zeroize(bytes);
+}
+
+#[cfg(target_vendor = "apple")]
+#[allow(unsafe_code)]
+mod apple {
+    use core::ffi::{c_int, c_void};
+
+    extern "C" {
+        fn memset_s(destination: *mut c_void, capacity: usize, value: c_int, count: usize) -> c_int;
+    }
+
+    pub fn erase(bytes: &mut [u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let status = unsafe { memset_s(bytes.as_mut_ptr().cast(), bytes.len(), 0, bytes.len()) };
+        if status != 0 {
+            zeroize::Zeroize::zeroize(bytes);
+        }
+    }
 }
 
 pub struct Wiping(pub Vec<u8>);

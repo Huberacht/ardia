@@ -51,7 +51,8 @@ Only nulls, lengths and contents. Nothing more:
   words, passwords or payloads; show the user's own input highlighted at `index` instead.
 - Secret results (opened payloads, passwords, entropy, phrases) are plain bytes, never JSON. Copy out what you need,
   then free the buffer.
-- `ardia_buf_free(&buf)` zeroes the bytes, frees them and resets the slot to `{NULL, 0}`. Freeing a reset slot or
+- `ardia_buf_free(&buf)` zeroes the bytes (with `memset_s` on Apple platforms, which the compiler may not remove, and
+  with `zeroize`'s volatile writes elsewhere), frees them and resets the slot to `{NULL, 0}`. Freeing a reset slot or
   passing `NULL` does nothing. Freeing another copy of a buffer that was already freed is a double free.
 - `ardia_sync_keys_new` writes a new handle that owns the derived keys and zeroes them when freed. A handle never
   changes after it's made, so threads may share it, but its free must be synchronized with every user.

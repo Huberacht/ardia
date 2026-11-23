@@ -24,6 +24,8 @@ Code:
     consent period they happened in (`SyncKeys.consentEpoch`, set by `SyncModule` from `ArdiaEvents.consentEpoch`;
     nothing sets it on the iPhone, so it never counts there).
   - `Wordlist.swift`: the English list, kept for `test_sync.py`, `scripts/e2e.mjs` and the wordlist checks.
+  - `SealedLogins.swift`: this Mac's saved logins sealed for sync. A login that won't seal is listed as passwordless,
+    as Windows lists one whose password it can't read, so sync leaves its copy alone instead of reading a deletion.
   - `SyncVault.swift`: the folder, with file coordination and partial files.
   - `SyncKeyStore.swift`: Keychain.
   - `RecoveryKit.swift`: PDF, text sheet and QR code.

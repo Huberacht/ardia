@@ -265,31 +265,7 @@ public class SyncModule: Module {
 
   private func sealedLogins(_ reply: [String: Any]?) -> [[String: Any]]? {
     guard let keys = state.keys else { return nil }
-    guard let logins = reply?["logins"] as? [[String: Any]] else {
-      NSLog("[sync] reading passwords: \(reply?["error"] ?? "no reply")")
-      return nil
-    }
-    var sealed: [[String: Any]] = []
-    var seen = Set<String>()
-    for login in logins {
-      guard let realm = login["realm"] as? String, let username = login["username"] as? String,
-            let password = login["password"] as? String, let created = login["created"] as? Double else {
-        NSLog("[sync] reading passwords: a malformed login; not syncing passwords now")
-        return nil
-      }
-      guard seen.insert("\(realm)\u{0}\(username)").inserted, let origin = Self.loginOrigin(realm) else { continue }
-      guard let seal = try? keys.sealPassword(password, origin: origin, username: username) else {
-        NSLog("[sync] reading passwords: one login couldn't be sealed; syncing the others")
-        continue
-      }
-      sealed.append(["origin": origin, "username": username, "sealed": seal, "created": created])
-    }
-    return sealed
-  }
-
-  static func loginOrigin(_ realm: String) -> String? {
-    let origin = realm.hasSuffix("/") ? String(realm.dropLast()) : realm
-    return origin.range(of: #"^https?://[^/\s]+$"#, options: .regularExpression) != nil ? origin : nil
+    return SealedLogins.from(reply, seal: keys.sealPassword)
   }
 
   private func ensureLocalStateReadable() throws {
