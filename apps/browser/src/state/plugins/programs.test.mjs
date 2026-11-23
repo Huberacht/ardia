@@ -382,7 +382,7 @@ test("a plugin you added has its programs removed with it", async () => {
 test("what the command line gets, as Settings shows it", () => {
   const texts = consentLines(readManifest(CLI).manifest).map((l) => l.text);
   assert.deepEqual(texts, [
-    "Lets any program you run fully control Ardia while control is on in Settings › Advanced: every tab and page, your signed-in sites and their cookies, and the files you download and upload",
+    "While control is on in Settings › Advanced, any program you run, and the commands Ardia runs for it after updates, can fully control Ardia: every tab and page, your signed-in sites and their cookies, and uploads and downloads of any file on this Mac",
     "Adds ardia to your PATH. It runs as you, outside Ardia's sandbox",
     "After updates, runs ardia skills install --auto, ardia skills refresh",
     "Adds ~/.local/bin to your PATH in your shell's login file",
@@ -394,7 +394,7 @@ test("a plugin whose programs run as you says first that they can fully control 
   const { fullControlLine, FULL_CONTROL_SUMMARY } = await import("./consent.ts");
   const other = readManifest(OTHER).manifest;
   const lines = consentLines(other).map((l) => l.text);
-  assert.equal(lines[0], "The other-tool command runs as you, so while control is on in Settings › Advanced, it can fully control Ardia: every tab and page, your signed-in sites and their cookies, and the files you download and upload");
+  assert.equal(lines[0], "The other-tool command runs as you, so while control is on in Settings › Advanced, it can fully control Ardia: every tab and page, your signed-in sites and their cookies, and uploads and downloads of any file on this Mac");
   assert.equal(fullControlLine(other)?.text, lines[0]);
   assert.equal(FULL_CONTROL_SUMMARY, "Can fully control Ardia");
   const sandboxed = readManifest(JSON.stringify({ manifest: 1, name: "boxed", title: "Boxed", main: "dist/index.js", permissions: { tabs: "read" } })).manifest;

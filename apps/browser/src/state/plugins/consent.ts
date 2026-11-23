@@ -22,14 +22,19 @@ function passwordManagerLines(m: PluginManifest, context: ConsentContext): Conse
   return lines;
 }
 
-const FULL_CONTROL_REACH = "every tab and page, your signed-in sites and their cookies, and the files you download and upload";
+const FULL_CONTROL_REACH = `every tab and page, your signed-in sites and their cookies, and uploads and downloads of any file on this ${PLATFORM_TERMS.computer}`;
 
 export function fullControlLine(m: PluginManifest): ConsentLine | null {
-  if (m.permissions.control) return { icon: "hand.raised", text: `Lets any program you run fully control Ardia while control is on in Settings › Advanced: ${FULL_CONTROL_REACH}` };
+  const afterUpdates = m.programs.some((p) => p.afterUpdate.length > 0);
+  if (m.permissions.control) {
+    const who = afterUpdates ? "any program you run, and the commands Ardia runs for it after updates," : "any program you run";
+    return { icon: "hand.raised", text: `While control is on in Settings › Advanced, ${who} can fully control Ardia: ${FULL_CONTROL_REACH}` };
+  }
   if (!m.programs.length) return null;
   const names = m.programs.map((p) => p.name).join(" and ");
   const one = m.programs.length === 1;
-  return { icon: "hand.raised", text: `The ${names} ${one ? "command runs" : "commands run"} as you, so while control is on in Settings › Advanced, ${one ? "it" : "they"} can fully control Ardia: ${FULL_CONTROL_REACH}` };
+  const also = afterUpdates ? ", also when Ardia runs it after updates" : "";
+  return { icon: "hand.raised", text: `The ${names} ${one ? "command runs" : "commands run"} as you${also}, so while control is on in Settings › Advanced, ${one ? "it" : "they"} can fully control Ardia: ${FULL_CONTROL_REACH}` };
 }
 
 export const FULL_CONTROL_SUMMARY = "Can fully control Ardia";
