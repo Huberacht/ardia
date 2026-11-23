@@ -210,18 +210,21 @@ writeDocument(DOC, versionedJson(data, VERSION));
 - `session.json` and `downloads.json` are the exception (`state/session/sessionSafety.ts`). One that exists but is
   empty, broken, of an unknown shape (no session field at all, or core lists that aren't lists), newer than the app, or
   unreadable is never written over until the store has copied it to `<name>-unreadable-<ms>-<n>.json`. The same goes
-  for one whose rows the reader had to drop: it still loads what is whole, but it is kept aside first. `copyDocument` copies the bytes, or the JS
+  for one whose rows the reader had to drop, or whose tabs point at a window or profile that isn't there (loading would
+  drop them): it still loads what is whole, but it is kept aside first. A download row the reader rejects keeps
+  `downloads.json` aside the same way. `copyDocument` copies the bytes, or the JS
   saves the text when the store can't copy. Every retry reuses the same name, and only one copy runs at a time. A slow
   copy that succeeds late still opens the writes. An existence probe that fails counts as present.
 - Until that copy lands, every write to the document waits. Quitting retries a copy that is waiting to retry and
   waits for each held document. Received synced tabs wait too, so a receipt never outruns the disk. The session then comes back from the newest daily backup
   that reads and hydrates, `session-backup-<sun…sat>.json` (one per weekday, so seven at most; each holds
   `{backupDay, backupAt, session}`). A session that reads but throws while it is prepared or hydrated counts as damaged too, and the next
-  backup is tried. With no
+  backup is tried. Backups that load whole are tried before ones that would lose rows. The backups are read only when
+  the saved session can't be used. With no
   backup it starts fresh, and the download history still loads. A missing file is a first launch: nothing is restored.
 - `readSaved` tells these cases apart, where `parseSaved` returns null for all of them.
 - The first session save of each calendar day writes that day's backup, unless today's slot already holds a backup
-  that reads. A failed backup is tried again five minutes later. A launch whose `session.json` still needs a migration
+  that loads whole. A slot holding a backup from a newer Ardia is left alone. A failed backup is tried again five minutes later. A launch whose `session.json` still needs a migration
   saves that day's backup first, and the migrated session isn't written until that backup has landed. Each save adds
   no other writes.
 - `versionedJson` writes the version last, so the payload can't override it. The reader still checks the payload it

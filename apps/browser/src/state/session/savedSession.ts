@@ -2,13 +2,14 @@ import type { HydrateData } from "../browser/store";
 import type { BrowserWindow, ClosedWindow, ParkedPins, Profile, SplitView, Tab } from "../browser/types";
 import { parseSaved, type Migrations, type SavedObject } from "../../lib/savedDocument";
 import { sessionWithCleanUpMinutes } from "../settings/cleanUpAfter";
-import { parseSettingsMeta, sessionWithNewTabLinksInLittleArdia, sessionWithSettingsMeta, sessionWithUnreadCountsOffByDefault } from "../settings/settings";
+import { DEFAULT_PROFILE_ID, parseSettingsMeta, sessionWithNewTabLinksInLittleArdia, sessionWithSettingsMeta, sessionWithUnreadCountsOffByDefault } from "../settings/settings";
 import { sessionWithOwnTabMutes } from "../tabs/mute";
 import { pinChoicesFromDisk, sessionWithPinChoiceStamps } from "../pins/pinChoices";
 import { isFields, isString, isStringList } from "../../lib/decode";
 import { pageFromDisk, pinFromDisk, splitsChecked, sessionWithSplitSlots, sessionWithTabPages, sessionWithTabPins, slotsFromDisk } from "./savedShapes";
 import { profilesKeepingLegacyDots } from "../profiles/switcherMark";
 import { profilesWithOwnLooks } from "../../lib/presetLook";
+import { isIncognitoProfile } from "../browser/model";
 
 export const SESSION_VERSION = 11;
 export const SESSION_MIGRATIONS: Migrations = { 2: sessionWithCleanUpMinutes, 3: sessionWithOwnTabMutes, 4: sessionWithTabPages, 5: sessionWithTabPins, 6: sessionWithSplitSlots, 7: sessionWithSettingsMeta, 8: sessionWithPinChoiceStamps, 9: sessionWithNewTabLinksInLittleArdia, 10: sessionWithUnreadCountsOffByDefault };
@@ -90,7 +91,14 @@ export function sessionFromSaved(raw: SavedObject): SavedSession {
 
 const listed = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 
+function orphanedTabs(session: SavedSession) {
+  const saved = Object.keys(session.profiles ?? {});
+  const profiles = new Set(saved.length ? saved : [DEFAULT_PROFILE_ID]);
+  return Object.values(session.tabs).some((t) => !session.windows[t.windowId] || (!profiles.has(t.profileId) && !isIncognitoProfile(t.profileId)));
+}
+
 export const droppedRows = (raw: SavedObject, session: SavedSession) =>
+  orphanedTabs(session) ||
   listed(raw.windows) > Object.keys(session.windows).length ||
   listed(raw.tabs) > Object.keys(session.tabs).length ||
   listed(raw.groups) > Object.keys(session.groups ?? {}).length ||

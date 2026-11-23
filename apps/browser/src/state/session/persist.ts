@@ -14,12 +14,12 @@ import { noteDownloadHistoryWrite } from "../telemetry/downloadWork";
 import { noteSessionBackup, noteSessionSetAside, noteSessionSetAsideFailure, noteSessionWrite, timeSessionSave } from "../telemetry/sessionWrites";
 import { saveBeforeQuit } from "../app/quit";
 import { landHeldPins, pinGuard, savedAfterPins } from "./pinGuard";
-import { keepAsideGate, rollingBackups, usableSessionValue, writeGate, type WriteGate } from "./sessionSafety";
+import { keepAsideGate, rollingBackups, writeGate, type WriteGate } from "./sessionSafety";
 import { consentToken } from "../telemetry/consentPeriod";
 import { isRegularWindow } from "../windows/small";
 import { savedPage } from "./savedShapes";
 import { SESSION_MIGRATIONS, SESSION_VERSION } from "./savedSession";
-import { DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, hydrateAtLaunch, type LaunchOverrides } from "./launchSession";
+import { DOWNLOADS_DOCUMENT, DOWNLOADS_VERSION, hydrateAtLaunch, newerBackup, wholeBackup, type LaunchOverrides } from "./launchSession";
 
 export { parseSession, SESSION_MIGRATIONS, SESSION_VERSION } from "./savedSession";
 
@@ -157,7 +157,7 @@ export function startPersistence(overrides: LaunchOverrides = {}) {
 
   const keepDroppedPins = pinGuard(useBrowser.getState(), (delay) => unstaged() && schedule(delay));
   const gates = new Map<string, WriteGate>();
-  const backups = rollingBackups(noteSessionBackup, (value) => usableSessionValue(value, SESSION_VERSION, SESSION_MIGRATIONS));
+  const backups = rollingBackups(noteSessionBackup, wholeBackup, newerBackup);
   pinsLanding = () => gates.get(SESSION_DOCUMENT)?.landing() ?? keepDroppedPins.landing();
   sessionGated = () => !(gates.get(SESSION_DOCUMENT)?.open() ?? true);
   const anyLanding = () => [...gates.values()].map((g) => g.landing()).find((l) => l !== null) ?? keepDroppedPins.landing();

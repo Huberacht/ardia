@@ -210,7 +210,7 @@ export const BACKUP_RETRY_MS = 5 * 60_000;
 
 export type RollingBackups = { afterSave: (sessionJson: string, now?: number) => void; beforeMigration: (sessionText: string, now?: number) => Promise<void> };
 
-export function rollingBackups(written: (beforeMigration: boolean) => void = () => {}, usable: (session: unknown) => unknown = () => true): RollingBackups {
+export function rollingBackups(written: (beforeMigration: boolean) => void = () => {}, usable: (session: unknown) => unknown = () => true, kept: (session: unknown) => boolean = () => false): RollingBackups {
   let doneDay: string | null = null;
   let writing = false;
   let retryAt = 0;
@@ -232,7 +232,7 @@ export function rollingBackups(written: (beforeMigration: boolean) => void = () 
   };
   const heldToday = (now: number, day: string) => {
     const held = readBackup(backupName(now));
-    return held?.day === day && !!usable(held.session);
+    return !!held && ((held.day === day && !!usable(held.session)) || kept(held.session));
   };
   return {
     afterSave: (sessionJson, now = Date.now()) => {

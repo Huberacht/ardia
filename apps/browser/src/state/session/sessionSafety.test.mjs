@@ -600,3 +600,84 @@ test("today's slot holding a backup that parses but isn't a session is replaced"
   await turn();
   assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
 });
+
+test("a pin that hydrating drops (its profile is gone) makes the launch keep the original aside before the first save", async () => {
+  const good = JSON.parse(realSession(["https://loose.example/"], { pin: "https://pin.example/" }));
+  const orphaned = JSON.stringify({ ...good, tabs: good.tabs.map((t) => (t.pin ? { ...t, profileId: "gone-profile" } : t)) });
+  stub.docs.set("session.json", orphaned);
+  const stop = startPersistence();
+  S().updateSettings({ appearance: "light" });
+  await settle();
+  stop();
+  assert.equal(stub.docs.get(asideCopies()[0]), orphaned, "the dropped pin is still on disk, beside");
+});
+
+test("an intact older backup wins over a newer one whose rows the reader had to drop", async () => {
+  const older = realSession(["https://older.example/"], { pin: "https://pin.example/" });
+  const newest = JSON.parse(realSession(["https://newest.example/"]));
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-03", 1, older));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify({ ...newest, tabs: [...newest.tabs, { id: "half" }] })));
+  stub.docs.set("session.json", "{");
+  const stop = startPersistence();
+  await settle();
+  stop();
+  assert.ok(tabUrls().includes("https://older.example/"));
+  assert.ok(tabUrls().includes("https://pin.example/"));
+});
+
+test("a damaged backup is the fallback when it is the only one, with what of it is whole", async () => {
+  const newest = JSON.parse(realSession(["https://only.example/"]));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify({ ...newest, tabs: [...newest.tabs, { id: "half" }] })));
+  stub.docs.set("session.json", "{");
+  const stop = startPersistence();
+  await settle();
+  stop();
+  assert.deepEqual(tabUrls(), ["https://only.example/"]);
+});
+
+test("a backup slot written by a newer Ardia is left alone by an older one", async () => {
+  clean();
+  const at = new Date(2026, 4, 3, 9).getTime();
+  const newer = backupJson(localDay(at - 7 * DAY_MS), 1, JSON.stringify({ version: SESSION_VERSION + 1, windows: [], tabs: [] }));
+  stub.docs.set(backupName(at), newer);
+  const { newerBackup, wholeBackup } = await import("./launchSession.ts");
+  rollingBackups(() => {}, wholeBackup, newerBackup).afterSave('{"version":11,"windows":[],"tabs":[]}', at);
+  await turn();
+  assert.equal(stub.docs.get(backupName(at)), newer);
+});
+
+test("today's slot holding a backup that reads but can't be restored (a numeric pinnedUrl) is written again", async () => {
+  const bad = JSON.parse(realSession(["https://x.example/"], { pin: "https://pin.example/" }));
+  clean();
+  const at = new Date(2026, 4, 3, 9).getTime();
+  stub.docs.set(backupName(at), backupJson(localDay(at), 1, JSON.stringify({ ...bad, tabs: bad.tabs.map((t) => (t.pin ? { ...t, pinnedUrl: 42 } : t)) })));
+  const { newerBackup, wholeBackup } = await import("./launchSession.ts");
+  rollingBackups(() => {}, wholeBackup, newerBackup).afterSave('{"version":11,"windows":[],"tabs":[],"n":1}', at);
+  await turn();
+  assert.equal(JSON.parse(stub.docs.get(backupName(at))).session.n, 1);
+});
+
+test("download rows the reader rejects keep downloads.json aside before it is rewritten, and the good rows load", async () => {
+  stub.docs.set("session.json", realSession());
+  const original = JSON.stringify({ version: 3, downloads: [{ id: "bad", state: "complete", profile: 5 }, { id: "good", url: "https://files.example/a.zip", filename: "a.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 0 }] });
+  stub.docs.set("downloads.json", original);
+  const stop = startPersistence();
+  S().upsertDownload({ id: "d1", url: "https://files.example/b.zip", filename: "b.zip", state: "complete", receivedBytes: 1, totalBytes: 1, startedAt: 1 });
+  await settle();
+  stop();
+  const aside = [...stub.docs.keys()].find((name) => /^downloads-unreadable-/.test(name));
+  assert.equal(stub.docs.get(aside), original);
+  assert.deepEqual(JSON.parse(stub.docs.get("downloads.json")).downloads.map((d) => d.filename).sort(), ["a.zip", "b.zip"]);
+});
+
+test("loadSession picks the same session launch does, skipping a backup that throws while it is prepared", () => {
+  const older = realSession(["https://older.example/"]);
+  const newest = JSON.parse(realSession(["https://newest.example/"], { pin: "https://pin.example/" }));
+  newest.settings = { ...newest.settings, restoreSession: false };
+  newest.tabs = newest.tabs.map((t) => (t.pin ? { ...t, pinnedUrl: 42 } : t));
+  stub.docs.set(SESSION_BACKUPS[0], backupJson("2026-01-03", 1, older));
+  stub.docs.set(SESSION_BACKUPS[1], backupJson("2026-01-04", 1, JSON.stringify(newest)));
+  stub.docs.set("session.json", "{");
+  const data = loadSession();
+  assert.deepEqual(Object.values(data.tabs).map((t) => t.url), ["https://older.example/"]);
+});
