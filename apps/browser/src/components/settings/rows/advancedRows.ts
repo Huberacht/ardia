@@ -84,8 +84,8 @@ export const advancedRows = {
         engineSwitchKeepsPage: {
           title: "Keep the page on screen while it switches",
           explained: true,
-          description: "The old page stays up until the other engine draws it.",
-          keywords: ["seamless", "swap", "flash", "blank", "reload", "scroll position", "switch engine", "switching engines", "open in webkit", "open in chromium", "3 seconds", "drawn"],
+          description: "The old page stays up until the other engine draws it, up to 3 seconds.",
+          keywords: ["seamless", "swap", "flash", "blank", "reload", "scroll position", "same scroll position", "switch engine", "switching engines", "open in webkit", "open in chromium", "3 seconds", "drawn"],
           shown: webKitOffered,
         },
         engineSwitchAsksAboutUnsavedWork: {

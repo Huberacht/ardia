@@ -10,6 +10,7 @@ import { splitLane, type SplitLane, splitsOnRow } from "./lanes";
 import type { AdoptId } from "../browser/types";
 import { noteSplit } from "../telemetry/usage";
 import { returnFocusToPage } from "../sidebar/actions";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 
 const store = () => useBrowser.getState();
 
@@ -118,7 +119,12 @@ export function splitMenuItems(tabId: string): MenuItem[] {
         { id: "convert", title: horizontal ? "Convert to Vertical Split View" : "Convert to Horizontal Split View", symbol: horizontal ? "rectangle.split.1x2" : "rectangle.split.2x1" },
       ],
     },
-    ...withOptionAlternate({ id: "remove", title: "Remove from Split View", symbol: "rectangle.portrait.and.arrow.right" }, { id: "separate", title: "Separate All Tabs", symbol: "rectangle.split.3x1" }),
+    ...(PLATFORM_FEATURES.menuAlternates
+      ? withOptionAlternate({ id: "remove", title: "Remove from Split View", symbol: "rectangle.portrait.and.arrow.right" }, { id: "separate", title: "Separate All Tabs", symbol: "rectangle.split.3x1" })
+      : [
+          { id: "remove", title: "Remove from Split View", symbol: "rectangle.portrait.and.arrow.right" },
+          { id: "separate", title: "Separate All Tabs", symbol: "rectangle.split.3x1" },
+        ]),
     { separator: true },
     { id: "close", title: "Close Pane", symbol: "xmark" },
     { id: "closeSplit", title: "Close Split View", symbol: "xmark.square" },

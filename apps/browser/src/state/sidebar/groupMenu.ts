@@ -18,6 +18,7 @@ import { shownLiveOf } from "../tabs/tabLive";
 import { urlParts } from "../../lib/urlParts";
 import { isPluginMenuChoice, pluginMenuItems, runPluginMenuChoice, type PluginMenuContext } from "../plugins/menus";
 import { consentToken, type ConsentToken } from "../telemetry/choice";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 
 type GroupChoice = Destination | { kind: "color"; color: GroupColor | null };
 
@@ -91,7 +92,12 @@ export function groupMenuItems(s: BrowserState, windowId: string, groupId: strin
     [
       { id: "sleep", title: "Sleep Tabs", symbol: "moon.zzz", enabled: groupTabIds(s.groups, groupId).some((id) => canSleep(s, id)) },
       { id: "ungroup", title: "Ungroup", symbol: "folder.badge.minus" },
-      ...withAlternate({ id: "close", title: "Close Group", symbol: "xmark" }, { id: "delete", title: "Delete Group", symbol: "trash" }, null),
+      ...(PLATFORM_FEATURES.menuAlternates
+        ? withAlternate({ id: "close", title: "Close Group", symbol: "xmark" }, { id: "delete", title: "Delete Group", symbol: "trash" }, null)
+        : [
+            { id: "close", title: "Close Group", symbol: "xmark" },
+            { id: "delete", title: "Delete Group", symbol: "trash" },
+          ]),
     ],
   );
 }

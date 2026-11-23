@@ -32,6 +32,7 @@ import { canSleep, sleepTabsFromMenu } from "../tabs/manualSleep";
 import { isPluginMenuChoice, pluginMenuItems, runPluginMenuChoice, type PluginMenuContext } from "../plugins/menus";
 import { urlParts } from "../../lib/urlParts";
 import { ALL_UNREAD_TITLE, canChooseSiteUnread, isUnreadSiteHidden, showUnreadCounts, toggleSiteUnread, unreadSiteTitle } from "../tabs/unreadSites";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 
 const store = () => useBrowser.getState();
 
@@ -135,7 +136,9 @@ function bookmarkItems(s: BrowserState, windowId: string, tab: Tab, f: Facts): M
   if (!bookmarksShown(s.settings)) return [];
   const saved = !!tab.url && isBookmarked(s, bookmarkProfileId(s, s.windows[windowId]), tab.url);
   if (!saved) return [{ id: "bookmark", title: "Bookmark Tab…", symbol: "bookmark", enabled: !!tab.url, ...hintWhen(f.active, "bookmarkPage", s) }];
-  return withAlternate({ id: "bookmark", title: "Edit Bookmark…", symbol: "bookmark.fill" }, { id: "unbookmark", title: "Remove Bookmark", symbol: "minus.circle" }, null);
+  const edit: MenuItem = { id: "bookmark", title: "Edit Bookmark…", symbol: "bookmark.fill" };
+  const remove: MenuItem = { id: "unbookmark", title: "Remove Bookmark", symbol: "minus.circle" };
+  return PLATFORM_FEATURES.menuAlternates ? withAlternate(edit, remove, null) : [edit, remove];
 }
 
 function muteItems(s: BrowserState, tab: Tab): MenuItem[] {

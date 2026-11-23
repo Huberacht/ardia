@@ -59,7 +59,7 @@ export const tabRows = {
           title: "Keep Top Apps running when closed",
           explained: true,
           description: `${keyText("⌘W")} switches away but keeps the page loaded for notifications.`,
-          keywords: ["top apps", "pinned tiles", "favorites", "essentials", "cmd w", "close", "unload", "keep loaded", "keep running", "background", "arc"],
+          keywords: ["top apps", "pinned tiles", "favorites", "essentials", "cmd w", "close", "unload", "keep loaded", "keep running", "background", "arc", "notifications still arrive"],
         },
         closedTopAppTiles: {
           title: "Draw tiles for closed Top Apps",

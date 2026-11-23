@@ -158,4 +158,3 @@ export async function editPinnedPage(windowId: string, tabId: string) {
   });
   if (url) store().setPinnedUrl(tabId, url.includes("://") ? url : `https://${url}`);
 }
-

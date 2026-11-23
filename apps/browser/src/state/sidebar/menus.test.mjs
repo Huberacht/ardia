@@ -310,6 +310,7 @@ test("the sidebar background menu: new things, Browser Layout, Close All Tabs la
     "New Live Folder [bolt] ›",
     "  Pull Requests [arrow.triangle.pull]",
     "  Documents [doc.text]",
+    "Add Shared Folder… [person.2]",
     "---",
     "Browser Layout [sidebar.left] ›",
     "  Sidebar on Left [sidebar.left] ✓",
@@ -353,11 +354,38 @@ test("Browser Layout moves the tabs between the sides and the top in one pick, a
   runBrowserLayoutChoice(w, "layout:addressToolbar");
   runBrowserLayoutChoice(w, "layout:minimalism");
   assert.equal(S().settings.minimalismMode, true);
+  assert.ok(!layout().some((l) => l.startsWith("Address Bar in")), "minimalism suppresses the address bar placement choices");
+  assert.ok(!layout().some((l) => l.startsWith("Compact Toolbar")), "minimalism suppresses Compact Toolbar");
+  runBrowserLayoutChoice(w, "layout:addressSidebar");
+  assert.equal(S().settings.addressBar, "toolbar");
   runBrowserLayoutChoice(w, "layout:minimalism");
+  S().updateSettings({ bookmarksBar: "always" });
+  const priv = S().createWindow({ kind: "private" });
+  assert.ok(!sub(sidebarMenuItems(S(), priv), "browserLayout").some((l) => l.startsWith("Bookmarks Bar")), "private windows hide the bookmarks bar row");
+  runBrowserLayoutChoice(priv, "layout:bookmarksBar");
+  assert.equal(S().settings.bookmarksBar, "always");
+  S().updateSettings({ bookmarksBar: "never" });
   S().updateSettings({ showBookmarks: false });
   assert.ok(!layout().some((l) => l.startsWith("Bookmarks Bar")), "bookmarks off, no bar row");
   S().updateSettings({ showBookmarks: true });
   assert.equal(runBrowserLayoutChoice(w, "newTab"), false);
+});
+
+test("multi-select Move to › Top Apps converts pinned rows into Top Apps tiles", async () => {
+  const { w, ids } = windowWith("a", "b");
+  S().pinTabs(ids, true, true);
+  assert.equal(S().tabs[ids[0]].pin?.as, "row");
+  assert.equal(S().tabs[ids[1]].pin?.as, "row");
+  const shell = shellNativeModules.ArdiaMenus;
+  const real = shell.showMenu;
+  shell.showMenu = () => Promise.resolve("pinTiles");
+  try {
+    await openMultiMenu(w, ids);
+  } finally {
+    shell.showMenu = real;
+  }
+  assert.equal(S().tabs[ids[0]].pin?.as, "tile");
+  assert.equal(S().tabs[ids[1]].pin?.as, "tile");
 });
 
 test("a Top Apps folder: rename, then unpin its tabs or remove the folder", () => {

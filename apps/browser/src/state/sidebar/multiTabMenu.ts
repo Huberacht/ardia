@@ -81,7 +81,7 @@ export async function openMultiMenu(windowId: string, shown: string[]) {
   if (!choice || !ids.length) return;
   if (typeof choice !== "string") sendTabs(windowId, ids, f.tabs[0]!.profileId, choice);
   else if (choice === "unpin") s.pinTabs(ids, false);
-  else if (choice === "pinTiles") s.pinTabs(ids, true);
+  else if (choice === "pinTiles") s.pinTabs(ids, true, false);
   else if (choice === "pinRows") s.pinTabs(ids, true, true);
   else if (choice === "duplicate") ids.forEach((id) => store().duplicateTab(id));
   else if (choice === "newGroup") newGroupWithSelection(windowId, ids);

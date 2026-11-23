@@ -12,7 +12,10 @@ import type { ConsentToken } from "../telemetry/choice";
 import { newLiveFolderMenuItem, runNewLiveFolder } from "./liveMenus";
 import { sections } from "./menuParts";
 import { pinnedFoldMenuItem, runPinnedFold } from "./pinnedFold";
+import { addSharedFolder } from "../sharedFolders/actions";
+import { canAddSharedFolder } from "../sharedFolders/removal";
 import { chooseSidebarSide, switchTabLayout } from "../settings/actions";
+import { minimalismIn } from "../windows/layout";
 
 const store = () => useBrowser.getState();
 
@@ -22,7 +25,8 @@ export function browserLayoutItems(s: BrowserState, windowId: string): MenuItem[
   const w = s.windows[windowId];
   const inSidebar = tabLayoutOf(s, windowId) === "sidebar";
   const right = s.settings.sidebarSide === "right";
-  const addressInToolbar = !inSidebar || s.settings.addressBar === "toolbar";
+  const minimal = minimalismIn(s, windowId);
+  const addressInToolbar = !minimal && (!inSidebar || s.settings.addressBar === "toolbar");
   return sections(
     [
       { id: "layout:sidebarLeft", title: "Sidebar on Left", symbol: "sidebar.left", checked: inSidebar && !right },
@@ -30,14 +34,14 @@ export function browserLayoutItems(s: BrowserState, windowId: string): MenuItem[
       { id: "layout:top", title: "Top Tab Bar", symbol: "menubar.rectangle", checked: !inSidebar, ...menuShortcut("toggleTabLayout", s) },
     ],
     [
-      inSidebar && { id: "layout:addressToolbar", title: "Address Bar in Toolbar", symbol: "menubar.rectangle", checked: s.settings.addressBar === "toolbar" },
-      inSidebar && { id: "layout:addressSidebar", title: "Address Bar in Sidebar", symbol: "sidebar.left", checked: s.settings.addressBar === "sidebar" },
+      inSidebar && !minimal && { id: "layout:addressToolbar", title: "Address Bar in Toolbar", symbol: "menubar.rectangle", checked: s.settings.addressBar === "toolbar" },
+      inSidebar && !minimal && { id: "layout:addressSidebar", title: "Address Bar in Sidebar", symbol: "sidebar.left", checked: s.settings.addressBar === "sidebar" },
       addressInToolbar && { id: "layout:compactToolbar", title: "Compact Toolbar", symbol: "rectangle.compress.vertical", checked: s.settings.compactToolbar },
     ],
     [
       { id: "layout:autoHide", title: "Auto-Hide Tabs", symbol: "eye.slash", checked: !!w && !tabsShownIn(s, windowId), ...menuShortcut("toggleSidebar", s) },
       { id: "layout:minimalism", title: "Minimalism Mode", symbol: "rectangle.leftthird.inset.filled", checked: s.settings.minimalismMode, ...menuShortcut("toggleMinimalism", s) },
-      bookmarksShown(s.settings) && { id: "layout:bookmarksBar", title: "Bookmarks Bar", symbol: "bookmark", checked: bookmarksBarShownIn(s, windowId), ...menuShortcut("toggleBookmarksBar", s) },
+      bookmarksShown(s.settings) && w?.kind !== "private" && { id: "layout:bookmarksBar", title: "Bookmarks Bar", symbol: "bookmark", checked: bookmarksBarShownIn(s, windowId), ...menuShortcut("toggleBookmarksBar", s) },
       ...pinnedFoldMenuItem(s, windowId),
     ],
   );
@@ -55,27 +59,33 @@ function placeTabs(windowId: string, layout: "sidebar" | "top", side: "left" | "
 export function runBrowserLayoutChoice(windowId: string, choice: string, consent: ConsentToken | null = null): boolean {
   if (!choice.startsWith("layout:") && choice !== "pinnedFold") return false;
   const s = store();
-  if (!s.windows[windowId]) return true;
+  const w = s.windows[windowId];
+  if (!w) return true;
   if (runPinnedFold(windowId, choice)) return true;
   if (choice === "layout:sidebarLeft") placeTabs(windowId, "sidebar", "left", consent);
   else if (choice === "layout:sidebarRight") placeTabs(windowId, "sidebar", "right", consent);
   else if (choice === "layout:top") placeTabs(windowId, "top", null, consent);
-  else if (choice === "layout:addressToolbar") s.updateSettings({ addressBar: "toolbar" });
-  else if (choice === "layout:addressSidebar") s.updateSettings({ addressBar: "sidebar" });
-  else if (choice === "layout:compactToolbar") s.updateSettings({ compactToolbar: !s.settings.compactToolbar });
+  else if (choice === "layout:addressToolbar" && !minimalismIn(s, windowId)) s.updateSettings({ addressBar: "toolbar" });
+  else if (choice === "layout:addressSidebar" && !minimalismIn(s, windowId)) s.updateSettings({ addressBar: "sidebar" });
+  else if (choice === "layout:compactToolbar" && !minimalismIn(s, windowId)) s.updateSettings({ compactToolbar: !s.settings.compactToolbar });
   else if (choice === "layout:autoHide") s.toggleSidebar(windowId);
   else if (choice === "layout:minimalism") s.updateSettings({ minimalismMode: !s.settings.minimalismMode });
-  else if (choice === "layout:bookmarksBar") s.updateSettings({ bookmarksBar: bookmarksBarShownIn(s, windowId) ? "never" : "always" });
+  else if (choice === "layout:bookmarksBar" && w.kind !== "private") s.updateSettings({ bookmarksBar: bookmarksBarShownIn(s, windowId) ? "never" : "always" });
   return true;
 }
 
 export function sidebarMenuItems(s: BrowserState, windowId: string): MenuItem[] {
+  const w = s.windows[windowId];
   return sections(
     [
       { id: "newTab", title: "New Tab", symbol: "plus.app", ...menuShortcut("newTab", s) },
       { id: "reopen", title: "Reopen Closed Tab", symbol: "clock.arrow.circlepath", enabled: !!lastClosedEntry(s, windowId), ...menuShortcut("reopenClosedTab", s) },
     ],
-    [{ id: "newGroup", title: "New Group", symbol: "folder.badge.plus" }, newLiveFolderMenuItem()],
+    [
+      { id: "newGroup", title: "New Group", symbol: "folder.badge.plus" },
+      newLiveFolderMenuItem(),
+      ...(canAddSharedFolder(w?.profileId) ? [{ id: "addShared", title: "Add Shared Folder…", symbol: "person.2" }] : []),
+    ],
     [browserLayoutMenuItem(s, windowId)],
     [{ id: "closeAll", title: "Close All Tabs", symbol: "xmark", ...menuShortcut("closeAllTabs", s) }],
   );
@@ -92,5 +102,6 @@ export async function openSidebarMenu(windowId: string) {
   else if (choice === "newGroup") {
     const id = s.newTab(windowId);
     if (id) newGroupWithSelection(windowId, [id]);
-  } else if (choice === "closeAll") closeAllTabs(windowId);
+  } else if (choice === "addShared") void addSharedFolder(windowId);
+  else if (choice === "closeAll") closeAllTabs(windowId);
 }
