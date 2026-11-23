@@ -252,6 +252,7 @@ final class GlassFrames: NSObject {
       return
     }
     mark("pieces\(pieces.count)")
+    capture.strikes = sourceWhole && web == nil ? LiquidGlassRules.backdropStrikes : 1
     let pageIndex = pieces.firstIndex { $0.page != nil }
     let page = pageIndex.map { pieces[$0] }
     let shiftable = sourceWhole && GlassLaunch.pageMode == .shift && GlassFlowRules.shiftable(pageIndex: pageIndex, overlapsAbove: pieces.map { $0.bounds.applying($0.transform).intersects(wanted) })

@@ -311,6 +311,14 @@ struct LiquidGlassTests {
     #expect(!GlassFlowRules.shiftable(pageIndex: nil, overlapsAbove: [true]))
   }
 
+  @Test func `a backdrop may hitch once in two seconds, a page or what lies beneath never`() {
+    let frameMs = 1000.0 / 60
+    let once = [LiquidGlassRules.CaptureSample(at: 1, ms: 38)]
+    #expect(LiquidGlassRules.overBudget(once, now: 1.1, frameMs: frameMs))
+    #expect(!LiquidGlassRules.overBudget(once, now: 1.1, frameMs: frameMs, strikes: LiquidGlassRules.backdropStrikes))
+    #expect(LiquidGlassRules.overBudget(once + [LiquidGlassRules.CaptureSample(at: 2, ms: 30)], now: 2.1, frameMs: frameMs, strikes: LiquidGlassRules.backdropStrikes))
+  }
+
   @Test func `a cold capture is forgiven once and only up to fifty milliseconds`() {
     let frameMs = 1000.0 / 60
     #expect(!LiquidGlassRules.overBudget([LiquidGlassRules.CaptureSample(at: 1, ms: 45, cold: true)], now: 1.1, frameMs: frameMs))
