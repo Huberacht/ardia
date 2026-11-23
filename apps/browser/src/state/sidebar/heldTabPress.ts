@@ -64,7 +64,7 @@ function rememberSwitchPress(press: SwitchPress) {
 export function switchedByPressWithin(windowId: string, tabId: string, ms: number, point: TabPress["at"] = null) {
   const p = switchPress;
   if (!p || p.windowId !== windowId || p.tabId !== tabId || performance.now() - p.at >= ms) return false;
-  return !p.point || !point || Math.hypot(point.x - p.point.x, point.y - p.point.y) < TAB_CLICK_SLOP;
+  return !!p.point && !!point && Math.hypot(point.x - p.point.x, point.y - p.point.y) < TAB_CLICK_SLOP;
 }
 
 const pressEnds = new Set<{ windowId: string; listener: () => void }>();

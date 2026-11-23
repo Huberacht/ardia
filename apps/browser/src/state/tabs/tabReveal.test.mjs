@@ -263,10 +263,10 @@ test("a selection after the press ends the hold, so a keyboard switch back to th
   setup();
   held.holdTabPress("w1", "b", pressAt(9200));
   S().activate("b");
-  assert.equal(held.switchedByPressWithin("w1", "b", 500), true);
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, { x: 10, y: 10 }), true);
   S().activate("c");
   S().activate("b");
-  assert.equal(held.switchedByPressWithin("w1", "b", 500), false);
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, { x: 10, y: 10 }), false);
 });
 
 test("a tab that moves to another window after the press is not held back there or here", async () => {
@@ -277,6 +277,16 @@ test("a tab that moves to another window after the press is not held back there 
   S().updateTab("b", { windowId: "w2" });
   assert.equal(held.switchedByPressWithin("w1", "b", 500), false);
   assert.equal(held.switchedByPressWithin("w2", "b", 500), false);
+});
+
+test("a keyboard close right after a mouse select closes: Return and Space press the close button with no pointer point", async () => {
+  const held = await import("../sidebar/heldTabPress.ts");
+  setup();
+  held.holdTabPress("w1", "b", pressAt(9350));
+  S().activate("b");
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, { x: 10, y: 10 }), true, "a mouse click at the same spot is still held back");
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, null), false);
+  assert.equal(held.switchedByPressWithin("w1", "b", 500, held.pressPoint({ nativeEvent: {} })), false);
 });
 
 test("a press on the tab already in front holds nothing back", async () => {

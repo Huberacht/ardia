@@ -27,7 +27,7 @@ import { devRegister } from "../dev/devRegister";
 import { StripScrollContext, type StripScroll } from "./stripScroll";
 import { StripMotionContext, useStripMotion } from "./stripMotion";
 import { StripGhosts } from "./StripGhosts";
-import { FIRST_REVEAL, firstOverflowReveal, selectionReveal } from "./stripRevealGate";
+import { endSettling, FIRST_REVEAL, firstOverflowReveal, isOwnScroll, NO_OWN_SCROLL, ownScroll, revealStillWanted, selectionReveal } from "./stripRevealGate";
 import { COMPACT_CHIP, GROUP_TITLE_MAX, GROUP_TITLE_TIGHT, EDGE_FADE, EDGE_FADE_FLOOR, EDGE_FADE_ONSET, FLARE, GAP, NEW_TAB_ROOM, STRIP_SCROLL_ID } from "./tokens";
 
 type Wide = { tabId: string; slot: number };
@@ -120,12 +120,13 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const viewport = useRef(pageWidth + flare * 2);
   const content = useRef(0);
   const motion = useStripMotion({ entries, top, dock, flare, end: pinned ? null : stripEnd(top) + GAP, viewport: viewport.current, offset: () => scrolled.current, windowId, enabled: current && !resting });
-  const ownScrollUntil = useRef(0);
+  const own = useRef(NO_OWN_SCROLL);
+  const userScrolls = useRef(0);
   const userScrollAt = useRef(-Infinity);
   const userScrolling = () => performance.now() - userScrollAt.current < USER_SCROLL_QUIET_MS;
   const scrollStrip = (x: number, animated: boolean) => {
+    own.current = ownScroll(scrolled.current, x, animated, performance.now() + (animated ? OWN_ANIMATED_SCROLL_MS : OWN_SCROLL_MS));
     scrolled.current = x;
-    ownScrollUntil.current = performance.now() + (animated ? OWN_ANIMATED_SCROLL_MS : OWN_SCROLL_MS);
     scroll.current?.scrollTo({ x, animated });
   };
   const keepInRange = () => {
@@ -175,10 +176,15 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const latestScroll = useRef((_: NativeSyntheticEvent<NativeScrollEvent>) => {});
   latestScroll.current = (e) => {
     const now = performance.now();
-    if (Math.abs(e.nativeEvent.contentOffset.x - scrolled.current) >= 1) {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    if (Math.abs(contentOffset.x - scrolled.current) >= 1) {
       dismissStripHoverIn(windowId);
-      if (now > ownScrollUntil.current) {
+      if (!isOwnScroll(own.current, contentOffset.x, scrolled.current, contentSize.width - layoutMeasurement.width, now)) {
         userScrollAt.current = now;
+        userScrolls.current++;
+        own.current = NO_OWN_SCROLL;
+        firstReveal.current = endSettling(firstReveal.current);
+        if (revealed.current !== activeId && !(held.current && closedTo.current === activeId)) revealed.current = activeId;
         noteTabStripScrolled(stripKey, now);
       }
     }
@@ -197,6 +203,8 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
   const latestSpan = useRef(spanOf);
   latestSpan.current = spanOf;
   const revealed = useRef(activeId);
+  const latestActive = useRef(activeId);
+  latestActive.current = activeId;
   const firstReveal = useRef(FIRST_REVEAL);
   const measuring = chipFrames.includes(undefined) || nameWidths.includes(undefined) || folderWidths.includes(undefined);
   const reveal = (tabId: string, animated: boolean) => {
@@ -230,7 +238,12 @@ export const StripPage = memo(function StripPage({ profileId, slot, pageWidth, c
     if (step !== "run") return;
     let frame = 0;
     let quiet: ReturnType<typeof setTimeout> | undefined;
+    const pending = { tabId: activeId, scrolls: userScrolls.current };
     const now = () => {
+      if (!revealStillWanted(pending, { tabId: latestActive.current, scrolls: userScrolls.current, current: onStage.current, dragging: tabDragging() })) {
+        if (onStage.current && latestActive.current === activeId) revealed.current = activeId;
+        return;
+      }
       if (!userScrolling()) {
         revealed.current = activeId;
         return reveal(activeId, true);

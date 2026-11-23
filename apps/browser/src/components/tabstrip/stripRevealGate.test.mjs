@@ -51,3 +51,38 @@ test("a user scroll after the first reveal ends the rechecks", () => {
   assert.equal(scrolled.reveal, false);
   assert.equal(firstOverflowReveal(scrolled.state, at({ now: 1300 })).reveal, false);
 });
+
+const { endSettling, isOwnScroll, NO_OWN_SCROLL, ownScroll, revealStillWanted } = await import("./stripRevealGate.ts");
+
+test("a scroll the strip made is its own, and a wheel step during its window is the user's", () => {
+  const jump = ownScroll(0, 4585, false, 1080);
+  assert.equal(isOwnScroll(jump, 4585, 4585, 6000, 1010), true);
+  assert.equal(isOwnScroll(jump, 4625, 4585, 6000, 1010), false, "a step past the target inside the 80 ms window");
+  assert.equal(isOwnScroll(jump, 4545, 4585, 6000, 1010), false, "a step back inside the window");
+  assert.equal(isOwnScroll(jump, 3200, 4585, 3200, 1010), true, "landing on the native end when the target was past it");
+  const glide = ownScroll(100, 900, true, 1600);
+  assert.equal(isOwnScroll(glide, 500, 400, 6000, 1300), true, "on the way of an animated reveal");
+  assert.equal(isOwnScroll(glide, 1100, 900, 6000, 1300), false);
+  assert.equal(isOwnScroll(glide, 500, 900, 6000, 1700), false, "back over the way once the glide is done");
+  assert.equal(isOwnScroll(NO_OWN_SCROLL, 300, 0, 6000, 0), false);
+  assert.equal(isOwnScroll(NO_OWN_SCROLL, 1800, 2400, 1800, 0), true, "AppKit clamping to a shorter strip's end");
+});
+
+test("a wheel step during the first reveal's own scroll cancels the measuring recheck", () => {
+  const first = firstOverflowReveal(FIRST_REVEAL, at({ measuring: true, now: 1000 }));
+  assert.equal(first.reveal, true);
+  const jump = ownScroll(0, 4585, false, 1080);
+  assert.equal(isOwnScroll(jump, 4625, 4585, 6000, 1020), false);
+  const taken = endSettling(first.state);
+  assert.equal(firstOverflowReveal(taken, at({ measuring: false, userScrollAt: -Infinity, now: 1200 })).reveal, false, "the group finishing its measure doesn't undo the user's scroll");
+});
+
+test("a user scroll during a pending reveal leaves the strip where the user put it", () => {
+  const pending = { tabId: "t9", scrolls: 3 };
+  const still = { tabId: "t9", scrolls: 3, current: true, dragging: false };
+  assert.equal(revealStillWanted(pending, still), true);
+  assert.equal(revealStillWanted(pending, { ...still, scrolls: 4 }), false, "a newer user scroll cancels it, not delays it");
+  assert.equal(revealStillWanted(pending, { ...still, tabId: "t2" }), false, "another selection");
+  assert.equal(revealStillWanted(pending, { ...still, current: false }), false, "another profile in front");
+  assert.equal(revealStillWanted(pending, { ...still, dragging: true }), false, "a drag started");
+});

@@ -153,10 +153,6 @@ export function useStripDrag(item: StripDrag) {
       const step = autoScrollSpeed(now.moveX, view, at, scroll.max(), AUTO_SCROLL_ZONE, AUTO_SCROLL_MAX);
       if (!step) return;
       const next = Math.max(0, Math.min(scroll.max(), at + step));
-      if (!shownHeld.current) {
-        shownHeld.current = true;
-        scroll.holdShown(true);
-      }
       scroll.scrollTo(next);
       drag.current.scrolled += next - at;
       if (!moveTo(now)) autoScroll();
@@ -197,6 +193,10 @@ export function useStripDrag(item: StripDrag) {
           drag.current = mine;
           phase.current = { kind: "dragging" };
           setLook("dragging");
+          if (!shownHeld.current && latest.current.scroll) {
+            shownHeld.current = true;
+            latest.current.scroll.holdShown(true);
+          }
           if (latest.current.from >= 0) raise(true);
           latest.current.scroll?.measure((x, width) => {
             if (drag.current === mine) mine.viewport = [x, x + width];

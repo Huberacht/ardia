@@ -167,6 +167,22 @@ export async function runInteractions(ctx) {
       record("backgroundTab", { selectedShift: after.detail.selSpan[0] - before.detail.selSpan[0], selInViewAfter: after.detail.selSpan[0] >= 0 ? 1 : 0, selTitleBefore: before.selTitlePt });
     }
 
+    if (want("revealYieldsToScroll")) {
+      await prepare("c120", WIDTH, "mid");
+      const r = await run(`const w = st().windows.c120; const loose = stripOrder("c120").filter((t) => !st().tabs[t].pin);
+        const steps = Array.from({ length: 30 }, (_, i) => ({ phase: "wheel", dy: -4, timestampMs: i * 16 }));
+        const page = globalThis.topStripPages["c120|default"];
+        const before = Math.round(page.scroll().x);
+        return D.devSetWindowFrame("c120", [40 + Object.keys(st().windows).indexOf("c120") * 11, 60 + Object.keys(st().windows).indexOf("c120") * 7, w.frame[2], ${HEIGHT}]).then((frame) => nativeOf(frame)).then((n) => {
+          setTimeout(() => ac.actions.switchToTab(loose[3]), 60);
+          return globalThis.expo.modules.ArdiaSwipe.devSimulate(640, 21, n, steps, true);
+        }).then(() => wait(250)).then(() => { const atEnd = Math.round(page.scroll().x); return wait(1200).then(() => {
+          const sc = page.scroll(); const chip = page.chips().find((c) => c.id === loose[3]);
+          return { before, afterWheel: atEnd, settled: Math.round(sc.x), selectedShown: chip.start >= sc.x - 1 && chip.end <= sc.x + sc.viewport + 1, active: st().windows.c120.activeTabIds.default.split("-").pop() };
+        }); });`, 60000);
+      record("revealYieldsToScroll", { ...r, snappedBack: r.settled !== r.afterWheel });
+    }
+
     if (want("groupEdgeDrag")) {
       await prepare("c120", WIDTH, 0);
       const group = await run(`const id = st().createGroup(["c120-t4", "c120-t5", "c120-t6", "c120-t7"], { name: "Edge" }); st().updateGroup(id, { collapsed: false }); return wait(1200).then(() => id);`);
