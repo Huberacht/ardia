@@ -4,13 +4,49 @@ import { watchShownLive } from "../browser/hooks";
 import { focusHeroBar } from "../omnibox/barState";
 import { consentToken } from "../telemetry/client";
 import { notePageOverlay } from "../telemetry/usage";
-import { shownLiveOf } from "./tabLive";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
+import { navigationOf } from "./pageSession";
+import { onLiveChange, shownLiveOf } from "./tabLive";
 
 export const NEW_TAB_KEPT_MAX_MS = 1500;
 export const NEW_TAB_DROP_AFTER_LOAD_MS = 100;
 
-export function watchPageDrawn(tabId: string, drawn: (timedOut: boolean) => void, maxMs = NEW_TAB_KEPT_MAX_MS, afterLoadMs = NEW_TAB_DROP_AFTER_LOAD_MS): () => void {
-  let sawLoading = shownLiveOf(useBrowser.getState(), tabId).isLoading;
+type Load = { seq: number; ended: boolean };
+const loads = new Map<string, Load>();
+const armed = new Map<string, number>();
+let recording: (() => void) | null = null;
+
+const navigationSeq = (tabId: string) => navigationOf(useBrowser.getState().tabs[tabId])?.seq;
+
+function recordLoad(tabId: string, loading: boolean) {
+  if (!armed.has(tabId)) return;
+  const seq = navigationSeq(tabId);
+  if (seq === undefined) return void loads.delete(tabId);
+  if (loading) return void loads.set(tabId, { seq, ended: false });
+  const load = loads.get(tabId);
+  if (load?.seq === seq) load.ended = true;
+}
+
+export function armLoadRecord(tabId: string): () => void {
+  armed.set(tabId, (armed.get(tabId) ?? 0) + 1);
+  recording ??= onLiveChange((id, live, prev) => {
+    if (live.isLoading !== prev.isLoading) recordLoad(id, live.isLoading);
+  });
+  return () => {
+    const left = (armed.get(tabId) ?? 1) - 1;
+    if (left > 0) return void armed.set(tabId, left);
+    armed.delete(tabId);
+    loads.delete(tabId);
+    if (armed.size || !recording) return;
+    recording();
+    recording = null;
+  };
+}
+
+export function watchPageDrawn(tabId: string, seq: number | undefined, drawn: (timedOut: boolean) => void, maxMs = NEW_TAB_KEPT_MAX_MS, afterLoadMs = NEW_TAB_DROP_AFTER_LOAD_MS): () => void {
+  const load = seq === undefined ? undefined : loads.get(tabId);
+  const ours = load !== undefined && load.seq === seq;
+  let sawLoading = ours || shownLiveOf(useBrowser.getState(), tabId).isLoading;
   let afterLoad: ReturnType<typeof setTimeout> | undefined;
   let done = false;
   const finish = (timedOut: boolean) => {
@@ -31,6 +67,7 @@ export function watchPageDrawn(tabId: string, drawn: (timedOut: boolean) => void
     if (sawLoading && afterLoad === undefined) afterLoad = setTimeout(() => finish(false), afterLoadMs);
   });
   const cap = setTimeout(() => finish(true), maxMs);
+  if (ours && load.ended && !shownLiveOf(useBrowser.getState(), tabId).isLoading) afterLoad = setTimeout(() => finish(false), afterLoadMs);
   return () => {
     done = true;
     stop();
@@ -44,13 +81,15 @@ export function useNewTabKeptForPage(tabId: string, newTabShown: boolean, pageSh
   const [kept, setKept] = useState(false);
   if (shownBefore !== newTabShown) {
     setShownBefore(newTabShown);
-    setKept(!newTabShown && pageShown && !appPage);
+    setKept(PLATFORM_FEATURES.keepsNewTabUntilPageLoads && !newTabShown && pageShown && !appPage);
   } else if (kept && appPage) setKept(false);
+  const recordsLoads = PLATFORM_FEATURES.keepsNewTabUntilPageLoads && (newTabShown || kept);
+  useLayoutEffect(() => (recordsLoads ? armLoadRecord(tabId) : undefined), [recordsLoads, tabId]);
   useLayoutEffect(() => {
     if (!kept) return;
     const consent = consentToken();
     notePageOverlay("newTabKeptForPage", consent);
-    return watchPageDrawn(tabId, (timedOut) => {
+    return watchPageDrawn(tabId, navigationSeq(tabId), (timedOut) => {
       if (timedOut) notePageOverlay("newTabKeptTimedOut", consent);
       setKept(false);
     });
