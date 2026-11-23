@@ -146,7 +146,7 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
 
 ```sh
 scripts/release.sh 0.2.49 --rc
-apps/browser/scripts/perf/gate.sh 0.2.49 0.2.48 --out <your scratch dir>/gate   # exit: first failing step, else the verdict
+apps/browser/scripts/perf/gate.sh 0.2.49 0.2.48 --out <your scratch dir>/gate   # exit: the verdict, or the step that failed
 scripts/agent/unregister-builds
 ```
 
@@ -154,8 +154,11 @@ scripts/agent/unregister-builds
 side, then two rounds (`native-bench --prepared --only launch,session,windows --launch-runs 6 --runs 2`, each in a new
 `mktemp -d` folder), then `gate-verdict.mjs` on both. On a pass it keeps the candidate's bench bundle as
 `dist/<v>/bench/main.jsbundle` (step 2: the next gate's `--control-bundle`, its default) before you delete the out dir.
-Its exit status is the first failing step's, else the verdict's (0 pass, 1 a row fails, 2 invalid; 70 when it passed
-but couldn't keep the bundle); any exit stops and waits for the jobs it started.
+Its exit status is the verdict's (0 pass, 1 a row fails, 2 invalid), or the step that failed (10 smoke, 11 ratchet,
+12 prepare, 13 and 14 the rounds, 15 the verdict didn't run; 70 when it passed but couldn't keep the bundle). None of
+those is the lock's own 75-77, so a failed step is never retried or reported as a busy lock. INT, TERM or HUP to it or
+its process group stops every job it started (INT, then TERM, then KILL), and the lock stays held until they've
+exited.
 
 js-bench is triage, not part of every gate: the ratchet (`ratchet.mjs run --own`) already checks the same commits,
 renders, store updates and timers on the candidate's own bundle, as counts that don't move with load. Run it when the

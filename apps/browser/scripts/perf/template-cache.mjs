@@ -156,9 +156,14 @@ export function pruneCache(cacheDir, { now = Date.now() } = {}) {
     for (const name of names) {
       const staging = name.startsWith(".staging-");
       const age = now - madeAt(name);
-      if (!Number.isFinite(age)) continue;
-      if ((staging && age > STAGING_ABANDONED_HOURS * 3600_000) || (!staging && generations(join(cacheDir, k)).includes(name) && age > PRUNE_AFTER_HOURS * 3600_000)) {
-        rmSync(join(cacheDir, k, name), { recursive: true, force: true });
+      if (!Number.isFinite(age) && !name.startsWith(".deleting-")) continue;
+      const deleting = name.startsWith(".deleting-");
+      if (deleting || (staging && age > STAGING_ABANDONED_HOURS * 3600_000) || (!staging && generations(join(cacheDir, k)).includes(name) && age > PRUNE_AFTER_HOURS * 3600_000)) {
+        const gone = deleting ? join(cacheDir, k, name) : join(cacheDir, k, `.deleting-${name}-${process.pid}-${randomBytes(2).toString("hex")}`);
+        try {
+          if (!deleting) renameSync(join(cacheDir, k, name), gone);
+          rmSync(gone, { recursive: true, force: true });
+        } catch {}
         removed.push(join(k, name));
       }
     }

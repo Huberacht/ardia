@@ -63,7 +63,7 @@ const win = { window: 50, firstPaint: 100, firstFrame: 80 };
 const complete = (app = "/dist/0.2.48/export/Ardia.app", source = { version: "0.2.48", build: "139", cdhash: "ab12" }) => ({
   meta: { only: ["launch", "session", "windows"], app, source },
   launch: Array.from({ length: 6 }, () => ({ window: 1, withContent: 1, js: 1, firstPaint: 1, firstFrame: 1 })),
-  session: Array.from({ length: 2 }, () => ({ tabSwitch: Array(16).fill(7), newTab: Array(5).fill(80), newTabFrame: Array(5).fill(60), newWindow: Array(3).fill(win), idle: { tabs1: idle, tabs20: idle } })),
+  session: Array.from({ length: 2 }, () => ({ tabSwitch: Array(16).fill(7), newTab: Array(5).fill(80), newTabFrame: Array(5).fill(60), newWindow: Array(3).fill(win), idle: { tabs1: idle, tabs20: idle }, memory: Object.fromEntries(["tabs1", "tabs10", "tabs20", "closed"].map((m) => [m, { totalMB: 300, kinds: { browser: 130 } }])) })),
   windows: Array.from({ length: 2 }, () => ({ newWindow: Array(8).fill(win) })),
 });
 
@@ -127,7 +127,7 @@ test("rounds of the same path but another build or code signature are refused", 
   assert.match(roundsProblems([a, resigned]).join(), /build differs between rounds/);
   const unknown = complete();
   delete unknown.meta.source;
-  assert.match(roundProblems(unknown).join(), /no build identity/);
+  assert.match(roundProblems(unknown).join(), /its build identity has no version, build, cdhash/);
 });
 
 test("a session run as its five parts counts as the session; a run that measured only some parts doesn't", () => {
@@ -156,18 +156,40 @@ test("the CLI checks every round before it prints a row: an incomplete or empty 
     };
     const short = complete();
     short.session[0].tabSwitch = [7];
+    const noMemory = complete("/dist/0.2.47/export/Ardia.app", { version: "0.2.47", build: "127", cdhash: "cc" });
+    delete noMemory.session[0].memory;
     write("r1", "0.2.47", complete("/dist/0.2.47/export/Ardia.app", { version: "0.2.47", build: "127", cdhash: "cc" }));
     write("r1", "rc", short);
-    write("r2", "0.2.47", {});
+    write("r2", "0.2.47", noMemory);
     write("r2", "rc", {});
     const r = spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "gate-verdict.mjs"), "--control", "0.2.47", "--candidate", "rc", join(dir, "r1"), join(dir, "r2")], { encoding: "utf8" });
     assert.equal(r.status, 2, r.stderr);
     assert.equal(r.stderr, "");
     assert.doesNotMatch(r.stdout, /^\|/m);
     assert.match(r.stdout, /invalid: round 1, candidate: session 0: 1 of 16 tab switches/);
-    assert.match(r.stdout, /invalid: round 2, control: it didn't run the launch phase/);
+    assert.match(r.stdout, /invalid: round 2, control: session 0: no tabs1 memory reading/);
+    assert.match(r.stdout, /invalid: round 2, candidate: it didn't run the launch phase/);
     assert.match(r.stdout, /gate: INVALID\n$/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a build identity of nulls or empty strings is no identity", () => {
+  for (const source of [{ version: null, build: null, cdhash: null }, { version: "0.2.48", build: "", cdhash: "ab12" }, { version: "0.2.48", build: 139, cdhash: "ab12" }]) {
+    const r = complete("/dist/0.2.48/export/Ardia.app", source);
+    assert.match(roundProblems(r).join(), /its build identity has no/);
+  }
+  const nulls = complete("/dist/0.2.48/export/Ardia.app", { version: null, build: null, cdhash: null });
+  assert.notDeepEqual(roundsProblems([{ control: nulls, candidate: nulls }, { control: nulls, candidate: nulls }]), []);
+});
+
+test("a session run missing what summary() reads (memory, idle, the sample arrays) is invalid before scoring", () => {
+  const r = complete();
+  for (const run of r.session) run.memory = { tabs1: { totalMB: 1, kinds: { browser: 1 } }, tabs10: { totalMB: 1, kinds: { browser: 1 } }, tabs20: { totalMB: 1, kinds: { browser: 1 } }, closed: { totalMB: 1, kinds: { browser: 1 } } };
+  assert.deepEqual(roundProblems(r), []);
+  delete r.session[0].memory;
+  r.session[1].tabSwitch = null;
+  r.windows[0] = null;
+  assert.deepEqual(roundProblems(r), ["session 0: no tabs1 memory reading", "session 0: no tabs10 memory reading", "session 0: no tabs20 memory reading", "session 0: no closed memory reading", "session 1: 0 of 16 tab switches", "windows 0: 0 of 8 new windows"]);
 });

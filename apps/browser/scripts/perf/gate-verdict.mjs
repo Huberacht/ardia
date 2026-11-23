@@ -63,30 +63,33 @@ export function roundProblems(results, { launchRuns = 6, runs = 2 } = {}) {
   for (const phase of ["launch", "windows"]) if (!only.includes(phase)) problems.push(`it didn't run the ${phase} phase`);
   if (!only.includes("session") && !SESSION_PARTS.every((p) => only.includes(p))) problems.push("it didn't run the session phase (or all five of its parts)");
   if ((results?.session ?? []).some((r) => r?.parts)) problems.push("its session runs measured only some parts");
-  if (!results?.meta?.source) problems.push("it has no build identity (version, build, code signature hash) to compare rounds by");
+  const source = results?.meta?.source;
+  const missing = ["version", "build", "cdhash"].filter((k) => typeof source?.[k] !== "string" || !source[k]);
+  if (missing.length) problems.push(`its build identity has no ${missing.join(", ")} to compare rounds by`);
   const count = (what, have, want) => have !== want && problems.push(`${have} ${what}, wanted ${want}`);
   const launch = results?.launch ?? [];
   count("launches", launch.length, launchRuns);
-  launch.forEach((l, i) => !finite(l.window, l.withContent, l.js, l.firstPaint, l.firstFrame) && problems.push(`launch ${i} is missing a time`));
+  launch.forEach((l, i) => !finite(l?.window, l?.withContent, l?.js, l?.firstPaint, l?.firstFrame) && problems.push(`launch ${i} is missing a time`));
   const session = results?.session ?? [];
   count("session runs", session.length, runs);
   session.forEach((r, i) => {
     const short = (name, xs, want, ok = Number.isFinite) => {
-      const good = (xs ?? []).filter(ok).length;
+      const good = Array.isArray(xs) ? xs.filter(ok).length : 0;
       if (good !== want) problems.push(`session ${i}: ${good} of ${want} ${name}`);
     };
     short("tab switches", r.tabSwitch, 16);
     short("new tabs painted", r.newTab, 5);
     short("new tabs' first frames", r.newTabFrame, 5);
     short("new windows", r.newWindow, 3, WINDOW_FIELDS);
-    for (const t of ["tabs1", "tabs20"]) if (!IDLE_FIELDS(r.idle?.[t])) problems.push(`session ${i}: no ${t} idle window`);
-    const left = (r.throttled?.tabSwitch ?? 0) + (r.throttled?.newTab ?? 0);
+    for (const t of ["tabs1", "tabs20"]) if (!IDLE_FIELDS(r?.idle?.[t])) problems.push(`session ${i}: no ${t} idle window`);
+    for (const m of ["tabs1", "tabs10", "tabs20", "closed"]) if (!finite(r?.memory?.[m]?.totalMB, r?.memory?.[m]?.kinds?.browser)) problems.push(`session ${i}: no ${m} memory reading`);
+    const left = (r?.throttled?.tabSwitch ?? 0) + (r?.throttled?.newTab ?? 0);
     if (left) problems.push(`session ${i}: ${left} samples left out because a page couldn't paint (screen locked or display asleep)`);
   });
   const windows = results?.windows ?? [];
   count("windows runs", windows.length, runs);
   windows.forEach((r, i) => {
-    const good = (r.newWindow ?? []).filter(WINDOW_FIELDS).length;
+    const good = Array.isArray(r?.newWindow) ? r.newWindow.filter(WINDOW_FIELDS).length : 0;
     if (good !== 8) problems.push(`windows ${i}: ${good} of 8 new windows`);
   });
   return problems;
@@ -194,7 +197,15 @@ function main() {
     console.log("gate: INVALID");
     process.exit(2);
   }
-  const v = gateVerdict(raw.map((r) => ({ control: summary(r.control), candidate: summary(r.candidate) })));
+  let summarised;
+  try {
+    summarised = raw.map((r) => ({ control: summary(r.control), candidate: summary(r.candidate) }));
+  } catch (error) {
+    console.log(`invalid: a round's results can't be read as native-bench results (${error.message})`);
+    console.log("gate: INVALID");
+    process.exit(2);
+  }
+  const v = gateVerdict(summarised);
   console.log(verdictTable(v, [opt.control, opt.candidate]));
   for (const p of v.problems) console.log(`invalid: ${p}`);
   console.log(v.problems.length ? "gate: INVALID" : v.fails.length ? `gate: FAIL (${v.fails.join(", ")})` : `gate: pass (${v.rounds} round${v.rounds > 1 ? "s" : ""})`);

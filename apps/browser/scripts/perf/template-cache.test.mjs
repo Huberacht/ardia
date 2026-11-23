@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -225,4 +225,32 @@ test("a pair that fails the joint check is never cached; a matching pair is stor
   assert.equal(pairs[0], pairs[1]);
   assert.ok(pairs[0]);
   assert.match(jointProblems([record, { ...record, sizes: { ...record.sizes, uboStoreMB: record.sizes.uboStoreMB * 1.5 } }]).join(), /uBO stores differ/);
+}));
+
+test("pruning renames a generation out of the lookup path before deleting it, so a reader can't take a half-deleted one", withDir((dir) => {
+  const cache = join(dir, "cache");
+  const made = join(dir, "made");
+  const record = fakeTemplate(made);
+  const now = Date.now();
+  const old = storeTemplate(cache, key, made, record, { now: now - 25 * HOUR });
+  const keyDir = join(cache, keyId(key));
+  assert.equal(pruneCache(cache, { now }).length, 1);
+  assert.equal(existsSync(old), false);
+  assert.deepEqual(readdirSync(keyDir), []);
+  storeTemplate(cache, key, made, record, { now: now - 25 * HOUR });
+  const stuck = readdirSync(keyDir)[0];
+  mkdirSync(join(keyDir, stuck, "template", "locked-dir"), { recursive: true });
+  writeFileSync(join(keyDir, stuck, "template", "locked-dir", "f"), "x");
+  if (process.getuid?.() !== 0) {
+    chmodSync(join(keyDir, stuck, "template", "locked-dir"), 0o500);
+    try {
+      pruneCache(cache, { now });
+      assert.equal(lookupTemplate(cache, key, { now: now - 25 * HOUR + 1000 }).hit, false);
+      assert.ok(readdirSync(keyDir).every((n) => n.startsWith(".deleting-")));
+    } finally {
+      for (const n of readdirSync(keyDir)) try { chmodSync(join(keyDir, n, "template", "locked-dir"), 0o700); } catch {}
+    }
+    pruneCache(cache, { now });
+    assert.deepEqual(readdirSync(keyDir), []);
+  }
 }));

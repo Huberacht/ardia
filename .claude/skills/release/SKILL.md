@@ -193,15 +193,18 @@ For a stable, run the gate script as soon as the candidate exists (`run_in_backg
 apps/browser/scripts/perf/gate.sh <version> <previous>    # --out $HOME/ardia-scratch/gate-<version> by default
 ```
 
-It takes the perflab lock for the whole run, so no other agent's timing shares the Mac, and stops at once if it can't
-get it. Inside the lock it runs this step's smoke test, 4b's ratchet and 4c's preparation side by side (none of them is
-a timing; logs in `<out>/smoke.log`, `ratchet.log`, `prep.log`), then 4c's two timed rounds and the verdict. Its exit
-status is the first failing step's (smoke, ratchet, prepare, then a round), else the verdict's: 0 pass, 1 a row
-fails, 2 a round is invalid. A ^C, a timeout or any exit stops and waits for every job it started, and the lock goes
-with the process. Fix what failed and run the script again. When the fix means a new candidate (a rebuild, a new
+It takes the perflab lock for the whole run, so no other agent's timing shares the Mac. While another job holds it,
+it waits up to `GATE_LOCK_WAIT` seconds (default 3600), then gives up with exit 75 without starting anything. Inside
+the lock it runs this step's smoke test, 4b's ratchet and 4c's preparation side by side (none of them is a timing;
+logs in `<out>/smoke.log`, `ratchet.log`, `prep.log`), then 4c's two timed rounds and the verdict. Its exit status is
+0 pass, 1 a row fails, 2 a round is invalid, or the step that failed: 10 smoke, 11 ratchet, 12 prepare, 13 and 14 the
+rounds, 15 the verdict didn't run (`gate.sh --help` lists them all; each step's own status is in its output). A ^C, a
+TERM to it or its process group, or a timeout stops every job it started and waits for them; the lock stays held
+until they've exited. Fix what failed and run the script again. When the fix means a new candidate (a rebuild, a new
 `--rc`), the next run prepares it afresh: `--prepared` refuses copies made from an older build of the same path, and
-the templates are keyed by the copy's code signature. Start 4d on the Mac mini at the same time. A nightly runs only
-the smoke test:
+the templates are keyed by the copy's code signature. A new candidate also means running 4d again on it: the site's
+benchmarks must be the build that ships. Start 4d on the Mac mini at the same time. A nightly runs only the smoke
+test:
 
 ```bash
 .claude/skills/release/scripts/smoke.sh <version> <previous>     # --rc for dist/<version>-rc
@@ -262,10 +265,13 @@ don't publish) or the check itself going stale after an intended change (fix the
 `.claude/skills/release/scripts/smoke.mjs`, and say so). When a release fixes a new class of bug that can be observed over CDP or
 the window list, add a check for it to `smoke.mjs` so the next release guards it.
 
-**After a fix mid-release, test only the fix.** When the smoke test, the ratchet or the perf gate fails and you fix it,
-rebuild and re-run only what covers that fix: the failed rows (a launch-only native-bench for a launch row, the
-ratchet for counts), plus the smoke test when the fix touches what it checks. Don't repeat the checks that already
-passed on the earlier candidate; move on to publishing.
+**After a fix mid-release, test only the fix, except for the perf gate.** When the smoke test or the ratchet fails and
+you fix it, rebuild and re-run only what covers that fix: the failed checks (the ratchet for counts), plus the smoke
+test when the fix touches what it checks. Don't repeat the checks that already passed on the earlier candidate. A
+perf-gate failure is different: its verdict is read from two whole rounds pooled, so no partial run (a launch-only
+native-bench, say) stands in for it. Rerun `gate.sh` in full, both rounds and the verdict, and publish only on its
+pass. A launch-only native-bench is for finding the cause, not for clearing the gate. Any fix that rebuilds the
+candidate also needs the full `gate.sh` before publishing, because its rounds measured the old build.
 
 ### 4b. Perf ratchet (stable only)
 

@@ -4,22 +4,29 @@
 #   apps/browser/scripts/perf/gate.sh <version> <previous> [--out <dir>] [--port <n>] [--control-bundle <file>]
 #
 # The candidate is dist/<version>-rc/export/Ardia.app, the control dist/<previous>/export/Ardia.app. It takes the perflab
-# lock for the whole run, and stops at once with the lock's status when it can't get it. Then:
+# lock for the whole run, and stops at once with the lock's 75 when it stays busy past GATE_LOCK_WAIT seconds (3600).
+# Then:
 #   1. side by side: smoke.sh <version> <previous> --rc, ratchet.mjs run --own, native-bench --only prepare
 #      (logs in <out>/smoke.log, ratchet.log, prep.log)
 #   2. two native-bench rounds (launch x6, session x2, windows x2), each in a new folder under <out>
 #   3. gate-verdict.mjs on both rounds
 #   4. on a pass, keeps the candidate's bench bundle as dist/<version>/bench/main.jsbundle: the next gate's control bundle
-# Exit: the first failing step's status (smoke, ratchet, prepare, then the rounds in order), else the verdict's: 0 pass,
-# 1 a row fails, 2 a round is invalid; 70 when it passed but the bundle couldn't be kept. Any exit, ^C or timeout stops the jobs it started and waits for them; the lock
-# is held by this process, so it goes with it.
+# Exit: 0 pass, 1 a row fails, 2 a round is invalid; 10 the smoke test failed, 11 the ratchet, 12 the prepare, 13 round 1,
+# 14 round 2, 15 the verdict couldn't run (each step's own status is in the output); 70 it passed but the bundle
+# couldn't be kept; 75 the lock stayed busy; 130, 143, 129 stopped by INT, TERM, HUP. No step's status is passed
+# through, so none can be taken for the lock's own 75-77.
+# Stopping it (INT, TERM or HUP to its pid or its process group) stops every job it started: INT first, so the
+# benches quit their instances, then TERM, then KILL, each after a deadline. The lock stays held until they have all
+# exited, and it returns after that. The lock wrapper runs in a process group of its own and only the worker under it
+# is signalled (its pid is in <out>/.gate-worker.pid), so the wrapper waits for the worker before it lets go.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
+self=$here/$(basename "$0")
 root=${GATE_ROOT:-$(cd "$here/../../../.." && pwd)}
 perf=${GATE_PERF:-$here}
 smoke=${GATE_SMOKE:-$root/.claude/skills/release/scripts/smoke.sh}
 
-help() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+help() { sed -n '2,/^set -u/p' "$self" | sed '$d' | sed 's/^# \{0,1\}//'; }
 case ${1:-} in -h | --help) help; exit 0 ;; esac
 [ $# -ge 2 ] || { help >&2; exit 64; }
 version=$1 previous=$2
@@ -34,58 +41,129 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+own_group=(perl -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; setpgrp(0, 0); exec { $ARGV[0] } @ARGV or die "gate.sh: cannot run $ARGV[0]: $!\n"')
+group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+wait_groups() {
+  local secs=$1 end g alive
+  shift
+  end=$(($(date +%s) + secs))
+  while :; do
+    alive=0
+    for g in "$@"; do group_alive "$g" && alive=1; done
+    [ "$alive" = 0 ] && return 0
+    [ "$(date +%s)" -ge "$end" ] && return 1
+    sleep 0.2
+  done
+}
+stop_groups() {
+  local steps=$1 step g
+  shift
+  for step in $steps; do
+    for g in "$@"; do kill -"${step%:*}" -- "-$g" 2>/dev/null; done
+    wait_groups "${step#*:}" "$@" && return 0
+  done
+}
+
+worker_file=$out/.gate-worker.pid
 if [ -z "${GATE_LOCKED:-}" ]; then
-  exec "$root/scripts/agent/locked" perflab --wait "${GATE_LOCK_WAIT:-3600}" -- env GATE_LOCKED=1 "$0" "$version" "$previous" --out "$out" --port "$port" --control-bundle "$control_bundle"
+  mkdir -p "$out" && rm -f "$worker_file"
+  "${own_group[@]}" "$root/scripts/agent/locked" perflab --wait "${GATE_LOCK_WAIT:-3600}" -- \
+    env GATE_LOCKED=1 "$self" "$version" "$previous" --out "$out" --port "$port" --control-bundle "$control_bundle" &
+  chain=$!
+  stop_chain() {
+    trap '' INT TERM HUP
+    local worker
+    worker=$(cat "$worker_file" 2>/dev/null)
+    if [ -n "$worker" ] && [ "$(ps -o pgid= -p "$worker" 2>/dev/null | tr -d ' ')" = "$chain" ]; then
+      kill -TERM "$worker" 2>/dev/null
+      wait_groups "${GATE_CHAIN_TERM_SECS:-120}" "$chain"
+    fi
+    group_alive "$chain" && stop_groups "TERM:10 KILL:5" "$chain"
+    wait "$chain" 2>/dev/null
+    exit "$1"
+  }
+  trap 'stop_chain 130' INT
+  trap 'stop_chain 143' TERM
+  trap 'stop_chain 129' HUP
+  wait "$chain"
+  status=$?
+  trap '' INT TERM HUP
+  group_alive "$chain" && ! wait_groups 10 "$chain" && stop_groups "TERM:10 KILL:5" "$chain"
+  exit "$status"
 fi
 
-jobs_started=()
+groups=()
 stop_jobs() {
-  for pid in "${jobs_started[@]:-}"; do [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; done
-  for pid in "${jobs_started[@]:-}"; do [ -n "$pid" ] && wait "$pid" 2>/dev/null; done
+  trap '' INT TERM HUP
+  if [ ${#groups[@]} -gt 0 ]; then
+    stop_groups "INT:${GATE_JOB_INT_SECS:-45} TERM:${GATE_JOB_TERM_SECS:-15} KILL:5" "${groups[@]}"
+    for g in "${groups[@]}"; do wait "$g" 2>/dev/null; done
+  fi
+  groups=()
+}
+pending=""
+defer_signals() { trap 'pending=130' INT; trap 'pending=143' TERM; trap 'pending=129' HUP; }
+take_signals() {
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  [ -z "$pending" ] || exit "$pending"
 }
 trap stop_jobs EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+take_signals
 
 awake=()
 command -v caffeinate >/dev/null && awake=(caffeinate -d -i)
 candidate=$root/dist/$version-rc/export/Ardia.app control=$root/dist/$previous/export/Ardia.app
-mkdir -p "$out" || exit 1
+mkdir -p "$out" || exit 12
+echo $$ > "$worker_file"
 
-timeout "${GATE_PREP_TIMEOUT:-3600}" "$smoke" "$version" "$previous" --rc > "$out/smoke.log" 2>&1 &
+defer_signals
+"${own_group[@]}" timeout "${GATE_PREP_TIMEOUT:-3600}" "$smoke" "$version" "$previous" --rc > "$out/smoke.log" 2>&1 &
 smoke_pid=$!
-timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/ratchet.mjs" run --own --app "$candidate" > "$out/ratchet.log" 2>&1 &
+groups+=("$smoke_pid")
+"${own_group[@]}" timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/ratchet.mjs" run --own --app "$candidate" > "$out/ratchet.log" 2>&1 &
 ratchet_pid=$!
-timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/native-bench.mjs" --out "$out/prep" --port "$port" --only prepare \
+groups+=("$ratchet_pid")
+"${own_group[@]}" timeout "${GATE_PREP_TIMEOUT:-3600}" node "$perf/native-bench.mjs" --out "$out/prep" --port "$port" --only prepare \
   --app "$candidate" --label rc --control "$control" --control-label "$previous" --control-bundle "$control_bundle" > "$out/prep.log" 2>&1 &
 prep_pid=$!
-jobs_started=("$smoke_pid" "$ratchet_pid" "$prep_pid")
+groups+=("$prep_pid")
+take_signals
 wait "$smoke_pid"; smoke_status=$?
 wait "$ratchet_pid"; ratchet_status=$?
 wait "$prep_pid"; prep_status=$?
-jobs_started=()
+groups=()
 echo "gate: smoke $smoke_status, ratchet $ratchet_status, prepare $prep_status"
-for status in "$smoke_status" "$ratchet_status" "$prep_status"; do [ "$status" = 0 ] || exit "$status"; done
+[ "$smoke_status" = 0 ] || { echo "gate: the smoke test failed (status $smoke_status, $out/smoke.log)"; exit 10; }
+[ "$ratchet_status" = 0 ] || { echo "gate: the ratchet failed (status $ratchet_status, $out/ratchet.log)"; exit 11; }
+[ "$prep_status" = 0 ] || { echo "gate: the prepare failed (status $prep_status, $out/prep.log)"; exit 12; }
 
 rounds=()
 for r in 1 2; do
-  dir=$(mktemp -d "$out/round$r.XXXXXX") || exit 1
-  timeout "${GATE_ROUND_TIMEOUT:-3600}" ${awake[@]+"${awake[@]}"} node "$perf/native-bench.mjs" --out "$dir" --port "$port" --prepared \
+  dir=$(mktemp -d "$out/round$r.XXXXXX") || exit $((12 + r))
+  defer_signals
+  "${own_group[@]}" timeout "${GATE_ROUND_TIMEOUT:-3600}" ${awake[@]+"${awake[@]}"} node "$perf/native-bench.mjs" --out "$dir" --port "$port" --prepared \
     --app "$out/prep/rc/app/Ardia.app" --label rc --control "$out/prep/$previous/app/Ardia.app" --control-label "$previous" \
     --only launch,session,windows --launch-runs 6 --runs 2 > "$dir.log" 2>&1 &
-  jobs_started=("$!")
-  wait "$!"; status=$?
-  jobs_started=()
+  round_pid=$!
+  groups=("$round_pid")
+  take_signals
+  wait "$round_pid"; status=$?
+  groups=()
   echo "gate: round $r exited $status ($dir)"
-  [ "$status" = 0 ] || exit "$status"
+  [ "$status" = 0 ] || { echo "gate: round $r failed (status $status, $dir.log)"; exit $((12 + r)); }
   rounds+=("$dir")
 done
 
 node "$perf/gate-verdict.mjs" --control "$previous" --candidate rc "${rounds[@]}"
 verdict=$?
-if [ "$verdict" = 0 ]; then
-  kept=$root/dist/$version/bench/main.jsbundle
-  mkdir -p "$(dirname "$kept")" && cp "$out/prep/rc/bundle/main.jsbundle" "$kept" || { echo "gate: passed, but couldn't keep the bench bundle as $kept"; exit 70; }
-  echo "gate: kept the bench bundle as $kept (the next gate's control bundle)"
-fi
-exit "$verdict"
+case $verdict in
+  0)
+    kept=$root/dist/$version/bench/main.jsbundle
+    mkdir -p "$(dirname "$kept")" && cp "$out/prep/rc/bundle/main.jsbundle" "$kept" || { echo "gate: passed, but couldn't keep the bench bundle as $kept"; exit 70; }
+    echo "gate: kept the bench bundle as $kept (the next gate's control bundle)"
+    exit 0 ;;
+  1 | 2) exit "$verdict" ;;
+  *) echo "gate: the verdict couldn't run (status $verdict)"; exit 15 ;;
+esac
