@@ -22,13 +22,14 @@ const MINUTE = 60_000;
 const OWNERS_FRESH_MS = 5 * MINUTE;
 const QUIET_AFTER_WARNING_MS = 120 * MINUTE;
 const WARNING_HOLD_MS = 20_000;
+const WARNING_TITLE_LINES = 2;
 const TOAST_KEY = "busyTab";
 const NAME_CHARS = 24;
 const ICON = "bolt.fill";
 
 let heat = new Map<number, ProcessHeat>();
 const owners = new Map<number, Owner>();
-const seenAt = new Map<string, number>();
+const hiddenSince = new Map<string, number>();
 const quietUntil = new Map<string, number>();
 const keptTabs = new Set<string>();
 let ticking = false;
@@ -79,7 +80,8 @@ function eligible(s: BrowserState, id: string, now: number): boolean {
   if (!hasTab(s, id) || isPrivate(s, id) || !canSleep(s, id) || inUse(s, id) || keptTabs.has(id)) return false;
   const tab = s.tabs[id]!;
   const rules = Array.isArray(s.settings.keepActiveSites) ? s.settings.keepActiveSites : [];
-  return !keptActive(tab.url, rules) && now - Math.max(tab.lastActiveAt, seenAt.get(id) ?? 0) >= SUSTAINED_MS;
+  const since = hiddenSince.get(id);
+  return !keptActive(tab.url, rules) && since !== undefined && now - since >= SUSTAINED_MS && now - tab.lastActiveAt >= SUSTAINED_MS;
 }
 
 function busyTabsOf(s: BrowserState, owner: Owner, now: number): string[] | null {
@@ -142,6 +144,7 @@ function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: num
     icon: ICON,
     key: TOAST_KEY,
     holdMs: WARNING_HOLD_MS,
+    titleLines: WARNING_TITLE_LINES,
     action: {
       title: "Sleep",
       run: () => {
@@ -213,8 +216,9 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
     const consent = consentToken();
     noteBusyTab("busy_tab_watch_ticks", consent);
     const s = useBrowser.getState();
-    for (const id of shownTabIds(s)) seenAt.set(id, now);
-    for (const id of seenAt.keys()) if (!hasTab(s, id)) seenAt.delete(id);
+    const shown = shownTabIds(s);
+    for (const id of hiddenSince.keys()) if (!hasTab(s, id) || shown.has(id)) hiddenSince.delete(id);
+    for (const id of webviews.keys()) if (hasTab(s, id) && !shown.has(id) && !hiddenSince.has(id)) hiddenSince.set(id, now);
     for (const [id, at] of quietUntil) if (at <= now) quietUntil.delete(id);
     for (const id of keptTabs) if (!hasTab(s, id)) keptTabs.delete(id);
     let raw: unknown;
@@ -234,7 +238,12 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
   }
 }
 
+function noteShown(s: BrowserState) {
+  for (const id of shownTabIds(s)) hiddenSince.delete(id);
+}
+
 function dropWork() {
+  hiddenSince.clear();
   generation++;
   heat = new Map();
   owners.clear();
@@ -250,7 +259,10 @@ export function startBusyTabWatch() {
     run: () => void watchBusyTabs(),
     needed: () => !unsupported && !isQuitting() && watchOn(useBrowser.getState()) && hasHiddenLoadedTab(useBrowser.getState()),
     watch: (changed) => {
-      const browser = useBrowser.subscribeTo(["tabs", "windows", "peeks", "splits"], changed);
+      const browser = useBrowser.subscribeTo(["tabs", "windows", "peeks", "splits"], (s) => {
+        noteShown(s);
+        changed();
+      });
       const lifecycle = useLifecycle.subscribe(changed);
       const views = onWebviewsChanged(changed);
       const quitting = onQuittingChanged(() => {

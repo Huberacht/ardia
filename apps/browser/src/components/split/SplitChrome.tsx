@@ -347,6 +347,7 @@ export const SplitToast = memo(function SplitToast({ windowId }: { windowId: str
       secondary={secondary?.title}
       onSecondary={pick(secondary)}
       onHeld={secondary ? setHeld : undefined}
+      titleLines={shown.titleLines}
       closing={closing}
       onClosed={() => {
         setShown(null);

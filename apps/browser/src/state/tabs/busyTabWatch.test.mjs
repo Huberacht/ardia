@@ -31,7 +31,7 @@ registerHooks({
 
 const { useBrowser } = await import("../browser/store.ts");
 const { webviews, webviewRef } = await import("../../platform/webviews.ts");
-const { readHeat, sustainedBusy, keptActive, matchesSiteRule, siteToKeepActive, validReadings } = await import("./busyProcesses.ts");
+const { readHeat, sustainedBusy, keptActive, siteToKeepActive, validReadings } = await import("./busyProcesses.ts");
 const { watchBusyTabs, startBusyTabWatch, toastName } = await import("./busyTabWatch.ts");
 const { shownTabIds } = await import("./shownTabs.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
@@ -90,22 +90,6 @@ test("readings and keep-active rules from outside are checked before they are us
   assert.deepEqual(validReadings([{ pid: -1, started: 1, cpuMs: 1 }, { pid: 1.5, started: 1, cpuMs: 1 }, { pid: 2, started: 1, cpuMs: Infinity }, { pid: 3, started: 1, cpuMs: -1 }]), []);
   for (const rule of [...HOSTILE_STRINGS, ...PROTOTYPE_KEYS]) assert.doesNotThrow(() => keptActive("https://a.example/x?y=1", [rule]));
   assert.ok(!keptActive("https://a.example/", [1, null, {}]), "rules that aren't text match nothing");
-});
-
-test("kept-active sites match as Chrome's Memory Saver exceptions do (its URL filter format)", () => {
-  const t = (url, rule) => matchesSiteRule(url, rule);
-  assert.ok(t("https://anything.test/x", "*"), "* keeps every site");
-  assert.ok(t("https://music.youtube.com/watch", "youtube.com"), "a host keeps its subdomains");
-  assert.ok(!t("https://notyoutube.com/", "youtube.com"));
-  assert.ok(t("https://example.com/", ".example.com") && !t("https://www.example.com/", ".example.com"), "a leading dot keeps that host only");
-  assert.ok(t("https://example.com/docs/a", "example.com/docs") && !t("https://example.com/blog", "example.com/docs"), "a path keeps that path and below");
-  assert.ok(t("https://example.com/", "https://example.com") && !t("http://example.com/", "https://example.com"), "a scheme must match");
-  assert.ok(t("http://example.com:8080/", "example.com:8080") && !t("http://example.com/", "example.com:8080"), "a port must match");
-  assert.ok(t("https://example.com/?a=1&b=2", "example.com/?a=1") && !t("https://example.com/?a=2", "example.com/?a=1"), "query values must be present");
-  assert.ok(t("https://a.example.com/", "*.example.com"));
-  assert.ok(!t("not a url", "*") && !t("https://example.com/", ""), "an unreadable address or an empty rule matches nothing");
-  assert.equal(siteToKeepActive("https://www.figma.com/file/1"), "figma.com");
-  assert.equal(siteToKeepActive("about:blank"), null);
 });
 
 function windowWithHiddenTab(lastActiveAt, { kind } = {}) {
@@ -278,23 +262,6 @@ test("hostile task rows and page titles reach neither the toast nor Sleep", asyn
   assert.equal(toastName("a b\u0000c‮ d"), "a b c d");
   assert.equal(toastName(42), "");
   webviews.clear();
-});
-
-test("query rules match as Chrome's allow filters do: every occurrence of a key must hold, a trailing * is a prefix", () => {
-  const t = (url, rule) => matchesSiteRule(url, rule);
-  assert.ok(t("https://example.com/?q=workday", "example.com/?q=work*"));
-  assert.ok(!t("https://example.com/?q=play", "example.com/?q=work*"));
-  assert.ok(!t("https://example.com/?q=workday&q=play", "example.com/?q=work*"), "a repeated key: every value must match (url_util.cc MATCH_ALL for allow lists)");
-  assert.ok(!t("https://example.com/?a=1&a=2", "example.com/?a=2"));
-  assert.ok(t("https://example.com/?a=2&b=1", "example.com/?a=2"));
-  assert.ok(t("https://example.com/?a=2&a=2", "example.com/?a=2"));
-  assert.ok(!t("https://example.com/?a=1&a=2", "example.com/?a=1&a=2"), "each token on its own must hold for every a");
-  assert.ok(t("https://example.com/?a=1&b=2", "example.com/?b=2&a=1"), "token order doesn't matter");
-  assert.ok(!t("https://example.com/?b=2", "example.com/?a=1"), "a key that isn't there doesn't match");
-  assert.ok(t("https://example.com/?debug", "example.com/?debug") && !t("https://example.com/?debug=1", "example.com/?debug"), "a bare key matches only the bare key");
-  assert.ok(t("https://example.com/?debugger=1", "example.com/?debug*"), "a key with * matches any key it starts");
-  assert.ok(!t("https://example.com/?debug&debugger=1", "example.com/?debug"), "as in url_matcher.cc: every occurrence of the delimited key must be followed by the delimiter, so a longer key that starts the same breaks the match");
-  assert.ok(!t("https://example.com/?debugger=1&debug", "example.com/?debug"));
 });
 
 test("Sleep does nothing once the process has calmed down below the threshold", async () => {
@@ -532,14 +499,6 @@ test("the busy average covers exactly the last two minutes: never before two min
   assert.deepEqual(sustainedBusy(run(burstBefore, (a) => (a === 24 ? 4 : a < 24 ? 0 : 0.55))), [], "a burst that mostly fell before the two minutes doesn't count; the window starts at the cutoff, interpolated");
 });
 
-test("query values are compared after the same canonical form on both sides, as Chrome's GURL does", () => {
-  const t = (url, rule) => matchesSiteRule(url, rule);
-  assert.ok(t("https://example.com/?q=a+b", "example.com/?q=a+b"), "a plus stays a plus on both sides");
-  assert.ok(t("https://example.com/?q=a%20b", "example.com/?q=a b"), "a space in the rule is %20, as in the page address");
-  assert.ok(!t("https://example.com/?q=a+b", "example.com/?q=a b"), "a plus and a space are different query bytes to Chrome");
-  assert.ok(t("https://example.com/?q=%C3%A9t%C3%A9", "example.com/?q=été"), "non-ASCII in the rule is percent-encoded like the address");
-});
-
 test("Keep Running relies on the saved site exception: removing it brings warnings back, and a refused save confirms nothing", async () => {
   const start = Date.now() + 8000 * MINUTE;
   const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
@@ -586,4 +545,80 @@ test("the kept-site header, its Add Site button and the list show in Settings wh
   const pane = readFileSync(new URL("../../components/settings/panes/Advanced.tsx", import.meta.url), "utf8");
   assert.match(pane, /const sitesListed = useSettings\(keptSitesListed\);/);
   assert.match(pane, /\{sitesListed &&\s+\[\.\.\.keepActiveSites\]/, "the list follows the same rule as its header");
+});
+
+test("a saved site keeps its host and subdomains active; rules with a path, query, port or wildcard never silence a warning", () => {
+  assert.ok(keptActive("https://music.youtube.com/watch?v=1", ["youtube.com"]), "a host keeps its subdomains");
+  assert.ok(keptActive("https://youtube.com/", ["https://youtube.com/"]), "a scheme or a trailing slash is the same host");
+  assert.ok(!keptActive("https://notyoutube.com/", ["youtube.com"]));
+  assert.ok(keptActive("https://example.com/", [".example.com"]) && !keptActive("https://www.example.com/", [".example.com"]), "a leading dot keeps that host only");
+  for (const rule of ["example.com/docs", "example.com/?q=work*", "example.com:8080", "*", "*.example.com", "[*.]example.com"]) assert.ok(!keptActive("https://example.com/docs?q=workday", [rule]), `${rule} doesn't count: one extra warning, and Keep Running is right there`);
+  assert.ok(!keptActive("file:///tmp/x.html", ["tmp"]));
+  assert.equal(siteToKeepActive("https://www.figma.com/file/1"), "figma.com");
+  assert.equal(siteToKeepActive("about:blank"), null);
+});
+
+test("the site comes from the address's own host on the Mac's URL too: a query holding an @ doesn't move it", async () => {
+  const real = globalThis.URL;
+  globalThis.URL = class {
+    constructor(url) {
+      this._url = url;
+    }
+    get protocol() {
+      return /^([a-z][a-z0-9+.-]*:)/i.exec(this._url)?.[1] ?? "";
+    }
+    get hostname() {
+      const hostnameMatch = this._url.match(/^https?:\/\/(?:[^@]+@)?([^:/?#]+)/);
+      return hostnameMatch ? hostnameMatch[1] : "";
+    }
+  };
+  try {
+    const address = "https://miner.example/?user=alice@other.example";
+    assert.equal(new URL(address).hostname, "other.example", "React Native's URL (Libraries/Blob/URL.js) reads the wrong host here");
+    assert.equal(siteToKeepActive(address), "miner.example");
+    assert.ok(keptActive(address, ["miner.example"]), "an existing exception for the tab's real site is found");
+    assert.ok(!keptActive(address, ["other.example"]));
+  } finally {
+    globalThis.URL = real;
+  }
+  const start = Date.now() + 9000 * MINUTE;
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const tab = S().newTab(w, { url: "https://miner.example/?user=alice@other.example", background: true });
+  S().updateTab(tab, { title: "Miner", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of Object.keys(S().tabs)) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 81, tabIds: [tab] }];
+  await burn(start, 2, { 81: 1 });
+  globalThis.busyTest.toasts[0].secondary.run();
+  await settle();
+  assert.deepEqual(S().settings.keepActiveSites, ["miner.example"], "Keep Running saves the tab's real site");
+  webviews.clear();
+});
+
+test("a tab counts as hidden from the first tick that saw it hidden, so it never warns before two full minutes out of sight", async () => {
+  const start = Date.now() + 9500 * MINUTE;
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const front = Object.keys(S().tabs)[0];
+  const busy = S().newTab(w, { url: "https://miner.example/page", background: true });
+  S().updateTab(busy, { title: "Busy Loop Page", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of [front, busy]) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  S().activate(busy);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 91, tabIds: [busy] }];
+  let used = 0;
+  const tick = (t) => watchBusyTabs(start + t * SECOND, async () => [{ pid: 91, started: 3, cpuMs: (used = t * 1000) }]);
+  await tick(0);
+  S().activate(front);
+  S().updateTab(busy, { lastActiveAt: start - 10 * MINUTE });
+  for (let t = 10; t <= 120; t += 10) await tick(t);
+  assert.equal(globalThis.busyTest.toasts.length, 0, "hidden 5 s after the tick that last saw it: at 120 s it has been out of sight for only 115 s");
+  await tick(130);
+  assert.equal(globalThis.busyTest.toasts.length, 1, "warned once two full minutes from the first tick that saw it hidden have passed");
+  webviews.clear();
 });

@@ -71,5 +71,8 @@ test("a toast never outgrows its card: in a 420 pt card both buttons keep their 
   assert.match(source, /maxWidth: toastWidth\(room, !!secondary\)/);
   assert.match(source, /const ACTIONS = \{ flexDirection: "row", flexShrink: 0/, "the buttons never shrink");
   assert.match(source, /const TEXT = \{ flexShrink: 1 \}/, "the title gives way");
-  assert.match(source, /numberOfLines=\{TITLE_LINES\}/, "and truncates past two lines");
+  assert.match(source, /numberOfLines=\{titleLines\}/, "a toast truncates only when it asks to");
+  assert.doesNotMatch(source, /TITLE_LINES/, "no cap shared by every toast");
+  assert.match(readFileSync(new URL("../split/SplitChrome.tsx", import.meta.url), "utf8"), /titleLines=\{shown\.titleLines\}/);
+  assert.match(readFileSync(new URL("../../state/tabs/busyTabWatch.ts", import.meta.url), "utf8"), /titleLines: WARNING_TITLE_LINES/, "the busy-tab warning asks for two lines");
 });

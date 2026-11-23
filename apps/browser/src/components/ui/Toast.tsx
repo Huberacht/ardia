@@ -14,7 +14,6 @@ const BODY = { paddingHorizontal: space.xl, paddingVertical: space.ml, flexDirec
 const ICON = { width: 20, height: 20 } as const;
 const TEXT = { flexShrink: 1 } as const;
 const ACTIONS = { flexDirection: "row", flexShrink: 0, gap: space.ml } as const;
-const TITLE_LINES = 2;
 
 export function toastWidth(room: number | null, twoActions: boolean): number {
   const cap = twoActions ? toastLayout.twoActionMaxWidth : toastLayout.maxWidth;
@@ -31,6 +30,7 @@ export function Toast({
   secondary,
   onSecondary,
   onHeld,
+  titleLines,
   closing = false,
   onClosed,
 }: {
@@ -42,6 +42,7 @@ export function Toast({
   secondary?: string;
   onSecondary?: () => void;
   onHeld?: (held: boolean) => void;
+  titleLines?: number;
   closing?: boolean;
   onClosed?: () => void;
 }) {
@@ -72,7 +73,7 @@ export function Toast({
         <Panel fill={theme.toastFill} border={theme.popoverBorder} radius={radius.panel} shadow={shadow.card} material="hudWindow" style={{ ...BODY, maxWidth: toastWidth(room, !!secondary) }}>
           {icon ? <Symbol name={icon} size={15} color={theme.icon} style={ICON} /> : null}
           <View style={TEXT}>
-            <Text weight="semibold" numberOfLines={TITLE_LINES}>{title}</Text>
+            <Text weight="semibold" numberOfLines={titleLines}>{title}</Text>
             {message ? (
               <Text size="small" tone="textSecondary">
                 {message}
