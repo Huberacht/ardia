@@ -24,7 +24,7 @@ std::vector<DiscardVeto> DiscardVetoesFor(content::WebContents* contents);
 
 void NotePostedDocument(content::NavigationHandle* handle);
 
-void SetCliHeldTabs(
+std::vector<bool> SetCliHeldTabs(
     const std::vector<std::pair<content::WebContents*, base::Time>>& held);
 
 int TakeCliHoldVetoes();

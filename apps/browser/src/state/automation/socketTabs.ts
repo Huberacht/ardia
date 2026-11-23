@@ -150,7 +150,8 @@ async function holdTabs(params: Record<string, unknown>) {
   noteCliTabsHeld(outcome.started.length);
   const gone = asked.filter((tab) => !held.includes(tab));
   if (!PLATFORM_FEATURES.vetoesChromeDiscardsForCli) return { held, gone, seconds };
-  return { held, gone, seconds, engineKeeps: await cliHoldsPushed() };
+  const marked = await cliHoldsPushed();
+  return { held, gone, seconds, engineKeeps: marked !== null && held.every((tab) => marked.has(tab)) };
 }
 
 const releaseTabs = (params: Record<string, unknown>) => ({ released: releaseFromCli(params.session as string) });

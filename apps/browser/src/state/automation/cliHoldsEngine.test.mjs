@@ -109,7 +109,7 @@ test("a hold that ends while an earlier update is still on its way never reaches
   const reply = await holding;
   await settled();
   assert.ok(pushed.slice(before).every((tabs) => !tabs.includes(id)), "every update after the stall carries what's held when it is sent: nothing");
-  assert.equal(reply.engineKeeps, true);
+  assert.equal(reply.engineKeeps, false, "a hold released before its update reached the engine isn't reported as kept");
   answerWith = () => {
     throw new Error("the engine refused");
   };
@@ -146,6 +146,20 @@ test("a one-second hold reaches the engine with the time it ends, not a rounded-
   assert.equal(reply.engineKeeps, true);
   assert.deepEqual(pushed.at(-1), [id], "the engine got the tab");
   assert.equal(seconds.at(-1)[id], 1);
+  releaseAllCliHolds();
+  await settled();
+});
+
+test("engineKeeps is true only when the engine marked every held tab", async () => {
+  releaseAllCliHolds();
+  await settled();
+  const { windowId } = await freshWindow("https://shown.example/");
+  const id = S().newTab(windowId, { url: "https://unmarked.example/", background: true });
+  answerWith = () => ({ kept: 0, marked: [] });
+  const unmarked = await ok("tabs.hold", { session: "mark", tabs: [id], seconds: 60 });
+  assert.equal(unmarked.engineKeeps, false, "a tab the engine found no page for, or whose hold had ended, isn't reported as kept");
+  const marked = await ok("tabs.hold", { session: "mark", tabs: [id], seconds: 60 });
+  assert.equal(marked.engineKeeps, true);
   releaseAllCliHolds();
   await settled();
 });

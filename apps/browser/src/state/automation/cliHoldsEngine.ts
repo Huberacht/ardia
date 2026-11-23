@@ -9,28 +9,28 @@ export const CLI_HOLD_REFRESH_MS = 10_000;
 export const CLI_HOLD_PUSH_MS = 3_000;
 
 let watching = false;
-let pushing: Promise<boolean> = Promise.resolve(true);
+let pushing: Promise<ReadonlySet<string> | null> = Promise.resolve(new Set());
 let countingSince: ConsentToken | null = null;
 let refresh: ReturnType<typeof setInterval> | null = null;
 
-export function pushCliHoldsToEngine(consent: ConsentToken | null): Promise<boolean> {
+export function pushCliHoldsToEngine(consent: ConsentToken | null): Promise<ReadonlySet<string> | null> {
   keepRefreshing(cliHoldsLeft().length > 0);
   pushing = pushing.then(async () => {
     const tabs = cliHoldsLeft();
     try {
       const answer = await withDeadline(setControlHeldTabs(tabs), CLI_HOLD_PUSH_MS, null);
-      if (answer === null) return false;
+      if (answer === null) return null;
       noteChromeDiscardsKeptForCli(answer.kept, countingSince);
       countingSince = consent;
-      return true;
+      return new Set(answer.marked);
     } catch {
-      return false;
+      return null;
     }
   });
   return pushing;
 }
 
-export const cliHoldsPushed = (): Promise<boolean> => pushing;
+export const cliHoldsPushed = (): Promise<ReadonlySet<string> | null> => pushing;
 
 function keepRefreshing(on: boolean): void {
   if (on && refresh === null) refresh = setInterval(holdsChanged, CLI_HOLD_REFRESH_MS);
