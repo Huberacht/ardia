@@ -657,12 +657,12 @@ async function makeTemplate(name) {
   if (key) {
     const checks = { validate: validTemplate, sizesOf: cachedTemplateSizes(name) };
     const found = lookupTemplate(templateCacheDir(), key, { maxAgeHours: +opt["template-max-age"], ...checks });
-    if (found.hit) {
-      copyCachedTemplate(found, dir, checks);
+    const copied = found.hit ? copyCachedTemplate(found, dir, checks) : null;
+    if (copied?.ok) {
       log(`${name} template: cached ${found.entry.made} in ${found.dir}`);
       return;
     }
-    log(`${name}: making its template (${found.problems.join("; ")})`);
+    log(`${name}: making its template (${(copied?.problems ?? found.problems).join("; ")})`);
   }
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });

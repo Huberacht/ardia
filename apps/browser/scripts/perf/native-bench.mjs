@@ -677,13 +677,14 @@ async function makeTemplates() {
   for (const side of sides) side.cache = templateCache(side);
   const found = sides.map((side) => side.cache && lookupTemplate(side.cache.dir, side.cache.key, cachedChecks()));
   const pairs = new Set(found.map((f) => f?.entry?.pair ?? null));
-  if (found.every((f) => f?.hit) && pairs.size === 1 && !pairs.has(null)) {
-    for (const [i, side] of sides.entries()) {
-      copyCachedTemplate(found[i], side.template, cachedChecks());
+  const usable = found.every((f) => f?.hit) && pairs.size === 1 && !pairs.has(null);
+  const copied = usable ? sides.map((side, i) => copyCachedTemplate(found[i], side.template, cachedChecks())) : [];
+  if (usable && copied.every((c) => c.ok)) {
+    for (const [i, side] of sides.entries())
       useTemplateRecord(side, { ...found[i].entry.record, cached: { dir: found[i].dir, made: found[i].entry.made, pair: found[i].entry.pair } },
         `cached ${cachedAgeHours(found[i].entry).toFixed(1)} h ago with the other side's, ${found[i].dir}`);
-    }
   } else {
+    if (usable) log(`a cached template didn't copy cleanly (${copied.map((c, i) => `${sides[i].label}: ${c.ok ? "ok" : c.problems.join("; ")}`).join("; ")}): making both again`);
     if (sides.some((s) => s.cache)) log(`making ${sides.length > 1 ? "both sides' templates together" : "the template"} (${found.map((f, i) => `${sides[i].label}: ${!f ? "not cached" : !f.hit ? f.problems.join("; ") : "cached, but not made with the other side's"}`).join("; ")})`);
     for (let attempt = 0; attempt < 2; attempt++) {
       const pair = randomBytes(8).toString("hex");
@@ -1345,6 +1346,7 @@ try {
       side.app = prepareBenchApp(side.src, join(side.dir, "app"), side.bundle);
     }
     const other = sides.find((s) => s !== side);
+    side.results.meta.source = side.results.meta.preparedFrom?.source ?? appIdentity(side.src);
     Object.assign(side.results.meta, { app: side.src, bundle: side.bundle, label: side.label, date: new Date().toISOString(),
       runs: +opt.runs, launchRuns: +opt["launch-runs"], idleSecs: +opt.idle, launchSettleSecs: +opt["launch-settle"], closeSettleSecs: +opt["close-settle"], only: [...only], env: opt.env, seed: opt.seed ?? null, freshCopy: !!opt["fresh-copy"], ...(other ? { role: side.role, interleavedWith: other.label } : {}) });
   }

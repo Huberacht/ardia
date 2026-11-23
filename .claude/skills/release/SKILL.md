@@ -21,7 +21,7 @@ There are two channels (`docs/releasing.md` › Channels):
   the README and fetch-engine (all on `releases/latest`) keep pointing at stable.
 - **Stable** (`0.2.37`): everything below. From the candidate to publish, the checks take about 45 min: the smoke
   test, the update test, the ratchet and the perf gate's preparation side by side (about 5 min), then the gate's two
-  timed rounds (about 19 min each), all under one perflab lock.
+  timed rounds (about 19 min each), all in `apps/browser/scripts/perf/gate.sh` under one perflab lock.
   The site's benchmarks run on the Mac mini beside them or after publishing, never in front of it. Its perf is
   compared with the previous **stable** release, never a nightly.
 
@@ -187,28 +187,21 @@ Notarization adds a few minutes per submission.
 
 ## 4. Smoke test the build
 
-For a stable, take the perflab lock first and hold it until 4c's verdict, so no other agent's timing shares the Mac with
-the gate. Inside it, start three things at once as soon as the candidate exists. None of them is a timing and none
-takes the lock itself, so they run side by side:
+For a stable, run the gate script as soon as the candidate exists (`run_in_background`; it ends in about 45 min):
 
 ```bash
-OUT=$HOME/ardia-scratch/gate-<version> ME=<you>; mkdir -p $OUT
-scripts/agent/locked perflab --take $ME --ttl 90 --wait 3600   # held until the verdict: no one else times on this Mac meanwhile
-timeout 3600 .claude/skills/release/scripts/smoke.sh <version> <previous> --rc > $OUT/smoke.log 2>&1 & smoke=$!     # 4
-timeout 3600 node apps/browser/scripts/perf/ratchet.mjs run --own --app dist/<version>-rc/export/Ardia.app \
-  > $OUT/ratchet.log 2>&1 & ratchet=$!                                                                            # 4b
-timeout 1800 node apps/browser/scripts/perf/native-bench.mjs --out $OUT/prep --port 9478 --only prepare \
-  --app dist/<version>-rc/export/Ardia.app --label rc --control dist/<previous>/export/Ardia.app \
-  --control-label <previous> --control-bundle dist/<previous>/bench/main.jsbundle > $OUT/prep.log 2>&1 & prep=$!  # 4c
-wait $smoke; s=$?; wait $ratchet; r=$?; wait $prep; p=$?; echo "smoke $s ratchet $r prep $p"
-[ "$s$r$p" = 000 ] || echo "fix what failed and rerun only that job; keep holding the lock"
+apps/browser/scripts/perf/gate.sh <version> <previous>    # --out $HOME/ardia-scratch/gate-<version> by default
 ```
 
-When all three exit 0, go on to 4c's timed rounds, still holding the lock. A fail in one doesn't stop the others; fix
-and rerun only what failed. When the fix means a new candidate (a rebuild, a new `--rc`), the prepared copies and
-templates are of the old one: run the prepare again with the smoke test and the ratchet. `--prepared` refuses copies
-made from an older build of the same path (version, build or code signature hash changed), and the templates are
-keyed by the copy's code signature, so a stale one is never reused. Start 4d on the Mac mini at the same time. A nightly runs only the smoke test.
+It takes the perflab lock for the whole run, so no other agent's timing shares the Mac, and stops at once if it can't
+get it. Inside the lock it runs this step's smoke test, 4b's ratchet and 4c's preparation side by side (none of them is
+a timing; logs in `<out>/smoke.log`, `ratchet.log`, `prep.log`), then 4c's two timed rounds and the verdict. Its exit
+status is the first failing step's (smoke, ratchet, prepare, then a round), else the verdict's: 0 pass, 1 a row
+fails, 2 a round is invalid. A ^C, a timeout or any exit stops and waits for every job it started, and the lock goes
+with the process. Fix what failed and run the script again. When the fix means a new candidate (a rebuild, a new
+`--rc`), the next run prepares it afresh: `--prepared` refuses copies made from an older build of the same path, and
+the templates are keyed by the copy's code signature. Start 4d on the Mac mini at the same time. A nightly runs only
+the smoke test:
 
 ```bash
 .claude/skills/release/scripts/smoke.sh <version> <previous>     # --rc for dist/<version>-rc
@@ -298,25 +291,13 @@ Every stable release is timed against the previous stable one before it publishe
 control is `dist/<previous stable>/export/Ardia.app`), and ships only when every row passes
 (`docs/perf/README.md` › Gating a release). The copies and both templates were made beside the smoke test (step 4);
 the timed part is two rounds of native-bench on the prepared copies, interleaved, launch x6, session x2 and windows x2
-each, alone on the Mac under the lock you took in step 4, about 19 minutes a round. Each round gets a new empty folder,
-and the verdict runs only when both rounds exited 0, so a retry never scores an earlier round or build.
+each, about 19 minutes a round, both run by `gate.sh` (step 4) under its lock. Each round gets a new empty folder, and
+the verdict runs only when both rounds exited 0, so a retry never scores an earlier round or build.
 `gate-verdict.mjs` reads the two rounds pooled: a row fails when the pooled ranges separate, or when it's worse in
 both rounds by more than the previous release's own round-to-round spread. It exits 1 on a failed row, and 2 on an
-invalid round: a phase, run or sample missing (a row is scored only from complete rounds), samples left out with the
-screen locked or the display asleep, or the rounds measuring different apps. Rerun the gate for a 2.
-
-```bash
-rounds=()
-for r in 1 2; do
-  R=$(mktemp -d "$OUT/round$r.XXXXXX")
-  scripts/agent/locked perflab --as $ME -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
-    --out "$R" --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc --control $OUT/prep/<previous>/app/Ardia.app \
-    --control-label <previous> --only launch,session,windows --launch-runs 6 --runs 2 || { echo "round $r failed"; break; }
-  rounds+=("$R")
-done
-[ ${#rounds[@]} = 2 ] && node apps/browser/scripts/perf/gate-verdict.mjs --control <previous> --candidate rc "${rounds[@]}"
-scripts/agent/locked perflab --release $ME
-```
+invalid round, before scoring anything: a phase, run or sample missing, samples left out with the screen locked or
+the display asleep, or the rounds measuring different builds (version, build or code signature hash). Rerun the gate
+for a 2.
 
 js-bench is triage, not a gate step, when the ratchet passed: run its alternating loop (`docs/perf/README.md`) only
 when a gate row fails or needs explaining. Afterwards read `scripts/agent/cpu-cap`'s log (`cpu-cap.log`): a pause of

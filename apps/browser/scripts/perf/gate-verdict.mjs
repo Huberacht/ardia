@@ -55,11 +55,15 @@ const finite = (...xs) => xs.every(Number.isFinite);
 const WINDOW_FIELDS = (w) => finite(w?.window, w?.firstPaint, w?.firstFrame);
 const IDLE_FIELDS = (i) => finite(i?.total?.cpu, i?.total?.wakeups, i?.kinds?.browser?.cpu, i?.kinds?.browser?.wakeups);
 
+export const SESSION_PARTS = ["idle", "memory", "switch", "newtab", "newwindow"];
+
 export function roundProblems(results, { launchRuns = 6, runs = 2 } = {}) {
   const problems = [];
   const only = results?.meta?.only ?? [];
-  for (const phase of ["launch", "session", "windows"]) if (!only.includes(phase)) problems.push(`it didn't run the ${phase} phase`);
-  if (results?.meta?.parts) problems.push("its session runs measured only some parts");
+  for (const phase of ["launch", "windows"]) if (!only.includes(phase)) problems.push(`it didn't run the ${phase} phase`);
+  if (!only.includes("session") && !SESSION_PARTS.every((p) => only.includes(p))) problems.push("it didn't run the session phase (or all five of its parts)");
+  if ((results?.session ?? []).some((r) => r?.parts)) problems.push("its session runs measured only some parts");
+  if (!results?.meta?.source) problems.push("it has no build identity (version, build, code signature hash) to compare rounds by");
   const count = (what, have, want) => have !== want && problems.push(`${have} ${what}, wanted ${want}`);
   const launch = results?.launch ?? [];
   count("launches", launch.length, launchRuns);
@@ -76,6 +80,8 @@ export function roundProblems(results, { launchRuns = 6, runs = 2 } = {}) {
     short("new tabs' first frames", r.newTabFrame, 5);
     short("new windows", r.newWindow, 3, WINDOW_FIELDS);
     for (const t of ["tabs1", "tabs20"]) if (!IDLE_FIELDS(r.idle?.[t])) problems.push(`session ${i}: no ${t} idle window`);
+    const left = (r.throttled?.tabSwitch ?? 0) + (r.throttled?.newTab ?? 0);
+    if (left) problems.push(`session ${i}: ${left} samples left out because a page couldn't paint (screen locked or display asleep)`);
   });
   const windows = results?.windows ?? [];
   count("windows runs", windows.length, runs);
@@ -94,6 +100,8 @@ export function roundsProblems(rounds, expected) {
   for (const side of ["control", "candidate"]) {
     const apps = new Set(rounds.map((r) => r[side]?.meta?.preparedFrom?.app ?? r[side]?.meta?.app));
     if (apps.size > 1) problems.push(`the ${side}'s app differs between rounds (${[...apps].join(", ")})`);
+    const builds = new Set(rounds.map((r) => { const s = r[side]?.meta?.source; return s ? `${s.version} (${s.build}) ${s.cdhash}` : "unknown"; }));
+    if (builds.size > 1) problems.push(`the ${side}'s build differs between rounds (${[...builds].join(", ")})`);
   }
   return problems;
 }
@@ -181,8 +189,12 @@ function main() {
     process.exit(2);
   }
   const incomplete = roundsProblems(raw, { launchRuns: +opt["launch-runs"], runs: +opt.runs });
+  if (incomplete.length) {
+    for (const p of incomplete) console.log(`invalid: ${p}`);
+    console.log("gate: INVALID");
+    process.exit(2);
+  }
   const v = gateVerdict(raw.map((r) => ({ control: summary(r.control), candidate: summary(r.candidate) })));
-  v.problems.unshift(...incomplete);
   console.log(verdictTable(v, [opt.control, opt.candidate]));
   for (const p of v.problems) console.log(`invalid: ${p}`);
   console.log(v.problems.length ? "gate: INVALID" : v.fails.length ? `gate: FAIL (${v.fails.join(", ")})` : `gate: pass (${v.rounds} round${v.rounds > 1 ? "s" : ""})`);

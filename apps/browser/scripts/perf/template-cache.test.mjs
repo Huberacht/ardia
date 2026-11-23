@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cloneTree, componentDrift, copyCachedTemplate, defaultCacheDir, sourceChanged, entryProblems, keyId, keyProblems, lookupTemplate, storeTemplate, templateKey, uboVersion } from "./template-cache.mjs";
+import { cloneTree, componentDrift, copyCachedTemplate, defaultCacheDir, pruneCache, sourceChanged, entryProblems, keyId, keyProblems, lookupTemplate, storeTemplate, templateKey, uboVersion } from "./template-cache.mjs";
 import { componentsMismatch, componentsState } from "./template-state.mjs";
 import { UBO_ID } from "./ubo-cache.mjs";
 
@@ -150,7 +150,9 @@ test("a hit re-reads the installed startup components, before the copy and on th
   assert.equal(hit.hit, true, hit.problems?.join());
   rmSync(join(hit.template, "Chromium", "PKIMetadata"), { recursive: true, force: true });
   assert.match(lookupTemplate(cache, key, installed).problems.join(), /component PKIMetadata is missing, recorded 1839/);
-  assert.throws(() => copyCachedTemplate(hit, join(dir, "dest"), installed), /PKIMetadata is missing/);
+  const copied = copyCachedTemplate(hit, join(dir, "dest"), installed);
+  assert.equal(copied.ok, false);
+  assert.match(copied.problems.join(), /PKIMetadata is missing/);
   assert.deepEqual(componentDrift(components, { CertificateRevocation: { version: "10918" }, PKIMetadata: { version: "1840" } }), ["component PKIMetadata is 1840, recorded 1839"]);
 }));
 
@@ -173,3 +175,38 @@ test("prepared copies made from an older build of the same path are refused, so 
   assert.deepEqual(sourceChanged(identity, { ...identity, build: "140", cdhash: "cd34" }), ["its build is 140, the copy was made from 139", "its cdhash is cd34, the copy was made from ab12"]);
   assert.deepEqual(sourceChanged(undefined, identity), []);
 });
+
+test("a generation removed before or during the copy is a miss, not an abort", withDir((dir) => {
+  const made = join(dir, "made");
+  const record = fakeTemplate(made);
+  storeTemplate(join(dir, "cache"), key, made, record);
+  const hit = lookupTemplate(join(dir, "cache"), key);
+  rmSync(hit.dir, { recursive: true, force: true });
+  const copied = copyCachedTemplate(hit, join(dir, "dest"));
+  assert.equal(copied.ok, false);
+  assert.equal(existsSync(join(dir, "dest")), false);
+}));
+
+test("storing prunes expired generations of every key and abandoned staging folders, and keeps fresh ones", withDir((dir) => {
+  const cache = join(dir, "cache");
+  const made = join(dir, "made");
+  const record = fakeTemplate(made);
+  const now = Date.now();
+  const other = { ...key, build: "140" };
+  const old = storeTemplate(cache, other, made, record, { now: now - 25 * HOUR });
+  const fresh = storeTemplate(cache, other, made, record, { now: now - HOUR });
+  const otherDir = join(cache, keyId(other));
+  mkdirSync(join(otherDir, `.staging-${now - 3 * HOUR}-1-aaaaaaaa`), { recursive: true });
+  mkdirSync(join(otherDir, `.staging-${now - 60_000}-2-bbbbbbbb`), { recursive: true });
+  storeTemplate(cache, key, made, record, { now });
+  assert.equal(existsSync(old), false);
+  assert.equal(existsSync(fresh), true);
+  assert.deepEqual(readdirSync(otherDir).filter((n) => n.startsWith(".staging-")), [`.staging-${now - 60_000}-2-bbbbbbbb`]);
+  assert.deepEqual(pruneCache(join(dir, "nothing")), []);
+}));
+
+test("a store that fails partway leaves no staging folder behind", withDir((dir) => {
+  const cache = join(dir, "cache");
+  assert.throws(() => storeTemplate(cache, key, join(dir, "does-not-exist"), {}));
+  assert.deepEqual(readdirSync(join(cache, keyId(key))), []);
+}));

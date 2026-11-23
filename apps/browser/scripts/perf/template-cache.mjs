@@ -7,6 +7,7 @@ import { templateProblems, templateSizes } from "./template-state.mjs";
 export const TEMPLATE_CACHE_REVISION = 2;
 export const TEMPLATE_MAX_AGE_HOURS = 12;
 const PRUNE_AFTER_HOURS = 2 * TEMPLATE_MAX_AGE_HOURS;
+const STAGING_ABANDONED_HOURS = 2;
 
 const ENTRY = "entry.json";
 
@@ -116,20 +117,61 @@ export function storeTemplate(cacheDir, key, templateDir, record, { now = Date.n
   const keyDir = join(cacheDir, keyId(key));
   const dir = join(keyDir, `${now}-${process.pid}-${randomBytes(4).toString("hex")}`);
   const staging = join(keyDir, `.staging-${basename(dir)}`);
-  mkdirSync(staging, { recursive: true });
-  cloneTree(templateDir, join(staging, "template"));
-  writeFileSync(join(staging, ENTRY), JSON.stringify({ key, made: new Date(now).toISOString(), pair, record }, null, 2));
-  renameSync(staging, dir);
-  for (const g of generations(keyDir)) if (now - +g.split("-")[0] > PRUNE_AFTER_HOURS * 3600_000) rmSync(join(keyDir, g), { recursive: true, force: true });
+  try {
+    mkdirSync(staging, { recursive: true });
+    cloneTree(templateDir, join(staging, "template"));
+    writeFileSync(join(staging, ENTRY), JSON.stringify({ key, made: new Date(now).toISOString(), pair, record }, null, 2));
+    renameSync(staging, dir);
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+  pruneCache(cacheDir, { now });
   return dir;
+}
+
+const madeAt = (name) => +name.replace(/^\.staging-/, "").split("-")[0];
+
+export function pruneCache(cacheDir, { now = Date.now() } = {}) {
+  const removed = [];
+  let keys = [];
+  try {
+    keys = readdirSync(cacheDir).filter((k) => /^[0-9a-f]{16}$/.test(k));
+  } catch {
+    return removed;
+  }
+  for (const k of keys) {
+    let names = [];
+    try {
+      names = readdirSync(join(cacheDir, k));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const staging = name.startsWith(".staging-");
+      const age = now - madeAt(name);
+      if (!Number.isFinite(age)) continue;
+      if ((staging && age > STAGING_ABANDONED_HOURS * 3600_000) || (!staging && generations(join(cacheDir, k)).includes(name) && age > PRUNE_AFTER_HOURS * 3600_000)) {
+        rmSync(join(cacheDir, k, name), { recursive: true, force: true });
+        removed.push(join(k, name));
+      }
+    }
+  }
+  return removed;
 }
 
 export function copyCachedTemplate(hit, templateDir, opts = {}) {
   rmSync(templateDir, { recursive: true, force: true });
   mkdirSync(dirname(templateDir), { recursive: true });
-  cloneTree(hit.template, templateDir);
-  const problems = checkTemplate(templateDir, hit.entry, hit.entry.key, { ...opts, maxAgeHours: Infinity });
-  if (problems.length) throw new Error(`the cached template copied from ${hit.dir} is off: ${problems.join("; ")}`);
+  let problems;
+  try {
+    cloneTree(hit.template, templateDir);
+    problems = existsSync(hit.template) ? checkTemplate(templateDir, hit.entry, hit.entry.key, { ...opts, maxAgeHours: Infinity }) : ["it was removed during the copy"];
+  } catch (error) {
+    problems = [`the copy failed (${error.code ?? error.message.split("\n")[0]})`];
+  }
+  if (problems.length) rmSync(templateDir, { recursive: true, force: true });
+  return { ok: !problems.length, problems };
 }
 
 export function sourceChanged(recorded, current) {

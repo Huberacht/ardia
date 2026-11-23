@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { GATE_ROWS, gateVerdict, roundProblems, roundsProblems, rowVerdict } from "./gate-verdict.mjs";
 
 const side = (values) => ({ values });
@@ -55,8 +60,8 @@ test("the gate reads every row by name, pooled, and calls a round with samples l
 
 const idle = { total: { cpu: 0.3, wakeups: 6 }, kinds: { browser: { cpu: 0.1, wakeups: 1.5 } } };
 const win = { window: 50, firstPaint: 100, firstFrame: 80 };
-const complete = (app = "/dist/0.2.48/export/Ardia.app") => ({
-  meta: { only: ["launch", "session", "windows"], app },
+const complete = (app = "/dist/0.2.48/export/Ardia.app", source = { version: "0.2.48", build: "139", cdhash: "ab12" }) => ({
+  meta: { only: ["launch", "session", "windows"], app, source },
   launch: Array.from({ length: 6 }, () => ({ window: 1, withContent: 1, js: 1, firstPaint: 1, firstFrame: 1 })),
   session: Array.from({ length: 2 }, () => ({ tabSwitch: Array(16).fill(7), newTab: Array(5).fill(80), newTabFrame: Array(5).fill(60), newWindow: Array(3).fill(win), idle: { tabs1: idle, tabs20: idle } })),
   windows: Array.from({ length: 2 }, () => ({ newWindow: Array(8).fill(win) })),
@@ -81,7 +86,7 @@ test("a missing phase, run or idle window, a part-only session, or too few launc
   s.session.pop();
   s.session[0].idle.tabs20 = undefined;
   s.launch.pop();
-  s.meta.parts = ["switch"];
+  s.session[0].parts = ["switch"];
   assert.deepEqual(roundProblems(s), ["its session runs measured only some parts", "5 launches, wanted 6", "1 session runs, wanted 2", "session 0: no tabs20 idle window"]);
   const w = complete();
   w.windows[1].newWindow[3] = { ...win, firstFrame: NaN };
@@ -110,4 +115,59 @@ test("the judged rows are exactly the 19 the 0.2.47 and 0.2.48 gates' pooled tab
   const v = gateVerdict([{ control: memory(700), candidate: memory(900) }]);
   assert.deepEqual(v.fails, []);
   assert.equal(v.reported.find((r) => r.name === "memory (phys_footprint), 20 tab(s)").candidate, 900);
+});
+
+test("rounds of the same path but another build or code signature are refused", () => {
+  const control = complete("/dist/0.2.47/export/Ardia.app", { version: "0.2.47", build: "127", cdhash: "cc" });
+  const a = { control, candidate: complete() };
+  const rebuilt = { control, candidate: complete("/dist/0.2.48/export/Ardia.app", { version: "0.2.48", build: "140", cdhash: "ab12" }) };
+  const resigned = { control, candidate: complete("/dist/0.2.48/export/Ardia.app", { version: "0.2.48", build: "139", cdhash: "ff99" }) };
+  assert.deepEqual(roundsProblems([a, a]), []);
+  assert.match(roundsProblems([a, rebuilt]).join(), /the candidate's build differs between rounds \(0\.2\.48 \(139\) ab12, 0\.2\.48 \(140\) ab12\)/);
+  assert.match(roundsProblems([a, resigned]).join(), /build differs between rounds/);
+  const unknown = complete();
+  delete unknown.meta.source;
+  assert.match(roundProblems(unknown).join(), /no build identity/);
+});
+
+test("a session run as its five parts counts as the session; a run that measured only some parts doesn't", () => {
+  const parts = complete();
+  parts.meta.only = ["launch", "idle", "memory", "switch", "newtab", "newwindow", "windows"];
+  assert.deepEqual(roundProblems(parts), []);
+  parts.meta.only = ["launch", "idle", "switch", "newtab", "newwindow", "windows"];
+  assert.match(roundProblems(parts).join(), /didn't run the session phase/);
+  const some = complete();
+  some.session[1].parts = ["switch"];
+  assert.deepEqual(roundProblems(some), ["its session runs measured only some parts"]);
+});
+
+test("samples left out are counted from the raw runs", () => {
+  const r = complete();
+  r.session[0].throttled = { tabSwitch: 2, newTab: 1 };
+  assert.deepEqual(roundProblems(r), ["session 0: 3 samples left out because a page couldn't paint (screen locked or display asleep)"]);
+});
+
+test("the CLI checks every round before it prints a row: an incomplete or empty round prints only INVALID and exits 2", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-verdict-"));
+  try {
+    const write = (round, label, results) => {
+      mkdirSync(join(dir, round, label), { recursive: true });
+      writeFileSync(join(dir, round, label, "results.json"), JSON.stringify(results));
+    };
+    const short = complete();
+    short.session[0].tabSwitch = [7];
+    write("r1", "0.2.47", complete("/dist/0.2.47/export/Ardia.app", { version: "0.2.47", build: "127", cdhash: "cc" }));
+    write("r1", "rc", short);
+    write("r2", "0.2.47", {});
+    write("r2", "rc", {});
+    const r = spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "gate-verdict.mjs"), "--control", "0.2.47", "--candidate", "rc", join(dir, "r1"), join(dir, "r2")], { encoding: "utf8" });
+    assert.equal(r.status, 2, r.stderr);
+    assert.equal(r.stderr, "");
+    assert.doesNotMatch(r.stdout, /^\|/m);
+    assert.match(r.stdout, /invalid: round 1, candidate: session 0: 1 of 16 tab switches/);
+    assert.match(r.stdout, /invalid: round 2, control: it didn't run the launch phase/);
+    assert.match(r.stdout, /gate: INVALID\n$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -11,7 +11,7 @@ All of them are in `apps/browser/scripts/perf/`.
 | File | Bench | What it is |
 |---|---|---|
 | `native-bench.mjs` | native | Launch, idle CPU and wakeups, memory, tab and window latency, throttling, on a Release app in hidden instances. Its header maps every section and output row to the function that measures it. |
-| `native-summary.mjs`, `gate-verdict.mjs` | native | The rows native-bench prints, and the release gate's pooled verdict over its rounds (below). |
+| `native-summary.mjs`, `gate-verdict.mjs`, `gate.sh` | native | The rows native-bench prints, the release gate's pooled verdict over its rounds, and the script that runs the whole gate under one perflab lock (below). |
 | `template-cache.mjs`, `template-state.mjs`, `ubo-cache.mjs` | native, cross-browser | The data folder every run copies: what a finished one must hold (uBO's saved engine, the startup components), and the cache that keeps it between rounds and gates, keyed by the app's build and code, uBO's version, the bench bundle and the page port. |
 | `acperf.swift` | native | Process probes (rusage, phys_footprint, window on screen, quit) and `postkeys` (real key events posted to one pid with `CGEventPostToPid`), built on demand with swiftc. |
 | `acmark.m` | native | Injected into the bench's copy of the app: marks when a window's React content commits, and (`AC_BENCH_KEYLOG=1`) every key down the app's event loop sees. |
@@ -81,8 +81,9 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
    by run, putting the control first on even runs, so both see the same machine. Don't run the apps as two
    separate jobs. The 0.2.22 gate ran 0.2.21 and the RC 15 minutes apart and chased a launch "regression" that
    was only drift. For js-bench, alternate `run --runs 1 --append 1` between the two labels, in a fresh `--out`.
-4. **Take the lock, then prepare inside it.** Take perflab once (`scripts/agent/locked perflab --take <you>`) and hold
-   it through both rounds and the verdict, so no other agent's timing shares the Mac. `--only prepare` builds the
+4. **Hold one lock for all of it.** `gate.sh` (below) runs the whole gate as one command under `locked perflab`, so
+   no other agent's timing shares the Mac, nothing is left holding the lock after a ^C or a timeout, and it stops at
+   once when the lock is busy past `GATE_LOCK_WAIT` seconds (default 3600). `--only prepare` builds the
    bench bundle, copies and signs both apps and makes both template data folders. None of that is a timing, so inside
    the lock it runs beside `smoke.sh` and `ratchet.mjs` (`.claude/skills/release/SKILL.md` › 4). The timed rounds then
    run the prepared copies with `--prepared`.
@@ -118,7 +119,8 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
    to back, each into a new empty folder, and score only when both exited 0. `gate-verdict.mjs` reads them (the rule
    the 0.2.47 and 0.2.48 gates used). It scores nothing and exits 2 when a round is incomplete: a phase or run
    missing, any run short of its samples (6 launches, 16 switches, 5 new tabs, 3 + 8 new windows, both idle windows),
-   samples left out, or the rounds measuring different apps. A row fails when:
+   samples left out, or the rounds measuring different builds (version, build or code signature hash). A session run
+   as its five parts (`--only idle,memory,switch,newtab,newwindow`) counts as the session. A row fails when:
    - the pooled ranges separate: the candidate's best run is worse than the control's worst, or
    - the candidate is worse in both rounds and its pooled median is worse by more than the control's own
      round-to-round spread of medians.
@@ -143,26 +145,15 @@ the control stays `dist/<previous stable>/export/Ardia.app` however many nightli
    `dist/<v>/bench/`: the next gate's control bundle and templates).
 
 ```sh
-V=0.2.49 PREV=0.2.48 OUT=<your scratch dir>/gate ME=<you>
-scripts/release.sh $V --rc
-scripts/agent/locked perflab --take $ME --ttl 90 --wait 3600
-# Not timed, inside the lock beside smoke.sh and ratchet.mjs. Omit --control-bundle when both apps share NATIVE_API_VERSION.
-node apps/browser/scripts/perf/native-bench.mjs --out $OUT/prep --port 9478 --only prepare \
-  --app dist/$V-rc/export/Ardia.app --label rc \
-  --control dist/$PREV/export/Ardia.app --control-label $PREV --control-bundle dist/$PREV/bench/main.jsbundle
-# Timed: two rounds, each in a new folder, then the verdict only if both finished.
-rounds=()
-for r in 1 2; do
-  R=$(mktemp -d "$OUT/round$r.XXXXXX")
-  scripts/agent/locked perflab --as $ME -- caffeinate -d -i node apps/browser/scripts/perf/native-bench.mjs \
-    --out "$R" --port 9478 --prepared --app $OUT/prep/rc/app/Ardia.app --label rc --control $OUT/prep/$PREV/app/Ardia.app \
-    --control-label $PREV --only launch,session,windows --launch-runs 6 --runs 2 || break
-  rounds+=("$R")
-done
-[ ${#rounds[@]} = 2 ] && node apps/browser/scripts/perf/gate-verdict.mjs --control $PREV --candidate rc "${rounds[@]}"
-scripts/agent/locked perflab --release $ME
+scripts/release.sh 0.2.49 --rc
+apps/browser/scripts/perf/gate.sh 0.2.49 0.2.48 --out <your scratch dir>/gate   # exit: first failing step, else the verdict
 scripts/agent/unregister-builds
 ```
+
+`gate.sh --help` lists what it runs: `smoke.sh`, `ratchet.mjs run --own` and `native-bench --only prepare` side by
+side, then two rounds (`native-bench --prepared --only launch,session,windows --launch-runs 6 --runs 2`, each in a new
+`mktemp -d` folder), then `gate-verdict.mjs` on both. Its exit status is the first failing step's, else the verdict's
+(0 pass, 1 a row fails, 2 invalid); any exit stops and waits for the jobs it started.
 
 js-bench is triage, not part of every gate: the ratchet (`ratchet.mjs run --own`) already checks the same commits,
 renders, store updates and timers on the candidate's own bundle, as counts that don't move with load. Run it when the
