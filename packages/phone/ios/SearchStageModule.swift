@@ -466,9 +466,11 @@ final class SearchStageView: ExpoView {
 
   private func reportArrival(after arrival: TimeInterval, of flying: StageMorph) {
     arrivalTask?.cancel()
-    let wait = Int(max(0, arrival - Self.landingLead) * 1000)
+    let deadline = ContinuousClock.now + .milliseconds(Int(max(0, arrival - Self.landingLead) * 1000))
     arrivalTask = Task { [weak self] in
-      try? await Task.sleep(for: .milliseconds(wait))
+      while ContinuousClock.now < deadline, !Task.isCancelled, !flying.isVisiblyLanded {
+        try? await Task.sleep(for: Self.settlePoll)
+      }
       guard let self, !Task.isCancelled, self.isClosing, self.morph === flying else { return }
       self.reportSettled(landed: true)
     }

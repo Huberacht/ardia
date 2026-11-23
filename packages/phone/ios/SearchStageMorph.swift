@@ -324,9 +324,9 @@ final class StageMorph {
   private var flight: UIViewPropertyAnimator?
   private var folding: [UIViewPropertyAnimator] = []
   private var fades: [UIViewPropertyAnimator] = []
-  private var landingLeft = 0
 
   private static let landedTolerance: CGFloat = 0.17
+  private static let visiblyLandedWithin: CGFloat = 8
 
   struct Start {
     var frame: CGRect
@@ -335,6 +335,11 @@ final class StageMorph {
 
   var hasDestination: Bool { destination != nil }
   var isShown: Bool { !view.isHidden }
+
+  var isVisiblyLanded: Bool {
+    guard let destination, let shown = view.layer.presentation()?.frame else { return false }
+    return Self.gap(between: shown, and: destination) <= Self.visiblyLandedWithin
+  }
 
   var isMoving: Bool {
     guard let flight, flight.isRunning || folding.contains(where: \.isRunning) else { return false }
@@ -408,25 +413,8 @@ final class StageMorph {
   }
 
   func handOff() {
-    if destination != nil {
-      let landing = ([flight].compactMap { $0 } + folding).filter(\.isRunning)
-      landingLeft = landing.count
-      guard landingLeft > 0 else {
-        DispatchQueue.main.async { self.remove() }
-        return
-      }
-      for animator in landing {
-        animator.addCompletion { [weak self] _ in self?.landed() }
-      }
-      return
-    }
     let fade = Self.run(Motion.stageHandOff) { [view] in view.alpha = 0 }
-    fade.addCompletion { _ in self.remove() }
-  }
-
-  private func landed() {
-    landingLeft -= 1
-    if landingLeft <= 0 { remove() }
+    fade.addCompletion { [weak self] _ in self?.remove() }
   }
 
   func remove() {
