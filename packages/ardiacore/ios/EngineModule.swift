@@ -51,6 +51,9 @@ public class EngineModule: Module {
     "cliMoveOffscreen": { args, reply in
       ArdiaHost.cliMoveOffscreen(try args.text("tabId")) { reply.ok($0) }
     },
+    "setCliHeldTabs": { args, reply in
+      reply.ok(["kept": ArdiaHost.cliHoldTabs(try args.strings("tabIds"))])
+    },
     "cliCloseOffscreenTabs": { _, reply in
       ArdiaHost.cliCloseOffscreenTabs()
       reply.ok()

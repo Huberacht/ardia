@@ -158,7 +158,7 @@ export const TAB_METHODS: MethodSpec[] = [
   {
     name: "tabs.hold",
     mutates: false,
-    description: `Keep tabs an ardia command session is using loaded: Ardia's own tab budget doesn't put them to sleep and their profile isn't unloaded as idle for the next seconds (default ${CLI_HOLD_DEFAULT_S}, at most ${CLI_HOLD_MAX_S}); Chromium's own discarding still keeps them only while a debugger is attached. Each call replaces the session's held tabs; call again before the time ends to keep holding, and tabs.release ends it sooner`,
+    description: `Keep tabs an ardia command session is using loaded: Ardia's own tab budget doesn't put them to sleep and their profile isn't unloaded as idle for the next seconds (default ${CLI_HOLD_DEFAULT_S}, at most ${CLI_HOLD_MAX_S}); on macOS Chromium's own discarding keeps them too, and elsewhere only while a debugger is attached. Each call replaces the session's held tabs; call again before the time ends to keep holding, and tabs.release ends it sooner`,
     params: obj({ session: HOLD_SESSION, tabs: ids("Tab ids from windows or tabs.list; they replace what this session held", CLI_HOLD_MAX_TABS), seconds: int("How long to hold them", 1, CLI_HOLD_MAX_S) }, ["session", "tabs"]),
     result: "{held, gone, seconds}",
     run: holdTabs,

@@ -14,11 +14,16 @@ enum class DiscardVeto {
   kPostedDocument = 100,
   kBeforeUnload = 101,
   kDownload = 102,
+  kCliHold = 103,
 };
 
 std::vector<DiscardVeto> DiscardVetoesFor(content::WebContents* contents);
 
 void NotePostedDocument(content::NavigationHandle* handle);
+
+void SetCliHeldTabs(const std::vector<content::WebContents*>& held);
+
+int TakeCliHoldVetoes();
 
 void InstallDiscardVeto();
 
