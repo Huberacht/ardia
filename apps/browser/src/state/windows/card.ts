@@ -20,8 +20,7 @@ import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { webviews } from "../../platform/webviews";
 import { notePageOverlay } from "../telemetry/usage";
 import { liveOf } from "../tabs/tabLive";
-import { useMemoryPressure } from "../tabs/sleepingTabs";
-import { capWarmViews } from "../tabs/sleepPolicy";
+import { warmOrder } from "../tabs/sleepPolicy";
 
 export const useSplitOf = (tabId: string | undefined) => useBrowser((s) => splitOf(s, tabId));
 
@@ -85,12 +84,11 @@ export function successorWhenLeaving(leaving: string[], windowId: string): strin
 }
 
 export function useWarmTabIds(windowId: string, pagerPages: PagerPage[] | null, successor: string | undefined) {
-  const pressure = useMemoryPressure();
   return useBrowser(
     useShallow((s) => {
       const w = s.windows[windowId];
       const ids = !w || !pagerPages ? [] : pagerPages.map((p) => (p.id === w.profileId ? undefined : w.activeTabIds[p.id])).filter((id): id is string => !!id);
-      return capWarmViews(ids, successor && s.tabs[successor]?.windowId === windowId ? successor : undefined, pressure);
+      return warmOrder(ids, successor && s.tabs[successor]?.windowId === windowId ? successor : undefined);
     }),
   );
 }

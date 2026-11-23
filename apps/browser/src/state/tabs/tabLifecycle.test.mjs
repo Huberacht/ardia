@@ -448,9 +448,8 @@ test("a protection seen while sharing is off is still counted the first time it 
   webviews.clear();
 });
 
-test("memory pressure tightens the sweep at once, a few tabs a tick, counts each level reached, and caps the warm background pages", async (t) => {
+test("memory pressure tightens the sweep at once, a few tabs a tick, counts each level reached", async (t) => {
   const { sleepTabsOverBudget, loadedTabBudget } = await import("./loadedTabBudget.ts");
-  const { capWarmViews } = await import("./sleepPolicy.ts");
   const { webviews } = await import("../../platform/webviews.ts");
   const { takeTabSleepCounts, noteMemoryPressure } = await import("../telemetry/tabSleepCounts.ts");
   t.mock.timers.enable({ apis: ["setTimeout"] });
@@ -488,8 +487,52 @@ test("memory pressure tightens the sweep at once, a few tabs a tick, counts each
   assert.equal(counts.tabs_slept_over_budget, 8);
   assert.equal(counts.memory_pressure_warnings, 1);
   assert.equal(counts.memory_pressure_criticals, 1);
-  assert.deepEqual(capWarmViews(["a", "b", "c"], "s", "normal"), ["s", "a", "b", "c"]);
-  assert.deepEqual(capWarmViews(["a", "b", "c"], "s", "warning"), ["s", "a"], "a warning keeps two warm pages, the next tab first");
-  assert.deepEqual(capWarmViews(["a", "b"], undefined, "critical"), [], "critical pressure keeps none");
+  webviews.clear();
+});
+
+test("pressure sweeps wait for launch to settle, share one rate limit through a warning, normal, warning flap, and stop when the level changes mid-sweep", async (t) => {
+  const { pressureChanged, armPressureSweeps, sweepIfDue, loadedTabBudget } = await import("./loadedTabBudget.ts");
+  const { webviews } = await import("../../platform/webviews.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const now = Date.now() + 1500 * 60 * minute;
+  const { ids, active } = windowOfHiddenTabs(12, now);
+  ids.forEach((id, i) => S().updateTab(id, { lastActiveAt: now - (60 + i) * minute }));
+  const sys = (memoryPressure) => ({ onBattery: false, batteryLevel: null, lowPowerMode: false, memoryPressure, physicalMemory: 8 * 2 ** 30 });
+  const settings = { memorySaver: true, memorySaverMode: "maximum" };
+  const warning = loadedTabBudget(settings, sys("warning"));
+  const normal = loadedTabBudget(settings, sys("normal"));
+  const asked = [];
+  let hold = null;
+  webviews.clear();
+  for (const id of [active, ...ids]) webviews.set(id, { sleepIfHidden: () => (asked.push(id), hold ? hold : Promise.resolve([7])) });
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+      t.mock.timers.tick(1500);
+    }
+  };
+  pressureChanged(null, warning, now);
+  await settle();
+  assert.deepEqual(asked, [], "a warning read at launch asks nothing until launch has settled");
+  armPressureSweeps();
+  pressureChanged(null, warning, now);
+  await settle();
+  pressureChanged(null, normal, now + 100);
+  pressureChanged(null, warning, now + 200);
+  await settle();
+  assert.equal(asked.length, 4, "the flap's second warning is inside the 15 s limit the first sweep started");
+  assert.deepEqual(await sweepIfDue(normal, null, now + 30_000), [], "the minute job shares the limit too: 30 s after a sweep is too soon for it");
+  asked.length = 0;
+  let release;
+  hold = new Promise((resolve) => (release = resolve));
+  const sweep = sweepIfDue(warning, null, now + 120_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(asked.length, 1, "the sweep is waiting on its first ask");
+  pressureChanged(null, normal, now + 120_100);
+  release([7]);
+  hold = null;
+  await settle();
+  await sweep;
+  assert.equal(asked.length, 1, "after the Mac returns to normal the sweep sends no more asks under the warning's rules");
   webviews.clear();
 });

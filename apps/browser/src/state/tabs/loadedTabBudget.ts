@@ -1,6 +1,7 @@
 import type { SystemState } from "../../platform/performance";
 import { everySlowly, reschedule } from "../../platform/slowTimers";
 import { webviews } from "../../platform/webviews";
+import { afterFirstWindow } from "../../lib/afterFirstWindow";
 import { withDeadline } from "../../lib/deadline";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { useBrowser, type BrowserState } from "../browser/store";
@@ -25,6 +26,7 @@ export type LoadedTabBudget = Pick<SleepRules, "tabs" | "hiddenMs"> & Partial<Sl
 
 const SWEEP_MS = MINUTE;
 const PRESSURE_TICK_MS = 5_000;
+const PRESSURE_ARMS_AFTER_MS = 10_000;
 const ANSWER_WITHIN_MS = 1500;
 const ASK_AGAIN_MS = 10 * MINUTE;
 const KEPT_RECENTLY_MS = 60 * MINUTE;
@@ -131,13 +133,15 @@ const askAgainAt = new Map<string, number>();
 const sleptAt = new Map<string, number>();
 const keptAt = new Map<string, number>();
 let sweeping = false;
-let lastSweepAt = -Infinity;
+let lastAutomaticSweepAt = -Infinity;
+let pressureGeneration = 0;
+let pressureArmed = false;
 
 export const sleepTabsOverBudget = (budget: LoadedTabBudget | null, now = Date.now()) => sweepOverBudget(budget, now, consentToken());
 
 async function sweepOverBudget(budget: LoadedTabBudget | null, now: number, consent: ConsentToken | null): Promise<string[]> {
   if (!budget || sweeping) return [];
-  lastSweepAt = now;
+  const generation = pressureGeneration;
   const s = useBrowser.getState();
   for (const id of shownTabIds(s)) seenAt.set(id, now);
   for (const id of seenAt.keys()) if (!s.tabs[id]) seenAt.delete(id);
@@ -156,6 +160,7 @@ async function sweepOverBudget(budget: LoadedTabBudget | null, now: number, cons
   sweeping = true;
   try {
     for (const id of asking) {
+      if (generation !== pressureGeneration) break;
       const vetoed = vetoNow(id, budget, now);
       if (vetoed) {
         if (vetoed !== "gone") noteVeto(id, vetoed, consent);
@@ -202,9 +207,23 @@ let budgetNow: () => LoadedTabBudget | null = () => null;
 
 const overBudget = (budget: LoadedTabBudget | null) => !!budget && awakeOf(useBrowser.getState(), webviews.keys()).length > budget.tabs;
 
-export function pressureChanged(consent: ConsentToken | null) {
-  const budget = budgetNow();
-  if (budget?.pressure && budget.pressure !== "normal" && overBudget(budget)) void sweepOverBudget(budget, Date.now(), consent);
+const underPressure = (budget: LoadedTabBudget | null) => !!budget?.pressure && budget.pressure !== "normal";
+
+export function sweepIfDue(budget: LoadedTabBudget | null, consent: ConsentToken | null, at = Date.now()): Promise<string[]> {
+  if (!budget || sweeping || (underPressure(budget) && !pressureArmed)) return Promise.resolve([]);
+  if (at - lastAutomaticSweepAt < (budget.everyMs ?? SWEEP_MS)) return Promise.resolve([]);
+  lastAutomaticSweepAt = at;
+  return sweepOverBudget(budget, at, consent);
+}
+
+export function pressureChanged(consent: ConsentToken | null, budget = budgetNow(), at = Date.now()) {
+  pressureGeneration++;
+  if (underPressure(budget) && overBudget(budget)) void sweepIfDue(budget, consent, at);
+  reschedule();
+}
+
+export function armPressureSweeps() {
+  pressureArmed = true;
   reschedule();
 }
 
@@ -218,19 +237,14 @@ export function startLoadedTabBudget(system: () => SystemState | null) {
   });
   everySlowly({
     every: SWEEP_MS,
-    run: () => void sleepTabsOverBudget(budget()),
+    run: () => void sweepIfDue(budget(), consentToken()),
     needed: () => overBudget(budget()),
   });
   everySlowly({
     every: PRESSURE_TICK_MS,
-    run: () => {
-      const rules = budget();
-      if (rules?.everyMs && Date.now() - lastSweepAt >= rules.everyMs) void sleepTabsOverBudget(rules);
-    },
-    needed: () => {
-      const rules = budget();
-      return !!rules?.pressure && rules.pressure !== "normal" && overBudget(rules);
-    },
+    run: () => void sweepIfDue(budget(), consentToken()),
+    needed: () => pressureArmed && underPressure(budget()) && overBudget(budget()),
   });
+  afterFirstWindow(() => setTimeout(armPressureSweeps, PRESSURE_ARMS_AFTER_MS));
   if (__DEV__) (globalThis as { acLoadedTabBudget?: unknown }).acLoadedTabBudget = { sleepTabsOverBudget, budget, tabsOverBudget, planOverBudget };
 }

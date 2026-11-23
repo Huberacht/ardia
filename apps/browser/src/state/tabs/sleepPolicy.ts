@@ -65,10 +65,15 @@ export function sleepRules(settings: { memorySaver: boolean; memorySaverMode: st
 
 export const warmViewCap = (pressure: MemoryPressure) => WARM_VIEWS[pressure];
 
-export function capWarmViews(neighbours: readonly string[], successor: string | undefined, pressure: MemoryPressure): string[] {
-  const all = successor && !neighbours.includes(successor) ? [successor, ...neighbours] : [...neighbours];
+export function warmOrder(neighbours: readonly string[], successor: string | undefined): string[] {
+  return successor && !neighbours.includes(successor) ? [successor, ...neighbours] : [...neighbours];
+}
+
+export function capWarmPanes(order: readonly string[], panesOf: (id: string) => readonly string[], shown: ReadonlySet<string>, pressure: MemoryPressure): string[] {
+  const panes: string[] = [];
+  for (const id of order) for (const pane of panesOf(id)) if (!shown.has(pane) && !panes.includes(pane)) panes.push(pane);
   const cap = warmViewCap(pressure);
-  return all.length > cap ? all.slice(0, cap) : all;
+  return panes.length > cap ? panes.slice(0, cap) : panes;
 }
 
 export const seenWindowMs = (rules: Pick<SleepRules, "hiddenMs" | "pressure">) => (rules.pressure === "normal" ? Math.max(rules.hiddenMs, RECENTLY_SEEN_MS) : rules.hiddenMs);
