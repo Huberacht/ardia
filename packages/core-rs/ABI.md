@@ -30,6 +30,12 @@ Only nulls, lengths and contents. Nothing more:
   or a `NULL` output slot returns `ARDIA_STATUS_INVALID_ARGUMENT`.
 - A variable-length input over its cap (`ARDIA_MAX_*`) returns `ARDIA_STATUS_TOO_LARGE` before the pointer is read,
   so the cap wins over a `NULL` pointer: an over-cap length with a `NULL` pointer returns `ARDIA_STATUS_TOO_LARGE`.
+- The caps are there to refuse a wrong length, not to limit real data. A vault payload may be up to 1 GiB
+  (`ARDIA_MAX_PAYLOAD_BYTES`) and a sealed file that much plus 4 KiB, because the Swift that wrote most vaults had no
+  cap and sync's checkpoint holds every scope in one file. A password, its origin and its username may each be that
+  large too (`ARDIA_MAX_PASSWORD_FIELD_BYTES`), and a sealed password half as much again, since Swift sealed and
+  opened passwords of any length. Scopes and file ids may be up to 64 KiB (`ARDIA_MAX_LABEL_BYTES`). A caller that can't show the user an error must still handle `ARDIA_STATUS_TOO_LARGE`:
+  every refusal is a status, never an abort.
 - Entropy is a fixed-size input: exactly `ARDIA_ENTROPY_BYTES`. Any other length, shorter or longer, returns
   `ARDIA_STATUS_INVALID_ARGUMENT` in both `ardia_sync_keys_new` and `ardia_phrase_from_entropy`.
 - Text inputs that aren't UTF-8 return `ARDIA_STATUS_INVALID_ARGUMENT`.
@@ -45,7 +51,8 @@ Only nulls, lengths and contents. Nothing more:
   words, passwords or payloads; show the user's own input highlighted at `index` instead.
 - Secret results (opened payloads, passwords, entropy, phrases) are plain bytes, never JSON. Copy out what you need,
   then free the buffer.
-- `ardia_buf_free(&buf)` zeroes the bytes, frees them and resets the slot to `{NULL, 0}`. Freeing a reset slot or
+- `ardia_buf_free(&buf)` zeroes the bytes (with `memset_s` on Apple platforms, which the compiler may not remove, and
+  with `zeroize`'s volatile writes elsewhere), frees them and resets the slot to `{NULL, 0}`. Freeing a reset slot or
   passing `NULL` does nothing. Freeing another copy of a buffer that was already freed is a double free.
 - `ardia_sync_keys_new` writes a new handle that owns the derived keys and zeroes them when freed. A handle never
   changes after it's made, so threads may share it, but its free must be synchronized with every user.
@@ -56,13 +63,19 @@ The library keeps no globals and starts no threads. It reads no files. The only 
 OS for random bytes, in `ardia_sync_seal`, `ardia_sync_new_file_id` and `ardia_phrase_generate_entropy`. A panic aborts
 the process in release builds.
 
+If the OS can't supply random bytes, what happens depends on the crypto backend:
+- RustCrypto, used in cargo builds, returns `ARDIA_STATUS_RANDOM`.
+- BoringSSL, used in Chromium's GN build, aborts the process. Its CSPRNG treats an entropy failure as fatal, as the rest
+  of Chromium does.
+
 ## Nonces
 
 Files and local state are sealed only with nonces drawn from the crypto backend's `fill_random`. In every shipped
 build that backend is the OS. Passwords are sealed with their HMAC-derived deterministic nonce. No function in
 `ardia-sync-core` or `ardia-ffi` takes a nonce. To reproduce the committed fixed-nonce vectors, the test crate
-`ardia-sync-vectors` builds `SyncKeysWith<FixtureCrypto>`, a test-only backend that wraps RustCrypto and returns the
-fixture's nonce from `fill_random`, and then calls the normal `seal`.
+`ardia-sync-vectors` builds `SyncKeysWith<FixtureCrypto>`, a test-only backend that wraps the build's selected backend
+and returns the fixture's nonce from `fill_random`, and then calls the normal `seal`. The selected backend is RustCrypto
+under cargo and BoringSSL in Chromium's GN build.
 
 ## Reading what other platforms wrote
 

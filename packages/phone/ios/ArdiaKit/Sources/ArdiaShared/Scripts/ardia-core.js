@@ -64,7 +64,7 @@ if (typeof scope.URL === "undefined") scope.URL = HostURL;
                              
                
   
-                                                                                                               
+                                                                                                        
 
 let source                   = { tabs: [], history: [], bookmarks: [] };
 let engines                 = allEngines();
@@ -187,6 +187,7 @@ __define("packages/core/src/index.ts", function (exports, __require) {
   __exportAll(exports, __require("packages/core/src/providerNetwork.ts"));
   __exportAll(exports, __require("packages/core/src/providerRows.ts"));
   __exportAll(exports, __require("packages/core/src/quickCreate.ts"));
+  __exportAll(exports, __require("packages/core/src/secret.ts"));
   __exportAll(exports, __require("packages/core/src/siteSearch.ts"));
   __exportAll(exports, __require("packages/core/src/suggest.ts"));
   __exportAll(exports, __require("packages/core/src/suggestFetcher.ts"));
@@ -194,6 +195,7 @@ __define("packages/core/src/index.ts", function (exports, __require) {
   __exportAll(exports, __require("packages/core/src/textFragment.ts"));
   __exportAll(exports, __require("packages/core/src/theme.ts"));
   __exportAll(exports, __require("packages/core/src/webStore.ts"));
+
 
 
 
@@ -372,7 +374,7 @@ function appUrlOrigin(url        )                {
   return parts ? `${APP_SCHEME}://${parts.host}` : null;
 }
 
-                         
+                  
                                        
                                                 
                       
@@ -947,7 +949,7 @@ function convert(input        )                                         {
   return { value: (amount * a.factor) / b.factor, unit: b.label };
 }
 
-                                                                                 
+                                                                          
 
 function calculate(raw        )                     {
   const expression = raw.trim().replace(/^=\s*/, "").replace(/\s*=\s*\??$/, "");
@@ -971,7 +973,9 @@ function calculate(raw        )                     {
 __define("packages/core/src/cleanUrl.ts", function (exports, __require) {
   __export(exports, "cleanUrlReport", () => cleanUrlReport);
   __export(exports, "cleanUrl", () => cleanUrl);
+  __export(exports, "cleanLinkTitle", () => cleanLinkTitle);
   __export(exports, "markdownLink", () => markdownLink);
+  __export(exports, "linkLines", () => linkLines);
 
 const GLOBAL_PARAMS = new Set([
   "gclid", "gclsrc", "dclid", "gbraid", "wbraid", "gad_source", "gad_campaignid", "_ga", "_gl", "srsltid",
@@ -1021,10 +1025,12 @@ function isTrackingParam(name        , hostname = "")          {
   return siteRules(hostname).some((r) => r.params.includes(key) || r.prefixes?.some((p) => key.startsWith(p)));
 }
 
-                                                                  
+                                                                               
+                                                                                                 
+                                                                                     
 
-function cleanUrlReport(url        )             {
-  const unchanged = { url, removedTracker: false };
+function cleanUrlReport(url        )                 {
+  const unchanged = Object.freeze({ url: url              , removedTracker: false });
   const match = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(url);
   if (!match?.[2]) return unchanged;
   let hostname = "";
@@ -1040,15 +1046,38 @@ function cleanUrlReport(url        )             {
   const tracks = (pair        ) => isTrackingParam(decodeName(pair.split("=")[0] ), hostname);
   const kept = pairs.filter((pair) => pair && !tracks(pair));
   if (kept.length === pairs.length) return unchanged;
-  return { url: `${base}${kept.length ? `?${kept.join("&")}` : ""}${hash}`, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) };
+  const cleaned = `${base}${kept.length ? `?${kept.join("&")}` : ""}${hash}`              ;
+  return Object.freeze({ url: cleaned, removedTracker: pairs.some((pair) => pair !== "" && tracks(pair)) });
 }
 
-function cleanUrl(url        )         {
+function cleanUrl(url        )             {
   return cleanUrlReport(url).url;
 }
 
-function markdownLink(title        , url        )         {
-  return `[${(title || url).replace(/([[\]])/g, "\\$1")}](${cleanUrl(url)})`;
+const LINE_BREAK_ESCAPES                         = { "\r": "%0D", "\n": "%0A" };
+
+const markdownLabel = (text        ) => text.replace(/[\\[\]*_\x60<>~]/g, "\\$&").replace(/&(?=#?[A-Za-z0-9]+;)/g, "&amp;");
+
+function markdownDestination(url        )         {
+  const oneLine = url.replace(/[\r\n]/g, (character) => LINE_BREAK_ESCAPES[character] ).replace(/&(?=#?[A-Za-z0-9]+;)/g, "&amp;");
+  return /[\s<>]/.test(oneLine) ? `<${oneLine.replace(/[<>\\]/g, "\\$&")}>` : oneLine.replace(/[()\\]/g, "\\$&");
+}
+
+                                                                                      
+
+function cleanLinkTitle(title                           , url        )               {
+  const oneLine = (title ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
+  if (!oneLine) return ""                ;
+  return (oneLine === url.trim() ? cleanUrl(url) : cleanUrl(oneLine))                          ;
+}
+
+function markdownLink(title        , url        )           {
+  const clean = cleanUrl(url);
+  return `[${markdownLabel(cleanLinkTitle(title, url) || clean)}](${markdownDestination(clean)})`            ;
+}
+
+function linkLines(lines                     , markdown         )           {
+  return (markdown && lines.length > 1 ? lines.map((line) => `- ${line}`).join("\n") : lines.join("\n"))            ;
 }
 
 });
@@ -1269,7 +1298,7 @@ const { cleanUrl } = __require("packages/core/src/cleanUrl.ts");
 const { displayHost, punycodeEncode } = __require("packages/core/src/idn.ts");
 const { PSL_TLDS } = __require("packages/core/src/tlds.ts");
 
-                                                                                                                  
+                                                                                                           
 
 const URL_PARTS = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/?#]*@)?(\[[^\]]*\]|[^:/?#]*)(?::(\d+))?([^?#]*)(\?[^#]*)?(#.*)?$/i;
 
@@ -1700,7 +1729,7 @@ const DANGEROUS = new RegExp(
   "u",
 );
 
-                         
+                  
              
                          
                
@@ -1948,7 +1977,7 @@ const { matchActions } = __require("packages/core/src/fuzzy.ts");
                    
   
 
-                                                                   
+                                                            
 
 const NONE                = { rows: [], exact: false };
 const MIN_PARTIAL_QUERY = 3;
@@ -2083,7 +2112,7 @@ const SITE_INGEST_KEY = "ak_site_6b26588b3764ae7d0f6d63d7";
 
 const INGEST_KEY_HEADER = "X-Ardia-Key";
 
-                                                  
+                                           
 
 const INGEST_KEYS                                         = {
   app: APP_INGEST_KEY,
@@ -2597,7 +2626,7 @@ const providerApprovalKey = (definition         ) => `omnibox-provider:${sha256H
 });
 __define("packages/core/src/quickCreate.ts", function (exports, __require) {
   __export(exports, "matchQuickCreate", () => matchQuickCreate);
-                           
+                    
              
                 
               
@@ -2637,6 +2666,171 @@ function matchQuickCreate(query        , limit = 3)                {
     .slice(0, limit)
     .map((x) => x.c);
 }
+
+});
+__define("packages/core/src/secret.ts", function (exports, __require) {
+  __export(exports, "SECRET_KINDS", () => SECRET_KINDS);
+  __export(exports, "REDACTED_SECRET", () => REDACTED_SECRET);
+  __export(exports, "SecretEscapeError", () => SecretEscapeError);
+  __export(exports, "Secret", () => Secret);
+  __export(exports, "asSecret", () => asSecret);
+  __export(exports, "isSecret", () => isSecret);
+  __export(exports, "reveal", () => reveal);
+  __export(exports, "sameSecret", () => sameSecret);
+  __export(exports, "noteSecretEscape", () => noteSecretEscape);
+  __export(exports, "setSecretEscapeMode", () => setSecretEscapeMode);
+  __export(exports, "onSecretEscape", () => onSecretEscape);
+  __export(exports, "secretsDropped", () => secretsDropped);
+  __export(exports, "withoutSecrets", () => withoutSecrets);
+const SECRET_KINDS = ["password", "oauthToken", "oauthClientSecret", "apiToken", "pluginSecret", "syncPhrase", "devtoolsToken"]         ;
+
+                                                       
+
+                                                                              
+
+                                         
+
+const REDACTED_SECRET = "<secret>";
+
+const plaintext = new WeakMap                ();
+const kinds = new WeakMap                    ();
+const listeners = new Set                                                 ();
+let mode                   = "drop";
+let dropped = 0;
+
+class SecretEscapeError extends Error {
+           where              ;
+           kind            ;
+
+  constructor(where              , kind            ) {
+    super(`A ${kind} secret reached a ${where} sink`);
+    this.name = "SecretEscapeError";
+    this.where = where;
+    this.kind = kind;
+  }
+}
+
+class Secret                                    {
+                   secretKind    ;
+
+          constructor() {}
+
+  get kind()    {
+    return kinds.get(this)     ;
+  }
+
+  toJSON()            {
+    noteSecretEscape("json", this);
+    return undefined;
+  }
+
+  toString()         {
+    noteSecretEscape("text", this);
+    return REDACTED_SECRET;
+  }
+
+  valueOf()         {
+    return this.toString();
+  }
+}
+
+Object.defineProperty(Secret.prototype, Symbol.toPrimitive, { value: Secret.prototype.toString });
+Object.defineProperty(Secret.prototype, Symbol.for("nodejs.util.inspect.custom"), { value: () => `Secret(${REDACTED_SECRET})` });
+
+function asSecret                      (kind   , value        )            {
+  if (typeof value !== "string") throw new TypeError("A secret is text");
+  if (!SECRET_KINDS.includes(kind)) throw new TypeError("Unknown secret kind");
+  const box = Object.create(Secret.prototype)             ;
+  plaintext.set(box, value);
+  kinds.set(box, kind);
+  Object.freeze(box);
+  return box;
+}
+
+const isSecret = (value         )                  => typeof value === "object" && value !== null && plaintext.has(value);
+
+function reveal(secret        )         {
+  const value = plaintext.get(secret);
+  if (value === undefined) throw new TypeError("Not a secret");
+  return value;
+}
+
+const sameSecret = (a                           , b                           )          =>
+  !!a && !!b && (a === b || (a.kind === b.kind && reveal(a) === reveal(b)));
+
+function noteSecretEscape(where              , secret        )       {
+  const kind = kinds.get(secret) ?? "password";
+  if (mode === "throw") throw new SecretEscapeError(where, kind);
+  dropped++;
+  for (const listener of listeners) {
+    try {
+      listener(where, kind);
+    } catch {}
+  }
+}
+
+function setSecretEscapeMode(next                  )                   {
+  const previous = mode;
+  mode = next;
+  return previous;
+}
+
+function onSecretEscape(listener                                                 )             {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
+const secretsDropped = () => dropped;
+
+function withoutSecrets   (value   , where              , seen = new WeakSet        ())    {
+  if (isSecret(value)) {
+    noteSecretEscape(where, value);
+    return undefined     ;
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    let changed = false;
+    const out = value.map((item) => {
+      const kept = withoutSecrets(item, where, seen);
+      if (kept !== item) changed = true;
+      return kept;
+    });
+    return (changed ? out : value)     ;
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return value;
+  let out                                 = null;
+  for (const [key, item] of Object.entries(value)) {
+    const kept = withoutSecrets(item, where, seen);
+    if (kept === item) continue;
+    out ??= { ...(value                           ) };
+    if (kept === undefined) delete out[key];
+    else out[key] = kept;
+  }
+  return (out ?? value)     ;
+}
+
+                                               
+                                           
+
+                                                  
+                       
+           
+                             
+             
+                        
+              
+                                                 
+                 
+                                             
+                                                    
+                              
+                                                                                                  
+                      
+                       
+                      
+
+                                                                       
 
 });
 __define("packages/core/src/siteSearch.ts", function (exports, __require) {
@@ -2689,7 +2883,7 @@ const POPULAR_SITE_SEARCHES                        = [
 
                                                                                                           
 
-                            
+                     
                                    
                                 
                             
@@ -2761,14 +2955,14 @@ function offeredSiteSearch(typed        , completion        , sources           
                     
   
 
-                                                                                                                    
+                                                                                                             
 
-                           
+                    
                                                        
                                    
                                      
 
-                                                               
+                                                        
 
 function keywordBySpace(typed        , next        )                        {
   if (!typed.trim() || /\s$/.test(typed) || next !== `${typed} `) return null;
@@ -2796,6 +2990,7 @@ __define("packages/core/src/suggest.ts", function (exports, __require) {
   __export(exports, "buildSuggestions", () => buildSuggestions);
   __export(exports, "displayUrl", () => __require("packages/core/src/pageText.ts")["displayUrl"]);
   __export(exports, "prepareSuggestions", () => __require("packages/core/src/candidatePool.ts")["prepareSuggestions"]);
+  __export(exports, "dedupeSuggestions", () => __require("packages/core/src/suggestionRows.ts")["dedupeSuggestions"]);
   __export(exports, "suggestionKey", () => __require("packages/core/src/suggestionRows.ts")["suggestionKey"]);
 const { findBang } = __require("packages/core/src/bangs.ts");
 const { calculate } = __require("packages/core/src/calculator.ts");
@@ -2804,7 +2999,7 @@ const { extensionSuggestions } = __require("packages/core/src/extensionRows.ts")
 const { BUILT_IN_ENGINES, searchUrl } = __require("packages/core/src/engines.ts");
 const { matchActions } = __require("packages/core/src/fuzzy.ts");
 const { fixupUrl, hostOf, sameAddress, searchUrlFor, spacedAddressGuess } = __require("packages/core/src/omnibox.ts");
-const { matchScore, matchScoreWord, narrowing, parseQuery, remember, TopList } = __require("packages/core/src/pageMatch.ts");
+const { leadingRows, matchScore, matchScoreWord, narrowing, parseQuery, remember, TabList, TopList } = __require("packages/core/src/pageMatch.ts");
 const { hostLowerOfPage, hostOfPage, hostPart, originOfPage, pageKey, withRootSlash } = __require("packages/core/src/pageText.ts");
 const { globalProviderRows, providerUrl, safeProviderRows } = __require("packages/core/src/providerRows.ts");
 const { matchQuickCreate } = __require("packages/core/src/quickCreate.ts");
@@ -2818,6 +3013,8 @@ const { actionRow, createRow, dedupeSuggestions, Output, pageSuggestion, suggest
 
 
 const DAY = 86_400_000;
+const lowerOrigin = (url        ) => url.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, (origin) => origin.toLowerCase());
+const withoutFragment = (url        ) => url.replace(/#.*$/, "");
 
 function buildSuggestions(raw        , source                  , options                 = {})                   {
   const { limit = 8, now = Date.now(), engine = BUILT_IN_ENGINES[0] , preference = "website", remote = [], actions = [], scope, preventInline = false } = options;
@@ -2843,13 +3040,9 @@ function buildSuggestions(raw        , source                  , options        
   const pool = poolFor(source.history, source.bookmarks ?? NO_BOOKMARKS);
   const { tabIds, extra, renamed } = tabsOver(pool, source.tabs, options.currentTabId);
   const currentKey = options.currentUrl ? pageKey(options.currentUrl) : null;
-  const via                                = {};
-  let tagged = false;
+  const via = new Map                           ();
   const tag = (s            , as                                   )             => {
-    if (as) {
-      via[suggestionKey(s)] = as;
-      tagged = true;
-    }
+    if (as) via.set(s, as);
     return s;
   };
   const known = (url        ) => {
@@ -2865,6 +3058,17 @@ function buildSuggestions(raw        , source                  , options        
     const row          = { url: visit?.url ?? opened, title: lent.title, favicon: lent.favicon, visits: visit?.visits ?? 0, bookmarked: bookmark !== undefined };
     return tag(pageSuggestion(row, null), "literal");
   };
+  const openTabAt = (url        )                         => {
+    if (!options.switchToOpenTab) return undefined;
+    const opened = withRootSlash(lowerOrigin(url));
+    if (!tabIds.has(pageKey(opened))) return undefined;
+    const tab = source.tabs.find((t) => t.url && t.id !== options.currentTabId && withoutFragment(withRootSlash(lowerOrigin(t.url))) === withoutFragment(opened));
+    if (!tab) return undefined;
+    const visit = savedVisit(source.history, opened);
+    const bookmark = savedBookmark(source.bookmarks ?? NO_BOOKMARKS, opened);
+    const title = tab.customTitle || visit?.title || bookmark?.title || tab.title;
+    return tag(pageSuggestion({ url: opened, title, favicon: tab.favicon ?? visit?.favicon ?? bookmark?.favicon ?? null, visits: visit?.visits ?? 0, bookmarked: bookmark !== undefined }, tab.id), "open_tab");
+  };
 
   const websiteFirst = preference === "website";
   const oneWord = tokens.length === 1;
@@ -2878,6 +3082,12 @@ function buildSuggestions(raw        , source                  , options        
   const scores           = again ? from.scores : [];
   let found = 0;
   const top = new TopList(limit + 1);
+  const tabTop = new TabList();
+  const typedUrl = scope ? null : fixupUrl(query);
+  const guessedUrl = scope || typedUrl ? null : spacedAddressGuess(query);
+  const tabUrls = guessedUrl ? new Map(source.tabs.map((t) => [t.id, t.url])) : null;
+  const tabUrl = (tabId                    ) => (tabUrls && tabId ? tabUrls.get(tabId) : undefined);
+  const listedRow = (x        ) => !guessedUrl || !sameAddress(tabUrl(x.tabId) ?? x.c.url, guessedUrl);
   const onSite = scope ? new TopList(4) : null;
   const score = oneWord ? matchScoreWord : matchScore;
   const bound = Boolean(scope);
@@ -2903,18 +3113,19 @@ function buildSuggestions(raw        , source                  , options        
         age = d < 0 ? 0 : d > 30 ? 30 : d;
       }
       const base = c.logVisits - age + (c.bookmarked ? 20 : 0);
-      if (!bound && top.floor >= m + base - derank + 7) {
+      const tabId = c.tabId ?? tabIds.get(key);
+      if (!bound && !tabId && top.floor >= m + base - derank + 7) {
         if (!completes) continue;
         if (inline === null ? false : inline.s >= m + base - derank + 7) continue;
         if (c.visits <= 0 || !c.text.shownLower.startsWith(q)) continue;
       }
-      const tabId = c.tabId ?? tabIds.get(key);
       const s = m + (base + (tabId ? 6 : 0)) - derank;
       let r                    ;
       if (top.floor < s || top.items.length < limit + 1) {
         r = { c, tabId, m, s };
         top.offer(r);
       }
+      if (tabId && !bound && (guessedUrl === null || listedRow({ c, tabId, m, s }))) tabTop.offer(r ?? { c, tabId, m, s });
       if (onSite) {
         const host = hostOfPage(c.text);
         if (host === scope .host || host.endsWith(`.${scope .host}`)) onSite.offer(r ?? { c, tabId, m, s });
@@ -2935,13 +3146,11 @@ function buildSuggestions(raw        , source                  , options        
     const scopedUrl = (text        ) => scopedSearchUrl(scope, text, engine);
     out.push({ kind: "search", query, url: scopedUrl(query), engine: scope.name });
     out.push(...remoteRows(scopedUrl, scope.name));
-    out.push(...onSite .items.map((x) => pageSuggestion(x.c, x.tabId)));
+    if (!options.remotePending) out.push(...onSite .items.map((x) => pageSuggestion(x.c, x.tabId)));
     return { items: out.items, completion: "" };
   }
 
   const search             = { kind: "search", query, url: searchUrl(engine, query), engine: engine.name };
-  const typedUrl = fixupUrl(query);
-  const guessedUrl = typedUrl ? null : spacedAddressGuess(query);
   const calc = calculate(query);
   const creates = matchQuickCreate(raw.trimStart());
   const actionRows = query.length >= 4 ? 4 : 2;
@@ -2955,8 +3164,8 @@ function buildSuggestions(raw        , source                  , options        
   let first            ;
   if (creates.length && /^\S+\s+\S/.test(query)) first = createRow(creates[0] );
   else if (actionMatches[0]?.exact) first = actionRow(actionMatches[0].action);
-  else if (target && completion) first = tag(known(target.url) ?? { kind: "page", url: target.url, title: "", favicon: target.favicon }, !websiteFirst && "search_first_inline");
-  else if (typedUrl) first = known(typedUrl) ?? { kind: "page", url: typedUrl, title: "", favicon: null };
+  else if (target && completion) first = openTabAt(target.url) ?? tag(known(target.url) ?? { kind: "page", url: target.url, title: "", favicon: target.favicon }, !websiteFirst && "search_first_inline");
+  else if (typedUrl) first = openTabAt(typedUrl) ?? known(typedUrl) ?? { kind: "page", url: typedUrl, title: "", favicon: null };
   else if (extensionMatches.exact) first = extensionMatches.rows[0] ;
   else if (!guessedUrl && websiteFirst && best && best.m >= 40 && (!noInline || typedIsPage(best.c.text, q))) first = tag(pageSuggestion(best.c, best.tabId), best.c.renamed && "renamed_tab");
   else first = search;
@@ -2971,17 +3180,24 @@ function buildSuggestions(raw        , source                  , options        
   out.push(...actionMatches.map((m) => actionRow(m.action)));
   out.push(...extensionMatches.rows);
   out.push(...creates.map(createRow));
-  const pageRows = ranked.map((x) => tag(pageSuggestion(x.c, x.tabId), x.c.renamed && "renamed_tab")).map((row) => (guessedUrl && row.kind === "page" && row.tabId ? { ...row, url: source.tabs.find((t) => t.id === row.tabId)?.url ?? row.url } : row)).filter((row) => !guessedUrl || row.kind !== "page" || !sameAddress(row.url, guessedUrl));
-  out.push(...pageRows.slice(0, 3));
+  const rowOf = (x        , as                                    = x.c.renamed && "renamed_tab")             => {
+    const url = tabUrl(x.tabId);
+    return tag(pageSuggestion(url ? { ...x.c, url } : x.c, x.tabId), as);
+  };
+  const listed = guessedUrl ? ranked.filter(listedRow) : ranked;
+  const lead = leadingRows(listed, tabTop.items);
+  out.push(...lead.map((x, i) => rowOf(x, i < 3 ? undefined : "leading_tab")));
   const remoteSites = (options.remoteSites ?? []).slice(0, 2).filter((site) => !guessedUrl || !sameAddress(site.url, guessedUrl));
   out.push(...remoteSites.map((site)             => known(site.url) ?? tag({ kind: "page", url: site.url, title: site.title, favicon: null }, "engine_site")));
   const providerAt = out.items.length;
   out.push(...remoteRows((text) => searchUrl(engine, text), engine.name));
-  out.push(...pageRows.slice(3));
-  const providerRows = options.providers?.length ? globalProviderRows(options.providers, out.items) : [];
+  const trailing = listed.filter((x) => !lead.includes(x));
+  const providerRows = options.providers?.length ? globalProviderRows(options.providers, [...out.items, ...trailing.filter((x) => x.tabId).map((x) => rowOf(x))]) : [];
+  const offered = new Set(providerRows.map((row) => pageKey(row.url)));
+  if (!options.remotePending) out.push(...trailing.filter((x) => x.tabId || !offered.has(pageKey(x.c.url))).map((x) => rowOf(x)));
   const items = providerRows.length ? [...out.items.slice(0, providerAt), ...providerRows, ...out.items.slice(providerAt)] : out.items;
   if (guessRow && out.items.includes(guessRow)) tag(guessRow, "spaced_address");
-  const shownVia = tagged ? viaOf(items, via) : undefined;
+  const shownVia = via.size ? viaOf(items, via) : undefined;
   return shownVia ? { items, completion, via: shownVia } : { items, completion };
 }
 
@@ -2996,11 +3212,11 @@ function providerScopeSuggestions(query        , scope             , sections   
   return { items, completion: "" };
 }
 
-function viaOf(items                       , via                               )                                            {
+function viaOf(items                       , via                                        )                                            {
   let shown                                           ;
   for (const item of items) {
-    const key = suggestionKey(item);
-    if (via[key]) (shown ??= {})[key] = via[key];
+    const as = via.get(item);
+    if (as) (shown ??= {})[suggestionKey(item)] = as;
   }
   return shown;
 }
@@ -3319,10 +3535,12 @@ __define("packages/core/src/pageMatch.ts", function (exports, __require) {
   __export(exports, "narrowing", () => narrowing);
   __export(exports, "remember", () => remember);
   __export(exports, "TopList", () => TopList);
+  __export(exports, "TabList", () => TabList);
+  __export(exports, "leadingRows", () => leadingRows);
                                                           
 const { shownWordsOf } = __require("packages/core/src/pageText.ts");
 
-                     
+              
             
                                          
                 
@@ -3431,12 +3649,53 @@ class TopList {
   offer(r        ) {
     const items = this.items;
     if (items.length === this.size && items[items.length - 1] .s >= r.s) return;
+    const same = items.findIndex((x) => x.c.text.key === r.c.text.key);
+    if (same >= 0) {
+      if (items[same] .s >= r.s) return;
+      items.splice(same, 1);
+    }
     let i = items.length;
     while (i > 0 && items[i - 1] .s < r.s) i--;
     items.splice(i, 0, r);
     if (items.length > this.size) items.pop();
     if (items.length === this.size) this.floor = items[items.length - 1] .s;
   }
+}
+
+const LEADING_PAGE_ROWS = 3;
+const LEADING_ROWS = 5;
+
+const matchesAhead = (a        , b        ) => a.m > b.m || (a.m === b.m && a.s > b.s);
+
+class TabList {
+           items           = [];
+  offer(r        ) {
+    const items = this.items;
+    const same = items.findIndex((x) => x.c.text.key === r.c.text.key);
+    if (same >= 0) {
+      if (!matchesAhead(r, items[same] )) return;
+      items.splice(same, 1);
+    }
+    if (items.length === LEADING_ROWS && !matchesAhead(r, items[items.length - 1] )) return;
+    let i = items.length;
+    while (i > 0 && matchesAhead(r, items[i - 1] )) i--;
+    items.splice(i, 0, r);
+    if (items.length > LEADING_ROWS) items.pop();
+  }
+}
+
+function leadingRows(ranked                   , tabs                   )           {
+  const lead           = [];
+  for (const x of ranked) {
+    if (lead.length >= LEADING_PAGE_ROWS) break;
+    if (!lead.some((y) => y.c.text.key === x.c.text.key)) lead.push(x);
+  }
+  const bar = lead.length === LEADING_PAGE_ROWS ? lead[LEADING_PAGE_ROWS - 1] .m : 0;
+  for (const t of tabs) {
+    if (lead.length >= LEADING_ROWS) break;
+    if (t.m >= bar && !lead.some((x) => x.c.text.key === t.c.text.key)) lead.push(t);
+  }
+  return lead;
 }
 
 });
@@ -3448,7 +3707,7 @@ const { parseRemoteSuggestions, suggestReplyJson, suggestRequestUrl } = __requir
                                                                                                                       
 
                               
-                                                                                                                     
+                                                                                                                                            
                  
   
 
@@ -3483,7 +3742,7 @@ function createSuggestFetcher({
 
   return {
     cancel,
-    request(engine, query, onResult) {
+    request(engine, query, onResult, onFailed) {
       cancel();
       const url = suggestRequestUrl(engine, query);
       if (!url) return;
@@ -3515,7 +3774,11 @@ function createSuggestFetcher({
                 onResult(suggestions.queries, suggestions.sites);
               }
             },
-            () => {},
+            () => {
+              if (controller.signal.aborted || current !== generation) return;
+              inFlight = undefined;
+              onFailed?.();
+            },
           );
       }, delay);
     },
@@ -3534,7 +3797,7 @@ __define("packages/core/src/textFragment.ts", function (exports, __require) {
   __export(exports, "chooseTextFragment", () => chooseTextFragment);
   __export(exports, "withTextFragment", () => withTextFragment);
 
-                                                                                             
+                                                                                      
 
                                 
                    
@@ -4022,7 +4285,7 @@ __define("packages/core/src/webStore.ts", function (exports, __require) {
   __export(exports, "isExtensionId", () => isExtensionId);
   __export(exports, "webStoreExtensionId", () => webStoreExtensionId);
   __export(exports, "permissionWarnings", () => permissionWarnings);
-                                                                                        
+                                                                                 
 
 const isExtensionId = (s        ) => /^[a-p]{32}$/.test(s);
 

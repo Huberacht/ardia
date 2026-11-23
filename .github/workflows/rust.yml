@@ -13,6 +13,7 @@ on:
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_crypto.h"
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_crypto.cc"
       - "engine/ardiacore-linux/src/ardia/linux/ac_linux_sync_wordlist.cc"
+      - "engine/ardiacore-linux/copies.tsv"
       - ".github/workflows/rust.yml"
   push:
     branches: [main]
