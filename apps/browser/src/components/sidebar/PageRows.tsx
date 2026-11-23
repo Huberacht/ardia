@@ -62,10 +62,11 @@ export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, 
   const cap = offScreen ? 0 : visited ? undefined : rows;
   const growing = cap === undefined && mountedRows < all.length;
   const launch = useLaunchGrowth(windowId, { lazy, current, total: all.length, shownRows: Math.min(mountedRows, all.length), controller });
-  const growNow = growing && !launch.holding;
+  const lastBatch = cap === undefined && mountedRows === all.length;
+  const growNow = (growing || lastBatch) && !launch.holding;
   useEffect(() => {
     if (!growNow) return;
-    const frame = requestAnimationFrame(() => setMountedRows((n) => (n + ROWS_PER_FRAME >= all.length ? Infinity : n + ROWS_PER_FRAME)));
+    const frame = requestAnimationFrame(() => setMountedRows((n) => (n >= all.length ? Infinity : Math.min(all.length, n + ROWS_PER_FRAME))));
     return () => cancelAnimationFrame(frame);
   }, [growNow, mountedRows, all.length]);
   const limit = cap ?? (growing ? mountedRows : undefined);
@@ -89,7 +90,7 @@ export function PageRows({ windowId, profileId, current, rows, lazy, offScreen, 
   if (geometry) geometry.current.newTabAtTop = newTabButtonAtTop && inlineNewTab;
   return (
     <ListMotionContext.Provider value={scope}>
-      <FoldSettling.Provider value={growing}>
+      <FoldSettling.Provider value={growing || lastBatch}>
       <View>
         {isIncognitoProfile(profileId) ? <IncognitoBadge /> : null}
         {tiles.length ? (

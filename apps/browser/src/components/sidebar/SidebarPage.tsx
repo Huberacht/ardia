@@ -214,7 +214,6 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
                           onContentSizeChange={(_, content) => {
                             scrollEdgeBelow.measure({ content });
                             selectedRow.relocate();
-                            geometry?.current.contentChanged?.(content);
                           }}
                           contentContainerStyle={{ flexGrow: 1, width, paddingHorizontal: layout.sidebarInset, paddingTop: LIST_PAD, paddingBottom: docked ? GLOW_ROOM : 0 }}
                         >

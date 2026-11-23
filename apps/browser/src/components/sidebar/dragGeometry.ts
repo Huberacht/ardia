@@ -4,7 +4,7 @@ import { currentSettings } from "../../state/browser/current";
 import { createDragMarks, dragMarksOf, markDrag, type SplitHalfMark } from "../../state/sidebar/dragMarks";
 import { overPins, pinGrid, pinSlot, TILE_GAP } from "./pinZone";
 import { SCROLL_EDGE } from "./ScrollEdge";
-import { apart, sourcesClosedAbove, SPLIT_HOLD_MS, pinSlotPitch, type Drop, type Frame, type Ghost, type Item, type Pointed, tailKey } from "./dragModel";
+import { apart, SPLIT_HOLD_MS, pinSlotPitch, type Drop, type Frame, type Ghost, type Item, type Pointed, tailKey } from "./dragModel";
 import { NO_DROP } from "../../state/drag/drops";
 import { splitViewAvailable } from "../../state/splits/splits";
 import type { DragHome } from "../../state/sidebar/current";
@@ -142,11 +142,6 @@ export class DragGeometry {
   protected get rowPinning() {
     const { drop } = this.drag;
     return drop.type === "tabs" && drop.placement.pinned && !!drop.placement.row;
-  }
-
-  protected sourcesClosedAbove(i: Item, y: number): number {
-    if (this.crossed || this.drag.closedInFrames) return 0;
-    return sourcesClosedAbove(this.drag.sources, i, y, layout.rowGap);
   }
 
   protected shown(i: Item): Frame {

@@ -9,6 +9,7 @@ import { FoldedAway, type AwaySource } from "./hoverController";
 import { SIDEBAR_MOTION } from "./tokens";
 import { FoldEntryContext, useCollapsingSlot } from "./DragProvider";
 import { foldReach, foldRows, nextFoldMount, rowsWithin, type FoldMount } from "./foldRows";
+import { fillingFold } from "./foldFlush";
 import { noteFoldMotion } from "../../state/telemetry/foldMotion";
 
 const FOLD_MS = SIDEBAR_MOTION.fold;
@@ -151,6 +152,10 @@ export function Fold({
   const unfilled = partial && !collapsed && now.shown !== Infinity;
   const growing = unfilled && !moving && !ancestorSettling;
   useEffect(() => {
+    if (!unfilled) return;
+    return fillingFold(() => setMount((m) => (m.collapsed ? m : { collapsed: false, shown: Infinity })));
+  }, [unfilled]);
+  useEffect(() => {
     if (!growing) return;
     const frame = requestAnimationFrame(() => setMount((m) => (m.collapsed !== collapsed ? m : nextFoldMount(m, collapsed, entries, heightOf, gap, reach, true))));
     return () => cancelAnimationFrame(frame);
@@ -215,7 +220,7 @@ export function Fold({
           : null;
   const slotStyle = (key: string, stays: boolean, inReach: boolean) => {
     if (!folding || stays) return null;
-    if (!inReach) return HIDDEN;
+    if (!inReach) return collapsed ? HIDDEN : null;
     if (compositor === null) return moving ? foldingStyle(heightOf(key)) : closed;
     if (compositor === "rest") return closed;
     return collapsed && compositor === "move" ? fadingShut : fading;
@@ -226,7 +231,7 @@ export function Fold({
       <View removeClippedSubviews style={[{ flexShrink: 0, gap, paddingTop: padTop, paddingBottom: padBottom, paddingLeft: indent, paddingRight: indentEnd }, measuring && outer && !moving ? { position: "absolute", left: 0, right: 0, top: 0 } : null, collapsed && !moving && !measuring && !folding ? HIDDEN : null]}>
         <FoldSettling.Provider value={ancestorSettling || moving || unfilled}>
         {plan.map((slot) => {
-          if (slot.kind === "spacer") return <Animated.View key={slot.key} style={folding ? HIDDEN : { height: slot.height }} />;
+          if (slot.kind === "spacer") return <Animated.View key={slot.key} style={folding && collapsed ? HIDDEN : { height: slot.height }} />;
           const { key, node } = entries[slot.index]!;
           const stays = kept.has(key);
           const style = slotStyle(key, stays, slot.inReach);

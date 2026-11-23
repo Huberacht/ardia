@@ -9,7 +9,7 @@ export const ROWS_PER_FRAME = 32;
 export const DOCK_SHARE = 0.4;
 export const DOCK_SLACK = 12;
 
-export type SidebarGeometry = { viewport: number; regions: Record<Section, number>; newTabAtTop: boolean; tilesFixed: boolean; edgeLift?: number; laidOut?: () => void; contentChanged?: (height?: number) => void; ownerShown?: () => boolean };
+export type SidebarGeometry = { viewport: number; regions: Record<Section, number>; newTabAtTop: boolean; tilesFixed: boolean; edgeLift?: number; laidOut?: () => void; ownerShown?: () => boolean };
 
 export type PageSpot = {
   scrollY: number;

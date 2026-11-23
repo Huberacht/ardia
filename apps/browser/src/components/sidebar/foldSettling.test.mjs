@@ -70,3 +70,24 @@ test("once its ancestors settle, a deferred fold fills in every row and then let
   assert.equal(frames.size, 0, "nothing left scheduled");
   filling.unmount();
 });
+
+test("a fold still filling in mounts every row at once when a drag or a reveal asks", async () => {
+  const { flushFolds, foldsFilling } = await import("./foldFlush.ts");
+  const filling = fold(true);
+  const element = filling.setContext(FoldSettling, false);
+  assert.ok(rowsIn(element) < 500);
+  assert.equal(foldsFilling(), true);
+  void flushFolds();
+  assert.equal(rowsIn(filling.value), 500);
+  assert.equal(foldsFilling(), false);
+  filling.unmount();
+});
+
+test("opening a fold with a kept row lays the rows past the window out at full height, so a reveal sees the settled length", () => {
+  const kept = mount(() => Fold({ fold: { open: new Animated.Value(0), moving: true }, collapsed: false, entries: entries(200), keep: "tab:t150", rowHeight: () => ROW }), { contexts: [[FoldSettling, false]] });
+  const slots = [kept.value.props.children.props.children].flat().find((c) => c?.type === FoldSettling.Provider).props.children;
+  const far = slots.filter((slot) => slot?.key?.startsWith("tab:t1") && Number(slot.key.slice(5)) > 100);
+  assert.ok(far.length > 0);
+  for (const slot of far) assert.notDeepEqual(slot.props.children.props.style, { display: "none" });
+  kept.unmount();
+});

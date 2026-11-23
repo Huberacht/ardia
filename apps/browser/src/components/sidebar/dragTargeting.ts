@@ -7,9 +7,9 @@ import { tabDragOutside } from "../../state/drag/tabDrag";
 import { dragMarksOf, markDrag, type SplitHalfMark } from "../../state/sidebar/dragMarks";
 import { folderPanel } from "../../state/sidebar/tileFolderUi";
 import { overPins, pinGrid, pinGridHeight } from "./pinZone";
-import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, measure, openGapsAbove, pinnedBlock, spring } from "./dragModel";
+import { boxed, type Drop, FOLDER_HOLD_MS, ROOM_SPRING, SPLIT_REST_SLOP, folderOf, inside, type Item, pinnedBlock, spring } from "./dragModel";
 import { aimAt, type Pointing } from "./dragZones";
-import { DragGeometry, type DragSession } from "./dragGeometry";
+import { DragGeometry } from "./dragGeometry";
 import { reorderTick } from "../../state/drag/reorderTick";
 import { entryKey } from "../../state/sidebar/entryKey";
 import { previewPaneSlot } from "./splitPaneGeometry";
@@ -108,37 +108,6 @@ export class DragTargeting extends DragGeometry {
       hold.ready = target.key;
       this.retarget();
     }, FOLDER_HOLD_MS);
-  }
-
-  private unmeasured = new Set<Item>();
-
-  protected measuredNow(items: Item[]) {
-    for (const item of items) this.unmeasured.delete(item);
-  }
-
-  protected markMeasured(session: DragSession) {
-    session.measured = true;
-    const waiting = [...this.unmeasured];
-    this.unmeasured.clear();
-    for (const item of waiting) this.measureLate(item);
-  }
-
-  measureLate(item: Item) {
-    const session = this.session;
-    if (!session) return;
-    if (!session.measured) return void this.unmeasured.add(item);
-    requestAnimationFrame(() => {
-      if (this.session !== session || this.items.get(item.key) !== item) return;
-      void Promise.all([measure(item.view), measure(item.header)]).then(([frame, header]) => {
-        if (this.session !== session || this.items.get(item.key) !== item) return;
-        const shift = this.still(item) ? 0 : this.scrollY - session.startScrollY;
-        const open = frame ? openGapsAbove(item, frame.y + shift, this.items.values()) : 0;
-        const back = frame ? this.sourcesClosedAbove(item, frame.y + shift - open) : 0;
-        item.frame = frame && { ...frame, y: frame.y + shift - open + back };
-        item.headerFrame = header && { ...header, y: header.y + shift - open + back };
-        this.retarget();
-      });
-    });
   }
 
   protected retarget() {

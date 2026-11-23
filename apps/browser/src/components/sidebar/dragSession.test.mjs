@@ -291,96 +291,24 @@ test("a drag let go with no place to drop is counted; a dropped, cancelled or re
   assert.deepEqual((await run({ to: (m, b) => ({ x: b.x + 20, y: b.y + 12 }) })).counted, 0, "let go where it started");
 });
 
-test("a row that registers while the drag's first measurement is still out is measured once it lands", async () => {
-  const { DragItems } = await import("./dragItems.ts");
-  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
+test("a drag that starts while a fold is still filling in mounts the rest first and measures it with the other rows", async () => {
+  const { fillingFold } = await import("./foldFlush.ts");
+  const ran = [];
+  globalThis.requestAnimationFrame = (run) => setTimeout(() => run(Date.now()), 0);
   const m = listScene();
   const { c } = mount({ entries: m.L.entries, regions: m.regions });
-  const items = new DragItems(c, true);
-  const b = frameOf(m, entryKey("tab", m.id.b));
-  const late = c.create(entryKey("tab", m.id.d) + ":late");
+  const late = c.create(entryKey("tab", m.id.d) + ":filled");
   Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "list" });
   late.view = D.fakeView({ x: 6, y: 600, w: 180, h: 30 });
-  c.root.held = true;
-  const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
-  items.add(late.key, late);
-  c.root.release();
-  await begun;
-  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
-  assert.ok(late.frame, "the late row has a frame");
-  assert.deepEqual([late.frame.x, late.frame.w, late.frame.h], [6, 180, 30]);
-  c.end(false);
-  await D.settle();
-});
-
-test("a row measured during a drag targets where it shows, with the dragged row's collapse not counted twice", async () => {
-  const { DragItems } = await import("./dragItems.ts");
-  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
-  const m = listScene();
-  const { c } = mount({ entries: m.L.entries, regions: m.regions });
-  const items = new DragItems(c, true);
+  const stop = fillingFold(() => {
+    ran.push("flush");
+    c.items.set(late.key, late);
+  });
   const b = frameOf(m, entryKey("tab", m.id.b));
   await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
-  const source = c.items.get(entryKey("tab", m.id.b));
-  source.size.setValue(0);
-  const late = c.create(entryKey("tab", m.id.d) + ":shown");
-  Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "list" });
-  late.view = D.fakeView({ x: 6, y: 600, w: 180, h: 30 });
-  items.add(late.key, late);
-  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
-  assert.equal(c.shown(late).y, 600, "targeting places the row where it was measured");
-  c.end(false);
-  await D.settle();
-});
-
-test("rows the launch lets in when a drag begins are measured once each: by the drag's own pass, or late if they mount after it", async () => {
-  const { DragItems } = await import("./dragItems.ts");
-  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
-  const m = listScene();
-  const { c } = mount({ entries: m.L.entries, regions: m.regions });
-  const items = new DragItems(c, true);
-  const counted = (key, frame) => {
-    const row = c.create(key);
-    Object.assign(row, { kind: "row", tabIds: [m.id.d], section: "list" });
-    row.view = D.fakeView(frame);
-    const measure = row.view.measureInWindow;
-    row.measures = 0;
-    row.view.measureInWindow = (done) => (row.measures++, measure(done));
-    return row;
-  };
-  const early = counted(entryKey("tab", m.id.d) + ":early", { x: 6, y: 560, w: 180, h: 30 });
-  const late = counted(entryKey("tab", m.id.d) + ":late", { x: 6, y: 600, w: 180, h: 30 });
-  c.beforeMeasure = () => items.add(early.key, early);
-  c.root.held = true;
-  const b = frameOf(m, entryKey("tab", m.id.b));
-  const begun = c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
-  items.add(late.key, late);
-  c.root.release();
-  await begun;
-  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
-  assert.deepEqual([early.measures, late.measures], [1, 1]);
-  assert.ok(early.frame && late.frame);
-  c.beforeMeasure = null;
-  c.end(false);
-  await D.settle();
-});
-
-test("a row in a fixed section measured late keeps the position it was measured at, since targeting never scrolls it", async () => {
-  const { DragItems } = await import("./dragItems.ts");
-  globalThis.requestAnimationFrame ??= (run) => setTimeout(() => run(Date.now()), 0);
-  const m = listScene();
-  const { c } = mount({ entries: m.L.entries, regions: m.regions });
-  const items = new DragItems(c, true);
-  const b = frameOf(m, entryKey("tab", m.id.b));
-  await c.begin(entryKey("tab", m.id.b), b.x + 20, b.y + 10);
-  c.scrollY = 50;
-  const late = c.create("fm:late");
-  Object.assign(late, { kind: "row", tabIds: [m.id.d], section: "folder" });
-  late.view = D.fakeView({ x: 6, y: 300, w: 180, h: 30 });
-  items.add(late.key, late);
-  for (let i = 0; i < 4; i++) await new Promise((done) => setTimeout(done, 20));
-  assert.equal(late.frame?.y, 300);
-  c.scrollY = 0;
+  stop();
+  assert.deepEqual(ran, ["flush"]);
+  assert.deepEqual(late.frame, { x: 6, y: 600, w: 180, h: 30 }, "the drag's own pass measured the row the flush mounted");
   c.end(false);
   await D.settle();
 });

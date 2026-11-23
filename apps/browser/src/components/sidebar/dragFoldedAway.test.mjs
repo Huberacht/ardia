@@ -18,61 +18,40 @@ function folded(away) {
   };
 }
 
-function controller() {
-  const late = [];
-  return { items: new Map(), late, active: true, measureLate: (item) => late.push(item.key) };
+const controller = (active = false) => ({ items: new Map(), active });
+
+function row(key) {
+  let gap = 0;
+  return { key, frame: { x: 0, y: 100, w: 180, h: 30 }, headerFrame: null, gap: { stopAnimation() {}, setValue: (v) => (gap = v), value: () => gap } };
 }
 
 test("a row hidden in a closed folder is no drag target, and becomes one again when the folder opens", () => {
   const c = controller();
   const items = new DragItems(c, true);
-  const row = { key: "tab:t1", gap: { stopAnimation() {}, setValue() {} } };
+  const r = row("tab:t1");
   const shown = folded(true);
-  const stop = items.addWhileShown(row.key, row, shown);
-  assert.equal(c.items.has(row.key), false, "a row mounted inside a closed folder isn't registered");
+  const stop = items.addWhileShown(r.key, r, shown);
+  assert.equal(c.items.has(r.key), false, "a row mounted inside a closed folder isn't registered");
   shown.set(false);
-  assert.equal(c.items.get(row.key), row, "opening the folder registers it");
+  assert.equal(c.items.get(r.key), r, "opening the folder registers it");
   shown.set(true);
-  assert.equal(c.items.has(row.key), false, "closing the folder takes it out again, so its last frame can't be targeted");
+  assert.equal(c.items.has(r.key), false, "closing the folder takes it out again");
   shown.set(false);
   stop();
-  assert.equal(c.items.has(row.key), false, "unmounting removes it");
+  assert.equal(c.items.has(r.key), false, "unmounting removes it");
 });
 
-test("a row that registers while a drag runs asks the controller to measure it", () => {
-  const c = controller();
+test("a row its folder hides during a drag forgets its frame and gap, so it's no target until the next drag measures it", () => {
+  const c = controller(true);
   const items = new DragItems(c, true);
-  items.add("tab:t2", { key: "tab:t2" });
-  assert.deepEqual(c.late, ["tab:t2"]);
-});
-
-test("a row hidden by its folder closing during a drag gives back the gap it had opened", () => {
-  const c = controller();
-  const items = new DragItems(c, true);
-  let gap = 33;
-  const row = { key: "tab:t3", gap: { stopAnimation() {}, setValue: (v) => (gap = v) } };
+  const r = row("tab:t2");
+  r.gap.setValue(33);
   const shown = folded(false);
-  items.addWhileShown(row.key, row, shown);
+  items.addWhileShown(r.key, r, shown);
   shown.set(true);
-  assert.equal(gap, 0);
-});
-
-test("a row measured while gaps are open is stored where it rests", async () => {
-  const { openGapsAbove } = await import("./dragModel.ts");
-  const value = (v) => ({ __getValue: () => v });
-  const above = { key: "a", kind: "row", gap: value(33), frame: { x: 0, y: 100, w: 200, h: 30 } };
-  const below = { key: "b", kind: "row", gap: value(20), frame: { x: 0, y: 400, w: 200, h: 30 } };
-  const tile = { key: "t", kind: "tile", gap: value(50), frame: { x: 0, y: 0, w: 40, h: 40 } };
-  const late = { key: "late", kind: "row", gap: value(5), frame: null };
-  assert.equal(openGapsAbove(late, 200 + 33 + 5, [above, below, tile, late]), 38);
-});
-
-test("two dragged rows above a row measured late both come off, even when the lower one starts below where the row now shows", async () => {
-  const { sourcesClosedAbove } = await import("./dragModel.ts");
-  const closed = (y) => ({ kind: "row", section: "list", size: { __getValue: () => 0 }, frame: { x: 0, y, w: 180, h: 30 } });
-  const first = closed(100);
-  const second = closed(140);
-  const late = { key: "late", kind: "row", section: "list", frame: null };
-  assert.equal(sourcesClosedAbove([second, first], late, 200 - 66, 3), 66);
-  assert.equal(sourcesClosedAbove([second, first], late, 90, 3), 0);
+  assert.equal(r.gap.value(), 0);
+  assert.equal(r.frame, null);
+  shown.set(false);
+  assert.equal(c.items.get(r.key), r);
+  assert.equal(r.frame, null, "back in the list, it waits for a full measure like any row that mounts mid-drag");
 });
