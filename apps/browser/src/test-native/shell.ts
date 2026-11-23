@@ -40,6 +40,8 @@ export const docs = new Map<string, string>();
 export const stagedDocs = new Map<string, string>();
 export const unreadableDocs = new Set<string>();
 export const asyncExists = { on: false };
+export const copiedDocs: [string, string][] = [];
+export const refusedCopies = { on: false };
 export const heldSaves = { on: false, queue: [] as (() => void)[] };
 export const refusedSaves = { on: false };
 export const refusedWrites = { on: false, returnsFalse: false, landingFails: false };
@@ -251,6 +253,14 @@ const documents: Modules["ArdiaDocuments"] = {
     }),
   documentSaved: () => (refusedWrites.on || refusedWrites.landingFails ? Promise.reject(new Error("save refused")) : Promise.resolve()),
   removeDocument: (name) => void (docs.delete(name), stagedDocs.delete(name), unreadableDocs.delete(name)),
+  copyDocument: (name, copyName) => {
+    copiedDocs.push([name, copyName]);
+    if (refusedCopies.on) return Promise.reject(new Error("copy refused"));
+    if (docs.has(copyName) || unreadableDocs.has(copyName)) return Promise.reject(new Error("copy exists"));
+    if (unreadableDocs.has(name)) unreadableDocs.add(copyName);
+    else if (docs.has(name)) docs.set(copyName, docs.get(name)!);
+    return Promise.resolve();
+  },
 };
 
 const app: Modules["ArdiaApp"] = {

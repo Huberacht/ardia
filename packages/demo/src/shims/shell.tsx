@@ -73,6 +73,10 @@ provideNativeModule("ArdiaDocuments", {
   writeDocument: (name: string, contents: string) => void documents.set(name, contents),
   saveDocument: async (name: string, contents: string) => void documents.set(name, contents),
   removeDocument: (name: string) => void documents.delete(name),
+  copyDocument: async (name: string, copyName: string) => {
+    const contents = documents.get(name);
+    if (contents !== undefined) documents.set(copyName, contents);
+  },
 });
 provideNativeModule("ArdiaShell", {
   fetchBangList: async (_etag: string | null) => ({ status: 304, etag: null, contentType: null, body: null, bytes: 0 }),

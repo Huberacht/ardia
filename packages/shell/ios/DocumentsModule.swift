@@ -13,6 +13,11 @@ public class DocumentsModule: Module {
       }
     }
     Function("removeDocument") { (name: String) in try DocumentStore.remove(name) }
+    AsyncFunction("copyDocument") { (name: String, copyName: String, promise: Promise) in
+      try DocumentStore.copy(name, to: copyName) { error in
+        if let error { promise.reject("ERR_COPY_DOCUMENT", error.localizedDescription) } else { promise.resolve(nil) }
+      }
+    }
     AsyncFunction("saveDocument") { (name: String, contents: String, promise: Promise) in
       try DocumentStore.write(name, contents) { error in
         if let error { promise.reject("ERR_SAVE_DOCUMENT", error.localizedDescription) } else { promise.resolve(nil) }

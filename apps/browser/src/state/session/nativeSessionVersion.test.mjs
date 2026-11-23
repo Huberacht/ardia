@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
-test("the native launch reader expects the session.json version persist.ts writes", () => {
-  const js = Number(read("./persist.ts").match(/const SESSION_VERSION = (\d+);/)[1]);
+test("the native launch reader expects the session.json version savedSession.ts declares", () => {
+  const js = Number(read("./savedSession.ts").match(/const SESSION_VERSION = (\d+);/)[1]);
   const native = Number(read("../../../../../packages/ardiacore/ios/ArdiaSavedSession.mm").match(/\+ \(NSInteger\)version \{\s*return (\d+);/)[1]);
   assert.equal(native, js, "bump ArdiaSavedSession.version with SESSION_VERSION, and check the fields it reads still exist");
 });

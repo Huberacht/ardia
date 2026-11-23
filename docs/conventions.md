@@ -207,6 +207,17 @@ writeDocument(DOC, versionedJson(data, VERSION));
 - A document without the field is version 0. A version newer than the app knows, a field that isn't a non-negative
   integer, a missing step, or anything that isn't a plain object reads as nothing (the document's defaults), and is
   overwritten on the next save. Downgrades aren't supported.
+- `session.json` and `downloads.json` are the exception (`state/session/sessionSafety.ts`). One that exists but is
+  empty, broken, of an unknown shape, newer than the app, or unreadable is never written over until the store has
+  copied it to `<name>-unreadable-<ms>-<n>.json` (`copyDocument`, which copies the bytes, or the text when the store
+  has no copy). Until that copy lands, every write to the document waits, and quitting waits for it too. The session
+  then comes back from the newest daily backup that reads, `session-backup-<sun…sat>.json` (one per weekday, so seven
+  at most; each holds `{backupDay, backupAt, session}`). With no backup that reads, it starts fresh. A missing file is a
+  first launch: nothing is restored. `readSaved` tells these cases apart, where `parseSaved` returns null for all of
+  them.
+- The first session save of each calendar day writes that day's backup, and a launch whose `session.json` still needs
+  a migration writes it at launch, before the migrated session can be saved over the old one. Each save adds no other
+  writes.
 - `versionedJson` writes the version last, so the payload can't override it. The reader still checks the payload it
   depends on: a version says which shape to expect, not that the data is valid.
 - The field is `version`, except in `sync.json` (`v`) and `ardia-cli.json` (`schemaVersion`; its `version` is the

@@ -90,6 +90,20 @@ enum DocumentStore {
     }
   }
 
+  static func copy(_ name: String, to copyName: String, done: @escaping Done) throws {
+    let source = try url(name)
+    let target = try url(copyName)
+    queue.async {
+      guard FileManager.default.fileExists(atPath: source.path) else { return done(nil) }
+      do {
+        try FileManager.default.copyItem(at: source, to: target)
+        done(nil)
+      } catch {
+        done(error)
+      }
+    }
+  }
+
   private static func land(_ key: String, _ generation: UInt64, attempt: Int) {
     lock.lock()
     guard let save = staged[key], save.generation == generation else { return lock.unlock() }

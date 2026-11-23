@@ -59,6 +59,14 @@ export function createHostDocuments(host: ArdiaHost) {
       keep(documents, name, contents ?? undefined);
       return typeof contents === "string";
     },
+    copy: async (name: string, copyName: string) => {
+      if (name === "live.json" || name === "live.canonical.json") throw Object.assign(new Error("Canonical Live documents cannot be copied generically"), { code: "ERR_DOCUMENT_RESERVED" });
+      await writes.catch(() => {});
+      const contents = documents.get(name) ?? (await invokeHost<unknown>("ArdiaShell.readDocument", { args: [name] }, host));
+      if (contents === null || contents === undefined) return;
+      if (typeof contents !== "string") throw Object.assign(new Error(`Unexpected stored document reply for ${name}`), { code: "ERR_BAD_REPLY" });
+      await change(copyName, contents, "writeDocument", [copyName, contents]);
+    },
     remove: (name: string) => {
       if (name === "live.json" || name === "live.canonical.json") return Promise.reject(Object.assign(new Error("Canonical Live documents cannot be removed generically"), { code: "ERR_DOCUMENT_RESERVED" }));
       return change(name, undefined, "removeDocument", [name]);

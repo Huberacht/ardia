@@ -336,6 +336,35 @@ class DocumentStore {
     return true;
   }
 
+  static void Copy(std::string_view name, std::string_view copyName, Done done) noexcept {
+    auto source = Url(name);
+    auto target = Url(copyName);
+    if (!source || !target || *source == *target) {
+      done(std::string("Invalid document name"));
+      return;
+    }
+    std::filesystem::path from = *source;
+    std::filesystem::path to = *target;
+    Queue().Async([from, to, done]() {
+      std::optional<std::string> message;
+      {
+        std::unique_lock<std::timed_mutex> writing(State().writing, std::chrono::seconds(10));
+        if (!writing.owns_lock()) {
+          message = std::string("The documents are busy");
+        } else if (GetFileAttributesW(from.c_str()) == INVALID_FILE_ATTRIBUTES) {
+          DWORD error = GetLastError();
+          if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) message = Paths::Utf8(Files::ErrorText(error));
+        } else if (!CopyFileW(from.c_str(), to.c_str(), TRUE)) {
+          message = Paths::Utf8(Files::ErrorText(GetLastError()));
+        }
+      }
+      try {
+        done(message);
+      } catch (...) {
+      }
+    });
+  }
+
   static void FinishRemove(std::filesystem::path const &path, std::wstring const &key, std::vector<Done> const &waiters, int attempt) noexcept {
     static constexpr int kRemoveAttempts = 6;
     bool removed = false;
@@ -491,6 +520,11 @@ struct DocumentsModule {
   REACT_METHOD(documentSaved)
   void documentSaved(std::string name, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
     DocumentStore::WhenSaved(name, Settle(promise));
+  }
+
+  REACT_METHOD(copyDocument)
+  void copyDocument(std::string name, std::string copyName, winrt::Microsoft::ReactNative::ReactPromise<void> promise) noexcept {
+    DocumentStore::Copy(name, copyName, Settle(promise));
   }
 
   REACT_SYNC_METHOD(removeDocument)
