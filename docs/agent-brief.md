@@ -175,7 +175,8 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
     marker, so Metro, `js-bench.mjs bundle` and the Xcode bundle phase resolve through the links with no wrapper.
   - Changing dependencies (a lockfile, a patch, `pnpm patch`) needs a real install: `--undo` first, then
     `pnpm install` under `scripts/agent/locked pod`. After pulling a new lockfile, run the setup again;
-    `--status` says when a worktree no longer matches. `--prune` deletes cached installs no worktree uses.
+    `--status` says when a worktree no longer matches. `--prune` deletes cached installs no worktree uses. A git
+    worktree moved with `git worktree move` is found again; a scratch export that moves must run the setup again.
   - A native build needs the worktree's own `Pods`: `pod install` under `locked pod` works against the linked,
     read-only `node_modules`. If a later build step must write into `node_modules`, it fails loudly on the
     read-only tree rather than changing it: use a real install (`--undo`) for that worktree.

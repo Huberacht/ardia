@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,7 +14,6 @@ export const LINKED_DOT_ENTRIES = new Set([".bin"]);
 export const WORKSPACE_SCOPE = "@ardia";
 const MARKER_VERSION = 2;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SETUP_GRACE_MS = 60 * 60 * 1000;
 
 const self = fileURLToPath(import.meta.url);
 const lockedScript = path.join(path.dirname(self), "..", "agent", "locked");
@@ -43,13 +42,15 @@ What it does to <worktree>:
     Setup refuses a worktree that already has its own .pnpmfile.cjs.
   - node_modules/${MARKER} lists every folder setup manages, written before the first link. apps/browser/metro.config.js
     reads it to watch and resolve through the links, so Metro, js-bench.mjs bundle and the Xcode bundle phase work
-    unchanged. The cache's ${USERS_DIR}/ records each linked worktree, so --prune keeps what is in use.
+    unchanged. The cache's ${USERS_DIR}/ records each linked worktree and the caches it claims; every change to those
+    records, and all of --prune, holds one kernel lock (<cache>/.registry.lock) that dies with its holder.
   - .metadata_never_index goes into the worktree, the cache and ~/ardia-scratch and ~/ardia-wt when they exist.
 
 --status   says which tree the worktree uses and whether it still matches its install inputs.
 --undo     removes the links, the guard, the marker and the worktree's record; the dependency tree is left alone.
---prune    deletes cached trees that no recorded worktree still links and unused for --older-than days (default 7),
-           under the same lock as building one.
+--prune    deletes cached trees unused for --older-than days (default 7) unless a recorded worktree's marker still
+           names them. A git worktree that moved is found again through git worktree list; a scratch export that
+           moved must run setup again from its new path.
 --replace  lets setup replace a worktree's own node_modules (a real install or a whole-folder link).
 `;
 
@@ -280,27 +281,36 @@ export function checkGuardSlot(worktree) {
   }
 }
 
-export function withFileLock(lockDir, action, { waitMs = 10000, staleMs = 30000 } = {}) {
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    try {
-      fs.mkdirSync(lockDir);
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const stat = lstatOrNull(lockDir);
-      if (stat && Date.now() - stat.mtimeMs > staleMs) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
-        continue;
-      }
-      if (Date.now() > deadline) throw new Error(`${lockDir} is still held after ${waitMs} ms`);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
-    }
-  }
+const HOLD_LOCK_PERL = `
+use Fcntl qw(:flock);
+my ($lock, $ready, $wait) = @ARGV;
+open(my $fh, ">>", $lock) or die "worktree-setup: cannot open $lock: $!\\n";
+my $deadline = time + $wait;
+until (flock($fh, LOCK_EX | LOCK_NB)) {
+  if (time >= $deadline) { open(my $f, ">", "$ready.timeout"); close $f; exit 75; }
+  select(undef, undef, undef, 0.05);
+}
+open(my $r, ">", $ready) or die; close $r;
+my $buf;
+1 while sysread(STDIN, $buf, 64);
+`;
+
+export function withKernelLock(lockFile, action, { waitSeconds = 300 } = {}) {
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  const ready = path.join(os.tmpdir(), `worktree-setup-lock-${process.pid}-${createHash("sha256").update(`${lockFile}${Date.now()}${Math.random()}`).digest("hex").slice(0, 12)}`);
+  const holder = spawn("perl", ["-e", HOLD_LOCK_PERL, lockFile, ready, String(waitSeconds)], { stdio: ["pipe", "ignore", "inherit"] });
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + (waitSeconds + 5) * 1000;
   try {
+    while (!fs.existsSync(ready)) {
+      if (fs.existsSync(`${ready}.timeout`) || Date.now() > deadline) throw new Error(`${lockFile} is still held after ${waitSeconds} s`);
+      Atomics.wait(sleeper, 0, 0, 10);
+    }
     return action();
   } finally {
-    fs.rmSync(lockDir, { recursive: true, force: true });
+    holder.kill("SIGKILL");
+    fs.rmSync(ready, { force: true });
+    fs.rmSync(`${ready}.timeout`, { force: true });
   }
 }
 
@@ -308,8 +318,7 @@ function excludeFromGit(worktree, names) {
   const result = spawnSync("git", ["-C", worktree, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8" });
   if (result.status !== 0) return null;
   const file = path.resolve(worktree, result.stdout.trim());
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  withFileLock(`${file}.worktree-setup.lock`, () => {
+  withKernelLock(path.join(path.dirname(file), "exclude.worktree-setup.lock"), () => {
     const current = readIfExists(file) ?? "";
     const lines = new Set(current.split(/\r?\n/));
     const missing = names.map((name) => `/${name}`).filter((line) => !lines.has(line));
@@ -346,10 +355,10 @@ export function pnpmInstall(staging) {
   }
 }
 
-function copyInputs(worktree, staging, files) {
-  for (const [name] of files) {
+function stageInputs(staging, files) {
+  for (const [name, content] of files) {
     fs.mkdirSync(path.dirname(path.join(staging, name)), { recursive: true });
-    fs.copyFileSync(path.join(worktree, name), path.join(staging, name));
+    fs.writeFileSync(path.join(staging, name), content);
   }
 }
 
@@ -375,7 +384,7 @@ export function buildCache({ worktree, cacheRoot, install = pnpmInstall, runtime
   removeTree(staging);
   fs.mkdirSync(staging, { recursive: true });
   try {
-    copyInputs(worktree, staging, inputs.files);
+    stageInputs(staging, inputs.files);
     install(staging);
     const installed = readIfExists(path.join(staging, "node_modules", ".pnpm", "lock.yaml"));
     if (installed === null || normalizeLockfile(installed) !== normalizeLockfile(inputs.lockfile)) throw new Error("the cache install's lockfile doesn't match the worktree's");
@@ -396,8 +405,45 @@ export function underPodLock(args) {
   if (result.status !== 0) throw new Error(`${args[0]} under scripts/agent/locked pod failed (exit ${result.status ?? result.error?.code})`);
 }
 
-function userRecord(cacheRoot, worktree) {
-  return path.join(cacheRoot, USERS_DIR, `${createHash("sha256").update(worktree).digest("hex").slice(0, 16)}.json`);
+const recordName = (worktree) => `${createHash("sha256").update(worktree).digest("hex").slice(0, 16)}.json`;
+const registryLock = (cacheRoot) => path.join(cacheRoot, ".registry.lock");
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function gitCommonDirOf(worktree) {
+  const result = spawnSync("git", ["-C", worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+export function claimCache(cacheRoot, worktree, key, keep = []) {
+  return withKernelLock(registryLock(cacheRoot), () => {
+    const stamp = path.join(cacheRoot, key, CACHE_STAMP);
+    if (!fs.existsSync(stamp)) throw new Error(`${path.join(cacheRoot, key)} isn't built (or was just pruned); run worktree-setup again`);
+    fs.utimesSync(stamp, new Date(), new Date());
+    const file = path.join(cacheRoot, USERS_DIR, recordName(worktree));
+    const keys = [...new Set([...(readJson(file)?.keys ?? []), ...keep, key])];
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    writeJsonAtomic(file, { worktree, keys, gitCommonDir: gitCommonDirOf(worktree), at: new Date().toISOString() });
+    return file;
+  });
+}
+
+function commitClaim(cacheRoot, worktree, key) {
+  withKernelLock(registryLock(cacheRoot), () => {
+    const file = path.join(cacheRoot, USERS_DIR, recordName(worktree));
+    const record = readJson(file);
+    if (record) writeJsonAtomic(file, { ...record, keys: [key] });
+  });
+}
+
+function releaseClaim(cacheRoot, worktree) {
+  withKernelLock(registryLock(cacheRoot), () => fs.rmSync(path.join(cacheRoot, USERS_DIR, recordName(worktree)), { force: true }));
 }
 
 export function setupWorktree(worktreeArg, options = {}) {
@@ -412,23 +458,17 @@ export function setupWorktree(worktreeArg, options = {}) {
   const previous = markerOf(worktree);
   if (previous === null && !options.replace) prepareTarget(worktree, inputs.projects, null, false);
 
-  fs.mkdirSync(path.join(cacheRoot, USERS_DIR), { recursive: true });
+  fs.mkdirSync(cacheRoot, { recursive: true });
   dropNeverIndex(cacheRoot);
-  const record = userRecord(cacheRoot, worktree);
-  writeJsonAtomic(record, { worktree, key, at: new Date().toISOString() });
-
   const final = path.join(cacheRoot, key);
-  const stamp = path.join(final, CACHE_STAMP);
   let createdCache = false;
-  if (!fs.existsSync(stamp)) {
+  if (!fs.existsSync(path.join(final, CACHE_STAMP))) {
     log(`installing ${key} into ${cacheRoot} (once per set of install inputs, under scripts/agent/locked pod)`);
     const build = options.build ?? (() => underPodLock(["--build-cache", worktree, "--cache", cacheRoot]));
     build({ worktree, cacheRoot, runtime });
-    if (!fs.existsSync(stamp)) throw new Error(`building ${final} didn't publish ${CACHE_STAMP}`);
     createdCache = true;
-  } else {
-    fs.utimesSync(stamp, new Date(), new Date());
   }
+  const record = claimCache(cacheRoot, worktree, key, previous?.key ? [previous.key] : []);
   const sourceRoot = fs.realpathSync(final);
 
   const plans = [];
@@ -453,6 +493,7 @@ export function setupWorktree(worktreeArg, options = {}) {
   marker.projects = plans.map((p) => p.project);
   marker.state = "linked";
   writeJsonAtomic(markerFile, marker);
+  commitClaim(cacheRoot, worktree, key);
 
   fs.writeFileSync(path.join(worktree, GUARD_FILE), GUARD_SOURCE);
   const neverIndexed = [worktree, path.join(os.homedir(), "ardia-scratch"), path.join(os.homedir(), "ardia-wt")].filter(dropNeverIndex);
@@ -478,16 +519,16 @@ export function undoWorktree(worktreeArg, { log = console.log } = {}) {
   for (const project of [...projects].sort().reverse()) fs.rmSync(path.join(worktree, project, "node_modules"), { recursive: true, force: true });
   const guard = path.join(worktree, GUARD_FILE);
   if (isOurGuard(readIfExists(guard))) fs.rmSync(guard);
-  if (marker.root) fs.rmSync(userRecord(path.dirname(marker.root), worktree), { force: true });
+  if (marker.root) releaseClaim(path.dirname(marker.root), worktree);
   log(`worktree-setup: removed the links in ${worktree} (${[...projects].map((p) => p || ".").join(", ")}) and its pnpm guard; ${marker.root} is untouched`);
 }
 
-export function worktreeStatus(worktreeArg) {
+export function worktreeStatus(worktreeArg, { runtime = runtimeOf() } = {}) {
   const worktree = fs.realpathSync(worktreeArg);
   const marker = markerOf(worktree);
   if (!marker) return { linked: false, worktree, problems: [`no node_modules/${MARKER}`] };
   const problems = [];
-  const key = dependencyKey(installInputs(worktree));
+  const key = dependencyKey(installInputs(worktree, runtime));
   if (key !== marker.key) problems.push(`the worktree's install inputs changed (key ${key}, linked ${marker.key}); run worktree-setup again`);
   if (!marker.root || !fs.existsSync(path.join(marker.root, CACHE_STAMP))) problems.push(`the cached install ${marker.root} is gone; run worktree-setup again`);
   if (marker.state !== "linked") problems.push("setup didn't finish; run worktree-setup again");
@@ -495,47 +536,72 @@ export function worktreeStatus(worktreeArg) {
   return { linked: true, worktree, marker, key, problems };
 }
 
-export function liveUsers(cacheRoot, now = Date.now()) {
-  const users = new Map();
+function gitWorktreesOf(commonDir) {
+  const result = spawnSync("git", ["--git-dir", commonDir, "worktree", "list", "--porcelain"], { encoding: "utf8" });
+  if (result.status !== 0) return [];
+  return result.stdout.split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
+}
+
+function namedKey(dir) {
+  const marker = markerOf(dir);
+  return marker?.key && marker.root && path.basename(marker.root) === marker.key ? marker.key : null;
+}
+
+export function liveKeys(cacheRoot) {
   const dir = path.join(cacheRoot, USERS_DIR);
   let names = [];
   try {
     names = fs.readdirSync(dir).filter((name) => name.endsWith(".json"));
   } catch {
-    return users;
+    return new Set();
   }
+  const live = new Set();
+  const gitLists = new Map();
   for (const name of names) {
     const file = path.join(dir, name);
-    let record;
-    try {
-      record = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {
+    const record = readJson(file);
+    if (!record?.worktree) {
+      fs.rmSync(file, { force: true });
       continue;
     }
-    const marker = record.worktree ? markerOf(record.worktree) : null;
-    const linked = marker?.key === record.key && marker.root && path.basename(marker.root) === record.key;
-    const fresh = now - fs.statSync(file).mtimeMs < SETUP_GRACE_MS;
-    if (linked || fresh) users.set(record.key, [...(users.get(record.key) ?? []), record.worktree]);
-    else fs.rmSync(file, { force: true });
+    const claims = new Set(record.keys ?? []);
+    const here = namedKey(record.worktree);
+    if (here && claims.has(here)) {
+      live.add(here);
+      continue;
+    }
+    if (record.gitCommonDir && !gitLists.has(record.gitCommonDir)) gitLists.set(record.gitCommonDir, gitWorktreesOf(record.gitCommonDir));
+    const moved = (gitLists.get(record.gitCommonDir) ?? []).find((candidate) => {
+      const key = namedKey(candidate);
+      return key && claims.has(key) && !fs.existsSync(path.join(dir, recordName(candidate)));
+    });
+    if (moved) {
+      live.add(namedKey(moved));
+      writeJsonAtomic(path.join(dir, recordName(moved)), { ...record, worktree: moved });
+    }
+    fs.rmSync(file, { force: true });
   }
-  return users;
+  return live;
 }
 
 export function pruneCaches({ cacheRoot = defaultCacheRoot(), olderThanDays = 7, now = Date.now(), log = console.log } = {}) {
   const root = path.resolve(cacheRoot);
-  const users = liveUsers(root, now);
-  const removed = [];
-  for (const name of listDirs(root)) {
-    if (name === USERS_DIR) continue;
-    const dir = path.join(root, name);
-    const stamp = lstatOrNull(path.join(dir, CACHE_STAMP));
-    const stale = name.startsWith(".staging-") ? now - fs.statSync(dir).mtimeMs > DAY_MS : stamp && now - stamp.mtimeMs > olderThanDays * DAY_MS;
-    if (!stale || users.has(name)) continue;
-    removeTree(dir);
-    removed.push(dir);
-  }
-  log(removed.length ? `worktree-setup: removed ${removed.join(", ")}` : `worktree-setup: nothing to prune in ${root}`);
-  return removed;
+  if (!fs.existsSync(root)) return [];
+  return withKernelLock(registryLock(root), () => {
+    const live = liveKeys(root);
+    const removed = [];
+    for (const name of listDirs(root)) {
+      if (name === USERS_DIR || live.has(name)) continue;
+      const dir = path.join(root, name);
+      const stat = lstatOrNull(name.startsWith(".staging-") ? dir : path.join(dir, CACHE_STAMP));
+      const stale = stat && now - stat.mtimeMs > (name.startsWith(".staging-") ? DAY_MS : olderThanDays * DAY_MS);
+      if (!stale) continue;
+      removeTree(dir);
+      removed.push(dir);
+    }
+    log(removed.length ? `worktree-setup: removed ${removed.join(", ")}` : `worktree-setup: nothing to prune in ${root}`);
+    return removed;
+  });
 }
 
 export function parseArgs(argv) {
@@ -559,9 +625,6 @@ export function parseArgs(argv) {
         break;
       case "--prune":
         options.command = "prune";
-        break;
-      case "--prune-locked":
-        options.command = "prune-locked";
         break;
       case "--build-cache":
         options.command = "build-cache";
@@ -591,10 +654,6 @@ export function main(argv) {
     return 0;
   }
   if (options.command === "prune") {
-    underPodLock(["--prune-locked", "--cache", cacheRoot, "--older-than", String(options.olderThanDays ?? 7)]);
-    return 0;
-  }
-  if (options.command === "prune-locked") {
     pruneCaches({ cacheRoot, olderThanDays: options.olderThanDays ?? 7 });
     return 0;
   }

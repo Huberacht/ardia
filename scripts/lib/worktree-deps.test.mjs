@@ -17,11 +17,12 @@ import {
   normalizeLockfile,
   planLinks,
   pruneCaches,
+  claimCache,
   removeTree,
   runtimeOf,
   setupWorktree,
   undoWorktree,
-  withFileLock,
+  withKernelLock,
   workspacePatterns,
   workspaceProjects,
   worktreeStatus,
@@ -183,7 +184,7 @@ test("setup installs once per key into a read-only cache, links the worktree int
   assert.ok(fs.existsSync(path.join(first, ".metadata_never_index")));
   assert.equal(fs.readdirSync(path.join(cacheRoot, USERS_DIR)).length, 1);
   assert.deepEqual(fs.readdirSync(cacheRoot).filter((n) => n.startsWith(".staging")), []);
-  assert.deepEqual(worktreeStatus(first).problems, []);
+  assert.deepEqual(worktreeStatus(first, { runtime: RUNTIME }).problems, []);
 
   const again = setup(makeWorktree());
   assert.equal(again.sourceRoot, result.sourceRoot);
@@ -264,7 +265,7 @@ test("the marker names every managed folder before the first link, so undo clean
   t.mock.restoreAll();
   assert.deepEqual(seen.projects, ["", "apps/web"]);
   assert.equal(seen.state, "linking");
-  assert.match(worktreeStatus(worktree).problems.join("\n"), /didn't finish/);
+  assert.match(worktreeStatus(worktree, { runtime: RUNTIME }).problems.join("\n"), /didn't finish/);
   undoWorktree(worktree, { log: quiet });
   for (const gone of ["node_modules", "apps/web/node_modules", GUARD_FILE]) assert.ok(!fs.existsSync(path.join(worktree, gone)), gone);
 });
@@ -285,7 +286,7 @@ test("status notices changed inputs, and undo removes the worktree's links and r
   const worktree = makeWorktree();
   const result = setup(worktree);
   write(path.join(worktree, ".npmrc"), "save-exact=true\n");
-  assert.match(worktreeStatus(worktree).problems.join("\n"), /install inputs changed/);
+  assert.match(worktreeStatus(worktree, { runtime: RUNTIME }).problems.join("\n"), /install inputs changed/);
   const before = snapshot(result.sourceRoot);
   undoWorktree(worktree, { log: quiet });
   for (const gone of ["node_modules", "apps/web/node_modules", GUARD_FILE]) assert.ok(!fs.existsSync(path.join(worktree, gone)), gone);
@@ -315,16 +316,108 @@ test("prune keeps a cache any recorded worktree or scratch export still links, g
   assert.ok(fs.existsSync(path.join(exported, "node_modules", "react", "index.js")));
 });
 
-test("the exclude lock lets one writer in at a time and clears a stale holder", () => {
-  const lockDir = path.join(fresh("lock"), "exclude.lock");
-  fs.mkdirSync(path.dirname(lockDir), { recursive: true });
-  assert.equal(withFileLock(lockDir, () => fs.existsSync(lockDir)), true);
-  assert.ok(!fs.existsSync(lockDir));
-  fs.mkdirSync(lockDir);
-  assert.throws(() => withFileLock(lockDir, () => 1, { waitMs: 100 }), /still held/);
-  const old = new Date(Date.now() - 60000);
-  fs.utimesSync(lockDir, old, old);
-  assert.equal(withFileLock(lockDir, () => 2, { waitMs: 100 }), 2);
+const childLock = (lockFile, holdMs) =>
+  spawn(process.execPath, ["--input-type=module", "-e", `import { withKernelLock } from ${JSON.stringify(path.join(here, "worktree-deps.mjs"))}; withKernelLock(${JSON.stringify(lockFile)}, () => { process.stdout.write("held\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${holdMs}); });`], { stdio: ["ignore", "pipe", "inherit"] });
+const once = (stream, text) => new Promise((resolve) => stream.on("data", (d) => String(d).includes(text) && resolve()));
+
+test("the kernel lock admits one holder at a time and frees itself when its holder dies", async () => {
+  const lockFile = path.join(fresh("lock"), "registry.lock");
+  assert.equal(withKernelLock(lockFile, () => 7), 7);
+  const holder = childLock(lockFile, 1500);
+  await once(holder.stdout, "held");
+  const started = Date.now();
+  assert.throws(() => withKernelLock(lockFile, () => 1, { waitSeconds: 0 }), /still held/);
+  assert.equal(withKernelLock(lockFile, () => 2), 2);
+  assert.ok(Date.now() - started >= 900, "waited for the holder");
+  const crashed = childLock(lockFile, 60000);
+  await once(crashed.stdout, "held");
+  crashed.kill("SIGKILL");
+  await new Promise((resolve) => crashed.on("close", resolve));
+  const again = Date.now();
+  assert.equal(withKernelLock(lockFile, () => 3, { waitSeconds: 5 }), 3);
+  assert.ok(Date.now() - again < 2000, "a dead holder's lock is free at once");
+});
+
+test("a failed re-setup keeps its old cache claimed, so prune never deletes what the worktree still links", () => {
+  const { cacheRoot, setup } = harness();
+  const worktree = makeWorktree();
+  const first = setup(worktree);
+  write(path.join(worktree, "patches", "left-pad@1.0.0.patch"), "patch v2\n");
+  assert.throws(() => setup(worktree, { build: () => { throw new Error("build failed"); } }), /build failed/);
+  const later = Date.now() + 10 * 24 * 60 * 60 * 1000;
+  assert.deepEqual(pruneCaches({ cacheRoot, now: later, log: quiet }), []);
+  assert.ok(fs.existsSync(path.join(worktree, "node_modules", "react", "index.js")));
+  const second = setup(worktree);
+  assert.notEqual(second.key, first.key);
+  const record = JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, fs.readdirSync(path.join(cacheRoot, USERS_DIR))[0]), "utf8"));
+  assert.deepEqual(record.keys, [second.key], "the old claim goes once the marker names the new cache");
+  assert.deepEqual(pruneCaches({ cacheRoot, now: later, log: quiet }), [path.join(cacheRoot, first.key)]);
+});
+
+test("prune holds the registry lock throughout, a claim needs the cache to still be there, and a vanished record is skipped", (t) => {
+  const { cacheRoot, setup } = harness();
+  const kept = makeWorktree();
+  const result = setup(kept);
+  let probed = false;
+  const realLstat = fs.lstatSync;
+  t.mock.method(fs, "lstatSync", (file, ...rest) => {
+    if (!probed && String(file).endsWith(CACHE_STAMP)) {
+      probed = true;
+      assert.throws(() => withKernelLock(path.join(cacheRoot, ".registry.lock"), () => 0, { waitSeconds: 0 }), /still held/);
+    }
+    return realLstat(file, ...rest);
+  });
+  const realRead = fs.readFileSync;
+  let vanished = false;
+  t.mock.method(fs, "readFileSync", (file, ...rest) => {
+    if (!vanished && String(file).includes(`${USERS_DIR}${path.sep}`)) {
+      vanished = true;
+      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    }
+    return realRead(file, ...rest);
+  });
+  write(path.join(cacheRoot, "0000000000000000", CACHE_STAMP), "{}");
+  pruneCaches({ cacheRoot, log: quiet });
+  t.mock.restoreAll();
+  assert.ok(probed && vanished);
+  removeTree(path.join(cacheRoot, result.key));
+  assert.throws(() => claimCache(cacheRoot, kept, result.key), /isn't built \(or was just pruned\)/);
+});
+
+test("prune follows a git worktree that moved, and the record moves with it", () => {
+  const { cacheRoot, setup } = harness();
+  const repo = fresh("repo");
+  fs.mkdirSync(repo);
+  const git = (...args) => spawnSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" });
+  git("init", "-q");
+  const scratch = makeWorktree();
+  for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "patches"]) fs.cpSync(path.join(scratch, name), path.join(repo, name), { recursive: true });
+  git("add", ".");
+  git("commit", "-q", "-m", "init");
+  const linked = path.join(fresh("wt"), "linked");
+  git("worktree", "add", "-q", linked);
+  const result = setup(linked);
+  const moved = path.join(path.dirname(linked), "moved");
+  assert.equal(git("worktree", "move", linked, moved).status, 0);
+  const later = Date.now() + 10 * 24 * 60 * 60 * 1000;
+  assert.deepEqual(pruneCaches({ cacheRoot, now: later, log: quiet }), []);
+  const records = fs.readdirSync(path.join(cacheRoot, USERS_DIR)).map((name) => JSON.parse(fs.readFileSync(path.join(cacheRoot, USERS_DIR, name), "utf8")));
+  assert.deepEqual(records.map((r) => r.worktree), [fs.realpathSync(moved)]);
+  assert.ok(fs.existsSync(path.join(cacheRoot, result.key, CACHE_STAMP)));
+});
+
+test("the cache is installed from the exact bytes its key was computed from", (t) => {
+  const { setup } = harness();
+  const worktree = makeWorktree();
+  const realWrite = fs.writeFileSync;
+  t.mock.method(fs, "writeFileSync", (file, ...rest) => {
+    if (String(file).includes(".staging-") && String(file).endsWith(".patch")) realWrite(path.join(worktree, "patches", "left-pad@1.0.0.patch"), "edited after hashing\n");
+    return realWrite(file, ...rest);
+  });
+  const result = setup(worktree);
+  t.mock.restoreAll();
+  assert.equal(fs.readFileSync(path.join(result.sourceRoot, "patches", "left-pad@1.0.0.patch"), "utf8"), "patch v1\n");
+  assert.equal(dependencyKey(installInputs(result.sourceRoot, RUNTIME)), result.key);
 });
 
 const hasLock = spawnSync("sh", ["-c", "command -v lockf || command -v flock"]).status === 0;
