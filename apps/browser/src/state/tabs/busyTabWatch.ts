@@ -16,7 +16,7 @@ import { keepSiteActive } from "./memorySaver";
 import { shownTabIds } from "./shownTabs";
 import { useLifecycle } from "./sleepingTabs";
 
-type Owner = { started: number; at: number; tabIds: string[] };
+type Owner = { started: number; at: number; tabIds: string[]; urls: Map<string, string> };
 
 const MINUTE = 60_000;
 const OWNERS_FRESH_MS = 5 * MINUTE;
@@ -89,12 +89,12 @@ function busyTabsOf(s: BrowserState, owner: Owner, now: number): string[] | null
   return owner.tabIds;
 }
 
-async function freshOwners(pids: number[], now: number, consent: ConsentToken | null): Promise<Map<number, Owner>> {
+async function freshOwners(pids: number[], now: number, consent: ConsentToken | null): Promise<Map<number, Owner> | null> {
   noteBusyTab("busy_tab_owner_lookups", consent);
-  const tasks: unknown = await listTasks().catch(() => []);
+  const tasks: unknown = await listTasks().catch(() => null);
+  if (!Array.isArray(tasks)) return null;
   const found = new Map<number, Owner>();
-  for (const pid of pids) found.set(pid, { started: heat.get(pid)?.started ?? -1, at: now, tabIds: [] });
-  if (!Array.isArray(tasks)) return found;
+  for (const pid of pids) found.set(pid, { started: heat.get(pid)?.started ?? -1, at: now, tabIds: [], urls: new Map() });
   for (const t of tasks) {
     if (!t || typeof t !== "object") continue;
     const { pid, tabIds } = t as Record<string, unknown>;
@@ -102,6 +102,8 @@ async function freshOwners(pids: number[], now: number, consent: ConsentToken | 
     if (!owner || !Array.isArray(tabIds)) continue;
     for (const id of tabIds) if (typeof id === "string" && id && !owner.tabIds.includes(id)) owner.tabIds.push(id);
   }
+  const s = useBrowser.getState();
+  for (const owner of found.values()) for (const id of owner.tabIds) if (hasTab(s, id)) owner.urls.set(id, s.tabs[id]!.url);
   return found;
 }
 
@@ -112,8 +114,8 @@ const stillHot = (pid: number, started: number) => {
 
 async function stillBusyIn(pid: number, started: number, tabIds: string[], consent: ConsentToken | null, wanted: StillWanted): Promise<string[]> {
   if (!wanted() || !stillHot(pid, started)) return [];
-  const owner = (await freshOwners([pid], clock(), consent)).get(pid)!;
-  if (!wanted() || !stillHot(pid, started)) return [];
+  const owner = (await freshOwners([pid], clock(), consent))?.get(pid);
+  if (!owner || !wanted() || !stillHot(pid, started)) return [];
   const s = useBrowser.getState();
   const now = clock();
   return tabIds.filter((id) => owner.tabIds.includes(id) && eligible(s, id, now));
@@ -125,19 +127,20 @@ function mayConfirm(windowId: string, warningId: number | null): boolean {
   return !slot || slot.id === warningId;
 }
 
-function warnAboutTabs(windowId: string, pid: number, tabIds: string[], now: number, consent: ConsentToken | null) {
+function warnAboutTabs(windowId: string, pid: number, ownerTabIds: string[], now: number, consent: ConsentToken | null) {
   const s = useBrowser.getState();
   const started = heat.get(pid)!.started;
-  const first = s.tabs[tabIds[0]!]!;
-  const many = tabIds.length > 1;
+  const first = s.tabs[ownerTabIds[0]!]!;
   const site = siteToKeepActive(first.url);
+  const tabIds = ownerTabIds.filter((id) => siteToKeepActive(s.tabs[id]!.url) === site);
+  const many = tabIds.length > 1;
   const nameOf = (id: string) => {
     const tab = useBrowser.getState().tabs[id] ?? first;
     return toastName(tab.customTitle || tab.title) || toastName(siteToKeepActive(tab.url)) || "A background tab";
   };
   const name = nameOf(first.id);
   const wanted = wantedNow();
-  for (const id of tabIds) quietUntil.set(id, now + QUIET_AFTER_WARNING_MS);
+  for (const id of ownerTabIds) quietUntil.set(id, now + QUIET_AFTER_WARNING_MS);
   noteBusyTab("busy_tab_warnings", consent);
   const title = many ? `${tabIds.length} ${toastName(site) || "background"} tabs are using a lot of power` : `“${name}” is using a lot of power`;
   showToast(windowId, title, undefined, {
@@ -193,13 +196,13 @@ async function warnFor(pids: number[], now: number, consent: ConsentToken | null
   });
   if (stale.length) {
     const found = await freshOwners(stale, now, consent);
-    if (!wanted()) return;
+    if (!found || !wanted()) return;
     for (const [pid, owner] of found) owners.set(pid, owner);
   }
   const candidates = pids.filter((pid) => owners.has(pid) && busyTabsOf(useBrowser.getState(), owners.get(pid)!, now));
   if (!candidates.length) return;
   const confirmed = candidates.every((pid) => stale.includes(pid)) ? new Map(candidates.map((pid) => [pid, owners.get(pid)!])) : await freshOwners(candidates, now, consent);
-  if (!wanted() || !free()) return;
+  if (!confirmed || !wanted() || !free()) return;
   for (const pid of candidates) {
     const owner = confirmed.get(pid)!;
     if (owner.started !== heat.get(pid)?.started) continue;
@@ -242,6 +245,7 @@ export async function watchBusyTabs(now = Date.now(), read: () => Promise<unknow
 
 function noteShown(s: BrowserState) {
   for (const id of shownTabIds(s)) hiddenSince.delete(id);
+  for (const [pid, owner] of owners) if (owner.tabIds.some((id) => !hasTab(s, id) || s.tabs[id]!.url !== owner.urls.get(id))) owners.delete(pid);
 }
 
 function dropWork() {

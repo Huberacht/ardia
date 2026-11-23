@@ -12,7 +12,7 @@ const performance = import.meta.resolve("../../platform/performance.ts");
 globalThis.busyTest = { tasks: [], lookups: 0, toasts: [], onLookup: null, slots: {}, trackSlots: false, hidden: [], validate: null, toastSeq: 0 };
 const stubs = {
   "../../platform/performance": `export * from ${JSON.stringify(performance)};
-    export const listTasks = async () => { globalThis.busyTest.lookups++; const t = globalThis.busyTest.tasks; globalThis.busyTest.onLookup?.(); return t; };
+    export const listTasks = async () => { globalThis.busyTest.lookups++; if (globalThis.busyTest.failLookups > 0) { globalThis.busyTest.failLookups--; throw new Error("task manager unavailable"); } const t = globalThis.busyTest.tasks; globalThis.busyTest.onLookup?.(); return t; };
     export const isKeepActiveSiteValid = () => globalThis.busyTest.validate ? globalThis.busyTest.validate() : Promise.resolve(true);
     export const childProcessCpu = async () => [];`,
   "../app/toasts": `export const useToasts = { getState: () => ({ toasts: globalThis.busyTest.slots }) };
@@ -654,5 +654,68 @@ test("Keep Running does nothing once the warned tab has gone to another site", a
   await settle();
   assert.deepEqual(S().settings.keepActiveSites, [], "neither the old site, which the tab left, nor the new one is saved");
   assert.equal(globalThis.busyTest.toasts.length, 1, "and nothing is confirmed");
+  webviews.clear();
+});
+
+const steadyTicks = (pid, start, started = 5) => (t) => watchBusyTabs(start + t * SECOND, async () => [{ pid, started, cpuMs: t * 1000 }]);
+
+test("a task lookup that fails isn't remembered as a process holding no tabs: the next tick asks again", async () => {
+  const start = Date.now() + 11000 * MINUTE;
+  const { hidden } = windowWithHiddenTab(start - 10 * MINUTE);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 111, tabIds: [hidden] }];
+  globalThis.busyTest.failLookups = 1;
+  const tick = steadyTicks(111, start);
+  for (let t = 0; t <= 120; t += 10) await tick(t);
+  assert.equal(globalThis.busyTest.toasts.length, 0, "the lookup at 120 s failed");
+  await tick(130);
+  assert.equal(globalThis.busyTest.toasts.length, 1, "and the next tick looked again and warned");
+  webviews.clear();
+});
+
+test("a warning and its Keep Running cover the same host when one process holds tabs on several", async () => {
+  const start = Date.now() + 11500 * MINUTE;
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const a = S().newTab(w, { url: "https://a.example/x", background: true });
+  const b = S().newTab(w, { url: "https://b.example/y", background: true });
+  S().updateTab(a, { title: "Alpha", lastActiveAt: start - 10 * MINUTE });
+  S().updateTab(b, { title: "Beta", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of Object.keys(S().tabs)) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 112, tabIds: [a, b] }];
+  await burn(start, 2, { 112: 1 });
+  assert.equal(globalThis.busyTest.toasts[0].title, "“Alpha” is using a lot of power", "it names only the tabs on the host it would keep");
+  globalThis.busyTest.toasts[0].secondary.run();
+  await settle();
+  assert.deepEqual(S().settings.keepActiveSites, ["a.example"]);
+  assert.equal(globalThis.busyTest.toasts[1].title, "a.example will keep running");
+  webviews.clear();
+});
+
+test("closing a tab the busy process held drops the cached owners, so the tab left behind is warned about without waiting out the cache", async () => {
+  const start = Date.now() + 12000 * MINUTE;
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [] });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const hidden = S().newTab(w, { url: "https://miner.example/page", background: true });
+  const shown = S().newTab(w, { url: "https://miner.example/other", background: true });
+  S().updateTab(hidden, { title: "Busy Loop Page", lastActiveAt: start - 10 * MINUTE });
+  webviews.clear();
+  for (const id of Object.keys(S().tabs)) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  S().activate(shown);
+  reset();
+  globalThis.busyTest.tasks = [{ pid: 113, tabIds: [hidden, shown] }];
+  const tick = steadyTicks(113, start);
+  for (let t = 0; t <= 120; t += 10) await tick(t);
+  assert.equal(globalThis.busyTest.toasts.length, 0, "the process also draws the tab in front");
+  S().closeTabs([shown]);
+  webviews.delete(shown);
+  globalThis.busyTest.tasks = [{ pid: 113, tabIds: [hidden] }];
+  assert.ok(!shownTabIds(S()).has(hidden));
+  await tick(130);
+  assert.equal(globalThis.busyTest.toasts.length, 1, "the next tick looks again instead of trusting owners cached a few seconds before");
   webviews.clear();
 });
