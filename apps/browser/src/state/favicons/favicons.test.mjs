@@ -18,7 +18,7 @@ registerHooks({
     return next(specifier, context);
   },
 });
-const { adoptFavicons, askFaviconTheme, faviconOutlived, noteFavicon, pruneEngineFavicons, resolveFavicon, startFavicons, useFavicons } = await import("./favicons.ts");
+const { adoptFavicons, askFaviconTheme, faviconFailed, faviconOutlived, noteFavicon, pruneEngineFavicons, resolveFavicon, startFavicons, useFavicons } = await import("./favicons.ts");
 const { useFavicon } = await import("./faviconHooks.ts");
 const { seedFavicons } = await import("./launchFavicons.ts");
 const { adoptIconPage, dropOutlivedFavicon, noteIconPage } = await import("./iconPage.ts");
@@ -413,6 +413,55 @@ test("a private tab's icon leaves the theme and accent caches with its window, l
     assert.equal(useFavicons.getState().themes[shown], undefined);
     assert.equal(useFavicons.getState().themes[pending], undefined, "a theme that answered after the close isn't kept");
     assert.equal(useFaviconAccents.getState().byUri[shown], undefined);
+  } finally {
+    delete globalThis.iconThemeForTest;
+    webviews.clear();
+    stop();
+  }
+});
+
+test("a row in a private window that names a regular profile still asks no store", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const page = "https://bookmarked-elsewhere.test/";
+  const asked = [];
+  const fetched = [];
+  globalThis.faviconsForTest = (profile, pages) => (asked.push(...pages), empty());
+  globalThis.fetchFaviconForTest = (src) => (fetched.push(src), Promise.resolve(null));
+  try {
+    const w = privateWindow("https://private-start.test/");
+    const row = mount(() => useFavicon(page, "https://bookmarked-elsewhere.test/icon.png", "default"), { contexts: [[WindowContext, w.id]] });
+    await settle();
+    assert.deepEqual(asked, []);
+    assert.deepEqual(fetched, []);
+    row.unmount();
+    useBrowser.getState().closeWindow(w.id);
+  } finally {
+    delete globalThis.faviconsForTest;
+    delete globalThis.fetchFaviconForTest;
+    stop();
+  }
+});
+
+test("a private icon that already left the cache still takes its theme and accent with it at close", async () => {
+  useBrowser.getState().hydrate({});
+  const stop = startFavicons();
+  const uri = "data:image/png;base64,PRIVATEEVICTED";
+  const w = privateWindow("https://evicted-theme.test/");
+  webviews.set(w.tab, { downloadFavicon: () => Promise.resolve({ uri, width: 32, height: 32 }) });
+  globalThis.iconThemeForTest = () => Promise.resolve({ kind: "full" });
+  try {
+    noteFavicon(w.tab, "https://evicted-theme.test/a.ico");
+    await waitFor(() => resolveFavicon("https://evicted-theme.test/", null, w.profile)?.uri === uri);
+    askFaviconTheme(uri);
+    await waitFor(() => useFavicons.getState().themes[uri] !== undefined);
+    useFaviconAccents.setState({ byUri: { [uri]: "#654321" } });
+    faviconFailed(w.profile, uri);
+    await waitFor(() => !Object.values(useFavicons.getState().profiles[w.profile]?.srcs ?? {}).includes(uri));
+    useBrowser.getState().closeWindow(w.id);
+    await waitFor(() => useFavicons.getState().profiles[w.profile] === undefined);
+    assert.equal(useFavicons.getState().themes[uri], undefined);
+    assert.equal(useFaviconAccents.getState().byUri[uri], undefined);
   } finally {
     delete globalThis.iconThemeForTest;
     webviews.clear();

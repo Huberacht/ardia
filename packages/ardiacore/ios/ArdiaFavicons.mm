@@ -87,7 +87,7 @@ void Download(NSString *url, NSString *profileName, void (^done)(NSData *_Nullab
 @implementation ArdiaFavicons
 
 + (void)noteImage:(NSImage *)image forURL:(NSString *)url profile:(NSString *)profile {
-  if (image && url.length) [Seen() setObject:image forKey:SeenKey(profile, url)];
+  if (image && url.length && !ardia_host::IsPrivateProfile(profile)) [Seen() setObject:image forKey:SeenKey(profile, url)];
 }
 
 + (void)fetch:(NSString *)url

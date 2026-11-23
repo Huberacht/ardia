@@ -13,7 +13,20 @@ export function incognitoClosed(key: string): boolean {
 
 const urisOf = (icons: IconMaps) => [...Object.values(icons.pages), ...Object.values(icons.srcs), ...Object.values(icons.appearances).flat()].filter((uri): uri is string => !!uri);
 
-export function urisOnlyIn(gone: IconMaps[], kept: IconMaps[]): Set<string> {
+const ownedByPrivate = new Map<string, Set<string>>();
+
+export function notePrivateUri(key: string, uri: string) {
+  let owned = ownedByPrivate.get(key);
+  if (!owned) ownedByPrivate.set(key, (owned = new Set()));
+  owned.add(uri);
+}
+
+export function takePrivateUris(gone: [string, IconMaps][], kept: IconMaps[]): Set<string> {
   const still = new Set(kept.flatMap(urisOf));
-  return new Set(gone.flatMap(urisOf).filter((uri) => !still.has(uri)));
+  const held = gone.flatMap(([key, icons]) => {
+    const owned = [...(ownedByPrivate.get(key) ?? [])];
+    ownedByPrivate.delete(key);
+    return [...owned, ...urisOf(icons)];
+  });
+  return new Set(held.filter((uri) => !still.has(uri)));
 }

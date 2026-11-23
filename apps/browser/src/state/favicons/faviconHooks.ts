@@ -90,7 +90,7 @@ function usePrivateWindowProfile(): string | undefined {
 
 const useAskingProfile = (profileId?: string) => {
   const privateProfile = usePrivateWindowProfile();
-  return profileId ?? privateProfile;
+  return privateProfile ?? profileId;
 };
 
 export function useResolvedFaviconUri(url: string, src?: string | null, given?: string): string | null {

@@ -14,7 +14,7 @@ import { consentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { notePageFavicon, notePageFaviconFailed } from "../telemetry/pageFaviconCounts";
 import { fetchFailedBefore, forgetAsked, markAsked, noteFetchFailed, unmarkAsked } from "./askedFavicons";
-import { incognitoClosed, privateViewer, urisOnlyIn } from "./privateLookups";
+import { incognitoClosed, notePrivateUri, privateViewer, takePrivateUris } from "./privateLookups";
 
 type Icons = {
   pages: Record<string, string | null>;
@@ -159,6 +159,7 @@ function remember(key: string, page: string, src: string, uri: string) {
   wrote(key, page);
   update(key, (icons) => {
     if (incognitoClosed(key)) return icons;
+    if (isIncognitoProfile(key)) notePrivateUri(key, uri);
     const previous = icons.pages[page];
     if (previous === uri && icons.srcs[src] === uri) return icons;
     let appearances = icons.appearances;
@@ -379,7 +380,7 @@ export function startFavicons() {
         const gone = Object.keys(f.profiles).filter((id) => isIncognitoProfile(id) && !open.has(id));
         if (!gone.length) return f;
         const profiles = Object.fromEntries(Object.entries(f.profiles).filter(([id]) => !gone.includes(id)));
-        const dropped = urisOnlyIn(gone.map((id) => f.profiles[id]!), Object.values(profiles));
+        const dropped = takePrivateUris(gone.map((id) => [id, f.profiles[id]!]), Object.values(profiles));
         for (const uri of dropped) theming.delete(uri);
         for (const listener of privateIconListeners) listener(dropped);
         return { ...f, profiles, themes: Object.fromEntries(Object.entries(f.themes).filter(([uri]) => !dropped.has(uri))) };
