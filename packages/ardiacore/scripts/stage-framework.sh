@@ -41,6 +41,13 @@ fi
 
 [[ -d "$src" ]] || { echo "error: no ArdiaCore framework at $src (engine/ardiacore/apply.sh, then build chrome_framework)" >&2; exit 1; }
 stamp="$dest/.stamp"
+engine_match=${ARDIACORE_ENGINE_MATCH:-$(cat "$(dirname "$src")/engine-match" 2>/dev/null || echo match=local)}
+"$here/engine-match.sh" check "$engine_match" || exit 1
+mkdir -p "$dest"
+if [[ "$(cat "$dest/engine-match" 2>/dev/null)" != "$engine_match" ]]; then
+  echo "$engine_match" >"$dest/engine-match.tmp-$$"
+  mv "$dest/engine-match.tmp-$$" "$dest/engine-match"
+fi
 
 fill_cache() {
   local tmp="$cache/.tmp-$$" key fwv lib helper

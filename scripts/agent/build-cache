@@ -352,13 +352,15 @@ function engine() {
   const key = engineKey();
   const dir = join(cfg.cacheRoot, "engines", key.slice(0, 12));
   const framework = join(dir, "Chromium Framework.framework");
+  const fetchEngine = join(repo, "packages/ardiacore/scripts/fetch-engine.sh");
   if (!fs.existsSync(join(dir, ".complete"))) {
-    const fetched = execFileSync(join(repo, "packages/ardiacore/scripts/fetch-engine.sh"), { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+    const fetched = execFileSync(fetchEngine, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
     const tmp = `${dir}.tmp-${process.pid}`;
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.mkdirSync(tmp, { recursive: true });
     const r = lib.cloneTree(fetched, join(tmp, "Chromium Framework.framework"));
     if (r.status !== 0) throw new Error(`copying the engine failed: ${r.stderr.trim()}`);
+    fs.copyFileSync(join(dirname(fetched), "engine-match"), join(tmp, "engine-match"));
     fs.writeFileSync(join(tmp, ".complete"), "");
     try {
       fs.renameSync(tmp, dir);
@@ -368,6 +370,12 @@ function engine() {
     if (!fs.existsSync(join(dir, ".complete")) || !fs.existsSync(join(framework, "Versions/Current/Chromium Framework"))) {
       throw new Error(`the engine store ${dir} is incomplete after fetching`);
     }
+  }
+  if (!fs.existsSync(join(dir, "engine-match"))) {
+    const line = execFileSync(fetchEngine, ["--describe"], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+    const tmp = join(dir, `engine-match.tmp-${process.pid}`);
+    fs.writeFileSync(tmp, `${line}\n`);
+    fs.renameSync(tmp, join(dir, "engine-match"));
   }
   lib.touch(dir);
   lib.evict(cfg.cacheRoot, { maxBytes: cfg.maxBytes, maxEntries: cfg.maxEntries, keepEngines: cfg.keepEngines, graceMs: cfg.graceMs, protectEngines: [dir] });

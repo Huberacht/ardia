@@ -12,16 +12,19 @@ die() { echo "error: $*" >&2; exit 1; }
 if [ "${1:-}" = --arch ]; then
   case "${2:-}" in
     linux-x86_64) shift 2; exec "$root/scripts/linux/fetch-engine.sh" "$@" ;;
-    *) die "usage: fetch-engine.sh [--nearest] | fetch-engine.sh --arch linux-x86_64 [--nearest]" ;;
+    *) die "usage: fetch-engine.sh [--nearest] [--describe] | fetch-engine.sh --arch linux-x86_64 [--nearest]" ;;
   esac
 fi
 
-nearest=0
-case "${1:-}" in
-  "") ;;
-  --nearest) nearest=1 ;;
-  *) die "usage: fetch-engine.sh [--nearest]" ;;
-esac
+nearest=0 describe=0
+for arg in "$@"; do
+  case "$arg" in
+    --nearest) nearest=1 ;;
+    --describe) describe=1 ;;
+    *) die "usage: fetch-engine.sh [--nearest] [--describe]" ;;
+  esac
+done
+public_dir=engine/ardiacore/src/ardia/core/public
 
 key_script="$root/engine/engine-key.sh"
 key() { "$key_script" --platform macos "$@"; }
@@ -47,13 +50,16 @@ release_tag() {
 }
 
 entry=$(lookup "$tree")
+match=exact
+source_commit=$(git -C "$root" rev-list -1 HEAD -- "${key_paths[@]}" 2>/dev/null || true)
+public=same
 if [ -z "$entry" ]; then
   skipped=0 found=""
   while read -r commit; do
     candidate_key=$(key "$commit" 2>/dev/null || true)
     [ "$candidate_key" != "$tree" ] || continue
     candidate=$(lookup "$candidate_key")
-    if [ -n "$candidate" ]; then found=$candidate; break; fi
+    if [ -n "$candidate" ]; then found=$candidate source_commit=$commit; break; fi
     skipped=$((skipped + 1))
     [ "$skipped" -lt 200 ] || break
   done < <(git -C "$root" rev-list HEAD -- "${key_paths[@]}")
@@ -64,13 +70,24 @@ if [ -z "$entry" ]; then
 $(release_tag "$version"), or run packages/ardiacore/scripts/fetch-engine.sh --nearest to build against \
 $version's engine anyway, or build the engine"
   fi
-  echo "warning: using $version's engine; the engine's sources changed in $skipped commits since, and the app may not match it" >&2
+  match=nearest
+  [ -z "$(git -C "$root" diff --no-renames --name-only "$source_commit" HEAD -- "$public_dir")" ] || public=changed
+  if [ "$public" = same ]; then
+    echo "warning: using $version's engine; the engine's sources changed in $skipped commits since, and the app may not match it" >&2
+  else
+    echo "warning: using $version's engine; the engine's sources changed in $skipped commits since, $public_dir among them, so the app build stops unless ARDIACORE_ALLOW_PUBLIC_MISMATCH=1" >&2
+  fi
   entry=$found
 fi
 read -r tree version sha built <<<"$entry"
 built=${built:-$tree}
 short=${tree:0:12}
 dest="$store/$short"
+match_line="match=$match key=$tree version=$version source=$source_commit public=$public"
+if [ "$describe" = 1 ]; then
+  echo "$match_line"
+  exit 0
+fi
 if [ ! -f "$dest/.complete" ]; then
   file="ArdiaCore-${built:0:12}.tar.xz"
   url="$assets/$(release_tag "$version")/$file"
@@ -90,5 +107,9 @@ if [ ! -f "$dest/.complete" ]; then
   for old in "$store"/*/; do
     [ "${old%/}" = "$dest" ] || rm -rf "${old%/}"
   done
+fi
+if [ "$(cat "$dest/engine-match" 2>/dev/null)" != "$match_line" ]; then
+  echo "$match_line" >"$dest/engine-match.tmp-$$"
+  mv "$dest/engine-match.tmp-$$" "$dest/engine-match"
 fi
 echo "$dest/$name.framework"
