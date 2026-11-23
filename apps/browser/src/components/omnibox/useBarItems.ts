@@ -25,6 +25,7 @@ export function useBarItems({
   dropdown,
   opensTab,
   switchToOpenTab,
+  listShown,
   windowId,
   profileId,
   tabId,
@@ -40,6 +41,7 @@ export function useBarItems({
   dropdown: boolean;
   opensTab: boolean;
   switchToOpenTab: boolean;
+  listShown: boolean;
   windowId: string;
   profileId: string;
   tabId: string;
@@ -64,7 +66,7 @@ export function useBarItems({
   const rows = useSteadyRows(listed, `${scope?.kind ?? ""}:${scope?.name ?? ""}:${typed}`, overRows, suggestionKey);
   const { items, completion } = rows.value;
   useEffect(() => barFieldMarks.rows(overRows, rows.held, items.length), [overRows, rows.held]);
-  const routesApart = edited && !idle && !scope && listsRoutesApart(items);
+  const routesApart = listShown && edited && !idle && !scope && listsRoutesApart(items);
   const seenUnder = useMemo(() => consentToken(), [items]);
   useEffect(() => {
     if (routesApart) noteRoutesListed(seenUnder);
