@@ -31,6 +31,7 @@ typedef enum ardia_status {
   ARDIA_STATUS_AUTHENTICATION = 4,
   ARDIA_STATUS_PHRASE = 5,
   ARDIA_STATUS_RANDOM = 6,
+  ARDIA_STATUS_OUTPUT_IN_USE = 7,
 } ardia_status;
 
 typedef struct ardia_sync_keys ardia_sync_keys;
@@ -39,6 +40,10 @@ typedef struct ardia_buf {
   uint8_t *ptr;
   size_t len;
 } ardia_buf;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 uint32_t ardia_abi_version(void);
 
@@ -65,17 +70,6 @@ enum ardia_status ardia_sync_seal(const struct ardia_sync_keys *keys,
                                   const uint8_t *file_id,
                                   size_t file_id_len,
                                   struct ardia_buf *out);
-
-enum ardia_status ardia_sync_seal_with_nonce(const struct ardia_sync_keys *keys,
-                                             const uint8_t *payload,
-                                             size_t payload_len,
-                                             const uint8_t *scope_tag,
-                                             size_t scope_tag_len,
-                                             const uint8_t *file_id,
-                                             size_t file_id_len,
-                                             const uint8_t *nonce,
-                                             size_t nonce_len,
-                                             struct ardia_buf *out);
 
 enum ardia_status ardia_sync_open(const struct ardia_sync_keys *keys,
                                   const uint8_t *file,
@@ -119,3 +113,7 @@ enum ardia_status ardia_phrase_to_entropy(const uint8_t *text,
 enum ardia_status ardia_vault_list(const uint8_t *request,
                                    size_t request_len,
                                    struct ardia_buf *out);
+
+#ifdef __cplusplus
+}
+#endif

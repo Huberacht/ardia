@@ -51,14 +51,27 @@ fn is_lowercase_letter(scalar: char) -> bool {
         .is_ok()
 }
 
+fn push_wiping(token: &mut Zeroizing<String>, scalar: char) {
+    if token.len() + scalar.len_utf8() > token.capacity() {
+        let mut grown = Zeroizing::new(String::with_capacity((token.capacity() * 2).max(32)));
+        grown.push_str(token);
+        *token = grown;
+    }
+    token.push(scalar);
+}
+
+fn empty_token() -> Zeroizing<String> {
+    Zeroizing::new(String::with_capacity(32))
+}
+
 pub fn tokens(text: &str) -> Vec<Zeroizing<String>> {
     let mut tokens = Vec::new();
-    let mut current = Zeroizing::new(String::new());
+    let mut current = empty_token();
     for scalar in text.chars().flat_map(char::to_lowercase) {
         if is_lowercase_letter(scalar) {
-            current.push(scalar);
+            push_wiping(&mut current, scalar);
         } else if !current.is_empty() {
-            tokens.push(std::mem::replace(&mut current, Zeroizing::new(String::new())));
+            tokens.push(std::mem::replace(&mut current, empty_token()));
         }
     }
     if !current.is_empty() {
@@ -85,7 +98,7 @@ pub fn entropy(text: &str) -> Result<Zeroizing<[u8; ENTROPY_BYTES]>, PhraseError
     }
     let mut stream = Zeroizing::new([0u8; ENTROPY_BYTES + 1]);
     for (word, token) in tokens.iter().enumerate() {
-        let index = index_of(token).ok_or_else(|| PhraseError::UnknownWord(token.clone()))?;
+        let index = index_of(token).ok_or(PhraseError::UnknownWord(word))?;
         for offset in 0..BITS_PER_WORD {
             if (index >> (BITS_PER_WORD - 1 - offset)) & 1 == 1 {
                 let at = word * BITS_PER_WORD + offset;
@@ -113,5 +126,14 @@ mod tests {
         assert!(is_lowercase_letter('a') && is_lowercase_letter('z') && is_lowercase_letter('ß'));
         assert!(!is_lowercase_letter('A') && !is_lowercase_letter('1') && !is_lowercase_letter('漢'));
         assert!(!is_lowercase_letter('\u{0301}') && !is_lowercase_letter('😀'));
+    }
+
+    #[test]
+    fn long_tokens_grow_without_losing_letters() {
+        let long = "a".repeat(1000) + " " + &"Ä".repeat(300);
+        let tokens = tokens(&long);
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].as_str(), "a".repeat(1000));
+        assert_eq!(tokens[1].as_str(), "ä".repeat(300));
     }
 }

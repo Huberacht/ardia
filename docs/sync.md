@@ -585,11 +585,12 @@ bookmark, settings, profile or group edit, and on Sync Now. A cycle:
   - `scripts/legacy-migration-e2e.mjs`: the migration tool run end to end on a scratch install.
 - Rust core (`packages/core-rs`, not linked into any host yet): `ardia-sync-core` is this format and the recovery
   phrase once more, matching Swift byte for byte, behind `ardia-crypto` (RustCrypto now, BoringSSL later for the
-  Chromium build) and a C ABI in `ardia-ffi` (`include/ardia_core.h`, with a size cap on every input). `cargo test`
-  reproduces every byte in `sync-vectors`, opens the Swift and Kotlin random-nonce sets, both `windows-interop`
-  vaults and `sealed-0.2.32.b64`, and checks every platform's wordlist copy. `tests/phrase-cases.json` freezes how
-  each platform reads unusual phrases today (Rust follows Swift); `tests/linux-sync/test_linux_sync.py` runs the
-  Linux C++ against the same vectors and cases. The Rust workflow (`.github/workflows/rust.yml`) runs all of it on
+  Chromium build) and a C ABI in `ardia-ffi` (`include/ardia_core.h`; ownership, caps and error rules in
+  `packages/core-rs/ABI.md`). `cargo test` reproduces every byte in `sync-vectors`, opens the Swift and Kotlin
+  random-nonce sets, both `windows-interop` vaults and `sealed-0.2.32.b64`, and checks every platform's wordlist copy.
+  `tests/phrase-cases.json` and `tests/password-read-cases.json` freeze how each platform reads unusual phrases and
+  sealed passwords today (Rust follows Swift, including Foundation's lenient base64 and its dropped leading U+FEFF);
+  `tests/linux-sync/test_linux_sync.py` runs the Linux C++ against the same vectors and cases. The Rust workflow (`.github/workflows/rust.yml`) runs all of it on
   macOS, Linux and Windows.
 - `pnpm --filter @ardia/browser test` runs `src/state/sync/adapters.test.mjs` (4 tests against the real
   store: delete versus add, concurrent moves that would make a cycle, parked pinned tabs, passwords

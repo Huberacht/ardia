@@ -1,5 +1,3 @@
-use zeroize::Zeroizing;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     Format,
@@ -20,7 +18,7 @@ impl Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PhraseError {
     WordCount(usize),
-    UnknownWord(Zeroizing<String>),
+    UnknownWord(usize),
     Checksum,
 }
 

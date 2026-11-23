@@ -31,6 +31,7 @@ pub enum ardia_status {
     Authentication = 4,
     Phrase = 5,
     Random = 6,
+    OutputInUse = 7,
 }
 
 #[repr(C)]
@@ -75,7 +76,7 @@ impl From<PhraseError> for Failure {
     fn from(error: PhraseError) -> Self {
         let detail = match &error {
             PhraseError::WordCount(count) => json!({ "code": error.code(), "count": count }),
-            PhraseError::UnknownWord(word) => json!({ "code": error.code(), "word": word.as_str() }),
+            PhraseError::UnknownWord(index) => json!({ "code": error.code(), "index": index }),
             PhraseError::Checksum => json!({ "code": error.code() }),
         };
         Failure {
@@ -128,8 +129,9 @@ unsafe fn run(out: *mut ardia_buf, body: impl FnOnce() -> Outcome) -> ardia_stat
     let Some(out) = (unsafe { out.as_mut() }) else {
         return ardia_status::InvalidArgument;
     };
-    out.ptr = ptr::null_mut();
-    out.len = 0;
+    if !out.ptr.is_null() || out.len != 0 {
+        return ardia_status::OutputInUse;
+    }
     match body() {
         Ok(data) => {
             write(out, &data);
@@ -170,7 +172,9 @@ pub unsafe extern "C" fn ardia_sync_keys_new(
     let Some(out) = (unsafe { out.as_mut() }) else {
         return ardia_status::InvalidArgument;
     };
-    *out = ptr::null_mut();
+    if !out.is_null() {
+        return ardia_status::OutputInUse;
+    }
     if entropy_len != ARDIA_ENTROPY_BYTES || entropy.is_null() {
         return ardia_status::InvalidArgument;
     }
@@ -231,6 +235,7 @@ pub unsafe extern "C" fn ardia_sync_seal(
     }
 }
 
+#[cfg(feature = "fixtures")]
 #[no_mangle]
 pub unsafe extern "C" fn ardia_sync_seal_with_nonce(
     keys: *const ardia_sync_keys,

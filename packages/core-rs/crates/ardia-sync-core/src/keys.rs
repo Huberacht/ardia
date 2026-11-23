@@ -1,7 +1,5 @@
 use ardia_crypto::{Backend, Crypto, KEY_BYTES};
-use base64::alphabet::STANDARD;
-use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
-use base64::engine::DecodePaddingMode;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -19,13 +17,7 @@ pub const LOCAL_SCOPE_TAG: &str = "local";
 
 const LENGTH_BYTES: usize = 4;
 
-const BASE64: GeneralPurpose = GeneralPurpose::new(
-    &STANDARD,
-    GeneralPurposeConfig::new()
-        .with_encode_padding(true)
-        .with_decode_padding_mode(DecodePaddingMode::RequireCanonical)
-        .with_decode_allow_trailing_bits(true),
-);
+const BYTE_ORDER_MARK: &str = "\u{feff}";
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct SyncKeys {
@@ -124,10 +116,21 @@ impl SyncKeys {
     pub fn seal(&self, payload: &[u8], scope_tag: &str, file_id: &str) -> Result<Vec<u8>, Error> {
         let mut nonce = [0u8; NONCE_BYTES];
         Backend::fill_random(&mut nonce).map_err(|_| Error::Random)?;
-        self.seal_with_nonce(payload, scope_tag, file_id, &nonce)
+        self.seal_with(payload, scope_tag, file_id, &nonce)
     }
 
+    #[cfg(feature = "fixtures")]
     pub fn seal_with_nonce(
+        &self,
+        payload: &[u8],
+        scope_tag: &str,
+        file_id: &str,
+        nonce: &[u8; NONCE_BYTES],
+    ) -> Result<Vec<u8>, Error> {
+        self.seal_with(payload, scope_tag, file_id, nonce)
+    }
+
+    fn seal_with(
         &self,
         payload: &[u8],
         scope_tag: &str,
@@ -194,7 +197,7 @@ impl SyncKeys {
     }
 
     pub fn open_password(&self, sealed: &str, origin: &str, username: &str) -> Result<Zeroizing<String>, Error> {
-        let data = Zeroizing::new(BASE64.decode(sealed).map_err(|_| Error::Format)?);
+        let data = Zeroizing::new(crate::foundation_base64::decode(sealed).ok_or(Error::Format)?);
         if data.len() < 1 + NONCE_BYTES + TAG_BYTES + LENGTH_BYTES || data[0] != PASSWORD_VERSION {
             return Err(Error::Format);
         }
@@ -203,6 +206,8 @@ impl SyncKeys {
         let plain =
             Backend::aes256gcm_open(&self.password_key, &nonce, &aad, body).map_err(|_| Error::Authentication)?;
         let password = std::str::from_utf8(unframed(&plain)?).map_err(|_| Error::Format)?;
-        Ok(Zeroizing::new(password.to_owned()))
+        Ok(Zeroizing::new(
+            password.strip_prefix(BYTE_ORDER_MARK).unwrap_or(password).to_owned(),
+        ))
     }
 }

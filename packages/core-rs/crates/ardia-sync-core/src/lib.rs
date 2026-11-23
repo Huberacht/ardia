@@ -2,6 +2,7 @@
 
 mod base32;
 mod error;
+pub mod foundation_base64;
 mod keys;
 mod lowercase_letters;
 pub mod phrase;

@@ -9,7 +9,9 @@ fn outcome(text: &str) -> Value {
     match phrase::entropy(text) {
         Ok(entropy) => json!({ "entropy": hex_string(entropy.as_ref()) }),
         Err(PhraseError::WordCount(count)) => json!({ "problem": "wordCount", "count": count }),
-        Err(PhraseError::UnknownWord(word)) => json!({ "problem": "unknownWord", "word": word.as_str() }),
+        Err(PhraseError::UnknownWord(index)) => {
+            json!({ "problem": "unknownWord", "word": phrase::tokens(text)[index].as_str() })
+        }
         Err(PhraseError::Checksum) => json!({ "problem": "checksum" }),
     }
 }

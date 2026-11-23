@@ -12,7 +12,14 @@ fn the_committed_header_is_current_and_has_no_comments() {
         .generate()
         .unwrap()
         .write(&mut generated);
-    let generated = String::from_utf8(generated).unwrap();
+    let generated: String = String::from_utf8(generated)
+        .unwrap()
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(at) => line[..at].trim_end().to_owned() + "\n",
+            None => line.to_owned() + "\n",
+        })
+        .collect();
     let path = root.join("../../include/ardia_core.h");
     if std::env::var_os("ARDIA_WRITE_HEADER").is_some() {
         fs::write(&path, &generated).unwrap();

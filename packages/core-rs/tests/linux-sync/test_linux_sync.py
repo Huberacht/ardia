@@ -14,6 +14,8 @@ LINUX = REPO / 'engine/ardiacore-linux/src'
 FIXTURES = REPO / 'packages/sync/tests/fixtures'
 VECTORS = FIXTURES / 'sync-vectors'
 CASES = HERE.parent / 'phrase-cases.json'
+PASSWORD_READS = HERE.parent / 'password-read-cases.json'
+REQUIRED = os.environ.get('ARDIA_REQUIRE_LINUX_CROSSCHECK') == '1'
 SOURCES = [LINUX / 'ardia/linux/ac_linux_sync_crypto.cc', LINUX / 'ardia/linux/ac_linux_sync_wordlist.cc', HERE / 'vectors.cc']
 
 
@@ -25,6 +27,12 @@ def h(data):
 
 def load(path):
     return json.loads(path.read_text(encoding='utf-8'))
+
+
+def unavailable(why):
+    if REQUIRED:
+        raise AssertionError(f'{why}, and ARDIA_REQUIRE_LINUX_CROSSCHECK=1 asks for the cross-check')
+    raise unittest.SkipTest(why)
 
 
 def openssl_flags():
@@ -40,7 +48,7 @@ class LinuxSyncVectorTests(unittest.TestCase):
     def setUpClass(cls):
         compiler = shutil.which('clang++') or shutil.which('c++')
         if compiler is None:
-            raise unittest.SkipTest('C++ compiler is unavailable')
+            unavailable('C++ compiler is unavailable')
         cls.scratch = tempfile.TemporaryDirectory(prefix='ardia-linux-sync-')
         cls.binary = pathlib.Path(cls.scratch.name) / 'linux-sync-vectors'
         includes, libraries = openssl_flags()
@@ -49,7 +57,7 @@ class LinuxSyncVectorTests(unittest.TestCase):
                                 *includes, *map(str, SOURCES), '-o', str(cls.binary), *libraries, '-lcrypto'],
                                capture_output=True, text=True, timeout=300)
         if built.returncode != 0 and 'openssl/' in built.stderr and 'not found' in built.stderr:
-            raise unittest.SkipTest('OpenSSL headers are unavailable')
+            unavailable('OpenSSL headers are unavailable')
         assert built.returncode == 0, built.stderr
 
     @classmethod
@@ -157,6 +165,16 @@ class LinuxSyncVectorTests(unittest.TestCase):
                 got = {'problem': kind, 'word': bytes.fromhex(rest).decode()}
             else:
                 got = {'problem': kind}
+            self.assertEqual(got, case['outcomes']['linux'], case['name'])
+
+    def test_password_reads_match_what_linux_was_recorded_doing(self):
+        table = load(PASSWORD_READS)
+        key = load(VECTORS / 'inputs.json')['entropies'][table['entropy']]
+        cases = table['cases']
+        lines = [f'openpw {key} {h(c["sealed"])} {h(c["origin"])} {h(c["username"])}' for c in cases]
+        for case, line in zip(cases, self.run_lines(lines)):
+            kind, _, rest = line.partition(' ')
+            got = {'password': bytes.fromhex(rest).decode() if rest != '-' else ''} if kind == 'ok' else {'error': kind}
             self.assertEqual(got, case['outcomes']['linux'], case['name'])
 
     def check(self, checks):

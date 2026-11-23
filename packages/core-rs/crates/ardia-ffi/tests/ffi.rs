@@ -408,7 +408,11 @@ fn phrases_cross_as_bytes_and_problems_as_json() {
         ("awful supreme", serde_json::json!({"code": "wordCount", "count": 2})),
         (
             &*phrase.replacen("awful", "awf", 1),
-            serde_json::json!({"code": "unknownWord", "word": "awf"}),
+            serde_json::json!({"code": "unknownWord", "index": 0}),
+        ),
+        (
+            &*phrase.replacen("lizard", "lizzard", 1),
+            serde_json::json!({"code": "unknownWord", "index": 6}),
         ),
         (
             &*phrase.replacen("awful supreme", "supreme awful", 1),
@@ -429,6 +433,45 @@ fn phrases_cross_as_bytes_and_problems_as_json() {
     let mut id = Buf::new();
     assert_eq!(unsafe { ardia_sync_new_file_id(id.out()) }, ardia_status::Ok);
     assert_eq!(id.text().len(), 26);
+}
+
+#[test]
+fn occupied_output_slots_are_refused_and_left_alone() {
+    let keys = Keys::new(&[0u8; 32]);
+    let mut out = Buf::new();
+    assert_eq!(unsafe { ardia_sync_chain_tag(keys.0, out.out()) }, ardia_status::Ok);
+    let (held, length) = (out.0.ptr, out.0.len);
+    assert_eq!(
+        unsafe { ardia_sync_chain_tag(keys.0, out.out()) },
+        ardia_status::OutputInUse
+    );
+    assert_eq!((out.0.ptr, out.0.len), (held, length));
+    assert_eq!(out.text(), "gbcx4r55mk3rlaegbggknyx4ta");
+    let mut stale = ardia_buf {
+        ptr: ptr::null_mut(),
+        len: 5,
+    };
+    assert_eq!(unsafe { ardia_sync_new_file_id(&mut stale) }, ardia_status::OutputInUse);
+    let mut existing = keys.0;
+    let entropy = [1u8; 32];
+    assert_eq!(
+        unsafe { ardia_sync_keys_new(entropy.as_ptr(), 32, &mut existing) },
+        ardia_status::OutputInUse
+    );
+    assert_eq!(existing, keys.0);
+}
+
+#[test]
+fn phrase_problems_never_carry_phrase_text() {
+    let words = "abandon ".repeat(23) + "zebrafish";
+    let mut out = Buf::new();
+    assert_eq!(
+        unsafe { ardia_phrase_to_entropy(words.as_ptr(), words.len(), out.out()) },
+        ardia_status::Phrase
+    );
+    let detail = out.text();
+    assert_eq!(detail, r#"{"code":"unknownWord","index":23}"#);
+    assert!(!detail.contains("zebra") && !detail.contains("abandon"));
 }
 
 #[test]

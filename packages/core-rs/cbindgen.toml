@@ -1,6 +1,6 @@
 language = "C"
 pragma_once = true
-cpp_compat = false
+cpp_compat = true
 documentation = false
 usize_is_size_t = true
 style = "both"
@@ -13,3 +13,6 @@ prefix_with_name = true
 
 [parse]
 parse_deps = false
+
+[export]
+exclude = ["ardia_sync_seal_with_nonce"]

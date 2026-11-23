@@ -132,3 +132,25 @@ fn ed25519_verifies_rfc_8032_test_1() {
     forged[0] ^= 1;
     assert!(!Backend::ed25519_verify(&public_key, b"", &forged));
 }
+
+#[cfg(feature = "ed25519")]
+#[test]
+fn ed25519_rejects_small_order_keys_and_their_trivial_signatures() {
+    let mut identity = [0u8; 32];
+    identity[0] = 1;
+    let mut trivial = [0u8; 64];
+    trivial[0] = 1;
+    for message in [&b""[..], b"any message", b"update manifest"] {
+        let lenient = ed25519_dalek::VerifyingKey::from_bytes(&identity).unwrap();
+        assert!(
+            ed25519_dalek::Verifier::verify(&lenient, message, &ed25519_dalek::Signature::from_bytes(&trivial)).is_ok()
+        );
+        assert!(!Backend::ed25519_verify(&identity, message, &trivial));
+    }
+    let order_two: [u8; 32] = hex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+        .try_into()
+        .unwrap();
+    let mut with_order_two = [0u8; 64];
+    with_order_two[..32].copy_from_slice(&order_two);
+    assert!(!Backend::ed25519_verify(&order_two, b"", &with_order_two));
+}

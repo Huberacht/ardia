@@ -56,9 +56,9 @@ impl Crypto for RustCrypto {
 
     #[cfg(feature = "ed25519")]
     fn ed25519_verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bool {
-        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        use ed25519_dalek::{Signature, VerifyingKey};
         VerifyingKey::from_bytes(public_key)
-            .map(|key| key.verify(message, &Signature::from_bytes(signature)).is_ok())
+            .map(|key| key.verify_strict(message, &Signature::from_bytes(signature)).is_ok())
             .unwrap_or(false)
     }
 }

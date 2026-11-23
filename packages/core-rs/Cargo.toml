@@ -12,6 +12,7 @@ publish = false
 ardia-crypto = { path = "crates/ardia-crypto", default-features = false }
 ardia-sync-core = { path = "crates/ardia-sync-core", default-features = false }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc", "zeroize"] }
+aes = { version = "0.8", features = ["zeroize"] }
 hkdf = "0.12"
 hmac = "0.12"
 sha2 = { version = "0.10", default-features = false }

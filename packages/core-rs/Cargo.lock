@@ -21,6 +21,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures",
+ "zeroize",
 ]
 
 [[package]]
@@ -42,6 +43,7 @@ dependencies = [
 name = "ardia-crypto"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "aes-gcm",
  "ed25519-dalek",
  "getrandom 0.2.17",
@@ -55,6 +57,7 @@ dependencies = [
 name = "ardia-ffi"
 version = "0.1.0"
 dependencies = [
+ "ardia-ffi",
  "ardia-sync-core",
  "cbindgen",
  "serde",
@@ -67,6 +70,7 @@ name = "ardia-sync-core"
 version = "0.1.0"
 dependencies = [
  "ardia-crypto",
+ "ardia-sync-core",
  "base64",
  "serde_json",
  "zeroize",
