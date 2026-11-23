@@ -34,6 +34,14 @@ test("a type composed from anything but generated domains and one row literal is
   assert.throws(() => typeRows(`${api.slice(0, tail)}\n} & Extra;\n${api.slice(tail + 4)}`, manifest, "EngineEvents"), /ends its type/);
   assert.throws(() => typeRows(api.replace(head, `${head}\n  ...Extra,`), manifest, "EngineEvents"), /only rows/);
   assert.throws(() => typeRows(`${api}\nexport type EngineEvents = {};\n`, manifest, "EngineEvents"), /2 times/);
+  const row = api.slice(api.indexOf("\n", api.indexOf(head)) + 1).split("\n")[0];
+  assert.throws(() => typeRows(api.replace(row, `${row} "history.undeclared": unknown;`), manifest, "EngineEvents"), /only rows/);
+});
+
+test("a checkout with CRLF line endings reads the same rows as LF", () => {
+  for (const name of ["EngineCalls", "EngineEvents"]) {
+    assert.deepEqual([...typeRows(api.replace(/\n/g, "\r\n"), manifest, name).rows], [...typeRows(api, manifest, name).rows]);
+  }
 });
 
 test("every call in api.ts has a handler in its domain's Swift call table, and nothing else does", () => {

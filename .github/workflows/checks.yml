@@ -3,6 +3,7 @@ name: Checks
 on:
   pull_request:
     paths: &inputs
+      - ".gitattributes"
       - "apps/browser/**"
       - "apps/linux/**"
       - "apps/site/**"
@@ -63,6 +64,7 @@ jobs:
         with:
           filters: |
             code:
+              - ".gitattributes"
               - "apps/browser/**"
               - "apps/linux/**"
               - "apps/phone/scripts/**"
