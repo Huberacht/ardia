@@ -145,22 +145,21 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
       }
     }
     if url.isFileURL { return make(url) }
-    URLSession.shared.dataTask(with: url) { data, response, error in
-      guard let data, !data.isEmpty else {
-        let outcome = NotificationIcon(status: error == nil ? "empty" : "download_failed", errorCode: (error as NSError?)?.code)
-        return DispatchQueue.main.async { completion(nil, outcome) }
-      }
-      let ext = (response?.mimeType == "image/png" || url.absoluteString.hasPrefix("data:image/png")) ? "png"
-        : (response?.suggestedFilename as NSString?)?.pathExtension.nonEmpty ?? "png"
-      let file = FileManager.default.temporaryDirectory.appendingPathComponent("ac-notification-\(id).\(ext)")
-      do {
-        try data.write(to: file)
-        DispatchQueue.main.async { make(file) }
-      } catch {
-        let outcome = NotificationIcon(status: "write_failed", errorCode: (error as NSError).code)
-        DispatchQueue.main.async { completion(nil, outcome) }
-      }
-    }.resume()
+    guard url.scheme?.lowercased() == "data", url.absoluteString.lowercased().hasPrefix("data:image/") else {
+      return completion(nil, NotificationIcon(status: "invalid_url", errorCode: nil))
+    }
+    guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+      return completion(nil, NotificationIcon(status: "empty", errorCode: nil))
+    }
+    let subtype = url.absoluteString.dropFirst("data:image/".count).prefix { $0 != ";" && $0 != "," }.lowercased()
+    let ext = ["jpeg": "jpg", "jpg": "jpg", "gif": "gif", "heic": "heic", "tiff": "tiff", "webp": "webp"][subtype] ?? "png"
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("ac-notification-\(id).\(ext)")
+    do {
+      try data.write(to: file)
+      make(file)
+    } catch {
+      completion(nil, NotificationIcon(status: "write_failed", errorCode: (error as NSError).code))
+    }
   }
 
   func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {

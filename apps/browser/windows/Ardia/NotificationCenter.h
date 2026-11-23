@@ -12,7 +12,6 @@
 
 #include <objbase.h>
 #include <shlwapi.h>
-#include <urlmon.h>
 #include <wincrypt.h>
 
 #include <winrt/Windows.Foundation.h>
@@ -33,7 +32,6 @@
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "urlmon.lib")
 
 namespace Ardia::NotificationParts {
 
@@ -196,12 +194,6 @@ inline std::optional<std::wstring> DataUriIcon(std::string const &icon, std::str
 inline std::optional<std::wstring> IconUrl(std::string const &icon, std::string const &id) noexcept {
   if (icon.starts_with("file:")) return Paths::Wide(icon);
   if (icon.starts_with("data:image/")) return DataUriIcon(icon, id);
-  if (icon.starts_with("https://") || icon.starts_with("http://")) {
-    std::wstring path = TempIconPath(id, L"png");
-    if (path.empty()) return std::nullopt;
-    if (FAILED(URLDownloadToFileW(nullptr, Paths::Wide(icon).c_str(), path.c_str(), 0, nullptr))) return std::nullopt;
-    return FileUrlOf(path);
-  }
   if (icon.size() > 2 && (icon[1] == ':' || icon.starts_with("\\\\"))) return FileUrlOf(Paths::Wide(icon));
   return std::nullopt;
 }
