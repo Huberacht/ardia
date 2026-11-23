@@ -11,6 +11,7 @@ import { consentToken, type ConsentToken } from "../telemetry/client";
 import { focusedWindowOf } from "../windows/ui";
 import { BUSY_TICK_MS, HOT_CORES, keptActive, readHeat, siteToKeepActive, SUSTAINED_MS, sustainedBusy, validReadings, type ProcessHeat } from "./busyProcesses";
 import { inUse } from "./loadedTabBudget";
+import { hasLoadedPage } from "./pageSession";
 import { canSleep, sleepAsked } from "./manualSleep";
 import { keepSiteActive } from "./memorySaver";
 import { shownTabIds } from "./shownTabs";
@@ -273,13 +274,16 @@ let rearm = () => {};
 
 const presenters = new Map<string, number>();
 
+const untracked = () => {};
+
 function markHidden(tabId: string) {
-  if (!started || !watchOn(useBrowser.getState())) return;
+  if (!PLATFORM_FEATURES.busyTabWatch || !started || !watchOn(useBrowser.getState())) return;
   if (!presenters.get(tabId) && !hiddenSince.has(tabId)) hiddenSince.set(tabId, clock());
   rearm();
 }
 
 export function presentTab(tabId: string): () => void {
+  if (!PLATFORM_FEATURES.busyTabWatch) return untracked;
   presenters.set(tabId, (presenters.get(tabId) ?? 0) + 1);
   if (started && watchOn(useBrowser.getState())) {
     hiddenSince.delete(tabId);
@@ -299,6 +303,18 @@ export function presentTab(tabId: string): () => void {
 export const noteTabHidden = (tabId: string) => markHidden(tabId);
 
 export const noteTabLoaded = (tabId: string) => markHidden(tabId);
+
+const loadedNow = (tabId: string) => {
+  const t = useBrowser.getState().tabs[tabId];
+  return !!t && hasLoadedPage(t);
+};
+
+export function trackPageArrival(tabId: string): () => void {
+  if (!PLATFORM_FEATURES.busyTabWatch || !started || loadedNow(tabId)) return untracked;
+  return () => {
+    if (loadedNow(tabId)) markHidden(tabId);
+  };
+}
 
 function dropWork() {
   hiddenSince.clear();

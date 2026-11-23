@@ -35,7 +35,8 @@ registerHooks({
 const { useBrowser } = await import("../browser/store.ts");
 const { webviews, webviewRef } = await import("../../platform/webviews.ts");
 const { readHeat, sustainedBusy, keptActive, siteToKeepActive, validReadings } = await import("./busyProcesses.ts");
-const { watchBusyTabs, startBusyTabWatch, toastName, presentTab, noteTabHidden } = await import("./busyTabWatch.ts");
+const { watchBusyTabs, startBusyTabWatch, toastName, presentTab, noteTabHidden, trackPageArrival } = await import("./busyTabWatch.ts");
+const { openFromPage } = await import("./openFromPage.ts");
 const { shownTabIds } = await import("./shownTabs.ts");
 const { noteReady } = await import("./tabLifecycle.ts");
 const { takeBusyTabCounts } = await import("../telemetry/busyTabCounts.ts");
@@ -421,6 +422,42 @@ test("#4031 r4672506169: a hidden tab whose page becomes loaded after its webvie
   assert.notEqual(timers.pending(), null, "the page reporting ready arms the watch");
   webviews.clear();
   noteTabHidden(later);
+});
+
+test("#4031 R2-S2: a background tab a page opens with no address yet arms the watch when its first address arrives after its page reported ready, with no store listener", (t) => {
+  const timers = slowTimersForTests(() => Date.now());
+  t.after(() => {
+    webviews.clear();
+    for (const id of Object.keys(S().tabs)) noteTabHidden(id);
+  });
+  S().hydrate({});
+  S().updateSettings({ keepActiveSites: [], busyTabWarnings: true });
+  const w = S().createWindow({ url: "https://front.example/" });
+  const front = Object.keys(S().tabs)[0];
+  openFromPage({ url: "", disposition: "background", adoptId: "ardiacore:r2s2" }, { windowId: w, profileId: S().windows[w].profileId, tabId: front });
+  const adopted = Object.keys(S().tabs).find((id) => S().tabs[id].page.kind === "adopted");
+  assert.ok(adopted, "the page's new tab adopts its contents");
+  assert.equal(S().tabs[adopted].url, "");
+  webviews.clear();
+  for (const id of [front, adopted]) webviews.set(id, { sleepIfHidden: async () => [], discard: async () => "discarded" });
+  startBusyTabWatch();
+  noteTabHidden(adopted);
+  noteReady(adopted);
+  assert.equal(timers.pending(), null, "with no address it can't be put to sleep, so nothing hidden is eligible yet");
+  const pageArrived = trackPageArrival(adopted);
+  S().updateTab(adopted, { url: "https://adopted.example/" });
+  assert.equal(timers.pending(), null, "the address arriving in the store wakes nothing: there is no store listener");
+  pageArrived();
+  assert.notEqual(timers.pending(), null, "the pane seeing its first address arms the watch");
+  const later = trackPageArrival(adopted);
+  S().updateTab(adopted, { url: "https://adopted.example/next" });
+  webviews.clear();
+  noteTabHidden(adopted);
+  assert.equal(timers.pending(), null);
+  later();
+  assert.equal(timers.pending(), null, "a tab that already had a page re-arms nothing on later addresses");
+  const pane = readFileSync(new URL("../../components/window/TabWebView.tsx", import.meta.url), "utf8");
+  assert.match(pane, /const pageArrived = trackPageArrival\(tabId\);[\s\S]*updateTab\(tabId, \{ url, title: shownTitle \}[^\n]*\n\s*pageArrived\(\);/, "the pane checks around the update that stores the reported address");
 });
 
 test("Warn about busy background tabs: off stops the watch and its reads, on arms it again; it persists, is counted, and is macOS only", async () => {
@@ -990,6 +1027,34 @@ test("#4031 S1: a holder shown by a frozen pin and by its own pane stays shown u
   assert.equal(globalThis.busyTest.toasts.length, 0, "hidden only since 235 s");
   await tick(360);
   assert.equal(globalThis.busyTest.toasts.length, 1, "two minutes after the last presenter stopped");
+  webviews.clear();
+});
+
+test("#4031 R2-S1: where the platform has no watch (Linux, Windows), panes and frozen copies do no presenter bookkeeping", async (t) => {
+  const start = Date.now() + 18000 * MINUTE;
+  t.mock.timers.enable({ apis: ["Date"], now: start });
+  const at = (sec) => t.mock.timers.setTime(start + sec * SECOND);
+  const pid = 171;
+  const { busy } = hiddenBusyTab(start, pid);
+  const tick = (sec) => (at(sec), watchBusyTabs(start + sec * SECOND, async () => [{ pid, started: 9, cpuMs: sec * 1000 }]));
+  PLATFORM_FEATURES.busyTabWatch = false;
+  let neverReleased;
+  try {
+    neverReleased = presentTab(busy);
+    presentTab(busy)();
+    noteTabHidden(busy);
+  } finally {
+    PLATFORM_FEATURES.busyTabWatch = true;
+  }
+  for (let sec = 0; sec <= 140; sec += 10) await tick(sec);
+  assert.equal(globalThis.busyTest.toasts.length, 1, "nothing was counted as showing it, so a macOS watch still sees it hidden");
+  neverReleased();
+  PLATFORM_FEATURES.busyTabWatch = false;
+  try {
+    assert.equal(trackPageArrival(busy), neverReleased, "the page-arrival check is the same no-op");
+  } finally {
+    PLATFORM_FEATURES.busyTabWatch = true;
+  }
   webviews.clear();
 });
 

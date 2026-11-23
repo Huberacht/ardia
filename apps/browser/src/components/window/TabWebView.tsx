@@ -15,7 +15,7 @@ import { useProfileTheme } from "./ThemeScope";
 import { opaqueCard } from "../ui/opaqueCard";
 import { handOff, takeHandOff, wantsPage } from "../../state/tabs/tabPages";
 import { noteDiscarded, noteGone, noteReady } from "../../state/tabs/tabLifecycle";
-import { noteTabHidden, presentTab } from "../../state/tabs/busyTabWatch";
+import { noteTabHidden, presentTab, trackPageArrival } from "../../state/tabs/busyTabWatch";
 import { noteWebKitPage, offerWebKit, persistEngine } from "../../state/engines/actions";
 import { heldBySwap, watchFirstPaint } from "../../state/engines/engineSwap";
 import { useRetiringEngine } from "../../state/engines/hooks";
@@ -218,6 +218,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
       }}
       onNavigationChange={({ url: reported, title: reportedPageTitle, canGoBack, canGoForward, isLoading, themeColor, themeColorSource, initialDocumentAccessed, committedInitial, committedUrl, committedAt, httpStatus }) => {
         if (consumedCallbackUrl(tabId, reported, committedUrl)) return;
+        const pageArrived = trackPageArrival(tabId);
         noteCommit(tabId, committedUrl, committedAt, httpStatus);
         verificationCodeDocument(tabId, committedAt);
         notePageDocument(tabId, reported, committedUrl, committedAt, isIncognitoProfile(profileId), documentReporter);
@@ -259,6 +260,7 @@ function EngineWebView({ tabId, visible, selected = true, warm, peekOf, engine, 
         const held = heldBySwap(tabId, { isLoading });
         const shownTitle = !title && (restoring || held) ? (tab()?.title ?? title) : title;
         updateTab(tabId, { url, title: shownTitle }, { isLoading: isLoading && !held, canGoBack, canGoForward, themeColor: shownTheme });
+        pageArrived();
         dropOutlivedFavicon(tabId, url, isLoading);
         if (engine === "webkit") noteWebKitPage(tabId, { url, title, isLoading, committedUrl: committedUrl ?? "" });
         if (lastPage.current !== null && withoutFragment(url) !== lastPage.current) leftPage(tabId, url, lastPage.current, engine, peekOf !== undefined);
