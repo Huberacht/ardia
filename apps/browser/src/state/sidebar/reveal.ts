@@ -34,6 +34,8 @@ const watchStoreTargets = (windowId: string, found: (targets: RevealTargets, via
 
 export const selectedTabIn = (windowId: string) => activeTabId(useBrowser.getState(), windowId);
 
+export const showsProfile = (windowId: string, profileId: string) => useBrowser.getState().windows[windowId]?.profileId === profileId;
+
 export type PillTab = { id: string; url: string; favicon: string | null; icon: string | null; profileId: string; faviconUri: string | null; template: boolean; marks: number };
 
 export function selectedTabSnapshot(windowId: string): PillTab | null {

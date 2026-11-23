@@ -39,7 +39,7 @@ test("no pill without a selected row in the list, or before the list is laid out
 test("the sidebar page measures no frame for the pill and never re-renders to show it", () => {
   const page = readFileSync(new URL("./SidebarPage.tsx", import.meta.url), "utf8");
   assert.match(page, /\{geometry \? <SelectedRowPill windowId=\{windowId\} tracker=\{selectedRow\}/);
-  assert.match(page, /useSelectedRowAway\(windowId, geometry, scrollView, \(\) => page\.scrollY\)/);
+  assert.match(page, /useSelectedRowAway\(windowId, geometry, scrollView, \(\) => page\.scrollY, profileId\)/);
   assert.doesNotMatch(page, /listFrame|useListFrame|pillNeeded/);
 });
 
@@ -85,6 +85,36 @@ test("the tracker hands the pill the selected tab only while its row is out of v
   scrollY = 0;
   tracker.judge();
   assert.equal(seen.at(-1), null);
+  detach();
+});
+
+test("a page's tracker keeps quiet while the window shows another profile, so a page sliding out never points at the arriving page's tab", async (t) => {
+  await import("../../test-native/index.ts");
+  const { useBrowser } = await import("../../state/browser/store.ts");
+  const S = () => useBrowser.getState();
+  S().hydrate({});
+  const w = S().createWindow({ url: "https://a.com/" });
+  const home = S().windows[w].profileId;
+  S().activate(S().windows[w].tabIds[0]);
+  const work = S().createProfile({ name: "Work" });
+  S().switchProfile(w, work);
+  const workTabs = [];
+  for (let i = 0; i < 30; i++) workTabs.push(S().newTab(w, { url: `https://w${i}.com/` }));
+  S().activate(workTabs.at(-1));
+  S().switchProfile(w, home);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
+  const geometry = { current: { viewport: 200, regions: { pinnedGroups: 0, list: 0 }, newTabAtTop: false, tilesFixed: false, edgeLift: 0 } };
+  const hook = mount(() => useSelectedRowAway(w, geometry, { current: null }, () => 0, home));
+  t.after(() => hook.unmount());
+  const seen = [];
+  const detach = hook.value.attach((away) => seen.push(away));
+  hook.value.judge();
+  assert.equal(seen.at(-1), null, "its own selected row is in view");
+  S().switchProfile(w, work);
+  hook.value.relocate();
+  t.mock.timers.tick(450);
+  hook.value.judge();
+  assert.equal(seen.at(-1), null, "past the switch's quiet time, the arriving profile's deep tab is still not this page's to point at");
   detach();
 });
 

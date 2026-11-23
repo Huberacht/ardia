@@ -207,7 +207,11 @@ const SidebarPages = memo(function SidebarPages({ windowId, pages, paging, width
   const settled = useSettledProfile(windowId, current);
   const [spots] = useState(() => new Map<string, PageSpot>());
   const claimed = useRef<PageSpot | null>(null);
-  const shown = dragging || !pages.some((page) => page.id === settled) ? current : settled;
+  const holding = settled !== current;
+  const [draggedThrough, setDraggedThrough] = useState<string | null>(null);
+  if (holding && dragging && draggedThrough !== settled) setDraggedThrough(settled);
+  if (!holding && draggedThrough !== null) setDraggedThrough(null);
+  const shown = !holding || dragging || draggedThrough === settled || !pages.some((page) => page.id === settled) ? current : settled;
   const capRows = Math.ceil(available / rowPitch()) + 1;
   const rowsOf = (profileId: string) => {
     if (profileId === shown) return undefined;

@@ -17,8 +17,10 @@ function restPages(current: string | null, order: string[]): PagerPage[] {
   return [...(before ? [{ id: before, slot: -1 }] : []), { id: current, slot: 0 }, ...(after ? [{ id: after, slot: 1 }] : [])];
 }
 
-const HOLD_WATCH_MS = 250;
+const HOLD_WATCH_MS = 50;
+const IDLE_OFF_TARGET_LOOKS = 20;
 const MOVING_PHASES = new Set<string>(["tracking", "holding", "settling"]);
+const atRest = (snapshot: PagerSnapshot) => !MOVING_PHASES.has(snapshot.phase) && Math.abs(snapshot.position - snapshot.selected) < 0.001;
 
 const samePages = (a: PagerPage[] | null, b: PagerPage[] | null) =>
   a === b || (!!a && !!b && a.length === b.length && a.every((p, i) => p.id === b[i]!.id && p.slot === b[i]!.slot));
@@ -43,7 +45,7 @@ class ProfilePager {
   private seen = 0;
   private switchedSinceBegan = false;
   private holdWatch: ReturnType<typeof setInterval> | null = null;
-  private restingSeen = false;
+  private idleOffTarget = 0;
   private holdConsent: ConsentToken | null = null;
 
   readonly windowId: string;
@@ -76,7 +78,7 @@ class ProfilePager {
 
   readonly onNativeState = (event: PagerStateEvent) => {
     const snapshot = pagerState(this.windowId);
-    this.noteMotion(snapshot ? MOVING_PHASES.has(snapshot.phase) : event.phase !== "settled");
+    this.noteMotion(snapshot ? !atRest(snapshot) : event.phase !== "settled");
     if (this.external) return;
     this.commitNative(snapshot ?? event, event);
   };
@@ -88,17 +90,18 @@ class ProfilePager {
       if (!current) return;
       this.holdConsent = consentToken();
       this.state.setState({ held: current });
-      this.restingSeen = false;
+      this.idleOffTarget = 0;
       this.holdWatch ??= setInterval(this.watchHold, HOLD_WATCH_MS);
     } else if (!moving && held) this.release();
   }
 
   private readonly watchHold = () => {
     const snapshot = pagerState(this.windowId);
-    const resting = !snapshot || !MOVING_PHASES.has(snapshot.phase);
-    const restingBefore = this.restingSeen;
-    this.restingSeen = resting;
-    if (!resting || !restingBefore) return;
+    if (snapshot && MOVING_PHASES.has(snapshot.phase)) {
+      this.idleOffTarget = 0;
+      return;
+    }
+    if (snapshot && !atRest(snapshot) && ++this.idleOffTarget < IDLE_OFF_TARGET_LOOKS) return;
     if (this.state.getState().held) notePagerRestSeenByWatch(this.holdConsent);
     this.release();
   };

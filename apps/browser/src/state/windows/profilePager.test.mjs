@@ -29,10 +29,10 @@ function threeProfiles() {
   S().switchProfile(w, order[0]);
   takePagerCounts();
   const pager = pagerFor(w);
-  const native = (phase, selected, event) => {
-    const snapshot = { sequence: ++sequence, selectionSequence: sequence, position: selected, selected, phase, velocity: 0, count: order.length, profileId: order[selected] };
+  const native = (phase, selected, event, position = selected) => {
+    const snapshot = { sequence: ++sequence, selectionSequence: sequence, position, selected, phase, velocity: 0, count: order.length, profileId: order[selected] };
     pagerSnapshots.set(w, snapshot);
-    if (event) pager.onNativeState({ phase: event, sequence: snapshot.sequence, position: selected, selected, velocity: 0, profileId: order[selected] });
+    if (event) pager.onNativeState({ phase: event, sequence: snapshot.sequence, position, selected, velocity: 0, profileId: order[selected] });
   };
   return { w, order, pager, native, b, c, held: () => pager.state.getState().held, warm: () => pager.state.getState().pages.map((p) => p.id) };
 }
@@ -93,19 +93,40 @@ test("the page that slides out of a third quick swipe is kept warm while it move
   assert.deepEqual(pager.state.getState().pages.map((p) => p.id), [order[2], order[3]]);
 });
 
-test("a hold the native pager never ends with an event is let go by the watch once it sees the pages resting twice", (t) => {
+test("a hold the native pager never ends with an event is let go at the first look that finds the pages resting on their target", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const { native, held } = threeProfiles();
   native("tracking", 0, "began");
-  native("settling", 1, "selected");
+  native("settling", 1, "selected", 0.4);
+  t.mock.timers.tick(50);
+  assert.notEqual(held(), null, "still moving");
   native("idle", 1);
-  t.mock.timers.tick(250);
-  assert.equal(held() !== null, true, "one resting look could be the settled event still on its way");
-  t.mock.timers.tick(250);
-  assert.equal(held(), null);
+  t.mock.timers.tick(50);
+  assert.equal(held(), null, "let go within one look of the pages resting");
   const counts = takePagerCounts();
   assert.equal(counts.profile_pager_rests_seen_by_watch, 1);
   assert.equal(counts.profile_pager_switches_after_rest, 1);
+});
+
+test("an idle pager that never reaches its target still lets go after a second", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const { native, held } = threeProfiles();
+  native("tracking", 0, "began");
+  native("idle", 1, "selected", 0.5);
+  t.mock.timers.tick(950);
+  assert.notEqual(held(), null);
+  t.mock.timers.tick(50);
+  assert.equal(held(), null);
+});
+
+test("Linux's pager says selected before it starts settling, still resting on the old page, and that holds too", () => {
+  const { w, order, native, held } = threeProfiles();
+  native("idle", 1, "selected", 0);
+  assert.equal(S().windows[w].profileId, order[1]);
+  assert.equal(held(), order[0], "an idle report that isn't on its target is a page still to move");
+  native("settling", 1, null, 0.6);
+  native("idle", 1, "settled");
+  assert.equal(held(), null);
 });
 
 test("a profile switch from elsewhere during a hold lets the sidebar follow at once", () => {

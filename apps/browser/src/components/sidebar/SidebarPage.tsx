@@ -128,7 +128,7 @@ export const SidebarPage = memo(function SidebarPage({ profileId, slot, paging, 
   const [listViewport] = useState<ListViewport>(() => ({
     band: () => (page.viewport ? withOverscan(page.scrollY - LIST_PAD - page.regions.list, page.viewport) : null),
   }));
-  const selectedRow = useSelectedRowAway(windowId, geometry, scrollView, () => page.scrollY);
+  const selectedRow = useSelectedRowAway(windowId, geometry, scrollView, () => page.scrollY, profileId);
   const [onScroll] = useState(() =>
     Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
       useNativeDriver: true,
