@@ -33,14 +33,14 @@ export function trackDrmDiagnostic(report: DrmDiagnosticReport, consent: Consent
   const keySystem = typeof report.keySystem === "string" && KEY_SYSTEM.test(report.keySystem) ? report.keySystem : "";
   const stage = STAGES.has(report.stage) ? report.stage : "unknown";
   const code = Number.isSafeInteger(report.code) ? report.code : 0;
-  const key = `${host}|${keySystem}|${stage}|${code}|${report.main}`;
-  if (seen.has(key) || sent >= MAX_EVENTS) return;
-  seen.add(key);
-  sent++;
   const blockedHosts = (Array.isArray(report.blockedHosts) ? report.blockedHosts : [])
     .map(hostname)
     .filter((value): value is string => value !== null)
     .slice(0, MAX_BLOCKED_HOSTS);
+  const key = `${host}|${keySystem}|${stage}|${code}|${report.main}|${[...blockedHosts].sort().join(",")}`;
+  if (seen.has(key) || sent >= MAX_EVENTS) return;
+  seen.add(key);
+  sent++;
   capture(
     "protected_media",
     { stage, code, main: report.main === true, blocked_hosts_n: blockedHosts.length },

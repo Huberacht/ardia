@@ -67,11 +67,24 @@ test("nothing but hostnames, a key system and numbers is stored: no URLs, paths 
   assert.equal(JSON.stringify(events).includes("/x/cover"), false);
 });
 
-test("the same record is kept once, and a session keeps at most 30", async () => {
+test("a record is kept once, however often it repeats", async () => {
   const before = (await queued()).length;
-  track(report({ stage: "accessDenied", code: 9 }));
-  track(report({ stage: "accessDenied", code: 9 }));
-  assert.equal((await queued()).length, before);
+  track(report({ stage: "accessDenied", code: 21 }));
+  track(report({ stage: "accessDenied", code: 21 }));
+  assert.equal((await queued()).length, before + 1);
+});
+
+test("the same record with other blocked hosts is a new one, whatever order the hosts come in", async () => {
+  const before = (await queued()).length;
+  track(report({ stage: "accessDenied", code: 22 }));
+  track(report({ stage: "accessDenied", code: 22, blockedHosts: ["ad.qq.com", "cdn.example.net"] }));
+  track(report({ stage: "accessDenied", code: 22, blockedHosts: ["cdn.example.net", "ad.qq.com"] }));
+  const events = (await queued()).slice(before);
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map((e) => e.properties.blocked_hosts_n), [0, 2]);
+});
+
+test("a session keeps at most 30", async () => {
   for (let code = 100; code < 160; code++) track(report({ stage: "error", code }));
   assert.equal((await queued()).length, 30);
 });

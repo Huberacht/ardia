@@ -410,6 +410,53 @@ test("encrypted, waitingforkey and media error codes are passed on once each fro
   ]);
 });
 
+test("a media element's drm diagnostics name the key system the page was granted, not the last one it asked for", async () => {
+  const p = page();
+  p.run(`
+    navigator.answer = (name) => (name === "com.widevine.alpha" ? Promise.resolve({}) : Promise.reject(new DOMException("no", "NotSupportedError")));
+    navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{}]);
+    navigator.requestMediaKeySystemAccess("com.microsoft.playready", [{}]).catch(() => {});
+  `);
+  await settle();
+  p.run(`new HTMLMediaElement().dispatchEvent(new Event("waitingforkey"))`);
+  assert.deepEqual(
+    p.drm().filter((d) => d.stage === "waitingforkey"),
+    [{ stage: "waitingforkey", keySystem: "com.widevine.alpha", code: 0 }],
+  );
+});
+
+test("a media element's drm diagnostics name no key system when the page was granted two, or none and asked for two", async () => {
+  const granted = page();
+  granted.run(`
+    navigator.answer = () => Promise.resolve({});
+    navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{}]);
+    navigator.requestMediaKeySystemAccess("com.microsoft.playready", [{}]);
+  `);
+  await settle();
+  granted.run(`new HTMLMediaElement().dispatchEvent(new Event("encrypted"))`);
+  assert.deepEqual(granted.drm().filter((d) => d.stage === "encrypted"), [{ stage: "encrypted", keySystem: "", code: 0 }]);
+  const refused = page();
+  refused.run(`
+    navigator.answer = () => Promise.reject(new DOMException("no", "NotSupportedError"));
+    navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{}]).catch(() => {});
+    navigator.requestMediaKeySystemAccess("com.apple.fps.1_0", [{}]).catch(() => {});
+  `);
+  await settle();
+  refused.run(`new HTMLMediaElement().dispatchEvent(new Event("waitingforkey"))`);
+  assert.deepEqual(refused.drm().filter((d) => d.stage === "waitingforkey"), [{ stage: "waitingforkey", keySystem: "", code: 0 }]);
+});
+
+test("a media element's drm diagnostics name the one key system the page asked for when none was granted", async () => {
+  const p = page();
+  p.run(`
+    navigator.answer = () => Promise.reject(new DOMException("no", "NotSupportedError"));
+    navigator.requestMediaKeySystemAccess("com.widevine.alpha", [{}]).catch(() => {});
+  `);
+  await settle();
+  p.run(`new HTMLMediaElement().dispatchEvent(new Event("waitingforkey"))`);
+  assert.deepEqual(p.drm().filter((d) => d.stage === "waitingforkey"), [{ stage: "waitingforkey", keySystem: "com.widevine.alpha", code: 0 }]);
+});
+
 test("at most 16 distinct drm diagnostics leave a frame", () => {
   const p = page();
   p.run(`

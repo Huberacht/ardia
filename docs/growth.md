@@ -201,11 +201,14 @@ owner's Mac ──▶ ardia.dev/_ch/ (read-only ClickHouse user)   ardia.dev/_re
     `abnormal` or `unknown`, `exit_code`, `visible` (the tab was on screen), `tabs`, `windows`, `profiles`,
     `session_min`, `gone_this_session`, `memory_pressure`). At most 30 per session. GPU and utility process exits aren't
     visible to the app yet (their crash reports are, through `helper_crash`).
-  - `protected_media` (a WebKit page on a built-in streaming site, when protected playback fails or stalls: `host`,
-    `key_system` (like `com.widevine.alpha`), `stage` (`access`, `accessDenied`, `encrypted`, `waitingforkey` or
-    `error`), `code` (the media error code, 9 for a refused key system, else 0), `main` (the top frame), `blocked_hosts`
-    (up to 8 host names the ad blocker stopped on that page) and `blocked_hosts_n`). Host names only, never a full address.
-    Each distinct record once, at most 30 per session.
+  - `protected_media` (a WebKit page on a built-in streaming site, when it asks for a DRM system or its protected
+    playback asks for keys, waits for them or fails: `host`, `key_system` (like `com.widevine.alpha`; the one the page
+    was granted, else the one it asked for, empty when the page used several), `stage` (`access` or `accessDenied` for a
+    key system request, `encrypted` or `waitingforkey` for a video, `error` for a media error), `code` (the error's code:
+    the DOM exception's for a refused request, 9 for `NotSupportedError`; the media error's for `error`; 0 otherwise),
+    `main` (the top frame), `blocked_hosts` (up to 8 host names the ad blocker stopped on that page) and
+    `blocked_hosts_n`). Host names only, never a full address. Each distinct record (blocked hosts included, in any order)
+    once, at most 30 per session.
   - `password_import` (once per import that sent at least one login to the engine; none for an empty list): `source`
     (`browser` for an import from another browser, `csv` for a CSV file), `tried`, `saved`, `refused` (the engine
     answered "Could not save the password (invalid, or already saved)"), `not_landed` (it answered "The password store
