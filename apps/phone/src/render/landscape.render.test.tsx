@@ -180,10 +180,11 @@ test("with no hinge the page bar keeps Tabs and + in its row", () => {
   unmount(page);
 });
 
-test("in landscape the search panel spans the safe width, so it clears the island", () => {
+test("in landscape the search panel spans the safe width, so it clears the island, and on Android sits the panel inset further in", () => {
   act(() => presentSearch("page"));
   const root = redesigned(<SearchTray />);
-  expect(flat(hosts(root, "trayPanel")[0]!)).toMatchObject({ left: 59, right: 59 });
+  const side = 59 + (Platform.OS === "android" ? 8 : 0);
+  expect(flat(hosts(root, "trayPanel")[0]!)).toMatchObject({ left: side, right: side });
   unmount(root);
 });
 

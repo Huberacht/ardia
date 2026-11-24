@@ -8,6 +8,7 @@ import { haptics } from "../../state/app/haptics";
 import { usePageTone } from "../../state/browse/hooks";
 import { display } from "../../state/search/omnibox";
 import type { BrowserTab } from "../../state/tabs/tabModels";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 
 export type TabPager = {
@@ -26,6 +27,7 @@ type Options = { width: number; selectedId: string | null; left: string | null; 
 
 export function useTabPager({ width, selectedId, left, right, landsEarly = false, onCommit, onGrab }: Options): TabPager {
   const reduceMotion = useReduceMotion();
+  const cuts = tabSwitchCuts();
   const offset = useSharedValue(0);
   const active = useSharedValue(0);
   const base = useSharedValue(0);
@@ -78,6 +80,15 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       "worklet";
       if (finished) land(target);
     };
+    if (cuts && target !== 0) {
+      offset.value = target * span.value;
+      land(target);
+      return;
+    }
+    if (cuts) {
+      offset.value = withTiming(0, { duration: PAGER_REFUSED_MS, easing: tabsCurve.easeOut }, landed);
+      return;
+    }
     offset.value = reduceMotion ? withTiming(target * span.value, { duration: trayMotion.reduced, easing: tabsCurve.easeOut }, landed) : withSpring(target * span.value, { ...tabsMotion.pagerSettle, velocity }, landed);
   };
 
@@ -143,9 +154,10 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
   const tone = usePageTone(tab.id);
   const { offset } = pager;
   const reduceMotion = useReduceMotion();
+  const cuts = tabSwitchCuts();
   const arrived = side === 0;
   const style = useAnimatedStyle(() => {
-    if (arrived) return { opacity: 1, transform: [{ translateX: withTiming(0, { duration: tabsMotion.pagerArrive, easing: tabsCurve.easeOut }) }] };
+    if (arrived) return { opacity: 1, transform: [{ translateX: cuts ? 0 : withTiming(0, { duration: tabsMotion.pagerArrive, easing: tabsCurve.easeOut }) }] };
     const pose = incomingPose(side, offset.value, width, hasLeft, hasRight, reduceMotion);
     return { opacity: pose.opacity, transform: [{ translateX: pose.x }] };
   });
@@ -180,5 +192,7 @@ export function PagerBackdrop() {
 }
 
 const cornerRadius = screenCornerRadius(tabsLayout.displayCornerRadius);
+
+const PAGER_REFUSED_MS = 50;
 
 const styles = StyleSheet.create({ card: { overflow: "hidden", borderRadius: cornerRadius, ...smoothCorners }, edge: { position: "absolute", width: tabsLayout.pagerEdgeShadow }, body: { flex: 1 }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 } });

@@ -89,6 +89,7 @@ import { DeckBottomBar } from "./DeckBottomBar";
 import { useBottomBarLayout } from "../ui/useBottomBarLayout";
 import { DeckHeader, deckHeaderBottom } from "./DeckHeader";
 import { deckLook } from "./deckLook";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { linearGradientCss } from "../../lib/gradient";
 import { DeckEmpty, IncognitoChip } from "./DeckChrome";
 import { MaterialDeckCard } from "./MaterialDeckCard";
@@ -406,13 +407,14 @@ export const TabDeck = memo(function TabDeck() {
     const entrance = peekDeckEntrance();
     const index = entrance ? order.indexOf(entrance) : -1;
     placeCards(order, index >= 0 ? deckOpeningScroll(index, order.length, material) : initialDeckScroll(order.length));
-    if (!entrance || index < 0 || grid) {
+    const cuts = tabSwitchCuts();
+    if (!entrance || index < 0 || grid || cuts) {
       deckPhase.value = DECK_PHASE.settled;
       expandedIndex.value = -1;
       scaleProgress.value = 1;
       positionProgress.value = 1;
-      cardsOpacity.value = withTiming(1, { duration: tabsMotion.fade });
-      if (entrance && grid) deckMotionDone(entrance);
+      cardsOpacity.value = cuts ? 1 : withTiming(1, { duration: tabsMotion.fade });
+      if (entrance && (grid || cuts)) deckMotionDone(entrance);
       markTiming("deck motion");
       markTiming("deck taps");
       return;
@@ -619,7 +621,7 @@ export const TabDeck = memo(function TabDeck() {
     markTiming("card tap", tappedAt);
     runOnUI(markNextUiFrame)("card motion");
     if (searchChrome) Keyboard.dismiss();
-    if (grid || (reduceMotion && !pulls)) {
+    if (grid || tabSwitchCuts() || (reduceMotion && !pulls)) {
       settledOpen(id);
       return;
     }

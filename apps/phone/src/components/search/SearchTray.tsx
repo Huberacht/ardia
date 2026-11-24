@@ -41,6 +41,7 @@ import { commandBarMotion, commandPanelPlace, useCommandBar } from "../duo/Comma
 
 const LARGE_FONT_SCALE = 1.5;
 import { useTrayKeyboard } from "./useTrayKeyboard";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { useKeyboardTopFromBottom } from "./useKeyboardHeight";
 import { chromeInk, chromeLayout, nativeClassicChrome } from "../ui/tokens";
 import { incognitoTheme, type Theme } from "../ui/theme";
@@ -136,6 +137,8 @@ function SheetTray() {
 
 type LayerProps = { session: number; closing: boolean; onClosed: () => void };
 
+const PIN_HOLDS_MS = 700;
+
 function TrayLayer({ session, closing, onClosed }: LayerProps) {
   countRender("TrayLayer");
   const origin = useSearchOrigin();
@@ -146,7 +149,8 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   const reduceMotion = useReduceMotion();
   const keyboard = useTrayKeyboard();
   const arrivesAtRest = useRef(searchState().arrival === "atRest").current;
-  const landing = useSharedValue(arrivesAtRest ? 1 : 0);
+  const cutsIn = useRef(tabSwitchCuts() && !closing).current;
+  const landing = useSharedValue(arrivesAtRest || cutsIn ? 1 : 0);
   const [departed, setDeparted] = useState(false);
   const back = useSharedValue(0);
   const departing = useRef(false);
@@ -159,9 +163,10 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
     })();
     setDeparted(true);
   };
-  const hasLanded = useSharedValue(arrivesAtRest);
+  const hasLanded = useSharedValue(arrivesAtRest || cutsIn);
   const isClosing = useSharedValue(closing);
-  const dim = useSharedValue(0);
+  const dim = useSharedValue(cutsIn ? 1 : 0);
+  const pinned = useSharedValue(cutsIn && keyboard.full.value > TRAY_LIFT.keyboardThreshold);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -206,9 +211,15 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
     if (closing) return;
     isClosing.value = false;
     const progress = keyboardProgress(keyboard.height.value, keyboard.full.value, 0);
-    const landed = arrivesAtRest || (keyboardIsUp(keyboard.height.value) && progress >= TRAY_LIFT.landedProgress);
+    const landed = arrivesAtRest || cutsIn || (keyboardIsUp(keyboard.height.value) && progress >= TRAY_LIFT.landedProgress);
     hasLanded.value = landed;
     landing.value = landed ? 1 : 0;
+    if (cutsIn) {
+      const unpin = setTimeout(() => {
+        pinned.value = false;
+      }, PIN_HOLDS_MS);
+      return () => clearTimeout(unpin);
+    }
     const land = setTimeout(() => {
       if (isClosing.value || hasLanded.value) return;
       hasLanded.value = true;
@@ -340,7 +351,9 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   useAnimatedReaction(
     () => keyboardProgress(keyboard.height.value, keyboard.full.value, 0),
     (progress) => {
-      if (isClosing.value || hasLanded.value || progress < TRAY_LIFT.landedProgress) return;
+      if (isClosing.value || progress < TRAY_LIFT.landedProgress) return;
+      pinned.value = false;
+      if (hasLanded.value) return;
       hasLanded.value = true;
       landing.value = 1;
     },
@@ -351,13 +364,19 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
     (up, was) => {
       if (up === was) return;
       if (up && arrivesAtRest) runOnJS(launchTrayUp)();
+      if (up && cutsIn) {
+        dim.value = 1;
+        return;
+      }
       dim.value = withTiming(up ? 1 : 0, { duration: reduceMotion ? trayMotion.reduced : trayMotion.dim, easing: reduceMotion ? tabsCurve.easeOut : trayMotion.dimEasing });
     },
   );
 
   const currentLift = () => {
     "worklet";
-    return heldLift.value >= 0 ? heldLift.value : liveLift(keyboard.height.value, safeBottom, hasLanded.value, isClosing.value);
+    if (heldLift.value >= 0) return heldLift.value;
+    const live = liveLift(keyboard.height.value, safeBottom, hasLanded.value, isClosing.value);
+    return pinned.value && !isClosing.value ? Math.max(live, keyboard.full.value) : live;
   };
   const dimStyle = useAnimatedStyle(() => ({ opacity: dim.value * (1 - clampedProgress(drag.value, trayHeight + currentLift())) }), [trayHeight, safeBottom]);
   const covered = useTrayCovers((state) => state.covers > 0);
