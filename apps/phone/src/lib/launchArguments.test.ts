@@ -68,11 +68,11 @@ test("the lab's one-container deck scroll is off unless ArdiaOneContainerScroll 
   assert.equal(parseLaunchArguments({ ArdiaOpeningCard: "1" }).oneContainerScroll, false);
 });
 
-test("the lab's collapsed pill holds its sample through a scroll unless ArdiaPillHoldOff turns the hold off", () => {
-  assert.equal(NO_LAUNCH_ARGUMENTS.pillHoldOff, false);
-  assert.equal(parseLaunchArguments({ ArdiaPillHoldOff: true }).pillHoldOff, true);
-  assert.equal(parseLaunchArguments({ ArdiaPillHoldOff: "false" }).pillHoldOff, false);
-  assert.equal(parseLaunchArguments({ PillHoldOff: true }).pillHoldOff, false);
+test("the lab's collapsed pill holds its sample through a scroll only when ArdiaPillHold asks for it", () => {
+  assert.equal(NO_LAUNCH_ARGUMENTS.pillHold, false);
+  assert.equal(parseLaunchArguments({ ArdiaPillHold: true }).pillHold, true);
+  assert.equal(parseLaunchArguments({ ArdiaPillHold: "false" }).pillHold, false);
+  assert.equal(parseLaunchArguments({ PillHold: true }).pillHold, false);
 });
 
 test("the lab's redesigned Android is off unless ArdiaRedesign asks for it", () => {

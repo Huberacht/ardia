@@ -15,10 +15,10 @@ import { useBarReturn } from "./barReturn";
 
 const REACH = slopToReach(controlSize.hitTarget, hostPillLayout.height);
 
-export const pillHoldOff = () => isLabBuild && launchArguments().pillHoldOff;
+export const pillHoldAsked = () => isLabBuild && launchArguments().pillHold;
 
-export const pillSampleHold = (android: boolean, collapsed: boolean, holdOff: boolean, tabId: string, isPrivate: boolean, dark: boolean): string | null =>
-  android && collapsed && !holdOff ? `${tabId}:${isPrivate ? "private" : "open"}:${dark ? "dark" : "light"}` : null;
+export const pillSampleHold = (android: boolean, collapsed: boolean, asked: boolean, tabId: string, isPrivate: boolean, dark: boolean): string | null =>
+  android && collapsed && asked ? `${tabId}:${isPrivate ? "private" : "open"}:${dark ? "dark" : "light"}` : null;
 
 export function HostPill({ tab, dark, shown, anchors = false, sampleHold = null, contentStyle, onExpand }: { tab: BrowserTab; dark: boolean; shown: boolean; anchors?: boolean; sampleHold?: string | null; contentStyle: ComponentProps<typeof Animated.View>["style"]; onExpand: () => void }) {
   const ink = dark ? chromeInk.dark : chromeInk.light;

@@ -21,7 +21,7 @@ beforeEach(() => {
   usePageUi.setState({ findOpen: false });
   useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
   setPreference("collapsesBottomBar", true);
-  jest.spyOn(launchFlags, "launchArguments").mockImplementation(() => NO_LAUNCH_ARGUMENTS);
+  jest.spyOn(launchFlags, "launchArguments").mockImplementation(() => parseLaunchArguments({ ArdiaPillHold: true }));
 });
 
 afterEach(() => {
@@ -59,14 +59,14 @@ const hold = (root: Root) => {
 };
 
 test("the hold key is Android's collapsed pill's alone, and names the tab, its privacy and the bar's tone", () => {
-  expect(pillSampleHold(true, true, false, "t1", false, false)).toBe("t1:open:light");
-  expect(pillSampleHold(true, true, false, "t1", true, true)).toBe("t1:private:dark");
-  expect(pillSampleHold(true, false, false, "t1", false, false)).toBeNull();
-  expect(pillSampleHold(true, true, true, "t1", false, false)).toBeNull();
-  expect(pillSampleHold(false, true, false, "t1", false, false)).toBeNull();
+  expect(pillSampleHold(true, true, true, "t1", false, false)).toBe("t1:open:light");
+  expect(pillSampleHold(true, true, true, "t1", true, true)).toBe("t1:private:dark");
+  expect(pillSampleHold(true, false, true, "t1", false, false)).toBeNull();
+  expect(pillSampleHold(true, true, false, "t1", false, false)).toBeNull();
+  expect(pillSampleHold(false, true, true, "t1", false, false)).toBeNull();
 });
 
-test("scrolling the page down arms the collapsed pill's sample hold on Android, and scrolling back up to expand the bar lets it go", () => {
+test("with ArdiaPillHold, scrolling the page down arms the collapsed pill's sample hold on Android, and scrolling back up to expand the bar lets it go", () => {
   const root = page();
   expect(hold(root)).toBeNull();
   scrolled("down");
@@ -90,8 +90,8 @@ test("tapping the pill to bring the bar back lets the hold go at once", () => {
   unmount(root);
 });
 
-test("the lab's ArdiaPillHoldOff leaves the collapsed pill live through a scroll", () => {
-  jest.spyOn(launchFlags, "launchArguments").mockImplementation(() => parseLaunchArguments({ ArdiaPillHoldOff: true }));
+test("without ArdiaPillHold the collapsed pill stays live through a scroll", () => {
+  jest.spyOn(launchFlags, "launchArguments").mockImplementation(() => NO_LAUNCH_ARGUMENTS);
   const root = page();
   scrolled("down");
   settle();
