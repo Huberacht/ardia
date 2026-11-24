@@ -161,6 +161,7 @@ export type PageSnapshot = {
   generation?: number;
   frame?: { x: number; y: number; width: number; height: number } | null;
   view?: number;
+  viewId?: number;
   viewSettled?: boolean;
 };
 
@@ -209,7 +210,7 @@ export type PageEngineEvent =
   | { name: "page.summarySettled"; pageId: string; trigger: PageSummaryTrigger; outcome: PageSummaryOutcome; chatGPTFellBack?: boolean; geminiNanoMissing?: string | null; isPrivate: boolean }
   | { name: "page.snapshotLanded"; pageId: string; uri: string; generation: number }
   | { name: "page.scrollSettled"; pageId: string; y: number }
-  | { name: "page.viewMoved"; pageId: string; view: number }
+  | { name: "page.viewMoved"; pageId: string; view: number; viewId: number }
   | { name: "page.externalAppMissing"; pageId: string; url: string }
   | { name: "page.desktop"; pageId: string; line: string }
   | { name: "pages.privateSessionEnded" }

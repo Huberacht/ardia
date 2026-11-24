@@ -13,7 +13,7 @@ import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, releaseDeckPull, 
 import { refreshHiddenDeck } from "../../state/browse/deckHold";
 import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } from "../../state/page/actions";
 import { useDrawnMenuOpen, useFindOpen, useMenuDocked, usePressOpen, useReaderTabId } from "../../state/page/hooks";
-import { ARRIVAL_COVER_ID, arriveAtNeighbour, holdBarAction, takeBarAction, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
+import { ARRIVAL_COVER_ID, arriveAtNeighbour, holdBarAction, takeCommittedBarAction, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
 import { useSearchFromDockedMenu, useSearchOpen } from "../../state/search/hooks";
 import { usePages } from "../../state/pages/store";
 import { reportBarPill } from "../../state/search/stageBar";
@@ -194,8 +194,18 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     editPageQuery();
   }, []);
   useEffect(() => {
-    if (takeBarAction(tab.id) === "address") editPageQuery();
+    const action = takeCommittedBarAction(tab.id);
+    if (action === "address") editPageQuery();
+    else if (action === "more") openPageMenu();
   }, [tab.id]);
+  const pageMenuOrHeld = useCallback(() => {
+    const landed = tabSwitchCuts() ? landedTarget.current() : null;
+    if (landed) {
+      holdBarAction(landed, "more", landedScope.current());
+      return;
+    }
+    openPageMenu();
+  }, []);
   const incognito = useIncognito();
   const reduceMotion = useReduceMotion();
   const pulls = design === "redesigned";
@@ -302,7 +312,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     onStep={stepTab}
                     onAddress={editAddress}
                     onPlus={newTab}
-                    onMore={openPageMenu}
+                    onMore={pageMenuOrHeld}
                   />
                   </FoldLayer>
                 </Animated.View>

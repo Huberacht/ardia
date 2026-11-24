@@ -2,7 +2,7 @@ import * as Reanimated from "react-native-reanimated";
 import { getAnimatedStyle, KeyboardState, makeMutable } from "react-native-reanimated";
 import { State } from "react-native-gesture-handler";
 import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-handler/jest-utils";
-import { act, type ReactTestRenderer } from "react-test-renderer";
+import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { Surfaces } from "../App";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { SearchTray } from "../components/search/SearchTray";
@@ -22,6 +22,7 @@ import { closeTabById, currentTabs, selectTabById, updateTabById } from "../stat
 import { noteViewMoved, noteWarmPicture } from "../state/tabs/warmPictures";
 import { findTab } from "../state/tabs/tabsState";
 import * as pageStore from "../state/pages/store";
+import { pageUi } from "../state/page/store";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 jest.mock("@ardia/phone-native", () => {
@@ -79,7 +80,7 @@ const outgoingPose = (root: ReactTestRenderer) => {
   return Object.assign({}, ...((getAnimatedStyle(outgoing!).transform ?? []) as object[])) as { translateX?: number };
 };
 
-test("an accepted bar swipe commits the neighbour within a frame of release, with no spring to wait out, and its arrival card sits full screen from that frame, hidden from TalkBack, and letting touches through to the page under it", () => {
+test("an accepted bar swipe commits the neighbour within a frame of release, with no spring to wait out, and its arrival card sits full screen from that frame, hidden from TalkBack, and with no validated picture of that page it keeps touches off the page body under it", () => {
   withTabs(3);
   selectTabById(currentTabs().open[1]!.id);
   browsingNow();
@@ -91,7 +92,7 @@ test("an accepted bar swipe commits the neighbour within a frame of release, wit
   act(() => jest.advanceTimersByTime(16));
   const arrival = arrivalPose(root);
   expect(arrival.at).toMatchObject({ translateX: 0 });
-  expect(arrival.node.props.pointerEvents).toBe("none");
+  expect(arrival.node.props.pointerEvents).toBe("auto");
   expect(arrival.node.props.importantForAccessibility).toBe("no-hide-descendants");
   unmount(root);
 });
@@ -450,6 +451,36 @@ test("an Address tap in the frames between a swipe landing and its commit opens 
   unmount(root);
 });
 
+test("a More tap between a swipe landing and its commit opens the destination's page menu with the switch, and its two sites differ", async () => {
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  const root = renderSurface(<Page />);
+  const from = currentTabs().selectedId!;
+  const { id, dx } = toNeighbour();
+  expect(findTab(currentTabs(), id)!.url).not.toBe(findTab(currentTabs(), from)!.url);
+  releaseSwipe(root, dx, 260, 1600);
+  const more = root.root.findAll((node) => node.props.accessibilityLabel === "Page Menu" && typeof node.props.onPress === "function")[0]!;
+  act(() => more.props.onPress());
+  expect(pageUi().menuOpen).toBe(false);
+  for (let step = 0; step < 4; step++)
+    await act(async () => {
+      jest.advanceTimersByTime(16);
+    });
+  expect(currentTabs().selectedId).toBe(id);
+  expect(pageUi().menuOpen).toBe(true);
+  unmount(root);
+});
+
+test("an action held for a swipe is dropped by any other navigation before its commit, so it never fires on a later visit", () => {
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  browse.holdBarAction(currentTabs().open[2]!.id, "address", "swipe:999");
+  act(() => browse.openTab(currentTabs().open[0]!.id));
+  expect(browse.takeBarAction("swipe:999", currentTabs().open[2]!.id)).toBeNull();
+});
+
 test("on Android a cover acknowledgement must name the document whose drawn frame hid it; one without leaves the cover up", () => {
   withTabs(3);
   selectTabById(currentTabs().open[1]!.id);
@@ -527,15 +558,19 @@ test("a swipe's neighbour shows its own last picture at the geometry it was capt
   const neighbour = findTab(currentTabs(), id)!;
   const window = Dimensions.get("window");
   const frame = { x: 0, y: 0, width: window.width, height: window.height - 40 };
-  noteWarmPicture(id, { uri, url: neighbour.url, window, frame, settled: true });
+  noteWarmPicture(id, { uri, url: neighbour.url, window, frame, settled: true, view: 3, viewId: 11 });
   const pictures = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.testID === "pagerWarmPicture" && typeof node.type === "string");
   const warm = renderSurface(<Page />);
   expect(pictures(warm)).toHaveLength(1);
   expect(pictures(warm)[0]!.props.source).toEqual({ uri });
   expect(StyleSheet.flatten(pictures(warm)[0]!.props.style)).toMatchObject({ top: 0, height: window.height - 40 });
+  act(() => noteViewMoved(id, 11, 4));
+  expect(pictures(warm)).toHaveLength(0);
+  const inNeighbour = (node: ReactTestInstance) => {
+    for (let at = node.parent; at; at = at.parent) if ((at.type as { name?: string }).name === "PagerNeighbour") return true;
+    return false;
+  };
+  const rasters = warm.root.findAll((node) => typeof node.type === "string" && JSON.stringify(node.props.source ?? null).includes(uri) && inNeighbour(node));
+  expect(rasters).toHaveLength(0);
   unmount(warm);
-  noteViewMoved(id);
-  const moved = renderSurface(<Page />);
-  expect(pictures(moved)).toHaveLength(0);
-  unmount(moved);
 });

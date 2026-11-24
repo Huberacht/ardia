@@ -109,9 +109,11 @@ internal class WebViewPage(
     internal var lastCaptureRoute: CaptureRoute? = null
     internal var viewVersion = 0L
         private set
-    private var viewMovedOnce: (() -> Unit)? = null
+    private var viewMovedOnce: ((version: Long) -> Unit)? = null
 
-    internal fun whenViewMoves(moved: () -> Unit) {
+    internal val viewIdentity: Int get() = webView?.let(System::identityHashCode) ?: 0
+
+    internal fun whenViewMoves(moved: (version: Long) -> Unit) {
         viewMovedOnce = moved
     }
 
@@ -119,7 +121,7 @@ internal class WebViewPage(
         viewVersion += 1
         val moved = viewMovedOnce ?: return
         viewMovedOnce = null
-        moved()
+        moved(viewVersion)
     }
     private var reportsContent = false
     private var nextVisualStateRequest = 1L
@@ -141,6 +143,7 @@ internal class WebViewPage(
         configure(web)
         webView = web
         mutableView.value = web
+        viewMoved()
         val zoom = engine.sitePreferences.pageZoom(mutableState.value.host, isPrivate) ?: 1.0
         web.settings.textZoom = (zoom * 100).roundToInt()
         update { it.copy(isLive = true, pageZoom = zoom, isDesktopSite = desktopSite) }
@@ -657,6 +660,7 @@ internal class WebViewPage(
 
     internal fun pageStarted(web: WebView, url: String) {
         if (web !== webView) return
+        viewMoved()
         filterPageUrl = url
         reportsContent = false
         desktopLoad += 1
@@ -1096,6 +1100,7 @@ internal class WebViewPage(
 
     private fun applyZoom(zoom: Double) {
         webView?.settings?.textZoom = (zoom * 100).roundToInt()
+        viewMoved()
         if (mutableState.value.pageZoom != zoom) update { it.copy(pageZoom = zoom) }
     }
 

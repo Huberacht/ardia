@@ -11,8 +11,8 @@ import type { BrowserTab } from "../../state/tabs/tabModels";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
-import { dropBarAction } from "../../state/browse/store";
-import { warmPicture } from "../../state/tabs/warmPictures";
+import { commitBarAction, dropBarAction, takeBarAction } from "../../state/browse/store";
+import { useWarmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 
 export type TabPager = {
@@ -91,8 +91,10 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       restore();
       return;
     }
+    const held = takeBarAction(swipeScope(sent), to);
     haptics.tabLanded();
     onCommit(to);
+    if (held && currentTabs().selectedId === to) commitBarAction(to, held);
   };
 
   const landedScope = () => swipeScope(turn.value);
@@ -223,15 +225,16 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
   });
   const shown = display(tab.url);
   const viewport = useWindowDimensions();
-  const warm = cuts ? warmPicture(tab, viewport) : null;
+  const warm = useWarmPicture(tab, viewport, cuts);
+  const faceTab = cuts && !warm && tab.snapshotFileName ? { ...tab, snapshotFileName: null } : tab;
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (
     <>
       <Animated.View testID="pagerEdgeShadow" pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[styles.edge, { top: cornerRadius * 0.6, bottom: cornerRadius * 0.6 }, edge, shadowStyle]} />
-      <Animated.View testID={arrived ? "pagerArrival" : undefined} nativeID={arrived ? coverId : undefined} collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+      <Animated.View testID={arrived ? "pagerArrival" : undefined} nativeID={arrived ? coverId : undefined} collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents={arrived && cuts && !warm ? "auto" : "none"} importantForAccessibility={"no-hide-descendants"} accessibilityElementsHidden={true}>
         {statusOver ? null : <View style={{ height: statusHeight, backgroundColor: tone?.top ?? theme.canvas }} />}
         <View style={styles.body}>
-          <TabFace tab={tab} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} />
+          <TabFace tab={faceTab} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} />
         </View>
         {warm ? <Image testID="pagerWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height }]} /> : null}
         {statusOver ? <View testID="pagerStatusStrip" style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}

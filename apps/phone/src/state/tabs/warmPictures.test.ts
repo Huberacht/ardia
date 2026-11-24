@@ -1,55 +1,65 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { forgetWarmPictures, noteViewMoved, noteWarmPicture, warmPicture } from "./warmPictures.ts";
+import { forgetWarmPictures, noteViewMoved, noteWarmPicture, useWarmRevision, warmPicture } from "./warmPictures.ts";
 
 const window = { width: 393, height: 873 };
 const frame = { x: 0, y: 0, width: 393, height: 873 };
 const tab = (id: string, url = "https://example.com/", snapshotFileName: string | null = `file:///${id}.jpg`) => ({ id, url, snapshotFileName });
-const capture = (id: string, settled = true) => ({ uri: `file:///${id}.jpg`, url: "https://example.com/", window, frame, settled });
+const capture = (id: string, view = 4, viewId = 7) => ({ uri: `file:///${id}.jpg`, url: "https://example.com/", window, frame, settled: true, view, viewId });
 
-test("a neighbour's picture is warm at its captured geometry while nothing about its view has moved", () => {
+test("a picture is warm at its captured geometry while its view hasn't moved since the capture", () => {
   noteWarmPicture("a", capture("a"));
   assert.deepEqual(warmPicture(tab("a"), window), { uri: "file:///a.jpg", frame });
   forgetWarmPictures(["a"]);
 });
 
-test("any move the WebView reports after the capture, a scroll, zoom, resize or new document, makes it cold until a new capture", () => {
-  noteWarmPicture("b", capture("b"));
-  noteViewMoved("b");
+test("a move reported before the snapshot is published still rejects it", () => {
+  noteViewMoved("b", 7, 5);
+  noteWarmPicture("b", capture("b", 4));
   assert.equal(warmPicture(tab("b"), window), null);
-  noteWarmPicture("b", capture("b"));
-  assert.notEqual(warmPicture(tab("b"), window), null);
   forgetWarmPictures(["b"]);
 });
 
-test("a capture whose view moved while it was taken, or that has no frame, is never warm", () => {
-  noteWarmPicture("c", capture("c", false));
+test("a late report of a move older than the capture doesn't invalidate it, and a newer one does", () => {
+  noteWarmPicture("c", capture("c", 6));
+  noteViewMoved("c", 7, 5);
+  assert.notEqual(warmPicture(tab("c"), window), null);
+  noteViewMoved("c", 7, 7);
   assert.equal(warmPicture(tab("c"), window), null);
-  noteWarmPicture("c", { ...capture("c"), frame: null });
-  assert.equal(warmPicture(tab("c"), window), null);
-  noteWarmPicture("c", { ...capture("c"), settled: undefined });
-  assert.equal(warmPicture(tab("c"), window), null);
+  forgetWarmPictures(["c"]);
 });
 
-test("a picture taken while the page was moved or scaled by a gesture is never warm, so it can't sit offset over the live page", () => {
+test("a replaced WebView makes every picture of the old one cold", () => {
+  noteWarmPicture("d", capture("d", 4, 7));
+  noteViewMoved("d", 8, 1);
+  assert.equal(warmPicture(tab("d"), window), null);
+  forgetWarmPictures(["d"]);
+});
+
+test("each change bumps the reactive revision so a mounted neighbour re-reads it", () => {
+  const before = useWarmRevision.getState().revision;
+  noteWarmPicture("e", capture("e"));
+  noteViewMoved("e", 7, 9);
+  assert.equal(useWarmRevision.getState().revision, before + 2);
+  forgetWarmPictures(["e"]);
+});
+
+test("a capture that moved while taken, has no identity, or was taken mid-gesture is never warm", () => {
+  noteWarmPicture("f", { ...capture("f"), settled: false });
+  assert.equal(warmPicture(tab("f"), window), null);
+  noteWarmPicture("f", { ...capture("f"), viewId: undefined });
+  assert.equal(warmPicture(tab("f"), window), null);
   noteWarmPicture("f", { ...capture("f"), frame: { x: 75, y: 19, width: 393, height: 873 } });
   assert.equal(warmPicture(tab("f"), window), null);
   noteWarmPicture("f", { ...capture("f"), frame: { x: 0, y: 10, width: 340, height: 760 } });
   assert.equal(warmPicture(tab("f"), window), null);
 });
 
-test("leaving for another address and coming back to the same one doesn't bring an old picture back", () => {
-  noteWarmPicture("d", capture("d"));
-  noteViewMoved("d");
-  assert.equal(warmPicture(tab("d", "https://example.com/next"), window), null);
-  assert.equal(warmPicture(tab("d"), window), null);
-  forgetWarmPictures(["d"]);
-});
-
-test("a rotated window, a different picture on the tab, or a closed tab makes it cold", () => {
-  noteWarmPicture("e", capture("e"));
-  assert.equal(warmPicture(tab("e"), { width: window.height, height: window.width }), null);
-  assert.equal(warmPicture(tab("e", "https://example.com/", "file:///other.jpg"), window), null);
-  forgetWarmPictures(["e"]);
-  assert.equal(warmPicture(tab("e"), window), null);
+test("a rotated window, another address, a different picture or a closed tab makes it cold", () => {
+  noteWarmPicture("g", capture("g"));
+  assert.equal(warmPicture(tab("g"), { width: window.height, height: window.width }), null);
+  assert.equal(warmPicture(tab("g", "https://example.com/next"), window), null);
+  assert.equal(warmPicture(tab("g", "https://example.com/", "file:///other.jpg"), window), null);
+  forgetWarmPictures(["g"]);
+  assert.equal(warmPicture(tab("g"), window), null);
 });

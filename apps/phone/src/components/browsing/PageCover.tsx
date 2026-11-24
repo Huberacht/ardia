@@ -1,6 +1,6 @@
 import { memo, useEffect, useState, type ReactNode } from "react";
 import { countRender } from "../../state/app/interactionPerf";
-import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
+import { Dimensions, Image, Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
@@ -11,6 +11,7 @@ import { launchArguments } from "../../state/app/launchFlags";
 import type { BrowserTab } from "../../state/tabs/tabModels";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
+import { warmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, useTheme } from "../ui";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageReportsDrawn } from "@ardia/phone-native";
@@ -56,6 +57,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const [cutsOnDraw] = useState(() => !WAITS_FOR_PAINT && tabSwitchCuts() && pageReportsDrawn());
   const waitsForPaint = WAITS_FOR_PAINT || cutsOnDraw;
   const [face] = useState(() => coverFace(tab, frozen ? null : picture, openingCardOf(tab.id), cutsOnDraw));
+  const [warm] = useState(() => (cutsOnDraw && face.kind === "card" ? warmPicture(findTab(currentTabs(), tab.id) ?? tab, Dimensions.get("window")) : null));
   const window = useWindowDimensions();
   const [box, setBox] = useState<Box>(() => ({ width: window.width, height: window.height }));
   const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was.width === layout.width && was.height === layout.height ? was : { width: layout.width, height: layout.height }));
@@ -132,6 +134,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
           paintDeadline = setTimeout(() => {
             paintDeadline = null;
             paintDeadlineFor = null;
+            if (cutsOnDraw) return;
             fadeIfShownAlone();
           }, PAGE_COVER.paintDeadlineMs);
         }
@@ -171,16 +174,18 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     <Animated.View
       testID="pageCover"
       needsOffscreenAlphaCompositing
-      pointerEvents={waitsForPaint && !cutsOnDraw ? "auto" : "none"}
+      pointerEvents={waitsForPaint && !warm ? "auto" : "none"}
       collapsable={false}
       importantForAccessibility={"no-hide-descendants"}
       accessibilityElementsHidden={!spoken}
       onLayout={face.kind === "card" && face.cardWidth ? laidOut : undefined}
       style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }, style]}
     >
-      {face.kind === "card" ? (
+      {warm ? (
+        <Image testID="pageCoverWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height }]} />
+      ) : face.kind === "card" ? (
         <AtCardScale cardWidth={face.cardWidth} box={box}>
-          <TabFace tab={{ ...tab, snapshotFileName: face.picture }} title={face.title} host={face.host} tone={tone?.top ?? null} roles={theme} paintedAs={`cover:${tab.id}`} />
+          <TabFace tab={{ ...tab, snapshotFileName: cutsOnDraw ? null : face.picture }} title={face.title} host={face.host} tone={tone?.top ?? null} roles={theme} paintedAs={`cover:${tab.id}`} />
         </AtCardScale>
       ) : (
         <PageLoadingPlaceholder tab={tab} />
@@ -189,4 +194,4 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   );
 });
 
-const styles = StyleSheet.create({ cardFace: { position: "absolute", left: 0, top: 0, transformOrigin: "left top" } });
+const styles = StyleSheet.create({ cardFace: { position: "absolute", left: 0, top: 0, transformOrigin: "left top" }, warm: { position: "absolute" } });

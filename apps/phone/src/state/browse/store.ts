@@ -384,7 +384,7 @@ export function stopOpeningTab(id: string) {
 
 let cutCard: { id: string; width: number } | null = null;
 
-export type BarAction = "address" | "tabs" | "plus" | "more";
+export type BarAction = "address" | "more";
 
 let heldBarAction: { id: string; action: BarAction; scope: string } | null = null;
 
@@ -396,11 +396,11 @@ export function dropBarAction(scope: string) {
   if (heldBarAction?.scope === scope) heldBarAction = null;
 }
 
-export function takeBarAction(id: string) {
-  if (heldBarAction?.id !== id) return null;
-  const action = heldBarAction.action;
+export function takeBarAction(scope: string, id: string): BarAction | null {
+  const held = heldBarAction;
   heldBarAction = null;
-  return action;
+  if (!held || held.scope !== scope || held.id !== id) return null;
+  return held.action;
 }
 
 export function noteCutCard(id: string, width: number) {
@@ -418,7 +418,21 @@ export function takeCutCardWidth(id: string) {
   return width;
 }
 
+let committedBarAction: { id: string; action: BarAction } | null = null;
+
+export function commitBarAction(id: string, action: BarAction) {
+  committedBarAction = { id, action };
+}
+
+export function takeCommittedBarAction(id: string): BarAction | null {
+  const committed = committedBarAction;
+  committedBarAction = null;
+  return committed && committed.id === id ? committed.action : null;
+}
+
 export function openTab(id: string) {
+  heldBarAction = null;
+  committedBarAction = null;
   const tabs = currentTabs();
   if (!tabs.open.some((tab) => tab.id === id) && !tabs.privates.some((tab) => tab.id === id)) return;
   showPulledPage();
@@ -845,17 +859,25 @@ export function arriveAtNeighbour(id: string) {
   earlyCoverHides.delete(id);
   const cover = `${ARRIVAL_COVER_ID}-${arrivalSeq}`;
   useBrowse.setState({ covered: id, arriving: id, arrivalCover: cover });
-  stopArrivalWait = whenPageCoverHidden(
+  const waitForDrawn = (): (() => void) =>
+    whenPageCoverHidden(
     id,
     tabSwitchCuts() ? CUT_ARRIVAL_HELD_MS : ARRIVAL_COVER_LOST_MS,
     (reason) => {
       stopArrivalWait = null;
+      const still = useBrowse.getState();
+      if (reason === "lost" && tabSwitchCuts() && still.arriving === id && still.arrivalCover === cover) {
+        labTrace(`PAGELAB arrival ${id} still unconfirmed after ${CUT_ARRIVAL_HELD_MS} ms, its card stays and waits again`);
+        stopArrivalWait = waitForDrawn();
+        return;
+      }
       if (COUNTS_CAPPED_COVERS && reason !== "drawn" && !isPrivateTab(currentTabs(), id) && !useTabs.getState().incognito) countUsage("page_covers_capped");
       const now = useBrowse.getState();
       if (now.arriving === id && now.arrivalCover === cover) useBrowse.setState({ arriving: null, arrivalCover: null, covered: now.covered === id ? null : now.covered });
     },
     cover,
   );
+  stopArrivalWait = waitForDrawn();
   noteTabSwiped(from, id);
 }
 
@@ -911,7 +933,7 @@ function pageEvent(event: PageEngineEvent) {
   else if (event.name === "page.state" && currentTabs().selectedId !== event.pageId) backgroundPageState(event.pageId, event.state);
   else if (event.name === "page.closeRequested") closeTabById(event.pageId);
   else if (event.name === "page.snapshotLanded") snapshotLanded(event.pageId, event.uri, event.generation);
-  else if (event.name === "page.viewMoved") noteViewMoved(event.pageId);
+  else if (event.name === "page.viewMoved") noteViewMoved(event.pageId, event.viewId, event.view);
   else if (event.name === "page.scrollSettled") frontScrollCameToRest(event.pageId, event.y, frontPageId(), pictureScrolledOrQuietPage);
 }
 
@@ -966,7 +988,7 @@ export async function captureSnapshot(id: string, pageTop: number | null = null,
   if (!snapshot || !tab) return false;
   const step = pictureCaptured(tab, snapshot.uri, snapshot.durable !== false, snapshot.generation);
   if (step) publishedCaptureStarted.set(id, startedAt);
-  if (step && step.show === snapshot.uri) noteWarmPicture(id, { uri: snapshot.uri, url: capturedUrl, window: capturedWindow, frame: snapshot.frame, settled: snapshot.viewSettled });
+  if (step && step.show === snapshot.uri) noteWarmPicture(id, { uri: snapshot.uri, url: capturedUrl, window: capturedWindow, frame: snapshot.frame, settled: snapshot.viewSettled, view: snapshot.view, viewId: snapshot.viewId });
   if (step && tab.snapshotFileName !== step.show) {
     updateTabById(id, { snapshotFileName: step.show });
     showHiddenDeckThePicture(id);
