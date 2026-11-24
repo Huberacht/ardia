@@ -274,7 +274,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     onGrab: grabbedSwipe,
   });
   useDemoMotion(pager, width);
-  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, landed: pager.landed, span: width, left, right, spoken: spokenLine } : null), [pager.offset, pager.from, pager.landed, width, left, right, spokenLine]);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, landed: pager.landed, cursor: pager.cursor, span: width, left, right, spoken: spokenLine } : null), [pager.offset, pager.from, pager.landed, pager.cursor, width, left, right, spokenLine]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);

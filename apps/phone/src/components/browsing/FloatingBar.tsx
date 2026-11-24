@@ -62,7 +62,7 @@ type Props = {
 
 export type HandOverFocus = { target: "address" | "pill" | null; pill: RefObject<ViewInstance | null> };
 
-export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; landed: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null; spoken?: Record<string, string> };
+export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; landed: SharedValue<string>; cursor: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null; spoken?: Record<string, string> };
 
 const NO_SPOKEN_LINE: Record<string, string> = {};
 
@@ -76,28 +76,58 @@ export function landedSide(from: string, shownId: string, at: number, span: numb
   return from === shownId && span > 0 && Math.abs(Math.abs(at) - span) < 1 ? (at > 0 ? -1 : 1) : 0;
 }
 
-function useLandedAddress(swipe: SwipeAddresses | null, shownId: string, side: -1 | 0 | 1) {
+export function hereShown(cursor: string, ownerId: string, leftId: string, rightId: string): boolean {
+  "worklet";
+  return cursor === "" || cursor === ownerId || (cursor !== leftId && cursor !== rightId);
+}
+
+export function landedLeafShown(cursor: string, leafId: string, ownerId: string): boolean {
+  "worklet";
+  return cursor !== "" && cursor === leafId && cursor !== ownerId;
+}
+
+export function landedBackHere(landed: string, cursor: string, ownerId: string): boolean {
+  "worklet";
+  return landed !== "" && landed === ownerId && cursor === ownerId;
+}
+
+function useHereAddress(swipe: SwipeAddresses | null, ownerId: string) {
+  const idle = useSharedValue("");
+  const cursor = swipe?.cursor ?? idle;
+  const leftId = swipe?.left?.id ?? "";
+  const rightId = swipe?.right?.id ?? "";
   return useAnimatedStyle(() => {
-    if (!swipe) return { opacity: side === 0 ? 1 : 0 };
-    const at = swipe.offset.value;
-    const from = swipe.from.value;
-    return { opacity: landedSide(from, shownId, at, swipe.span) === side ? 1 : 0 };
-  }, [swipe, shownId, side]);
+    const at = cursor.value;
+    return { opacity: hereShown(at, ownerId, leftId, rightId) ? 1 : 0 };
+  }, [ownerId, leftId, rightId]);
 }
 
-export function landedSpokenSide(landed: string, from: string, shownId: string, leftId: string, rightId: string, at: number, span: number): -1 | 0 | 1 {
-  "worklet";
-  if (landed !== "" && from === shownId) {
-    if (landed === shownId) return 0;
-    if (landed === leftId) return -1;
-    if (landed === rightId) return 1;
-  }
-  return landedSide(from, shownId, at, span);
+type LandedLeafProps = { tab: BrowserTab; side: -1 | 0 | 1; ownerId: string; cursor: SharedValue<string>; dark: boolean };
+
+function LandedLeaf({ tab, side, ownerId, cursor, dark }: LandedLeafProps) {
+  const shown = useAnimatedStyle(() => {
+    const at = cursor.value;
+    return { opacity: landedLeafShown(at, tab.id, ownerId) ? 1 : 0 };
+  }, [tab.id, ownerId]);
+  const marked = useAnimatedStyle(() => {
+    const at = cursor.value;
+    return { opacity: landedLeafShown(at, tab.id, ownerId) ? 1 : 0 };
+  }, [tab.id, ownerId]);
+  const named = side < 0 ? "Left" : side > 0 ? "Right" : "Self";
+  return (
+    <Animated.View testID={`floatingBarLanded${named}`} collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, shown]}>
+      <AddressLeaf address={barAddress(tab)} dark={dark} testIDPrefix={`floatingBar${named}`} style={styles.addressHit} />
+      {side !== 0 ? <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${tab.id}`} style={[uiFrameMarkStyle, marked]} /> : null}
+    </Animated.View>
+  );
 }
 
-export function landedBackHere(landed: string, from: string, shownId: string, at: number): boolean {
-  "worklet";
-  return landed !== "" && landed === shownId && from === shownId && at === 0;
+function landedLeaves(swipe: SwipeAddresses, tab: BrowserTab): { tab: BrowserTab; side: -1 | 0 | 1 }[] {
+  const leaves: { tab: BrowserTab; side: -1 | 0 | 1 }[] = [];
+  if (swipe.left) leaves.push({ tab: swipe.left, side: -1 });
+  leaves.push({ tab, side: 0 });
+  if (swipe.right) leaves.push({ tab: swipe.right, side: 1 });
+  return leaves;
 }
 
 export function spokenDestination(side: -1 | 0 | 1, here: string, left: string, right: string, lifted: string, shownId: string, previewShown: number, table: Record<string, { spoken: string }>): string {
@@ -125,51 +155,29 @@ function useBarWords(swipe: SwipeAddresses | null, shownId: string, here: string
   const idle = useSharedValue(0);
   const nobody = useSharedValue("");
   const notLanded = useSharedValue("");
-  return { words, offset: swipe?.offset ?? idle, from: swipe?.from ?? nobody, landed: swipe?.landed ?? notLanded };
+  const nowhere = useSharedValue("");
+  return { words, offset: swipe?.offset ?? idle, from: swipe?.from ?? nobody, landed: swipe?.landed ?? notLanded, cursor: swipe?.cursor ?? nowhere };
 }
 
 function useSpokenAddress(swipe: SwipeAddresses | null, shownId: string, here: string) {
-  const { words, offset, from, landed } = useBarWords(swipe, shownId, here);
+  const { words, offset, from, landed, cursor } = useBarWords(swipe, shownId, here);
   const spoken = useAnimatedProps(() => {
     const now = words.value;
     const at = offset.value;
     const started = from.value;
-    const arrived = landed.value;
+    const onScreen = cursor.value;
     const lifted = destination.id.value;
     const previewShown = pageBarPreviewShown.value;
     const table = destinationAddresses.value;
-    const side = landedSpokenSide(arrived, started, now.shownId, now.leftId, now.rightId, at, now.span);
-    return { accessibilityValue: { text: landedSpoken(arrived, now.table, spokenDestination(side, now.here, now.left, now.right, lifted, now.shownId, previewShown, table)) } };
+    const side = landedSide(started, now.shownId, at, now.span);
+    return { accessibilityValue: { text: landedSpoken(onScreen !== now.shownId ? onScreen : "", now.table, spokenDestination(side, now.here, now.left, now.right, lifted, now.shownId, previewShown, table)) } };
   });
-  const leftShown = useAnimatedStyle(() => {
-    const at = offset.value;
-    const started = from.value;
-    return { opacity: landedSide(started, shownId, at, swipe?.span ?? 0) < 0 ? 1 : 0 };
-  }, [shownId, swipe?.span]);
-  const rightShown = useAnimatedStyle(() => {
-    const at = offset.value;
-    const started = from.value;
-    return { opacity: landedSide(started, shownId, at, swipe?.span ?? 0) > 0 ? 1 : 0 };
-  }, [shownId, swipe?.span]);
   const backShown = useAnimatedStyle(() => {
-    const at = offset.value;
-    const started = from.value;
     const arrived = landed.value;
-    return { opacity: landedBackHere(arrived, started, shownId, at) ? 1 : 0 };
+    const onScreen = cursor.value;
+    return { opacity: landedBackHere(arrived, onScreen, shownId) ? 1 : 0 };
   }, [shownId]);
-  return { spoken, marks: { leftShown, rightShown, backShown } };
-}
-
-type LandedBarMarks = ReturnType<typeof useSpokenAddress>["marks"];
-
-function LandedBarMarks({ marks, shownId, leftId, rightId }: { marks: LandedBarMarks; shownId: string; leftId: string; rightId: string }) {
-  return (
-    <>
-      {leftId ? <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${leftId}`} style={[uiFrameMarkStyle, marks.leftShown]} /> : null}
-      {rightId ? <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${rightId}`} style={[uiFrameMarkStyle, marks.rightShown]} /> : null}
-      <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${shownId}`} style={[uiFrameMarkStyle, marks.backShown]} />
-    </>
-  );
+  return { spoken, backShown };
 }
 
 const SPEAKS_LANDED_ADDRESS = Platform.OS === "android";
@@ -220,12 +228,10 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
   const looksPrivate = privateLook ?? tab.isPrivate;
   const styledTab = looksPrivate === tab.isPrivate ? tab : { ...tab, isPrivate: looksPrivate };
   useLayoutEffect(() => markShownFrame(`bar:${tab.id}`), [tab.id]);
-  const landedHere = useLandedAddress(swipe, tab.id, 0);
-  const landedLeft = useLandedAddress(swipe, tab.id, -1);
-  const landedRight = useLandedAddress(swipe, tab.id, 1);
+  const landedHere = useHereAddress(swipe, tab.id);
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const address = barAddress(tab);
-  const { spoken, marks: landedMarks } = useSpokenAddress(swipe, tab.id, spokenAddress(address));
+  const { spoken, backShown } = useSpokenAddress(swipe, tab.id, spokenAddress(address));
   const menuButton = useRef<ViewInstance>(null);
   const returning = useBarReturn();
   const handed = useDeckOwnsBar();
@@ -314,16 +320,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
           </Animated.View>
         ) : null}
         {standsIn ? <DestinationFallbackLeaf shownId={tab.id} leafId={previewId} dark={dark} style={styles.addressHit} /> : null}
-        {swipe?.left ? (
-          <Animated.View testID="floatingBarLandedLeft" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedLeft]}>
-            <AddressLeaf address={barAddress(swipe.left)} dark={dark} testIDPrefix="floatingBarLeft" style={styles.addressHit} />
-          </Animated.View>
-        ) : null}
-        {swipe?.right ? (
-          <Animated.View testID="floatingBarLandedRight" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedRight]}>
-            <AddressLeaf address={barAddress(swipe.right)} dark={dark} testIDPrefix="floatingBarRight" style={styles.addressHit} />
-          </Animated.View>
-        ) : null}
+        {swipe ? landedLeaves(swipe, tab).map((leaf) => <LandedLeaf key={leaf.tab.id} tab={leaf.tab} side={leaf.side} ownerId={tab.id} cursor={swipe.cursor} dark={dark} />) : null}
         </Animated.View>
         <PressInPlace ref={menuButton} label={squeezed ? `Page Menu, ${spokenAddress(address)}` : "Page Menu"} busy={squeezed ? squeezedBusy : undefined} onPress={() => openPageMenuFrom(() => menuButton.current, onMore)} onPressIn={haptics.barPress} style={styles.menu}>
           <Animated.View style={[styles.menuGlyph, dotsFade]}>
@@ -354,7 +351,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
       {inStrip ? null : trailing}
     </View>
     {fold ? <BarMotionCatchUp fold={fold} /> : null}
-    {swipe ? <LandedBarMarks marks={landedMarks} shownId={tab.id} leftId={swipe.left?.id ?? ""} rightId={swipe.right?.id ?? ""} /> : null}
+    {swipe ? <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${tab.id}`} style={[uiFrameMarkStyle, backShown]} /> : null}
     {inStrip ? (
       <Animated.View testID="floatingBarStrip" pointerEvents="box-none" style={[styles.strip, { left: duo.stripLeft, top: duo.stripTop }]}>
         {trailing}

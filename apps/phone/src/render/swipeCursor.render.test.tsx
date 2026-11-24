@@ -5,7 +5,7 @@ import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-
 import { Dimensions, Platform } from "react-native";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { besideIn, heldPose, restOf, swipeRefusal, zeroArmedTurn } from "../components/browsing/TabPager";
-import { landedBackHere, landedSpokenSide } from "../components/browsing/FloatingBar";
+import { FloatingBar, hereShown, landedBackHere, landedLeafShown, type SwipeAddresses } from "../components/browsing/FloatingBar";
 import * as browse from "../state/browse/store";
 import * as pageStore from "../state/pages/store";
 import { cutTabSwitches } from "../state/browse/tabSwitch";
@@ -243,11 +243,13 @@ test("an accepted flick raises the landed card's face mark and the bar's mark fo
   const spoken = root.root.findAll((node) => typeof node.props.jestAnimatedProps?.value?.accessibilityValue?.text === "string").map((node) => node.props.jestAnimatedProps.value.accessibilityValue.text as string);
   expect(spoken.length > 0).toBe(Platform.OS === "android");
   expect(spoken.every((text) => text.includes(display(findTab(currentTabs(), wanted)!.url).host))).toBe(true);
-  expect(landedSpokenSide(wanted, from, from, "", wanted, 0, 400)).toBe(1);
-  expect(landedSpokenSide(from, from, from, wanted, "", 0, 400)).toBe(0);
-  expect(landedSpokenSide("", from, from, wanted, "", 400, 400)).toBe(-1);
-  expect(landedBackHere(from, from, from, 0)).toBe(true);
-  expect(landedBackHere(from, from, from, 12)).toBe(false);
+  expect(hereShown(wanted, from, "", wanted)).toBe(false);
+  expect(hereShown(from, from, "", wanted)).toBe(true);
+  expect(hereShown("elsewhere", from, "", wanted)).toBe(true);
+  expect(landedLeafShown(wanted, wanted, from)).toBe(true);
+  expect(landedLeafShown(wanted, wanted, wanted)).toBe(false);
+  expect(landedBackHere(from, from, from)).toBe(true);
+  expect(landedBackHere("", from, from)).toBe(false);
   frames(48);
   expect(currentTabs().selectedId).toBe(wanted);
   unmount(root);
@@ -418,3 +420,60 @@ test("placeholder cards are mounted only through a swipe sequence: none while id
   expect(placeholders()).toBe(0);
   unmount(root);
 });
+
+const textsIn = (node: ReactTestInstance): string[] => node.findAll((child) => typeof child.props.children === "string" && typeof child.type === "string").map((child) => child.props.children as string);
+
+function visibleAddresses(root: ReactTestRenderer): string[] {
+  const leaves = root.root.findAll((node) => typeof node.props.testID === "string" && /^floatingBar(AddressStack|Landed(Left|Self|Right))$/.test(node.props.testID) && node.props.jestAnimatedStyle !== undefined && typeof node.type === "string");
+  return leaves.filter((node) => getAnimatedStyle(node).opacity !== 0).map((node) => [...new Set(textsIn(node))].join(" "));
+}
+
+for (const rebaseFirst of [false, true])
+  test(`from the lift through each JS turn of the commit, its render and the rebase${rebaseFirst ? ", with the UI rebase landing before the render" : ""}, the bar's visible address is the destination at every step and its bar mark rises once`, () => {
+    const root = startAt(4, 1);
+    const from = currentTabs().selectedId!;
+    const line = order();
+    const right = line[line.indexOf(from) + 1];
+    const dx: -1 | 1 = right ? -1 : 1;
+    const wanted = right ?? line[line.indexOf(from) - 1]!;
+    const host = (id: string) => display(findTab(currentTabs(), id)!.url).host;
+    const destination = host(wanted);
+    const source = host(from);
+    expect(destination).not.toBe(source);
+    expect(visibleAddresses(root)).toEqual([source]);
+    const held: (() => void)[] = [];
+    const holding = jest.spyOn(global, "queueMicrotask").mockImplementation((task) => void held.push(task));
+    const rises: string[] = [];
+    const barMarks = () => marksOf(root, "landedBarMark").filter((node) => opacityOf(node) === 1).map((node) => node.props.markWhenShown as string);
+    let shown = new Set(barMarks());
+    const step = (label: string) => {
+      const visible = visibleAddresses(root);
+      expect({ label, visible }).toEqual({ label, visible: [destination] });
+      const now = new Set(barMarks());
+      for (const mark of now) if (!shown.has(mark)) rises.push(mark);
+      shown = now;
+    };
+    flick(dx);
+    step("lift");
+    if (rebaseFirst) {
+      const swipe = root.root.findAll((node) => node.type === FloatingBar)[0]!.props.swipe as SwipeAddresses;
+      act(() => {
+        swipe.from.value = wanted;
+        swipe.offset.value = 0;
+      });
+      step("rebase before render");
+    }
+    for (let turn = 0; turn < 40 && held.length > 0; turn++) {
+      const task = held.shift()!;
+      act(() => task());
+      step(`js turn ${turn}`);
+    }
+    holding.mockRestore();
+    act(() => jest.advanceTimersByTime(0));
+    step("timers");
+    frames(64);
+    step("settled");
+    expect(currentTabs().selectedId).toBe(wanted);
+    expect(rises).toEqual([`dest-bar:${wanted}`]);
+    unmount(root);
+  });

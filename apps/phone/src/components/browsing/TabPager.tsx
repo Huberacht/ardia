@@ -206,7 +206,7 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
   const acknowledge = (lift: number) => {
     "worklet";
     if (lift > ackedTurn.value) ackedTurn.value = lift;
-    if (cursorTurn.value <= ackedTurn.value && cursor.value === fromId.value) landed.value = "";
+    if (cursorTurn.value <= ackedTurn.value) landed.value = "";
   };
 
   const restore = () => {
