@@ -153,7 +153,7 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
   const lockFade = useAnimatedStyle(() => ({ opacity: shut(progress.value) }));
   const leading = (
     <Animated.View testID="floatingBarLeading" collapsable={false} style={back.leading} pointerEvents={back.sidesShown ? "box-none" : "none"} importantForAccessibility={back.sidesShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.sidesShown}>
-      <FloatingTabsButton tab={tab} order={order} roles={roles} dark={dark} testID="floatingBarTabs" glass={back.sidesGlass} glyphs={back.leadingGlyphs} fold={fold} ghost={!handed} onTabs={onTabs} onTabsMenu={onTabsMenu} onStep={onStep} />
+      <FloatingTabsButton tab={tab} order={order} roles={roles} dark={dark} testID="floatingBarTabs" glass={back.sidesGlass} glyphs={back.leadingGlyphs} fold={fold} ghost={!handed} swipe={swipe} onTabs={onTabs} onTabsMenu={onTabsMenu} onStep={onStep} />
     </Animated.View>
   );
   const trailing = (
@@ -253,7 +253,7 @@ function useFoldedGlass<Back extends { centreGlass: { shown: boolean; shownMs: n
 
 const TABS_TAP_MS = 350;
 
-export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, glyphs, fold = null, ghost = false, onTabs, onTabsMenu, onStep }: ButtonProps & { order: BrowserTab[]; roles: ColorRoles; onTabs: () => void; onTabsMenu: () => void; onStep: (delta: -1 | 1) => void }) {
+export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, glyphs, fold = null, ghost = false, swipe = null, onTabs, onTabsMenu, onStep }: ButtonProps & { order: BrowserTab[]; roles: ColorRoles; swipe?: SwipeAddresses | null; onTabs: () => void; onTabsMenu: () => void; onStep: (delta: -1 | 1) => void }) {
   const count = order.length;
   const foldGlyphs = useFoldGlyphs(fold);
   const tabsNow = useRef(onTabs);
@@ -268,10 +268,11 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
         .enabled(tabSwitchCuts())
         .onEnd((_event, success) => {
           if (!success) return;
-          if (canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
+          const swipeLanded = swipe !== null && swipe.from.value === tabId && swipe.span > 0 && Math.abs(Math.abs(swipe.offset.value) - swipe.span) < 1;
+          if (!swipeLanded && canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
           else runOnJS(callTabs)();
         }),
-    [tabId, testID, callTabs],
+    [tabId, testID, callTabs, swipe],
   );
   return (
     <TabsMenuTrigger order={order} onTabsMenu={onTabsMenu}>

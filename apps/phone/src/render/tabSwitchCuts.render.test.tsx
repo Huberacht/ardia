@@ -1280,6 +1280,22 @@ test("a cut made before a phone, Duo and back to phone round trip and delivered 
   unmount(root);
 });
 
+test("a Tabs tap right after an accepted swipe lands, before its commit, doesn't cut to the deck of the tab it left: it is held for the destination", () => {
+  if (Platform.OS !== "android") return;
+  const root = standbyDeck();
+  const from = currentTabs().selectedId!;
+  expect(deckPull.target.value?.id).toBe(from);
+  const { id, dx } = toNeighbour();
+  releaseSwipe(root, dx, 260, 1600);
+  tapTabs();
+  expect(deckPull.cut.value).toBe(false);
+  expect(deckTurn.live.value).toBe(0);
+  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
+  expect(currentTabs().selectedId).toBe(id);
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  unmount(root);
+});
+
 test("an accepted upward pull with cuts hands the deck its input turn on the release itself, with no frame wait or landing spring", () => {
   if (Platform.OS !== "android") return;
   const root = standbyDeck();

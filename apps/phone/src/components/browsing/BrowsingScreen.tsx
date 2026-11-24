@@ -243,8 +243,12 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   landedTarget.current = pager.landedTarget;
   const landedScope = useRef(pager.landedScope);
   landedScope.current = pager.landedScope;
-  const editAddress = useCallback(() => {
+  const heldFor = useCallback(() => {
     const landed = tabSwitchCuts() ? landedTarget.current() : null;
+    return landed && currentTabs().selectedId !== landed ? landed : null;
+  }, []);
+  const editAddress = useCallback(() => {
+    const landed = heldFor();
     if (landed) {
       holdBarAction(landed, "address", landedScope.current());
       return;
@@ -259,7 +263,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     else if (action === "tabs") showDeck();
   }, [tab.id]);
   const heldOr = useCallback((action: BarAction, now: () => void) => () => {
-    const landed = tabSwitchCuts() ? landedTarget.current() : null;
+    const landed = heldFor();
     if (landed) {
       holdBarAction(landed, action, landedScope.current());
       return;
@@ -269,7 +273,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const tabsOrHeld = useMemo(() => heldOr("tabs", showDeck), [heldOr]);
   const plusOrHeld = useMemo(() => heldOr("plus", newTab), [heldOr]);
   const pageMenuOrHeld = useCallback(() => {
-    const landed = tabSwitchCuts() ? landedTarget.current() : null;
+    const landed = heldFor();
     if (landed) {
       holdBarAction(landed, "more", landedScope.current());
       return;
