@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
-import { MANIFEST, ROOT } from "./generate.mjs";
+import { DESKTOP_ROUTES, MANIFEST, ROOT } from "./generate.mjs";
 
 const read = (path) => readFileSync(ROOT + path, "utf8");
 const manifest = JSON.parse(read(MANIFEST));
@@ -74,7 +74,7 @@ export function macForwarding(bridgeSource) {
 
 const linuxContract = stripComments(read("engine/ardiacore-linux/src/ardia/linux/ac_linux_contract.h"));
 export function parseRoutes(header) {
-  const opening = /\bkRoutes\[\]\s*=\s*\{/g;
+  const opening = /\bkRoutes\s*=\s*\{\{/g;
   const open = opening.exec(header);
   if (!open || opening.exec(header)) throw new Error("the header declares kRoutes exactly once");
   const row = /\s*\{\s*"([^"\\]*)"\s*,\s*"([^"\\]*)"\s*,\s*"([^"\\]*)"\s*\}\s*,?/y;
@@ -88,16 +88,16 @@ export function parseRoutes(header) {
     routes.push({ name, service, field });
     at = row.lastIndex;
   }
-  const close = /\s*\}\s*;/y;
+  const close = /\s*\}\}\s*;/y;
   close.lastIndex = at;
   if (!close.test(header)) throw new Error(`kRoutes has a row the scan can't read: ${JSON.stringify(header.slice(at, at + 80))}`);
   return routes;
 }
 
-const linuxRoutes = parseRoutes(linuxContract);
+const linuxRoutes = parseRoutes(stripComments(read(DESKTOP_ROUTES)));
 
 const LINUX = "engine/ardiacore-linux/src/ardia/linux/";
-const CUSTOM_ONLY_DOMAINS = ["autofill", "contentBlocker", "passwords", "profiles", "webKit", "webView", "windows"];
+const CUSTOM_ONLY_DOMAINS = ["autofill", "contentBlocker", "media", "passwords", "profiles", "webKit", "webView", "windows"];
 
 export function namesIn(source, list) {
   const opening = new RegExp(`\\b${list}\\[\\]\\s*=\\s*\\{`, "g");
@@ -153,7 +153,7 @@ test("the scans find the hosts' tables", () => {
 });
 
 test("the kRoutes scan reads rows however they're wrapped and refuses what it can't read or a name routed twice", () => {
-  const header = (rows) => `inline constexpr Route kRoutes[] = {\n${rows}\n};\n\ninline const Route* FindRoute(std::string_view name) {}\n`;
+  const header = (rows) => `inline constexpr std::array<Route, 2> kRoutes = {{\n${rows}\n}};\n\ninline const Route* FindRoute(std::string_view name) {}\n`;
   assert.deepEqual(parseRoutes(header('    {\n"history.query",\n "ac_history_query", ""},\n    {"downloads.pause", "ac_downloads_command", "null"}')), [
     { name: "history.query", service: "ac_history_query", field: "" },
     { name: "downloads.pause", service: "ac_downloads_command", field: "null" },
@@ -164,7 +164,24 @@ test("the kRoutes scan reads rows however they're wrapped and refuses what it ca
   assert.throws(() => parseRoutes("struct Route {};"), /exactly once/);
 });
 
-test("the Linux WebUI allowlist routes exactly each generated domain's desktop-routed calls, to the same service", () => {
+test("the Linux and Windows hosts route through the generated header and keep no route table of their own", () => {
+  for (const name of ["FindRoute", "kRoutes", "Route"]) assert.ok(linuxContract.includes(`using ardia::desktop_routes::${name};`), name);
+  assert.ok(linuxContract.includes('#include "ardia/desktop/generated/ac_desktop_routes.h"'));
+  assert.doesNotMatch(linuxContract, /\bstruct Route\b|\bkRoutes\s*(\[\])?\s*=/);
+  assert.ok(read("engine/ardiacore-desktop/src/ardia/desktop/BUILD.gn").includes('"generated/ac_desktop_routes.h",'));
+  const windowsShell = stripComments(read("scripts/windows/engine/src/ardia/win/webui/webui_shell.cc"));
+  assert.ok(windowsShell.includes("ardiacore::linux_contract::kRoutes") && windowsShell.includes("ardiacore::linux_contract::FindRoute("));
+  assert.doesNotMatch(windowsShell, /\bkRoutes\s*(\[\])?\s*=/);
+});
+
+test("the hosts advertise the routes in the order they always have: engine, tabs, downloads' settings before its commands, then the rest", () => {
+  assert.deepEqual(linuxRoutes.slice(0, 8).map(({ name }) => name), ["engine.components", "engine.tasks", "engine.batterySaver", "engine.trimMemory", "engine.openTaskManager", "tabs.lastTabPolicy", "downloads.settings", "downloads.setSettings"]);
+  const domainsInOrder = [...new Set(linuxRoutes.map(({ name }) => name.split(".")[0]))];
+  assert.deepEqual(domainsInOrder, ["engine", "tabs", "downloads", "history", "bookmarks", "favicons", "extensions", "search", "permissions"]);
+  assert.deepEqual(linuxRoutes.at(-1).name, "permissions.removeExternalAppAllowance");
+});
+
+test("the generated desktop routes are exactly each generated domain's desktop-routed calls, to the same service", () => {
   for (const [domain, entry] of domains) {
     const routed = linuxRoutes.filter((route) => route.name.startsWith(`${domain}.`)).sort((a, b) => a.name.localeCompare(b.name));
     const schema = Object.entries(entry.calls)
@@ -209,6 +226,15 @@ test("the EventName scan reads every topic however it's spelled and refuses what
   assert.ok(macForwarding(bridgeSource).topics.includes("extensions.action"));
   assert.ok(!macForwarding(commented).topics.includes("extensions.action"));
   assert.ok(!macForwarding(bridgeSource.replace('@"extensions.action", ', '\n// @"extensions.action",\n')).topics.includes("extensions.action"));
+});
+
+test("the desktop UI's request deadlines are the generated maps, looked up by the engine call's or host method's own name", () => {
+  const bootstrap = read("engine/ardiacore-linux/src/ardia/linux/bootstrap.js");
+  assert.ok(bootstrap.includes('request("engine.call", { name, profile, args }, engineDeadlines.get(name))'));
+  assert.ok(bootstrap.includes('request("host.invoke", { method, args }, hostDeadlines.get(method))'));
+  assert.equal(bootstrap.match(/new Map\(\[/g).length, 2, "bootstrap.js keeps no deadline table but the two generated ones");
+  const windowsBuild = read("scripts/windows/engine/src/ardia/win/BUILD.gn");
+  assert.ok(windowsBuild.includes('sources = [ "//ardia/linux/bootstrap.js" ]'), "Windows embeds the same bootstrap");
 });
 
 test("the custom-only domains are exactly the ones no host passes any call of straight to the engine", () => {
@@ -305,7 +331,7 @@ test("the Mac's call table for each domain is the generated one: each service-ba
 
 test("a domain the Mac serves partly or wholly by hand builds its module's table from the generated one", () => {
   const mixed = domains.filter(([, entry]) => entry.swift.endsWith("Calls.swift"));
-  assert.deepEqual(mixed.map(([domain]) => domain).sort(), ["autofill", "bookmarks", "contentBlocker", "downloads", "engine", "extensions", "favicons", "passwords", "permissions", "profiles", "search", "sites", "tabs", "webKit", "webView", "windows"]);
+  assert.deepEqual(mixed.map(([domain]) => domain).sort(), ["autofill", "bookmarks", "contentBlocker", "downloads", "engine", "extensions", "favicons", "media", "passwords", "permissions", "profiles", "search", "sites", "tabs", "webKit", "webView", "windows"]);
   for (const [domain, entry] of mixed) {
     const module = read(entry.swift.replace(/Calls\.swift$/, "Module.swift"));
     assert.match(module, new RegExp(`static let calls = ${domain}CallTable\\(`), `${domain}'s module`);

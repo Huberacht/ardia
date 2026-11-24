@@ -10,6 +10,7 @@ export type Call = {
   service?: string;
   desktop: DesktopBinding;
   routeField?: string;
+  deadline?: number;
   mac?: Binding;
   windows?: Binding;
 };
@@ -56,6 +57,7 @@ export type ModuleFunction = {
   instance?: "strong" | "weak";
   fallback?: string;
   debug?: true;
+  deadline?: number;
   mac: ModuleBinding;
   desktop: DesktopModuleBinding;
   windows: ModuleBinding;
@@ -93,4 +95,13 @@ export type ModuleDomain = {
 
 export function defineModuleDomain<const D extends ModuleDomain>(domain: D): D {
   return domain;
+}
+
+export type DesktopHost = {
+  routeOrder: readonly string[];
+  deadlines: Record<string, number>;
+};
+
+export function defineDesktopHost<const D extends DesktopHost>(host: D): D {
+  return host;
 }

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { clientPackages, loadDomains, loadModuleDomains, MANIFEST, outputs, ROOT, validate, validateModuleDomain, validateModuleNames, validateTopics } from "./generate.mjs";
+import { BOOTSTRAP, clientPackages, DESKTOP_ROUTES, desktopDeadlines, desktopRoutes, loadDesktopHost, loadDomains, loadModuleDomains, MANIFEST, outputs, realOutputs, ROOT, spliceDeadlines, validate, validateDesktopHost, validateModuleDomain, validateModuleNames, validateTopics } from "./generate.mjs";
 
 const GENERATOR = fileURLToPath(new URL("./generate.mjs", import.meta.url));
 const runAt = (generator, ...args) => spawnSync(process.execPath, [generator, ...args], { encoding: "utf8" });
@@ -19,7 +19,7 @@ const domain = (calls) => ({ kind: "engine", imports: {}, calls, events: {} });
 test("every generated file matches the schema byte for byte", async () => {
   const result = run("--check");
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `up to date: ${outputs(await loadDomains(), await loadModuleDomains()).size} files\n`);
+  assert.equal(result.stdout, `up to date: ${(await realOutputs()).size} files\n`);
 });
 
 test("the generator takes exactly one mode", () => {
@@ -44,7 +44,7 @@ test("run through a symlinked path, the generator still runs, so a check can't p
 });
 
 test("git checks every generated file out with LF endings, so a CRLF checkout still matches byte for byte", async () => {
-  const paths = [...outputs(await loadDomains(), await loadModuleDomains()).keys()];
+  const paths = [...(await realOutputs()).keys()];
   const result = spawnSync("git", ["check-attr", "eol", "--", ...paths], { cwd: ROOT, encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.stdout.trim().split("\n"), paths.map((path) => `${path}: eol: lf`));
@@ -61,8 +61,8 @@ test("engine domains and module domains each keep to their own list and kind", (
 });
 
 test("two runs give the same bytes, so the check never flaps", async () => {
-  const once = outputs(await loadDomains(), await loadModuleDomains());
-  const twice = outputs(await loadDomains(), await loadModuleDomains());
+  const once = (await realOutputs());
+  const twice = (await realOutputs());
   assert.deepEqual([...once], [...twice]);
 });
 
@@ -227,6 +227,87 @@ test("a desktop route may answer with one field of the engine's reply, or null, 
   const manifest = JSON.parse(outputs({ demo: domain({ watch: call(), tasks: call({ service: "ac_tasks_list", routeField: "tasks" }) }) }).get(MANIFEST)).domains.demo;
   assert.equal("routeField" in manifest.calls.watch, false);
   assert.equal(manifest.calls.tasks.routeField, "tasks");
+});
+
+test("the desktop routes header lists every desktop-routed call with its service and reply field, and finds a route at compile time", () => {
+  const header = outputs({ demo: domain({ watch: call(), tasks: call({ service: "ac_tasks_list", routeField: "tasks" }), local: call({ desktop: "custom" }), gone: call({ desktop: "absent", mac: "custom", windows: "custom", service: undefined }) }) }).get(DESKTOP_ROUTES);
+  assert.ok(header.includes('inline constexpr std::array<Route, 2> kRoutes = {{\n    {"demo.watch", "ac_demo_watch", ""},\n    {"demo.tasks", "ac_tasks_list", "tasks"},\n}};\n'));
+  assert.doesNotMatch(header, /demo\.local|demo\.gone|\/\/|\/\*/);
+  assert.ok(header.endsWith("#endif\n") && !header.includes("\r"));
+  const empty = outputs({ quiet: domain({ local: call({ desktop: "custom" }) }) }).get(DESKTOP_ROUTES);
+  assert.ok(empty.includes("inline constexpr std::array<Route, 0> kRoutes = {};"));
+  const compiler = spawnSync("c++", ["--version"], { encoding: "utf8" });
+  if (compiler.status !== 0) return;
+  const dir = mkdtempSync(join(tmpdir(), "hostapi-routes-"));
+  try {
+    for (const [name, text] of [["full", header], ["empty", empty]]) {
+      mkdirSync(join(dir, name, "ardia/desktop/generated"), { recursive: true });
+      writeFileSync(join(dir, name, "ardia/desktop/generated/ac_desktop_routes.h"), text);
+      const probe = name === "full"
+        ? 'static_assert(ardia::desktop_routes::FindRoute("demo.tasks")->field == "tasks");\nstatic_assert(!ardia::desktop_routes::FindRoute("demo.local"));\nint main() {}\n'
+        : 'static_assert(!ardia::desktop_routes::FindRoute("demo.watch"));\nint main() {}\n';
+      writeFileSync(join(dir, name, "probe.cc"), `#include "ardia/desktop/generated/ac_desktop_routes.h"\n${probe}`);
+      const result = spawnSync("c++", ["-std=c++20", "-Wall", "-Wextra", "-Werror", "-fsyntax-only", "-I", join(dir, name), join(dir, name, "probe.cc")], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the desktop routes come in routeOrder's domain order, then the other routed domains alphabetically, each domain's calls in schema order", async () => {
+  const domains = { zeta: domain({ z: call({ service: "ac_zeta" }) }), alpha: domain({ a: call({ service: "ac_alpha" }) }), mid: domain({ second: call({ service: "ac_mid_b" }), first: call({ service: "ac_mid_a" }) }) };
+  const header = outputs(domains, {}, { routeOrder: ["mid"], deadlines: {} }).get(DESKTOP_ROUTES);
+  const names = [...header.matchAll(/^ {4}\{"([^"]+)"/gm)].map((match) => match[1]);
+  assert.deepEqual(names, ["mid.second", "mid.first", "alpha.a", "zeta.z"]);
+  assert.deepEqual(desktopRoutes(domains).map(({ name }) => name), ["alpha.a", "mid.second", "mid.first", "zeta.z"]);
+  assert.throws(() => validateDesktopHost({ routeOrder: ["mid", "mid"], deadlines: {} }, {}, domains), /lists mid twice/);
+  assert.throws(() => validateDesktopHost({ routeOrder: ["ghost"], deadlines: {} }, {}, domains), /ghost, which isn't an engine domain with a desktop route/);
+  assert.throws(() => validateDesktopHost({ deadlines: {} }, {}, domains), /routeOrder lists/);
+  const { domains: real, desktopHost } = await loadDesktopHost();
+  const order = [...new Set(desktopRoutes(real, desktopHost.routeOrder).map(({ name }) => name.split(".")[0]))];
+  assert.deepEqual(order.slice(0, desktopHost.routeOrder.length), desktopHost.routeOrder);
+});
+
+test("a deadline lengthens the desktop UI's wait for the native host, and only where the call or function reaches it", () => {
+  assert.doesNotThrow(() => validate("demo", domain({ slow: call({ desktop: "custom", deadline: 90000 }) })));
+  assert.throws(() => validate("demo", domain({ slow: call({ desktop: "absent", mac: "custom", windows: "custom", service: undefined, deadline: 90000 }) })), /desktop binding that reaches it/);
+  for (const deadline of [30000, 900001, 1.5e5 + 0.5, "90000", 0]) assert.throws(() => validate("demo", domain({ slow: call({ deadline }) })), /deadline is an integer/, String(deadline));
+  assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "host", deadline: 120000 }) }, events: {} } })));
+  assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "adapted", deadline: 120000 }) }, events: {} } })));
+  assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "custom", deadline: 120000 }) }, events: {} } })), /goes only with desktop: host or adapted/);
+  const modules = { demo: moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "host", deadline: 120000 }) }, events: {} } }) };
+  assert.doesNotThrow(() => validateDesktopHost({ routeOrder: [], deadlines: { "ArdiaVault.unlock": 180000 } }, modules));
+  assert.throws(() => validateDesktopHost({ routeOrder: [], deadlines: { "ArdiaDemo.hold": 180000 } }, modules), /function of module domain demo, so its deadline goes on that function/);
+  assert.throws(() => validateDesktopHost({ routeOrder: [], deadlines: { "vault.unlock": 180000 } }, modules), /Ardia<Module>\.<method>/);
+  assert.throws(() => validateDesktopHost({ routeOrder: [], deadlines: { "ArdiaVault.unlock": 1000 } }, modules), /deadline is an integer/);
+  assert.throws(() => validateDesktopHost({}, modules), /deadlines maps/);
+  const deadlines = desktopDeadlines({ demo: domain({ slow: call({ desktop: "custom", deadline: 90000 }), quick: call() }) }, modules, { deadlines: { "ArdiaVault.unlock": 180000, "ArdiaAlpha.go": 60000 } });
+  assert.deepEqual(deadlines, { host: [["ArdiaAlpha.go", 60000], ["ArdiaDemo.hold", 120000], ["ArdiaVault.unlock", 180000]], engine: [["demo.slow", 90000]] });
+  const manifest = JSON.parse(outputs({ demo: domain({ slow: call({ desktop: "custom", deadline: 90000 }), quick: call() }) }, modules).get(MANIFEST));
+  assert.equal(manifest.domains.demo.calls.slow.deadline, 90000);
+  assert.equal("deadline" in manifest.domains.demo.calls.quick, false);
+  assert.equal(manifest.modules.demo.modules.ArdiaDemo.functions.hold.deadline, 120000);
+});
+
+test("the bootstrap's two deadline maps are rewritten in place, and a bootstrap that doesn't hold each exactly once is refused", () => {
+  const source = "(() => {\n  const hostDeadlines = new Map([\n    [\"Old.x\", 1],\n  ]);\n  const engineDeadlines = new Map([\n  ]);\n  run();\n})();\n";
+  const spliced = spliceDeadlines(source, { host: [["ArdiaA.b", 60000]], engine: [["demo.slow", 90000], ["demo.slower", 120000]] });
+  assert.equal(spliced, "(() => {\n  const hostDeadlines = new Map([\n    [\"ArdiaA.b\", 60000],\n  ]);\n  const engineDeadlines = new Map([\n    [\"demo.slow\", 90000],\n    [\"demo.slower\", 120000],\n  ]);\n  run();\n})();\n");
+  assert.equal(spliceDeadlines(spliced, { host: [["ArdiaA.b", 60000]], engine: [["demo.slow", 90000], ["demo.slower", 120000]] }), spliced);
+  assert.equal(spliceDeadlines(spliced, { host: [], engine: [] }), "(() => {\n  const hostDeadlines = new Map([\n  ]);\n  const engineDeadlines = new Map([\n  ]);\n  run();\n})();\n");
+  assert.throws(() => spliceDeadlines(source.replace("hostDeadlines", "interactive"), { host: [], engine: [] }), /hostDeadlines as a new Map\(\[ \.\.\. \]\) exactly once/);
+  assert.throws(() => spliceDeadlines(`${source}\n  const engineDeadlines = new Map([\n  ]);\n`, { host: [], engine: [] }), /engineDeadlines .* exactly once/);
+});
+
+test("the real bootstrap keeps every deadline it had before the schema owned them", async () => {
+  const bootstrap = (await realOutputs()).get(BOOTSTRAP);
+  const rows = Object.fromEntries([...bootstrap.matchAll(/^ {4}\["([^"]+)", (\d+)\],$/gm)].map((match) => [match[1], Number(match[2])]));
+  assert.deepEqual(
+    { passwordsExport: rows["ArdiaPasswords.export"], cardNumber: rows["ArdiaAutofill.cardNumber"], bangList: rows["ArdiaShell.fetchBangList"], cli: rows["ArdiaCli.install"], calendar: rows["ArdiaCalendar.sources"], removeAllowed: rows["contentBlocker.removeAllowed"], chooseFolder: rows["ArdiaSync.chooseFolder"], live: rows["ArdiaLive.request"] },
+    { passwordsExport: 900000, cardNumber: 180000, bangList: 75000, cli: 330000, calendar: 60000, removeAllowed: 90000, chooseFolder: 900000, live: 180000 },
+  );
+  assert.equal(Object.keys(rows).length, 27);
 });
 
 test("an event says whether the desktop host forwards it, never by default, and the Mac and Windows forward it unless they say otherwise", () => {
@@ -401,7 +482,7 @@ test("the real manifest lists every module domain function and event of the sche
       const listed = manifest.modules[name].modules[module];
       assert.deepEqual(Object.keys(listed.functions), Object.keys(row.functions));
       for (const [fn, binding] of Object.entries(row.functions)) {
-        assert.deepEqual(listed.functions[fn], { args: binding.args.map(([param]) => param.replace(/\?$/, "")), async: binding.async, mac: binding.mac, desktop: binding.desktop, windows: binding.windows });
+        assert.deepEqual(listed.functions[fn], { args: binding.args.map(([param]) => param.replace(/\?$/, "")), async: binding.async, mac: binding.mac, desktop: binding.desktop, windows: binding.windows, ...(binding.deadline === undefined ? {} : { deadline: binding.deadline }) });
       }
       assert.deepEqual(Object.keys(listed.events), Object.keys(row.events));
     }
@@ -498,7 +579,7 @@ const conformers = (swift) =>
 test("the generated module Swift typechecks against Expo's shapes, and a module with the schema's signatures conforms to it", async () => {
   const swiftc = spawnSync("swiftc", ["--version"], { encoding: "utf8" });
   if (swiftc.status !== 0) return;
-  const real = outputs(await loadDomains(), await loadModuleDomains());
+  const real = (await realOutputs());
   const sources = [
     ...[...real].filter(([path]) => path.endsWith("Native.swift")),
     ["packages/shaders/ios/DemoNative.swift", outputs({}, { demo: richModules() }).get("packages/shaders/ios/DemoNative.swift")],
@@ -562,7 +643,7 @@ test("--write deletes or overwrites a module domain's file only when it still ho
       mkdirSync(join(dir, path, ".."), { recursive: true });
       cpSync(ROOT + path, join(dir, path), { recursive: true });
     };
-    for (const path of ["packages/hostapi/generate.mjs", "packages/hostapi/define.ts", "packages/hostapi/schema", "packages/ardiacore/package.json", "packages/shaders/package.json", "packages/shell/package.json", "packages/sync/package.json", "packages/import/package.json"]) copy(path);
+    for (const path of ["packages/hostapi/generate.mjs", "packages/hostapi/define.ts", "packages/hostapi/schema", "packages/ardiacore/package.json", "packages/shaders/package.json", "packages/shell/package.json", "packages/sync/package.json", "packages/import/package.json", BOOTSTRAP]) copy(path);
     const generator = join(dir, "packages/hostapi/generate.mjs");
     const at = (path) => join(dir, path);
     const write = () => runAt(generator, "--write");
