@@ -562,6 +562,9 @@ jobs:
   windows-update:
     needs: [publish, windows]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.windows.result == 'success' }}
+    concurrency:
+      group: windows-alpha-publish
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

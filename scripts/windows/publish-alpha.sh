@@ -19,8 +19,10 @@
 # The version and build come from Ardia.build.json, the identity the build carries. The build is the number of
 # commits in the built commit's history, so a release outranks every build before it. A build below the live
 # feed's is refused, and a build equal to the live feed's is refused unless the live feed's windows-update.json.sig
-# is confirmed missing (HTTP 404) or invalid AND the staged manifest matches the live windows-update.json exactly
-# (in which case only windows-update.json.sig is uploaded, never clobbering published installers).
+# is confirmed missing (HTTP 404), empty, or invalid AND the staged manifest matches the live windows-update.json
+# exactly (in which case only windows-update.json.sig is uploaded after rechecking live windows-update.json, never
+# clobbering published installers). Live publishes serialize on a per-release lock and verify the live manifest and
+# signature after uploading.
 # Signing uses --key <pem> (or WINDOWS_UPDATE_KEY_FILE / WINDOWS_UPDATE_ED_PRIVATE_KEY), refused if its public half
 # doesn't match --public-key (default scripts/windows/windows-update.pem), and self-verifies windows-update.json,
 # windows-update.json.sig and both installers with ardia-update-verify before uploading windows-update.json.sig and
@@ -96,7 +98,7 @@ resolve_verifier() {
   esac
   local candidate="$target_dir/release/ardia-update-verify"
   if PATH="$PATH:$HOME/.cargo/bin" command -v cargo >/dev/null; then
-    (cd "$root/packages/core-rs" && PATH="$PATH:$HOME/.cargo/bin" cargo build --locked --release --quiet -p ardia-update-verify)
+    (cd "$root/packages/core-rs" && PATH="$PATH:$HOME/.cargo/bin" cargo build --locked --release --quiet -p ardia-update-verify) || die "cargo build ardia-update-verify failed"
   elif [ ! -x "$candidate" ]; then
     die "cargo or --verify-bin is required to self-verify windows-update.json"
   fi
@@ -184,6 +186,14 @@ else
   status="Its release, with the Mac and Linux downloads and the notes: https://github.com/$repo/releases/tag/v$version"
 fi
 
+if [ "$dry" != 1 ]; then
+  lock_key="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$repo/$tag")"
+  lock_file="${ARDIA_WINDOWS_PUBLISH_LOCK:-/tmp/ardia-windows-publish-$lock_key.lock}"
+  mkdir -p "$(dirname "$lock_file")"
+  exec 9>>"$lock_file"
+  python3 -I -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX)' || die "failed to acquire publish lock $lock_file"
+fi
+
 verifier=""
 repair_sig_only=0
 live_json="$stage/live-windows-update.json"
@@ -198,7 +208,7 @@ if [ "$live_json_state" = "200" ]; then
     live_sig_state="$(fetch_live "$published/windows-update.json.sig" "$live_sig")"
     case "$live_sig_state" in
       200)
-        verifier="$(resolve_verifier)"
+        verifier="$(resolve_verifier)" || exit 1
         if "$verifier" windows-manifest --key "$public_key" --manifest "$live_json" --signature "$live_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null 2>&1 \
           && "$verifier" windows-manifest --key "$public_key" --manifest "$live_json" --signature "$live_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null 2>&1; then
           [ "$dry" = 1 ] || die "build $build isn't above the live feed's build $live_build, so no installed app would take it"
@@ -207,6 +217,10 @@ if [ "$live_json_state" = "200" ]; then
           repair_sig_only=1
           echo "warning: live build $build has an invalid windows-update.json.sig; repairing signature in place" >&2
         fi
+        ;;
+      http:200-empty)
+        repair_sig_only=1
+        echo "warning: live build $build has an empty windows-update.json.sig; repairing signature in place" >&2
         ;;
       404)
         repair_sig_only=1
@@ -268,7 +282,9 @@ fi
 cat "$out/windows-update.json"
 
 echo "==> Sign and verify feed"
-[ -n "$verifier" ] || verifier="$(resolve_verifier)"
+if [ -z "$verifier" ]; then
+  verifier="$(resolve_verifier)" || exit 1
+fi
 sign_args=(
   "$root/scripts/windows/sign-update.mjs"
   --manifest "$out/windows-update.json"
@@ -317,6 +333,12 @@ The engine is Chromium with Helium's patches (GPL-3.0); $name.tar.xz is its sour
 Not a Mac release.
 EOF
 if [ "$repair_sig_only" = 1 ]; then
+  if [ "$dry" != 1 ]; then
+    recheck_json="$stage/recheck-windows-update.json"
+    recheck_state="$(fetch_live "$published/windows-update.json" "$recheck_json")"
+    [ "$recheck_state" = "200" ] || die "live windows-update.json became unavailable ($recheck_state) before uploading signature"
+    cmp -s "$recheck_json" "$out/windows-update.json" || die "live windows-update.json changed during repair; refusing to overwrite another build's signature"
+  fi
   run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json.sig"
 else
   if [ "$dry" = 1 ] || ! gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
@@ -339,6 +361,17 @@ if [ "$dry" = 1 ]; then
   echo "dry run: nothing published."
 else
   [ "$(gh release view "$tag" -R "$repo" --json isPrerelease -q .isPrerelease)" = true ] || die "$tag isn't a prerelease"
+  post_json="$stage/post-windows-update.json"
+  post_sig="$stage/post-windows-update.json.sig"
+  post_json_state="$(fetch_live "$published/windows-update.json" "$post_json")"
+  [ "$post_json_state" = "200" ] || die "published windows-update.json could not be re-fetched ($post_json_state)"
+  post_sig_state="$(fetch_live "$published/windows-update.json.sig" "$post_sig")"
+  [ "$post_sig_state" = "200" ] || die "published windows-update.json.sig could not be re-fetched ($post_sig_state)"
+  cmp -s "$post_json" "$out/windows-update.json" || die "published windows-update.json drifted during publish"
+  cmp -s "$post_sig" "$out/windows-update.json.sig" || die "published windows-update.json.sig drifted during publish"
+  "$verifier" windows-manifest --key "$public_key" --manifest "$post_json" --signature "$post_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null \
+    && "$verifier" windows-manifest --key "$public_key" --manifest "$post_json" --signature "$post_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null \
+    || die "published windows-update.json and windows-update.json.sig failed post-upload verification"
   echo "Published Windows build $build ($version): https://github.com/$repo/releases/tag/$tag"
 fi
 du -sh "$out/Ardia-Setup-x64.exe" "$out/Ardia-Setup-arm64.exe" "$out/$name.tar.xz"
