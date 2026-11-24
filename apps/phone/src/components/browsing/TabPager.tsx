@@ -95,14 +95,14 @@ export function adjacentIn(order: readonly string[], from: string, to: string): 
   return at >= 0 && to !== "" && (order[at - 1] === to || order[at + 1] === to);
 }
 
-type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; order?: readonly string[]; landsEarly?: boolean; onCommit: (id: string, onScreen: boolean) => void; onHeld?: (id: string, action: BarAction) => void; onGrab: () => void };
+type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; order?: readonly string[]; landsEarly?: boolean; onCommit: (id: string, onScreen: boolean) => void; onHeld?: (id: string, action: BarAction) => void; onSequence?: (active: boolean) => void; onGrab: () => void };
 
 export function isOpenTab(id: string): boolean {
   const tabs = currentTabs();
   return id !== "" && (tabs.open.some((tab) => tab.id === id) || tabs.privates.some((tab) => tab.id === id));
 }
 
-export function useTabPager({ width, selectedId, left, right, order, landsEarly = false, onCommit, onHeld, onGrab }: Options): TabPager {
+export function useTabPager({ width, selectedId, left, right, order, landsEarly = false, onCommit, onHeld, onSequence, onGrab }: Options): TabPager {
   const reduceMotion = useReduceMotion();
   const cuts = tabSwitchCuts();
   const shownId = selectedId ?? "";
@@ -234,9 +234,21 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
   const logSwipe = (verdict: "accepted" | "refused", lift: number, from: string, candidate: string, projected: number, reason: string) => {
     labTrace(`PAGELAB swipe ${verdict} turn=${lift} source=${from || "none"} candidate=${candidate || "none"} projected=${Math.round(projected)} reason=${reason}`);
     traceSlice(`swipe ${verdict}:${reason}:${lift}`);
+    if (verdict === "refused") settleSequence();
+  };
+
+  const beginSequence = () => onSequence?.(true);
+  const settleSequence = () => {
+    if (panning.value || cursorTurn.value > committedTurn.current) return;
+    onSequence?.(false);
   };
 
   const commit = (from: string, to: string, lift: number, starts: number) => {
+    commitLift(from, to, lift, starts);
+    settleSequence();
+  };
+
+  const commitLift = (from: string, to: string, lift: number, starts: number) => {
     if (lift > committedTurn.current) committedTurn.current = lift;
     runOnUI(acknowledge)(lift);
     if (!cuts && starts !== panStarts.value) {
@@ -400,6 +412,12 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     .withTestId("tabPager")
     .activeOffsetX([-PAGER.minimumDistance, PAGER.minimumDistance])
     .failOffsetY([-PAGER.minimumDistance, PAGER.minimumDistance])
+    .onBegin(() => {
+      runOnJS(beginSequence)();
+    })
+    .onFinalize(() => {
+      runOnJS(settleSequence)();
+    })
     .onStart(() => {
       if (!active.value) runOnJS(onGrab)();
       active.value = 1;

@@ -74,6 +74,27 @@ const outgoingX = (root: ReactTestRenderer) => {
   const outgoing = root.root.findAll((node) => typeof node.type === "string" && (getAnimatedStyle(node)?.transform as object[] | undefined)?.some((step) => "scale" in step) === true)[0]!;
   return (Object.assign({}, ...(getAnimatedStyle(outgoing).transform as object[])) as { translateX: number }).translateX;
 };
+function holdingJs() {
+  const held: (() => void)[] = [];
+  const spy = jest.spyOn(global, "queueMicrotask").mockImplementation((task) => void held.push(task));
+  return {
+    runFirst: () => {
+      const first = held.shift();
+      const waiting = held.length;
+      act(() => first?.());
+      act(() => jest.advanceTimersByTime(0));
+      for (let pass = 0; pass < 8 && held.length > waiting; pass++) {
+        const rendered = held.splice(waiting);
+        act(() => rendered.forEach((task) => task()));
+      }
+    },
+    release: () => {
+      spy.mockRestore();
+      act(() => held.splice(0).forEach((task) => task()));
+    },
+  };
+}
+const placeholderCount = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.testID === "pagerAhead" && typeof node.type === "string").length;
 const swipeLines = () => lines.filter((line) => line.startsWith("PAGELAB swipe"));
 const order = () => browse.swipeOrder();
 
@@ -257,8 +278,10 @@ test("five flicks 250 ms apart while JS renders nothing in between all advance, 
   const step = dx < 0 ? 1 : -1;
   const travel = Math.round(width() * 0.46);
   const ahead = (id: string) => root.root.findAll((node) => node.props.testID === "pagerAhead" && node.props.jestAnimatedStyle !== undefined && node.findAll((child) => child.props.markWhenShown === `dest-face:${id}`).length > 0)[0];
+  const js = holdingJs();
   for (let at = 0; at < 5; at++) {
     flick(dx, travel, 1650);
+    if (at === 0) js.runFirst();
     const landedOn = line[start + step * (at + 1)]!;
     if (at >= 1 && at <= 3) {
       const card = ahead(landedOn)!;
@@ -269,8 +292,10 @@ test("five flicks 250 ms apart while JS renders nothing in between all advance, 
     }
   }
   expect(currentTabs().selectedId).toBe(line[start]);
+  js.release();
   frames(64);
   expect(currentTabs().selectedId).toBe(line[start + step * 5]);
+  expect(placeholderCount(root)).toBe(0);
   const verdicts = swipeLines().filter((entry) => / turn=\d+ /.test(entry) && !/stale|closed|archived|neighbour/.test(entry));
   expect(verdicts).toHaveLength(5);
   verdicts.forEach((entry, at) => {
@@ -368,5 +393,28 @@ test("without cuts, as on iPhone, a pan begun after a spring lands but before it
   frames(1_000);
   expect(currentTabs().selectedId).toBe(line[start + step]);
   expect(swipeLines().filter((entry) => entry.includes("accepted")).every((entry) => entry.includes(`source=${line[start]}`))).toBe(true);
+  unmount(root);
+});
+
+test("placeholder cards are mounted only through a swipe sequence: none while idle, mounted from a pan's start, and gone once every lift has committed or been refused", () => {
+  const root = startAt(8, 0);
+  const placeholders = () => placeholderCount(root);
+  expect(placeholders()).toBe(0);
+  const line = order();
+  const dx: -1 | 1 = line.indexOf(currentTabs().selectedId!) === 0 ? -1 : 1;
+  const js = holdingJs();
+  flick(dx);
+  js.runFirst();
+  flick(dx);
+  expect(placeholders()).toBeGreaterThan(0);
+  js.release();
+  frames(64);
+  expect(placeholders()).toBe(0);
+  flick(dx, 40, 0);
+  frames(32);
+  expect(placeholders()).toBe(0);
+  flick((-dx) as -1 | 1, 200, 1800, State.CANCELLED);
+  frames(32);
+  expect(placeholders()).toBe(0);
   unmount(root);
 });

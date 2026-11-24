@@ -260,7 +260,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const cutsSwipe = tabSwitchCuts() && !probes("landed");
   const lineTabs = useLineTabs(cutsSwipe ? swipeLine : NO_LINE);
   const spokenLine = useMemo(() => Object.fromEntries(lineTabs.flatMap((each) => (each ? [[each.id, spokenAddress(barAddress(each))]] : []))) as Record<string, string>, [lineTabs]);
-  const aheadCards = useMemo(() => cardsAhead(swipeLine, lineTabs, tab.id), [swipeLine, lineTabs, tab.id]);
+  const [swiping, setSwiping] = useState(false);
+  const aheadCards = useMemo(() => (swiping ? cardsAhead(swipeLine, lineTabs, tab.id) : NO_AHEAD), [swiping, swipeLine, lineTabs, tab.id]);
   const runHeldAction = useCallback((id: string, action: BarAction) => {
     if (currentTabs().selectedId !== id) return;
     runBarAction(action);
@@ -277,6 +278,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     order: swipeLine,
     landsEarly: handsOver,
     onHeld: runHeldAction,
+    onSequence: cutsSwipe ? setSwiping : undefined,
     onCommit: handsOver ? arriveAtNeighbour : swipeToNeighbour,
     onGrab: grabbedSwipe,
   });
@@ -569,6 +571,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
 const NO_LINE: string[] = [];
 
 const AHEAD_SLOTS = [2, 3, 4];
+
+const NO_AHEAD: { card: BrowserTab; side: -1 | 1; inner: string }[] = [];
 
 function runBarAction(action: BarAction) {
   if (action === "address") editPageQuery();
