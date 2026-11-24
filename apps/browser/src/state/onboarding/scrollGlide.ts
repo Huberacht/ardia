@@ -1,1 +1,1 @@
-export { glideNativeScroll } from "../../platform/scrollGlide";
+export { glideNativeScroll, wheelSteersSections } from "../../platform/scrollGlide";

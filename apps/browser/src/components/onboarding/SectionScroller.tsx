@@ -1,9 +1,9 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
-import { Animated, findNodeHandle, unstable_batchedUpdates, View, type LayoutChangeEvent, type ScrollView } from "react-native";
+import { Animated, findNodeHandle, unstable_batchedUpdates, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type ScrollView } from "react-native";
 import { reduceMotion } from "../ui";
 import type { WheelInfo } from "../ui/native";
 import { previousStep } from "../../state/onboarding/onboarding";
-import { glideNativeScroll } from "../../state/onboarding/scrollGlide";
+import { glideNativeScroll, wheelSteersSections } from "../../state/onboarding/scrollGlide";
 import { currentPlace, goToSection, type OnboardingSection, type SectionMove } from "../../state/onboarding/sections";
 import { noteOnboarding } from "../../state/telemetry/usage";
 import { SectionContext, useFlowSlots } from "./sectionContext";
@@ -44,6 +44,8 @@ const SectionBody = memo(function SectionBody({
   );
 });
 
+const GLIDE_SLACK_MS = 80;
+
 const glideMs = () => (reduceMotion() ? 0 : onboardingMotion.sectionScroll);
 
 export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: OnboardingSection[]; active: number; render: (section: OnboardingSection) => ReactNode }>(
@@ -53,7 +55,7 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
     const [viewport, setViewport] = useState(0);
     const [frames, setFrames] = useState<Record<string, Frame>>({});
     const fades = useSectionFades(onboardingFlow.peekOpacity, sectionEase);
-    const motion = useRef({ at: 0, placedKey: null as string | null }).current;
+    const motion = useRef({ at: 0, placedKey: null as string | null, glidingUntil: 0 }).current;
     const gesture = useRef(newWheelGesture()).current;
     const keys = sections.map(sectionKey);
     const ranges = keys.map((k) => rangeOf(frames[k], viewport));
@@ -63,6 +65,7 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
 
     const moveTo = (y: number, ms: number) => {
       motion.at = y;
+      motion.glidingUntil = Date.now() + ms + GLIDE_SLACK_MS;
       const tag = findNodeHandle(scroll.current as never);
       if (tag !== null && glideNativeScroll(tag, y, ms)) return;
       scroll.current?.scrollTo({ y, animated: ms > 0 });
@@ -119,6 +122,16 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
 
     useImperativeHandle(ref, () => ({ move, wheel }));
 
+    const keepInQuestion = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const y = e.nativeEvent.contentOffset.y;
+      const { ranges: now, active: at } = live.current;
+      const r = now[at];
+      if (!r || Date.now() < motion.glidingUntil) return;
+      const kept = clampTo(y, r);
+      motion.at = kept;
+      if (Math.abs(kept - y) > 0.5) scroll.current?.scrollTo({ y: kept, animated: false });
+    };
+
     const measure = (key: string, e: LayoutChangeEvent) => {
       const { y, height } = e.nativeEvent.layout;
       setFrames((prev) => (prev[key]?.y === y && prev[key]?.h === height ? prev : { ...prev, [key]: { y, h: height } }));
@@ -136,7 +149,9 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
       <Animated.ScrollView
         ref={scroll as never}
         style={{ flex: 1 }}
-        scrollEnabled={false}
+        scrollEnabled={!wheelSteersSections}
+        onScroll={wheelSteersSections ? undefined : keepInQuestion}
+        scrollEventThrottle={wheelSteersSections ? undefined : 16}
         showsVerticalScrollIndicator={false}
         onLayout={(e) => setViewport(e.nativeEvent.layout.height)}
         contentContainerStyle={{ paddingTop: viewport / 2, paddingBottom: viewport / 2, paddingHorizontal: onboardingFlow.columnPad, gap: onboardingFlow.gap }}
