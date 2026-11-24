@@ -32,5 +32,5 @@ export function reportShellMigrationAtLaunch(consent: ConsentToken | null) {
     },
     sharing: () => stillValid(consent),
     send: (properties) => capture("shell_migration", properties, consent),
-  }).catch(() => "none" as const);
+  }).catch(() => "unsaved" as const);
 }

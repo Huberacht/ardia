@@ -52,7 +52,7 @@ test("anything unexpected in the report is not sent", () => {
 });
 
 function reporting(store, sharing, sent = []) {
-  return { sent, read: store.read, save: store.save, sharing: () => sharing, send: (properties) => sent.push(properties) };
+  return { sent, read: store.read, save: store.save, sharing: () => sharing, send: (properties) => (sent.push(properties), true) };
 }
 
 test("each migration run is reported once, and only after the event was sent", async () => {
@@ -75,6 +75,15 @@ test("with sharing off the report stays pending, nothing is sent and nothing is 
   assert.equal(off.sent.length, 0);
   assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
   assert.equal(await reportShellMigration(reporting(store, true)), "reported");
+});
+
+test("a capture that drops or throws leaves the run pending", async () => {
+  const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+  assert.equal(await reportShellMigration({ ...reporting(store, true), send: () => false }), "dropped");
+  assert.equal(await reportShellMigration({ ...reporting(store, true), send: () => { throw new Error("queue full"); } }), "dropped");
+  assert.equal(await reportShellMigration({ ...reporting(store, true), send: () => undefined }), "dropped");
+  assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
+  assert.ok(pendingShellMigration(store.read));
 });
 
 test("a failed save of the reported mark leaves the run pending for the next launch", async () => {

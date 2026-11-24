@@ -128,9 +128,11 @@ impl Vault for CredentialManager {
                 continue;
             };
             let comment = unsafe { from_wide(credential.Comment) };
+            let user = unsafe { from_wide(credential.UserName) };
             stored.push(StoredCredential {
                 target,
                 comment,
+                user,
                 blob: copy,
             });
         }

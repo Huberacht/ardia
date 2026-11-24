@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 use zeroize::Zeroizing;
 
 use crate::credentials::{self, Assembled, StoredCredential};
-use crate::fsafe::{self, Entry, Fetched, Root};
+use crate::fsafe::{self, Dir, Entry, Fetched, Root};
 use crate::names;
 
 pub const MARKER_VERSION: u64 = 1;
@@ -226,6 +226,7 @@ struct Migration<'a> {
     sealer: &'a dyn Sealer,
     vault: &'a dyn Vault,
     faults: &'a Faults,
+    run: &'a str,
     counts: Counts,
     commits: usize,
 }
@@ -243,7 +244,7 @@ fn resolved(path: &Path) -> io::Result<PathBuf> {
     loop {
         match fs::canonicalize(&existing) {
             Ok(canonical) => {
-                let mut full = canonical;
+                let mut full = fsafe::plain(canonical);
                 for part in rest.iter().rev() {
                     full.push(part);
                 }
@@ -292,7 +293,7 @@ pub fn check_layout(layout: &Layout) -> io::Result<()> {
 }
 
 fn read_report(root: &Root, name: &str) -> Option<Value> {
-    match root.read_regular(&root.path.join(name), SECRET_FILE_LIMIT).ok()? {
+    match root.dir().read(name, SECRET_FILE_LIMIT).ok()? {
         Fetched::Data(bytes) => serde_json::from_slice::<Value>(&bytes).ok().filter(Value::is_object),
         _ => None,
     }
@@ -316,37 +317,60 @@ fn report_bytes(report: &Report) -> io::Result<Vec<u8>> {
 }
 
 fn write_report(root: &Root, name: &str, report: &Report) -> io::Result<()> {
-    root.commit(root.stage(&root.path, name, &report_bytes(report)?)?)
+    root.dir().write(name, &report_bytes(report)?)
+}
+
+fn kept_name(name: &str, run: &str) -> String {
+    format!("{name}.{}.kept", &run[..run.len().min(12)])
 }
 
 impl Migration<'_> {
-    fn commit(&mut self, staged: fsafe::Staged) -> io::Result<()> {
+    fn commit(&mut self, dir: &Dir, staged: fsafe::Staged, name: &str) -> io::Result<()> {
         self.commits += 1;
         if self.faults.fail_at_commit == Some(self.commits) {
+            dir.abandon(staged);
             return Err(io::Error::other("stopped before a rename"));
         }
-        self.webui.commit(staged)
+        dir.commit(staged, name)
     }
 
-    fn write(&mut self, dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
-        let staged = self.webui.stage(dir, name, bytes)?;
-        self.commit(staged)
+    fn write(&mut self, dir: &Dir, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let staged = dir.stage(bytes)?;
+        self.commit(dir, staged, name)
     }
 
     fn keep_aside(&mut self, kept_parts: &[&str], name: &str, bytes: &[u8]) -> io::Result<()> {
         let mut parts = vec![names::KEPT_FOLDER];
         parts.extend_from_slice(kept_parts);
-        let kept = self.webui.ensure_folder(&parts)?;
-        if matches!(fsafe::entry(&kept.join(name))?, Entry::Missing) {
-            self.write(&kept, name, bytes)?;
-            self.counts.kept_aside += 1;
-        }
+        let kept = self
+            .webui
+            .folder(&parts, true)?
+            .ok_or_else(|| fsafe::unsafe_path(parts.join("/").into()))?;
+        let target = match kept.read(name, DOCUMENT_LIMIT)? {
+            Fetched::Missing => name.to_string(),
+            Fetched::Data(earlier) if earlier.as_slice() == bytes => return Ok(()),
+            Fetched::Data(_) => {
+                let newer = kept_name(name, self.run);
+                if let Fetched::Data(earlier) = kept.read(&newer, DOCUMENT_LIMIT)? {
+                    if earlier.as_slice() == bytes {
+                        return Ok(());
+                    }
+                }
+                newer
+            }
+            _ => kept_name(name, self.run),
+        };
+        self.write(&kept, &target, bytes)?;
+        self.counts.kept_aside += 1;
         Ok(())
     }
 
     fn place(&mut self, parts: &[&str], name: &str, bytes: &[u8], same: &dyn Fn(&[u8]) -> bool) -> io::Result<Placed> {
-        let dir = self.webui.ensure_folder(parts)?;
-        match self.webui.read_regular(&dir.join(name), DOCUMENT_LIMIT)? {
+        let dir = self
+            .webui
+            .folder(parts, true)?
+            .ok_or_else(|| fsafe::unsafe_path(parts.join("/").into()))?;
+        match dir.read(name, DOCUMENT_LIMIT)? {
             Fetched::Missing => {}
             Fetched::Data(existing) if same(&existing) => {
                 self.counts.unchanged += 1;
@@ -375,41 +399,49 @@ impl Migration<'_> {
         }
     }
 
+    fn source_folder(&mut self, root: &Root, parts: &[&str]) -> io::Result<Option<Dir>> {
+        let Some((last, above)) = parts.split_last() else {
+            return root.folder(&[], false);
+        };
+        let Some(parent) = root.folder(above, false)? else {
+            return Ok(None);
+        };
+        match parent.entry(last)? {
+            Entry::Directory => parent.child(last, false),
+            Entry::Missing => Ok(None),
+            Entry::Link => {
+                self.counts.skipped_links += 1;
+                Ok(None)
+            }
+            Entry::File | Entry::Other => {
+                self.counts.skipped_invalid += 1;
+                Ok(None)
+            }
+        }
+    }
+
     fn copy_folder(
         &mut self,
         root: &Root,
-        source: &Path,
+        source_parts: &[&str],
         parts: &[&str],
         limit: u64,
         accept: &dyn Fn(&str) -> bool,
         counted: &dyn Fn(&mut Counts, &str),
     ) -> io::Result<()> {
-        match fsafe::entry(source)? {
-            Entry::Directory => {}
-            Entry::Missing => return Ok(()),
-            Entry::Link => {
-                self.counts.skipped_links += 1;
-                return Ok(());
-            }
-            Entry::File | Entry::Other => {
-                self.counts.skipped_invalid += 1;
-                return Ok(());
-            }
-        }
+        let Some(source) = self.source_folder(root, source_parts)? else {
+            return Ok(());
+        };
         let mut seen = BTreeSet::new();
-        for name in fsafe::list_names(source)? {
-            if !accept(&name) {
-                continue;
-            }
-            let path = source.join(&name);
-            if matches!(fsafe::entry(&path)?, Entry::Directory) {
+        for name in source.list()? {
+            if !accept(&name) || matches!(source.entry(&name)?, Entry::Directory) {
                 continue;
             }
             if !seen.insert(names::folded(&name)) {
                 self.counts.skipped_case_clash += 1;
                 continue;
             }
-            match root.read_regular(&path, limit)? {
+            match source.read(&name, limit)? {
                 Fetched::Data(bytes) => {
                     match self.place(parts, &name, &bytes, &|existing| existing == bytes.as_slice())? {
                         Placed::Written | Placed::Unchanged => counted(&mut self.counts, &name),
@@ -428,7 +460,7 @@ impl Migration<'_> {
         };
         self.copy_folder(
             root,
-            &root.path,
+            &[],
             &[],
             DOCUMENT_LIMIT,
             &names::document_name,
@@ -446,26 +478,16 @@ impl Migration<'_> {
         let Some(root) = self.rnw_config else {
             return Ok(());
         };
-        let source = root.path.clone();
         let is_config = |name: &str| names::CONFIG_FILES.contains(&name);
+        let count = |counts: &mut Counts, _: &str| counts.config_files += 1;
+        self.copy_folder(root, &[], &[names::CONFIG_FOLDER], CONFIG_LIMIT, &is_config, &count)?;
         self.copy_folder(
             root,
-            &source,
-            &[names::CONFIG_FOLDER],
-            CONFIG_LIMIT,
-            &is_config,
-            &|counts, _| counts.config_files += 1,
-        )?;
-        if !matches!(fsafe::entry(&source)?, Entry::Directory) {
-            return Ok(());
-        }
-        self.copy_folder(
-            root,
-            &source.join(names::THEMES_FOLDER),
+            &[names::THEMES_FOLDER],
             &[names::CONFIG_FOLDER, names::THEMES_FOLDER],
             CONFIG_LIMIT,
             &names::theme_file_name,
-            &|counts, _| counts.config_files += 1,
+            &count,
         )
     }
 
@@ -473,21 +495,11 @@ impl Migration<'_> {
         let Some(root) = self.rnw_data else {
             return Ok(());
         };
-        let source = root.path.join(names::SYNC_FOLDER);
-        match fsafe::entry(&source)? {
-            Entry::Directory => {}
-            Entry::Missing => return Ok(()),
-            Entry::Link => {
-                self.counts.skipped_links += 1;
-                return Ok(());
-            }
-            Entry::File | Entry::Other => {
-                self.counts.skipped_invalid += 1;
-                return Ok(());
-            }
-        }
+        let Some(source) = self.source_folder(root, &[names::SYNC_FOLDER])? else {
+            return Ok(());
+        };
         let mut seen = BTreeSet::new();
-        for name in fsafe::list_names(&source)? {
+        for name in source.list()? {
             let Some(account) = names::sync_key_account(&name) else {
                 continue;
             };
@@ -495,7 +507,7 @@ impl Migration<'_> {
                 self.counts.skipped_case_clash += 1;
                 continue;
             }
-            let bytes = match root.read_regular(&source.join(&name), SYNC_KEY_LIMIT)? {
+            let bytes = match source.read(&name, SYNC_KEY_LIMIT)? {
                 Fetched::Data(bytes) => bytes,
                 other => {
                     self.skip(&other);
@@ -556,17 +568,21 @@ impl Migration<'_> {
     }
 
     fn sweep(&mut self) -> io::Result<()> {
-        let webui = self.layout.webui_data.clone();
-        let mut folders = vec![webui.clone()];
-        for base in [webui.clone(), webui.join(names::KEPT_FOLDER)] {
-            folders.push(base.join(names::CONFIG_FOLDER));
-            folders.push(base.join(names::CONFIG_FOLDER).join(names::THEMES_FOLDER));
-            folders.push(base.join(names::SYNC_FOLDER));
-            folders.push(base.join(names::SECRETS_FOLDER));
+        let mut folders: Vec<Vec<&str>> = vec![vec![], vec![names::KEPT_FOLDER]];
+        for base in [vec![], vec![names::KEPT_FOLDER]] {
+            for sub in [
+                vec![names::CONFIG_FOLDER],
+                vec![names::CONFIG_FOLDER, names::THEMES_FOLDER],
+                vec![names::SYNC_FOLDER],
+                vec![names::SECRETS_FOLDER],
+            ] {
+                folders.push(base.iter().chain(sub.iter()).copied().collect());
+            }
         }
-        folders.push(webui.join(names::KEPT_FOLDER));
-        for folder in folders {
-            self.counts.partials_swept += self.webui.sweep_partials(&folder)? as u64;
+        for parts in folders {
+            if let Ok(Some(dir)) = self.webui.folder(&parts, false) {
+                self.counts.partials_swept += dir.sweep_partials()? as u64;
+            }
         }
         Ok(())
     }
@@ -603,50 +619,43 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         report.duration_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
         report
     };
+    let refuse = |mut report: Report, stage: Stage| {
+        report.outcome = Outcome::Refused;
+        report.failed_stage = Some(stage);
+        finish(report)
+    };
 
     if check_layout(layout).is_err() {
-        report.outcome = Outcome::Refused;
-        report.failed_stage = Some(Stage::Layout);
-        return finish(report);
+        return refuse(report, Stage::Layout);
     }
-    let webui_path = &layout.webui_data;
-    if matches!(fsafe::entry(webui_path), Ok(Entry::Missing)) && fs::create_dir_all(webui_path).is_err() {
-        report.failed_stage = Some(Stage::Layout);
-        return finish(report);
-    }
+    let webui = match Root::open_or_create(&layout.webui_data) {
+        Ok(webui) => webui,
+        Err(error) if fsafe::is_unsafe(&error) => return refuse(report, Stage::Layout),
+        Err(_) => {
+            report.failed_stage = Some(Stage::Layout);
+            return finish(report);
+        }
+    };
     let source_root = |path: &Path| match fsafe::entry(path) {
         Ok(Entry::Missing) => Ok(None),
         Ok(Entry::Directory) => Root::new(path).map(Some).map_err(|_| ()),
         _ => Err(()),
     };
-    let roots = (
-        Root::new(webui_path).map_err(|_| ()),
-        source_root(&layout.rnw_data),
-        source_root(&layout.rnw_config),
-    );
-    let (Ok(webui), Ok(rnw_data), Ok(rnw_config)) = roots else {
-        report.outcome = Outcome::Refused;
-        report.failed_stage = Some(Stage::Layout);
-        return finish(report);
+    let (Ok(rnw_data), Ok(rnw_config)) = (source_root(&layout.rnw_data), source_root(&layout.rnw_config)) else {
+        return refuse(report, Stage::Layout);
     };
     let overlaps = [rnw_data.as_ref(), rnw_config.as_ref()]
         .into_iter()
         .flatten()
         .any(|root| overlapping(&root.resolved, &webui.resolved));
     if overlaps {
-        report.outcome = Outcome::Refused;
-        report.failed_stage = Some(Stage::Layout);
-        return finish(report);
+        return refuse(report, Stage::Layout);
     }
 
-    let lock = match webui.open_lock(names::LOCK_NAME) {
+    let lock = match webui.dir().open_lock(names::LOCK_NAME) {
         Ok(lock) => lock,
-        Err(error) => {
-            report.outcome = if error.get_ref().is_some_and(|inner| inner.is::<fsafe::Unsafe>()) {
-                Outcome::Refused
-            } else {
-                Outcome::Failed
-            };
+        Err(error) if fsafe::is_unsafe(&error) => return refuse(report, Stage::Lock),
+        Err(_) => {
             report.failed_stage = Some(Stage::Lock);
             return finish(report);
         }
@@ -664,13 +673,8 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         }
     }
 
-    if matches!(
-        fsafe::entry(&webui.path.join(names::MARKER_NAME)),
-        Ok(Entry::Link | Entry::Directory | Entry::Other)
-    ) {
-        report.outcome = Outcome::Refused;
-        report.failed_stage = Some(Stage::Marker);
-        return finish(report);
+    if !matches!(webui.dir().entry(names::MARKER_NAME), Ok(Entry::Missing | Entry::File)) {
+        return refuse(report, Stage::Marker);
     }
     if marker_in(&webui).is_some() {
         report.outcome = Outcome::AlreadyMigrated;
@@ -679,19 +683,22 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
     report.attempt = read_report(&webui, names::ATTEMPT_NAME)
         .and_then(|previous| previous.get("attempt").and_then(Value::as_u64))
         .map_or(1, |previous| (previous + 1).min(ATTEMPT_CAP));
+    let failed = |mut report: Report, stage: Stage| {
+        report.outcome = Outcome::Failed;
+        report.failed_stage = Some(stage);
+        let mut report = finish(report);
+        if write_report(&webui, names::ATTEMPT_NAME, &report).is_err() {
+            report.failed_stage = Some(Stage::Report);
+        }
+        report
+    };
 
     let nothing = match nothing_there(layout, vault) {
         Ok(nothing) => nothing,
-        Err(_) => {
-            report.failed_stage = Some(Stage::Credentials);
-            let mut report = finish(report);
-            if write_report(&webui, names::ATTEMPT_NAME, &report).is_err() {
-                report.failed_stage = Some(Stage::Report);
-            }
-            return report;
-        }
+        Err(_) => return failed(report, Stage::Credentials),
     };
 
+    let run = report.run.clone();
     let mut migration = Migration {
         layout,
         webui: &webui,
@@ -700,18 +707,14 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         sealer,
         vault,
         faults,
+        run: &run,
         counts: Counts::default(),
         commits: 0,
     };
     let stepped = if nothing { Ok(()) } else { migration.steps() };
     report.counts = migration.counts.clone();
     if let Err((stage, _error)) = stepped {
-        report.failed_stage = Some(stage);
-        let mut report = finish(report);
-        if faults.fail_at_commit.is_none() && write_report(&webui, names::ATTEMPT_NAME, &report).is_err() {
-            report.failed_stage = Some(Stage::Report);
-        }
-        return report;
+        return failed(report, stage);
     }
     report.outcome = if nothing {
         Outcome::NothingToMigrate
@@ -720,21 +723,19 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
     } else {
         Outcome::Migrated
     };
-    let mut report = finish(report);
+    let report = finish(report);
+    let root = webui.dir();
     let attempt = report_bytes(&report)
-        .and_then(|bytes| webui.stage(&webui.path, names::ATTEMPT_NAME, &bytes))
-        .and_then(|staged| migration.commit(staged));
+        .and_then(|bytes| root.stage(&bytes))
+        .and_then(|staged| migration.commit(root, staged, names::ATTEMPT_NAME));
     if attempt.is_err() {
-        report.outcome = Outcome::Failed;
-        report.failed_stage = Some(Stage::Report);
-        return report;
+        return failed(report, Stage::Report);
     }
     let marker = report_bytes(&report)
-        .and_then(|bytes| webui.stage(&webui.path, names::MARKER_NAME, &bytes))
-        .and_then(|staged| migration.commit(staged));
+        .and_then(|bytes| root.stage(&bytes))
+        .and_then(|staged| migration.commit(root, staged, names::MARKER_NAME));
     if marker.is_err() {
-        report.outcome = Outcome::Failed;
-        report.failed_stage = Some(Stage::Marker);
+        return failed(report, Stage::Marker);
     }
     drop(lock);
     report

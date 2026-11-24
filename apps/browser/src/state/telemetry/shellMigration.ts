@@ -73,14 +73,20 @@ export type ShellMigrationReporting = {
   read(name: string): string | null;
   save(name: string, contents: string): Promise<void>;
   sharing(): boolean;
-  send(properties: ShellMigrationProperties): void;
+  send(properties: ShellMigrationProperties): boolean;
 };
 
-export async function reportShellMigration(reporting: ShellMigrationReporting): Promise<"none" | "held" | "reported"> {
+export async function reportShellMigration(reporting: ShellMigrationReporting): Promise<"none" | "held" | "dropped" | "reported"> {
   const report = pendingShellMigration(reporting.read);
   if (!report) return "none";
   if (!reporting.sharing()) return "held";
-  reporting.send(report.properties);
+  let accepted = false;
+  try {
+    accepted = reporting.send(report.properties) === true;
+  } catch {
+    accepted = false;
+  }
+  if (!accepted) return "dropped";
   await reporting.save(SHELL_MIGRATION_REPORTED_DOC, JSON.stringify({ run: report.run }));
   return "reported";
 }

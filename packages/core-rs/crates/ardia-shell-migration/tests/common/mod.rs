@@ -89,8 +89,24 @@ fn getrandom_fill(bytes: &mut [u8]) {
     }
 }
 
+pub fn owner_of(target: &str) -> String {
+    let account = target.rsplit('/').next().unwrap_or("");
+    let Some((head, index)) = account.rsplit_once('#') else {
+        return account.to_string();
+    };
+    if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
+        return account.to_string();
+    }
+    head.strip_suffix("#g1")
+        .or_else(|| head.strip_suffix("#g2"))
+        .unwrap_or(head)
+        .to_string()
+}
+
+pub type VaultItem = (String, Option<String>, Option<String>, Vec<u8>);
+
 pub struct FakeVault {
-    pub items: Vec<(String, Option<String>, Vec<u8>)>,
+    pub items: Vec<VaultItem>,
     pub fail: bool,
     pub lists: RefCell<u64>,
 }
@@ -106,15 +122,18 @@ impl FakeVault {
 
     pub fn add_rnw(&mut self, prefix: &str, account: &str, secret: &[u8], generation: usize) {
         for stored in credentials::rnw_layout(prefix, account, secret, generation) {
-            self.items.push((stored.target, stored.comment, stored.blob.to_vec()));
+            self.items
+                .push((stored.target, stored.comment, stored.user, stored.blob.to_vec()));
         }
     }
 
     pub fn add(&mut self, target: &str, comment: Option<&str>, blob: &[u8]) {
-        self.items.push((target.into(), comment.map(Into::into), blob.to_vec()));
+        let user = Some(credentials::rnw_user(&owner_of(target)));
+        self.items
+            .push((target.into(), comment.map(Into::into), user, blob.to_vec()));
     }
 
-    pub fn snapshot(&self) -> Vec<(String, Option<String>, Vec<u8>)> {
+    pub fn snapshot(&self) -> Vec<VaultItem> {
         self.items.clone()
     }
 }
@@ -128,10 +147,11 @@ impl Vault for FakeVault {
         Ok(self
             .items
             .iter()
-            .filter(|(target, _, _)| target.starts_with(prefix))
-            .map(|(target, comment, blob)| StoredCredential {
+            .filter(|(target, _, _, _)| target.starts_with(prefix))
+            .map(|(target, comment, user, blob)| StoredCredential {
                 target: target.clone(),
                 comment: comment.clone(),
+                user: user.clone(),
                 blob: Zeroizing::new(blob.clone()),
             })
             .collect())
@@ -239,7 +259,7 @@ pub fn populate(root: &Path, sealer: &FakeDpapi) -> Populated {
     vault.add_rnw(PREFIX, "torn", &big_secret(credentials::CHUNK_BYTES * 3, 1), 1);
     vault
         .items
-        .retain(|(target, _, _)| target != &format!("{PREFIX}torn#g1#2"));
+        .retain(|(target, _, _, _)| target != &format!("{PREFIX}torn#g1#2"));
     vault.add_rnw("Ardia Connected Accounts [C:\\scratch]/", "github", b"scratch only", 1);
     vault.add("Other App/github", None, b"not ours");
     vault.add(&format!("{PREFIX}half-written#g1#1"), None, b"orphan continuation");

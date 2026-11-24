@@ -663,7 +663,9 @@ fn a_stop_between_the_report_and_the_marker_resumes_with_both() {
         },
     );
     assert_eq!(report.failed_stage, Some(Stage::Report));
-    assert!(ardia_shell_migration::migrate::read_attempt(&early.layout.webui_data).is_none());
+    let failed = ardia_shell_migration::migrate::read_attempt(&early.layout.webui_data).unwrap();
+    assert_eq!(failed["outcome"], "failed");
+    assert_eq!(failed["failed_stage"], "report");
     assert!(read_marker(&early.layout.webui_data).is_none());
     let report = migrate(
         &stopped.layout,
@@ -677,9 +679,11 @@ fn a_stop_between_the_report_and_the_marker_resumes_with_both() {
     assert_eq!(report.failed_stage, Some(Stage::Marker));
     let written = ardia_shell_migration::migrate::read_attempt(&stopped.layout.webui_data).unwrap();
     assert_eq!(
-        written["outcome"], "migrated_with_skips",
-        "the report is on disk before the marker"
+        written["outcome"], "failed",
+        "a marker that couldn't be written replaces the success report"
     );
+    assert_eq!(written["failed_stage"], "marker");
+    assert_eq!(written["counts"]["documents"], 2);
     assert!(read_marker(&stopped.layout.webui_data).is_none());
     let resumed = run(&stopped.layout, &sealer, &stopped.vault);
     assert_eq!(resumed.outcome, Outcome::MigratedWithSkips);
@@ -767,18 +771,83 @@ mod ancestors {
     #[test]
     fn a_folder_swapped_for_a_link_mid_run_is_not_written_through() {
         let scratch = Scratch::new("swap");
-        let sealer = FakeDpapi::new();
-        let populated = populate(&scratch.0, &sealer);
-        let layout = &populated.layout;
         let outside = scratch.0.join("outside");
         fs::create_dir_all(&outside).unwrap();
-        fs::create_dir_all(&layout.webui_data).unwrap();
-        let root = ardia_shell_migration::fsafe::Root::new(&layout.webui_data).unwrap();
-        let sync = root.ensure_folder(&[names::SYNC_FOLDER]).unwrap();
-        fs::remove_dir(&sync).unwrap();
+        let webui = scratch.0.join("webui");
+        let root = ardia_shell_migration::fsafe::Root::open_or_create(&webui).unwrap();
+        let held = root.folder(&[names::SYNC_FOLDER], true).unwrap().unwrap();
+        let sync = webui.join(names::SYNC_FOLDER);
+        fs::rename(&sync, webui.join("moved")).unwrap();
         symlink(&outside, &sync).unwrap();
-        assert!(root.stage(&sync, "x.dpapi", b"secret").is_err());
-        assert!(root.read_regular(&sync.join("x.dpapi"), 10).is_err());
+        held.write("x.dpapi", b"secret").unwrap();
+        assert_eq!(
+            fs::read(webui.join("moved").join("x.dpapi")).unwrap(),
+            b"secret",
+            "the write stays on the held folder"
+        );
+        assert_eq!(
+            fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing went through the link"
+        );
+        assert!(
+            root.folder(&[names::SYNC_FOLDER], false).is_err(),
+            "opening the swapped name again is refused"
+        );
+        let staged = root.folder(&["moved"], false).unwrap().unwrap();
+        fs::remove_dir_all(webui.join("moved")).unwrap();
+        assert!(
+            staged.write("y.dpapi", b"secret").is_err(),
+            "a removed folder takes no writes"
+        );
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     }
+}
+
+#[test]
+fn a_newer_pilot_copy_is_kept_beside_the_older_one() {
+    let scratch = Scratch::new("kept-newer");
+    let sealer = FakeDpapi::new();
+    let populated = populate(&scratch.0, &sealer);
+    let layout = &populated.layout;
+    write(&layout.webui_data.join("session.json"), b"pilot one");
+    let first = migrate(
+        layout,
+        &sealer,
+        &populated.vault,
+        &Faults {
+            fail_at_commit: Some(3),
+        },
+    );
+    assert_eq!(first.outcome, Outcome::Failed);
+    let kept = layout.webui_data.join(names::KEPT_FOLDER);
+    assert_eq!(fs::read(kept.join("session.json")).unwrap(), b"pilot one");
+    write(
+        &layout.webui_data.join("session.json"),
+        b"pilot two, written after the first try",
+    );
+    let second = run(layout, &sealer, &populated.vault);
+    assert_eq!(second.outcome, Outcome::MigratedWithSkips);
+    assert_eq!(fs::read(kept.join("session.json")).unwrap(), b"pilot one");
+    let newer: Vec<String> = tree(&kept)
+        .into_iter()
+        .filter(|(name, bytes)| name.starts_with("session.json.") && bytes == b"pilot two, written after the first try")
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(newer.len(), 1, "{:?}", tree(&kept).keys());
+    assert!(newer[0].ends_with(".kept"));
+    assert_eq!(
+        fs::read(layout.webui_data.join("session.json")).unwrap(),
+        fs::read(layout.rnw_data.join("session.json")).unwrap()
+    );
+}
+
+#[test]
+fn a_destination_name_of_255_characters_stages_and_lands() {
+    let scratch = Scratch::new("long-name");
+    let root = ardia_shell_migration::fsafe::Root::open_or_create(&scratch.0.join("webui")).unwrap();
+    let name = names::secret_file(&"a".repeat(120));
+    assert_eq!(name.len(), 255);
+    root.dir().write(&name, b"sealed").unwrap();
+    assert_eq!(fs::read(scratch.0.join("webui").join(&name)).unwrap(), b"sealed");
 }

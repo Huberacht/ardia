@@ -131,14 +131,17 @@ export function capture<P extends Record<string, unknown>, R extends Record<stri
   props: P & SecretFree<P>,
   consent: ConsentToken | null,
   options: CaptureOptions & { raw?: R & SecretFree<R> } = {},
-) {
+): boolean {
   const sharing = stillValid(consent);
   if (!sharing && COUNT_EVENTS.has(event)) {
     droppedWhileOff++;
-    return;
+    return false;
   }
   const relay = telemetryRelay();
-  if (relay) return relay.capture(event, withoutSecrets(props, "telemetry"), consent, { ...options, raw: withoutSecrets(options.raw, "telemetry") });
+  if (relay) {
+    relay.capture(event, withoutSecrets(props, "telemetry"), consent, { ...options, raw: withoutSecrets(options.raw, "telemetry") });
+    return sharing;
+  }
   try {
     const { installId } = saved();
     const at = Date.now();
@@ -152,15 +155,17 @@ export function capture<P extends Record<string, unknown>, R extends Record<stri
     recordLocal("event", sharing, { event, uuid: record.uuid, distinct_id: sharing ? installId : null, properties: record.properties }, at);
     if (!sharing) {
       droppedWhileOff++;
-      return;
+      return false;
     }
     loadQueue();
     queue.events.push(record);
     if (queue.events.length > MAX_EVENTS) queue.events.splice(0, queue.events.length - MAX_EVENTS);
     persistQueue(options.persist);
     scheduleFlush(options.urgent ? URGENT_FLUSH_DELAY_MS : FLUSH_DELAY_MS);
+    return true;
   } catch (error) {
     if (error instanceof SecretEscapeError) throw error;
+    return false;
   }
 }
 

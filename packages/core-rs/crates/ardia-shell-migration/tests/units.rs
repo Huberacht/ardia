@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use ardia_shell_migration::cli::{parse, Command, Environment};
 use ardia_shell_migration::credentials::{
-    assemble, chunk_count, chunk_target, generation_of, layout_of, rnw_layout, Assembled, Layout, StoredCredential,
-    CHUNK_BYTES, MAX_CHUNKS,
+    self, assemble, chunk_count, chunk_target, generation_of, layout_of, rnw_layout, Assembled, Layout,
+    StoredCredential, CHUNK_BYTES, MAX_CHUNKS,
 };
 use ardia_shell_migration::migrate::overlapping;
 use ardia_shell_migration::names;
@@ -12,7 +12,20 @@ use zeroize::Zeroizing;
 const PREFIX: &str = "Ardia Connected Accounts/";
 
 fn stored(target: &str, comment: Option<&str>, blob: &[u8]) -> StoredCredential {
+    let account = target.rsplit('/').next().unwrap_or("");
+    let owner = match account.rsplit_once('#') {
+        Some((head, index)) if !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()) => head
+            .strip_suffix("#g1")
+            .or_else(|| head.strip_suffix("#g2"))
+            .unwrap_or(head),
+        _ => account,
+    };
+    owned(target, comment, owner, blob)
+}
+
+fn owned(target: &str, comment: Option<&str>, user: &str, blob: &[u8]) -> StoredCredential {
     StoredCredential {
+        user: Some(user.to_string()),
         target: target.into(),
         comment: comment.map(Into::into),
         blob: Zeroizing::new(blob.to_vec()),
@@ -433,4 +446,50 @@ fn hostile_names_never_become_files_or_purposes_that_escape() {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.'));
     }
+}
+
+#[test]
+fn a_chunk_name_two_accounts_could_claim_goes_to_its_owner() {
+    let shared = format!("{PREFIX}a#g1#1");
+    let parts = vec![
+        owned(&format!("{PREFIX}a"), Some("Ardia g1 2"), "a", &[1u8; CHUNK_BYTES]),
+        owned(&format!("{PREFIX}a#g1"), Some("Ardia 2"), "a#g1", &[2u8; CHUNK_BYTES]),
+        owned(&shared, None, "a#g1", b"belongs to the legacy account"),
+    ];
+    let assembled = assemble(PREFIX, parts);
+    assert_eq!(
+        assembled.iter().filter(|a| matches!(a, Assembled::Incomplete)).count(),
+        1
+    );
+    let mut expected = vec![2u8; CHUNK_BYTES];
+    expected.extend_from_slice(b"belongs to the legacy account");
+    assert_eq!(secrets(assembled), vec![("a#g1".to_string(), expected)]);
+}
+
+#[test]
+fn a_chunk_owned_by_someone_else_never_completes_a_secret() {
+    let mut parts = rnw_layout(PREFIX, "acct", &vec![3u8; CHUNK_BYTES + 9], 1);
+    for part in parts.iter_mut().filter(|part| part.comment.is_none()) {
+        part.user = Some("intruder".into());
+    }
+    let assembled = assemble(PREFIX, parts);
+    assert!(matches!(assembled[0], Assembled::Incomplete));
+    assert_eq!(assembled.iter().filter(|a| matches!(a, Assembled::Orphan)).count(), 1);
+    assert!(secrets(assembled).is_empty());
+}
+
+#[test]
+fn rnw_writes_the_account_as_the_owner_of_every_chunk() {
+    let parts = rnw_layout(PREFIX, "acct", &vec![1u8; CHUNK_BYTES * 3], 2);
+    assert!(parts.iter().all(|part| part.user.as_deref() == Some("acct")));
+    assert_eq!(credentials::rnw_user(&"x".repeat(300)).len(), 256);
+}
+
+#[test]
+fn the_longest_account_still_names_a_file_ntfs_accepts() {
+    let longest = "a".repeat(120);
+    assert!(names::secret_account(&longest));
+    assert_eq!(names::secret_file(&longest).len(), 255);
+    assert!(!names::secret_account(&"a".repeat(121)));
+    assert!(ardia_shell_migration::fsafe::partial_name().len() < 64);
 }

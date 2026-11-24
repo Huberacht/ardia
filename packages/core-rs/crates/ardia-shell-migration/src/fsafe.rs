@@ -1,6 +1,7 @@
-use std::fs::{self, File, Metadata, OpenOptions};
+use std::fs::{self, File, Metadata};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use zeroize::Zeroizing;
 
@@ -28,6 +29,7 @@ pub fn is_link(meta: &Metadata) -> bool {
     meta.file_type().is_symlink() || reparse_point(meta)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Missing,
     Link,
@@ -38,12 +40,21 @@ pub enum Entry {
 
 pub fn entry(path: &Path) -> io::Result<Entry> {
     match fs::symlink_metadata(path) {
-        Ok(meta) if is_link(&meta) => Ok(Entry::Link),
-        Ok(meta) if meta.is_dir() => Ok(Entry::Directory),
-        Ok(meta) if meta.is_file() => Ok(Entry::File),
-        Ok(_) => Ok(Entry::Other),
+        Ok(meta) => Ok(kind_of(&meta)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Entry::Missing),
         Err(error) => Err(error),
+    }
+}
+
+fn kind_of(meta: &Metadata) -> Entry {
+    if is_link(meta) {
+        Entry::Link
+    } else if meta.is_dir() {
+        Entry::Directory
+    } else if meta.is_file() {
+        Entry::File
+    } else {
+        Entry::Other
     }
 }
 
@@ -60,6 +71,10 @@ impl std::error::Error for Unsafe {}
 
 pub fn unsafe_path(path: PathBuf) -> io::Error {
     io::Error::other(Unsafe(path))
+}
+
+pub fn is_unsafe(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|inner| inner.is::<Unsafe>())
 }
 
 pub fn plain(path: PathBuf) -> PathBuf {
@@ -104,6 +119,19 @@ pub fn check_ancestors(path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn child_name(name: &str) -> io::Result<&str> {
+    let plain_name = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', '\0'])
+        && (cfg!(not(windows)) || !name.contains(':'));
+    if plain_name {
+        Ok(name)
+    } else {
+        Err(unsafe_path(PathBuf::from(name)))
+    }
 }
 
 #[cfg(windows)]
@@ -165,120 +193,412 @@ fn link_count(file: &File) -> io::Result<u64> {
     Ok(file.metadata()?.nlink())
 }
 
-fn no_follow(options: &mut OpenOptions, directory: bool) {
-    #[cfg(unix)]
-    {
+#[derive(Clone, Copy)]
+enum Opening {
+    Read,
+    CreateNew,
+    Lock,
+}
+
+#[cfg(unix)]
+mod sys {
+    use std::ffi::CString;
+    use std::fs::File;
+    use std::io;
+    use std::os::unix::io::{AsRawFd, FromRawFd};
+
+    use super::{unsafe_path, Entry, Opening};
+
+    fn c_name(name: &str) -> io::Result<CString> {
+        CString::new(name).map_err(|_| unsafe_path(name.into()))
+    }
+
+    pub fn open_root(path: &std::path::Path) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
-        let folder = if directory { libc::O_DIRECTORY } else { 0 };
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | folder);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        let folder = if directory { FILE_FLAG_BACKUP_SEMANTICS } else { 0 };
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | folder);
-    }
-}
-
-fn open_folder(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    no_follow(&mut options, true);
-    let folder = options.open(path).map_err(|_| unsafe_path(path.to_path_buf()))?;
-    let meta = folder.metadata()?;
-    if is_link(&meta) || !meta.is_dir() {
-        return Err(unsafe_path(path.to_path_buf()));
-    }
-    Ok(folder)
-}
-
-pub struct Root {
-    pub path: PathBuf,
-    pub resolved: PathBuf,
-}
-
-impl Root {
-    pub fn new(path: &Path) -> io::Result<Root> {
-        check_ancestors(path)?;
-        if !matches!(entry(path)?, Entry::Directory) {
-            return Err(unsafe_path(path.to_path_buf()));
-        }
-        let resolved = final_path(&open_folder(path)?)?;
-        if !same_place(&resolved, &plain(fs::canonicalize(path)?)) {
-            return Err(unsafe_path(path.to_path_buf()));
-        }
-        Ok(Root {
-            path: path.to_path_buf(),
-            resolved,
-        })
-    }
-
-    pub fn holds(&self, file: &File) -> io::Result<bool> {
-        Ok(within(&final_path(file)?, &self.resolved))
-    }
-
-    fn relative<'a>(&self, path: &'a Path) -> io::Result<&'a Path> {
-        path.strip_prefix(&self.path)
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(path)
             .map_err(|_| unsafe_path(path.to_path_buf()))
     }
 
-    pub fn check_chain(&self, dir: &Path) -> io::Result<File> {
-        let relative = self.relative(dir)?;
-        let mut walked = self.path.clone();
-        let mut folder = open_folder(&walked)?;
-        for component in relative.components() {
-            if !matches!(component, Component::Normal(_)) {
-                return Err(unsafe_path(dir.to_path_buf()));
+    pub fn child_dir(dir: &File, name: &str, create: bool) -> io::Result<Option<File>> {
+        let c = c_name(name)?;
+        for _ in 0..2 {
+            let fd = unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    c.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd >= 0 {
+                return Ok(Some(unsafe { File::from_raw_fd(fd) }));
             }
-            walked.push(component);
-            if !matches!(entry(&walked)?, Entry::Directory) {
-                return Err(unsafe_path(walked));
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::ENOENT) if create => {
+                    if unsafe { libc::mkdirat(dir.as_raw_fd(), c.as_ptr(), 0o700) } != 0 {
+                        let made = io::Error::last_os_error();
+                        if made.raw_os_error() != Some(libc::EEXIST) {
+                            return Err(made);
+                        }
+                    }
+                }
+                Some(libc::ENOENT) => return Ok(None),
+                Some(libc::ELOOP) | Some(libc::ENOTDIR) => return Err(unsafe_path(name.into())),
+                _ => return Err(error),
             }
-            folder = open_folder(&walked)?;
         }
-        if !self.holds(&folder)? {
-            return Err(unsafe_path(dir.to_path_buf()));
-        }
-        Ok(folder)
+        Err(unsafe_path(name.into()))
     }
 
-    pub fn ensure_folder(&self, parts: &[&str]) -> io::Result<PathBuf> {
-        let mut path = self.path.clone();
-        self.check_chain(&path)?;
-        for part in parts {
-            path.push(part);
-            match entry(&path)? {
-                Entry::Directory => {}
-                Entry::Missing => match fs::create_dir(&path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(error) => return Err(error),
-                },
-                _ => return Err(unsafe_path(path)),
+    pub fn child_file(dir: &File, name: &str, opening: Opening) -> io::Result<File> {
+        let c = c_name(name)?;
+        let flags = libc::O_NOFOLLOW
+            | libc::O_CLOEXEC
+            | match opening {
+                Opening::Read => libc::O_RDONLY | libc::O_NONBLOCK,
+                Opening::CreateNew => libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                Opening::Lock => libc::O_RDWR | libc::O_CREAT,
+            };
+        let fd = unsafe { libc::openat(dir.as_raw_fd(), c.as_ptr(), flags, 0o600 as libc::c_uint) };
+        if fd < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                return Err(unsafe_path(name.into()));
             }
-            self.check_chain(&path)?;
+            return Err(error);
         }
-        Ok(path)
+        Ok(unsafe { File::from_raw_fd(fd) })
     }
 
-    pub fn read_regular(&self, path: &Path, limit: u64) -> io::Result<Fetched> {
-        if let Some(parent) = path.parent() {
-            self.check_chain(parent)?;
+    pub fn child_entry(dir: &File, name: &str) -> io::Result<Entry> {
+        let c = c_name(name)?;
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(dir.as_raw_fd(), c.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(libc::ENOENT) {
+                Ok(Entry::Missing)
+            } else {
+                Err(error)
+            };
         }
-        match entry(path)? {
+        Ok(match stat.st_mode & libc::S_IFMT {
+            libc::S_IFLNK => Entry::Link,
+            libc::S_IFDIR => Entry::Directory,
+            libc::S_IFREG => Entry::File,
+            _ => Entry::Other,
+        })
+    }
+
+    pub fn rename(dir: &File, _staged: &File, from: &str, to: &str) -> io::Result<()> {
+        let (from, to) = (c_name(from)?, c_name(to)?);
+        if unsafe { libc::renameat(dir.as_raw_fd(), from.as_ptr(), dir.as_raw_fd(), to.as_ptr()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn remove(dir: &File, name: &str) -> io::Result<()> {
+        let c = c_name(name)?;
+        if unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+mod sys {
+    use std::ffi::c_void;
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+    use std::ptr::{null, null_mut};
+
+    use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
+    use windows_sys::Wdk::Storage::FileSystem::{
+        NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
+        FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
+    };
+    use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, FileDispositionInfoEx, FileRenameInfo, FileRenameInfoEx, SetFileInformationByHandle,
+        DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_DISPOSITION_FLAG_DELETE,
+        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX, FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, SYNCHRONIZE,
+    };
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+    use super::{kind_of, unsafe_path, Entry, Opening, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT};
+
+    const FILE_RENAME_FLAG_REPLACE_IF_EXISTS: u32 = 1;
+    const FILE_RENAME_FLAG_POSIX_SEMANTICS: u32 = 2;
+    const ERROR_DIRECTORY: i32 = 267;
+    const ERROR_FILE_NOT_FOUND: i32 = 2;
+    const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_CANT_ACCESS_FILE: i32 = 1920;
+    const ERROR_STOPPED_ON_SYMLINK: i32 = 681;
+
+    fn nt_open(dir: &File, name: &str, access: u32, disposition: u32, options: u32) -> io::Result<File> {
+        let wide: Vec<u16> = name.encode_utf16().collect();
+        let bytes = u16::try_from(wide.len() * 2).map_err(|_| unsafe_path(name.into()))?;
+        let object_name = UNICODE_STRING {
+            Length: bytes,
+            MaximumLength: bytes,
+            Buffer: wide.as_ptr() as *mut u16,
+        };
+        let attributes = OBJECT_ATTRIBUTES {
+            Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+            RootDirectory: dir.as_raw_handle() as HANDLE,
+            ObjectName: &object_name,
+            Attributes: OBJ_CASE_INSENSITIVE,
+            SecurityDescriptor: null(),
+            SecurityQualityOfService: null(),
+        };
+        let mut handle: HANDLE = null_mut();
+        let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+        let status = unsafe {
+            NtCreateFile(
+                &mut handle,
+                access,
+                &attributes,
+                &mut status_block,
+                null(),
+                FILE_ATTRIBUTE_NORMAL,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                disposition,
+                options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT,
+                null(),
+                0,
+            )
+        };
+        if status < 0 {
+            let code = unsafe { RtlNtStatusToDosError(status) } as i32;
+            return Err(io::Error::from_raw_os_error(code));
+        }
+        Ok(unsafe { File::from_raw_handle(handle as RawHandle) })
+    }
+
+    fn missing(error: &io::Error) -> bool {
+        matches!(error.raw_os_error(), Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND))
+    }
+
+    pub fn open_root(path: &std::path::Path) -> io::Result<File> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let open = |access: u32| {
+            std::fs::OpenOptions::new()
+                .access_mode(access)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+        };
+        let reading = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+        open(reading | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
+            .or_else(|_| open(reading))
+            .map_err(|_| unsafe_path(path.to_path_buf()))
+    }
+
+    pub fn child_dir(dir: &File, name: &str, create: bool) -> io::Result<Option<File>> {
+        let access = FILE_LIST_DIRECTORY
+            | FILE_TRAVERSE
+            | FILE_READ_ATTRIBUTES
+            | SYNCHRONIZE
+            | if create {
+                FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | DELETE
+            } else {
+                0
+            };
+        let disposition = if create { FILE_OPEN_IF } else { FILE_OPEN };
+        match nt_open(dir, name, access, disposition, FILE_DIRECTORY_FILE) {
+            Ok(folder) => Ok(Some(folder)),
+            Err(error) if !create && missing(&error) => Ok(None),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(ERROR_DIRECTORY | ERROR_CANT_ACCESS_FILE | ERROR_STOPPED_ON_SYMLINK)
+                ) =>
+            {
+                Err(unsafe_path(name.into()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn child_file(dir: &File, name: &str, opening: Opening) -> io::Result<File> {
+        let (access, disposition) = match opening {
+            Opening::Read => (FILE_GENERIC_READ, FILE_OPEN),
+            Opening::CreateNew => (FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE, FILE_CREATE),
+            Opening::Lock => (FILE_GENERIC_READ | FILE_GENERIC_WRITE, FILE_OPEN_IF),
+        };
+        nt_open(dir, name, access, disposition, FILE_NON_DIRECTORY_FILE)
+    }
+
+    pub fn child_entry(dir: &File, name: &str) -> io::Result<Entry> {
+        match nt_open(dir, name, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_OPEN, 0) {
+            Ok(file) => Ok(kind_of(&file.metadata()?)),
+            Err(error) if missing(&error) => Ok(Entry::Missing),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn rename_info(dir: &File, to: &str, flags: u32) -> Vec<u64> {
+        let wide: Vec<u16> = to.encode_utf16().collect();
+        let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        let bytes = header + wide.len() * 2 + 2;
+        let mut buffer = vec![0u64; bytes.div_ceil(8)];
+        let info = buffer.as_mut_ptr() as *mut FILE_RENAME_INFO;
+        unsafe {
+            (*info).Anonymous.Flags = flags;
+            (*info).RootDirectory = dir.as_raw_handle() as HANDLE;
+            (*info).FileNameLength = (wide.len() * 2) as u32;
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), (*info).FileName.as_mut_ptr(), wide.len());
+        }
+        buffer
+    }
+
+    pub fn rename(dir: &File, staged: &File, _from: &str, to: &str) -> io::Result<()> {
+        let size = |buffer: &Vec<u64>| (buffer.len() * 8) as u32;
+        let posix = rename_info(
+            dir,
+            to,
+            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS,
+        );
+        let renamed = unsafe {
+            SetFileInformationByHandle(
+                staged.as_raw_handle() as HANDLE,
+                FileRenameInfoEx,
+                posix.as_ptr() as *const c_void,
+                size(&posix),
+            )
+        };
+        if renamed != 0 {
+            return Ok(());
+        }
+        let plain = rename_info(dir, to, 1);
+        let renamed = unsafe {
+            SetFileInformationByHandle(
+                staged.as_raw_handle() as HANDLE,
+                FileRenameInfo,
+                plain.as_ptr() as *const c_void,
+                size(&plain),
+            )
+        };
+        if renamed == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn remove(dir: &File, name: &str) -> io::Result<()> {
+        let file = nt_open(dir, name, DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_OPEN, 0)?;
+        let posix = FILE_DISPOSITION_INFO_EX {
+            Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        };
+        let removed = unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle() as HANDLE,
+                FileDispositionInfoEx,
+                &posix as *const _ as *const c_void,
+                std::mem::size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+            )
+        };
+        if removed != 0 {
+            return Ok(());
+        }
+        let plain = FILE_DISPOSITION_INFO { DeleteFile: true };
+        let removed = unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle() as HANDLE,
+                FileDispositionInfo,
+                &plain as *const _ as *const c_void,
+                std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+            )
+        };
+        if removed == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+pub enum Fetched {
+    Data(Zeroizing<Vec<u8>>),
+    Missing,
+    Link,
+    NotRegular,
+    HardLinked,
+    TooLarge,
+}
+
+pub struct Staged {
+    file: File,
+    temp: String,
+}
+
+pub struct Dir {
+    file: File,
+    path: PathBuf,
+}
+
+static STAGED: AtomicU64 = AtomicU64::new(0);
+
+pub fn partial_name() -> String {
+    format!(
+        ".ardia-mig-{:x}-{}-{}{PARTIAL_SUFFIX}",
+        std::process::id(),
+        STAGED.fetch_add(1, Ordering::Relaxed),
+        random_hex(4)
+    )
+}
+
+impl Dir {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn entry(&self, name: &str) -> io::Result<Entry> {
+        sys::child_entry(&self.file, child_name(name)?)
+    }
+
+    pub fn child(&self, name: &str, create: bool) -> io::Result<Option<Dir>> {
+        let name = child_name(name)?;
+        let Some(file) = sys::child_dir(&self.file, name, create)? else {
+            return Ok(None);
+        };
+        let meta = file.metadata()?;
+        if is_link(&meta) || !meta.is_dir() {
+            return Err(unsafe_path(self.path.join(name)));
+        }
+        Ok(Some(Dir {
+            file,
+            path: self.path.join(name),
+        }))
+    }
+
+    pub fn list(&self) -> io::Result<Vec<String>> {
+        let mut names = Vec::new();
+        for item in fs::read_dir(final_path(&self.file)?)? {
+            if let Ok(name) = item?.file_name().into_string() {
+                names.push(name);
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    pub fn read(&self, name: &str, limit: u64) -> io::Result<Fetched> {
+        match self.entry(name)? {
             Entry::Missing => return Ok(Fetched::Missing),
             Entry::Link => return Ok(Fetched::Link),
             Entry::File => {}
             Entry::Directory | Entry::Other => return Ok(Fetched::NotRegular),
         }
-        let mut options = OpenOptions::new();
-        options.read(true);
-        no_follow(&mut options, false);
-        let mut file = match options.open(path) {
+        let mut file = match sys::child_file(&self.file, name, Opening::Read) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Fetched::Missing),
-            #[cfg(unix)]
-            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Ok(Fetched::Link),
+            Err(error) if is_unsafe(&error) => return Ok(Fetched::Link),
             Err(error) => return Err(error),
         };
         let meta = file.metadata()?;
@@ -287,9 +607,6 @@ impl Root {
         }
         if !meta.is_file() {
             return Ok(Fetched::NotRegular);
-        }
-        if !self.holds(&file)? {
-            return Ok(Fetched::Link);
         }
         if link_count(&file)? > 1 {
             return Ok(Fetched::HardLinked);
@@ -306,107 +623,159 @@ impl Root {
         Ok(Fetched::Data(bytes))
     }
 
-    pub fn stage(&self, dir: &Path, name: &str, bytes: &[u8]) -> io::Result<Staged> {
-        let folder = self.check_chain(dir)?;
-        let temp = dir.join(partial_name(name));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        no_follow(&mut options, false);
-        let mut file = options.open(&temp)?;
-        let placed = final_path(&file)
-            .map(|at| at.parent().map(Path::to_path_buf).unwrap_or_default())
-            .and_then(|parent| Ok(same_place(&parent, &final_path(&folder)?)));
-        let written = match placed {
-            Ok(true) => file.write_all(bytes).and_then(|()| file.sync_all()),
-            Ok(false) => Err(unsafe_path(temp.clone())),
-            Err(error) => Err(error),
-        };
-        drop(file);
-        if let Err(error) = written {
-            let _ = fs::remove_file(&temp);
+    pub fn stage(&self, bytes: &[u8]) -> io::Result<Staged> {
+        let temp = partial_name();
+        let mut file = sys::child_file(&self.file, &temp, Opening::CreateNew)?;
+        if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = sys::remove(&self.file, &temp);
             return Err(error);
         }
-        Ok(Staged {
-            temp,
-            target: dir.join(name),
-        })
+        Ok(Staged { file, temp })
     }
 
-    pub fn commit(&self, staged: Staged) -> io::Result<()> {
-        let parent = staged.target.parent().map(Path::to_path_buf).unwrap_or_default();
-        let checked = self.check_chain(&parent).and_then(|_| match entry(&staged.target)? {
-            Entry::Missing | Entry::File => Ok(()),
-            _ => Err(unsafe_path(staged.target.clone())),
-        });
-        if let Err(error) = checked.and_then(|()| fs::rename(&staged.temp, &staged.target)) {
-            let _ = fs::remove_file(&staged.temp);
+    pub fn commit(&self, staged: Staged, name: &str) -> io::Result<()> {
+        let name = child_name(name)?;
+        let checked = match self.entry(name)? {
+            Entry::Missing | Entry::File => sys::rename(&self.file, &staged.file, &staged.temp, name),
+            _ => Err(unsafe_path(self.path.join(name))),
+        };
+        if let Err(error) = checked {
+            self.discard(staged);
             return Err(error);
         }
-        sync_folder(&parent);
+        drop(staged);
+        let _ = self.file.sync_all();
         Ok(())
     }
 
-    pub fn sweep_partials(&self, dir: &Path) -> io::Result<usize> {
-        if self.check_chain(dir).is_err() {
-            return Ok(0);
-        }
+    pub fn discard(&self, staged: Staged) {
+        let Staged { file, temp } = staged;
+        drop(file);
+        let _ = sys::remove(&self.file, &temp);
+    }
+
+    pub fn abandon(&self, staged: Staged) {
+        drop(staged);
+    }
+
+    pub fn write(&self, name: &str, bytes: &[u8]) -> io::Result<()> {
+        let staged = self.stage(bytes)?;
+        self.commit(staged, name)
+    }
+
+    pub fn sweep_partials(&self) -> io::Result<usize> {
         let mut swept = 0;
-        for name in list_names(dir)? {
+        for name in self.list()? {
             if !(name.starts_with('.') && name.ends_with(PARTIAL_SUFFIX)) {
                 continue;
             }
-            let path = dir.join(&name);
-            match entry(&path)? {
-                Entry::File => fs::remove_file(&path)?,
-                Entry::Link => fs::remove_file(&path).or_else(|_| fs::remove_dir(&path))?,
-                _ => continue,
+            if matches!(self.entry(&name)?, Entry::File | Entry::Link) {
+                sys::remove(&self.file, &name)?;
+                swept += 1;
             }
-            swept += 1;
         }
         Ok(swept)
     }
 
     pub fn open_lock(&self, name: &str) -> io::Result<File> {
-        let path = self.path.join(name);
-        if !matches!(entry(&path)?, Entry::Missing | Entry::File) {
-            return Err(unsafe_path(path));
+        let name = child_name(name)?;
+        if !matches!(self.entry(name)?, Entry::Missing | Entry::File) {
+            return Err(unsafe_path(self.path.join(name)));
         }
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        no_follow(&mut options, false);
-        let lock = options.open(&path)?;
+        let lock = sys::child_file(&self.file, name, Opening::Lock)?;
         let meta = lock.metadata()?;
-        if is_link(&meta) || !meta.is_file() || !self.holds(&lock)? {
-            return Err(unsafe_path(path));
+        if is_link(&meta) || !meta.is_file() || link_count(&lock)? != 1 {
+            return Err(unsafe_path(self.path.join(name)));
         }
         Ok(lock)
     }
 }
 
-pub enum Fetched {
-    Data(Zeroizing<Vec<u8>>),
-    Missing,
-    Link,
-    NotRegular,
-    HardLinked,
-    TooLarge,
+pub struct Root {
+    dir: Dir,
+    pub path: PathBuf,
+    pub resolved: PathBuf,
 }
 
-pub fn list_names(dir: &Path) -> io::Result<Vec<String>> {
-    let mut names = Vec::new();
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(names),
-        Err(error) => return Err(error),
-    };
-    for item in entries {
-        let item = item?;
-        if let Ok(name) = item.file_name().into_string() {
-            names.push(name);
+impl Root {
+    pub fn new(path: &Path) -> io::Result<Root> {
+        check_ancestors(path)?;
+        if !matches!(entry(path)?, Entry::Directory) {
+            return Err(unsafe_path(path.to_path_buf()));
         }
+        let file = sys::open_root(path)?;
+        let meta = file.metadata()?;
+        if is_link(&meta) || !meta.is_dir() {
+            return Err(unsafe_path(path.to_path_buf()));
+        }
+        let resolved = final_path(&file)?;
+        if !same_place(&resolved, &plain(fs::canonicalize(path)?)) {
+            return Err(unsafe_path(path.to_path_buf()));
+        }
+        Ok(Root {
+            dir: Dir {
+                file,
+                path: path.to_path_buf(),
+            },
+            path: path.to_path_buf(),
+            resolved,
+        })
     }
-    names.sort();
-    Ok(names)
+
+    pub fn open_or_create(path: &Path) -> io::Result<Root> {
+        check_ancestors(path)?;
+        let mut existing = path.to_path_buf();
+        let mut missing = Vec::new();
+        while matches!(entry(&existing)?, Entry::Missing) {
+            let Some(name) = existing.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+                return Err(unsafe_path(path.to_path_buf()));
+            };
+            missing.push(name);
+            if !existing.pop() {
+                return Err(unsafe_path(path.to_path_buf()));
+            }
+        }
+        if missing.is_empty() {
+            return Root::new(path);
+        }
+        let base = Root::new(&existing)?;
+        let mut dir = base.dir;
+        for name in missing.iter().rev() {
+            dir = dir.child(name, true)?.ok_or_else(|| unsafe_path(path.to_path_buf()))?;
+        }
+        let resolved = final_path(&dir.file)?;
+        if !within(&resolved, &base.resolved) {
+            return Err(unsafe_path(path.to_path_buf()));
+        }
+        dir.path = path.to_path_buf();
+        Ok(Root {
+            dir,
+            path: path.to_path_buf(),
+            resolved,
+        })
+    }
+
+    pub fn dir(&self) -> &Dir {
+        &self.dir
+    }
+
+    pub fn folder(&self, parts: &[&str], create: bool) -> io::Result<Option<Dir>> {
+        let mut current = Dir {
+            file: self.dir.file.try_clone()?,
+            path: self.path.clone(),
+        };
+        for part in parts {
+            match current.child(part, create)? {
+                Some(next) => current = next,
+                None => return Ok(None),
+            }
+        }
+        if !within(&final_path(&current.file)?, &self.resolved) {
+            return Err(unsafe_path(current.path));
+        }
+        Ok(Some(current))
+    }
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -425,32 +794,4 @@ fn random_hex(bytes: usize) -> String {
 
 pub fn run_id() -> String {
     random_hex(16)
-}
-
-pub fn partial_name(name: &str) -> String {
-    format!(".{name}.{}{PARTIAL_SUFFIX}", random_hex(6))
-}
-
-pub struct Staged {
-    pub temp: PathBuf,
-    pub target: PathBuf,
-}
-
-#[cfg(unix)]
-fn sync_folder(dir: &Path) {
-    if let Ok(folder) = File::open(dir) {
-        let _ = folder.sync_all();
-    }
-}
-
-#[cfg(windows)]
-fn sync_folder(dir: &Path) {
-    use std::os::windows::fs::OpenOptionsExt;
-    if let Ok(folder) = OpenOptions::new()
-        .write(true)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-        .open(dir)
-    {
-        let _ = folder.sync_all();
-    }
 }

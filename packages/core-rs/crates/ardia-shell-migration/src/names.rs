@@ -12,7 +12,7 @@ pub const PARTIAL_SUFFIX: &str = ".rnw-migration.partial";
 
 const DOCUMENT_NAME_LIMIT: usize = 200;
 const ACCOUNT_LIMIT: usize = 64;
-const SECRET_ACCOUNT_LIMIT: usize = 1024;
+const SECRET_ACCOUNT_LIMIT: usize = 120;
 
 const RNW_SCRATCH_FILES: [&str; 5] = [
     "dialog.json",

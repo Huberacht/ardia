@@ -11,6 +11,7 @@ pub const MAX_SECRET_BYTES: usize = CHUNK_BYTES * MAX_CHUNKS;
 pub struct StoredCredential {
     pub target: String,
     pub comment: Option<String>,
+    pub user: Option<String>,
     pub blob: Zeroizing<Vec<u8>>,
 }
 
@@ -129,7 +130,7 @@ fn parts_of<'a>(
     let mut total = first.blob.len();
     for index in 1..layout.chunks {
         let part = by_target.get(&chunk_target(base, layout.generation, index))?;
-        if !continuation(part) {
+        if !continuation(part) || part.user != first.user {
             return None;
         }
         total += part.blob.len();
@@ -174,21 +175,29 @@ pub fn assemble(prefix: &str, stored: Vec<StoredCredential>) -> Vec<Assembled> {
             secret,
         });
     }
-    let stale_generation = |target: &str| {
-        chunk_bases(target)
-            .iter()
-            .any(|base| by_target.get(*base).is_some_and(|first| !continuation(first)))
+    let stale_generation = |target: &str, owner: &Option<String>| {
+        chunk_bases(target).iter().any(|base| {
+            by_target
+                .get(*base)
+                .is_some_and(|first| !continuation(first) && &first.user == owner)
+        })
     };
     for (target, credential) in &by_target {
-        if continuation(credential) && !used.contains(target) && !stale_generation(target) {
+        if continuation(credential) && !used.contains(target) && !stale_generation(target, &credential.user) {
             assembled.push(Assembled::Orphan);
         }
     }
     assembled
 }
 
+pub fn rnw_user(account: &str) -> String {
+    let wide: Vec<u16> = account.encode_utf16().take(256).collect();
+    String::from_utf16_lossy(&wide)
+}
+
 pub fn rnw_layout(prefix: &str, account: &str, secret: &[u8], generation: usize) -> Vec<StoredCredential> {
     let base = format!("{prefix}{account}");
+    let user = Some(rnw_user(account));
     let chunks = secret.len().div_ceil(CHUNK_BYTES).max(1);
     let mut stored = Vec::with_capacity(chunks);
     for index in 1..chunks {
@@ -197,6 +206,7 @@ pub fn rnw_layout(prefix: &str, account: &str, secret: &[u8], generation: usize)
         stored.push(StoredCredential {
             target: chunk_target(&base, generation, index),
             comment: None,
+            user: user.clone(),
             blob: Zeroizing::new(secret[start..end].to_vec()),
         });
     }
@@ -208,6 +218,7 @@ pub fn rnw_layout(prefix: &str, account: &str, secret: &[u8], generation: usize)
     stored.push(StoredCredential {
         target: base,
         comment: Some(comment),
+        user,
         blob: Zeroizing::new(secret[..secret.len().min(CHUNK_BYTES)].to_vec()),
     });
     stored

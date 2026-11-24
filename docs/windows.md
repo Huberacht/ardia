@@ -1774,7 +1774,7 @@ still RNW, and the cutover PR decides where the WebUI host calls it (before Chro
 | documents (`session.json` and the rest of `DocumentStore`), window placement | `%LOCALAPPDATA%\Ardia\<name>` | `%LOCALAPPDATA%\Ardia WebUI\<name>`, where the WebUI host already reads `session.json` | byte copy |
 | config, hooks, themes | `%APPDATA%\Ardia\{config.json,hooks.json,themes\*.json}` (`<data>\config` with `ARDIA_DATA_DIR`) | `Ardia WebUI\config\…` | byte copy |
 | sealed sync keys | `%LOCALAPPDATA%\Ardia\Sync\sync-key-<account>.dpapi`, DPAPI with entropy `ardia-sync-key/v1[/test-instance]/<account>` | `Ardia WebUI\Sync\sync-key-x<lowercase hex of the account>.dpapi`, the name and entropy the WebUI host's DPAPI secret store (`desktop_platform_win.cc`, #4039) reads | byte copy under the new name, only once the key unseals to 32 bytes for its own account |
-| connected accounts | Credential Manager `Ardia Connected Accounts/<account>` (`… [<data dir>]/` with `ARDIA_DATA_DIR`): the first 2,560 bytes on the base item, comment `Ardia g<1|2> <chunks>`, the rest on `<base>#g<generation>#<n>` (`<base>#<n>` before generations), up to 64 chunks | `Ardia WebUI\Secrets\account-x<lowercase hex of the UTF-8 account>.dpapi`, DPAPI with entropy `ardia-connected-account/v1[/test-instance]/<account>`; the WebUI host has no connected-accounts store yet (`ArdiaKeychain` is refused on desktop), so the cutover's store reads this layout | reassembled as `CredentialStore::Get` does. RNW writes continuation chunks (no comment) before the base (comment `Ardia …`), so an item counts as a chunk only when it has no comment and a chunk-shaped name: one no base claims is an orphan of an interrupted first write and is left out (`credential_chunks_orphaned`), while a chunk-shaped name with its own comment is an account of its own. A missing chunk leaves the account out |
+| connected accounts | Credential Manager `Ardia Connected Accounts/<account>` (`… [<data dir>]/` with `ARDIA_DATA_DIR`): the first 2,560 bytes on the base item, comment `Ardia g<1|2> <chunks>`, the rest on `<base>#g<generation>#<n>` (`<base>#<n>` before generations), up to 64 chunks | `Ardia WebUI\Secrets\account-x<lowercase hex of the UTF-8 account>.dpapi`, DPAPI with entropy `ardia-connected-account/v1[/test-instance]/<account>`; the WebUI host has no connected-accounts store yet (`ArdiaKeychain` is refused on desktop), so the cutover's store reads this layout | reassembled as `CredentialStore::Get` does. RNW writes continuation chunks (no comment) before the base (comment `Ardia …`), each with the account as its `UserName`, so an item counts as a chunk only when it has no comment and a chunk-shaped name, and a chunk completes a secret only when its `UserName` matches the base's: one no base claims is an orphan of an interrupted first write and is left out (`credential_chunks_orphaned`), while a chunk-shaped name with its own comment is an account of its own. A missing chunk leaves the account out |
 | Chromium's profile (cookies, saved passwords, extensions) and the install identity | `%LOCALAPPDATA%\Ardia\User Data`, the installer's registry | untouched and not copied | stays where it is |
 
 Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`, `Ardia.png`), dot files, staged
@@ -1787,20 +1787,28 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   a later run removes leftovers. `rnw-migration.json`, the marker, is written last and only when every step finished;
   with it present the migration doesn't run again, so what the WebUI host writes afterwards is never overwritten. A
   file the run finds already in place with the same content (for secrets, the same plaintext) counts as unchanged; one
-  that differs (pilot data) is copied once to `rnw-migration-kept\` before the RNW copy replaces it. An exclusive lock
+  that differs (pilot data) is copied to `rnw-migration-kept\` before the RNW copy replaces it; a retry that finds a
+  different pilot copy than the one kept keeps it too, as `<name>.<run>.kept`. An exclusive lock
   on `rnw-migration.lock` makes a second concurrent run answer `busy`. `migration.rs` stops before every rename in
   turn and resumes each to the same result as an uninterrupted run.
 - **Safety.** Overlapping or relative folders are refused, and so is a root with a link or junction anywhere above it,
-  or a linked marker or lock. Each root is pinned to its resolved path; every read, write, lock, folder creation,
-  rename and partial sweep first walks each folder from its root and opens it without following links, and each
-  opened handle's final path (`GetFinalPathNameByHandleW`, `F_GETPATH`, `/proc/self/fd`) must stay inside the root.
+  or a linked marker or lock. Each root is opened once, without following links, and its handle's final path
+  (`GetFinalPathNameByHandleW`, `F_GETPATH`, `/proc/self/fd`) is pinned. Every folder below it is opened relative to
+  the folder handle above it (`openat`/`mkdirat` on Unix, `NtCreateFile` with `RootDirectory` and
+  `FILE_OPEN_REPARSE_POINT` on Windows) and held while it's used, so swapping a folder for a link by name mid-run
+  changes nothing: reads, staged files, renames (`renameat`; `SetFileInformationByHandle(FileRenameInfoEx)` on the
+  open staged file, relative to the held folder), deletes (`unlinkat`; `FileDispositionInfoEx` on a handle) and the
+  lock all go through those handles, and the lock file must have exactly one link.
   Nothing is opened through a symlink, junction or other reparse point (`O_NOFOLLOW`, `FILE_FLAG_OPEN_REPARSE_POINT`)
   on either side, files with more than one link (`nNumberOfLinks`, `st_nlink`) and files over the
   limits (64 MiB documents, 4 MiB config, 64 KiB keys) are skipped, names follow the RNW stores' own rules, account
-  file names are lowercase hex, DPAPI runs with `CRYPTPROTECT_UI_FORBIDDEN` and plaintext is read into one buffer of its exact size and zeroed. Boundary
+  file names are lowercase hex, DPAPI runs with `CRYPTPROTECT_UI_FORBIDDEN` and plaintext is read into one buffer of its exact size and zeroed. Staged files have short fixed names
+  (`.ardia-mig-<pid>-<n>-<random>.rnw-migration.partial`), and accounts are at most 120 bytes so
+  `account-x<hex>.dpapi` stays within NTFS's 255-character name. Boundary
   row `native:rnw-webui-migration`.
 - **Report.** The report is committed before the marker, so a marker never exists without the report of its run; a
-  report that can't be written fails the run (`failed_stage: report`). Each run writes `rnw-migration-attempt.json` with only an outcome (`migrated`, `migrated_with_skips`,
+  report that can't be written fails the run (`failed_stage: report`), and a marker that can't be written replaces the
+  success report with a `failed`/`marker` one. Each run writes `rnw-migration-attempt.json` with only an outcome (`migrated`, `migrated_with_skips`,
   `already_migrated`, `nothing_to_migrate`, `busy`, `refused`, `failed`), the failed stage (`layout`, `lock`,
   `documents`, `config`, `sync_keys`, `credentials`, `report`, `marker`), the attempt number, the
   duration and counts. The exit code is 0, 1 (failed, run again), 2 (refused), 3 (busy) or 64 (usage).
@@ -1808,7 +1816,10 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   the WebUI host the telemetry leader loads the attempt report from disk with its own documents before the launch
   events read it, and sends `shell_migration` once per run only while sharing is on; the run is marked reported
   (`rnw-migration-reported.json`) only after the event went out and that mark is saved, so with sharing off it
-  stays pending. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms` and the counts: known enums
+  stays pending, and so it does when the event is dropped or throws (`capture` now says whether it queued the
+  event). If the host can't store the mark, the next launch sends the run again: a duplicate, never a lost report. The
+  desktop document and telemetry routes are live on Linux and reach Windows with the cutover's host wiring; the
+  pilot's `webui_shell.cc` serves no documents yet, so on the pilot nothing is read or sent. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms` and the counts: known enums
   and capped counts only. Watch
   `shell_migration` by outcome: `failed` and `refused` should stay near zero, and `credentials_incomplete` and
   `sync_keys_unreadable` against `credentials` and `sync_keys`.

@@ -135,6 +135,46 @@ function Clear-WebUI([string]$folder = $web) {
   Remove-Item -LiteralPath $folder -Recurse -Force
 }
 
+function Rnw-Tree([int]$root) {
+  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $tree = @{ $root = $true }
+  do {
+    $grew = $false
+    foreach ($process in $all) {
+      if ($tree.ContainsKey([int]$process.ParentProcessId) -and -not $tree.ContainsKey([int]$process.ProcessId)) { $tree[[int]$process.ProcessId] = $true; $grew = $true }
+    }
+  } while ($grew)
+  @($all | Where-Object { $tree.ContainsKey([int]$_.ProcessId) })
+}
+
+function Rnw-Running {
+  $folder = (Resolve-Path -LiteralPath $RnwApp).Path.TrimEnd('\') + '\'
+  @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($folder, [StringComparison]::OrdinalIgnoreCase) })
+}
+
+function Run-Rnw([int]$Milliseconds) {
+  $env:ARDIA_DATA_DIR = $rnw
+  $env:ARDIA_BACKGROUND = '1'
+  try {
+    $started = Start-Process (Join-Path $RnwApp 'Ardia.exe') -PassThru
+  } finally {
+    Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
+  }
+  Hold $Milliseconds
+  $alive = -not $started.HasExited
+  $mine = Rnw-Tree $started.Id
+  $mine | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  Wait-Until { @(Rnw-Tree $started.Id | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -eq 0 } 20 'the RNW processes this run started to exit' -NoThrow | Out-Null
+  $alive
+}
+
+function Assert-RnwStopped([string]$when) {
+  if (-not $RnwApp) { return }
+  $left = Rnw-Running
+  Check "rnw-stopped-$when" ($left.Count -eq 0) "processes running from $RnwApp $when`: $(($left | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ', ')"
+  if ($left.Count) { throw "the RNW build is still running from $RnwApp; not migrating against a live profile" }
+}
+
 $secrets = [ordered]@{
   'github'       = @{ bytes = (Bytes 'gho_pilot-short-token'); generation = 1 }
   'google-oauth' = @{ bytes = (Pattern ($chunkBytes * 2 + 117) 3); generation = 2 }
@@ -161,16 +201,12 @@ try {
   [RnwVault]::Delete("${prefix}torn#g1#2")
   if (-not [RnwVault]::Write("${prefix}half-written#g1#1", $null, 'half-written', (Pattern 300 2))) { throw 'CredWrite of the orphan chunk failed' }
 
+  Assert-RnwStopped 'before-seeding'
   if ($RnwApp) {
-    $env:ARDIA_DATA_DIR = $rnw
-    $env:ARDIA_BACKGROUND = '1'
-    $p = Start-Process (Join-Path $RnwApp 'Ardia.exe') -PassThru
-    [Pilot]::Roots.Add($p.Id) | Out-Null
-    Hold 15000
-    Get-Process -ErrorAction SilentlyContinue | Where-Object { [Pilot]::IsTracked($_.Id) } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
+    Run-Rnw 15000 | Out-Null
     Check 'rnw-populated' (Test-Path "$rnw\session.json") "the RNW build ran on the seeded profile for 15 s and left session.json"
   }
+  Assert-RnwStopped 'before-migrating'
 
   $rnwBefore = Tree-Snapshot $rnw
   $vaultBefore = [RnwVault]::Snapshot($prefix)
@@ -237,14 +273,8 @@ try {
   Check 'rollback-reads-sync-key' (Same (Unseal ([IO.File]::ReadAllBytes("$rnw\Sync\sync-key-acct1.dpapi")) 'ardia-sync-key/v1/test-instance/acct1') $syncKey) 'the RNW sealed sync key still unseals in place'
 
   if ($RnwApp) {
-    $env:ARDIA_DATA_DIR = $rnw
-    $env:ARDIA_BACKGROUND = '1'
-    $p = Start-Process (Join-Path $RnwApp 'Ardia.exe') -PassThru
-    [Pilot]::Roots.Add($p.Id) | Out-Null
-    Hold 15000
-    $alive = -not $p.HasExited
-    Get-Process -ErrorAction SilentlyContinue | Where-Object { [Pilot]::IsTracked($_.Id) } | Stop-Process -Force -ErrorAction SilentlyContinue
-    Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
+    $alive = Run-Rnw 15000
+    Assert-RnwStopped 'after-rollback'
     $stillReadable = @($secrets.Keys | Where-Object { Same (Read-Rnw $_) $secrets[$_].bytes }).Count
     Check 'rollback-launch' ($alive -and (Test-Path "$rnw\session.json") -and $stillReadable -eq $secrets.Count) "the RNW build opened the original folder after the migration (running after 15 s: $alive) and its accounts still read back"
   }
@@ -277,10 +307,16 @@ try {
   Check 'test-credentials-removed' (([RnwVault]::Snapshot($prefix)).Count -eq 0) 'the run removed the Credential Manager items it made'
   try { Remove-PilotRun $run; Check 'scratch-removed' (-not (Test-Path -LiteralPath $run)) "the run folder $run is gone" }
   catch { Check 'scratch-removed' $false "$($_.Exception.Message)" }
-  $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\$Label-results.json"
+  try {
+    $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$Proof\$Label-results.json" -ErrorAction Stop
+    $proofWritten = $true
+  } catch {
+    Log "FAIL proof-written: $($_.Exception.Message)"
+    $proofWritten = $false
+  }
 }
 
 $failed = @($results.Values | Where-Object { -not $_.ok }).Count
 "DONE $Label, $failed failed"
-if ($failed -gt 0) { exit 1 }
+if ($failed -gt 0 -or -not $proofWritten) { exit 1 }
 exit 0
