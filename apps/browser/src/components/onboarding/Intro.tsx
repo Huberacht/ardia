@@ -11,7 +11,7 @@ import { isWebDemo } from "../../state/onboarding/demoSteps";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, AppState, findNodeHandle, Image, StyleSheet, View } from "react-native";
 import { useTheme } from "../ui/theme";
-import { CircleButton } from "./Buttons";
+import { CircleButton, SecondaryButton } from "./Buttons";
 import { useOnboardingColors } from "./Parts";
 import { curve, springs } from "../ui/motion";
 import { space } from "../ui/tokens";
@@ -64,14 +64,18 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
   const pageIntro = useMemo(() => meadowIntroFor({ colors, muted, startedAt: started.current }), [colors, muted]);
   const keys = useRef<View>(null);
   const muteStop = useRef<View>(null);
+  const skipStop = useRef<View>(null);
   const holdsKeys = introHoldsKeyboard({ live, leaving, tabReachesUnderOverlays: PLATFORM_FEATURES.tabReachesUnderOverlays });
+
+  const catchesEscape = overlay || (!holdsKeys && !live);
 
   useEffect(() => {
     if (holdsKeys) keys.current?.focus();
-  }, [holdsKeys]);
+    else if (catchesEscape) escapeKeys.current?.focus();
+  }, [holdsKeys, catchesEscape]);
 
   const tab = (target: number | undefined, shift: boolean) => {
-    const stops = [muteStop];
+    const stops = [muteStop, skipStop];
     const focused = stops.findIndex((stop) => target !== undefined && stop.current !== null && findNodeHandle(stop.current) === target);
     stops[nextIntroStop(focused, shift, stops.length)]?.current?.focus();
   };
@@ -101,7 +105,7 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
   }, [began]);
 
   useEffect(() => {
-    if (!began) return;
+    if (!began || exitStarted.current) return;
     if (overlay) started.current = Date.now();
     const ease = curve.enter;
     const lag = Date.now() - started.current;
@@ -127,7 +131,6 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
 
   useEffect(() => {
     if (!overlay) return;
-    escapeKeys.current?.focus();
     let wasActive = AppState.currentState === "active";
     const watch = AppState.addEventListener("change", (state) => {
       if (state === "active") wasActive = true;
@@ -237,10 +240,11 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
           </Animated.View>
         )}
       </Animated.View>
-      {overlay ? (
+      {catchesEscape ? (
         <View
           ref={escapeKeys}
           style={StyleSheet.absoluteFill}
+          pointerEvents={overlay ? "auto" : "none"}
           focusable
           enableFocusRing={false}
           keyDownEvents={ESCAPE_KEYS}
@@ -256,9 +260,11 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
           pointerEvents="box-none"
           focusable={holdsKeys}
           enableFocusRing={false}
-          keyDownEvents={holdsKeys ? INTRO_TAB_KEYS : undefined}
+          keyDownEvents={holdsKeys ? [...INTRO_TAB_KEYS, ...ESCAPE_KEYS] : undefined}
           onKeyDown={(e) => {
-            if (holdsKeys && e.nativeEvent.key === "Tab") tab((e.nativeEvent as { target?: number }).target, e.nativeEvent.shiftKey);
+            if (!holdsKeys) return;
+            if (e.nativeEvent.key === "Escape") skip();
+            else if (e.nativeEvent.key === "Tab") tab((e.nativeEvent as { target?: number }).target, e.nativeEvent.shiftKey);
           }}
         >
           <View style={{ position: "absolute", left: INTRO_LOOK.inset, bottom: INTRO_LOOK.inset }}>
@@ -272,6 +278,9 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
               onPress={() => muteTo(!muted)}
               pressRef={muteStop}
             />
+          </View>
+          <View style={{ position: "absolute", right: INTRO_LOOK.inset, bottom: INTRO_LOOK.inset }} accessibilityHint={INTRO_COPY.skipHint}>
+            <SecondaryButton title={INTRO_COPY.skip} onPress={skip} pressRef={skipStop} />
           </View>
         </View>
       )}
