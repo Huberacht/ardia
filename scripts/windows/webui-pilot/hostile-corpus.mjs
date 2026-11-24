@@ -63,7 +63,7 @@ const corpus = JSON.stringify({
   cases,
   shapes,
   control: "https://ardia-fixture.invalid/ardia-open-external",
-  mailto: "mailto:ardia@ardia-fixture.invalid?body=https://ardia-fixture.invalid/x",
+  mailto: "mailto:ardia@ardia-fixture.invalid?body=https://user@ardia-fixture.invalid/x",
 });
 if (out) writeFileSync(out, corpus);
 else process.stdout.write(corpus);

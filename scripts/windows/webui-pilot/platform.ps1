@@ -13,7 +13,25 @@ function Engine-Call([string]$name) {
   Cdp-Eval "__ardiaHost.call ? __ardiaHost.call($(Js $name), 'default', '{}').then(r => JSON.stringify({ ok: true, r }), e => JSON.stringify({ ok: false, e: String(e && e.message || e) })) : JSON.stringify({ ok: false, e: 'no call' })" | ConvertFrom-Json
 }
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$RunSubKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
 function Run-Value([string]$name) { (Get-ItemProperty -LiteralPath $RunKey -Name $name -ErrorAction SilentlyContinue).$name }
+function Read-RawRun([string]$name) {
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RunSubKey, $false)
+  if ($null -eq $key) { return $null }
+  try {
+    $val = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($null -eq $val) { return $null }
+    return @{ value = $val; kind = $key.GetValueKind($name) }
+  } finally { $key.Dispose() }
+}
+function Restore-RawRun([string]$name, $saved) {
+  if ($null -eq $saved) {
+    Remove-ItemProperty -LiteralPath $RunKey -Name $name -ErrorAction SilentlyContinue
+    return
+  }
+  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($RunSubKey)
+  try { $key.SetValue($name, $saved.value, $saved.kind) } finally { $key.Dispose() }
+}
 $Spawned = @('msedge', 'mshta', 'calc', 'CalculatorApp', 'msdt', 'explorer', 'SystemSettings', 'wscript', 'cscript')
 function Spawned { @(Get-Process -Name $Spawned -ErrorAction SilentlyContinue | ForEach-Object Id) }
 function Named([int[]]$ids) { @($ids | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.Name)#$_ parent $((Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction SilentlyContinue).ParentProcessId)" } }) -join ', ' }
@@ -28,8 +46,9 @@ function Refused($answer, [string[]]$Expected, [switch]$FalseIsRefusal) {
   return ($answer.ok -eq $false) -and ($Expected -ccontains [string]$answer.e)
 }
 $MailApps = @('olk', 'HxOutlook', 'OUTLOOK', 'HxTsr', 'OpenWith')
-$webuiRunBefore = Run-Value 'Ardia WebUI'
+$webuiRunBefore = Read-RawRun 'Ardia WebUI'
 $mailWasRunning = @(Get-Process -Name $MailApps -ErrorAction SilentlyContinue | ForEach-Object Id)
+$pilotEnginePids = @()
 $failedRun = $false
 try {
   Stop-Engine
@@ -73,6 +92,7 @@ try {
   $sinkControl = Sink-Calls
   Check 'open-external-control-reaches-sink' (($valid.ok -eq $true) -and ($valid.r -is [bool]) -and $valid.r -and ($sinkAfter -eq 0) -and ($sinkControl -eq 1)) "answer $($valid | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkAfter -> $sinkControl"
 
+  $pilotEnginePids = @(Get-Process -Name chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$App*" } | ForEach-Object Id)
   $mailto = Open-With "[$(Js $corpus.mailto)]"
   $sinkMail = Sink-Calls
   Check 'mailto-with-embedded-url-reaches-sink' (($mailto.ok -eq $true) -and ($mailto.r -is [bool]) -and ($sinkMail -eq 2)) "answer $($mailto | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkControl -> $sinkMail"
@@ -130,9 +150,14 @@ try {
 } finally {
   Stop-Engine
   if (-not $edgeWasRunning) { Get-Process -Name msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
-  if ($null -eq $webuiRunBefore) { Remove-ItemProperty -LiteralPath $RunKey -Name 'Ardia WebUI' -ErrorAction SilentlyContinue }
-  else { Set-ItemProperty -LiteralPath $RunKey -Name 'Ardia WebUI' -Value $webuiRunBefore }
-  Get-Process -Name $MailApps -ErrorAction SilentlyContinue | Where-Object { $mailWasRunning -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
+  Restore-RawRun 'Ardia WebUI' $webuiRunBefore
+  $mailCandidates = @(Get-Process -Name $MailApps -ErrorAction SilentlyContinue | Where-Object { $mailWasRunning -notcontains $_.Id })
+  foreach ($proc in $mailCandidates) {
+    $info = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
+    if ($info -and (($info.CommandLine -like '*ardia-fixture.invalid*') -or ($pilotEnginePids -contains [int]$info.ParentProcessId))) {
+      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+  }
   $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\platform-results.json"
   if ($RunRoot) { Remove-PilotRun $RunRoot }
 }
