@@ -37,6 +37,7 @@ export function PluginsStep() {
   }, [known, names, active]);
   useEffect(() => (active ? leavePluginsStep : undefined), [active]);
   const nothingToDo = known && phase === "offer" && !plugins.some((p) => p.state === "available");
+  const settled = phase === "installed" || nothingToDo;
   const subject = plugins.find((p) => p.name === current) ?? plugins[0];
 
   return (
@@ -49,8 +50,8 @@ export function PluginsStep() {
           continueTitle={primaryTitle(plugins, { picks, phase: shownPhase })}
           disabled={phase === "working" || !known}
           onContinue={() => (phase === "offer" ? void installPickedPlugins(plugins) : finishPluginsStep(plugins))}
-          onSkip={phase === "installed" || nothingToDo ? undefined : () => skipPluginsStep(plugins)}
-          holdScroll
+          onSkip={settled ? undefined : () => skipPluginsStep(plugins)}
+          holdScroll={!settled}
         />
       }
       preview={<Terminal plugin={subject} />}
