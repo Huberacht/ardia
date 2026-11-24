@@ -31,7 +31,7 @@ inline constexpr const char* kReservedWindowsDocumentNames[] = {
     "session.json",       "live.json",
     "live.canonical.json", "rnw-migration.json",
     "rnw-migration.lock", "launch-starts.txt",
-    "launch-starts.txt.tmp",
+    "launch-starts.txt.tmp", "window-placement.txt",
 };
 
 inline constexpr char AsciiLower(char c) {

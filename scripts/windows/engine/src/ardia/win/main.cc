@@ -618,10 +618,27 @@ void AddWebUIMainParts(ChromeBrowserMainParts* main_parts) {
   main_parts->AddParts(std::make_unique<WebUIMainParts>());
 }
 
+base::ListValue RelaunchUrls(const base::CommandLine& command_line,
+                             const base::FilePath& cur_dir) {
+  base::ListValue urls;
+  for (const base::CommandLine::StringType& argument :
+       command_line.GetArgs()) {
+    GURL url(base::WideToUTF8(argument));
+    if (!url.is_valid()) {
+      url = url_formatter::FixupRelativeFile(cur_dir,
+                                             base::FilePath(argument));
+    }
+    if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile())) {
+      urls.Append(url.spec());
+    }
+  }
+  return urls;
+}
+
 bool WebUIRelaunched(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir) {
   ClearExiting();
-  OpenWebUIShell();
+  OpenWebUIShellWithUrls(RelaunchUrls(command_line, cur_dir));
   return true;
 }
 
@@ -728,6 +745,7 @@ void BeforeWebUIChromeMain(base::CommandLine* command_line) {
   }
   g_ardia_win_add_main_parts = &AddWebUIMainParts;
   g_ardia_win_relaunched = &WebUIRelaunched;
+  InstallWebUIShellHooks();
 }
 
 bool KeepsWindowWithoutTabs(const BrowserWindowInterface* browser) {
@@ -737,20 +755,8 @@ bool KeepsWindowWithoutTabs(const BrowserWindowInterface* browser) {
 bool Relaunched(const base::CommandLine& command_line,
                 const base::FilePath& cur_dir) {
   ClearExiting();
-  base::ListValue urls;
-  for (const base::CommandLine::StringType& argument :
-       command_line.GetArgs()) {
-    GURL url(base::WideToUTF8(argument));
-    if (!url.is_valid()) {
-      url = url_formatter::FixupRelativeFile(cur_dir,
-                                             base::FilePath(argument));
-    }
-    if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile())) {
-      urls.Append(url.spec());
-    }
-  }
   base::DictValue payload;
-  payload.Set("urls", std::move(urls));
+  payload.Set("urls", RelaunchUrls(command_line, cur_dir));
   Emit("relaunch", std::move(payload));
   return true;
 }

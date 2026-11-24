@@ -72,6 +72,9 @@ void TestDocumentNames() {
   assert(ReservedWindowsDocumentName("Launch-Starts.txt"));
   assert(ReservedWindowsDocumentName("launch-starts.txt.tmp"));
   assert(ReservedWindowsDocumentName("LAUNCH-STARTS.TXT.TMP"));
+  assert(ReservedWindowsDocumentName("window-placement.txt"));
+  assert(ReservedWindowsDocumentName("Window-Placement.TXT"));
+  assert(!BootstrapDocumentEligible("window-placement.txt"));
   assert(!ReservedWindowsDocumentName("rnw-migration-attempt.json"));
   assert(!ReservedWindowsDocumentName("rnw-migration-reported.json"));
   assert(!ReservedWindowsDocumentName("launch-guard.json"));

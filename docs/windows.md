@@ -1747,12 +1747,51 @@ Rewritten for the pilot (each marks code the desktop host should own once, share
 
 | Linux code | Windows pilot | Why |
 | --- | --- | --- |
-| `ShellHostView` inside `BrowserView` (`ac_linux_host.cc`, 8,921 lines) | `ShellWindow` + `ShellContents` in a plain `views::Widget` | the host is one translation unit tied to 100+ Linux files and 35 Linux patches; the pilot needed none of them |
+| `ShellHostView` inside `BrowserView` (`ac_linux_host.cc`, 8,921 lines) | `ShellHostView` inside `BrowserView` (`webui/webui_host_view.{h,cc}`, `webui_host_tabs.cc`, `webui_host_calls.cc`; #4112) | the pilot's single `ShellWindow` widget is gone: each Chromium browser window carries the shell over its own `BrowserView`, see "WebUI host on BrowserView" below |
 | `ShellDataSource`, `ShellController`, `ShellConfig`, `ReadAsset`, `MimeType`, `AssetDirectory` | same code, copied | file-local in `ac_linux_host.cc`; move to `engine/ardiacore-desktop` as is |
 | `ViewportTargeter`, `ShellTransparency`, `SubtractFromRegion`, `PassesShellPoint`, `DoesIntersectRect`, `SetInputRegions` | same logic, plus `ShellRootTargeter` | see Results |
 | `HostMessageHandler` | `Handler` | same transport; the renderer-generation and lease bookkeeping is reduced to one window and generation `1` |
 | `linux_window::StartCaptionMove` | `WM_SYSCOMMAND SC_MOVE \| HTCAPTION`, only while the left button is down | Win32 move loop, Aero Snap included |
 | `chromium-linux-borderless-frame`, `-window-state` (GTK and Wayland frames) | `ShellTreeHost::GetClientAreaInsets`/`GetDwmFrameInsetsInPixels` + `ShellFrame::NonClientHitTest` + `WebUIShellPreTranslate` | Chrome's own Windows frame model: invisible native resize borders, top edge in the client, DWM shadow and rounded corners; `HTMAXBUTTON` presses are taken in the message pump and toggle maximize |
+
+**WebUI host on BrowserView (#4112).** In `--ardia-shell=webui` the shell lives inside Chromium's own windows, as on
+Linux. `InstallWebUIShellHooks` (`webui_shell.cc`, called from `BeforeWebUIChromeMain`) sets
+`g_ardia_win_hosts_normal_windows` (no tab strip, toolbar, bookmark bar or Chromium shortcuts in a normal window),
+`g_ardia_win_shell_frame` (`chromium-win-hosted-browser-windows.patch`: the window keeps the system DWM frame and its
+contents stay transparent, so Mica and the rounded corners survive), `g_ardia_win_frame_view` (`ShellBrowserFrameView`
+in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize button for Snap Layouts) and
+`g_ardia_keeps_window_without_tabs` (a shell window and its companions stay open with no tabs until they close).
+
+- `WindowRegistry` (`webui_windows.cc`) opens the `main` window at start, `ArdiaShell.openWindow` windows (browser,
+  small, private, Settings, Import), and adopts any normal window Chromium opens by itself as `chromeMade`, its tabs
+  offered as unclaimed. It tracks activation order (focus, links from other apps), private window ordinals
+  (`ArdiaShell.privateWindows`), placement (`window-placement.txt`, the RNW format, cascaded 28 px from the window
+  in front, fitted to the display's work area) and quits when the last browser window closes.
+- `ShellHostView` (`webui_host_view.cc`) is a child view over the `BrowserView`: the `chrome://ardia/` shell
+  `WebView` on top and one viewport `WebView` per shown tab under it. Tabs are real `TabStripModel` tabs created with
+  `Navigate` (`kNewBackgroundTab`), so popups, `beforeunload`, session tab ids and tab helpers are Chromium's own. A
+  tab of another profile lives in a hidden companion browser of that profile owned by the window (`EnsureMember`,
+  `RouteProfile`); private and utility windows take no companions. The `BrowserView`'s own contents view is emptied
+  after every strip change (`ReattachViewports`).
+- Host calls served there: `tab.create` (with `adoptId`, `previousClaim` and transfers between windows after
+  `ArdiaTabs.prepareTransfer`), `tab.viewport`, `tab.presentations`, `tab.command` (`loadUrl`, `goBack`,
+  `goForward`, `goToOffset`, `reload`, `forceReload`, `stopLoading`, `focus`, `blur`, `zoomStep`, `setMuted`,
+  `close`, `navigationEntries`), `tab.release`, `tab.close`, `ArdiaTabs.unclaimedTabs` and the `unclaimed` event,
+  `ArdiaTabs.claimLaunchTab`, `ArdiaShell.setActiveProfile`, `openWindow`, `focusWindow`, `windowIdentity`,
+  `windowIds`, `privateWindows`, `toggleFullScreen`, `pickFolder`, `pickFiles`, `copyText`, `readText`,
+  `listenForOpenURLs` with `onOpenURLs` (a second launch's URLs), `documents.watch`/`unwatch`/`commit`/`flush` with
+  `documents.changed` (the shared `LinuxDocumentService` from `engine/ardiacore-linux`, compiled as is), and
+  `profiles.loaded`; plus everything the pilot served (documents, session, telemetry, platform calls, routes).
+- #4107's widened hooks are set in WebUI mode only (`InstallWebUIShellHooks`; the RNW host leaves them null):
+  `g_ardia_linux_is_companion`, `g_ardia_linux_companion_owner` (a companion's tab-modal dialogs and permission
+  prompts show in the visible window), `g_ardia_linux_present_companion` (a companion's `Show`/`Activate` focuses
+  the owning window, its other window requests are dropped), `g_ardia_linux_window_tab_count` (one close warning
+  for the window's tabs across its companions) and `g_ardia_linux_shell_passes_point` (`BrowserView` hands input at
+  the shell's pass-through regions to the page below). Still deferred: the close drain
+  (`g_ardia_linux_close_hooks`, `beginWindowCloseDrain`, `acknowledgeWindowClose`; until it lands
+  `LinuxCloseHooksActive()` stays false and Chromium closes WebUI windows itself, running `beforeunload`),
+  `ArdiaShell.beginDialog`, picture in picture, glass regions, notifications, idle signals, drag escape and switcher
+  capture; none is advertised, so the desktop falls back as it does on a host without them.
 
 **Compile probe** of the rest (`ARDIA_LINUX_COMPILE_PROBE=1`, objects only, nothing linked;
 `docs/engine-build-windows.md`), on the Windows tree with the patches `series-win` takes (#4107, 2026-11-24): of the
@@ -1853,7 +1892,7 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   stays pending, and so it does when the event is dropped or throws (`capture` now says whether it queued the
   event, and a relay that drops it says so), and until the queue holding the event is saved to disk while the consent the launch started with is still the current one. It is reported
   only by the telemetry leader: on the desktop host, once the window has taken over from the startup relay (the
-  leadership's after-lead hook), with the consent the launch started with, and at most once per run of the app. If the host can't store the mark, the next launch sends the run again: a duplicate, never a lost report. The desktop document and telemetry routes are live on both Linux and Windows WebUI (`webui_shell.cc` serves
+  leadership's after-lead hook), with the consent the launch started with, and at most once per run of the app. If the host can't store the mark, the next launch sends the run again: a duplicate, never a lost report. The desktop document and telemetry routes are live on both Linux and Windows WebUI (`webui_host_calls.cc` serves
 `ArdiaShell.readDocument`/`writeDocument`/`saveDocument`/`removeDocument`, populates `bootstrap.documents`, and
 advertises and handles `ArdiaTelemetry.post` using `ardia::desktop_telemetry_policy`), so
 `rnw-migration-attempt.json` and `rnw-migration-reported.json` flow end-to-end into `shell_migration` telemetry. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms`, `prior_failed_stage` and the counts: known enums
@@ -1905,10 +1944,11 @@ None: the pilot runs in a plain `views::Widget`. It adds one Windows patch of it
 None fundamental. Views on Windows hosts the WebUI shell, a page below it, native resize and snap, and the snap
 layouts flyout over an HTML button. Closed in #4087:
 
-- **`HTMAXBUTTON` hover and press state:** `ShellWindow::PreTranslate` tracks `WM_NCMOUSEMOVE`, `WM_NCMOUSELEAVE`
+- **`HTMAXBUTTON` hover and press state:** `CaptionInput::PreTranslate` (`webui_frame.cc`) tracks `WM_NCMOUSEMOVE`, `WM_NCMOUSELEAVE`
   (armed via `TrackMouseEvent` with `TME_NONCLIENT | TME_LEAVE`), `WM_NCLBUTTONDOWN`, `WM_NCLBUTTONUP`, and clears
-  state on client input, capture loss, cancel mode, or deactivation in both `PreTranslate` and `ShellTreeHost`
-  (`HandleActivationChanged`, `HandleCancelMode`, `HandleCaptureLost`, `PreHandleMSG`) via `MaximizeButtonStateMachine`,
+  state on client input, capture loss, cancel mode, or deactivation in both `PreTranslate` and
+  `CaptionInput::FilterMessage` (an `HWNDSubclass` filter on the browser window, which sees the sent
+  `WM_CAPTURECHANGED`, `WM_CANCELMODE` and `WM_ACTIVATE`) via `MaximizeButtonStateMachine`,
   emitting `ArdiaShell.maximizeButtonState` (`{ windowId, hovered, pressed }`) to `apps/desktop/src/maximizeButtonState.ts`
   and `WindowControls.tsx` for immediate hover/active styling alongside Snap Layouts.
 - **Final-path root and file containment:** the root folder and the files in it are opened differently.
