@@ -249,10 +249,26 @@ void TestCanonicalPathContainment() {
                                       L"\\\\?\\C:\\app\\ardia-ui\\index.html"));
   assert(IsStrictlyWithinWinDirectory(
       L"\\\\?\\C:\\app\\ardia-ui\\",
+      L"\\\\?\\c:\\app\\ardia-ui\\assets\\app.js"));
+  assert(IsStrictlyWithinWinDirectory(L"c:\\App\\ardia-ui",
+                                      L"C:\\App\\ardia-ui\\a.png"));
+  assert(!IsStrictlyWithinWinDirectory(L"C:\\App\\ardia-ui",
+                                       L"C:\\App\\ARDIA-UI\\a.png"));
+  assert(!IsStrictlyWithinWinDirectory(
+      L"\\\\?\\C:\\app\\ardia-ui\\",
       L"\\\\?\\c:\\APP\\ARDIA-UI\\assets\\app.js"));
   assert(IsStrictlyWithinWinDirectory(
       L"\\\\?\\UNC\\files\\ardia\\ui",
+      L"\\\\?\\UNC\\FILES\\ARDIA\\ui\\assets\\app.js"));
+  assert(!IsStrictlyWithinWinDirectory(
+      L"\\\\?\\UNC\\files\\ardia\\ui",
       L"\\\\?\\UNC\\FILES\\ARDIA\\UI\\assets\\app.js"));
+  assert(IsStrictlyWithinWinDirectory(
+      L"\\\\?\\Volume{abcdef01-1111-1111-1111-111111111111}\\ui",
+      L"\\\\?\\Volume{ABCDEF01-1111-1111-1111-111111111111}\\ui\\a.js"));
+  assert(!IsStrictlyWithinWinDirectory(
+      L"\\\\?\\Volume{abcdef01-1111-1111-1111-111111111111}\\ui",
+      L"\\\\?\\Volume{abcdef01-1111-1111-1111-111111111111}\\UI\\a.js"));
   assert(IsStrictlyWithinWinDirectory(L"C:\\", L"C:\\index.html"));
   assert(IsStrictlyWithinWinDirectory(
       L"\\\\?\\Volume{11111111-1111-1111-1111-111111111111}\\",
@@ -281,9 +297,28 @@ void TestCanonicalPathContainment() {
   assert(!IsDirectChildOfWinDirectory(L"\\\\?\\C:\\data",
                                       L"\\\\?\\C:\\data-evil\\telemetry.json"));
   assert(!IsDirectChildOfWinDirectory(L"\\\\?\\C:\\data", L"\\\\?\\C:\\data"));
+  assert(IsDirectChildOfWinDirectory(L"\\\\?\\c:\\Data",
+                                     L"\\\\?\\C:\\Data\\telemetry.json"));
+  assert(!IsDirectChildOfWinDirectory(L"\\\\?\\C:\\Data",
+                                      L"\\\\?\\C:\\DATA\\telemetry.json"));
+  assert(!IsDirectChildOfWinDirectory(L"C:\\", L"C:\\"));
+  assert(IsDirectChildOfWinDirectory(L"C:\\", L"c:\\telemetry.json"));
+  assert(WinFinalPathRootLength(L"C:\\a") == 2);
+  assert(WinFinalPathRootLength(L"\\\\server\\share\\a") == 14);
+  assert(WinFinalPathRootLength(L"\\\\server") == 8);
+  assert(WinFinalPathRootLength(L"relative") == 0);
 }
 
 void TestStartupMigrationPolicy() {
+  assert(StartupMigrationRequestIncomplete({true, false, true, false}));
+  assert(!StartupMigrationRequestIncomplete({true, false, true, true}));
+  assert(!StartupMigrationRequestIncomplete({false, false, true, false}));
+  assert(!StartupMigrationRequestIncomplete({false, false, true, true}));
+  assert(!StartupMigrationRequestIncomplete({true, true, true, false}));
+  assert(!StartupMigrationRequestIncomplete({true, false, false, false}));
+  assert(!StartupMigrationRequestIncomplete({false, false, false, false}));
+  assert(!StartupMigrationAllowsShell(
+      {StartupMigrationOutcome::kIncompleteArguments}));
   assert(ShouldRunStartupMigration({false, false, false, false}));
   assert(ShouldRunStartupMigration({true, false, false, false}));
   assert(ShouldRunStartupMigration({false, false, false, true}));

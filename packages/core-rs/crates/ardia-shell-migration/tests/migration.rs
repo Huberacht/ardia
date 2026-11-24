@@ -356,10 +356,43 @@ fn a_vault_that_cannot_be_read_fails_and_retries() {
     assert_eq!(attempt["outcome"], "failed");
     assert_eq!(attempt["failed_stage"], "credentials");
     assert_eq!(attempt["attempt"], 1);
+    assert!(attempt.get("prior_failed_stage").is_none());
+    let again = run(&populated.layout, &sealer, &vault);
+    assert_eq!(again.attempt, 2);
+    assert_eq!(again.prior_failed_stage, Some(Stage::Credentials));
     vault.fail = false;
     let resumed = run(&populated.layout, &sealer, &vault);
     assert_eq!(resumed.outcome, Outcome::MigratedWithSkips);
-    assert_eq!(resumed.attempt, 2);
+    assert_eq!(resumed.attempt, 3);
+    assert_eq!(resumed.prior_failed_stage, Some(Stage::Credentials));
+    let reported = ardia_shell_migration::migrate::read_attempt(&populated.layout.webui_data).unwrap();
+    assert_eq!(reported["outcome"], "migrated_with_skips");
+    assert_eq!(reported["attempt"], 3);
+    assert_eq!(reported["prior_failed_stage"], "credentials");
+    assert_eq!(read_marker(&populated.layout.webui_data).unwrap()["prior_failed_stage"], "credentials");
+}
+
+#[test]
+fn a_prior_stage_comes_only_from_a_failed_attempt_report() {
+    let scratch = Scratch::new("prior-stage");
+    let sealer = FakeDpapi::new();
+    let populated = populate(&scratch.0, &sealer);
+    write(
+        &populated.layout.webui_data.join(names::ATTEMPT_NAME),
+        b"{\"version\":1,\"run\":\"0123456789abcdef0123456789abcdef\",\"outcome\":\"busy\",\"failed_stage\":\"lock\",\"attempt\":4,\"counts\":{}}",
+    );
+    let report = run(&populated.layout, &sealer, &populated.vault);
+    assert_eq!(report.attempt, 5);
+    assert_eq!(report.prior_failed_stage, None);
+    let scratch = Scratch::new("prior-stage-unknown");
+    let populated = populate(&scratch.0, &sealer);
+    write(
+        &populated.layout.webui_data.join(names::ATTEMPT_NAME),
+        b"{\"version\":1,\"run\":\"0123456789abcdef0123456789abcdef\",\"outcome\":\"failed\",\"failed_stage\":\"C:\\\\Users\",\"attempt\":1,\"counts\":{}}",
+    );
+    let report = run(&populated.layout, &sealer, &populated.vault);
+    assert_eq!(report.prior_failed_stage, None);
+    assert!(report.to_json().get("prior_failed_stage").is_none());
 }
 
 #[test]

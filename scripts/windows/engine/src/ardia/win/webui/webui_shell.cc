@@ -5,6 +5,7 @@
 #include <dwmapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -710,11 +711,27 @@ base::DictValue ReadBootstrapDocuments(const base::FilePath& directory) {
   return documents;
 }
 
+std::atomic<int>& AssetReadsServed() {
+  static std::atomic<int> served{0};
+  return served;
+}
+
+std::atomic<int>& AssetReadsRefused() {
+  static std::atomic<int> refused{0};
+  return refused;
+}
+
+std::atomic<int>& AssetReadsOutsideRoot() {
+  static std::atomic<int> outside{0};
+  return outside;
+}
+
 std::optional<std::string> ReadAsset(base::FilePath directory,
                                      std::string path,
                                      std::string bootstrap_json,
                                      base::FilePath documents) {
   if (!ValidWindowsAssetPath(path) || MimeType(path).empty()) {
+    ++AssetReadsRefused();
     return std::nullopt;
   }
   if (path == "host-bootstrap.js") {
@@ -726,7 +743,10 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     if (std::optional<base::DictValue> session = ReadSession(documents)) {
       bootstrap->GetDict().Set("session", std::move(*session));
     }
-    bootstrap->GetDict().Set("documents", ReadBootstrapDocuments(documents));
+    base::DictValue bootstrap_documents = ReadBootstrapDocuments(documents);
+    LOG(WARNING) << "Ardia WebUI shell: bootstrap documents: "
+                 << bootstrap_documents.size();
+    bootstrap->GetDict().Set("documents", std::move(bootstrap_documents));
     const std::optional<std::string> json = base::WriteJson(*bootstrap);
     if (!json) {
       return std::nullopt;
@@ -750,6 +770,7 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
   }
   const std::optional<std::wstring> file_final = HandleFinalPath(file.get());
   if (!file_final || !IsStrictlyWithinWinDirectory(*root_final, *file_final)) {
+    ++AssetReadsOutsideRoot();
     return std::nullopt;
   }
   std::optional<std::string> contents =
@@ -757,6 +778,7 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
   if (!contents) {
     return std::nullopt;
   }
+  ++AssetReadsServed();
   if (path == "index.html") {
     const size_t head = contents->find("<head>");
     if (head == std::string::npos) {
@@ -2351,6 +2373,13 @@ void ShellWindow::Invoke(const std::string& method,
         true, base::Value(base::DictValue()
                               .Set("calls", ExternalOpenCount())
                               .Set("defaultBrowserCalls", DefaultAppsOpenCount())));
+  }
+  if (method == "ArdiaShell.testAssetSink" && ardiacore::TestInstance()) {
+    return std::move(done).Run(
+        true, base::Value(base::DictValue()
+                              .Set("served", AssetReadsServed().load())
+                              .Set("refused", AssetReadsRefused().load())
+                              .Set("outsideRoot", AssetReadsOutsideRoot().load())));
   }
   if (method == "ArdiaShell.testTelemetrySink" && ardiacore::TestInstance()) {
     return std::move(done).Run(

@@ -202,8 +202,26 @@ Clear-WebUI
 Opens 'control-user-data-dir-with-a-space' @('--ardia-shell=webui', "--user-data-dir=$web\Chromium")
 Clear-WebUI
 
+$webReal = Join-Path $run 'webui-real'
+New-Item -ItemType Directory -Force $webReal | Out-Null
+Set-Content -LiteralPath (Join-Path $webReal 'pilot-root-a.json') '{"a":1}' -NoNewline
+Set-Content -LiteralPath (Join-Path $webReal 'pilot-root-b.json') '{"b":2}' -NoNewline
+$rootLinked = Link junction $web $webReal
+$rootPilot = Start-Pilot @('--ardia-shell=webui', '--ardia-no-migrate', '--enable-logging', '--v=0')
+$rootWindow = $null
+try { $rootWindow = Wait-Shell 60 } catch {}
+$rootLog = Join-Path $webReal 'Chromium\chrome_debug.log'
+$rootLine = Wait-Until { Get-Content -LiteralPath $rootLog -ErrorAction SilentlyContinue | Select-String 'Ardia WebUI shell: bootstrap documents: (\d+)' | Select-Object -Last 1 } 30 'the shell to read bootstrap.documents' -NoThrow
+$rootCount = if ($rootLine) { [int]$rootLine.Matches[0].Groups[1].Value } else { -1 }
+Stop-Engine
+$rootStillLinked = [bool]((Get-Item -LiteralPath $web -Force -ErrorAction SilentlyContinue).LinkType -eq 'Junction')
+$rootDocsIntact = ((Get-Content -LiteralPath (Join-Path $webReal 'pilot-root-a.json') -Raw) -ceq '{"a":1}') -and ((Get-Content -LiteralPath (Join-Path $webReal 'pilot-root-b.json') -Raw) -ceq '{"b":2}')
+$rootOpened = ($null -ne $rootWindow) -and ($rootWindow -ne [IntPtr]::Zero)
+Check 'documents-read-under-junction-app-data-root' ($rootLinked -and $rootPilot.ArgvOk -and $rootOpened -and ($rootCount -eq 2) -and $rootStillLinked -and $rootDocsIntact) "Ardia WebUI is a junction to $webReal (made $rootLinked, still a junction $rootStillLinked); window $rootOpened; bootstrap read $rootCount of the 2 documents seeded in the target through the junction (0 means the root was refused); seeded documents intact $rootDocsIntact"
+Clear-WebUI
+
 $assetUi = Join-Path $run 'asset-ui'
-$assetSecretDir = Join-Path $elsewhere 'asset-secret'
+$assetSecretDir = Join-Path $run 'asset-outside'
 New-Item -ItemType Directory -Force $assetSecretDir | Out-Null
 $pngBytes = [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
 [System.IO.File]::WriteAllBytes((Join-Path $assetSecretDir 'secret.png'), $pngBytes)
@@ -221,15 +239,48 @@ try {
 } catch {
   Log "asset containment shell did not become ready: $($_.Exception.Message)"
 }
+function Asset-Sink {
+  $answer = Cdp-Eval "__ardiaHost.invoke('ArdiaShell.testAssetSink', {}).then(r => JSON.stringify(r), () => 'null')"
+  if ($answer) { $answer | ConvertFrom-Json } else { $null }
+}
 $controlLoad = $null
 $escapeLoad = $null
+$sinkStart = $null
+$sinkControl = $null
+$sinkEscape = $null
+$sinkCorpus = $null
+$corpusLoaded = @()
+$corpusChecked = 0
+$corpusSkipped = 0
 if ($assetReady) {
-  $imgProbe = "src => new Promise(resolve => { const img = new Image(); img.onload = () => resolve(JSON.stringify({ ok: true, width: img.naturalWidth, height: img.naturalHeight })); img.onerror = () => resolve(JSON.stringify({ ok: false, width: img.naturalWidth, height: img.naturalHeight })); img.src = src; })"
-  $controlLoad = Cdp-Eval "($imgProbe)('/control.png')" | ConvertFrom-Json
-  $escapeLoad = Cdp-Eval "($imgProbe)('/escape/secret.png')" | ConvertFrom-Json
+  $imgProbe = "src => new Promise(resolve => { const img = new Image(); const done = ok => resolve({ ok, width: img.naturalWidth, height: img.naturalHeight }); img.onload = () => done(true); img.onerror = () => done(false); img.src = src; })"
+  $sinkStart = Wait-Settled { (Asset-Sink) | ConvertTo-Json -Compress } 10 | ConvertFrom-Json
+  $controlLoad = Cdp-Eval "($imgProbe)('/control.png').then(r => JSON.stringify(r))" | ConvertFrom-Json
+  $sinkControl = Asset-Sink
+  $escapeLoad = Cdp-Eval "($imgProbe)('/escape/secret.png').then(r => JSON.stringify(r))" | ConvertFrom-Json
+  $sinkEscape = Asset-Sink
+  $corpus = Get-Content -LiteralPath 'C:\pilot\hostile-corpus.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+  $asText = "v => { try { return String(v); } catch { return Object.prototype.toString.call(v); } }"
+  foreach ($case in $corpus.cases) {
+    $answer = Cdp-Eval "(async () => { const text = ($asText)($($case.expression)); const probe = $imgProbe; const request = async path => { const url = new URL(path, location.href); if (url.origin === location.origin && (url.pathname === '/' || url.pathname === '/index.html')) return { ok: false, width: 0, skipped: true }; return probe(url.href); }; const raw = await request('/' + text); const encoded = await request('/' + encodeURIComponent(text.toWellFormed())); return JSON.stringify({ raw, encoded }); })()"
+    $loads = if ($answer) { $answer | ConvertFrom-Json } else { $null }
+    $corpusChecked++
+    if ($loads) { $corpusSkipped += @($loads.raw, $loads.encoded | Where-Object { $_.skipped }).Count }
+    if (-not $loads -or $loads.raw.ok -or $loads.encoded.ok -or $loads.raw.width -ne 0 -or $loads.encoded.width -ne 0) {
+      $corpusLoaded += $case.id
+      Log "asset corpus $($case.id) answered $answer"
+    }
+  }
+  $sinkCorpus = Asset-Sink
 }
 Stop-Engine
-Check 'asset-junction-escape-refused' ($assetLinkOk -and $assetReady -and $controlLoad.ok -and ($controlLoad.width -eq 1) -and ($controlLoad.height -eq 1) -and (-not $escapeLoad.ok) -and ($escapeLoad.width -eq 0)) "control=$($controlLoad | ConvertTo-Json -Compress); escape=$($escapeLoad | ConvertTo-Json -Compress)"
+$controlServed = $sinkStart -and $sinkControl -and ($sinkControl.served -eq $sinkStart.served + 1) -and ($sinkControl.outsideRoot -eq $sinkStart.outsideRoot)
+$escapeRefusedAtSink = $sinkControl -and $sinkEscape -and ($sinkEscape.served -eq $sinkControl.served) -and ($sinkEscape.outsideRoot -eq $sinkControl.outsideRoot + 1)
+Check 'asset-junction-escape-refused' ($assetLinkOk -and $assetReady -and $controlLoad.ok -and ($controlLoad.width -eq 1) -and ($controlLoad.height -eq 1) -and $controlServed -and (-not $escapeLoad.ok) -and ($escapeLoad.width -eq 0) -and $escapeRefusedAtSink) "control=$($controlLoad | ConvertTo-Json -Compress); escape=$($escapeLoad | ConvertTo-Json -Compress); sink start=$($sinkStart | ConvertTo-Json -Compress) after control=$($sinkControl | ConvertTo-Json -Compress) after escape=$($sinkEscape | ConvertTo-Json -Compress)"
+$corpusAtSink = $sinkEscape -and $sinkCorpus -and ($sinkCorpus.served -eq $sinkEscape.served) -and ($sinkCorpus.outsideRoot -eq $sinkEscape.outsideRoot) -and ($sinkCorpus.refused -gt $sinkEscape.refused)
+Check 'asset-sink-refuses-hostile-corpus' ($assetReady -and ($corpusChecked -gt 0) -and ($corpusChecked -eq @($corpus.cases).Count) -and ($corpusLoaded.Count -eq 0) -and $corpusAtSink) "$corpusChecked corpus values requested raw and URL-encoded under chrome://ardia/ ($corpusSkipped requests not sent because the URL parser resolved them to the shell page itself); loaded: $($corpusLoaded -join ', '); sink after escape=$($sinkEscape | ConvertTo-Json -Compress) after corpus=$($sinkCorpus | ConvertTo-Json -Compress)"
+cmd /c rmdir "$(Join-Path $assetUi 'escape')" | Out-Null
+Remove-Item -LiteralPath $assetSecretDir -Recurse -Force -ErrorAction SilentlyContinue
 
 cmd /c rmdir "$rn\User Data" | Out-Null
 Move-Item -LiteralPath (Join-Path $elsewhere 'profile') -Destination "$rn\User Data"

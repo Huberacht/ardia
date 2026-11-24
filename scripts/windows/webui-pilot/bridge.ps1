@@ -226,13 +226,14 @@ Check 'documents-sync-state-alias-limit' (($syncAliasWrite.ok -eq $true) -and ($
 $linkPath = Join-Path $Data 'escape-link.json'
 cmd /c mklink "$linkPath" "$outsideCanary" | Out-Null
 $linkItem = Get-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue
+$linkType = if ($linkItem) { [string]$linkItem.LinkType } else { '' }
 $linkRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["escape-link.json"]'
 $linkWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["escape-link.json", "{\"pwned\":true}"]'
 $linkRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["escape-link.json"]'
 $canaryAfterLink = Get-Content -LiteralPath $outsideCanary -Raw
 $linkStillExists = Test-Path -LiteralPath $linkPath
 if ($linkStillExists) { Remove-Item -LiteralPath $linkPath -Force }
-Check 'documents-refuse-reparse-point' ([bool]($linkItem -and $linkItem.LinkType) -and (Native-Refusal $linkRead 'ERR_DOCUMENT_READ') -and (Native-Refusal $linkWrite 'ERR_DOCUMENT_WRITE') -and (Native-Refusal $linkRemove 'ERR_DOCUMENT_REMOVE') -and ($canaryAfterLink -eq $canaryBefore) -and $linkStillExists) "read=$(Answer-Text $linkRead) write=$(Answer-Text $linkWrite) remove=$(Answer-Text $linkRemove); outside canary intact: $($canaryAfterLink -eq $canaryBefore)"
+Check 'documents-refuse-reparse-point' (($linkType -ne '') -and (Native-Refusal $linkRead 'ERR_DOCUMENT_READ') -and (Native-Refusal $linkWrite 'ERR_DOCUMENT_WRITE') -and (Native-Refusal $linkRemove 'ERR_DOCUMENT_REMOVE') -and ($canaryAfterLink -eq $canaryBefore) -and $linkStillExists) "read=$(Answer-Text $linkRead) write=$(Answer-Text $linkWrite) remove=$(Answer-Text $linkRemove); outside canary intact: $($canaryAfterLink -eq $canaryBefore); link type $linkType"
 
 $docAbsent = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
 $docWritten = Invoke-HostExpr 'ArdiaShell.writeDocument' '["pilot-roundtrip.json", "{\"ok\":true}"]'
@@ -358,33 +359,6 @@ Remove-Item -LiteralPath $telemetryCapture, "$telemetryCapture.ready" -Force -Er
 
 Stop-Engine
 Remove-Item Env:ARDIA_TEST_TELEMETRY_ENDPOINT -ErrorAction SilentlyContinue
-
-$linkedRoot = Join-Path $RunRoot 'data-real'
-$linkedData = Join-Path $RunRoot 'data-link'
-New-Item -ItemType Directory -Force $linkedRoot | Out-Null
-cmd /c mklink /J "$linkedData" "$linkedRoot" | Out-Null
-$linkedItem = Get-Item -LiteralPath $linkedData -Force -ErrorAction SilentlyContinue
-$script:Data = $linkedData
-Start-Shell | Out-Null
-$linkedReady = $false
-try {
-  Wait-ShellReady 60 | Out-Null
-  $linkedReady = $true
-} catch {
-  Log "junction data root shell did not become ready: $($_.Exception.Message)"
-}
-$linkedWrite = $null
-$linkedRead = $null
-$linkedOnDisk = $null
-$linkedRemove = $null
-if ($linkedReady) {
-  $linkedWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["junction-root.json", "{\"root\":\"linked\"}"]'
-  $linkedRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["junction-root.json"]'
-  $linkedOnDisk = Get-Content -LiteralPath (Join-Path $linkedRoot 'junction-root.json') -Raw -ErrorAction SilentlyContinue
-  $linkedRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["junction-root.json"]'
-}
-Stop-Engine
-Check 'documents-work-under-junction-data-root' ([bool]($linkedItem -and $linkedItem.LinkType -eq 'Junction') -and $linkedReady -and ($linkedWrite.ok -eq $true) -and ($linkedRead.ok -eq $true) -and ($linkedRead.value -ceq '{"root":"linked"}') -and ($linkedOnDisk -ceq '{"root":"linked"}') -and ($linkedRemove.ok -eq $true) -and (-not (Test-Path -LiteralPath (Join-Path $linkedRoot 'junction-root.json')))) "write=$(Answer-Text $linkedWrite) read=$(Answer-Text $linkedRead) on disk=$linkedOnDisk remove=$(Answer-Text $linkedRemove)"
 
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\bridge-results.json"
 Remove-PilotRun $RunRoot

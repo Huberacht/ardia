@@ -118,6 +118,21 @@ impl Stage {
             Stage::Marker => "marker",
         }
     }
+
+    pub fn parse(text: &str) -> Option<Stage> {
+        [
+            Stage::Layout,
+            Stage::Lock,
+            Stage::Documents,
+            Stage::Config,
+            Stage::SyncKeys,
+            Stage::Credentials,
+            Stage::Report,
+            Stage::Marker,
+        ]
+        .into_iter()
+        .find(|stage| stage.as_str() == text)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -178,6 +193,7 @@ pub struct Report {
     pub counts: Counts,
     pub duration_ms: u64,
     pub attempt: u64,
+    pub prior_failed_stage: Option<Stage>,
     pub run: String,
 }
 
@@ -191,6 +207,9 @@ impl Report {
             object.insert("failed_stage".into(), json!(stage.as_str()));
         }
         object.insert("attempt".into(), json!(self.attempt));
+        if let Some(stage) = self.prior_failed_stage {
+            object.insert("prior_failed_stage".into(), json!(stage.as_str()));
+        }
         object.insert("duration_ms".into(), json!(self.duration_ms));
         let mut counts = Map::new();
         for (name, value) in self.counts.fields() {
@@ -295,6 +314,12 @@ fn read_report(root: &Root, name: &str) -> Option<Value> {
         Fetched::Data(bytes) => serde_json::from_slice::<Value>(&bytes).ok().filter(Value::is_object),
         _ => None,
     }
+}
+
+fn prior_failed_stage(previous: &Value) -> Option<Stage> {
+    let stage_of = |field: &str| previous.get(field).and_then(Value::as_str).and_then(Stage::parse);
+    let failed = previous.get("outcome").and_then(Value::as_str) == Some("failed");
+    failed.then(|| stage_of("failed_stage")).flatten().or_else(|| stage_of("prior_failed_stage"))
 }
 
 pub fn valid_marker(marker: &Value) -> bool {
@@ -662,6 +687,7 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         counts: Counts::default(),
         duration_ms: 0,
         attempt: 1,
+        prior_failed_stage: None,
         run: fsafe::run_id(),
     };
     let finish = |mut report: Report| {
@@ -729,9 +755,12 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         report.outcome = Outcome::AlreadyMigrated;
         return finish(report);
     }
-    report.attempt = read_report(&webui, names::ATTEMPT_NAME)
+    let previous = read_report(&webui, names::ATTEMPT_NAME);
+    report.attempt = previous
+        .as_ref()
         .and_then(|previous| previous.get("attempt").and_then(Value::as_u64))
         .map_or(1, |previous| previous.saturating_add(1).min(ATTEMPT_CAP));
+    report.prior_failed_stage = previous.as_ref().and_then(prior_failed_stage);
     let failed = |mut report: Report, stage: Stage| {
         report.outcome = Outcome::Failed;
         report.failed_stage = Some(stage);

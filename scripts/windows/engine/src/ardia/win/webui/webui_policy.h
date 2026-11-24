@@ -330,6 +330,37 @@ inline std::optional<std::wstring> NormalizeWinFinalPath(std::wstring_view raw) 
   return std::nullopt;
 }
 
+inline size_t WinFinalPathRootLength(std::wstring_view path) {
+  if (path.size() >= 2 && IsAsciiDriveLetter(path[0]) && path[1] == L':') {
+    return 2;
+  }
+  if (path.starts_with(L"\\\\?\\")) {
+    const size_t close = path.find(L'}');
+    return close == std::wstring_view::npos ? path.size() : close + 1;
+  }
+  if (path.starts_with(L"\\\\")) {
+    const size_t server_end = path.find(L'\\', 2);
+    if (server_end == std::wstring_view::npos) {
+      return path.size();
+    }
+    const size_t share_end = path.find(L'\\', server_end + 1);
+    return share_end == std::wstring_view::npos ? path.size() : share_end;
+  }
+  return 0;
+}
+
+inline bool WinFinalPathStartsWith(std::wstring_view candidate,
+                                   std::wstring_view root) {
+  if (candidate.size() < root.size()) {
+    return false;
+  }
+  const size_t folded = std::min(WinFinalPathRootLength(root), root.size());
+  return WideAsciiEqualsIgnoreCase(candidate.substr(0, folded),
+                                   root.substr(0, folded)) &&
+         candidate.substr(folded, root.size() - folded) ==
+             root.substr(folded);
+}
+
 inline bool IsStrictlyWithinWinDirectory(std::wstring_view raw_root,
                                          std::wstring_view raw_candidate) {
   const std::optional<std::wstring> root = NormalizeWinFinalPath(raw_root);
@@ -340,15 +371,13 @@ inline bool IsStrictlyWithinWinDirectory(std::wstring_view raw_root,
   }
   if (root->back() == L'\\') {
     return candidate->size() > root->size() &&
-           WideAsciiEqualsIgnoreCase(
-               std::wstring_view(*candidate).substr(0, root->size()), *root);
+           WinFinalPathStartsWith(*candidate, *root);
   }
   if (candidate->size() <= root->size() + 1) {
     return false;
   }
   return (*candidate)[root->size()] == L'\\' &&
-         WideAsciiEqualsIgnoreCase(
-             std::wstring_view(*candidate).substr(0, root->size()), *root);
+         WinFinalPathStartsWith(*candidate, *root);
 }
 
 inline bool IsDirectChildOfWinDirectory(std::wstring_view raw_root,
@@ -362,16 +391,14 @@ inline bool IsDirectChildOfWinDirectory(std::wstring_view raw_root,
   size_t leaf_offset = 0;
   if (root->back() == L'\\') {
     if (candidate->size() <= root->size() ||
-        !WideAsciiEqualsIgnoreCase(
-            std::wstring_view(*candidate).substr(0, root->size()), *root)) {
+        !WinFinalPathStartsWith(*candidate, *root)) {
       return false;
     }
     leaf_offset = root->size();
   } else {
     if (candidate->size() <= root->size() + 1 ||
         (*candidate)[root->size()] != L'\\' ||
-        !WideAsciiEqualsIgnoreCase(
-            std::wstring_view(*candidate).substr(0, root->size()), *root)) {
+        !WinFinalPathStartsWith(*candidate, *root)) {
       return false;
     }
     leaf_offset = root->size() + 1;
@@ -457,6 +484,12 @@ inline constexpr const char* StartupMigrationOutcomeName(
       return "wait_failed";
   }
   return "unknown";
+}
+
+inline constexpr bool StartupMigrationRequestIncomplete(
+    const StartupMigrationPolicyInput& input) {
+  return !input.has_no_migrate_switch && input.has_custom_data_dir &&
+         input.has_migrate_switch && !input.has_migrate_rnw_data;
 }
 
 inline std::optional<std::vector<std::wstring>> BuildStartupMigrationArguments(

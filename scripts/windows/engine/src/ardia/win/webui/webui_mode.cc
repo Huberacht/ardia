@@ -142,14 +142,19 @@ StartupMigrationResult LaunchWebUIStartupMigration(
   const bool has_custom_data_dir = !Trimmed(env_data_dir).empty();
   const std::wstring rnw_data_dir =
       Trimmed(command_line.GetSwitchValueNative(kMigrateRnwDataSwitch));
-  if (!ShouldRunWebUIStartupMigration(command_line, env_data_dir)) {
-    if (!command_line.HasSwitch(kNoMigrateSwitch) &&
-        command_line.HasSwitch(kMigrateFromRnwSwitch) && has_custom_data_dir &&
-        rnw_data_dir.empty()) {
-      LOG(WARNING) << "Ardia WebUI shell: startup migration skipped "
-                      "(ARDIA_DATA_DIR requires --ardia-migrate-rnw-data)";
-      NoteForTest("webui shell: startup migration skipped (missing rnw-data)");
-    }
+  const StartupMigrationPolicyInput policy{
+      .has_migrate_switch = command_line.HasSwitch(kMigrateFromRnwSwitch),
+      .has_no_migrate_switch = command_line.HasSwitch(kNoMigrateSwitch),
+      .has_custom_data_dir = has_custom_data_dir,
+      .has_migrate_rnw_data = !rnw_data_dir.empty(),
+  };
+  if (StartupMigrationRequestIncomplete(policy)) {
+    LOG(WARNING) << "Ardia WebUI shell: --ardia-migrate-from-rnw with "
+                    "ARDIA_DATA_DIR needs --ardia-migrate-rnw-data=<dir>";
+    NoteForTest("webui shell: startup migration refused (missing rnw-data)");
+    return {StartupMigrationOutcome::kIncompleteArguments};
+  }
+  if (!ShouldRunStartupMigration(policy)) {
     return {StartupMigrationOutcome::kNotRequested};
   }
   base::FilePath exe_dir;
