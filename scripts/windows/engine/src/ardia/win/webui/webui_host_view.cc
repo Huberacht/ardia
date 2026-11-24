@@ -1405,7 +1405,7 @@ bool ShellHostView::OpenPrivateLink(content::WebContents* contents,
 }
 
 bool ShellHostView::RequestPrivateWindow(const GURL& url) {
-  if (!browser_ || private_window() || is_utility() || closing_) {
+  if (!browser_ || is_utility() || closing_ || !handler_) {
     return false;
   }
   PageBinding* chosen = nullptr;
@@ -1421,9 +1421,11 @@ bool ShellHostView::RequestPrivateWindow(const GURL& url) {
       chosen = binding.get();
     }
   }
+  const std::string& profile =
+      chosen && !chosen->profile().empty() ? chosen->profile()
+                                           : config_.page_profile;
   return chosen && chosen->ReportOpenPrivateWindow(
-                       url, chosen->profile().empty() ? config_.page_profile
-                                                      : chosen->profile());
+                       url, std::string(webui_window::OriginalProfileOf(profile)));
 }
 
 void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,

@@ -210,6 +210,7 @@ class ShellHostView : public views::View,
   void RequestClose();
   bool InterceptSystemClose();
   bool OpenPrivateLink(content::WebContents* contents, const GURL& url);
+  void ResetUnloadConfirmations();
   bool RequestPrivateWindow(const GURL& url);
   bool LiveFor(uint64_t generation) const;
   void RememberPlacement();
@@ -243,7 +244,6 @@ class ShellHostView : public views::View,
 
   bool CompanionsHoldTabs() const;
   void ConfirmWindowUnload(base::OnceCallback<void(bool)> done);
-  void ResetUnloadConfirmations();
   static void ConfirmNextCompanion(
       std::shared_ptr<CompanionConfirmation> confirmation,
       std::weak_ptr<base::RepeatingClosure> self);

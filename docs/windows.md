@@ -1781,7 +1781,8 @@ in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize bu
   taken by `CaptionInput`) first run the companions' `beforeunload` while the visible window is still there to show
   their prompts (`ConfirmWindowUnload`, like Linux's `ConfirmCompanions`); the window's own tabs then go through
   Chromium's ordinary close, download warning included. A cancel resets the companions, and each new close attempt
-  clears any confirmation a cancelled one left behind, so the next close asks again. `closing_` is set only when the
+  clears any confirmation a cancelled one left behind, so the next close asks again, and so does quitting
+  (`ArdiaShell.quit`, closing the last window) through `ResetAllCompanionConfirmations`. `closing_` is set only when the
   widget actually starts closing (`OnWidgetClosing`), so a cancelled `beforeunload` never leaves documents refused.
   Companions closed after their window are emptied without prompts.
 - A `session.write` broadcasts `ArdiaHost` `session` (`base`, `session`, `sourceWindowId`) to every non-private
@@ -1791,7 +1792,10 @@ in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize bu
   requested, cascaded or saved frame falls on (`EffectivePlacementRect`). A closed window sends
   `onWindowEvent` `{type: "close", id}` to the other windows (a private one only to its opener). Chromium's "Open link
   in private window" becomes the shell's `openWindow` page event (`OffTheRecordNavigation`), and any other private
-  window Chromium opens hands its pages to the shell's private windows and closes (`HandOverPrivateWindow`).
+  window Chromium opens (say "Open link in new window" from a private window) is hidden at once and its pages go to the
+  shell of the private window sharing its session, or else the front regular window, as `openWindow` requests, so the
+  shell opens real private windows for them (`HandOverPrivateWindow`). A page no shell takes within 5 s moves into the
+  same-session private window as an unclaimed tab; the empty Chromium window then closes.
 - Host calls served there: `tab.create` (with `adoptId`, `previousClaim` and transfers between windows after
   `ArdiaTabs.prepareTransfer`), `tab.viewport`, `tab.presentations`, `tab.command` (`loadUrl`, `goBack`,
   `goForward`, `goToOffset`, `reload`, `forceReload`, `stopLoading`, `focus`, `blur`, `zoomStep`, `setMuted`,

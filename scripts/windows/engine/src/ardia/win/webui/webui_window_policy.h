@@ -620,6 +620,27 @@ constexpr std::string_view PrivateLinkProfile(std::string_view profile) {
   return profile;
 }
 
+inline constexpr int kPrivateHandOverTries = 20;
+
+constexpr std::string_view OriginalProfileOf(std::string_view profile) {
+  const size_t at = profile.rfind('@');
+  return at == std::string_view::npos ? profile : profile.substr(at + 1);
+}
+
+enum class HandOverStep { kHanded, kMove, kRetry, kDrop };
+
+constexpr HandOverStep NextHandOverStep(bool handed,
+                                        bool same_session_host,
+                                        int tries) {
+  if (handed) {
+    return HandOverStep::kHanded;
+  }
+  if (tries < kPrivateHandOverTries) {
+    return HandOverStep::kRetry;
+  }
+  return same_session_host ? HandOverStep::kMove : HandOverStep::kDrop;
+}
+
 constexpr bool KeepsWindowWithoutTabs(bool hosted, bool companion, bool closing) {
   return (hosted || companion) && !closing;
 }

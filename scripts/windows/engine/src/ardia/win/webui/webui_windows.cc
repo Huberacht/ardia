@@ -21,6 +21,8 @@
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -679,30 +681,90 @@ void WindowRegistry::Attach(base::WeakPtr<BrowserWindowInterface> browser) {
 }
 
 void WindowRegistry::HandOverPrivateWindow(BrowserWindowInterface* browser) {
+  browser->GetWindow()->Hide();
+  ContinueHandOver(browser->GetWeakPtr(), 0);
+}
+
+void WindowRegistry::ContinueHandOver(
+    base::WeakPtr<BrowserWindowInterface> browser,
+    int tries) {
+  if (!browser) {
+    return;
+  }
+  ShellHostView* same_session = nullptr;
   ShellHostView* front = nullptr;
   for (auto it = activation_order_.rbegin(); it != activation_order_.rend();
        ++it) {
     const auto found = hosts_.find(*it);
-    if (found != hosts_.end() && found->second->browser() &&
-        !found->second->private_window() && !found->second->is_utility() &&
-        !found->second->closing()) {
-      front = found->second;
-      break;
+    if (found == hosts_.end() || !found->second->browser() ||
+        found->second->is_utility() || found->second->closing()) {
+      continue;
+    }
+    ShellHostView* host = found->second;
+    if (!same_session && host->page_profile() == browser->GetProfile()) {
+      same_session = host;
+    }
+    if (!front && !host->private_window()) {
+      front = host;
     }
   }
   TabStripModel* model = browser->GetTabStripModel();
+  bool waiting = false;
   size_t handed = 0;
-  for (int index = 0; front && index < model->count(); ++index) {
-    const GURL url = model->GetWebContentsAt(index)->GetVisibleURL();
-    if (url.is_valid() && !url.IsAboutBlank() &&
-        front->RequestPrivateWindow(url)) {
-      ++handed;
+  size_t moved = 0;
+  for (int index = model->count() - 1; index >= 0; --index) {
+    content::WebContents* contents = model->GetWebContentsAt(index);
+    const GURL url = contents->GetVisibleURL();
+    const bool blank = !url.is_valid() || url.IsAboutBlank();
+    ShellHostView* target = same_session ? same_session : front;
+    const bool accepted =
+        !blank && target && target->RequestPrivateWindow(url);
+    switch (webui_window::NextHandOverStep(accepted || blank,
+                                           same_session != nullptr, tries)) {
+      case webui_window::HandOverStep::kHanded:
+        if (!blank) {
+          ++handed;
+        }
+        model->DetachAndDeleteWebContentsAt(index);
+        break;
+      case webui_window::HandOverStep::kMove: {
+        std::unique_ptr<content::WebContents> taken =
+            model->DetachWebContentsAtForInsertion(index);
+        TabStripModel* into = same_session->browser()->GetTabStripModel();
+        into->InsertWebContentsAt(into->count(), std::move(taken),
+                                  AddTabTypes::ADD_NONE);
+        ++moved;
+        break;
+      }
+      case webui_window::HandOverStep::kRetry:
+        waiting = true;
+        break;
+      case webui_window::HandOverStep::kDrop:
+        model->DetachAndDeleteWebContentsAt(index);
+        break;
     }
   }
-  NoteForTest("webui shell: a private window Chromium opened handed " +
-              base::NumberToString(handed) +
-              " pages to the shell's private windows");
+  if (handed || moved) {
+    NoteForTest("webui shell: a private window Chromium opened handed " +
+                base::NumberToString(handed) + " pages to the shell and moved " +
+                base::NumberToString(moved) + " into its private window");
+  }
+  if (waiting) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&WindowRegistry::ContinueHandOver,
+                       weak_factory_.GetWeakPtr(), std::move(browser),
+                       tries + 1),
+        base::Milliseconds(250));
+    return;
+  }
   browser->GetWindow()->Close();
+}
+
+void WindowRegistry::ResetAllCompanionConfirmations() {
+  for (ShellHostView* host : Hosts()) {
+    host->ResetUnloadConfirmations();
+  }
 }
 
 void WindowRegistry::NotifyWindowClosed(ShellHostView* closed) {
@@ -768,6 +830,7 @@ void WindowRegistry::OnBrowserClosed(BrowserWindowInterface* browser) {
   const bool browser_left = std::ranges::any_of(
       remaining, [](ShellHostView* other) { return !other->is_utility(); });
   if (!browser_left) {
+    ResetAllCompanionConfirmations();
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&QuitApp));
   }

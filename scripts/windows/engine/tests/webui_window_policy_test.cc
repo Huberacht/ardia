@@ -101,6 +101,27 @@ void TestBindingGenerations() {
   assert(generation == 6);
 }
 
+void TestPrivateHandOver() {
+  assert(OriginalProfileOf("incognito:abc@default") == "default");
+  assert(OriginalProfileOf("incognito:abc@work") == "work");
+  assert(OriginalProfileOf("default") == "default");
+  assert(OriginalProfileOf("") == "");
+  assert(OriginalProfileOf("a@b@c") == "c");
+  assert(PrivateLinkProfile(OriginalProfileOf("incognito:abc@default")) ==
+         "default");
+
+  assert(NextHandOverStep(true, true, 0) == HandOverStep::kHanded);
+  assert(NextHandOverStep(true, false, kPrivateHandOverTries) ==
+         HandOverStep::kHanded);
+  assert(NextHandOverStep(false, true, 0) == HandOverStep::kRetry);
+  assert(NextHandOverStep(false, false, kPrivateHandOverTries - 1) ==
+         HandOverStep::kRetry);
+  assert(NextHandOverStep(false, true, kPrivateHandOverTries) ==
+         HandOverStep::kMove);
+  assert(NextHandOverStep(false, false, kPrivateHandOverTries) ==
+         HandOverStep::kDrop);
+}
+
 void TestSelectionSequence() {
   SelectionSequence sequence;
   assert(sequence.Admit(1, 0));
@@ -404,6 +425,7 @@ int main() {
   TestOpenWindowRequests();
   TestCompanionRouting();
   TestSelectionSequence();
+  TestPrivateHandOver();
   TestBindingGenerations();
   TestClaims();
   TestUnclaimedTabs();

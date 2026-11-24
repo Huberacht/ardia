@@ -78,6 +78,7 @@ class WindowRegistry : public BrowserCollectionObserver {
   bool PreTranslate(const MSG& msg);
   void Relaunched(base::ListValue urls);
   void DeliverOpenUrls();
+  void ResetAllCompanionConfirmations();
   bool OffTheRecordNavigation(content::WebContents* contents, const GURL& url);
   void BroadcastWindowEvent(const base::DictValue& event);
   void BroadcastSession(const std::string& source_window,
@@ -113,6 +114,8 @@ class WindowRegistry : public BrowserCollectionObserver {
                      Profile* profile);
   std::string NextWindowId();
   void HandOverPrivateWindow(BrowserWindowInterface* browser);
+  void ContinueHandOver(base::WeakPtr<BrowserWindowInterface> browser,
+                        int tries);
   void NotifyWindowClosed(ShellHostView* closed);
   int NextPrivateOrdinal() const;
 

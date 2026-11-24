@@ -344,6 +344,7 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.quit") {
     std::move(done).Run(true, base::Value());
+    WindowRegistry::Get().ResetAllCompanionConfirmations();
     for (ShellHostView* host : WindowRegistry::Get().Hosts()) {
       host->RememberPlacement();
     }
