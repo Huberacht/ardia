@@ -535,7 +535,8 @@ export function barSwipeUp(enabled: boolean, pagerActive: { value: number }, ope
       });
   }
   const { id, prepare, began, released, settled } = pull;
-  const frameRelease = Platform.OS === "android";
+  const cutsAtRelease = tabSwitchCuts();
+  const frameRelease = Platform.OS === "android" && !cutsAtRelease;
   return pan
     .onBegin(() => {
       deckPull.warm.value = true;
@@ -561,7 +562,7 @@ export function barSwipeUp(enabled: boolean, pagerActive: { value: number }, ope
           releaseDeckPull(id, velocity, success, released, settled);
         });
       } else {
-        releaseDeckPull(id, velocity, success, released, settled);
+        releaseDeckPull(id, velocity, success, released, settled, cutsAtRelease);
       }
     });
 }

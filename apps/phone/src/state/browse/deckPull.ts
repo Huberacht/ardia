@@ -163,7 +163,7 @@ export function hurryDeckPull(x: number, y: number, settled: PullSettled): boole
   return true;
 }
 
-export function settleDeckPull(lands: boolean, velocityY: number, settled: PullSettled) {
+export function settleDeckPull(lands: boolean, velocityY: number, settled: PullSettled, cuts = false) {
   "worklet";
   const target = deckPull.target.value;
   const id = deckPull.id.value;
@@ -172,6 +172,12 @@ export function settleDeckPull(lands: boolean, velocityY: number, settled: PullS
     return;
   }
   const velocity = pullSpeed(velocityY, target.pull);
+  if (lands && cuts && deckReadyFor(id)) {
+    const worst = deckPull.worstFrame.value;
+    const turn = ownDeckAtCut(id);
+    runOnJS(settled)(id, true, worst, "", turn, deckTurn.phone.value);
+    return;
+  }
   if (lands) {
     deckPull.stage.value = PULL_STAGE.landing;
     const landing = deckPull.landing.value + 1;
@@ -201,12 +207,12 @@ export function abandonDeckPull(id: string, settled: PullSettled) {
   settleDeckPull(false, 0, settled);
 }
 
-export function releaseDeckPull(id: string, velocityY: number, success: boolean, released: (lands: boolean) => void, settled: PullSettled) {
+export function releaseDeckPull(id: string, velocityY: number, success: boolean, released: (lands: boolean) => void, settled: PullSettled, cuts = false) {
   "worklet";
   if (deckPull.stage.value !== PULL_STAGE.tracking || deckPull.id.value !== id) return;
   const lands = success && pullLands(deckPull.travel.value, velocityY);
   runOnJS(released)(lands);
-  settleDeckPull(lands, velocityY, settled);
+  settleDeckPull(lands, velocityY, settled, cuts);
 }
 
 export type PullPath = { travel: number; ms: number; velocityY: number };

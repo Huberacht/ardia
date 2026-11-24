@@ -1279,3 +1279,23 @@ test("a cut made before a phone, Duo and back to phone round trip and delivered 
   expect(browse.useBrowse.getState().surface).toBe("deck");
   unmount(root);
 });
+
+test("an accepted upward pull with cuts hands the deck its input turn on the release itself, with no frame wait or landing spring", () => {
+  if (Platform.OS !== "android") return;
+  const root = standbyDeck();
+  act(() =>
+    fireGestureHandler(getByGestureTestId("barSwipeUp"), [
+      { state: State.BEGAN, translationX: 0, translationY: 0, velocityX: 0, velocityY: 0 },
+      { state: State.ACTIVE, translationX: 0, translationY: -60, velocityX: 0, velocityY: -900 },
+      { state: State.ACTIVE, translationX: 0, translationY: -320, velocityX: 0, velocityY: -900 },
+      { state: State.END, translationX: 0, translationY: -320, velocityX: 0, velocityY: -900 },
+    ]),
+  );
+  expect(deckTurn.live.value).toBeGreaterThan(0);
+  expect(deckPull.cut.value).toBe(true);
+  expect(deckPull.stage.value).toBe(PULL_STAGE.handed);
+  expect(pageBodyShown.value).toBe(0);
+  act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  unmount(root);
+});
