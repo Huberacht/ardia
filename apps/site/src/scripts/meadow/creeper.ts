@@ -241,6 +241,8 @@ export class CreeperCharge {
     this.boomAt = now;
     this.contact = null;
     this.near = false;
+    this.x = this.endX;
+    this.z = END_DEPTH;
     const ground = meadowHeight(this.x, this.z);
     const centre = view.project(this.x, ground + HEIGHT * 0.55, this.z);
     const top = view.project(this.x, ground + HEIGHT, this.z);
