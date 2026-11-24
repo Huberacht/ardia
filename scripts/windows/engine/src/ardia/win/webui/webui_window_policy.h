@@ -641,6 +641,13 @@ constexpr HandOverStep NextHandOverStep(bool handed,
   return same_session_host ? HandOverStep::kMove : HandOverStep::kDrop;
 }
 
+constexpr bool HidesUntilHandedOver(bool started,
+                                    bool opening_own_window,
+                                    bool normal_window,
+                                    bool off_the_record) {
+  return started && !opening_own_window && normal_window && off_the_record;
+}
+
 constexpr bool KeepsWindowWithoutTabs(bool hosted, bool companion, bool closing) {
   return (hosted || companion) && !closing;
 }

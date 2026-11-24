@@ -13,6 +13,7 @@
 #include "ardia/win/webui/webui_host_internal.h"
 #include "ardia/win/webui/webui_host_view.h"
 #include "ardia/win/webui/webui_storage.h"
+#include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
@@ -171,6 +172,7 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
 }
 
 void WindowRegistry::Stop() {
+  hidden_private_handovers_.clear();
   browsers_observation_.Reset();
   Watch().reset();
   started_ = false;
@@ -213,7 +215,11 @@ ShellHostView* WindowRegistry::Open(Profile* page_profile,
   params.initial_show_state = choice.maximized
                                   ? ui::mojom::WindowShowState::kMaximized
                                   : ui::mojom::WindowShowState::kNormal;
-  BrowserWindowInterface* browser = CreateBrowserWindow(std::move(params));
+  BrowserWindowInterface* browser = nullptr;
+  {
+    base::AutoReset<bool> opening(&opening_window_, true);
+    browser = CreateBrowserWindow(std::move(params));
+  }
   if (!browser) {
     return nullptr;
   }
@@ -261,6 +267,7 @@ ShellHostView* WindowRegistry::AttachTo(BrowserWindowInterface* browser,
   if (private_window) {
     host->set_private_ordinal(NextPrivateOrdinal());
   }
+  hidden_private_handovers_.erase(host->id());
   hosts_[host->id()] = host;
   activation_order_.push_back(host->id());
   host->Initialize();
@@ -465,6 +472,7 @@ void WindowRegistry::Detached(ShellHostView* host) {
 void WindowRegistry::RegisterCompanion(const BrowserWindowInterface* companion,
                                        ShellHostView* owner) {
   companion_owners_[companion->GetSessionID().id()] = owner->id();
+  hidden_private_handovers_.erase(companion->GetSessionID().id());
 }
 
 bool WindowRegistry::IsCompanion(const BrowserWindowInterface* browser) const {
@@ -493,6 +501,10 @@ BrowserWindowInterface* WindowRegistry::CompanionOwner(
 
 bool WindowRegistry::PresentCompanion(const BrowserWindowInterface* browser,
                                       bool activate) {
+  if (browser &&
+      hidden_private_handovers_.contains(browser->GetSessionID().id())) {
+    return true;
+  }
   if (!IsCompanion(browser)) {
     return false;
   }
@@ -650,6 +662,12 @@ std::optional<webui_window::Placement> WindowRegistry::SavedPlacement() const {
 }
 
 void WindowRegistry::OnBrowserCreated(BrowserWindowInterface* browser) {
+  if (webui_window::HidesUntilHandedOver(
+          started_, opening_window_,
+          browser->GetType() == BrowserWindowInterface::TYPE_NORMAL,
+          browser->GetProfile() && browser->GetProfile()->IsOffTheRecord())) {
+    hidden_private_handovers_.insert(browser->GetSessionID().id());
+  }
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&WindowRegistry::Attach,
                                 weak_factory_.GetWeakPtr(),
@@ -657,13 +675,19 @@ void WindowRegistry::OnBrowserCreated(BrowserWindowInterface* browser) {
 }
 
 void WindowRegistry::Attach(base::WeakPtr<BrowserWindowInterface> browser) {
-  if (!browser || !started_ || hosts_.contains(browser->GetSessionID().id()) ||
-      IsCompanion(browser.get()) ||
-      browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
+  if (!browser) {
     return;
   }
   Profile* profile = browser->GetProfile();
-  if (!profile) {
+  if (!started_ || hosts_.contains(browser->GetSessionID().id()) ||
+      IsCompanion(browser.get()) ||
+      browser->GetType() != BrowserWindowInterface::TYPE_NORMAL || !profile ||
+      !profile->IsOffTheRecord()) {
+    hidden_private_handovers_.erase(browser->GetSessionID().id());
+  }
+  if (!started_ || hosts_.contains(browser->GetSessionID().id()) ||
+      IsCompanion(browser.get()) ||
+      browser->GetType() != BrowserWindowInterface::TYPE_NORMAL || !profile) {
     return;
   }
   if (profile->IsOffTheRecord()) {
@@ -803,6 +827,7 @@ bool WindowRegistry::OffTheRecordNavigation(content::WebContents* contents,
 
 void WindowRegistry::OnBrowserClosed(BrowserWindowInterface* browser) {
   const int session = browser->GetSessionID().id();
+  hidden_private_handovers_.erase(session);
   if (const auto owner = companion_owners_.find(session);
       owner != companion_owners_.end()) {
     const int host_id = owner->second;

@@ -120,6 +120,12 @@ void TestPrivateHandOver() {
          HandOverStep::kMove);
   assert(NextHandOverStep(false, false, kPrivateHandOverTries) ==
          HandOverStep::kDrop);
+
+  assert(HidesUntilHandedOver(true, false, true, true));
+  assert(!HidesUntilHandedOver(false, false, true, true));
+  assert(!HidesUntilHandedOver(true, true, true, true));
+  assert(!HidesUntilHandedOver(true, false, false, true));
+  assert(!HidesUntilHandedOver(true, false, true, false));
 }
 
 void TestSelectionSequence() {

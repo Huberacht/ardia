@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -127,6 +128,8 @@ class WindowRegistry : public BrowserCollectionObserver {
   std::map<int, int> companion_owners_;
   std::vector<int> activation_order_;
   base::ListValue pending_urls_;
+  std::set<int> hidden_private_handovers_;
+  bool opening_window_ = false;
   std::optional<webui_window::Placement> saved_placement_;
   bool placement_loaded_ = false;
   int next_window_ = 1;
