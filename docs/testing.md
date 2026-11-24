@@ -85,16 +85,15 @@ holds the rest.
   push to `main`, with no paths filter and no install, so a file in a folder no other workflow watches is checked
   too. `expiring-skips.yml` runs its expiry part every Monday and lists skips past their date, as warnings, in the
   run's summary.
-- When GitHub's runners are busy, the long jobs of `checks.yml`, `linux.yml` and `android.yml` move to Boat CI
-  (`boat-large`); the `which checks run` job or a `route` job decides, and each run's summary says why
-  ([ci-boat-overflow.md](ci-boat-overflow.md)).
+- CI runs on Blacksmith's Linux and macOS runners; only the Windows jobs stay on GitHub's
+  ([ci-runners.md](ci-runners.md)).
 - `linux.yml` starts on what the Linux build and its fixture suites read (`apps/desktop`, the shared UI and the desktop
   packages' sources, the engine sources, its scripts, and the few Mac files the parity fixtures compare against,
   which `workflow-paths.test.mjs` finds in the suites and checks), not on the rest of the Mac, iPhone, Android or
   Windows native code; `windows.yml`
   leaves out `packages/phone`; `windows-engine-inputs.yml` starts on the engine inputs `check_inputs.py` reads;
   `deploy.yml` starts on `main` only for paths one of its services deploys from.
-- `mac.yml` compiles the Mac app (Debug, unsigned, `xcode-27`) on pull requests and pushes that touch its native code:
+- `mac.yml` compiles the Mac app (Debug, unsigned, on Blacksmith's macOS 27 with Xcode 27.1) on pull requests and pushes that touch its native code:
   `apps/browser/macos`, the packages' `ios` folders, the Dock tile and plugin host, the engine's public headers, the
   workspace manifests, the patches and the lockfile. It builds against this commit's engine, or the nearest published
   one before it, and any compiler error fails it. When `engine/ardiacore/src/ardia/core/public` changed since that
