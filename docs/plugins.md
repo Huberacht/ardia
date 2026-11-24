@@ -597,9 +597,10 @@ slow, hung or gone can't slow them down: sends go to the helper's own buffered c
   same. A drop within 30 s of the last resync waits before resyncing, 1 s doubling up to 60 s. After 5 such drops in a
   row the SDK stops and reports a `state_desync` error; adding a listener again, even to a topic it already hears,
   starts over with a whole snapshot. Navigation commits lost to a drop don't come back.
-- **A second listener.** When a listener joins a topic another listener already hears, the SDK asks for that topic
-  whole again (`resync: ["tabs"]`), so every listener starts from an `initial` event; the ones already listening get it
-  too and should treat it as a reset.
+- **A listener added later.** When a listener is added to a topic the plugin is already subscribed to (beside another
+  listener, or replacing the only one before the SDK noticed it was gone), the SDK asks for that topic whole again
+  (`resync: ["tabs"]`), so every listener starts from an `initial` event; the ones already listening get it too and
+  should treat it as a reset.
 - Subscriptions end with the run.
 
 **Intents** (`state/plugins/stateIntents.ts`) are the only state a plugin may change this way, and each must be listed:

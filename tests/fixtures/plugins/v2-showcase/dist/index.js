@@ -224,10 +224,9 @@
       subscribe(topic, listener) {
         let listeners = registry.state.get(topic);
         if (!listeners) registry.state.set(topic, listeners = new Set());
-        const joining = listeners.size > 0;
         const added = addTo(listeners, listener);
         state.subscriptionsChanged();
-        state.listenerAdded(topic, joining);
+        state.listenerAdded(topic);
         return {
           dispose() {
             added.dispose();
@@ -1046,7 +1045,7 @@
       if (!joined.size) enqueueMicrotask(() => void sendJoined());
       joined.add(topic);
     };
-    const listenerAdded = (topic, joining) => {
+    const listenerAdded = (topic) => {
       if (gaveUp) {
         gaveUp = false;
         streak = 0;
@@ -1055,7 +1054,7 @@
         enqueueMicrotask(() => void resync());
         return;
       }
-      if (joining) topicJoined(topic);
+      topicJoined(topic);
     };
     return { sync, deliverState, noteDropped, listenerAdded };
   }
@@ -1155,7 +1154,7 @@
       values: {},
       info: { name: "", app: "", version: "", protocol: 0 },
       subscriptionsChanged: () => subscriptions.sync(),
-      listenerAdded: (topic, joining) => subscriptions.listenerAdded(topic, joining),
+      listenerAdded: (topic) => subscriptions.listenerAdded(topic),
       report
     };
     const ardia2 = createArdia(rpc, registry, state);

@@ -997,6 +997,25 @@ describe("createHostRuntime", () => {
     assert.deepEqual(rounds, [true, false]);
   });
 
+  test("a sole listener replaced before the next sync still gets a fresh snapshot", async () => {
+    const { host, runtime } = await started({});
+    const first = runtime.ardia.tabs.onChange(() => {});
+    await settle();
+    const before = host.calls("state.subscribe").length;
+    first.dispose();
+    runtime.ardia.tabs.onChange(() => {});
+    await settle();
+    const after = host.calls("state.subscribe").slice(before).map((m) => m.params);
+    assert.deepEqual(after, [{ topics: ["tabs"], resync: ["tabs"] }]);
+  });
+
+  test("the very first listener on a topic asks for no resync: its subscription brings the snapshot", async () => {
+    const { host, runtime } = await started({});
+    runtime.ardia.tabs.onChange(() => {});
+    await settle();
+    assert.deepEqual(host.calls("state.subscribe").map((m) => m.params), [{ topics: ["tabs"] }]);
+  });
+
   test("a drop with no state listeners asks for nothing", async () => {
     const { host } = await started({ events: { "tab.activated": () => {} } });
     await settle();
