@@ -7,12 +7,13 @@ import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { besideIn, heldPose, restOf, swipeRefusal, zeroArmedTurn } from "../components/browsing/TabPager";
 import { landedBackHere, landedSpokenSide } from "../components/browsing/FloatingBar";
 import * as browse from "../state/browse/store";
+import * as pageStore from "../state/pages/store";
 import { cutTabSwitches } from "../state/browse/tabSwitch";
 import { traceLab } from "../platform/lab";
 import { searchState, dismissSearch } from "../state/search/store";
 import { setPreference } from "../state/settings/store";
 import { useSelectedTab } from "../state/tabs/hooks";
-import { currentTabs, selectTabById } from "../state/tabs/store";
+import { archiveTabById, currentTabs, selectTabById, useTabs } from "../state/tabs/store";
 import { findTab } from "../state/tabs/tabsState";
 import { display } from "../state/search/omnibox";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
@@ -245,5 +246,127 @@ test("an Address tap after the second of two quick flicks is held for the latest
   frames(64);
   expect(currentTabs().selectedId).toBe(line[start + step * 2]);
   expect(searchState().open).toBe(true);
+  unmount(root);
+});
+
+test("five flicks 250 ms apart while JS renders nothing in between all advance, each projecting past the commit threshold from the tab the last one landed on, and a placeholder card shows each destination beyond the mounted neighbours", () => {
+  const root = startAt(8, 0);
+  const line = order();
+  const start = line.indexOf(currentTabs().selectedId!);
+  const dx: -1 | 1 = start === 0 ? -1 : 1;
+  const step = dx < 0 ? 1 : -1;
+  const travel = Math.round(width() * 0.46);
+  const ahead = (id: string) => root.root.findAll((node) => node.props.testID === "pagerAhead" && node.props.jestAnimatedStyle !== undefined && node.findAll((child) => child.props.markWhenShown === `dest-face:${id}`).length > 0)[0];
+  for (let at = 0; at < 5; at++) {
+    flick(dx, travel, 1650);
+    const landedOn = line[start + step * (at + 1)]!;
+    if (at >= 1 && at <= 3) {
+      const card = ahead(landedOn)!;
+      expect(card).toBeDefined();
+      expect(opacityOf(card)).toBe(1);
+      const mark = marksOf(root, "pagerAheadMark").find((node) => node.props.markWhenShown === `dest-face:${landedOn}`)!;
+      expect(opacityOf(mark)).toBe(1);
+    }
+  }
+  expect(currentTabs().selectedId).toBe(line[start]);
+  frames(64);
+  expect(currentTabs().selectedId).toBe(line[start + step * 5]);
+  const verdicts = swipeLines().filter((entry) => / turn=\d+ /.test(entry) && !/stale|closed|archived|neighbour/.test(entry));
+  expect(verdicts).toHaveLength(5);
+  verdicts.forEach((entry, at) => {
+    expect(entry).toContain("accepted");
+    expect(entry).toContain(`source=${line[start + step * at]}`);
+    const projected = Math.abs(Number(/projected=(-?\d+)/.exec(entry)![1]));
+    expect(projected).toBeGreaterThan(width() / 2);
+    expect(Math.abs(projected - travel - 1650 * 0.12)).toBeLessThan(2);
+  });
+  unmount(root);
+});
+
+test("a destination archived after its lift but before the new order renders is refused against the open tabs: the source stays, the pager goes back to centre, and no cover waits for it", () => {
+  jest.spyOn(pageStore, "endPages").mockImplementation(() => undefined);
+  const root = startAt(3, 1);
+  act(() => useTabs.setState({ archive: [] }));
+  const from = currentTabs().selectedId!;
+  const line = order();
+  const right = line[line.indexOf(from) + 1];
+  const dx: -1 | 1 = right ? -1 : 1;
+  const wanted = right ?? line[line.indexOf(from) - 1]!;
+  flick(dx);
+  act(() => {
+    archiveTabById(wanted);
+    jest.advanceTimersByTime(0);
+  });
+  frames(48);
+  expect(currentTabs().selectedId).toBe(from);
+  expect(browse.useBrowse.getState()).toMatchObject({ arriving: null, arrivalCover: null });
+  expect(outgoingX(root)).toBe(0);
+  expect(swipeLines().some((entry) => entry.includes("refused") && entry.includes("reason=archived"))).toBe(true);
+  frames(5_000);
+  expect(browse.useBrowse.getState().arriving).toBeNull();
+  unmount(root);
+});
+
+test("an Address tap after flicking there and back before either commit is held for the tab the cursor is on and opens search once the return commits", () => {
+  const root = startAt(4, 1);
+  const first = currentTabs().selectedId!;
+  act(() => browse.pageDrawn(first));
+  const line = order();
+  const dx: -1 | 1 = line[line.indexOf(first) + 1] ? -1 : 1;
+  flick(dx);
+  flick(dx === -1 ? 1 : -1);
+  const address = root.root.findAll((node) => node.props.accessibilityLabel === "Address" && typeof node.props.onPress === "function")[0]!;
+  act(() => address.props.onPress());
+  expect(searchState().open).toBe(false);
+  frames(64);
+  expect(currentTabs().selectedId).toBe(first);
+  expect(searchState().open).toBe(true);
+  unmount(root);
+});
+
+test("after two flicks ahead of the render, the Address speaks the tab the cursor landed on, two tabs from the one still rendered", () => {
+  if (Platform.OS !== "android") return;
+  const root = startAt(5, 0);
+  const line = order();
+  const start = line.indexOf(currentTabs().selectedId!);
+  const dx: -1 | 1 = start === 0 ? -1 : 1;
+  const step = dx < 0 ? 1 : -1;
+  flick(dx);
+  flick(dx);
+  const wanted = line[start + step * 2]!;
+  const spoken = root.root.findAll((node) => typeof node.props.jestAnimatedProps?.value?.accessibilityValue?.text === "string").map((node) => node.props.jestAnimatedProps.value.accessibilityValue.text as string);
+  expect(spoken.length).toBeGreaterThan(0);
+  expect(spoken.every((text) => text.includes(display(findTab(currentTabs(), wanted)!.url).host))).toBe(true);
+  frames(64);
+  unmount(root);
+});
+
+test("without cuts, as on iPhone, a pan begun after a spring lands but before its commit runs catches the page from the tab still rendered and drops that commit as before, so the two lifts switch one tab, not two", () => {
+  cutTabSwitches(false);
+  const root = startAt(4, 0);
+  const line = order();
+  const start = line.indexOf(currentTabs().selectedId!);
+  const dx: -1 | 1 = start === 0 ? -1 : 1;
+  const step = dx < 0 ? 1 : -1;
+  const incomingAt = () => Math.min(...root.root.findAll((node) => node.props.testID === "pagerEdgeShadow" && node.props.jestAnimatedStyle !== undefined).map((node) => Math.abs((Object.assign({}, ...((getAnimatedStyle(node).transform ?? []) as object[])) as { translateX?: number }).translateX ?? width())));
+  flick(dx);
+  const held: (() => void)[] = [];
+  const holding = jest.spyOn(global, "queueMicrotask").mockImplementation((task) => void held.push(task));
+  let caught = false;
+  for (let tick = 0; tick < 400 && !caught; tick++) {
+    act(() => void jest.advanceTimersToNextTimer());
+    caught = incomingAt() < 6;
+    if (!caught) act(() => held.splice(0).forEach((task) => task()));
+  }
+  expect(caught).toBe(true);
+  expect(currentTabs().selectedId).toBe(line[start]);
+  flick(dx);
+  holding.mockRestore();
+  act(() => held.splice(0).forEach((task) => task()));
+  act(() => jest.advanceTimersByTime(0));
+  expect(currentTabs().selectedId).toBe(line[start + step]);
+  frames(1_000);
+  expect(currentTabs().selectedId).toBe(line[start + step]);
+  expect(swipeLines().filter((entry) => entry.includes("accepted")).every((entry) => entry.includes(`source=${line[start]}`))).toBe(true);
   unmount(root);
 });

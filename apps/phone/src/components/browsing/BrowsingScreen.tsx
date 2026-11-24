@@ -23,6 +23,7 @@ import { usePreferences } from "../../state/settings/hooks";
 import { closeFrontTab, menuOpenedHaptic, recentTabs, switchToTab, tabTitle } from "../../state/browse/tabMenus";
 import { useBarOrder, useChromeTab, useIncognito, useSwipeIds, useTabWhile } from "../../state/tabs/hooks";
 import { currentTabs, useTabs } from "../../state/tabs/store";
+import { useShallow } from "zustand/react/shallow";
 import { findTab } from "../../state/tabs/tabsState";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import type { BrowserTab } from "../../state/tabs/tabModels";
@@ -76,7 +77,7 @@ import { PageSurface } from "./PageSurface";
 import { PagePull, PullBlocker, usePullBarShift } from "./PagePull";
 import { redesignedBarCenterFromBottom } from "../../lib/deckGeometry";
 import { useDemoMotion } from "./DemoMotion";
-import { PagerBackdrop, PagerNeighbour, useTabPager } from "./TabPager";
+import { PagerAhead, PagerBackdrop, PagerNeighbour, useTabPager } from "./TabPager";
 import { TabSwipeHint } from "./tabSwipeHint";
 import { PageProgressLine } from "./PageProgressLine";
 import { labTrace } from "../../platform/lab";
@@ -256,6 +257,14 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   }, [aroundKey]);
   const left = useTabWhile(around.left ?? "", around.left !== null);
   const right = useTabWhile(around.right ?? "", around.right !== null);
+  const cutsSwipe = tabSwitchCuts() && !probes("landed");
+  const lineTabs = useLineTabs(cutsSwipe ? swipeLine : NO_LINE);
+  const spokenLine = useMemo(() => Object.fromEntries(lineTabs.flatMap((each) => (each ? [[each.id, spokenAddress(barAddress(each))]] : []))) as Record<string, string>, [lineTabs]);
+  const aheadCards = useMemo(() => cardsAhead(swipeLine, lineTabs, tab.id), [swipeLine, lineTabs, tab.id]);
+  const runHeldAction = useCallback((id: string, action: BarAction) => {
+    if (currentTabs().selectedId !== id) return;
+    runBarAction(action);
+  }, []);
   const handsOver = pageReportsDrawn();
   const grabbedSwipe = useCallback(() => {
     captureCurrentCover();
@@ -267,11 +276,12 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     right: right?.id ?? null,
     order: swipeLine,
     landsEarly: handsOver,
+    onHeld: runHeldAction,
     onCommit: handsOver ? arriveAtNeighbour : swipeToNeighbour,
     onGrab: grabbedSwipe,
   });
   useDemoMotion(pager, width);
-  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, landed: pager.landed, span: width, left, right } : null), [pager.offset, pager.from, pager.landed, width, left, right]);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, landed: pager.landed, span: width, left, right, spoken: spokenLine } : null), [pager.offset, pager.from, pager.landed, width, left, right, spokenLine]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);
@@ -327,8 +337,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const landedScope = useRef(pager.landedScope);
   landedScope.current = pager.landedScope;
   const heldFor = useCallback(() => {
-    const landed = tabSwitchCuts() ? landedTarget.current() : null;
-    return landed && currentTabs().selectedId !== landed ? landed : null;
+    return tabSwitchCuts() ? landedTarget.current() : null;
   }, []);
   const editAddress = useCallback(() => {
     if (barKept && routeBarToDestination(shownTab.current, "address")) return;
@@ -342,10 +351,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const arrivedCover = useDestination((s) => (s.arriving === tab.id ? s.cover : null));
   useEffect(() => {
     const action = takeCommittedBarAction(tab.id);
-    if (action === "address") editPageQuery();
-    else if (action === "more") openPageMenu();
-    else if (action === "plus") newTab();
-    else if (action === "tabs") showDeck();
+    if (action) runBarAction(action);
   }, [tab.id, arrivedCover]);
   const heldOr = useCallback((action: BarAction, now: () => void) => () => {
     if (barKept && routeBarToDestination(shownTab.current, action)) return;
@@ -437,6 +443,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
         {pagerCards(left, right, arrived ? arrivalTab : null).map(({ card, side }) => (
           <PagerNeighbour key={card.id} pager={pager} tab={card} side={side} width={width} statusHeight={insets.top} statusOver={underBar} hasLeft={left !== null} hasRight={right !== null} coverId={arrivalCover ?? ARRIVAL_COVER_ID} />
         ))}
+        {cutsSwipe ? aheadCards.map(({ card, side, inner }) => <PagerAhead key={`ahead:${card.id}`} pager={pager} tab={card} side={side} inner={inner} width={width} statusHeight={insets.top} statusOver={underBar} />) : null}
         <PageProgressLine tabId={tab.id} top={insets.top} />
         </PageStack>
         </HeldFrostSource>
@@ -558,6 +565,34 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   );
 });
 
+
+const NO_LINE: string[] = [];
+
+const AHEAD_SLOTS = [2, 3, 4];
+
+function runBarAction(action: BarAction) {
+  if (action === "address") editPageQuery();
+  else if (action === "more") openPageMenu();
+  else if (action === "plus") newTab();
+  else if (action === "tabs") void showDeck();
+}
+
+function useLineTabs(ids: readonly string[]): (BrowserTab | null)[] {
+  return useTabs(useShallow((state) => ids.map((id) => findTab(state, id) ?? null)));
+}
+
+export function cardsAhead(line: readonly string[], tabs: readonly (BrowserTab | null)[], shownId: string): { card: BrowserTab; side: -1 | 1; inner: string }[] {
+  const at = line.indexOf(shownId);
+  if (at < 0 || tabs.length !== line.length) return [];
+  const cards: { card: BrowserTab; side: -1 | 1; inner: string }[] = [];
+  for (const side of [-1, 1] as const)
+    for (const slot of AHEAD_SLOTS) {
+      const card = tabs[at + side * slot];
+      const inner = line[at + side * (slot - 1)];
+      if (card && inner) cards.push({ card, side, inner });
+    }
+  return cards;
+}
 
 function pagerCards(left: BrowserTab | null, right: BrowserTab | null, arrival: BrowserTab | null): { card: BrowserTab; side: -1 | 0 | 1 }[] {
   const cards: { card: BrowserTab; side: -1 | 0 | 1 }[] = [];

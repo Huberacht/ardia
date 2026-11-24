@@ -62,7 +62,14 @@ type Props = {
 
 export type HandOverFocus = { target: "address" | "pill" | null; pill: RefObject<ViewInstance | null> };
 
-export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; landed: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null };
+export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; landed: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null; spoken?: Record<string, string> };
+
+const NO_SPOKEN_LINE: Record<string, string> = {};
+
+export function landedSpoken(landed: string, table: Record<string, string>, otherwise: string): string {
+  "worklet";
+  return landed !== "" && table[landed] !== undefined ? table[landed] : otherwise;
+}
 
 export function landedSide(from: string, shownId: string, at: number, span: number): -1 | 0 | 1 {
   "worklet";
@@ -101,7 +108,7 @@ export function spokenDestination(side: -1 | 0 | 1, here: string, left: string, 
   return here;
 }
 
-type BarWords = { shownId: string; here: string; left: string; right: string; leftId: string; rightId: string; span: number };
+type BarWords = { shownId: string; here: string; left: string; right: string; leftId: string; rightId: string; span: number; table: Record<string, string> };
 
 function useBarWords(swipe: SwipeAddresses | null, shownId: string, here: string) {
   const left = swipe?.left ? spokenAddress(barAddress(swipe.left)) : "";
@@ -109,11 +116,12 @@ function useBarWords(swipe: SwipeAddresses | null, shownId: string, here: string
   const leftId = swipe?.left?.id ?? "";
   const rightId = swipe?.right?.id ?? "";
   const span = swipe?.span ?? 0;
-  const next: BarWords = { shownId, here, left, right, leftId, rightId, span };
+  const table = swipe?.spoken ?? NO_SPOKEN_LINE;
+  const next: BarWords = { shownId, here, left, right, leftId, rightId, span, table };
   const words = useSharedValue<BarWords>(next);
   useLayoutEffect(() => {
-    words.value = { shownId, here, left, right, leftId, rightId, span };
-  }, [words, shownId, here, left, right, leftId, rightId, span]);
+    words.value = { shownId, here, left, right, leftId, rightId, span, table };
+  }, [words, shownId, here, left, right, leftId, rightId, span, table]);
   const idle = useSharedValue(0);
   const nobody = useSharedValue("");
   const notLanded = useSharedValue("");
@@ -131,7 +139,7 @@ function useSpokenAddress(swipe: SwipeAddresses | null, shownId: string, here: s
     const previewShown = pageBarPreviewShown.value;
     const table = destinationAddresses.value;
     const side = landedSpokenSide(arrived, started, now.shownId, now.leftId, now.rightId, at, now.span);
-    return { accessibilityValue: { text: spokenDestination(side, now.here, now.left, now.right, lifted, now.shownId, previewShown, table) } };
+    return { accessibilityValue: { text: landedSpoken(arrived, now.table, spokenDestination(side, now.here, now.left, now.right, lifted, now.shownId, previewShown, table)) } };
   });
   const leftShown = useAnimatedStyle(() => {
     const at = offset.value;

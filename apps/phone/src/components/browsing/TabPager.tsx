@@ -13,7 +13,7 @@ import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
 import { labTrace, traceSlice } from "../../platform/lab";
-import { carryHeldBarAction, commitBarAction, dropBarAction, takeBarAction } from "../../state/browse/store";
+import { carryHeldBarAction, commitBarAction, dropBarAction, takeBarAction, type BarAction } from "../../state/browse/store";
 import { useWarmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
@@ -26,6 +26,7 @@ export type TabPager = {
   landed: SharedValue<string>;
   turn: SharedValue<number>;
   panning: SharedValue<number>;
+  travel: SharedValue<number>;
   rendered: string;
   renderedLeft: string;
   renderedRight: string;
@@ -94,9 +95,14 @@ export function adjacentIn(order: readonly string[], from: string, to: string): 
   return at >= 0 && to !== "" && (order[at - 1] === to || order[at + 1] === to);
 }
 
-type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; order?: readonly string[]; landsEarly?: boolean; onCommit: (id: string, onScreen: boolean) => void; onGrab: () => void };
+type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; order?: readonly string[]; landsEarly?: boolean; onCommit: (id: string, onScreen: boolean) => void; onHeld?: (id: string, action: BarAction) => void; onGrab: () => void };
 
-export function useTabPager({ width, selectedId, left, right, order, landsEarly = false, onCommit, onGrab }: Options): TabPager {
+export function isOpenTab(id: string): boolean {
+  const tabs = currentTabs();
+  return id !== "" && (tabs.open.some((tab) => tab.id === id) || tabs.privates.some((tab) => tab.id === id));
+}
+
+export function useTabPager({ width, selectedId, left, right, order, landsEarly = false, onCommit, onHeld, onGrab }: Options): TabPager {
   const reduceMotion = useReduceMotion();
   const cuts = tabSwitchCuts();
   const shownId = selectedId ?? "";
@@ -125,6 +131,8 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
   const cursorTurn = useSharedValue(0);
   const ackedTurn = useSharedValue(0);
   const refusedTurn = useSharedValue(0);
+  const panStarts = useSharedValue(0);
+  const committedTurn = useRef(0);
   const lineRef = useRef(line);
   lineRef.current = line;
   const mountedPage = useRef(shownId);
@@ -171,8 +179,28 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     active.value = cursor.value !== shown ? 1 : 0;
   };
 
+  const settledShown = useRef(shownId);
   useLayoutEffect(() => {
-    runOnUI(rebase)(shownId, left ?? "", right ?? "", line, width);
+    if (cuts) {
+      runOnUI(rebase)(shownId, left ?? "", right ?? "", line, width);
+      return;
+    }
+    const moved = settledShown.current !== shownId;
+    settledShown.current = shownId;
+    fromId.value = shownId;
+    leftId.value = left ?? "";
+    rightId.value = right ?? "";
+    hasLeft.value = left !== null;
+    hasRight.value = right !== null;
+    lineIds.value = line;
+    span.value = width;
+    if (!moved) return;
+    panStarts.value += 1;
+    cursor.value = shownId;
+    landed.value = "";
+    landing.value = 0;
+    offset.value = 0;
+    active.value = 0;
   }, [shownId, left, right, line, width]);
 
   const acknowledge = (lift: number) => {
@@ -200,7 +228,7 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
 
   const validates = (from: string, to: string) => {
     const tabs = currentTabs();
-    return Boolean(to) && tabs.selectedId === from && Boolean(findTab(tabs, to)) && adjacentIn(lineRef.current, from, to);
+    return Boolean(to) && tabs.selectedId === from && isOpenTab(to) && adjacentIn(lineRef.current, from, to);
   };
 
   const logSwipe = (verdict: "accepted" | "refused", lift: number, from: string, candidate: string, projected: number, reason: string) => {
@@ -208,12 +236,17 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     traceSlice(`swipe ${verdict}:${reason}:${lift}`);
   };
 
-  const commit = (from: string, to: string, lift: number) => {
+  const commit = (from: string, to: string, lift: number, starts: number) => {
+    if (lift > committedTurn.current) committedTurn.current = lift;
     runOnUI(acknowledge)(lift);
+    if (!cuts && starts !== panStarts.value) {
+      dropBarAction(swipeScope(lift));
+      return;
+    }
     const later = cursorTurn.value > lift;
     if (!validates(from, to)) {
       const tabs = currentTabs();
-      const reason = tabs.selectedId !== from ? "stale-source" : !findTab(tabs, to) ? "closed" : "not-neighbour";
+      const reason = tabs.selectedId !== from ? "stale-source" : !isOpenTab(to) ? (findTab(tabs, to) ? "archived" : "closed") : "not-neighbour";
       logSwipe("refused", lift, from, to, 0, reason);
       dropBarAction(swipeScope(lift));
       if (!later) restore();
@@ -228,13 +261,18 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     }
     const held = takeBarAction(swipeScope(lift), to);
     onCommit(to, onScreen);
-    if (held && currentTabs().selectedId === to) commitBarAction(to, held);
+    if (!held || currentTabs().selectedId !== to) return;
+    if (onScreen && onHeld) onHeld(to, held);
+    else commitBarAction(to, held);
   };
 
   const landedScope = () => swipeScope(cursorTurn.value);
   const landedTarget = () => {
-    if (cursorTurn.value <= ackedTurn.value) return null;
-    return cursor.value || null;
+    const pending = cursorTurn.value;
+    if (pending <= committedTurn.current) return null;
+    const at = cursor.value;
+    if (!cuts && at === fromId.value) return null;
+    return at || null;
   };
 
   const advance = (to: string, lift: number, from: string) => {
@@ -242,7 +280,7 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     cursor.value = to;
     landed.value = to;
     cursorTurn.value = lift;
-    runOnJS(commit)(from, to, lift);
+    runOnJS(commit)(from, to, lift, panStarts.value);
   };
 
   const land = (target: number) => {
@@ -367,10 +405,18 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
       active.value = 1;
       panning.value = 1;
       travel.value = 0;
-      const caught = !cuts && cursor.value === fromId.value;
-      catching.value = caught ? 1 : 0;
-      base.value = caught ? offset.value : 0;
       landing.value = 0;
+      if (!cuts) {
+        panStarts.value += 1;
+        cursor.value = fromId.value;
+        landed.value = "";
+        catching.value = 1;
+        base.value = offset.value;
+        latchFromCursor();
+        return;
+      }
+      catching.value = 0;
+      base.value = 0;
       latchFromCursor();
     })
     .onUpdate((event) => {
@@ -421,7 +467,7 @@ export function useTabPager({ width, selectedId, left, right, order, landsEarly 
     return { opacity: outgoingPose(at, span.value, renderedLeft !== "", renderedRight !== "", reduceMotion).dim };
   });
 
-  return { offset, from: fromId, active, cursor, landed, turn, panning, rendered: shownId, renderedLeft, renderedRight, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope, refusedTurn };
+  return { offset, from: fromId, active, cursor, landed, turn, panning, travel, rendered: shownId, renderedLeft, renderedRight, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope, refusedTurn };
 }
 
 type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; width: number; statusHeight: number; statusOver?: boolean; hasLeft: boolean; hasRight: boolean; coverId?: string };
@@ -471,6 +517,38 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
         {cuts && !arrived ? <UiFrameMark testID="pagerFaceMark" markWhenShown={`dest-face:${tab.id}`} style={[uiFrameMarkStyle, faceShown]} /> : null}
       </Animated.View>
     </>
+  );
+}
+
+export function aheadPose(side: -1 | 1, id: string, inner: string, cursor: string, panning: number, travel: number, width: number): { shown: boolean; x: number } {
+  "worklet";
+  if (cursor === id) return { shown: true, x: 0 };
+  if (panning !== 0 && cursor === inner && side * travel < 0) return { shown: true, x: side > 0 ? Math.max(0, width + travel) : Math.min(0, travel - width) };
+  return { shown: false, x: side * width };
+}
+
+type AheadProps = { pager: TabPager; tab: BrowserTab; side: -1 | 1; inner: string; width: number; statusHeight: number; statusOver?: boolean };
+
+export function PagerAhead({ pager, tab, side, inner, width, statusHeight, statusOver = false }: AheadProps) {
+  const theme = useTheme();
+  const tone = usePageTone(tab.id);
+  const { cursor, panning, travel } = pager;
+  const style = useAnimatedStyle(() => {
+    const pose = aheadPose(side, tab.id, inner, cursor.value, panning.value, travel.value, width);
+    return { opacity: pose.shown ? 1 : 0, transform: [{ translateX: pose.x }] };
+  }, [side, tab.id, inner, width]);
+  const faceShown = useAnimatedStyle(() => ({ opacity: cursor.value === tab.id ? 1 : 0 }), [tab.id]);
+  const shown = display(tab.url);
+  const face = tab.snapshotFileName ? { ...tab, snapshotFileName: null } : tab;
+  return (
+    <Animated.View testID="pagerAhead" collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+      {statusOver ? null : <View style={{ height: statusHeight, backgroundColor: tone?.top ?? theme.canvas }} />}
+      <View style={styles.body}>
+        <TabFace tab={face} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} />
+      </View>
+      {statusOver ? <View style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
+      <UiFrameMark testID="pagerAheadMark" markWhenShown={`dest-face:${tab.id}`} style={[uiFrameMarkStyle, faceShown]} />
+    </Animated.View>
   );
 }
 

@@ -1006,6 +1006,7 @@ export function arriveAtNeighbour(id: string, onScreen = false) {
   cancelArrivalWait();
   useBrowse.setState({ frozenOrder: order });
   openTab(id);
+  if (currentTabs().selectedId !== id) return;
   if (onScreen && pageWasDrawn(id)) {
     const now = useBrowse.getState();
     if (now.arriving !== null || now.arrivalCover !== null) useBrowse.setState({ arriving: null, arrivalCover: null });
