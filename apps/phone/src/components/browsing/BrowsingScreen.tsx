@@ -9,7 +9,7 @@ import { BAR_SHOWN, barShown, bottomBarCollapses, followScroll, obscuredBottom, 
 import type { Design } from "../../lib/design";
 import { neighbours, PAGER } from "../../lib/pagerPhysics";
 import { useSystemBars } from "../../state/app/systemBars";
-import { useFrozenOrder, useNavigation, usePageTone, useSurface } from "../../state/browse/hooks";
+import { useFrozenOrder, useNavigation, usePageTone } from "../../state/browse/hooks";
 import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, pageBarShown, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
 import { refreshHiddenDeck } from "../../state/browse/deckHold";
 import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } from "../../state/page/actions";
@@ -154,10 +154,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const blankPage = underBar ? theme.pageSurface : theme.canvas;
   const top = pageTone?.top ?? blankPage;
   const bottom = pageTone?.bottom ?? blankPage;
-  const surface = useSurface();
   const barKept = tabSwitchCuts() && design === "redesigned";
-  const deckUp = barKept && surface === "deck";
-  const previewId = usePageBarPreview((s) => s.id);
+  const deckUp = useBrowse((s) => barKept && s.surface === "deck");
+  const previewId = usePageBarPreview((s) => (barKept ? s.id : null));
   const previewTab = useTabWhile(previewId ?? "", deckUp && previewId !== null && previewId !== tab.id);
   const barTab = deckUp && previewTab ? previewTab : tab;
   const previewTone = usePageTone(barTab.id);
@@ -168,10 +167,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   useLayoutEffect(() => {
     if (barKept) pageBarShown.value = deckUp ? 0 : 1;
   }, [barKept, deckUp]);
-  const keptBarStyle = useAnimatedStyle(() => ({ opacity: barKept ? pageBarShown.value : 1 }), [barKept]);
+  const keptBarStyle = useAnimatedStyle(() => ({ opacity: barKept ? pageBarShown.value : 1 }));
   const keptBarProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(
     () => ({ pointerEvents: !barKept || pageBarShown.value > 0 ? "box-none" : "none", importantForAccessibility: !barKept || pageBarShown.value > 0 ? "auto" : "no-hide-descendants" }),
-    [barKept],
   );
   const barSlotHeight = barHeight(insets.bottom, design);
   const collapse = useBarCollapse(tab.id, tab.isPrivate, finding, design, barSlotHeight, squeeze !== null);
