@@ -1421,20 +1421,43 @@ look surface: it has no frost source to refract.
   old lab flag) 7.2 and 6.8 % (p50 12 to 14, p90 21, p99 36 to 38) with 32 GPU passes a frame; the shipped strip
   8.6 % (p50 14, p90 23, p99 48) with 10. Frame by frame the RenderThread issues 3.5 ms at the median against 2.8
   with the solid bar (6.2 before the strip refreshed at 60 Hz) and the GPU takes 3.5 ms against 1.7: the page's
-  layer is what remains. Measured again after the source stopped waking live glasses (3 runs each, interleaved, the F4 at thermal
-  status 0): the solid bar 4.1, 2.7 and 2.6 % janky (p50 10 to 11 ms, GPU p50 2 ms), the glass 8.3, 9.1 and 6.7 %
-  (p50 15 ms, GPU p50 4 ms). Scrolling is no faster for it, since the WebView asks for every frame of a scroll
-  anyway; the cost is the GPU's: 9.7 render passes a frame against 2.1, the page drawn into its full-screen
-  layer and then composited, the strip's blur, and the fold views' layers redrawn with the glass inside them
-  (`flush layers` is 3.8 ms of the slowest tenth of frames). The WebView's functor runs at most once a frame in
-  every trace. An idle page with a GIF now draws 220 frames in 5 s with the bar out, as the solid bar does
-  (433 before). Wikipedia's Newton's cradle page is a poor idle test once scrolled: its pulsing Save hint runs a CSS
-  animation every frame, so main itself draws about 510 frames there with the bar folded. On a page served for the
-  test (one 50 fps GIF and text, `adb reverse` to a local server) main draws 250 frames in 5 s with the bar out and
-  257 folded, and the glass 250 and 251: no doubling. Dropping the fold views' hardware layers saves two render passes a
-  frame but doubles the frames with the bar out too, so they stay. The fold views' own
-  hardware layers (`renderToHardwareTextureAndroid` on `floatingBarFold` and `hostPillFold`) now redraw with the
-  strip, about 0.5 ms a frame; they stay for the fold's fade (b66c3bbdb).
+  layer seemed to be what remained, but that was wrong: see "Where scrolling under the glass went". An idle page
+  with a GIF draws 220 frames in 5 s with the bar out, as the solid bar does (433 before the source stopped waking
+  live glasses from inside its draw). Wikipedia's Newton's cradle page is a poor idle test once scrolled: its pulsing
+  Save hint runs a CSS animation every frame, so main itself draws about 510 frames there with the bar folded. On a
+  page served for the test (one 50 fps GIF and text, `adb reverse` to a local server) main draws 250 frames in 5 s
+  with the bar out and 257 folded, and the glass 250 and 251: no doubling.
+- **Where scrolling under the glass went.** One lab build with launch switches for each part, 3 interleaved scroll
+  runs each on the F4 against main 14db917fd (3.0 % janky, p50 10 ms): the glass as it was, 6.8 % (p50 14, p90 21);
+  the page drawn into its full-screen layer with solid glass and no strip, 3.1 %, though its GPU took 2.2 ms a frame
+  against main's 0.5, so the page layer and the GPU weren't the cost; the live glass with the fold views' layers
+  dropped, 5.0 %; solid glass with them dropped, 4.5 %. The fold views (`floatingBarFold`, `hostPillFold`) hold
+  hardware layers (`renderToHardwareTextureAndroid`) so the fold scales a cached texture; with live glass inside them
+  both layers re-rendered all their contents every frame (about 18 rect fills, 16 texture draws, 18 circles and
+  rounded rects, text and paths a frame where main composites two textures), and without the layers the bar redraws
+  straight into every frame. The lens and rim cost nothing measurable (`ArdiaFlatGlass` drew the same), and the
+  strip's own layers are tiny (180 by 43). The F4 has no `gpu.renderstages` producer and its Adreno tracepoints
+  aren't readable on a user build, so the split comes from these ablations, HWUI's GPU-completion slices and
+  simpleperf (lab builds are profileable: `simpleperf record --app`).
+- **The bar's glass behind its fold layers.** `GlassBackdropView` (`GlassBehind` in `LookViews.tsx`) is the page
+  bar's first child, behind the folds. A glass with a backdrop before its branch records nothing in its own view; the
+  backdrop draws it, in tree order, with the glass's transform and its ancestors' alpha up to the bar, and a glass's
+  redraw invalidates the backdrop instead of the glass. The fold layers hold only the icons and text and stay cached,
+  and a fold that scales or fades redraws the backdrop through its pre-draw check. A hidden glass (shown false) used
+  to see a new offset on every pre-draw, since it returns before FrostView's draw and its fold sits scaled, and
+  invalidated itself every frame: that dirtied its fold's layer each frame, and with the backdrop re-recorded it each
+  frame (3.6 % of the UI thread). A glass that isn't sampling now skips that check.
+- **Scrolling with the glass, measured (round 6).** Ten swipes on Wikipedia's Glass article, interleaved, each run
+  started with the F4's CPU cooling devices at level 3 or less (thermal status 0 alone let the big cores throttle
+  mid-series): main 2.68 % janky over 11 runs (p50 9 to 10 ms, p90 13 to 14), the glass 3.90 % over 6 (p50 12, p90
+  16 to 18), against 6.8 % before this round. Render passes while scrolling: 6.3 a frame against main's 2.1 (9.7
+  before). The idle GIF test page: 250 frames in 5 s with the bar out and 252 folded (main 250 and 257). What is
+  left is the page's full-screen layer, which the WebView needs to draw once a frame: in the same lab build, the
+  page layer with solid glass measured the same as the live glass, and taking out the blur, the live strip draws or
+  the lens moved nothing. Caching the bar's tints and rims in layers of their own was tried and dropped: 3.96 %
+  over 8 runs against 3.90 without. The deck's own pre-draw check (`DeckBackdropView.judgeTraversal`, walking the
+  view tree to keep its backdrop still while something else moves) runs on every frame while browsing, about 4 % of
+  the UI thread in main and the glass alike.
 - **The folded bar's glass.** Android folds the bar into the host pill by crossfading the two by opacity, so both
   glasses show while the fold moves. Once the fold settles, the side it left hides its glass (`shown` false,
   `foldGlassShown` in `useBarFold`), so it leaves the strip and draws nothing; it used to stay a live consumer at
