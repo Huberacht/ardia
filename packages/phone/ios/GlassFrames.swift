@@ -280,8 +280,20 @@ final class GlassFrames: NSObject {
     }
     if let web, page != nil, capture.page.observe(web, now: now) {
       capture.drop()
+      if capture.page.arrived { capture.motion.arrive(now: now) }
       capture.tone = GlassToneGate()
       NotificationCenter.default.post(name: GlassTone.changed, object: web)
+    }
+    capture.motion.observe(pieces.map { $0.bounds.applying($0.transform) }, in: space.bounds, now: now)
+    capture.page.heldUntil = capture.motion.heldUntil
+    let held = capture.motion.holds(now: now)
+    if held != capture.wasHeld {
+      capture.wasHeld = held
+      if PhoneTestBuild.isOn { NSLog("PAGELAB glass hold %@ %@ at %.3f", held ? "on" : "off", members.map(\.label).joined(separator: ","), now) }
+    }
+    if held {
+      if PhoneTestBuild.isOn { stats.heldFrames += 1 }
+      return
     }
     if capture.dropsPageCapture(shiftable: shiftable) {
       capture.drop()
@@ -401,6 +413,7 @@ final class GlassFrames: NSObject {
     var clearReasons: [String: Int] = [:]
     var unshifted: [String: Int] = [:]
     var toneFlips = 0
+    var heldFrames = 0
     var offMainMs: [Double] = []
     var mainMs: [Double] = []
     var worstInterval = 0.0
@@ -431,7 +444,7 @@ final class GlassFrames: NSObject {
       if since == 0 { since = now }
       guard now - since >= 1, frames > 0 else { return nil }
       func fixed(_ value: Double) -> String { String(format: "%.2f", value) }
-      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) moving_snapshots=\(moving)  lens_frames=\(lensFrames) clear_frames=\(clearFrames) tone_flips=\(toneFlips) unshifted=\(unshifted.map { "\($0.key):\($0.value)" }.joined(separator: ",")) clear_why=\(clearReasons.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key):\($0.value)" }.joined(separator: ",")) off_main_ms_p50=\(fixed(LiquidGlassRules.median(offMainMs))) off_main_ms_max=\(fixed(offMainMs.max() ?? 0)) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
+      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) moving_snapshots=\(moving)  lens_frames=\(lensFrames) clear_frames=\(clearFrames) tone_flips=\(toneFlips) held_frames=\(heldFrames) unshifted=\(unshifted.map { "\($0.key):\($0.value)" }.joined(separator: ",")) clear_why=\(clearReasons.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key):\($0.value)" }.joined(separator: ",")) off_main_ms_p50=\(fixed(LiquidGlassRules.median(offMainMs))) off_main_ms_max=\(fixed(offMainMs.max() ?? 0)) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
       self = FrameStats()
       since = now
       return line

@@ -66,13 +66,12 @@ public struct GlassSnapshotGate: Sendable {
   public init() {}
 
   @discardableResult
-  public mutating func observe(_ key: GlassPageKey, arrivingAt now: TimeInterval? = nil) -> Bool {
+  public mutating func observe(_ key: GlassPageKey) -> Bool {
     guard key != self.key else { return false }
-    let arrived = self.key?.page != key.page
     self.key = key
     token += 1
     failures = 0
-    nextRequest = arrived ? (now.map { $0 + GlassFlowRules.arrivalSettle } ?? 0) : 0
+    nextRequest = 0
     return true
   }
 
@@ -258,7 +257,6 @@ public enum GlassFlowRules {
   public static let documentLeadSeconds: CGFloat = 0.75
   public static let documentLeadLongest: CGFloat = 3000
   public static let documentGap: TimeInterval = 0.25
-  public static let arrivalSettle: TimeInterval = 0.45
   public static let documentBusyShare = 0.6
   public static let rasterPixelsLongest: CGFloat = 2_000_000
   public static let documentBehindSeconds: CGFloat = 0.4

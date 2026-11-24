@@ -99,6 +99,8 @@ final class GlassCapture {
   }
 
   var isChanging: Bool { settle > 0 }
+  var motion = GlassMotionHold()
+  var wasHeld = false
 
   func drop() {
     token += 1

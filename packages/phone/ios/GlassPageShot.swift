@@ -32,6 +32,11 @@ final class GlassPageShot {
   private(set) var uncovered = 0
   private(set) var moving = 0
   var onMainWork: ((Double) -> Void)?
+  var heldUntil: CFTimeInterval = 0
+  private(set) var arrived = false
+  private(set) var held = 0
+
+  private func isHeld(at now: CFTimeInterval) -> Bool { now < heldUntil }
 
   static func key(of web: WKWebView) -> (key: GlassPageKey, committed: Bool) {
     let document = PhonePages.shared.document(of: web)
@@ -57,7 +62,8 @@ final class GlassPageShot {
     }
     let key = Self.key(of: web).key
     let zoomed = zoomWatch.observe(Double(web.scrollView.zoomScale))
-    let changed = gate.observe(key, arrivingAt: now) || self.web !== web || zoomed
+    arrived = self.web !== web
+    let changed = gate.observe(key) || arrived || zoomed
     guard changed else { return false }
     self.web = web
     pendingToken = nil
@@ -66,6 +72,7 @@ final class GlassPageShot {
   }
 
   func request(_ web: WKWebView, around needed: CGRect, pixelsPerPoint: CGFloat, now: CFTimeInterval) {
+    guard !isHeld(at: now) else { return }
     switch GlassLaunch.pageShot {
     case .pdf: requestDocument(web, around: needed, pixelsPerPoint: pixelsPerPoint, now: now)
     case .snapshot: requestSnapshot(web, pixelsPerPoint: pixelsPerPoint, now: now)
@@ -93,6 +100,7 @@ final class GlassPageShot {
     let started = CACurrentMediaTime()
     busy = busy.filter { started - ($0.end ?? started) <= LiquidGlassRules.budgetWindow } + [(token: token, start: started, end: nil)]
     let width = max(Int((area.width * GlassFlowRules.rasterScale(area: area, zoom: zoom, pixelsPerPoint: pixelsPerPoint)).rounded()), 1)
+    if PhoneTestBuild.isOn { NSLog("PAGELAB glass pdf ask %.0f points at %.3f", area.height, started) }
     web.createPDF(configuration: configuration) { [weak self, weak web] result in
       MainActor.assumeIsolated {
         let working = CACurrentMediaTime()
@@ -102,6 +110,12 @@ final class GlassPageShot {
           self.settle(token, at: working)
           self.rejected += 1
           if case .failure = result { self.gate.failed(now: working) }
+          return
+        }
+        guard !self.isHeld(at: working) else {
+          self.settle(token, at: working)
+          self.held += 1
+          if PhoneTestBuild.isOn { NSLog("PAGELAB glass pdf landed during a hold: not rasterized") }
           return
         }
         let moved = self.movedWhilePending
@@ -159,6 +173,10 @@ final class GlassPageShot {
         self.settle(token, at: working)
         guard let web, self.web === web, self.gate.accepts(token: token, key: key), Self.key(of: web).key == key else {
           self.rejected += 1
+          return
+        }
+        guard !self.isHeld(at: working) else {
+          self.held += 1
           return
         }
         let moved = self.movedWhilePending || web.scrollView.contentOffset != offset
