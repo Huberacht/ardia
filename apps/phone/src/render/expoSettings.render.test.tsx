@@ -184,7 +184,10 @@ const firstFrameTitle = (node: ReactTestInstance) => {
 const isPlaceholder = (node: ReactTestInstance) => node.findAll((inner) => typeof inner.type === "string" && Array.isArray(inner.props.modifiers) && (inner.props.modifiers as ({ $type: string } | null)[]).some((modifier) => modifier?.$type === "accessibilityHidden")).length > 0 && textsIn(node).length === 0;
 const destinationKeys = (root: Root) => hosts(root, (props) => props.name === "destination").map((node) => (node.props.extraProps as { value: string }).value);
 
-const quietNativeReads = () => jest.spyOn(platformPages, "listsSitePermissions").mockReturnValue(false);
+const quietNativeReads = () => {
+  jest.spyOn(platformPages, "listsSitePermissions").mockReturnValue(false);
+  jest.spyOn(platformPages, "clearsWebsiteDataSince").mockReturnValue(false);
+};
 
 onIos("every page a Settings screen links to is mounted before the tap with the same first-frame title the page itself shows, hero or inline, and is hidden from VoiceOver until pushed", () => {
   quietNativeReads();
