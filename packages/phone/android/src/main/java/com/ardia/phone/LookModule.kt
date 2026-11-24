@@ -247,6 +247,7 @@ class LookModule : Module() {
         View(FrameMarkView::class) {
             Name("FrameMark")
             Prop("mark") { view: FrameMarkView, value: String? -> view.mark(value) }
+            Prop("drawn") { view: FrameMarkView, value: Boolean? -> view.drawnOnly(value == true) }
         }
 
         View(FrostSourceView::class) {

@@ -1,7 +1,7 @@
 import { getAnimatedStyle } from "react-native-reanimated";
 import { getByGestureTestId } from "react-native-gesture-handler/jest-utils";
 import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { StyleSheet } from "react-native";
+import { Dimensions, StyleSheet } from "react-native";
 import { Surfaces } from "../App";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import { pageBarPreviewShown, pageBarShown } from "../state/browse/deckPull";
@@ -11,8 +11,9 @@ import { cutTabSwitches } from "../state/browse/tabSwitch";
 import { display } from "../state/search/omnibox";
 import { dismissSearch, searchState } from "../state/search/store";
 import { setPreference } from "../state/settings/store";
-import { currentTabs } from "../state/tabs/store";
-import { renderSurface, unmount, withTabs } from "../../test/render/harness";
+import { currentTabs, useTabs } from "../state/tabs/store";
+import { forgetWarmPictures, noteWarmPicture } from "../state/tabs/warmPictures";
+import { renderSurface, someTabs, textOf, unmount, withTabs } from "../../test/render/harness";
 
 jest.mock("@ardia/phone-native", () => {
   const actual = jest.requireActual<typeof import("@ardia/phone-native")>("@ardia/phone-native");
@@ -41,13 +42,37 @@ const deckUp = () => browse.useBrowse.setState({ surface: "deck", sheet: null, d
 const otherTab = () => currentTabs().open.find((tab) => tab.id !== currentTabs().selectedId)!;
 const hostOf = (id: string) => display(currentTabs().open.find((tab) => tab.id === id)!.url).host;
 const animatedProp = (node: ReactTestInstance, key: string) => (node.props.jestAnimatedProps?.value as Record<string, unknown> | undefined)?.[key];
-const marks = (root: ReactTestRenderer) =>
-  root.root.findAll((node) => typeof animatedProp(node, "mark") === "string").map((node) => animatedProp(node, "mark") as string);
+const opacityOf = (node: ReactTestInstance): number => {
+  const animated = (node.props.jestAnimatedStyle?.value as { opacity?: number } | undefined)?.opacity;
+  if (animated !== undefined) return animated;
+  return typeof node.type === "string" ? ((StyleSheet.flatten(node.props.style) as { opacity?: number } | undefined)?.opacity ?? 1) : 1;
+};
+const shownThrough = (node: ReactTestInstance) => {
+  for (let at: ReactTestInstance | null = node; at; at = at.parent) if (opacityOf(at) <= 0) return false;
+  return true;
+};
+const drawnMarkNodes = (root: ReactTestRenderer) =>
+  root.root.findAll((node) => typeof node.type !== "string" && node.props.drawn === true && typeof node.props.mark === "string" && node.props.mark !== "" && node.findAll((inner) => inner !== node && inner.props.drawn === true).length === 0);
+const drawnMarks = (root: ReactTestRenderer) => [...new Set(drawnMarkNodes(root).filter(shownThrough).map((node) => node.props.mark as string))];
+const faceOf = (root: ReactTestRenderer, id: string) =>
+  root.root
+    .findAll((node) => typeof node.type !== "string" && (node.props.tab as { id?: string } | undefined)?.id === id && "statusOver" in node.props)
+    .flatMap((owner) => owner.findAll((node) => node.props.testID === "destinationFace" && typeof node.type === "string"))[0];
+const shownFaces = (root: ReactTestRenderer) => hosts(root, "destinationFace").filter((face) => opacityOf(face) > 0);
 const lift = (id: string) => {
   act(() => {
     liftDestination(id);
   });
   act(() => jest.advanceTimersByTime(16));
+};
+const roundOf = (id: string) => useDestination.getState().spent[id] ?? 0;
+const expectReleased = (root: ReactTestRenderer, id: string, before: number) => {
+  const face = faceOf(root, id)!;
+  expect(face).toBeDefined();
+  expect(roundOf(id)).toBe(before + 1);
+  expect(face.props.nativeID).toBeUndefined();
+  expect(opacityOf(face)).toBe(0);
+  expect(shownFaces(root)).toHaveLength(0);
 };
 const commit = (id: string) => act(() => sendDeckCommand({ kind: "open", tabId: id, tappedAt: Date.now() }));
 
@@ -57,7 +82,7 @@ test("a card pressed in the deck gets its destination face ready under the kept 
   const root = renderSurface(<Surfaces />);
   const wanted = otherTab();
   act(() => require("../state/browse/destination").pressDestination(wanted.id));
-  const face = host(root, "destinationFace")!;
+  const face = faceOf(root, wanted.id)!;
   expect(face).toBeDefined();
   expect(host(root, "destinationTitle")).toBeDefined();
   expect(getAnimatedStyle(face).opacity).toBe(0);
@@ -67,7 +92,7 @@ test("a card pressed in the deck gets its destination face ready under the kept 
   expect(getAnimatedStyle(face).opacity).toBe(1);
   expect(animatedProp(face, "pointerEvents")).toBe("auto");
   expect(pageBarShown.value).toBe(1);
-  expect(marks(root)).toEqual(expect.arrayContaining([`dest-face:${wanted.id}`, `dest-bar:${wanted.id}`]));
+  expect(drawnMarks(root).sort()).toEqual([`dest-bar:${wanted.id}`, `dest-face:${wanted.id}`]);
   unmount(root);
 });
 
@@ -77,13 +102,13 @@ test("the destination face is one view from the lift to the page's first drawn f
   const root = renderSurface(<Surfaces />);
   const wanted = otherTab();
   act(() => require("../state/browse/destination").pressDestination(wanted.id));
-  const before = host(root, "destinationFace")!.instance;
+  const before = roundOf(wanted.id);
   lift(wanted.id);
   commit(wanted.id);
   flush();
   expect(currentTabs().selectedId).toBe(wanted.id);
-  const face = host(root, "destinationFace")!;
-  expect(face.instance).toBe(before);
+  const face = faceOf(root, wanted.id)!;
+  expect(roundOf(wanted.id)).toBe(before);
   const cover = useDestination.getState().cover!;
   expect(cover).toMatch(/^destinationCover-/);
   expect(face.props.nativeID).toBe(cover);
@@ -92,10 +117,10 @@ test("the destination face is one view from the lift to the page's first drawn f
   const surface = root.root.findAll((node) => node.props.pageId === wanted.id && node.props.coverNativeId !== undefined)[0]!;
   expect(surface.props.coverNativeId).toBe(cover);
   act(() => browse.pageCoverHidden(wanted.id, "drawn", "destinationCover-0", true, 1));
-  expect(host(root, "destinationFace")).toBeDefined();
+  expect(faceOf(root, wanted.id)!.props.nativeID).toBe(cover);
   act(() => browse.pageCoverHidden(wanted.id, "drawn", cover, true, 1));
   flush();
-  expect(host(root, "destinationFace")).toBeUndefined();
+  expectReleased(root, wanted.id, before);
   expect(destination.id.value).toBe("");
   unmount(root);
 });
@@ -154,7 +179,7 @@ test("a card opened by a screen reader takes the same hand-over: it lifts its de
   commit(wanted.id);
   flush();
   expect(destination.id.value).toBe(wanted.id);
-  const face = host(root, "destinationFace")!;
+  const face = faceOf(root, wanted.id)!;
   expect(getAnimatedStyle(face).opacity).toBe(1);
   expect(face.props.nativeID).toBe(useDestination.getState().cover);
   unmount(root);
@@ -167,7 +192,7 @@ test("a cut back to the deck before the page draws hides the destination face on
   const wanted = otherTab();
   commit(wanted.id);
   flush();
-  const face = host(root, "destinationFace")!;
+  const face = faceOf(root, wanted.id)!;
   expect(getAnimatedStyle(face).opacity).toBe(1);
   act(() => {
     pageBarShown.value = 0;
@@ -184,10 +209,11 @@ test("a destination whose page fails is released instead of waiting on a drawn f
   const wanted = otherTab();
   commit(wanted.id);
   flush();
-  expect(host(root, "destinationFace")).toBeDefined();
+  const before = roundOf(wanted.id);
+  expect(faceOf(root, wanted.id)!.props.nativeID).toBe(useDestination.getState().cover);
   act(() => require("../state/pages/store").storeNavigation(wanted.id, { isLive: true, isLoading: false, url: wanted.url, title: "", failure: { code: "offline" }, progress: 1 }));
   act(() => jest.advanceTimersByTime(4_100));
-  expect(host(root, "destinationFace")).toBeUndefined();
+  expectReleased(root, wanted.id, before);
   unmount(root);
 });
 
@@ -217,11 +243,11 @@ test("a destination page that native refuses to bind, so it never draws, release
   const wanted = otherTab();
   commit(wanted.id);
   flush();
-  expect(host(root, "destinationFace")).toBeDefined();
+  const before = roundOf(wanted.id);
   act(() => pageViewOf(root, wanted.id).props.onPageError({ code: "savedStateUnreadable", message: "bind refused" }));
   flush();
   act(() => jest.advanceTimersByTime(16));
-  expect(host(root, "destinationFace")).toBeUndefined();
+  expectReleased(root, wanted.id, before);
   expect(useDestination.getState().arriving).toBeNull();
   expect(destination.id.value).toBe("");
   expect(animatedProp(frostSource(root), "heldFill") ?? null).toBeNull();
@@ -235,9 +261,10 @@ test("a destination page that fails to load releases its face on the failure its
   const wanted = otherTab();
   commit(wanted.id);
   flush();
+  const before = roundOf(wanted.id);
   act(() => require("../state/pages/store").storeNavigation(wanted.id, { isLive: true, isLoading: false, url: wanted.url, title: "", failure: { code: "offline" }, progress: 1 }));
   flush();
-  expect(host(root, "destinationFace")).toBeUndefined();
+  expectReleased(root, wanted.id, before);
   unmount(root);
 });
 
@@ -260,7 +287,7 @@ test("reopening the deck before one destination draws and pressing another hands
   act(() => require("../state/browse/destination").pressDestination(second!.id));
   expect(useDestination.getState().prepared).toBe(second!.id);
   expect(useDestination.getState().arriving).toBeNull();
-  const face = host(root, "destinationFace")!;
+  const face = faceOf(root, second!.id)!;
   lift(second!.id);
   expect(getAnimatedStyle(face).opacity).toBe(1);
   expect(animatedProp(frostSource(root), "heldUntil") ?? null).toBeNull();
@@ -281,10 +308,11 @@ test("a deck select of a tab whose swipe arrival is still waiting keeps the deck
   const cover = useDestination.getState().cover!;
   expect(cover).toMatch(/^destinationCover-/);
   act(() => jest.advanceTimersByTime(3_100));
+  const before = roundOf(wanted.id);
   act(() => browse.pageCoverHidden(wanted.id, "drawn", cover, true, 1));
   flush();
   expect(useDestination.getState().arriving).toBeNull();
-  expect(host(root, "destinationFace")).toBeUndefined();
+  expectReleased(root, wanted.id, before);
   unmount(root);
 });
 
@@ -314,5 +342,162 @@ test("without tab-switch cuts the Address stays the plain Pressable, with no UI-
   const nodes = root.root.findAll((node) => node.props.accessibilityLabel === "Address");
   expect(nodes.length).toBeGreaterThan(0);
   expect(nodes.every((node) => node.props.jestAnimatedProps === undefined && node.props.animatedProps === undefined)).toBe(true);
+  unmount(root);
+});
+
+const deckCardIds = (root: ReactTestRenderer) => [...new Set(root.root.findAll((node) => typeof node.type !== "string" && node.props.motion !== undefined && typeof node.props.onOpen === "function" && (node.props.tab as { id?: string } | undefined)?.id !== undefined).map((node) => (node.props.tab as { id: string }).id))].sort();
+const faceIds = (root: ReactTestRenderer) =>
+  [...new Set(root.root.findAll((node) => typeof node.type !== "string" && "statusOver" in node.props && typeof node.props.id === "string").map((node) => node.props.id as string))].sort();
+const both = (id: string) => [`dest-bar:${id}`, `dest-face:${id}`];
+
+test("every tappable deck card has its face mounted before any press, so a tap whose JS touch-down never ran shows face and bar together from the release alone", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  expect(deckCardIds(root).length).toBe(3);
+  expect(faceIds(root)).toEqual(deckCardIds(root));
+  expect(useDestination.getState().prepared).toBeNull();
+  expect(drawnMarks(root)).toEqual([]);
+  const wanted = otherTab();
+  const face = faceOf(root, wanted.id)!;
+  expect(face.props.importantForAccessibility).toBe("no-hide-descendants");
+  expect(opacityOf(face)).toBe(0);
+  lift(wanted.id);
+  expect(useDestination.getState().prepared).toBeNull();
+  expect(opacityOf(faceOf(root, wanted.id)!)).toBe(1);
+  expect(shownFaces(root)).toHaveLength(1);
+  expect(drawnMarks(root).sort()).toEqual(both(wanted.id));
+  unmount(root);
+});
+
+test("the release publishes face and bar in one UI write: no step shows one mark without the other, and no React state changes on the way", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const wanted = otherTab();
+  const before = useDestination.getState();
+  const steps: string[][] = [];
+  act(() => {
+    liftDestination(wanted.id);
+  });
+  steps.push(drawnMarks(root).sort());
+  for (let frame = 0; frame < 3; frame++) {
+    act(() => jest.advanceTimersByTime(16));
+    steps.push(drawnMarks(root).sort());
+  }
+  for (const step of steps) expect([[], both(wanted.id)]).toContainEqual(step);
+  expect(steps.at(-1)).toEqual(both(wanted.id));
+  expect(useDestination.getState()).toBe(before);
+  unmount(root);
+});
+
+test("a warm card's picture is decoded under its hidden face before any press and is shown on the release; a cold card shows its title card", () => {
+  withTabs(3);
+  const selected = currentTabs().selectedId!;
+  const [warm, cold] = currentTabs().open.filter((tab) => tab.id !== selected);
+  const uri = `file:///${warm!.id}.jpg`;
+  useTabs.setState((now) => ({ open: now.open.map((tab) => (tab.id === warm!.id ? { ...tab, snapshotFileName: uri } : tab)) }));
+  const window = Dimensions.get("window");
+  noteWarmPicture(warm!.id, { uri, url: warm!.url, window, frame: { x: 0, y: 0, width: window.width, height: window.height }, settled: true, view: 1, viewId: 1 });
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const pictureOf = (id: string) => faceOf(root, id)!.findAll((node) => node.props.testID === "destinationPicture" && typeof node.props.onLoad === "function")[0];
+  const picture = pictureOf(warm!.id)!;
+  expect(picture.props.resizeMethod).toBe("scale");
+  expect(StyleSheet.flatten(picture.props.style).opacity).toBe(0);
+  act(() => picture.props.onLoad({ nativeEvent: { source: { width: window.width, height: window.height } } }));
+  expect(StyleSheet.flatten(pictureOf(warm!.id)!.props.style).opacity).toBe(1);
+  expect(opacityOf(faceOf(root, warm!.id)!)).toBe(0);
+  lift(warm!.id);
+  expect(opacityOf(faceOf(root, warm!.id)!)).toBe(1);
+  expect(StyleSheet.flatten(pictureOf(warm!.id)!.props.style).opacity).toBe(1);
+  expect(pictureOf(cold!.id)).toBeUndefined();
+  expect(textOf({ root: faceOf(root, cold!.id)! } as ReactTestRenderer)).toContain(cold!.title);
+  commit(warm!.id);
+  flush();
+  const round = roundOf(warm!.id);
+  act(() => browse.pageCoverHidden(warm!.id, "drawn", useDestination.getState().cover!, true, 1));
+  flush();
+  expect(roundOf(warm!.id)).toBe(round + 1);
+  expect(StyleSheet.flatten(pictureOf(warm!.id)!.props.style).opacity).toBe(1);
+  forgetWarmPictures([warm!.id]);
+  unmount(root);
+});
+
+test("a moving deck keeps one face per mounted card: cards scrolled into reach get theirs and a newly reachable card's release shows its own face", () => {
+  withTabs(30);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const was = deckCardIds(root);
+  expect(was.length).toBeLessThan(30);
+  expect(faceIds(root)).toEqual(was);
+  const scroller = root.root.findAll((node) => typeof node.props.onScrollAction === "function")[0]!;
+  for (let step = 0; step < 12; step++) {
+    act(() => scroller.props.onScrollAction("backward"));
+    act(() => jest.advanceTimersByTime(600));
+  }
+  const now = deckCardIds(root);
+  const arrived = now.filter((id) => !was.includes(id));
+  expect(arrived.length).toBeGreaterThan(0);
+  expect(faceIds(root)).toEqual(now);
+  lift(arrived[0]!);
+  expect(shownFaces(root)).toHaveLength(1);
+  expect(drawnMarks(root).sort()).toEqual(both(arrived[0]!));
+  unmount(root);
+});
+
+test("a private card's face carries the incognito styling, not its page title card", () => {
+  withTabs(3);
+  const [secret] = someTabs(1, true);
+  useTabs.setState({ privates: [secret!], incognito: true });
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const face = faceOf(root, secret!.id)!;
+  expect(face).toBeDefined();
+  lift(secret!.id);
+  expect(opacityOf(faceOf(root, secret!.id)!)).toBe(1);
+  expect(textOf({ root: faceOf(root, secret!.id)! } as ReactTestRenderer)).toContain("Incognito Tab");
+  expect(drawnMarks(root).sort()).toEqual(both(secret!.id));
+  unmount(root);
+});
+
+test("a deck opened over a page whose bar had collapsed still publishes the destination face and bar together", () => {
+  setPreference("collapsesBottomBar", true);
+  withTabs(3);
+  const selected = currentTabs().selectedId!;
+  browse.useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, arriving: null, leaving: null });
+  const root = renderSurface(<Surfaces />);
+  act(() => require("../state/pages/store").storeNavigation(selected, { url: currentTabs().open[0]!.url, title: "Site", isLive: true, isLoading: false, progress: 1, failure: null, canGoBack: false, canGoForward: false, scrollDirection: "down" }));
+  act(() => jest.advanceTimersByTime(1_000));
+  deckUp();
+  flush();
+  const wanted = otherTab();
+  lift(wanted.id);
+  expect(shownFaces(root)).toHaveLength(1);
+  expect(drawnMarks(root).sort()).toEqual(both(wanted.id));
+  setPreference("collapsesBottomBar", null);
+  unmount(root);
+});
+
+test("from the release to the page's first drawn frame some face always covers the page, and the face re-mounted after the hand-over never shows", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const wanted = otherTab();
+  lift(wanted.id);
+  commit(wanted.id);
+  for (let frame = 0; frame < 6; frame++) {
+    act(() => jest.advanceTimersByTime(16));
+    expect(shownFaces(root)).toHaveLength(1);
+    expect(opacityOf(faceOf(root, wanted.id)!)).toBe(1);
+  }
+  const round = roundOf(wanted.id);
+  act(() => browse.pageCoverHidden(wanted.id, "drawn", useDestination.getState().cover!, true, 1));
+  for (let frame = 0; frame < 6; frame++) {
+    act(() => jest.advanceTimersByTime(16));
+    const face = faceOf(root, wanted.id)!;
+    if (roundOf(wanted.id) > round) expect(opacityOf(face)).toBe(0);
+  }
+  expectReleased(root, wanted.id, round);
   unmount(root);
 });

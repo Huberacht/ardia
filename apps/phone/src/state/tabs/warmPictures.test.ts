@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { forgetWarmPictures, noteViewMoved, noteWarmPicture, useWarmRevision, warmPicture } from "./warmPictures.ts";
+import { forgetWarmPictures, noteViewMoved, noteWarmDecoded, noteWarmPicture, useWarmRevision, warmDecoded, warmPicture } from "./warmPictures.ts";
 
 const window = { width: 393, height: 873 };
 const frame = { x: 0, y: 0, width: 393, height: 873 };
@@ -62,4 +62,16 @@ test("a rotated window, another address, a different picture or a closed tab mak
   assert.equal(warmPicture(tab("g", "https://example.com/", "file:///other.jpg"), window), null);
   forgetWarmPictures(["g"]);
   assert.equal(warmPicture(tab("g"), window), null);
+});
+
+test("a face remounted after its hand-over knows its warm picture was already decoded, only for that tab's latest picture, until the tab is forgotten", () => {
+  assert.equal(warmDecoded("d", "file:///d.jpg"), false);
+  noteWarmDecoded("d", "file:///d.jpg");
+  assert.equal(warmDecoded("d", "file:///d.jpg"), true);
+  assert.equal(warmDecoded("d", "file:///d2.jpg"), false);
+  assert.equal(warmDecoded("e", "file:///d.jpg"), false);
+  noteWarmDecoded("d", "file:///d2.jpg");
+  assert.equal(warmDecoded("d", "file:///d.jpg"), false);
+  forgetWarmPictures(["d"]);
+  assert.equal(warmDecoded("d", "file:///d2.jpg"), false);
 });

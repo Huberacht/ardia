@@ -61,11 +61,20 @@ export function useWarmPicture(tab: { id: string; url: string; snapshotFileName:
   return enabled ? warmPicture(tab, window) : null;
 }
 
+const decoded = new Map<string, string>();
+
+export function noteWarmDecoded(id: string, uri: string) {
+  decoded.set(id, uri);
+}
+
+export const warmDecoded = (id: string, uri: string) => decoded.get(id) === uri;
+
 export function forgetWarmPictures(ids: readonly string[]) {
   let any = false;
   for (const id of ids) {
     any = keys.delete(id) || any;
     watermarks.delete(id);
+    decoded.delete(id);
   }
   if (any) changed();
 }

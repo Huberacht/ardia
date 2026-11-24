@@ -11,15 +11,15 @@ import { launchArguments } from "../../state/app/launchFlags";
 import type { BrowserTab } from "../../state/tabs/tabModels";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
-import { useWarmPicture } from "../../state/tabs/warmPictures";
+import { noteWarmDecoded, useWarmPicture, warmDecoded } from "../../state/tabs/warmPictures";
 import { TabFace, useTheme } from "../ui";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
-import { pageReportsDrawn } from "@ardia/phone-native";
+import { FrameMark, pageReportsDrawn } from "@ardia/phone-native";
 import { PageLoadingPlaceholder } from "./PageLoadingPlaceholder";
 import { pageWords } from "../../lib/sharedWords";
-import { destination, destinationCovers, destinationFaceMark, destinationFaceShows } from "../../state/browse/destination";
+import { destination, destinationCovers, destinationFaceShows } from "../../state/browse/destination";
 import { pageBarShown } from "../../state/browse/deckPull";
-import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
+import { uiFrameMarkStyle } from "../ui/UiFrameMark";
 
 export type CoverFace = { kind: "card"; picture: string | null; title: string; host: string; cardWidth: number | null } | { kind: "placeholder" };
 
@@ -204,7 +204,7 @@ export const DestinationFace = memo(function DestinationFace({ tab, cover, statu
   const tone = usePageTone(tab.id);
   const viewport = useWindowDimensions();
   const warm = useWarmPicture(tab, viewport, true);
-  const [decoded, setDecoded] = useState<string | null>(null);
+  const [decoded, setDecoded] = useState<string | null>(() => (warm && warmDecoded(tab.id, warm.uri) ? warm.uri : null));
   const shown = display(tab.url);
   const id = tab.id;
   const face = useAnimatedStyle(() => {
@@ -217,21 +217,20 @@ export const DestinationFace = memo(function DestinationFace({ tab, cover, statu
     const bar = pageBarShown.value;
     return { pointerEvents: destinationFaceShows(id, lifted, bar) ? "auto" : "none" };
   }, [id]);
-  const mark = useAnimatedProps<{ mark: string }>(() => {
-    const lifted = destination.id.value;
-    const bar = pageBarShown.value;
-    return { mark: destinationFaceMark(id, lifted, bar) };
-  }, [id]);
-  const pictured = warm !== null && decoded === warm.uri;
+  const pictured = warm !== null && (decoded === warm.uri || warmDecoded(id, warm.uri));
+  const pictureDecoded = (uri: string) => {
+    noteWarmDecoded(id, uri);
+    setDecoded(uri);
+  };
   return (
     <Animated.View testID="destinationFace" nativeID={cover} collapsable={false} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }, face]} animatedProps={touches}>
       {statusOver ? null : <View style={{ height: statusHeight, backgroundColor: tone?.top ?? theme.canvas }} />}
       <View testID="destinationTitle" style={styles.body}>
         <TabFace tab={{ ...tab, snapshotFileName: null }} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} paintedAs={`destination:${tab.id}`} />
       </View>
-      {warm ? <Image testID="destinationPicture" source={{ uri: warm.uri }} fadeDuration={0} onLoad={() => setDecoded(warm.uri)} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height, opacity: pictured ? 1 : 0 }]} /> : null}
+      {warm ? <Image testID="destinationPicture" source={{ uri: warm.uri }} resizeMethod="scale" fadeDuration={0} onLoad={() => pictureDecoded(warm.uri)} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height, opacity: pictured ? 1 : 0 }]} /> : null}
       {statusOver ? <View style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
-      <UiFrameMark style={uiFrameMarkStyle} animatedProps={mark} />
+      <FrameMark style={uiFrameMarkStyle} mark={`dest-face:${id}`} drawn />
     </Animated.View>
   );
 });

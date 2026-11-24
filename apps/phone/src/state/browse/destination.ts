@@ -1,4 +1,4 @@
-import { makeMutable, runOnUI } from "react-native-reanimated";
+import { makeMutable, runOnJS, runOnUI } from "react-native-reanimated";
 import { create } from "zustand";
 import { labTrace } from "../../platform/lab";
 import { pageNavigation, usePages } from "../pages/store";
@@ -34,16 +34,6 @@ export function destinationFaceShows(faceId: string, liftedId: string, barShown:
   return faceId !== "" && faceId === liftedId && barShown > 0;
 }
 
-export function destinationFaceMark(faceId: string, liftedId: string, barShown: number): string {
-  "worklet";
-  return destinationFaceShows(faceId, liftedId, barShown) ? `dest-face:${faceId}` : "";
-}
-
-export function destinationBarMark(liftedId: string, barShown: number): string {
-  "worklet";
-  return liftedId !== "" && barShown > 0 ? `dest-bar:${liftedId}` : "";
-}
-
 export function destinationHeldFill(liftedId: string, barShown: number, table: Record<string, DestinationAddress>): string | null {
   "worklet";
   return liftedId !== "" && barShown > 0 ? (table[liftedId]?.fill ?? null) : null;
@@ -64,9 +54,46 @@ export function destinationStandsIn(liftedId: string, shownId: string, previewSh
   return previewShown > 0 && liftedId !== "" && liftedId !== shownId;
 }
 
-type DestinationState = { prepared: string | null; arriving: string | null; cover: string | null };
+type DestinationState = { prepared: string | null; arriving: string | null; cover: string | null; spent: Readonly<Record<string, number>> };
 
-export const useDestination = create<DestinationState>()(() => ({ prepared: null, arriving: null, cover: null }));
+export const useDestination = create<DestinationState>()(() => ({ prepared: null, arriving: null, cover: null, spent: {} }));
+
+const spentAfter = (spent: Readonly<Record<string, number>>, id: string | null) => (id === null ? spent : { ...spent, [id]: (spent[id] ?? 0) + 1 });
+
+export const destinationFaceKey = (id: string, spent: Readonly<Record<string, number>>) => `${id}:${spent[id] ?? 0}`;
+
+function spendFace(id: string) {
+  useDestination.setState((now) => (now.arriving === id ? now : { spent: spentAfter(now.spent, id) }));
+}
+
+const faceHolds = new Map<string, number>();
+
+export const useDestinationFaces = create<{ ids: readonly string[] }>()(() => ({ ids: [] }));
+
+const publishFaces = () => {
+  const ids = [...faceHolds.keys()];
+  const was = useDestinationFaces.getState().ids;
+  if (was.length !== ids.length || was.some((id, at) => id !== ids[at])) useDestinationFaces.setState({ ids });
+};
+
+export function holdDestinationFace(id: string): () => void {
+  faceHolds.set(id, (faceHolds.get(id) ?? 0) + 1);
+  publishFaces();
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    const left = (faceHolds.get(id) ?? 1) - 1;
+    if (left > 0) faceHolds.set(id, left);
+    else faceHolds.delete(id);
+    publishFaces();
+  };
+}
+
+export function destinationFaceIds(held: readonly string[], prepared: string | null, arriving: string | null): readonly string[] {
+  const extra = [prepared, arriving].filter((id, at, all): id is string => id !== null && !held.includes(id) && all.indexOf(id) === at);
+  return extra.length === 0 ? held : [...held, ...extra];
+}
 
 export const deckScope = (turn: number) => `deck:${turn}`;
 
@@ -82,7 +109,7 @@ export function prepareDestination(id: string) {
     stopWaiting();
     destination.cover.value = { id: "", name: "" };
   }
-  useDestination.setState({ prepared: id, arriving: null, cover: null });
+  useDestination.setState({ prepared: id, arriving: null, cover: null, spent: spentAfter(now.spent, now.arriving) });
 }
 
 let coverSeq = 0;
@@ -114,7 +141,8 @@ export function arriveFromDeck(id: string, held: BarAction | null = null) {
   if (destination.id.value !== id) runOnUI(liftDestination)(id);
   coverSeq += 1;
   const cover = `${DESTINATION_COVER_ID}-${coverSeq}`;
-  useDestination.setState({ prepared: id, arriving: id, cover });
+  const replaced = useDestination.getState().arriving;
+  useDestination.setState((now) => ({ prepared: id, arriving: id, cover, spent: replaced !== null && replaced !== id ? spentAfter(now.spent, replaced) : now.spent }));
   destination.cover.value = { id, name: cover };
   const failed = () => {
     if (pageNavigation(id)?.failure && useDestination.getState().cover === cover) releaseDestination(id);
@@ -154,11 +182,11 @@ export function releaseDestination(id: string | null = null) {
   if (id === null || now.arriving === id) stopWaiting();
   useDestination.setState({ prepared: null, arriving: null, cover: null });
   destination.cover.value = { id: "", name: "" };
-  runOnUI((released: string | null) => {
+  runOnUI((released: string | null, spent: string | null) => {
     "worklet";
-    if (released !== null && destination.id.value !== released) return;
-    destination.id.value = "";
-  })(id);
+    if (released === null || destination.id.value === released) destination.id.value = "";
+    if (spent !== null) runOnJS(spendFace)(spent);
+  })(id, now.arriving);
 }
 
 export function dropPreparedDestination() {

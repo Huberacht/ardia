@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { countRender } from "../../state/app/interactionPerf";
 import { PixelRatio, Platform, StyleSheet, Text, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue, type SharedValue } from "react-native-reanimated";
@@ -15,6 +15,8 @@ import { accentGlowCss, barHeight, elevation, FadeView, Favicon, font, iPhoneOr,
 import { MenuTrigger, nativeMenus, spaceSystemImage, type MenuHandlers } from "../ui/MenuTrigger";
 import { hideArchiveCard } from "../../state/browse/archiveCard";
 import { OPENING_COVER_ID, useBrowse } from "../../state/browse/store";
+import { holdDestinationFace } from "../../state/browse/destination";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { canShareTab, copyTabLink, shareTab } from "../../state/browse/tabMenus";
 import { actionWords } from "../../lib/sharedWords";
 import { CARD_MENU_ACTION, CLOSE_TAB, tabCardAccess, tabCardTitle, tabCardTitleText, useIsActiveTab } from "./tabCard";
@@ -256,6 +258,7 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
   countRender("DeckCard");
   const theme = useTheme();
   const design = useDesign();
+  useLayoutEffect(() => (design === "redesigned" && tabSwitchCuts() ? holdDestinationFace(tab.id) : undefined), [tab.id, design]);
   const tone = shownTone(useHeldPageTone(tab.id), tab.themeColorHex);
   const { orderIds, scaleProgress, covering } = motion;
   const id = tab.id;

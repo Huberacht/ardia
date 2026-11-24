@@ -69,7 +69,7 @@ import { PageRequestHost, PressMenu } from "./PageRequests";
 import { ReaderView, useLeavingReader } from "./ReaderView";
 import { PageFailureView } from "./PageFailureView";
 import { DestinationFace, PageCover } from "./PageCover";
-import { barFencedForDestination, destination, destinationAddresses, destinationBarMark, destinationHeldFill, destinationHeldUntil, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, type DestinationAddress } from "../../state/browse/destination";
+import { barFencedForDestination, destination, destinationAddresses, destinationFaceIds, destinationFaceKey, destinationHeldFill, destinationHeldUntil, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, useDestinationFaces, type DestinationAddress } from "../../state/browse/destination";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { HeldFrostSource } from "../ui/LookViews";
 import { PageSurface } from "./PageSurface";
@@ -142,17 +142,39 @@ function usePageSourceHold(kept: boolean) {
   return { held };
 }
 
+function useDestinationFaceIds() {
+  const held = useDestinationFaces((s) => s.ids);
+  const prepared = useDestination((s) => s.prepared);
+  const arriving = useDestination((s) => s.arriving);
+  return useMemo(() => destinationFaceIds(held, prepared, arriving), [held, prepared, arriving]);
+}
+
 function DestinationSlot({ shownId, statusHeight, statusOver }: { shownId: string; statusHeight: number; statusOver: boolean }) {
-  const id = useDestination((s) => s.arriving ?? s.prepared);
+  const ids = useDestinationFaceIds();
+  const arriving = useDestination((s) => s.arriving);
   const cover = useDestination((s) => (s.arriving !== null && s.arriving === s.prepared ? s.cover : null));
-  const tab = useTabWhile(id ?? "", id !== null);
+  const spent = useDestination((s) => s.spent);
   useEffect(() => {
-    const arriving = useDestination.getState().arriving;
-    if (arriving !== null && currentTabs().selectedId !== arriving) releaseDestination(arriving);
-  }, [shownId, id]);
+    const now = useDestination.getState().arriving;
+    if (now !== null && currentTabs().selectedId !== now) releaseDestination(now);
+  }, [shownId, arriving]);
   useEffect(() => () => releaseDestination(), []);
-  if (!tab || id === null) return null;
-  return <DestinationFace key={id} tab={tab} cover={cover ?? undefined} statusHeight={statusHeight} statusOver={statusOver} />;
+  return ids.map((id) => <PremountedFace key={destinationFaceKey(id, spent)} id={id} cover={id === arriving ? (cover ?? undefined) : undefined} statusHeight={statusHeight} statusOver={statusOver} />);
+}
+
+const PremountedFace = memo(function PremountedFace({ id, cover, statusHeight, statusOver }: { id: string; cover: string | undefined; statusHeight: number; statusOver: boolean }) {
+  const tab = useTabWhile(id, true);
+  return tab ? <DestinationFace tab={tab} cover={cover} statusHeight={statusHeight} statusOver={statusOver} /> : null;
+});
+
+function DestinationBarMarks() {
+  const ids = useDestinationFaceIds();
+  return ids.map((id) => <DestinationBarMark key={id} id={id} />);
+}
+
+function DestinationBarMark({ id }: { id: string }) {
+  const lifted = useAnimatedStyle(() => ({ opacity: destination.id.value === id ? 1 : 0 }), [id]);
+  return <UiFrameMark testID="destinationBarMark" style={[uiFrameMarkStyle, lifted]} mark={`dest-bar:${id}`} drawn />;
 }
 
 type KeptBar = { preview: BrowserTab | null; standsIn: boolean; privateLook: boolean | undefined };
@@ -172,16 +194,11 @@ function KeptBarSlot({ tab, kept, pageDark, children }: KeptBarProps) {
     pointerEvents: !kept || pageBarShown.value > 0 ? "box-none" : "none",
     importantForAccessibility: !kept || pageBarShown.value > 0 ? "auto" : "no-hide-descendants",
   }));
-  const barMark = useAnimatedProps<{ mark: string }>(() => {
-    const lifted = destination.id.value;
-    const shown = pageBarShown.value;
-    return { mark: kept ? destinationBarMark(lifted, shown) : "" };
-  }, [kept]);
   return (
     <Animated.View testID="keptPageBar" style={[StyleSheet.absoluteFill, keptBarStyle]} animatedProps={keptBarProps} pointerEvents="box-none" collapsable={false}>
       {children(keptBar, barDark)}
       {kept && deckUp ? <DeckAddresses /> : null}
-      {kept ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={barMark} /> : null}
+      {kept ? <DestinationBarMarks /> : null}
     </Animated.View>
   );
 }
