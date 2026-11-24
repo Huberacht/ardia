@@ -17,6 +17,21 @@ the plan and the state of the port. The request is issue #351.
 
 Logic is written once. Only code that calls the OS is written per platform.
 
+## The default shell (#4142)
+
+Windows ships the Chromium WebUI shell: Chromium is the app and serves the shared desktop UI (`apps/desktop`, its
+`--mode win` build) from `chrome://ardia/`, as on Linux. CI, the Release workflow and `windows-alpha` build, test and
+publish the WebUI installers (`assemble-webui.ps1 -Shippable`, `make-installer.ps1 -Shell webui`), and an installed
+React Native build updates into it through the installer's shell switch and the startup migration
+(`ardia-webui-migrate.exe`, "Moving a user's data from the RNW shell" below). The engine picks the shell for the
+browser process: `--ardia-shell=webui` or `--ardia-shell=rnw` decides when given; without it, a folder holding the
+React Native app (`ArdiaApp.dll` beside the launcher) starts React Native and any other folder starts WebUI
+(`WebUIShellSelected` in `webui_policy.h`, `install_static::IsWebUIShellCommandLine` in
+`chromium-win-webui-user-data-dir.patch`). Child processes (`--type=…`) are never read as either shell. The React
+Native shell still builds in CI (`Ardia-Setup-rnw-<cpu>`) and stays the emergency rollback until it is deleted
+(#4143): `make-installer.ps1 -Shell rnw`, `publish-alpha.sh --shell rnw` or the `shell: rnw` input of
+`windows-alpha.yml`. The sections on the React Native app below describe that rollback build.
+
 ## What works on Windows today
 
 Walked by hand on 2026-11-14 in the Windows 11 ARM VM (1920 by 1080), with the `Ardia-Setup-arm64` installer of run
@@ -1254,7 +1269,8 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
   Between releases, dispatch `.github/workflows/windows-alpha.yml` with a green Windows workflow run id so alpha
   publishes share the `ardia-windows-alpha-publish` concurrency group with `release.yml` (`scripts/windows/publish-alpha.sh`
   refuses live local publishes unless `--allow-local-publish` is explicitly passed; `--dry-run` works locally).
-- A build knows what it is from `Ardia.build.json` beside `Ardia.exe` (`assemble.ps1 -Version -Build`). The build
+- A build knows what it is from `Ardia.build.json` beside `Ardia.exe` (`assemble-webui.ps1 -Version -Build`, which
+  also stamps `"shell": "webui"`; `assemble.ps1` for the React Native rollback build, without a shell). The build
   number is the number of commits in the built commit's history (`git rev-list --count`, the workflow's `identity`
   job), so it grows with `main` and a release outranks every build before it, CI's included; builds before this rule
   were numbered by the run (up to about 670). The Windows workflow puts the same file beside the installer in its
@@ -1285,7 +1301,8 @@ The Release workflow (`.github/workflows/release.yml`, dispatched by the `releas
 Mac, for every nightly and stable:
 
 1. Its `windows` job calls `windows.yml` with the release's version, at the release's commit: the same build, pinned
-   engine (`scripts/windows/engine/prebuilt.json`), launch, tour and installer checks as CI, for x64 and arm64.
+   engine (`scripts/windows/engine/prebuilt.json`), launch, tour and installer checks as CI, for x64 and arm64. The
+   installers it ships are the WebUI shell's (the `webui` and `webui-arm64` jobs).
    `release-files.ps1` names each tested installer `Ardia-<version>-windows-<cpu>-setup.exe` with its `.sha256`, and
    the job leaves them with `Ardia.build.json` in the artifacts `windows-release-x64` and `windows-release-arm64`. Its
    `source` job packs the engine's source, `Ardia-<version>-windows-source.tar.xz` with a `.sha256`, in
@@ -1560,8 +1577,9 @@ folder and refused all 3 launches), the concurrent-runs check (`ports.ps1`) and
 
 ### Selecting the shell and keeping real data out
 
-- `chrome.exe --ardia-shell=webui` turns it on. Without the switch nothing changes: `BeforeChromeMain` still finds
-  `ArdiaApp.dll` and starts React Native Windows.
+- `chrome.exe --ardia-shell=webui` turns it on, and since the cutover (#4142) so does a launch without the switch
+  from a folder with no `ArdiaApp.dll`. `--ardia-shell=rnw`, or no switch with `ArdiaApp.dll` beside the launcher,
+  still makes `BeforeChromeMain` start React Native Windows. A child process (`--type=` with a value) is neither.
 - Order in `BeforeChromeMain` (`main.cc`): the WebUI branch first makes sure Chromium will open the WebUI profile,
   then the test gate runs (as for RNW), then the WebUI branch returns **before** the `ArdiaApp.dll` check. A WebUI start
   never loads the app library, the RNW message hooks, the hosted-window frame or `AskBeforeDiscards`.
@@ -1946,7 +1964,7 @@ advertises and handles `ArdiaTelemetry.post` using `ardia::desktop_telemetry_pol
 
 The WebUI shell ships through the same Inno Setup installer as the React Native shell, from a folder that looks the
 same to Windows: `Ardia.exe`, `chrome.dll` and the engine's files, with `ardia-ui\` and `ardia-webui-migrate.exe` in
-place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below changes what CI ships today.
+place of `ArdiaApp.dll`. Since the cutover (#4142) it is the shell CI, releases and `windows-alpha` ship.
 
 - **Assembly.** `assemble-webui.ps1 -Engine <engine> -Ui apps/desktop/dist/win -Out <dir> -MigrateBin
   <ardia-webui-migrate.exe> -Shippable -Version <v> -Build <n>` renames `chrome.exe` to `Ardia.exe`, gives it Ardia's
@@ -1968,8 +1986,8 @@ place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below
   a missing `Ardia.build.json`. `make-installer.ps1`, `installer-check.ps1`,
   `dependency-check.ps1`, `assemble-webui.ps1` and `upgrade.ps1` all read it, and `shell-layout.test.ps1` checks it
   with the assembler's and the installer's refusals.
-- **Installer.** `make-installer.ps1 -Shell auto|rnw|webui` (auto by default: the folder decides) passes
-  `/DShell=webui` to `Ardia.iss`. That build adds `--ardia-shell=webui` to the Start Menu and desktop shortcuts, the
+- **Installer.** `make-installer.ps1 -Shell auto|rnw|webui` (`webui` by default; `auto` lets the folder decide) passes
+  `/DShell=webui` to `Ardia.iss`, whose own default is also `webui`. That build adds `--ardia-shell=webui` to the Start Menu and desktop shortcuts, the
   launch after setup and the relaunch after an update, `"Ardia.exe" --ardia-shell=webui --single-argument %1` for
   `ArdiaHTM` and `"Ardia.exe" --ardia-shell=webui` for `StartMenuInternet\Ardia`. Switching shells removes only what
   the other shell shipped, and only once this shell is in place. `make-installer.ps1` writes a manifest of every
@@ -2031,8 +2049,8 @@ place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below
   download from a page, a document written, read, found on disk and removed through `ArdiaShell`, a second
   `Ardia.exe --ardia-shell=webui --single-argument <address>` that must open in the running window without a second
   window, and Close with no process left running from the build's folder. Handing an address to a running WebUI shell
-  needs the Wave 5B-3b engine (#4118); until it is pinned that check fails, which is safe because the React Native
-  shell is still the default and the tour doesn't fail the run. It writes `tour-webui-results.json` and `tour-webui.md` (each check,
+  needs the Wave 5B-3b engine (#4118); since the cutover the tour gates the run, so the engine pinned in
+  `prebuilt.json` must carry it. It writes `tour-webui-results.json` and `tour-webui.md` (each check,
   pass or fail, its time and detail). `lib.ps1` takes `PILOT_APP`, `PILOT_RUNS` and `PILOT_PROOF` so the tour also
   runs outside `C:\pilot`, finds `Ardia.exe` when there is no `chrome.exe`, and skips screenshots without ffmpeg.
   Its waits, log and argument quoting live in `webui-pilot/wait.ps1`: `Log` writes `steps.log` and the console but
@@ -2040,17 +2058,23 @@ place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below
   names the last error a check threw, kept through later checks that come back false until one passes, and `wait.test.ps1` checks them and compiles every `Add-Type` in `lib.ps1`,
   `upgrade.ps1` and `tour-webui.ps1` with the default assemblies (PowerShell 7 drops them when
   `-ReferencedAssemblies` is given).
-- **CI.** The `webui` job in `windows.yml` runs on every Windows run, beside the React Native jobs, with the `x64`
-  job's permissions and engine fetch: `shell-layout.test.ps1`, `wait.test.ps1` on PowerShell 7 and Windows PowerShell,
-  `pnpm -C apps/desktop build:win`, `cargo build --release -p ardia-shell-migration --bin
-  ardia-webui-migrate`, the engine, `assemble-webui.ps1 -Shippable` and `dependency-check.ps1`. Full runs (`full-ci`,
-  pushes to `main`, releases) also make `Ardia-Setup-x64.exe` with `-Shell webui`, install and uninstall it with
-  `installer-check.ps1 -Shell webui` and tour a copy of the build marked as a test build (`continue-on-error` until
-  the engine with the WebUI host is pinned). Artifacts: `Ardia-Setup-webui-x64`, `Ardia-windows-webui-x64` and
-  `tour-webui`. `scripts/ci/windows-webui.test.mjs` keeps this wiring and the installer's React Native default in place.
-- **Cutover.** Once the engine that hosts the WebUI shell by default is pinned, the cutover makes the release jobs
-  assemble with `assemble-webui.ps1 -Shippable` in place of `assemble.ps1` (the installer follows the folder) and
-  drops `continue-on-error` from the tour. The upgrade path above is what existing installs then take.
+- **CI.** The `webui` (x64, `windows-latest`) and `webui-arm64` (`windows-11-arm`) jobs in `windows.yml` run the same
+  steps on every Windows run, beside the React Native jobs, with their permissions and engine fetch:
+  `shell-layout.test.ps1` and `wait.test.ps1` on PowerShell 7 and Windows PowerShell (x64), `pnpm -C apps/desktop
+  build:win`, `cargo build --release -p ardia-shell-migration --bin ardia-webui-migrate` (its cache keyed by the
+  runner's CPU), the engine, `assemble-webui.ps1 -Shippable` and `dependency-check.ps1`. Full runs (`full-ci`, pushes
+  to `main`, releases) also make `Ardia-Setup-<cpu>.exe` with `-Shell webui`, install and uninstall it with
+  `installer-check.ps1 -Shell webui`, stamp it with `Ardia.build.json` (`release-files.ps1`) and, on x64, tour a copy
+  of the build marked as a test build; a failed tour fails the run. Artifacts: `Ardia-Setup-<cpu>` (what
+  `publish-alpha.sh <run id>` takes), `Ardia-windows-<cpu>`, `windows-release-<cpu>` when the run has a version, and
+  `tour-webui`. The React Native jobs keep building, launching and touring their shell and upload
+  `Ardia-Setup-rnw-<cpu>` and `Ardia-windows-rnw-<cpu>` for a rollback, but nothing ships them.
+  `scripts/ci/windows-webui.test.mjs` keeps this wiring and the installer's WebUI default in place.
+- **Cutover (#4142).** The release jobs take the WebUI installers, `assemble-webui.ps1` stamps `"shell": "webui"` in
+  `Ardia.build.json`, and `publish-alpha.sh` refuses a build whose stamp isn't the shell it was asked for (`--shell
+  webui` by default; a build with no stamp is a React Native one). The upgrade path above is what existing installs
+  take: the React Native app's updater runs the WebUI installer, which removes the React Native files and starts
+  `Ardia.exe --ardia-shell=webui`, which migrates the user's data before its first window.
 
 ### Linux patches the pilot needed widened to Windows
 

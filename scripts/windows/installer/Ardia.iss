@@ -1,5 +1,5 @@
 #ifndef Shell
-  #define Shell "rnw"
+  #define Shell "webui"
 #endif
 #if Shell == "webui"
   #define LaunchSwitch "--ardia-shell=webui"

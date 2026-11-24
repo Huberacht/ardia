@@ -27,7 +27,7 @@ function triggerPaths(text, event) {
 const steps = (block) => block.split(/\n      - /).slice(1);
 const stepNamed = (block, name) => steps(block).find((step) => step.includes(`name: ${name}\n`));
 
-test("the WebUI job runs beside the React Native jobs, gated like them, on a GitHub Windows runner", () => {
+test("the WebUI jobs run beside the React Native jobs, gated like them, on GitHub's x64 and arm64 Windows runners", () => {
   const blocks = jobBlocks(WORKFLOW);
   const job = blocks.webui;
   assert.ok(job, "windows.yml has a webui job");
@@ -37,17 +37,31 @@ test("the WebUI job runs beside the React Native jobs, gated like them, on a Git
   assert.ok(job.includes("    permissions:\n      contents: write\n"), "the job's token can read the engine's release, as the x64 job's does");
   assert.equal(stepNamed(job, "Fetch the engine"), stepNamed(blocks.x64, "Fetch the engine"), "the engine is fetched exactly as the x64 job fetches it");
   assert.ok(!/concurrency:/.test(job), "the job shares the workflow's concurrency group instead of naming its own");
+  assert.ok(job.includes("    steps: &webui_steps\n"));
+  assert.ok(job.includes("      SLUG: x64\n      TOUR: \"true\"\n"));
+  const arm = blocks["webui-arm64"];
+  assert.ok(arm, "windows.yml has a webui-arm64 job");
+  assert.match(arm, /\n    needs: \[gate, identity\]\n/);
+  assert.ok(arm.includes("    runs-on: windows-11-arm\n"));
+  assert.ok(arm.includes("      SLUG: arm64\n      TOUR: \"false\"\n"));
+  assert.ok(arm.includes("    steps: *webui_steps\n"), "arm64 runs the same steps");
+  assert.equal(arm.split("\n    if: ")[1].split("\n")[0], job.split("\n    if: ")[1].split("\n")[0], "arm64 is gated exactly like x64");
   for (const name of ["app", "arm64-app", "x64", "x64-input", "x64-tour", "x64-tour-first-run", "x64-gate", "arm64", "arm64-gate"]) {
     assert.ok(blocks[name], `the React Native job ${name} is still there`);
     assert.ok(!blocks[name].includes("assemble-webui.ps1"), `${name} still assembles the React Native shell`);
   }
 });
 
-test("the React Native jobs package exactly as before the WebUI packaging", () => {
+test("the React Native jobs still build and package their shell for a rollback, but never ship it", () => {
   const launch = jobBlocks(WORKFLOW).x64;
   assert.ok(launch.includes('run: scripts/windows/assemble.ps1 -App $env:APP -Engine "${{ runner.temp }}/engine" -Out "${{ runner.temp }}/Ardia" -Version $env:VERSION -Build $env:BUILD\n'));
-  assert.ok(launch.includes('run: scripts/windows/make-installer.ps1 -Source "${{ runner.temp }}/Ardia" -Out "${{ runner.temp }}/installer" -Cpu $env:SLUG -Version $env:VERSION\n'));
-  assert.ok(launch.includes('run: scripts/windows/installer-check.ps1 -Setup "${{ runner.temp }}/installer/Ardia-Setup-$env:SLUG.exe"\n'));
+  assert.ok(launch.includes('run: scripts/windows/make-installer.ps1 -Source "${{ runner.temp }}/Ardia" -Out "${{ runner.temp }}/installer" -Cpu $env:SLUG -Version $env:VERSION -Shell rnw\n'));
+  assert.ok(launch.includes('run: scripts/windows/installer-check.ps1 -Setup "${{ runner.temp }}/installer/Ardia-Setup-$env:SLUG.exe" -Shell rnw\n'));
+  assert.ok(launch.includes("name: Ardia-Setup-rnw-${{ env.SLUG }}\n"));
+  assert.ok(launch.includes("name: Ardia-windows-rnw-${{ env.SLUG }}\n"));
+  assert.ok(!launch.includes("windows-release-"), "a release never takes the React Native installers");
+  assert.ok(!launch.includes("release-files.ps1"));
+  assert.ok(!launch.includes("name: Ardia-Setup-${{ env.SLUG }}\n"), "the installer artifact publish-alpha.sh takes is the WebUI one");
 });
 
 test("the WebUI job builds the UI and the migrator, assembles a shippable build and checks it", () => {
@@ -80,14 +94,21 @@ test("the WebUI job builds the UI and the migrator, assembles a shippable build 
   assert.ok(stepNamed(job, "Fetch the engine").includes("github.event.pull_request.head.repo.full_name == github.repository"), "a fork's pull request never gets the engine token");
 });
 
-test("the WebUI installer and tour run on full runs only, and the tour never fails the run", () => {
+test("the WebUI installer runs on full runs and ships; the x64 tour gates the run", () => {
   const job = jobBlocks(WORKFLOW).webui;
   assert.ok(stepNamed(job, "Make the WebUI installer").includes("env.FULL == 'true'"));
   assert.ok(stepNamed(job, "Make the WebUI installer").includes("-Shell webui"));
   assert.ok(stepNamed(job, "Install and uninstall the WebUI build").includes("-Shell webui"));
+  const release = stepNamed(job, "Name it for a release");
+  assert.ok(release.includes('release-files.ps1 -Installer "${{ runner.temp }}/installer-webui" -Identity "${{ runner.temp }}/ArdiaWebUI/Ardia.build.json" -Cpu $env:SLUG'));
+  assert.ok(job.includes("name: Ardia-Setup-${{ env.SLUG }}\n          path: ${{ runner.temp }}/installer-webui\n"), "publish-alpha.sh's Ardia-Setup-<cpu> artifacts are the WebUI installers");
+  assert.ok(job.includes("name: windows-release-${{ env.SLUG }}\n"), "a release takes the WebUI installers");
+  assert.ok(job.includes("name: Ardia-windows-${{ env.SLUG }}\n          path: ${{ runner.temp }}/ArdiaWebUI\n"));
+  assert.match(job, /key: webui-migrate-\$\{\{ runner\.os \}\}-\$\{\{ runner\.arch \}\}-/, "x64 and arm64 never share a migrator build cache");
   const tour = stepNamed(job, "Tour the WebUI build");
   assert.ok(tour.includes("env.FULL == 'true'"));
-  assert.ok(tour.includes("continue-on-error: true\n"));
+  assert.ok(tour.includes("env.TOUR == 'true'"));
+  assert.ok(!tour.includes("continue-on-error"), "a failed WebUI tour fails the run");
   assert.ok(tour.includes("scripts/windows/webui-pilot/tour-webui.ps1"));
   assert.ok(tour.includes('"Ardia.test-build"'), "the tour runs a copy marked as a test build, never the shippable folder");
 });
@@ -98,15 +119,15 @@ test("pushes to main and pull requests start Windows on the same paths, includin
   for (const path of ["apps/desktop/**", "packages/core-rs/crates/ardia-shell-migration/**", "scripts/windows/**"]) assert.ok(pull.includes(path), `${path} starts Windows`);
 });
 
-test("the installer stays the React Native shell's unless make-installer asks for the WebUI shell", () => {
-  assert.match(SCRIPT, /^#ifndef Shell\n {2}#define Shell "rnw"\n#endif\n/);
+test("the installer is the WebUI shell's unless make-installer asks for the React Native shell", () => {
+  assert.match(SCRIPT, /^#ifndef Shell\n {2}#define Shell "webui"\n#endif\n/);
   assert.match(SCRIPT, /#if Shell == "webui"\n {2}#define LaunchSwitch "--ardia-shell=webui"\n {2}#define OpenSuffix " --ardia-shell=webui"\n {2}#define ShellMarker "ardia-ui\\index\.html"\n(?: {2}#define Retired\w+ .*\n)+#else\n {2}#define LaunchSwitch ""\n {2}#define OpenSuffix ""\n {2}#define ShellMarker "ArdiaApp\.dll"\n(?: {2}#define Retired\w+ .*\n)+#endif\n/);
   assert.ok(SCRIPT.includes('ValueData: """{app}\\Ardia.exe""{#OpenSuffix} --single-argument %1"'));
   assert.ok(SCRIPT.includes('Name: "{autoprograms}\\Ardia"; Filename: "{app}\\Ardia.exe"; Parameters: "{#LaunchSwitch}"; IconFilename: "{app}\\Ardia.ico"; AppUserModelID: "Ardia.Browser"'));
   assert.equal((SCRIPT.match(/Parameters: "\{#LaunchSwitch\}"/g) || []).length, 4, "both shortcuts and both launches after setup carry the switch");
   const installer = read("scripts/windows/make-installer.ps1");
   assert.ok(installer.includes('"/DShell=$shellKind"'), "make-installer passes the shell it found");
-  assert.ok(installer.includes('[ValidateSet("auto", "rnw", "webui")][string]$Shell = "auto"'));
+  assert.ok(installer.includes('[ValidateSet("auto", "rnw", "webui")][string]$Shell = "webui"'));
 });
 
 test("switching shells deletes only files the other shell shipped, after this shell is installed, and folders only once empty", () => {
