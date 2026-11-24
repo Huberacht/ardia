@@ -95,6 +95,7 @@ export const SF_SYMBOL_NAMES: Record<SymbolName, SFSymbolName | null> = {
   stopFill: "stop.fill",
   platterBottomArrowDown: "platter.filled.bottom.and.arrow.down.iphone",
   handDrawFill: "hand.draw.fill",
+  paintbrushFill: "paintbrush.fill",
   sidebarLeft: "sidebar.left",
 };
 
