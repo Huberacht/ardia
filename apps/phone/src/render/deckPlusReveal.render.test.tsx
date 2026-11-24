@@ -105,7 +105,7 @@ const animatedField = (root: ReactTestRenderer) => (fieldNode(root).props.jestAn
 
 const searchUiMark = (root: ReactTestRenderer) => {
   const node = root.root.findAll((each) => each.props.testID === "traySearchUiMark" && each.props.jestAnimatedProps !== undefined)[0]!;
-  return { drawn: node.props.drawn as boolean, mark: (node.props.jestAnimatedProps as { value: { mark?: string } }).value.mark ?? "" };
+  return { drawn: node.props.drawn === true, mark: (node.props.jestAnimatedProps as { value: { markWhenShown?: string } }).value.markWhenShown ?? "" };
 };
 
 const fieldOf = (layer: ReactTestInstance) => layer.findAll((node) => node.type === TextInput)[0]!;
@@ -114,7 +114,7 @@ const runJS = () => {
   for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
 };
 
-test("a deck + claimed in the frames after the cut shows the prepared editor in the same UI step that marks deck-hit:plus, focused natively under a drawn-gated search-ui mark, before any JS runs; JS then adopts that very sheet", async () => {
+test("a deck + claimed in the frames after the cut shows the prepared editor in the same UI step that marks deck-hit:plus, focused natively under a search-ui mark shown by the sheet's own opacity, before any JS runs; JS then adopts that very sheet", async () => {
   if (Platform.OS !== "android") return;
   mockNativeField = true;
   const root = await standbyDeck();
@@ -130,7 +130,7 @@ test("a deck + claimed in the frames after the cut shows the prepared editor in 
   expect(standbyShownEarly.value.deckTurn).toBe(deckTurn.live.value);
   expect(sheetShown(root)).toBe(1);
   expect(animatedField(root).revealFocus).toBe(generation);
-  expect(searchUiMark(root)).toEqual({ drawn: true, mark: `search-ui:${generation}` });
+  expect(searchUiMark(root)).toEqual({ drawn: false, mark: `search-ui:${generation}` });
   expect(searchState().open).toBe(false);
   runJS();
   expect(searchState().open).toBe(true);

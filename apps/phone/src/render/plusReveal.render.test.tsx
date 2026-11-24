@@ -311,8 +311,8 @@ test("the native press focuses the waiting editor itself: its reveal generation 
   const fieldNode = () => t.layer().findAll((node) => node.props.jestAnimatedProps !== undefined && typeof node.props.onTypedChange === "function")[0]!;
   expect(revealFocusOf(fieldNode())).toBe(0);
   const markNode = () => t.root.root.findAll((node) => node.props.testID === "traySearchUiMark" && node.props.jestAnimatedProps !== undefined)[0]!;
-  const mark = () => (markNode().props.jestAnimatedProps as { value: { mark?: string } }).value.mark ?? "";
-  expect(markNode().props.drawn).toBe(true);
+  const mark = () => (markNode().props.jestAnimatedProps as { value: { markWhenShown?: string } }).value.markWhenShown ?? "";
+  expect(markNode().props.drawn).toBeUndefined();
   expect(mark()).toBe(`search-ui:${standbyPrepared.value.generation}`);
   t.tap();
   const generation = standbyShownEarly.value.generation;

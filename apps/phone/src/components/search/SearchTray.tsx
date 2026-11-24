@@ -247,7 +247,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     return { pointerEvents: shown ? "box-none" : "none", importantForAccessibility: shown ? "auto" : "no-hide-descendants" };
   });
   const fieldReveal = useDerivedValue(() => (shownNow.value ? armed.value : 0));
-  const shownMark = useAnimatedProps(() => ({ mark: armed.value !== 0 ? `search-ui:${armed.value}` : "" }));
+  const shownMark = useAnimatedProps(() => ({ markWhenShown: armed.value !== 0 ? `search-ui:${armed.value}` : "" }));
   useAnimatedReaction(
     () => (shownNow.value && revealed.value !== armed.value ? armed.value : 0),
     (early, was) => {
@@ -586,7 +586,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     <DepartContext.Provider value={beginDeparture}>
     <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, bornStandby ? revealStyle : null]} animatedProps={bornStandby ? revealProps : undefined} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
       {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
-      {bornStandby ? <UiFrameMark testID="traySearchUiMark" drawn style={uiFrameMarkStyle} animatedProps={shownMark} /> : null}
+      {bornStandby ? <UiFrameMark testID="traySearchUiMark" style={[uiFrameMarkStyle, revealStyle]} animatedProps={shownMark} /> : null}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable
           accessibilityLabel="Close Search"
