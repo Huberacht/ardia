@@ -1,3 +1,5 @@
+import { SPONSOR_FIELD } from "./sponsors.mjs";
+
 export const MONTHLY_MIN_DOLLARS = 1;
 export const MONTHLY_MAX_DOLLARS = 10_000;
 export const DONATE_PRODUCT = "prod_Vfh8KWt8NYQmm0";
@@ -19,6 +21,12 @@ export function monthlySessionForm(dollars, { product, returnUrl }) {
     "line_items[0][price_data][recurring][interval]": "month",
     "subscription_data[metadata][donate]": "monthly_custom",
     "metadata[donate]": "monthly_custom",
+    "custom_fields[0][key]": SPONSOR_FIELD.key,
+    "custom_fields[0][type]": "text",
+    "custom_fields[0][optional]": "true",
+    "custom_fields[0][label][type]": "custom",
+    "custom_fields[0][label][custom]": SPONSOR_FIELD.label,
+    "custom_fields[0][text][maximum_length]": String(SPONSOR_FIELD.maxLength),
     success_url: `${returnUrl}/?donated=monthly#donate`,
     cancel_url: `${returnUrl}/#donate`,
   });
