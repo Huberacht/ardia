@@ -135,12 +135,7 @@ function SheetTray() {
     presence.current = next;
     redraw((count) => count + 1);
   };
-  return (
-    <>
-      <TrayLayer key={presentation.current} session={shown} closing={target === null} onClosed={closed} />
-      {standby}
-    </>
-  );
+  return <TrayLayer key={presentation.current} session={shown} closing={target === null} onClosed={closed} />;
 }
 
 const STANDBY_SESSION = -1;
@@ -182,7 +177,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const hasLanded = useSharedValue(arrivesAtRest || cutsIn);
   const isClosing = useSharedValue(closing);
   const dim = useSharedValue(cutsIn ? 1 : 0);
-  const pinned = useSharedValue(cutsIn && keyboard.full.value > TRAY_LIFT.keyboardThreshold);
+  const pinned = useSharedValue(cutsIn);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -234,7 +229,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     landing.value = landed ? 1 : 0;
     if (cutsIn) {
       dim.value = 1;
-      pinned.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold;
+      pinned.value = true;
       if (!arrivesAtRest && searchState().arrival === "atRest") launchTrayUp();
       const unpin = setTimeout(() => {
         pinned.value = false;
