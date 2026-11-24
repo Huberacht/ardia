@@ -33,10 +33,15 @@ $ShellOwned = @{
     "Microsoft.WindowsAppRuntime.pri", "WindowsAppRuntime.DeploymentExtensions.OneCore.dll", "WindowsAppRuntime.png",
     "WindowsAppSdk.AppxDeploymentExtensions.Desktop-EventLog-Instrumentation.dll", "WindowsAppSdk.AppxDeploymentExtensions.Desktop.dll",
     "workloads.json", "workloads.365.json", "workloads.j32.json", "workloads.lnl.json", "workloads.qnn.json", "workloads.stx.json",
-    "Bundle\", "Microsoft.UI.Xaml\", "NpuDetect\",
-    "*\Microsoft.ui.xaml.dll.mui", "*\Microsoft.UI.Xaml.Phone.dll.mui"
+    "Bundle\index.windows.bundle", "Microsoft.UI.Xaml\Assets\map.html", "Microsoft.UI.Xaml\Assets\NoiseAsset_256X256_PNG.png",
+    "NpuDetect\NPUDetect.dll", "*\Microsoft.ui.xaml.dll.mui", "*\Microsoft.UI.Xaml.Phone.dll.mui"
   )
-  webui = @("ardia-ui\", "ardia-webui-migrate.exe")
+  webui = @("ardia-ui\index.html", "ardia-webui-migrate.exe")
+}
+
+$ShellOwnedFolders = @{
+  rnw = @("Bundle", "Microsoft.UI.Xaml", "NpuDetect")
+  webui = @("ardia-ui")
 }
 
 $ShellKept = @("Ardia.exe", "Ardia.ico", "Ardia.build.json", "chrome.dll", "chrome_elf.dll", "locales\", "unins000.exe", "unins000.dat")
@@ -51,7 +56,19 @@ function Get-ShellOwnedEntries([string]$shell) {
   return ,$ShellOwned[$shell]
 }
 
-function Find-ShellOwnedEntries([string]$root, [string]$shell) {
+function Get-ShellManifestName([string]$shell) {
+  if (-not $ShellOwned.ContainsKey($shell)) { throw "'$shell' is not a shell: rnw or webui" }
+  return "ardia-$shell-files.txt"
+}
+
+function Get-RelativeFiles([string]$root, [string]$folder) {
+  $base = (Resolve-Path -LiteralPath $root).Path.TrimEnd('\', '/')
+  $path = Join-Path $base $folder
+  if (-not (Test-Path -LiteralPath $path -PathType Container)) { return ,@() }
+  ,@(Get-ChildItem -LiteralPath $path -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($base.Length + 1).Replace('/', '\') })
+}
+
+function Find-OwnedFiles([string]$root, [string]$shell) {
   $found = @()
   foreach ($entry in (Get-ShellOwnedEntries $shell)) {
     if ($entry.StartsWith("*\")) {
@@ -59,18 +76,42 @@ function Find-ShellOwnedEntries([string]$root, [string]$shell) {
       foreach ($folder in @(Get-ChildItem -LiteralPath $root -Directory -Force -ErrorAction SilentlyContinue)) {
         if (Test-Path -LiteralPath (Join-Path $folder.FullName $name) -PathType Leaf) { $found += "$($folder.Name)\$name" }
       }
-    } elseif ($entry.EndsWith("\")) {
-      if (Test-Path -LiteralPath (Join-Path $root $entry.TrimEnd("\")) -PathType Container) { $found += $entry }
     } elseif (Test-Path -LiteralPath (Join-Path $root $entry) -PathType Leaf) {
       $found += $entry
     }
   }
-  return ,$found
+  ,$found
+}
+
+function Get-ShellShippedFiles([string]$root, [string]$shell) {
+  $files = @()
+  $files += Find-OwnedFiles $root $shell
+  foreach ($folder in $ShellOwnedFolders[$shell]) { $files += Get-RelativeFiles $root $folder }
+  ,@($files | Sort-Object -Unique)
+}
+
+function Write-Lines([string]$path, [string[]]$lines) {
+  [System.IO.File]::WriteAllText($path, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding $false))
+}
+
+function Write-ShellManifest([string]$root, [string]$shell, [string]$path) {
+  $files = Get-ShellShippedFiles $root $shell
+  if (-not $files.Count) { throw "'$root' ships none of the $shell shell's own files" }
+  Write-Lines $path $files
+}
+
+function Find-ShellOwnedEntries([string]$root, [string]$shell) {
+  $files = Find-OwnedFiles $root $shell
+  $found = @($files | Where-Object { $entry = $_; -not ($ShellOwnedFolders[$shell] | Where-Object { $entry.StartsWith("$_\") }) })
+  foreach ($folder in $ShellOwnedFolders[$shell]) {
+    if (Test-Path -LiteralPath (Join-Path $root $folder) -PathType Container) { $found += "$folder\" }
+  }
+  if (Test-Path -LiteralPath (Join-Path $root (Get-ShellManifestName $shell)) -PathType Leaf) { $found += Get-ShellManifestName $shell }
+  ,$found
 }
 
 function Write-RetiredShellList([string]$shell, [string]$path) {
-  $lines = Get-ShellOwnedEntries (Get-OtherShell $shell)
-  [System.IO.File]::WriteAllText($path, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding $false))
+  Write-Lines $path (Get-ShellOwnedEntries (Get-OtherShell $shell))
 }
 
 function Get-ShellLayout([string]$root) {
@@ -115,8 +156,8 @@ function Get-ShellDocumentCommand([string]$exe, [string]$shell) {
 }
 
 function Get-ShellInstalledFiles([string]$shell) {
-  if ($shell -eq "webui") { return @($ShellLayout.Launcher, $ShellLayout.Engine, "Ardia.ico", "Ardia.build.json", "unins000.exe", $ShellLayout.UiEntry, $ShellLayout.Migrator) }
-  return @($ShellLayout.Launcher, $ShellLayout.RnwLibrary, $ShellLayout.Engine, "Ardia.ico", "Ardia.build.json", "unins000.exe")
+  if ($shell -eq "webui") { return @($ShellLayout.Launcher, $ShellLayout.Engine, "Ardia.ico", "Ardia.build.json", "unins000.exe", $ShellLayout.UiEntry, $ShellLayout.Migrator, (Get-ShellManifestName "webui")) }
+  return @($ShellLayout.Launcher, $ShellLayout.RnwLibrary, $ShellLayout.Engine, "Ardia.ico", "Ardia.build.json", "unins000.exe", (Get-ShellManifestName "rnw"))
 }
 
 function Find-TestMarkers([string]$root) {

@@ -69,7 +69,10 @@ try {
   Write-Host "make-installer: using $iscc"
   $retired = Join-Path $scratch "retired-shell.txt"
   Write-RetiredShellList $shellKind $retired
-  & $iscc "/Q" "/DSource=$sourceRoot" "/DOut=$outRoot" "/DCpu=$Cpu" "/DAllowed=$($allowed[$Cpu])" "/DVersion=$Version" "/DIcon=$icon" "/DShell=$shellKind" "/DRetiredList=$retired" $script
+  $manifest = Join-Path $scratch (Get-ShellManifestName $shellKind)
+  Write-ShellManifest $sourceRoot $shellKind $manifest
+  Write-Host "make-installer: the $shellKind shell ships $(@(Get-Content -LiteralPath $manifest | Where-Object { $_ }).Count) files of its own, listed in $(Get-ShellManifestName $shellKind)"
+  & $iscc "/Q" "/DSource=$sourceRoot" "/DOut=$outRoot" "/DCpu=$Cpu" "/DAllowed=$($allowed[$Cpu])" "/DVersion=$Version" "/DIcon=$icon" "/DShell=$shellKind" "/DRetiredList=$retired" "/DShellManifest=$manifest" $script
   if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE" }
   $setup = Join-Path $outRoot "Ardia-Setup-$Cpu.exe"
   if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "ISCC wrote no $setup" }

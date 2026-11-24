@@ -197,7 +197,7 @@ function Run-Rnw([int]$Milliseconds) {
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
-  $script:Launched.Add($started.Id)
+  Track-Launched $started
   Hold $Milliseconds
   $alive = -not $started.HasExited
   $mine = Rnw-Tree $started.Id
@@ -226,7 +226,21 @@ $installedPrefix = "Ardia Connected Accounts [$rnwInstalled]/"
 $installedKeyPurpose = 'ardia-sync-key/v1/acct1'
 $installedSecretPurpose = 'ardia-connected-account/v1/'
 $exitIncomplete = 75
-$Launched = New-Object System.Collections.Generic.List[int]
+$Launched = New-Object System.Collections.Generic.List[object]
+
+function Track-Launched($process) {
+  $start = $null
+  try { $start = $process.StartTime } catch {}
+  $script:Launched.Add([pscustomobject]@{ Id = $process.Id; Start = $start })
+}
+
+function Under-Folder($process, [string[]]$folders) {
+  if (-not $process.ExecutablePath) { return $false }
+  foreach ($folder in $folders) {
+    if ($folder -and $process.ExecutablePath.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  $false
+}
 
 function Prior-Ardia {
   $found = @()
@@ -235,7 +249,7 @@ function Prior-Ardia {
   if (Test-Path -LiteralPath 'HKCU:\Software\Clients\StartMenuInternet\Ardia') { $found += 'StartMenuInternet\Ardia' }
   if (Test-Path -LiteralPath 'HKCU:\Software\Classes\ArdiaHTM') { $found += 'the ArdiaHTM ProgID' }
   $userData = Join-Path $env:LOCALAPPDATA 'Ardia\User Data'
-  if (Get-ChildItem -LiteralPath $userData -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1) { $found += "a profile in $userData" }
+  if (Test-Path -LiteralPath $userData) { $found += $userData }
   $webuiData = Join-Path $env:LOCALAPPDATA 'Ardia WebUI'
   if (Test-Path -LiteralPath $webuiData) { $found += $webuiData }
   ,$found
@@ -249,12 +263,19 @@ function Installed-Processes {
 
 function Stop-Launched {
   $stopped = 0
-  foreach ($root in @($script:Launched)) {
+  $folders = @($installDir, $RnwApp) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
+  foreach ($tracked in @($script:Launched)) {
+    $live = Get-Process -Id $tracked.Id -ErrorAction SilentlyContinue
+    $sameStart = $false
+    if ($live -and $tracked.Start) { try { $sameStart = $live.StartTime -eq $tracked.Start } catch {} }
+    if (-not $sameStart) { continue }
     try {
-      foreach ($process in (Rnw-Tree $root)) {
-        if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue; $stopped++ }
+      foreach ($process in (Rnw-Tree $tracked.Id)) {
+        if ($process.ProcessId -ne $tracked.Id -and -not (Under-Folder $process $folders)) { continue }
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        $stopped++
       }
-    } catch { Log "the processes started from $root could not be listed: $($_.Exception.Message)" }
+    } catch { Log "the processes started from $($tracked.Id) could not be listed: $($_.Exception.Message)" }
   }
   if ($installed) {
     try {
@@ -308,7 +329,7 @@ function Start-Installed([string]$data, [string[]]$extra) {
   }
   $null = $process.Handle
   [Pilot]::Roots.Add($process.Id) | Out-Null
-  $script:Launched.Add($process.Id)
+  Track-Launched $process
   $process
 }
 
@@ -335,7 +356,7 @@ function Run-InstalledRnw([string]$data, [int]$Milliseconds) {
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
-  $script:Launched.Add($started.Id)
+  Track-Launched $started
   Hold $Milliseconds
   $alive = -not $started.HasExited
   $closed = Close-Tree $started.Id

@@ -100,7 +100,7 @@ test("pushes to main and pull requests start Windows on the same paths, includin
 
 test("the installer stays the React Native shell's unless make-installer asks for the WebUI shell", () => {
   assert.match(SCRIPT, /^#ifndef Shell\n {2}#define Shell "rnw"\n#endif\n/);
-  assert.match(SCRIPT, /#if Shell == "webui"\n {2}#define LaunchSwitch "--ardia-shell=webui"\n {2}#define OpenSuffix " --ardia-shell=webui"\n {2}#define ShellMarker "ardia-ui\\index\.html"\n#else\n {2}#define LaunchSwitch ""\n {2}#define OpenSuffix ""\n {2}#define ShellMarker "ArdiaApp\.dll"\n#endif\n/);
+  assert.match(SCRIPT, /#if Shell == "webui"\n {2}#define LaunchSwitch "--ardia-shell=webui"\n {2}#define OpenSuffix " --ardia-shell=webui"\n {2}#define ShellMarker "ardia-ui\\index\.html"\n(?: {2}#define Retired\w+ .*\n)+#else\n {2}#define LaunchSwitch ""\n {2}#define OpenSuffix ""\n {2}#define ShellMarker "ArdiaApp\.dll"\n(?: {2}#define Retired\w+ .*\n)+#endif\n/);
   assert.ok(SCRIPT.includes('ValueData: """{app}\\Ardia.exe""{#OpenSuffix} --single-argument %1"'));
   assert.ok(SCRIPT.includes('Name: "{autoprograms}\\Ardia"; Filename: "{app}\\Ardia.exe"; Parameters: "{#LaunchSwitch}"; IconFilename: "{app}\\Ardia.ico"; AppUserModelID: "Ardia.Browser"'));
   assert.equal((SCRIPT.match(/Parameters: "\{#LaunchSwitch\}"/g) || []).length, 4, "both shortcuts and both launches after setup carry the switch");
@@ -109,18 +109,27 @@ test("the installer stays the React Native shell's unless make-installer asks fo
   assert.ok(installer.includes('[ValidateSet("auto", "rnw", "webui")][string]$Shell = "auto"'));
 });
 
-test("switching shells removes only the other shell's own files, and only after this shell's files are installed", () => {
-  assert.ok(!/\[InstallDelete\]|ssInstall\b/.test(SCRIPT), "nothing is deleted before the new files are copied");
-  assert.ok(!SCRIPT.includes("RemoveReactNativeShell"), "no step empties the install folder");
-  assert.match(SCRIPT, /#if Shell == "webui"\n(?: {2}#define \w+ .*\n)*? {2}#define ShellMarker "ardia-ui\\index\.html"\n/);
-  assert.match(SCRIPT, /#else\n(?: {2}#define \w+ .*\n)*? {2}#define ShellMarker "ArdiaApp\.dll"\n/);
+test("switching shells deletes only files the other shell shipped, after this shell is installed, and folders only once empty", () => {
+  assert.ok(!/\[InstallDelete\]|DelTree|RemoveReactNativeShell/.test(SCRIPT), "nothing removes a folder with what's inside it, or anything before the copy");
+  assert.match(SCRIPT, /#if Shell == "webui"\n(?: {2}#define \w+ .*\n)*? {2}#define RetiredShell "rnw"\n {2}#define RetiredMarker "ArdiaApp\.dll"\n/);
+  assert.match(SCRIPT, /#else\n(?: {2}#define \w+ .*\n)*? {2}#define RetiredShell "webui"\n {2}#define RetiredMarker "ardia-ui\\index\.html"\n {2}#define RetiredMarkerAlt "ardia-webui-migrate\.exe"\n/);
+  assert.ok(SCRIPT.includes('#ifdef ShellManifest\nSource: "{#ShellManifest}"; DestDir: "{app}"; DestName: "ardia-{#Shell}-files.txt"; Flags: ignoreversion\n#endif'), "each install carries the list of files its shell shipped");
   assert.ok(SCRIPT.includes('#ifdef RetiredList\nSource: "{#RetiredList}"; DestName: "retired-shell.txt"; Flags: dontcopy\n#endif'));
+  const hook = SCRIPT.slice(SCRIPT.indexOf("procedure CurStepChanged"));
+  assert.ok(hook.includes("if CurStep = ssInstall then\n    RetiredShellFound := FileExists(ExpandConstant('{app}\\{#RetiredMarker}'))"), "the other shell is noted before anything is copied");
+  assert.ok(hook.includes("else if CurStep = ssPostInstall then\n    RemoveRetiredShell;"), "its files go only after this shell's are installed");
   const cleanup = SCRIPT.slice(SCRIPT.indexOf("procedure RemoveRetiredShell;"));
+  assert.ok(cleanup.includes("if not RetiredShellFound then Exit;"));
   assert.ok(cleanup.includes("if not FileExists(Folder + '\\{#ShellMarker}') then"), "the cleanup waits for this shell's marker");
-  assert.ok(cleanup.includes("LoadStringsFromFile(ExpandConstant('{tmp}\\retired-shell.txt'), Entries)"), "it removes only the listed entries");
-  assert.ok(cleanup.includes("(Pos('..', Entry) > 0) or (Pos(':', Entry) > 0)"), "an entry can't leave the install folder");
-  assert.ok(SCRIPT.includes("if CurStep = ssPostInstall then\n    RemoveRetiredShell;"));
+  assert.ok(cleanup.indexOf("if FileExists(Manifest) then") < cleanup.indexOf("ExtractTemporaryFile('retired-shell.txt')"), "the other shell's own manifest comes first, the fixed list only for installs without one");
+  assert.ok(SCRIPT.includes("(Pos('..', Entry) = 0) and (Pos(':', Entry) = 0) and (Pos('/', Entry) = 0) and (Copy(Entry, 1, 1) <> '\\')"), "an entry can't leave the install folder");
+  assert.ok(SCRIPT.includes("if DeleteFile(Path) then\n    Removed.Add(Path)"), "only listed files are deleted");
+  assert.ok(SCRIPT.includes("if not RemoveDir(Dir) then Exit;"), "folders go bottom up, only once empty");
   const layout = read("scripts/windows/shell-layout.ps1");
-  assert.ok(layout.includes('webui = @("ardia-ui\\", "ardia-webui-migrate.exe")'));
-  assert.ok(read("scripts/windows/make-installer.ps1").includes('Write-RetiredShellList $shellKind $retired'));
+  assert.ok(layout.includes('webui = @("ardia-ui\\index.html", "ardia-webui-migrate.exe")'));
+  assert.ok(layout.includes('webui = @("ardia-ui")'));
+  const installer = read("scripts/windows/make-installer.ps1");
+  assert.ok(installer.includes("Write-RetiredShellList $shellKind $retired"));
+  assert.ok(installer.includes("Write-ShellManifest $sourceRoot $shellKind $manifest"));
+  assert.ok(installer.includes('"/DShellManifest=$manifest"'));
 });

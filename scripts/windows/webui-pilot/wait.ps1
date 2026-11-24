@@ -11,7 +11,7 @@ function Log([string]$line) {
 function Test-Condition([scriptblock]$Condition) {
   try {
     $value = & $Condition
-    $script:WaitFailure = $null
+    if ($value) { $script:WaitFailure = $null }
     $value
   } catch {
     $script:WaitFailure = $_.Exception.Message
@@ -38,11 +38,12 @@ function Wait-Until([scriptblock]$Condition, [double]$Seconds = 10, [string]$Wha
 
 function Never([scriptblock]$Condition, [double]$Seconds = 3) {
   $deadline = (Get-Date).AddSeconds($Seconds)
+  $script:WaitFailure = $null
   while ((Get-Date) -lt $deadline) {
     if (Test-Condition $Condition) { return $false }
     Start-Sleep -Milliseconds 100
   }
-  if ($script:WaitFailure) { Log "every check of $Seconds s threw, last: $($script:WaitFailure)" }
+  if ($script:WaitFailure) { Log "a check in $Seconds s threw: $($script:WaitFailure)" }
   $true
 }
 

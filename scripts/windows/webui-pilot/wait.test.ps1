@@ -28,6 +28,11 @@ try {
   Check "Wait-Until checks again until the condition holds" $true ([bool](Wait-Until { $script:calls++; $script:calls -ge 3 } 5 'the third check'))
   Check-Throws "Wait-Until throws on a timeout and names what it waited for" "timed out after 0.3 s waiting for the page" { Wait-Until { $false } 0.3 'the page' }
   Check-Throws "Wait-Until names the last error a check threw" "the last check threw: CDP connect timed out" { Wait-Until { throw 'CDP connect timed out' } 0.3 'the page' }
+  $calls = 0
+  Check-Throws "an error a check threw is still named after later checks come back false" "the last check threw: CDP connect refused" { Wait-Until { if ($script:calls++ -eq 0) { throw 'CDP connect refused' } $false } 0.5 'the page' }
+  $calls = 0
+  Check "Wait-Until -NoThrow keeps the thrown error after false checks" "CDP connect refused" "$(Wait-Until { if ($script:calls++ -eq 0) { throw 'CDP connect refused' } $false } 0.5 'the page' -NoThrow; $WaitFailure)"
+  $calls = 0
   Check "Wait-Until forgets an error once a check passes" $true ([bool](Wait-Until { if ($script:calls++ -lt 5) { throw 'early' } $true } 5 'a late success'))
   Check "a passing check clears the last error" "" "$WaitFailure"
 
