@@ -610,7 +610,7 @@ export function deckMotionDone(id: string) {
   void takeDeckCapture(latched).then(enter);
 }
 
-export function deckPullBegan(id: string, tracked = true) {
+export function deckPullBegan(id: string, tracked = true, captureLater = false) {
   const tab = findTab(currentTabs(), id);
   if (tab?.snapshotFileName) noteSnapshotShown(tab.snapshotFileName);
   if (tracked) {
@@ -618,8 +618,9 @@ export function deckPullBegan(id: string, tracked = true) {
     pullBusySince = Date.now();
     beginInteraction(PULL_PERF, INTERACTION_WINDOW_MS.deckPull);
   }
-  if (PULL_COPIES_PAGE) latchDeckCapture(id, pageCovered(), PULLED_PAGE_TOP, false);
-  else deckCapture = null;
+  if (!PULL_COPIES_PAGE) deckCapture = null;
+  else if (captureLater) requestAnimationFrame(() => latchDeckCapture(id, pageCovered(), PULLED_PAGE_TOP, false));
+  else latchDeckCapture(id, pageCovered(), PULLED_PAGE_TOP, false);
 }
 
 export function deckPullReleased(id: string, lands: boolean) {
@@ -650,9 +651,17 @@ function landDeckFromRest(id: string) {
       enterDeck();
       return;
     }
+    if (tabSwitchCuts()) {
+      traceSlice("deck cut");
+      runOnUI(cutDeckPullFromRest)(id, deckPullSettled, deckPullRefused);
+      deckPullBegan(id, false, true);
+      beginInteraction(PULL_LANDING_PERF, INTERACTION_WINDOW_MS.deckPullLanding);
+      runOnUI(markNextUiFrame)("deck motion");
+      runOnUI(markNextUiFrame)("deck takes taps");
+      return;
+    }
     deckPullBegan(id, false);
     beginInteraction(PULL_LANDING_PERF, INTERACTION_WINDOW_MS.deckPullLanding);
-    if (tabSwitchCuts()) traceSlice("deck cut");
     runOnUI(tabSwitchCuts() ? cutDeckPullFromRest : deckPullFades() ? (cardShowsPicture(id) ? fadeDeckPullFromRest : cutDeckPullFromRest) : landDeckPullFromRest)(id, deckPullSettled, deckPullRefused);
     runOnUI(markNextUiFrame)("deck motion");
     runOnUI(markNextUiFrame)("deck takes taps");
