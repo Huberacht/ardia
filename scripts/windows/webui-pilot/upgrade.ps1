@@ -167,18 +167,6 @@ function All-Processes {
   }
 }
 
-function Rnw-Tree([int]$root) {
-  $all = All-Processes
-  $tree = @{ $root = $true }
-  do {
-    $grew = $false
-    foreach ($process in $all) {
-      if ($tree.ContainsKey([int]$process.ParentProcessId) -and -not $tree.ContainsKey([int]$process.ProcessId)) { $tree[[int]$process.ProcessId] = $true; $grew = $true }
-    }
-  } while ($grew)
-  @($all | Where-Object { $tree.ContainsKey([int]$_.ProcessId) })
-}
-
 function Rnw-Running {
   $folder = (Resolve-Path -LiteralPath $RnwApp -ErrorAction Stop).Path.TrimEnd('\') + '\'
   $all = All-Processes
@@ -189,6 +177,64 @@ function Rnw-Running {
   @($all | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($folder, [StringComparison]::OrdinalIgnoreCase) })
 }
 
+function Allowed-Roots {
+  @($installDir, $RnwApp) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
+}
+
+function Under-Folder($process, [string[]]$folders) {
+  if (-not $process.ExecutablePath) { return $false }
+  foreach ($folder in $folders) {
+    if ($folder -and $process.ExecutablePath.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  $false
+}
+
+function Track-Launched($process) {
+  $snapshot = $null
+  try { $snapshot = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$process.Id)" -ErrorAction Stop } catch {}
+  $tracked = [pscustomobject]@{ Id = [int]$process.Id; Created = $(if ($snapshot) { $snapshot.CreationDate } else { $null }) }
+  $script:Launched.Add($tracked)
+  $tracked
+}
+
+function Tracked-For($process) {
+  @($script:Launched | Where-Object { $_.Id -eq [int]$process.Id }) | Select-Object -Last 1
+}
+
+function Verified-Tree($tracked) {
+  if (-not $tracked -or -not $tracked.Created) { return ,@() }
+  $all = All-Processes
+  $roots = Allowed-Roots
+  $root = $all | Where-Object { [int]$_.ProcessId -eq $tracked.Id } | Select-Object -First 1
+  if ($root -and $root.CreationDate -ne $tracked.Created) { return ,@() }
+  $tree = @{ $tracked.Id = $true }
+  do {
+    $grew = $false
+    foreach ($process in $all) {
+      $id = [int]$process.ProcessId
+      if ($tree.ContainsKey($id) -or -not $tree.ContainsKey([int]$process.ParentProcessId)) { continue }
+      if ($process.CreationDate -lt $tracked.Created -or -not (Under-Folder $process $roots)) { continue }
+      $tree[$id] = $true
+      $grew = $true
+    }
+  } while ($grew)
+  ,@($all | Where-Object { $tree.ContainsKey([int]$_.ProcessId) -and (Under-Folder $_ $roots) })
+}
+
+function Stop-VerifiedProcess($process) {
+  $id = [int]$process.ProcessId
+  $live = Get-CimInstance Win32_Process -Filter "ProcessId = $id" -ErrorAction SilentlyContinue
+  if (-not $live -or $live.CreationDate -ne $process.CreationDate -or -not (Under-Folder $live (Allowed-Roots))) { return $false }
+  Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+  $true
+}
+
+function Stop-VerifiedTree($tracked) {
+  $stopped = 0
+  foreach ($process in (Verified-Tree $tracked)) { if (Stop-VerifiedProcess $process) { $stopped++ } }
+  $stopped
+}
+
 function Run-Rnw([int]$Milliseconds) {
   $env:ARDIA_DATA_DIR = $rnw
   $env:ARDIA_BACKGROUND = '1'
@@ -197,12 +243,11 @@ function Run-Rnw([int]$Milliseconds) {
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
-  Track-Launched $started
+  $tracked = Track-Launched $started
   Hold $Milliseconds
   $alive = -not $started.HasExited
-  $mine = Rnw-Tree $started.Id
-  $mine | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-  Wait-Until { @(Rnw-Tree $started.Id | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -eq 0 } 20 'the RNW processes this run started to exit' -NoThrow | Out-Null
+  Stop-VerifiedTree $tracked | Out-Null
+  Wait-Until { (Verified-Tree $tracked).Count -eq 0 } 20 'the RNW processes this run started to exit' -NoThrow | Out-Null
   $alive
 }
 
@@ -228,20 +273,6 @@ $installedSecretPurpose = 'ardia-connected-account/v1/'
 $exitIncomplete = 75
 $Launched = New-Object System.Collections.Generic.List[object]
 
-function Track-Launched($process) {
-  $start = $null
-  try { $start = $process.StartTime } catch {}
-  $script:Launched.Add([pscustomobject]@{ Id = $process.Id; Start = $start })
-}
-
-function Under-Folder($process, [string[]]$folders) {
-  if (-not $process.ExecutablePath) { return $false }
-  foreach ($folder in $folders) {
-    if ($folder -and $process.ExecutablePath.StartsWith($folder.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
-  }
-  $false
-}
-
 function Prior-Ardia {
   $found = @()
   if (Test-Path -LiteralPath $uninstallEntry) { $found += 'its uninstall entry' }
@@ -263,23 +294,12 @@ function Installed-Processes {
 
 function Stop-Launched {
   $stopped = 0
-  $folders = @($installDir, $RnwApp) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
   foreach ($tracked in @($script:Launched)) {
-    $live = Get-Process -Id $tracked.Id -ErrorAction SilentlyContinue
-    $sameStart = $false
-    if ($live -and $tracked.Start) { try { $sameStart = $live.StartTime -eq $tracked.Start } catch {} }
-    if (-not $sameStart) { continue }
-    try {
-      foreach ($process in (Rnw-Tree $tracked.Id)) {
-        if ($process.ProcessId -ne $tracked.Id -and -not (Under-Folder $process $folders)) { continue }
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
-        $stopped++
-      }
-    } catch { Log "the processes started from $($tracked.Id) could not be listed: $($_.Exception.Message)" }
+    try { $stopped += Stop-VerifiedTree $tracked } catch { Log "the processes started from $($tracked.Id) could not be listed: $($_.Exception.Message)" }
   }
   if ($installed) {
     try {
-      foreach ($process in (Installed-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue; $stopped++ }
+      foreach ($process in (Installed-Processes)) { if (Stop-VerifiedProcess $process) { $stopped++ } }
     } catch { Log "the processes running from $installDir could not be listed: $($_.Exception.Message)" }
   }
   $stopped
@@ -329,7 +349,7 @@ function Start-Installed([string]$data, [string[]]$extra) {
   }
   $null = $process.Handle
   [Pilot]::Roots.Add($process.Id) | Out-Null
-  Track-Launched $process
+  Track-Launched $process | Out-Null
   $process
 }
 
@@ -339,12 +359,13 @@ function Exit-Code($process, [int]$seconds) {
   'timeout'
 }
 
-function Close-Tree([int]$root, [int]$seconds = 20) {
-  $pids = @(Rnw-Tree $root | ForEach-Object { [int]$_.ProcessId })
+function Close-Tree($process, [int]$seconds = 20) {
+  $tracked = Tracked-For $process
+  $pids = @(Verified-Tree $tracked | ForEach-Object { [int]$_.ProcessId })
   $posted = if ($pids.Count) { [RnwWindows]::Close([int[]]$pids) } else { 0 }
-  $gone = Wait-Until { @(Rnw-Tree $root | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count -eq 0 } $seconds 'the app to close its windows and exit' -NoThrow
-  $left = @(Rnw-Tree $root)
-  $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  $gone = Wait-Until { (Verified-Tree $tracked).Count -eq 0 } $seconds 'the app to close its windows and exit' -NoThrow
+  $left = Verified-Tree $tracked
+  foreach ($stray in $left) { Stop-VerifiedProcess $stray | Out-Null }
   [pscustomobject]@{ posted = $posted; clean = ([bool]$gone -and $posted -gt 0); left = $left.Count }
 }
 
@@ -356,10 +377,10 @@ function Run-InstalledRnw([string]$data, [int]$Milliseconds) {
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
-  Track-Launched $started
+  Track-Launched $started | Out-Null
   Hold $Milliseconds
   $alive = -not $started.HasExited
-  $closed = Close-Tree $started.Id
+  $closed = Close-Tree $started
   [pscustomobject]@{ alive = $alive; clean = $closed.clean; posted = $closed.posted; left = $closed.left }
 }
 
@@ -397,6 +418,31 @@ function Test-ForcedFailure([string]$name, [string[]]$extra, [scriptblock]$prepa
   Check "forced-failure-$name" (("$code" -eq "$exitIncomplete") -and -not $opened -and -not $markerLeft -and $untouched -and [bool]$stray) "$what`: exit $code of the launched process itself (want $exitIncomplete), window opened $opened, marker written $markerLeft, RNW profile and outside folder unchanged $untouched, processes left running: $(if ($left.Count) { $left -join ', ' } else { 'none' })"
 }
 
+function Test-SameShellUpdate {
+  $manifest = Join-Path $installDir (Get-ShellManifestName 'webui')
+  $stale = 'ardia-ui\assets\stale-from-last-build.js'
+  $linked = 'ardia-ui\assets\linked-outside'
+  $linkedEntry = "$linked\keep.txt"
+  $userFile = Join-Path $installDir 'ardia-ui\user-notes.txt'
+  $outsideKeep = Join-Path $run 'outside-installed'
+  New-Item -ItemType Directory -Force $outsideKeep | Out-Null
+  Put "$outsideKeep\keep.txt" (Bytes 'not the installer''s')
+  Put (Join-Path $installDir $stale) (Bytes 'from the last build')
+  Put $userFile (Bytes 'mine')
+  cmd /c mklink /J "$(Join-Path $installDir $linked)" "$outsideKeep" | Out-Null
+  Add-Content -LiteralPath $manifest -Value @($stale, $linkedEntry)
+  $setup = Invoke-Setup $WebUIInstaller
+  $listed = @(Get-Content -LiteralPath $manifest | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $staleGone = -not (Test-Path -LiteralPath (Join-Path $installDir $stale))
+  Check 'same-shell-update-removes-stale-files' ($setup.code -eq 0 -and $staleGone -and $listed -notcontains $stale) "reinstalling the WebUI build: exit $($setup.code); a file only the last build's manifest listed is gone: $staleGone, and dropped from the manifest: $($listed -notcontains $stale)"
+  Check 'same-shell-update-never-follows-links' ((Test-Path -LiteralPath "$outsideKeep\keep.txt") -and ($listed -contains $linkedEntry)) "a manifest entry behind a junction left the outside file alone and stays listed so a later install retries it"
+  Check 'same-shell-update-keeps-unlisted-files' (Test-Path -LiteralPath $userFile) "a file no manifest lists stays in ardia-ui"
+  cmd /c rmdir "$(Join-Path $installDir $linked)" | Out-Null
+  Remove-Item -LiteralPath $userFile -Force -ErrorAction SilentlyContinue
+  $kept = @(Get-Content -LiteralPath $manifest | Where-Object { $_.Trim() -and $_.Trim() -ne $linkedEntry })
+  [IO.File]::WriteAllText($manifest, (($kept -join "`r`n") + "`r`n"), $utf8)
+}
+
 function Test-InstalledUpgrade {
   $pilotApp = $App
   Use-App $installDir
@@ -417,6 +463,9 @@ function Test-InstalledUpgrade {
   Check 'installed-webui-identity' ("$identity" -eq '0') "launcher-identity -Check on the installed Ardia.exe: $identity"
   $entry = Get-ItemProperty -LiteralPath $uninstallEntry -ErrorAction SilentlyContinue
   Check 'installed-webui-uninstall-entry' ($entry -and $entry.DisplayName -eq 'Ardia' -and (Test-Path -LiteralPath (($entry.DisplayIcon -split ',')[0].Trim('"')) -PathType Leaf)) "uninstall entry '$($entry.DisplayName)' $($entry.DisplayVersion), icon '$($entry.DisplayIcon)'"
+  Test-SameShellUpdate
+  $sameShell = Get-ShellLayoutProblems $installDir 'webui'
+  Check 'same-shell-update-layout' ($sameShell.Count -eq 0) "the WebUI install after the update and the cleanup of its test files: $(if ($sameShell.Count) { $sameShell -join '; ' } else { 'no problems' })"
 
   Test-ForcedFailure 'incomplete-request' @('--ardia-migrate-from-rnw') $null '--ardia-migrate-from-rnw under ARDIA_DATA_DIR without --ardia-migrate-rnw-data'
   Test-ForcedFailure 'junction-target' @('--ardia-migrate-from-rnw', "--ardia-migrate-rnw-data=$rnwInstalled") { param($data) cmd /c mklink /J "$data\Secrets" "$outside" | Out-Null } 'a junction at Secrets in the WebUI folder'
@@ -428,7 +477,7 @@ function Test-InstalledUpgrade {
   $window = $null
   try { $window = Wait-Shell 90 } catch {}
   $opened = ($window -ne $null) -and ($window -ne [IntPtr]::Zero)
-  $closed = Close-Tree $process.Id 30
+  $closed = Close-Tree $process 30
   Stop-Engine
   $marker = Join-Path $web 'rnw-migration.json'
   $attemptFile = Join-Path $web 'rnw-migration-attempt.json'

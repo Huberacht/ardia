@@ -152,71 +152,161 @@ begin
 end;
 
 #ifdef RetiredList
+const
+  InvalidFileAttributes = $FFFFFFFF;
+  ReparsePointAttribute = $400;
+  DirectoryAttribute = $10;
+
 var
   RetiredShellFound: Boolean;
+  PreviousOwnFound: Boolean;
+  PreviousOwn: TArrayOfString;
 
-function RetiredEntryValid(Entry: String): Boolean;
+function GetFileAttributes(Name: String): Cardinal;
+  external 'GetFileAttributesW@kernel32.dll stdcall';
+
+function IsReparsePoint(Path: String): Boolean;
+var
+  Attributes: Cardinal;
 begin
-  Result := (Entry <> '') and (Pos('..', Entry) = 0) and (Pos(':', Entry) = 0) and (Pos('/', Entry) = 0) and (Copy(Entry, 1, 1) <> '\');
+  Attributes := GetFileAttributes(Path);
+  Result := (Attributes <> InvalidFileAttributes) and ((Attributes and ReparsePointAttribute) <> 0);
 end;
 
-procedure RemoveRetiredFile(Path: String; Removed: TStringList);
+function OwnedEntryValid(Entry: String): Boolean;
 begin
+  Result := (Entry <> '') and (Pos('..', Entry) = 0) and (Pos(':', Entry) = 0) and (Pos('/', Entry) = 0) and (Copy(Entry, 1, 1) <> '\') and (Copy(Entry, Length(Entry), 1) <> '\');
+end;
+
+function ExactEntryValid(Entry: String): Boolean;
+begin
+  Result := OwnedEntryValid(Entry) and (Pos('*', Entry) = 0) and (Pos('?', Entry) = 0);
+end;
+
+function PathWithoutLinks(Folder, Relative: String): Boolean;
+var
+  Rest, Path: String;
+  Slash: Integer;
+begin
+  Result := False;
+  if IsReparsePoint(Folder) then Exit;
+  Path := Folder;
+  Rest := Relative;
+  Slash := Pos('\', Rest);
+  while Slash > 0 do
+  begin
+    Path := Path + '\' + Copy(Rest, 1, Slash - 1);
+    if IsReparsePoint(Path) then Exit;
+    Rest := Copy(Rest, Slash + 1, Length(Rest) - Slash);
+    Slash := Pos('\', Rest);
+  end;
+  Result := not IsReparsePoint(Path + '\' + Rest);
+end;
+
+function InList(List: TStringList; Entry: String): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to List.Count - 1 do
+    if CompareText(List[I], Entry) = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
+procedure RemoveOwnedFile(Folder, Relative: String; Removed, Failed: TStringList);
+var
+  Path: String;
+begin
+  Path := Folder + '\' + Relative;
+  if not PathWithoutLinks(Folder, Relative) then
+  begin
+    Log('Owned files: ' + Path + ' is behind a link, so it stays');
+    Failed.Add(Relative);
+    Exit;
+  end;
   if not FileExists(Path) then Exit;
   if DeleteFile(Path) then
     Removed.Add(Path)
   else
-    Log('Retired shell: could not remove ' + Path);
-end;
-
-procedure RemoveEmptyFolders(Folder, Path: String);
-var
-  Dir: String;
-begin
-  Dir := ExtractFileDir(Path);
-  while (Length(Dir) > Length(Folder)) and (CompareText(Copy(Dir, 1, Length(Folder) + 1), Folder + '\') = 0) do
   begin
-    if not RemoveDir(Dir) then Exit;
-    Dir := ExtractFileDir(Dir);
+    Log('Owned files: could not remove ' + Path);
+    Failed.Add(Relative);
   end;
 end;
 
-procedure RemoveRetiredInEachFolder(Folder, Name: String; Removed: TStringList);
+procedure RemoveEmptyFolders(Folder: String; Removed: TStringList);
+var
+  Dir: String;
+  I: Integer;
+begin
+  for I := 0 to Removed.Count - 1 do
+  begin
+    Dir := ExtractFileDir(Removed[I]);
+    while (Length(Dir) > Length(Folder)) and (CompareText(Copy(Dir, 1, Length(Folder) + 1), Folder + '\') = 0) do
+    begin
+      if IsReparsePoint(Dir) then Break;
+      if not RemoveDir(Dir) then Break;
+      Dir := ExtractFileDir(Dir);
+    end;
+  end;
+end;
+
+procedure RemoveInEachFolder(Folder, Name: String; Removed, Failed: TStringList);
 var
   Found: TFindRec;
 begin
-  if Pos('\', Name) > 0 then Exit;
+  if not ExactEntryValid(Name) or (Pos('\', Name) > 0) then Exit;
   if not FindFirst(Folder + '\*', Found) then Exit;
   try
     repeat
-      if ((Found.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and (Found.Name <> '.') and (Found.Name <> '..') then
-        RemoveRetiredFile(Folder + '\' + Found.Name + '\' + Name, Removed);
+      if ((Found.Attributes and DirectoryAttribute) <> 0) and (Found.Name <> '.') and (Found.Name <> '..') then
+        RemoveOwnedFile(Folder, Found.Name + '\' + Name, Removed, Failed);
     until not FindNext(Found);
   finally
     FindClose(Found);
   end;
 end;
 
-procedure RemoveRetiredShell;
+function ReadManifest(Folder, Name: String; var Entries: TArrayOfString): Boolean;
+begin
+  Result := False;
+  if not FileExists(Folder + '\' + Name) then Exit;
+  if not PathWithoutLinks(Folder, Name) then
+  begin
+    Log('Owned files: ' + Name + ' is behind a link, so it is not read');
+    Exit;
+  end;
+  Result := LoadStringsFromFile(Folder + '\' + Name, Entries);
+end;
+
+procedure KeepOwnership(Path: String; Failed: TStringList);
 var
-  Folder, Manifest, Entry: String;
+  I: Integer;
+begin
+  for I := 0 to Failed.Count - 1 do
+    if not SaveStringToFile(Path, Failed[I] + #13#10, True) then
+      Log('Owned files: could not keep ' + Failed[I] + ' in ' + Path);
+end;
+
+procedure RemoveRetiredShell(Folder: String);
+var
+  Manifest, Entry: String;
   Entries: TArrayOfString;
-  Removed: TStringList;
+  Removed, Failed: TStringList;
+  FromManifest: Boolean;
   I: Integer;
 begin
   if not RetiredShellFound then Exit;
-  Folder := ExpandConstant('{app}');
-  if not FileExists(Folder + '\{#ShellMarker}') then
+  Manifest := 'ardia-{#RetiredShell}-files.txt';
+  FromManifest := FileExists(Folder + '\' + Manifest);
+  if FromManifest then
   begin
-    Log('Retired shell: {#ShellMarker} is not installed, so the other shell''s files stay');
-    Exit;
-  end;
-  Manifest := Folder + '\ardia-{#RetiredShell}-files.txt';
-  if FileExists(Manifest) then
-  begin
-    if not LoadStringsFromFile(Manifest, Entries) then
+    if not ReadManifest(Folder, Manifest, Entries) then
     begin
-      Log('Retired shell: ' + Manifest + ' could not be read, so the other shell''s files stay');
+      Log('Retired shell: ' + Manifest + ' could not be read safely, so the other shell''s files stay');
       Exit;
     end;
   end
@@ -230,31 +320,105 @@ begin
     end;
   end;
   Removed := TStringList.Create;
+  Failed := TStringList.Create;
   try
     for I := 0 to GetArrayLength(Entries) - 1 do
     begin
       Entry := Trim(Entries[I]);
-      if not RetiredEntryValid(Entry) then
-        Continue;
-      if Copy(Entry, 1, 2) = '*\' then
-        RemoveRetiredInEachFolder(Folder, Copy(Entry, 3, Length(Entry) - 2), Removed)
-      else
-        RemoveRetiredFile(Folder + '\' + Entry, Removed);
+      if ExactEntryValid(Entry) then
+        RemoveOwnedFile(Folder, Entry, Removed, Failed)
+      else if not FromManifest and OwnedEntryValid(Entry) and (Copy(Entry, 1, 2) = '*\') then
+        RemoveInEachFolder(Folder, Copy(Entry, 3, Length(Entry) - 2), Removed, Failed)
+      else if Entry <> '' then
+        Log('Retired shell: ignored the entry ' + Entry);
     end;
-    for I := 0 to Removed.Count - 1 do
-      RemoveEmptyFolders(Folder, Removed[I]);
-    if FileExists(Manifest) and not DeleteFile(Manifest) then
-      Log('Retired shell: could not remove ' + Manifest);
+    RemoveEmptyFolders(Folder, Removed);
+    if FromManifest and PathWithoutLinks(Folder, Manifest) then
+    begin
+      if Failed.Count = 0 then
+      begin
+        if not DeleteFile(Folder + '\' + Manifest) then
+          Log('Retired shell: could not remove ' + Manifest);
+      end
+      else if not SaveStringToFile(Folder + '\' + Manifest, '', False) then
+        Log('Retired shell: could not rewrite ' + Manifest)
+      else
+        KeepOwnership(Folder + '\' + Manifest, Failed);
+    end;
   finally
     Removed.Free;
+    Failed.Free;
   end;
+end;
+
+procedure RemoveStaleOwnFiles(Folder: String);
+var
+  Manifest, Entry: String;
+  Current: TArrayOfString;
+  Kept, Removed, Failed: TStringList;
+  I: Integer;
+begin
+  if not PreviousOwnFound then Exit;
+  Manifest := 'ardia-{#Shell}-files.txt';
+  if not ReadManifest(Folder, Manifest, Current) then
+  begin
+    Log('Own files: the new ' + Manifest + ' could not be read safely, so files the last build shipped stay');
+    Exit;
+  end;
+  Kept := TStringList.Create;
+  Removed := TStringList.Create;
+  Failed := TStringList.Create;
+  try
+    for I := 0 to GetArrayLength(Current) - 1 do
+      Kept.Add(Trim(Current[I]));
+    for I := 0 to GetArrayLength(PreviousOwn) - 1 do
+    begin
+      Entry := Trim(PreviousOwn[I]);
+      if ExactEntryValid(Entry) and not InList(Kept, Entry) then
+        RemoveOwnedFile(Folder, Entry, Removed, Failed);
+    end;
+    RemoveEmptyFolders(Folder, Removed);
+    KeepOwnership(Folder + '\' + Manifest, Failed);
+  finally
+    Kept.Free;
+    Removed.Free;
+    Failed.Free;
+  end;
+end;
+
+procedure NoteInstalledShells;
+var
+  Folder: String;
+begin
+  Folder := ExpandConstant('{app}');
+  RetiredShellFound := FileExists(Folder + '\{#RetiredMarker}') or FileExists(Folder + '\{#RetiredMarkerAlt}') or FileExists(Folder + '\ardia-{#RetiredShell}-files.txt');
+  PreviousOwnFound := ReadManifest(Folder, 'ardia-{#Shell}-files.txt', PreviousOwn);
+end;
+
+procedure RemoveFilesNoLongerShipped;
+var
+  Folder: String;
+begin
+  Folder := ExpandConstant('{app}');
+  if not FileExists(Folder + '\{#ShellMarker}') then
+  begin
+    Log('Owned files: {#ShellMarker} is not installed, so no file is removed');
+    Exit;
+  end;
+  if IsReparsePoint(Folder) then
+  begin
+    Log('Owned files: ' + Folder + ' is a link, so no file is removed');
+    Exit;
+  end;
+  RemoveStaleOwnFiles(Folder);
+  RemoveRetiredShell(Folder);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
-    RetiredShellFound := FileExists(ExpandConstant('{app}\{#RetiredMarker}')) or FileExists(ExpandConstant('{app}\{#RetiredMarkerAlt}')) or FileExists(ExpandConstant('{app}\ardia-{#RetiredShell}-files.txt'))
+    NoteInstalledShells
   else if CurStep = ssPostInstall then
-    RemoveRetiredShell;
+    RemoveFilesNoLongerShipped;
 end;
 #endif

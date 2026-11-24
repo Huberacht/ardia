@@ -1905,12 +1905,17 @@ place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below
   file the payload ships in its shell's own folders and fixed list (`ardia-rnw-files.txt` or `ardia-webui-files.txt`,
   so every hashed `ardia-ui\assets\` file is named), which the install puts beside `Ardia.exe`, and hands the
   installer the other shell's fixed list as `retired-shell.txt` without installing it. At `ssInstall`, before
-  anything is copied, the installer notes whether the other shell is there (its marker or its manifest). At
-  `ssPostInstall`, after Inno has closed the app and copied every file, `RemoveRetiredShell` does nothing unless the
-  other shell was there and this shell's marker (`ardia-ui\index.html` or `ArdiaApp.dll`) is now installed. It then
-  reads the other shell's manifest, or, for a React Native install from before manifests, the fixed list, deletes
-  only the files it names (`DeleteFile`, logging any it can't remove), removes each emptied folder bottom up with
-  `RemoveDir` (which leaves a folder holding anything else alone), and deletes the manifest. A file someone added in
+  anything is copied, the installer notes whether the other shell is there (its marker or its manifest) and reads
+  this shell's own manifest from the last install. At `ssPostInstall`, after Inno has closed the app and copied every
+  file, nothing happens unless this shell's marker (`ardia-ui\index.html` or `ArdiaApp.dll`) is now installed and the
+  install folder isn't a link. Then an update of the same shell removes the files the last build's manifest listed
+  and the new one doesn't (old hashed `ardia-ui\assets\` or `Bundle\` files), and a switch reads the other shell's
+  manifest, or, for a React Native install from before manifests, the fixed list (the only place a `*\` entry is
+  accepted; a manifest on disk takes exact paths, never `*` or `?`). Each file goes only if `GetFileAttributesW` shows
+  no reparse point on the install folder, any folder on its path or the file itself, with `DeleteFile`; each emptied
+  folder goes bottom up with `RemoveDir`, which leaves a folder holding anything else, or a link, alone. A file that is
+  behind a link or can't be removed stays listed: in this shell's manifest after an update, or in the other shell's
+  manifest, which is otherwise deleted, so a later install tries again. A file someone added in
   `Bundle\` or `ardia-ui\` stays, as does its folder, and an install that stops early leaves the old shell whole. So a
   WebUI install over the React Native one leaves no React Native file (an install from before manifests may keep
   `Bundle\assets\`, whose names change each build), and a rollback removes `ardia-ui\` and the migrator. User data is in `%LOCALAPPDATA%\Ardia` and `%LOCALAPPDATA%\Ardia WebUI`, never in the
@@ -1938,10 +1943,14 @@ place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below
   tabs, history, bookmarks, extensions, window placement, config, the sync key and every Credential Manager account,
   that cookies and logins stay behind, and that the React Native profile is unchanged. Last it reinstalls the React
   Native build (rollback), checks the layout is the React Native one again, runs it on the untouched profile and
-  reads back every account and the sync key, and uninstalls. Every process it starts is tracked by its id and start
-  time; at the end it stops a tracked process only if one with that id and start time is still running, and only
-  those of its children that run from the install or the React Native build, then anything still running from the
-  install folder, so a reused process id is never stopped. Results go to `C:\pilot\proof\<label>-results.json`.
+  reads back every account and the sync key, and uninstalls. Before the forced failures it also updates the WebUI
+  install with the same installer after adding a file only the last manifest lists, a manifest entry behind a junction
+  and a file no manifest lists, and checks the first is removed, the junction's target and the third stay, and the
+  junction entry stays listed (`same-shell-update-*`). Every process it starts is tracked by its id and creation time,
+  and every stop, whether a run ends, a window closes or the run cleans up, goes through `Stop-VerifiedProcess`: right
+  before stopping, the process must still have the same id and creation time and run from the install folder or the
+  React Native build, and a tracked process's children count only when they started after it, so a reused process id
+  is never stopped. Results go to `C:\pilot\proof\<label>-results.json`.
 - **Tour.** `webui-pilot/tour-webui.ps1 -App <folder> -Out <dir>` tours a packaged WebUI build (`Ardia.exe` or
   `chrome.exe`, with `ardia-ui\` and an `Ardia.test-build` marker, which CDP needs) with real input and CDP:
   a clean launch, the window's icon and AppUserModelID (`SHGetPropertyStoreForWindow`, expected `Ardia.Browser`),

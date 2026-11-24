@@ -110,6 +110,16 @@ function Find-ShellOwnedEntries([string]$root, [string]$shell) {
   ,$found
 }
 
+function Find-UnlistedOwnedFiles([string]$root, [string]$shell) {
+  $manifest = Join-Path $root (Get-ShellManifestName $shell)
+  if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return ,@() }
+  $listed = @{}
+  foreach ($line in (Get-Content -LiteralPath $manifest)) { if ($line.Trim()) { $listed[$line.Trim().ToLowerInvariant()] = $true } }
+  $files = @()
+  foreach ($folder in $ShellOwnedFolders[$shell]) { $files += Get-RelativeFiles $root $folder }
+  ,@($files | Where-Object { -not $listed.ContainsKey($_.ToLowerInvariant()) })
+}
+
 function Write-RetiredShellList([string]$shell, [string]$path) {
   Write-Lines $path (Get-ShellOwnedEntries (Get-OtherShell $shell))
 }
@@ -179,6 +189,8 @@ function Get-ShellLayoutProblems([string]$root, [string]$shell, [switch]$AllowTe
   } elseif (-not (Test-Path -LiteralPath (Join-Path $root $ShellLayout.RnwLibrary) -PathType Leaf)) {
     $problems += "it has no $($ShellLayout.RnwLibrary)"
   }
+  $unlisted = Find-UnlistedOwnedFiles $root $shell
+  if ($unlisted.Count) { $problems += "it holds $($unlisted.Count) files in its own folders that $(Get-ShellManifestName $shell) doesn't list: $(($unlisted | Select-Object -First 5) -join ', ')" }
   $other = Get-OtherShell $shell
   $leftover = Find-ShellOwnedEntries $root $other
   if ($leftover.Count) { $problems += "it still holds $($leftover.Count) of the $other shell's files: $(($leftover | Select-Object -First 5) -join ', ')" }
