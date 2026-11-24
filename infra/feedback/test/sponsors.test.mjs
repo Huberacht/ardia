@@ -357,6 +357,26 @@ test("GET /api/sponsors serves one refresh's list for 10 minutes, then only a ne
   assert.equal(state.calls, 2);
 });
 
+test("R6: a list is fresh for 10 minutes from when its refresh started, so a hide during a slow refresh ends within 10 minutes", async (t) => {
+  const coldWait = SPONSORS_TIMING.coldWaitMs;
+  SPONSORS_TIMING.coldWaitMs = 50;
+  t.after(() => (SPONSORS_TIMING.coldWaitMs = coldWait));
+  let clock = 1_000_000;
+  const { state, backend } = controlledList();
+  state.mode = "hang";
+  const url = await service(backend, { now: () => clock });
+  assert.equal((await getJson(url)).status, 503);
+  const hiddenAt = clock + 5_000;
+  clock = hiddenAt + 5_000;
+  state.release();
+  await settle();
+  assert.equal((await getJson(url)).status, 200);
+  clock = hiddenAt + SPONSORS_TIMING.freshMs - 5_000;
+  state.mode = "fail";
+  assert.equal((await getJson(url)).status, 503, "the list started before the hide is gone 10 minutes after the refresh began");
+  assert.ok(clock - hiddenAt < SPONSORS_TIMING.freshMs);
+});
+
 test("R5: a successful refresh followed by a failed one serves 503, not the old list, and waits out the cooldown", async () => {
   let clock = 1_000_000;
   const { state, backend } = controlledList();
@@ -702,6 +722,10 @@ test("R5: names carrying identifying numbers are refused", () => {
     "Call 555.123.4567",
     "12345",
     "Ref ١٢٣٤٥",
+    "123 • 45 • 6789",
+    "4111 • 1111 • 1111 • 1111",
+    "４１１１ • １１１１ • １１１１ • １１１１",
+    "Ada 123 Bo 4567",
   ]) assert.equal(cleanSponsorName(raw), null, JSON.stringify(raw));
-  for (const kept of ["Studio 54", "Team 2026", "Version 1.2 fans", "Apollo 11 Club"]) assert.equal(cleanSponsorName(kept), kept);
+  for (const kept of ["Studio 54", "Team 2026", "Version 1.2 fans", "Apollo 11 Club", "Route 66 Studio 54"]) assert.equal(cleanSponsorName(kept), kept);
 });

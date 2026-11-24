@@ -359,11 +359,12 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
     if (sponsorRefresh) return sponsorRefresh;
     if (sponsorFailedAt !== null && now() - sponsorFailedAt < SPONSORS_TIMING.cooldownMs) return null;
     sponsorList = null;
+    const startedAt = now();
     sponsorRefresh = sponsors
       .list()
       .then(
         (body) => {
-          sponsorList = { at: now(), body };
+          sponsorList = { at: startedAt, body };
           sponsorFailedAt = null;
         },
         (error) => {

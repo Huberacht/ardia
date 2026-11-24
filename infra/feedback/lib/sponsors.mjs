@@ -26,13 +26,15 @@ const IPV4_LIKE = /(?<![\p{N}.])\d{1,3}(?:\s*\.\s*\d{1,3}){3}(?![\p{N}])/u;
 const IPV6_LIKE = /(?:^|[^\p{L}\p{N}])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,}/iu;
 const NUMBER_SEPARATORS = "[\\s.\\-‐-―−_/\\\\|,:;()#+*]*";
 const LONG_NUMBER = new RegExp(`\\p{Nd}(?:${NUMBER_SEPARATORS}\\p{Nd}){4,}`, "u");
+const DIGIT = /\p{Nd}/gu;
+const MOST_DIGITS = 6;
 const READABLE = /[\p{L}\p{N}]/u;
 
 const PROBE_CODE_POINTS = SPONSOR_FIELD.maxLength * 4;
 
 const looksLikeAddress = (text) => {
   const probe = Array.from(text.slice(0, PROBE_CODE_POINTS * 2)).slice(0, PROBE_CODE_POINTS).join("").normalize("NFKC").replace(DOT_LOOKALIKES, ".");
-  return URL_LIKE.test(probe) || EMAIL_LIKE.test(probe) || IPV4_LIKE.test(probe) || IPV6_LIKE.test(probe) || LONG_NUMBER.test(probe);
+  return URL_LIKE.test(probe) || EMAIL_LIKE.test(probe) || IPV4_LIKE.test(probe) || IPV6_LIKE.test(probe) || LONG_NUMBER.test(probe) || (probe.match(DIGIT)?.length ?? 0) > MOST_DIGITS;
 };
 
 export function cleanSponsorName(raw) {

@@ -1,6 +1,7 @@
 import { donorsFrom, type Donor } from "../data/donors.ts";
 
 export const LIVE_FETCH_TIMEOUT_MS = 4000;
+export const LIVE_REFRESH_MS = 10 * 60 * 1000;
 
 interface ListElement {
   hidden: boolean;
@@ -8,6 +9,8 @@ interface ListElement {
 }
 interface DocumentLike {
   createElement(tag: "li"): { className: string; textContent: string | null };
+  visibilityState?: string;
+  addEventListener?(type: "visibilitychange", listener: () => void): void;
 }
 
 export function renderDonors(list: ListElement, empty: { hidden: boolean }, donors: readonly Donor[], doc: DocumentLike) {
@@ -35,6 +38,7 @@ export async function liveDonors(url: string, fetchImpl: typeof fetch = fetch): 
 
 interface PageEvents {
   addEventListener(type: "pagehide" | "pageshow", listener: (event: Event) => void): void;
+  setInterval?(handler: () => void, ms: number): unknown;
 }
 
 export function mountLiveDonors({
@@ -65,5 +69,11 @@ export function mountLiveDonors({
   page.addEventListener("pageshow", (event) => {
     if ((event as Event & { persisted?: boolean }).persisted) void load();
   });
+  doc.addEventListener?.("visibilitychange", () => {
+    if (doc.visibilityState === "visible") void load();
+  });
+  page.setInterval?.(() => {
+    if (doc.visibilityState !== "hidden") void load();
+  }, LIVE_REFRESH_MS);
   return load();
 }

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DONORS_MAX, donorsFrom, type Donor } from "../data/donors.ts";
 import { AUTOCAPTURE_PRIVATE_SELECTOR, NO_CAPTURE_SELECTOR, PRIVATE_SELECTOR } from "../data/telemetry.ts";
-import { liveDonors, mountLiveDonors, renderDonors } from "./sponsors.ts";
+import { liveDonors, mountLiveDonors, renderDonors, LIVE_REFRESH_MS } from "./sponsors.ts";
 
 test("donorsFrom keeps well-formed names and tiers and drops the rest", () => {
   assert.deepEqual(
@@ -144,4 +144,35 @@ test("R4-2: an answer that lands after pagehide doesn't paint names back", async
   release(new Response(JSON.stringify({ sponsors: [{ name: "Late", tier: "friend" }] }), { status: 200 }));
   await mounted;
   assert.equal(list.children.length, 0);
+});
+
+test("R6: an open page asks again every 10 minutes and when its tab comes back, so a later hide leaves it", async () => {
+  const { doc, list, empty } = fakeDom();
+  const visibility = Object.assign(new EventTarget(), { visibilityState: "visible" });
+  const page = Object.assign(new EventTarget(), {
+    every: [] as Array<{ handler: () => void; ms: number }>,
+    setInterval(handler: () => void, ms: number) {
+      this.every.push({ handler, ms });
+      return this.every.length;
+    },
+  });
+  const answers: unknown[] = [{ sponsors: [{ name: "Alice", tier: "friend" }] }, { sponsors: [] }, { sponsors: [] }];
+  let asked = 0;
+  const fetchImpl = (async () => new Response(JSON.stringify(answers[Math.min(asked++, answers.length - 1)]), { status: 200 })) as typeof fetch;
+  const liveDoc = Object.assign(visibility, { createElement: doc.createElement.bind(doc) });
+  await mountLiveDonors({ page, list, empty, url: "/api/sponsors", doc: liveDoc, fetchImpl });
+  assert.equal(list.children.length, 1);
+  assert.deepEqual(page.every.map((entry) => entry.ms), [LIVE_REFRESH_MS]);
+  page.every[0].handler();
+  for (let tick = 0; asked < 2 && tick < 50; tick++) await ticks(1);
+  await ticks(5);
+  assert.equal(list.children.length, 0, "the donor hidden meanwhile leaves the open page");
+  visibility.visibilityState = "hidden";
+  page.every[0].handler();
+  await ticks(5);
+  assert.equal(asked, 2, "a hidden tab doesn't ask");
+  visibility.visibilityState = "visible";
+  visibility.dispatchEvent(new Event("visibilitychange"));
+  for (let tick = 0; asked < 3 && tick < 50; tick++) await ticks(1);
+  assert.equal(asked, 3, "coming back to the tab asks again");
 });
