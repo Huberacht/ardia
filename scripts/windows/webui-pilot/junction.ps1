@@ -221,7 +221,10 @@ $rootGuardPath = Join-Path $webReal 'launch-guard.json'
 $rootGuardWritten = Test-Path -LiteralPath $rootGuardPath -PathType Leaf
 $rootGuardJson = $false
 if ($rootGuardWritten) {
-  try { $null = (Get-Content -LiteralPath $rootGuardPath -Raw | ConvertFrom-Json); $rootGuardJson = $true } catch {}
+  try {
+    $rootGuard = Get-Content -LiteralPath $rootGuardPath -Raw | ConvertFrom-Json
+    $rootGuardJson = ($null -ne $rootGuard) -and ($null -ne $rootGuard.PSObject.Properties['unfinishedStartsBefore'])
+  } catch {}
 }
 $rootPresent = @('launch-guard.json', 'pilot-root-a.json', 'pilot-root-b.json' | Where-Object { Test-Path -LiteralPath (Join-Path $webReal $_) -PathType Leaf })
 Check 'documents-read-under-junction-app-data-root' ($rootLinked -and $rootPilot.ArgvOk -and $rootOpened -and $rootGuardWritten -and $rootGuardJson -and ($rootPresent.Count -eq 3) -and ($rootCount -eq 3) -and $rootStillLinked -and $rootDocsIntact) "Ardia WebUI is a junction to $webReal (made $rootLinked, still a junction $rootStillLinked); window $rootOpened; launch-guard written $rootGuardWritten (valid JSON $rootGuardJson); present [$($rootPresent -join ', ')]; bootstrap read $rootCount of 3 expected documents through the junction; seeded documents intact $rootDocsIntact"
