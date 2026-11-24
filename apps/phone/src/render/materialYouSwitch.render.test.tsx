@@ -4,11 +4,12 @@ import { getAnimatedStyle } from "react-native-reanimated";
 import { act, type ReactTestInstance } from "react-test-renderer";
 import { Surfaces } from "../App";
 import { DesignProvider, Portal, useDesign } from "../components/ui";
+import { SettingsView } from "../components/settings/SettingsView";
 import { MaterialBottomBar } from "../components/ui/MaterialBottomBar";
 import { pages } from "../platform/pages";
 import { closeArchive, markSheetFromSettings, openArchive, openSpaces, useBrowse } from "../state/browse/store";
 import { handleSystemBack } from "../state/page/actions";
-import { closeSettings, openSettings, pushSettings, settingsScroll, useSettingsNav } from "../state/settings/nav";
+import { closeSettings, openSettings, settingsScroll, useSettingsNav } from "../state/settings/nav";
 import { currentPreferences, usePreferences } from "../state/settings/store";
 import * as telemetry from "../state/telemetry/telemetry";
 import { renderSurface, textOf, unmount, updateSurface, withTabs } from "../../test/render/harness";
@@ -98,11 +99,9 @@ onAndroid("both flips keep the same Settings sheet, list and switch while changi
 });
 
 onIPhone("iPhone Appearance has no Material You switch", () => {
-  const root = renderSurface(<Surfaces />);
-  act(() => openSettings());
-  act(() => pushSettings({ page: "appearance" }));
-  settle();
-  expect(textOf(root)).toContain("Interface style");
+  openSettings({ page: "appearance" });
+  const root = renderSurface(<SettingsView />);
+  expect(root.root.findAll((node) => typeof node.type === "string" && node.props.title === "Interface style")).toHaveLength(1);
   expect(materialYouRow(root)).toBeUndefined();
   unmount(root);
 });

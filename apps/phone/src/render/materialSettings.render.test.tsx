@@ -3,8 +3,9 @@ import { act } from "react-test-renderer";
 import { Surfaces } from "../App";
 import { MaterialBottomBar } from "../components/ui/MaterialBottomBar";
 import { SEEDED_SCHEMES } from "../lib/material/schemes";
+import { pages } from "../platform/pages";
 import { setDynamicScheme } from "../state/app/dynamicScheme";
-import { closeArchive, openArchive } from "../state/browse/store";
+import { closeArchive, openArchive, useBrowse } from "../state/browse/store";
 import { closeSettings, openSettings, pushSettings } from "../state/settings/nav";
 import { currentPreferences, loadPreferences, setPreference } from "../state/settings/store";
 import { renderSurface, unmount, withTabs, withMaterialYou } from "../../test/render/harness";
@@ -16,6 +17,8 @@ const onAndroid = Platform.OS === "android" ? test : test.skip;
 beforeEach(() => {
   jest.useFakeTimers();
   withTabs(1);
+  useBrowse.setState({ surface: "browsing", sheet: null });
+  jest.spyOn(pages, "listsSitePermissions").mockReturnValue(false);
   setDynamicScheme(null);
   openSettings();
 });
@@ -24,6 +27,7 @@ afterEach(() => {
   act(() => closeSettings());
   act(() => jest.runOnlyPendingTimers());
   jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
 type Root = ReturnType<typeof renderSurface>;
