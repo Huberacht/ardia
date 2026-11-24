@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
+import { searchState } from "../../state/search/store";
 import { markShownFrame } from "../../platform/lab";
 import { Platform, StyleSheet, View, type ViewInstance } from "react-native";
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageBarPreviewShown } from "../../state/browse/deckPull";
@@ -10,7 +11,9 @@ import { focusForScreenReader } from "../ui/coverFocus";
 import { acceptsPlusPress, dropEarlyStandby, dropEarlyStandbyUnlessOpened, revealStandbyOnPress } from "../../state/search/standbyReveal";
 import { currentTabs } from "../../state/tabs/store";
 import { useBarReturn } from "./barReturn";
-import { AddressFace, AddressLeaf } from "./AddressFace";
+import { AddressFace, AddressLeaf, DestinationFallbackLeaf } from "./AddressFace";
+import { destination, destinationAddresses, destinationLeafShows, destinationStandsIn } from "../../state/browse/destination";
+import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { NotSecureLock } from "./NotSecureLock";
 import { haptics } from "../../state/app/haptics";
 import { TabsMenuTrigger } from "./tabsMenu";
@@ -37,6 +40,8 @@ import { pageWords } from "../../lib/sharedWords";
 type Props = {
   tab: BrowserTab;
   preview?: BrowserTab | null;
+  standsIn?: boolean;
+  privateLook?: boolean;
   order: BrowserTab[];
   roles: ColorRoles;
   dark: boolean;
@@ -51,17 +56,73 @@ type Props = {
   onMore: () => void;
   fold?: BarFoldLook | null;
   swipe?: SwipeAddresses | null;
+  handover?: HandOverFocus;
 };
 
+export type HandOverFocus = { target: "address" | "pill" | null; pill: RefObject<ViewInstance | null> };
+
 export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null };
+
+export function landedSide(from: string, shownId: string, at: number, span: number): -1 | 0 | 1 {
+  "worklet";
+  return from === shownId && span > 0 && Math.abs(Math.abs(at) - span) < 1 ? (at > 0 ? -1 : 1) : 0;
+}
 
 function useLandedAddress(swipe: SwipeAddresses | null, shownId: string, side: -1 | 0 | 1) {
   return useAnimatedStyle(() => {
     if (!swipe) return { opacity: side === 0 ? 1 : 0 };
     const at = swipe.offset.value;
-    const landed = swipe.from.value === shownId && swipe.span > 0 && Math.abs(Math.abs(at) - swipe.span) < 1 ? (at > 0 ? -1 : 1) : 0;
-    return { opacity: landed === side ? 1 : 0 };
+    const from = swipe.from.value;
+    return { opacity: landedSide(from, shownId, at, swipe.span) === side ? 1 : 0 };
   }, [swipe, shownId, side]);
+}
+
+export function spokenDestination(side: -1 | 0 | 1, here: string, left: string, right: string, lifted: string, shownId: string, previewShown: number, table: Record<string, { spoken: string }>): string {
+  "worklet";
+  if (side < 0) return left;
+  if (side > 0) return right;
+  if (previewShown > 0 && lifted !== "" && lifted !== shownId && table[lifted]) return table[lifted].spoken;
+  return here;
+}
+
+type BarWords = { shownId: string; here: string; left: string; right: string; leftId: string; rightId: string; span: number };
+
+function useBarWords(swipe: SwipeAddresses | null, shownId: string, here: string) {
+  const left = swipe?.left ? spokenAddress(barAddress(swipe.left)) : "";
+  const right = swipe?.right ? spokenAddress(barAddress(swipe.right)) : "";
+  const leftId = swipe?.left?.id ?? "";
+  const rightId = swipe?.right?.id ?? "";
+  const span = swipe?.span ?? 0;
+  const next: BarWords = { shownId, here, left, right, leftId, rightId, span };
+  const words = useSharedValue<BarWords>(next);
+  useLayoutEffect(() => {
+    words.value = { shownId, here, left, right, leftId, rightId, span };
+  }, [words, shownId, here, left, right, leftId, rightId, span]);
+  const idle = useSharedValue(0);
+  const nobody = useSharedValue("");
+  return { words, offset: swipe?.offset ?? idle, from: swipe?.from ?? nobody };
+}
+
+function useSpokenAddress(swipe: SwipeAddresses | null, shownId: string, here: string) {
+  const { words, offset, from } = useBarWords(swipe, shownId, here);
+  const spoken = useAnimatedProps(() => {
+    const now = words.value;
+    const at = offset.value;
+    const started = from.value;
+    const lifted = destination.id.value;
+    const previewShown = pageBarPreviewShown.value;
+    const table = destinationAddresses.value;
+    return { accessibilityValue: { text: spokenDestination(landedSide(started, now.shownId, at, now.span), now.here, now.left, now.right, lifted, now.shownId, previewShown, table) } };
+  });
+  const mark = useAnimatedProps(() => {
+    const now = words.value;
+    const at = offset.value;
+    const started = from.value;
+    const side = landedSide(started, now.shownId, at, now.span);
+    const id = side < 0 ? now.leftId : side > 0 ? now.rightId : "";
+    return { mark: id ? `dest-bar:${id}` : "" };
+  });
+  return { spoken, mark };
 }
 
 export type DuoBar = { stripLeft: number; stripTop: number; squeeze: DuoSqueeze | null; progress: SharedValue<number>; collapsed: boolean };
@@ -95,15 +156,27 @@ export function barAddress(tab: BrowserTab): BarAddress {
   };
 }
 
-export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, swipe = null, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
-  const previewHides = useAnimatedStyle(() => ({ opacity: preview ? 1 - pageBarPreviewShown.value : 1 }));
-  const previewShows = useAnimatedStyle(() => ({ opacity: pageBarPreviewShown.value }));
+export function FloatingBar({ tab, preview = null, standsIn = false, privateLook, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, swipe = null, handover, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
+  const previewId = preview?.id ?? null;
+  const previewHides = useAnimatedStyle(() => {
+    const lifted = destination.id.value;
+    const previewShown = pageBarPreviewShown.value;
+    return { opacity: destinationStandsIn(lifted, tab.id, previewShown) ? 0 : 1 };
+  }, [tab.id]);
+  const previewShows = useAnimatedStyle(() => {
+    const lifted = destination.id.value;
+    const previewShown = pageBarPreviewShown.value;
+    return { opacity: destinationLeafShows(lifted, tab.id, previewId, previewShown) ? 1 : 0 };
+  }, [tab.id, previewId]);
+  const looksPrivate = privateLook ?? tab.isPrivate;
+  const styledTab = looksPrivate === tab.isPrivate ? tab : { ...tab, isPrivate: looksPrivate };
   useLayoutEffect(() => markShownFrame(`bar:${tab.id}`), [tab.id]);
   const landedHere = useLandedAddress(swipe, tab.id, 0);
   const landedLeft = useLandedAddress(swipe, tab.id, -1);
   const landedRight = useLandedAddress(swipe, tab.id, 1);
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const address = barAddress(tab);
+  const { spoken, mark: landedMark } = useSpokenAddress(swipe, tab.id, spokenAddress(address));
   const menuButton = useRef<ViewInstance>(null);
   const returning = useBarReturn();
   const handed = useDeckOwnsBar();
@@ -119,17 +192,29 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
     shownTab.current = tab.id;
     focusOwed.current = tab.id;
   }
+  const focusTarget = handover ? handover.target : "address";
+  const pill = handover?.pill;
   useEffect(() => {
     const destination = tab.id;
     if (handed || focusOwed.current !== destination) return;
-    return focusForScreenReader(
+    if (focusTarget === null) {
+      focusOwed.current = null;
+      return;
+    }
+    const within = focusTarget === "pill";
+    const cancel = focusForScreenReader(
       () => {
         focusOwed.current = null;
-        return addressButton.current;
+        return within ? pill?.current : addressButton.current;
       },
-      () => currentTabs().selectedId === destination && useBrowse.getState().surface === "browsing" && !deckPull.cut.value,
+      () => currentTabs().selectedId === destination && useBrowse.getState().surface === "browsing" && !deckPull.cut.value && !searchState().open,
+      { handover: { within } },
     );
-  }, [tab.id, handed]);
+    return () => {
+      cancel();
+      if (focusOwed.current === destination) focusOwed.current = null;
+    };
+  }, [tab.id, handed, focusTarget]);
   const swaps = handed || wasHanded.current;
   const handedBack = swaps ? { ...returning, centreGlass: { shown: returning.centreGlass.shown && !handed, shownMs: 0 }, sidesGlass: { shown: returning.sidesGlass.shown && !handed, shownMs: 0 } } : returning;
   const back = useFoldedGlass(handedBack, fold?.glass ?? true);
@@ -153,12 +238,12 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
   const lockFade = useAnimatedStyle(() => ({ opacity: shut(progress.value) }));
   const leading = (
     <Animated.View testID="floatingBarLeading" collapsable={false} style={back.leading} pointerEvents={back.sidesShown ? "box-none" : "none"} importantForAccessibility={back.sidesShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.sidesShown}>
-      <FloatingTabsButton tab={tab} order={order} roles={roles} dark={dark} testID="floatingBarTabs" glass={back.sidesGlass} glyphs={back.leadingGlyphs} fold={fold} ghost={!handed} swipe={swipe} onTabs={onTabs} onTabsMenu={onTabsMenu} onStep={onStep} />
+      <FloatingTabsButton tab={styledTab} order={order} roles={roles} dark={dark} testID="floatingBarTabs" glass={back.sidesGlass} glyphs={back.leadingGlyphs} fold={fold} ghost={!handed} swipe={swipe} onTabs={onTabs} onTabsMenu={onTabsMenu} onStep={onStep} />
     </Animated.View>
   );
   const trailing = (
     <Animated.View testID="floatingBarTrailing" collapsable={false} style={[styles.circleHit, back.trailing]} pointerEvents={back.sidesShown ? "box-none" : "none"} importantForAccessibility={back.sidesShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.sidesShown}>
-      {showsPlus ? <FloatingPlusButton tab={tab} dark={dark} testID="floatingBarPlus" glass={back.sidesGlass} glyphs={back.trailingGlyphs} fold={fold} ghost={!handed} onPlus={onPlus} /> : null}
+      {showsPlus ? <FloatingPlusButton tab={styledTab} dark={dark} testID="floatingBarPlus" glass={back.sidesGlass} glyphs={back.trailingGlyphs} fold={fold} ghost={!handed} onPlus={onPlus} /> : null}
     </Animated.View>
   );
   return (
@@ -166,19 +251,20 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
     <View testID="floatingBar" style={styles.row} pointerEvents="box-none">
       {inStrip ? null : leading}
       <Animated.View testID="floatingBarCentre" nativeID={ids?.anchor} collapsable={false} style={[styles.addressSlot, centreSqueeze]} pointerEvents={back.centreShown ? "box-none" : "none"} importantForAccessibility={back.centreShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.centreShown}>
-      <ChromeSurface testID="floatingBarAddress" shape="capsule" cornerRadius={capsule(floatingBarLayout.control)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={back.centreGlass.shown} shownMs={back.centreGlass.shownMs} style={[styles.address, squeeze ? styles.squeezes : null]}>
+      <ChromeSurface testID="floatingBarAddress" shape="capsule" cornerRadius={capsule(floatingBarLayout.control)} incognito={looksPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={back.centreGlass.shown} shownMs={back.centreGlass.shownMs} style={[styles.address, squeeze ? styles.squeezes : null]}>
         <Animated.View testID="floatingBarCentreGlyphs" nativeID={ids?.face} collapsable={false} style={[styles.addressRow, back.centreGlyphs]}>
         <Animated.View testID="floatingBarFoldGlyphs" collapsable={false} style={[styles.addressRow, centreFold]}>
         <PullGlyphs style={styles.addressRow}>
         <Animated.View testID="floatingBarAddressFade" collapsable={false} style={[styles.addressFade, addressFade]} pointerEvents={squeezed ? "none" : "box-none"} importantForAccessibility={squeezed ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={squeezed}>
-        <Animated.View collapsable={false} style={[styles.addressStack, landedHere, previewHides]} pointerEvents="box-none">
-          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} pressRef={addressButton} />
+        <Animated.View testID="floatingBarAddressStack" collapsable={false} style={[styles.addressStack, landedHere, previewHides]} pointerEvents="box-none">
+          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} pressRef={addressButton} spoken={spoken} />
         </Animated.View>
         {preview ? (
           <Animated.View testID="floatingBarPreview" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, previewShows]}>
             <AddressLeaf address={barAddress(preview)} dark={dark} testIDPrefix="floatingBarPreview" style={styles.addressHit} />
           </Animated.View>
         ) : null}
+        {standsIn ? <DestinationFallbackLeaf shownId={tab.id} leafId={previewId} dark={dark} style={styles.addressHit} /> : null}
         {swipe?.left ? (
           <Animated.View testID="floatingBarLandedLeft" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedLeft]}>
             <AddressLeaf address={barAddress(swipe.left)} dark={dark} testIDPrefix="floatingBarLeft" style={styles.addressHit} />
@@ -219,6 +305,7 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
       {inStrip ? null : trailing}
     </View>
     {fold ? <BarMotionCatchUp fold={fold} /> : null}
+    {swipe ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={landedMark} /> : null}
     {inStrip ? (
       <Animated.View testID="floatingBarStrip" pointerEvents="box-none" style={[styles.strip, { left: duo.stripLeft, top: duo.stripTop }]}>
         {trailing}

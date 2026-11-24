@@ -2,7 +2,7 @@ import { probes } from "../../state/app/launchFlags";
 import { useEffect, useLayoutEffect } from "react";
 import { Image, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
-import Animated, { cancelAnimation, runOnJS, runOnUI, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { cancelAnimation, runOnJS, runOnUI, useAnimatedProps, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { incomingPose, landedNear, outgoingPose, PAGER, resolvedOffset, snapTarget } from "../../lib/pagerPhysics";
 import { screenCornerRadius } from "../../state/app/displayCorner";
 import { haptics } from "../../state/app/haptics";
@@ -16,6 +16,7 @@ import { traceSlice } from "../../platform/lab";
 import { commitBarAction, dropBarAction, takeBarAction } from "../../state/browse/store";
 import { useWarmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
+import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 
 export type TabPager = {
   offset: SharedValue<number>;
@@ -31,7 +32,18 @@ export type TabPager = {
   validates: (from: string, to: string) => boolean;
   landedTarget: () => string | null;
   landedScope: () => string;
+  refusedTurn: SharedValue<number>;
 };
+
+export function landedFaceMark(side: -1 | 0 | 1, at: number, width: number, id: string): string {
+  "worklet";
+  return side !== 0 && width > 0 && Math.abs(at + side * width) < 1 ? `dest-face:${id}` : "";
+}
+
+export function refusedMark(turn: number): string {
+  "worklet";
+  return turn > 0 ? `swipe-zero:${turn}` : "";
+}
 
 type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; landsEarly?: boolean; isNeighbour?: (id: string) => boolean; onCommit: (id: string) => void; onGrab: () => void };
 
@@ -51,6 +63,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   const latchedLeft = useSharedValue(left ?? "");
   const latchedRight = useSharedValue(right ?? "");
   const turn = useSharedValue(0);
+  const refusedTurn = useSharedValue(0);
 
   useEffect(() => {
     hasLeft.value = left !== null;
@@ -140,6 +153,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     }
     if (cuts) {
       offset.value = 0;
+      refusedTurn.value = turn.value;
       land(0);
       return;
     }
@@ -204,7 +218,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   });
   const dim = useAnimatedStyle(() => ({ opacity: outgoingPose(offset.value, span.value, hasLeft.value, hasRight.value, reduceMotion).dim }));
 
-  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope };
+  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope, refusedTurn };
 }
 
 type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; width: number; statusHeight: number; statusOver?: boolean; hasLeft: boolean; hasRight: boolean; coverId?: string };
@@ -230,6 +244,10 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
   const viewport = useWindowDimensions();
   const warm = useWarmPicture(tab, viewport, cuts && !probes("warm"));
   const faceTab = cuts && !warm && tab.snapshotFileName ? { ...tab, snapshotFileName: null } : tab;
+  const faceMark = useAnimatedProps(() => {
+    const at = offset.value;
+    return { mark: landedFaceMark(side, at, width, tab.id) };
+  });
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (
     <>
@@ -241,6 +259,7 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
         </View>
         {warm ? <Image testID="pagerWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height }]} /> : null}
         {statusOver ? <View testID="pagerStatusStrip" style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
+        {cuts && !arrived ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={faceMark} /> : null}
       </Animated.View>
     </>
   );
@@ -252,9 +271,19 @@ const EDGE_SHADOW_TRAILING = `linear-gradient(to left, ${EDGE_SHADOW_STOPS.join(
 
 const swipeScope = (turn: number) => `swipe:${turn}`;
 
-export function PagerBackdrop() {
+export function PagerBackdrop({ pager }: { pager?: TabPager }) {
   const theme = useTheme();
-  return <View testID="pagerBackdrop" style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }]} />;
+  const idle = useSharedValue(0);
+  const refused = pager?.refusedTurn ?? idle;
+  const zeroMark = useAnimatedProps(() => {
+    const turn = refused.value;
+    return { mark: refusedMark(turn) };
+  });
+  return (
+    <View testID="pagerBackdrop" style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }]}>
+      {pager && tabSwitchCuts() ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={zeroMark} /> : null}
+    </View>
+  );
 }
 
 const cornerRadius = screenCornerRadius(tabsLayout.displayCornerRadius);

@@ -1,9 +1,10 @@
 import { create } from "zustand";
+import { shownPictureGeneration } from "./pictures";
 
 type Size = { width: number; height: number };
 export type WarmFrame = { x: number; y: number; width: number; height: number };
-export type WarmCapture = { uri: string; url: string; window: Size; frame: WarmFrame | null | undefined; settled: boolean | undefined; view: number | undefined; viewId: number | undefined };
-type WarmKey = { uri: string; url: string; window: Size; frame: WarmFrame; view: number; viewId: number };
+export type WarmCapture = { uri: string; url: string; window: Size; frame: WarmFrame | null | undefined; settled: boolean | undefined; view: number | undefined; viewId: number | undefined; generation?: number };
+type WarmKey = { uri: string; url: string; window: Size; frame: WarmFrame; view: number; viewId: number; generation: number | null };
 type Watermark = { viewId: number; version: number };
 export type WarmPicture = { uri: string; frame: WarmFrame };
 
@@ -28,7 +29,7 @@ export function noteWarmPicture(id: string, capture: WarmCapture) {
     if (keys.delete(id)) changed();
     return;
   }
-  keys.set(id, { uri: capture.uri, url: capture.url, window: { ...capture.window }, frame: { ...frame }, view, viewId });
+  keys.set(id, { uri: capture.uri, url: capture.url, window: { ...capture.window }, frame: { ...frame }, view, viewId, generation: capture.generation ?? null });
   changed();
 }
 
@@ -44,6 +45,7 @@ export function warmPicture(tab: { id: string; url: string; snapshotFileName: st
   if (!key || key.uri !== tab.snapshotFileName || key.url !== tab.url) return null;
   if (key.window.width !== window.width || key.window.height !== window.height) return null;
   if (movedSince(tab.id, key.viewId, key.view)) return null;
+  if (key.generation !== null && key.generation < shownPictureGeneration(tab.id)) return null;
   return { uri: key.uri, frame: key.frame };
 }
 

@@ -3,6 +3,7 @@ import { StyleSheet } from "react-native";
 import { ARRIVAL_COVER_ID, notePageHosted, OPENING_COVER_ID, pageCoverHidden, pageDrawn, pageOpenFailed, pageStateChanged, pageToneChanged, swipedPastHistory } from "../../state/browse/store";
 import { useArrivalCover, useNavigation, useOpeningCover, usePageArriving, usePageCovered, usePageTone, usePageVeiled } from "../../state/browse/hooks";
 import { shownTone } from "../../lib/pageTone";
+import { useDestinationCover } from "../../state/browse/destination";
 import { registerPageHandle, type PageState, type PageTone } from "../../state/pages/store";
 import { tabSavedState } from "../../state/tabs/store";
 import { useCanReopen } from "../../state/tabs/hooks";
@@ -22,6 +23,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
   const arriving = usePageArriving(id);
   const arrivalCover = useArrivalCover();
   const openingCover = useOpeningCover();
+  const destinationCover = useDestinationCover(id);
   const tone = usePageTone(id);
   const failed = useNavigation(id, (n) => n?.failure != null);
   const pageTone = failed ? null : shownTone(tone, tab.themeColorHex);
@@ -71,7 +73,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
       onPageTone={onPageTone}
       onPageDrawn={onPageDrawn}
       onPageError={onPageError}
-      coverNativeId={covered ? (arriving ? (arrivalCover ?? ARRIVAL_COVER_ID) : (openingCover ?? OPENING_COVER_ID)) : undefined}
+      coverNativeId={destinationCover ?? (covered ? (arriving ? (arrivalCover ?? ARRIVAL_COVER_ID) : (openingCover ?? OPENING_COVER_ID)) : undefined)}
       onPageCoverHidden={onPageCoverHidden}
     />
   );

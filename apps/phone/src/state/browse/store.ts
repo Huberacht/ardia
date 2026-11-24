@@ -1099,7 +1099,7 @@ export async function captureSnapshot(id: string, pageTop: number | null = null,
   if (!snapshot || !tab) return false;
   const step = pictureCaptured(tab, snapshot.uri, snapshot.durable !== false, snapshot.generation);
   if (step) publishedCaptureStarted.set(id, startedAt);
-  if (step && step.show === snapshot.uri) noteWarmPicture(id, { uri: snapshot.uri, url: capturedUrl, window: capturedWindow, frame: snapshot.frame, settled: snapshot.viewSettled, view: snapshot.view, viewId: snapshot.viewId });
+  if (step && step.show === snapshot.uri) noteWarmPicture(id, { uri: snapshot.uri, url: capturedUrl, window: capturedWindow, frame: snapshot.frame, settled: snapshot.viewSettled, view: snapshot.view, viewId: snapshot.viewId, generation: snapshot.generation });
   if (step && tab.snapshotFileName !== step.show) {
     updateTabById(id, { snapshotFileName: step.show });
     showHiddenDeckThePicture(id);

@@ -1,7 +1,7 @@
 import { probes } from "../../state/app/launchFlags";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { countRender } from "../../state/app/interactionPerf";
-import { Platform, StyleSheet, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
+import { Platform, StyleSheet, useWindowDimensions, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,13 +16,13 @@ import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } fr
 import { useDrawnMenuOpen, useFindOpen, useMenuDocked, usePressOpen, useReaderTabId } from "../../state/page/hooks";
 import { ARRIVAL_COVER_ID, arriveAtNeighbour, holdBarAction, type BarAction, takeCommittedBarAction, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
 import { useSearchFromDockedMenu, useSearchOpen } from "../../state/search/hooks";
-import { usePages } from "../../state/pages/store";
+import { shownPageTone, usePages } from "../../state/pages/store";
 import { reportBarPill } from "../../state/search/stageBar";
 import { searchStageIsNative } from "../../platform/searchStage";
 import { usePreferences } from "../../state/settings/hooks";
 import { closeFrontTab, menuOpenedHaptic, recentTabs, switchToTab, tabTitle } from "../../state/browse/tabMenus";
 import { useBarOrder, useChromeTab, useIncognito, useSwipeIds, useTabWhile } from "../../state/tabs/hooks";
-import { currentTabs } from "../../state/tabs/store";
+import { currentTabs, useTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import type { BrowserTab } from "../../state/tabs/tabModels";
@@ -41,7 +41,6 @@ import {
   tabsLayout,
   tabsMotion,
   floatingBarLayout,
-  FrostSource,
   GlassBehind,
   GlassBranch,
   GlassSource,
@@ -55,7 +54,7 @@ import {
   useReduceMotion,
 } from "../ui";
 import { BottomBar } from "./BottomBar";
-import { FloatingBar } from "./FloatingBar";
+import { barAddress, FloatingBar, spokenAddress, type HandOverFocus } from "./FloatingBar";
 import { MaterialBarBand } from "./MaterialPageBar";
 import { materialBarPill, materialBottomBar } from "../ui/materialTokens";
 import { MaterialBarPill, useMaterialBarFold, useMaterialBarRegistration, useMaterialPillFold } from "./PersistentMaterialBar";
@@ -69,7 +68,10 @@ import { SystemPageMenuHost, usesSystemPageMenu } from "./SystemPageMenu";
 import { PageRequestHost, PressMenu } from "./PageRequests";
 import { ReaderView, useLeavingReader } from "./ReaderView";
 import { PageFailureView } from "./PageFailureView";
-import { PageCover } from "./PageCover";
+import { DestinationFace, PageCover } from "./PageCover";
+import { barFencedForDestination, destination, destinationAddresses, destinationBarMark, destinationHeldFill, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, type DestinationAddress } from "../../state/browse/destination";
+import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
+import { HeldFrostSource } from "../ui/LookViews";
 import { PageSurface } from "./PageSurface";
 import { PagePull, PullBlocker, usePullBarShift } from "./PagePull";
 import { redesignedBarCenterFromBottom } from "../../lib/deckGeometry";
@@ -106,29 +108,80 @@ function PageBodyOwner({ kept }: { kept: boolean }) {
     if (deckUp) return;
     pageBarPreviewShown.value = 0;
     previewPageBar(null);
+    dropPreparedDestination();
   }, [kept, deckUp]);
   return null;
 }
 
-type KeptBarProps = { tab: BrowserTab; kept: boolean; pageDark: boolean; barHeight: number; children: (preview: BrowserTab | null, barDark: boolean) => ReactNode };
-
-function KeptBarSlot({ tab, kept, pageDark, barHeight: stripHeight, children }: KeptBarProps) {
+function DeckAddresses() {
+  const open = useTabs((s) => s.open);
+  const privates = useTabs((s) => s.privates);
   const theme = useTheme();
-  const releaseFill = useAnimatedStyle(() => ({ opacity: kept && pageBarShown.value > 0 && pageBodyShown.value === 0 ? 1 : 0 }));
+  const blank = usePageUnderBars() ? theme.pageSurface : theme.canvas;
+  useEffect(() => {
+    const table: Record<string, DestinationAddress> = {};
+    const pages = usePages.getState();
+    for (const tab of [...open, ...privates]) {
+      const address = barAddress(tab);
+      const fill = shownTone(shownPageTone(pages, tab.id), tab.themeColorHex)?.bottom ?? blank;
+      table[tab.id] = { host: address.host, spoken: spokenAddress(address), isPrivate: address.isPrivate, insecure: address.insecure, fill };
+    }
+    publishDestinationAddresses(table);
+  }, [open, privates, blank]);
+  return null;
+}
+
+function usePageSourceHold(kept: boolean) {
+  const cover = useDestination((s) => (s.arriving !== null && s.arriving === s.prepared ? s.cover : null));
+  const held = useAnimatedProps<{ heldFill: string | null }>(() => {
+    const lifted = destination.id.value;
+    const bar = pageBarShown.value;
+    const table = destinationAddresses.value;
+    return { heldFill: kept ? destinationHeldFill(lifted, bar, table) : null };
+  }, [kept]);
+  return { held, heldUntil: kept ? cover : null };
+}
+
+function DestinationSlot({ shownId, statusHeight, statusOver }: { shownId: string; statusHeight: number; statusOver: boolean }) {
+  const id = useDestination((s) => s.arriving ?? s.prepared);
+  const cover = useDestination((s) => (s.arriving !== null && s.arriving === s.prepared ? s.cover : null));
+  const tab = useTabWhile(id ?? "", id !== null);
+  useEffect(() => {
+    const arriving = useDestination.getState().arriving;
+    if (arriving !== null && currentTabs().selectedId !== arriving) releaseDestination(arriving);
+  }, [shownId, id]);
+  useEffect(() => () => releaseDestination(), []);
+  if (!tab || id === null) return null;
+  return <DestinationFace key={id} tab={tab} cover={cover ?? undefined} statusHeight={statusHeight} statusOver={statusOver} />;
+}
+
+type KeptBar = { preview: BrowserTab | null; standsIn: boolean; privateLook: boolean | undefined };
+
+type KeptBarProps = { tab: BrowserTab; kept: boolean; pageDark: boolean; children: (kept: KeptBar, barDark: boolean) => ReactNode };
+
+function KeptBarSlot({ tab, kept, pageDark, children }: KeptBarProps) {
   const deckUp = useBrowse((s) => kept && s.surface === "deck");
   const previewId = usePageBarPreview((s) => (kept ? s.id : null));
   const previewTab = useTabWhile(previewId ?? "", deckUp && previewId !== null && previewId !== tab.id);
   const preview = deckUp && previewTab ? previewTab : null;
+  const deckPrivate = useIncognito();
+  const keptBar = useMemo<KeptBar>(() => ({ preview, standsIn: kept && deckUp, privateLook: kept && deckUp ? deckPrivate : undefined }), [preview, kept, deckUp, deckPrivate]);
   const barDark = pageDark;
   const keptBarStyle = useAnimatedStyle(() => ({ opacity: kept ? pageBarShown.value : 1 }));
   const keptBarProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({
     pointerEvents: !kept || pageBarShown.value > 0 ? "box-none" : "none",
     importantForAccessibility: !kept || pageBarShown.value > 0 ? "auto" : "no-hide-descendants",
   }));
+  const barMark = useAnimatedProps<{ mark: string }>(() => {
+    const lifted = destination.id.value;
+    const shown = pageBarShown.value;
+    return { mark: kept ? destinationBarMark(lifted, shown) : "" };
+  }, [kept]);
   return (
     <Animated.View testID="keptPageBar" style={[StyleSheet.absoluteFill, keptBarStyle]} animatedProps={keptBarProps} pointerEvents="box-none" collapsable={false}>
-      {kept ? <Animated.View testID="keptBarReleaseFill" pointerEvents="none" style={[styles.bar, { height: stripHeight, backgroundColor: theme.canvas }, releaseFill]} /> : null}
-      {children(preview, barDark)}
+      {children(keptBar, barDark)}
+      {kept && deckUp ? <DeckAddresses /> : null}
+      {kept ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={barMark} /> : null}
     </Animated.View>
   );
 }
@@ -203,6 +256,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const top = pageTone?.top ?? blankPage;
   const bottom = pageTone?.bottom ?? blankPage;
   const barKept = tabSwitchCuts() && design === "redesigned";
+  const sourceHold = usePageSourceHold(barKept);
   const barDark = (design === "redesigned" || design === "material") && !pageTone?.bottom ? theme.dark : isDarkColor(bottom);
   const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateX: barKept && pageBodyShown.value === 0 ? BODY_UNDER_DECK : 0 }] }));
   const bodyProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({
@@ -226,9 +280,10 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     painted.value = true;
   }, [painted]);
   const openTabsMenu = useCallback(() => {
+    if (barKept && barFencedForDestination(shownTab.current)) return;
     menuOpenedHaptic();
     setTabsMenu(true);
-  }, []);
+  }, [barKept]);
   const neighbourIds = useRef(around);
   neighbourIds.current = around;
   const shownTab = useRef(tab.id);
@@ -236,10 +291,11 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const validatesStep = useRef(pager.validates);
   validatesStep.current = pager.validates;
   const stepTab = useCallback((delta: -1 | 1) => {
+    if (barKept && barFencedForDestination(shownTab.current)) return;
     const id = delta < 0 ? neighbourIds.current.left : neighbourIds.current.right;
     if (!id || !validatesStep.current(shownTab.current, id)) return;
     switchToNeighbour(id);
-  }, []);
+  }, [barKept]);
   const landedTarget = useRef(pager.landedTarget);
   landedTarget.current = pager.landedTarget;
   const landedScope = useRef(pager.landedScope);
@@ -249,13 +305,14 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     return landed && currentTabs().selectedId !== landed ? landed : null;
   }, []);
   const editAddress = useCallback(() => {
+    if (barKept && routeBarToDestination(shownTab.current, "address")) return;
     const landed = heldFor();
     if (landed) {
       holdBarAction(landed, "address", landedScope.current());
       return;
     }
     editPageQuery();
-  }, []);
+  }, [barKept]);
   useEffect(() => {
     const action = takeCommittedBarAction(tab.id);
     if (action === "address") editPageQuery();
@@ -264,23 +321,25 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     else if (action === "tabs") showDeck();
   }, [tab.id]);
   const heldOr = useCallback((action: BarAction, now: () => void) => () => {
+    if (barKept && routeBarToDestination(shownTab.current, action)) return;
     const landed = heldFor();
     if (landed) {
       holdBarAction(landed, action, landedScope.current());
       return;
     }
     now();
-  }, []);
+  }, [barKept]);
   const tabsOrHeld = useMemo(() => heldOr("tabs", showDeck), [heldOr]);
   const plusOrHeld = useMemo(() => heldOr("plus", newTab), [heldOr]);
   const pageMenuOrHeld = useCallback(() => {
+    if (barKept && routeBarToDestination(shownTab.current, "more")) return;
     const landed = heldFor();
     if (landed) {
       holdBarAction(landed, "more", landedScope.current());
       return;
     }
     openPageMenu();
-  }, []);
+  }, [barKept]);
   const incognito = useIncognito();
   const reduceMotion = useReduceMotion();
   const pulls = design === "redesigned";
@@ -302,6 +361,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const pullBegan = () => deckPullBegan(tab.id);
   const pullReleased = (lands: boolean) => deckPullReleased(tab.id, lands);
   const barPull = tracks ? { id: tab.id, prepare: refreshHiddenDeck, began: pullBegan, released: pullReleased, settled: deckPullSettled } : null;
+  const hostPill = useRef<ViewInstance | null>(null);
+  const handoverTarget: HandOverFocus["target"] = searching || menuOpen || dockedSearch || finding || fullscreen || pressing || tabsMenu || readerId === tab.id || collapse.hidden ? null : folds && collapse.collapsed ? "pill" : "address";
+  const handover = useMemo(() => ({ target: handoverTarget, pill: hostPill }), [handoverTarget]);
   const barGesture = useMemo(() => Gesture.Race(pager.gesture, barSwipeUp(swipesUp, pager.active, openDeckFromBar, barPull, pulls && reduceMotion)), [pager.gesture, swipesUp, incognito, tracks, tab.id]);
   const toneTab = useRef(tab.id);
   const toneSwitchesTab = toneTab.current !== tab.id;
@@ -331,9 +393,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     <View style={[StyleSheet.absoluteFill, pulls ? null : { backgroundColor: theme.canvas }]} onLayout={() => pageLaidOut(tab.id)}>
       <Shade shaded={menuOpen || dockedSearch || readerId === tab.id || pressing || tabsMenu}>
         <Animated.View testID="pageBody" style={[StyleSheet.absoluteFill, bodyStyle]} animatedProps={bodyProps} pointerEvents="box-none" collapsable={false}>
-        <FrostSource name={PAGE_FROST} style={StyleSheet.absoluteFill} pointerEvents="box-none" collapsable={false}>
+        <HeldFrostSource testID="pageFrostSource" name={PAGE_FROST} heldUntil={barKept ? sourceHold.heldUntil : undefined} animatedProps={barKept ? sourceHold.held : undefined} style={StyleSheet.absoluteFill} pointerEvents="box-none" collapsable={false}>
         <PageStack pulledTab={pulls ? tab.id : null} barTop={barTop}>
-        <PagerBackdrop />
+        <PagerBackdrop pager={pager} />
         <Animated.View style={[StyleSheet.absoluteFill, styles.outgoing, { backgroundColor: theme.canvas }, pager.outgoing]}>
           {underBar ? null : <Animated.View testID="pageStatusStrip" style={[{ height: insets.top }, statusStyle]} />}
           <View testID="pageArea" style={[styles.page, { marginBottom: layout.pageBottom }]}>
@@ -349,12 +411,13 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
         ))}
         <PageProgressLine tabId={tab.id} top={insets.top} />
         </PageStack>
-        </FrostSource>
+        </HeldFrostSource>
         </Animated.View>
+        {barKept ? <DestinationSlot shownId={tab.id} statusHeight={insets.top} statusOver={underBar} /> : null}
         <GlassSource name={PAGE_FROST}>
         {materialBarHosted && design === "material" ? null : (
-        <KeptBarSlot tab={tab} kept={barKept} pageDark={barDark} barHeight={barSlotHeight}>
-        {(preview, barDark) => (
+        <KeptBarSlot tab={tab} kept={barKept} pageDark={barDark}>
+        {(keptBar, barDark) => (
         <GestureDetector gesture={barGesture}>
           <Animated.View
             testID="pageBar"
@@ -379,7 +442,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                   <FoldLayer testID="floatingBarFoldLayer" textured={!folds || collapse.fold.attached.bar}>
                   <FloatingBar
                     tab={tab}
-                    preview={preview}
+                    preview={keptBar.preview}
+                    standsIn={keptBar.standsIn}
+                    privateLook={keptBar.privateLook}
                     order={barOrder}
                     roles={rolesFor(barDark)}
                     dark={barDark}
@@ -388,6 +453,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     duo={duoBar}
                     fold={folds ? collapse.fold.barLook : null}
                     swipe={swipeAddresses}
+                    handover={handover}
                     onTabs={tabsOrHeld}
                     onTabsMenu={openTabsMenu}
                     onStep={stepTab}
@@ -400,6 +466,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                 </Animated.View>
                 {folds ? (
                   <Animated.View
+                    ref={hostPill}
                     testID="hostPillFold"
                     collapsable={false}
                     needsOffscreenAlphaCompositing={Platform.OS === "android"}

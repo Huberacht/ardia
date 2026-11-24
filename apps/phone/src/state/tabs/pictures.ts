@@ -32,6 +32,8 @@ export function pictureLanded(tab: BrowserTab, uri: string, generation: number):
   return "durable";
 }
 
+export const shownPictureGeneration = (id: string): number => shownGeneration.get(id) ?? 0;
+
 export const persistedPicture = (tab: BrowserTab): string | null => (durableWhileShowing.has(tab.id) ? durableWhileShowing.get(tab.id)! : tab.snapshotFileName);
 
 export const forTheDatabase = (tab: BrowserTab): BrowserTab => (durableWhileShowing.has(tab.id) ? { ...tab, snapshotFileName: durableWhileShowing.get(tab.id)! } : tab);

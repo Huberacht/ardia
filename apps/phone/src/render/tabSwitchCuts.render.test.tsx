@@ -12,6 +12,7 @@ import { DesignProvider, Favicon } from "../components/ui";
 import { Dimensions, Image, Platform, StyleSheet, TextInput, View } from "react-native";
 import { deckPull, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, PULL_STAGE } from "../state/browse/deckPull";
 import { currentPhoneGeneration, deckTurn, liftDeckControl, pressDeckControl, queueDeckHit, takeDeckHit, type DeckHitCommand, type PreparedDeck } from "../state/browse/deckTurn";
+import { liftDestination } from "../state/browse/destination";
 import { MenuTrigger } from "../components/ui/MenuTrigger";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
@@ -209,18 +210,16 @@ test("with cuts the page bar is one bar that stays mounted under the deck: hidde
   expect(preview).toContain(display(destination.url).host);
   const previewLeaf = host("floatingBarPreview")[0]!;
   expect(getAnimatedStyle(previewLeaf).opacity).toBe(0);
-  act(() => {
-    pageBarShown.value = 1;
-    pageBarPreviewShown.value = 1;
-  });
+  act(() => liftDestination(destination.id));
+  act(() => jest.advanceTimersByTime(16));
   expect(getAnimatedStyle(kept()!).opacity).toBe(1);
   expect(getAnimatedStyle(previewLeaf).opacity).toBe(1);
-  const fill = host("keptBarReleaseFill")[0]!;
-  expect(getAnimatedStyle(fill).opacity).toBe(1);
+  const source = root.root.findAll((node) => node.props.testID === "pageFrostSource" && node.props.jestAnimatedProps !== undefined)[0]!;
+  expect(source.props.jestAnimatedProps.value.heldFill).toEqual(expect.any(String));
   act(() => sendDeckCommand({ kind: "open", tabId: destination.id, tappedAt: Date.now() }));
   expect(currentTabs().selectedId).toBe(destination.id);
   expect(host("keptPageBar")[0]).toBeDefined();
-  expect(getAnimatedStyle(host("keptBarReleaseFill")[0]!).opacity).toBe(0);
+  expect(root.root.findAll((node) => node.props.testID === "pageFrostSource" && typeof node.props.heldUntil === "string")).not.toHaveLength(0);
   expect(host("floatingBarHost").map((node) => node.props.children).flat().join("")).toContain(display(destination.url).host);
   act(() => previewPageBar(null));
   unmount(root);
@@ -323,9 +322,11 @@ function spyScreenReaderFocus() {
   return landed;
 }
 
+const spokenValue = (node: ReactTestInstance) => ((node.props.jestAnimatedProps?.value?.accessibilityValue ?? node.props.accessibilityValue) as { text: string } | undefined)?.text;
+
 const focusedAddress = (root: ReactTestRenderer, view: unknown) => {
   const nodes = root.root.findAll((node) => node.instance === view && node.props.accessibilityLabel === "Address");
-  return nodes.length > 0 ? (nodes[0]!.props.accessibilityValue as { text: string }).text : null;
+  return nodes.length > 0 ? (spokenValue(nodes[0]!) ?? null) : null;
 };
 
 const settleFocus = async () => {
@@ -350,7 +351,7 @@ test("after a swipe hands the page over, TalkBack focus moves to the destination
   await settleFocus();
   expect(currentTabs().selectedId).toBe(id);
   expect(addressNode().instance).toBe(before);
-  expect(addressNode().props.accessibilityValue.text).toBe(display(findTab(currentTabs(), id)!.url).host);
+  expect(spokenValue(addressNode())).toBe(display(findTab(currentTabs(), id)!.url).host);
   expect(landed.length).toBe(1);
   expect(focusedAddress(root, landed[0])).toBe(display(findTab(currentTabs(), id)!.url).host);
   unmount(root);
@@ -367,7 +368,7 @@ test("a deck select moves TalkBack focus to the destination's Address once the d
   act(() => sendDeckCommand({ kind: "open", tabId: wanted, tappedAt: Date.now() }));
   await settleFocus();
   expect(currentTabs().selectedId).toBe(wanted);
-  const address = root.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityLabel === "Address" && node.props.accessibilityValue?.text === display(findTab(currentTabs(), wanted)!.url).host);
+  const address = root.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityLabel === "Address" && spokenValue(node) === display(findTab(currentTabs(), wanted)!.url).host);
   expect(address).toHaveLength(1);
   expect(landed.length).toBe(1);
   expect(focusedAddress(root, landed[0])).toBe(display(findTab(currentTabs(), wanted)!.url).host);

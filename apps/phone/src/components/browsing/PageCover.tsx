@@ -1,7 +1,7 @@
 import { memo, useEffect, useState, type ReactNode } from "react";
 import { countRender } from "../../state/app/interactionPerf";
 import { Dimensions, Image, Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent } from "react-native";
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
 import { arrivalCovers, documentWasDrawn, takeCutCardWidth, listenForPageDrawn, useBrowse } from "../../state/browse/store";
@@ -17,6 +17,9 @@ import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageReportsDrawn } from "@ardia/phone-native";
 import { PageLoadingPlaceholder } from "./PageLoadingPlaceholder";
 import { pageWords } from "../../lib/sharedWords";
+import { destination, destinationCovers, destinationFaceMark, destinationFaceShows } from "../../state/browse/destination";
+import { pageBarShown } from "../../state/browse/deckPull";
+import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 
 export type CoverFace = { kind: "card"; picture: string | null; title: string; host: string; cardWidth: number | null } | { kind: "placeholder" };
 
@@ -52,7 +55,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const tone = usePageTone(tab.id);
   const [frozen] = useState(() => launchArguments().loadFreeze !== null);
   const [picture] = useState(() => findTab(currentTabs(), tab.id)?.snapshotFileName ?? tab.snapshotFileName);
-  const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && (WAITS_FOR_PAINT || !arrivalCovers(tab.id))));
+  const [needed] = useState(() => frozen || (!destinationCovers(tab.id) && pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && (WAITS_FOR_PAINT || !arrivalCovers(tab.id)))));
   const [atRest] = useState(() => pageAtRest(pageNavigation(tab.id)));
   const [cutsOnDraw] = useState(() => !WAITS_FOR_PAINT && tabSwitchCuts() && pageReportsDrawn());
   const waitsForPaint = WAITS_FOR_PAINT || cutsOnDraw;
@@ -194,4 +197,43 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   );
 });
 
-const styles = StyleSheet.create({ cardFace: { position: "absolute", left: 0, top: 0, transformOrigin: "left top" }, warm: { position: "absolute" } });
+type DestinationFaceProps = { tab: BrowserTab; cover: string | undefined; statusHeight: number; statusOver: boolean };
+
+export const DestinationFace = memo(function DestinationFace({ tab, cover, statusHeight, statusOver }: DestinationFaceProps) {
+  const theme = useTheme();
+  const tone = usePageTone(tab.id);
+  const viewport = useWindowDimensions();
+  const warm = useWarmPicture(tab, viewport, true);
+  const [decoded, setDecoded] = useState<string | null>(null);
+  const shown = display(tab.url);
+  const id = tab.id;
+  const face = useAnimatedStyle(() => {
+    const lifted = destination.id.value;
+    const bar = pageBarShown.value;
+    return { opacity: destinationFaceShows(id, lifted, bar) ? 1 : 0 };
+  }, [id]);
+  const touches = useAnimatedProps<{ pointerEvents: "auto" | "none" }>(() => {
+    const lifted = destination.id.value;
+    const bar = pageBarShown.value;
+    return { pointerEvents: destinationFaceShows(id, lifted, bar) ? "auto" : "none" };
+  }, [id]);
+  const mark = useAnimatedProps<{ mark: string }>(() => {
+    const lifted = destination.id.value;
+    const bar = pageBarShown.value;
+    return { mark: destinationFaceMark(id, lifted, bar) };
+  }, [id]);
+  const pictured = warm !== null && decoded === warm.uri;
+  return (
+    <Animated.View testID="destinationFace" nativeID={cover} collapsable={false} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }, face]} animatedProps={touches}>
+      {statusOver ? null : <View style={{ height: statusHeight, backgroundColor: tone?.top ?? theme.canvas }} />}
+      <View testID="destinationTitle" style={styles.body}>
+        <TabFace tab={{ ...tab, snapshotFileName: null }} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} paintedAs={`destination:${tab.id}`} />
+      </View>
+      {warm ? <Image testID="destinationPicture" source={{ uri: warm.uri }} fadeDuration={0} onLoad={() => setDecoded(warm.uri)} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height, opacity: pictured ? 1 : 0 }]} /> : null}
+      {statusOver ? <View style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
+      <UiFrameMark style={uiFrameMarkStyle} animatedProps={mark} />
+    </Animated.View>
+  );
+});
+
+const styles = StyleSheet.create({ body: { flex: 1 }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 }, cardFace: { position: "absolute", left: 0, top: 0, transformOrigin: "left top" }, warm: { position: "absolute" } });
