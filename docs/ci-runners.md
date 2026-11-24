@@ -8,14 +8,22 @@ Blacksmith's cache without any change to the steps.
 | Label | Machine | Used for |
 | - | - | - |
 | `blacksmith-2vcpu-ubuntu-2404` | 2 vCPU, 8 GB | gates, bots, `which checks run`, vouch, CLA, stale, linked-issue, caches, preflights |
-| `blacksmith-4vcpu-ubuntu-2404` | 4 vCPU, 16 GB | the `browser tests` shares, site and service deploys, Rust, the Windows JavaScript bundle and source checks |
-| `blacksmith-8vcpu-ubuntu-2404` | 8 vCPU, 32 GB | `typecheck, tests and Mac bundle`, Linux `checks` and `package`, the Android app, the Linux release build |
+| `blacksmith-4vcpu-ubuntu-2404` | 4 vCPU, 16 GB | the `browser tests` shares, `repository, vouch and stale tests`, site and service deploys, the Linux update helper, the Windows JavaScript bundle and source checks |
+| `blacksmith-8vcpu-ubuntu-2404` | 8 vCPU, 32 GB | `typecheck, tests and Mac bundle`, Linux `checks` and `package`, the Android app, `core-rs (ubuntu-latest)`, the Linux release build |
 | `blacksmith-6vcpu-macos-27` | M4, 6 vCPU, 24 GB | Swift tests, iPhone packages, release checks and signing |
 | `blacksmith-12vcpu-macos-27` | M4, 12 vCPU, 48 GB | the Mac app, the iPhone app, the Mac release build, the iPhone release |
 | `blacksmith-6vcpu-macos-15` | M4, 6 vCPU, 24 GB | the release's `publish` job |
 | `blacksmith-6vcpu-macos-latest` | M4, 6 vCPU, 24 GB | `core-rs (macos-latest)` |
 
 macOS 27 ships Xcode 27; the Mac and iPhone workflows pin Xcode 27.1 with `DEVELOPER_DIR`.
+
+## Caches that make it fast
+
+- Turborepo's remote cache is on for the org (Blacksmith Settings › Caching), so `pnpm typecheck` and the turbo test
+  tasks replay unchanged packages; a job log says `Remote caching enabled` and `cache hit, replaying logs`.
+- The Android job runs Gradle with `--build-cache`. Pushes to `main` save `~/.gradle` under the build files' hash plus
+  the commit, and pull requests restore the newest one, so unchanged modules and their unit tests come from the cache.
+- `core-rs` keeps its Cargo registry and `target` in the Actions cache, keyed by the toolchain and lockfiles.
 
 ## What stays on GitHub
 

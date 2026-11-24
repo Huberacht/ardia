@@ -84,7 +84,7 @@ jobs:
       matrix:
         include:
           - { os: macos-latest, runner: blacksmith-6vcpu-macos-latest }
-          - { os: ubuntu-latest, runner: blacksmith-4vcpu-ubuntu-2404 }
+          - { os: ubuntu-latest, runner: blacksmith-8vcpu-ubuntu-2404 }
           - { os: windows-latest, runner: windows-latest }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
