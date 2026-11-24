@@ -12,6 +12,11 @@ class SystemModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ArdiaPhoneSystem")
 
+        OnCreate {
+            val context = appContext.reactContext ?: return@OnCreate
+            LabTouches.register(context) { appContext.currentActivity }
+        }
+
         Function("labLog") { line: String ->
             if (PhoneLab.isOn) android.util.Log.i("PAGELAB", line)
         }
