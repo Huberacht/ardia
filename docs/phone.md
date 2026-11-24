@@ -1439,14 +1439,19 @@ look surface: it has no frost source to refract.
   strip's own layers are tiny (180 by 43). The F4 has no `gpu.renderstages` producer and its Adreno tracepoints
   aren't readable on a user build, so the split comes from these ablations, HWUI's GPU-completion slices and
   simpleperf (lab builds are profileable: `simpleperf record --app`).
-- **The bar's glass behind its fold layers.** `GlassBackdropView` (`GlassBehind` in `LookViews.tsx`) is the page
-  bar's first child, behind the folds. A glass with a backdrop before its branch records nothing in its own view; the
-  backdrop draws it, in tree order, with the glass's transform and its ancestors' alpha up to the bar, and a glass's
-  redraw invalidates the backdrop instead of the glass. The fold layers hold only the icons and text and stay cached,
-  and a fold that scales or fades redraws the backdrop through its pre-draw check. A hidden glass (shown false) used
-  to see a new offset on every pre-draw, since it returns before FrostView's draw and its fold sits scaled, and
-  invalidated itself every frame: that dirtied its fold's layer each frame, and with the backdrop re-recorded it each
-  frame (3.6 % of the UI thread). A glass that isn't sampling now skips that check.
+- **The bar's glass behind its fold layers.** Each fold (`floatingBarFold`, `hostPillFold`) holds its own
+  `GlassBackdropView` (`GlassBehind` in `LookViews.tsx`) as its first child, then a `FoldLayer` around its glyphs that
+  carries the hardware layer (`renderToHardwareTextureAndroid`) the fold view used to hold. The fold view keeps its
+  transform and alpha with `needsOffscreenAlphaCompositing`, so a fading fold composites its glass and glyphs as one
+  group, as its layer did; the backdrop clips to the fold's bounds, as the layer did; and the bar's fold still draws
+  under the pill's. A glass with a backdrop before its branch records nothing in its own view; the backdrop draws it,
+  in tree order, with its transform, size and ancestors' alpha up to the fold, and a glass's redraw or size change
+  invalidates the backdrop instead of the glass, so the glyph layers stay cached while the page scrolls. The backdrop
+  is a `ReactPointerEventsView` with pointer events NONE, so touches beside the folded pill reach the page, and
+  removing one hands its glasses back to drawing themselves. A hidden glass (shown false) used to see a new offset on
+  every pre-draw, since it returns before FrostView's draw and its fold sits scaled, and invalidated itself every
+  frame (3.6 % of the UI thread); a glass that isn't sampling now skips that check and never waits on its source.
+  Mid-fold frames on a blank page match round 5's in the live and Classic looks.
 - **Scrolling with the glass, measured (round 6).** Ten swipes on Wikipedia's Glass article, interleaved, each run
   started with the F4's CPU cooling devices at level 3 or less (thermal status 0 alone let the big cores throttle
   mid-series): main 2.68 % janky over 11 runs (p50 9 to 10 ms, p90 13 to 14), the glass 3.90 % over 6 (p50 12, p90
