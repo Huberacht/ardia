@@ -675,9 +675,9 @@ test("a Windows build waiting at the gate starts with the iPhone one", async () 
   assert.deepEqual(github.named("actions.reRunWorkflow").map((call) => call.params.run_id), [900, 960]);
 });
 
-test("a fork build that ran is not started again", async () => {
-  const built = [{ name: "gate", conclusion: "success" }, { name: "app", conclusion: "success" }];
-  const waiting = [{ name: "gate", conclusion: "success" }, { name: "package", conclusion: "skipped" }];
+test("a fork build that ran, with its route job skipped, is not started again", async () => {
+  const built = [{ name: "gate", conclusion: "success" }, { name: "route", conclusion: "skipped" }, { name: "app", conclusion: "success" }];
+  const waiting = [{ name: "gate", conclusion: "success" }, { name: "route", conclusion: "skipped" }, { name: "package", conclusion: "skipped" }];
   const github = fakeGithub({
     runs: { s9: [runOf(9, 900)] },
     androidRuns: { s9: [runOf(9, 950)] },
