@@ -39,7 +39,8 @@ function Named([int[]]$ids) { @($ids | ForEach-Object { $p = Get-Process -Id $_ 
 $edgeWasRunning = [bool](Get-Process -Name msedge -ErrorAction SilentlyContinue)
 $OpenRefusals = @('A URL is required', 'The arguments must be a list')
 $LoginRefusals = @('Opening at login takes one boolean', 'The arguments must be a list')
-$DefaultRefusals = @('The arguments must be a list')
+$DefaultRefusals = @('The default browser calls take no arguments', 'The arguments must be a list')
+$settingsAtStart = @(Get-Process -Name SystemSettings -ErrorAction SilentlyContinue | ForEach-Object Id)
 function Refused($answer, [string[]]$Expected, [switch]$FalseIsRefusal) {
   if ($null -eq $answer -or $null -eq $answer.ok) { return $false }
   if ($answer.ok -eq $true) { return [bool]$FalseIsRefusal -and ($answer.r -is [bool]) -and -not $answer.r }
@@ -48,6 +49,7 @@ function Refused($answer, [string[]]$Expected, [switch]$FalseIsRefusal) {
 $MailApps = @('olk', 'HxOutlook', 'OUTLOOK', 'HxTsr', 'OpenWith')
 $webuiRunBefore = Read-RawRun 'Ardia WebUI'
 $mailWasRunning = @(Get-Process -Name $MailApps -ErrorAction SilentlyContinue | ForEach-Object Id)
+$runStarted = Get-Date
 $pilotEnginePids = @()
 $failedRun = $false
 try {
@@ -130,11 +132,25 @@ try {
   Check 'set-launch-at-login-refuses-shared-corpus' ($absentAtStart -and ($badAbsent.Count -eq 0) -and ($badPresent.Count -eq 0) -and ($storedAfter -eq $expected)) "not refused or changed the Run value while absent: $($badAbsent -join ', '); while present: $($badPresent -join ', ')"
   Check 'login-item-toggles-run-key' ($on.ok -and $off.ok -and $stored -eq $expected -and $status1.r -eq 'enabled' -and $status2.r -eq 'notRegistered' -and (Run-Value 'Ardia WebUI') -eq $null -and (Run-Value 'Ardia') -eq $rnwBefore) "before $($status0.r), stored '$stored', after on $($status1.r), after off $($status2.r), RNW value unchanged: $((Run-Value 'Ardia') -eq $rnwBefore)"
 
-  $settingsBefore = @(Get-Process -Name SystemSettings -ErrorAction SilentlyContinue | ForEach-Object Id)
-  $defaultBad = Invoke-Host 'ArdiaSystem.setAsDefaultBrowser' '{ "args": "x" }'
-  $defaultObject = Invoke-Host 'ArdiaSystem.setAsDefaultBrowser' '{ "args": { "0": 1 } }'
-  $settingsNew = @(Get-Process -Name SystemSettings -ErrorAction SilentlyContinue | Where-Object { $settingsBefore -notcontains $_.Id })
-  Check 'non-list-args-refused-before-dispatch' ((Refused $defaultBad $DefaultRefusals) -and (Refused $defaultObject $DefaultRefusals) -and ($settingsNew.Count -eq 0)) "string args $($defaultBad | ConvertTo-Json -Compress); object args $($defaultObject | ConvertTo-Json -Compress)"
+  function Sinks { $r = (Invoke-Host 'ArdiaShell.testOpenExternalSink' '{}').r; [pscustomobject]@{ open = $r.calls; defaults = $r.defaultBrowserCalls } }
+  function Set-Default([string]$argsExpression) {
+    Cdp-Eval "(() => { try { return __ardiaHost.invoke('ArdiaSystem.setAsDefaultBrowser', { args: $argsExpression }).then(r => JSON.stringify({ ok: true, r }), e => JSON.stringify({ ok: false, e: String(e && e.message || e) })); } catch (e) { return JSON.stringify({ ok: false, e: 'threw ' + e.message }); } })()" | ConvertFrom-Json
+  }
+  $defaultSinkBefore = Sinks
+  $defaultUnrefused = @()
+  foreach ($case in $corpus.cases) {
+    $answer = Set-Default "[$($case.expression)]"
+    if (-not (Refused $answer $DefaultRefusals)) { $defaultUnrefused += $case.id; Log "setAsDefaultBrowser answered $($answer | ConvertTo-Json -Compress) for $($case.id)" }
+  }
+  foreach ($shape in @($corpus.shapes | Where-Object { $_.expression -ne '[]' }) + @([pscustomobject]@{ id = 'shape.stringArgs'; expression = '"x"' }, [pscustomobject]@{ id = 'shape.objectArgs'; expression = '{ "0": 1 }' })) {
+    $answer = Set-Default $shape.expression
+    if (-not (Refused $answer $DefaultRefusals)) { $defaultUnrefused += $shape.id; Log "setAsDefaultBrowser answered $($answer | ConvertTo-Json -Compress) for $($shape.id)" }
+  }
+  $defaultSinkAfter = Sinks
+  Check 'set-default-browser-refuses-shared-corpus' (($defaultUnrefused.Count -eq 0) -and ($defaultSinkBefore.defaults -eq 0) -and ($defaultSinkAfter.defaults -eq 0) -and ($null -ne $defaultSinkBefore.open) -and ($defaultSinkAfter.open -eq $defaultSinkBefore.open)) "$($corpus.cases.Count) corpus values as one-item lists and bad containers; not explicitly refused: $($defaultUnrefused -join ', '); default apps launches $($defaultSinkBefore.defaults) -> $($defaultSinkAfter.defaults); external opens $($defaultSinkBefore.open) -> $($defaultSinkAfter.open)"
+  $defaultControl = Set-Default '[]'
+  $defaultSinkControl = Sinks
+  Check 'set-default-browser-control-reaches-sink' (($defaultControl.ok -eq $true) -and ($defaultControl.r -is [bool]) -and ($defaultSinkAfter.defaults -eq 0) -and ($defaultSinkControl.defaults -eq 1) -and ($defaultSinkControl.open -eq $defaultSinkAfter.open)) "answer $($defaultControl | ConvertTo-Json -Compress); default apps launches $($defaultSinkAfter.defaults) -> $($defaultSinkControl.defaults)"
 
   $isDefault = Invoke-Host 'ArdiaSystem.isDefaultBrowser' '{ "args": [] }'
   $badDefault = Invoke-Host 'ArdiaSystem.isDefaultBrowser' '{ "args": [1] }'
@@ -153,10 +169,11 @@ try {
   Stop-Engine
   if (-not $edgeWasRunning) { Get-Process -Name msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
   Restore-RawRun 'Ardia WebUI' $webuiRunBefore
+  Get-Process -Name SystemSettings -ErrorAction SilentlyContinue | Where-Object { $settingsAtStart -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
   $mailCandidates = @(Get-Process -Name $MailApps -ErrorAction SilentlyContinue | Where-Object { $mailWasRunning -notcontains $_.Id })
   foreach ($proc in $mailCandidates) {
     $info = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction SilentlyContinue
-    if ($info -and (($info.CommandLine -like '*ardia-fixture.invalid*') -or ($pilotEnginePids -contains [int]$info.ParentProcessId))) {
+    if (($proc.StartTime -ge $runStarted) -or ($info -and (($info.CommandLine -like '*ardia-fixture.invalid*') -or ($pilotEnginePids -contains [int]$info.ParentProcessId)))) {
       Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     }
   }

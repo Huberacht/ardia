@@ -43,6 +43,8 @@ std::string SecretFileName(std::string_view account);
 
 int ExternalOpenCount();
 
+int DefaultAppsOpenCount();
+
 std::optional<std::wstring> LoginItemCommand(const base::FilePath& executable);
 
 base::FilePath SecretDirectory();

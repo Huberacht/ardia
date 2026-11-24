@@ -1444,7 +1444,9 @@ void ShellWindow::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.testOpenExternalSink" && ardiacore::TestInstance()) {
     return std::move(done).Run(
-        true, base::Value(base::DictValue().Set("calls", ExternalOpenCount())));
+        true, base::Value(base::DictValue()
+                              .Set("calls", ExternalOpenCount())
+                              .Set("defaultBrowserCalls", DefaultAppsOpenCount())));
   }
   if (method == "ArdiaShell.testWindowDecorations" && ardiacore::TestInstance()) {
     return std::move(done).Run(true, base::Value(DecorationReport()));

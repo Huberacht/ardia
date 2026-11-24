@@ -74,6 +74,7 @@ constexpr base::TimeDelta kPowerSampleInterval = base::Seconds(10);
 constexpr std::string_view kExternalSchemes[] = {"http", "https", "mailto"};
 
 std::atomic<int> g_external_opens{0};
+std::atomic<int> g_default_apps_opens{0};
 
 void Fail(PlatformReply done, std::string_view code, std::string_view message) {
   std::move(done).Run(false, base::Value(base::DictValue().Set("code", code).Set("message", message)));
@@ -314,8 +315,11 @@ void InvokeDefaultBrowser(std::string_view method, const base::ListValue& args, 
   }
   ShellWorker()->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce([](bool changing) {
-        if (changing && !OpenWithShell(kDefaultAppsPage)) {
-          LOG(WARNING) << "Ardia: the default apps page did not open";
+        if (changing) {
+          g_default_apps_opens.fetch_add(1, std::memory_order_relaxed);
+          if (!OpenWithShell(kDefaultAppsPage)) {
+            LOG(WARNING) << "Ardia: the default apps page did not open";
+          }
         }
         return DefaultBrowserNow();
       }, changing),
@@ -635,6 +639,10 @@ std::string SecretFileName(std::string_view account) {
 
 int ExternalOpenCount() {
   return g_external_opens.load(std::memory_order_relaxed);
+}
+
+int DefaultAppsOpenCount() {
+  return g_default_apps_opens.load(std::memory_order_relaxed);
 }
 
 bool SecretAccountAllowed(std::string_view account) {
