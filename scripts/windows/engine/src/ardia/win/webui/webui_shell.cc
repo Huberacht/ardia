@@ -1451,6 +1451,13 @@ void ShellWindow::Invoke(const std::string& method,
   }
   if (const auto capability =
           ardia::desktop::Platform().CapabilityFor(method)) {
+    const base::Value* given = args.Find("args");
+    if (given && !given->is_list()) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_SYSTEM_REQUEST")
+                                 .Set("message", "The arguments must be a list")));
+    }
     static const base::NoDestructor<base::ListValue> kNoArguments;
     return ardia::desktop::Platform().Invoke(
         *capability, {method, values ? *values : *kNoArguments,
@@ -1524,7 +1531,8 @@ void ShellWindow::EngineCall(const std::string& name,
     WatchSystemState();
     return ardia::desktop::Platform().CurrentPower(base::BindOnce(
         [](Done done, base::DictValue state) {
-          std::move(done).Run(true, base::Value(std::move(state)));
+          std::move(done).Run(
+              true, base::Value(base::WriteJson(state).value_or("{}")));
         },
         std::move(done)));
   }

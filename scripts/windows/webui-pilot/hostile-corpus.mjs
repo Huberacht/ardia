@@ -21,6 +21,12 @@ const UNLISTED_SCHEMES = [
   "https://user:pass@ardia-fixture.invalid/",
   "mailto:a@ardia-fixture.invalid?body=%0d%0a" + "\t",
   "https:///ardia-fixture.invalid",
+  "https://@ardia-fixture.invalid/",
+  "https://ardia-fixture.invalid@ardia-other.invalid/",
+  "https://ardia-fixture.invalid/" + "\u061c",
+  "https://ardia-fixture.invalid/" + String.fromCodePoint(0xe0001),
+  "https://ardia-fixture.invalid/" + String.fromCodePoint(0xf0000),
+  "https://ardia-fixture.invalid/" + "\u00a0",
   "https:ardia-fixture.invalid",
   "HTTPS://ardia-fixture.invalid/" + "\u0000",
 ];

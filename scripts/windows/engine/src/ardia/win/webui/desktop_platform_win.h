@@ -31,6 +31,10 @@ ShellDecorations ApplyShellDecorations(HWND window);
 
 bool SystemPrefersDark();
 
+bool PlainCodePoints(std::string_view text);
+
+bool RawUserInfo(std::string_view text);
+
 bool ExternalUrlAllowed(std::string_view text);
 
 bool SecretAccountAllowed(std::string_view account);

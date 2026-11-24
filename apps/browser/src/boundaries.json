@@ -1811,7 +1811,12 @@
     "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#LoginItemCommand",
     "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#SecretAccountAllowed",
     "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#SecretFileName",
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#CapabilityFor",
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#PlainCodePoints",
+    "scripts/windows/engine/src/ardia/win/webui/desktop_platform_win.cc#RawUserInfo",
     "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#CapabilityFor",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#Trusted",
+    "scripts/windows/webui-pilot/platform.ps1#set-launch-at-login-refuses-shared-corpus",
     "scripts/windows/webui-pilot/hostile-corpus.mjs#HOSTILE_VALUES",
     "scripts/windows/webui-pilot/platform.ps1#open-external-refuses-shared-corpus",
     "scripts/windows/webui-pilot/platform.ps1#dpapi-case-distinct-accounts"

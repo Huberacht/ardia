@@ -32,6 +32,8 @@
 #include "base/power_monitor/power_observer.h"
 #include "base/rand_util.h"
 #include "base/containers/span.h"
+#include "third_party/icu/source/common/unicode/uchar.h"
+#include "third_party/icu/source/common/unicode/utf8.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -547,6 +549,43 @@ ShellDecorations ApplyShellDecorations(HWND window) {
   return applied;
 }
 
+bool PlainCodePoints(std::string_view text) {
+  const auto* bytes = reinterpret_cast<const uint8_t*>(text.data());
+  const int32_t length = static_cast<int32_t>(text.size());
+  int32_t offset = 0;
+  while (offset < length) {
+    UChar32 point = 0;
+    U8_NEXT(bytes, offset, length, point);
+    if (point < 0) {
+      return false;
+    }
+    switch (u_charType(point)) {
+      case U_CONTROL_CHAR:
+      case U_FORMAT_CHAR:
+      case U_SPACE_SEPARATOR:
+      case U_LINE_SEPARATOR:
+      case U_PARAGRAPH_SEPARATOR:
+      case U_SURROGATE:
+      case U_PRIVATE_USE_CHAR:
+      case U_UNASSIGNED:
+        return false;
+      default:
+        break;
+    }
+  }
+  return true;
+}
+
+bool RawUserInfo(std::string_view text) {
+  const size_t marker = text.find("://");
+  if (marker == std::string_view::npos) {
+    return false;
+  }
+  const std::string_view rest = text.substr(marker + 3);
+  const std::string_view authority = rest.substr(0, rest.find_first_of("/?#"));
+  return authority.find('@') != std::string_view::npos;
+}
+
 bool ExternalUrlAllowed(std::string_view text) {
   if (text.empty() || text.size() > kExternalUrlLimit) {
     return false;
@@ -557,15 +596,7 @@ bool ExternalUrlAllowed(std::string_view text) {
       return false;
     }
   }
-  if (!base::IsStringUTF8(text)) {
-    return false;
-  }
-  const std::u16string wide = base::UTF8ToUTF16(text);
-  if (std::ranges::any_of(wide, [](char16_t c) {
-        return (c >= 0x80 && c <= 0xa0) || c == 0xad || c == 0x1680 || c == 0x180e || (c >= 0x2000 && c <= 0x200f) ||
-               (c >= 0x2028 && c <= 0x202f) || (c >= 0x205f && c <= 0x206f) || c == 0x3000 || c == 0xfeff ||
-               (c >= 0xfff0 && c <= 0xffff);
-      })) {
+  if (!PlainCodePoints(text) || RawUserInfo(text)) {
     return false;
   }
   const GURL url(text);
