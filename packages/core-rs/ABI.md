@@ -131,10 +131,9 @@ keys and `R` values and a non-canonical `S`. OpenSSL, which the helper used befo
 small-order key's trivial signature; that can't matter for a release, since installs pin
 `scripts/linux/linux-update.pem`, but it's recorded.
 
-`crates/ardia-update-verify` is the command line called by both the Linux root helper (`lib/ardia/ardia-update-verify`,
-built static for `x86_64-unknown-linux-musl` by `scripts/linux/update-verify.sh`) and the Windows updater
-(`ardia-update-verify.exe`, built static with `+crt-static` by `scripts/windows/update-verify.ps1`, plus
-`scripts/windows/publish-alpha.sh` self-verification): `version <V>`, `manifest` and `package` over
+`crates/ardia-update-verify` is the command line called by the Linux root helper (`lib/ardia/ardia-update-verify`,
+built static for `x86_64-unknown-linux-musl` by `scripts/linux/update-verify.sh`) and by `scripts/windows/publish-alpha.sh`
+to self-verify the Windows feed: `version <V>`, `manifest` and `package` over
 `verify_linux_update`, and `windows-manifest` and `windows-package` over `verify_windows_update`, with no rule of its
 own besides reading the key's PEM, capping and refusing to follow its inputs (including Windows reparse points), and
 hashing the package. It links `ardia-update-core` as a Rust crate, not `libardia_update`, and nothing in `BUILD.gn`

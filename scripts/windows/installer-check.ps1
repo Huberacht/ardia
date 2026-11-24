@@ -1,6 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Setup,
-  [ValidateSet("auto", "rnw", "webui")][string]$Shell = "auto"
+  [Parameter(Mandatory = $true)][string]$Setup
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,7 +44,7 @@ $before = Browser-Leftovers
 if ($before.Count) { throw "Ardia's browser registration is already here before the install: $($before -join ', ')" }
 
 Invoke-Quietly (Resolve-Path -LiteralPath $Setup).Path "the installer"
-$shellKind = Resolve-ShellLayout $folder $Shell
+$shellKind = Resolve-ShellLayout $folder "webui"
 $shipped = Get-ShellInstalledFiles $shellKind
 $missing = @($shipped | Where-Object { -not (Test-Path -LiteralPath (Join-Path $folder $_) -PathType Leaf) })
 if ($missing.Count) { throw "the install in $folder lacks $($missing -join ', ')" }

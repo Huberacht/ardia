@@ -1,21 +1,9 @@
-#ifndef Shell
-  #define Shell "webui"
-#endif
-#if Shell == "webui"
-  #define LaunchSwitch "--ardia-shell=webui"
-  #define OpenSuffix " --ardia-shell=webui"
-  #define ShellMarker "ardia-ui\index.html"
-  #define RetiredShell "rnw"
-  #define RetiredMarker "ArdiaApp.dll"
-  #define RetiredMarkerAlt "ArdiaApp.dll"
-#else
-  #define LaunchSwitch ""
-  #define OpenSuffix ""
-  #define ShellMarker "ArdiaApp.dll"
-  #define RetiredShell "webui"
-  #define RetiredMarker "ardia-ui\index.html"
-  #define RetiredMarkerAlt "ardia-webui-migrate.exe"
-#endif
+#define Shell "webui"
+#define LaunchSwitch "--ardia-shell=webui"
+#define OpenSuffix " --ardia-shell=webui"
+#define ShellMarker "ardia-ui\index.html"
+#define RetiredShell "rnw"
+#define RetiredMarker "ArdiaApp.dll"
 
 [Setup]
 AppId={{47A92F18-32B0-4548-A1EF-72C217FE1836}
@@ -392,7 +380,7 @@ var
   Folder: String;
 begin
   Folder := ExpandConstant('{app}');
-  RetiredShellFound := FileExists(Folder + '\{#RetiredMarker}') or FileExists(Folder + '\{#RetiredMarkerAlt}') or FileExists(Folder + '\ardia-{#RetiredShell}-files.txt');
+  RetiredShellFound := FileExists(Folder + '\{#RetiredMarker}') or FileExists(Folder + '\ardia-{#RetiredShell}-files.txt');
   PreviousOwnFound := ReadManifest(Folder, 'ardia-{#Shell}-files.txt', PreviousOwn);
 end;
 

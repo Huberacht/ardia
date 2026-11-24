@@ -10,14 +10,8 @@
 
 namespace ardia_win {
 
-inline constexpr wchar_t kReactNativeShell[] = L"rnw";
-inline constexpr wchar_t kWebUIShell[] = L"webui";
-
-inline constexpr bool WebUIShellSelected(std::wstring_view process_type,
-                                         std::wstring_view shell,
-                                         bool react_native_app_present) {
-  return process_type.empty() && shell != kReactNativeShell &&
-         (shell == kWebUIShell || !react_native_app_present);
+inline constexpr bool WebUIShellSelected(std::wstring_view process_type) {
+  return process_type.empty();
 }
 
 inline constexpr char kMigrateFromRnwSwitch[] = "ardia-migrate-from-rnw";
