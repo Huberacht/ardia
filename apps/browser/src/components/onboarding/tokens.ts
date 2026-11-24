@@ -164,6 +164,7 @@ export const onboardingMotion = {
   overlayOut: duration.long,
   mockOverlay: duration.slow,
   introSkip: duration.slow,
+  introCoverDeadline: 15000,
   tourIn: duration.slow,
   tourOut: duration.base,
   tourPulse: period.pulse,

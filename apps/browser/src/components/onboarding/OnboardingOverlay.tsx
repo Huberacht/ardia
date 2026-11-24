@@ -41,7 +41,7 @@ function Overlay({ session }: { session: number }) {
     Animated.timing(presence, { toValue: 1, duration: onboardingMotion.overlayIn, easing: curve.enter, useNativeDriver: true }).start();
   }, []);
 
-  useEffect(() => coverOrReveal(windowId, introCovers), [introCovers, windowId]);
+  useEffect(() => coverOrReveal(windowId, introCovers, onboardingMotion.introCoverDeadline), [introCovers, windowId]);
 
   useEffect(() => {
     if (step === "intro") return card.setValue(0);

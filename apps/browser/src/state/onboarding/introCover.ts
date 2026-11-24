@@ -34,13 +34,21 @@ export function uncoverScreen(browserWindowId: string) {
   }, INTRO_WINDOW_LINGER_MS);
 }
 
-export function coverOrReveal(browserWindowId: string, covers: boolean): (() => void) | undefined {
+export function coverOrReveal(browserWindowId: string, covers: boolean, deadlineMs: number): (() => void) | undefined {
   if (!covers) {
     void setWindowShown(browserWindowId, true);
     return undefined;
   }
+  const { session } = useOnboarding.getState();
   coverScreenForIntro(browserWindowId);
-  return () => uncoverScreen(browserWindowId);
+  const stalled = setTimeout(() => {
+    const now = useOnboarding.getState();
+    if (now.session === session && now.step === "intro") handOffFromIntro(false, session);
+  }, deadlineMs);
+  return () => {
+    clearTimeout(stalled);
+    uncoverScreen(browserWindowId);
+  };
 }
 
 export function handOffFromIntro(burst: boolean, from: number = useOnboarding.getState().session) {

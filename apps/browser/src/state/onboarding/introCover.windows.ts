@@ -6,7 +6,7 @@ export function coverScreenForIntro(_browserWindowId: string) {}
 
 export function uncoverScreen(_browserWindowId: string) {}
 
-export function coverOrReveal(_browserWindowId: string, _covers: boolean): (() => void) | undefined {
+export function coverOrReveal(_browserWindowId: string, _covers: boolean, _deadlineMs: number): (() => void) | undefined {
   return undefined;
 }
 
