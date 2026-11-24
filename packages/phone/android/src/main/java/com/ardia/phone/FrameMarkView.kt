@@ -7,6 +7,14 @@ import android.view.ViewTreeObserver
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.views.ExpoView
 
+internal object FrameMarkTrace {
+    var on: () -> Boolean = { PhoneLab.isOn }
+    var write: (String) -> Unit = { label ->
+        Trace.beginSection("ardia-frame:$label")
+        Trace.endSection()
+    }
+}
+
 internal class FrameMarkGate(private val trace: (String) -> Unit) {
     var label: String? = null
         private set
@@ -57,14 +65,22 @@ internal class FrameMarkGate(private val trace: (String) -> Unit) {
 }
 
 class FrameMarkView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
-    private val gate = FrameMarkGate { label ->
-        Trace.beginSection("ardia-frame:$label")
-        Trace.endSection()
-    }
+    private val gate = FrameMarkGate { label -> FrameMarkTrace.write(label) }
     private var observer: ViewTreeObserver? = null
     private val preDraw = ViewTreeObserver.OnPreDrawListener {
         gate.traversal(!gate.drawn || FrameMarkGate.shownThrough(this))
         if (!gate.listens) stopListening()
+        true
+    }
+
+    private var shownLabel: String? = null
+    private var shown = false
+    private var traversalLabel: String? = null
+    private var traversalObserver: ViewTreeObserver? = null
+    private val atTraversal = ViewTreeObserver.OnPreDrawListener {
+        val now = traversalLabel
+        dropTraversalMark()
+        if (now != null) FrameMarkTrace.write(now)
         true
     }
 
@@ -80,8 +96,26 @@ class FrameMarkView(context: Context, appContext: AppContext) : ExpoView(context
         if (gate.drawnOnly(value)) armed()
     }
 
+    fun markWhenShown(label: String?) {
+        shownLabel = label?.takeIf { it.isNotEmpty() }
+        if (shownLabel == null) dropTraversalMark()
+    }
+
+    override fun setAlpha(alpha: Float) {
+        super.setAlpha(alpha)
+        val now = alpha > 0f
+        if (now == shown) return
+        shown = now
+        if (!now) {
+            dropTraversalMark()
+            return
+        }
+        val label = shownLabel ?: return
+        if (FrameMarkTrace.on()) markAtTraversal(label)
+    }
+
     private fun armed() {
-        if (!PhoneLab.isOn) return
+        if (!FrameMarkTrace.on()) return
         listen()
         rootView?.invalidate()
     }
@@ -97,13 +131,32 @@ class FrameMarkView(context: Context, appContext: AppContext) : ExpoView(context
         if (was.isAlive) was.removeOnPreDrawListener(preDraw)
     }
 
+    private fun markAtTraversal(label: String) {
+        traversalLabel = label
+        if (traversalObserver == null) {
+            val next = viewTreeObserver
+            next.addOnPreDrawListener(atTraversal)
+            traversalObserver = next
+        }
+        rootView?.invalidate()
+    }
+
+    private fun dropTraversalMark() {
+        traversalLabel = null
+        val was = traversalObserver ?: return
+        traversalObserver = null
+        if (was.isAlive) was.removeOnPreDrawListener(atTraversal)
+        else if (viewTreeObserver.isAlive) viewTreeObserver.removeOnPreDrawListener(atTraversal)
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (PhoneLab.isOn && gate.listens) listen()
+        if (FrameMarkTrace.on() && gate.listens) listen()
     }
 
     override fun onDetachedFromWindow() {
         stopListening()
+        dropTraversalMark()
         super.onDetachedFromWindow()
     }
 }
