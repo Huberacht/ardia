@@ -9,6 +9,7 @@ import type { RequestLogEntry } from "./requestLog";
 import { appInfo, mayPost, post } from "./transport";
 import { telemetryRelay, type AskPlacement, type CaptureOptions, type SharingSource } from "./relay";
 import { uuidv4, uuidv7 } from "./ids";
+import { upcomingInstallId } from "./installId";
 import { parseSaved, versionedJson } from "../../lib/savedDocument";
 import { withDeadline } from "../../lib/deadline";
 import { isFields, isString } from "../../lib/decode";
@@ -305,10 +306,6 @@ export function setSharing(on: boolean, source: SharingSource, placement?: AskPl
   capture("sharing_turned_on", { source, ...placement }, consentNow());
   return Promise.resolve(true);
 }
-
-let upcoming: string | null = null;
-
-export const upcomingInstallId = () => saved().installId ?? (upcoming ??= uuidv4());
 
 export function replaceInstallId(): string {
   const current = saved();
