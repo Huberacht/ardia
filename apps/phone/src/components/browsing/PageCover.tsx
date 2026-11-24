@@ -4,7 +4,7 @@ import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
-import { arrivalCovers, cutCardWidth, documentWasDrawn, listenForPageDrawn, useBrowse } from "../../state/browse/store";
+import { arrivalCovers, documentWasDrawn, takeCutCardWidth, listenForPageDrawn, useBrowse } from "../../state/browse/store";
 import { holdTone, pageNavigation, releaseTone, usePages } from "../../state/pages/store";
 import { display } from "../../state/search/omnibox";
 import { launchArguments } from "../../state/app/launchFlags";
@@ -30,7 +30,7 @@ export function coverFace(tab: Pick<BrowserTab, "title" | "url">, picture: strin
 const openingCardOf = (id: string): OpeningCard | null => {
   const { opening, openingCardWidth } = useBrowse.getState();
   if (opening === id) return { cardWidth: openingCardWidth };
-  const cut = cutCardWidth(id);
+  const cut = takeCutCardWidth(id);
   return cut === null ? null : { cardWidth: cut };
 };
 
@@ -98,12 +98,14 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     };
     const shownAloneNow = () => useBrowse.getState().surface === "browsing";
     const fadeIfShownAlone = () => {
-      if (shownAloneNow()) fade();
+      if (!shownAloneNow()) return;
+      if (cutsOnDraw) cut();
+      else fade();
     };
     const check = () => {
       if (fading) return;
       const shownAlone = useBrowse.getState().surface === "browsing";
-      if (shownAlone && !deadline) deadline = setTimeout(fade, PAGE_COVER.deadlineMs);
+      if (shownAlone && !deadline && !cutsOnDraw) deadline = setTimeout(fade, PAGE_COVER.deadlineMs);
       const page = pageNavigation(tab.id);
       if (!page?.isLive) return;
       if (waitsForPaint && shownAlone && documentWasDrawn(tab.id) && !(cutsOnDraw && page.isLoading)) {

@@ -12,7 +12,7 @@ import Animated, { cancelAnimation, Easing, runOnJS, runOnUI, useAnimatedReactio
 import { countUsage } from "../../state/telemetry/telemetry";
 import { haptics } from "../../state/app/haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { labTrace } from "../../platform/lab";
+import { labTrace, markShownFrame } from "../../platform/lab";
 import { measuredOr } from "../../state/app/rootSize";
 import {
   DECK,
@@ -69,6 +69,7 @@ import {
   whenPageCoverHidden,
   whenPageLaidOut,
   noteCutCard,
+  clearCutCard,
 } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { useCanReopen, useHasArchivedTabs, useIncognito, usePrivateCount, useShownSpace } from "../../state/tabs/hooks";
@@ -270,6 +271,7 @@ export const TabDeck = memo(function TabDeck() {
     expandedIndex.value = -1;
   };
   const cutsAway = tabSwitchCuts();
+  const poseTurn = useSharedValue(0);
   const chromeCutAway = useAnimatedStyle(() => ({ opacity: cutsAway && deckPhase.value === DECK_PHASE.closing ? 0 : 1 }));
   const scroll = useSharedValue(first.scroll);
   const scaleProgress = useSharedValue(first.progress);
@@ -393,6 +395,7 @@ export const TabDeck = memo(function TabDeck() {
 
   useLayoutEffect(() => {
     if (!shown) return;
+    markShownFrame("deck");
     spaceShown.current = shownSpace;
     sideShown.current = side;
     sideScrolls.current = { normal: null, incognito: null };
@@ -619,30 +622,42 @@ export const TabDeck = memo(function TabDeck() {
   }, [command, phase.kind, shown]);
 
   useEffect(() => () => void (openingId.current = null), []);
-  const open = (index: number, tappedAt?: number) => {
+  const unpose = (turn: number) => {
+    clearCutCard();
+    runOnUI((posed: number) => {
+      "worklet";
+      if (poseTurn.value !== posed || deckPhase.value !== DECK_PHASE.closing) return;
+      deckPhase.value = DECK_PHASE.settled;
+      expandedIndex.value = -1;
+      scaleProgress.value = 1;
+      positionProgress.value = 1;
+    })(turn);
+  };
+  const open = (index: number, tappedAt?: number, posedTurn?: number) => {
     beginInteraction("card open", INTERACTION_WINDOW_MS.cardOpen);
     const id = order[index];
     if (!id || phase.kind !== "settled" || dragIndex.value === index || openingId.current !== null || useBrowse.getState().surface !== "deck") {
-      if (tabSwitchCuts() && deckPhase.value === DECK_PHASE.closing) {
-        deckPhase.value = DECK_PHASE.settled;
-        expandedIndex.value = -1;
-        scaleProgress.value = 1;
-        positionProgress.value = 1;
-      }
+      if (posedTurn !== undefined) unpose(posedTurn);
       return;
     }
     markTiming("card tap", tappedAt);
     runOnUI(markNextUiFrame)("card motion");
     if (searchChrome) Keyboard.dismiss();
     if (grid || tabSwitchCuts() || (reduceMotion && !pulls)) {
-      if (tabSwitchCuts() && !grid) {
-        deckPhase.value = DECK_PHASE.closing;
-        expandedIndex.value = index;
-        scaleProgress.value = 0;
-        positionProgress.value = 0;
+      const cuts = tabSwitchCuts() && !grid;
+      const turn = posedTurn ?? poseTurn.value + 1;
+      if (cuts) {
+        if (posedTurn === undefined) {
+          poseTurn.value = turn;
+          deckPhase.value = DECK_PHASE.closing;
+          expandedIndex.value = index;
+          scaleProgress.value = 0;
+          positionProgress.value = 0;
+        }
         noteCutCard(id, g.cardWidth);
       }
       settledOpen(id);
+      if (cuts && (currentTabs().selectedId !== id || useBrowse.getState().surface !== "browsing")) unpose(turn);
       return;
     }
     setMenu(null);
@@ -914,9 +929,9 @@ export const TabDeck = memo(function TabDeck() {
   const settleAnchor = (target: number) => {
     if (deckWindow(target, count) !== deckWindow(anchor, count)) setAnchor(target);
   };
-  const gestureActions = useRef({ order, open, flownOff, closeFromX, showHeldCardMenu, settleAnchor });
+  const gestureActions = useRef({ order, open, unpose, flownOff, closeFromX, showHeldCardMenu, settleAnchor });
   useLayoutEffect(() => {
-    gestureActions.current = { order, open, flownOff, closeFromX, showHeldCardMenu, settleAnchor };
+    gestureActions.current = { order, open, unpose, flownOff, closeFromX, showHeldCardMenu, settleAnchor };
   });
   const panEnabled = !(pulls && reduceMotion && phase.kind === "closing");
   const longPressEnabled = !nativeMenus();
@@ -927,6 +942,11 @@ export const TabDeck = memo(function TabDeck() {
       if (at >= 0) act(at);
     };
     const openCard = (id: string) => withCard(id, (at) => gestureActions.current.open(at));
+    const openPosedCard = (id: string, turn: number) => {
+      const at = gestureActions.current.order.indexOf(id);
+      if (at < 0) gestureActions.current.unpose(turn);
+      else gestureActions.current.open(at, undefined, turn);
+    };
     const flyOff = (id: string, at: number, spec: DeckLeave, next: readonly string[], after: number) => gestureActions.current.flownOff(id, at, spec, next, after);
     const closeCardFromX = (id: string) => withCard(id, (at) => gestureActions.current.closeFromX(at));
     const holdCardMenu = (id: string, x: number, y: number) => withCard(id, (at) => gestureActions.current.showHeldCardMenu(at, x, y));
@@ -1028,12 +1048,14 @@ export const TabDeck = memo(function TabDeck() {
             if (closingId !== undefined) runOnJS(closeCardFromX)(closingId);
           } else if (card >= 0) {
             if (cardId !== undefined && cutsAway && !grid && deckPhase.value === DECK_PHASE.settled && dragIndex.value !== card) {
+              const turn = poseTurn.value + 1;
+              poseTurn.value = turn;
               deckPhase.value = DECK_PHASE.closing;
               expandedIndex.value = card;
               scaleProgress.value = 0;
               positionProgress.value = 0;
-            }
-            if (cardId !== undefined) runOnJS(openCard)(cardId);
+              runOnJS(openPosedCard)(cardId, turn);
+            } else if (cardId !== undefined) runOnJS(openCard)(cardId);
           } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();
         }
         manager.fail();

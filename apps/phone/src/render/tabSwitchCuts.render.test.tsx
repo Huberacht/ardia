@@ -6,7 +6,9 @@ import { act, type ReactTestRenderer } from "react-test-renderer";
 import { Surfaces } from "../App";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { SearchTray } from "../components/search/SearchTray";
-import { DesignProvider } from "../components/ui";
+import { DesignProvider, Favicon } from "../components/ui";
+import { Image } from "react-native";
+import { deckPull, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import * as browse from "../state/browse/store";
@@ -266,4 +268,88 @@ test("a dismissed query never comes back in the next + sheet: the waiting field 
   for (const start of starts) expect(start).toBe("");
   unmount(root);
   keyboard.mockRestore();
+});
+
+test("TalkBack's next and previous tab go through the swipe's own checks: a page that is no longer the selected tab can't switch tabs", () => {
+  withTabs(3);
+  const shown = currentTabs().open[1]!.id;
+  selectTabById(shown);
+  browsingNow();
+  const root = renderSurface(<BrowsingScreen tabId={shown} />);
+  const stepper = root.root.findAll((node) => typeof node.props.onStep === "function")[0]!;
+  const elsewhere = currentTabs().open[0]!.id;
+  act(() => selectTabById(elsewhere));
+  act(() => stepper.props.onStep(1));
+  act(() => stepper.props.onStep(-1));
+  expect(currentTabs().selectedId).toBe(elsewhere);
+  unmount(root);
+});
+
+test("an Address tap in the frames between a swipe landing and its commit opens search for the destination, not the tab it left", () => {
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  const root = renderSurface(<Page />);
+  const { id, dx } = toNeighbour();
+  releaseSwipe(root, dx, 260, 1600);
+  const address = root.root.findAll((node) => node.props.accessibilityLabel === "Address" && typeof node.props.onPress === "function")[0]!;
+  act(() => address.props.onPress());
+  expect(searchState().open).toBe(false);
+  act(() => jest.advanceTimersByTime(32));
+  expect(currentTabs().selectedId).toBe(id);
+  expect(searchState().open).toBe(true);
+  expect(searchState().editsPage).toBeTruthy();
+  unmount(root);
+});
+
+test("a cover acknowledgement that names the arrival's cover but found no view leaves the cover up", () => {
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  const root = renderSurface(<Page />);
+  const { id, dx } = toNeighbour();
+  releaseSwipe(root, dx, 260, 1600);
+  act(() => jest.advanceTimersByTime(16));
+  const cover = browse.useBrowse.getState().arrivalCover!;
+  act(() => browse.pageCoverHidden(id, "drawn", cover, false));
+  expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
+  act(() => jest.advanceTimersByTime(1000));
+  expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
+  act(() => browse.pageCoverHidden(id, "drawn", cover, true));
+  expect(browse.useBrowse.getState()).toMatchObject({ arriving: null });
+  unmount(root);
+});
+
+test("a cut card width is used once: the next open of the same tab doesn't inherit it, and opening the deck forgets it", () => {
+  browse.noteCutCard("t1", 200);
+  expect(browse.takeCutCardWidth("t1")).toBe(200);
+  expect(browse.takeCutCardWidth("t1")).toBeNull();
+  browse.noteCutCard("t1", 200);
+  browse.clearCutCard();
+  expect(browse.takeCutCardWidth("t1")).toBeNull();
+});
+
+test("a tap on the deck during the cut is latched to the card it touched down on, and dropped if the deck's hit data changed before it lifted", () => {
+  deckPull.stage.value = PULL_STAGE.handed;
+  deckPull.openAfter.value = "";
+  const latched = { id: "t2", hitTurn: deckPull.hitTurn.value };
+  expect(queueDeckTapAfterCut(latched)).toBe(true);
+  expect(deckPull.openAfter.value).toBe("t2");
+  deckPull.openAfter.value = "";
+  deckPull.hitTurn.value += 1;
+  expect(queueDeckTapAfterCut(latched)).toBe(false);
+  expect(deckPull.openAfter.value).toBe("");
+  expect(queueDeckTapAfterCut(null)).toBe(false);
+  deckPull.stage.value = PULL_STAGE.idle;
+});
+
+test("a favicon another view already resolved shows its icon on its own first frame, never the letter tile first", () => {
+  const icon = (root: ReactTestRenderer) => root.root.findAll((node) => node.type === Image).length;
+  const first = renderSurface(<Favicon iconUrl="https://site.example/favicon.ico" pageUrl="https://site.example/" size={32} />);
+  act(() => jest.advanceTimersByTime(16));
+  expect(icon(first)).toBe(1);
+  const second = renderSurface(<Favicon iconUrl="https://site.example/favicon.ico" pageUrl="https://site.example/" size={32} />);
+  expect(icon(second)).toBe(1);
+  unmount(first);
+  unmount(second);
 });

@@ -34,7 +34,7 @@ export { forcedDuoCanvas, ScreenLayoutProbe, screenLayoutIsNative, type DuoCanva
 export * as settingsUI from "./settingsUI";
 export { sync } from "./sync";
 export { syncLab, type SyncRuntimeCheck } from "./syncLab";
-export { labLog, restorableState, system, systemLab, type SystemLink, type SystemLinkSource } from "./system";
+export { labFrameMark, labLog, restorableState, system, systemLab, type SystemLink, type SystemLinkSource } from "./system";
 export { predictiveBack, TRAY_BACK_TRAVEL, trayBack, type PredictiveBackHandlers, type TrayBackHandlers } from "./back";
 export { scanLab, scanner, ScanView, type ScanError, type ScanPermission, type ScanViewProps } from "./scan";
 export { clipboard, type ClipboardOffer } from "./clipboard";

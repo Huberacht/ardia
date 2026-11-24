@@ -31,6 +31,7 @@ export const deckPull = {
   hit: makeMutable<DeckHit | null>(null),
   landing: makeMutable(0),
   openAfter: makeMutable(""),
+  hitTurn: makeMutable(0),
 };
 
 export type PullSettled = (id: string, landed: boolean, worstFrameMs: number, openAfter?: string) => void;
@@ -123,14 +124,21 @@ export function hurryDeckPull(x: number, y: number, settled: PullSettled): boole
   return true;
 }
 
-export function queueDeckTapAfterCut(x: number, y: number): boolean {
+export type LatchedDeckTap = { id: string; hitTurn: number } | null;
+
+export function latchDeckTap(x: number, y: number): LatchedDeckTap {
+  "worklet";
+  const hit = deckPull.hit.value;
+  const tapped = hit ? deckCardAt(hit, x, y) : null;
+  return tapped ? { id: tapped, hitTurn: deckPull.hitTurn.value } : null;
+}
+
+export function queueDeckTapAfterCut(latched: LatchedDeckTap): boolean {
   "worklet";
   const stage = deckPull.stage.value;
   if (stage !== PULL_STAGE.landed && stage !== PULL_STAGE.handed) return false;
-  const hit = deckPull.hit.value;
-  const tapped = hit ? deckCardAt(hit, x, y) : null;
-  if (!tapped) return false;
-  deckPull.openAfter.value = tapped;
+  if (!latched || latched.hitTurn !== deckPull.hitTurn.value) return false;
+  deckPull.openAfter.value = latched.id;
   return true;
 }
 
@@ -395,6 +403,7 @@ export function publishDeckStandby(target: PullTarget | null, hit: DeckHit | nul
     "worklet";
     deckPull.target.value = next;
     deckPull.hit.value = next ? cards : null;
+    deckPull.hitTurn.value += 1;
   })(target, hit);
   for (const waiter of [...standbyWaiters]) waiter(standbyId);
 }

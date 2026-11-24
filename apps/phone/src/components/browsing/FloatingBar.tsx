@@ -1,4 +1,5 @@
-import { useEffect, useRef, type ComponentProps } from "react";
+import { useEffect, useLayoutEffect, useRef, type ComponentProps } from "react";
+import { markShownFrame } from "../../platform/lab";
 import { Platform, StyleSheet, View, type ViewInstance } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { useBarReturn } from "./barReturn";
@@ -87,6 +88,7 @@ export function barAddress(tab: BrowserTab): BarAddress {
 }
 
 export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, swipe = null, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
+  useLayoutEffect(() => markShownFrame(`bar:${tab.id}`), [tab.id]);
   const landedHere = useLandedAddress(swipe, tab.id, 0);
   const landedLeft = useLandedAddress(swipe, tab.id, -1);
   const landedRight = useLandedAddress(swipe, tab.id, 1);

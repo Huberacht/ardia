@@ -16,6 +16,10 @@ class SystemModule : Module() {
             if (PhoneLab.isOn) android.util.Log.i("PAGELAB", line)
         }
 
+        Function("labFrameMark") { label: String ->
+            if (PhoneLab.isOn) FrameMarks.markNextFrame(label)
+        }
+
         Function("setUsageConsent") { sharing: Boolean ->
             val context = appContext.reactContext ?: return@Function Unit
             UsageConsent.set(context, sharing)

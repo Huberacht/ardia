@@ -1,4 +1,5 @@
 import { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { markShownFrame } from "../../platform/lab";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
 import { countRender } from "../../state/app/interactionPerf";
@@ -145,6 +146,7 @@ const noClose = () => undefined;
 type LayerProps = { session: number; closing: boolean; standby?: boolean; onClosed: () => void };
 
 const PIN_HOLDS_MS = 700;
+const FIRST_KEYBOARD_SHARE = 0.42;
 
 function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) {
   countRender("TrayLayer");
@@ -178,6 +180,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const isClosing = useSharedValue(closing);
   const dim = useSharedValue(cutsIn ? 1 : 0);
   const pinned = useSharedValue(cutsIn);
+  const floor = useSharedValue(0);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -230,6 +233,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     if (cutsIn) {
       dim.value = 1;
       pinned.value = true;
+      floor.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold ? 0 : window.height * FIRST_KEYBOARD_SHARE;
       if (!arrivesAtRest && searchState().arrival === "atRest") launchTrayUp();
       const unpin = setTimeout(() => {
         pinned.value = false;
@@ -392,7 +396,8 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     "worklet";
     if (heldLift.value >= 0) return heldLift.value;
     const live = liveLift(keyboard.height.value, safeBottom, hasLanded.value, isClosing.value);
-    return pinned.value && !isClosing.value ? Math.max(live, keyboard.full.value) : live;
+    if (isClosing.value) return live;
+    return Math.max(pinned.value ? Math.max(live, keyboard.full.value) : live, floor.value);
   };
   const dimStyle = useAnimatedStyle(() => ({ opacity: dim.value * (1 - clampedProgress(drag.value, trayHeight + currentLift())) }), [trayHeight, safeBottom]);
   const covered = useTrayCovers((state) => state.covers > 0);
@@ -969,6 +974,7 @@ function FieldInput({ first, closing, standby = false }: { first: boolean; closi
     if (standby || closing || !focusesInCommit) return;
     trayInput = input.current;
     input.current?.focus();
+    markShownFrame("search");
   }, [closing, standby]);
   useEffect(() => {
     if (standby) return;

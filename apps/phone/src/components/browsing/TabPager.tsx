@@ -24,11 +24,13 @@ export type TabPager = {
   track: (raw: number) => void;
   settleTo: (target: number, velocity: number) => void;
   peek: (toward: -1 | 1) => boolean;
+  validates: (from: string, to: string) => boolean;
+  landedTarget: () => string | null;
 };
 
-type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; landsEarly?: boolean; onCommit: (id: string) => void; onGrab: () => void };
+type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; landsEarly?: boolean; isNeighbour?: (id: string) => boolean; onCommit: (id: string) => void; onGrab: () => void };
 
-export function useTabPager({ width, selectedId, left, right, landsEarly = false, onCommit, onGrab }: Options): TabPager {
+export function useTabPager({ width, selectedId, left, right, landsEarly = false, isNeighbour, onCommit, onGrab }: Options): TabPager {
   const reduceMotion = useReduceMotion();
   const cuts = tabSwitchCuts();
   const offset = useSharedValue(0);
@@ -41,6 +43,8 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   const fromId = useSharedValue(selectedId ?? "");
   const leftId = useSharedValue(left ?? "");
   const rightId = useSharedValue(right ?? "");
+  const latchedLeft = useSharedValue(left ?? "");
+  const latchedRight = useSharedValue(right ?? "");
   const turn = useSharedValue(0);
 
   useEffect(() => {
@@ -69,14 +73,26 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     })();
   };
 
-  const commit = (from: string, to: string, sent: number) => {
+  const validates = (from: string, to: string) => {
     const tabs = currentTabs();
-    if (!to || sent !== turn.value || tabs.selectedId !== from || !findTab(tabs, to)) {
+    return Boolean(to) && tabs.selectedId === from && Boolean(findTab(tabs, to)) && (isNeighbour ? isNeighbour(to) : true);
+  };
+
+  const commit = (from: string, to: string, sent: number) => {
+    if (sent !== turn.value) return;
+    if (!validates(from, to)) {
       restore();
       return;
     }
     haptics.tabLanded();
     onCommit(to);
+  };
+
+  const landedTarget = () => {
+    const at = offset.value;
+    if (fromId.value !== (selectedId ?? "") || span.value <= 0 || Math.abs(Math.abs(at) - span.value) >= 1) return null;
+    const to = at > 0 ? latchedLeft.value : latchedRight.value;
+    return to || null;
   };
 
   const land = (target: number) => {
@@ -87,7 +103,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       active.value = 0;
       return;
     }
-    runOnJS(commit)(fromId.value, target > 0 ? leftId.value : rightId.value, turn.value);
+    runOnJS(commit)(fromId.value, target > 0 ? latchedLeft.value : latchedRight.value, turn.value);
   };
 
   useAnimatedReaction(
@@ -139,6 +155,9 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     if (!hasLeft.value && !hasRight.value) return false;
     if (!active.value) onGrab();
     active.value = 1;
+    turn.value += 1;
+    latchedLeft.value = leftId.value;
+    latchedRight.value = rightId.value;
     return true;
   };
   const track = (raw: number) => {
@@ -154,6 +173,9 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       active.value = 1;
       landing.value = 0;
       base.value = offset.value;
+      turn.value += 1;
+      latchedLeft.value = leftId.value;
+      latchedRight.value = rightId.value;
     })
     .onUpdate((event) => {
       offset.value = resolvedOffset(base.value + event.translationX, hasLeft.value, hasRight.value, span.value);
@@ -169,7 +191,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   });
   const dim = useAnimatedStyle(() => ({ opacity: outgoingPose(offset.value, span.value, hasLeft.value, hasRight.value, reduceMotion).dim }));
 
-  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek };
+  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget };
 }
 
 type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; width: number; statusHeight: number; statusOver?: boolean; hasLeft: boolean; hasRight: boolean; coverId?: string };

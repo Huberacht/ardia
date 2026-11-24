@@ -13,7 +13,7 @@ import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, releaseDeckPull, 
 import { refreshHiddenDeck } from "../../state/browse/deckHold";
 import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } from "../../state/page/actions";
 import { useDrawnMenuOpen, useFindOpen, useMenuDocked, usePressOpen, useReaderTabId } from "../../state/page/hooks";
-import { ARRIVAL_COVER_ID, arriveAtNeighbour, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
+import { ARRIVAL_COVER_ID, arriveAtNeighbour, holdBarAction, takeBarAction, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
 import { useSearchFromDockedMenu, useSearchOpen } from "../../state/search/hooks";
 import { usePages } from "../../state/pages/store";
 import { reportBarPill } from "../../state/search/stageBar";
@@ -124,17 +124,24 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const left = useTabWhile(around.left ?? "", around.left !== null);
   const right = useTabWhile(around.right ?? "", around.right !== null);
   const handsOver = pageReportsDrawn();
+  const [swiping, setSwiping] = useState(false);
+  const grabbedSwipe = useCallback(() => {
+    captureCurrentCover();
+    setSwiping(true);
+  }, []);
   const pager = useTabPager({
     width,
     selectedId: tab.id,
     left: left?.id ?? null,
     right: right?.id ?? null,
     landsEarly: handsOver,
+    isNeighbour: (id: string) => id === neighbourIds.current.left || id === neighbourIds.current.right,
     onCommit: handsOver ? arriveAtNeighbour : swipeToNeighbour,
-    onGrab: captureCurrentCover,
+    onGrab: grabbedSwipe,
   });
   useDemoMotion(pager, width);
-  const swipeAddresses = useMemo(() => (tabSwitchCuts() ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right]);
+  useEffect(() => setSwiping(false), [tab.id]);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() && swiping ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right, swiping]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);
@@ -170,12 +177,26 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   neighbourIds.current = around;
   const shownTab = useRef(tab.id);
   shownTab.current = tab.id;
+  const validatesStep = useRef(pager.validates);
+  validatesStep.current = pager.validates;
   const stepTab = useCallback((delta: -1 | 1) => {
     const id = delta < 0 ? neighbourIds.current.left : neighbourIds.current.right;
-    const tabs = currentTabs();
-    if (!id || tabs.selectedId !== shownTab.current || !findTab(tabs, id)) return;
+    if (!id || !validatesStep.current(shownTab.current, id)) return;
     switchToNeighbour(id);
   }, []);
+  const landedTarget = useRef(pager.landedTarget);
+  landedTarget.current = pager.landedTarget;
+  const editAddress = useCallback(() => {
+    const landed = tabSwitchCuts() ? landedTarget.current() : null;
+    if (landed) {
+      holdBarAction(landed, "address");
+      return;
+    }
+    editPageQuery();
+  }, []);
+  useEffect(() => {
+    if (takeBarAction(tab.id) === "address") editPageQuery();
+  }, [tab.id]);
   const incognito = useIncognito();
   const reduceMotion = useReduceMotion();
   const pulls = design === "redesigned";
@@ -212,7 +233,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const materialBarFold = useMaterialBarFold(design === "material" ? collapse.fold.progress : null);
   const materialPillFold = useMaterialPillFold(design === "material" ? collapse.fold.progress : null);
   const materialBarHosted = useMaterialBarRegistration("page", design === "material" ? {
-    bar: { isTabOverview: false, scheme: materialScheme, tab, order: barOrder, showsPlus: !searching, addressDocked: siteSettingsSheet !== null, onTabs: showDeck, onTabsMenu: openTabsMenu, onStep: stepTab, onAddress: editPageQuery, onPlus: newTab, onMore: openPageMenu, onSiteSettings: openDockedSiteSettings },
+    bar: { isTabOverview: false, scheme: materialScheme, tab, order: barOrder, showsPlus: !searching, addressDocked: siteSettingsSheet !== null, onTabs: showDeck, onTabsMenu: openTabsMenu, onStep: stepTab, onAddress: editAddress, onPlus: newTab, onMore: openPageMenu, onSiteSettings: openDockedSiteSettings },
     gesture: barGesture,
     tabId: tab.id,
     hidden: finding || fullscreen || (menu.mounted && !siteSettingsSheet) || readerId === tab.id || pressing || tabsMenu,
@@ -280,7 +301,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     onTabs={showDeck}
                     onTabsMenu={openTabsMenu}
                     onStep={stepTab}
-                    onAddress={editPageQuery}
+                    onAddress={editAddress}
                     onPlus={newTab}
                     onMore={openPageMenu}
                   />
@@ -306,7 +327,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
             ) : design === "material" ? (
               <>
                 <Animated.View testID="materialBarFold" collapsable={false} style={[StyleSheet.absoluteFill, materialBarFold]} pointerEvents={collapse.collapsed ? "none" : "box-none"} importantForAccessibility={collapse.collapsed ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={collapse.collapsed}>
-                  <MaterialBarBand tab={tab} order={barOrder} showsPlus={!searching} addressDocked={siteSettingsSheet !== null} safeSide={safeSide} onTabs={showDeck} onTabsMenu={openTabsMenu} onStep={stepTab} onAddress={editPageQuery} onPlus={newTab} onMore={openPageMenu} onSiteSettings={openDockedSiteSettings} />
+                  <MaterialBarBand tab={tab} order={barOrder} showsPlus={!searching} addressDocked={siteSettingsSheet !== null} safeSide={safeSide} onTabs={showDeck} onTabsMenu={openTabsMenu} onStep={stepTab} onAddress={editAddress} onPlus={newTab} onMore={openPageMenu} onSiteSettings={openDockedSiteSettings} />
                 </Animated.View>
                 <Animated.View testID="materialBarPillPlace" collapsable={false} style={[styles.materialPillPlace, { bottom: insets.bottom + materialBottomBar.inset - materialBarPill.shadowRoom, left: safeSide + materialBottomBar.edge, right: safeSide + materialBottomBar.edge }, materialPillFold]} pointerEvents={collapse.collapsed ? "box-none" : "none"} importantForAccessibility={collapse.collapsed ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!collapse.collapsed}>
                   <MaterialBarPill tab={tab} scheme={materialScheme} onExpand={collapse.expand} />

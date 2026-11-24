@@ -331,7 +331,7 @@ export function whenPageCoverHidden(id: string, capMs: number, then: (reason: Co
   return stop;
 }
 
-const COVER_ACK_NEEDS_ID = Platform.OS === "ios";
+const COUNTS_CAPPED_COVERS = Platform.OS === "ios";
 
 type EarlyCoverHide = { cover: string | undefined; reason: "drawn" | "cap"; found: boolean };
 
@@ -339,8 +339,7 @@ const earlyCoverHides = new Map<string, EarlyCoverHide>();
 
 function coverMatches(expected: string | null, cover: string | undefined, found: boolean) {
   if (expected === null) return true;
-  if (COVER_ACK_NEEDS_ID) return cover === expected && found;
-  return cover === expected;
+  return cover === expected && found;
 }
 
 export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string, found = true) {
@@ -381,11 +380,33 @@ export function stopOpeningTab(id: string) {
 
 let cutCard: { id: string; width: number } | null = null;
 
+let heldBarAction: { id: string; action: "address" } | null = null;
+
+export function holdBarAction(id: string, action: "address") {
+  heldBarAction = { id, action };
+}
+
+export function takeBarAction(id: string) {
+  if (heldBarAction?.id !== id) return null;
+  const action = heldBarAction.action;
+  heldBarAction = null;
+  return action;
+}
+
 export function noteCutCard(id: string, width: number) {
   cutCard = { id, width };
 }
 
-export const cutCardWidth = (id: string) => (cutCard?.id === id ? cutCard.width : null);
+export function clearCutCard() {
+  cutCard = null;
+}
+
+export function takeCutCardWidth(id: string) {
+  if (cutCard?.id !== id) return null;
+  const width = cutCard.width;
+  cutCard = null;
+  return width;
+}
 
 export function openTab(id: string) {
   const tabs = currentTabs();
@@ -468,6 +489,7 @@ let entranceSeq = 0;
 
 function enterDeck() {
   entranceSeq += 1;
+  cutCard = null;
   const { surface } = useBrowse.getState();
   const selected = currentTabs().selectedId;
   const covered = pageCovered();
@@ -794,6 +816,7 @@ export function switchToNeighbour(id: string, swiped = false) {
 export const swipeToNeighbour = (id: string) => switchToNeighbour(id, true);
 
 const ARRIVAL_COVER_LOST_MS = 400;
+const CUT_ARRIVAL_HELD_MS = 4_000;
 let stopArrivalWait: (() => void) | null = null;
 
 function cancelArrivalWait() {
@@ -814,10 +837,10 @@ export function arriveAtNeighbour(id: string) {
   useBrowse.setState({ covered: id, arriving: id, arrivalCover: cover });
   stopArrivalWait = whenPageCoverHidden(
     id,
-    ARRIVAL_COVER_LOST_MS,
+    tabSwitchCuts() ? CUT_ARRIVAL_HELD_MS : ARRIVAL_COVER_LOST_MS,
     (reason) => {
       stopArrivalWait = null;
-      if (COVER_ACK_NEEDS_ID && reason !== "drawn" && !isPrivateTab(currentTabs(), id) && !useTabs.getState().incognito) countUsage("page_covers_capped");
+      if (COUNTS_CAPPED_COVERS && reason !== "drawn" && !isPrivateTab(currentTabs(), id) && !useTabs.getState().incognito) countUsage("page_covers_capped");
       const now = useBrowse.getState();
       if (now.arriving === id && now.arrivalCover === cover) useBrowse.setState({ arriving: null, arrivalCover: null, covered: now.covered === id ? null : now.covered });
     },

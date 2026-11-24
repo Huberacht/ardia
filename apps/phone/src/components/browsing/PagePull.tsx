@@ -1,10 +1,10 @@
 import { useMemo, type ReactNode } from "react";
 import { Platform, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue } from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue } from "react-native-reanimated";
 import { DECK, DECK_REDESIGN } from "../../lib/deckGeometry";
 import { pullBarGhosts, pullBarGlyphs, pullBarShift, pullClearsBar, pullPagePose, pullRise } from "../../lib/deckPull";
-import { deckPull, hurryDeckPull, PULL_STAGE, pullFades, queueDeckTapAfterCut, setDeckOwnsBar } from "../../state/browse/deckPull";
+import { deckPull, hurryDeckPull, latchDeckTap, PULL_STAGE, pullFades, queueDeckTapAfterCut, setDeckOwnsBar, type LatchedDeckTap } from "../../state/browse/deckPull";
 import { deckPullSettled, noteDeckTapWhileLanding } from "../../state/browse/store";
 import { tabsInk, usesGlass, useTheme } from "../ui";
 
@@ -69,15 +69,21 @@ export function PagePull({ tabId, barTop, children }: { tabId: string; barTop: n
 const LANDING_TAP_MS = 500;
 
 export function PullBlocker() {
+  const latched = useSharedValue<LatchedDeckTap>(null);
   const landingTap = useMemo(
     () =>
       Gesture.Tap()
         .maxDuration(LANDING_TAP_MS)
         .withTestId("landingTap")
+        .onBegin((event) => {
+          latched.value = latchDeckTap(event.absoluteX, event.absoluteY);
+        })
         .onEnd((event, success) => {
+          const tap = latched.value;
+          latched.value = null;
           if (!success) return;
           if (hurryDeckPull(event.absoluteX, event.absoluteY, deckPullSettled)) runOnJS(noteDeckTapWhileLanding)(Date.now());
-          else if (queueDeckTapAfterCut(event.absoluteX, event.absoluteY)) runOnJS(noteDeckTapWhileLanding)(Date.now());
+          else if (queueDeckTapAfterCut(tap)) runOnJS(noteDeckTapWhileLanding)(Date.now());
         }),
     [],
   );

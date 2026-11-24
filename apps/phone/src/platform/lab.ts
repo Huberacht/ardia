@@ -1,4 +1,4 @@
-import { labLog, lookLab } from "@ardia/phone-native";
+import { labFrameMark, labLog, lookLab } from "@ardia/phone-native";
 
 export { labLog };
 
@@ -14,6 +14,10 @@ export function traceLab(on: boolean, sink: (line: string) => void = labLog) {
 
 export const labTrace = (line: string) => {
   if (tracing) traceSink(line);
+};
+
+export const markShownFrame = (label: string) => {
+  if (isLabBuild) labFrameMark(label);
 };
 
 export function lookActivity(): { recording: number; holdingLayers: number; animating: number } | null {
