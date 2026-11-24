@@ -10,16 +10,16 @@
         <item name="android:listViewStyle">@style/ArdiaListView</item>
         <item name="android:gridViewStyle">@style/ArdiaGridView</item>
     </style>
-    <style name="ArdiaScrollView" parent="android:Widget.ScrollView">
+    <style name="ArdiaScrollView" parent="@android:style/Widget.Material.ScrollView">
         <item name="android:overScrollMode">never</item>
     </style>
-    <style name="ArdiaHorizontalScrollView" parent="android:Widget.HorizontalScrollView">
+    <style name="ArdiaHorizontalScrollView" parent="@android:style/Widget.Material.HorizontalScrollView">
         <item name="android:overScrollMode">never</item>
     </style>
-    <style name="ArdiaListView" parent="android:Widget.ListView">
+    <style name="ArdiaListView" parent="@android:style/Widget.Material.ListView">
         <item name="android:overScrollMode">never</item>
     </style>
-    <style name="ArdiaGridView" parent="android:Widget.GridView">
+    <style name="ArdiaGridView" parent="@android:style/Widget.Material.GridView">
         <item name="android:overScrollMode">never</item>
     </style>
     <style name="ShareTheme" parent="Theme.AppCompat.DayNight.NoActionBar">

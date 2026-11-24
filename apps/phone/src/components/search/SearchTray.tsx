@@ -176,7 +176,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   const panelRadius = searchPanelRadius(fieldHeight);
   const resting = Math.max(keyboard.target, safeBottom);
   const placement = searchPanelPlacement(arcPanel, command !== null);
-  const place = searchPanelPlace(placement, resting, true);
+  const place = searchPanelPlace(placement, resting, Platform.OS === "android");
   const corners = place.corners;
   const [rowsHeight, setRowsHeight] = useState(ROWS_FALLBACK * browseLayout.suggestionPitch * window.fontScale);
   const measuredRows = useCallback((height: number) => setRowsHeight((was) => (Math.abs(was - height) < 1 ? was : height)), []);
