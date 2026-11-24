@@ -48,20 +48,20 @@ object LabTouches {
         ContextCompat.registerReceiver(context.applicationContext, receiver, IntentFilter(ACTION), ContextCompat.RECEIVER_EXPORTED)
     }
 
-    private fun play(steps: List<Step>, activity: () -> Activity?) {
+    internal fun play(steps: List<Step>, activity: () -> Activity?) {
         val start = SystemClock.uptimeMillis() + LEAD_MS
         var downAt = start
         for (step in steps) {
+            val planned = start + step.at
             main.postAtTime({
                 val target = activity() ?: return@postAtTime
-                val now = SystemClock.uptimeMillis()
-                if (step.kind == 'd') downAt = now
+                if (step.kind == 'd') downAt = planned
                 val action = when (step.kind) {
                     'd' -> MotionEvent.ACTION_DOWN
                     'm' -> MotionEvent.ACTION_MOVE
                     else -> MotionEvent.ACTION_UP
                 }
-                val event = MotionEvent.obtain(downAt, now, action, step.x, step.y, 0)
+                val event = MotionEvent.obtain(downAt, planned, action, step.x, step.y, 0)
                 event.source = InputDevice.SOURCE_TOUCHSCREEN
                 Trace.beginSection("ardia-lab-touch:${step.kind}:${step.x.toInt()}:${step.y.toInt()}")
                 try {
