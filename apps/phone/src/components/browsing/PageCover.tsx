@@ -172,7 +172,8 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       testID="pageCover"
       needsOffscreenAlphaCompositing
       pointerEvents={waitsForPaint ? "auto" : "none"}
-      importantForAccessibility="no-hide-descendants"
+      collapsable={false}
+      importantForAccessibility={"no-hide-descendants"}
       accessibilityElementsHidden={!spoken}
       onLayout={face.kind === "card" && face.cardWidth ? laidOut : undefined}
       style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }, style]}

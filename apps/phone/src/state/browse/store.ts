@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { Dimensions, Platform } from "react-native";
 import { create } from "zustand";
 import { history } from "../history/store";
 import { HISTORY_RETENTION_MS } from "../history/historySummary";
@@ -54,6 +54,7 @@ import {
 } from "../tabs/store";
 import { labTrace } from "../../platform/lab";
 import { pictureCaptured, pictureLanded } from "../tabs/pictures";
+import { noteSettledScroll, noteWarmPicture } from "../tabs/warmPictures";
 import { deckOrder, findTab, isPrivateOnScreen, isPrivateTab, selectedTab, tabBefore } from "../tabs/tabsState";
 import { setHidesFromRecents } from "../../platform/links";
 import { copyText, pasteForGo } from "../../platform/system";
@@ -901,7 +902,8 @@ function pageEvent(event: PageEngineEvent) {
   else if (event.name === "page.state" && currentTabs().selectedId !== event.pageId) backgroundPageState(event.pageId, event.state);
   else if (event.name === "page.closeRequested") closeTabById(event.pageId);
   else if (event.name === "page.snapshotLanded") snapshotLanded(event.pageId, event.uri, event.generation);
-  else if (event.name === "page.scrollSettled") frontScrollCameToRest(event.pageId, event.y, frontPageId(), pictureScrolledOrQuietPage);
+  else if (event.name === "page.scrollSettled") noteSettledScroll(event.pageId, event.y);
+  if (event.name === "page.scrollSettled") frontScrollCameToRest(event.pageId, event.y, frontPageId(), pictureScrolledOrQuietPage);
 }
 
 const loading = new Map<string, boolean>();
@@ -953,6 +955,7 @@ export async function captureSnapshot(id: string, pageTop: number | null = null,
   if (!snapshot || !tab) return false;
   const step = pictureCaptured(tab, snapshot.uri, snapshot.durable !== false, snapshot.generation);
   if (step) publishedCaptureStarted.set(id, startedAt);
+  if (step && step.show === snapshot.uri) noteWarmPicture(id, snapshot.uri, tab.url, Dimensions.get("window"), { width: snapshot.width, height: snapshot.height });
   if (step && tab.snapshotFileName !== step.show) {
     updateTabById(id, { snapshotFileName: step.show });
     showHiddenDeckThePicture(id);

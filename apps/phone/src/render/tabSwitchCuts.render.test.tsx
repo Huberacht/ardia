@@ -7,7 +7,7 @@ import { Surfaces } from "../App";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
-import { Image, StyleSheet, TextInput } from "react-native";
+import { Dimensions, Image, StyleSheet, TextInput } from "react-native";
 import { deckPull, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
@@ -17,7 +17,8 @@ import { dismissSearch, presentSearch, searchState, setSearchText } from "../sta
 import { display } from "../state/search/omnibox";
 import { setPreference } from "../state/settings/store";
 import { useSelectedTab } from "../state/tabs/hooks";
-import { closeTabById, currentTabs, selectTabById } from "../state/tabs/store";
+import { closeTabById, currentTabs, selectTabById, updateTabById } from "../state/tabs/store";
+import { noteSettledScroll, noteWarmPicture } from "../state/tabs/warmPictures";
 import { findTab } from "../state/tabs/tabsState";
 import * as pageStore from "../state/pages/store";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
@@ -399,4 +400,28 @@ test("a favicon another view already resolved shows its icon on its own first fr
   expect(icon(second)).toBe(1);
   unmount(first);
   unmount(second);
+});
+
+test("a swipe's neighbour shows its own last picture while it still matches the tab, and only its title card once that page's scroll or document moved on", () => {
+  withTabs(3);
+  browsingNow();
+  const { id } = toNeighbour();
+  const uri = `file:///warm-${id}.jpg`;
+  act(() => updateTabById(id, { snapshotFileName: uri }));
+  const neighbour = findTab(currentTabs(), id)!;
+  noteWarmPicture(id, uri, neighbour.url, Dimensions.get("window"), { width: 600, height: 1333 });
+  const pictures = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.testID === "pagerWarmPicture" && typeof node.type === "string");
+  const warm = renderSurface(<Page />);
+  expect(pictures(warm)).toHaveLength(1);
+  expect(pictures(warm)[0]!.props.source).toEqual({ uri });
+  unmount(warm);
+  noteSettledScroll(id, 900);
+  const scrolled = renderSurface(<Page />);
+  expect(pictures(scrolled)).toHaveLength(0);
+  unmount(scrolled);
+  noteWarmPicture(id, uri, neighbour.url, Dimensions.get("window"), { width: 600, height: 1333 });
+  act(() => updateTabById(id, { url: "https://example.com/moved" }));
+  const moved = renderSurface(<Page />);
+  expect(pictures(moved)).toHaveLength(0);
+  unmount(moved);
 });

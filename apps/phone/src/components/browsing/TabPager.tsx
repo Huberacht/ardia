@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect } from "react";
-import { StyleSheet, View } from "react-native";
+import { Image, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, runOnJS, runOnUI, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { incomingPose, landedNear, outgoingPose, PAGER, resolvedOffset, snapTarget } from "../../lib/pagerPhysics";
@@ -11,6 +11,8 @@ import type { BrowserTab } from "../../state/tabs/tabModels";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
+import { warmPicture } from "../../state/tabs/warmPictures";
+import { snapshotPageTop } from "../../lib/shownSnapshots";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 
 export type TabPager = {
@@ -214,15 +216,19 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
     return { opacity: pose.shadow, transform: [{ translateX: pose.x }] };
   });
   const shown = display(tab.url);
+  const viewport = useWindowDimensions();
+  const warm = cuts ? warmPicture(tab, viewport) : null;
+  const warmTop = warm ? (snapshotPageTop(warm.uri) ?? statusHeight) : 0;
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (
     <>
       <Animated.View testID="pagerEdgeShadow" pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[styles.edge, { top: cornerRadius * 0.6, bottom: cornerRadius * 0.6 }, edge, shadowStyle]} />
-      <Animated.View testID={arrived ? "pagerArrival" : undefined} nativeID={arrived ? coverId : undefined} collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents={arrived && cuts ? "auto" : "none"} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+      <Animated.View testID={arrived ? "pagerArrival" : undefined} nativeID={arrived ? coverId : undefined} collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents={arrived && cuts ? "auto" : "none"} importantForAccessibility={"no-hide-descendants"} accessibilityElementsHidden={true}>
         {statusOver ? null : <View style={{ height: statusHeight, backgroundColor: tone?.top ?? theme.canvas }} />}
         <View style={styles.body}>
           <TabFace tab={tab} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} />
         </View>
+        {warm ? <Image testID="pagerWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { top: warmTop, width, height: (width * warm.size.height) / warm.size.width }]} /> : null}
         {statusOver ? <View testID="pagerStatusStrip" style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
       </Animated.View>
     </>
@@ -240,4 +246,4 @@ export function PagerBackdrop() {
 
 const cornerRadius = screenCornerRadius(tabsLayout.displayCornerRadius);
 
-const styles = StyleSheet.create({ card: { overflow: "hidden", borderRadius: cornerRadius, ...smoothCorners }, edge: { position: "absolute", width: tabsLayout.pagerEdgeShadow }, body: { flex: 1 }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 } });
+const styles = StyleSheet.create({ card: { overflow: "hidden", borderRadius: cornerRadius, ...smoothCorners }, edge: { position: "absolute", width: tabsLayout.pagerEdgeShadow }, body: { flex: 1 }, warm: { position: "absolute", left: 0 }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 } });
