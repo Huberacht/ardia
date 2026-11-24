@@ -316,18 +316,41 @@ fn read_report(root: &Root, name: &str) -> Option<Value> {
     }
 }
 
+fn valid_run(report: &Value) -> bool {
+    report
+        .get("run")
+        .and_then(Value::as_str)
+        .is_some_and(|run| run.len() == 32 && run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+pub fn valid_attempt_report(report: &Value) -> bool {
+    let written = [
+        Outcome::Failed,
+        Outcome::Migrated,
+        Outcome::MigratedWithSkips,
+        Outcome::NothingToMigrate,
+    ];
+    report.get("version").and_then(Value::as_u64) == Some(MARKER_VERSION)
+        && valid_run(report)
+        && report
+            .get("outcome")
+            .and_then(Value::as_str)
+            .is_some_and(|outcome| written.iter().any(|known| known.as_str() == outcome))
+        && report.get("attempt").is_some_and(Value::is_u64)
+}
+
 fn prior_failed_stage(previous: &Value) -> Option<Stage> {
     let stage_of = |field: &str| previous.get(field).and_then(Value::as_str).and_then(Stage::parse);
     let failed = previous.get("outcome").and_then(Value::as_str) == Some("failed");
-    failed.then(|| stage_of("failed_stage")).flatten().or_else(|| stage_of("prior_failed_stage"))
+    failed
+        .then(|| stage_of("failed_stage"))
+        .flatten()
+        .or_else(|| stage_of("prior_failed_stage"))
 }
 
 pub fn valid_marker(marker: &Value) -> bool {
     let finished = ["migrated", "migrated_with_skips", "nothing_to_migrate"];
-    let run_ok = marker
-        .get("run")
-        .and_then(Value::as_str)
-        .is_some_and(|run| run.len() == 32 && run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    let run_ok = valid_run(marker);
     let outcome_ok = marker
         .get("outcome")
         .and_then(Value::as_str)
@@ -755,7 +778,7 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         report.outcome = Outcome::AlreadyMigrated;
         return finish(report);
     }
-    let previous = read_report(&webui, names::ATTEMPT_NAME);
+    let previous = read_report(&webui, names::ATTEMPT_NAME).filter(valid_attempt_report);
     report.attempt = previous
         .as_ref()
         .and_then(|previous| previous.get("attempt").and_then(Value::as_u64))

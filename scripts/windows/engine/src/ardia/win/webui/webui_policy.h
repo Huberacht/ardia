@@ -136,6 +136,24 @@ inline constexpr bool ReservedWindowsDocumentName(std::string_view name) {
   return false;
 }
 
+inline constexpr const char* kEngineOwnedWindowsDocumentNames[] = {
+    "launch-guard.json",
+};
+
+inline constexpr bool EngineOwnedWindowsDocumentName(std::string_view name) {
+  for (const char* owned : kEngineOwnedWindowsDocumentNames) {
+    if (AsciiEqualsIgnoreCase(name, owned)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline constexpr bool WritableWindowsDocumentName(std::string_view name) {
+  return ValidWindowsDocumentName(name) && !ReservedWindowsDocumentName(name) &&
+         !EngineOwnedWindowsDocumentName(name);
+}
+
 inline constexpr bool BootstrapDocumentEligible(std::string_view name) {
   return ValidWindowsDocumentName(name) && !ReservedWindowsDocumentName(name) &&
          !IsWindowsSyncStateDocument(name) &&

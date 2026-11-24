@@ -550,7 +550,7 @@ StoredDocument ReadStoredDocument(const base::FilePath& directory,
 bool WriteStoredDocument(const base::FilePath& directory,
                          const std::string& name,
                          const std::string& contents) {
-  if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name) ||
+  if (!WritableWindowsDocumentName(name) ||
       !base::IsStringUTF8(contents) ||
       contents.size() > WindowsDocumentLimit(name) ||
       !base::CreateDirectory(directory)) {
@@ -626,7 +626,7 @@ bool WriteStoredDocument(const base::FilePath& directory,
 
 bool RemoveStoredDocument(const base::FilePath& directory,
                           const std::string& name) {
-  if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+  if (!WritableWindowsDocumentName(name)) {
     return false;
   }
   bool dir_missing = false;
@@ -726,12 +726,23 @@ std::atomic<int>& AssetReadsOutsideRoot() {
   return outside;
 }
 
+std::atomic<int>& AssetReadsUnreadable() {
+  static std::atomic<int> unreadable{0};
+  return unreadable;
+}
+
+void CountAssetRead(std::atomic<int>& counter) {
+  if (ardiacore::TestInstance()) {
+    ++counter;
+  }
+}
+
 std::optional<std::string> ReadAsset(base::FilePath directory,
                                      std::string path,
                                      std::string bootstrap_json,
                                      base::FilePath documents) {
   if (!ValidWindowsAssetPath(path) || MimeType(path).empty()) {
-    ++AssetReadsRefused();
+    CountAssetRead(AssetReadsRefused());
     return std::nullopt;
   }
   if (path == "host-bootstrap.js") {
@@ -757,6 +768,7 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
   const std::optional<std::wstring> root_final =
       OpenDirectoryFinalPath(directory, true);
   if (!root_final) {
+    CountAssetRead(AssetReadsUnreadable());
     return std::nullopt;
   }
   const base::FilePath candidate = directory.AppendASCII(path);
@@ -766,19 +778,21 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
       OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
       nullptr));
   if (!file.valid()) {
+    CountAssetRead(AssetReadsUnreadable());
     return std::nullopt;
   }
   const std::optional<std::wstring> file_final = HandleFinalPath(file.get());
   if (!file_final || !IsStrictlyWithinWinDirectory(*root_final, *file_final)) {
-    ++AssetReadsOutsideRoot();
+    CountAssetRead(AssetReadsOutsideRoot());
     return std::nullopt;
   }
   std::optional<std::string> contents =
       ReadHandleBytes(file.get(), kAssetLimit);
   if (!contents) {
+    CountAssetRead(AssetReadsUnreadable());
     return std::nullopt;
   }
-  ++AssetReadsServed();
+  CountAssetRead(AssetReadsServed());
   if (path == "index.html") {
     const size_t head = contents->find("<head>");
     if (head == std::string::npos) {
@@ -2192,7 +2206,7 @@ void ShellWindow::Invoke(const std::string& method,
                                "A document name and text are required")));
     }
     const std::string name = (*values)[0].GetString();
-    if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+    if (!WritableWindowsDocumentName(name)) {
       return std::move(done).Run(
           false, base::Value(base::DictValue()
                                  .Set("code", "ERR_DOCUMENT_NAME")
@@ -2234,7 +2248,7 @@ void ShellWindow::Invoke(const std::string& method,
                                  .Set("message", "A document name is required")));
     }
     const std::string name = (*values)[0].GetString();
-    if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+    if (!WritableWindowsDocumentName(name)) {
       return std::move(done).Run(
           false, base::Value(base::DictValue()
                                  .Set("code", "ERR_DOCUMENT_NAME")
@@ -2379,7 +2393,8 @@ void ShellWindow::Invoke(const std::string& method,
         true, base::Value(base::DictValue()
                               .Set("served", AssetReadsServed().load())
                               .Set("refused", AssetReadsRefused().load())
-                              .Set("outsideRoot", AssetReadsOutsideRoot().load())));
+                              .Set("outsideRoot", AssetReadsOutsideRoot().load())
+                              .Set("unreadable", AssetReadsUnreadable().load())));
   }
   if (method == "ArdiaShell.testTelemetrySink" && ardiacore::TestInstance()) {
     return std::move(done).Run(

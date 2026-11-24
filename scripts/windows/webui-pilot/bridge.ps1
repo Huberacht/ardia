@@ -137,9 +137,10 @@ function Native-Refusal($answer, [string]$code) {
   ($null -ne $answer) -and ($answer.ok -eq $false) -and ($answer.kind -ceq 'native') -and ($answer.code -ceq $code)
 }
 function Answer-Text($answer) { if ($null -eq $answer) { 'null' } else { $answer | ConvertTo-Json -Compress -Depth 4 } }
+$EngineWrittenDocuments = @('session.json', 'live.json', 'live.canonical.json', 'rnw-migration.json', 'rnw-migration.lock', 'launch-starts.txt', 'launch-starts.txt.tmp', 'launch-guard.json')
 function Folder-Snapshot([string]$root) {
   @(Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
-    if ($_.PSIsContainer) { "D:$($_.Name)" } else { "F:$($_.Name):$($_.Length):$($_.LastWriteTimeUtc.Ticks)" }
+    if ($_.PSIsContainer) { "D:$($_.Name)" } elseif ($EngineWrittenDocuments -notcontains $_.Name) { "F:$($_.Name):$($_.Length):$($_.LastWriteTimeUtc.Ticks)" }
   }) -join '|'
 }
 function Prototype-Shape { Cdp-Eval 'JSON.stringify({ own: Object.getOwnPropertyNames(Object.prototype).sort(), plain: Object.getPrototypeOf({}) === Object.prototype, polluted: ({}).pilotPolluted === undefined && ({}).polluted === undefined })' }
@@ -222,6 +223,15 @@ $syncAliasWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["Sync-State.nns",
 $syncAliasSize = (Get-Item -LiteralPath $syncAliasPath -ErrorAction SilentlyContinue).Length
 $syncAliasRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["Sync-State.nns"]'
 Check 'documents-sync-state-alias-limit' (($syncAliasWrite.ok -eq $true) -and ($syncAliasSize -eq (8 * 1024 * 1024 + 1)) -and ($syncAliasRemove.ok -eq $true) -and (-not (Test-Path -LiteralPath $syncAliasPath))) "write=$(Answer-Text $syncAliasWrite) size=$syncAliasSize remove=$(Answer-Text $syncAliasRemove)"
+
+$guardPath = Join-Path $Data 'launch-guard.json'
+$guardBefore = Get-Content -LiteralPath $guardPath -Raw -ErrorAction SilentlyContinue
+$guardRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["launch-guard.json"]'
+$guardWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["launch-guard.json", "{\"unfinishedStartsBefore\":99}"]'
+$guardWriteUpper = Invoke-HostExpr 'ArdiaShell.writeDocument' '["LAUNCH-GUARD.JSON", "{}"]'
+$guardRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["Launch-Guard.json"]'
+$guardAfter = Get-Content -LiteralPath $guardPath -Raw -ErrorAction SilentlyContinue
+Check 'documents-launch-guard-read-only' (($null -ne $guardBefore) -and ($guardRead.ok -eq $true) -and ($guardRead.value -ceq $guardBefore) -and (Native-Refusal $guardWrite 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardWriteUpper 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardRemove 'ERR_DOCUMENT_NAME') -and ($guardAfter -ceq $guardBefore)) "read=$(Answer-Text $guardRead) write=$(Answer-Text $guardWrite) upper-case write=$(Answer-Text $guardWriteUpper) remove=$(Answer-Text $guardRemove); file unchanged $($guardAfter -ceq $guardBefore)"
 
 $linkPath = Join-Path $Data 'escape-link.json'
 cmd /c mklink "$linkPath" "$outsideCanary" | Out-Null

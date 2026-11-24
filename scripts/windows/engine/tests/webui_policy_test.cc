@@ -77,6 +77,21 @@ void TestDocumentNames() {
   assert(!ReservedWindowsDocumentName("launch-guard.json"));
   assert(!ReservedWindowsDocumentName("launch-starts.json"));
   assert(!ReservedWindowsDocumentName("launch-look.json"));
+  for (const char* owned : {"launch-guard.json", "LAUNCH-GUARD.JSON",
+                            "Launch-Guard.Json"}) {
+    assert(ValidWindowsDocumentName(owned));
+    assert(!ReservedWindowsDocumentName(owned));
+    assert(EngineOwnedWindowsDocumentName(owned));
+    assert(!WritableWindowsDocumentName(owned));
+    assert(BootstrapDocumentEligible(owned));
+  }
+  assert(!EngineOwnedWindowsDocumentName("launch-guard.json.tmp"));
+  assert(!EngineOwnedWindowsDocumentName("launch-guard.jsonx"));
+  assert(WritableWindowsDocumentName("launch-look.json"));
+  assert(WritableWindowsDocumentName("telemetry.json"));
+  assert(!WritableWindowsDocumentName("session.json"));
+  assert(!WritableWindowsDocumentName("launch-starts.txt"));
+  assert(!WritableWindowsDocumentName("../launch-guard.json"));
   assert(!ReservedWindowsDocumentName("__proto__"));
   assert(!ReservedWindowsDocumentName("constructor"));
   for (const char* accepted : {"__proto__", "constructor", "prototype",
