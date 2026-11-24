@@ -14,6 +14,7 @@ public enum LiquidGlassShader {
     case edgeRed, edgeGreen, edgeBlue, edgeAlpha
     case tintRed, tintGreen, tintBlue, tintAlpha
     case rimOnly
+    case readable
   }
 
   public struct Frame: Equatable, Sendable {
@@ -99,6 +100,7 @@ public enum LiquidGlassShader {
       set(.edgeRed, ink: style.edge(dark: dark))
       set(.tintRed, ink: tint)
       set(.rimOnly, rimOnly ? 1 : 0)
+      set(.readable, dark ? 1 : 2)
       return values
     }
   }
@@ -119,6 +121,7 @@ struct GlassUniforms {
   float edgeRed; float edgeGreen; float edgeBlue; float edgeAlpha;
   float tintRed; float tintGreen; float tintBlue; float tintAlpha;
   float rimOnly;
+  float readable;
 };
 
 struct GlassVertexOut {
@@ -199,6 +202,18 @@ static float rimLight(float2 p, float edge, float inward, float feather, constan
   return clamp((lit + back) * mask, 0.0, 1.0) * u.rimOpacity;
 }
 
+static float4 readable(float4 color, float mode) {
+  if (mode < 0.5 || color.a <= 0.0) return color;
+  float3 lin = pow(clamp(color.rgb / color.a, 0.0, 1.0), float3(2.2));
+  float light = dot(lin, float3(0.2126, 0.7152, 0.0722));
+  if (mode < 1.5) {
+    if (light > \(LiquidGlassRules.readableCeiling)) lin *= \(LiquidGlassRules.readableCeiling) / light;
+  } else if (light < \(LiquidGlassRules.readableFloor)) {
+    lin += (1.0 - lin) * ((\(LiquidGlassRules.readableFloor) - light) / max(1.0 - light, 0.0001));
+  }
+  return float4(pow(lin, float3(1.0 / 2.2)) * color.a, color.a);
+}
+
 fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant GlassUniforms &u [[buffer(0)]], texture2d<float> source [[texture(0)]]) {
   constexpr sampler smooth(coord::normalized, address::clamp_to_edge, filter::linear);
   float2 p = in.position.xy / u.scale;
@@ -232,6 +247,7 @@ fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant Gla
   float edgeMask = 1.0 - smoothstep(u.edgeWidth, u.edgeWidth + feather, inward);
   color = over(float4(u.edgeRed, u.edgeGreen, u.edgeBlue, u.edgeAlpha) * edgeMask, color);
   color = over(float4(u.tintRed, u.tintGreen, u.tintBlue, u.tintAlpha), color);
+  if (u.live > 0.5) color = readable(color, u.readable);
   return color * coverage;
 }
 """

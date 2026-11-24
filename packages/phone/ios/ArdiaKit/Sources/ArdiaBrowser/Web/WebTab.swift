@@ -74,6 +74,7 @@ public final class WebTab: DiscardablePage, Identifiable {
   public private(set) var isFindingInPage = false
   public private(set) var navigationGeneration = 0
   public private(set) var committedDocuments = 0
+  public private(set) var sameDocumentNavigations = 0
   public static var labScrollCountsAsTouch = false
   public private(set) var hasCommittedLoad = true
   public var request: PageRequest?
@@ -371,7 +372,8 @@ public final class WebTab: DiscardablePage, Identifiable {
     if let webView { securityChanged(webView) }
     engine?.tabs.update(id, url: newURL.absoluteString)
     if !isPrivate, let language = PageTranslation.chosenLanguage(in: newURL) { engine?.preferences.rememberTranslation(into: language) }
-    let sameDocument = !(webView?.isLoading ?? false) && previous != nil
+    let sameDocument = PageLoadCommit.sameDocument(loading: webView?.isLoading ?? false, hadURL: previous != nil)
+    if sameDocument { sameDocumentNavigations += 1 }
     if sameDocument, let previous, Self.withoutFragment(previous) != Self.withoutFragment(newURL) {
       lastVisit = engine?.tabs.recordVisit(url: newURL.absoluteString, title: title, transition: .link, fromTab: id)
       engine?.onVisit?(id, PageVisit(url: newURL.absoluteString, title: title, kind: .sameDocument))

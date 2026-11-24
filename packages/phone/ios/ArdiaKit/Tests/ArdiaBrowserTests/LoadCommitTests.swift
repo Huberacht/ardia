@@ -13,4 +13,10 @@ import Testing
     #expect(PageLoadCommit.after(loading: false, wasLoading: true, committed: false))
     #expect(PageLoadCommit.after(loading: false, wasLoading: false, committed: true))
   }
+
+  @Test func `a URL change while nothing loads is a same-document route, and one during a load is not`() {
+    #expect(PageLoadCommit.sameDocument(loading: false, hadURL: true), "pushState, replaceState or a hash route")
+    #expect(!PageLoadCommit.sameDocument(loading: true, hadURL: true), "a provisional load keeps the page it shows until it commits")
+    #expect(!PageLoadCommit.sameDocument(loading: false, hadURL: false), "the first URL")
+  }
 }

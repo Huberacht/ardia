@@ -373,8 +373,9 @@ final class LiquidGlassSurface: UIView {
     let base = choice.path == .solid ? (solidFill.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? GlassFrostStyle.glass.fallback(dark: dark)) : GlassFrostStyle.glass.fallback(dark: dark)
     let tintInk = tint.map { GlassInk($0.resolvedColor(with: traits(dark))) }
     let edge = GlassFrostStyle.glass.edge(dark: dark).color
-    for (target, ink) in [(fillLayer, base), (clearLayer, GlassFrostStyle.glass.clear(dark: dark))] {
-      target.backgroundColor = (tintInk.map { $0.over(ink) } ?? ink).color
+    let veil = tintInk.map { $0.over(GlassFrostStyle.glass.clear(dark: dark)) } ?? GlassFrostStyle.glass.clear(dark: dark)
+    for (target, ink) in [(fillLayer, tintInk.map { $0.over(base) } ?? base), (clearLayer, LiquidGlassRules.readableVeil(veil, dark: dark))] {
+      target.backgroundColor = ink.color
       target.cornerRadius = corner
       target.borderWidth = GlassFrostStyle.glass.edgeWidth
       target.borderColor = edge

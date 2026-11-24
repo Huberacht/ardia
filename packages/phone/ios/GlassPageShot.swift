@@ -8,6 +8,7 @@ final class GlassPageShot {
   private static let rasterQueue = DispatchQueue(label: "ardia.glass.page", qos: .userInitiated)
 
   private var gate = GlassSnapshotGate()
+  private var zoomWatch = GlassZoomWatch()
   private weak var web: WKWebView?
   private(set) var image: CGImage?
   private(set) var generation = 0
@@ -33,7 +34,7 @@ final class GlassPageShot {
 
   static func key(of web: WKWebView) -> (key: GlassPageKey, committed: Bool) {
     let document = PhonePages.shared.document(of: web)
-    return (GlassPageKey(page: ObjectIdentifier(web).hashValue, committed: document?.committed ?? 0), document?.settled ?? true)
+    return (GlassPageKey(page: ObjectIdentifier(web).hashValue, committed: document?.committed ?? 0, route: document?.route ?? 0), document?.settled ?? true)
   }
 
   @discardableResult
@@ -54,11 +55,9 @@ final class GlassPageShot {
       fastestWhilePending = max(fastestWhilePending, hypot(instant.x, instant.y))
     }
     let key = Self.key(of: web).key
-    let changed = gate.observe(key) || self.web !== web
-    guard changed else {
-      if image != nil, web.scrollView.zoomScale != zoom { forgetImage() }
-      return false
-    }
+    let zoomed = zoomWatch.observe(Double(web.scrollView.zoomScale))
+    let changed = gate.observe(key) || self.web !== web || zoomed
+    guard changed else { return false }
     self.web = web
     pendingToken = nil
     forgetImage()
@@ -229,6 +228,7 @@ final class GlassPageShot {
     pendingToken = nil
     busy = []
     web = nil
+    zoomWatch = GlassZoomWatch()
     lastOffset = nil
     lastSeenAt = 0
     velocity = .zero
@@ -288,8 +288,8 @@ final class GlassPageShot {
 }
 
 extension PhonePages {
-  func document(of webView: WKWebView) -> (committed: Int, settled: Bool)? {
+  func document(of webView: WKWebView) -> (committed: Int, route: Int, settled: Bool)? {
     guard let tab = pageIDList.lazy.compactMap({ self.page($0) }).first(where: { $0.webView === webView }) else { return nil }
-    return (tab.committedDocuments, tab.hasCommittedLoad)
+    return (tab.committedDocuments, tab.sameDocumentNavigations, tab.hasCommittedLoad)
   }
 }

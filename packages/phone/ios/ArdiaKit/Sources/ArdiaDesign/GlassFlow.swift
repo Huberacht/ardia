@@ -4,10 +4,12 @@ import Foundation
 public struct GlassPageKey: Hashable, Sendable {
   public var page: Int
   public var committed: Int
+  public var route: Int
 
-  public init(page: Int, committed: Int) {
+  public init(page: Int, committed: Int, route: Int = 0) {
     self.page = page
     self.committed = committed
+    self.route = route
   }
 }
 
@@ -98,6 +100,17 @@ public struct GlassSnapshotGate: Sendable {
   public mutating func failed(now: TimeInterval) {
     failures += 1
     nextRequest = now + LiquidGlassRules.captureRetryDelay(failures: failures)
+  }
+}
+
+public struct GlassZoomWatch: Sendable {
+  public private(set) var zoom: Double?
+
+  public init() {}
+
+  public mutating func observe(_ zoom: Double) -> Bool {
+    defer { self.zoom = zoom }
+    return self.zoom.map { $0 != zoom } ?? false
   }
 }
 

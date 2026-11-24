@@ -205,6 +205,65 @@ public enum LiquidGlassRules {
   }
 
   public static let backdropStrikes = 2
+  public static let lightInk = GlassInk(red: 1, green: 1, blue: 1, alpha: 0.8)
+  public static let darkInk = GlassInk(hex: 0x0E0F10, alpha: 0.9)
+  public static let readableContrast = 5.0
+  public static let readableCeiling = readableBound(ink: lightInk, dark: true)
+  public static let readableFloor = readableBound(ink: darkInk, dark: false)
+
+  public static func text(_ ink: GlassInk, over glass: (red: Double, green: Double, blue: Double)) -> Double {
+    luminance(red: ink.red * ink.alpha + glass.red * (1 - ink.alpha), green: ink.green * ink.alpha + glass.green * (1 - ink.alpha), blue: ink.blue * ink.alpha + glass.blue * (1 - ink.alpha))
+  }
+
+  public static func readableBound(ink: GlassInk, dark: Bool) -> Double {
+    func reads(_ gray: Double) -> Bool { contrast(text(ink, over: (gray, gray, gray)), luminance(red: gray, green: gray, blue: gray)) >= readableContrast }
+    var low = 0.0
+    var high = 1.0
+    for _ in 0..<30 {
+      let middle = (low + high) / 2
+      if reads(middle) == dark { low = middle } else { high = middle }
+    }
+    let gray = dark ? low : high
+    return luminance(red: gray, green: gray, blue: gray)
+  }
+
+  public static func luminance(red: Double, green: Double, blue: Double) -> Double {
+    0.2126 * pow(red, 2.2) + 0.7152 * pow(green, 2.2) + 0.0722 * pow(blue, 2.2)
+  }
+
+  public static func contrast(_ one: Double, _ other: Double) -> Double {
+    (max(one, other) + 0.05) / (min(one, other) + 0.05)
+  }
+
+  public static func veil(_ ink: GlassInk, over backdrop: Double) -> Double {
+    func channel(_ value: Double) -> Double { value * ink.alpha + backdrop * (1 - ink.alpha) }
+    return luminance(red: channel(ink.red), green: channel(ink.green), blue: channel(ink.blue))
+  }
+
+  public static func readableVeil(_ ink: GlassInk, dark: Bool) -> GlassInk {
+    let worst = dark ? 1.0 : 0.0
+    func fits(_ candidate: GlassInk) -> Bool {
+      let light = veil(candidate, over: worst)
+      return dark ? light <= readableCeiling : light >= readableFloor
+    }
+    var made = ink
+    if fits(made) { return made }
+    made.alpha = 1
+    if !fits(made) {
+      let target = dark ? 0.12 : 0.9
+      made = GlassInk(red: target, green: target, blue: target, alpha: 1)
+    }
+    var low = ink.alpha
+    var high = 1.0
+    for _ in 0..<24 {
+      let middle = (low + high) / 2
+      var trial = made
+      trial.alpha = middle
+      if fits(trial) { high = middle } else { low = middle }
+    }
+    made.alpha = high
+    return made
+  }
   public static let budgetCooldownBase: TimeInterval = 3
   public static let budgetCooldownLongest: TimeInterval = 30
   public static let budgetTripMemory: TimeInterval = 60

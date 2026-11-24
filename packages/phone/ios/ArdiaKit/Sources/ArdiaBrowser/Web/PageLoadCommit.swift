@@ -3,4 +3,8 @@ public enum PageLoadCommit {
     if loading { return wasLoading ? committed : false }
     return true
   }
+
+  public static func sameDocument(loading: Bool, hadURL: Bool) -> Bool {
+    !loading && hadURL
+  }
 }

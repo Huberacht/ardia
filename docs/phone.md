@@ -1418,9 +1418,11 @@ Metal.
     the glass (up to 3,600 during a fling) and only where the picture has pixels, and is redrawn off the main thread
     only to recentre it a quarter second ahead of the scroll or when a new picture arrives, as long as nothing over
     the page comes within 200 points of the glass and the glass sits over the web view; otherwise the strip around
-    the glass is redrawn as it is on screen. A picture is used only for the web view and committed document it was
+    the glass is redrawn as it is on screen. A picture is used only for the web view, committed document and route it was
     asked for (`WebTab.committedDocuments`, so a same-URL reload drops it, while a load that is stopped or fails
-    before it commits keeps the page it was showing) at the same zoom. A capture that was being drawn when a new
+    before it commits keeps the page it was showing; `WebTab.sameDocumentNavigations`, so a `pushState`,
+    `replaceState` or hash route drops it) at the same zoom. A zoom change drops the picture, the capture made from
+    it and any capture in flight, and the glass shows clear glass until the new one lands. A capture that was being drawn when a new
     document committed is dropped when it lands. One that fails, comes back blank, or comes back a flat colour that
     isn't the page's own background is refused and the requests back off. Fixed and sticky elements are painted
     where the document places them, not where they float on screen. WebKit's work counts against the budget: a
@@ -1429,6 +1431,15 @@ Metal.
     viewport, whatever rect it is asked for (the rest comes back transparent), so it can't reach ahead of a scroll,
     and a snapshot taken while scrolling can't be placed exactly. In that mode WebKit is asked only while the page is
     still; `ArdiaGlassMovingSnapshots` also asks every 8 points while it creeps (under 400 points a second).
+  - **Readable on every frame.** The bar's ink follows its `dark` prop (white at 80 % on dark glass, #0E0F10 at
+    90 % on light glass, `chromeInk`), and the glass keeps that ink at 5:1 or better whatever it samples: the
+    shader caps the lens's luminance under white ink and floors it under dark ink (`LiquidGlassRules.readableCeiling`
+    and `readableFloor`, worked out from the inks), and clear glass raises its veil until it meets the same bound
+    over the worst page. A crossfade between two readable layers stays readable. `GlassReadabilityTests` renders the
+    lens over white, black and deep red and checks the veils and the crossfade, and reads the inks back from
+    `tokens.ts`. On the simulator, the frames of the Glass to Stained glass navigation, a route change, a zoom and a
+    scroll past the rose window all measure 4.7:1 or better around the host text; before, the bar could show a lens
+    sampled from white page pixels under white ink (1.2:1).
   - **Clear glass.** Whenever a refracting glass has no capture that covers it (past the snapshot during a fling,
     before its first capture, after a failure, while the shader compiles, while it is over budget), it shows clear
     glass instead of an opaque fill: a translucent veil (#FFFFFF at 66 %, #1C1C1E at 62 % in dark) under the profile
