@@ -370,22 +370,25 @@ double GzipText(const base::FilePath& documents, const std::string& text, const 
 struct UploadFile {
   base::FilePath path;
   int64_t bytes = -1;
-#if BUILDFLAG(IS_WIN)
-  base::win::ScopedHandle held;
-#endif
+  std::optional<std::string> body;
 };
 
-UploadFile FindUploadFile(const base::FilePath& documents, const std::string& path) {
+UploadFile FindUploadFile(const base::FilePath& documents, const std::string& path, int64_t max_bytes) {
   const base::FilePath drafts = DraftsFolder(documents);
   const std::optional<base::FilePath> real = ExistingDraftPath(drafts, path);
   if (!real || base::DirectoryExists(*real)) return {};
 #if BUILDFLAG(IS_WIN)
-  UploadFile file;
-  file.held = OpenDraftHandle(drafts, *real, GENERIC_READ, FILE_SHARE_READ);
+  base::win::ScopedHandle held = OpenDraftHandle(drafts, *real, GENERIC_READ, FILE_SHARE_READ);
   LARGE_INTEGER size = {};
-  if (!file.held.is_valid() || DirectoryHandle(file.held.get()) || !::GetFileSizeEx(file.held.get(), &size)) return {};
+  if (!held.is_valid() || DirectoryHandle(held.get()) || !::GetFileSizeEx(held.get(), &size)) return {};
+  UploadFile file;
   file.path = *real;
   file.bytes = size.QuadPart;
+  if (file.bytes < 1 || file.bytes > max_bytes) return file;
+  base::File verified(std::move(held));
+  std::string body(static_cast<size_t>(file.bytes), '\0');
+  if (!verified.ReadAndCheck(0, base::as_writable_byte_span(body))) return {};
+  file.body = std::move(body);
   return file;
 #else
   return {*real, base::GetFileSize(*real).value_or(-1)};
@@ -414,9 +417,6 @@ class Transfer {
   ~Transfer() = default;
 
   int caller() const { return caller_; }
-#if BUILDFLAG(IS_WIN)
-  void HoldUpload(base::win::ScopedHandle held) { upload_hold_ = std::move(held); }
-#endif
 
   void Post(network::mojom::URLLoaderFactory* factory, const std::string& url, const std::vector<report::Header>& headers,
             std::string body) {
@@ -426,13 +426,17 @@ class Transfer {
   }
 
   void Put(network::mojom::URLLoaderFactory* factory, const std::string& url, const std::vector<report::Header>& headers,
-           const base::FilePath& file) {
+           const base::FilePath& file, std::optional<std::string> body) {
     std::string type;
     for (const auto& [name, value] : headers) {
       if (name == "Content-Type") type = value;
     }
     Create(url, "PUT", headers, report::kUploadTimeoutSeconds);
-    loader_->AttachFileForUpload(file, type);
+    if (body) {
+      loader_->AttachStringForUpload(std::move(*body), type);
+    } else {
+      loader_->AttachFileForUpload(file, type);
+    }
     loader_->SetOnUploadProgressCallback(base::BindRepeating(&Transfer::OnProgress, base::Unretained(this)));
     Start(factory);
   }
@@ -490,9 +494,6 @@ class Transfer {
   LinuxReportEvent emit_;
   Done done_;
   std::unique_ptr<network::SimpleURLLoader> loader_;
-#if BUILDFLAG(IS_WIN)
-  base::win::ScopedHandle upload_hold_;
-#endif
 };
 
 std::optional<std::vector<report::Header>> HeadersFrom(const base::Value& value) {
@@ -562,7 +563,7 @@ void StartUpload(const base::ListValue& args, const base::FilePath& documents, i
   if (BackgroundInstance()) return Refuse(std::move(done), "Background instances send no reports");
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&FindUploadFile, documents, args[4].GetString()),
+      base::BindOnce(&FindUploadFile, documents, args[4].GetString(), request.max_bytes),
       base::BindOnce(
           [](report::Request request, std::string id, std::string url, std::vector<report::Header> headers, int caller,
              LinuxReportEvent emit, Done done, UploadFile file) {
@@ -572,11 +573,7 @@ void StartUpload(const base::ListValue& args, const base::FilePath& documents, i
             scoped_refptr<network::SharedURLLoaderFactory> factory = SystemLoaderFactory();
             if (!factory) return Refuse(std::move(done), "The network is unavailable");
             Transfer* transfer = Admit(caller, std::move(id), report::kUploadReplyMaxBytes, std::move(emit), &done);
-            if (!transfer) return;
-#if BUILDFLAG(IS_WIN)
-            transfer->HoldUpload(std::move(file.held));
-#endif
-            transfer->Put(factory.get(), url, headers, file.path);
+            if (transfer) transfer->Put(factory.get(), url, headers, file.path, std::move(file.body));
           },
           request, args[0].GetString(), args[1].GetString(), std::move(*headers), caller, std::move(emit), std::move(done)));
 }

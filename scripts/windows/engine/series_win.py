@@ -909,6 +909,17 @@ def rewind(tree, plan):
     return len(entries)
 
 
+def apply_summary(rows):
+    skips = sum(1 for row in rows if row[1].startswith('skipped'))
+    failed = sum(1 for row in rows if row[1] == 'FAILED')
+    unreached = sum(1 for row in rows if row[1] == 'not reached')
+    planned = len(rows) - skips
+    summary = f'{planned - failed - unreached} of {planned} patches in, {skips} skipped'
+    if failed or unreached:
+        summary += f', {failed} failed, {unreached} not reached'
+    return summary
+
+
 def cmd_apply(args):
     tree = os.environ['CHROMIUM_SRC']
     rows = []
@@ -927,8 +938,7 @@ def cmd_apply(args):
         f.write('patch\tresult\tfiles\tdetail\n')
         for row in rows:
             f.write('\t'.join(row) + '\n')
-    skips = sum(1 for r in rows if r[1].startswith('skipped'))
-    print(f'{len(rows) - failed - skips} of {len(rows) - skips} patches in, {skips} skipped; report: {args.report}')
+    print(f'{apply_summary(rows)}; report: {args.report}')
     return 1 if failed else 0
 
 

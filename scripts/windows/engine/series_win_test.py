@@ -121,6 +121,8 @@ class LedgerTest(unittest.TestCase):
         rows, failed = self.apply([first, second])
         self.assertEqual(failed, 1)
         self.assertEqual([r[1] for r in rows], ['FAILED', 'not reached'])
+        skipped = [('skipped.patch', 'skipped (series-win)', 'OS-neutral', '')]
+        self.assertEqual(build.apply_summary(skipped + rows), '0 of 2 patches in, 1 skipped, 1 failed, 1 not reached')
         self.assertEqual(build.read_ledger(self.tree), [])
         self.assertEqual(self.tree_files()['b.txt'], BASE['b.txt'])
         self.write_tree({'a.txt': BASE['a.txt']})
@@ -128,6 +130,7 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(failed, 0)
         self.assertEqual([r[1] for r in rows], ['clean', 'clean'])
         self.assertEqual([entry[:2] for entry in build.read_ledger(self.tree)], [(0, 'first.patch'), (1, 'second.patch')])
+        self.assertEqual(build.apply_summary(rows), '2 of 2 patches in, 0 skipped')
         rows, failed = self.apply([first, second])
         self.assertEqual([r[1] for r in rows], ['already applied', 'already applied'])
 
