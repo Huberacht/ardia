@@ -563,8 +563,9 @@ jobs:
     needs: [publish, windows]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.windows.result == 'success' }}
     concurrency:
-      group: windows-alpha-publish
+      group: ${{ (inputs.dry_run == true || inputs.dry_run == 'true') && format('ardia-windows-alpha-dry-run-{0}', github.run_id) || 'ardia-windows-alpha-publish' }}
       cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

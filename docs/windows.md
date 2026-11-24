@@ -1252,7 +1252,7 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
   the live feed's, since no installed app would take it.
 - Every release refreshes it (Releases, below), so installed Windows apps update to each nightly and stable.
   Between releases, dispatch `.github/workflows/windows-alpha.yml` with a green Windows workflow run id so alpha
-  publishes share the `windows-alpha-publish` concurrency group with `release.yml` (`scripts/windows/publish-alpha.sh`
+  publishes share the `ardia-windows-alpha-publish` concurrency group with `release.yml` (`scripts/windows/publish-alpha.sh`
   refuses live local publishes unless `--allow-local-publish` is explicitly passed; `--dry-run` works locally).
 - A build knows what it is from `Ardia.build.json` beside `Ardia.exe` (`assemble.ps1 -Version -Build`). The build
   number is the number of commits in the built commit's history (`git rev-list --count`, the workflow's `identity`

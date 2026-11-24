@@ -22,7 +22,7 @@
 # is confirmed missing (HTTP 404), empty, or invalid AND the staged manifest matches the live windows-update.json
 # exactly (in which case only windows-update.json.sig is uploaded after rechecking live windows-update.json, never
 # clobbering published installers). Live publishes must run in GitHub Actions (.github/workflows/windows-alpha.yml or
-# .github/workflows/release.yml, serialized on windows-alpha-publish) unless --allow-local-publish is passed; they also
+# .github/workflows/release.yml, serialized on ardia-windows-alpha-publish) unless --allow-local-publish is passed; they also
 # hold a per-release lock, retry or roll back if uploading windows-update.json fails after windows-update.json.sig, and
 # verify the live manifest and signature after uploading.
 # Signing uses --key <pem> (or WINDOWS_UPDATE_KEY_FILE / WINDOWS_UPDATE_ED_PRIVATE_KEY), refused if its public half
@@ -152,7 +152,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [ "$dry" != 1 ] && [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "$allow_local_publish" != 1 ]; then
-  die "live publishes must run in GitHub Actions (.github/workflows/windows-alpha.yml or .github/workflows/release.yml) so they serialize on windows-alpha-publish; pass --allow-local-publish only to intentionally publish locally"
+  die "live publishes must run in GitHub Actions (.github/workflows/windows-alpha.yml or .github/workflows/release.yml) so they serialize on ardia-windows-alpha-publish; pass --allow-local-publish only to intentionally publish locally"
 fi
 
 if [ -z "$key_file" ] && [ -n "${WINDOWS_UPDATE_ED_PRIVATE_KEY:-}" ]; then
@@ -203,6 +203,18 @@ else
 fi
 
 if [ "$dry" != 1 ]; then
+  lock_timeout="${ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT:-60}"
+  parent_wait="$(python3 -I - "$lock_timeout" <<'PY'
+import math, sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+if not math.isfinite(value) or value < 0:
+    sys.exit(1)
+print(max(5, math.ceil(value) + 5))
+PY
+  )" || die "invalid ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT: $lock_timeout"
   lock_key="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$repo/$tag")"
   if [ -n "${ARDIA_WINDOWS_PUBLISH_LOCK:-}" ]; then
     lock_file="$ARDIA_WINDOWS_PUBLISH_LOCK"
@@ -214,19 +226,20 @@ if [ "$dry" != 1 ]; then
     lock_file="$lock_dir/windows-publish-$lock_key.lock"
   fi
   mkfifo "$stage/lock.hold" "$stage/lock.ready"
-  python3 -I - "$lock_file" "${ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT:-60}" "$stage/lock.hold" "$stage/lock.ready" <<'PY' &
-import errno, fcntl, os, stat, sys, time
+  exec 7<>"$stage/lock.ready"
+  python3 -I - "$lock_file" "$lock_timeout" "$stage/lock.hold" "$stage/lock.ready" <<'PY' &
+import errno, fcntl, math, os, stat, sys, time
 path, timeout_raw, hold_fifo, ready_fifo = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
     timeout = float(timeout_raw)
 except ValueError:
-    timeout = -1.0
-if timeout < 0:
+    timeout = float("nan")
+if not math.isfinite(timeout) or timeout < 0:
     with open(ready_fifo, "w") as out:
         out.write("ERR invalid lock timeout\n")
     sys.exit(1)
 try:
-    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
 except OSError as error:
     with open(ready_fifo, "w") as out:
         out.write(f"ERR {error}\n")
@@ -264,8 +277,17 @@ finally:
 PY
   lock_pid=$!
   lock_status=""
-  IFS= read -r lock_status <"$stage/lock.ready" || true
+  lock_read_ok=1
+  IFS= read -r -t "$parent_wait" lock_status <&7 || lock_read_ok=0
+  exec 7<&-
+  if [ "$lock_read_ok" != 1 ]; then
+    kill "$lock_pid" 2>/dev/null || true
+    wait "$lock_pid" 2>/dev/null || true
+    lock_pid=""
+    die "timed out waiting for publish lock helper ($lock_file)"
+  fi
   if [ "$lock_status" != "READY" ]; then
+    kill "$lock_pid" 2>/dev/null || true
     wait "$lock_pid" 2>/dev/null || true
     lock_pid=""
     die "failed to acquire publish lock $lock_file (${lock_status#ERR })"
@@ -454,12 +476,28 @@ else
     done
   fi
   if [ "$json_uploaded" != 1 ]; then
+    ambig_json="$stage/ambig-windows-update.json"
+    ambig_sig="$stage/ambig-windows-update.json.sig"
+    ambig_json_state="$(fetch_live "$published/windows-update.json" "$ambig_json")"
+    ambig_sig_state="$(fetch_live "$published/windows-update.json.sig" "$ambig_sig")"
+    if [ "$ambig_json_state" = "200" ] && [ "$ambig_sig_state" = "200" ] \
+      && cmp -s "$ambig_json" "$out/windows-update.json" && cmp -s "$ambig_sig" "$out/windows-update.json.sig" \
+      && "$verifier" windows-manifest --key "$public_key" --manifest "$ambig_json" --signature "$ambig_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null 2>&1 \
+      && "$verifier" windows-manifest --key "$public_key" --manifest "$ambig_json" --signature "$ambig_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null 2>&1; then
+      echo "warning: uploading windows-update.json returned an error, but the new signed pair landed intact; continuing" >&2
+      json_uploaded=1
+    fi
+  fi
+  if [ "$json_uploaded" != 1 ]; then
     if [ "$have_prev_valid_sig" = 1 ]; then
       rollback_dir="$stage/rollback"
       mkdir -p "$rollback_dir"
       cp "$prev_sig" "$rollback_dir/windows-update.json.sig"
+      cp "$live_json" "$rollback_dir/windows-update.json"
       gh release upload "$tag" -R "$repo" --clobber "$rollback_dir/windows-update.json.sig" \
         || die "uploading windows-update.json failed and restoring previous windows-update.json.sig also failed"
+      gh release upload "$tag" -R "$repo" --clobber "$rollback_dir/windows-update.json" \
+        || die "uploading windows-update.json failed and restoring previous windows-update.json also failed"
       rb_json="$stage/rb-windows-update.json"
       rb_sig="$stage/rb-windows-update.json.sig"
       rb_json_state="$(fetch_live "$published/windows-update.json" "$rb_json")"
@@ -468,12 +506,15 @@ else
         && cmp -s "$rb_json" "$live_json" && cmp -s "$rb_sig" "$prev_sig" \
         && "$verifier" windows-manifest --key "$public_key" --manifest "$rb_json" --signature "$rb_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null 2>&1 \
         && "$verifier" windows-manifest --key "$public_key" --manifest "$rb_json" --signature "$rb_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null 2>&1; then
-        die "uploading windows-update.json failed after retries; restored previous valid windows-update.json.sig"
+        die "uploading windows-update.json failed after retries; restored previous valid windows-update.json and windows-update.json.sig"
       fi
       die "uploading windows-update.json failed and restored live pair failed verification"
     else
       gh release delete-asset "$tag" windows-update.json.sig -R "$repo" --yes \
         || die "uploading windows-update.json failed and removing orphaned windows-update.json.sig also failed"
+      if [ "$live_json_state" != "200" ]; then
+        gh release delete-asset "$tag" windows-update.json -R "$repo" --yes >/dev/null 2>&1 || true
+      fi
       die "uploading windows-update.json failed after retries; removed orphaned windows-update.json.sig"
     fi
   fi

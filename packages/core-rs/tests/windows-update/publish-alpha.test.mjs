@@ -54,6 +54,7 @@ function makeFakeBin(
     driftAfterFirstJsonFetch = null,
     pauseOnUploadSig = null,
     failJsonUploadExit = 0,
+    failJsonUploadMode = "clobber-delete",
   } = {},
 ) {
   const bin = join(dir, "bin");
@@ -161,7 +162,15 @@ fi`
     failJsonUploadExit !== 0
       ? `  for arg in "$@"; do
     case "$arg" in
-      */windows-update.json) exit "${failJsonUploadExit}" ;;
+      */rollback/windows-update.json) ;;
+      */windows-update.json)
+        if [ "${failJsonUploadMode}" = "clobber-delete" ]; then
+          rm -f "${join(state, "live.json")}"
+        elif [ "${failJsonUploadMode}" = "landed-then-fail" ]; then
+          cp "$arg" "${join(state, "live.json")}"
+        fi
+        exit "${failJsonUploadExit}"
+        ;;
     esac
   done`
       : "";
@@ -374,7 +383,7 @@ test("live publish outside GitHub Actions fails closed without --allow-local-pub
   }
 });
 
-test("failed windows-update.json upload after windows-update.json.sig restores prior valid signature", () => {
+test("failed windows-update.json upload after --clobber deletion restores both windows-update.json and windows-update.json.sig", () => {
   ensureVerifier();
   const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-rollback-"));
   try {
@@ -385,16 +394,45 @@ test("failed windows-update.json upload after windows-update.json.sig restores p
       liveJson: m500.json,
       liveSig: m500.sig,
       failJsonUploadExit: 42,
+      failJsonUploadMode: "clobber-delete",
     });
     const result = runPublish(
       ["--installers", f501.installers, "--out", join(dir, "out-501"), "--key", keypair.privPem, "--public-key", keypair.pubPem, "--verify-bin", verifierPath],
       { binDir: bin, lockFile },
     );
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /restored previous valid windows-update\.json\.sig/);
+    assert.match(result.stderr, /restored previous valid windows-update\.json and windows-update\.json\.sig/);
     const uploads = loggedUploads(ghLog);
     assert.ok(uploads.some((line) => /rollback\/windows-update\.json\.sig$/.test(line)), uploads.join("\n"));
+    assert.ok(uploads.some((line) => /rollback\/windows-update\.json$/.test(line)), uploads.join("\n"));
     verifyLiveFeed(state, keypair.pubPem, 500);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous windows-update.json upload error succeeds without rollback when the new signed pair landed intact", () => {
+  ensureVerifier();
+  const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-ambig-"));
+  try {
+    const keypair = makeKeypair(dir);
+    const f501 = makeFixture(dir, "0.2.99", 501, { keypair });
+    const m500 = signedManifest("0.2.99", 500, keypair.privateKey);
+    const { bin, state, ghLog, lockFile } = makeFakeBin(dir, {
+      liveJson: m500.json,
+      liveSig: m500.sig,
+      failJsonUploadExit: 42,
+      failJsonUploadMode: "landed-then-fail",
+    });
+    const result = runPublish(
+      ["--installers", f501.installers, "--out", join(dir, "out-501"), "--key", keypair.privPem, "--public-key", keypair.pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile },
+    );
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(result.stderr, /new signed pair landed intact; continuing/);
+    const uploads = loggedUploads(ghLog);
+    assert.ok(!uploads.some((line) => /rollback\//.test(line)), uploads.join("\n"));
+    verifyLiveFeed(state, keypair.pubPem, 501);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -533,7 +571,7 @@ test("concurrent repair of build 500 and publish of build 501 serialize on the r
   }
 });
 
-test("publish lock refuses symlinks and times out cleanly when held past ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT", async () => {
+test("publish lock refuses symlinks, FIFOs, and non-finite timeouts, and times out cleanly when held", async () => {
   ensureVerifier();
   const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-lock-hardening-"));
   try {
@@ -550,6 +588,26 @@ test("publish lock refuses symlinks and times out cleanly when held past ARDIA_W
     assert.notEqual(symRes.status, 0);
     assert.match(symRes.stderr, /failed to acquire publish lock/);
     assert.deepEqual(loggedUploads(ghLog), []);
+
+    const fifoLock = join(dir, "fifo.lock");
+    execFileSync("mkfifo", [fifoLock]);
+    const fifoRes = runPublish(
+      ["--installers", installers, "--out", join(dir, "out-fifo"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile: fifoLock },
+    );
+    assert.notEqual(fifoRes.status, 0);
+    assert.match(fifoRes.stderr, /failed to acquire publish lock/);
+    assert.deepEqual(loggedUploads(ghLog), []);
+
+    for (const badTimeout of ["nan", "inf", "-inf", "-1", "abc"]) {
+      const badRes = runPublish(
+        ["--installers", installers, "--out", join(dir, `out-bad-${badTimeout}`), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+        { binDir: bin, lockFile, env: { ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT: badTimeout } },
+      );
+      assert.notEqual(badRes.status, 0, badTimeout);
+      assert.match(badRes.stderr, /invalid ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT/, badTimeout);
+      assert.deepEqual(loggedUploads(ghLog), [], badTimeout);
+    }
 
     const heldMarker = join(dir, "lock-held");
     const releaseMarker = join(dir, "lock-release");

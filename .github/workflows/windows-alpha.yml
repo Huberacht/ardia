@@ -18,8 +18,9 @@ permissions:
   actions: read
 
 concurrency:
-  group: windows-alpha-publish
+  group: ${{ inputs.dry_run && format('ardia-windows-alpha-dry-run-{0}', github.run_id) || 'ardia-windows-alpha-publish' }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   publish:
