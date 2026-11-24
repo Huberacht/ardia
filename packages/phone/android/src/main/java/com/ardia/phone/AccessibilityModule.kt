@@ -31,6 +31,7 @@ class AccessibilityModule : Module() {
         AsyncFunction("returnFocus") { tag: Int -> requests.start(recheck = true) { runCatching { appContext.findView<View>(tag) }.getOrNull() } }.runOnQueue(Queues.MAIN)
 
         AsyncFunction("handOverFocus") { tag: Int, within: Boolean ->
+            appContext.currentActivity?.window?.decorView?.let(FocusMoves::watch)
             requests.start(handover = true) {
                 val view = runCatching { appContext.findView<View>(tag) }.getOrNull()
                 if (within && view != null) ScreenReaderFocus.firstStop(view) else view
@@ -61,10 +62,10 @@ internal class FocusRequests(
     private val handler: Handler,
     private val clock: () -> Long,
     private val afterDraw: (Runnable) -> Unit = { next -> android.view.Choreographer.getInstance().postFrameCallback { handler.post(next) } },
+    private val moves: () -> Long = { FocusMoves.count },
     private val rootOf: (View) -> View = View::getRootView,
 ) {
     companion object {
-        private val UNSEEN = Any()
         const val RETRY_EVERY_MS = 16L
         const val GIVE_UP_AFTER_MS = 500L
         const val RECHECK_AFTER_MS = 300L
@@ -83,11 +84,14 @@ internal class FocusRequests(
         if (destroyed) return 0
         val id = ++lastId
         if (handover) {
+            val movesAtRequest = moves()
+            val target = resolve()?.takeIf { it.isAttachedToWindow }
+            val baseline = target?.let { ScreenReaderFocus.anyHolder(rootOf(it)) }
             val handing = object : Runnable {
                 override fun run() {
                     if (destroyed || pending[id] !== this) return
                     pending.remove(id)
-                    handOver(id, resolve)
+                    handOver(id, resolve, movesAtRequest, baseline)
                 }
             }
             pending[id] = handing
@@ -132,9 +136,8 @@ internal class FocusRequests(
         return id
     }
 
-    private fun handOver(id: Int, resolve: () -> View?) {
+    private fun handOver(id: Int, resolve: () -> View?, movesAtRequest: Long, baseline: View?) {
         val deadline = clock() + GIVE_UP_AFTER_MS
-        var baseline: Any? = UNSEEN
         val attempt = object : Runnable {
             override fun run() {
                 if (destroyed || pending[id] !== this) return
@@ -143,13 +146,16 @@ internal class FocusRequests(
                     return
                 }
                 val view = resolve()
-                val holding = view?.takeIf { it.isAttachedToWindow }?.let { ScreenReaderFocus.holder(rootOf(it)) }
-                if (baseline === UNSEEN && view != null && view.isAttachedToWindow) baseline = holding
-                if (baseline !== UNSEEN && ScreenReaderFocus.movedSince(baseline as View?, holding, view)) {
-                    pending.remove(id)
-                    return
+                val root = view?.takeIf { it.isAttachedToWindow }?.let(rootOf)
+                if (root != null) {
+                    val holding = ScreenReaderFocus.anyHolder(root)
+                    val moved = moves() != movesAtRequest || ScreenReaderFocus.movedSince(baseline, holding, view)
+                    if (moved && !ScreenReaderFocus.focusIsFree(view, root)) {
+                        pending.remove(id)
+                        return
+                    }
                 }
-                if (ScreenReaderFocus.focus(view)) {
+                if (FocusMoves.quietly { ScreenReaderFocus.focus(view) }) {
                     pending.remove(id)
                     return
                 }
@@ -175,6 +181,41 @@ internal class FocusRequests(
     }
 }
 
+internal object FocusMoves {
+    @Volatile
+    var count = 0L
+        private set
+
+    private var quiet = 0
+    private val watched = java.util.WeakHashMap<View, Unit>()
+
+    fun watch(root: View) {
+        if (root !is ViewGroup || watched.containsKey(root) || root.accessibilityDelegate != null) return
+        root.accessibilityDelegate = Watch
+        watched[root] = Unit
+    }
+
+    fun <T> quietly(body: () -> T): T {
+        quiet += 1
+        try {
+            return body()
+        } finally {
+            quiet -= 1
+        }
+    }
+
+    internal fun focused() {
+        if (quiet == 0) count += 1
+    }
+
+    private object Watch : View.AccessibilityDelegate() {
+        override fun onRequestSendAccessibilityEvent(host: ViewGroup, child: View, event: android.view.accessibility.AccessibilityEvent): Boolean {
+            if (event.eventType == android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED) focused()
+            return super.onRequestSendAccessibilityEvent(host, child, event)
+        }
+    }
+}
+
 internal object ScreenReaderFocus {
     fun ready(view: View?): Boolean = view != null && view.isAttachedToWindow && view.isLaidOut
 
@@ -191,6 +232,8 @@ internal object ScreenReaderFocus {
     fun holds(view: View): Boolean = view.createAccessibilityNodeInfo()?.isAccessibilityFocused == true
 
     fun movedSince(baseline: View?, holding: View?, target: View?): Boolean = holding != null && holding !== baseline && holding !== target
+
+    fun anyHolder(root: View): View? = holder(root) ?: virtualHolder(root)
 
     fun virtualHolder(root: View): View? {
         if (!root.isShown) return null

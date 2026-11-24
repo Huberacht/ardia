@@ -336,7 +336,7 @@ class ScreenReaderFocusTest {
     }
 
     @Test
-    fun aHandOverAsksNothingUntilTheFrameHasDrawnThenFocusesTheExposedTarget() {
+    fun aHandOverOnlyTakesItsBaselineWhenRequestedAndAsksNothingUntilTheFrameHasDrawnThenFocusesTheExposedTarget() {
         val asked = mutableListOf<Int>()
         val target = recording(asked)
         activity.setContentView(FrameLayout(activity).apply { addView(target, 200, 100) })
@@ -349,7 +349,7 @@ class ScreenReaderFocusTest {
             target
         }
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
-        assertEquals("nothing is looked up before the draw", 0, looked)
+        assertEquals("only the baseline lookup happens before the draw", 1, looked)
         assertTrue(asked.isEmpty())
         assertEquals(1, requests.waiting)
         drawn.single().run()
@@ -358,7 +358,7 @@ class ScreenReaderFocusTest {
     }
 
     @Test
-    fun aHandOverCancelledBeforeItsDrawNeverLooks() {
+    fun aHandOverCancelledBeforeItsDrawNeverLooksAgain() {
         val drawn = mutableListOf<Runnable>()
         val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis, afterDraw = { drawn += it })
         var looked = 0
@@ -369,7 +369,7 @@ class ScreenReaderFocusTest {
         requests.cancel(id)
         drawn.single().run()
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1))
-        assertEquals(0, looked)
+        assertEquals("only the baseline lookup at the request", 1, looked)
         assertEquals(0, requests.waiting)
     }
 
@@ -394,6 +394,65 @@ class ScreenReaderFocusTest {
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
         assertTrue("focus moved elsewhere after the hand-over began, so it gives up", asked.isEmpty())
         assertEquals(0, requests.waiting)
+    }
+
+    @Test
+    fun aHandOverGivesUpWhenTheUserMovedToAPageLinkBeforeTheFrameDrewEvenThoughNoHostViewHoldsFocus() {
+        val asked = mutableListOf<Int>()
+        val target = recording(asked)
+        var linkFocused = false
+        val web = page { linkFocused }
+        activity.setContentView(LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(web, 400, 400)
+            addView(target, 200, 100)
+        })
+        layOut()
+        FocusMoves.watch(activity.window.decorView)
+        val drawn = mutableListOf<Runnable>()
+        val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis, afterDraw = { drawn += it })
+        requests.start(handover = true) { target }
+        linkFocused = true
+        web.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+        drawn.single().run()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+        assertTrue("the link the user moved to keeps focus", asked.isEmpty())
+        assertEquals(0, requests.waiting)
+    }
+
+    @Test
+    fun aHandOverTakesItsBaselineWhenItIsRequestedSoAMoveBeforeTheFrameCallbackStillCounts() {
+        val asked = mutableListOf<Int>()
+        val target = recording(asked)
+        var otherHeld = false
+        val other = holding(mutableListOf()) { otherHeld }
+        activity.setContentView(LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(target, 200, 100)
+            addView(other, 200, 100)
+        })
+        layOut()
+        val drawn = mutableListOf<Runnable>()
+        val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis, afterDraw = { drawn += it }, moves = { 0L })
+        requests.start(handover = true) { target }
+        otherHeld = true
+        drawn.single().run()
+        assertTrue(asked.isEmpty())
+        assertEquals(0, requests.waiting)
+    }
+
+    @Test
+    fun theFocusEventAHandOverSendsItselfIsNotCountedAsTheUserMoving() {
+        val asked = mutableListOf<Int>()
+        val target = recording(asked)
+        activity.setContentView(FrameLayout(activity).apply { addView(target, 200, 100) })
+        layOut()
+        FocusMoves.watch(activity.window.decorView)
+        val before = FocusMoves.count
+        assertTrue(FocusMoves.quietly { target.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED); true })
+        assertEquals(before, FocusMoves.count)
+        target.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+        assertEquals(before + 1, FocusMoves.count)
     }
 
     @Test
