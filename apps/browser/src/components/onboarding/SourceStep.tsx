@@ -1,7 +1,7 @@
 import { fileExists, fileIcon } from "../../state/app/system";
 import { useEffect, useState } from "react";
 import { Image, View, type ImageSourcePropType } from "react-native";
-import { IconTile } from "../ui";
+import { IconTile, Text } from "../ui";
 import { space } from "../ui/tokens";
 import { isWebDemo } from "../../state/onboarding/demoSteps";
 import { openImport } from "../../state/settings/settingsWindows";
@@ -11,7 +11,8 @@ import { chooseSource, confirmAnswer, skipStep, sourcePatch, useOnboarding, type
 import { StepActions, StepLayout } from "./StepLayout";
 import { SectionLabel, SelectTile, useOnboardingColors } from "./Parts";
 import { SourcePreview } from "./SourcePreview";
-import { useSection } from "./sectionContext";
+import { useFlowPreviewShown, useSection } from "./sectionContext";
+import { SecondaryButton } from "./Buttons";
 import { SetupCodeLink, SetupCodeStep } from "./SetupCodeStep";
 import { browserIcon } from "./browserIcons";
 import { useImageRing } from "./GlassBacking";
@@ -36,6 +37,7 @@ export function SourceStep() {
   const [tiles, setTiles] = useState<Tile[]>(detectByAppBundle);
   const [importing, setImporting] = useState<BrowserSourceId | null>(null);
   const [pastingCode, setPastingCode] = useState(false);
+  const previewShown = useFlowPreviewShown();
 
   useEffect(() => {
     if (!BY_APP_BUNDLE) {
@@ -101,7 +103,23 @@ export function SourceStep() {
         <SectionLabel title={found.length ? "Others" : "Browsers"} />
         <TileGrid tiles={others} selected={source} onPress={choose} fresh />
       </View>
+      {!previewShown && canImport && chosen ? <CompactImport name={chosen.name} running={importing === chosen.id} onImport={startImport} /> : null}
     </StepLayout>
+  );
+}
+
+function CompactImport({ name, running, onImport }: { name: string; running: boolean; onImport: () => void }) {
+  const colors = useOnboardingColors();
+  return (
+    <View style={{ alignItems: "flex-start" }}>
+      {running ? (
+        <Text size="small" color={colors.rowSubtitle}>
+          {`Importing from ${name}… It runs in its own window.`}
+        </Text>
+      ) : (
+        <SecondaryButton title={`Import from ${name}`} filled onPress={onImport} />
+      )}
+    </View>
   );
 }
 

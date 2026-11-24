@@ -8,7 +8,7 @@ import { sectionIndexOf, useSections, type OnboardingSection } from "../../state
 import { RedoCancel } from "./Parts";
 import { PreviewStage } from "./PreviewStage";
 import { SectionScroller, sectionKey, type SectionScrollerHandle } from "./SectionScroller";
-import { createFlowSlots, createMockFocus, FlowSlotsContext, MockFocusContext, useFlowShown, useFlowSlots, type FlowShown } from "./sectionContext";
+import { createFlowSlots, createMockFocus, FlowPreviewShownContext, FlowSlotsContext, MockFocusContext, useFlowShown, useFlowSlots, type FlowShown } from "./sectionContext";
 import { onboardingFlow } from "./tokens";
 import { ThemeGradient } from "./ThemeGradient";
 import { SourceStep } from "./SourceStep";
@@ -99,7 +99,9 @@ export function OnboardingFlow() {
                 <WindowDragRegion style={StyleSheet.absoluteFill} />
                 <RedoCancel />
               </View>
-              <SectionScroller ref={scroller} sections={sections} active={active} render={renderSection} />
+              <FlowPreviewShownContext.Provider value={showPreview}>
+                <SectionScroller ref={scroller} sections={sections} active={active} render={renderSection} />
+              </FlowPreviewShownContext.Provider>
               <ActionBar />
             </View>
             {showPreview ? <PreviewStage /> : null}

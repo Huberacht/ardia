@@ -91,3 +91,7 @@ export function useFlowShown() {
 }
 
 export const useFlowSlots = () => useContext(FlowSlotsContext);
+
+export const FlowPreviewShownContext = createContext(true);
+
+export const useFlowPreviewShown = () => useContext(FlowPreviewShownContext);
