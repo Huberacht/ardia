@@ -1,10 +1,12 @@
-import { armFilePanel, armsFilePanels, disarmFilePanels, filePanelArms, placeArmedDownload, type FileArmKind, type FileArmRow } from "../../platform/automation";
+import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
+import { armFilePanel, armsFilePanels as nativeArmsFilePanels, disarmFilePanels, filePanelArms, placeArmedDownload, type FileArmKind, type FileArmRow } from "../../platform/automation";
 import { onDownload, type Download } from "../../platform/downloads";
 import { secureRandomHex } from "../../platform/secureRandom";
 import { foreignWriteHooks } from "../browser/foreignWriteHooks";
 import { engineProfile } from "../browser/model";
 import { useBrowser } from "../browser/store";
 import { noteFileArm } from "../telemetry/cliCounts";
+import { consentToken, type ConsentToken } from "../telemetry/client";
 import { claimDownload } from "./downloadHooks";
 import type { SocketCall } from "./socketCatalog";
 import { OpError } from "./workspaceTargets";
@@ -16,6 +18,8 @@ export const MAX_ARM_SECONDS = 600;
 export const MAX_ARMS = 16;
 const POLL_MS = 2_000;
 const KEEP_ENDED_MS = 600_000;
+
+const armsFilePanels = () => PLATFORM_FEATURES.silentFilePanels && nativeArmsFilePanels();
 
 export const UNSUPPORTED = "Answering file panels for the ardia command needs Ardia on macOS for now.";
 
@@ -34,6 +38,7 @@ type Tracked = {
   answeredSeen: number;
   failureSeen: boolean;
   downloads: DownloadProgress[];
+  consent: ConsentToken | null;
 };
 
 const tracked = new Map<string, Tracked>();
@@ -111,18 +116,18 @@ function claimant(d: Download): Tracked | null {
   return pick;
 }
 
-async function settle(t: Tracked, row: DownloadProgress, d: Download) {
+async function settle(t: Tracked, row: DownloadProgress, d: Download, consent: ConsentToken | null) {
   const placed = await placeArmedDownload(t.id, d.path).catch((error: unknown) => ({ ok: false as const, reason: String(error).slice(0, 80) }));
   if (!placed.ok) {
     row.state = "failed";
     row.reason = placed.reason;
-    noteFileArm("arm_failures");
+    noteFileArm("arm_failures", 1, consent);
     return;
   }
   row.state = "finished";
   row.path = placed.path;
   row.bytes = placed.bytes;
-  noteFileArm("downloads_placed");
+  noteFileArm("downloads_placed", 1, consent);
   if (placed.path === d.path) return;
   const current = useBrowser.getState().downloads.find((x) => x.id === d.id);
   if (current) foreignWriteHooks.around(() => useBrowser.getState().upsertDownload({ ...current, path: placed.path, filename: placed.path.split("/").pop() || current.filename }));
@@ -150,11 +155,11 @@ function noteDownload(d: Download) {
   if (d.state === "finished") {
     if (d.dangerous || settling.has(d.id)) return;
     settling.add(d.id);
-    void settle(t, row, d).finally(() => settling.delete(d.id));
+    void settle(t, row, d, t.consent).finally(() => settling.delete(d.id));
     return;
   }
   row.state = d.state;
-  noteFileArm("arm_failures");
+  noteFileArm("arm_failures", 1, t.consent);
 }
 
 function watchTabs() {
@@ -173,12 +178,12 @@ function account(rows: readonly FileArmRow[]) {
     const row = byId.get(t.id);
     if (!row) continue;
     if (row.answered > t.answeredSeen) {
-      if (t.kind === "upload") noteFileArm("uploads_answered", row.answered - t.answeredSeen);
+      if (t.kind === "upload") noteFileArm("uploads_answered", row.answered - t.answeredSeen, t.consent);
       t.answeredSeen = row.answered;
     }
     if (row.state === "failed" && !t.failureSeen) {
       t.failureSeen = true;
-      noteFileArm("arm_failures");
+      noteFileArm("arm_failures", 1, t.consent);
     }
     if (row.state !== "armed" && (t.kind === "upload" || row.state !== "answered")) end(t);
   }
@@ -202,6 +207,7 @@ function startPolling() {
 export type ArmRequest = { kind: FileArmKind; tab: string | null; profileId: string | null; paths: string[]; once: boolean; seconds: number };
 
 export async function armFiles(request: ArmRequest, call: SocketCall) {
+  const consent = consentToken();
   if (!armsFilePanels()) throw new OpError("refused", UNSUPPORTED);
   for (const path of request.paths) {
     const problem = localPathProblem(path);
@@ -232,8 +238,9 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
     answeredSeen: 0,
     failureSeen: false,
     downloads: [],
+    consent,
   });
-  noteFileArm(request.kind === "upload" ? "upload_arms" : "download_arms");
+  noteFileArm(request.kind === "upload" ? "upload_arms" : "download_arms", 1, consent);
   if (request.kind === "download") downloadsWatched ??= onDownload(noteDownload);
   watchTabs();
   startPolling();

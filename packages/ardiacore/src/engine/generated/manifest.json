@@ -3509,7 +3509,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "absent",
+              "desktop": "custom",
               "windows": "absent"
             },
             "disarmFiles": {
@@ -3518,14 +3518,14 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "absent",
+              "desktop": "custom",
               "windows": "absent"
             },
             "fileArms": {
               "args": [],
               "async": true,
               "mac": "custom",
-              "desktop": "absent",
+              "desktop": "custom",
               "windows": "absent"
             },
             "placeArmedDownload": {
@@ -3535,7 +3535,7 @@
               ],
               "async": true,
               "mac": "custom",
-              "desktop": "absent",
+              "desktop": "custom",
               "windows": "absent"
             }
           },

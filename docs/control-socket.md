@@ -293,7 +293,8 @@ changes it today, 🔍 read only, 🗺️ designed below, ⛔ deliberately not e
 | splits | `splits.list {window?}` | `splits.create {tabs, orientation?}`, `splits.separate`, `splits.removeTab`, `splits.resize {split, sizes}`, `splits.flip`, `splits.setOrientation` |
 | peek | `peek.list` | `peek.open {tab, url}`, `peek.close {tab}`, `peek.toTab {window}` |
 | littleArdia | (in `windows`) | `littleArdia.open {url?, profile?}`, `littleArdia.close`, `littleArdia.toMain` |
-| bookmarks | `bookmarks.tree {profile?, folder?, depth?}`, `bookmarks.search {profile?, query, limit?, offset?}`, `bookmarks.get {id}` | `bookmarks.add`, `bookmarks.addFolder`, `bookmarks.update`, `bookmarks.move {ids, parent, index?}`, `bookmarks.remove {ids}` |
+| spaces | `spaces.list` (a space is a profile's tabs: `{id, name, profileId, color, icon, active, default, windowIds, tabCount, pinnedCount, groupCount}`), `tabGroups.list {space?, limit?, offset?}` (`{id, title, color, icon, spaceId, windowId, collapsed, pinned, parentId, tabIds, tabs: [{id, url, title, active}]}`, at most 500 tabs a group, then `truncated` and `tabCount`) | none (groups change through `apply`'s `group.*` ops) |
+| bookmarks | `bookmarks.tree {profile?, folder?, depth?}`, `bookmarks.search {profile?, folder?, query, limit?, offset?}` (each row with `folderPath`, the titles of the folders it sits in), `bookmarks.get {id}` | `bookmarks.add`, `bookmarks.addFolder`, `bookmarks.update`, `bookmarks.move {ids, parent, index?}`, `bookmarks.remove {ids}` |
 | history | `history.search {profile?, query?, since?, until?, limit?, offset?}` (rows `{id, url, title, visits, lastVisit, clipped?}`) | `history.remove {profile?, ids \| urls}`, `history.clear {profile?, since?}` |
 | downloads | `downloads.list {profile?, state?, limit?, offset?}` (live progress for running downloads), `downloads.settings {profile?}` | `downloads.pause`, `downloads.resume`, `downloads.cancel`, `downloads.keep`, `downloads.open`, `downloads.reveal`, `downloads.remove`, `downloads.clear`, `downloads.setSettings` |
 | settings | `settings.get {keys?}`, `settings.schema` | `settings.set {values}`, `settings.reset {keys}` |
@@ -827,6 +828,46 @@ into a separate bundle that is loaded only when a `devtools.*` method first runs
 `cli_devtools_field_data_requests`, `cli_devtools_issues_reported`, `cli_devtools_source_maps_resolved`,
 `cli_devtools_source_maps_failed`, `cli_devtools_style_lookups`, `cli_devtools_logpoints_set`,
 `cli_devtools_logpoints_refused`.
+
+## Files: silent uploads and downloads
+
+A page's file chooser and a download's save panel are native panels a background program can't answer, and a panel
+would take focus from the person. The command arms them instead, through the socket alone (peer-UID trust, no extra
+question), on macOS (`PLATFORM_FEATURES.silentFilePanels`; Linux and Windows answer `refused` and hide the methods).
+
+| Method | Mutates | What it does |
+| --- | --- | --- |
+| `files.armUpload {tab, paths, once?, seconds?}` | yes | The next file chooser the tab's page opens is answered with `paths` (files, or folders for a folder chooser; more than one only when the chooser takes several), without a panel, in a visible Ardia as in a background one |
+| `files.armDownload {tab?, path, once?, seconds?}` | yes | The next download (of the tab's profile, or of any regular profile without `tab`) lands at `path` without asking where. `path` is a file that doesn't exist yet in a folder that does, or an existing folder, where each download keeps its own name (`once: false` keeps answering, numbering names that are taken) |
+| `files.arms {arms?}` | no | Arms from the last ten minutes: `state` (`armed`, `answered`, `downloading`, `finished`, `failed`, `cancelled`, `expired`, `cleared`), `reason`, `chosen` for uploads, and for downloads each `{downloadId, state, path, bytes, reason?}` |
+| `files.disarm {arms?}` | yes | Stops the named arms, or every waiting one |
+
+**Paths.** Checked in JS (`localPathProblem`: absolute, no NUL or line break, at most 1,024 bytes, no `.` or `..`)
+and again natively when armed and when answered (`ArdiaFilePaths.mm`). An upload path resolves to an existing,
+readable file or folder and is handed over by its resolved path. A download target never exists yet and is never a
+symbolic link; the folder above it is resolved when armed (`/tmp` becomes `/private/tmp`, and the reply names the
+resolved path), must still resolve to the same place when the file lands, and the file lands with an exclusive rename
+(`renameatx_np(RENAME_EXCL)`, or an exclusive copy across volumes), so nothing already there is replaced and nothing
+is written through a link.
+
+**How a panel is answered.** `ArdiaActivation.mm` wraps `NSOpenPanel` and `NSSavePanel`'s three ways of running. A
+panel is answered from an arm only when Chromium opened it (its call stack) and an arm of the right kind waits for a
+tab in the panel's window (a tab arm wins over an any-tab download arm, the newest wins among equals); anything else
+runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. An upload
+arm that can't be honoured (two files for a one-file chooser, a folder for a file chooser, a file gone since) cancels
+the chooser and ends `failed` with the reason, rather than showing a panel the person didn't expect.
+
+**How a download lands.** When the profile asks where to save, the save panel is answered with the target. When it
+doesn't, the download saves to the profile's folder as usual, and when it finishes it is moved to the target
+(`placeArmedDownload`) and the downloads list follows it. Ardia takes the first download that starts after the arm, in
+the tab's profile; a download another tab of that profile starts at the same moment can be the one taken, so arm just
+before the click. Private downloads are never taken, and a taken download skips the `hooks.json` folder rules.
+
+**Lifetime.** An arm lasts `seconds` (default 120, at most 600), ends when its tab closes, after its one answer when
+`once` (the default), at `files.disarm`, and with every other arm when control turns off. At most 16 wait at once.
+
+**Telemetry** (counts only, never a path): `cli_socket_calls_files`, `cli_files_upload_arms`,
+`cli_files_download_arms`, `cli_files_uploads_answered`, `cli_files_downloads_placed`, `cli_files_arm_failures`.
 
 ## Next
 
