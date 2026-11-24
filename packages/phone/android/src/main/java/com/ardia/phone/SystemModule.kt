@@ -17,7 +17,7 @@ class SystemModule : Module() {
         }
 
         Function("labFrameMark") { label: String ->
-            if (PhoneLab.isOn) FrameMarks.markNextFrame(label)
+            if (PhoneLab.isOn) FrameMarks.markNextFrame(label) { appContext.currentActivity?.window?.decorView }
         }
 
         Function("setUsageConsent") { sharing: Boolean ->
