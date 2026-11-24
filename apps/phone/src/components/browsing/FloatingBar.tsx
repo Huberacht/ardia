@@ -62,7 +62,7 @@ type Props = {
 
 export type HandOverFocus = { target: "address" | "pill" | null; pill: RefObject<ViewInstance | null> };
 
-export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null };
+export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; landed: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null };
 
 export function landedSide(from: string, shownId: string, at: number, span: number): -1 | 0 | 1 {
   "worklet";
@@ -76,6 +76,21 @@ function useLandedAddress(swipe: SwipeAddresses | null, shownId: string, side: -
     const from = swipe.from.value;
     return { opacity: landedSide(from, shownId, at, swipe.span) === side ? 1 : 0 };
   }, [swipe, shownId, side]);
+}
+
+export function landedSpokenSide(landed: string, from: string, shownId: string, leftId: string, rightId: string, at: number, span: number): -1 | 0 | 1 {
+  "worklet";
+  if (landed !== "" && from === shownId) {
+    if (landed === shownId) return 0;
+    if (landed === leftId) return -1;
+    if (landed === rightId) return 1;
+  }
+  return landedSide(from, shownId, at, span);
+}
+
+export function landedBackHere(landed: string, from: string, shownId: string, at: number): boolean {
+  "worklet";
+  return landed !== "" && landed === shownId && from === shownId && at === 0;
 }
 
 export function spokenDestination(side: -1 | 0 | 1, here: string, left: string, right: string, lifted: string, shownId: string, previewShown: number, table: Record<string, { spoken: string }>): string {
@@ -101,29 +116,52 @@ function useBarWords(swipe: SwipeAddresses | null, shownId: string, here: string
   }, [words, shownId, here, left, right, leftId, rightId, span]);
   const idle = useSharedValue(0);
   const nobody = useSharedValue("");
-  return { words, offset: swipe?.offset ?? idle, from: swipe?.from ?? nobody };
+  const notLanded = useSharedValue("");
+  return { words, offset: swipe?.offset ?? idle, from: swipe?.from ?? nobody, landed: swipe?.landed ?? notLanded };
 }
 
 function useSpokenAddress(swipe: SwipeAddresses | null, shownId: string, here: string) {
-  const { words, offset, from } = useBarWords(swipe, shownId, here);
+  const { words, offset, from, landed } = useBarWords(swipe, shownId, here);
   const spoken = useAnimatedProps(() => {
     const now = words.value;
     const at = offset.value;
     const started = from.value;
+    const arrived = landed.value;
     const lifted = destination.id.value;
     const previewShown = pageBarPreviewShown.value;
     const table = destinationAddresses.value;
-    return { accessibilityValue: { text: spokenDestination(landedSide(started, now.shownId, at, now.span), now.here, now.left, now.right, lifted, now.shownId, previewShown, table) } };
+    const side = landedSpokenSide(arrived, started, now.shownId, now.leftId, now.rightId, at, now.span);
+    return { accessibilityValue: { text: spokenDestination(side, now.here, now.left, now.right, lifted, now.shownId, previewShown, table) } };
   });
-  const mark = useAnimatedProps(() => {
-    const now = words.value;
+  const leftShown = useAnimatedStyle(() => {
     const at = offset.value;
     const started = from.value;
-    const side = landedSide(started, now.shownId, at, now.span);
-    const id = side < 0 ? now.leftId : side > 0 ? now.rightId : "";
-    return { mark: id ? `dest-bar:${id}` : "" };
-  });
-  return { spoken, mark };
+    return { opacity: landedSide(started, shownId, at, swipe?.span ?? 0) < 0 ? 1 : 0 };
+  }, [shownId, swipe?.span]);
+  const rightShown = useAnimatedStyle(() => {
+    const at = offset.value;
+    const started = from.value;
+    return { opacity: landedSide(started, shownId, at, swipe?.span ?? 0) > 0 ? 1 : 0 };
+  }, [shownId, swipe?.span]);
+  const backShown = useAnimatedStyle(() => {
+    const at = offset.value;
+    const started = from.value;
+    const arrived = landed.value;
+    return { opacity: landedBackHere(arrived, started, shownId, at) ? 1 : 0 };
+  }, [shownId]);
+  return { spoken, marks: { leftShown, rightShown, backShown } };
+}
+
+type LandedBarMarks = ReturnType<typeof useSpokenAddress>["marks"];
+
+function LandedBarMarks({ marks, shownId, leftId, rightId }: { marks: LandedBarMarks; shownId: string; leftId: string; rightId: string }) {
+  return (
+    <>
+      {leftId ? <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${leftId}`} style={[uiFrameMarkStyle, marks.leftShown]} /> : null}
+      {rightId ? <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${rightId}`} style={[uiFrameMarkStyle, marks.rightShown]} /> : null}
+      <UiFrameMark testID="landedBarMark" markWhenShown={`dest-bar:${shownId}`} style={[uiFrameMarkStyle, marks.backShown]} />
+    </>
+  );
 }
 
 const SPEAKS_LANDED_ADDRESS = Platform.OS === "android";
@@ -179,7 +217,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
   const landedRight = useLandedAddress(swipe, tab.id, 1);
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const address = barAddress(tab);
-  const { spoken, mark: landedMark } = useSpokenAddress(swipe, tab.id, spokenAddress(address));
+  const { spoken, marks: landedMarks } = useSpokenAddress(swipe, tab.id, spokenAddress(address));
   const menuButton = useRef<ViewInstance>(null);
   const returning = useBarReturn();
   const handed = useDeckOwnsBar();
@@ -308,7 +346,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
       {inStrip ? null : trailing}
     </View>
     {fold ? <BarMotionCatchUp fold={fold} /> : null}
-    {swipe ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={landedMark} /> : null}
+    {swipe ? <LandedBarMarks marks={landedMarks} shownId={tab.id} leftId={swipe.left?.id ?? ""} rightId={swipe.right?.id ?? ""} /> : null}
     {inStrip ? (
       <Animated.View testID="floatingBarStrip" pointerEvents="box-none" style={[styles.strip, { left: duo.stripLeft, top: duo.stripTop }]}>
         {trailing}

@@ -1,5 +1,5 @@
 import { probes } from "../../state/app/launchFlags";
-import { useEffect, useLayoutEffect } from "react";
+import { useLayoutEffect, useMemo, useRef } from "react";
 import { Image, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, runOnJS, runOnUI, useAnimatedProps, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
@@ -12,8 +12,8 @@ import type { BrowserTab } from "../../state/tabs/tabModels";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
-import { traceSlice } from "../../platform/lab";
-import { commitBarAction, dropBarAction, takeBarAction } from "../../state/browse/store";
+import { labTrace, traceSlice } from "../../platform/lab";
+import { carryHeldBarAction, commitBarAction, dropBarAction, takeBarAction } from "../../state/browse/store";
 import { useWarmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
@@ -22,6 +22,13 @@ export type TabPager = {
   offset: SharedValue<number>;
   from: SharedValue<string>;
   active: SharedValue<number>;
+  cursor: SharedValue<string>;
+  landed: SharedValue<string>;
+  turn: SharedValue<number>;
+  panning: SharedValue<number>;
+  rendered: string;
+  renderedLeft: string;
+  renderedRight: string;
   gesture: ReturnType<typeof Gesture.Pan>;
   outgoing: ReturnType<typeof useAnimatedStyle>;
   dim: ReturnType<typeof useAnimatedStyle>;
@@ -35,9 +42,11 @@ export type TabPager = {
   refusedTurn: SharedValue<number>;
 };
 
-export function landedFaceMark(side: -1 | 0 | 1, at: number, width: number, id: string): string {
+export type SwipeRefusal = "edge" | "short" | "opposed" | "cancelled";
+
+export function landedFaceShown(side: -1 | 0 | 1, at: number, width: number): boolean {
   "worklet";
-  return side !== 0 && width > 0 && Math.abs(at + side * width) < 1 ? `dest-face:${id}` : "";
+  return side !== 0 && width > 0 && Math.abs(at + side * width) < 1;
 }
 
 export function refusedMark(turn: number): string {
@@ -45,45 +54,143 @@ export function refusedMark(turn: number): string {
   return turn > 0 ? `swipe-zero:${turn}` : "";
 }
 
-type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; landsEarly?: boolean; isNeighbour?: (id: string) => boolean; onCommit: (id: string) => void; onGrab: () => void };
+export function restOf(cursor: string, from: string, left: string, right: string, span: number): number | null {
+  "worklet";
+  if (cursor === from) return 0;
+  if (cursor !== "" && cursor === left) return span;
+  if (cursor !== "" && cursor === right) return -span;
+  return null;
+}
 
-export function useTabPager({ width, selectedId, left, right, landsEarly = false, isNeighbour, onCommit, onGrab }: Options): TabPager {
+export function settledOffset(from: string, owner: string, cursor: string, at: number, ownerLeft: string, ownerRight: string, span: number): number {
+  "worklet";
+  if (from === owner) return at;
+  return restOf(cursor, owner, ownerLeft, ownerRight, span) ?? 0;
+}
+
+export function heldPose(rest: number, travel: number, span: number): number {
+  "worklet";
+  if (rest === 0) return 0;
+  if (rest > 0) return Math.min(Math.max(rest + travel, 0), span);
+  return Math.max(Math.min(rest + travel, 0), -span);
+}
+
+export function besideIn(order: readonly string[], id: string, delta: -1 | 1): string {
+  "worklet";
+  const at = order.indexOf(id);
+  if (at < 0) return "";
+  return order[at + delta] ?? "";
+}
+
+export function swipeRefusal(candidate: string, projected: number, span: number): SwipeRefusal {
+  "worklet";
+  if (candidate === "") return "edge";
+  if (Math.abs(projected) <= span * PAGER.commitFraction) return "short";
+  return "opposed";
+}
+
+export function adjacentIn(order: readonly string[], from: string, to: string): boolean {
+  const at = order.indexOf(from);
+  return at >= 0 && to !== "" && (order[at - 1] === to || order[at + 1] === to);
+}
+
+type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; order?: readonly string[]; landsEarly?: boolean; onCommit: (id: string, onScreen: boolean) => void; onGrab: () => void };
+
+export function useTabPager({ width, selectedId, left, right, order, landsEarly = false, onCommit, onGrab }: Options): TabPager {
   const reduceMotion = useReduceMotion();
   const cuts = tabSwitchCuts();
+  const shownId = selectedId ?? "";
+  const line = useMemo(() => order ?? [left ?? "", shownId, right ?? ""].filter(Boolean), [order, left, shownId, right]);
   const offset = useSharedValue(0);
   const active = useSharedValue(0);
+  const panning = useSharedValue(0);
+  const catching = useSharedValue(0);
   const base = useSharedValue(0);
+  const travel = useSharedValue(0);
   const hasLeft = useSharedValue(left !== null);
   const hasRight = useSharedValue(right !== null);
   const span = useSharedValue(width);
   const landing = useSharedValue(0);
-  const fromId = useSharedValue(selectedId ?? "");
+  const landingTurn = useSharedValue(0);
+  const fromId = useSharedValue(shownId);
   const leftId = useSharedValue(left ?? "");
   const rightId = useSharedValue(right ?? "");
+  const lineIds = useSharedValue<readonly string[]>(line);
+  const cursor = useSharedValue(shownId);
+  const landed = useSharedValue("");
+  const source = useSharedValue(shownId);
   const latchedLeft = useSharedValue(left ?? "");
   const latchedRight = useSharedValue(right ?? "");
   const turn = useSharedValue(0);
+  const cursorTurn = useSharedValue(0);
+  const ackedTurn = useSharedValue(0);
   const refusedTurn = useSharedValue(0);
+  const lineRef = useRef(line);
+  lineRef.current = line;
+  const mountedPage = useRef(shownId);
+  useLayoutEffect(() => {
+    mountedPage.current = shownId;
+  }, [shownId]);
 
-  useEffect(() => {
-    hasLeft.value = left !== null;
-    hasRight.value = right !== null;
-    leftId.value = left ?? "";
-    rightId.value = right ?? "";
-    span.value = width;
-  }, [hasLeft, hasRight, left, leftId, right, rightId, span, width]);
+  const latchFromCursor = () => {
+    "worklet";
+    const at = cursor.value;
+    source.value = at;
+    const rendered = at === fromId.value;
+    latchedLeft.value = rendered ? leftId.value : besideIn(lineIds.value, at, -1);
+    latchedRight.value = rendered ? rightId.value : besideIn(lineIds.value, at, 1);
+  };
+
+  const rebase = (shown: string, l: string, r: string, ids: readonly string[], w: number) => {
+    "worklet";
+    const moved = shown !== fromId.value;
+    fromId.value = shown;
+    leftId.value = l;
+    rightId.value = r;
+    hasLeft.value = l !== "";
+    hasRight.value = r !== "";
+    lineIds.value = ids;
+    span.value = w;
+    const inFlight = cursorTurn.value > ackedTurn.value;
+    const followed = !inFlight && cursor.value !== shown;
+    if (followed) cursor.value = shown;
+    if (!inFlight) landed.value = "";
+    if (!moved) return;
+    if (panning.value) {
+      catching.value = 0;
+      if (followed) latchFromCursor();
+      const rest = restOf(cursor.value, shown, l, r, w);
+      if (rest === null) return;
+      offset.value = rest === 0 ? resolvedOffset(travel.value, l !== "", r !== "", w) : heldPose(rest, travel.value, w);
+      return;
+    }
+    cancelAnimation(offset);
+    landing.value = 0;
+    const rest = restOf(cursor.value, shown, l, r, w);
+    if (rest !== null) offset.value = rest;
+    active.value = cursor.value !== shown ? 1 : 0;
+  };
 
   useLayoutEffect(() => {
-    landing.value = 0;
-    offset.value = 0;
-    active.value = 0;
-    fromId.value = selectedId ?? "";
-    turn.value += 1;
-  }, [active, landing, offset, selectedId]);
+    runOnUI(rebase)(shownId, left ?? "", right ?? "", line, width);
+  }, [shownId, left, right, line, width]);
+
+  const acknowledge = (lift: number) => {
+    "worklet";
+    if (lift > ackedTurn.value) ackedTurn.value = lift;
+    if (cursorTurn.value <= ackedTurn.value && cursor.value === fromId.value) landed.value = "";
+  };
 
   const restore = () => {
     runOnUI(() => {
       "worklet";
+      cursor.value = fromId.value;
+      landed.value = "";
+      if (panning.value) {
+        catching.value = 0;
+        latchFromCursor();
+        return;
+      }
       cancelAnimation(offset);
       landing.value = 0;
       offset.value = 0;
@@ -93,32 +200,49 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
 
   const validates = (from: string, to: string) => {
     const tabs = currentTabs();
-    return Boolean(to) && tabs.selectedId === from && Boolean(findTab(tabs, to)) && (isNeighbour ? isNeighbour(to) : true);
+    return Boolean(to) && tabs.selectedId === from && Boolean(findTab(tabs, to)) && adjacentIn(lineRef.current, from, to);
   };
 
-  const commit = (from: string, to: string, sent: number) => {
-    if (sent !== turn.value) {
-      dropBarAction(swipeScope(sent));
-      return;
-    }
+  const logSwipe = (verdict: "accepted" | "refused", lift: number, from: string, candidate: string, projected: number, reason: string) => {
+    labTrace(`PAGELAB swipe ${verdict} turn=${lift} source=${from || "none"} candidate=${candidate || "none"} projected=${Math.round(projected)} reason=${reason}`);
+    traceSlice(`swipe ${verdict}:${reason}:${lift}`);
+  };
+
+  const commit = (from: string, to: string, lift: number) => {
+    runOnUI(acknowledge)(lift);
+    const later = cursorTurn.value > lift;
     if (!validates(from, to)) {
-      dropBarAction(swipeScope(sent));
-      restore();
+      const tabs = currentTabs();
+      const reason = tabs.selectedId !== from ? "stale-source" : !findTab(tabs, to) ? "closed" : "not-neighbour";
+      logSwipe("refused", lift, from, to, 0, reason);
+      dropBarAction(swipeScope(lift));
+      if (!later) restore();
       return;
     }
     traceSlice("swipe commit");
-    const held = takeBarAction(swipeScope(sent), to);
     haptics.tabLanded();
-    onCommit(to);
+    const onScreen = to === mountedPage.current;
+    if (later) {
+      carryHeldBarAction(() => onCommit(to, onScreen));
+      return;
+    }
+    const held = takeBarAction(swipeScope(lift), to);
+    onCommit(to, onScreen);
     if (held && currentTabs().selectedId === to) commitBarAction(to, held);
   };
 
-  const landedScope = () => swipeScope(turn.value);
+  const landedScope = () => swipeScope(cursorTurn.value);
   const landedTarget = () => {
-    const at = offset.value;
-    if (fromId.value !== (selectedId ?? "") || span.value <= 0 || Math.abs(Math.abs(at) - span.value) >= 1) return null;
-    const to = at > 0 ? latchedLeft.value : latchedRight.value;
-    return to || null;
+    if (cursorTurn.value <= ackedTurn.value) return null;
+    return cursor.value || null;
+  };
+
+  const advance = (to: string, lift: number, from: string) => {
+    "worklet";
+    cursor.value = to;
+    landed.value = to;
+    cursorTurn.value = lift;
+    runOnJS(commit)(from, to, lift);
   };
 
   const land = (target: number) => {
@@ -126,10 +250,10 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     if (landing.value !== target) return;
     landing.value = 0;
     if (target === 0) {
-      active.value = 0;
+      if (!panning.value) active.value = cursor.value !== fromId.value ? 1 : 0;
       return;
     }
-    runOnJS(commit)(fromId.value, target > 0 ? latchedLeft.value : latchedRight.value, turn.value);
+    advance(target > 0 ? latchedLeft.value : latchedRight.value, landingTurn.value, source.value);
   };
 
   useAnimatedReaction(
@@ -139,30 +263,72 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     },
   );
 
-  const settle = (target: number, velocity: number) => {
+  const springTo = (at: number, velocity: number, landed?: (finished?: boolean) => void) => {
+    "worklet";
+    offset.value = reduceMotion ? withTiming(at, { duration: trayMotion.reduced, easing: tabsCurve.easeOut }, landed) : withSpring(at, { ...tabsMotion.pagerSettle, velocity }, landed);
+  };
+
+  const zeroAt = (lift: number) => {
+    "worklet";
+    const rest = restOf(cursor.value, fromId.value, leftId.value, rightId.value, span.value);
+    if (rest !== null) offset.value = rest;
+    refusedTurn.value = lift;
+    active.value = cursor.value !== fromId.value ? 1 : 0;
+  };
+
+  const settleCaught = (target: number, velocity: number, lift: number) => {
     "worklet";
     landing.value = target;
-    const landed = (finished?: boolean) => {
-      "worklet";
-      if (finished) land(target);
-    };
+    landingTurn.value = lift;
     if (cuts && target !== 0) {
       offset.value = target * span.value;
       land(target);
       return;
     }
     if (cuts) {
-      offset.value = 0;
-      refusedTurn.value = turn.value;
-      land(0);
+      landing.value = 0;
+      zeroAt(lift);
       return;
     }
-    offset.value = reduceMotion ? withTiming(target * span.value, { duration: trayMotion.reduced, easing: tabsCurve.easeOut }, landed) : withSpring(target * span.value, { ...tabsMotion.pagerSettle, velocity }, landed);
+    springTo(target * span.value, velocity, (finished?: boolean) => {
+      "worklet";
+      if (finished) land(target);
+    });
+  };
+
+  const settleFromCursor = (target: number, velocity: number, lift: number) => {
+    "worklet";
+    landing.value = 0;
+    if (target === 0) {
+      if (cuts) {
+        zeroAt(lift);
+        return;
+      }
+      const rest = restOf(cursor.value, fromId.value, leftId.value, rightId.value, span.value);
+      if (rest !== null)
+        springTo(rest, velocity, (finished?: boolean) => {
+          "worklet";
+          if (finished && !panning.value) active.value = cursor.value !== fromId.value ? 1 : 0;
+        });
+      return;
+    }
+    const from = source.value;
+    const to = target > 0 ? latchedLeft.value : latchedRight.value;
+    const rest = restOf(to, fromId.value, leftId.value, rightId.value, span.value);
+    if (rest !== null) {
+      if (cuts) offset.value = rest;
+      else springTo(rest, velocity);
+    }
+    active.value = 1;
+    advance(to, lift, from);
   };
 
   const settleTo = (wanted: number, velocity: number) => {
     const target = (wanted > 0 && !hasLeft.value) || (wanted < 0 && !hasRight.value) ? 0 : wanted;
-    settle(target, velocity);
+    turn.value += 1;
+    panning.value = 0;
+    catching.value = 0;
+    settleCaught(target, velocity, turn.value);
   };
   const peek = (toward: -1 | 1) => {
     if (active.value || landing.value !== 0) return false;
@@ -182,7 +348,8 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     if (!hasLeft.value && !hasRight.value) return false;
     if (!active.value) onGrab();
     active.value = 1;
-    turn.value += 1;
+    catching.value = 1;
+    source.value = fromId.value;
     latchedLeft.value = leftId.value;
     latchedRight.value = rightId.value;
     return true;
@@ -198,27 +365,63 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     .onStart(() => {
       if (!active.value) runOnJS(onGrab)();
       active.value = 1;
+      panning.value = 1;
+      travel.value = 0;
+      const caught = !cuts && cursor.value === fromId.value;
+      catching.value = caught ? 1 : 0;
+      base.value = caught ? offset.value : 0;
       landing.value = 0;
-      base.value = offset.value;
-      turn.value += 1;
-      latchedLeft.value = leftId.value;
-      latchedRight.value = rightId.value;
+      latchFromCursor();
     })
     .onUpdate((event) => {
-      offset.value = resolvedOffset(base.value + event.translationX, hasLeft.value, hasRight.value, span.value);
+      travel.value = event.translationX;
+      if (catching.value) {
+        offset.value = resolvedOffset(base.value + event.translationX, hasLeft.value, hasRight.value, span.value);
+        return;
+      }
+      const rest = restOf(cursor.value, fromId.value, leftId.value, rightId.value, span.value);
+      if (rest === null) return;
+      offset.value = rest === 0 ? resolvedOffset(event.translationX, hasLeft.value, hasRight.value, span.value) : heldPose(rest, event.translationX, span.value);
     })
-    .onEnd((event) => {
+    .onEnd((event, success) => {
+      panning.value = 0;
+      turn.value += 1;
+      const lift = turn.value;
+      const caught = catching.value === 1;
+      catching.value = 0;
+      const from = source.value;
+      if (!success) {
+        runOnJS(logSwipe)("refused", lift, from, "", 0, "cancelled");
+        if (caught && !cuts) settleCaught(0, 0, lift);
+        else settleFromCursor(0, 0, lift);
+        return;
+      }
       const velocity = Math.min(Math.max(event.velocityX, -PAGER.maxVelocity), PAGER.maxVelocity);
-      settle(snapTarget(offset.value, velocity, span.value, hasLeft.value, hasRight.value), velocity);
+      const towardLeft = latchedLeft.value !== "";
+      const towardRight = latchedRight.value !== "";
+      const at = caught ? offset.value : resolvedOffset(travel.value, towardLeft, towardRight, span.value);
+      const target = caught ? snapTarget(at, velocity, span.value, hasLeft.value, hasRight.value) : snapTarget(at, velocity, span.value, towardLeft, towardRight);
+      const projected = at + velocity * PAGER.projectionTime;
+      const candidate = projected > 0 ? latchedLeft.value : projected < 0 ? latchedRight.value : "";
+      if (target === 0) runOnJS(logSwipe)("refused", lift, from, candidate, projected, swipeRefusal(candidate, projected, span.value));
+      else runOnJS(logSwipe)("accepted", lift, from, target > 0 ? latchedLeft.value : latchedRight.value, projected, "accepted");
+      if (caught) settleCaught(target, velocity, lift);
+      else settleFromCursor(target, velocity, lift);
     });
 
+  const renderedLeft = left ?? "";
+  const renderedRight = right ?? "";
   const outgoing = useAnimatedStyle(() => {
-    const pose = outgoingPose(offset.value, span.value, hasLeft.value, hasRight.value, reduceMotion);
+    const at = settledOffset(fromId.value, shownId, cursor.value, offset.value, renderedLeft, renderedRight, span.value);
+    const pose = outgoingPose(at, span.value, renderedLeft !== "", renderedRight !== "", reduceMotion);
     return { transform: [{ translateX: pose.x }, { scale: pose.scale }], borderRadius: active.value ? cornerRadius : 0 };
   });
-  const dim = useAnimatedStyle(() => ({ opacity: outgoingPose(offset.value, span.value, hasLeft.value, hasRight.value, reduceMotion).dim }));
+  const dim = useAnimatedStyle(() => {
+    const at = settledOffset(fromId.value, shownId, cursor.value, offset.value, renderedLeft, renderedRight, span.value);
+    return { opacity: outgoingPose(at, span.value, renderedLeft !== "", renderedRight !== "", reduceMotion).dim };
+  });
 
-  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope, refusedTurn };
+  return { offset, from: fromId, active, cursor, landed, turn, panning, rendered: shownId, renderedLeft, renderedRight, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope, refusedTurn };
 }
 
 type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; width: number; statusHeight: number; statusOver?: boolean; hasLeft: boolean; hasRight: boolean; coverId?: string };
@@ -226,27 +429,33 @@ type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; widt
 export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOver = false, hasLeft, hasRight, coverId }: NeighbourProps) {
   const theme = useTheme();
   const tone = usePageTone(tab.id);
-  const { offset } = pager;
+  const { offset, from, cursor, rendered, renderedLeft, renderedRight } = pager;
   const reduceMotion = useReduceMotion();
   const cuts = tabSwitchCuts();
   const arrived = side === 0;
   const style = useAnimatedStyle(() => {
-    if (arrived) return { opacity: 1, transform: [{ translateX: cuts ? 0 : withTiming(0, { duration: tabsMotion.pagerArrive, easing: tabsCurve.easeOut }) }] };
-    const pose = incomingPose(side, offset.value, width, hasLeft, hasRight, reduceMotion);
+    const at = settledOffset(from.value, rendered, cursor.value, offset.value, renderedLeft, renderedRight, width);
+    if (arrived && cuts) {
+      const pose = outgoingPose(at, width, hasLeft, hasRight, reduceMotion);
+      return { opacity: 1, transform: [{ translateX: pose.x }, { scale: pose.scale }] };
+    }
+    if (arrived) return { opacity: 1, transform: [{ translateX: withTiming(0, { duration: tabsMotion.pagerArrive, easing: tabsCurve.easeOut }) }] };
+    const pose = incomingPose(side, at, width, hasLeft, hasRight, reduceMotion);
     return { opacity: pose.opacity, transform: [{ translateX: pose.x }] };
   });
   const shadowStyle = useAnimatedStyle(() => {
     if (arrived) return { opacity: 0, transform: [{ translateX: 0 }] };
-    const pose = incomingPose(side, offset.value, width, hasLeft, hasRight, reduceMotion);
+    const at = settledOffset(from.value, rendered, cursor.value, offset.value, renderedLeft, renderedRight, width);
+    const pose = incomingPose(side, at, width, hasLeft, hasRight, reduceMotion);
     return { opacity: pose.shadow, transform: [{ translateX: pose.x }] };
   });
   const shown = display(tab.url);
   const viewport = useWindowDimensions();
   const warm = useWarmPicture(tab, viewport, cuts && !probes("warm"));
   const faceTab = cuts && !warm && tab.snapshotFileName ? { ...tab, snapshotFileName: null } : tab;
-  const faceMark = useAnimatedProps(() => {
-    const at = offset.value;
-    return { mark: landedFaceMark(side, at, width, tab.id) };
+  const faceShown = useAnimatedStyle(() => {
+    const at = settledOffset(from.value, rendered, cursor.value, offset.value, renderedLeft, renderedRight, width);
+    return { opacity: landedFaceShown(side, at, width) ? 1 : 0 };
   });
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (
@@ -259,7 +468,7 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
         </View>
         {warm ? <Image testID="pagerWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height }]} /> : null}
         {statusOver ? <View testID="pagerStatusStrip" style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
-        {cuts && !arrived ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={faceMark} /> : null}
+        {cuts && !arrived ? <UiFrameMark testID="pagerFaceMark" markWhenShown={`dest-face:${tab.id}`} style={[uiFrameMarkStyle, faceShown]} /> : null}
       </Animated.View>
     </>
   );
@@ -271,18 +480,45 @@ const EDGE_SHADOW_TRAILING = `linear-gradient(to left, ${EDGE_SHADOW_STOPS.join(
 
 const swipeScope = (turn: number) => `swipe:${turn}`;
 
+export function zeroArmedTurn(turn: number, refused: number, panning: number): number {
+  "worklet";
+  return panning === 0 && refused > 0 && refused === turn ? turn : turn + 1;
+}
+
 export function PagerBackdrop({ pager }: { pager?: TabPager }) {
   const theme = useTheme();
-  const idle = useSharedValue(0);
-  const refused = pager?.refusedTurn ?? idle;
-  const zeroMark = useAnimatedProps(() => {
-    const turn = refused.value;
-    return { mark: refusedMark(turn) };
-  });
   return (
     <View testID="pagerBackdrop" style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }]}>
-      {pager && tabSwitchCuts() ? <UiFrameMark style={uiFrameMarkStyle} animatedProps={zeroMark} /> : null}
+      {pager && tabSwitchCuts() ? <PagerMarks pager={pager} /> : null}
     </View>
+  );
+}
+
+function PagerMarks({ pager }: { pager: TabPager }) {
+  const { refusedTurn, turn, panning, landed, from, offset, rendered } = pager;
+  const zeroArmed = useAnimatedProps(() => {
+    const now = turn.value;
+    const refused = refusedTurn.value;
+    const held = panning.value;
+    return { markWhenShown: refusedMark(zeroArmedTurn(now, refused, held)) };
+  });
+  const zeroShown = useAnimatedStyle(() => {
+    const now = turn.value;
+    const refused = refusedTurn.value;
+    const held = panning.value;
+    return { opacity: held === 0 && refused > 0 && refused === now ? 1 : 0 };
+  });
+  const backShown = useAnimatedStyle(() => {
+    const at = landed.value;
+    const shown = from.value;
+    const pose = offset.value;
+    return { opacity: at !== "" && at === rendered && shown === rendered && pose === 0 ? 1 : 0 };
+  }, [rendered]);
+  return (
+    <>
+      <UiFrameMark testID="pagerZeroMark" style={[uiFrameMarkStyle, zeroShown]} animatedProps={zeroArmed} />
+      <UiFrameMark testID="pagerBackMark" markWhenShown={`dest-face:${rendered}`} style={[uiFrameMarkStyle, backShown]} />
+    </>
   );
 }
 

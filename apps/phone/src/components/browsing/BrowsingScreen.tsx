@@ -236,11 +236,15 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const [tabsMenu, setTabsMenu] = useState(false);
   const menu = usePresence(menuOpen || dockedSearch);
   useEffect(() => closePageMenu, [tab.id]);
-  const aroundKey = useBrowse(() => {
+  const lineKey = useBrowse(() => {
     const sameKind = separatesIncognito ? new Set(swipeIds) : null;
-    const near = neighbours(sameKind ? swipeOrder().filter((id) => sameKind.has(id)) : swipeOrder(), tab.id);
-    return `${near.left ?? ""}|${near.right ?? ""}`;
+    return (sameKind ? swipeOrder().filter((id) => sameKind.has(id)) : swipeOrder()).join("|");
   });
+  const swipeLine = useMemo(() => (lineKey ? lineKey.split("|") : []), [lineKey]);
+  const aroundKey = useMemo(() => {
+    const near = neighbours(swipeLine, tab.id);
+    return `${near.left ?? ""}|${near.right ?? ""}`;
+  }, [swipeLine, tab.id]);
   const around = useMemo(() => {
     const [leftId, rightId] = aroundKey.split("|");
     return { left: leftId || null, right: rightId || null };
@@ -256,13 +260,13 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     selectedId: tab.id,
     left: left?.id ?? null,
     right: right?.id ?? null,
+    order: swipeLine,
     landsEarly: handsOver,
-    isNeighbour: (id: string) => id === neighbourIds.current.left || id === neighbourIds.current.right,
     onCommit: handsOver ? arriveAtNeighbour : swipeToNeighbour,
     onGrab: grabbedSwipe,
   });
   useDemoMotion(pager, width);
-  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right]);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, landed: pager.landed, span: width, left, right } : null), [pager.offset, pager.from, pager.landed, width, left, right]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);
@@ -551,9 +555,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
 
 function pagerCards(left: BrowserTab | null, right: BrowserTab | null, arrival: BrowserTab | null): { card: BrowserTab; side: -1 | 0 | 1 }[] {
   const cards: { card: BrowserTab; side: -1 | 0 | 1 }[] = [];
+  if (arrival) cards.push({ card: arrival, side: 0 });
   if (left) cards.push({ card: left, side: -1 });
   if (right) cards.push({ card: right, side: 1 });
-  if (arrival) cards.push({ card: arrival, side: 0 });
   return cards;
 }
 

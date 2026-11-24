@@ -401,6 +401,12 @@ export function holdBarAction(id: string, action: BarAction, scope: string) {
   heldBarAction = { id, action, scope };
 }
 
+export function carryHeldBarAction(run: () => void) {
+  const held = heldBarAction;
+  run();
+  if (held && heldBarAction === null) heldBarAction = held;
+}
+
 export function dropBarAction(scope: string) {
   if (heldBarAction?.scope === scope) heldBarAction = null;
 }
@@ -994,12 +1000,18 @@ function cancelArrivalWait() {
   stop?.();
 }
 
-export function arriveAtNeighbour(id: string) {
+export function arriveAtNeighbour(id: string, onScreen = false) {
   const order = swipeOrder();
   const from = currentTabs().selectedId;
   cancelArrivalWait();
   useBrowse.setState({ frozenOrder: order });
   openTab(id);
+  if (onScreen && pageWasDrawn(id)) {
+    const now = useBrowse.getState();
+    if (now.arriving !== null || now.arrivalCover !== null) useBrowse.setState({ arriving: null, arrivalCover: null });
+    noteTabSwiped(from, id);
+    return;
+  }
   arrivalSeq += 1;
   earlyCoverHides.delete(id);
   const cover = `${ARRIVAL_COVER_ID}-${arrivalSeq}`;
