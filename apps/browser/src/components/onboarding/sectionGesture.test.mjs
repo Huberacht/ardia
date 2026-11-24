@@ -60,3 +60,21 @@ test("mouse notches move one section per cooldown", () => {
 test("zero-length deltas outside a lift do nothing", () => {
   assert.deepEqual(kinds(run([["mayBegin", 0], ["changed", 0]])), ["none", "none"]);
 });
+
+test("a swipe that starts at the bottom edge of a tall section pulls, then moves on", () => {
+  const out = run([["began", -10], ["changed", -10], ["changed", -10], ["changed", -10], ["ended", 0]], { range: TALL, at: TALL.hi });
+  assert.deepEqual(kinds(out), ["place", "place", "move1", "none", "none"]);
+  assert.ok(out[0].y > TALL.hi && out[1].y > out[0].y);
+});
+
+test("a swipe that starts at the top edge of a tall section pulls, then moves back", () => {
+  const out = run([["began", 10], ["changed", 10], ["changed", 10], ["changed", 10], ["ended", 0]], { range: TALL, at: TALL.lo });
+  assert.deepEqual(kinds(out), ["place", "place", "move-1", "none", "none"]);
+  assert.ok(out[0].y < TALL.lo && out[1].y < out[0].y);
+});
+
+test("a pull at the edge that reverses scrolls back inside the section", () => {
+  const out = run([["began", -10], ["changed", 30]], { range: TALL, at: TALL.hi });
+  assert.deepEqual(kinds(out), ["place", "place"]);
+  assert.equal(out[1].y, TALL.hi - 30);
+});

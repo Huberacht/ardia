@@ -22,9 +22,10 @@ export function readWheel(gesture: WheelGesture, { dy, phase, momentum, precise 
   if (!Number.isFinite(dy) || (dy === 0 && !ending)) return NONE;
   const by = precise ? -dy : -dy * tune.wheelLine;
   const tall = range.hi > range.lo;
+  const within = clampTo(at, range);
   const inside = () => {
-    const next = clampTo(at + by, range);
-    return tall && Math.abs(next - at) > 0.01 ? next : null;
+    const next = clampTo(within + by, range);
+    return tall && Math.abs(next - within) > 0.01 ? next : null;
   };
   if (!precise) {
     const next = inside();
