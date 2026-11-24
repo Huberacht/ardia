@@ -437,6 +437,23 @@ test("a tap on the dim of a sheet + revealed before React rendered it live close
   keyboard.mockRestore();
 });
 
+test("the waiting + sheet carries no live frost behind the page: its panel shows the precomposited solid face until it goes live", () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  const frosts = waiting.findAll((node) => typeof node.type !== "string" && /Frost/.test((node.type as { displayName?: string; name?: string }).displayName ?? (node.type as { name?: string }).name ?? ""));
+  expect(frosts).toHaveLength(0);
+  expect(waiting.findAll((node) => node.props.testID === "searchPanelFace" && typeof node.type === "string")).toHaveLength(1);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
 test("a search that opens with text waits for its own commit: the waiting empty sheet is not shown early", async () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });

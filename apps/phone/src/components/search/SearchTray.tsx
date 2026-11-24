@@ -77,11 +77,11 @@ export const searchPanelMorphLook = (incognito: boolean, dark: boolean, material
 
 export const searchPanelSolidFace = (incognito: boolean, dark: boolean) => ({ backgroundColor: panelFill(incognito, dark, true), borderWidth: chromeLayout.edge, borderColor: (incognito || dark ? chromeInk.dark : chromeInk.light).edge });
 
-function SearchPanelFace({ incognito, dark, panelRadius, corners }: { incognito: boolean; dark: boolean; panelRadius: number; corners: SearchPanelCorners }) {
+function SearchPanelFace({ incognito, dark, panelRadius, corners, waiting = false }: { incognito: boolean; dark: boolean; panelRadius: number; corners: SearchPanelCorners; waiting?: boolean }) {
   const solid = plateMaterial(SEARCH_PANEL_FACE, useSolidChrome(), usesGlass()) === "solid";
   const fill = panelFill(incognito, dark, solid);
   const place = [StyleSheet.absoluteFill, panelCornerStyle(panelRadius, corners)];
-  if (solid) return <View testID="searchPanelFace" pointerEvents="none" style={[place, searchPanelSolidFace(incognito, dark)]} />;
+  if (solid || waiting) return <View testID="searchPanelFace" pointerEvents="none" style={[place, searchPanelSolidFace(incognito, dark)]} />;
   return (
     <View testID="searchPanelFace" pointerEvents="none" style={[place, styles.clip]}>
       <LookFrost source={SURFACES_FROST} variant="thin" cornerRadius={0} fill={ink.clear} dark={incognito || dark} incognito={incognito} style={StyleSheet.absoluteFill} />
@@ -512,7 +512,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
             trayStyle,
           ]}
         >
-          <SearchPanelFace incognito={incognito} dark={theme.dark} panelRadius={panelRadius} corners={corners} />
+          <SearchPanelFace incognito={incognito} dark={theme.dark} panelRadius={panelRadius} corners={corners} waiting={standby} />
           <View style={[styles.clip, panelCornerStyle(panelRadius, corners), { height: trayHeight }]}>
             <SearchPanelContext.Provider value={arcPanel}>
               <GestureDetector gesture={dismissDrag}>
