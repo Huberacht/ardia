@@ -66,6 +66,8 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
     const moveTo = (y: number, ms: number) => {
       motion.at = y;
       motion.glidingUntil = Date.now() + ms + GLIDE_SLACK_MS;
+      if (motion.afterGlide !== null) clearTimeout(motion.afterGlide);
+      motion.afterGlide = null;
       const tag = findNodeHandle(scroll.current as never);
       if (tag !== null && glideNativeScroll(tag, y, ms)) return;
       scroll.current?.scrollTo({ y, animated: ms > 0 });
