@@ -8,7 +8,7 @@ import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider } from "../components/ui";
 import * as browse from "../state/browse/store";
 import { cutTabSwitches } from "../state/browse/tabSwitch";
-import { dismissSearch, presentSearch, searchState } from "../state/search/store";
+import { dismissSearch, presentSearch, searchState, typeSearch } from "../state/search/store";
 import { dropEarlyStandby, revealStandbyOnPress, standbyPrepared, standbyShownEarly, withinPressRect } from "../state/search/standbyReveal";
 import { setPreference } from "../state/settings/store";
 import { useSelectedTab } from "../state/tabs/hooks";
@@ -382,4 +382,24 @@ test("rows and the frosted panel load the frame after the sheet goes live, so th
   expect(rows()).toHaveLength(1);
   expect(live().findAll((node) => node.props.testID === "searchPanelFace" && typeof node.type === "string")).toHaveLength(1);
   finish(t.root);
+});
+
+test("a draft queued in a private search never lands in the regular search that opens before its frame: queued text belongs to its own session and privacy", () => {
+  withTabs(2);
+  act(() => useTabs.setState({ incognito: true }));
+  act(() => presentSearch("page", ""));
+  act(() => typeSearch("secret"));
+  act(() => dismissSearch());
+  act(() => useTabs.setState({ incognito: false }));
+  act(() => presentSearch("page", ""));
+  act(() => jest.advanceTimersByTime(40));
+  expect(searchState().text).toBe("");
+  act(() => typeSearch("otters"));
+  act(() => jest.advanceTimersByTime(40));
+  expect(searchState().text).toBe("otters");
+  act(() => typeSearch("otters in"));
+  act(() => useTabs.setState({ incognito: true }));
+  act(() => jest.advanceTimersByTime(40));
+  expect(searchState().text).toBe("otters");
+  act(() => useTabs.setState({ incognito: false }));
 });
