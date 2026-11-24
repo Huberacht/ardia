@@ -143,7 +143,7 @@ test("without the system glass the redesigned chrome fades as one layer, as befo
   unmount(root);
 });
 
-test("with cuts, the deck's chrome glass is shown from the standby on and never flips; the chrome's own UI-thread opacity keeps it all but invisible behind the page, so its glass keeps a sample, and shows it with the deck", () => {
+test("with cuts, the deck's bar glass is shown from the standby on and never flips, while the header draws nothing behind the page: its precomposited sample lies under it at its own bounds, and its live glass comes on only while the deck shows", () => {
   withGlass(true);
   cutTabSwitches(true);
   try {
@@ -159,15 +159,18 @@ test("with cuts, the deck's chrome glass is shown from the standby on and never 
       for (let at = glass.parent; at; at = at.parent) if (typeof at.type === "string") product *= opacity(at);
       return product;
     };
+    const shownOf = (id: string) => glasses(root).find((glass) => glass.props.testID === id)!.props.shown;
     expect(glasses(root)).toHaveLength(CHROME.length);
-    expect(glassShown(root)).toEqual(CHROME.map(() => true));
-    for (const glass of glasses(root)) expect(glass.props.shownMs).toBe(0);
-    for (const glass of glasses(root)) expect(seen(glass)).toBeLessThan(0.01);
+    expect([shownOf("deckSearchTabs"), shownOf("deckBarPlus")]).toEqual([true, true]);
+    expect(shownOf("deckHeaderMore")).toBe(false);
+    for (const glass of glasses(root)) expect(seen(glass)).toBe(0);
+    const more = glasses(root).find((glass) => glass.props.testID === "deckHeaderMore")!;
+    act(() => more.props.onLayout({ nativeEvent: { layout: { x: 300, y: 4, width: 44, height: 44 } } }));
+    const sample = root.root.findAll((node) => node.props.testID === "deckHeaderMoreSample" && typeof node.type === "string")[0];
+    expect(StyleSheet.flatten(sample!.props.style)).toMatchObject({ left: 300, top: 4, width: 44, height: 44 });
     act(() => useBrowse.setState({ surface: "deck", deckEntrance: currentTabs().selectedId }));
-    for (let frame = 0; frame < 4; frame++) {
-      expect(glassShown(root)).toEqual(CHROME.map(() => true));
-      frames(1);
-    }
+    frames(4);
+    expect(glasses(root).map((glass) => glass.props.shown)).toEqual(CHROME.map(() => true));
     for (const glass of glasses(root)) expect(seen(glass)).toBe(1);
     unmount(root);
   } finally {

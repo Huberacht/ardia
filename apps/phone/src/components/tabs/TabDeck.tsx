@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { DeckLookProbe } from "./DeckLookProbe";
-import { launchArguments } from "../../state/app/launchFlags";
 import { actionWords, destinationWords, incognitoWords } from "../../lib/sharedWords";
 import { IncognitoLook } from "../ui/theme";
 import { useDeckOwnsBar, useSheet, useSurface } from "../../state/browse/hooks";
@@ -74,7 +73,7 @@ import {
 } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { useCanReopen, useHasArchivedTabs, useIncognito, usePrivateCount, useShownSpace } from "../../state/tabs/hooks";
-import { archiveCardLayout, chromeLayout, ConfirmSheet, deckChromeLayout, DeckLookBackdrop, iPhoneOr, DeckLookBackdropBase, FrostSource, GlassSource, measureAnchor, Menu, menuExitMs, MenuFloorProvider, moveTo, pointPlacer, Portal, ScrollActions, Shade, space, tabsCurve, tabsLayout, tabsMotion, type Confirmation, type MenuItem, useDesign, useFocusReturn, useReduceMotion, usesGlass, useTheme } from "../ui";
+import { archiveCardLayout, browseLayout, chromeLayout, ConfirmSheet, deckChromeLayout, DeckLookBackdrop, iPhoneOr, DeckLookBackdropBase, FrostSource, GlassSource, measureAnchor, Menu, menuExitMs, MenuFloorProvider, moveTo, pointPlacer, Portal, ScrollActions, Shade, space, tabsCurve, tabsLayout, tabsMotion, type Confirmation, type MenuItem, useDesign, useFocusReturn, useReduceMotion, usesGlass, useTheme } from "../ui";
 import { openSettings } from "../../state/settings/hooks";
 import { confirmInSheet, nativeMenus } from "../ui/MenuTrigger";
 import { useSyncEnabled } from "../../state/sync/hooks";
@@ -106,7 +105,7 @@ import { screenCornerRadius } from "../../state/app/displayCorner";
 import { TabGrid, type GridFrame } from "./TabGrid";
 import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
-import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
+import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckHeader, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
 import { barSpanCenter } from "../../lib/bottomBarSpan";
@@ -321,13 +320,21 @@ export const TabDeck = memo(function TabDeck() {
   const barGlyphFade = useBarGlyphFade(pulling, chromeOpacity);
   const chromeStyle = useAnimatedStyle(() => ({ opacity: chromeOpacity.value }));
   const chromeGlassHeld = cutsAway && glassChrome;
+  const moreOpener = useRef<(() => void) | null>(null);
+  const spacesOpener = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!chromeGlassHeld) return;
+    const side = g.safeSide + chromeLayout.barSideInset;
+    const top = g.safeTop + deckChromeLayout.headerCenter - browseLayout.hitTarget / 2;
+    publishDeckHeader({ top, bottom: top + browseLayout.hitTarget, moreLeft: width - side - deckChromeLayout.headerCircle, moreRight: width - side, spacesLeft: side, spacesRight: width / 2 });
+    return () => publishDeckHeader(null);
+  }, [chromeGlassHeld, g.safeSide, g.safeTop, width]);
   const deckShownNow = useSharedValue(shown);
   useLayoutEffect(() => {
     deckShownNow.value = shown;
     if (chromeGlassHeld && shown) pageBarShown.value = 0;
   }, [shown, deckShownNow]);
-  const headerSamples = launchArguments().deckHeaderCold ? 0 : HELD_GLASS_SAMPLES;
-  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: Math.max(pulling.value || deckShownNow.value ? chromeOpacity.value : 0, headerSamples) }));
+  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? chromeOpacity.value : 0 }));
   const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? barGlyphFade.value * (deckPull.cut.value || deckShownNow.value ? 1 - pageBarShown.value : 1) : 0 }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
@@ -418,8 +425,10 @@ export const TabDeck = memo(function TabDeck() {
       positionProgress.value = 1;
       cardsOpacity.value = 1;
       const queued = deckPull.openAfter.value;
+      const queuedMenu = deckPull.menuAfter.value;
       endDeckPull();
       if (queued) sendDeckCommand({ kind: "open", tabId: queued, tappedAt: Date.now() });
+      else if (queuedMenu) (queuedMenu === "more" ? moreOpener : spacesOpener).current?.();
       return;
     }
     const entrance = peekDeckEntrance();
@@ -1313,6 +1322,9 @@ export const TabDeck = memo(function TabDeck() {
                 <>
                   <HeldChrome held={chromeGlassHeld} style={heldHeaderStyle}>
                     <DeckHeader
+                      moreOpener={moreOpener}
+                      spacesOpener={spacesOpener}
+                      underlay={chromeGlassHeld}
                       safeTop={g.safeTop}
                       safeSide={g.safeSide}
                       sideInset={chromeLayout.barSideInset}
@@ -1320,7 +1332,7 @@ export const TabDeck = memo(function TabDeck() {
                       menusShown={shown && phase.kind === "settled"}
                       onMenu={setChromeMenu}
                       onCloseAll={confirmCloseAll}
-                      glassShown={chromeGlassHeld || glassShown}
+                      glassShown={chromeGlassHeld ? shown : glassShown}
                       glassShownMs={pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
                       glyphFade={glassChrome && !chromeGlassHeld ? chromeOpacity : undefined}
                     />
@@ -1451,7 +1463,6 @@ const dismissKeyboard = () => Keyboard.dismiss();
 const flickTick = () => haptics.tap();
 
 const DECK_FROST = "deck";
-const HELD_GLASS_SAMPLES = 1 / 255;
 const SHOWN = { opacity: 1 };
 const HIDDEN = { opacity: 0 };
 const HANDOVER_CAP_MS = 250;

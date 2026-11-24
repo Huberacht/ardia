@@ -34,6 +34,8 @@ export const deckPull = {
   hit: makeMutable<DeckHit | null>(null),
   landing: makeMutable(0),
   openAfter: makeMutable(""),
+  menuAfter: makeMutable<"" | DeckMenu>(""),
+  header: makeMutable<HeaderHit | null>(null),
   hitTurn: makeMutable(0),
 };
 
@@ -86,6 +88,7 @@ export function resetDeckPull() {
   deckPull.reveal.value = 0;
   deckPull.fade.value = 0;
   deckPull.openAfter.value = "";
+  deckPull.menuAfter.value = "";
 }
 
 export function handOverDeckPull() {
@@ -128,13 +131,32 @@ export function hurryDeckPull(x: number, y: number, settled: PullSettled): boole
   return true;
 }
 
-export type LatchedDeckTap = { id: string; hitTurn: number } | null;
+export type DeckMenu = "more" | "spaces";
+export type HeaderHit = { top: number; bottom: number; moreLeft: number; moreRight: number; spacesLeft: number; spacesRight: number };
+export type LatchedDeckTap = { id: string; hitTurn: number } | { menu: DeckMenu; hitTurn: number } | null;
+
+export function headerMenuAt(header: HeaderHit | null, x: number, y: number): DeckMenu | null {
+  "worklet";
+  if (!header || y < header.top || y > header.bottom) return null;
+  if (x >= header.moreLeft && x <= header.moreRight) return "more";
+  if (x >= header.spacesLeft && x <= header.spacesRight) return "spaces";
+  return null;
+}
+
+export function publishDeckHeader(header: HeaderHit | null) {
+  runOnUI((next: HeaderHit | null) => {
+    "worklet";
+    deckPull.header.value = next;
+  })(header);
+}
 
 export function latchDeckTap(x: number, y: number): LatchedDeckTap {
   "worklet";
   const hit = deckPull.hit.value;
   const tapped = hit ? deckCardAt(hit, x, y) : null;
-  return tapped ? { id: tapped, hitTurn: deckPull.hitTurn.value } : null;
+  if (tapped) return { id: tapped, hitTurn: deckPull.hitTurn.value };
+  const menu = headerMenuAt(deckPull.header.value, x, y);
+  return menu ? { menu, hitTurn: deckPull.hitTurn.value } : null;
 }
 
 export function queueDeckTapAfterCut(latched: LatchedDeckTap): boolean {
@@ -142,6 +164,10 @@ export function queueDeckTapAfterCut(latched: LatchedDeckTap): boolean {
   const stage = deckPull.stage.value;
   if (stage !== PULL_STAGE.landed && stage !== PULL_STAGE.handed) return false;
   if (!latched || latched.hitTurn !== deckPull.hitTurn.value) return false;
+  if ("menu" in latched) {
+    deckPull.menuAfter.value = latched.menu;
+    return true;
+  }
   deckPull.openAfter.value = latched.id;
   return true;
 }

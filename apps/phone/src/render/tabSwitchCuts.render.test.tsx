@@ -1,3 +1,4 @@
+import { useState } from "react";
 import * as Reanimated from "react-native-reanimated";
 import { getAnimatedStyle, KeyboardState, makeMutable } from "react-native-reanimated";
 import { State } from "react-native-gesture-handler";
@@ -8,8 +9,9 @@ import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { PullGhost } from "../components/browsing/PagePull";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
-import { Dimensions, Image, Platform, StyleSheet, TextInput } from "react-native";
-import { deckPull, pageBarShown, previewPageBar, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
+import { Dimensions, Image, Platform, StyleSheet, TextInput, View } from "react-native";
+import { deckPull, latchDeckTap, pageBarShown, previewPageBar, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
+import { MenuTrigger } from "../components/ui/MenuTrigger";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import * as browse from "../state/browse/store";
@@ -600,6 +602,55 @@ test("on a cut to the deck the page bar's Search Tabs ghost never draws, so only
     deckPull.stage.value = PULL_STAGE.idle;
     deckPull.target.value = null;
   });
+  unmount(root);
+});
+
+test("a tap on the deck header's More or Spaces during the cut is latched with the deck's turn and queued as that menu, and a turn that changed drops it", () => {
+  act(() => {
+    deckPull.header.value = { top: 40, bottom: 90, moreLeft: 330, moreRight: 380, spacesLeft: 16, spacesRight: 196 };
+    deckPull.stage.value = PULL_STAGE.landed;
+  });
+  const more = latchDeckTap(350, 60);
+  expect(more).toMatchObject({ menu: "more" });
+  expect(queueDeckTapAfterCut(more)).toBe(true);
+  expect(deckPull.menuAfter.value).toBe("more");
+  const spaces = latchDeckTap(60, 60);
+  expect(spaces).toMatchObject({ menu: "spaces" });
+  act(() => {
+    deckPull.hitTurn.value += 1;
+  });
+  deckPull.menuAfter.value = "";
+  expect(queueDeckTapAfterCut(spaces)).toBe(false);
+  expect(deckPull.menuAfter.value).toBe("");
+  expect(latchDeckTap(250, 60)).toBeNull();
+  act(() => {
+    deckPull.header.value = null;
+    deckPull.stage.value = PULL_STAGE.idle;
+  });
+});
+
+test("a menu's opener opens it at once when its trigger is live, and holds the open until a disabled trigger comes live", () => {
+  if (Platform.OS !== "android") return;
+  const opened = jest.fn();
+  const opener: { current: (() => void) | null } = { current: null };
+  const items = [{ title: "One", onPress: () => undefined }] as never;
+  let enable: () => void = () => undefined;
+  function Host() {
+    const [disabled, setDisabled] = useState(true);
+    enable = () => setDisabled(false);
+    return (
+      <MenuTrigger opener={opener} items={items} trigger="tap" disabled={disabled} onOpen={opened}>
+        {() => <View />}
+      </MenuTrigger>
+    );
+  }
+  const root = renderSurface(<Host />);
+  act(() => opener.current?.());
+  expect(opened).not.toHaveBeenCalled();
+  act(() => enable());
+  expect(opened).toHaveBeenCalledTimes(1);
+  act(() => opener.current?.());
+  expect(opened).toHaveBeenCalledTimes(2);
   unmount(root);
 });
 

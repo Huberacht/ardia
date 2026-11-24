@@ -10,8 +10,8 @@ import {
   type FrostVariant,
   type GlassShape,
 } from "@ardia/phone-native";
-import { createContext, useContext, type ReactNode, type RefObject } from "react";
-import { Platform, Pressable, StyleSheet, View, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
+import { createContext, useContext, useState, type ReactNode, type RefObject } from "react";
+import { Platform, Pressable, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   backdropStops,
@@ -281,6 +281,7 @@ export function ChromeSurface({
   dark,
   shown,
   shownMs,
+  underlay = false,
   testID,
   style,
   children,
@@ -294,6 +295,7 @@ export function ChromeSurface({
   dark?: boolean;
   shown?: boolean;
   shownMs?: number;
+  underlay?: boolean;
   testID?: string;
   style?: StyleProp<ViewStyle>;
   children?: ReactNode;
@@ -304,12 +306,22 @@ export function ChromeSurface({
   const privateContext = useIncognitoLook();
   const incognito = incognitoChosen ?? privateContext;
   const source = useContext(GlassSourceContext);
+  const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was && was.x === layout.x && was.y === layout.y && was.width === layout.width && was.height === layout.height ? was : layout));
   if (glassIsNative()) {
     const shade = dark ?? (incognito || theme.dark);
-    return (
-      <Glass testID={testID} source={source} shape={shape} cornerRadius={cornerRadius} tint={incognito ? undefined : lookGlassTint(look)} interactive={interactive} tinted={tinted} surface={surface} barShadow={barShadow} shown={shown} shownMs={shownMs} classicChrome={nativeClassicChrome} {...lookColors(look, incognito, shade)} dark={shade} style={[style, { borderRadius: cornerRadius }]}>
+    const glass = (
+      <Glass testID={testID} source={source} shape={shape} cornerRadius={cornerRadius} tint={incognito ? undefined : lookGlassTint(look)} interactive={interactive} tinted={tinted} surface={surface} barShadow={barShadow} shown={shown} shownMs={shownMs} classicChrome={nativeClassicChrome} {...lookColors(look, incognito, shade)} dark={shade} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
         {children}
       </Glass>
+    );
+    if (!underlay) return glass;
+    const sampleInk = shade ? chromeInk.dark : chromeInk.light;
+    return (
+      <>
+        {box ? <View testID={testID ? `${testID}Sample` : undefined} pointerEvents="none" style={{ position: "absolute", left: box.x, top: box.y, width: box.width, height: box.height, borderRadius: cornerRadius, backgroundColor: sampleInk.surface, borderWidth: chromeLayout.edge, borderColor: sampleInk.edge }} /> : null}
+        {glass}
+      </>
     );
   }
   const ink = dark ?? (incognito || theme.dark) ? chromeInk.dark : chromeInk.light;

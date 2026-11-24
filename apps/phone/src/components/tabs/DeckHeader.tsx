@@ -10,7 +10,7 @@ import { useCanReopen, useIncognito } from "../../state/tabs/hooks";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { browseLayout, ChromeSurface, deckChromeLayout, font, iconRoles, menuLook, smoothCorners, Tappable, tabsLayout, useTheme, type MenuItem } from "../ui";
 import { deckLook } from "./deckLook";
-import { MenuTrigger, nativeMenus, spaceSystemImage } from "../ui/MenuTrigger";
+import { MenuTrigger, nativeMenus, spaceSystemImage, type MenuOpener } from "../ui/MenuTrigger";
 import { SpaceTitle, spaceMenuSymbol } from "../search/StartSpaces";
 import { FadingGlyphs, GlassCircleButton, type ChromeFade } from "./ChromeButtons";
 
@@ -22,6 +22,9 @@ type Props = {
   onCloseAll: () => void;
   menusShown?: boolean;
   onMenu?: (open: boolean) => void;
+  moreOpener?: MenuOpener;
+  spacesOpener?: MenuOpener;
+  underlay?: boolean;
 } & ChromeFade;
 
 export const deckHeaderBottom = () => deckChromeLayout.headerCenter + deckChromeLayout.headerCircle / 2;
@@ -60,7 +63,7 @@ export function useDeckSpaces() {
   return { syncEnabled: status.isEnabled, spaces, current, spaceItems };
 }
 
-export function DeckHeader({ safeTop, safeSide, sideInset, hasTabs, onCloseAll, menusShown = true, onMenu, glassShown, glassShownMs, glyphFade }: Props) {
+export function DeckHeader({ safeTop, safeSide, sideInset, hasTabs, onCloseAll, menusShown = true, onMenu, moreOpener, spacesOpener, underlay = false, glassShown, glassShownMs, glyphFade }: Props) {
   const theme = useTheme();
   const incognito = useIncognito();
   const canReopen = useCanReopen();
@@ -74,9 +77,9 @@ export function DeckHeader({ safeTop, safeSide, sideInset, hasTabs, onCloseAll, 
   return (
     <View testID="deckHeader" pointerEvents="box-none" style={[styles.row, { top: safeTop + deckChromeLayout.headerCenter - browseLayout.hitTarget / 2, paddingHorizontal: side }]}>
       {current && spaces.length > 1 ? (
-        <MenuTrigger items={spaceItems} {...menu} place={{ top: below, left: side, width: tabsLayout.menuWidth }} style={styles.switcher}>
+        <MenuTrigger opener={spacesOpener} items={spaceItems} {...menu} place={{ top: below, left: side, width: tabsLayout.menuWidth }} style={styles.switcher}>
           {({ onPress }) => (
-            <ChromeSurface testID="deckSwitcherGlass" shape="capsule" cornerRadius={deckLook.switcherCorner} incognito={incognito} dark={theme.dark} shown={glassShown} shownMs={glassShownMs} style={smoothCorners}>
+            <ChromeSurface testID="deckSwitcherGlass" shape="capsule" cornerRadius={deckLook.switcherCorner} incognito={incognito} dark={theme.dark} shown={glassShown} shownMs={glassShownMs} underlay={underlay} style={smoothCorners}>
               <Tappable kind="text" label={`Space, ${current.name}`} hint="Shows your Mac’s spaces." onPress={onPress ?? noop} style={styles.switcherPress}>
                 <FadingGlyphs testID="deckSwitcher" fade={glyphFade}>
                   <SpaceTitle space={current} dark={theme.dark} showsChevron />
@@ -99,8 +102,8 @@ export function DeckHeader({ safeTop, safeSide, sideInset, hasTabs, onCloseAll, 
         </FadingGlyphs>
       )}
       <View style={styles.spacer} />
-      <MenuTrigger items={moreItems} {...menu} place={{ top: below, right: side, width: tabsLayout.menuWidth }}>
-        {({ onPress }) => <GlassCircleButton icon={iconRoles.more} label={actionWords.more} testID="deckHeaderMore" diameter={deckChromeLayout.headerCircle} incognito={incognito} dark={theme.dark} glassShown={glassShown} glassShownMs={glassShownMs} glyphFade={glyphFade} onPress={onPress ?? noop} />}
+      <MenuTrigger opener={moreOpener} items={moreItems} {...menu} place={{ top: below, right: side, width: tabsLayout.menuWidth }}>
+        {({ onPress }) => <GlassCircleButton icon={iconRoles.more} label={actionWords.more} testID="deckHeaderMore" diameter={deckChromeLayout.headerCircle} incognito={incognito} dark={theme.dark} glassShown={glassShown} glassShownMs={glassShownMs} glyphFade={glyphFade} underlay={underlay} onPress={onPress ?? noop} />}
       </MenuTrigger>
     </View>
   );
