@@ -55,7 +55,7 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
     const [viewport, setViewport] = useState(0);
     const [frames, setFrames] = useState<Record<string, Frame>>({});
     const fades = useSectionFades(onboardingFlow.peekOpacity, sectionEase);
-    const motion = useRef({ at: 0, placedKey: null as string | null, glidingUntil: 0 }).current;
+    const motion = useRef({ at: 0, placedKey: null as string | null, glidingUntil: 0, lastY: 0, afterGlide: null as ReturnType<typeof setTimeout> | null }).current;
     const gesture = useRef(newWheelGesture()).current;
     const keys = sections.map(sectionKey);
     const ranges = keys.map((k) => rangeOf(frames[k], viewport));
@@ -122,15 +122,28 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
 
     useImperativeHandle(ref, () => ({ move, wheel }));
 
-    const keepInQuestion = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const y = e.nativeEvent.contentOffset.y;
+    const clampScroll = (y: number) => {
       const { ranges: now, active: at } = live.current;
       const r = now[at];
-      if (!r || Date.now() < motion.glidingUntil) return;
+      if (!r) return;
       const kept = clampTo(y, r);
       motion.at = kept;
       if (Math.abs(kept - y) > 0.5) scroll.current?.scrollTo({ y: kept, animated: false });
     };
+
+    const keepInQuestion = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      motion.lastY = e.nativeEvent.contentOffset.y;
+      const wait = motion.glidingUntil - Date.now();
+      if (motion.afterGlide !== null) clearTimeout(motion.afterGlide);
+      motion.afterGlide = null;
+      if (wait <= 0) return clampScroll(motion.lastY);
+      motion.afterGlide = setTimeout(() => {
+        motion.afterGlide = null;
+        clampScroll(motion.lastY);
+      }, wait);
+    };
+
+    useEffect(() => () => void (motion.afterGlide !== null && clearTimeout(motion.afterGlide)), []);
 
     const measure = (key: string, e: LayoutChangeEvent) => {
       const { y, height } = e.nativeEvent.layout;
