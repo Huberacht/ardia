@@ -235,14 +235,16 @@ On the Windows tree (2026-11-10): `pins` and `guard` pass, 356 patches applied w
 `04-series.sh` applies every `chromium` line of `engine/patches/series` Windows takes, minus the `skip` lines of
 `scripts/windows/engine/series-win` and plus the `linux` lines its `take` lines name (each at its own place in the
 series), then that file's own `chromium` lines (patches in `scripts/windows/engine/patches/`),
-strictly with `git apply` and else with `patch`'s fuzz. It records a failure and goes on, and writes
+strictly with `git apply` and else with `patch`'s fuzz. It stops at the first patch that fails (the rest show as not
+reached), so a tree always carries the plan's first patches and a retry resumes in order, and writes
 `~/chromium-build-win/logs/series-win.tsv`. Each patch that goes in is recorded in `.series-win-applied` beside `src`
 with its place in the plan and its sha256, and a copy goes to `.series-win-applied.d`. Before patching, every
 recorded patch must still sit at the same place in the plan with the same content; a tree an earlier plan patched (a
 remade Windows patch, a `take` that moves the ones after it) is refused with the first entry that parts.
 `series_win.py rewind` reverses the recorded copies back to that entry, and apply goes on from there. A ledger from
 before the copies (names only) is kept when it is a prefix of the plan the tree still carries, and otherwise needs
-the files the series touches restored from a fresh `03-helium.py` run. `series_win_test.py` covers it. `series-win` today: four skips, 24 takes and 23 Windows-only patches ([Windows-only patches](#windows-only-patches)).
+the files the series touches restored from a fresh `03-helium.py` run. `03-helium.py` doesn't touch the ledger, so
+remove `.series-win-applied` and `.series-win-applied.d` beside `src` too before applying again. `series_win_test.py` covers it. `series-win` today: four skips, 24 takes and 23 Windows-only patches ([Windows-only patches](#windows-only-patches)).
 A shared `chromium` line may end in a platform tag since the Linux port: untagged lines are for every platform, and
 Windows takes those and the `mac` ones (the set it started from), never `linux`. A tag can name several platforms
 joined by commas (`linux,win`); Windows takes a line whose platforms include `mac` or `win`. A `layer` line Windows would

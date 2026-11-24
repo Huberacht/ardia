@@ -414,7 +414,9 @@ bool GateLinuxClose(BrowserWindowInterface* browser,
     return false;
   }
   auto client = Find(browser);
-  CHECK(client);
+  if (!client) {
+    return false;
+  }
   if (client->cancelling) {
     return true;
   }

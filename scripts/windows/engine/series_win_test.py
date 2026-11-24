@@ -114,6 +114,30 @@ class LedgerTest(unittest.TestCase):
         expected['b.txt'] = BASE['b.txt'].replace('b line 2\n', 'b line two\n')
         self.assertEqual(self.tree_files(), expected)
 
+    def test_a_failed_patch_stops_apply_and_a_retry_resumes_in_plan_order(self):
+        first = self.patch('first.patch', 'a.txt', 'a line 3\n', 'a line three\n')
+        second = self.patch('second.patch', 'b.txt', 'b line 9\n', 'b line nine\n')
+        self.write_tree({'a.txt': BASE['a.txt'].replace('a line 2\na line 3\na line 4\n', 'drifted\n')})
+        rows, failed = self.apply([first, second])
+        self.assertEqual(failed, 1)
+        self.assertEqual([r[1] for r in rows], ['FAILED', 'not reached'])
+        self.assertEqual(build.read_ledger(self.tree), [])
+        self.assertEqual(self.tree_files()['b.txt'], BASE['b.txt'])
+        self.write_tree({'a.txt': BASE['a.txt']})
+        rows, failed = self.apply([first, second])
+        self.assertEqual(failed, 0)
+        self.assertEqual([r[1] for r in rows], ['clean', 'clean'])
+        self.assertEqual([entry[:2] for entry in build.read_ledger(self.tree)], [(0, 'first.patch'), (1, 'second.patch')])
+        rows, failed = self.apply([first, second])
+        self.assertEqual([r[1] for r in rows], ['already applied', 'already applied'])
+
+    def test_a_ledger_with_a_hole_is_refused_as_out_of_order(self):
+        first = self.patch('first.patch', 'a.txt', 'a line 3\n', 'a line three\n')
+        second = self.patch('second.patch', 'b.txt', 'b line 9\n', 'b line nine\n')
+        build.write_ledger(self.tree, [(1, 'second.patch', build.patch_digest(second[1]))])
+        with self.assertRaisesRegex(build.InputError, 'out of order'):
+            self.apply([first, second])
+
     def test_a_name_only_ledger_is_kept_when_it_is_a_prefix_the_tree_still_carries_and_refused_otherwise(self):
         one = self.patch('one.patch', 'a.txt', 'a line 3\n', 'a line three\n')
         two = self.patch('two.patch', 'b.txt', 'b line 9\n', 'b line nine\n')

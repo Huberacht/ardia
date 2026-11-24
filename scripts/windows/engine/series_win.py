@@ -7,7 +7,8 @@ scripts/windows/engine/series-win (when it exists; its patches in scripts/window
 its `skip <patch>` lines leave a patch of engine/patches/series out, and its `take <patch>` lines apply a `linux` line
 of engine/patches/series at its own place in that series, as a `linux,win` line would once series.py reads platform
 sets), each applied strictly (git apply), else with patch's fuzz.
-A patch that fails is recorded and the rest still run. Each patch that goes in is written to .series-win-applied beside
+Apply stops at the first patch that fails (the rest are reported as not reached), so the patches in a tree are always the
+plan's first ones and a retry resumes in order. Each patch that goes in is written to .series-win-applied beside
 the tree (its place in the plan, name and sha256, with a copy in .series-win-applied.d) and never applied again: a later
 patch on the same lines would hide it from a reverse check. Before patching, apply checks every recorded patch against
 the plan at the same place and with the same content, and refuses a tree an earlier plan patched (rewind reverses the
@@ -822,11 +823,9 @@ def divergence(tree, plan):
             if not applied(plan[position][1], tree):
                 return position, f'records {name} without its content, and the tree does not carry the current {name}'
         return None
-    last = -1
     for position, (index, name, digest) in enumerate(entries):
-        if index <= last:
-            return position, f'records {name} out of order'
-        last = index
+        if index != position:
+            return position, f'records {name} at place {index} after {position} recorded patches, out of order'
         if index >= len(plan) or plan[index][0] != name:
             planned = plan[index][0] if index < len(plan) else 'nothing'
             return position, f'records {name} at place {index}, where the plan applies {planned}'
@@ -850,8 +849,8 @@ def upgrade_legacy(tree, plan):
 def refusal(tree, position, reason):
     return (f'{state_path(tree)}: an earlier plan patched this tree; entry {position + 1} {reason}. Patching on top would '
             'misapply. Run `series_win.py rewind` to reverse the recorded patches back to that point (it needs their '
-            f'copies in {copies_path(tree)}), or restore the files the series touches from a fresh 03-helium.py run, '
-            'then apply again.')
+            f'copies in {copies_path(tree)}), or restore the files the series touches from a fresh 03-helium.py run and '
+            f'remove {state_path(tree)} and {copies_path(tree)}, then apply again.')
 
 
 def apply_plan(tree, plan):
@@ -859,16 +858,19 @@ def apply_plan(tree, plan):
     if parted is not None:
         raise InputError(refusal(tree, *parted))
     upgrade_legacy(tree, plan)
-    done = {index for index, _, _ in read_ledger(tree)}
+    done = len(read_ledger(tree))
     rows, failed = [], 0
     for index, (name, path) in enumerate(plan):
-        if index in done:
+        if index < done:
             result, detail = 'already applied', 'recorded'
+        elif failed:
+            result, detail = 'not reached', 'a patch before it failed; apply stops there so a retry resumes in order'
         else:
             result, detail = apply_one(path, tree)
-            if result != 'FAILED':
+            if result == 'FAILED':
+                failed = 1
+            else:
                 record(tree, index, name, path)
-        failed += result == 'FAILED'
         rows.append((name, result, classify(patch_files(path)), detail))
         print(f'{result:16} {name}', flush=True)
     return rows, failed
@@ -887,17 +889,19 @@ def rewind(tree, plan):
     if entries and entries[0][0] is None:
         if keep < len(entries):
             raise InputError(f'{state_path(tree)}: no copy of {entries[keep][1]} as it was applied (a ledger from before '
-                             'copies were kept); restore the files the series touches from a fresh 03-helium.py run')
+                             'copies were kept); restore the files the series touches from a fresh 03-helium.py run and remove '
+                             f'{state_path(tree)} and {copies_path(tree)}')
         upgrade_legacy(tree, plan)
         return len(entries)
     for index, name, _digest in reversed(entries[keep:]):
         copy = copy_of(tree, index, name) if index is not None else None
         if copy is None or not os.path.isfile(copy):
             raise InputError(f'{state_path(tree)}: no copy of {name} as it was applied; restore the files the series '
-                             'touches from a fresh 03-helium.py run instead')
+                             f'touches from a fresh 03-helium.py run and remove {state_path(tree)} and '
+                             f'{copies_path(tree)} instead')
         if not unapply(copy, tree):
             raise InputError(f'{copy} no longer reverses on {tree}; restore the files the series touches from a fresh '
-                             '03-helium.py run instead')
+                             f'03-helium.py run and remove {state_path(tree)} and {copies_path(tree)} instead')
         os.remove(copy)
         entries = entries[:-1]
         write_ledger(tree, entries)

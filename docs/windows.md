@@ -1953,7 +1953,11 @@ Two RNW features the desktop host must carry over:
    `GetFinalPathNameByHandleW` (`DosFinalPath` refuses UNC and volume-GUID forms), the target and its parent are opened
    with `FILE_FLAG_OPEN_REPARSE_POINT` and refused when they are reparse points, an output is created with
    `CREATE_NEW` on such a handle (after removing a regular file there) and checked inside the drafts folder before a
-   byte is written, and an input's open handle is checked the same way. A gzip refuses a destination that is its
+   byte is written, and an input's open handle is checked the same way. The checked handle is what the operation
+   uses: a replaced output and a removed gzip source or failed output are deleted through their own handles
+   (`FileDispositionInfo`), removing a draft walks it under held folder handles that deny delete sharing and deletes
+   each entry through its handle (a link inside is deleted as a link, never followed), and an upload holds its file
+   open without write or delete sharing until the transfer ends, so the path can't be swapped under it. A gzip refuses a destination that is its
    source by file identity (volume serial and file index on Windows, `st_dev`/`st_ino` on POSIX), not by path text,
    which a case alias or a hard link would pass. The password export (`PlanExport`) takes the native separator too,
    so a Windows drive-rooted destination reaches `ac_passwords_export`, which `ardia-layer-win.patch` already reads
@@ -1966,7 +1970,7 @@ Two RNW features the desktop host must carry over:
 `series-win` names each patch with a `take` line instead: Windows applies that `linux` line at its own place in the
 shared series, as a `linux,win` line will. A `take` line changes nothing for the Mac or Linux. The Linux engine key
 does move, for the launch-config split, the widened and gated patches and the changed Linux layer sources
-(`c6e339147f82` on main, `d578c7c75a96` here), so Linux needs a new engine; the macOS key is byte for byte
+(`c6e339147f82` on main, `54c2d9a4d764` here), so Linux needs a new engine; the macOS key is byte for byte
 `origin/main`'s. On the Windows tree (MSI, 2026-11-24) all 24 apply with `git apply`, no
 fuzz, and `chromium-win-ardia-layer-calls-mac-only`, `-external-protocol-dialog`, `-hosted-popups-and-menus` and
 `-hosted-theme-change` are remade on top of them, so 132 of the 133 patches apply strictly (the one with fuzz is the
@@ -1984,7 +1988,7 @@ desktop host sets it, which only the WebUI shell will. Guards that would change 
 | `-shell-above-input`, `-companion-browsers`, `-window-minimum-size`, `-page-prompts`, `-page-status`, `-wheel-zoom`, `-unhandled-key`, `-action-popup-hook`, `-thin-scroll-bars` | no guards: null hooks |
 | `-background-windows` | taken without its launch-config half, now `chromium-linux-launch-config.patch` (`linux`); its `--ardia-background` check stays Linux |
 | `-auto-pip` | hooks taken; the feature switches it adds in `BasicStartupComplete` stay Linux |
-| `-document-close` | every path it changes asks `ardia::LinuxCloseHooksActive()`: always true on Linux, true on Windows only once a host sets `g_ardia_linux_close_hooks.defer`. Until then `BrowserCloseManager` runs Chromium's own bodies (no deferred success callback, no confirmed-browser rescan), `UnloadController` keeps Chromium's state transitions and repeat `OnWindowCloseComplete`, and `RenderFrameHostImpl` starts no close dispatch for any `beforeunload`, navigations included, and posts Chromium's own ACK |
+| `-document-close` | every path it changes asks `ardia::LinuxCloseHooksActive()`: always true on Linux, true on Windows only once a host sets `g_ardia_linux_close_hooks.defer`. Until then `BrowserCloseManager` runs Chromium's own bodies (no deferred success callback, no confirmed-browser rescan, Chromium's own downloads callback), `UnloadController` registers no close client, keeps no dispatch bookkeeping and keeps Chromium's state transitions and repeat `OnWindowCloseComplete`, and `RenderFrameHostImpl` starts no close dispatch for any `beforeunload`, navigations included, and posts Chromium's own ACK |
 | `-pip-placement`, `-extension-keybindings`, `-settings-overrides`, `-devtools-authority` | guards stay Linux: they call Linux layer code or change behavior unconditionally; taken so the files match Linux's and the patches after them apply. `-devtools-authority` and `chromium-win-devtools-other-clients` share no file |
 
 `linux-hooks.gn` gives Windows `//ardia/linux:close_hooks` (`ac_linux_close_hooks.cc`, which `-document-close`
