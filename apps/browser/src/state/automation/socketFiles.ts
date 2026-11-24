@@ -30,7 +30,7 @@ export const FILE_METHODS: MethodSpec[] = [
   {
     name: "files.armUpload",
     mutates: true,
-    description: "Answer the next file chooser this tab's page opens with these files, without showing a panel or taking focus",
+    description: "Answer the next file chooser opened in this tab's window with these files, without showing a panel or taking focus; one waiting upload arm per window",
     params: obj(
       {
         tab: TAB,

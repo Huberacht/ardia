@@ -837,7 +837,7 @@ question), on macOS (`PLATFORM_FEATURES.silentFilePanels`; Linux and Windows ans
 
 | Method | Mutates | What it does |
 | --- | --- | --- |
-| `files.armUpload {tab, paths, once?, seconds?}` | yes | The next file chooser the tab's page opens is answered with `paths` (files, or folders for a folder chooser; more than one only when the chooser takes several), without a panel, in a visible Ardia as in a background one |
+| `files.armUpload {tab, paths, once?, seconds?}` | yes | The next file chooser opened in the tab's window is answered with `paths` (files, or folders for a folder chooser; more than one only when the chooser takes several), without a panel, in a visible Ardia as in a background one |
 | `files.armDownload {tab?, path, once?, seconds?}` | yes | The next download (of the tab's profile, or of any regular profile without `tab`) lands at `path` without asking where. `path` is a file that doesn't exist yet in a folder that does, or an existing folder, where each download keeps its own name (`once: false` keeps answering, numbering names that are taken) |
 | `files.arms {arms?}` | no | Arms from the last ten minutes: `state` (`armed`, `answered`, `downloading`, `finished`, `failed`, `cancelled`, `expired`, `cleared`), `reason`, `chosen` for uploads, and for downloads each `{downloadId, state, path, bytes, reason?}` |
 | `files.disarm {arms?}` | yes | Stops the named arms, or every waiting one |
@@ -853,7 +853,11 @@ is written through a link.
 **How a panel is answered.** `ArdiaActivation.mm` wraps `NSOpenPanel` and `NSSavePanel`'s three ways of running. A
 panel is answered from an arm only when Chromium opened it (its call stack) and an arm of the right kind waits for a
 tab in the panel's window (a tab arm wins over an any-tab download arm, the newest wins among equals); anything else
-runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. An upload
+runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. Chromium
+opens a page's chooser on the window that holds all of that window's tabs, so the panel names the window, not the
+tab: an upload arm answers the next chooser from its tab's window, and a second upload arm for a window that already
+has one waiting is `refused` (naming the waiting arm) rather than guessed between. Tell tabs apart by window (a tab
+`offscreen` moved or one in another window has its own). An upload
 arm that can't be honoured (two files for a one-file chooser, a folder for a file chooser, a file gone since) cancels
 the chooser and ends `failed` with the reason, rather than showing a panel the person didn't expect.
 
