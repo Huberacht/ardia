@@ -254,8 +254,8 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
 
 export function dismissSearch(ending: SearchEnding = "cancelled") {
   if (useSearch.getState().open) markSearchClosing();
-  dropQueuedDraft();
   useSearch.setState({ open: false, ending, incognitoOnCancel: null });
+  dropQueuedDraft();
 }
 
 const REMOTE_DELAY_MS = 150;

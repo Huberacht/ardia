@@ -1,6 +1,6 @@
 import { probes } from "../../state/app/launchFlags";
 import { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { markShownFrame, traceSlice } from "../../platform/lab";
+import { labTrace, markShownFrame, traceSlice } from "../../platform/lab";
 import { hardwareKeyboardShown } from "@ardia/phone-native";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
@@ -323,15 +323,15 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const trayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
   const extend = placement === "underKeyboard" ? window.height : 0;
   const closedOnPressIn = useRef(false);
-  const closeFromTouch = () => {
+  const closeFromTouch = (): boolean => {
     const now = searchState();
-    if (session === STANDBY_SESSION) {
-      const generation = armedNow.current;
-      closeEarlyReveal(generation);
-      if (standbyAdopted(generation) && now.open) cancelSearch();
-      return;
-    }
-    if (now.open && now.session === session) cancelSearch();
+    const generation = armedNow.current;
+    const waiting = session === STANDBY_SESSION;
+    const mine = now.open && (waiting ? standbyAdopted(generation) : now.session === session);
+    labTrace(`PAGELAB search dim ${waiting ? "waiting" : "live"} open=${now.open} mine=${mine}`);
+    if (mine) cancelSearch();
+    if (waiting) closeEarlyReveal(generation);
+    return mine;
   };
   const ownsField = useCallback(() => {
     const now = searchState();
@@ -339,8 +339,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     return session === STANDBY_SESSION ? standbyAdopted(armedNow.current) : now.session === session;
   }, [session]);
   const closeOnPressIn = () => {
-    closedOnPressIn.current = true;
-    closeFromTouch();
+    closedOnPressIn.current = closeFromTouch();
   };
   const closeOnPress = () => {
     if (closedOnPressIn.current) {

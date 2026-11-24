@@ -461,3 +461,46 @@ test("a tap on the dim closes the press it dismisses by token, and every earlier
   expect(searchState().open).toBe(true);
   finish(t.root);
 });
+
+test("once JS has taken the press and the sheet is live, the first tap on the dim closes search and nothing reopens it", async () => {
+  const t = setUp();
+  t.tap();
+  t.flush();
+  expect(searchState().open).toBe(true);
+  await act(async () => {
+    jest.advanceTimersByTime(1500);
+  });
+  const dim = t.layer().findAll((node) => node.props.accessibilityLabel === "Close Search" && typeof node.props.onPressIn === "function")[0]!;
+  act(() => dim.props.onPressIn());
+  act(() => dim.props.onPress());
+  expect(searchState().open).toBe(false);
+  t.flush();
+  await act(async () => {
+    jest.advanceTimersByTime(1500);
+  });
+  expect(searchState().open).toBe(false);
+  expect(t.presses).toHaveBeenCalledTimes(1);
+  finish(t.root);
+});
+
+test("the first tap on a live sheet's dim closes it even when aborting the last suggestion fetch throws", async () => {
+  const t = setUp();
+  t.tap();
+  t.flush();
+  const aborts = jest.spyOn(AbortController.prototype, "abort");
+  await act(async () => {
+    jest.advanceTimersByTime(1500);
+  });
+  act(() => typeSearch("otters"));
+  await act(async () => {
+    jest.advanceTimersByTime(400);
+  });
+  aborts.mockImplementation(() => {
+    throw new Error("abort listener failed");
+  });
+  const dim = t.layer().findAll((node) => node.props.accessibilityLabel === "Close Search" && typeof node.props.onPressIn === "function")[0]!;
+  expect(() => act(() => dim.props.onPressIn())).toThrow("abort listener failed");
+  aborts.mockRestore();
+  expect(searchState().open).toBe(false);
+  finish(t.root);
+});
