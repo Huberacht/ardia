@@ -11,13 +11,22 @@ the Swift module of every domain the Mac serves straight from the engine, and th
 whose Mac module serves some calls itself, which that hand-written module builds with its own handlers.
 For each module domain (positional Expo functions) it writes the package's TypeScript *Native types in
 <package>/src/generated/native.ts, the Swift protocols its Mac modules conform to in <package>/ios/<Domain>Native.swift,
-and the domain's entry under the manifest's modules.`;
+and the domain's entry under the manifest's modules.
+For the desktop host Linux and Windows share it writes the engine routes in
+engine/ardiacore-desktop/src/ardia/desktop/generated/ac_desktop_routes.h and the request deadline maps
+of engine/ardiacore-linux/src/ardia/linux/bootstrap.js, from each call's and function's deadline and the
+desktop host's own methods in schema/desktop.ts.`;
 
 export const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const GENERATED_TS = "packages/ardiacore/src/engine/generated/";
 export const MANIFEST = `${GENERATED_TS}manifest.json`;
 export const SWIFT = "packages/ardiacore/ios/";
 export const HOSTS = ["mac", "desktop", "windows"];
+export const DESKTOP_ROUTES = "engine/ardiacore-desktop/src/ardia/desktop/generated/ac_desktop_routes.h";
+export const BOOTSTRAP = "engine/ardiacore-linux/src/ardia/linux/bootstrap.js";
+export const DEFAULT_DEADLINE = 30000;
+export const LONGEST_DEADLINE = 900000;
+const HOST_METHOD = /^Ardia[A-Z][A-Za-z]*\.[a-z][a-zA-Z]*$/;
 const BINDINGS = { mac: new Set(["service", "custom", "absent"]), desktop: new Set(["route", "custom", "absent"]), windows: new Set(["service", "custom", "absent"]) };
 const EVENT_BINDINGS = new Set(["forward", "custom", "absent"]);
 const NAME = /^[a-z][a-zA-Z]*$/;
@@ -64,6 +73,37 @@ export async function loadDomains() {
   for (const [name, domain] of Object.entries(domains)) validate(name, domain);
   validateTopics(domains);
   return domains;
+}
+
+export async function loadDesktopHost() {
+  const { domains, moduleDomains, desktopHost } = await schema();
+  validateDesktopHost(desktopHost, moduleDomains, domains);
+  return { domains, moduleDomains, desktopHost };
+}
+
+const isDeadline = (value) => Number.isInteger(value) && value > DEFAULT_DEADLINE && value <= LONGEST_DEADLINE;
+const DEADLINE_RULE = `an integer of milliseconds above the ordinary ${DEFAULT_DEADLINE} and at most ${LONGEST_DEADLINE}`;
+
+export function validateDesktopHost(host, moduleDomains, domains = {}) {
+  const fail = (message) => {
+    throw new Error(`schema desktopHost: ${message}`);
+  };
+  if (!isRecord(host) || !isRecord(host.deadlines)) fail("deadlines maps the desktop host's own Module.method names to their request deadlines");
+  if (!Array.isArray(host.routeOrder)) fail("routeOrder lists the engine domains whose desktop routes come first, in the order the hosts advertise them");
+  const routed = new Set(desktopRoutes(domains).map(({ name }) => name.split(".")[0]));
+  for (const [index, name] of host.routeOrder.entries()) {
+    if (!routed.has(name)) fail(`routeOrder names ${name}, which isn't an engine domain with a desktop route`);
+    if (host.routeOrder.indexOf(name) !== index) fail(`routeOrder lists ${name} twice`);
+  }
+  const declared = new Map();
+  for (const [domain, entry] of Object.entries(moduleDomains)) {
+    for (const [module, row] of Object.entries(entry.modules)) for (const fn of Object.keys(row.functions)) declared.set(`${module}.${fn}`, domain);
+  }
+  for (const [method, deadline] of Object.entries(host.deadlines)) {
+    if (!HOST_METHOD.test(method)) fail(`deadline ${method} names a host method as Ardia<Module>.<method>`);
+    if (declared.has(method)) fail(`${method} is a function of module domain ${declared.get(method)}, so its deadline goes on that function`);
+    if (!isDeadline(deadline)) fail(`${method}'s deadline is ${DEADLINE_RULE}`);
+  }
 }
 
 export async function loadModuleDomains() {
@@ -202,6 +242,8 @@ function validateModuleFunction(fail, at, fn, row) {
   if (row.fallback !== undefined && (row.instance !== "weak" || !returns)) fail(`function ${at}.fallback answers once the module is gone, so it goes only with instance: weak and a result`);
   if (row.instance === "weak" && returns && row.fallback === undefined) fail(`function ${at} holds its module weakly and returns ${row.result}, so it says its fallback`);
   validateModuleBindings(fail, `function ${at}`, row);
+  if (row.deadline !== undefined && !isDeadline(row.deadline)) fail(`function ${at}.deadline is ${DEADLINE_RULE}`);
+  if (row.deadline !== undefined && row.desktop !== "host" && row.desktop !== "adapted") fail(`function ${at}.deadline is how long the desktop UI waits for the native host, so it goes only with desktop: host or adapted`);
 }
 
 export function validateModuleNames(domains, moduleDomains) {
@@ -255,6 +297,8 @@ export function validate(name, domain) {
     if (call.routeField !== undefined && call.desktop !== "route") fail(`${verb}.routeField picks the field of the engine's reply a desktop route answers with, so it goes only with desktop: route`);
     if (call.routeField !== undefined && (typeof call.routeField !== "string" || !NAME.test(call.routeField))) fail(`${verb}.routeField is a string: a lowerCamelCase field of the engine's reply, or "null" to answer null`);
     if (call.service === undefined && HOSTS.some((host) => passesStraight(call, host))) fail(`${verb}'s service is an ac_* call: a host passes it straight to the engine`);
+    if (call.deadline !== undefined && !isDeadline(call.deadline)) fail(`${verb}.deadline is ${DEADLINE_RULE}`);
+    if (call.deadline !== undefined && call.desktop === "absent") fail(`${verb}.deadline is how long the desktop UI waits for the native host, so it goes only with a desktop binding that reaches it`);
   }
   for (const [event, row] of Object.entries(domain.events ?? {})) {
     if (!NAME.test(event)) fail(`event ${event} is lowerCamelCase letters`);
@@ -462,7 +506,7 @@ function moduleManifest(name, domain) {
   for (const [module, entry] of Object.entries(domain.modules)) {
     modules[module] = {
       native: nativeTypeOf(module),
-      functions: Object.fromEntries(Object.entries(entry.functions).map(([fn, row]) => [fn, { args: row.args.map((arg) => parameterOf(arg).name), async: row.async, ...moduleBindings(row) }])),
+      functions: Object.fromEntries(Object.entries(entry.functions).map(([fn, row]) => [fn, { args: row.args.map((arg) => parameterOf(arg).name), async: row.async, ...moduleBindings(row), ...(row.deadline === undefined ? {} : { deadline: row.deadline }) }])),
       ...(Object.keys(constantsOf(entry)).length ? { constants: Object.fromEntries(Object.entries(constantsOf(entry)).map(([constant, row]) => [constant, moduleBindings(row)])) } : {}),
       events: Object.fromEntries(Object.entries(entry.events).map(([event, row]) => [event, moduleBindings(row)])),
     };
@@ -482,6 +526,7 @@ function manifest(domains, moduleDomains) {
         ...(call.service === undefined ? {} : { service: call.service }),
         ...Object.fromEntries(HOSTS.map((host) => [host, bindingOf(call, host)])),
         ...(call.routeField === undefined ? {} : { routeField: call.routeField }),
+        ...(call.deadline === undefined ? {} : { deadline: call.deadline }),
       };
     }
     const events = {};
@@ -500,7 +545,77 @@ function manifest(domains, moduleDomains) {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-export function outputs(domains, moduleDomains = {}) {
+const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+export const routeDomainOrder = (domains, routeOrder = []) => [...routeOrder, ...Object.keys(domains).filter((name) => !routeOrder.includes(name)).sort(byName)];
+
+export const desktopRoutes = (domains, routeOrder = []) =>
+  routeDomainOrder(domains, routeOrder).map((name) => [name, domains[name]]).flatMap(([name, domain]) =>
+    Object.entries(domain.calls ?? {})
+      .filter(([, call]) => bindingOf(call, "desktop") === "route")
+      .map(([verb, call]) => ({ name: `${name}.${verb}`, service: call.service, field: call.routeField ?? "" })),
+  );
+
+function routesHeader(domains, routeOrder) {
+  const routes = desktopRoutes(domains, routeOrder);
+  const lines = [
+    "#ifndef ARDIA_DESKTOP_GENERATED_AC_DESKTOP_ROUTES_H_",
+    "#define ARDIA_DESKTOP_GENERATED_AC_DESKTOP_ROUTES_H_",
+    "",
+    "#include <array>",
+    "#include <string_view>",
+    "",
+    "namespace ardia::desktop_routes {",
+    "",
+    "struct Route {",
+    "  std::string_view name;",
+    "  std::string_view service;",
+    "  std::string_view field;",
+    "};",
+    "",
+    routes.length ? `inline constexpr std::array<Route, ${routes.length}> kRoutes = {{` : "inline constexpr std::array<Route, 0> kRoutes = {};",
+    ...(routes.length ? [...routes.map(({ name, service, field }) => `    {"${name}", "${service}", "${field}"},`), "}};"] : []),
+    "",
+    "inline constexpr const Route* FindRoute(std::string_view name) {",
+    "  for (const auto& route : kRoutes) {",
+    "    if (route.name == name) return &route;",
+    "  }",
+    "  return nullptr;",
+    "}",
+    "",
+    "}",
+    "",
+    "#endif",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+export function desktopDeadlines(domains, moduleDomains, desktopHost) {
+  const engine = Object.entries(domains).flatMap(([name, domain]) => Object.entries(domain.calls ?? {}).filter(([, call]) => call.deadline !== undefined).map(([verb, call]) => [`${name}.${verb}`, call.deadline]));
+  const functions = Object.values(moduleDomains).flatMap((domain) =>
+    Object.entries(domain.modules).flatMap(([module, entry]) => Object.entries(entry.functions).filter(([, row]) => row.deadline !== undefined).map(([fn, row]) => [`${module}.${fn}`, row.deadline])),
+  );
+  const byKey = (a, b) => byName(a[0], b[0]);
+  return { host: [...functions, ...Object.entries(desktopHost.deadlines)].sort(byKey), engine: engine.sort(byKey) };
+}
+
+const DEADLINE_MAPS = { host: "hostDeadlines", engine: "engineDeadlines" };
+
+export function spliceDeadlines(source, deadlines) {
+  let out = source;
+  for (const [kind, variable] of Object.entries(DEADLINE_MAPS)) {
+    const opening = `\n  const ${variable} = new Map([\n`;
+    const start = out.indexOf(opening);
+    if (start < 0 || out.indexOf(opening, start + 1) >= 0) throw new Error(`${BOOTSTRAP} declares ${variable} as a new Map([ ... ]) exactly once`);
+    const end = out.indexOf("\n  ]);\n", start + opening.length - 1);
+    if (end < 0) throw new Error(`${BOOTSTRAP}'s ${variable} never closes with ]);`);
+    const rows = deadlines[kind].map(([name, deadline]) => `    ["${name}", ${deadline}],\n`).join("");
+    out = `${out.slice(0, start + opening.length)}${rows}${out.slice(end + 1)}`;
+  }
+  return out;
+}
+
+export function outputs(domains, moduleDomains = {}, desktopHost = null) {
   const files = new Map();
   for (const name of Object.keys(domains)) {
     const domain = domains[name];
@@ -513,6 +628,8 @@ export function outputs(domains, moduleDomains = {}) {
     const swift = moduleSwiftPath(name, domain);
     if (swift !== null) files.set(swift, moduleSwift(domain));
   }
+  files.set(DESKTOP_ROUTES, routesHeader(domains, desktopHost?.routeOrder ?? []));
+  if (desktopHost !== null) files.set(BOOTSTRAP, spliceDeadlines(readFileSync(ROOT + BOOTSTRAP, "utf8"), desktopDeadlines(domains, moduleDomains, desktopHost)));
   files.set(MANIFEST, manifest(domains, moduleDomains));
   return files;
 }
@@ -574,10 +691,10 @@ const retired = (files) => [...new Set(previouslyGenerated())].filter((path) => 
 
 const blocked = (files) => {
   const owned = new Set(previouslyGenerated());
-  return [...files].filter(([path, text]) => path !== MANIFEST && existsSync(ROOT + path) && readFileSync(ROOT + path, "utf8") !== text && !owned.has(path)).map(([path]) => path);
+  return [...files].filter(([path, text]) => path !== MANIFEST && path !== BOOTSTRAP && path !== DESKTOP_ROUTES && existsSync(ROOT + path) && readFileSync(ROOT + path, "utf8") !== text && !owned.has(path)).map(([path]) => path);
 };
 
-const generatedFolders = (files) => new Set([GENERATED_TS, ...[...files.keys()].filter((path) => path.endsWith("/src/generated/native.ts")).map((path) => path.slice(0, -"native.ts".length))]);
+const generatedFolders = (files) => new Set([GENERATED_TS, DESKTOP_ROUTES.slice(0, DESKTOP_ROUTES.lastIndexOf("/") + 1), ...[...files.keys()].filter((path) => path.endsWith("/src/generated/native.ts")).map((path) => path.slice(0, -"native.ts".length))]);
 
 const strays = (files) => {
   const owned = new Set(previouslyGenerated());
@@ -600,13 +717,15 @@ export function stale(files) {
   return problems;
 }
 
+export const realOutputs = async () => outputs(await loadDomains(), await loadModuleDomains(), (await loadDesktopHost()).desktopHost);
+
 async function main(argv) {
   const mode = argv[0];
   if (argv.length !== 1 || (mode !== "--check" && mode !== "--write")) {
     console.error(USAGE);
     process.exit(2);
   }
-  const files = outputs(await loadDomains(), await loadModuleDomains());
+  const files = await realOutputs();
   try {
     retired(files);
     const left = strays(files).map((path) => `not written by the generator, remove it by hand: ${path}`);

@@ -7,6 +7,7 @@ import { extensions } from "./extensions.ts";
 import { favicons } from "./favicons.ts";
 import { history } from "./history.ts";
 import { importModules } from "./import.ts";
+import { media } from "./media.ts";
 import { passwords } from "./passwords.ts";
 import { permissions } from "./permissions.ts";
 import { profiles } from "./profiles.ts";
@@ -20,6 +21,8 @@ import { webKit } from "./webKit.ts";
 import { webView } from "./webView.ts";
 import { windows } from "./windows.ts";
 
-export const domains = { autofill, bookmarks, contentBlocker, downloads, engine, extensions, favicons, history, passwords, permissions, profiles, search, sites, tabs, webKit, webView, windows };
+export const domains = { autofill, bookmarks, contentBlocker, downloads, engine, extensions, favicons, history, media, passwords, permissions, profiles, search, sites, tabs, webKit, webView, windows };
 
 export const moduleDomains = { shaders, shell, sync, import: importModules };
+
+export { desktopHost } from "./desktop.ts";
