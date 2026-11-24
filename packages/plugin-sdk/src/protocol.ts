@@ -147,7 +147,7 @@ export type WorkspaceChange = { initial?: true; more?: true; windows: StateWindo
 
 export type NavigationCommit = { tabId: string; windowId: string; url: string; title: string | null; sameDocument: boolean };
 
-export type NavigationChange = { commits: NavigationCommit[] };
+export type NavigationChange = { more?: true; commits: NavigationCommit[] };
 
 export type DownloadsChange = { initial?: true; more?: true; downloads: StateDownload[]; removed: string[] };
 

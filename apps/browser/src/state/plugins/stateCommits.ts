@@ -73,8 +73,12 @@ function scheduleReregister() {
 export function listenForPluginStateCommits(on: (() => void) | null) {
   const wasOn = !!listener;
   listener = on;
+  if (!on && wasOn) {
+    void reportPageCommits("pluginState", false).catch(() => {});
+    if (!pageCommitsFlowing()) latest.clear();
+  }
   if (!!on !== wasOn) {
-    if (!on || !pageCommitsFlowing()) latest.clear();
+    if (on && !pageCommitsFlowing()) latest.clear();
     log = [];
     listeningSince = Date.now();
     reported = false;
@@ -83,5 +87,4 @@ export function listenForPluginStateCommits(on: (() => void) | null) {
     reregisterTimer = null;
   }
   if (on && !reported) register();
-  if (!on && wasOn) void reportPageCommits("pluginState", false).catch(() => {});
 }

@@ -983,6 +983,20 @@ describe("createHostRuntime", () => {
     assert.deepEqual(broken.complete, [], "a page out of order is never joined");
   });
 
+  test("a navigation round that says more still hands every commit to onCommit and the raw change to state.subscribe", async () => {
+    const { host, runtime } = await started({});
+    const commits = [];
+    const rounds = [];
+    runtime.ardia.navigation.onCommit((commit) => commits.push(commit.tabId));
+    runtime.ardia.state.subscribe("navigation", (change) => rounds.push(change.more === true));
+    await settle();
+    host.push({ event: "state.navigation", data: { more: true, commits: [{ tabId: "t1", windowId: "w", url: "https://a.example/", title: null, sameDocument: false }] } });
+    host.push({ event: "state.navigation", data: { commits: [{ tabId: "t2", windowId: "w", url: "https://b.example/", title: null, sameDocument: false }] } });
+    await settle();
+    assert.deepEqual(commits, ["t1", "t2"]);
+    assert.deepEqual(rounds, [true, false]);
+  });
+
   test("a drop with no state listeners asks for nothing", async () => {
     const { host } = await started({ events: { "tab.activated": () => {} } });
     await settle();

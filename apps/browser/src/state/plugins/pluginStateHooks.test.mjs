@@ -883,6 +883,29 @@ test("joining while another reader already has commit reports on keeps real base
   await reportPageCommits("pageBars", false);
 });
 
+test("leaving and coming back while another reader keeps commit reports on still delivers the first in-page change", async () => {
+  await enable(WATCHER);
+  const w = S().createWindow({ url: "https://doc.example/page" });
+  const tab = activeTabId(S(), w);
+  await reportPageCommits("pageBars", true);
+  const committed = Date.now() - 60_000;
+  notePluginStateCommit(tab, "https://doc.example/page", committed);
+  const run = await activated("watcher");
+  assert.equal((await ask("watcher", "state.subscribe", { topics: ["navigation"] }, run)).result.ok, true);
+  flushStateEvents();
+  assert.equal((await ask("watcher", "state.subscribe", { topics: [] }, run)).result.ok, true);
+  assert.equal(stateSubscriberCount(), 0);
+  assert.equal((await ask("watcher", "state.subscribe", { topics: ["navigation"] }, run)).result.ok, true);
+  flushStateEvents();
+  host.events.length = 0;
+  notePluginStateCommit(tab, "https://doc.example/page#first", committed);
+  flushStateEvents();
+  const commits = stateEvents("watcher", "navigation").flatMap((e) => e.commits);
+  assert.equal(commits.length, 1, "the first in-page change after coming back arrives");
+  assert.equal(commits[0].sameDocument, true);
+  await reportPageCommits("pageBars", false);
+});
+
 test("subscriptions end with the run", async () => {
   await subscribed(WATCHER, ["tabs"]);
   assert.equal(stateSubscriberCount(), 1);
