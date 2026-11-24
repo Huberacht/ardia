@@ -368,3 +368,18 @@ test("text typed into the editor the press focused, before JS takes the press, o
   expect(searchState().text).toBe("rabbit");
   finish(t.root);
 });
+
+test("rows and the frosted panel load the frame after the sheet goes live, so the first live frame only carries the editor and the solid face", () => {
+  const t = setUp();
+  t.tap();
+  t.flushJS();
+  const live = () => t.host("trayRoot")[0]!;
+  const rows = () => live().findAll((node) => typeof node.type === "function" && (node.type as { name?: string }).name === "TrayRows");
+  expect(rows()).toHaveLength(0);
+  const frosts = () => live().findAll((node) => typeof node.type !== "string" && /Frost/.test((node.type as { displayName?: string; name?: string }).displayName ?? (node.type as { name?: string }).name ?? ""));
+  expect(frosts()).toHaveLength(0);
+  act(() => jest.advanceTimersByTime(20));
+  expect(rows()).toHaveLength(1);
+  expect(live().findAll((node) => node.props.testID === "searchPanelFace" && typeof node.type === "string")).toHaveLength(1);
+  finish(t.root);
+});

@@ -219,6 +219,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const armed = useSharedValue(0);
   const armedNow = useRef(0);
   const revealed = useSharedValue(0);
+  const [furnished, setFurnished] = useState(!bornStandby);
   const revealStyle = useAnimatedStyle(() => {
     const generation = armed.value;
     const early = standbyShownEarly.value;
@@ -281,6 +282,11 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       unprepareStandby(generation);
     };
   }, [standby, origin, incognito, tabId, standbyLayout]);
+  useEffect(() => {
+    if (standby || furnished) return;
+    const frame = requestAnimationFrame(() => setFurnished(true));
+    return () => cancelAnimationFrame(frame);
+  }, [standby, furnished]);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -575,7 +581,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
             trayStyle,
           ]}
         >
-          <SearchPanelFace incognito={incognito} dark={theme.dark} panelRadius={panelRadius} corners={corners} waiting={standby} />
+          <SearchPanelFace incognito={incognito} dark={theme.dark} panelRadius={panelRadius} corners={corners} waiting={standby || !furnished} />
           <View style={[styles.clip, panelCornerStyle(panelRadius, corners), { height: trayHeight }]}>
             <SearchPanelContext.Provider value={arcPanel}>
               <GestureDetector gesture={dismissDrag}>
@@ -583,7 +589,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
                   <TrayField key={fieldKey} closing={closing} standby={standby} reveal={fieldKey === "kept" ? fieldReveal : undefined} />
                 </View>
               </GestureDetector>
-              {standby ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
+              {standby || !furnished ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
             </SearchPanelContext.Provider>
           </View>
         </Animated.View>
@@ -608,7 +614,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
           trayStyle,
         ]}
       >
-        {incognito ? null : <LookFrost source={SURFACES_FROST} variant="sheet" cornerRadius={panelRadius} fill={theme.canvas} style={StyleSheet.absoluteFill} />}
+        {incognito ? null : furnished && !standby ? <LookFrost source={SURFACES_FROST} variant="sheet" cornerRadius={panelRadius} fill={theme.canvas} style={StyleSheet.absoluteFill} /> : <View testID="traySheetSolidFace" pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas, borderRadius: panelRadius }]} />}
         <View style={{ height: trayHeight }}>
           <TrayContentContext.Provider value={measuredRows}>
             <GestureDetector gesture={dismissDrag}>
@@ -616,7 +622,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
                 <TrayField key={fieldKey} closing={closing} standby={standby} reveal={fieldKey === "kept" ? fieldReveal : undefined} />
               </View>
             </GestureDetector>
-            {standby ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
+            {standby || !furnished ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
           </TrayContentContext.Provider>
         </View>
       </Animated.View>
