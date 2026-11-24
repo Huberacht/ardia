@@ -337,9 +337,11 @@ test("an old download re-announced after the arm (a profile loading its history)
   await setup();
   const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/new.zip" });
   stub.emitDownload(download({ id: "history", path: "/Users/me/Downloads/old.zip", state: "finished", startTime: armed.armedAt - 86_400_000 }));
+  stub.emitDownload(download({ id: "just-before", path: "/Users/me/Downloads/before.zip", state: "finished", startTime: armed.armedAt - 1000 }));
+  stub.emitDownload(download({ id: "a-ms-before", path: "/Users/me/Downloads/ms.zip", state: "finished", startTime: Math.floor(armed.armedAt) - 1 }));
   await tick();
-  assert.equal(native.claims.length, 0, "a download that started a day before the arm isn't offered to it");
-  stub.emitDownload(download({ id: "fresh", path: "/Users/me/Downloads/fresh.zip", startTime: armed.armedAt + 50 }));
+  assert.equal(native.claims.length, 0, "a download that started before the arm, even by a second or a millisecond, isn't offered to it");
+  stub.emitDownload(download({ id: "fresh", path: "/Users/me/Downloads/fresh.zip", startTime: Math.floor(armed.armedAt) }));
   await tick();
   assert.deepEqual(native.claims.map(([arm, id]) => [arm, id]), [[armed.arm, "fresh"]]);
 });
@@ -355,6 +357,31 @@ test("a cancelled or failed claimed download releases its native claim and place
   assert.equal(native.placed.length, 0);
   const row = (await ok("files.arms", { arms: [armed.arm] })).items[0];
   assert.equal(row.downloads[0].state, "cancelled");
+});
+
+test("a fast download whose first event with a path is finished goes to the arm, never also to a hooks.json folder rule", async () => {
+  await setup();
+  const { startDownloadHooks, resetDownloadHooksForTests } = await import("./downloadHooks.ts");
+  const { reloadHooks } = await import("./hookRules.ts");
+  stub.configFolder.files.set("hooks.json", JSON.stringify({ hooks: [{ name: "all", on: "download.deciding", folder: "~/Downloads/Sorted" }] }));
+  reloadHooks();
+  resetDownloadHooksForTests();
+  const moves = [];
+  startDownloadHooks({ move: async (path, folder) => (moves.push([path, folder]), { ok: true, path }), approveFolders: () => {} });
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/fast.zip" });
+  stub.emitDownload(download({ id: "fast", path: "", state: "downloading", received: 0 }));
+  stub.emitDownload(download({ id: "fast", path: "/Users/me/Downloads/fast.zip", state: "finished", received: 100 }));
+  for (let i = 0; i < 20 && !native.placed.length; i++) await tick();
+  for (let i = 0; i < 5; i++) await tick();
+  assert.deepEqual(native.placed, [[armed.arm, "fast", "/Users/me/Downloads/fast.zip"]], "the arm placed it");
+  assert.deepEqual(moves, [], "the folder rule never moved it");
+  stub.emitDownload(download({ id: "other", path: "", state: "downloading", received: 0 }));
+  stub.emitDownload(download({ id: "other", path: "/Users/me/Downloads/other.zip", state: "finished", received: 100 }));
+  for (let i = 0; i < 20 && !moves.length; i++) await tick();
+  assert.deepEqual(moves, [["/Users/me/Downloads/other.zip", "~/Downloads/Sorted"]], "positive control: an unarmed download still follows the rule");
+  resetDownloadHooksForTests();
+  stub.configFolder.files.delete("hooks.json");
+  reloadHooks();
 });
 
 test("file methods refuse where the platform can't answer panels", async () => {

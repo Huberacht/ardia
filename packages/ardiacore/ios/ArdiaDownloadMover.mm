@@ -230,6 +230,12 @@ int OpenOwnStaging(int source, NSString *name) {
   if (!downloadId.length || !from.length || !to.length) return;
   os_unfair_lock_lock(&_lock);
   [self lockedRemember:downloadId from:from to:to];
+  if (NSDictionary *record = _records[downloadId]) {
+    NSMutableDictionary *event = [record mutableCopy];
+    event[@"path"] = to;
+    event[@"filename"] = to.lastPathComponent;
+    _records[downloadId] = event;
+  }
   os_unfair_lock_unlock(&_lock);
 }
 

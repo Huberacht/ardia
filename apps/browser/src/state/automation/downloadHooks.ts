@@ -42,6 +42,9 @@ function pushApprovedFolders() {
 
 export const claimDownload = (id: string) => remember(id);
 
+let claimant: ((d: Download) => boolean) | null = null;
+export const setDownloadClaimant = (next: ((d: Download) => boolean) | null) => void (claimant = next);
+
 function remember(id: string) {
   handled.add(id);
   if (handled.size > HANDLED_CAP) handled.delete(handled.values().next().value!);
@@ -76,6 +79,10 @@ const inProgress = new Set<string>();
 const IN_PROGRESS_CAP = 500;
 
 function noteDownloadEvent(d: Download) {
+  if (claimant?.(d)) {
+    inProgress.delete(d.id);
+    return;
+  }
   if (d.state === "downloading") {
     inProgress.add(d.id);
     if (inProgress.size > IN_PROGRESS_CAP) inProgress.delete(inProgress.values().next().value!);
@@ -96,6 +103,7 @@ export function startDownloadHooks(next: DownloadMover) {
 
 export function resetDownloadHooksForTests() {
   mover = null;
+  claimant = null;
   handled.clear();
   inProgress.clear();
   lastApproved = null;

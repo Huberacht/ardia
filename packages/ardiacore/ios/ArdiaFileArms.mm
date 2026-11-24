@@ -1,4 +1,5 @@
 #import "ArdiaHost.h"
+#import "ArdiaArmLifetimes.h"
 #import "ArdiaDownloadMover.h"
 #import "ArdiaDownloadPrompts.h"
 #import "ArdiaFilePaths.h"
@@ -33,6 +34,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *claims;
 @property(nonatomic) NSInteger answered;
 @property(nonatomic) NSTimeInterval lastAnsweredAt;
+@property(nonatomic) NSUInteger pendingHandoffs;
 @end
 
 @implementation ArdiaFileArm
@@ -48,7 +50,6 @@ constexpr NSUInteger kMaxActiveArms = 16;
 constexpr NSUInteger kMaxKeptArms = 64;
 constexpr NSUInteger kMaxUploadPaths = 64;
 constexpr NSTimeInterval kMaxSeconds = 600;
-constexpr NSTimeInterval kKeepEndedSeconds = 600;
 constexpr NSUInteger kMaxIdBytes = 64;
 constexpr int kPlaceTries = 8;
 constexpr NSTimeInterval kUploadRetentionSeconds = 1800;
@@ -107,6 +108,10 @@ void End(ArdiaFileArm *arm, NSString *state, NSString *_Nullable reason, NSMutab
   }
 }
 
+ardia_files::ArmLife LifeOf(ArdiaFileArm *arm) {
+  return {Active(arm), arm.uploadFolder != nil, arm.claims.count, arm.stagingFolders.count, arm.pendingHandoffs, arm.expiresAt, arm.lastAnsweredAt};
+}
+
 NSMutableArray<NSString *> *SweepLocked() {
   NSMutableArray<NSString *> *purge = [NSMutableArray array];
   const NSTimeInterval now = Now();
@@ -119,11 +124,11 @@ NSMutableArray<NSString *> *SweepLocked() {
     }
   }
   NSIndexSet *old = [arms indexesOfObjectsPassingTest:^BOOL(ArdiaFileArm *arm, NSUInteger, BOOL *) {
-    return !Active(arm) && !arm.uploadFolder && !arm.claims.count && now - arm.expiresAt > kKeepEndedSeconds;
+    return ardia_files::MayForgetArm(LifeOf(arm), false, now);
   }];
   [arms removeObjectsAtIndexes:old];
   while (arms.count > kMaxKeptArms) {
-    NSUInteger oldest = [arms indexOfObjectPassingTest:^BOOL(ArdiaFileArm *arm, NSUInteger, BOOL *) { return !Active(arm) && !arm.uploadFolder && !arm.claims.count && !arm.stagingFolders.count; }];
+    NSUInteger oldest = [arms indexOfObjectPassingTest:^BOOL(ArdiaFileArm *arm, NSUInteger, BOOL *) { return ardia_files::MayForgetArm(LifeOf(arm), true, now); }];
     if (oldest == NSNotFound) break;
     [arms removeObjectAtIndex:oldest];
   }
@@ -131,7 +136,10 @@ NSMutableArray<NSString *> *SweepLocked() {
 }
 
 void PurgeAll(NSArray<NSString *> *folders) {
-  for (NSString *folder in folders) Purge(folder);
+  for (NSString *folder in folders) {
+    ardia_files::ForgetCopies(folder);
+    Purge(folder);
+  }
 }
 
 ArdiaFileArm *_Nullable ArmNamed(NSString *armId) {
@@ -230,6 +238,8 @@ NSString *_Nullable PickArm(NSString *kind, ArdiaWindowController *panelWindow) 
 
 NSArray<NSURL *> *_Nullable UploadPicks(NSString *armId, NSOpenPanel *panel) {
   NSMutableArray<NSString *> *purge = [NSMutableArray array];
+  NSString *keep = nil;
+  NSTimeInterval keepUntil = 0;
   NSArray<NSURL *> *urls = Locked([&]() -> NSArray<NSURL *> * {
     ArdiaFileArm *arm = ArmNamed(armId);
     if (!arm || !Active(arm)) return nil;
@@ -246,6 +256,8 @@ NSArray<NSURL *> *_Nullable UploadPicks(NSString *armId, NSOpenPanel *panel) {
     arm.landed = arm.paths;
     arm.answered += 1;
     arm.lastAnsweredAt = Now();
+    keep = arm.uploadFolder;
+    keepUntil = arm.lastAnsweredAt + kUploadRetentionSeconds;
     if (arm.once) {
       arm.state = @"answered";
       arm.expiresAt = Now();
@@ -253,6 +265,7 @@ NSArray<NSURL *> *_Nullable UploadPicks(NSString *armId, NSOpenPanel *panel) {
     return picked;
   });
   PurgeAll(purge);
+  if (keep) ardia_files::KeepCopiesUntil(keep, keepUntil);
   return urls;
 }
 
@@ -266,6 +279,7 @@ NSArray<NSURL *> *_Nullable DownloadPicks(NSString *armId, NSSavePanel *panel) {
     name = arm.folder ? nil : arm.paths.firstObject.lastPathComponent;
     arm.answered += 1;
     arm.lastAnsweredAt = Now();
+    arm.pendingHandoffs += 1;
     if (arm.once) {
       arm.state = @"answered";
       arm.expiresAt = Now();
@@ -279,6 +293,7 @@ NSArray<NSURL *> *_Nullable DownloadPicks(NSString *armId, NSSavePanel *panel) {
   Locked([&] {
     ArdiaFileArm *arm = ArmNamed(armId);
     if (!arm) return;
+    if (arm.pendingHandoffs) arm.pendingHandoffs -= 1;
     if (staging) [arm.stagingFolders addObject:staging];
     else {
       arm.state = @"failed";
@@ -324,9 +339,10 @@ NSArray<NSURL *> *ArmedPanelPicks(NSSavePanel *panel, NSWindow *parent, bool *ha
   ArdiaWindowController *panelWindow = ControllerOf(parent);
   if (!RegularWindow(panelWindow)) return nil;
   NSString *profile = ProfileName(panelWindow.coreWindow.activeProfile);
-  if (!open && !ardia_files::LooksLikeDownloadPicker(ardia_files::AwaitingDownloadTarget(Now(), profile), panel.message)) return nil;
+  if (!open && !ardia_files::LooksLikeDownloadPicker(ardia_files::AwaitingDownloadTarget(Now(), profile), panel.message, panel.accessoryView != nil)) return nil;
   NSString *pick = PickArm(open ? @"upload" : @"download", panelWindow);
   if (!pick) return nil;
+  if (!open && !ardia_files::TakeDownloadTarget(Now(), profile)) return nil;
   *handled = true;
   *armId = pick;
   return open ? UploadPicks(pick, (NSOpenPanel *)panel) : DownloadPicks(pick, panel);

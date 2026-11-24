@@ -7,7 +7,7 @@ import { engineProfile } from "../browser/model";
 import { useBrowser } from "../browser/store";
 import { noteFileArm } from "../telemetry/cliCounts";
 import { consentToken, type ConsentToken } from "../telemetry/client";
-import { claimDownload } from "./downloadHooks";
+import { claimDownload, setDownloadClaimant } from "./downloadHooks";
 import { STOPPED, type SocketCall } from "./socketCatalog";
 import { OpError } from "./workspaceTargets";
 
@@ -18,7 +18,6 @@ export const MAX_ARM_SECONDS = 600;
 export const MAX_ARMS = 16;
 const POLL_MS = 2_000;
 const KEEP_ENDED_MS = 600_000;
-const START_SLACK_MS = 2_000;
 
 const armsFilePanels = () => PLATFORM_FEATURES.silentFilePanels && nativeArmsFilePanels();
 
@@ -116,7 +115,7 @@ function candidates(d: Download): Tracked[] {
   const now = Date.now();
   return [...tracked.values()]
     .filter((t) => t.kind === "download" && !t.cleared && now < t.expiresAt + KEEP_ENDED_MS && !t.before.has(d.id))
-    .filter((t) => typeof d.startTime !== "number" || d.startTime >= t.armedAt - START_SLACK_MS)
+    .filter((t) => typeof d.startTime !== "number" || Math.floor(d.startTime) >= Math.floor(t.armedAt))
     .filter((t) => t.engineProfile === null || (d.profile ?? "") === t.engineProfile)
     .filter((t) => !t.once || !t.downloads.length)
     .sort((a, b) => Number(b.tab !== null) - Number(a.tab !== null) || b.expiresAt - a.expiresAt);
@@ -177,6 +176,11 @@ function noteDownload(d: Download) {
   row.state = d.state;
   releaseArmedDownload(t.id, d.id, d.state);
   noteFileArm("arm_failures", 1, t.consent);
+}
+
+function claimsDownload(d: Download): boolean {
+  noteDownload(d);
+  return byDownload.has(d.id);
 }
 
 function watchTabs() {
@@ -271,7 +275,10 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
     cleared: false,
   });
   noteFileArm(request.kind === "upload" ? "upload_arms" : "download_arms", 1, consent);
-  if (request.kind === "download") downloadsWatched ??= onDownload(noteDownload);
+  if (request.kind === "download") {
+    downloadsWatched ??= onDownload(noteDownload);
+    setDownloadClaimant(claimsDownload);
+  }
   watchTabs();
   startPolling();
   return armView(made.arm);
@@ -330,4 +337,5 @@ export function resetFileArmsForTests() {
   settling.clear();
   tabsWatched?.();
   tabsWatched = null;
+  setDownloadClaimant(null);
 }

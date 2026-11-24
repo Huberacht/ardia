@@ -1,5 +1,6 @@
 #import "../ios/ArdiaFilePaths.h"
 #import "../ios/ArdiaDownloadPrompts.h"
+#import "../ios/ArdiaArmLifetimes.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -246,9 +247,18 @@ static void TestDownloadPickerDetection() {
   CHECK(AwaitingDownloadTarget(1001, @"Work"));
   CHECK(!AwaitingDownloadTarget(1001, @"Home"));
   CHECK(!AwaitingDownloadTarget(1001, nil));
-  CHECK(LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @""));
-  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Home"), @""));
-  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"Export passwords"));
+  CHECK(LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"", false));
+  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Home"), @"", false));
+  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"Export passwords", false));
+  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"", true));
+  CHECK(TakeDownloadTarget(1001, @"Work"));
+  CHECK(!AwaitingDownloadTarget(1001, @"Work"));
+  CHECK(!TakeDownloadTarget(1001, @"Work"));
+  NoteDownloadEvent(@{@"id" : @"a2", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work"}, 1001);
+  CHECK(AwaitingDownloadTarget(1001, @"Work"));
+  CHECK(!TakeDownloadTarget(1001, @"Home"));
+  CHECK(TakeDownloadTarget(1001, @"Work"));
+  NoteDownloadEvent(@{@"id" : @"a2", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a2.zip", @"profile" : @"Work"}, 1001);
   NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a.zip", @"offTheRecord" : @NO, @"profile" : @"Work"}, 1002);
   CHECK(!AwaitingDownloadTarget(1003, @"Work"));
   NoteDownloadEvent(@{@"id" : @"p", @"state" : @"downloading", @"path" : @"", @"offTheRecord" : @YES, @"profile" : @"Work"}, 1004);
@@ -281,6 +291,39 @@ static void TestRemoveIfSame() {
   CHECK(!RemoveIfSame(At(@"remove/none.bin"), info.st_dev, info.st_ino));
 }
 
+static void TestArmLifetimes() {
+  ArmLife waiting = {true, false, 0, 0, 0, 0, 0};
+  CHECK(!MayForgetArm(waiting, true, 10000));
+  ArmLife ended = {false, false, 0, 0, 0, 1000, 900};
+  CHECK(MayForgetArm(ended, true, 1001));
+  CHECK(!MayForgetArm(ended, false, 1001));
+  CHECK(MayForgetArm(ended, false, 1000 + kKeepEndedArmSeconds + 1));
+  ArmLife claimed = {false, false, 1, 0, 0, 0, 0};
+  CHECK(!MayForgetArm(claimed, true, 1e9) && !MayForgetArm(claimed, false, 1e9));
+  ArmLife handingOff = {false, false, 0, 0, 1, 0, 0};
+  CHECK(!MayForgetArm(handingOff, true, 1e9) && !MayForgetArm(handingOff, false, 1e9));
+  ArmLife staged = {false, false, 0, 1, 0, 1000, 1000};
+  CHECK(!MayForgetArm(staged, true, 1000 + 60) && !MayForgetArm(staged, false, 1000 + kKeepEndedArmSeconds + 1));
+  CHECK(MayForgetArm(staged, true, 1000 + kKeepHandoffSeconds + 1) && MayForgetArm(staged, false, 1000 + kKeepHandoffSeconds + 1));
+  ArmLife copies = {false, true, 0, 0, 0, 0, 0};
+  CHECK(!MayForgetArm(copies, true, 1e9));
+
+  NSString *soon = Make(@"copies/soon/0/a.txt", @"a").stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+  NSString *later = Make(@"copies/later/0/b.txt", @"b").stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+  NSString *kept = Make(@"copies/kept/0/c.txt", @"c").stringByDeletingLastPathComponent.stringByDeletingLastPathComponent;
+  const NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+  KeepCopiesUntil(soon, now + 0.2);
+  KeepCopiesUntil(later, now + 0.6);
+  KeepCopiesUntil(kept, now + 0.2);
+  ForgetCopies(kept);
+  usleep(450000);
+  CHECK(!Exists(soon));
+  CHECK(Exists(later));
+  usleep(500000);
+  CHECK(!Exists(later));
+  CHECK(Exists(kept));
+}
+
 int main() {
   @autoreleasepool {
     char base[] = "/tmp/ardia-file-paths-XXXXXX";
@@ -298,6 +341,7 @@ int main() {
     TestNamesKeepWholeCharacters();
     TestDownloadPickerDetection();
     TestRemoveIfSame();
+    TestArmLifetimes();
     [NSFileManager.defaultManager removeItemAtPath:gRoot error:nil];
     if (failures) return 1;
     std::printf("file-paths: ok\n");

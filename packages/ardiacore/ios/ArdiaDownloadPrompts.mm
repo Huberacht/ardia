@@ -36,7 +36,7 @@ void NoteDownloadEvent(NSDictionary *event, NSTimeInterval now) {
   os_unfair_lock_lock(&gLock);
   DropStale(now);
   if (!waiting) [Awaiting() removeObjectForKey:downloadId];
-  else if (!Awaiting()[downloadId] && Awaiting().count < kMaxAwaiting) Awaiting()[downloadId] = @[ @(now), profile ];
+  else if (!Awaiting()[downloadId] && Awaiting().count < kMaxAwaiting) Awaiting()[downloadId] = @[ @(now), profile, @NO ];
   os_unfair_lock_unlock(&gLock);
 }
 
@@ -45,13 +45,28 @@ bool AwaitingDownloadTarget(NSTimeInterval now, NSString *profile) {
   os_unfair_lock_lock(&gLock);
   DropStale(now);
   bool any = false;
-  for (NSArray *entry in Awaiting().objectEnumerator) any = any || [entry[1] isEqualToString:profile];
+  for (NSArray *entry in Awaiting().objectEnumerator) any = any || (![entry[2] boolValue] && [entry[1] isEqualToString:profile]);
   os_unfair_lock_unlock(&gLock);
   return any;
 }
 
-bool LooksLikeDownloadPicker(bool awaitingTarget, NSString *message) {
-  return awaitingTarget && !message.length;
+bool TakeDownloadTarget(NSTimeInterval now, NSString *profile) {
+  if (!profile) return false;
+  os_unfair_lock_lock(&gLock);
+  DropStale(now);
+  NSString *oldest = nil;
+  for (NSString *key in Awaiting()) {
+    NSArray *entry = Awaiting()[key];
+    if ([entry[2] boolValue] || ![entry[1] isEqualToString:profile]) continue;
+    if (!oldest || [entry[0] doubleValue] < [Awaiting()[oldest][0] doubleValue]) oldest = key;
+  }
+  if (oldest) Awaiting()[oldest] = @[ Awaiting()[oldest][0], profile, @YES ];
+  os_unfair_lock_unlock(&gLock);
+  return oldest != nil;
+}
+
+bool LooksLikeDownloadPicker(bool awaitingTarget, NSString *message, bool hasAccessoryView) {
+  return awaitingTarget && !message.length && !hasAccessoryView;
 }
 
 void ForgetDownloadPrompts() {

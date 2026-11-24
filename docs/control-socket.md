@@ -865,7 +865,8 @@ and again natively (`ArdiaFilePaths.mm`).
   link, a pipe or another file after the check can't reach the page.
 - *How long copies stay.* A page may send a chosen file long after choosing it, so copies of an arm that answered a
   chooser stay until the first of: its tab closes, control turns off, 30 minutes pass since that arm last answered
-  (and it no longer waits), or Ardia quits (the next launch removes what's left, before any new arm). An arm that never
+  (a timer set for that deadline removes them, whether or not anything else happens in Ardia meanwhile), or Ardia
+  quits (the next launch removes what's left, before any new arm). An arm that never
   answered drops its copies as soon as it ends (expired, cleared, failed), even when it was reusable (`once: false`):
   what decides is whether it ever answered, not whether it still waits.
 - *Download targets* never exist yet and are never a symbolic link; the folder above is resolved when armed (`/tmp`
@@ -887,7 +888,10 @@ ships without symbols, so the call stack can't name the picker, and Chromium ope
 code (password export, certificate export, DevTools, a page's `showSaveFilePicker`). Ardia counts a save panel as a
 download's only when a download of the profile that panel's window shows is waiting for its target (the engine's
 download event, which names the profile but not the tab, arrived with no path yet, in the last two minutes) and the
-panel carries no message (Chromium's download picker passes no title; password export does). Any other save panel leaves the arm untouched and runs as it would have. A private window, a window Ardia doesn't know, and a free-standing panel are
+panel carries no message and no file-type pop-up (Chromium's download picker passes no title and at most one file
+type, so it gets neither; password export sets a message, and Save Page As offers its save types in a pop-up). Each
+waiting download answers one panel at most: the panel that uses it takes it, so a second save panel in that profile
+(Save Page As for a page that can't be saved complete, which looks the same) can't match the same download again. Any other save panel leaves the arm untouched and runs as it would have. A private window, a window Ardia doesn't know, and a free-standing panel are
 never answered from an arm, and an armed answer is logged without the window's title or the file name. Anything else
 runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. Chromium
 opens a page's chooser on the window that holds all of that window's tabs, so the panel names the window, not the
@@ -921,10 +925,12 @@ chooser) cancels the chooser and ends `failed` with the reason, rather than show
   answered. A path inside any arm's staging folder belongs to that arm alone: the registry checks every arm's staging
   folders before anything else, so another arm asked first refuses it (`stagedForAnother`) rather than taking it as
   an automatic download. Ardia takes the first download in the
-  tab's profile (or any regular profile) that started after the arm (by the download's own start time, so a
-  profile announcing its past downloads as it loads can't take a waiting arm); another tab of that profile starting one at the
+  tab's profile (or any regular profile) that started at or after the moment it was armed (by the download's own
+  start time, to the millisecond and with no slack, so a profile announcing its past downloads as it loads can't
+  take a waiting arm); another tab of that profile starting one at the
   same moment can be the one taken, so arm just before the click. Private downloads are never taken, and a taken
-  download skips the `hooks.json` folder rules. Placing only moves a file a download of that arm claimed.
+  download skips the `hooks.json` folder rules: the folder hook asks the arms first, on every event, so a fast
+  download whose first event with a path is already `finished` goes to the arm alone. Placing only moves a file a download of that arm claimed.
 
 **Telemetry** (counts only, never a path): `cli_socket_calls_files`, `cli_files_upload_arms`,
 `cli_files_download_arms`, `cli_files_uploads_answered`, `cli_files_downloads_placed`, `cli_files_arm_failures`.
