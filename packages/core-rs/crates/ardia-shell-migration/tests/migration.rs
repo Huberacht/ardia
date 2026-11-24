@@ -329,6 +329,29 @@ fn nothing_to_migrate_still_marks_the_profile() {
 }
 
 #[test]
+fn engine_launch_files_are_not_migrated_or_overwritten() {
+    let scratch = Scratch::new("launch-files");
+    let sealer = FakeDpapi::new();
+    let populated = populate(&scratch.0, &sealer);
+    write(
+        &populated.layout.rnw_data.join("launch-guard.json"),
+        b"{\"unfinishedStartsBefore\":3}\n",
+    );
+    write(&populated.layout.rnw_data.join("launch-starts.txt"), b"3\n");
+    write(
+        &populated.layout.webui_data.join("launch-guard.json"),
+        b"{\"unfinishedStartsBefore\":0}\n",
+    );
+    let report = run(&populated.layout, &sealer, &populated.vault);
+    assert_eq!(report.outcome, Outcome::MigratedWithSkips);
+    assert_eq!(
+        fs::read_to_string(populated.layout.webui_data.join("launch-guard.json")).unwrap(),
+        "{\"unfinishedStartsBefore\":0}\n"
+    );
+    assert!(!populated.layout.webui_data.join("launch-starts.txt").exists());
+}
+
+#[test]
 fn credentials_alone_are_migrated() {
     let scratch = Scratch::new("vault-only");
     let sealer = FakeDpapi::new();

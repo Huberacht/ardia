@@ -217,9 +217,14 @@ Stop-Engine
 $rootStillLinked = [bool]((Get-Item -LiteralPath $web -Force -ErrorAction SilentlyContinue).LinkType -eq 'Junction')
 $rootDocsIntact = ((Get-Content -LiteralPath (Join-Path $webReal 'pilot-root-a.json') -Raw) -ceq '{"a":1}') -and ((Get-Content -LiteralPath (Join-Path $webReal 'pilot-root-b.json') -Raw) -ceq '{"b":2}')
 $rootOpened = ($null -ne $rootWindow) -and ($rootWindow -ne [IntPtr]::Zero)
-$rootEngineDocs = @('launch-guard.json' | Where-Object { Test-Path -LiteralPath (Join-Path $webReal $_) -PathType Leaf })
-$rootExpected = 2 + $rootEngineDocs.Count
-Check 'documents-read-under-junction-app-data-root' ($rootLinked -and $rootPilot.ArgvOk -and $rootOpened -and ($rootCount -eq $rootExpected) -and $rootStillLinked -and $rootDocsIntact) "Ardia WebUI is a junction to $webReal (made $rootLinked, still a junction $rootStillLinked); window $rootOpened; bootstrap read $rootCount documents through the junction, expecting the 2 seeded in the target plus the engine's own $($rootEngineDocs -join ', ') ($rootExpected; 0 means the root was refused); seeded documents intact $rootDocsIntact"
+$rootGuardPath = Join-Path $webReal 'launch-guard.json'
+$rootGuardWritten = Test-Path -LiteralPath $rootGuardPath -PathType Leaf
+$rootGuardJson = $false
+if ($rootGuardWritten) {
+  try { $null = (Get-Content -LiteralPath $rootGuardPath -Raw | ConvertFrom-Json); $rootGuardJson = $true } catch {}
+}
+$rootPresent = @('launch-guard.json', 'pilot-root-a.json', 'pilot-root-b.json' | Where-Object { Test-Path -LiteralPath (Join-Path $webReal $_) -PathType Leaf })
+Check 'documents-read-under-junction-app-data-root' ($rootLinked -and $rootPilot.ArgvOk -and $rootOpened -and $rootGuardWritten -and $rootGuardJson -and ($rootPresent.Count -eq 3) -and ($rootCount -eq 3) -and $rootStillLinked -and $rootDocsIntact) "Ardia WebUI is a junction to $webReal (made $rootLinked, still a junction $rootStillLinked); window $rootOpened; launch-guard written $rootGuardWritten (valid JSON $rootGuardJson); present [$($rootPresent -join ', ')]; bootstrap read $rootCount of 3 expected documents through the junction; seeded documents intact $rootDocsIntact"
 Clear-WebUI
 
 $assetUi = Join-Path $run 'asset-ui'

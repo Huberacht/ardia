@@ -228,10 +228,11 @@ $guardPath = Join-Path $Data 'launch-guard.json'
 $guardBefore = Get-Content -LiteralPath $guardPath -Raw -ErrorAction SilentlyContinue
 $guardRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["launch-guard.json"]'
 $guardWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["launch-guard.json", "{\"unfinishedStartsBefore\":99}"]'
+$guardSave = Invoke-HostExpr 'ArdiaShell.saveDocument' '["launch-guard.json", "{\"unfinishedStartsBefore\":99}"]'
 $guardWriteUpper = Invoke-HostExpr 'ArdiaShell.writeDocument' '["LAUNCH-GUARD.JSON", "{}"]'
 $guardRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["Launch-Guard.json"]'
 $guardAfter = Get-Content -LiteralPath $guardPath -Raw -ErrorAction SilentlyContinue
-Check 'documents-launch-guard-read-only' (($null -ne $guardBefore) -and ($guardRead.ok -eq $true) -and ($guardRead.value -ceq $guardBefore) -and (Native-Refusal $guardWrite 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardWriteUpper 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardRemove 'ERR_DOCUMENT_NAME') -and ($guardAfter -ceq $guardBefore)) "read=$(Answer-Text $guardRead) write=$(Answer-Text $guardWrite) upper-case write=$(Answer-Text $guardWriteUpper) remove=$(Answer-Text $guardRemove); file unchanged $($guardAfter -ceq $guardBefore)"
+Check 'documents-launch-guard-read-only' (($null -ne $guardBefore) -and ($guardRead.ok -eq $true) -and ($guardRead.value -ceq $guardBefore) -and (Native-Refusal $guardWrite 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardSave 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardWriteUpper 'ERR_DOCUMENT_NAME') -and (Native-Refusal $guardRemove 'ERR_DOCUMENT_NAME') -and ($guardAfter -ceq $guardBefore)) "read=$(Answer-Text $guardRead) write=$(Answer-Text $guardWrite) save=$(Answer-Text $guardSave) upper-case write=$(Answer-Text $guardWriteUpper) remove=$(Answer-Text $guardRemove); file unchanged $($guardAfter -ceq $guardBefore)"
 
 $linkPath = Join-Path $Data 'escape-link.json'
 cmd /c mklink "$linkPath" "$outsideCanary" | Out-Null

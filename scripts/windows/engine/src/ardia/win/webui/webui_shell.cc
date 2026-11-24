@@ -749,6 +749,7 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     std::optional<base::Value> bootstrap =
         base::JSONReader::Read(bootstrap_json, base::JSON_PARSE_RFC);
     if (!bootstrap || !bootstrap->is_dict()) {
+      CountAssetRead(AssetReadsUnreadable());
       return std::nullopt;
     }
     if (std::optional<base::DictValue> session = ReadSession(documents)) {
@@ -760,8 +761,10 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     bootstrap->GetDict().Set("documents", std::move(bootstrap_documents));
     const std::optional<std::string> json = base::WriteJson(*bootstrap);
     if (!json) {
+      CountAssetRead(AssetReadsUnreadable());
       return std::nullopt;
     }
+    CountAssetRead(AssetReadsServed());
     return BootstrapAssignmentScript(*json) + "\n" +
            ardia::kArdiaHostBootstrap + "\n" + kWindowsCaptionScript;
   }
@@ -782,7 +785,11 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     return std::nullopt;
   }
   const std::optional<std::wstring> file_final = HandleFinalPath(file.get());
-  if (!file_final || !IsStrictlyWithinWinDirectory(*root_final, *file_final)) {
+  if (!file_final) {
+    CountAssetRead(AssetReadsUnreadable());
+    return std::nullopt;
+  }
+  if (!IsStrictlyWithinWinDirectory(*root_final, *file_final)) {
     CountAssetRead(AssetReadsOutsideRoot());
     return std::nullopt;
   }
@@ -792,14 +799,15 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     CountAssetRead(AssetReadsUnreadable());
     return std::nullopt;
   }
-  CountAssetRead(AssetReadsServed());
   if (path == "index.html") {
     const size_t head = contents->find("<head>");
     if (head == std::string::npos) {
+      CountAssetRead(AssetReadsUnreadable());
       return std::nullopt;
     }
     contents->insert(head + 6, "<script src=\"/host-bootstrap.js\"></script>");
   }
+  CountAssetRead(AssetReadsServed());
   return contents;
 }
 
