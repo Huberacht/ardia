@@ -67,7 +67,9 @@ import { showToast } from "../toasts/store";
 import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages";
 import { hideArchiveCard } from "./archiveCard";
 import { tabSwitchCuts } from "./tabSwitch";
-import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, PULL_STAGE, showPulledPage, whenDeckStandby } from "./deckPull";
+import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, PULL_STAGE, showPulledPage, whenDeckStandby } from "./deckPull";
+import { useScreenLayout } from "../app/screenLayout";
+import { dropEarlyStandby } from "../search/standbyReveal";
 import { beginInteraction, cutInteraction, INTERACTION_WINDOW_MS, markNextUiFrame, markTiming } from "../app/interactionPerf";
 import { refreshHiddenDeck, wantDeckStandby } from "./deckStandby";
 import { sendDeckCommand } from "./deckCommands";
@@ -561,6 +563,37 @@ let trackedPull: string | null = null;
 let pullBusySince = 0;
 
 const PULL_STALE_MS = 1500;
+
+function revokePhoneTurnOnUI() {
+  "worklet";
+  deckPull.hitTurn.value += 1;
+  deckPull.target.value = null;
+  deckPull.hit.value = null;
+  deckPull.header.value = null;
+  deckPull.awayId.value = "";
+  pageBarShown.value = 1;
+  pageBodyShown.value = 1;
+  pageBarPreviewShown.value = 0;
+}
+
+export function screenLayoutChanged() {
+  landingFromRest = null;
+  trackedPull = null;
+  heldBarAction = null;
+  committedBarAction = null;
+  endDeckPull();
+  runOnUI(revokePhoneTurnOnUI)();
+  previewPageBar(null);
+  dropEarlyStandby();
+}
+
+let phoneLayout = useScreenLayout.getState().layout.name === "phone";
+useScreenLayout.subscribe((state) => {
+  const phone = state.layout.name === "phone";
+  if (phone === phoneLayout) return;
+  phoneLayout = phone;
+  screenLayoutChanged();
+});
 
 function pullBusyWith(id: string) {
   if (landingFromRest !== id && trackedPull !== id) return false;
