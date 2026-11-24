@@ -353,8 +353,8 @@ function sync() {
   applied = on;
   const consent = consentToken();
   if (!on) {
-    clearFileArms();
     cutOffControlSocket();
+    clearFileArms();
     openConnections.clear();
     generation = null;
     dismissSocketAsks();

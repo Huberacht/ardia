@@ -845,7 +845,7 @@ question), on macOS (`PLATFORM_FEATURES.silentFilePanels`; Linux and Windows ans
 **An arm outlives its connection.** The command arms in one call and clicks in the next, often on a new connection,
 so closing the connection that armed doesn't end an arm. It ends when its time runs out (`seconds`, default 120, at
 most 600), after its one answer when `once` (the default), when its tab closes, at `files.disarm`, and with every
-other arm when control turns off: the app clears the native arms first, before the socket is cut off. At most 16 wait
+other arm when control turns off: the app clears the native arms right after cutting the socket off, in the same synchronous step. At most 16 wait
 at once.
 
 **Paths.** Checked in JS (`localPathProblem`: absolute, no NUL or line break, at most 1,024 bytes, no `.` or `..`)

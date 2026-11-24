@@ -36,7 +36,7 @@ async function setup() {
   native.placed.length = 0;
   native.disarmed.length = 0;
   native.claims.length = 0;
-  native.armDelayMs = 0;
+  native.disarmedAfter.length = 0;
   native.refuse = null;
   native.place = null;
   native.supported = true;
@@ -155,11 +155,14 @@ test("files.disarm clears arms, a closed tab ends its arm, and control off clear
   S().closeTab(tab);
   await tick();
   assert.ok(native.disarmed.some(([ids, purge]) => Array.isArray(ids) && ids.includes(two.arm) && purge), "closing the tab disarms its upload and drops its copies");
+  const callsBefore = stub.controlSocket.calls.length;
+  const disarmsBefore = native.disarmed.length;
   S().updateSettings({ cliControl: false });
+  assert.deepEqual(stub.controlSocket.calls.slice(callsBefore), ["cutOff"], "the cut-off comes first, in the same turn");
+  assert.deepEqual(native.disarmed[disarmsBefore], [null, true], "every native arm is cleared in that same turn");
+  assert.equal(native.disarmedAfter[disarmsBefore], "cutOff", "right after the cut-off");
   for (let i = 0; i < 5; i++) await tick();
   assert.ok(native.disarmed.some(([ids, purge]) => ids === null && purge), "turning control off clears every arm");
-  const cutAt = stub.controlSocket.calls.lastIndexOf("cutOff");
-  assert.equal(stub.controlSocket.calls[cutAt - 1], "disarmFiles", `native arms are cleared just before the socket is cut off: ${stub.controlSocket.calls.slice(-6)}`);
   S().updateSettings({ cliControl: true });
   for (let i = 0; i < 5; i++) await tick();
 });
@@ -167,7 +170,6 @@ test("files.disarm clears arms, a closed tab ends its arm, and control off clear
 test("two upload arms for one window racing each other: the native registry lets exactly one in", async () => {
   const windowId = await setup();
   const tab = tabIn(windowId);
-  native.armDelayMs = 5;
   const before = stub.controlSocket.replies.length;
   const ids = [++nextId, ++nextId];
   for (const [i, id] of ids.entries()) stub.emitControlRequest({ connection: 12, generation: stub.controlSocket.generation, line: JSON.stringify({ id, method: "files.armUpload", params: { tab, paths: [`/tmp/${i}`] } }) });

@@ -521,9 +521,9 @@ export const fileArmsNative = {
   placed: [] as [string, string, string][],
   claims: [] as [string, string, string][],
   disarmed: [] as [string[] | null, boolean][],
+  disarmedAfter: [] as (string | undefined)[],
   refuse: null as null | { reason: string; path?: string },
   place: null as null | ((arm: string, path: string) => Record<string, unknown>),
-  armDelayMs: 0,
   supported: true,
   answerSavePanel(armId: string): string | null {
     const row = fileArmsNative.rows.find((r) => r.id === armId);
@@ -570,7 +570,6 @@ const inStaging = (row: Record<string, unknown>, path: string) => ((row.staging 
 for (const [name, run] of Object.entries({
   armFiles: async (spec: Record<string, unknown>) => {
     fileArmsNative.specs.push(spec);
-    if (fileArmsNative.armDelayMs) await new Promise((resolve) => setTimeout(resolve, fileArmsNative.armDelayMs));
     if (fileArmsNative.refuse) return { ok: false, ...fileArmsNative.refuse };
     const busy = spec.kind === "upload" && fileArmsNative.rows.find((r) => r.kind === "upload" && r.state === "armed" && r.window === spec.window);
     if (busy) return { ok: false, reason: "windowBusy", arm: busy.id };
@@ -584,7 +583,7 @@ for (const [name, run] of Object.entries({
   },
   disarmFiles: (ids: string[] | null, purge: boolean) => {
     fileArmsNative.disarmed.push([ids, purge]);
-    controlSocket.calls.push("disarmFiles");
+    fileArmsNative.disarmedAfter.push(controlSocket.calls.at(-1));
     let cleared = 0;
     for (const row of fileArmsNative.rows) {
       if (row.state !== "armed" || (ids && !ids.includes(row.id as string))) continue;
