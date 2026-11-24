@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { shownPictureGeneration } from "./pictures";
 
 type Size = { width: number; height: number };
 export type WarmFrame = { x: number; y: number; width: number; height: number };
@@ -40,12 +39,20 @@ export function noteViewMoved(id: string, viewId: number, version: number) {
   changed();
 }
 
+const shownGenerations = new Map<string, number>();
+
+export function noteShownPictureGeneration(id: string, generation: number) {
+  if (generation <= (shownGenerations.get(id) ?? 0)) return;
+  shownGenerations.set(id, generation);
+  changed();
+}
+
 export function warmPicture(tab: { id: string; url: string; snapshotFileName: string | null }, window: Size): WarmPicture | null {
   const key = keys.get(tab.id);
   if (!key || key.uri !== tab.snapshotFileName || key.url !== tab.url) return null;
   if (key.window.width !== window.width || key.window.height !== window.height) return null;
   if (movedSince(tab.id, key.viewId, key.view)) return null;
-  if (key.generation !== null && key.generation < shownPictureGeneration(tab.id)) return null;
+  if (key.generation !== null && key.generation < (shownGenerations.get(tab.id) ?? 0)) return null;
   return { uri: key.uri, frame: key.frame };
 }
 
