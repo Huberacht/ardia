@@ -645,6 +645,7 @@ export const TabDeck = memo(function TabDeck() {
     }
     if (path !== "deckCard") setOpeningCard({ id, x: deckLeading(g, index - scroll.value) + g.cardWidth / 2, y: g.cardCenterY, path });
     if (path === "coveringCard") return;
+    if (path === "deckCard") setTimeout(() => prepareHandOver(id), PAGE_MOUNT_AFTER_GROWTH_MS);
     requestAnimationFrame(() => {
       if (openingId.current !== id) return;
       landing.value = true;
