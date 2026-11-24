@@ -165,7 +165,7 @@ function SpacePages({ spaces, current, showsTiles, dark, onChoose, onClose }: { 
     <>
       <View style={styles.pages} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
         {width > 0 ? (
-          <FlatList
+          <FlatList overScrollMode="never"
             ref={pager}
             testID="duoSidebarPager"
             data={spaces}
@@ -209,7 +209,7 @@ function SpaceList({ space, isCurrent, showsTiles, dark, onClose }: { space: Syn
   const selected = useSelectedTab();
   const tiles = showsTiles ? (space?.pinned.tiles ?? []) : [];
   return (
-    <ScrollView testID="duoSidebarList" style={styles.pages} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+    <ScrollView bounces={false} overScrollMode="never" testID="duoSidebarList" style={styles.pages} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
       {tiles.length && space ? <SidebarTiles tiles={tiles} profileId={space.syncId} dark={dark} onClose={onClose} /> : null}
       <Text accessibilityRole="header" style={[font.subheadline, styles.heading, { color: roles.secondaryLabel }]}>
         Today

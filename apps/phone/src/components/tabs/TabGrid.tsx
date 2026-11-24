@@ -68,7 +68,7 @@ export function TabGrid({ tabs, selectedId, geometry: g, reduceMotion, shown = t
   const leave = FadeOut.duration(tabsMotion.fade);
   return (
     <FadeView testID="tabGrid" top={{ length: tabGridLayout.topFade }} style={[styles.viewport, { top: viewportTop }]}>
-      <ScrollView
+      <ScrollView bounces={false} overScrollMode="never"
         testID="tabGridScroll"
         ref={scroll}
         contentOffset={{ x: 0, y: startOffset }}

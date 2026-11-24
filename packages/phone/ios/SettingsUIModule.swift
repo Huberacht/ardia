@@ -4,6 +4,7 @@ import ExpoModulesCore
 import ExpoUI
 import Observation
 import SwiftUI
+import UIKit
 
 enum SettingsTintChoice {
   static let swatch = "swatch"
@@ -474,9 +475,76 @@ struct ContentMarginsModifier: ViewModifier, Record {
   }
 }
 
-struct BouncesOnlyWhenScrollableModifier: ViewModifier, Record {
+struct NeverBouncesModifier: ViewModifier, Record {
   func body(content: Content) -> some View {
-    content.scrollBounceBehavior(.basedOnSize)
+    content.scrollBounceBehavior(.basedOnSize).background(ScrollBounceOff())
+  }
+}
+
+struct ScrollBounceOff: UIViewRepresentable {
+  func makeUIView(context: Context) -> ScrollBounceOffView { ScrollBounceOffView() }
+  func updateUIView(_ view: ScrollBounceOffView, context: Context) { view.apply() }
+}
+
+final class ScrollBounceOffView: UIView {
+  private weak var target: UIScrollView?
+  private var watch: NSKeyValueObservation?
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    isUserInteractionEnabled = false
+    isAccessibilityElement = false
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    apply()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    apply()
+  }
+
+  func apply() {
+    guard window != nil else { return }
+    if target == nil, let found = findTarget() {
+      target = found
+      watch = found.observe(\.contentSize, options: []) { scroll, _ in
+        MainActor.assumeIsolated { ScrollBounceOffView.turnOff(scroll) }
+      }
+    }
+    if let target { Self.turnOff(target) }
+  }
+
+  static func turnOff(_ scroll: UIScrollView) {
+    if scroll.bouncesVertically { scroll.bouncesVertically = false }
+    if scroll.bouncesHorizontally { scroll.bouncesHorizontally = false }
+    if scroll.alwaysBounceVertical { scroll.alwaysBounceVertical = false }
+    if scroll.alwaysBounceHorizontal { scroll.alwaysBounceHorizontal = false }
+  }
+
+  private func findTarget() -> UIScrollView? {
+    guard let window else { return nil }
+    let mine = convert(bounds, to: window)
+    var ancestor = superview
+    for _ in 0..<ScrollBounceTarget.ancestorsSearched {
+      guard let root = ancestor else { return nil }
+      var queue: [UIView] = [root]
+      var index = 0
+      while index < queue.count, index < ScrollBounceTarget.viewsSearched {
+        let view = queue[index]
+        index += 1
+        if let scroll = view as? UIScrollView, scroll.refreshControl == nil, ScrollBounceTarget.matches(className: NSStringFromClass(type(of: scroll)), frame: scroll.convert(scroll.bounds, to: window), mine: mine) {
+          return scroll
+        }
+        queue.append(contentsOf: view.subviews)
+      }
+      ancestor = root.superview
+    }
+    return nil
   }
 }
 
@@ -494,7 +562,7 @@ struct ProfileLookModifier: ViewModifier, Record {
 }
 
 enum SettingsUIModifiers {
-  static let names = ["ardia.navigationBarBackButtonHidden", "ardia.minListRowHeight", "ardia.spaceBackdrop", "ardia.settingsChrome", "ardia.settingsPage", "ardia.chromeSurface", "ardia.settingsSwitchStyle", "ardia.pressableStyle", "ardia.legibleInk", "ardia.profileLook", "ardia.contentMargins", "ardia.bouncesOnlyWhenScrollable", "ardia.accessibilityFocusRequest", "ardia.widthChange"]
+  static let names = ["ardia.navigationBarBackButtonHidden", "ardia.minListRowHeight", "ardia.spaceBackdrop", "ardia.settingsChrome", "ardia.settingsPage", "ardia.chromeSurface", "ardia.settingsSwitchStyle", "ardia.pressableStyle", "ardia.legibleInk", "ardia.profileLook", "ardia.contentMargins", "ardia.neverBounces", "ardia.accessibilityFocusRequest", "ardia.widthChange"]
 
   static func register() {
     ViewModifierRegistry.register("ardia.navigationBarBackButtonHidden") { params, context, _ in try BackButtonHiddenModifier(from: params, appContext: context) }
@@ -508,7 +576,7 @@ enum SettingsUIModifiers {
     ViewModifierRegistry.register("ardia.legibleInk") { params, context, _ in try LegibleInkModifier(from: params, appContext: context) }
     ViewModifierRegistry.register("ardia.profileLook") { params, context, _ in try ProfileLookModifier(from: params, appContext: context) }
     ViewModifierRegistry.register("ardia.contentMargins") { params, context, _ in try ContentMarginsModifier(from: params, appContext: context) }
-    ViewModifierRegistry.register("ardia.bouncesOnlyWhenScrollable") { params, context, _ in try BouncesOnlyWhenScrollableModifier(from: params, appContext: context) }
+    ViewModifierRegistry.register("ardia.neverBounces") { params, context, _ in try NeverBouncesModifier(from: params, appContext: context) }
     ViewModifierRegistry.register("ardia.accessibilityFocusRequest") { params, context, _ in try AccessibilityFocusRequestModifier(from: params, appContext: context) }
     ViewModifierRegistry.register("ardia.widthChange") { params, context, dispatcher in try WidthChangeModifier(from: params, appContext: context, eventDispatcher: dispatcher) }
   }
@@ -531,7 +599,7 @@ public final class SettingsUIModule: Module {
 
     OnCreate {
       SettingsUIModifiers.register()
-      DispatchQueue.main.async { MainActor.assumeIsolated { ScrollBounceGuard.install() } }
+      DispatchQueue.main.async { MainActor.assumeIsolated { ScrollBounceProbe.startIfAsked() } }
     }
 
     OnDestroy {
