@@ -88,6 +88,7 @@ source_set("win") {
     "//ardia/desktop",
     "//third_party/icu",
     "//components/input",
+    "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//ui/display",
     "//ui/views/controls/webview",

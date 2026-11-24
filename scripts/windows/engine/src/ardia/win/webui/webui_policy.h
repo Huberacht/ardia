@@ -305,6 +305,7 @@ struct StartupMigrationPolicyInput {
   bool has_migrate_switch = false;
   bool has_no_migrate_switch = false;
   bool has_custom_data_dir = false;
+  bool has_migrate_rnw_data = false;
 };
 
 inline constexpr bool ShouldRunStartupMigration(
@@ -312,19 +313,28 @@ inline constexpr bool ShouldRunStartupMigration(
   if (input.has_no_migrate_switch) {
     return false;
   }
-  if (input.has_migrate_switch) {
-    return true;
+  if (input.has_custom_data_dir) {
+    return input.has_migrate_switch && input.has_migrate_rnw_data;
   }
-  return !input.has_custom_data_dir;
+  return true;
 }
 
-inline std::vector<std::wstring> BuildStartupMigrationArguments(
+inline std::optional<std::vector<std::wstring>> BuildStartupMigrationArguments(
+    bool has_custom_data_dir,
     const std::wstring& rnw_data_dir,
     const std::wstring& webui_data_dir,
     bool test_instance) {
+  const bool has_rnw = !rnw_data_dir.empty();
+  const bool has_webui = !webui_data_dir.empty();
+  if (has_custom_data_dir && (!has_rnw || !has_webui)) {
+    return std::nullopt;
+  }
+  if (has_rnw != has_webui) {
+    return std::nullopt;
+  }
   std::vector<std::wstring> args;
   args.push_back(L"--from-rnw");
-  if (!rnw_data_dir.empty() && !webui_data_dir.empty()) {
+  if (has_rnw) {
     args.push_back(L"--rnw-data");
     args.push_back(rnw_data_dir);
     args.push_back(L"--webui-data");
@@ -334,6 +344,26 @@ inline std::vector<std::wstring> BuildStartupMigrationArguments(
     args.push_back(L"--test-instance");
   }
   return args;
+}
+
+inline constexpr bool ValidWinRenameLeafName(std::wstring_view name) {
+  if (name.empty() || name.size() > kWindowsDocumentNameLimit ||
+      name == L"." || name == L"..") {
+    return false;
+  }
+  for (const wchar_t c : name) {
+    if (c == L'\\' || c == L'/' || c == L':' || c == L'\0') {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline constexpr size_t WinFileRenameInfoBufferBytes(size_t header_offset,
+                                                     size_t struct_size,
+                                                     size_t name_utf16_units) {
+  const size_t required = header_offset + name_utf16_units * 2;
+  return required > struct_size ? required : struct_size;
 }
 
 inline std::wstring QuoteWinCommandArg(std::wstring_view arg) {

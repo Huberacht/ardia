@@ -194,6 +194,26 @@ $docRemoved = Invoke-HostExpr 'ArdiaShell.removeDocument' '["pilot-roundtrip.jso
 $docGone = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
 Check 'documents-valid-roundtrip' (($docAbsent.ok -eq $true) -and ($null -eq $docAbsent.r) -and ($docWritten.ok -eq $true) -and ($docRead.ok -eq $true) -and ($docRead.r -eq '{"ok":true}') -and ($docDisk -eq '{"ok":true}') -and ($docRemoved.ok -eq $true) -and ($docGone.ok -eq $true) -and ($null -eq $docGone.r) -and (-not (Test-Path -LiteralPath (Join-Path $Data 'pilot-roundtrip.json')))) "absent=$($docAbsent.r), read=$($docRead.r), gone=$($docGone.r)"
 
+$telemetryBadCases = @(
+  '[]',
+  '["{}"]',
+  '["{}", "ak_app_0123456789abcdef01234567", "extra"]',
+  '[123, "ak_app_0123456789abcdef01234567"]',
+  '["{}", 123]',
+  '["", "ak_app_0123456789abcdef01234567"]',
+  '["not-json", "ak_app_0123456789abcdef01234567"]',
+  '["{}", "bad_key"]',
+  '["{}", "ak_app_0123456789abcdef01234567\r\nX-Injected: 1"]',
+  '["{" + "a".repeat(524289) + "}", "ak_app_0123456789abcdef01234567"]'
+)
+$telemetryUnrefused = @()
+foreach ($caseExpr in $telemetryBadCases) {
+  $ans = Invoke-HostExpr 'ArdiaTelemetry.post' $caseExpr
+  if ($ans.ok -ne $false) { $telemetryUnrefused += $caseExpr }
+}
+$telemetryCap = Cdp-Eval 'Boolean(globalThis.__ardiaBootstrap && Array.isArray(globalThis.__ardiaBootstrap.capabilities) && globalThis.__ardiaBootstrap.capabilities.includes("ArdiaTelemetry.post"))'
+Check 'telemetry-refuses-invalid-requests' (($telemetryCap -eq 'True') -and ($telemetryUnrefused.Count -eq 0)) "advertised=$telemetryCap; unrefused=$($telemetryUnrefused -join '; ')"
+
 Stop-Engine
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\bridge-results.json"
 Remove-PilotRun $RunRoot

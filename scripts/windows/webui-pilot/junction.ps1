@@ -205,9 +205,10 @@ Clear-WebUI
 $assetUi = Join-Path $run 'asset-ui'
 $assetSecretDir = Join-Path $elsewhere 'asset-secret'
 New-Item -ItemType Directory -Force $assetSecretDir | Out-Null
-Set-Content -LiteralPath (Join-Path $assetSecretDir 'secret.json') '{"secret":"escaped"}' -NoNewline
+$pngBytes = [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=')
+[System.IO.File]::WriteAllBytes((Join-Path $assetSecretDir 'secret.png'), $pngBytes)
 Copy-Item -LiteralPath (Join-Path $App 'ardia-ui') -Destination $assetUi -Recurse
-Set-Content -LiteralPath (Join-Path $assetUi 'control.json') '{"ok":true}' -NoNewline
+[System.IO.File]::WriteAllBytes((Join-Path $assetUi 'control.png'), $pngBytes)
 $assetLinkOk = Link junction (Join-Path $assetUi 'escape') $assetSecretDir
 $assetData = Join-Path $run 'asset-data'
 New-Item -ItemType Directory -Force $assetData | Out-Null
@@ -220,14 +221,15 @@ try {
 } catch {
   Log "asset containment shell did not become ready: $($_.Exception.Message)"
 }
-$controlFetch = $null
-$escapeFetch = $null
+$controlLoad = $null
+$escapeLoad = $null
 if ($assetReady) {
-  $controlFetch = Cdp-Eval "fetch('/control.json').then(async r => JSON.stringify({ ok: r.ok, status: r.status, text: await r.text() }), e => JSON.stringify({ ok: false, err: String(e) }))" | ConvertFrom-Json
-  $escapeFetch = Cdp-Eval "fetch('/escape/secret.json').then(async r => JSON.stringify({ ok: r.ok, status: r.status, text: await r.text() }), e => JSON.stringify({ ok: false, err: String(e) }))" | ConvertFrom-Json
+  $imgProbe = "src => new Promise(resolve => { const img = new Image(); img.onload = () => resolve(JSON.stringify({ ok: true, width: img.naturalWidth, height: img.naturalHeight })); img.onerror = () => resolve(JSON.stringify({ ok: false, width: img.naturalWidth, height: img.naturalHeight })); img.src = src; })"
+  $controlLoad = Cdp-Eval "($imgProbe)('/control.png')" | ConvertFrom-Json
+  $escapeLoad = Cdp-Eval "($imgProbe)('/escape/secret.png')" | ConvertFrom-Json
 }
 Stop-Engine
-Check 'asset-junction-escape-refused' ($assetLinkOk -and $assetReady -and $controlFetch.ok -and ($controlFetch.text -eq '{"ok":true}') -and (-not $escapeFetch.ok) -and ("$($escapeFetch.text)" -notmatch 'escaped')) "control=$($controlFetch | ConvertTo-Json -Compress); escape=$($escapeFetch | ConvertTo-Json -Compress)"
+Check 'asset-junction-escape-refused' ($assetLinkOk -and $assetReady -and $controlLoad.ok -and ($controlLoad.width -eq 1) -and ($controlLoad.height -eq 1) -and (-not $escapeLoad.ok) -and ($escapeLoad.width -eq 0)) "control=$($controlLoad | ConvertTo-Json -Compress); escape=$($escapeLoad | ConvertTo-Json -Compress)"
 
 cmd /c rmdir "$rn\User Data" | Out-Null
 Move-Item -LiteralPath (Join-Path $elsewhere 'profile') -Destination "$rn\User Data"

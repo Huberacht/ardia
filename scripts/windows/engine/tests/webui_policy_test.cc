@@ -1,3 +1,4 @@
+#include "ardia/desktop/ac_desktop_telemetry_policy.h"
 #include "ardia/win/webui/webui_policy.h"
 
 #include <cassert>
@@ -162,33 +163,50 @@ void TestCanonicalPathContainment() {
 }
 
 void TestStartupMigrationPolicy() {
-  assert(ShouldRunStartupMigration({false, false, false}));
-  assert(!ShouldRunStartupMigration({false, false, true}));
-  assert(ShouldRunStartupMigration({true, false, false}));
-  assert(ShouldRunStartupMigration({true, false, true}));
-  assert(!ShouldRunStartupMigration({false, true, false}));
-  assert(!ShouldRunStartupMigration({true, true, false}));
-  assert(!ShouldRunStartupMigration({true, true, true}));
+  assert(ShouldRunStartupMigration({false, false, false, false}));
+  assert(ShouldRunStartupMigration({true, false, false, false}));
+  assert(ShouldRunStartupMigration({false, false, false, true}));
+  assert(!ShouldRunStartupMigration({false, false, true, false}));
+  assert(!ShouldRunStartupMigration({true, false, true, false}));
+  assert(!ShouldRunStartupMigration({false, false, true, true}));
+  assert(ShouldRunStartupMigration({true, false, true, true}));
+  assert(!ShouldRunStartupMigration({false, true, false, false}));
+  assert(!ShouldRunStartupMigration({true, true, false, false}));
+  assert(!ShouldRunStartupMigration({true, true, true, true}));
 
-  const std::vector<std::wstring> standard_args =
-      BuildStartupMigrationArguments(L"", L"", false);
-  assert(standard_args == std::vector<std::wstring>({L"--from-rnw"}));
+  const std::optional<std::vector<std::wstring>> standard_args =
+      BuildStartupMigrationArguments(false, L"", L"", false);
+  assert(standard_args.has_value());
+  assert(*standard_args == std::vector<std::wstring>({L"--from-rnw"}));
 
-  const std::vector<std::wstring> test_args =
-      BuildStartupMigrationArguments(L"", L"", true);
-  assert(test_args ==
+  const std::optional<std::vector<std::wstring>> test_args =
+      BuildStartupMigrationArguments(false, L"", L"", true);
+  assert(test_args.has_value());
+  assert(*test_args ==
          std::vector<std::wstring>({L"--from-rnw", L"--test-instance"}));
 
-  const std::vector<std::wstring> custom_args =
-      BuildStartupMigrationArguments(L"C:\\rnw data", L"C:\\webui data", true);
-  assert(custom_args == std::vector<std::wstring>({
-                            L"--from-rnw",
-                            L"--rnw-data",
-                            L"C:\\rnw data",
-                            L"--webui-data",
-                            L"C:\\webui data",
-                            L"--test-instance",
-                        }));
+  assert(!BuildStartupMigrationArguments(true, L"", L"", false).has_value());
+  assert(!BuildStartupMigrationArguments(true, L"", L"C:\\webui", false)
+              .has_value());
+  assert(!BuildStartupMigrationArguments(true, L"C:\\rnw", L"", false)
+              .has_value());
+  assert(!BuildStartupMigrationArguments(false, L"C:\\rnw", L"", false)
+              .has_value());
+  assert(!BuildStartupMigrationArguments(false, L"", L"C:\\webui", false)
+              .has_value());
+
+  const std::optional<std::vector<std::wstring>> custom_args =
+      BuildStartupMigrationArguments(true, L"C:\\rnw data", L"C:\\webui data",
+                                     true);
+  assert(custom_args.has_value());
+  assert(*custom_args == std::vector<std::wstring>({
+                             L"--from-rnw",
+                             L"--rnw-data",
+                             L"C:\\rnw data",
+                             L"--webui-data",
+                             L"C:\\webui data",
+                             L"--test-instance",
+                         }));
 
   assert(QuoteWinCommandArg(L"--from-rnw") == L"--from-rnw");
   assert(QuoteWinCommandArg(L"C:\\Program Files\\Ardia\\bin.exe") ==
@@ -197,10 +215,54 @@ void TestStartupMigrationPolicy() {
          L"\"C:\\dir with space\\\\\"");
   assert(QuoteWinCommandArg(L"") == L"\"\"");
   assert(BuildWinCommandLine(L"C:\\Program Files\\Ardia\\ardia-webui-migrate.exe",
-                             custom_args) ==
+                             *custom_args) ==
          L"\"C:\\Program Files\\Ardia\\ardia-webui-migrate.exe\" --from-rnw "
          L"--rnw-data \"C:\\rnw data\" --webui-data \"C:\\webui data\" "
          L"--test-instance");
+}
+
+void TestWinRenameHelpers() {
+  assert(ValidWinRenameLeafName(L"telemetry.json"));
+  assert(ValidWinRenameLeafName(L"a"));
+  assert(!ValidWinRenameLeafName(L""));
+  assert(!ValidWinRenameLeafName(L"."));
+  assert(!ValidWinRenameLeafName(L".."));
+  assert(!ValidWinRenameLeafName(L"a\\b.json"));
+  assert(!ValidWinRenameLeafName(L"a/b.json"));
+  assert(!ValidWinRenameLeafName(L"a:b.json"));
+  assert(!ValidWinRenameLeafName(std::wstring_view(L"a\0b", 3)));
+  assert(!ValidWinRenameLeafName(
+      std::wstring(kWindowsDocumentNameLimit + 1, L'a')));
+
+  assert(WinFileRenameInfoBufferBytes(20, 24, 1) == 24);
+  assert(WinFileRenameInfoBufferBytes(20, 24, 2) == 24);
+  assert(WinFileRenameInfoBufferBytes(20, 24, 3) == 26);
+  assert(WinFileRenameInfoBufferBytes(20, 24, 14) == 48);
+}
+
+void TestDesktopTelemetryPolicy() {
+  namespace telemetry = ardia::desktop_telemetry_policy;
+  const std::string valid_key = "ak_app_0123456789abcdef01234567";
+  assert(telemetry::IngestKeyAcceptable(valid_key));
+  assert(!telemetry::IngestKeyAcceptable(""));
+  assert(!telemetry::IngestKeyAcceptable("bad_key"));
+  assert(!telemetry::IngestKeyAcceptable("ak_app_0123456789ABCDEF01234567"));
+  assert(!telemetry::IngestKeyAcceptable(valid_key + "\r\nX-Injected: 1"));
+  assert(telemetry::BodyAcceptable("{\"resourceLogs\":[]}"));
+  assert(!telemetry::BodyAcceptable(""));
+  assert(!telemetry::BodyAcceptable("[]"));
+  assert(!telemetry::BodyAcceptable("{" + std::string(telemetry::kMaxBodyBytes, 'a')));
+  assert(telemetry::PostAcceptable("{\"ok\":true}", valid_key));
+  assert(!telemetry::PostAcceptable("not-json", valid_key));
+  assert(!telemetry::PostAcceptable("{}", "invalid"));
+  assert(telemetry::AdmitPost(0));
+  assert(telemetry::AdmitPost(telemetry::kMaxInFlight - 1));
+  assert(!telemetry::AdmitPost(telemetry::kMaxInFlight));
+  assert(!telemetry::AdmitPost(-1));
+  assert(telemetry::ReportedStatus(true, 200) == 200);
+  assert(telemetry::ReportedStatus(true, 503) == 503);
+  assert(telemetry::ReportedStatus(true, 302) == 0);
+  assert(telemetry::ReportedStatus(false, 200) == 0);
 }
 
 void TestMaximizeButtonStateMachine() {
@@ -244,6 +306,8 @@ int main() {
   TestDocumentNames();
   TestCanonicalPathContainment();
   TestStartupMigrationPolicy();
+  TestWinRenameHelpers();
+  TestDesktopTelemetryPolicy();
   TestMaximizeButtonStateMachine();
   std::cout << "webui_policy_test: all assertions passed\n";
   return 0;

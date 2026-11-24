@@ -128,6 +128,9 @@ bool ShouldRunWebUIStartupMigration(const base::CommandLine& command_line,
       .has_migrate_switch = command_line.HasSwitch(kMigrateFromRnwSwitch),
       .has_no_migrate_switch = command_line.HasSwitch(kNoMigrateSwitch),
       .has_custom_data_dir = !Trimmed(ardia_data_dir_env).empty(),
+      .has_migrate_rnw_data =
+          !Trimmed(command_line.GetSwitchValueNative(kMigrateRnwDataSwitch))
+               .empty(),
   });
 }
 
@@ -138,7 +141,17 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
   }
   checked = true;
   const std::wstring env_data_dir = ReadEnv(L"ARDIA_DATA_DIR");
+  const bool has_custom_data_dir = !Trimmed(env_data_dir).empty();
+  const std::wstring rnw_data_dir =
+      Trimmed(command_line.GetSwitchValueNative(kMigrateRnwDataSwitch));
   if (!ShouldRunWebUIStartupMigration(command_line, env_data_dir)) {
+    if (!command_line.HasSwitch(kNoMigrateSwitch) &&
+        command_line.HasSwitch(kMigrateFromRnwSwitch) && has_custom_data_dir &&
+        rnw_data_dir.empty()) {
+      LOG(WARNING) << "Ardia WebUI shell: startup migration skipped "
+                      "(ARDIA_DATA_DIR requires --ardia-migrate-rnw-data)";
+      NoteForTest("webui shell: startup migration skipped (missing rnw-data)");
+    }
     return;
   }
   base::FilePath exe_dir;
@@ -159,13 +172,18 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
     NoteForTest("webui shell: startup migrator refused");
     return;
   }
-  const std::wstring rnw_data_dir =
-      Trimmed(command_line.GetSwitchValueNative(kMigrateRnwDataSwitch));
   const std::wstring webui_data_dir = Trimmed(AppDataDirectory());
-  const std::vector<std::wstring> args = BuildStartupMigrationArguments(
-      rnw_data_dir, rnw_data_dir.empty() ? std::wstring() : webui_data_dir,
-      ardiacore::TestInstance());
-  std::wstring command_text = BuildWinCommandLine(binary.value(), args);
+  const std::optional<std::vector<std::wstring>> args =
+      BuildStartupMigrationArguments(
+          has_custom_data_dir, rnw_data_dir,
+          rnw_data_dir.empty() ? std::wstring() : webui_data_dir,
+          ardiacore::TestInstance());
+  if (!args) {
+    LOG(WARNING) << "Ardia WebUI shell: startup migration skipped (incomplete migration paths)";
+    NoteForTest("webui shell: startup migration skipped (incomplete paths)");
+    return;
+  }
+  std::wstring command_text = BuildWinCommandLine(binary.value(), *args);
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   PROCESS_INFORMATION process{};
