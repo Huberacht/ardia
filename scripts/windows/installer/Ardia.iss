@@ -1,3 +1,14 @@
+#ifndef Shell
+  #define Shell "rnw"
+#endif
+#if Shell == "webui"
+  #define LaunchSwitch "--ardia-shell=webui"
+  #define OpenSuffix " --ardia-shell=webui"
+#else
+  #define LaunchSwitch ""
+  #define OpenSuffix ""
+#endif
+
 [Setup]
 AppId={{47A92F18-32B0-4548-A1EF-72C217FE1836}
 AppName=Ardia
@@ -33,6 +44,12 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "{#Source}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#Icon}"; DestDir: "{app}"; DestName: "Ardia.ico"; Flags: ignoreversion
 
+#if Shell != "webui"
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\ardia-ui"
+Type: files; Name: "{app}\ardia-webui-migrate.exe"
+
+#endif
 [Dirs]
 Name: "{localappdata}\Ardia\User Data"
 
@@ -49,7 +66,7 @@ Root: HKCU; Subkey: "Software\Classes\ArdiaHTM\Application"; ValueType: string; 
 Root: HKCU; Subkey: "Software\Classes\ArdiaHTM\Application"; ValueType: string; ValueName: "ApplicationCompany"; ValueData: "Ardia"
 Root: HKCU; Subkey: "Software\Classes\ArdiaHTM\Application"; ValueType: string; ValueName: "AppUserModelId"; ValueData: "Ardia.Browser"
 Root: HKCU; Subkey: "Software\Classes\ArdiaHTM\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Ardia.exe,0"
-Root: HKCU; Subkey: "Software\Classes\ArdiaHTM\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Ardia.exe"" --single-argument %1"
+Root: HKCU; Subkey: "Software\Classes\ArdiaHTM\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Ardia.exe""{#OpenSuffix} --single-argument %1"
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia"; ValueType: string; ValueName: ""; ValueData: "Ardia"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Ardia"
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: "{app}\Ardia.exe,0"
@@ -65,7 +82,7 @@ Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\Capabilities\Start
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\Capabilities\URLAssociations"; ValueType: string; ValueName: "http"; ValueData: "ArdiaHTM"
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\Capabilities\URLAssociations"; ValueType: string; ValueName: "https"; ValueData: "ArdiaHTM"
 Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\Ardia.exe,0"
-Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Ardia.exe"""
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\Ardia\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Ardia.exe""{#OpenSuffix}"
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Ardia"; ValueData: "Software\Clients\StartMenuInternet\Ardia\Capabilities"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\.htm\OpenWithProgids"; ValueType: string; ValueName: "ArdiaHTM"; ValueData: ""; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Classes\.html\OpenWithProgids"; ValueType: string; ValueName: "ArdiaHTM"; ValueData: ""; Flags: uninsdeletevalue
@@ -76,12 +93,12 @@ Root: HKCU; Subkey: "Software\Classes\.xht\OpenWithProgids"; ValueType: string; 
 Root: HKCU; Subkey: "Software\Classes\.xhtml\OpenWithProgids"; ValueType: string; ValueName: "ArdiaHTM"; ValueData: ""; Flags: uninsdeletevalue
 
 [Icons]
-Name: "{autoprograms}\Ardia"; Filename: "{app}\Ardia.exe"; IconFilename: "{app}\Ardia.ico"; AppUserModelID: "Ardia.Browser"
-Name: "{autodesktop}\Ardia"; Filename: "{app}\Ardia.exe"; IconFilename: "{app}\Ardia.ico"; AppUserModelID: "Ardia.Browser"; Tasks: desktopicon
+Name: "{autoprograms}\Ardia"; Filename: "{app}\Ardia.exe"; Parameters: "{#LaunchSwitch}"; IconFilename: "{app}\Ardia.ico"; AppUserModelID: "Ardia.Browser"
+Name: "{autodesktop}\Ardia"; Filename: "{app}\Ardia.exe"; Parameters: "{#LaunchSwitch}"; IconFilename: "{app}\Ardia.ico"; AppUserModelID: "Ardia.Browser"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Ardia.exe"; Description: "Open Ardia"; Flags: nowait postinstall skipifsilent
-Filename: "{app}\Ardia.exe"; Flags: nowait skipifnotsilent; Check: RelaunchAsked
+Filename: "{app}\Ardia.exe"; Parameters: "{#LaunchSwitch}"; Description: "Open Ardia"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Ardia.exe"; Parameters: "{#LaunchSwitch}"; Flags: nowait skipifnotsilent; Check: RelaunchAsked
 
 [Code]
 function CreateFile(Name: String; Access, Share, Security, Disposition, Flags, Template: Cardinal): Cardinal;
@@ -125,3 +142,43 @@ begin
     Waited := Waited + 250;
   end;
 end;
+
+#if Shell == "webui"
+procedure RemoveReactNativeShell;
+var
+  Folder: String;
+  Found: TFindRec;
+  Names: TStringList;
+  I: Integer;
+begin
+  Folder := ExpandConstant('{app}');
+  if not FileExists(Folder + '\ArdiaApp.dll') then Exit;
+  Names := TStringList.Create;
+  try
+    if FindFirst(Folder + '\*', Found) then
+    try
+      repeat
+        if (Found.Name <> '.') and (Found.Name <> '..') and (CompareText(Copy(Found.Name, 1, 5), 'unins') <> 0) then
+          Names.Add(Found.Name);
+      until not FindNext(Found);
+    finally
+      FindClose(Found);
+    end;
+    for I := 0 to Names.Count - 1 do
+    begin
+      if DirExists(Folder + '\' + Names[I]) then
+        DelTree(Folder + '\' + Names[I], True, True, True)
+      else
+        DeleteFile(Folder + '\' + Names[I]);
+    end;
+  finally
+    Names.Free;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    RemoveReactNativeShell;
+end;
+#endif

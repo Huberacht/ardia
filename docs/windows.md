@@ -1670,8 +1670,8 @@ folder and refused all 3 launches), the concurrent-runs check (`ports.ps1`) and
 | `src/ardia/win/webui/webui_policy.h` | pure testable helpers for Windows document names/limits (`ValidWindowsDocumentName`: 1-200 `[A-Za-z0-9._-]`, no Windows device names; `ReservedWindowsDocumentName`, case-insensitive: `session.json`, `live.json`, `live.canonical.json`, the migrator's `rnw-migration.json` and `rnw-migration.lock`, and the launch guard's `launch-starts.txt` and its `launch-starts.txt.tmp` staging file; `EngineOwnedWindowsDocumentName`: `launch-guard.json`, which `SaveLaunchGuardFacts` in `main.cc` writes at every start and the launch telemetry reads, so it stays readable and in `bootstrap.documents` but `writeDocument`, `saveDocument` and `removeDocument` refuse it in any case (`WritableWindowsDocumentName`); `WindowsDocumentLimit`: writes up to 8 MiB, 48 MiB for `sync-state.nns` in any letter case; reads up to `kWindowsDocumentReadLimit`, 64 MiB; the name and read limits equal `ardia-shell-migration`'s `DOCUMENT_NAME_LIMIT` and `DOCUMENT_LIMIT`, so a document the migrator copies under a name in that character set reads back; names with other characters, such as spaces or non-ASCII, still copy but can't be read through `readDocument`), the `bootstrap.documents` budget (`BootstrapDocumentEligible`, `BootstrapDocumentFits`: at most 128 documents and 8 MiB, checked against the listed size before a file is opened), `BootstrapAssignmentScript` (the bootstrap goes through `JSON.parse`, so a document named `__proto__` stays an own property instead of setting the prototype), `DownloadCommandForRoute` (`downloads.cancel`/`pause`/`resume`/`keep` forward `{id, command}` to `ac_downloads_command`, as on Linux), canonical final-path containment (`NormalizeWinFinalPath`, `IsStrictlyWithinWinDirectory`, `IsDirectChildOfWinDirectory`), handle-relative `FileRenameInformation` sizing/leaf validation, startup migration policy/CLI quoting, and the `HTMAXBUTTON` hover/press state machine (`MaximizeButtonStateMachine`) |
 | `src/ardia/win/webui/webui_shell.{h,cc}` | the bridge bound to the live shell document as on Linux (`Trusted`: the shell's live primary main frame with the committed origin `chrome://ardia/`; `OwnsHandler`: the handler of that document's generation; a new document (a reload or a renderer swap) or a renderer exit retires the generation, which drops its pending replies (`DeliverReply`), its events and its pages; `OnJavascriptDisallowed` drops that handler's pending replies at once and retires the generation only if the handler no longer owns the live document; a page whose creation was asked by a retired document is never made and its profile never loaded; closing the window tears the shell down while its views are still alive (`TearDown`, from `OnWidgetDestroying` and before the widget is reset: the document is retired, in-flight telemetry posts, pages, delegate, pass-through regions and the view pointers are cleared, weak pointers are invalidated, and `ShellContents` deletes its children before its own state), so destroying the shell's WebContents can't call back into freed views; tab URLs pass one check (`AllowedPageUrl`) before any profile loads and again before a page navigates: no `javascript:`, no `chrome://ardia` in any spelling or behind `view-source:`, nothing that doesn't parse; rows in `boundaries.json`); one `views::Widget` (`ShellTreeHost`, a `DesktopWindowTreeHostWin` with Chrome's client-area insets and `WM_CAPTURECHANGED`/`WM_CANCELMODE`/`WM_ACTIVATE`/`WM_NCMOUSELEAVE` maximize-state resets; `ShellFrame`, a `views::FrameView` hit tester), the `chrome://ardia` WebUI config, handle-verified `ReadAsset` data source (regular single-link non-reparse disk file and strict final-path containment via `GetFinalPathNameByHandleW` against the opened `AssetDirectory()` handle) and `ardiaRequest` handler, desktop document store (`ArdiaShell.readDocument`/`writeDocument`/`saveDocument`/`removeDocument` and `bootstrap.documents` with strict name/device/reserved validation, `FILE_FLAG_OPEN_REPARSE_POINT`, `nNumberOfLinks == 1`, UTF-8 validation on reads, final-path direct-child checks, handle-relative `NtSetInformationFile` `FileRenameInformationEx` atomic commits and handle-based `FileDispositionInformationEx`/`FileDispositionInfo` cleanup/deletes), `ArdiaTelemetry.post` (advertised in `capabilities`; `TelemetryPostAllowed` applies `ardia::desktop_telemetry_policy::PostAcceptable` and then requires the body to parse as a JSON object, so `{` alone or `{} trailing` is refused with `ERR_TELEMETRY_REFUSED`; sent over Chromium's system `URLLoaderFactory`; in a test instance only, `ARDIA_TEST_TELEMETRY_ENDPOINT` may point it at an `http` localhost URL, and `ArdiaShell.testTelemetrySink` reports `requestsStarted`, counted where the request is handed to the network, and `inFlight`, which `bridge.ps1` uses to show refused posts never reach the network and a valid one reaches a loopback listener), `HTMAXBUTTON` hover/press tracking (`WM_NCMOUSEMOVE`, `WM_NCMOUSELEAVE` via `TME_NONCLIENT \| TME_LEAVE`, `WM_NCLBUTTONDOWN`/`UP`, deactivation/capture reset in both `PreTranslate` and `ShellTreeHost`) emitting `ArdiaShell.maximizeButtonState`, the transparent shell `WebView` above the page `WebView`s, input pass-through, page leases and navigation events, accelerators, `session.read`/`session.write`, `engine.call` for all 37 generated routes of `ardia/desktop/generated/ac_desktop_routes.h` through the Windows `ac_*` table |
 | `src/ardia/win/webui/webui_caption_script.h` | lines added to `host-bootstrap.js` that report the shell's maximize button rectangle (`ArdiaShell.setMaximizeButton`) and mirror `ArdiaShell.maximizeButtonState` onto `data-ardia-nc-hover`/`data-ardia-nc-pressed` |
-| `scripts/windows/assemble-webui.ps1` | engine + `apps/desktop/dist/win` (default, or any UI build folder with `index.html`) as `ardia-ui\` beside `chrome.exe`, plus optional `-MigrateBin` to bundle `ardia-webui-migrate.exe` beside `chrome.exe` |
-| `scripts/windows/webui-pilot/` | the real-input run below (`run.ps1`, its helpers and test page), the stale-document check (`stale.ps1`), the hostile-input check at the bridge and document sinks (`bridge.ps1`), the junction and `ardia-ui\` asset-escape check (`junction.ps1`) and the close-cycle check (`close.ps1`), the policy and cleanup-race check (`profile-edges.ps1`) and the concurrent-runs check (`ports.ps1`); they track the processes they start and stop only those and their children, launch with `--remote-debugging-port=0` and read the port back from the run's own `DevToolsActivePort`, using it only while the process listening on it is one this run started, run each launch in its own marked folder under `C:\pilot\runs`, and delete only a folder whose `.pilot-run` marker names it |
+| `scripts/windows/assemble-webui.ps1` | engine + `apps/desktop/dist/win` (default, or any UI build folder with `index.html`) as `ardia-ui\` beside `chrome.exe`, plus optional `-MigrateBin` to bundle `ardia-webui-migrate.exe` beside it; `-Shippable` makes the build the installer takes (below) |
+| `scripts/windows/webui-pilot/` | the real-input run below (`run.ps1`, its helpers and test page), the packaged-build tour (`tour-webui.ps1`), the stale-document check (`stale.ps1`), the hostile-input check at the bridge and document sinks (`bridge.ps1`), the junction and `ardia-ui\` asset-escape check (`junction.ps1`) and the close-cycle check (`close.ps1`), the policy and cleanup-race check (`profile-edges.ps1`) and the concurrent-runs check (`ports.ps1`); they track the processes they start and stop only those and their children, launch with `--remote-debugging-port=0` and read the port back from the run's own `DevToolsActivePort`, using it only while the process listening on it is one this run started, run each launch in its own marked folder under `C:\pilot\runs`, and delete only a folder whose `.pilot-run` marker names it |
 
 The frontend is `apps/desktop`'s Linux-mode production build (`pnpm -C apps/desktop build`), unchanged, with Linux wording; its `--mode win` build (#3972) has the Windows wording and is the next one to run here. Host calls the pilot doesn't answer
 resolve to `null` (and `engine.call`s outside the routes fail as unknown) and are logged once each as
@@ -1868,6 +1868,78 @@ advertises and handles `ArdiaTelemetry.post` using `ardia::desktop_telemetry_pol
   `ARDIA_TEST_MIGRATION_STOP_AT_COMMIT`), checks every item, a second run, the RNW folder, vault and keys unchanged,
   the RNW build opening its folder again, the WebUI shell opening the migrated one, and refusals for overlap and a
   junction. It uses `ARDIA_DATA_DIR`-style scratch folders and removes the Credential Manager items it made.
+  With `-RnwInstaller <Ardia-Setup.exe> -WebUIInstaller <Ardia-Setup.exe>` it also runs the installed upgrade
+  described under "Packaging, installing and upgrading the WebUI shell".
+
+### Packaging, installing and upgrading the WebUI shell (#4113)
+
+The WebUI shell ships through the same Inno Setup installer as the React Native shell, from a folder that looks the
+same to Windows: `Ardia.exe`, `chrome.dll` and the engine's files, with `ardia-ui\` and `ardia-webui-migrate.exe` in
+place of `ArdiaApp.dll`. The React Native shell stays the default; nothing below changes what CI ships today.
+
+- **Assembly.** `assemble-webui.ps1 -Engine <engine> -Ui apps/desktop/dist/win -Out <dir> -MigrateBin
+  <ardia-webui-migrate.exe> -Shippable -Version <v> -Build <n>` renames `chrome.exe` to `Ardia.exe`, gives it Ardia's
+  icon and name (`launcher-identity.ps1`, `-AppIcon` to use another `.ico`), adds the Visual C++ runtime the launcher
+  and the migrator need (`vc-runtime.ps1`, `-VcRedist <folder>` to name the redist), checks the migrator is built for
+  the launcher's CPU, stamps `Ardia.build.json` when `-Build` is above 0 and refuses to finish without the migrator,
+  with `ArdiaApp.dll` or `chrome.exe` left in the folder, or with an `Ardia.test-build` marker anywhere in it unless
+  `-TestBuild` is passed. `-LauncherName Ardia.exe` alone does the rename and the icon without the rest. Without
+  these switches it assembles the pilot as before (`chrome.exe`, no rename); an engine's own `Ardia.test-build` is
+  dropped unless `-TestBuild` asks for one.
+- **One layout rule.** `scripts/windows/shell-layout.ps1` decides which shell a folder holds (`ArdiaApp.dll`: React
+  Native; `ardia-ui\index.html`: WebUI; both or neither: refused), lists what an install of each ships and the
+  commands it registers, and names what is wrong with a folder. `make-installer.ps1`, `installer-check.ps1`,
+  `dependency-check.ps1`, `assemble-webui.ps1` and `upgrade.ps1` all read it, and `shell-layout.test.ps1` checks it
+  with the assembler's and the installer's refusals.
+- **Installer.** `make-installer.ps1 -Shell auto|rnw|webui` (auto by default: the folder decides) passes
+  `/DShell=webui` to `Ardia.iss`. That build adds `--ardia-shell=webui` to the Start Menu and desktop shortcuts, the
+  launch after setup and the relaunch after an update, `"Ardia.exe" --ardia-shell=webui --single-argument %1` for
+  `ArdiaHTM` and `"Ardia.exe" --ardia-shell=webui` for `StartMenuInternet\Ardia`. Installed over the React Native
+  shell, it first empties the install folder of everything but the uninstaller (`RemoveReactNativeShell`, only when
+  `ArdiaApp.dll` is there), so no React Native file outlives the upgrade. The React Native installer, in turn, removes
+  `ardia-ui\` and `ardia-webui-migrate.exe` (`[InstallDelete]`), so a rollback leaves the React Native layout exactly.
+  User data is in `%LOCALAPPDATA%\Ardia` and `%LOCALAPPDATA%\Ardia WebUI`, never in the install folder, so neither
+  step touches it.
+- **Installer check.** `installer-check.ps1 -Shell auto|rnw|webui` checks the layout's own files (for the WebUI shell
+  `ardia-ui\index.html` and `ardia-webui-migrate.exe`, and no `ArdiaApp.dll`), the Start Menu shortcut's target,
+  arguments, icon and AppUserModelID, the registered commands with or without the switch, and that no
+  `Ardia.test-build` was installed; the React Native checks are unchanged.
+- **Installed upgrade and rollback.** `upgrade.ps1 -RnwInstaller <rnw setup> -WebUIInstaller <webui setup>` (in a
+  throwaway Windows 11 guest where Ardia isn't installed, with `shell-layout.ps1` and `launcher-identity.ps1` copied
+  beside it or one folder up) installs the React Native build silently into the run's own
+  folder (`/DIR=`), runs the direct-migrator checks above against that install, then seeds a second profile sealed
+  as a shipped build seals it (no `test-instance` in the DPAPI entropy: an installed build has no `Ardia.test-build`,
+  so it isn't a test instance and passes no `--test-instance` to the migrator), runs the installed React Native
+  build on it and closes it with `WM_CLOSE` (`installed-rnw-clean-exit`). It installs the WebUI build over it and
+  checks the layout, `Ardia.exe`'s identity, the uninstall entry and the shortcut; starts it twice so the migration
+  must fail (`--ardia-migrate-from-rnw` without `--ardia-migrate-rnw-data`, and a junction at `Secrets`), expecting
+  exit code 75, no window, no marker and the React Native profile and vault unchanged; then starts it with
+  `--ardia-shell=webui --ardia-migrate-from-rnw --ardia-migrate-rnw-data=<profile>` and checks the window opens, the
+  marker and the attempt report `shell_migration` sends (outcome, attempt, duration and counts, no paths or names),
+  tabs, history, bookmarks, extensions, window placement, config, the sync key and every Credential Manager account,
+  that cookies and logins stay behind, and that the React Native profile is unchanged. Last it reinstalls the React
+  Native build (rollback), checks the layout is the React Native one again, runs it on the untouched profile and
+  reads back every account and the sync key, and uninstalls. Results go to `C:\pilot\proof\<label>-results.json`.
+- **Tour.** `webui-pilot/tour-webui.ps1 -App <folder> -Out <dir>` tours a packaged WebUI build (`Ardia.exe` or
+  `chrome.exe`, with `ardia-ui\` and an `Ardia.test-build` marker, which CDP needs) with real input and CDP:
+  a clean launch, the window's icon and AppUserModelID (`SHGetPropertyStoreForWindow`, expected `Ardia.Browser`),
+  a caption drag, a caption double-click to maximize and back, the `HTMAXBUTTON` hover and press states
+  (`data-ardia-nc-hover`, `data-ardia-nc-pressed`, cleared when a press leaves the button) and a click on it,
+  typing an address, Ctrl+T and Ctrl+Tab between two tabs, Ctrl+Shift+= for a split pane, Ctrl+, for Settings, a
+  download from a page, a document written, read, found on disk and removed through `ArdiaShell`, and Close with no
+  process left running from the build's folder. It writes `tour-webui-results.json` and `tour-webui.md` (each check,
+  pass or fail, its time and detail). `lib.ps1` takes `PILOT_APP`, `PILOT_RUNS` and `PILOT_PROOF` so the tour also
+  runs outside `C:\pilot`, finds `Ardia.exe` when there is no `chrome.exe`, and skips screenshots without ffmpeg.
+- **CI.** The `webui` job in `windows.yml` runs on every Windows run, beside the React Native jobs:
+  `shell-layout.test.ps1`, `pnpm -C apps/desktop build:win`, `cargo build --release -p ardia-shell-migration --bin
+  ardia-webui-migrate`, the engine, `assemble-webui.ps1 -Shippable` and `dependency-check.ps1`. Full runs (`full-ci`,
+  pushes to `main`, releases) also make `Ardia-Setup-x64.exe` with `-Shell webui`, install and uninstall it with
+  `installer-check.ps1 -Shell webui` and tour a copy of the build marked as a test build (`continue-on-error` until
+  the engine with the WebUI host is pinned). Artifacts: `Ardia-Setup-webui-x64`, `Ardia-windows-webui-x64` and
+  `tour-webui`. `scripts/ci/windows-webui.test.mjs` keeps this wiring and the installer's React Native default in place.
+- **Cutover.** Once the engine that hosts the WebUI shell by default is pinned, the cutover makes the release jobs
+  assemble with `assemble-webui.ps1 -Shippable` in place of `assemble.ps1` (the installer follows the folder) and
+  drops `continue-on-error` from the tour. The upgrade path above is what existing installs then take.
 
 ### Linux patches the pilot needed widened to Windows
 
