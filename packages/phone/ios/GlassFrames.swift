@@ -328,7 +328,9 @@ final class GlassFrames: NSObject {
     }
     let pieceMethod: GlassLaunch.Capture = method == .auto ? (sourceWhole && web == nil ? capture.wholeMethod : .layer) : method
     if GlassLaunch.offMain, pieceMethod == .layer, !pieces.isEmpty {
-      if let steps = GlassSteps.make(pieces, page: capture.page, pixelsPerPoint: pixelsPerPoint) {
+      let made = GlassSteps.make(pieces, page: capture.page, pixelsPerPoint: pixelsPerPoint)
+      if made == nil, PhoneTestBuild.isOn { NSLog("PAGELAB look glass copy refused for %@: %@", members.map(\.label).joined(separator: ","), GlassLayerCopy.refused) }
+      if let steps = made {
         mark("copy\(steps.layers)")
         if GlassLaunch.copyProbe { GlassCopyProbe.arm(capture, pieces: pieces, rect: wanted, pixelsPerPoint: pixelsPerPoint) }
         let outcome = capture.start(rect: wanted, pixelsPerPoint: pixelsPerPoint, now: now, steps: steps, follow: shiftable ? web : nil)

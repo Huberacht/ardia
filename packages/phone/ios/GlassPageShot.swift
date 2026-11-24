@@ -122,7 +122,10 @@ final class GlassPageShot {
                 return
               }
               self.keep(picture, rows: rows, area: area, zoom: zoom, at: landed, moved: moved)
-              if PhoneTestBuild.isOn { self.latencies.append(rasterMs) }
+              if PhoneTestBuild.isOn {
+                self.latencies.append(rasterMs)
+                NSLog("PAGELAB glass pdf %.0f ms for %.0f points (busy %.0f%%)", rasterMs, area.height, GlassFlowRules.documentBusy(self.busy.map { (start: $0.start, end: $0.end) }, now: landed) * 100)
+              }
               if GlassLaunch.placementProbe { GlassPlacementProbe.check(picture, area: area, zoom: zoom, web: web) }
             }
           }

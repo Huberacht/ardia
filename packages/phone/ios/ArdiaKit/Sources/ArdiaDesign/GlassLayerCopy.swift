@@ -21,6 +21,7 @@ public final class GlassLayerTree: @unchecked Sendable {
 
 public enum GlassLayerCopy {
   public static let layerBudget = 2000
+  @MainActor public private(set) static var refused = ""
 
   public enum Refusal: Error, Equatable {
     case tooMany
@@ -58,9 +59,15 @@ public enum GlassLayerCopy {
 
   @MainActor
   private static func copy(_ layer: CALayer, scale: CGFloat, budget: inout Int) throws(Refusal) -> CALayer? {
-    guard budget > 0 else { throw Refusal.tooMany }
+    guard budget > 0 else {
+      refused = "more than \(layerBudget) layers"
+      throw Refusal.tooMany
+    }
     budget -= 1
-    if refuses(layer) { throw Refusal.unsafe }
+    if refuses(layer) {
+      refused = NSStringFromClass(type(of: layer))
+      throw Refusal.unsafe
+    }
     guard !drawsNothing(layer), !layer.isHidden, layer.opacity > 0 else { return nil }
     let made: CALayer
     switch layer {
@@ -69,15 +76,21 @@ public enum GlassLayerCopy {
     default: made = CALayer()
     }
     copyBase(layer, into: made)
-    if layer is CATextLayer || !isPicture(layer.contents) {
-      guard let picture = ownContents(of: layer, scale: scale) else { throw Refusal.unsafe }
+    if layer.bounds.width > 0, layer.bounds.height > 0, layer is CATextLayer || !isPicture(layer.contents) {
+      guard let picture = ownContents(of: layer, scale: scale) else {
+        refused = "contents of \(NSStringFromClass(type(of: layer))) \(Int(layer.bounds.width))x\(Int(layer.bounds.height))"
+        throw Refusal.unsafe
+      }
       made.contents = picture
       made.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
       made.contentsCenter = CGRect(x: 0, y: 0, width: 1, height: 1)
       made.contentsGravity = .resize
     }
     if let mask = layer.mask {
-      guard let copied = try copy(mask, scale: scale, budget: &budget) else { throw Refusal.unsafe }
+      guard let copied = try copy(mask, scale: scale, budget: &budget) else {
+        refused = "mask \(NSStringFromClass(type(of: mask)))"
+        throw Refusal.unsafe
+      }
       made.mask = copied
     }
     for sublayer in layer.sublayers ?? [] {

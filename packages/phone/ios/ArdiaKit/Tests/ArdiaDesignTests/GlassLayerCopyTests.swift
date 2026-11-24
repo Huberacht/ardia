@@ -134,6 +134,25 @@ struct GlassLayerCopyTests {
     #expect(gap.mean < 1.5, "mean difference \(gap.mean), worst \(gap.worst)")
   }
 
+  @Test func `a layer with no size draws nothing of its own, so its contents never refuse the copy`() throws {
+    let root = CALayer()
+    root.bounds = CGRect(x: 0, y: 0, width: 20, height: 20)
+    let drawn = Drawn()
+    drawn.frame = CGRect(x: 0, y: 0, width: 16, height: 10)
+    drawn.setNeedsDisplay()
+    drawn.displayIfNeeded()
+    drawn.bounds = .zero
+    #expect(!GlassLayerCopy.isPicture(drawn.contents))
+    let child = CALayer()
+    child.frame = CGRect(x: 2, y: 2, width: 6, height: 6)
+    child.backgroundColor = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
+    drawn.addSublayer(child)
+    root.addSublayer(drawn)
+    let tree = try GlassLayerCopy.tree(of: root).get()
+    #expect(Self.contentsOnlyPictures(tree.root))
+    #expect(tree.root.sublayers?.first?.sublayers?.count == 1, "what it holds is still copied")
+  }
+
   @Test func `layers the copy can't carry are refused, so the capture falls back instead of dropping them`() {
     let root = CALayer()
     root.bounds = CGRect(x: 0, y: 0, width: 10, height: 10)
