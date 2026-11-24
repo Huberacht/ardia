@@ -5,9 +5,10 @@ import { eligibleKind, isEligibleTab, lastFocusedEligibleWindow, shownPage } fro
 import type { MethodSpec } from "./socketCatalog";
 import { id, int, obj } from "./socketSchema";
 import { now, page, profileArg } from "./socketTargets";
-import { withinBudget } from "./socketWire";
 
 export const MAX_GROUP_TABS = 200;
+export const MAX_GROUP_BYTES = 768 * 1024;
+const utf8 = new TextEncoder();
 export const MAX_TAB_URL = 2048;
 export const MAX_TAB_TITLE = 512;
 
@@ -43,20 +44,30 @@ function spaceRow(s: BrowserState, profileId: string, focusedProfile: string | n
   };
 }
 
-function listSpaces() {
+function listSpaces(params: Record<string, unknown>) {
   const s = now();
   const focused = lastFocusedEligibleWindow(s);
   const focusedProfile = focused ? s.windows[focused]!.profileId : null;
-  return { items: withinBudget(spaceIds(s).map((p) => spaceRow(s, p, focusedProfile))) };
+  return page(spaceIds(s), params, (p) => spaceRow(s, p, focusedProfile));
 }
 
 function groupRow(s: BrowserState, g: TabGroup) {
   const members = g.tabIds.filter((t) => s.tabs[t]?.windowId === g.windowId && isEligibleTab(s, t));
   const active = activeTabId(s, g.windowId, g.profileId);
-  const shown = members.slice(0, MAX_GROUP_TABS);
+  const tabs: ReturnType<typeof clippedTab>[] = [];
+  let bytes = 0;
+  for (const t of members.slice(0, MAX_GROUP_TABS)) {
+    const { url, title } = shownPage(s.tabs[t]!);
+    const row = clippedTab(t, url, title, t === active);
+    const size = utf8.encode(JSON.stringify(row)).length * 2 + 2;
+    if (bytes + size > MAX_GROUP_BYTES) break;
+    bytes += size;
+    tabs.push(row);
+  }
+  const shown = tabs.map((row) => row.id);
   return {
     id: g.id,
-    title: g.name,
+    title: g.name.slice(0, MAX_TAB_TITLE),
     color: g.color,
     icon: g.icon,
     spaceId: g.profileId,
@@ -65,11 +76,7 @@ function groupRow(s: BrowserState, g: TabGroup) {
     pinned: g.pinned,
     parentId: g.parentId ?? null,
     tabIds: shown,
-    tabs: shown.map((t) => {
-      const tab = s.tabs[t]!;
-      const { url, title } = shownPage(tab);
-      return clippedTab(t, url, title, t === active);
-    }),
+    tabs,
     ...(members.length > shown.length ? { truncated: true, tabCount: members.length } : {}),
   };
 }
@@ -89,14 +96,14 @@ export const SPACE_METHODS: MethodSpec[] = [
     name: "spaces.list",
     mutates: false,
     description: "Spaces: each profile's tabs, with how many tabs, pinned tabs and groups it holds and whether the last focused window shows it",
-    params: obj({}),
-    result: "{items: [{id, name, profileId, color, icon, active, default, windowIds, tabCount, pinnedCount, groupCount}]}",
+    params: obj({ limit: int("At most this many spaces (default 100)", 1, 1000), offset: int("Skip this many spaces first (default 0)", 0) }),
+    result: "{items: [{id, name, profileId, color, icon, active, default, windowIds, tabCount, pinnedCount, groupCount}], total, nextOffset}",
     run: listSpaces,
   },
   {
     name: "tabGroups.list",
     mutates: false,
-    description: "Tab groups in regular windows, with their tabs in order (at most 200 per group, URLs cut at 2,048 characters and titles at 512, named in clipped); private windows are left out",
+    description: "Tab groups in regular windows, with their tabs in order (at most 200 per group and about 768 KiB of them, URLs cut at 2,048 characters and titles at 512, named in clipped; a group cut short says truncated and tabCount); private windows are left out",
     params: obj({ space: SPACE, limit: int("At most this many groups (default 100)", 1, 1000), offset: int("Skip this many groups first (default 0)", 0) }),
     result: "{items: [{id, title, color, icon, spaceId, windowId, collapsed, pinned, parentId, tabIds, tabs: [{id, url, title, active, clipped?}], truncated?}], total, nextOffset}",
     run: listGroups,

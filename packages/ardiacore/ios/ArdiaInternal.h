@@ -41,6 +41,7 @@ NSString *AppDisposition(NSString *chromeDisposition);
 
 void InstallActivationGuardsEarly();
 bool HasArmedPanels();
+void SweepFileArmsAtLaunch();
 NSArray<NSURL *> *_Nullable ArmedPanelPicks(NSSavePanel *panel, NSWindow *_Nullable parent, bool *handled, NSString *_Nullable *_Nonnull armId);
 void InstallActivationGuardsLate();
 bool Background();

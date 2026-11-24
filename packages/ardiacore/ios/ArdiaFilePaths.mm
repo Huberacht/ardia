@@ -72,6 +72,12 @@ NSString *Resolved(NSString *path) {
   return [NSFileManager.defaultManager stringWithFileSystemRepresentation:resolved length:strlen(resolved)];
 }
 
+NSString *FitBytes(NSString *text, NSUInteger maxBytes) {
+  NSString *kept = text;
+  while (kept.length && Bytes(kept) > maxBytes) kept = [kept substringToIndex:[kept rangeOfComposedCharacterSequenceAtIndex:kept.length - 1].location];
+  return kept;
+}
+
 bool ValidName(NSString *name) {
   return name.length && Bytes(name) <= kMaxNameBytes && ![name isEqualToString:@"."] && ![name isEqualToString:@".."] &&
          [name rangeOfString:@"/"].location == NSNotFound && [name rangeOfString:@"\0"].location == NSNotFound;
@@ -86,8 +92,7 @@ NSString *SafeName(NSString *name) {
   base = [base stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
   while ([base hasPrefix:@"."]) base = [base substringFromIndex:1];
   if (!base.length) base = @"download";
-  while (Bytes(base) > kMaxNameBytes) base = [base substringToIndex:base.length - 1];
-  return base;
+  return FitBytes(base, kMaxNameBytes);
 }
 
 NSString *Numbered(NSString *name, int n) {
@@ -98,7 +103,7 @@ NSString *Numbered(NSString *name, int n) {
     ext = @"";
   }
   NSString *tail = ext.length ? [NSString stringWithFormat:@" (%d).%@", n, ext] : [NSString stringWithFormat:@" (%d)", n];
-  while (stem.length > 1 && Bytes(stem) + Bytes(tail) > kMaxNameBytes) stem = [stem substringToIndex:stem.length - 1];
+  if (Bytes(stem) + Bytes(tail) > kMaxNameBytes) stem = FitBytes(stem, kMaxNameBytes - Bytes(tail));
   return [stem stringByAppendingString:tail];
 }
 
@@ -113,10 +118,28 @@ NSString *SafeFileName(NSString *name) {
   return SafeName(name);
 }
 
+NSString *AppDataRoot(NSString *custom, NSString *bundleId) {
+  if (custom.length) return custom;
+  NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+  if (!support.length) support = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"];
+  return [support stringByAppendingPathComponent:bundleId.length ? bundleId : @"Ardia"];
+}
+
 NSString *ChosenPath(id value, NSString **reason) {
   NSString *path = WellFormed(value, reason);
   if (!path) return nil;
-  NSString *canonical = Resolved(path);
+  struct stat leaf;
+  if (lstat(path.fileSystemRepresentation, &leaf) == 0 && S_ISLNK(leaf.st_mode)) {
+    *reason = @"symlink";
+    return nil;
+  }
+  NSString *folder = Resolved(path.stringByDeletingLastPathComponent);
+  NSString *canonical = folder ? [folder stringByAppendingPathComponent:path.lastPathComponent] : nil;
+  if (canonical && lstat(canonical.fileSystemRepresentation, &leaf) != 0) canonical = nil;
+  if (canonical && S_ISLNK(leaf.st_mode)) {
+    *reason = @"symlink";
+    return nil;
+  }
   if (!canonical) {
     *reason = errno == ENOENT || errno == ENOTDIR ? @"missing" : @"unreadable";
     return nil;

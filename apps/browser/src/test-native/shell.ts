@@ -525,6 +525,8 @@ export const fileArmsNative = {
   refuse: null as null | { reason: string; path?: string },
   place: null as null | ((arm: string, path: string) => Record<string, unknown>),
   supported: true,
+  generation: 0,
+  gate: null as Promise<void> | null,
   answerSavePanel(armId: string): string | null {
     const row = fileArmsNative.rows.find((r) => r.id === armId);
     if (!row || row.state !== "armed") return null;
@@ -570,6 +572,9 @@ const inStaging = (row: Record<string, unknown>, path: string) => ((row.staging 
 for (const [name, run] of Object.entries({
   armFiles: async (spec: Record<string, unknown>) => {
     fileArmsNative.specs.push(spec);
+    const generation = fileArmsNative.generation;
+    if (fileArmsNative.gate) await fileArmsNative.gate;
+    if (generation !== fileArmsNative.generation) return { ok: false, reason: "stopped" };
     if (fileArmsNative.refuse) return { ok: false, ...fileArmsNative.refuse };
     const busy = spec.kind === "upload" && fileArmsNative.rows.find((r) => r.kind === "upload" && r.state === "armed" && r.window === spec.window);
     if (busy) return { ok: false, reason: "windowBusy", arm: busy.id };
@@ -584,6 +589,7 @@ for (const [name, run] of Object.entries({
   disarmFiles: (ids: string[] | null, purge: boolean) => {
     fileArmsNative.disarmed.push([ids, purge]);
     fileArmsNative.disarmedAfter.push(controlSocket.calls.at(-1));
+    if (!ids) fileArmsNative.generation++;
     let cleared = 0;
     for (const row of fileArmsNative.rows) {
       if (row.state !== "armed" || (ids && !ids.includes(row.id as string))) continue;
@@ -599,6 +605,8 @@ for (const [name, run] of Object.entries({
     if (!row) return { ok: false, reason: "noArm" };
     const claimed = row.claimed as Record<string, string>;
     if (claimed[download]) return { ok: true, mode: "automatic" };
+    const owner = fileArmsNative.rows.find((r) => r.kind === "download" && inStaging(r, path));
+    if (owner && owner !== row) return { ok: false, reason: "stagedForAnother" };
     if (inStaging(row, path)) {
       claimed[download] = path;
       return { ok: true, mode: "prompted" };

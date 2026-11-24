@@ -129,14 +129,12 @@ NSString *DescribePanel(NSSavePanel *panel, NSWindow *parent, NSString *how) {
                                                   (long)((NSPopUpButton *)v).indexOfSelectedItem]];
     [views addObjectsFromArray:v.subviews];
   }
-  if (panel.directoryURL) [parts addObject:[NSString stringWithFormat:@"directory=%@", panel.directoryURL.path]];
   return [parts componentsJoinedByString:@" | "];
 }
 
 NSModalResponse AnswerPanel(NSSavePanel *panel, NSWindow *parent, NSString *how) {
   NSArray<NSURL *> *picks = TakePicks();
-  NSString *answer = picks ? [NSString stringWithFormat:@"chose %@", [[picks valueForKey:@"path"] componentsJoinedByString:@", "]]
-                           : @"cancelled";
+  NSString *answer = picks ? [NSString stringWithFormat:@"chose %lu", (unsigned long)picks.count] : @"cancelled";
   Log([NSString stringWithFormat:@"%@ | %@", DescribePanel(panel, parent, how), answer], @[]);
   if (picks) ReturnPicks(panel, picks);
   return picks ? NSModalResponseOK : NSModalResponseCancel;
@@ -416,6 +414,7 @@ void InstallActivationGuardsEarly() {
     return originalActivate(app, @selector(activateWithOptions:), options);
   });
   InterceptFilePanels(Background());
+  SweepFileArmsAtLaunch();
 
   if (!Background()) return;
   FakeKeyWindows();

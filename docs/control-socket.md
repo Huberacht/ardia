@@ -293,7 +293,7 @@ changes it today, 🔍 read only, 🗺️ designed below, ⛔ deliberately not e
 | splits | `splits.list {window?}` | `splits.create {tabs, orientation?}`, `splits.separate`, `splits.removeTab`, `splits.resize {split, sizes}`, `splits.flip`, `splits.setOrientation` |
 | peek | `peek.list` | `peek.open {tab, url}`, `peek.close {tab}`, `peek.toTab {window}` |
 | littleArdia | (in `windows`) | `littleArdia.open {url?, profile?}`, `littleArdia.close`, `littleArdia.toMain` |
-| spaces | `spaces.list` (a space is a profile's tabs: `{id, name, profileId, color, icon, active, default, windowIds, tabCount, pinnedCount, groupCount}`), `tabGroups.list {space?, limit?, offset?}` (`{id, title, color, icon, spaceId, windowId, collapsed, pinned, parentId, tabIds, tabs: [{id, url, title, active}]}`, at most 500 tabs a group, then `truncated` and `tabCount`) | none (groups change through `apply`'s `group.*` ops) |
+| spaces | `spaces.list {limit?, offset?}` (paged, a space is a profile's tabs: `{id, name, profileId, color, icon, active, default, windowIds, tabCount, pinnedCount, groupCount}`), `tabGroups.list {space?, limit?, offset?}` (`{id, title, color, icon, spaceId, windowId, collapsed, pinned, parentId, tabIds, tabs: [{id, url, title, active, clipped?}]}`, at most 200 tabs and about 768 KiB of them a group, URLs cut at 2,048 characters and titles at 512, then `truncated` and `tabCount`) | none (groups change through `apply`'s `group.*` ops) |
 | bookmarks | `bookmarks.tree {profile?, folder?, depth?}`, `bookmarks.search {profile?, folder?, query, limit?, offset?}` (each row with `folderPath`, the titles of the folders it sits in), `bookmarks.get {id}` | `bookmarks.add`, `bookmarks.addFolder`, `bookmarks.update`, `bookmarks.move {ids, parent, index?}`, `bookmarks.remove {ids}` |
 | history | `history.search {profile?, query?, since?, until?, limit?, offset?}` (rows `{id, url, title, visits, lastVisit, clipped?}`) | `history.remove {profile?, ids \| urls}`, `history.clear {profile?, since?}` |
 | downloads | `downloads.list {profile?, state?, limit?, offset?}` (live progress for running downloads), `downloads.settings {profile?}` | `downloads.pause`, `downloads.resume`, `downloads.cancel`, `downloads.keep`, `downloads.open`, `downloads.reveal`, `downloads.remove`, `downloads.clear`, `downloads.setSettings` |
@@ -845,17 +845,25 @@ question), on macOS (`PLATFORM_FEATURES.silentFilePanels`; Linux and Windows ans
 **An arm outlives its connection.** The command arms in one call and clicks in the next, often on a new connection,
 so closing the connection that armed doesn't end an arm. It ends when its time runs out (`seconds`, default 120, at
 most 600), after its one answer when `once` (the default), when its tab closes, at `files.disarm`, and with every
-other arm when control turns off: the app clears the native arms right after cutting the socket off, in the same synchronous step. At most 16 wait
+other arm when control turns off: the app clears the native arms right after cutting the socket off, in the same
+synchronous step. Clearing every arm also moves the registry's generation on, so a registration still copying files
+when control went off is refused when it reaches the registry (its copies are removed), and the app checks again
+after the native answer that control is still on and the tab still exists, disarming the new arm if not. At most 16 wait
 at once.
 
 **Paths.** Checked in JS (`localPathProblem`: absolute, no NUL or line break, at most 1,024 bytes, no `.` or `..`)
 and again natively (`ArdiaFilePaths.mm`).
-- *Uploads* are regular files only (a folder is refused). When armed, each is opened without following a link
-  (`O_NOFOLLOW`), checked to be a regular file on the open descriptor, and copied from that descriptor (an APFS clone
-  when it can be) into `<data dir>/file-arms/<arm>/`, a `0700` folder only Ardia writes. The chooser is answered with
-  that copy, so a path swapped for a link, a pipe or another file after the check can't reach the page. Copies stay
-  while the page may still send them, and go when the tab closes, when control turns off, when the arm ends unused,
-  and at the next launch.
+- *Uploads* are regular files only: a folder is refused, and so is a path whose own name is a symbolic link (folders
+  above it may be links; they're resolved). When armed, each is opened without following a link (`O_NOFOLLOW`),
+  checked to be a regular file on the open descriptor, and copied from that descriptor (an APFS clone when it can be)
+  into `file-arms/<arm>/` in Ardia's data folder (`ARDIA_DATA_DIR`, or `~/Library/Application Support/<bundle id>` in
+  a normal launch), a `0700` folder only Ardia writes. The chooser is answered with that copy, so a path swapped for a
+  link, a pipe or another file after the check can't reach the page.
+- *How long copies stay.* A page may send a chosen file long after choosing it, so copies of an arm that answered a
+  chooser stay until the first of: its tab closes, control turns off, 30 minutes pass since that arm last answered
+  (and it no longer waits), or Ardia quits (the next launch removes what's left, before any new arm). An arm that never
+  answered drops its copies as soon as it ends (expired, cleared, failed), even when it was reusable (`once: false`):
+  what decides is whether it ever answered, not whether it still waits.
 - *Download targets* never exist yet and are never a symbolic link; the folder above is resolved when armed (`/tmp`
   becomes `/private/tmp`, and the reply names the resolved path) and must resolve to the same place when the file
   lands. Placing a file opens the source without following a link, checks it's a regular file, moves it to a hidden
@@ -867,8 +875,14 @@ and again natively (`ArdiaFilePaths.mm`).
 **How a panel is answered.** `ArdiaActivation.mm` wraps `NSOpenPanel` and `NSSavePanel`'s three ways of running. A
 panel is answered from an arm only when Chromium opened it (its call stack), its window is a known regular Ardia
 window (`ArdiaWindowController`, with an app window id and a profile that isn't off the record), and an arm of the
-right kind waits for it: a tab arm when its tab is held by that very window, an any-tab download arm for any regular
-window (a tab arm wins, then the newest). A private window, a window Ardia doesn't know, and a free-standing panel are
+right kind waits for it: a tab arm when its tab is held by that very window and the window still shows that tab's
+profile (a window switched to another profile isn't answered for the first one's tab), an any-tab download arm for
+any regular window (a tab arm wins, then the newest). A save panel must also be a download picker: Chromium's framework
+ships without symbols, so the call stack can't name the picker, and Chromium opens other save panels from the same
+code (password export, certificate export, DevTools, a page's `showSaveFilePicker`). Ardia counts a save panel as a
+download's only when a regular-profile download is waiting for its target (the engine's download event arrived with no
+path yet, in the last two minutes) and the panel carries no message (Chromium's download picker passes no title;
+password export does). Any other save panel leaves the arm untouched and runs as it would have. A private window, a window Ardia doesn't know, and a free-standing panel are
 never answered from an arm, and an armed answer is logged without the window's title or the file name. Anything else
 runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. Chromium
 opens a page's chooser on the window that holds all of that window's tabs, so the panel names the window, not the
@@ -888,7 +902,9 @@ chooser) cancels the chooser and ends `failed` with the reason, rather than show
 - *One arm, one download.* A download claims an arm natively (`claimArmedDownload`) once its path is known, in the
   same registry lock the save panel uses, so a once arm goes to exactly one of them: a save panel finds an arm an
   automatic download already claimed spent, and an automatic download can't claim an arm a save panel already
-  answered (only the download saving into that arm's staging folder can). Ardia takes the first download in the
+  answered. A path inside any arm's staging folder belongs to that arm alone: the registry checks every arm's staging
+  folders before anything else, so another arm asked first refuses it (`stagedForAnother`) rather than taking it as
+  an automatic download. Ardia takes the first download in the
   tab's profile (or any regular profile) that started after the arm; another tab of that profile starting one at the
   same moment can be the one taken, so arm just before the click. Private downloads are never taken, and a taken
   download skips the `hooks.json` folder rules. Placing only moves a file a download of that arm claimed.

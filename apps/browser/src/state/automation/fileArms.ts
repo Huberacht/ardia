@@ -8,7 +8,7 @@ import { useBrowser } from "../browser/store";
 import { noteFileArm } from "../telemetry/cliCounts";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { claimDownload } from "./downloadHooks";
-import type { SocketCall } from "./socketCatalog";
+import { STOPPED, type SocketCall } from "./socketCatalog";
 import { OpError } from "./workspaceTargets";
 
 export const MAX_UPLOAD_PATHS = 64;
@@ -23,7 +23,7 @@ const armsFilePanels = () => PLATFORM_FEATURES.silentFilePanels && nativeArmsFil
 
 export const UNSUPPORTED = "Answering file panels for the ardia command needs Ardia on macOS for now.";
 
-export type DownloadProgress = { downloadId: string; state: "downloading" | "finished" | "failed" | "cancelled"; path: string | null; bytes: number; reason?: string };
+export type DownloadProgress = { downloadId: string; state: "downloading" | "finished" | "failed" | "cancelled"; path: string | null; bytes: number; reason?: string; sourceLeft?: true };
 
 type Tracked = {
   id: string;
@@ -83,6 +83,7 @@ function armRefusal(reason: string, path?: string, arm?: string): OpError {
   if (reason === "tooMany") return new OpError("refused", `At most ${MAX_ARMS} file arms wait at once; clear some with files.disarm.`);
   if (reason === "onceForFile") return new OpError("bad_request", "A download path names one file; arm again for the next one, or name a folder to keep answering.");
   if (reason === "unsupported") return new OpError("refused", UNSUPPORTED);
+  if (reason === "stopped") return new OpError("failed", STOPPED);
   if (reason === "windowBusy") return new OpError("refused", `Upload arm ${arm ?? "another arm"} already waits in this tab's window, and a file chooser names only its window; clear it with files.disarm first.`);
   const why = REASONS[reason];
   if (why) return new OpError("bad_request", `${path ? path.slice(0, 200) : "The path"} ${why}.`);
@@ -138,6 +139,7 @@ async function settle(t: Tracked, row: DownloadProgress, d: Download, consent: C
   row.state = "finished";
   row.path = placed.path;
   row.bytes = placed.bytes;
+  if (placed.sourceLeft) row.sourceLeft = true;
   noteFileArm("downloads_placed", 1, consent);
   if (placed.path === d.path) return;
   const current = useBrowser.getState().downloads.find((x) => x.id === d.id);
@@ -242,6 +244,10 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
   if (!call.serving()) {
     disarmFilePanels([id], true);
     call.stillServing();
+  }
+  if (request.tab !== null && !useBrowser.getState().tabs[request.tab]) {
+    disarmFilePanels([id], true);
+    throw new OpError("no_window", "The tab closed while Ardia armed it, so nothing is armed.");
   }
   tracked.set(id, {
     id,

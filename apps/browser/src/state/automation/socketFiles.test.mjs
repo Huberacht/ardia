@@ -37,6 +37,7 @@ async function setup() {
   native.disarmed.length = 0;
   native.claims.length = 0;
   native.disarmedAfter.length = 0;
+  native.gate = null;
   native.refuse = null;
   native.place = null;
   native.supported = true;
@@ -227,6 +228,108 @@ test("a download without a path yet isn't claimed", async () => {
   stub.emitDownload(download({ id: "nopath", path: "" }));
   await tick();
   assert.equal(native.claims.length, 0);
+});
+
+test("a prompted download goes to the arm whose staging folder it saved into, even when another arm ranks first", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  const ranked = await ok("files.armDownload", { tab, path: "/Users/me/Desktop/a.zip" });
+  const owner = await ok("files.armDownload", { path: "/Users/me/Elsewhere/b.zip" });
+  const stagedPath = native.answerSavePanel(owner.arm);
+  assert.ok(stagedPath);
+  stub.emitDownload(download({ id: "prompted", path: stagedPath }));
+  stub.emitDownload(download({ id: "prompted", path: stagedPath, state: "finished" }));
+  for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
+  await tick();
+  assert.deepEqual(native.placed, [[owner.arm, "prompted", stagedPath]]);
+  assert.ok(native.claims.some(([arm, id]) => arm === ranked.arm && id === "prompted"), "the higher-ranked arm was asked first");
+  const rows = (await ok("files.arms", {})).items;
+  assert.equal(rows.find((r) => r.arm === ranked.arm).state, "armed", "the other arm wasn't spent");
+  assert.deepEqual(rows.find((r) => r.arm === owner.arm).downloads.map((d) => d.downloadId), ["prompted"]);
+});
+
+test("control going off while an arm is still staging leaves nothing armed", async () => {
+  const windowId = await setup();
+  let open;
+  native.gate = new Promise((resolve) => (open = resolve));
+  const pending = call("files.armUpload", { tab: tabIn(windowId), paths: ["/tmp/a"] });
+  await tick();
+  S().updateSettings({ cliControl: false });
+  open();
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(native.rows.filter((r) => r.state === "armed").length, 0, "the native registry refused the stale registration");
+  S().updateSettings({ cliControl: true });
+  for (let i = 0; i < 5; i++) await tick();
+  void pending;
+});
+
+test("a tab closing while its arm is still staging disarms it and says so", async () => {
+  const windowId = await setup();
+  await ok("apply", { ops: [{ op: "open", urls: ["https://second.example/"], window: windowId }] });
+  const tab = S().windows[windowId].tabIds.find((t) => S().tabs[t].url.includes("second.example"));
+  let open;
+  native.gate = new Promise((resolve) => (open = resolve));
+  const id = 900000 + nextId++;
+  const before = stub.controlSocket.replies.length;
+  stub.emitControlRequest({ connection: 12, generation: stub.controlSocket.generation, line: JSON.stringify({ id, method: "files.armUpload", params: { tab, paths: ["/tmp/a"] } }) });
+  await tick();
+  S().closeTab(tab);
+  open();
+  for (let i = 0; i < 20 && !stub.controlSocket.replies.slice(before).some((r) => JSON.parse(r.line).id === id); i++) await tick();
+  const reply = JSON.parse(stub.controlSocket.replies.slice(before).find((r) => JSON.parse(r.line).id === id).line);
+  assert.equal(reply.error?.code, "no_window");
+  const armId = native.specs.at(-1).id;
+  assert.ok(native.disarmed.some(([ids, purge]) => Array.isArray(ids) && ids.includes(armId) && purge), "the new arm was disarmed with its copies");
+});
+
+test("every shared hostile string sent as a path to the real handlers is refused before the native sink unless it is a plain absolute path", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  let refused = 0;
+  for (const { value } of HOSTILE_STRINGS) {
+    for (const [method, params] of [["files.armUpload", { tab, paths: [value] }], ["files.armDownload", { path: value }]]) {
+      const before = native.specs.length;
+      const reply = await call(method, params);
+      const reached = native.specs.length > before;
+      if (localPathProblem(value) !== null) {
+        assert.ok(reply.error, `${method} ${JSON.stringify(value).slice(0, 60)} is refused`);
+        assert.equal(reached, false, `${method} ${JSON.stringify(value).slice(0, 60)} never reaches the native sink`);
+        refused++;
+      } else if (reached) {
+        assert.deepEqual(native.specs.at(-1).paths, [value], "only the exact plain path reaches the sink");
+      }
+      native.rows.length = 0;
+    }
+  }
+  assert.ok(refused > 10, "the corpus exercised the guard");
+  const before = native.specs.length;
+  await ok("files.armUpload", { tab, paths: ["/Users/me/plain.txt"] });
+  assert.equal(native.specs.length, before + 1, "positive control: a plain path reaches the sink");
+});
+
+test("files.arms says when a placed download's source couldn't be removed", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/left.zip" });
+  native.place = () => ({ ok: true, path: "/Users/me/Desktop/left.zip", bytes: 7, sourceLeft: true });
+  stub.emitDownload(download({ id: "left", path: "/Volumes/Other/left.zip" }));
+  stub.emitDownload(download({ id: "left", path: "/Volumes/Other/left.zip", state: "finished" }));
+  for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
+  await tick();
+  const row = (await ok("files.arms", { arms: [armed.arm] })).items[0];
+  assert.equal(row.downloads[0].sourceLeft, true);
+});
+
+test("spaces.list pages", async () => {
+  await setup();
+  S().createProfile({ name: "Work" });
+  S().createProfile({ name: "Home" });
+  const first = await ok("spaces.list", { limit: 1 });
+  assert.equal(first.items.length, 1);
+  assert.ok(first.total >= 3);
+  assert.equal(first.nextOffset, 1);
+  const rest = await ok("spaces.list", { offset: 1 });
+  assert.equal(rest.items.length, first.total - 1);
+  assert.equal(rest.nextOffset, null);
 });
 
 test("file methods refuse where the platform can't answer panels", async () => {
