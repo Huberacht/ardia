@@ -147,6 +147,26 @@ public enum GlassToneRows {
   }
 }
 
+public struct GlassPageFollow: Sendable {
+  public private(set) var following = false
+
+  public init() {}
+
+  public mutating func installed(following: Bool) {
+    self.following = following
+  }
+
+  public mutating func dropped() {
+    following = false
+  }
+
+  public mutating func dropsCapture(shiftable: Bool) -> Bool {
+    guard !shiftable, following else { return false }
+    following = false
+    return true
+  }
+}
+
 public enum GlassToneSend {
   public static func needed(toneChanged: Bool, hasColors: Bool, barDark: Bool?, sentBarDark: Bool?) -> Bool {
     guard toneChanged || barDark != sentBarDark else { return false }

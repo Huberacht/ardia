@@ -283,7 +283,10 @@ final class GlassFrames: NSObject {
       capture.tone = GlassToneGate()
       NotificationCenter.default.post(name: GlassTone.changed, object: web)
     }
-    if !shiftable, capture.followsPage { capture.drop() }
+    if capture.dropsPageCapture(shiftable: shiftable) {
+      capture.drop()
+      if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ page capture dropped: the page no longer shifts under it", members.map(\.label).joined(separator: ",")) }
+    }
     capture.survey(pieces, rect: shiftable ? strip : wanted, shiftable: shiftable)
     mark("survey")
     if let web, let page {

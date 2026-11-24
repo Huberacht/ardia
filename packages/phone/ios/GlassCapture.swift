@@ -60,12 +60,15 @@ final class GlassCapture {
 
   func follow(_ web: WKWebView?) {
     scrollWeb = web
+    pageFollow.installed(following: web != nil)
     capturedScroll = web?.scrollView.contentOffset ?? .zero
   }
 
   var velocity: CGPoint { scrollWeb == nil ? .zero : page.velocity }
 
-  var followsPage: Bool { scrollWeb != nil }
+  private var pageFollow = GlassPageFollow()
+
+  func dropsPageCapture(shiftable: Bool) -> Bool { pageFollow.dropsCapture(shiftable: shiftable) }
 
   var travel: ClosedRange<CGFloat>? {
     guard let scroll = scrollWeb?.scrollView else { return nil }
@@ -101,6 +104,8 @@ final class GlassCapture {
     token += 1
     flying = false
     landed = nil
+    scrollWeb = nil
+    pageFollow.dropped()
     guard texture != nil else { return }
     texture = nil
     rect = .null
@@ -228,6 +233,7 @@ final class GlassCapture {
     probe?(landed.pixels)
     guard landed.inked, install(landed.pixels, rect: landed.rect, valid: landed.valid, sigma: sigma, blurs: &blurs, at: landed.askedAt) else { return fail(now) }
     scrollWeb = landed.follow?.web
+    pageFollow.installed(following: landed.follow != nil)
     capturedScroll = landed.follow?.offset ?? .zero
     return .captured
   }

@@ -35,4 +35,22 @@ struct GlassChangeTests {
     #expect(GlassStacking.reach(bounds: .zero, clips: false, children: [page]) == page, "a zero-size container still holds its children")
     #expect(GlassStacking.reach(bounds: .zero, clips: false, children: []).isNull)
   }
+
+  @Test func `a page-following capture is dropped once when shifting stops, and the copy that replaces it can land`() {
+    var follow = GlassPageFollow()
+    follow.installed(following: true)
+    let firstStill = follow.dropsCapture(shiftable: false)
+    #expect(firstStill, "the page's frame no longer allows shifting: its capture goes")
+    let whileCopying = (0..<10).map { _ in follow.dropsCapture(shiftable: false) }
+    #expect(!whileCopying.contains(true), "the copy started for the still strip is never cancelled while it renders")
+    follow.installed(following: false)
+    let afterLanding = follow.dropsCapture(shiftable: false)
+    #expect(!afterLanding, "a copy that doesn't follow the page stays")
+    follow.installed(following: true)
+    let shifting = follow.dropsCapture(shiftable: true)
+    #expect(!shifting, "a page-following capture stays while shifting is allowed")
+    follow.dropped()
+    let afterDrop = follow.dropsCapture(shiftable: false)
+    #expect(!afterDrop, "a capture already dropped for a new document isn't dropped again")
+  }
 }
