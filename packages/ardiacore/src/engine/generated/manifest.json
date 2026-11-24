@@ -173,6 +173,18 @@
       "types": "packages/ardiacore/src/engine/generated/downloads.ts",
       "swift": "packages/ardiacore/ios/DownloadsCalls.swift",
       "calls": {
+        "settings": {
+          "service": "ac_downloads_settings",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
+        "setSettings": {
+          "service": "ac_downloads_set_settings",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
         "cancel": {
           "service": "ac_downloads_command",
           "mac": "custom",
@@ -200,18 +212,6 @@
           "desktop": "route",
           "windows": "custom",
           "routeField": "null"
-        },
-        "settings": {
-          "service": "ac_downloads_settings",
-          "mac": "service",
-          "desktop": "route",
-          "windows": "service"
-        },
-        "setSettings": {
-          "service": "ac_downloads_set_settings",
-          "mac": "service",
-          "desktop": "route",
-          "windows": "service"
         }
       },
       "events": {

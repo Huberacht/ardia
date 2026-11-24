@@ -98,6 +98,7 @@ export function defineModuleDomain<const D extends ModuleDomain>(domain: D): D {
 }
 
 export type DesktopHost = {
+  routeOrder: readonly string[];
   deadlines: Record<string, number>;
 };
 

@@ -174,6 +174,13 @@ test("the Linux and Windows hosts route through the generated header and keep no
   assert.doesNotMatch(windowsShell, /\bkRoutes\s*(\[\])?\s*=/);
 });
 
+test("the hosts advertise the routes in the order they always have: engine, tabs, downloads' settings before its commands, then the rest", () => {
+  assert.deepEqual(linuxRoutes.slice(0, 8).map(({ name }) => name), ["engine.components", "engine.tasks", "engine.batterySaver", "engine.trimMemory", "engine.openTaskManager", "tabs.lastTabPolicy", "downloads.settings", "downloads.setSettings"]);
+  const domainsInOrder = [...new Set(linuxRoutes.map(({ name }) => name.split(".")[0]))];
+  assert.deepEqual(domainsInOrder, ["engine", "tabs", "downloads", "history", "bookmarks", "favicons", "extensions", "search", "permissions"]);
+  assert.deepEqual(linuxRoutes.at(-1).name, "permissions.removeExternalAppAllowance");
+});
+
 test("the generated desktop routes are exactly each generated domain's desktop-routed calls, to the same service", () => {
   for (const [domain, entry] of domains) {
     const routed = linuxRoutes.filter((route) => route.name.startsWith(`${domain}.`)).sort((a, b) => a.name.localeCompare(b.name));

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { BOOTSTRAP, clientPackages, DESKTOP_ROUTES, desktopDeadlines, loadDomains, loadModuleDomains, MANIFEST, outputs, realOutputs, ROOT, spliceDeadlines, validate, validateDesktopHost, validateModuleDomain, validateModuleNames, validateTopics } from "./generate.mjs";
+import { BOOTSTRAP, clientPackages, DESKTOP_ROUTES, desktopDeadlines, desktopRoutes, loadDesktopHost, loadDomains, loadModuleDomains, MANIFEST, outputs, realOutputs, ROOT, spliceDeadlines, validate, validateDesktopHost, validateModuleDomain, validateModuleNames, validateTopics } from "./generate.mjs";
 
 const GENERATOR = fileURLToPath(new URL("./generate.mjs", import.meta.url));
 const runAt = (generator, ...args) => spawnSync(process.execPath, [generator, ...args], { encoding: "utf8" });
@@ -255,6 +255,20 @@ test("the desktop routes header lists every desktop-routed call with its service
   }
 });
 
+test("the desktop routes come in routeOrder's domain order, then the other routed domains alphabetically, each domain's calls in schema order", async () => {
+  const domains = { zeta: domain({ z: call({ service: "ac_zeta" }) }), alpha: domain({ a: call({ service: "ac_alpha" }) }), mid: domain({ second: call({ service: "ac_mid_b" }), first: call({ service: "ac_mid_a" }) }) };
+  const header = outputs(domains, {}, { routeOrder: ["mid"], deadlines: {} }).get(DESKTOP_ROUTES);
+  const names = [...header.matchAll(/^ {4}\{"([^"]+)"/gm)].map((match) => match[1]);
+  assert.deepEqual(names, ["mid.second", "mid.first", "alpha.a", "zeta.z"]);
+  assert.deepEqual(desktopRoutes(domains).map(({ name }) => name), ["alpha.a", "mid.second", "mid.first", "zeta.z"]);
+  assert.throws(() => validateDesktopHost({ routeOrder: ["mid", "mid"], deadlines: {} }, {}, domains), /lists mid twice/);
+  assert.throws(() => validateDesktopHost({ routeOrder: ["ghost"], deadlines: {} }, {}, domains), /ghost, which isn't an engine domain with a desktop route/);
+  assert.throws(() => validateDesktopHost({ deadlines: {} }, {}, domains), /routeOrder lists/);
+  const { domains: real, desktopHost } = await loadDesktopHost();
+  const order = [...new Set(desktopRoutes(real, desktopHost.routeOrder).map(({ name }) => name.split(".")[0]))];
+  assert.deepEqual(order.slice(0, desktopHost.routeOrder.length), desktopHost.routeOrder);
+});
+
 test("a deadline lengthens the desktop UI's wait for the native host, and only where the call or function reaches it", () => {
   assert.doesNotThrow(() => validate("demo", domain({ slow: call({ desktop: "custom", deadline: 90000 }) })));
   assert.throws(() => validate("demo", domain({ slow: call({ desktop: "absent", mac: "custom", windows: "custom", service: undefined, deadline: 90000 }) })), /desktop binding that reaches it/);
@@ -263,10 +277,10 @@ test("a deadline lengthens the desktop UI's wait for the native host, and only w
   assert.doesNotThrow(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "adapted", deadline: 120000 }) }, events: {} } })));
   assert.throws(() => validateModuleDomain("demo", moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "custom", deadline: 120000 }) }, events: {} } })), /goes only with desktop: host or adapted/);
   const modules = { demo: moduleDomain({ ArdiaDemo: { functions: { hold: fn({ desktop: "host", deadline: 120000 }) }, events: {} } }) };
-  assert.doesNotThrow(() => validateDesktopHost({ deadlines: { "ArdiaVault.unlock": 180000 } }, modules));
-  assert.throws(() => validateDesktopHost({ deadlines: { "ArdiaDemo.hold": 180000 } }, modules), /function of module domain demo, so its deadline goes on that function/);
-  assert.throws(() => validateDesktopHost({ deadlines: { "vault.unlock": 180000 } }, modules), /Ardia<Module>\.<method>/);
-  assert.throws(() => validateDesktopHost({ deadlines: { "ArdiaVault.unlock": 1000 } }, modules), /deadline is an integer/);
+  assert.doesNotThrow(() => validateDesktopHost({ routeOrder: [], deadlines: { "ArdiaVault.unlock": 180000 } }, modules));
+  assert.throws(() => validateDesktopHost({ routeOrder: [], deadlines: { "ArdiaDemo.hold": 180000 } }, modules), /function of module domain demo, so its deadline goes on that function/);
+  assert.throws(() => validateDesktopHost({ routeOrder: [], deadlines: { "vault.unlock": 180000 } }, modules), /Ardia<Module>\.<method>/);
+  assert.throws(() => validateDesktopHost({ routeOrder: [], deadlines: { "ArdiaVault.unlock": 1000 } }, modules), /deadline is an integer/);
   assert.throws(() => validateDesktopHost({}, modules), /deadlines maps/);
   const deadlines = desktopDeadlines({ demo: domain({ slow: call({ desktop: "custom", deadline: 90000 }), quick: call() }) }, modules, { deadlines: { "ArdiaVault.unlock": 180000, "ArdiaAlpha.go": 60000 } });
   assert.deepEqual(deadlines, { host: [["ArdiaAlpha.go", 60000], ["ArdiaDemo.hold", 120000], ["ArdiaVault.unlock", 180000]], engine: [["demo.slow", 90000]] });

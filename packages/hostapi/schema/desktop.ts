@@ -1,6 +1,7 @@
 import { defineDesktopHost } from "../define.ts";
 
 export const desktopHost = defineDesktopHost({
+  routeOrder: ["engine", "tabs", "downloads", "history", "bookmarks", "favicons", "extensions", "search", "permissions"],
   deadlines: {
     "ArdiaAutofill.cardNumber": 180000,
     "ArdiaCalendar.objects": 120000,

@@ -77,18 +77,24 @@ export async function loadDomains() {
 
 export async function loadDesktopHost() {
   const { domains, moduleDomains, desktopHost } = await schema();
-  validateDesktopHost(desktopHost, moduleDomains);
+  validateDesktopHost(desktopHost, moduleDomains, domains);
   return { domains, moduleDomains, desktopHost };
 }
 
 const isDeadline = (value) => Number.isInteger(value) && value > DEFAULT_DEADLINE && value <= LONGEST_DEADLINE;
 const DEADLINE_RULE = `an integer of milliseconds above the ordinary ${DEFAULT_DEADLINE} and at most ${LONGEST_DEADLINE}`;
 
-export function validateDesktopHost(host, moduleDomains) {
+export function validateDesktopHost(host, moduleDomains, domains = {}) {
   const fail = (message) => {
     throw new Error(`schema desktopHost: ${message}`);
   };
   if (!isRecord(host) || !isRecord(host.deadlines)) fail("deadlines maps the desktop host's own Module.method names to their request deadlines");
+  if (!Array.isArray(host.routeOrder)) fail("routeOrder lists the engine domains whose desktop routes come first, in the order the hosts advertise them");
+  const routed = new Set(desktopRoutes(domains).map(({ name }) => name.split(".")[0]));
+  for (const [index, name] of host.routeOrder.entries()) {
+    if (!routed.has(name)) fail(`routeOrder names ${name}, which isn't an engine domain with a desktop route`);
+    if (host.routeOrder.indexOf(name) !== index) fail(`routeOrder lists ${name} twice`);
+  }
   const declared = new Map();
   for (const [domain, entry] of Object.entries(moduleDomains)) {
     for (const [module, row] of Object.entries(entry.modules)) for (const fn of Object.keys(row.functions)) declared.set(`${module}.${fn}`, domain);
@@ -539,15 +545,19 @@ function manifest(domains, moduleDomains) {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-export const desktopRoutes = (domains) =>
-  Object.entries(domains).flatMap(([name, domain]) =>
+const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+export const routeDomainOrder = (domains, routeOrder = []) => [...routeOrder, ...Object.keys(domains).filter((name) => !routeOrder.includes(name)).sort(byName)];
+
+export const desktopRoutes = (domains, routeOrder = []) =>
+  routeDomainOrder(domains, routeOrder).map((name) => [name, domains[name]]).flatMap(([name, domain]) =>
     Object.entries(domain.calls ?? {})
       .filter(([, call]) => bindingOf(call, "desktop") === "route")
       .map(([verb, call]) => ({ name: `${name}.${verb}`, service: call.service, field: call.routeField ?? "" })),
   );
 
-function routesHeader(domains) {
-  const routes = desktopRoutes(domains);
+function routesHeader(domains, routeOrder) {
+  const routes = desktopRoutes(domains, routeOrder);
   const lines = [
     "#ifndef ARDIA_DESKTOP_GENERATED_AC_DESKTOP_ROUTES_H_",
     "#define ARDIA_DESKTOP_GENERATED_AC_DESKTOP_ROUTES_H_",
@@ -585,8 +595,8 @@ export function desktopDeadlines(domains, moduleDomains, desktopHost) {
   const functions = Object.values(moduleDomains).flatMap((domain) =>
     Object.entries(domain.modules).flatMap(([module, entry]) => Object.entries(entry.functions).filter(([, row]) => row.deadline !== undefined).map(([fn, row]) => [`${module}.${fn}`, row.deadline])),
   );
-  const byName = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
-  return { host: [...functions, ...Object.entries(desktopHost.deadlines)].sort(byName), engine: engine.sort(byName) };
+  const byKey = (a, b) => byName(a[0], b[0]);
+  return { host: [...functions, ...Object.entries(desktopHost.deadlines)].sort(byKey), engine: engine.sort(byKey) };
 }
 
 const DEADLINE_MAPS = { host: "hostDeadlines", engine: "engineDeadlines" };
@@ -618,7 +628,7 @@ export function outputs(domains, moduleDomains = {}, desktopHost = null) {
     const swift = moduleSwiftPath(name, domain);
     if (swift !== null) files.set(swift, moduleSwift(domain));
   }
-  files.set(DESKTOP_ROUTES, routesHeader(domains));
+  files.set(DESKTOP_ROUTES, routesHeader(domains, desktopHost?.routeOrder ?? []));
   if (desktopHost !== null) files.set(BOOTSTRAP, spliceDeadlines(readFileSync(ROOT + BOOTSTRAP, "utf8"), desktopDeadlines(domains, moduleDomains, desktopHost)));
   files.set(MANIFEST, manifest(domains, moduleDomains));
   return files;
