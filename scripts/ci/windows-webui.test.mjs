@@ -126,7 +126,7 @@ test("switching shells deletes only files the other shell shipped, after this sh
   assert.ok(cleanup.indexOf("if FileExists(Manifest) then") < cleanup.indexOf("ExtractTemporaryFile('retired-shell.txt')"), "the other shell's own manifest comes first, the fixed list only for installs without one");
   assert.ok(SCRIPT.includes("(Pos('..', Entry) = 0) and (Pos(':', Entry) = 0) and (Pos('/', Entry) = 0) and (Copy(Entry, 1, 1) <> '\\')"), "an entry can't leave the install folder");
   assert.ok(SCRIPT.includes("if DeleteFile(Path) then\n    Removed.Add(Path)"), "only listed files are deleted");
-  assert.ok(SCRIPT.includes("if IsReparsePoint(Dir) then Break;\n      if not RemoveDir(Dir) then Break;"), "folders go bottom up, only once empty, never through a link");
+  assert.ok(SCRIPT.includes("if not PathWithoutLinks(Folder, Relative) then Break;\n      if not RemoveDir(Dir) then Break;"), "folders go bottom up, only once empty, never through a link");
 });
 
 test("removals never pass through a link, take exact paths from manifests, and keep what they can't remove", () => {

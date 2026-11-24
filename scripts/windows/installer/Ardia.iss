@@ -239,7 +239,7 @@ end;
 
 procedure RemoveEmptyFolders(Folder: String; Removed: TStringList);
 var
-  Dir: String;
+  Dir, Relative: String;
   I: Integer;
 begin
   for I := 0 to Removed.Count - 1 do
@@ -247,7 +247,8 @@ begin
     Dir := ExtractFileDir(Removed[I]);
     while (Length(Dir) > Length(Folder)) and (CompareText(Copy(Dir, 1, Length(Folder) + 1), Folder + '\') = 0) do
     begin
-      if IsReparsePoint(Dir) then Break;
+      Relative := Copy(Dir, Length(Folder) + 2, Length(Dir) - Length(Folder) - 1);
+      if not PathWithoutLinks(Folder, Relative) then Break;
       if not RemoveDir(Dir) then Break;
       Dir := ExtractFileDir(Dir);
     end;

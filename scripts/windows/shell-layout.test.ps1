@@ -175,7 +175,7 @@ try {
   Check "the other shell's files go only after this shell's files are installed" $true ($script -match "else if CurStep = ssPostInstall then\s+RemoveFilesNoLongerShipped;")
   Check "the install step only notes what is there before the copy" $true ($script -match "if CurStep = ssInstall then\s+NoteInstalledShells")
   Check "before the copy it notes the other shell and reads this shell's last manifest" $true ($script -match "(?s)procedure NoteInstalledShells;.*RetiredShellFound := FileExists\(Folder \+ '\\\{#RetiredMarker\}'\).*PreviousOwnFound := ReadManifest\(Folder, 'ardia-\{#Shell\}-files.txt', PreviousOwn\);")
-  Check "folders go only once they are empty and are not links" $true ($script -match "if IsReparsePoint\(Dir\) then Break;\s+if not RemoveDir\(Dir\) then Break;")
+  Check "folders go only once they are empty and nothing on their path is a link" $true ($script -match "if not PathWithoutLinks\(Folder, Relative\) then Break;\s+if not RemoveDir\(Dir\) then Break;")
   Check "the other shell's own manifest comes before the fallback list" $true ($script -match "(?s)Manifest := 'ardia-\{#RetiredShell\}-files.txt';\s+FromManifest := FileExists\(Folder \+ '\\' \+ Manifest\);.*ExtractTemporaryFile\('retired-shell.txt'\)")
   Check "attributes come from GetFileAttributesW" $true ($script -match "external 'GetFileAttributesW@kernel32.dll stdcall';")
   Check "a reparse point is the attribute 0x400" $true ($script -match "ReparsePointAttribute = \`$400;")

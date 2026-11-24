@@ -76,7 +76,6 @@ function Check([string]$name, [bool]$ok, [string]$detail) {
   Log ("{0} {1}: {2}" -f ($(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $detail))
 }
 
-Stop-Engine
 Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_REMOTE_DEBUGGING_PORT, Env:ARDIA_TEST_MIGRATION_STOP_AT_COMMIT -ErrorAction SilentlyContinue
 $run = New-PilotRun
 $rnw = Join-Path $run 'rnw'
@@ -178,7 +177,7 @@ function Rnw-Running {
 }
 
 function Allowed-Roots {
-  @($installDir, $RnwApp) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
+  @($installDir, $RnwApp, $script:App) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }
 }
 
 function Under-Folder($process, [string[]]$folders) {
@@ -202,23 +201,24 @@ function Tracked-For($process) {
 }
 
 function Verified-Tree($tracked) {
-  if (-not $tracked -or -not $tracked.Created) { return ,@() }
+  if (-not $tracked -or -not $tracked.Created) { return @() }
   $all = All-Processes
   $roots = Allowed-Roots
   $root = $all | Where-Object { [int]$_.ProcessId -eq $tracked.Id } | Select-Object -First 1
-  if ($root -and $root.CreationDate -ne $tracked.Created) { return ,@() }
-  $tree = @{ $tracked.Id = $true }
+  if ($root -and $root.CreationDate -ne $tracked.Created) { return @() }
+  $tree = @{ $tracked.Id = $tracked.Created }
   do {
     $grew = $false
     foreach ($process in $all) {
       $id = [int]$process.ProcessId
-      if ($tree.ContainsKey($id) -or -not $tree.ContainsKey([int]$process.ParentProcessId)) { continue }
-      if ($process.CreationDate -lt $tracked.Created -or -not (Under-Folder $process $roots)) { continue }
-      $tree[$id] = $true
+      $parentId = [int]$process.ParentProcessId
+      if ($tree.ContainsKey($id) -or -not $tree.ContainsKey($parentId)) { continue }
+      if (-not $process.CreationDate -or $process.CreationDate -lt $tree[$parentId] -or -not (Under-Folder $process $roots)) { continue }
+      $tree[$id] = $process.CreationDate
       $grew = $true
     }
   } while ($grew)
-  ,@($all | Where-Object { $tree.ContainsKey([int]$_.ProcessId) -and (Under-Folder $_ $roots) })
+  @($all | Where-Object { $tree.ContainsKey([int]$_.ProcessId) -and (Under-Folder $_ $roots) })
 }
 
 function Stop-VerifiedProcess($process) {
@@ -231,8 +231,16 @@ function Stop-VerifiedProcess($process) {
 
 function Stop-VerifiedTree($tracked) {
   $stopped = 0
-  foreach ($process in (Verified-Tree $tracked)) { if (Stop-VerifiedProcess $process) { $stopped++ } }
+  foreach ($process in @(Verified-Tree $tracked)) { if (Stop-VerifiedProcess $process) { $stopped++ } }
   $stopped
+}
+
+function Stop-PilotEngine {
+  $roots = Allowed-Roots
+  foreach ($process in @(All-Processes | Where-Object { ([Pilot]::IsTracked([int]$_.ProcessId)) -and (Under-Folder $_ $roots) })) {
+    Stop-VerifiedProcess $process | Out-Null
+  }
+  Wait-Until { @(All-Processes | Where-Object { ([Pilot]::IsTracked([int]$_.ProcessId)) -and (Under-Folder $_ $roots) }).Count -eq 0 } 15 'the engine processes to exit' -NoThrow | Out-Null
 }
 
 function Run-Rnw([int]$Milliseconds) {
@@ -247,7 +255,7 @@ function Run-Rnw([int]$Milliseconds) {
   Hold $Milliseconds
   $alive = -not $started.HasExited
   Stop-VerifiedTree $tracked | Out-Null
-  Wait-Until { (Verified-Tree $tracked).Count -eq 0 } 20 'the RNW processes this run started to exit' -NoThrow | Out-Null
+  Wait-Until { @(Verified-Tree $tracked).Count -eq 0 } 20 'the RNW processes this run started to exit' -NoThrow | Out-Null
   $alive
 }
 
@@ -355,16 +363,17 @@ function Start-Installed([string]$data, [string[]]$extra) {
 
 function Exit-Code($process, [int]$seconds) {
   if ($process.WaitForExit($seconds * 1000)) { return $process.ExitCode }
-  Stop-Engine
+  Stop-VerifiedTree (Tracked-For $process) | Out-Null
+  Stop-PilotEngine
   'timeout'
 }
 
 function Close-Tree($process, [int]$seconds = 20) {
   $tracked = Tracked-For $process
-  $pids = @(Verified-Tree $tracked | ForEach-Object { [int]$_.ProcessId })
+  $pids = @(@(Verified-Tree $tracked) | ForEach-Object { [int]$_.ProcessId })
   $posted = if ($pids.Count) { [RnwWindows]::Close([int[]]$pids) } else { 0 }
-  $gone = Wait-Until { (Verified-Tree $tracked).Count -eq 0 } $seconds 'the app to close its windows and exit' -NoThrow
-  $left = Verified-Tree $tracked
+  $gone = Wait-Until { @(Verified-Tree $tracked).Count -eq 0 } $seconds 'the app to close its windows and exit' -NoThrow
+  $left = @(Verified-Tree $tracked)
   foreach ($stray in $left) { Stop-VerifiedProcess $stray | Out-Null }
   [pscustomobject]@{ posted = $posted; clean = ([bool]$gone -and $posted -gt 0); left = $left.Count }
 }
@@ -412,7 +421,7 @@ function Test-ForcedFailure([string]$name, [string[]]$extra, [scriptblock]$prepa
   $stray = Wait-Until { (Installed-Processes).Count -eq 0 } 15 'every process of the failed start to exit' -NoThrow
   $left = @(Installed-Processes | ForEach-Object { "$($_.Name) $($_.ProcessId)" })
   Stop-Launched | Out-Null
-  Stop-Engine
+  Stop-PilotEngine
   $markerLeft = Test-Path -LiteralPath (Join-Path $data 'rnw-migration.json')
   $untouched = (Same-Snapshot $rnwBefore (Tree-Snapshot $rnwInstalled)) -and (Same-Snapshot $outsideBefore (Tree-Snapshot $outside))
   Check "forced-failure-$name" (("$code" -eq "$exitIncomplete") -and -not $opened -and -not $markerLeft -and $untouched -and [bool]$stray) "$what`: exit $code of the launched process itself (want $exitIncomplete), window opened $opened, marker written $markerLeft, RNW profile and outside folder unchanged $untouched, processes left running: $(if ($left.Count) { $left -join ', ' } else { 'none' })"
@@ -478,7 +487,7 @@ function Test-InstalledUpgrade {
   try { $window = Wait-Shell 90 } catch {}
   $opened = ($window -ne $null) -and ($window -ne [IntPtr]::Zero)
   $closed = Close-Tree $process 30
-  Stop-Engine
+  Stop-PilotEngine
   $marker = Join-Path $web 'rnw-migration.json'
   $attemptFile = Join-Path $web 'rnw-migration-attempt.json'
   $attempt = $null
@@ -629,7 +638,7 @@ try {
     Start-Shell | Out-Null
     $opened = $false
     try { $h = Wait-Shell 60; $opened = ($h -ne $null) -and ($h -ne [IntPtr]::Zero) } catch {}
-    Stop-Engine
+    Stop-PilotEngine
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_REMOTE_DEBUGGING_PORT -ErrorAction SilentlyContinue
     Check 'webui-opens-migrated-data' ($opened -and (Test-Path "$web\Chromium") -and (Same-Snapshot $rnwBeforeWebUI (Tree-Snapshot $rnw))) "--ardia-shell=webui opened its window on the migrated folder, its own Chromium profile inside it, and wrote nothing into the RNW profile"
   }
@@ -649,7 +658,7 @@ try {
   foreach ($target in ([RnwVault]::Snapshot($prefix)).Keys) { [RnwVault]::Delete($target) }
   $stoppedLate = Stop-Launched
   if ($stoppedLate) { Log "stopped $stoppedLate processes this run started that were still running" }
-  Stop-Engine
+  Stop-PilotEngine
   if ($installed) {
     foreach ($target in ([RnwVault]::Snapshot($installedPrefix)).Keys) { [RnwVault]::Delete($target) }
     if (Test-Path -LiteralPath (Join-Path $installDir 'unins000.exe')) { Remove-Install | Out-Null }
