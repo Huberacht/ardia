@@ -38,7 +38,6 @@ on:
       - "scripts/windows/sign-update.mjs"
       - "scripts/windows/sign-update.test.mjs"
       - "scripts/windows/publish-alpha.sh"
-      - "scripts/windows/publish-alpha.test.mjs"
       - "scripts/security/hostile-inputs.mjs"
       - ".github/workflows/rust.yml"
   push:
@@ -183,7 +182,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           ARDIA_REQUIRE_WINDOWS_CROSSCHECK: "1"
-        run: python3 -I tests/windows-update/test_windows_update.py -v && node --test ../../scripts/windows/sign-update.test.mjs ../../scripts/windows/publish-alpha.test.mjs
+        run: python3 -I tests/windows-update/test_windows_update.py -v && node --test ../../scripts/windows/sign-update.test.mjs tests/windows-update/publish-alpha.test.mjs
       - name: Rust through the C ABI, the Linux C++ and the TypeScript Netscape HTML parsers against the shared vectors and hostile inputs
         if: runner.os == 'Linux'
         env:

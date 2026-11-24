@@ -70,7 +70,7 @@ pub fn is_valid_windows_version(text: &str) -> bool {
     if bytes.is_empty() || bytes.len() > MAX_WINDOWS_VERSION_BYTES {
         return false;
     }
-    if !bytes[0].is_ascii_digit() || !bytes.contains(&b'.') {
+    if !bytes[0].is_ascii_digit() {
         return false;
     }
     bytes[1..]

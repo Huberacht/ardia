@@ -171,6 +171,7 @@ class WindowsUpdateParityTests(unittest.TestCase):
             unavailable('this node cannot load TypeScript')
         self.assertEqual(result.returncode, 0, result.stderr)
         got = json.loads(result.stdout)
+        self.assertEqual(len(got), len(WINDOWS))
         for case, entry in zip(WINDOWS, got):
             self.assertEqual(entry['sigOk'], case['signatureValid'], case['name'])
             self.assertEqual(entry['parseOut'], case['parse'], case['name'])
@@ -212,6 +213,8 @@ class WindowsUpdateParityTests(unittest.TestCase):
         binary = self.verifier()
         manifest = self.dir / 'hostile.json.body'
         signature = self.dir / 'hostile.json.sig'
+        self.assertEqual(len(encoded), len(forged))
+        self.assertEqual(len(signed['signatures']), len(forged))
         for (name, field, _), body, sig in zip(forged, encoded, signed['signatures']):
             manifest.write_bytes(body)
             signature.write_bytes(bytes.fromhex(sig))

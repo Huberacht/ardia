@@ -122,7 +122,7 @@ jobs:
           set -euo pipefail
           project=$(sed -n 's/.*MARKETING_VERSION = "\{0,1\}\([^";]*\)"\{0,1\};.*/\1/p' apps/browser/macos/Ardia.xcodeproj/project.pbxproj | head -1)
           version="${RELEASE_VERSION:-$project}"
-          [[ "$version" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$ ]] || { echo "::error::'$version' isn't a version the updater reads"; exit 1; }
+          [[ "$version" =~ ^[0-9][0-9A-Za-z.+-]{0,63}$ ]] || { echo "::error::'$version' isn't a version the updater reads"; exit 1; }
           build=$(git rev-list --count HEAD)
           { echo "version=$version"; echo "build=$build"; } >> "$GITHUB_OUTPUT"
           echo "Ardia $version, Windows build $build (the commits in $(git rev-parse --short HEAD)'s history)" >> "$GITHUB_STEP_SUMMARY"

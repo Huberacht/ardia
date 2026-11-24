@@ -33,11 +33,13 @@ test("a manifest that is not JSON, not an object, or has no usable build is refu
     manifest().replace('"bytes":180000000', '"bytes":1e2'),
     manifest().replace('"bytes":180000000', '"bytes":180000000.0'),
     manifest({ version: "" }),
+    manifest({ version: "constructor" }),
     manifest({ version: "a b" }),
     manifest({ extra: 1 }),
   ]) {
     assert.equal(readManifest(text, under), null, text);
   }
+  assert.equal(readManifest(manifest({ version: "1" }), under)?.version, "1");
 });
 
 test("an installer from another address, with another ending, or a path that climbs refuses the manifest", () => {

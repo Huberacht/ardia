@@ -1926,6 +1926,46 @@
     {
       "cpu": "x64",
       "currentBuild": 59,
+      "manifest": "{\n  \"arm64\": {\n    \"bytes\": 175000000,\n    \"sha256\": \"d926c167dbacf0e28d0487cb2ec6585e8eb954e6d8fd411f9d3c910758050e32\",\n    \"url\": \"https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-arm64-60.exe\"\n  },\n  \"build\": 60,\n  \"version\": \"1\",\n  \"x64\": {\n    \"bytes\": 180000000,\n    \"sha256\": \"6c4961f6d9349fac780739ccd45cedd5154bb4c2aa77c2fd9bad7c23795a491e\",\n    \"url\": \"https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-x64-60.exe\"\n  }\n}\n",
+      "name": "single-segment version 1",
+      "outcome": {
+        "build": 60,
+        "bytes": 180000000,
+        "sha256": "6c4961f6d9349fac780739ccd45cedd5154bb4c2aa77c2fd9bad7c23795a491e",
+        "url": "https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-x64-60.exe",
+        "version": "1"
+      },
+      "parse": {
+        "build": 60,
+        "bytes": 180000000,
+        "sha256": "6c4961f6d9349fac780739ccd45cedd5154bb4c2aa77c2fd9bad7c23795a491e",
+        "url": "https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-x64-60.exe",
+        "version": "1"
+      },
+      "publicKey": "2012cb90ca60e8e5d8daf66e2272d2233e0486d557e8c66141ed8920177d7eb7",
+      "publishedUnder": "https://github.com/ardia-browser/ardia/releases/download/",
+      "signature": "0ec4c82ff40508267d5f753de78773a863aa94d934b927ede1d2a21406b1156cce784c17a7e90a452b528a30bfe17de75259db28fa490bbc2c4371abf74fd807",
+      "signatureValid": true
+    },
+    {
+      "cpu": "x64",
+      "currentBuild": 59,
+      "manifest": "{\n  \"arm64\": {\n    \"bytes\": 175000000,\n    \"sha256\": \"d926c167dbacf0e28d0487cb2ec6585e8eb954e6d8fd411f9d3c910758050e32\",\n    \"url\": \"https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-arm64-60.exe\"\n  },\n  \"build\": 60,\n  \"version\": \"constructor\",\n  \"x64\": {\n    \"bytes\": 180000000,\n    \"sha256\": \"6c4961f6d9349fac780739ccd45cedd5154bb4c2aa77c2fd9bad7c23795a491e\",\n    \"url\": \"https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-x64-60.exe\"\n  }\n}\n",
+      "name": "non-digit version constructor",
+      "outcome": {
+        "error": "manifest"
+      },
+      "parse": {
+        "error": "manifest"
+      },
+      "publicKey": "2012cb90ca60e8e5d8daf66e2272d2233e0486d557e8c66141ed8920177d7eb7",
+      "publishedUnder": "https://github.com/ardia-browser/ardia/releases/download/",
+      "signature": "7ad05eea45feec726e8e02b2b829341f661bee30eae159453171145ea1493127a5a890377a1019fd7fdf1c66285e067c620bc2dd5f4b516e6128129bf1e3ac02",
+      "signatureValid": true
+    },
+    {
+      "cpu": "x64",
+      "currentBuild": 59,
       "manifest": "{\n  \"arm64\": {\n    \"bytes\": 175000000,\n    \"sha256\": \"d926c167dbacf0e28d0487cb2ec6585e8eb954e6d8fd411f9d3c910758050e32\",\n    \"url\": \"https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-arm64-60.exe\"\n  },\n  \"build\": 60,\n  \"version\": \"0.2.48 nightly\",\n  \"x64\": {\n    \"bytes\": 180000000,\n    \"sha256\": \"6c4961f6d9349fac780739ccd45cedd5154bb4c2aa77c2fd9bad7c23795a491e\",\n    \"url\": \"https://github.com/ardia-browser/ardia/releases/download/windows-alpha/Ardia-Setup-x64-60.exe\"\n  }\n}\n",
       "name": "version with space",
       "outcome": {

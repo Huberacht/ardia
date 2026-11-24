@@ -728,6 +728,8 @@ fn windows_cases() -> Vec<WindowsCase> {
         win_case("missing version", format!("{{\"build\":60,\"x64\":{{\"url\":\"{x64_url}\",\"sha256\":\"{x64_sha}\",\"bytes\":10}}}}"), Err(E::Manifest)),
         win_case("missing build", format!("{{\"version\":\"0.2.48\",\"x64\":{{\"url\":\"{x64_url}\",\"sha256\":\"{x64_sha}\",\"bytes\":10}}}}"), Err(E::Manifest)),
         win_case("empty version", base.replace("\"0.2.48-nightly.1\"", "\"\""), Err(E::Manifest)),
+        win_case("single-segment version 1", base.replace("\"0.2.48-nightly.1\"", "\"1\""), Ok(())),
+        win_case("non-digit version constructor", base.replace("\"0.2.48-nightly.1\"", "\"constructor\""), Err(E::Manifest)),
         win_case("version with space", base.replace("\"0.2.48-nightly.1\"", "\"0.2.48 nightly\""), Err(E::Manifest)),
         win_case("version starting with dash", base.replace("\"0.2.48-nightly.1\"", "\"-0.2.48\""), Err(E::Manifest)),
         win_case(

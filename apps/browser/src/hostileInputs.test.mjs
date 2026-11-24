@@ -559,8 +559,14 @@ test("windows update manifest and verified update parser refuse every hostile in
       const reply = parseVerifiedUpdate(value, published, 59);
       assert.equal(reply.status, "failed", `${id} raw verified reply`);
     }
-    const forgedManifests = [
+    const versionManifest = readWindowsManifest(
       JSON.stringify({ version: value, build: 60, x64: { url: goodUrl, sha256: sha, bytes: 10 } }),
+      published,
+    );
+    if (versionManifest !== null) {
+      assert.match(versionManifest.version, /^[0-9][0-9A-Za-z.+-]{0,63}$/, `${id} version manifest`);
+    }
+    const forgedManifests = [
       JSON.stringify({ version: "0.2.48", build: value, x64: { url: goodUrl, sha256: sha, bytes: 10 } }),
       JSON.stringify({ version: "0.2.48", build: 60, x64: { url: value, sha256: sha, bytes: 10 } }),
       JSON.stringify({ version: "0.2.48", build: 60, x64: { url: goodUrl, sha256: value, bytes: 10 } }),
@@ -576,8 +582,17 @@ test("windows update manifest and verified update parser refuse every hostile in
     if (suffixManifest !== null) {
       assert.match(suffixManifest.installers.x64.url, /^https:\/\/github\.com\/ardia-browser\/ardia\/releases\/download\/windows-alpha\/[0-9A-Za-z][0-9A-Za-z._+-]*\.exe$/, `${id} url suffix`);
     }
-    const forgedReplies = [
+    const versionReply = parseVerifiedUpdate(
       JSON.stringify({ status: "ok", version: value, build: 60, url: goodUrl, sha256: sha, bytes: 10 }),
+      published,
+      59,
+    );
+    if (versionReply.status === "ok") {
+      assert.match(versionReply.version, /^[0-9][0-9A-Za-z.+-]{0,63}$/, `${id} reply version`);
+    } else {
+      assert.equal(versionReply.status, "failed", `${id} reply version`);
+    }
+    const forgedReplies = [
       JSON.stringify({ status: "ok", version: "0.2.48", build: value, url: goodUrl, sha256: sha, bytes: 10 }),
       JSON.stringify({ status: "ok", version: "0.2.48", build: 60, url: value, sha256: sha, bytes: 10 }),
       JSON.stringify({ status: "ok", version: "0.2.48", build: 60, url: goodUrl, sha256: value, bytes: 10 }),

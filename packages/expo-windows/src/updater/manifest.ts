@@ -23,7 +23,7 @@ const INSTALLER_KEYS = new Set(["url", "sha256", "bytes"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const isBuild = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-const isVersion = (value: unknown): value is string => typeof value === "string" && /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(value) && value.includes(".");
+const isVersion = (value: unknown): value is string => typeof value === "string" && /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(value);
 const hasValidPath = (text: string) => /^[0-9A-Za-z._+/-]*$/.test(text) && !text.includes("..") && !text.includes("//") && !text.split("/").includes(".");
 
 export function isValidPublishedUnder(prefix: string): boolean {

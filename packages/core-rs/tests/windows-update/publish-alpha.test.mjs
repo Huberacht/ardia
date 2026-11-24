@@ -5,8 +5,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("../..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("../../../..", import.meta.url)));
 const publishScript = join(root, "scripts/windows/publish-alpha.sh");
 const verifierPath = process.env.ARDIA_UPDATE_VERIFY_BIN || join(root, "packages/core-rs/target/release/ardia-update-verify");
 const publishedBase = "https://github.com/ardia-browser/ardia/releases/download/windows-alpha";
@@ -15,13 +16,13 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function makeFixture(dir, version, build) {
+function makeFixture(dir, version, build, { x64Body, arm64Body } = {}) {
   const installers = join(dir, "installers");
   mkdirSync(installers, { recursive: true });
   writeFileSync(join(installers, "Ardia.build.json"), JSON.stringify({ version, build }) + "\n");
   const files = [
-    [`Ardia-${version}-windows-x64-setup.exe`, Buffer.from(`x64-payload-${build}`)],
-    [`Ardia-${version}-windows-arm64-setup.exe`, Buffer.from(`arm64-payload-${build}`)],
+    [`Ardia-${version}-windows-x64-setup.exe`, x64Body ?? Buffer.from(`x64-payload-${build}`)],
+    [`Ardia-${version}-windows-arm64-setup.exe`, arm64Body ?? Buffer.from(`arm64-payload-${build}`)],
     [`Ardia-${version}-windows-source.tar.xz`, Buffer.from(`source-payload-${build}`)],
   ];
   for (const [name, data] of files) {
@@ -36,7 +37,7 @@ function makeFixture(dir, version, build) {
   return { installers, privPem, pubPem, privateKey };
 }
 
-function makeFakeBin(dir, { liveJson = null, liveSig = null } = {}) {
+function makeFakeBin(dir, { liveJson = null, liveSig = null, sigCurlExit = 0, sigHttpCode = null, jsonHttpCode = null } = {}) {
   const bin = join(dir, "bin");
   const state = join(dir, "state");
   mkdirSync(bin, { recursive: true });
@@ -52,27 +53,56 @@ function makeFakeBin(dir, { liveJson = null, liveSig = null } = {}) {
     `#!/usr/bin/env bash
 set -euo pipefail
 out=""
+write_out=""
 url=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift ;;
+    -w) write_out="$2"; shift ;;
     --retry|--max-time) shift ;;
     -*) ;;
     *) url="$1" ;;
   esac
   shift
 done
-src=""
+emit_code() {
+  if [ -n "$write_out" ]; then
+    printf '%s' "$1"
+  fi
+}
 case "$url" in
-  */windows-update.json) src="${join(state, "live.json")}" ;;
-  */windows-update.json.sig) src="${join(state, "live.sig")}" ;;
+  */windows-update.json)
+    if [ -n "${jsonHttpCode ?? ""}" ]; then
+      emit_code "${jsonHttpCode ?? ""}"
+      exit 0
+    fi
+    if [ -f "${join(state, "live.json")}" ]; then
+      if [ -n "$out" ]; then cp "${join(state, "live.json")}" "$out"; else cat "${join(state, "live.json")}"; fi
+      emit_code "200"
+      exit 0
+    fi
+    emit_code "404"
+    exit 0
+    ;;
+  */windows-update.json.sig)
+    if [ "${sigCurlExit}" -ne 0 ]; then
+      exit "${sigCurlExit}"
+    fi
+    if [ -n "${sigHttpCode ?? ""}" ]; then
+      emit_code "${sigHttpCode ?? ""}"
+      exit 0
+    fi
+    if [ -f "${join(state, "live.sig")}" ]; then
+      if [ -n "$out" ]; then cp "${join(state, "live.sig")}" "$out"; else cat "${join(state, "live.sig")}"; fi
+      emit_code "200"
+      exit 0
+    fi
+    emit_code "404"
+    exit 0
+    ;;
 esac
-[ -n "$src" ] && [ -f "$src" ] || exit 22
-if [ -n "$out" ]; then
-  cp "$src" "$out"
-else
-  cat "$src"
-fi
+emit_code "404"
+exit 0
 `,
   );
   chmodSync(curlBin, 0o755);
@@ -139,6 +169,13 @@ function ensureVerifier() {
   assert.ok(existsSync(verifierPath), `missing ${verifierPath}; build ardia-update-verify first`);
 }
 
+function loggedUploads(ghLog) {
+  return readFileSync(ghLog, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => line.startsWith("release upload "));
+}
+
 test("live publish uploads installers, then windows-update.json.sig alone, then windows-update.json alone", () => {
   ensureVerifier();
   const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-order-"));
@@ -149,10 +186,7 @@ test("live publish uploads installers, then windows-update.json.sig alone, then 
     const result = runPublish(["--installers", installers, "--out", out, "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath], { binDir: bin });
     assert.equal(result.status, 0, result.stderr + result.stdout);
 
-    const uploads = readFileSync(ghLog, "utf8")
-      .trim()
-      .split("\n")
-      .filter((line) => line.startsWith("release upload "));
+    const uploads = loggedUploads(ghLog);
     assert.equal(uploads.length, 4, uploads.join("\n"));
     assert.match(uploads[0], /Ardia-Setup-x64-500\.exe.*Ardia-Setup-arm64-500\.exe.*ardia-windows-source-500\.tar\.xz/);
     assert.match(uploads[1], /windows-update\.json\.sig$/);
@@ -165,7 +199,7 @@ test("live publish uploads installers, then windows-update.json.sig alone, then 
   }
 });
 
-test("retrying the same build repairs a partial publish with missing or invalid windows-update.json.sig", () => {
+test("matching same-build repair uploads only windows-update.json.sig without clobbering installers", () => {
   ensureVerifier();
   for (const mode of ["missing-sig", "corrupt-sig"]) {
     const dir = mkdtempSync(join(tmpdir(), `ardia-win-pub-repair-${mode}-`));
@@ -177,14 +211,47 @@ test("retrying the same build repairs a partial publish with missing or invalid 
       const out = join(dir, "out");
       const result = runPublish(["--installers", installers, "--out", out, "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath], { binDir: bin });
       assert.equal(result.status, 0, `${mode}: ${result.stderr}${result.stdout}`);
-      assert.match(result.stderr, /repairing incomplete publish/, mode);
-      const uploads = readFileSync(ghLog, "utf8")
-        .trim()
-        .split("\n")
-        .filter((line) => line.startsWith("release upload "));
-      assert.equal(uploads.length, 4, mode);
-      assert.match(uploads[1], /windows-update\.json\.sig$/);
-      assert.match(uploads[2], /windows-update\.json$/);
+      assert.match(result.stderr, /repairing signature in place/, mode);
+      const uploads = loggedUploads(ghLog);
+      assert.equal(uploads.length, 1, `${mode}: ${uploads.join("\n")}`);
+      assert.match(uploads[0], /windows-update\.json\.sig$/);
+      assert.doesNotMatch(uploads[0], /Ardia-Setup-|windows-update\.json(?:\s|$)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("same-build repair refuses rebuilt installers whose sha256 differs from live windows-update.json", () => {
+  ensureVerifier();
+  const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-rebuilt-"));
+  try {
+    const { installers, privPem, pubPem, privateKey } = makeFixture(dir, "0.2.99", 500, {
+      x64Body: Buffer.from("rebuilt-different-x64-payload-500"),
+    });
+    const { json } = signedManifest("0.2.99", 500, privateKey);
+    const { bin, ghLog } = makeFakeBin(dir, { liveJson: json, liveSig: null });
+    const result = runPublish(["--installers", installers, "--out", join(dir, "out"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath], { binDir: bin });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /differs from the live windows-update\.json/);
+    assert.deepEqual(loggedUploads(ghLog), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("signature fetch timeout or 5xx error aborts instead of triggering same-build repair", () => {
+  ensureVerifier();
+  for (const fault of [{ name: "timeout", sigCurlExit: 28 }, { name: "503", sigHttpCode: 503 }]) {
+    const dir = mkdtempSync(join(tmpdir(), `ardia-win-pub-${fault.name}-`));
+    try {
+      const { installers, privPem, pubPem, privateKey } = makeFixture(dir, "0.2.99", 500);
+      const { json } = signedManifest("0.2.99", 500, privateKey);
+      const { bin, ghLog } = makeFakeBin(dir, { liveJson: json, ...fault });
+      const result = runPublish(["--installers", installers, "--out", join(dir, "out"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath], { binDir: bin });
+      assert.notEqual(result.status, 0, fault.name);
+      assert.match(result.stderr, /could not check live windows-update\.json\.sig/, fault.name);
+      assert.deepEqual(loggedUploads(ghLog), [], fault.name);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
