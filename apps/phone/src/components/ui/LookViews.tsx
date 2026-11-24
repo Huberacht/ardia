@@ -46,8 +46,17 @@ export function GlassSource({ name, children }: { name: string; children: ReactN
 
 export const drawsGlassBehindItsLayers = (os: string, nativeGlass: boolean) => os === "android" && nativeGlass;
 
+const GlassBranchContext = createContext<boolean | null>(null);
+
+export function GlassBranch({ attached, children }: { attached: boolean; children: ReactNode }) {
+  return <GlassBranchContext.Provider value={attached}>{children}</GlassBranchContext.Provider>;
+}
+
+export const splitsGlassFromFace = (os: string, nativeGlass: boolean, branch: boolean | null) => branch !== null && drawsGlassBehindItsLayers(os, nativeGlass);
+
 export function GlassBehind() {
-  if (!drawsGlassBehindItsLayers(Platform.OS, glassIsNative())) return null;
+  const attached = useContext(GlassBranchContext) ?? true;
+  if (!attached || !drawsGlassBehindItsLayers(Platform.OS, glassIsNative())) return null;
   return <GlassBackdrop testID="glassBehind" pointerEvents="none" style={StyleSheet.absoluteFill} />;
 }
 
@@ -310,12 +319,20 @@ export function ChromeSurface({
   const privateContext = useIncognitoLook();
   const incognito = incognitoChosen ?? privateContext;
   const source = useContext(GlassSourceContext);
+  const branch = useContext(GlassBranchContext);
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was && was.x === layout.x && was.y === layout.y && was.width === layout.width && was.height === layout.height ? was : layout));
   if (glassIsNative()) {
     const shade = dark ?? (incognito || theme.dark);
-    const glass = (
-      <Glass testID={testID} source={source} name={testID} shape={shape} cornerRadius={cornerRadius} tint={incognito ? undefined : lookGlassTint(look)} interactive={interactive} tinted={tinted} surface={surface} barShadow={barShadow} shown={shown} shownMs={shownMs} classicChrome={nativeClassicChrome} {...lookColors(look, incognito, shade)} dark={shade} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
+    const glassProps = { source, name: testID, shape, cornerRadius, tint: incognito ? undefined : lookGlassTint(look), interactive, tinted, surface, barShadow, shown, shownMs, classicChrome: nativeClassicChrome, ...lookColors(look, incognito, shade), dark: shade };
+    const split = splitsGlassFromFace(Platform.OS, true, branch);
+    const glass = split ? (
+      <View testID={testID ? `${testID}Face` : undefined} collapsable={false} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
+        {branch ? <Glass testID={testID} {...glassProps} style={[StyleSheet.absoluteFill, { borderRadius: cornerRadius }]} /> : null}
+        {children}
+      </View>
+    ) : (
+      <Glass testID={testID} {...glassProps} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
         {children}
       </Glass>
     );

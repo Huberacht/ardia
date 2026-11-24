@@ -63,6 +63,8 @@ export const foldGlassShown = (android: boolean, collapsed: boolean, rest: FoldR
   pill: android ? collapsed || rest !== "bar" : collapsed,
 });
 
+export const foldBranchesAttached = (android: boolean, collapsed: boolean, rest: FoldRest) => (android ? foldGlassShown(true, collapsed, rest) : { bar: true, pill: true });
+
 export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
   const android = Platform.OS === "android";
   const fold = useSharedValue(collapsed ? 1 : 0);
@@ -90,7 +92,8 @@ export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
   const pillContent = useAnimatedStyle(() => ({ opacity: fold.value }));
   const glass = foldGlassShown(android, collapsed, rest);
   const barLook: BarFoldLook = { glass: glass.bar, glyphsGone: android ? null : fold, progress: fold };
-  return { bar, barLook, pill, pillContent, pillGlass: glass.pill, progress: fold };
+  const attached = foldBranchesAttached(android, collapsed, rest);
+  return { bar, barLook, pill, pillContent, pillGlass: glass.pill, attached, progress: fold };
 }
 
 export type BarFoldLook = { glass: boolean; glyphsGone: SharedValue<number> | null; progress: SharedValue<number> };

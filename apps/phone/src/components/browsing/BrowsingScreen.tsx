@@ -43,6 +43,7 @@ import {
   floatingBarLayout,
   FrostSource,
   GlassBehind,
+  GlassBranch,
   GlassSource,
   PAGE_FROST,
   pageReportsDrawn,
@@ -373,8 +374,9 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                   importantForAccessibility={folds && collapse.collapsed ? "no-hide-descendants" : "auto"}
                   accessibilityElementsHidden={folds && collapse.collapsed}
                 >
+                  <GlassBranch attached={!folds || collapse.fold.attached.bar}>
                   <GlassBehind />
-                  <FoldLayer testID="floatingBarFoldLayer">
+                  <FoldLayer testID="floatingBarFoldLayer" textured={!folds || collapse.fold.attached.bar}>
                   <FloatingBar
                     tab={tab}
                     preview={preview}
@@ -394,6 +396,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     onMore={pageMenuOrHeld}
                   />
                   </FoldLayer>
+                  </GlassBranch>
                 </Animated.View>
                 {folds ? (
                   <Animated.View
@@ -405,10 +408,12 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     importantForAccessibility={collapse.collapsed ? "auto" : "no-hide-descendants"}
                     accessibilityElementsHidden={!collapse.collapsed}
                   >
+                    <GlassBranch attached={collapse.fold.attached.pill}>
                     <GlassBehind />
-                    <FoldLayer testID="hostPillFoldLayer" style={styles.pillLayer}>
+                    <FoldLayer testID="hostPillFoldLayer" textured={collapse.fold.attached.pill} style={styles.pillLayer}>
                       <HostPill tab={tab} dark={barDark} shown={collapse.fold.pillGlass} anchors={collapse.collapsed} contentStyle={collapse.fold.pillContent} onExpand={collapse.expand} />
                     </FoldLayer>
+                    </GlassBranch>
                   </Animated.View>
                 ) : null}
               </Animated.View>
@@ -584,9 +589,9 @@ const styles = StyleSheet.create({
   pillLayer: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, alignItems: "center", justifyContent: "flex-end" },
 });
 
-function FoldLayer({ testID, style, children }: { testID: string; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+function FoldLayer({ testID, textured, style, children }: { testID: string; textured: boolean; style?: StyleProp<ViewStyle>; children: ReactNode }) {
   return (
-    <View testID={testID} collapsable={false} renderToHardwareTextureAndroid={Platform.OS === "android"} pointerEvents="box-none" style={style}>
+    <View testID={testID} collapsable={false} renderToHardwareTextureAndroid={Platform.OS === "android" && textured} pointerEvents="box-none" style={style}>
       {children}
     </View>
   );
