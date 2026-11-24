@@ -4,6 +4,9 @@ import { contextProperties, hardwareProperties, launchGuardProperties } from "./
 import { topAppsSharingAtLaunch } from "./topAppsSharing";
 import { appInfo } from "./transport";
 import { engineMatchProperties } from "./engineMatch";
+import { HOST_SHELL } from "./hostShell";
+import { shellMigrationOnce } from "./shellMigration";
+import { readDocument, saveDocument } from "../../platform/documents";
 
 const rebootedSince = (lastLaunchAt: number | null) => {
   const boot = appInfo().bootTime;
@@ -17,4 +20,6 @@ export async function launchEvents(session: ReturnType<typeof startClient>, cons
   capture("app_launched", { previous_session: session.previous, ...hardware, ...previous, ...launchGuardProperties(), ...engineMatchProperties(appInfo().engineMatch) }, consent);
   if (session.updatedFrom) capture("app_updated", { from_version: session.updatedFrom }, consent);
   capture("top_apps_sharing", topApps, consent);
+  const migration = HOST_SHELL === "webui" ? shellMigrationOnce({ read: readDocument, save: saveDocument }) : null;
+  if (migration) capture("shell_migration", migration, consent);
 }

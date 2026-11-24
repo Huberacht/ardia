@@ -1884,6 +1884,21 @@
     "apps/browser/src/state/automation/devToolsSourceMaps.ts#parseSourceMap"
    ],
    "detected": false
+  },
+  {
+   "id": "native:rnw-webui-migration",
+   "source": "native",
+   "guard": "ardia-webui-migrate (ardia-shell-migration) reads the React Native Windows shell's data folder, config folder, sealed sync keys and Credential Manager items, which any same-user process could have planted or linked, and copies them once into the WebUI host's folder: names follow the RNW stores' own rules (document names, theme names, sync-key accounts) and accounts become lowercase hex file names; nothing is opened through a symbolic link, junction or other reparse point on either side (O_NOFOLLOW, FILE_FLAG_OPEN_REPARSE_POINT, each folder on the way checked), hard-linked and oversized files are skipped, folders that overlap are refused, every write is staged and renamed, DPAPI runs with CRYPTPROTECT_UI_FORBIDDEN and plaintext is zeroed; the attempt report holds only enums and counts and the UI sends only known enums and capped counts from it",
+   "checks": [
+    "packages/core-rs/crates/ardia-shell-migration/src/names.rs",
+    "packages/core-rs/crates/ardia-shell-migration/src/fsafe.rs",
+    "packages/core-rs/crates/ardia-shell-migration/src/migrate.rs",
+    "packages/core-rs/crates/ardia-shell-migration/tests/migration.rs",
+    "packages/core-rs/crates/ardia-shell-migration/tests/units.rs",
+    "apps/browser/src/state/telemetry/shellMigration.ts",
+    "apps/browser/src/state/telemetry/shellMigration.test.mjs"
+   ],
+   "detected": false
   }
  ]
 }

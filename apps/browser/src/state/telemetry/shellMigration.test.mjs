@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+const { shellMigrationReport, shellMigrationOnce, SHELL_MIGRATION_ATTEMPT_DOC, SHELL_MIGRATION_REPORTED_DOC } = await import("./shellMigration.ts");
+const { HOST_SHELL } = await import("./hostShell.ts");
+const { HOST_SHELL: RNW } = await import("./hostShell.windows.ts");
+const { HOST_SHELL: WEBUI } = await import("./hostShell.win.ts");
+
+const RUN = "0123456789abcdef0123456789abcdef";
+const attempt = (overrides = {}) =>
+  JSON.stringify({
+    version: 1,
+    run: RUN,
+    outcome: "migrated_with_skips",
+    attempt: 2,
+    duration_ms: 41,
+    counts: { documents: 3, placement: 1, config_files: 2, sync_keys: 1, credentials: 4, credentials_incomplete: 1, skipped_links: 2 },
+    ...overrides,
+  });
+
+function documents(initial) {
+  const docs = new Map(Object.entries(initial));
+  return { docs, read: (name) => docs.get(name) ?? null, save: (name, contents) => void docs.set(name, contents) };
+}
+
+test("host_shell is rnw on React Native Windows, webui on the Windows WebUI build and absent elsewhere", () => {
+  assert.equal(HOST_SHELL, null);
+  assert.equal(RNW, "rnw");
+  assert.equal(WEBUI, "webui");
+});
+
+test("the migration's attempt report becomes enums and counts only", () => {
+  const { run, properties } = shellMigrationReport(attempt({ failed_stage: "credentials", outcome: "failed", path: "C:\\Users\\me", counts: { documents: 2, secret: 9, credentials: -1, sync_keys: 1.5, kept_aside: 9e15 } }));
+  assert.equal(run, RUN);
+  assert.deepEqual(Object.keys(properties).sort(), ["attempt", "config_files", "credentials", "credentials_incomplete", "documents", "duration_ms", "failed_stage", "kept_aside", "outcome", "partials_swept", "placement", "skipped_case_clash", "skipped_invalid", "skipped_links", "skipped_too_large", "sync_keys", "sync_keys_unreadable", "unchanged"]);
+  assert.equal(properties.outcome, "failed");
+  assert.equal(properties.failed_stage, "credentials");
+  assert.equal(properties.documents, 2);
+  assert.equal(properties.credentials, 0);
+  assert.equal(properties.sync_keys, 0);
+  assert.equal(properties.kept_aside, 1_000_000);
+  for (const value of Object.values(properties)) assert.ok(typeof value === "number" || /^[a-z_]+$/.test(value));
+});
+
+test("anything unexpected in the report is not sent", () => {
+  for (const text of [null, "", "{", "[]", attempt({ version: 2 }), attempt({ run: "C:\\Users" }), attempt({ run: RUN.toUpperCase() }), attempt({ outcome: "exploded" })]) {
+    assert.equal(shellMigrationReport(text), null, String(text));
+  }
+  assert.equal(shellMigrationReport(attempt({ failed_stage: "C:\\x" })).properties.failed_stage, undefined);
+  assert.equal(shellMigrationReport(attempt({ attempt: 0, duration_ms: 1e12 })).properties.attempt, 1);
+  assert.equal(shellMigrationReport(attempt({ duration_ms: 1e12 })).properties.duration_ms, 3_600_000);
+});
+
+test("each migration run is reported once", () => {
+  const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+  assert.equal(shellMigrationOnce(store).credentials, 4);
+  assert.deepEqual(JSON.parse(store.docs.get(SHELL_MIGRATION_REPORTED_DOC)), { run: RUN });
+  assert.equal(shellMigrationOnce(store), null);
+  store.docs.set(SHELL_MIGRATION_ATTEMPT_DOC, attempt({ run: "f".repeat(32), outcome: "migrated" }));
+  assert.equal(shellMigrationOnce(store).outcome, "migrated");
+  assert.equal(shellMigrationOnce(documents({})), null);
+});
+
+test("hostile values in the migration's report never reach an event", async () => {
+  const { HOSTILE_VALUES } = await import("../../../../../scripts/security/hostile-inputs.mjs");
+  for (const { id, value } of HOSTILE_VALUES) {
+    for (const field of ["run", "outcome", "failed_stage", "attempt", "duration_ms", "counts", "version"]) {
+      const report = shellMigrationReport(attempt({ [field]: value }));
+      if (!report) continue;
+      for (const sent of Object.values(report.properties)) assert.ok(typeof sent === "number" ? Number.isSafeInteger(sent) && sent >= 0 : /^[a-z_]+$/.test(sent), `${id} in ${field}`);
+    }
+    const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt(), [SHELL_MIGRATION_REPORTED_DOC]: typeof value === "string" ? value : JSON.stringify({ run: value }) });
+    assert.equal(shellMigrationOnce(store)?.outcome ?? "migrated_with_skips", "migrated_with_skips", id);
+  }
+});
