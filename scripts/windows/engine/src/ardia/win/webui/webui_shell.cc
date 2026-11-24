@@ -537,7 +537,7 @@ StoredDocument ReadStoredDocument(const base::FilePath& directory,
     return {};
   }
   std::optional<std::string> contents =
-      ReadHandleBytes(file.get(), WindowsDocumentLimit(name));
+      ReadHandleBytes(file.get(), kWindowsDocumentReadLimit);
   if (!contents || !base::IsStringUTF8(*contents)) {
     return {};
   }
@@ -674,8 +674,19 @@ base::DictValue ReadBootstrapDocuments(const base::FilePath& directory) {
   }
   size_t total_bytes = 0;
   do {
+    if (documents.size() >= kBootstrapDocumentMaxCount ||
+        total_bytes >= kBootstrapDocumentMaxBytes) {
+      break;
+    }
     if ((data.dwFileAttributes &
          (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+      continue;
+    }
+    const uint64_t listed_bytes =
+        (static_cast<uint64_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+    if (listed_bytes > kBootstrapDocumentMaxBytes ||
+        !BootstrapDocumentFits(documents.size(), total_bytes,
+                               static_cast<size_t>(listed_bytes))) {
       continue;
     }
     const std::wstring_view file_name(data.cFileName);
@@ -685,14 +696,13 @@ base::DictValue ReadBootstrapDocuments(const base::FilePath& directory) {
       continue;
     }
     StoredDocument stored = ReadStoredDocument(directory, name);
-    if (stored.outcome != ardia::desktop_policy::StoredRead::kFound) {
+    if (stored.outcome != ardia::desktop_policy::StoredRead::kFound ||
+        !BootstrapDocumentFits(documents.size(), total_bytes,
+                               stored.contents.size())) {
       continue;
     }
-    if (documents.size() < kBootstrapDocumentMaxCount &&
-        total_bytes + stored.contents.size() <= kBootstrapDocumentMaxBytes) {
-      total_bytes += stored.contents.size();
-      documents.Set(name, std::move(stored.contents));
-    }
+    total_bytes += stored.contents.size();
+    documents.Set(name, std::move(stored.contents));
   } while (::FindNextFileW(find, &data));
   ::FindClose(find);
   return documents;
@@ -719,7 +729,7 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     if (!json) {
       return std::nullopt;
     }
-    return "globalThis.__ardiaBootstrap=" + *json + ";\n" +
+    return BootstrapAssignmentScript(*json) + "\n" +
            ardia::kArdiaHostBootstrap + "\n" + kWindowsCaptionScript;
   }
   const std::optional<std::wstring> root_final =
@@ -2417,6 +2427,33 @@ void ShellWindow::EngineCall(const std::string& name,
                                                "in the Windows WebUI pilot")));
   }
   std::string json = args && args->is_string() ? args->GetString() : "{}";
+  if (const std::string_view download_command = DownloadCommandForRoute(name);
+      !download_command.empty()) {
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+    const std::string* download_id =
+        parsed && parsed->is_dict() ? parsed->GetDict().FindString("id")
+                                    : nullptr;
+    if (!download_id || download_id->empty()) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOWNLOAD_REQUEST")
+                                 .Set("message",
+                                      "A valid download id is required")));
+    }
+    std::optional<std::string> command_json =
+        base::WriteJson(base::DictValue()
+                            .Set("id", *download_id)
+                            .Set("command", download_command));
+    if (!command_json) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_BAD_REPLY")
+                                 .Set("message", "Download command arguments "
+                                                 "are not JSON")));
+    }
+    json = std::move(*command_json);
+  }
   struct Pending {
     Done done;
     std::string field;

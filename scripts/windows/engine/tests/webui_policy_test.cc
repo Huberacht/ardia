@@ -1,4 +1,5 @@
 #include "ardia/desktop/ac_desktop_telemetry_policy.h"
+#include "ardia/desktop/generated/ac_desktop_routes.h"
 #include "ardia/win/webui/webui_policy.h"
 
 #include <cassert>
@@ -64,9 +65,27 @@ void TestDocumentNames() {
   assert(ReservedWindowsDocumentName("Live.Canonical.Json"));
   assert(ReservedWindowsDocumentName("rnw-migration.lock"));
   assert(ReservedWindowsDocumentName("RNW-MIGRATION.LOCK"));
+  assert(ReservedWindowsDocumentName("rnw-migration.json"));
+  assert(ReservedWindowsDocumentName("RNW-Migration.JSON"));
+  assert(ReservedWindowsDocumentName("launch-starts.txt"));
+  assert(ReservedWindowsDocumentName("LAUNCH-STARTS.TXT"));
+  assert(ReservedWindowsDocumentName("Launch-Starts.txt"));
+  assert(ReservedWindowsDocumentName("launch-starts.txt.tmp"));
+  assert(ReservedWindowsDocumentName("LAUNCH-STARTS.TXT.TMP"));
   assert(!ReservedWindowsDocumentName("rnw-migration-attempt.json"));
   assert(!ReservedWindowsDocumentName("rnw-migration-reported.json"));
   assert(!ReservedWindowsDocumentName("launch-guard.json"));
+  assert(!ReservedWindowsDocumentName("launch-starts.json"));
+  assert(!ReservedWindowsDocumentName("launch-look.json"));
+  assert(!ReservedWindowsDocumentName("__proto__"));
+  assert(!ReservedWindowsDocumentName("constructor"));
+  for (const char* accepted : {"__proto__", "constructor", "prototype",
+                               "toString", "hasOwnProperty", "1", "true",
+                               "null", "undefined", "NaN"}) {
+    assert(ValidWindowsDocumentName(accepted));
+    assert(!ReservedWindowsDocumentName(accepted));
+    assert(BootstrapDocumentEligible(accepted));
+  }
 
   assert(BootstrapDocumentEligible("rnw-migration-attempt.json"));
   assert(BootstrapDocumentEligible("telemetry.json"));
@@ -75,6 +94,13 @@ void TestDocumentNames() {
   assert(!BootstrapDocumentEligible("live.canonical.json"));
   assert(!BootstrapDocumentEligible("rnw-migration.lock"));
   assert(!BootstrapDocumentEligible("sync-state.nns"));
+  assert(!BootstrapDocumentEligible("SYNC-STATE.NNS"));
+  assert(!BootstrapDocumentEligible("Sync-State.nns"));
+  assert(!BootstrapDocumentEligible("sync-state.NNS"));
+  assert(BootstrapDocumentEligible("sync-state.nns.json"));
+  assert(!BootstrapDocumentEligible("rnw-migration.json"));
+  assert(!BootstrapDocumentEligible("launch-starts.txt"));
+  assert(!BootstrapDocumentEligible("Launch-Starts.TXT"));
   assert(!BootstrapDocumentEligible("staging.tmp"));
   assert(!BootstrapDocumentEligible("staging.TMP"));
   assert(!BootstrapDocumentEligible("staging.partial"));
@@ -82,6 +108,21 @@ void TestDocumentNames() {
 
   assert(WindowsDocumentLimit("telemetry.json") == kWindowsDocumentDefaultLimit);
   assert(WindowsDocumentLimit("sync-state.nns") == kWindowsSyncStateDocumentLimit);
+  assert(WindowsDocumentLimit("SYNC-STATE.NNS") == kWindowsSyncStateDocumentLimit);
+  assert(WindowsDocumentLimit("Sync-State.nns") == kWindowsSyncStateDocumentLimit);
+  assert(WindowsDocumentLimit("sync-state.nns.bak") == kWindowsDocumentDefaultLimit);
+  assert(IsWindowsSyncStateDocument("sYnC-sTaTe.NnS"));
+  assert(!IsWindowsSyncStateDocument("sync-state.nn"));
+
+  static_assert(kMigratorDocumentNameLimit == 200);
+  static_assert(kMigratorDocumentLimit == 64 * 1024 * 1024);
+  static_assert(kWindowsDocumentNameLimit >= kMigratorDocumentNameLimit);
+  static_assert(kWindowsDocumentReadLimit >= kMigratorDocumentLimit);
+  static_assert(kWindowsDocumentReadLimit >= kWindowsSyncStateDocumentLimit);
+  static_assert(kWindowsDocumentReadLimit >= kWindowsDocumentDefaultLimit);
+  assert(ValidWindowsDocumentName(std::string(kMigratorDocumentNameLimit, 'm')));
+  assert(ValidWindowsDocumentName(std::string(129, 'm') + ".json"));
+  assert(!ValidWindowsDocumentName(std::string(kMigratorDocumentNameLimit + 1, 'm')));
 
   assert(ValidWindowsAssetPath("index.html"));
   assert(ValidWindowsAssetPath("assets/index-123.js"));
@@ -94,6 +135,61 @@ void TestDocumentNames() {
   assert(!ValidWindowsAssetPath("assets\\index.js"));
   assert(!ValidWindowsAssetPath("CON/index.html"));
   assert(!ValidWindowsAssetPath("assets/NUL.json"));
+}
+
+void TestBootstrapBudget() {
+  assert(BootstrapDocumentFits(0, 0, 0));
+  assert(BootstrapDocumentFits(0, 0, kBootstrapDocumentMaxBytes));
+  assert(!BootstrapDocumentFits(0, 0, kBootstrapDocumentMaxBytes + 1));
+  assert(BootstrapDocumentFits(kBootstrapDocumentMaxCount - 1, 0, 1));
+  assert(!BootstrapDocumentFits(kBootstrapDocumentMaxCount, 0, 0));
+  assert(!BootstrapDocumentFits(kBootstrapDocumentMaxCount + 5, 0, 0));
+  assert(BootstrapDocumentFits(3, kBootstrapDocumentMaxBytes - 10, 10));
+  assert(!BootstrapDocumentFits(3, kBootstrapDocumentMaxBytes - 10, 11));
+  assert(BootstrapDocumentFits(3, kBootstrapDocumentMaxBytes, 0));
+  assert(!BootstrapDocumentFits(3, kBootstrapDocumentMaxBytes + 1, 0));
+  assert(!BootstrapDocumentFits(3, 1, static_cast<size_t>(-1)));
+}
+
+void TestBootstrapScript() {
+  assert(JsonStringLiteral("") == "\"\"");
+  assert(JsonStringLiteral("abc") == "\"abc\"");
+  assert(JsonStringLiteral("a\"b\\c") == "\"a\\\"b\\\\c\"");
+  assert(JsonStringLiteral("a\nb\tc") == "\"a\\u000ab\\u0009c\"");
+  assert(JsonStringLiteral(std::string("a\0b", 3)) == "\"a\\u0000b\"");
+  assert(JsonStringLiteral("</script>") == "\"\\u003c/script>\"");
+  assert(JsonStringLiteral("x\xe2\x80\xa8y\xe2\x80\xa9z") ==
+         "\"x\\u2028y\\u2029z\"");
+  assert(JsonStringLiteral("caf\xc3\xa9") == "\"caf\xc3\xa9\"");
+
+  const std::string script = BootstrapAssignmentScript(
+      "{\"documents\":{\"__proto__\":\"{\\\"polluted\\\":true}\",\"ok.json\":\"1\"}}");
+  assert(script ==
+         "globalThis.__ardiaBootstrap=JSON.parse(\"{\\\"documents\\\":{\\\"__proto__"
+         "\\\":\\\"{\\\\\\\"polluted\\\\\\\":true}\\\",\\\"ok.json\\\":\\\"1\\\"}}\");");
+  assert(script.starts_with("globalThis.__ardiaBootstrap=JSON.parse(\""));
+  assert(script.ends_with("\");"));
+  assert(script.find("={") == std::string::npos);
+}
+
+void TestDownloadCommands() {
+  assert(DownloadCommandForRoute("downloads.cancel") == "cancel");
+  assert(DownloadCommandForRoute("downloads.pause") == "pause");
+  assert(DownloadCommandForRoute("downloads.resume") == "resume");
+  assert(DownloadCommandForRoute("downloads.keep") == "keep");
+  assert(DownloadCommandForRoute("downloads.settings").empty());
+  assert(DownloadCommandForRoute("downloads.setSettings").empty());
+  assert(DownloadCommandForRoute("downloads.Resume").empty());
+  assert(DownloadCommandForRoute("downloads.resume ").empty());
+  assert(DownloadCommandForRoute("history.query").empty());
+  assert(DownloadCommandForRoute("").empty());
+  size_t command_routes = 0;
+  for (const auto& route : ardia::desktop_routes::kRoutes) {
+    const bool command_service = route.service == "ac_downloads_command";
+    assert(command_service == !DownloadCommandForRoute(route.name).empty());
+    command_routes += command_service ? 1 : 0;
+  }
+  assert(command_routes == 4);
 }
 
 void TestCanonicalPathContainment() {
@@ -304,6 +400,9 @@ void TestMaximizeButtonStateMachine() {
 
 int main() {
   TestDocumentNames();
+  TestBootstrapBudget();
+  TestBootstrapScript();
+  TestDownloadCommands();
   TestCanonicalPathContainment();
   TestStartupMigrationPolicy();
   TestWinRenameHelpers();

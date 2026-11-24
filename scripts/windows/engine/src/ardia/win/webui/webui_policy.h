@@ -16,17 +16,22 @@ inline constexpr char kMigrateRnwDataSwitch[] = "ardia-migrate-rnw-data";
 inline constexpr wchar_t kMigratorBinaryName[] = L"ardia-webui-migrate.exe";
 inline constexpr unsigned long kStartupMigrationTimeoutMs = 15000;
 
-inline constexpr size_t kWindowsDocumentNameLimit = 128;
+inline constexpr size_t kMigratorDocumentNameLimit = 200;
+inline constexpr size_t kMigratorDocumentLimit = 64 * 1024 * 1024;
+inline constexpr size_t kWindowsDocumentNameLimit = kMigratorDocumentNameLimit;
+inline constexpr size_t kWindowsDocumentReadLimit = kMigratorDocumentLimit;
 inline constexpr size_t kWindowsDocumentDefaultLimit = 8 * 1024 * 1024;
 inline constexpr char kWindowsSyncStateDocument[] = "sync-state.nns";
 inline constexpr size_t kWindowsSyncStateDocumentLimit = 48 * 1024 * 1024;
 inline constexpr size_t kBootstrapDocumentMaxCount = 128;
 inline constexpr size_t kBootstrapDocumentMaxBytes = 8 * 1024 * 1024;
 
-inline constexpr size_t WindowsDocumentLimit(std::string_view name) {
-  return name == kWindowsSyncStateDocument ? kWindowsSyncStateDocumentLimit
-                                           : kWindowsDocumentDefaultLimit;
-}
+inline constexpr const char* kReservedWindowsDocumentNames[] = {
+    "session.json",       "live.json",
+    "live.canonical.json", "rnw-migration.json",
+    "rnw-migration.lock", "launch-starts.txt",
+    "launch-starts.txt.tmp",
+};
 
 inline constexpr char AsciiLower(char c) {
   return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
@@ -55,6 +60,15 @@ inline constexpr bool AsciiEndsWithIgnoreCase(std::string_view text,
     return false;
   }
   return AsciiEqualsIgnoreCase(text.substr(text.size() - suffix.size()), suffix);
+}
+
+inline constexpr bool IsWindowsSyncStateDocument(std::string_view name) {
+  return AsciiEqualsIgnoreCase(name, kWindowsSyncStateDocument);
+}
+
+inline constexpr size_t WindowsDocumentLimit(std::string_view name) {
+  return IsWindowsSyncStateDocument(name) ? kWindowsSyncStateDocumentLimit
+                                          : kWindowsDocumentDefaultLimit;
 }
 
 inline constexpr bool WideAsciiEqualsIgnoreCase(std::wstring_view a,
@@ -113,17 +127,81 @@ inline constexpr bool ValidWindowsDocumentName(std::string_view name) {
 }
 
 inline constexpr bool ReservedWindowsDocumentName(std::string_view name) {
-  return AsciiEqualsIgnoreCase(name, "session.json") ||
-         AsciiEqualsIgnoreCase(name, "live.json") ||
-         AsciiEqualsIgnoreCase(name, "live.canonical.json") ||
-         AsciiEqualsIgnoreCase(name, "rnw-migration.lock");
+  for (const char* reserved : kReservedWindowsDocumentNames) {
+    if (AsciiEqualsIgnoreCase(name, reserved)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 inline constexpr bool BootstrapDocumentEligible(std::string_view name) {
   return ValidWindowsDocumentName(name) && !ReservedWindowsDocumentName(name) &&
+         !IsWindowsSyncStateDocument(name) &&
          !AsciiEndsWithIgnoreCase(name, ".tmp") &&
          !AsciiEndsWithIgnoreCase(name, ".partial") &&
          WindowsDocumentLimit(name) <= kBootstrapDocumentMaxBytes;
+}
+
+inline constexpr bool BootstrapDocumentFits(size_t count,
+                                            size_t used_bytes,
+                                            size_t file_bytes) {
+  return count < kBootstrapDocumentMaxCount &&
+         used_bytes <= kBootstrapDocumentMaxBytes &&
+         file_bytes <= kBootstrapDocumentMaxBytes - used_bytes;
+}
+
+inline std::string JsonStringLiteral(std::string_view utf8) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(utf8.size() + 2);
+  out.push_back('"');
+  for (size_t i = 0; i < utf8.size(); ++i) {
+    const unsigned char c = static_cast<unsigned char>(utf8[i]);
+    if (c == '"' || c == '\\') {
+      out.push_back('\\');
+      out.push_back(static_cast<char>(c));
+    } else if (c == '<') {
+      out.append("\\u003c");
+    } else if (c < 0x20 || c == 0x7f) {
+      out.append("\\u00");
+      out.push_back(kHex[c >> 4]);
+      out.push_back(kHex[c & 0xf]);
+    } else if (c == 0xe2 && i + 2 < utf8.size() &&
+               static_cast<unsigned char>(utf8[i + 1]) == 0x80 &&
+               (static_cast<unsigned char>(utf8[i + 2]) == 0xa8 ||
+                static_cast<unsigned char>(utf8[i + 2]) == 0xa9)) {
+      out.append(static_cast<unsigned char>(utf8[i + 2]) == 0xa8 ? "\\u2028"
+                                                                 : "\\u2029");
+      i += 2;
+    } else {
+      out.push_back(static_cast<char>(c));
+    }
+  }
+  out.push_back('"');
+  return out;
+}
+
+inline std::string BootstrapAssignmentScript(std::string_view bootstrap_json) {
+  return "globalThis.__ardiaBootstrap=JSON.parse(" +
+         JsonStringLiteral(bootstrap_json) + ");";
+}
+
+inline constexpr std::string_view DownloadCommandForRoute(
+    std::string_view route) {
+  if (route == "downloads.cancel") {
+    return "cancel";
+  }
+  if (route == "downloads.pause") {
+    return "pause";
+  }
+  if (route == "downloads.resume") {
+    return "resume";
+  }
+  if (route == "downloads.keep") {
+    return "keep";
+  }
+  return {};
 }
 
 inline constexpr bool ValidWindowsAssetPath(std::string_view path) {

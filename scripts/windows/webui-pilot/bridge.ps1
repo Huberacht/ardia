@@ -117,19 +117,27 @@ $targets = PageTargets
 Check 'valid-create-after-hostile-input' ($second.ok -and ($targets -contains 'file:///C:/pilot/form.html?second') -and ((PagesCreated) -eq $baseCreated + 1)) "pages: $($targets -join ' | ')"
 
 function Invoke-HostExpr([string]$method, [string]$argsExpression) {
-  Cdp-Eval "(() => { try { return __ardiaHost.invoke($(Js $method), { args: $argsExpression }).then(r => JSON.stringify({ ok: true, r }), e => JSON.stringify({ ok: false, e: String(e && e.message || e) })); } catch (e) { return JSON.stringify({ ok: false, e: 'threw ' + e.message }); } })()" | ConvertFrom-Json
+  $answer = Cdp-Eval "(() => { let pending; try { pending = __ardiaHost.invoke($(Js $method), { args: $argsExpression }); } catch (e) { return JSON.stringify({ ok: false, kind: 'sync', message: String(e && e.message || e) }); } return pending.then(value => JSON.stringify({ ok: true, value: value === undefined ? null : value }), e => { const message = String(e && e.message || e); if (e && typeof e === 'object' && Object.hasOwn(e, 'code')) return JSON.stringify({ ok: false, kind: 'native', code: String(e.code), message }); return JSON.stringify({ ok: false, kind: /^Native request timed out/.test(message) ? 'timeout' : 'transport', message }); }); })()"
+  if ($null -eq $answer) { return [pscustomobject]@{ ok = $false; kind = 'transport'; code = $null; message = 'no CDP answer' } }
+  $answer | ConvertFrom-Json
 }
+function Native-Refusal($answer, [string]$code) {
+  ($null -ne $answer) -and ($answer.ok -eq $false) -and ($answer.kind -ceq 'native') -and ($answer.code -ceq $code)
+}
+function Answer-Text($answer) { if ($null -eq $answer) { 'null' } else { $answer | ConvertTo-Json -Compress -Depth 4 } }
 function Folder-Snapshot([string]$root) {
   @(Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
     if ($_.PSIsContainer) { "D:$($_.Name)" } else { "F:$($_.Name):$($_.Length):$($_.LastWriteTimeUtc.Ticks)" }
   }) -join '|'
 }
+function Prototype-Shape { Cdp-Eval 'JSON.stringify({ own: Object.getOwnPropertyNames(Object.prototype).sort(), plain: Object.getPrototypeOf({}) === Object.prototype, polluted: ({}).pilotPolluted === undefined && ({}).polluted === undefined })' }
 
 $outsideCanary = Join-Path $RunRoot 'outside-canary.json'
 Set-Content -LiteralPath $outsideCanary '{"canary":"untouched"}' -NoNewline
 $canaryBefore = Get-Content -LiteralPath $outsideCanary -Raw
 $runBefore = Folder-Snapshot $RunRoot
 $dataBefore = Folder-Snapshot $Data
+$prototypeBefore = Prototype-Shape
 
 $corpus = Get-Content -LiteralPath 'C:\pilot\hostile-corpus.json' -Raw -Encoding UTF8 | ConvertFrom-Json
 $docHostileNames = @(
@@ -137,43 +145,71 @@ $docHostileNames = @(
   '.hidden.json', 'trailing.', ' leading.json', 'trailing.json ', 'foo:bar.json', 'foo.json:$DATA',
   'CON', 'CON.json', 'PRN.txt', 'AUX', 'NUL.json', 'COM1', 'COM9.json', 'LPT1', 'LPT9.txt',
   'session.json', 'SESSION.JSON', 'live.json', 'LIVE.JSON', 'live.canonical.json', 'Live.Canonical.Json',
-  'rnw-migration.lock', 'RNW-MIGRATION.LOCK', ('a' * 129)
+  'rnw-migration.json', 'RNW-Migration.JSON', 'rnw-migration.lock', 'RNW-MIGRATION.LOCK',
+  'launch-starts.txt', 'LAUNCH-STARTS.TXT', 'launch-starts.txt.tmp', 'Launch-Starts.TXT.tmp', ('a' * 201)
 )
 $docUnrefused = @()
+$docAccepted = @()
+$docRoundTripFailures = @()
+function Expect-Refusal([string]$label, $answer, [string]$code) {
+  if (-not (Native-Refusal $answer $code)) {
+    $script:docUnrefused += $label
+    Log "document $label expected native $code, answered $(Answer-Text $answer)"
+  }
+}
+function Expect-Refused-Everywhere([string]$label, [string]$expression, [string]$code) {
+  Expect-Refusal "read:$label" (Invoke-HostExpr 'ArdiaShell.readDocument' "[$expression]") $code
+  Expect-Refusal "write:$label" (Invoke-HostExpr 'ArdiaShell.writeDocument' "[$expression, `"x`"]") $code
+  Expect-Refusal "remove:$label" (Invoke-HostExpr 'ArdiaShell.removeDocument' "[$expression]") $code
+}
+function Expect-RoundTrip([string]$label, [string]$expression, [string]$name) {
+  $contents = "pilot-roundtrip:$label"
+  $path = Join-Path $Data $name
+  $absent = Invoke-HostExpr 'ArdiaShell.readDocument' "[$expression]"
+  $written = Invoke-HostExpr 'ArdiaShell.writeDocument' "[$expression, $(Js $contents)]"
+  $read = Invoke-HostExpr 'ArdiaShell.readDocument' "[$expression]"
+  $disk = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+  $removed = Invoke-HostExpr 'ArdiaShell.removeDocument' "[$expression]"
+  $gone = Invoke-HostExpr 'ArdiaShell.readDocument' "[$expression]"
+  $ok = ($absent.ok -eq $true) -and ($null -eq $absent.value) -and ($written.ok -eq $true) -and ($read.ok -eq $true) -and ($read.value -ceq $contents) -and ($disk -ceq $contents) -and ($removed.ok -eq $true) -and ($gone.ok -eq $true) -and ($null -eq $gone.value) -and (-not (Test-Path -LiteralPath $path))
+  $script:docAccepted += $label
+  if (-not $ok) {
+    $script:docRoundTripFailures += $label
+    Log "document round trip $label failed: absent=$(Answer-Text $absent) written=$(Answer-Text $written) read=$(Answer-Text $read) disk=$disk removed=$(Answer-Text $removed) gone=$(Answer-Text $gone)"
+  }
+}
 foreach ($case in $corpus.cases) {
-  $readAns = Invoke-HostExpr 'ArdiaShell.readDocument' "[$($case.expression)]"
-  if ($readAns.ok -ne $false) { $docUnrefused += "read:$($case.id)" }
-  $writeAns = Invoke-HostExpr 'ArdiaShell.writeDocument' "[$($case.expression), `"x`"]"
-  if ($writeAns.ok -ne $false) { $docUnrefused += "write:$($case.id)" }
-  $removeAns = Invoke-HostExpr 'ArdiaShell.removeDocument' "[$($case.expression)]"
-  if ($removeAns.ok -ne $false) { $docUnrefused += "remove:$($case.id)" }
+  switch ($case.document) {
+    'request' { Expect-Refused-Everywhere $case.id $case.expression 'ERR_DOCUMENT_REQUEST' }
+    'name' { Expect-Refused-Everywhere $case.id $case.expression 'ERR_DOCUMENT_NAME' }
+    'accepted' { Expect-RoundTrip $case.id $case.expression $case.name }
+    default { $docUnrefused += "unclassified:$($case.id)" }
+  }
 }
 foreach ($name in $docHostileNames) {
-  $expr = Js $name
-  $readAns = Invoke-HostExpr 'ArdiaShell.readDocument' "[$expr]"
-  if ($readAns.ok -ne $false) { $docUnrefused += "read:$name" }
-  $writeAns = Invoke-HostExpr 'ArdiaShell.writeDocument' "[$expr, `"x`"]"
-  if ($writeAns.ok -ne $false) { $docUnrefused += "write:$name" }
-  $removeAns = Invoke-HostExpr 'ArdiaShell.removeDocument' "[$expr]"
-  if ($removeAns.ok -ne $false) { $docUnrefused += "remove:$name" }
+  Expect-Refused-Everywhere $name (Js $name) 'ERR_DOCUMENT_NAME'
 }
-foreach ($shape in @('[]', '["a.json", "b", "extra"]', '"a.json"', '{ "0": "a.json" }')) {
-  $readAns = Invoke-HostExpr 'ArdiaShell.readDocument' $shape
-  if ($readAns.ok -ne $false) { $docUnrefused += "read-shape:$shape" }
-  $removeAns = Invoke-HostExpr 'ArdiaShell.removeDocument' $shape
-  if ($removeAns.ok -ne $false) { $docUnrefused += "remove-shape:$shape" }
+foreach ($shape in @('[]', '["a.json", "b", "extra"]', '"a.json"', '{ "0": "a.json" }', '[123]', '[null]')) {
+  Expect-Refusal "read-shape:$shape" (Invoke-HostExpr 'ArdiaShell.readDocument' $shape) 'ERR_DOCUMENT_REQUEST'
+  Expect-Refusal "remove-shape:$shape" (Invoke-HostExpr 'ArdiaShell.removeDocument' $shape) 'ERR_DOCUMENT_REQUEST'
 }
-foreach ($shape in @('[]', '["a.json"]', '["a.json", 123]', '["a.json", "x", "extra"]')) {
-  $writeAns = Invoke-HostExpr 'ArdiaShell.writeDocument' $shape
-  if ($writeAns.ok -ne $false) { $docUnrefused += "write-shape:$shape" }
+foreach ($shape in @('[]', '["a.json"]', '["a.json", 123]', '["a.json", "x", "extra"]', '[123, "x"]')) {
+  Expect-Refusal "write-shape:$shape" (Invoke-HostExpr 'ArdiaShell.writeDocument' $shape) 'ERR_DOCUMENT_REQUEST'
 }
-$oversized = Invoke-HostExpr 'ArdiaShell.writeDocument' '["oversized-doc.json", "x".repeat(8 * 1024 * 1024 + 1)]'
-if ($oversized.ok -ne $false) { $docUnrefused += 'write:oversized' }
+Expect-Refusal 'write:oversized' (Invoke-HostExpr 'ArdiaShell.writeDocument' '["oversized-doc.json", "x".repeat(8 * 1024 * 1024 + 1)]') 'ERR_DOCUMENT_LIMIT'
 
+$prototypeAfter = Prototype-Shape
 $canaryAfterHostile = Get-Content -LiteralPath $outsideCanary -Raw
 $runAfterHostile = Folder-Snapshot $RunRoot
 $dataAfterHostile = Folder-Snapshot $Data
-Check 'documents-refuse-hostile-corpus' (($docUnrefused.Count -eq 0) -and ($canaryAfterHostile -eq $canaryBefore) -and ($runAfterHostile -eq $runBefore) -and ($dataAfterHostile -eq $dataBefore)) "unrefused: $($docUnrefused -join ', '); outside canary intact: $($canaryAfterHostile -eq $canaryBefore); data unchanged: $($dataAfterHostile -eq $dataBefore)"
+Check 'documents-refuse-hostile-corpus' (($docUnrefused.Count -eq 0) -and ($canaryAfterHostile -eq $canaryBefore) -and ($runAfterHostile -eq $runBefore) -and ($dataAfterHostile -eq $dataBefore)) "not refused with the expected native code: $($docUnrefused -join ', '); outside canary intact: $($canaryAfterHostile -eq $canaryBefore); data unchanged: $($dataAfterHostile -eq $dataBefore)"
+Check 'documents-accepted-corpus-names-roundtrip' (($docAccepted.Count -gt 0) -and ($docRoundTripFailures.Count -eq 0) -and ($null -ne $prototypeBefore) -and ($prototypeAfter -ceq $prototypeBefore)) "accepted names: $($docAccepted -join ', '); failed: $($docRoundTripFailures -join ', '); Object.prototype unchanged: $($prototypeAfter -ceq $prototypeBefore)"
+
+$syncAliasPath = Join-Path $Data 'Sync-State.nns'
+$syncAliasWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["Sync-State.nns", "s".repeat(8 * 1024 * 1024 + 1)]'
+$syncAliasSize = (Get-Item -LiteralPath $syncAliasPath -ErrorAction SilentlyContinue).Length
+$syncAliasRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["Sync-State.nns"]'
+Check 'documents-sync-state-alias-limit' (($syncAliasWrite.ok -eq $true) -and ($syncAliasSize -eq (8 * 1024 * 1024 + 1)) -and ($syncAliasRemove.ok -eq $true) -and (-not (Test-Path -LiteralPath $syncAliasPath))) "write=$(Answer-Text $syncAliasWrite) size=$syncAliasSize remove=$(Answer-Text $syncAliasRemove)"
 
 $linkPath = Join-Path $Data 'escape-link.json'
 cmd /c mklink "$linkPath" "$outsideCanary" | Out-Null
@@ -184,7 +220,7 @@ $linkRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["escape-link.json"]'
 $canaryAfterLink = Get-Content -LiteralPath $outsideCanary -Raw
 $linkStillExists = Test-Path -LiteralPath $linkPath
 if ($linkStillExists) { Remove-Item -LiteralPath $linkPath -Force }
-Check 'documents-refuse-reparse-point' ([bool]($linkItem -and $linkItem.LinkType) -and ($linkRead.ok -eq $false) -and ($linkWrite.ok -eq $false) -and ($linkRemove.ok -eq $false) -and ($canaryAfterLink -eq $canaryBefore) -and $linkStillExists) "link read/write/remove ok=$($linkRead.ok)/$($linkWrite.ok)/$($linkRemove.ok); outside canary intact: $($canaryAfterLink -eq $canaryBefore)"
+Check 'documents-refuse-reparse-point' ([bool]($linkItem -and $linkItem.LinkType) -and (Native-Refusal $linkRead 'ERR_DOCUMENT_READ') -and (Native-Refusal $linkWrite 'ERR_DOCUMENT_WRITE') -and (Native-Refusal $linkRemove 'ERR_DOCUMENT_REMOVE') -and ($canaryAfterLink -eq $canaryBefore) -and $linkStillExists) "read=$(Answer-Text $linkRead) write=$(Answer-Text $linkWrite) remove=$(Answer-Text $linkRemove); outside canary intact: $($canaryAfterLink -eq $canaryBefore)"
 
 $docAbsent = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
 $docWritten = Invoke-HostExpr 'ArdiaShell.writeDocument' '["pilot-roundtrip.json", "{\"ok\":true}"]'
@@ -192,7 +228,20 @@ $docRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
 $docDisk = Get-Content -LiteralPath (Join-Path $Data 'pilot-roundtrip.json') -Raw -ErrorAction SilentlyContinue
 $docRemoved = Invoke-HostExpr 'ArdiaShell.removeDocument' '["pilot-roundtrip.json"]'
 $docGone = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
-Check 'documents-valid-roundtrip' (($docAbsent.ok -eq $true) -and ($null -eq $docAbsent.r) -and ($docWritten.ok -eq $true) -and ($docRead.ok -eq $true) -and ($docRead.r -eq '{"ok":true}') -and ($docDisk -eq '{"ok":true}') -and ($docRemoved.ok -eq $true) -and ($docGone.ok -eq $true) -and ($null -eq $docGone.r) -and (-not (Test-Path -LiteralPath (Join-Path $Data 'pilot-roundtrip.json')))) "absent=$($docAbsent.r), read=$($docRead.r), gone=$($docGone.r)"
+Check 'documents-valid-roundtrip' (($docAbsent.ok -eq $true) -and ($null -eq $docAbsent.value) -and ($docWritten.ok -eq $true) -and ($docRead.ok -eq $true) -and ($docRead.value -eq '{"ok":true}') -and ($docDisk -eq '{"ok":true}') -and ($docRemoved.ok -eq $true) -and ($docGone.ok -eq $true) -and ($null -eq $docGone.value) -and (-not (Test-Path -LiteralPath (Join-Path $Data 'pilot-roundtrip.json')))) "absent=$($docAbsent.value), read=$($docRead.value), gone=$($docGone.value)"
+
+$protoDocument = '{"pilotPolluted":true}'
+$protoWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' "[`"__proto__`", $(Js $protoDocument)]"
+$ordinaryWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["pilot-bootstrap.json", "ordinary"]'
+$originBefore = Cdp-Eval 'String(performance.timeOrigin)'
+$liveBefore = (Shell-Lines-Matching 'shell document \d+ is live').Count
+Cdp-Command 'Page.reload' @{ ignoreCache = $true } | Out-Null
+Wait-Until { (Shell-Lines-Matching 'shell document \d+ is live').Count -gt $liveBefore } 30 'the reloaded document to go live' -NoThrow | Out-Null
+Wait-Until { ((Cdp-Eval 'String(performance.timeOrigin)') -ne $originBefore) -and ((Cdp-Eval 'typeof window.__ardiaHost === "object"') -eq $true) } 30 'the reloaded document to answer' -NoThrow | Out-Null
+$bootstrapDocs = Cdp-Eval "(() => { const docs = __ardiaHost.bootstrap.documents || {}; return JSON.stringify({ ownProto: Object.hasOwn(docs, '__proto__'), proto: Object.getOwnPropertyDescriptor(docs, '__proto__')?.value ?? null, ordinary: Object.hasOwn(docs, 'pilot-bootstrap.json') ? docs['pilot-bootstrap.json'] : null, plain: Object.getPrototypeOf(docs) === Object.prototype, clean: ({}).pilotPolluted === undefined, mapped: new Map(Object.entries(docs)).get('__proto__') ?? null }); })()" | ConvertFrom-Json
+$protoRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["__proto__"]'
+$ordinaryRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["pilot-bootstrap.json"]'
+Check 'bootstrap-keeps-proto-document' (($protoWrite.ok -eq $true) -and ($ordinaryWrite.ok -eq $true) -and $bootstrapDocs.ownProto -and ($bootstrapDocs.proto -ceq $protoDocument) -and ($bootstrapDocs.mapped -ceq $protoDocument) -and ($bootstrapDocs.ordinary -ceq 'ordinary') -and $bootstrapDocs.plain -and $bootstrapDocs.clean -and ($protoRemove.ok -eq $true) -and ($ordinaryRemove.ok -eq $true) -and (-not (Test-Path -LiteralPath (Join-Path $Data '__proto__')))) "bootstrap documents after reload: $(Answer-Text $bootstrapDocs)"
 
 $telemetryBadCases = @(
   '[]',
@@ -209,10 +258,10 @@ $telemetryBadCases = @(
 $telemetryUnrefused = @()
 foreach ($caseExpr in $telemetryBadCases) {
   $ans = Invoke-HostExpr 'ArdiaTelemetry.post' $caseExpr
-  if ($ans.ok -ne $false) { $telemetryUnrefused += $caseExpr }
+  if (-not (Native-Refusal $ans 'ERR_TELEMETRY_REFUSED')) { $telemetryUnrefused += "$caseExpr => $(Answer-Text $ans)" }
 }
-$telemetryCap = Cdp-Eval 'Boolean(globalThis.__ardiaBootstrap && Array.isArray(globalThis.__ardiaBootstrap.capabilities) && globalThis.__ardiaBootstrap.capabilities.includes("ArdiaTelemetry.post"))'
-Check 'telemetry-refuses-invalid-requests' (($telemetryCap -eq 'True') -and ($telemetryUnrefused.Count -eq 0)) "advertised=$telemetryCap; unrefused=$($telemetryUnrefused -join '; ')"
+$telemetryCap = Cdp-Eval 'Boolean(window.__ardiaHost && Array.isArray(__ardiaHost.bootstrap.capabilities) && __ardiaHost.bootstrap.capabilities.includes("ArdiaTelemetry.post"))'
+Check 'telemetry-refuses-invalid-requests' (($telemetryCap -eq $true) -and ($telemetryUnrefused.Count -eq 0)) "advertised=$telemetryCap; not refused with ERR_TELEMETRY_REFUSED: $($telemetryUnrefused -join '; ')"
 
 Stop-Engine
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\bridge-results.json"
