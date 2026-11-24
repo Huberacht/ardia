@@ -75,7 +75,14 @@ bool ReachesOtherTargets(std::string_view method,
            method != "Target.detachFromTarget" &&
            method != "Target.getTargetInfo";
   }
-  return false;
+  if (method.starts_with("Browser.")) {
+    return method != "Browser.getVersion";
+  }
+  return method == "Storage.getCookies" || method == "Storage.setCookies" ||
+         method == "Storage.clearCookies" ||
+         method == "Network.getAllCookies" ||
+         method == "Network.clearBrowserCookies" ||
+         method == "Network.clearBrowserCache";
 }
 
 bool ValidMethodName(std::string_view method) {

@@ -54,6 +54,8 @@ function route(event: ControlDevToolsEvent) {
     method: event.method,
     ...(event.sessionId ? { sessionId: event.sessionId } : {}),
     ...(event.cut ? { cut: true, bytes: event.bytes ?? 0 } : { params: event.params ?? {} }),
+    ...((event.dropped ?? 0) > 0 ? { dropped: event.dropped } : {}),
+    ...((event.droppedByHost ?? 0) > 0 ? { droppedByHost: event.droppedByHost } : {}),
   });
 }
 

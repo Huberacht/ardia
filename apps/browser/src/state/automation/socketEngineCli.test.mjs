@@ -58,14 +58,17 @@ test("a DevTools session belongs to the connection that opened it, gets its even
   const before = stub.controlSocket.broadcasts.length;
   stub.emitEvent("engine.cliDevTools", { session: opened.session, method: "Network.requestWillBeSent", params: { requestId: "1" } });
   stub.emitEvent("engine.cliDevTools", { session: opened.session, method: "Tracing.dataCollected", cut: true, bytes: 2_000_000 });
+  stub.emitEvent("engine.cliDevTools", { session: opened.session, method: "Tracing.tracingComplete", params: {}, dropped: 4, droppedByHost: 2 });
   await settle();
   const pushed = eventsFor(501, before);
   assert.deepEqual(
-    pushed.map((e) => [e.event, e.data.method, e.data.cut ?? false]),
+    pushed.map((e) => [e.event, e.data.method, e.data.cut ?? false, e.data.dropped ?? 0, e.data.droppedByHost ?? 0]),
     [
-      ["devtools.event", "Network.requestWillBeSent", false],
-      ["devtools.event", "Tracing.dataCollected", true],
+      ["devtools.event", "Network.requestWillBeSent", false, 0, 0],
+      ["devtools.event", "Tracing.dataCollected", true, 0, 0],
+      ["devtools.event", "Tracing.tracingComplete", false, 4, 2],
     ],
+    "a socket client is told when the engine or the host dropped its events",
   );
   assert.equal(eventsFor(502, before).length, 0, "events go only to the owning connection");
   assert.equal(liveEngineSessions(), 1);
