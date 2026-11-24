@@ -8,7 +8,7 @@ import { selectProfile } from "../../state/sync/actions";
 import { useSelectedProfile, useSyncStatus, useSyncView } from "../../state/sync/hooks";
 import { useCanReopen, useIncognito } from "../../state/tabs/hooks";
 import { countUsage } from "../../state/telemetry/telemetry";
-import { browseLayout, ChromeSurface, deckChromeLayout, font, iconRoles, menuLook, smoothCorners, Tappable, tabsLayout, useTheme, type MenuItem } from "../ui";
+import { browseLayout, ChromeSurface, deckChromeLayout, font, iconRoles, menuLook, Tappable, tabsLayout, useTheme, type MenuItem } from "../ui";
 import { deckLook } from "./deckLook";
 import { MenuTrigger, nativeMenus, spaceSystemImage, type MenuOpener } from "../ui/MenuTrigger";
 import { SpaceTitle, spaceMenuSymbol } from "../search/StartSpaces";
@@ -81,9 +81,9 @@ export function DeckHeader({ safeTop, safeSide, sideInset, hasTabs, onCloseAll, 
     <View testID="deckHeader" pointerEvents="box-none" style={[styles.row, { top: rowTop, paddingHorizontal: side }]}>
       {current && spaces.length > 1 ? (
         <DeckHitTarget control="spaces" live={hits} originY={rowTop} style={styles.switcher}>
-        <MenuTrigger opener={spacesOpener} items={spaceItems} {...menu} place={{ top: below, left: side, width: tabsLayout.menuWidth }}>
+        <MenuTrigger opener={spacesOpener} items={spaceItems} {...menu} previewRadius={deckLook.switcherCorner} place={{ top: below, left: side, width: tabsLayout.menuWidth }}>
           {({ onPress }) => (
-            <ChromeSurface testID="deckSwitcherGlass" shape="capsule" cornerRadius={deckLook.switcherCorner} incognito={incognito} dark={theme.dark} shown={glassShown} shownMs={glassShownMs} underlay={underlay} style={smoothCorners}>
+            <ChromeSurface testID="deckSwitcherGlass" shape="capsule" cornerRadius={deckLook.switcherCorner} incognito={incognito} dark={theme.dark} shown={glassShown} shownMs={glassShownMs} underlay={underlay}>
               <Tappable kind="text" label={`Space, ${current.name}`} hint="Shows your Mac’s spaces." onPress={onPress ?? noop} style={styles.switcherPress}>
                 <FadingGlyphs testID="deckSwitcher" fade={glyphFade}>
                   <SpaceTitle space={current} dark={theme.dark} showsChevron />
@@ -108,7 +108,7 @@ export function DeckHeader({ safeTop, safeSide, sideInset, hasTabs, onCloseAll, 
       )}
       <View style={styles.spacer} />
       <DeckHitTarget control="more" live={hits} originY={rowTop}>
-        <MenuTrigger opener={moreOpener} items={moreItems} {...menu} place={{ top: below, right: side, width: tabsLayout.menuWidth }}>
+        <MenuTrigger opener={moreOpener} items={moreItems} {...menu} previewRadius={deckChromeLayout.headerCircle / 2} place={{ top: below, right: side, width: tabsLayout.menuWidth }}>
           {({ onPress }) => <GlassCircleButton icon={iconRoles.more} label={actionWords.more} testID="deckHeaderMore" diameter={deckChromeLayout.headerCircle} incognito={incognito} dark={theme.dark} glassShown={glassShown} glassShownMs={glassShownMs} glyphFade={glyphFade} underlay={underlay} onPress={onPress ?? noop} />}
         </MenuTrigger>
       </DeckHitTarget>

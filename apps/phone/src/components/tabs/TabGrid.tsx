@@ -68,7 +68,7 @@ export function TabGrid({ tabs, selectedId, geometry: g, reduceMotion, shown = t
   const leave = FadeOut.duration(tabsMotion.fade);
   return (
     <FadeView testID="tabGrid" top={{ length: tabGridLayout.topFade }} style={[styles.viewport, { top: viewportTop }]}>
-      <ScrollView
+      <ScrollView bounces={false} overScrollMode="never"
         testID="tabGridScroll"
         ref={scroll}
         contentOffset={{ x: 0, y: startOffset }}
@@ -168,7 +168,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", gap: tabGridLayout.headerSpacing, height: tabGridCloseSlot.side },
   title: { flex: 1, fontWeight: "500" },
   closeSlot: { width: tabGridCloseSlot.side, height: tabGridCloseSlot.side, marginLeft: tabGridCloseSlot.lead, alignItems: "center", justifyContent: "center" },
-  closePlate: { width: tabGridLayout.closePlate, height: tabGridLayout.closePlate, alignItems: "center", justifyContent: "center" },
+  closePlate: { width: tabGridLayout.closePlate, height: tabGridLayout.closePlate, alignItems: "center", justifyContent: "center", borderRadius: CLOSE_CORNER },
   card: { borderRadius: tabsLayout.cardRadius, ...smoothCorners, overflow: "hidden" },
   edge: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, borderRadius: tabsLayout.cardRadius, ...smoothCorners },
 });

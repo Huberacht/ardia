@@ -6,7 +6,7 @@ import { SearchTray } from "../components/search/SearchTray";
 import { StartScreen } from "../components/search/StartScreen";
 import { TabDeck } from "../components/tabs/TabDeck";
 import { deckHeaderBottom } from "../components/tabs/DeckHeader";
-import { DesignProvider } from "../components/ui";
+import { DesignProvider, floatingPanelLayout } from "../components/ui";
 import { deckGeometry, deckLeading } from "../lib/deckGeometry";
 import { forgetLandscapeCount, noteScreenLayout, noteWindowShape } from "../state/app/landscapeCount";
 import * as deckGrid from "../state/browse/deckGrid";
@@ -180,11 +180,10 @@ test("with no hinge the page bar keeps Tabs and + in its row", () => {
   unmount(page);
 });
 
-test("in landscape the search panel spans the safe width, so it clears the island, and on Android sits the panel inset further in", () => {
+test("in landscape the search panel sits 8 points inside the safe width, so it clears the island", () => {
   act(() => presentSearch("page"));
   const root = redesigned(<SearchTray />);
-  const side = 59 + (Platform.OS === "android" ? 8 : 0);
-  expect(flat(hosts(root, "trayPanel")[0]!)).toMatchObject({ left: side, right: side });
+  expect(flat(hosts(root, "trayPanel")[0]!)).toMatchObject({ left: 59 + floatingPanelLayout.inset, right: 59 + floatingPanelLayout.inset });
   unmount(root);
 });
 

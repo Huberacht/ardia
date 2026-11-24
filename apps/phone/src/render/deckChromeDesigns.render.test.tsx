@@ -144,7 +144,7 @@ test("the redesigned cards stack as Arc Search's: two thirds of the screen wide 
   unmount(root);
 });
 
-test("the header is centred 26 points under the safe top, 24 in from the sides like the bottom bar, and its More is a 44-point glass circle, never a rounded rectangle", () => {
+test("the header is centred 26 points under the safe top, 24 in from the sides like the bottom bar, and its More is a 44-point glass circle, whose menu lifts out as a circle", () => {
   const root = deck();
   const header = style(root, "deckHeader");
   expect(header.top + header.height / 2).toBe(SAFE_TOP + 26);
@@ -154,6 +154,7 @@ test("the header is centred 26 points under the safe top, 24 in from the sides l
   expect(more.props.place).toMatchObject({ right: 24 });
   expect(style(root, "deckHeaderMore")).toMatchObject({ width: 44, height: 44, borderRadius: 22 });
   expect(root.root.findAll((node) => node.props.testID === "deckHeaderMore" && node.props.shape === "circle").length).toBeGreaterThan(0);
+  expect(more.props.previewRadius).toBe(22);
   unmount(root);
 });
 

@@ -34,7 +34,7 @@ export function plusMenuItems(incognito: boolean, canReopen: boolean): PlusMenuI
   ];
 }
 
-export const plusMenu = (incognito: boolean, canReopen: boolean): MenuItem[] => plusMenuItems(incognito, canReopen).map(({ label, onPress }) => ({ label, onPress }));
+export const plusMenu = (incognito: boolean, canReopen: boolean): MenuItem[] => plusMenuItems(incognito, canReopen);
 
 type Look = { dark: boolean; incognito?: boolean };
 

@@ -80,7 +80,7 @@ import { PagerBackdrop, PagerNeighbour, useTabPager } from "./TabPager";
 import { TabSwipeHint } from "./tabSwipeHint";
 import { PageProgressLine } from "./PageProgressLine";
 import { labTrace } from "../../platform/lab";
-import { shownTone } from "../../lib/pageTone";
+import { barIsDark, shownTone } from "../../lib/pageTone";
 import { besideStrip, bottomBarLayout, DUO_BAR, duoSqueeze } from "../../lib/bottomBarSpan";
 import { useScreenLayout } from "../../state/app/screenLayout";
 
@@ -257,7 +257,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const bottom = pageTone?.bottom ?? blankPage;
   const barKept = tabSwitchCuts() && design === "redesigned";
   const sourceHold = usePageSourceHold(barKept);
-  const barDark = (design === "redesigned" || design === "material") && !pageTone?.bottom ? theme.dark : isDarkColor(bottom);
+  const barDark = barIsDark({ design, glassTone: failed ? undefined : tone?.barDark, toneBottom: pageTone?.bottom, themeDark: theme.dark, bottomDark: isDarkColor(bottom) });
   const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateX: barKept && pageBodyShown.value === 0 ? BODY_UNDER_DECK : 0 }] }));
   const bodyProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({
     pointerEvents: barKept && (pageBodyShown.value === 0 || deckCutOwns()) ? "none" : "box-none",
@@ -563,7 +563,7 @@ function useBarCollapse(tabId: string, isPrivate: boolean, finding: boolean, des
   const slidesAway = hidden && !materialFind;
   const wasCollapsed = useRef(collapsed);
   useEffect(() => {
-    if ((android || squeezes) && collapsed && !wasCollapsed.current && !isPrivate) countUsage("bottom_bar_collapses");
+    if (collapsed && !wasCollapsed.current && !isPrivate) countUsage("bottom_bar_collapses");
     wasCollapsed.current = collapsed;
   }, [collapsed, tabId, isPrivate, squeezes]);
   const fold = useBarFold(collapsed, reduceMotion);
