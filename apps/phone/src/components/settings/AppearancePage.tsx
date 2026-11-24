@@ -1,7 +1,7 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { themeAccent, themePalette } from "@ardia/core/src/theme.ts";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { linearGradientCss } from "../../lib/gradient";
 import { rainbow } from "../../lib/themeEditor";
 import { INTERFACE_STYLE_NAMES, INTERFACE_STYLES, offeredInterfaceStyle, offeredScheme, SCHEME_CHOICES, SCHEME_NAMES } from "../../lib/appearance";
@@ -122,13 +122,16 @@ export function ColorRow({ labelled = true, plainIcon = false }: { labelled?: bo
 function SwatchRing({ ring, selected, children }: { ring: string; selected: boolean; children: ReactNode }) {
   const shown = useSharedValue(selected ? 1 : 0);
   useEffect(() => {
-    shown.value = withSpring(selected ? 1 : 0, settingsMotion.swatchRing);
+    shown.value = withTiming(selected ? 1 : 0, settingsMotion.swatchPick);
   }, [selected, shown]);
   const ringStyle = useAnimatedStyle(() => ({ opacity: shown.value }));
+  const discStyle = useAnimatedStyle(() => ({ transform: [{ scale: 1 - (1 - PICKED_DISC) * shown.value }] }));
   return (
     <View style={styles.ringBox}>
       <Animated.View testID="swatchRing" style={[StyleSheet.absoluteFill, styles.ring, { borderColor: ring }, ringStyle]} />
-      {children}
+      <Animated.View testID="swatchDisc" style={discStyle}>
+        {children}
+      </Animated.View>
     </View>
   );
 }
@@ -175,6 +178,8 @@ function Swatch({ color, selected, grid }: { color: ProfileColor; selected: bool
 }
 
 const RING = settingsLayout.swatch + (settingsLayout.swatchGap + settingsLayout.swatchRing) * 2;
+
+const PICKED_DISC = (RING - 2 * (2 * (settingsLayout.swatchGap + settingsLayout.swatchRing) - settingsLayout.swatchRing)) / settingsLayout.swatch;
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
