@@ -7,23 +7,30 @@ struct GlassMotionHoldTests {
 
   @Test func `a card growing or a page sliding under the glass holds every capture until it has been still a moment`() {
     var hold = GlassMotionHold()
-    #expect(!hold.observe([screen], in: screen, now: 0), "the first look is no motion")
+    let moved1 = hold.observe([screen], in: screen, now: 0)
+    #expect(!moved1, "the first look is no motion")
     #expect(!hold.holds(now: 0))
     let card = CGRect(x: 40, y: 120, width: 320, height: 600)
-    #expect(hold.observe([card], in: screen, now: 1))
+    let moved2 = hold.observe([card], in: screen, now: 1)
+    #expect(moved2)
     #expect(hold.holds(now: 1 + GlassMotionHold.quiet - 0.01))
-    #expect(hold.observe([card.insetBy(dx: -20, dy: -20)], in: screen, now: 1.1), "still growing")
+    let moved3 = hold.observe([card.insetBy(dx: -20, dy: -20)], in: screen, now: 1.1)
+    #expect(moved3, "still growing")
     #expect(hold.holds(now: 1.2))
-    #expect(!hold.observe([card.insetBy(dx: -20, dy: -20)], in: screen, now: 1.15))
+    let moved4 = hold.observe([card.insetBy(dx: -20, dy: -20)], in: screen, now: 1.15)
+    #expect(!moved4)
     #expect(!hold.holds(now: 1.1 + GlassMotionHold.quiet), "idle once it stops")
   }
 
   @Test func `a thin loading line or a toast moving under the glass is no transition`() {
     var hold = GlassMotionHold()
     hold.observe([screen, CGRect(x: 0, y: 800, width: 100, height: 3)], in: screen, now: 0)
-    #expect(!hold.observe([screen, CGRect(x: 0, y: 800, width: 300, height: 3)], in: screen, now: 0.1))
-    #expect(!hold.observe([screen, CGRect(x: 20, y: 760, width: 360, height: 44)], in: screen, now: 0.2))
-    #expect(!hold.observe([screen.offsetBy(dx: 0.3, dy: 0)], in: screen, now: 0.3), "subpixel settling")
+    let moved5 = hold.observe([screen, CGRect(x: 0, y: 800, width: 300, height: 3)], in: screen, now: 0.1)
+    #expect(!moved5)
+    let moved6 = hold.observe([screen, CGRect(x: 20, y: 760, width: 360, height: 44)], in: screen, now: 0.2)
+    #expect(!moved6)
+    let moved7 = hold.observe([screen.offsetBy(dx: 0.3, dy: 0)], in: screen, now: 0.3)
+    #expect(!moved7, "subpixel settling")
   }
 
   @Test func `an arriving tab holds for the arrival, and later commits or routes on it never shorten that`() {
