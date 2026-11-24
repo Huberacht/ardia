@@ -531,6 +531,7 @@ public final class SettingsUIModule: Module {
 
     OnCreate {
       SettingsUIModifiers.register()
+      DispatchQueue.main.async { MainActor.assumeIsolated { ScrollBounceGuard.install() } }
     }
 
     OnDestroy {
