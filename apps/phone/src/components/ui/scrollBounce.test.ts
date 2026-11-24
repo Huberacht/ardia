@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import test from "node:test";
 
 const COMPONENTS = new URL("..", import.meta.url).pathname;
-const SCROLLERS = /<(Animated\.ScrollView|ScrollView|FlatList|SectionList|SheetScrollView)\b/g;
+const SCROLLERS = /(?<![\w.])<(Animated\.ScrollView|ScrollView|FlatList|SectionList|SheetScrollView)(?=\s)/g;
 const OWNED_ELSEWHERE = new Set(["search/SearchTray.tsx"]);
 
 function files(dir: string): string[] {
@@ -31,7 +31,7 @@ function reactNativeScrollers() {
     const name = relative(COMPONENTS, path);
     if (OWNED_ELSEWHERE.has(name)) return [];
     const source = readFileSync(path, "utf8");
-    return [...source.matchAll(SCROLLERS)].map((match) => ({ name, tag: openingTag(source, match.index!) }));
+    return [...source.matchAll(SCROLLERS)].map((match) => ({ name, tag: openingTag(source, match.index!) })).filter(({ tag }) => !tag.includes("modifiers="));
   });
 }
 

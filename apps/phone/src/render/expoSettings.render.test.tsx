@@ -189,7 +189,7 @@ onIos("every page a Settings screen links to is mounted before the tap with the 
   for (const top of tops) {
     openSettings(top);
     const root = renderSurface(<SettingsView />);
-    const pushed = new Set(top.page === "root" ? [] : [top.page]);
+    const pushed = new Set<string>(top.page === "root" ? [] : [top.page]);
     const links = destinationKeys(root).filter((key) => !pushed.has(key));
     for (const key of links) {
       const placeholder = paneOf(root, key);
