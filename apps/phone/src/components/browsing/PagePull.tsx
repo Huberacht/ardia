@@ -133,7 +133,7 @@ export function PullGhost({ style, children }: GlyphsProps) {
   const fade = useAnimatedStyle(() => {
     const target = deckPull.target.value;
     const stage = deckPull.stage.value;
-    if (stage === PULL_STAGE.idle || !target) return { opacity: 0 };
+    if (stage === PULL_STAGE.idle || !target || deckPull.cut.value) return { opacity: 0 };
     if (pullFades(stage)) return { opacity: deckPull.fade.value };
     if (barStays && pullLanded(stage)) return { opacity: 1 };
     if (stage === PULL_STAGE.growing) return { opacity: deckPull.pageLive.value ? 1 - deckPull.barBack.value : 1 };

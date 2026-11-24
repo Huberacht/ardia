@@ -251,6 +251,8 @@ object PhonePages {
         )
     }
 
+    private var snapshotCookies = 0
+
     suspend fun snapshot(pageId: String, maxWidth: Int, quality: Int, covered: Pair<Double, Double>?, windowCopy: Boolean = true): Map<String, Any?>? {
         val page = require(pageId)
         val (generation, shown, frameAtStart) = kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
@@ -259,7 +261,13 @@ object PhonePages {
         }
         val started = android.os.SystemClock.uptimeMillis()
         val (viewAtStart, viewIdentity) = kotlinx.coroutines.withContext(Dispatchers.Main.immediate) { (page as? WebViewPage).let { it?.viewVersion to (it?.viewIdentity ?: 0) } }
-        val drawn = page.snapshot(maxWidth, windowCopy) ?: return null
+        val cookie = snapshotCookies++
+        android.os.Trace.beginAsyncSection("ardia:snapshot", cookie)
+        val drawn = try {
+            page.snapshot(maxWidth, windowCopy)
+        } finally {
+            android.os.Trace.endAsyncSection("ardia:snapshot", cookie)
+        } ?: return null
         val viewSettled = kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
             val web = page as? WebViewPage
             val still = web != null && web.viewVersion == viewAtStart && web.viewIdentity == viewIdentity

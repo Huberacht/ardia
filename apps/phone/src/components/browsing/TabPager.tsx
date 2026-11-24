@@ -11,6 +11,7 @@ import type { BrowserTab } from "../../state/tabs/tabModels";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
+import { traceSlice } from "../../platform/lab";
 import { commitBarAction, dropBarAction, takeBarAction } from "../../state/browse/store";
 import { useWarmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
@@ -91,6 +92,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       restore();
       return;
     }
+    traceSlice("swipe commit");
     const held = takeBarAction(swipeScope(sent), to);
     haptics.tabLanded();
     onCommit(to);

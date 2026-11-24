@@ -1632,7 +1632,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             return
         }
         val fresh = recorder == null
-        val node = recorder ?: RenderNode("ardiaFrostSource").also { recorder = it }
+        val node = recorder ?: RenderNode("ardiaFrostSource:${sourceId ?: "unnamed"}").also { recorder = it }
         LookActivity.sourceRecordings += 1
         node.setPosition(0, 0, width, height)
         node.setUseCompositingLayer(holdsPage, null)

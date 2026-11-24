@@ -1,5 +1,5 @@
 import { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { markShownFrame } from "../../platform/lab";
+import { markShownFrame, traceSlice } from "../../platform/lab";
 import { hardwareKeyboardShown } from "@ardia/phone-native";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
@@ -214,8 +214,10 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       return;
     }
     if (cutsIn) floor.value = firstLift(keyboard.full.value, window.height);
+    traceSlice("standby ready");
     revealStandby = (presenting) => {
       if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey) return;
+      traceSlice("search reveal");
       revealed.value = 1;
       standbyField?.focus();
       markShownFrame("search");

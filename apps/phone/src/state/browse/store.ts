@@ -52,7 +52,7 @@ import {
   updateTabById,
   useTabs,
 } from "../tabs/store";
-import { labTrace } from "../../platform/lab";
+import { labTrace, traceSlice } from "../../platform/lab";
 import { pictureCaptured, pictureLanded } from "../tabs/pictures";
 import { noteViewMoved, noteWarmPicture } from "../tabs/warmPictures";
 import { deckOrder, findTab, isPrivateOnScreen, isPrivateTab, selectedTab, tabBefore } from "../tabs/tabsState";
@@ -652,6 +652,7 @@ function landDeckFromRest(id: string) {
     }
     deckPullBegan(id, false);
     beginInteraction(PULL_LANDING_PERF, INTERACTION_WINDOW_MS.deckPullLanding);
+    if (tabSwitchCuts()) traceSlice("deck cut");
     runOnUI(tabSwitchCuts() ? cutDeckPullFromRest : deckPullFades() ? (cardShowsPicture(id) ? fadeDeckPullFromRest : cutDeckPullFromRest) : landDeckPullFromRest)(id, deckPullSettled, deckPullRefused);
     runOnUI(markNextUiFrame)("deck motion");
     runOnUI(markNextUiFrame)("deck takes taps");

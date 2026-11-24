@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { DeckLookProbe } from "./DeckLookProbe";
+import { launchArguments } from "../../state/app/launchFlags";
 import { actionWords, destinationWords, incognitoWords } from "../../lib/sharedWords";
 import { IncognitoLook } from "../ui/theme";
 import { useDeckOwnsBar, useSheet, useSurface } from "../../state/browse/hooks";
@@ -12,7 +13,7 @@ import Animated, { cancelAnimation, Easing, runOnJS, runOnUI, useAnimatedReactio
 import { countUsage } from "../../state/telemetry/telemetry";
 import { haptics } from "../../state/app/haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { labTrace, markShownFrame } from "../../platform/lab";
+import { labTrace, markShownFrame, traceSlice } from "../../platform/lab";
 import { measuredOr } from "../../state/app/rootSize";
 import {
   DECK,
@@ -324,7 +325,8 @@ export const TabDeck = memo(function TabDeck() {
   useLayoutEffect(() => {
     deckShownNow.value = shown;
   }, [shown, deckShownNow]);
-  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: Math.max(pulling.value || deckShownNow.value ? chromeOpacity.value : 0, HELD_GLASS_SAMPLES) }));
+  const headerSamples = launchArguments().deckHeaderCold ? 0 : HELD_GLASS_SAMPLES;
+  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: Math.max(pulling.value || deckShownNow.value ? chromeOpacity.value : 0, headerSamples) }));
   const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? barGlyphFade.value : 0 }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
@@ -950,6 +952,7 @@ export const TabDeck = memo(function TabDeck() {
     };
     const openCard = (id: string) => withCard(id, (at) => gestureActions.current.open(at));
     const openPosedCard = (id: string, turn: number) => {
+      traceSlice("deck select");
       const at = gestureActions.current.order.indexOf(id);
       if (at < 0) gestureActions.current.unpose(turn);
       else gestureActions.current.open(at, undefined, turn);

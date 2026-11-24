@@ -22,6 +22,7 @@ export const deckPull = {
   barBack: makeMutable(0),
   barCleared: makeMutable(false),
   barOwned: makeMutable(false),
+  cut: makeMutable(false),
   warm: makeMutable(false),
   steady: makeMutable(false),
   primed: makeMutable(false),
@@ -76,6 +77,7 @@ export function trackDeckPull(at: number) {
 
 export function resetDeckPull() {
   "worklet";
+  deckPull.cut.value = false;
   deckPull.stage.value = PULL_STAGE.idle;
   deckPull.id.value = "";
   deckPull.shrink.value = 0;
@@ -247,6 +249,7 @@ export function cutDeckPullFromRest(id: string, settled: PullSettled, refused: (
     runOnJS(refused)(id);
     return;
   }
+  deckPull.cut.value = true;
   deckPull.shrink.value = 1;
   deckPull.reveal.value = 1;
   deckPull.stage.value = PULL_STAGE.landed;

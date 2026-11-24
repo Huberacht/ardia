@@ -332,7 +332,9 @@ class PageView(context: Context, appContext: AppContext) : ExpoView(context, app
         }
         val owner = view.parent as? ViewGroup
         owner?.removeView(view)
+        android.os.Trace.beginSection("ardia:webview transfer")
         host.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        android.os.Trace.endSection()
         layOutChildren()
         lab {
             val from = if (owner != null) ", taken from another view (${owner.javaClass.simpleName}${(owner.parent as? PageView)?.let { " of page view ${it.pageId}" } ?: ""})" else ""

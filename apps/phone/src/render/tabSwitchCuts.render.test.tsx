@@ -5,6 +5,7 @@ import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-han
 import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { Surfaces } from "../App";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
+import { PullGhost } from "../components/browsing/PagePull";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
 import { Dimensions, Image, Platform, StyleSheet, TextInput } from "react-native";
@@ -558,6 +559,23 @@ test("on Android a cover acknowledgement must name the document whose drawn fram
   if (Platform.OS === "android") expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
   act(() => browse.pageCoverHidden(id, "drawn", cover, true, 7));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: null });
+  unmount(root);
+});
+
+test("on a cut to the deck the page bar's Search Tabs ghost never draws, so only the deck's own field shows that label", () => {
+  const root = renderSurface(<PullGhost style={undefined}><Image source={{ uri: "file:///ghost.png" }} /></PullGhost>);
+  const ghost = () => root.root.findAll((node) => node.props.testID === "pullGhost" && typeof node.type === "string")[0]!;
+  act(() => {
+    deckPull.target.value = { id: "t0" } as never;
+    deckPull.stage.value = PULL_STAGE.landed;
+    deckPull.cut.value = true;
+  });
+  expect(getAnimatedStyle(ghost()).opacity).toBe(0);
+  act(() => {
+    deckPull.cut.value = false;
+    deckPull.stage.value = PULL_STAGE.idle;
+    deckPull.target.value = null;
+  });
   unmount(root);
 });
 

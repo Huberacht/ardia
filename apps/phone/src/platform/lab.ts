@@ -1,4 +1,4 @@
-import { labFrameMark, labLog, lookLab } from "@ardia/phone-native";
+import { labFrameMark, labLog, labSlice, lookLab } from "@ardia/phone-native";
 
 export { labLog };
 
@@ -14,6 +14,10 @@ export function traceLab(on: boolean, sink: (line: string) => void = labLog) {
 
 export const labTrace = (line: string) => {
   if (tracing) traceSink(line);
+};
+
+export const traceSlice = (label: string) => {
+  if (isLabBuild) labSlice(label);
 };
 
 export const markShownFrame = (label: string) => {
