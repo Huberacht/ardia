@@ -89,16 +89,20 @@ class FrameMarkViewTest {
     }
 
     @Test
-    fun withoutAShownLabelOpacityMarksNothingAndThePlainMarkStillTracesWhenSetAndDedupes() {
+    fun withoutAShownLabelOpacityMarksNothingAndThePlainMarkTracesInTheNextTraversalAndDedupes() {
         val mark = attached()
         mark.alpha = 1f
         traverse(mark)
         assertEquals(emptyList<String>(), traced)
         mark.mark("swipe-landed")
         mark.mark("swipe-landed")
+        assertEquals(emptyList<String>(), traced)
+        traverse(mark)
+        traverse(mark)
         assertEquals(listOf("swipe-landed"), traced)
         mark.mark("")
         mark.mark("swipe-landed")
+        traverse(mark)
         assertEquals(listOf("swipe-landed", "swipe-landed"), traced)
     }
 
