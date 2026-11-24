@@ -6,8 +6,10 @@ export type WarmPicture = { uri: string; frame: WarmFrame };
 
 const keys = new Map<string, WarmKey>();
 
+const atRest = (frame: WarmFrame, window: Size) => Math.abs(frame.x) < 1 && Math.abs(frame.width - window.width) < 1 && frame.height > 0 && frame.y >= 0 && frame.y + frame.height <= window.height + 1;
+
 export function noteWarmPicture(id: string, capture: WarmCapture) {
-  if (!capture.settled || !capture.frame || capture.frame.width <= 0 || capture.frame.height <= 0) {
+  if (!capture.settled || !capture.frame || !atRest(capture.frame, capture.window)) {
     keys.delete(id);
     return;
   }

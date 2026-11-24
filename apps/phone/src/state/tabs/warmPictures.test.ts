@@ -31,6 +31,13 @@ test("a capture whose view moved while it was taken, or that has no frame, is ne
   assert.equal(warmPicture(tab("c"), window), null);
 });
 
+test("a picture taken while the page was moved or scaled by a gesture is never warm, so it can't sit offset over the live page", () => {
+  noteWarmPicture("f", { ...capture("f"), frame: { x: 75, y: 19, width: 393, height: 873 } });
+  assert.equal(warmPicture(tab("f"), window), null);
+  noteWarmPicture("f", { ...capture("f"), frame: { x: 0, y: 10, width: 340, height: 760 } });
+  assert.equal(warmPicture(tab("f"), window), null);
+});
+
 test("leaving for another address and coming back to the same one doesn't bring an old picture back", () => {
   noteWarmPicture("d", capture("d"));
   noteViewMoved("d");
