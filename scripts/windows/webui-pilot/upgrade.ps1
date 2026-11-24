@@ -302,7 +302,7 @@ function Installed-Processes {
 
 function Stop-Launched {
   $stopped = 0
-  foreach ($tracked in @($script:Launched)) {
+  foreach ($tracked in $script:Launched.ToArray()) {
     try { $stopped += Stop-VerifiedTree $tracked } catch { Log "the processes started from $($tracked.Id) could not be listed: $($_.Exception.Message)" }
   }
   if ($installed) {
