@@ -607,6 +607,64 @@ test("a More tap between a swipe landing and its commit opens the destination's 
   unmount(root);
 });
 
+test("a Plus tap between a swipe landing and its commit is held for that turn and opens the new-tab sheet with the switch", () => {
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  const root = renderSurface(<Page />);
+  const { id, dx } = toNeighbour();
+  releaseSwipe(root, dx, 260, 1600);
+  const plus = root.root.findAll((node) => node.props.accessibilityLabel === "New Tab" && typeof node.props.onPress === "function")[0]!;
+  act(() => plus.props.onPress());
+  expect(searchState().open).toBe(false);
+  act(() => jest.advanceTimersByTime(32));
+  expect(currentTabs().selectedId).toBe(id);
+  expect(searchState().open).toBe(true);
+  unmount(root);
+});
+
+test("an Address tap that arrives in the same JS turn as the deck's release acts on the destination, because the release opens it first", () => {
+  withTabs(3);
+  browse.useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
+  const root = renderSurface(<Surfaces />);
+  const destination = currentTabs().open.find((tab) => tab.id !== currentTabs().selectedId)!;
+  act(() => previewPageBar(destination.id));
+  const address = root.root.findAll((node) => node.props.accessibilityLabel === "Address" && typeof node.props.onPress === "function")[0]!;
+  act(() => {
+    pageBarShown.value = 1;
+    browse.openTab(destination.id);
+    address.props.onPress();
+  });
+  expect(currentTabs().selectedId).toBe(destination.id);
+  expect(searchState().open).toBe(true);
+  expect(searchState().initialText).toContain(display(destination.url).host);
+  act(() => previewPageBar(null));
+  unmount(root);
+});
+
+test("the deck-to-page cover re-checks its warm picture: once the page's view moves, it drops the picture and blocks touches to the page under it", () => {
+  if (Platform.OS !== "android") return;
+  withTabs(2);
+  const tab = currentTabs().open[0]!;
+  const uri = `file:///cover-${tab.id}.jpg`;
+  act(() => updateTabById(tab.id, { snapshotFileName: uri }));
+  const window = Dimensions.get("window");
+  noteWarmPicture(tab.id, { uri, url: findTab(currentTabs(), tab.id)!.url, window, frame: { x: 0, y: 0, width: window.width, height: window.height }, settled: true, view: 2, viewId: 21 });
+  act(() => pageStore.storeNavigation(tab.id, { isLive: true, isLoading: true, url: tab.url, title: "Site", failure: null, progress: 0 } as never));
+  browse.noteCutCard(tab.id, 200);
+  const root = renderSurface(<BrowsingScreen tabId={tab.id} />, { flushTimers: false });
+  const coverNode = () => root.root.findAll((node) => node.props.testID === "pageCover" && typeof node.type === "string")[0];
+  expect(coverNode()).toBeDefined();
+  {
+    expect(root.root.findAll((node) => node.props.testID === "pageCoverWarmPicture" && typeof node.type === "string")).toHaveLength(1);
+    expect(coverNode()!.props.pointerEvents).toBe("none");
+    act(() => noteViewMoved(tab.id, 21, 3));
+    expect(root.root.findAll((node) => node.props.testID === "pageCoverWarmPicture" && typeof node.type === "string")).toHaveLength(0);
+    expect(coverNode()!.props.pointerEvents).toBe("auto");
+  }
+  unmount(root);
+});
+
 test("an action held for a swipe is dropped by any other navigation before its commit, so it never fires on a later visit", () => {
   withTabs(3);
   selectTabById(currentTabs().open[1]!.id);

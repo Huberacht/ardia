@@ -384,7 +384,7 @@ export function stopOpeningTab(id: string) {
 
 let cutCard: { id: string; width: number } | null = null;
 
-export type BarAction = "address" | "more";
+export type BarAction = "address" | "more" | "plus" | "tabs";
 
 let heldBarAction: { id: string; action: BarAction; scope: string } | null = null;
 

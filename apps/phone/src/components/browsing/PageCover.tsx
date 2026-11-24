@@ -11,7 +11,7 @@ import { launchArguments } from "../../state/app/launchFlags";
 import type { BrowserTab } from "../../state/tabs/tabModels";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
-import { warmPicture } from "../../state/tabs/warmPictures";
+import { useWarmPicture } from "../../state/tabs/warmPictures";
 import { TabFace, useTheme } from "../ui";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageReportsDrawn } from "@ardia/phone-native";
@@ -57,7 +57,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const [cutsOnDraw] = useState(() => !WAITS_FOR_PAINT && tabSwitchCuts() && pageReportsDrawn());
   const waitsForPaint = WAITS_FOR_PAINT || cutsOnDraw;
   const [face] = useState(() => coverFace(tab, frozen ? null : picture, openingCardOf(tab.id), cutsOnDraw));
-  const [warm] = useState(() => (cutsOnDraw && face.kind === "card" ? warmPicture(findTab(currentTabs(), tab.id) ?? tab, Dimensions.get("window")) : null));
+  const warm = useWarmPicture(findTab(currentTabs(), tab.id) ?? tab, Dimensions.get("window"), cutsOnDraw && face.kind === "card");
   const window = useWindowDimensions();
   const [box, setBox] = useState<Box>(() => ({ width: window.width, height: window.height }));
   const laidOut = ({ nativeEvent: { layout } }: LayoutChangeEvent) => setBox((was) => (was.width === layout.width && was.height === layout.height ? was : { width: layout.width, height: layout.height }));

@@ -10,11 +10,11 @@ import type { Design } from "../../lib/design";
 import { neighbours, PAGER } from "../../lib/pagerPhysics";
 import { useSystemBars } from "../../state/app/systemBars";
 import { useNavigation, usePageTone } from "../../state/browse/hooks";
-import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, pageBarShown, pageBodyShown, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
+import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, pageBarShown, pageBodyShown, previewPageBar, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
 import { refreshHiddenDeck } from "../../state/browse/deckHold";
 import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } from "../../state/page/actions";
 import { useDrawnMenuOpen, useFindOpen, useMenuDocked, usePressOpen, useReaderTabId } from "../../state/page/hooks";
-import { ARRIVAL_COVER_ID, arriveAtNeighbour, holdBarAction, takeCommittedBarAction, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
+import { ARRIVAL_COVER_ID, arriveAtNeighbour, holdBarAction, type BarAction, takeCommittedBarAction, captureCurrentCover, deckPullBegan, deckPullReleased, deckPullSettled, newTab, pageLaidOut, showDeck, swipeOrder, swipeToNeighbour, switchToNeighbour, useBrowse } from "../../state/browse/store";
 import { useSearchFromDockedMenu, useSearchOpen } from "../../state/search/hooks";
 import { usePages } from "../../state/pages/store";
 import { reportBarPill } from "../../state/search/stageBar";
@@ -102,6 +102,7 @@ function PageBodyOwner({ kept }: { kept: boolean }) {
     if (!kept) return;
     pageBodyShown.value = deckUp ? 0 : 1;
     pageBarShown.value = deckUp ? 0 : 1;
+    if (!deckUp) previewPageBar(null);
   }, [kept, deckUp]);
   return null;
 }
@@ -254,7 +255,19 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     const action = takeCommittedBarAction(tab.id);
     if (action === "address") editPageQuery();
     else if (action === "more") openPageMenu();
+    else if (action === "plus") newTab();
+    else if (action === "tabs") showDeck();
   }, [tab.id]);
+  const heldOr = useCallback((action: BarAction, now: () => void) => () => {
+    const landed = tabSwitchCuts() ? landedTarget.current() : null;
+    if (landed) {
+      holdBarAction(landed, action, landedScope.current());
+      return;
+    }
+    now();
+  }, []);
+  const tabsOrHeld = useMemo(() => heldOr("tabs", showDeck), [heldOr]);
+  const plusOrHeld = useMemo(() => heldOr("plus", newTab), [heldOr]);
   const pageMenuOrHeld = useCallback(() => {
     const landed = tabSwitchCuts() ? landedTarget.current() : null;
     if (landed) {
@@ -368,11 +381,11 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     duo={duoBar}
                     fold={folds ? collapse.fold.barLook : null}
                     swipe={swipeAddresses}
-                    onTabs={showDeck}
+                    onTabs={tabsOrHeld}
                     onTabsMenu={openTabsMenu}
                     onStep={stepTab}
                     onAddress={editAddress}
-                    onPlus={newTab}
+                    onPlus={plusOrHeld}
                     onMore={pageMenuOrHeld}
                   />
                   </FoldLayer>

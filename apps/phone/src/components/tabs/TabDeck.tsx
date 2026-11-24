@@ -643,6 +643,7 @@ export const TabDeck = memo(function TabDeck() {
   useEffect(() => () => void (openingId.current = null), []);
   const unpose = (turn: number) => {
     clearCutCard();
+    previewPageBar(null);
     runOnUI((posed: number) => {
       "worklet";
       if (poseTurn.value !== posed || deckPhase.value !== DECK_PHASE.closing) return;
