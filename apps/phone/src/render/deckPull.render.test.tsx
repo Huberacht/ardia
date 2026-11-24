@@ -22,6 +22,7 @@ const { runDeckPullScript, DECK_PULL_SCRIPT } = require("../state/browse/deckPul
 const { sendDeckCommand } = require("../state/browse/deckCommands") as typeof import("../state/browse/deckCommands");
 const deckGrid = require("../state/browse/deckGrid") as typeof import("../state/browse/deckGrid");
 const browse = require("../state/browse/store") as typeof import("../state/browse/store");
+const { currentPhoneGeneration } = require("../state/browse/deckTurn") as typeof import("../state/browse/deckTurn");
 const { setRootSize } = require("../state/app/rootSize") as typeof import("../state/app/rootSize");
 const { resizeRoot } = require("../state/browse/deckHold") as typeof import("../state/browse/deckHold");
 const { writePreference } = require("../state/store/browserDatabase") as typeof import("../state/store/browserDatabase");
@@ -812,7 +813,7 @@ test("a Tabs tap while a long-held pull springs back is still ignored: the pull 
     })(-Math.min(step, 40)));
     frame();
   }
-  act(() => runOnUI((tab: string, settled: (id: string, landed: boolean, worst: number) => void) => {
+  act(() => runOnUI((tab: string, settled: typeof browse.deckPullSettled) => {
     "worklet";
     pull.releaseDeckPull(tab, 0, false, () => undefined, settled);
   })(id, browse.deckPullSettled));
@@ -1044,13 +1045,13 @@ test("a pull whose frames stalled is counted once it settles, and not in Incogni
   framesUntil(() => deckPull.stage.value === PULL_STAGE.idle, 240);
   frame();
   expect(counted).not.toHaveBeenCalledWith("deck_pulls_hitched");
-  act(() => browse.deckPullSettled(id, false, DECK_PULL.hitchMs));
+  act(() => browse.deckPullSettled(id, false, DECK_PULL.hitchMs, "", 0, currentPhoneGeneration()));
   expect(counted).not.toHaveBeenCalledWith("deck_pulls_hitched");
-  act(() => browse.deckPullSettled(id, false, DECK_PULL.hitchMs + 1));
+  act(() => browse.deckPullSettled(id, false, DECK_PULL.hitchMs + 1, "", 0, currentPhoneGeneration()));
   expect(counted).toHaveBeenCalledWith("deck_pulls_hitched");
   counted.mockClear();
   act(() => useTabs.setState({ incognito: true }));
-  act(() => browse.deckPullSettled(id, false, 200));
+  act(() => browse.deckPullSettled(id, false, 200, "", 0, currentPhoneGeneration()));
   expect(counted).not.toHaveBeenCalledWith("deck_pulls_hitched");
   expect(root).toBeDefined();
 });

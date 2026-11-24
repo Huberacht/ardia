@@ -515,12 +515,20 @@ function deckCutFromTap(id: string, phone: number) {
 }
 
 function deckTapCutRefused(id: string, phone: number) {
-  if (landingFromRest === id) landingFromRest = null;
   if (phone !== currentPhoneGeneration()) {
     labTrace("PAGELAB deck tap refused for an earlier screen layout, nothing opens");
     return;
   }
+  if (landingFromRest === id) landingFromRest = null;
   void showDeck();
+}
+
+export function tabsPressedOnPhone(phone: number, press: () => void) {
+  if (phone !== currentPhoneGeneration()) {
+    labTrace("PAGELAB Tabs press dropped, it was made in an earlier screen layout");
+    return;
+  }
+  press();
 }
 
 export function canCutDeckFromTap(id: string): boolean {
@@ -760,10 +768,13 @@ function cardShowsPicture(id: string) {
   return picture != null && picturePainted(pictureKey(`deck:${id}`, picture));
 }
 
-function deckPullRefused(id: string, phone: number = currentPhoneGeneration()) {
+function deckPullRefused(id: string, phone: number) {
+  if (phone !== currentPhoneGeneration()) {
+    labTrace("PAGELAB deck pull refused for an earlier screen layout, dropped");
+    return;
+  }
   if (landingFromRest !== id) return;
   landingFromRest = null;
-  if (phone !== currentPhoneGeneration()) return;
   if (trackedPull !== null || useBrowse.getState().surface !== "browsing" || currentTabs().selectedId !== id) return;
   deckCapture = null;
   labTrace("PAGELAB deck pull refused on the UI thread, the deck opens without it");
@@ -776,14 +787,13 @@ export function noteDeckTapWhileLanding(at: number) {
   landingTapAt = at;
 }
 
-export function deckPullSettled(id: string, landed: boolean, worstFrameMs = 0, openAfter = "", turn = 0, phone: number = currentPhoneGeneration()) {
-  const tappedAt = landingTapAt;
-  landingTapAt = null;
+export function deckPullSettled(id: string, landed: boolean, worstFrameMs: number, openAfter: string, turn: number, phone: number) {
   if (phone !== currentPhoneGeneration()) {
     labTrace("PAGELAB deck pull settled for an earlier screen layout, dropped");
-    if (deckCapture?.id === id && !deckCapture.done) deckCapture = null;
     return;
   }
+  const tappedAt = landingTapAt;
+  landingTapAt = null;
   labTrace(`PAGELAB deck pull animation ${landed ? "landed" : "returned"}`);
   if (landingFromRest === id) landingFromRest = null;
   if (trackedPull === id) trackedPull = null;

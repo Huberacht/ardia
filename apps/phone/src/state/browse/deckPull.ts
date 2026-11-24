@@ -43,7 +43,7 @@ export const deckPull = {
   landingPhone: makeMutable(0),
 };
 
-export type PullSettled = (id: string, landed: boolean, worstFrameMs: number, openAfter?: string, turn?: number, phone?: number) => void;
+export type PullSettled = (id: string, landed: boolean, worstFrameMs: number, openAfter: string, turn: number, phone: number) => void;
 
 export type PullRefused = (id: string, phone: number) => void;
 

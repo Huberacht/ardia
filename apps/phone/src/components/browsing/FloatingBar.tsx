@@ -6,7 +6,8 @@ import Animated, { runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, 
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageBarPreviewShown } from "../../state/browse/deckPull";
-import { canCutDeckFromTap, cutDeckFromTabsTap, useBrowse } from "../../state/browse/store";
+import { canCutDeckFromTap, cutDeckFromTabsTap, tabsPressedOnPhone, useBrowse } from "../../state/browse/store";
+import { deckTurn } from "../../state/browse/deckTurn";
 import { focusForScreenReader } from "../ui/coverFocus";
 import { IDLE_PLUS_TOUCH, isTouchRelease, NO_EARLY_REVEAL, plusTouchDown, plusTouchUp, pressWithReveal, revealStandbyOnPress, useStandbyLayout, type EarlyReveal, type PlusTouch } from "../../state/search/standbyReveal";
 import { currentTabs } from "../../state/tabs/store";
@@ -340,24 +341,19 @@ function useFoldedGlass<Back extends { centreGlass: { shown: boolean; shownMs: n
   return { ...back, centreGlass: fade(back.centreGlass), sidesGlass: fade(back.sidesGlass) };
 }
 
-const TABS_PRESS_ECHO_MS = 1000;
-const TABS_TAP_MS = 350;
+const TABS_LONG_PRESS_MS = 500;
+const TABS_TAP_DRIFT = 24;
 
 export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, glyphs, fold = null, ghost = false, swipe = null, onTabs, onTabsMenu, onStep }: ButtonProps & { order: BrowserTab[]; roles: ColorRoles; swipe?: SwipeAddresses | null; onTabs: () => void; onTabsMenu: () => void; onStep: (delta: -1 | 1) => void }) {
   const count = order.length;
   const foldGlyphs = useFoldGlyphs(fold);
   const tabsNow = useRef(onTabs);
   tabsNow.current = onTabs;
-  const callTabs = useCallback(() => tabsNow.current(), []);
-  const tapHandledAt = useSharedValue(0);
-  const pressTabs = useCallback(() => {
-    const handledAt = tapHandledAt.value;
-    if (handledAt !== 0 && Date.now() - handledAt < TABS_PRESS_ECHO_MS) {
-      tapHandledAt.value = 0;
-      return;
-    }
+  const callTabs = useCallback((phone: number) => tabsPressedOnPhone(phone, () => tabsNow.current()), []);
+  const pressTabs = useCallback((event?: unknown) => {
+    if (tabSwitchCuts() && isTouchRelease(event)) return;
     tabsNow.current();
-  }, [tapHandledAt]);
+  }, []);
   const tabId = tab.id;
   const swipeOffset = swipe?.offset ?? null;
   const swipeFrom = swipe?.from ?? null;
@@ -366,19 +362,17 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
     () =>
       Gesture.Tap()
         .withTestId(`${testID}Tap`)
-        .maxDuration(TABS_TAP_MS)
+        .maxDuration(TABS_LONG_PRESS_MS)
+        .shouldCancelWhenOutside(false)
+        .maxDistance(TABS_TAP_DRIFT)
         .enabled(tabSwitchCuts())
-        .onBegin(() => {
-          tapHandledAt.value = 0;
-        })
         .onEnd((_event, success) => {
           if (!success) return;
-          tapHandledAt.value = Date.now();
           const swipeLanded = swipeFrom !== null && swipeOffset !== null && swipeFrom.value === tabId && swipeSpan > 0 && Math.abs(Math.abs(swipeOffset.value) - swipeSpan) < 1;
           if (!swipeLanded && canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
-          else runOnJS(callTabs)();
+          else runOnJS(callTabs)(deckTurn.phone.value);
         }),
-    [tabId, testID, callTabs, tapHandledAt, swipeOffset, swipeFrom, swipeSpan],
+    [tabId, testID, callTabs, swipeOffset, swipeFrom, swipeSpan],
   );
   return (
     <TabsMenuTrigger order={order} onTabsMenu={onTabsMenu}>
