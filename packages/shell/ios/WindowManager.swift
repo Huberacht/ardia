@@ -166,6 +166,10 @@ final class WindowManager: NSObject, NSWindowDelegate {
       entry.whenRevealed { [weak self, weak entry, weak window] in
         guard let self, let entry, let window, self.managed[id] === entry, entry.window === window, self.typeAhead.keyOnReveal === window else { return }
         self.typeAhead.keyOnReveal = nil
+        if NSApp.keyWindow is IntroCoverWindow {
+          if self.typeAhead.window === window { self.typeAhead.end(send: false) }
+          return
+        }
         SummonedWindow.makeKeyAndFront(window, summoned: entry.summoned)
         self.typeAhead.keyed(window)
       }
