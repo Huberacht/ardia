@@ -7,6 +7,7 @@ import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageBarPreviewShown } from "../../state/browse/deckPull";
 import { canCutDeckFromTap, cutDeckFromTabsTap, useBrowse } from "../../state/browse/store";
 import { focusForScreenReader } from "../ui/coverFocus";
+import { dropEarlyStandby, revealStandbyOnPress } from "../../state/search/standbyReveal";
 import { currentTabs } from "../../state/tabs/store";
 import { useBarReturn } from "./barReturn";
 import { AddressFace, AddressLeaf } from "./AddressFace";
@@ -318,7 +319,28 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
 export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = null, ghost = false, onPlus }: ButtonProps & { onPlus: () => void }) {
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const foldGlyphs = useFoldGlyphs(fold);
+  const plusNow = useRef(onPlus);
+  plusNow.current = onPlus;
+  const callPlus = useCallback(() => {
+    plusNow.current();
+    dropEarlyStandby();
+  }, []);
+  const incognito = tab.isPrivate;
+  const plusTap = useMemo(
+    () =>
+      Gesture.Tap()
+        .withTestId(`${testID}Tap`)
+        .maxDuration(TABS_TAP_MS)
+        .enabled(tabSwitchCuts())
+        .onEnd((_event, success) => {
+          if (!success) return;
+          revealStandbyOnPress(incognito);
+          runOnJS(callPlus)();
+        }),
+    [incognito, testID, callPlus],
+  );
   return (
+    <GestureDetector gesture={plusTap}>
     <PressInPlace label={newTabLabel(tab.isPrivate)} onPress={onPlus} onPressIn={haptics.barPress} dims="glyph" style={styles.circleHit}>
       <ChromeSurface testID={testID} shape="circle" cornerRadius={capsule(floatingBarLayout.control)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={glass?.shown} shownMs={glass?.shownMs} style={styles.circle}>
         <PullGlyphs>
@@ -337,6 +359,7 @@ export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = nu
         ) : null}
       </ChromeSurface>
     </PressInPlace>
+    </GestureDetector>
   );
 }
 

@@ -26,6 +26,7 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
+import { dropEarlyStandby, STANDBY_ARMED, standbyArmed, standbyShownEarly } from "../../state/search/standbyReveal";
 import { preparedIdleKey, preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
 import { useBrowse } from "../../state/browse/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
@@ -154,7 +155,8 @@ let standbyField: TrayInputHandle | null = null;
 let standbyRowsKey: string | null = null;
 
 const revealStandbyFor = (presenting: SearchPresenting) => {
-  if (presenting.text === "") revealStandby?.(presenting);
+  if (presenting.text === "" && revealStandby) revealStandby(presenting);
+  else dropEarlyStandby();
 };
 
 const StandbyContext = createContext(false);
@@ -207,8 +209,11 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const pinned = useSharedValue(cutsIn);
   const floor = useSharedValue(0);
   const revealed = useSharedValue(0);
-  const revealStyle = useAnimatedStyle(() => ({ opacity: revealed.value }));
-  const revealProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({ pointerEvents: revealed.value ? "box-none" : "none", importantForAccessibility: revealed.value ? "auto" : "no-hide-descendants" }));
+  const revealStyle = useAnimatedStyle(() => ({ opacity: Math.max(revealed.value, standby ? standbyShownEarly.value : 0) }));
+  const revealProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => {
+    const shown = Math.max(revealed.value, standby ? standbyShownEarly.value : 0) > 0;
+    return { pointerEvents: shown ? "box-none" : "none", importantForAccessibility: shown ? "auto" : "no-hide-descendants" };
+  });
   useLayoutEffect(() => {
     if (!standby) {
       if (bornStandby) revealed.value = 1;
@@ -216,15 +221,22 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     }
     if (cutsIn) floor.value = firstLift(keyboard.full.value, window.height);
     traceSlice("standby ready");
+    dropEarlyStandby();
+    standbyArmed.value = origin === "page" ? (incognito ? STANDBY_ARMED.incognito : STANDBY_ARMED.regular) : STANDBY_ARMED.none;
     revealStandby = (presenting) => {
-      if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey) return;
+      if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey) {
+        dropEarlyStandby();
+        return;
+      }
       traceSlice("search reveal");
       revealed.value = 1;
+      dropEarlyStandby();
       standbyField?.focus();
       markShownFrame("search");
     };
     return () => {
       revealStandby = null;
+      standbyArmed.value = STANDBY_ARMED.none;
     };
   }, [standby, origin, incognito]);
   const drag = useSharedValue(0);

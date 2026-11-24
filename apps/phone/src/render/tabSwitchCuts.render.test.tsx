@@ -440,6 +440,63 @@ test("+ shows and focuses the waiting sheet before React renders it live: the pr
   keyboard.mockRestore();
 });
 
+test("a tap on the page bar's + reveals the waiting sheet from its own UI-thread worklet before any JS runs, and JS drops that reveal when the press doesn't open it", () => {
+  withTabs(2);
+  browsingNow();
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const original = browse.newTab;
+  const seen: number[] = [];
+  let opens = true;
+  const waiting = () => root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  jest.spyOn(browse, "newTab").mockImplementation(() => {
+    seen.push(getAnimatedStyle(waiting()).opacity as number);
+    if (opens) original();
+  });
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <Page />
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const tap = () => {
+    act(() => fireGestureHandler(getByGestureTestId("floatingBarPlusTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
+    act(() => jest.advanceTimersByTime(0));
+  };
+  expect(getAnimatedStyle(waiting()).opacity).toBe(0);
+  opens = false;
+  act(() => fireGestureHandler(getByGestureTestId("floatingBarPlusTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
+  expect(seen).toEqual([]);
+  expect(getAnimatedStyle(waiting()).opacity).toBe(1);
+  act(() => jest.advanceTimersByTime(0));
+  expect(seen).toEqual([1]);
+  expect(searchState().open).toBe(false);
+  expect(getAnimatedStyle(waiting()).opacity).toBe(0);
+  opens = true;
+  tap();
+  expect(seen).toEqual([1, 1]);
+  expect(searchState().open).toBe(true);
+  const live = root.root.findAll((node) => node.props.testID === "trayRoot" && typeof node.type === "string");
+  expect(live).toHaveLength(1);
+  expect(getAnimatedStyle(live[0]!).opacity).toBe(1);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
+test("the + worklet reveals nothing when the waiting sheet is prepared for the other privacy mode", () => {
+  const { revealStandbyOnPress, standbyArmed, standbyShownEarly, STANDBY_ARMED } = require("../state/search/standbyReveal") as typeof import("../state/search/standbyReveal");
+  standbyArmed.value = STANDBY_ARMED.regular;
+  standbyShownEarly.value = 0;
+  expect(revealStandbyOnPress(true)).toBe(false);
+  expect(standbyShownEarly.value).toBe(0);
+  standbyArmed.value = STANDBY_ARMED.none;
+  expect(revealStandbyOnPress(false)).toBe(false);
+  standbyArmed.value = STANDBY_ARMED.incognito;
+  expect(revealStandbyOnPress(true)).toBe(true);
+  expect(standbyShownEarly.value).toBe(1);
+  standbyArmed.value = STANDBY_ARMED.none;
+  standbyShownEarly.value = 0;
+});
+
 test("the early reveal only shows a sheet prepared for the origin and privacy mode the press asks for; anything else waits for its own commit", async () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
