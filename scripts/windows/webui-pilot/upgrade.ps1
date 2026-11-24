@@ -197,6 +197,7 @@ function Run-Rnw([int]$Milliseconds) {
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
+  $script:Launched.Add($started.Id)
   Hold $Milliseconds
   $alive = -not $started.HasExited
   $mine = Rnw-Tree $started.Id
@@ -225,6 +226,43 @@ $installedPrefix = "Ardia Connected Accounts [$rnwInstalled]/"
 $installedKeyPurpose = 'ardia-sync-key/v1/acct1'
 $installedSecretPurpose = 'ardia-connected-account/v1/'
 $exitIncomplete = 75
+$Launched = New-Object System.Collections.Generic.List[int]
+
+function Prior-Ardia {
+  $found = @()
+  if (Test-Path -LiteralPath $uninstallEntry) { $found += 'its uninstall entry' }
+  if (Test-Path -LiteralPath $startMenuLink) { $found += 'its Start Menu shortcut' }
+  if (Test-Path -LiteralPath 'HKCU:\Software\Clients\StartMenuInternet\Ardia') { $found += 'StartMenuInternet\Ardia' }
+  if (Test-Path -LiteralPath 'HKCU:\Software\Classes\ArdiaHTM') { $found += 'the ArdiaHTM ProgID' }
+  $userData = Join-Path $env:LOCALAPPDATA 'Ardia\User Data'
+  if (Get-ChildItem -LiteralPath $userData -Recurse -Force -ErrorAction SilentlyContinue | Select-Object -First 1) { $found += "a profile in $userData" }
+  $webuiData = Join-Path $env:LOCALAPPDATA 'Ardia WebUI'
+  if (Test-Path -LiteralPath $webuiData) { $found += $webuiData }
+  ,$found
+}
+
+function Installed-Processes {
+  if (-not (Test-Path -LiteralPath $installDir)) { return ,@() }
+  $folder = $installDir.TrimEnd('\') + '\'
+  ,@(All-Processes | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($folder, [StringComparison]::OrdinalIgnoreCase) })
+}
+
+function Stop-Launched {
+  $stopped = 0
+  foreach ($root in @($script:Launched)) {
+    try {
+      foreach ($process in (Rnw-Tree $root)) {
+        if (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue; $stopped++ }
+      }
+    } catch { Log "the processes started from $root could not be listed: $($_.Exception.Message)" }
+  }
+  if ($installed) {
+    try {
+      foreach ($process in (Installed-Processes)) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue; $stopped++ }
+    } catch { Log "the processes running from $installDir could not be listed: $($_.Exception.Message)" }
+  }
+  $stopped
+}
 
 function Invoke-Setup([string]$setup) {
   $started = Get-Date
@@ -249,10 +287,9 @@ function Check-InstalledLayout([string]$name, [string]$shell, $setup) {
 }
 
 function Install-Rnw {
-  if ((Test-Path -LiteralPath $uninstallEntry) -or (Test-Path -LiteralPath $startMenuLink)) {
-    Check 'no-prior-install' $false 'Ardia is already installed for this user; the installed upgrade only runs where it is not'
-    throw 'Ardia is already installed for this user'
-  }
+  $prior = Prior-Ardia
+  Check 'no-prior-install' ($prior.Count -eq 0) "Ardia's install, registration and profiles for this user: $(if ($prior.Count) { $prior -join ', ' } else { 'none' })"
+  if ($prior.Count) { throw "this user already has Ardia ($($prior -join ', ')); the installed upgrade only runs in a disposable account" }
   $setup = Invoke-Setup $RnwInstaller
   Check-InstalledLayout 'installed-rnw' 'rnw' $setup
   if ($setup.code -ne 0) { throw "the React Native installer exited with $($setup.code)" }
@@ -264,12 +301,14 @@ function Start-Installed([string]$data, [string[]]$extra) {
   $env:ARDIA_DATA_DIR = $data
   $env:ARDIA_BACKGROUND = '1'
   try {
-    $process = Start-Process (Join-Path $installDir 'Ardia.exe') -ArgumentList (Join-Arguments (@($ShellLayout.WebUISwitch) + $extra)) -PassThru
+    $arguments = @($ShellLayout.WebUISwitch, "--user-data-dir=$(Join-Path $data 'Chromium')") + $extra
+    $process = Start-Process (Join-Path $installDir 'Ardia.exe') -ArgumentList (Join-Arguments $arguments) -PassThru
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
   $null = $process.Handle
   [Pilot]::Roots.Add($process.Id) | Out-Null
+  $script:Launched.Add($process.Id)
   $process
 }
 
@@ -296,6 +335,7 @@ function Run-InstalledRnw([string]$data, [int]$Milliseconds) {
   } finally {
     Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND -ErrorAction SilentlyContinue
   }
+  $script:Launched.Add($started.Id)
   Hold $Milliseconds
   $alive = -not $started.HasExited
   $closed = Close-Tree $started.Id
@@ -327,10 +367,13 @@ function Test-ForcedFailure([string]$name, [string[]]$extra, [scriptblock]$prepa
   $process = Start-Installed $data $extra
   $opened = -not (Never { (Shell-Window) -ne [IntPtr]::Zero } 8)
   $code = Exit-Code $process 90
+  $stray = Wait-Until { (Installed-Processes).Count -eq 0 } 15 'every process of the failed start to exit' -NoThrow
+  $left = @(Installed-Processes | ForEach-Object { "$($_.Name) $($_.ProcessId)" })
+  Stop-Launched | Out-Null
   Stop-Engine
   $markerLeft = Test-Path -LiteralPath (Join-Path $data 'rnw-migration.json')
   $untouched = (Same-Snapshot $rnwBefore (Tree-Snapshot $rnwInstalled)) -and (Same-Snapshot $outsideBefore (Tree-Snapshot $outside))
-  Check "forced-failure-$name" (("$code" -eq "$exitIncomplete") -and -not $opened -and -not $markerLeft -and $untouched) "$what`: exit $code (want $exitIncomplete), window opened $opened, marker written $markerLeft, RNW profile and outside folder unchanged $untouched"
+  Check "forced-failure-$name" (("$code" -eq "$exitIncomplete") -and -not $opened -and -not $markerLeft -and $untouched -and [bool]$stray) "$what`: exit $code of the launched process itself (want $exitIncomplete), window opened $opened, marker written $markerLeft, RNW profile and outside folder unchanged $untouched, processes left running: $(if ($left.Count) { $left -join ', ' } else { 'none' })"
 }
 
 function Test-InstalledUpgrade {
@@ -534,6 +577,8 @@ try {
   Check 'no-terminating-error' $false "$($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)"
 } finally {
   foreach ($target in ([RnwVault]::Snapshot($prefix)).Keys) { [RnwVault]::Delete($target) }
+  $stoppedLate = Stop-Launched
+  if ($stoppedLate) { Log "stopped $stoppedLate processes this run started that were still running" }
   Stop-Engine
   if ($installed) {
     foreach ($target in ([RnwVault]::Snapshot($installedPrefix)).Keys) { [RnwVault]::Delete($target) }

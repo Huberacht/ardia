@@ -120,11 +120,12 @@ try {
   $run = New-PilotRun
   $pages = Join-Path $run 'pages'
   New-Item -ItemType Directory -Force $pages | Out-Null
-  $pageA = Join-Path $pages 'a.html'; $pageB = Join-Path $pages 'b.html'; $pageC = Join-Path $pages 'download.html'
+  $pageA = Join-Path $pages 'a.html'; $pageB = Join-Path $pages 'b.html'; $pageC = Join-Path $pages 'download.html'; $pageD = Join-Path $pages 'handed-over.html'
+  Set-Content -LiteralPath $pageD -Value '<!doctype html><title>Tour handed over</title><h1 id="t">D</h1>' -Encoding utf8
   Set-Content -LiteralPath $pageA -Value '<!doctype html><title>Tour A</title><h1 id="t">A</h1><input id="q">' -Encoding utf8
   Set-Content -LiteralPath $pageB -Value '<!doctype html><title>Tour B</title><h1 id="t">B</h1>' -Encoding utf8
   Set-Content -LiteralPath $pageC -Value "<!doctype html><title>Tour download</title><a id=`"d`" download=`"$downloadName`" href=`"data:text/plain;charset=utf-8,ardia%20tour`">save</a>" -Encoding utf8
-  $urlA = ([Uri]$pageA).AbsoluteUri; $urlB = ([Uri]$pageB).AbsoluteUri; $urlC = ([Uri]$pageC).AbsoluteUri
+  $urlA = ([Uri]$pageA).AbsoluteUri; $urlB = ([Uri]$pageB).AbsoluteUri; $urlC = ([Uri]$pageC).AbsoluteUri; $urlD = ([Uri]$pageD).AbsoluteUri
   $downloadFolders += (Join-Path $Data 'Downloads')
 
   $p = Start-Shell
@@ -233,6 +234,14 @@ try {
   $disk = Get-Content -LiteralPath (Join-Path $Data $docName) -Raw -Encoding utf8 -ErrorAction SilentlyContinue
   $removed = ShellEval "window.__ardiaHost.invoke('ArdiaShell.removeDocument', { args: ['$docName'] }).then(() => window.__ardiaHost.invoke('ArdiaShell.readDocument', { args: ['$docName'] })).then(v => v === undefined || v === null, () => false)"
   Check 'document-round-trip' ($doc -and $null -eq $doc.before -and $doc.read -eq $docText -and $disk -eq $docText -and $removed -eq $true -and -not (Test-Path -LiteralPath (Join-Path $Data $docName))) "write, read back, on disk and remove: $answer; disk '$disk'; removed $removed"
+
+  $windowsBefore = [Pilot]::CountShells('Ardia')
+  $second = Start-Process $launcherPath -ArgumentList (Join-Arguments @('--ardia-shell=webui', "--user-data-dir=$(Join-Path $Data 'Chromium')", '--single-argument', $urlD)) -PassThru
+  [Pilot]::Roots.Add($second.Id) | Out-Null
+  $secondExited = $second.WaitForExit(20000)
+  $handedOver = Wait-Until { @(Pages | Where-Object { $_.url -eq $urlD }).Count -ge 1 } 15 'the running window to open the address a second launch handed over' -NoThrow
+  $windowsAfter = [Pilot]::CountShells('Ardia')
+  Check 'second-launch-opens-address' ([bool]$handedOver -and $secondExited -and $windowsAfter -eq $windowsBefore) "Ardia.exe --ardia-shell=webui --single-argument <address> while the shell runs: the second process exited $secondExited, the address opened in the running window $([bool]$handedOver), windows $windowsBefore -> $windowsAfter (a running WebUI shell takes addresses from a second launch with the Wave 5B-3b engine, #4118)"
 
   $close = ShellRect $closeSelector
   [Pilot]::SetForegroundWindow($h) | Out-Null

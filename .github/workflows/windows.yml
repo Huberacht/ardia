@@ -771,6 +771,12 @@ jobs:
       - name: Check the shell layouts, the WebUI assembly and the installer's refusals
         shell: pwsh
         run: scripts/windows/shell-layout.test.ps1
+      - name: Check the pilot's waits, log and types on PowerShell 7
+        shell: pwsh
+        run: scripts/windows/webui-pilot/wait.test.ps1
+      - name: Check the pilot's waits, log and types on Windows PowerShell
+        shell: powershell
+        run: scripts/windows/webui-pilot/wait.test.ps1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:

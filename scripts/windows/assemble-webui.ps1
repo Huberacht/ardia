@@ -39,6 +39,9 @@ if (-not $AppIcon) { $AppIcon = Join-Path $repository "apps\browser\windows\Ardi
 $engineRoot = Resolve-Folder $Engine "The engine" $engineLauncher
 $uiRoot = Resolve-Folder $Ui "The desktop UI build (apps/desktop/dist/win)" "index.html"
 if (Test-Path -LiteralPath (Join-Path $engineRoot $ShellLayout.RnwLibrary)) { throw "The engine '$Engine' holds the React Native app; the WebUI shell is assembled from a bare engine" }
+if ($Shippable -and $TestBuild) { throw "a shippable WebUI build never carries ${testMarker}: assemble it without -TestBuild, and mark a copy for tests" }
+if ($Shippable -and $Build -le 0) { throw "a shippable WebUI build needs -Build above 0, so it carries Ardia.build.json for updates and the installer" }
+if ($Shippable -and (Find-TestMarkers $engineRoot).Count) { throw "the engine '$Engine' carries $testMarker; a shippable WebUI build is assembled from an engine without one" }
 if ($Shippable -and -not $MigrateBin) { throw "a shippable WebUI build needs -MigrateBin: without $migratorName an upgrade from the React Native shell would open empty" }
 if ($branded -and -not (Test-Path -LiteralPath $AppIcon -PathType Leaf)) { throw "the app icon '$AppIcon' is not a file" }
 $migrateSource = $null
@@ -93,7 +96,7 @@ if ($Build -gt 0) {
 if ($TestBuild) { New-Item -ItemType File -Path (Join-Path $outRoot $testMarker) -Force | Out-Null }
 
 if ($Shippable) {
-  $problems = Get-ShellLayoutProblems $outRoot "webui" -AllowTestBuild:$TestBuild
+  $problems = Get-ShellLayoutProblems $outRoot "webui"
   if ($problems.Count) { throw "the assembled WebUI build in $outRoot is not shippable: $($problems -join '; ')" }
 } elseif (-not $TestBuild -and (Find-TestMarkers $outRoot).Count) {
   throw "the assembled WebUI build in $outRoot carries a $testMarker marker without -TestBuild"

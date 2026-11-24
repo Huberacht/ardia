@@ -67,7 +67,9 @@ try {
     if (-not $iscc) { throw "Inno Setup installed without an ISCC.exe" }
   }
   Write-Host "make-installer: using $iscc"
-  & $iscc "/Q" "/DSource=$sourceRoot" "/DOut=$outRoot" "/DCpu=$Cpu" "/DAllowed=$($allowed[$Cpu])" "/DVersion=$Version" "/DIcon=$icon" "/DShell=$shellKind" $script
+  $retired = Join-Path $scratch "retired-shell.txt"
+  Write-RetiredShellList $shellKind $retired
+  & $iscc "/Q" "/DSource=$sourceRoot" "/DOut=$outRoot" "/DCpu=$Cpu" "/DAllowed=$($allowed[$Cpu])" "/DVersion=$Version" "/DIcon=$icon" "/DShell=$shellKind" "/DRetiredList=$retired" $script
   if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE" }
   $setup = Join-Path $outRoot "Ardia-Setup-$Cpu.exe"
   if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "ISCC wrote no $setup" }
