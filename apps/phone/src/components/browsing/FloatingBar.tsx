@@ -1,7 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, type ComponentProps } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps } from "react";
 import { markShownFrame } from "../../platform/lab";
 import { Platform, StyleSheet, View, type ViewInstance } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
+import { canCutDeckFromTap, cutDeckFromTabsTap } from "../../state/browse/store";
 import { useBarReturn } from "./barReturn";
 import { AddressFace, AddressLeaf } from "./AddressFace";
 import { NotSecureLock } from "./NotSecureLock";
@@ -218,12 +221,32 @@ function useFoldedGlass<Back extends { centreGlass: { shown: boolean; shownMs: n
   return { ...back, centreGlass: fade(back.centreGlass), sidesGlass: fade(back.sidesGlass) };
 }
 
+const TABS_TAP_MS = 350;
+
 export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, glyphs, fold = null, ghost = false, onTabs, onTabsMenu, onStep }: ButtonProps & { order: BrowserTab[]; roles: ColorRoles; onTabs: () => void; onTabsMenu: () => void; onStep: (delta: -1 | 1) => void }) {
   const count = order.length;
   const foldGlyphs = useFoldGlyphs(fold);
+  const tabsNow = useRef(onTabs);
+  tabsNow.current = onTabs;
+  const callTabs = useCallback(() => tabsNow.current(), []);
+  const tabId = tab.id;
+  const tabsTap = useMemo(
+    () =>
+      Gesture.Tap()
+        .withTestId(`${testID}Tap`)
+        .maxDuration(TABS_TAP_MS)
+        .enabled(tabSwitchCuts())
+        .onEnd((_event, success) => {
+          if (!success) return;
+          if (canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
+          else runOnJS(callTabs)();
+        }),
+    [tabId, testID, callTabs],
+  );
   return (
     <TabsMenuTrigger order={order} onTabsMenu={onTabsMenu}>
       {({ onLongPress, screenReaderActions }) => (
+        <GestureDetector gesture={tabsTap}>
         <PressInPlace
           label="Tabs"
           value={`${count} ${count === 1 ? "tab" : "tabs"}`}
@@ -257,6 +280,7 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
             ) : null}
           </ChromeSurface>
         </PressInPlace>
+        </GestureDetector>
       )}
     </TabsMenuTrigger>
   );

@@ -62,7 +62,7 @@ import { pasteTap } from "../search/pasteRow";
 import { anyPicturePainted, noteSnapshotPageTop, noteSnapshotShown, pictureKey, picturePainted } from "../../lib/shownSnapshots";
 import { DECK_PULL } from "../../lib/deckPull";
 import { tabWords } from "../../lib/sharedWords";
-import { runOnUI } from "react-native-reanimated";
+import { runOnJS, runOnUI } from "react-native-reanimated";
 import { showToast } from "../toasts/store";
 import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages";
 import { hideArchiveCard } from "./archiveCard";
@@ -493,6 +493,31 @@ export function cancelSearch() {
     return;
   }
   if (incognitoOnCancel !== null) setIncognito(incognitoOnCancel);
+}
+
+function deckCutFromTap(id: string) {
+  markTiming("deck press");
+  landingFromRest = id;
+  pullBusySince = Date.now();
+  traceSlice("deck cut from tap");
+  deckPullBegan(id, false, true);
+  beginInteraction(PULL_LANDING_PERF, INTERACTION_WINDOW_MS.deckPullLanding);
+}
+
+function deckTapCutRefused(id: string) {
+  if (landingFromRest === id) landingFromRest = null;
+  void showDeck();
+}
+
+export function canCutDeckFromTap(id: string): boolean {
+  "worklet";
+  return deckPull.target.value?.id === id && deckPull.stage.value === PULL_STAGE.idle;
+}
+
+export function cutDeckFromTabsTap(id: string) {
+  "worklet";
+  runOnJS(deckCutFromTap)(id);
+  cutDeckPullFromRest(id, deckPullSettled, deckTapCutRefused);
 }
 
 export async function showDeck() {

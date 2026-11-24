@@ -219,6 +219,25 @@ test("with cuts a deck entrance renders neither the kept page body nor its bar: 
   unmount(root);
 });
 
+test("a tap on the page's Tabs button cuts to the waiting deck from its own UI-thread worklet, before any JS press handler runs", () => {
+  if (Platform.OS !== "android") return;
+  withTabs(3);
+  browsingNow();
+  const root = renderSurface(<Surfaces />);
+  act(() => jest.advanceTimersByTime(500));
+  const selected = currentTabs().selectedId!;
+  expect(deckPull.target.value?.id).toBe(selected);
+  const press = jest.spyOn(browse, "showDeck");
+  act(() => fireGestureHandler(getByGestureTestId("floatingBarTabsTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
+  expect(deckPull.cut.value).toBe(true);
+  expect(pageBarShown.value).toBe(0);
+  expect(press).not.toHaveBeenCalled();
+  act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  press.mockRestore();
+  unmount(root);
+});
+
 test("a card tapped in the deck is the open tab at once: the deck hands straight to the page, with no growth and no bar hand-over", () => {
   withTabs(3);
   browse.useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
