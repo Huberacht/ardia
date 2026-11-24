@@ -34,6 +34,7 @@ export type OpenWindowOptions = {
   profile?: string;
   size?: [number, number];
   behind?: string;
+  cover?: string;
   chromeWindow?: string;
   claim?: string;
   pointer?: [number, number];

@@ -11,6 +11,7 @@ test("a cover opened again right after the last one was let go stays open past t
   try {
     const id = useBrowser.getState().createWindow();
     coverScreenForIntro(id);
+    assert.equal(windows.open.get(INTRO_WINDOW_ID)?.cover, id, "the cover names the browser window it covers");
     uncoverScreen(id);
     coverScreenForIntro(id);
     mock.timers.tick(5000);

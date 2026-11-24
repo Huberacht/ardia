@@ -22,7 +22,7 @@ export function holdWindowHidden(browserWindowId: string) {
 export function coverScreenForIntro(browserWindowId: string) {
   stopLingering();
   void setWindowShown(browserWindowId, false);
-  void openWindow(INTRO_WINDOW_ID, { kind: "intro", title: "Ardia" });
+  void openWindow(INTRO_WINDOW_ID, { kind: "intro", title: "Ardia", cover: browserWindowId });
 }
 
 export function uncoverScreen(browserWindowId: string) {

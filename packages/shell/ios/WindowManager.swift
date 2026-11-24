@@ -95,7 +95,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
     }
     let kind = options.kind, title = options.title, frame = options.frame, claim = options.claim
     let small = kind == .small
-    if kind == .intro { return openIntroCover(id: id) }
+    if kind == .intro { return openIntroCover(id: id, over: options.cover) }
     if kind != .browser && !small { return openAux(id: id, kind: kind, title: title) }
     guard let makeWindow = WindowHost.makeWindow, let makeContentView = WindowHost.makeContentView else { return }
     if !small, ArdiaChromeWindowHost.takeDismissedAppWindow(id) {

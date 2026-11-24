@@ -2,9 +2,9 @@ import AppKit
 import ArdiaCore
 
 extension WindowManager {
-  func openIntroCover(id: String) {
+  func openIntroCover(id: String, over owner: String?) {
     guard let makeContentView = WindowHost.makeContentView else { return }
-    let browser = managed.values.first(where: { $0.kind == .browser })?.window
+    let browser = owner.flatMap { managed[$0]?.window } ?? managed.values.first(where: { $0.kind == .browser })?.window
     guard let screen = browser?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
     let background = LaunchConfig.shared.background
     let frame = background ? browser?.frame ?? screen.visibleFrame : screen.frame
