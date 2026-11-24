@@ -40,7 +40,7 @@ namespace ardia_win::webui {
 namespace {
 
 constexpr base::TimeDelta kUnclaimedRetry = base::Milliseconds(25);
-constexpr int kNavigationEntryLimit = 50;
+constexpr int kNavigationEntryLimit = 1000;
 
 bool BlankUrl(const GURL& url) {
   return url.is_empty() || url.IsAboutBlank();
@@ -174,8 +174,26 @@ void ShellHostView::CreateTabIn(base::DictValue args,
       return std::move(done).Run(true, base::Value(Identity(existing)));
     }
     content::WebContents* retired = existing->contents();
+    BrowserWindowInterface* retired_owner = OwnerOf(retired);
     bindings_.erase(existing->id());
-    CloseContents(retired);
+    if (retired_owner) {
+      TabStripModel* retired_model = retired_owner->GetTabStripModel();
+      const int retired_index = retired_model->GetIndexOfWebContents(retired);
+      if (retired_index != TabStripModel::kNoTab) {
+        base::AutoReset<bool> creating(&creating_tab_, true);
+        retired_model->DetachAndDeleteWebContentsAt(retired_index);
+      }
+    }
+    if (!browser_) {
+      return std::move(done).Run(
+          false, base::Value("The window closed while the tab moved profiles"));
+    }
+    member = own ? browser_.get() : EnsureMember(profile);
+    if (!member) {
+      return std::move(done).Run(
+          false, Failure("ERR_PROFILE_UNAVAILABLE",
+                         "The tab's profile has no window to live in"));
+    }
   }
   for (ShellHostView* source : WindowRegistry::Get().Hosts()) {
     if (source == this) {
@@ -417,14 +435,14 @@ void ShellHostView::TabCommand(const base::DictValue& args, Done done) {
   }
   if (command == "navigationEntries") {
     base::ListValue entries;
-    const int count = controller.GetEntryCount();
-    const int first = std::max(0, count - kNavigationEntryLimit);
-    for (int index = first; index < count; ++index) {
+    const int count = std::min(controller.GetEntryCount(), kNavigationEntryLimit);
+    const int current = controller.GetCurrentEntryIndex();
+    for (int index = 0; index < count; ++index) {
       content::NavigationEntry* entry = controller.GetEntryAtIndex(index);
       entries.Append(base::DictValue()
                          .Set("url", entry->GetVirtualURL().spec())
                          .Set("title", base::UTF16ToUTF8(entry->GetTitle()))
-                         .Set("offset", index - controller.GetCurrentEntryIndex()));
+                         .Set("current", index == current));
     }
     return std::move(done).Run(true, base::Value(std::move(entries)));
   }

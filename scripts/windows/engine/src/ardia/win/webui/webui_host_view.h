@@ -75,6 +75,7 @@ struct WindowConfig {
   bool startup = false;
   bool chrome_made = false;
   bool focus = true;
+  std::optional<bool> maximized;
   std::string page_profile;
   base::DictValue private_window;
   base::DictValue small_window;
@@ -210,6 +211,7 @@ class ShellHostView : public views::View,
   void RequestClose();
   bool InterceptSystemClose();
   bool OpenPrivateLink(content::WebContents* contents, const GURL& url);
+  void NavigateUtility(base::DictValue utility);
   void ResetUnloadConfirmations();
   bool RequestPrivateWindow(const GURL& url);
   bool LiveFor(uint64_t generation) const;
@@ -338,6 +340,7 @@ class ShellHostView : public views::View,
   int id_ = 0;
   int private_ordinal_ = 0;
   bool closing_ = false;
+  bool utility_ready_ = false;
   bool close_confirming_ = false;
   std::vector<std::shared_ptr<base::RepeatingClosure>> confirmation_steps_;
   bool creating_tab_ = false;

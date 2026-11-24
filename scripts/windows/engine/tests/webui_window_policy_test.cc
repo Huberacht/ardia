@@ -237,6 +237,25 @@ void TestPlacement() {
   assert(ParsePlacement(text) == saved);
 }
 
+void TestRequestedMaximized() {
+  const Rect work{0, 0, 1920, 1040};
+  const Rect restored{100, 80, 1200, 800};
+  const PlacementChoice maximized =
+      ChoosePlacement(restored, std::nullopt, std::nullopt, work, true);
+  assert(maximized.source == PlacementSource::kRequested);
+  assert(maximized.maximized);
+  assert(maximized.frame == restored);
+  assert(!ChoosePlacement(restored, std::nullopt, std::nullopt, work).maximized);
+  assert(!ChoosePlacement(restored, std::nullopt, std::nullopt, work, false)
+              .maximized);
+  const Placement saved{{5, 5, 900, 700}, true};
+  assert(ChoosePlacement(std::nullopt, std::nullopt, saved, work).maximized);
+  assert(!ChoosePlacement(std::nullopt, std::nullopt, saved, work, false)
+              .maximized);
+  assert(ChoosePlacement(std::nullopt, std::nullopt, std::nullopt, work, true)
+             .maximized);
+}
+
 void TestMultiMonitorPlacement() {
   const Rect primary{0, 0, 1920, 1040};
   const Rect secondary{1920, -200, 2560, 1400};
@@ -440,6 +459,7 @@ int main() {
   TestPlacement();
   TestPlacementFit();
   TestMultiMonitorPlacement();
+  TestRequestedMaximized();
   TestHostileSinks();
   std::cout << "webui_window_policy_test: all assertions passed\n";
   return 0;

@@ -206,7 +206,7 @@ ShellHostView* WindowRegistry::Open(Profile* page_profile,
       effective ? display::Screen::Get()->GetDisplayMatching(FromRect(*effective))
                 : display::Screen::Get()->GetPrimaryDisplay();
   const webui_window::PlacementChoice choice = webui_window::ChoosePlacement(
-      requested, front, saved, ToRect(display.work_area()));
+      requested, front, saved, ToRect(display.work_area()), config.maximized);
   BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
                                    *page_profile, true);
   params.omit_from_session_restore = true;
@@ -296,6 +296,21 @@ void WindowRegistry::OpenRequested(ShellHostView* requester,
                                base::Value("Invalid native window request"));
   }
   if (ShellHostView* existing = HostByWindowId(id)) {
+    if (existing->is_utility() && options) {
+      std::optional<base::DictValue> navigation;
+      if (const base::DictValue* settings = options->FindDict("settings")) {
+        navigation = settings->Clone();
+      }
+      if (const std::string* source = options->FindString("importSource")) {
+        if (!navigation) {
+          navigation.emplace();
+        }
+        navigation->Set("importSource", *source);
+      }
+      if (navigation) {
+        existing->NavigateUtility(std::move(*navigation));
+      }
+    }
     if (!options || options->FindBool("focus").value_or(true)) {
       existing->FocusWindow();
     }
@@ -336,6 +351,9 @@ void WindowRegistry::OpenRequested(ShellHostView* requester,
   config.page_profile = profile;
   config.opener = requester->id();
   config.focus = !options || options->FindBool("focus").value_or(true);
+  if (options && !utility) {
+    config.maximized = options->FindBool("maximized");
+  }
   if (private_seed) {
     config.private_window = private_seed->Clone();
   }

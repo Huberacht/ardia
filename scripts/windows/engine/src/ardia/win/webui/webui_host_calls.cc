@@ -339,8 +339,29 @@ void ShellHostView::Invoke(const std::string& method,
   }
   if (method == "ArdiaShell.closeWindow" ||
       method == "ArdiaShell.requestWindowClose") {
+    const std::string target = values && !values->empty() &&
+                                       (*values)[0].is_string()
+                                   ? (*values)[0].GetString()
+                                   : std::string();
+    ShellHostView* host = target.empty() || target == config_.window_id
+                              ? this
+                              : WindowRegistry::Get().ReachableHost(target);
+    if (!host || !host->browser()) {
+      return std::move(done).Run(false, base::Value("No such native window"));
+    }
     std::move(done).Run(true, base::Value());
-    return RequestClose();
+    return host->RequestClose();
+  }
+  if (method == "ArdiaShell.utilityReady") {
+    const std::string target = values && !values->empty() &&
+                                       (*values)[0].is_string()
+                                   ? (*values)[0].GetString()
+                                   : std::string();
+    if (!is_utility() || target != config_.window_id) {
+      return std::move(done).Run(false, base::Value("No such utility renderer"));
+    }
+    utility_ready_ = true;
+    return std::move(done).Run(true, base::Value(config_.utility.Clone()));
   }
   if (method == "ArdiaShell.quit") {
     std::move(done).Run(true, base::Value());

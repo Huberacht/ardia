@@ -487,23 +487,28 @@ struct PlacementChoice {
   PlacementSource source = PlacementSource::kDefault;
 };
 
-constexpr PlacementChoice ChoosePlacement(const std::optional<Rect>& requested,
-                                          const std::optional<Placement>& front,
-                                          const std::optional<Placement>& saved,
-                                          const Rect& work_area) {
+constexpr PlacementChoice ChoosePlacement(
+    const std::optional<Rect>& requested,
+    const std::optional<Placement>& front,
+    const std::optional<Placement>& saved,
+    const Rect& work_area,
+    std::optional<bool> requested_maximized = std::nullopt) {
+  PlacementChoice choice{CenteredDefault(work_area), false,
+                         PlacementSource::kDefault};
   if (requested && requested->width > 0 && requested->height > 0) {
-    return {FitToWorkArea(*requested, work_area), false,
-            PlacementSource::kRequested};
+    choice = {FitToWorkArea(*requested, work_area), false,
+              PlacementSource::kRequested};
+  } else if (front) {
+    choice = {CascadeFrom(front->frame, work_area), front->maximized,
+              PlacementSource::kFront};
+  } else if (saved) {
+    choice = {FitToWorkArea(saved->frame, work_area), saved->maximized,
+              PlacementSource::kSaved};
   }
-  if (front) {
-    return {CascadeFrom(front->frame, work_area), front->maximized,
-            PlacementSource::kFront};
+  if (requested_maximized) {
+    choice.maximized = *requested_maximized;
   }
-  if (saved) {
-    return {FitToWorkArea(saved->frame, work_area), saved->maximized,
-            PlacementSource::kSaved};
-  }
-  return {CenteredDefault(work_area), false, PlacementSource::kDefault};
+  return choice;
 }
 
 inline constexpr size_t kPickerPromptLimit = 200;

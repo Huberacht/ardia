@@ -923,6 +923,7 @@ void ShellHostView::RetireRenderer() {
   caption_->Reset();
   unclaimed_listener_.reset();
   open_urls_listener_.reset();
+  utility_ready_ = false;
   if (focus_manager_) {
     focus_manager_->UnregisterAccelerators(this);
   }
@@ -1391,6 +1392,14 @@ void ShellHostView::OnTabStripModelChanged(
     ReplaceTabContents(replace->old_contents, replace->new_contents);
   }
   ReattachViewports();
+}
+
+void ShellHostView::NavigateUtility(base::DictValue utility) {
+  config_.utility = std::move(utility);
+  if (utility_ready_) {
+    Emit("ArdiaShell", "onUtilityNavigation",
+         base::Value(config_.utility.Clone()));
+  }
 }
 
 bool ShellHostView::OpenPrivateLink(content::WebContents* contents,
