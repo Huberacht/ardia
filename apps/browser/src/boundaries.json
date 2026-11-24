@@ -2118,9 +2118,9 @@
   {
    "id": "windows-webui-relaunch:openUrls",
    "source": "other-app",
-   "guard": "Windows WebUI host (--ardia-shell=webui): a second launch of Ardia hands its command-line arguments to the running browser (WebUIRelaunched); RelaunchUrls keeps only arguments that parse as valid URLs (a relative file path is fixed up against the caller's folder first) whose scheme is http, https or file, each at most 32 KiB and at most 64 of them (RelaunchUrlAccepted); the registry queues them and delivers them only as ArdiaShell onOpenURLs to the most recently active browser window that is not private, not a utility window, not closing, and whose live shell document called ArdiaShell.listenForOpenURLs for its current renderer generation (DeliverOpenUrls, OpenUrlsListening); scripts/windows/engine/tests/webui_window_policy_test.cc runs the hostile corpus through the scheme and size rules",
+   "guard": "Windows WebUI host (--ardia-shell=webui): a second launch of Ardia hands its command-line arguments to the running browser (WebUIRelaunched); WebUIRelaunchUrls keeps only arguments that parse as valid URLs (a relative file path is fixed up against the caller's folder first) whose scheme is http, https or file, each at most 32 KiB and at most 64 of them (RelaunchUrlAccepted); the registry queues them and delivers them only as ArdiaShell onOpenURLs to the most recently active browser window that is not private, not a utility window, not closing, and whose live shell document called ArdiaShell.listenForOpenURLs for its current renderer generation (DeliverOpenUrls, OpenUrlsListening); scripts/windows/engine/tests/webui_window_policy_test.cc runs the hostile corpus through the scheme and size rules",
    "checks": [
-    "scripts/windows/engine/src/ardia/win/main.cc#RelaunchUrls",
+    "scripts/windows/engine/src/ardia/win/main.cc#WebUIRelaunchUrls",
     "scripts/windows/engine/src/ardia/win/main.cc#WebUIRelaunched",
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#RelaunchUrlAccepted",
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#RelaunchUrlSchemeAllowed",

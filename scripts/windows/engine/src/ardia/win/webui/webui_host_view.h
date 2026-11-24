@@ -100,6 +100,7 @@ class PageBinding : public content::WebContentsObserver {
   std::string claim;
   uint64_t renderer_generation = 0;
   uint64_t sequence = 1;
+  uint64_t binding_generation = 1;
   raw_ptr<views::WebView> viewport = nullptr;
   bool visible = false;
   bool presented = false;
@@ -237,7 +238,8 @@ class ShellHostView : public views::View,
   };
 
   bool CompanionsHoldTabs() const;
-  void ConfirmCompanions(base::OnceCallback<void(bool)> done);
+  void ConfirmWindowUnload(base::OnceCallback<void(bool)> done);
+  void ResetUnloadConfirmations();
   static void ConfirmNextCompanion(
       std::shared_ptr<CompanionConfirmation> confirmation,
       std::weak_ptr<base::RepeatingClosure> self);
@@ -363,6 +365,7 @@ class ShellHostView : public views::View,
   std::optional<bool> reported_maximized_;
   std::optional<bool> reported_full_screen_;
   base::CallbackListSubscription system_state_subscription_;
+  base::CallbackListSubscription close_cancelled_subscription_;
   WinTelemetryClient telemetry_;
   std::unique_ptr<FilePicker> file_picker_;
 

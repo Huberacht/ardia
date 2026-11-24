@@ -619,7 +619,7 @@ void AddWebUIMainParts(ChromeBrowserMainParts* main_parts) {
   main_parts->AddParts(std::make_unique<WebUIMainParts>());
 }
 
-base::ListValue RelaunchUrls(const base::CommandLine& command_line,
+base::ListValue WebUIRelaunchUrls(const base::CommandLine& command_line,
                              const base::FilePath& cur_dir) {
   base::ListValue urls;
   for (const base::CommandLine::StringType& argument :
@@ -641,7 +641,7 @@ base::ListValue RelaunchUrls(const base::CommandLine& command_line,
 bool WebUIRelaunched(const base::CommandLine& command_line,
                      const base::FilePath& cur_dir) {
   ClearExiting();
-  OpenWebUIShellWithUrls(RelaunchUrls(command_line, cur_dir));
+  OpenWebUIShellWithUrls(WebUIRelaunchUrls(command_line, cur_dir));
   return true;
 }
 
@@ -758,8 +758,20 @@ bool KeepsWindowWithoutTabs(const BrowserWindowInterface* browser) {
 bool Relaunched(const base::CommandLine& command_line,
                 const base::FilePath& cur_dir) {
   ClearExiting();
+  base::ListValue urls;
+  for (const base::CommandLine::StringType& argument :
+       command_line.GetArgs()) {
+    GURL url(base::WideToUTF8(argument));
+    if (!url.is_valid()) {
+      url = url_formatter::FixupRelativeFile(cur_dir,
+                                             base::FilePath(argument));
+    }
+    if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile())) {
+      urls.Append(url.spec());
+    }
+  }
   base::DictValue payload;
-  payload.Set("urls", RelaunchUrls(command_line, cur_dir));
+  payload.Set("urls", std::move(urls));
   Emit("relaunch", std::move(payload));
   return true;
 }

@@ -64,7 +64,8 @@ base::DictValue ShellHostView::Identity(PageBinding* binding) const {
   lease.Set("claim", binding->claim);
   lease.Set("rendererGeneration",
             base::NumberToString(binding->renderer_generation));
-  lease.Set("bindingGeneration", "1");
+  lease.Set("bindingGeneration",
+            base::NumberToString(binding->binding_generation));
   lease.Set("documentEpoch", "1");
   base::DictValue snapshot;
   snapshot.Set("watermark", static_cast<double>(binding->sequence));

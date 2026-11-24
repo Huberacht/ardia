@@ -581,6 +581,17 @@ constexpr bool DocumentEngineRequestAllowed(std::string_view profile,
   return profile == kAppProfileName && json_bytes <= kDocumentEngineRequestLimit;
 }
 
+constexpr std::optional<uint64_t> NextBindingGeneration(uint64_t current) {
+  if (current == 0 || current == std::numeric_limits<uint64_t>::max()) {
+    return std::nullopt;
+  }
+  return current + 1;
+}
+
+constexpr bool CloseCancelResetsUnload(bool unload_handlers_need_time) {
+  return !unload_handlers_need_time;
+}
+
 constexpr bool KeepsWindowWithoutTabs(bool hosted, bool companion, bool closing) {
   return (hosted || companion) && !closing;
 }

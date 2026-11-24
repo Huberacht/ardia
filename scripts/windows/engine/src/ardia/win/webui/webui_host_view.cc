@@ -289,7 +289,7 @@ base::DictValue PageBinding::Envelope(std::string_view type) {
       .Set("type", type)
       .Set("claim", claim)
       .Set("rendererGeneration", base::NumberToString(renderer_generation))
-      .Set("bindingGeneration", "1")
+      .Set("bindingGeneration", base::NumberToString(binding_generation))
       .Set("documentEpoch", "1")
       .Set("sequence", static_cast<double>(++sequence));
 }
@@ -393,6 +393,18 @@ void ShellHostView::Initialize() {
   shell_->GetWebContents()->SetDelegate(this);
   transparency_ = std::make_unique<ShellTransparency>(shell_->GetWebContents());
   ObserveMember(browser_);
+  close_cancelled_subscription_ = browser_->RegisterBrowserCloseCancelled(
+      base::BindRepeating(
+          [](base::WeakPtr<ShellHostView> host, BrowserWindowInterface* browser,
+             BrowserWindowInterface::ClosingStatus status) {
+            if (host && host->browser_ == browser &&
+                webui_window::CloseCancelResetsUnload(
+                    status == BrowserWindowInterface::ClosingStatus::
+                                  kDeniedUnloadHandlersNeedTime)) {
+              host->ResetUnloadConfirmations();
+            }
+          },
+          GetWeakPtr()));
   if (views::Widget* frame = widget()) {
     original_targeter_ = frame->GetNativeWindow()->SetEventTargeter(
         std::make_unique<ShellRootTargeter>(GetWeakPtr()));
@@ -422,6 +434,7 @@ void ShellHostView::DetachBrowser() {
   telemetry_.CancelAll();
   file_picker_.reset();
   system_state_subscription_ = {};
+  close_cancelled_subscription_ = {};
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
   for (auto& [id, binding] : bindings_) {
@@ -584,8 +597,11 @@ void ShellHostView::CloseCompanions() {
     }
     TabStripModel* model = companion->GetTabStripModel();
     model->RemoveObserver(this);
-    while (model->count() > 0) {
-      model->DetachAndDeleteWebContentsAt(model->count() - 1);
+    UnloadController* unload = UnloadController::From(companion.get());
+    if (!unload || !unload->is_attempting_to_close_browser()) {
+      while (model->count() > 0) {
+        model->DetachAndDeleteWebContentsAt(model->count() - 1);
+      }
     }
     companion->GetWindow()->Close();
   }
@@ -1051,8 +1067,12 @@ void ShellHostView::RequestClose() {
     return;
   }
   RememberPlacement();
+  if (!CompanionsHoldTabs() || browser_shutdown::IsTryingToQuit()) {
+    browser_->GetWindow()->Close();
+    return;
+  }
   close_confirming_ = true;
-  ConfirmCompanions(base::BindOnce(
+  ConfirmWindowUnload(base::BindOnce(
       [](base::WeakPtr<ShellHostView> host, bool proceed) {
         if (!host) {
           return;
@@ -1060,7 +1080,7 @@ void ShellHostView::RequestClose() {
         host->close_confirming_ = false;
         if (!proceed || !host->browser_ || host->closing_) {
           host->Note("closing window " + host->config_.window_id +
-                     " was cancelled by a page in another profile");
+                     " was cancelled by one of its pages");
           return;
         }
         host->browser_->GetWindow()->Close();
@@ -1084,8 +1104,12 @@ bool ShellHostView::CompanionsHoldTabs() const {
   });
 }
 
-void ShellHostView::ConfirmCompanions(base::OnceCallback<void(bool)> done) {
+void ShellHostView::ConfirmWindowUnload(
+    base::OnceCallback<void(bool)> done) {
   std::vector<base::WeakPtr<BrowserWindowInterface>> waiting;
+  if (browser_ && browser_->GetTabStripModel()->count() > 0) {
+    waiting.push_back(browser_->GetWeakPtr());
+  }
   for (const auto& companion : companions_) {
     if (companion && companion->GetTabStripModel()->count() > 0) {
       waiting.push_back(companion);
@@ -1147,6 +1171,15 @@ void ShellHostView::ConfirmNextCompanion(
   }
   if (confirmation->done) {
     FinishCompanionConfirmation(confirmation, true);
+  }
+}
+
+void ShellHostView::ResetUnloadConfirmations() {
+  for (BrowserWindowInterface* member : Members()) {
+    UnloadController* unload = UnloadController::From(member);
+    if (unload && unload->is_attempting_to_close_browser()) {
+      unload->ResetBeforeUnloadForShutdown();
+    }
   }
 }
 
@@ -1368,20 +1401,32 @@ void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
     bindings_.erase(old_id);
     bindings_[id] = std::move(owned);
   }
-  base::DictValue creation = Identity(binding);
-  creation.Remove("snapshot");
-  creation.Set("lease", binding->Envelope("pageLease"));
-  creation.Set("snapshot",
-               base::DictValue()
-                   .Set("watermark", static_cast<double>(binding->sequence))
-                   .Set("events",
-                        base::ListValue().Append(binding->NavigationEvent())));
+  const std::optional<uint64_t> next =
+      webui_window::NextBindingGeneration(binding->binding_generation);
+  if (!next) {
+    binding->ReportClosed();
+    binding->claim.clear();
+    return;
+  }
   if (!binding->claim.empty()) {
     base::DictValue delivery = binding->Envelope("pageLifecycle");
+    binding->binding_generation = *next;
+    base::DictValue creation =
+        base::DictValue()
+            .Set("browserId", id)
+            .Set("chromeTabId", id)
+            .Set("lease", binding->Envelope("pageLease"));
+    creation.Set("snapshot",
+                 base::DictValue()
+                     .Set("watermark", static_cast<double>(binding->sequence))
+                     .Set("events",
+                          base::ListValue().Append(binding->NavigationEvent())));
     delivery.Set("action", "rebind");
     delivery.Set("creation", std::move(creation));
     Emit("ArdiaWebView", base::NumberToString(old_id),
          base::Value(std::move(delivery)));
+  } else {
+    binding->binding_generation = *next;
   }
   Note("tab " + base::NumberToString(old_id) + " now shows tab " +
        base::NumberToString(id) + " after Chromium replaced its page");

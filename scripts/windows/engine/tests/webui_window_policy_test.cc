@@ -87,6 +87,22 @@ void TestCompanionRouting() {
   assert(!KeepsWindowWithoutTabs(false, false, false));
 }
 
+void TestBindingGenerations() {
+  assert(NextBindingGeneration(1) == 2u);
+  assert(NextBindingGeneration(41) == 42u);
+  assert(!NextBindingGeneration(0));
+  assert(!NextBindingGeneration(std::numeric_limits<uint64_t>::max()));
+  uint64_t generation = 1;
+  for (int replaced = 0; replaced < 5; ++replaced) {
+    const std::optional<uint64_t> next = NextBindingGeneration(generation);
+    assert(next && *next > generation);
+    generation = *next;
+  }
+  assert(generation == 6);
+  assert(CloseCancelResetsUnload(false));
+  assert(!CloseCancelResetsUnload(true));
+}
+
 void TestSelectionSequence() {
   SelectionSequence sequence;
   assert(sequence.Admit(1, 0));
@@ -345,6 +361,7 @@ int main() {
   TestOpenWindowRequests();
   TestCompanionRouting();
   TestSelectionSequence();
+  TestBindingGenerations();
   TestClaims();
   TestUnclaimedTabs();
   TestDocumentVerbs();
