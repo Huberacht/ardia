@@ -1239,12 +1239,21 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
 ## Updates
 
 - The updates live on the GitHub prerelease `windows-alpha`: `Ardia-Setup-x64.exe`, `Ardia-Setup-arm64.exe`, the
-  feed `windows-update.json` (version, build, and per CPU the installer's address, SHA-256 and size) and the
-  engine's source. `scripts/windows/publish-alpha.sh` puts one build there, the feed last. It keeps the installers of
-  the build before, so an update the app already offered still downloads, and removes older ones. It refuses a build
-  at or below the live feed's, since no installed app would take it.
+  feed `windows-update.json` (version, build, and per CPU the installer's address, SHA-256 and size), its raw 64-byte
+  Ed25519 signature `windows-update.json.sig`, and the engine's source. `scripts/windows/publish-alpha.sh` signs the
+  feed with `scripts/windows/sign-update.mjs` (using `--key`, `WINDOWS_UPDATE_KEY_FILE` or
+  `WINDOWS_UPDATE_ED_PRIVATE_KEY`, checked against `scripts/windows/windows-update.pem`) and self-verifies
+  `windows-update.json`, `windows-update.json.sig` and both installers with `ardia-update-verify` before uploading,
+  putting the feed and its `.sig` up after the installers. A live publish without a signing key fails closed;
+  `--dry-run` without a key signs with an ephemeral test key so the verification path still runs. Keeping
+  `windows-update.json`'s JSON shape unchanged and carrying the signature in `windows-update.json.sig` lets older
+  unsigned installs keep updating while new installs enforce the signature. It keeps the installers of the build
+  before, so an update the app already offered still downloads, and removes older ones. It refuses a build at or below
+  the live feed's, since no installed app would take it.
 - Every release refreshes it (Releases, below), so installed Windows apps update to each nightly and stable.
-  `publish-alpha.sh <run id>` still publishes one green Windows workflow run there as an alpha between releases.
+  Between releases, dispatch `.github/workflows/windows-alpha.yml` with a green Windows workflow run id so alpha
+  publishes share the `ardia-windows-alpha-publish` concurrency group with `release.yml` (`scripts/windows/publish-alpha.sh`
+  refuses live local publishes unless `--allow-local-publish` is explicitly passed; `--dry-run` works locally).
 - A build knows what it is from `Ardia.build.json` beside `Ardia.exe` (`assemble.ps1 -Version -Build`). The build
   number is the number of commits in the built commit's history (`git rev-list --count`, the workflow's `identity`
   job), so it grows with `main` and a release outranks every build before it, CI's included; builds before this rule
@@ -1252,16 +1261,23 @@ Swift core wrote (`fixtures/windows-interop/mac`), and the self-check opens that
   `Ardia-Setup-<cpu>` artifact, which is where `publish-alpha.sh` reads a build's version and number. `ArdiaApp.systemInfo` takes its version and build from that file, since the library has no version
   resource, so telemetry, About and problem reports name the build; a folder build without it says 0.0.0, build 0. Only an installed build with that file updates: Settings › General › Updates shows "not set up" for a
   folder build.
-- `packages/expo-windows/src/updater` is the app's `ArdiaUpdater` on Windows. It reads the feed, offers a higher
+- `packages/expo-windows/src/updater` is the app's `ArdiaUpdater` on Windows. It calls
+  `ArdiaWindowsUpdate.fetchVerifiedManifest`, checks the verified answer again in `manifest.ts`, offers a higher
   build for this CPU, downloads it, and asks before installing; with automatic downloads on it downloads first and
-  asks once. It checks 30 s after launch and every 6 hours, never in a hidden instance, and in an instance with its
-  own data folder only when a test instance names a feed with `ARDIA_INSTANCE=updateFeed=<url>` (then installers must
-  sit beside it).
-- The native half (`UpdateModule.h`, `ArdiaWindowsUpdate`) only fetches from the release's address, checks the
-  download's size and SHA-256 against the feed, and runs the installer from the Updates folder in the data folder
-  after hashing it again while holding it open. The installer runs silently, closes what is left of the app and
-  opens it again (`/relaunch=1`). Nothing is signed yet, so what stands behind an update is GitHub's HTTPS and the
-  release's write access.
+  asks once. It never falls back to an unsigned feed. It checks 30 s after launch and every 6 hours, never in a hidden
+  instance, and in an instance with its own data folder only when a test instance names a feed with
+  `ARDIA_INSTANCE=updateFeed=<url>` (then installers must sit beside it, and a test key may be passed with
+  `ARDIA_INSTANCE=updateFeed=<url>,updateKey=<pem>`). Manifest verification outcomes are counted hourly in
+  `usage_counts` (`windows_update_manifest_verified` and `windows_update_manifest_failures_<reason>`, sharing on only,
+  never URLs or versions).
+- The native half (`UpdateModule.h`, `ArdiaWindowsUpdate`) only fetches from the release's address (or a test
+  instance's `updateFeed`), fetches both `windows-update.json` (at most 64 KiB) and `windows-update.json.sig` (64
+  bytes), runs the bundled static `ardia-update-verify.exe` (`ardia-update-core`) against the pinned
+  `windows-update.pem` beside `Ardia.exe` without following symlinks or reparse points, checks the download's size and
+  SHA-256 against the verified manifest, and runs the installer from the Updates folder in the data folder after
+  hashing it again while holding it open. The installer runs silently, closes what is left of the app and opens it
+  again (`/relaunch=1`). The installer `.exe` itself is not Authenticode-signed yet, so SmartScreen still prompts on a
+  fresh manual download, while in-app updates verify the Ed25519 manifest signature and the installer's SHA-256.
 
 ## Releases
 
@@ -1296,7 +1312,7 @@ gh workflow run windows.yml -R ardia-browser/ardia --ref v<version> -f version=<
 gh run download <run id> -R ardia-browser/ardia -p 'windows-release-*' -D dist/<version>/artifacts
 mkdir -p dist/<version>/windows && cp -n dist/<version>/artifacts/windows-release-*/* dist/<version>/windows/
 gh release upload v<version> -R ardia-browser/ardia dist/<version>/windows/Ardia-<version>-windows-*
-scripts/windows/publish-alpha.sh --installers dist/<version>/windows --commit v<version>
+scripts/windows/publish-alpha.sh --allow-local-publish --installers dist/<version>/windows --commit v<version>
 ```
 
 When the cause is in the code (a stale engine pin needs a new engine release and `prebuilt.json`), fix it on `main`;
@@ -1358,7 +1374,7 @@ for that test key. A test key sealed by a build before this rule doesn't unseal 
 the scratch instance makes a new one. Sync's `selfTest`, which seals and removes a probe key, needs a test instance.
 
 Outside a test instance the launch config drops `ARDIA_TEST`, `ARDIA_TRACE`, `ARDIA_CONFIG_DIR` and the test-only
-`ARDIA_INSTANCE` keys (`updateFeed`, `importSourceDir`, `importSafariHome`), and the launch log says once why. The other
+`ARDIA_INSTANCE` keys (`updateFeed`, `updateKey`, `importSourceDir`, `importSafariHome`), and the launch log says once why. The other
 `ARDIA_INSTANCE` keys and `ARDIA_BACKGROUND` stay instance settings, as on the Mac.
 
 The engine applies the same decision to its own switches (`main.cc` `DecideTestGate`, before Chromium starts):
