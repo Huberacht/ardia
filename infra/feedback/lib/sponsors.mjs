@@ -24,13 +24,15 @@ const URL_LIKE = /[a-z][a-z0-9+.-]*:\S|www\.|[\p{L}\p{N}-]+\.[\p{L}]{2,}(?![\p{L
 const EMAIL_LIKE = /\S@\S/u;
 const IPV4_LIKE = /(?<![\p{N}.])\d{1,3}(?:\s*\.\s*\d{1,3}){3}(?![\p{N}])/u;
 const IPV6_LIKE = /(?:^|[^\p{L}\p{N}])[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,}/iu;
+const NUMBER_SEPARATORS = "[\\s.\\-‐-―−_/\\\\|,:;()#+*]*";
+const LONG_NUMBER = new RegExp(`\\p{Nd}(?:${NUMBER_SEPARATORS}\\p{Nd}){4,}`, "u");
 const READABLE = /[\p{L}\p{N}]/u;
 
 const PROBE_CODE_POINTS = SPONSOR_FIELD.maxLength * 4;
 
 const looksLikeAddress = (text) => {
   const probe = Array.from(text.slice(0, PROBE_CODE_POINTS * 2)).slice(0, PROBE_CODE_POINTS).join("").normalize("NFKC").replace(DOT_LOOKALIKES, ".");
-  return URL_LIKE.test(probe) || EMAIL_LIKE.test(probe) || IPV4_LIKE.test(probe) || IPV6_LIKE.test(probe);
+  return URL_LIKE.test(probe) || EMAIL_LIKE.test(probe) || IPV4_LIKE.test(probe) || IPV6_LIKE.test(probe) || LONG_NUMBER.test(probe);
 };
 
 export function cleanSponsorName(raw) {
@@ -87,7 +89,9 @@ const fieldValue = (session) =>
 export const publishable = (subscription, product = DONATE_PRODUCT) =>
   subscription?.status === "active" && isDonation(subscription, product) && subscription.metadata?.[HIDE_METADATA.key] !== HIDE_METADATA.value;
 
-export function sponsorEntries(activeSubscriptions, sessionBySubscription, product = DONATE_PRODUCT, pricesById = new Map()) {
+const outranks = (a, b) => tierRank(a.tier) < tierRank(b.tier) || (a.tier === b.tier && a.since < b.since);
+
+export function sponsorsFrom(activeSubscriptions, sessionBySubscription, product = DONATE_PRODUCT, pricesById = new Map()) {
   const seen = new Map();
   for (const subscription of activeSubscriptions) {
     if (!publishable(subscription, product)) continue;
@@ -95,29 +99,17 @@ export function sponsorEntries(activeSubscriptions, sessionBySubscription, produ
     if (session?.status !== "complete" || !String(session.metadata?.donate ?? "").startsWith("monthly_")) continue;
     const name = cleanSponsorName(fieldValue(session));
     if (!name) continue;
-    const sponsor = { name, tier: sponsorTier(monthlyCentsOf(subscription, product, pricesById) ?? 0), since: Number(subscription.created) || 0, subscriptions: [subscription.id] };
+    const sponsor = { name, tier: sponsorTier(monthlyCentsOf(subscription, product, pricesById) ?? 0), since: Number(subscription.created) || 0 };
     const key = name.toLocaleLowerCase("en-US");
     const earlier = seen.get(key);
-    seen.set(
-      key,
-      earlier
-        ? {
-            name: earlier.name,
-            tier: tierRank(sponsor.tier) < tierRank(earlier.tier) ? sponsor.tier : earlier.tier,
-            since: Math.min(earlier.since, sponsor.since),
-            subscriptions: [...earlier.subscriptions, subscription.id],
-          }
-        : sponsor,
-    );
+    if (!earlier || outranks(sponsor, earlier)) seen.set(key, sponsor);
   }
-  return [...seen.values()].sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.since - b.since).slice(0, SPONSORS_MAX);
+  return [...seen.values()]
+    .sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.since - b.since)
+    .slice(0, SPONSORS_MAX)
+    .map(({ name, tier }) => ({ name, tier }));
 }
 
-export const publicSponsors = (entries) => entries.map(({ name, tier }) => ({ name, tier }));
-
-export function sponsorsFrom(activeSubscriptions, sessionBySubscription, product = DONATE_PRODUCT, pricesById = new Map()) {
-  return publicSponsors(sponsorEntries(activeSubscriptions, sessionBySubscription, product, pricesById));
-}
 
 export class StripeReadError extends Error {
   constructor(status, code) {
@@ -127,13 +119,6 @@ export class StripeReadError extends Error {
 }
 
 export class IncompleteListError extends Error {}
-
-export class RefreshFailedAfterScan extends Error {
-  constructor(cause, prunedSponsors) {
-    super(`sponsor refresh failed after the subscription scan: ${cause?.message ?? cause}`, { cause });
-    this.prunedSponsors = prunedSponsors;
-  }
-}
 
 const finishedCheckout = (session) =>
   session?.status === "complete"
@@ -186,7 +171,6 @@ const PRICE_CACHE_MS = 24 * 60 * 60 * 1000;
 export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetch, deadlineMs = REFRESH_DEADLINE_MS, requestGapMs = REQUEST_GAP_MS, now = Date.now }) {
   const sessions = new Map();
   const prices = new Map();
-  let published = [];
 
   const get = async (path, params, refresh, { list = true } = {}) => {
     await refresh.pace(refresh.signal);
@@ -233,18 +217,11 @@ export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetc
         pace: pacer(requestGapMs),
         fail: (error) => stop.abort(error),
       };
-      let donations;
       try {
-        donations = (await listAll("subscriptions", { status: "active" }, refresh)).filter((s) => isDonation(s, product));
-      } catch (error) {
-        refresh.fail(error);
-        throw error;
-      }
-      const allowed = new Set(donations.filter((s) => publishable(s, product)).map((s) => s.id));
-      published = published.filter((entry) => entry.subscriptions.some((id) => allowed.has(id)));
-      for (const id of sessions.keys()) if (!allowed.has(id)) sessions.delete(id);
-      try {
-        const missing = donations.filter((s) => allowed.has(s.id) && !sessions.has(s.id));
+        const donations = (await listAll("subscriptions", { status: "active" }, refresh)).filter((s) => isDonation(s, product));
+        const visible = new Set(donations.filter((s) => publishable(s, product)).map((s) => s.id));
+        for (const id of sessions.keys()) if (!visible.has(id)) sessions.delete(id);
+        const missing = donations.filter((s) => visible.has(s.id) && !sessions.has(s.id));
         await eachLimited(missing, LOOKUP_CONCURRENCY, refresh.signal, async (subscription) => {
           const body = await get("checkout/sessions", { subscription: subscription.id, limit: "1" }, refresh);
           const checkout = finishedCheckout(body.data[0]);
@@ -253,7 +230,7 @@ export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetc
         const stalePrices = [
           ...new Set(
             donations
-              .filter((s) => allowed.has(s.id) && sessions.has(s.id))
+              .filter((s) => visible.has(s.id) && sessions.has(s.id))
               .flatMap((s) => needsCurrencyOptions(s, product))
               .map((price) => price.id)
               .filter((id) => !prices.has(id) || now() - prices.get(id).at >= PRICE_CACHE_MS),
@@ -263,11 +240,10 @@ export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetc
           const price = await get(`prices/${encodeURIComponent(id)}`, { "expand[]": "currency_options" }, refresh, { list: false });
           prices.set(id, { price, at: now() });
         });
-        published = sponsorEntries(donations, sessions, product, pricesById());
-        return { sponsors: publicSponsors(published) };
+        return { sponsors: sponsorsFrom(donations, sessions, product, pricesById()) };
       } catch (error) {
         refresh.fail(error);
-        throw new RefreshFailedAfterScan(error, publicSponsors(published));
+        throw error;
       }
     },
   };

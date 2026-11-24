@@ -17,9 +17,8 @@ const SERVICE_VERSION = "1.0.0";
 const RETRY_AFTER_SECONDS = 60;
 export const SPONSORS_TIMING = {
   freshMs: 10 * 60 * 1000,
-  maxAgeMs: 6 * 60 * 60 * 1000,
   cooldownMs: 60 * 1000,
-  coldWaitMs: 4000,
+  coldWaitMs: 3000,
 };
 export const EVENT_RETRY_MS = [30_000, 120_000, 600_000, 1_800_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000];
 
@@ -351,14 +350,15 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
     res.end();
   }
 
-  const usableSponsors = () => {
-    if (sponsorList && now() - sponsorList.at >= SPONSORS_TIMING.maxAgeMs) sponsorList = null;
+  const freshSponsors = () => {
+    if (sponsorList && now() - sponsorList.at >= SPONSORS_TIMING.freshMs) sponsorList = null;
     return sponsorList;
   };
 
   const refreshSponsors = () => {
     if (sponsorRefresh) return sponsorRefresh;
     if (sponsorFailedAt !== null && now() - sponsorFailedAt < SPONSORS_TIMING.cooldownMs) return null;
+    sponsorList = null;
     sponsorRefresh = sponsors
       .list()
       .then(
@@ -367,9 +367,8 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
           sponsorFailedAt = null;
         },
         (error) => {
+          sponsorList = null;
           sponsorFailedAt = now();
-          const pruned = (error.cause ?? error)?.prunedSponsors;
-          if (Array.isArray(pruned) && sponsorList) sponsorList = { ...sponsorList, body: { sponsors: pruned } };
           log(`[feedback] sponsors refresh failed: ${error.cause?.message ?? error.message}`);
         },
       )
@@ -380,11 +379,11 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
   async function listSponsors(res, ip) {
     if (!sponsors) throw new HttpError(503, "sponsors_off", "the sponsor list is not set up here");
     limit("sponsors", ip);
-    let list = usableSponsors();
-    if (!list || now() - list.at >= SPONSORS_TIMING.freshMs) {
+    let list = freshSponsors();
+    if (!list) {
       const pending = refreshSponsors();
-      if (!list && pending) await Promise.race([pending, new Promise((resolve) => later(resolve, SPONSORS_TIMING.coldWaitMs))]);
-      list = usableSponsors();
+      if (pending) await Promise.race([pending, new Promise((resolve) => later(resolve, SPONSORS_TIMING.coldWaitMs))]);
+      list = freshSponsors();
     }
     if (!list) {
       res.setHeader("Retry-After", String(SPONSORS_TIMING.cooldownMs / 1000));
