@@ -8,11 +8,12 @@ import { useBrowser } from "../browser/store";
 import type { Frame } from "../browser/types";
 import { tabTitle } from "../browser/model";
 import { splitOf, type SplitSide, splitTabIdsOf, splitViewAvailable } from "../splits/splits";
-import { dropTabIntoSplit } from "../splits/actions";
+import { dropTabOnPane, swapSplitPanes } from "../splits/actions";
 import { dropTabsOutside, rootPointIn, screenPoint, windowUnder } from "./windowDrop";
 import { dropTabsOnBar, followTabDragOnBar } from "../bookmarks/barDrag";
 
-type DropTarget = { tabId: string; side: SplitSide };
+export type PaneDropSide = SplitSide | "center";
+export type DropTarget = { tabId: string; side: PaneDropSide };
 type Insert = { windowId: string; beforeId: string | null };
 type Picture = { chip: () => [number, number, number, number]; grab: [number, number] };
 type TabDragSession = { seq: number; liveFrame: Frame | null; pointer: [number, number]; picture: Picture | null; sentShape: DragPreviewShape };
@@ -208,9 +209,9 @@ export function endTabDrag(): boolean {
   }
   if (target && tabId) {
     dragPreview.end();
-    return !!dropTabIntoSplit(tabId, target.tabId, target.side);
+    return target.side === "center" ? swapSplitPanes(tabId, target.tabId, "drag") : !!dropTabOnPane(tabId, target.tabId, target.side);
   }
-  if (!(outside || onPage)) {
+  if (!(outside || onPage) || (!outside && paneShownIn(windowId, tabId))) {
     if (shown) dragPreview.end();
     return false;
   }
@@ -220,6 +221,12 @@ export function endTabDrag(): boolean {
   if (moved && moved === overWindow && insertBefore !== undefined) useBrowser.getState().placeTabs(tabIds, { pinned: false, beforeId: insertBefore });
   if (moved) focus(moved);
   return true;
+}
+
+function paneShownIn(windowId: string, tabId: string | null) {
+  const s = useBrowser.getState();
+  const w = s.windows[windowId];
+  return !!tabId && !!splitTabIdsOf(splitOf(s, w?.activeTabIds[w.profileId]))?.includes(tabId);
 }
 
 export function cancelTabDrag() {

@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 globalThis.__DEV__ = false;
-const { DROP_SIDES, PREVIEW, zoneHit, zoneRect } = await import("./splitDrop.ts");
+const { DROP_SIDES, PANE_SIDES, PREVIEW, zoneHit, zoneRect } = await import("./splitDrop.ts");
 const { splitGeometry } = await import("../window/geometry.ts");
 const { useBrowser } = await import("../../state/browser/store.ts");
 
 const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-test("all four split drop zones stay inside the pane and never overlap at rest, grown or active", () => {
+test("all four split drop zones and the swap zone stay inside the pane and never overlap at rest, grown or active", () => {
   for (const pane of [
     { x: 0, y: 0, width: 1200, height: 800 },
     { x: 0, y: 0, width: 690, height: 775 },
@@ -19,7 +19,7 @@ test("all four split drop zones stay inside the pane and never overlap at rest, 
     { x: 0, y: 0, width: 220, height: 300 },
   ]) {
     for (const stage of ["rest", "grown"]) {
-      const rects = DROP_SIDES.map((side) => [side, zoneRect(pane, side, stage)]);
+      const rects = PANE_SIDES.map((side) => [side, zoneRect(pane, side, stage)]);
       for (const [side, r] of rects) {
         assert.ok(r.x >= pane.x && r.y >= pane.y, `${side} ${stage} inside top-left`);
         assert.ok(r.x + r.width <= pane.x + pane.width + 0.01 && r.y + r.height <= pane.y + pane.height + 0.01, `${side} ${stage} inside bottom-right`);
@@ -30,10 +30,10 @@ test("all four split drop zones stay inside the pane and never overlap at rest, 
         }
       }
     }
-    for (const activeSide of DROP_SIDES) {
+    for (const activeSide of PANE_SIDES) {
       const home = zoneRect(pane, activeSide, "grown");
       const active = zoneRect(pane, activeSide, "active", home.x + home.width / 2, home.y + home.height / 2);
-      for (const other of DROP_SIDES) {
+      for (const other of PANE_SIDES) {
         if (other === activeSide) continue;
         assert.equal(overlaps(active, zoneRect(pane, other, "grown")), false, `active ${activeSide} overlaps grown ${other}`);
       }
@@ -71,6 +71,34 @@ test("zoneHit detects all four edges, switches immediately on entry, and prefers
   ];
   assert.deepEqual(zoneHit(twoPanes, 495, 400, null), { tabId: "left", side: "right" });
   assert.deepEqual(zoneHit(twoPanes, 520, 400, null), { tabId: "right", side: "left" });
+});
+
+test("the swap zone sits in the pane's middle, is only offered when asked for, and takes over as soon as the pointer enters it", () => {
+  const pane = { x: 0, y: 0, width: 1000, height: 800 };
+  const panes = [["t1", pane]];
+  assert.deepEqual(zoneHit(panes, 500, 400, null, PANE_SIDES), { tabId: "t1", side: "center" });
+  assert.equal(zoneHit(panes, 500, 400, null, DROP_SIDES), null);
+  assert.equal(zoneHit(panes, 500, 400, null), null);
+  assert.deepEqual(zoneHit(panes, 120, 400, null, PANE_SIDES), { tabId: "t1", side: "left" });
+  assert.deepEqual(zoneHit(panes, 500, 80, null, PANE_SIDES), { tabId: "t1", side: "top" });
+  assert.deepEqual(zoneHit(panes, 500, 720, null, PANE_SIDES), { tabId: "t1", side: "bottom" });
+  const grownCentre = zoneRect(pane, "center", "grown");
+  for (const current of DROP_SIDES) {
+    const r = zoneRect(pane, current, "active", 500, 400);
+    if (r.x <= 500 && 500 <= r.x + r.width && r.y <= 400 && 400 <= r.y + r.height) continue;
+    assert.deepEqual(zoneHit(panes, 500, 400, { tabId: "t1", side: current }, PANE_SIDES), { tabId: "t1", side: "center" }, `from ${current}`);
+  }
+  assert.deepEqual(zoneHit(panes, grownCentre.x + 2, 400, null, PANE_SIDES), { tabId: "t1", side: "center" });
+  const activeCentre = zoneRect(pane, "center", "active");
+  assert.deepEqual(zoneHit(panes, activeCentre.x + 1, 400, { tabId: "t1", side: "center" }, PANE_SIDES), { tabId: "t1", side: "center" });
+  assert.deepEqual(zoneHit(panes, 120, 400, { tabId: "t1", side: "center" }, PANE_SIDES), { tabId: "t1", side: "left" });
+
+  const twoPanes = [
+    ["a", { x: 0, y: 0, width: 500, height: 800 }],
+    ["b", { x: 509, y: 0, width: 500, height: 800 }],
+  ];
+  assert.deepEqual(zoneHit(twoPanes, 759, 400, null, PANE_SIDES), { tabId: "b", side: "center" });
+  assert.deepEqual(zoneHit(twoPanes, 250, 400, null, PANE_SIDES), { tabId: "a", side: "center" });
 });
 
 function freshWindow() {

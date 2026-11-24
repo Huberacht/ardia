@@ -19,8 +19,7 @@ import { useHistoryAvailability } from "../../state/tabs/navigation";
 import { toggleBookmarkOfTab } from "../../state/bookmarks/actions";
 import { useBookmarksShown } from "../../state/bookmarks/hooks";
 import { copyPageUrl } from "../../state/site/selection";
-import { openSplitPane, pressClosePane, showSplitMenu } from "../../state/splits/actions";
-import { useSplitOrientation } from "../../state/splits/hooks";
+import { openSplitPane, pressClosePane } from "../../state/splits/actions";
 import { splitViewAvailable } from "../../state/splits/splits";
 import { useEasedColor, type ToolbarPalette } from "../ui/toolbarColors";
 import { useSitePalette } from "./useSitePalette";
@@ -50,6 +49,7 @@ import { DeveloperToolsButtons } from "./DeveloperToolsButtons";
 import { TabSwipeArea } from "../window/TabSwipe";
 import { useDeveloperMode } from "../../state/site/developerMode";
 import { PageBarFieldButtons, usePageBarOf } from "../plugins/PageBarScope";
+import { PaneSplitButton } from "../split/PaneSplitButton";
 
 type ToolbarTab = Pick<Tab, "id" | "url" | "title" | "windowId" | "zoom">;
 const toolbarTab = (t: Tab | undefined): ToolbarTab | undefined =>
@@ -94,7 +94,6 @@ export const Toolbar = memo(function Toolbar({
   const tabsIcon = useTabsToggleIcon(windowId);
   const tabsShown = useTabsShown(windowId);
   const tab = useToolbarTab(tabId);
-  const splitOrientation = useSplitOrientation(inSplit ? tabId : undefined);
   const isLoading = useTabLive(tabId, (l) => l.isLoading);
   const palette = useSitePalette(tabId);
   const band = useEasedColor(bare ? null : palette.background);
@@ -117,7 +116,6 @@ export const Toolbar = memo(function Toolbar({
     if (!focused) activate(tabId);
   });
   const toggleTabs = useCallback(() => toggleSidebar(windowId), [windowId]);
-  const splitMenu = useCallback(() => showSplitMenu(tabId), [tabId]);
   const closeThisPane = useCallback(() => pressClosePane(tabId), [tabId]);
   const at = useMemo(() => {
     const top = row.center - row.button / 2;
@@ -163,7 +161,7 @@ export const Toolbar = memo(function Toolbar({
         </View>
         {inSplit && (
           <View style={{ position: "absolute", top: at.top, right: trailing.splitRight + geometry.trailing, flexDirection: "row" }}>
-            <Button variant="icon" toolbar palette={palette} icon={splitOrientation === "vertical" ? "rectangle.split.1x2" : "rectangle.split.2x1"} look="row" onPress={splitMenu} tooltip="Split View" />
+            <PaneSplitButton tabId={tabId} palette={palette} />
             <Button variant="icon" toolbar palette={palette} icon="xmark" look="row" weight="medium" onPress={closeThisPane} tooltip="Close Pane" />
           </View>
         )}
