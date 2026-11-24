@@ -1,14 +1,14 @@
 import { useEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import { BottomSheet, Host, NavigationDestination, NavigationStack, RNHostView, VStack } from "@expo/ui/swift-ui";
-import { ignoreSafeArea, navigationBarTitleDisplayMode, navigationTitle } from "@expo/ui/swift-ui/modifiers";
+import { accessibilityHidden, ignoreSafeArea, navigationBarTitleDisplayMode, navigationTitle } from "@expo/ui/swift-ui/modifiers";
 import { refreshSettings } from "../../state/settings/actions";
 import { useSettingsNav } from "../../state/settings/hooks";
 import { closeSettings, followSettingsPath, settingsDestinationKeys, settingsPath, settingsRouteFromKey, type SettingsRoute } from "../../state/settings/nav";
 import { nativeLookColors } from "../../lib/profileLook";
 import { PHONE_SHARING_COPY } from "../../lib/telemetryCopy";
 import { destinationWords, syncWords } from "../../lib/sharedWords";
-import { LookBackdrop, modifierList, profileLook, settingsChrome, settingsUIAvailable, useProfileLook, useTheme } from "../ui";
+import { LookBackdrop, modifierList, profileLook, neverBounces, settingsChrome, settingsUIAvailable, useProfileLook, useTheme } from "../ui";
 import { useNativeChromeUsesGlass, usePublishNativeChromeLook } from "./nativeChromeLook";
 import { ExpoAppearancePage } from "./ExpoAppearancePage";
 import { ExpoSiteSettingsPage } from "./ExpoSiteSettingsPage";
@@ -120,13 +120,17 @@ function SettingsNavigation() {
   if (open && stack.length) kept.current = stack;
   const shown = open ? stack : kept.current;
   const path = settingsPath(shown);
-  const destinations = settingsDestinationKeys(shown);
+  const seen = useRef<{ open: boolean; keys: Set<string> }>({ open, keys: new Set() });
+  if (open && !seen.current.open) seen.current = { open, keys: new Set() };
+  else seen.current.open = open;
+  for (const key of path) seen.current.keys.add(key);
+  const destinations = [...new Set([...settingsDestinationKeys(shown), ...seen.current.keys])];
   return (
     <NavigationStack path={path} onPathChange={followSettingsPath} modifiers={modifierList(profileLook({ ...nativeLookColors(look, dark), usesGlass: glass }))}>
       <StackRoot route={shown[0]} />
       {destinations.map((key) => (
         <NavigationDestination key={key} value={key}>
-          <Destination routeKey={key} pushed={path.includes(key)} />
+          <Destination routeKey={key} pushed={seen.current.keys.has(key)} />
         </NavigationDestination>
       ))}
     </NavigationStack>
@@ -146,12 +150,14 @@ function StackRoot({ route }: { route: SettingsRoute | undefined }) {
   );
 }
 
-const HERO_TITLED = new Set<SettingsRoute["page"]>(["sync", "filterLists"]);
+export const HERO_TITLED = new Set<SettingsRoute["page"]>(["sync", "syncConnect", "filterLists"]);
+
+export const placeholderTitle = (page: SettingsRoute["page"]) => (HERO_TITLED.has(page) ? "" : TITLES[page]);
 
 function Destination({ routeKey, pushed }: { routeKey: string; pushed: boolean }) {
   const route = settingsRouteFromKey(routeKey);
   if (!route) return null;
-  if (!pushed) return <VStack modifiers={modifierList(navigationTitle(HERO_TITLED.has(route.page) ? "" : TITLES[route.page]), navigationBarTitleDisplayMode("inline"), settingsChrome())}>{null}</VStack>;
+  if (!pushed) return <VStack modifiers={modifierList(navigationTitle(placeholderTitle(route.page)), navigationBarTitleDisplayMode("inline"), settingsChrome(), accessibilityHidden(true))}>{null}</VStack>;
   const Converted = CONVERTED[route.page];
   if (Converted) return <Converted route={route} />;
   return (
