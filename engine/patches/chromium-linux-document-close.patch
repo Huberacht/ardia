@@ -5,7 +5,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      ]
    }
  
-+  if (is_linux) {
++  if (is_linux || is_win) {
 +    deps += [ "//ardia/linux:close_hooks" ]
 +  }
 +
@@ -442,7 +442,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
        "//content/public/browser",
        "//extensions/buildflags",
      ]
-+    if (is_linux) {
++    if (is_linux || is_win) {
 +      deps += [ "//ardia/linux:close_hooks" ]
 +    }
 +
@@ -1034,7 +1034,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      "//v8",
      "//v8:v8_version",
    ]
-+  if (is_linux) {
++  if (is_linux || is_win) {
 +    deps += [ "//ardia/linux:close_hooks" ]
 +  }
 +

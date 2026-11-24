@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveHostModule } from "./hostModules.ts";
-import { CRASH_DUMPS, linuxCrashReport, servesCrashDumps } from "./hostCrashReports.ts";
+import { CRASH_DUMPS, isWindowsDump, linuxCrashReport, servesCrashDumps, windowsCrashReport } from "./hostCrashReports.ts";
 import { parseMinidump } from "./minidump.ts";
 
 const CHROME_BASE = 0x5555_0000_0000n;
@@ -53,11 +53,11 @@ const utf16 = (blob, text) => blob.put(struct(4 + text.length * 2, (v) => {
   for (let i = 0; i < text.length; i++) v.setUint16(4 + i * 2, text.charCodeAt(i), true);
 }));
 
-function minidump({ time = 1_794_770_653, created = 1_794_770_649, ptype = "renderer", version, signal = 11, code = 1, rip, rsp, rbp, stack = [], modules = defaultModules() }) {
+function minidump({ time = 1_794_770_653, created = 1_794_770_649, ptype = "renderer", version, signal = 11, code = 1, rip, rsp, rbp, stack = [], modules = defaultModules(), platform = 0x8201, address = 0n, parameters = [] }) {
   const blob = new Blob();
   const streams = [];
   blob.put(new Uint8Array(32));
-  streams.push([7, 56, blob.put(struct(56, (v) => v.setUint16(0, 9, true)))]);
+  streams.push([7, 56, blob.put(struct(56, (v) => { v.setUint16(0, 9, true); v.setUint32(20, platform, true); }))]);
   streams.push([15, 24, blob.put(struct(24, (v) => { v.setUint32(0, 24, true); v.setUint32(4, 2, true); v.setUint32(8, 1, true); v.setUint32(12, created, true); }))]);
   const context = blob.put(struct(1232, (v) => { v.setBigUint64(0x98, rsp, true); v.setBigUint64(0xa0, rbp, true); v.setBigUint64(0xf8, rip, true); }));
   const stackBytes = struct(0x400, (v) => { for (const [address, value] of stack) v.setBigUint64(Number(address - rsp), value, true); });
@@ -75,6 +75,9 @@ function minidump({ time = 1_794_770_653, created = 1_794_770_649, ptype = "rend
     v.setUint32(0, 262, true);
     v.setUint32(8, signal, true);
     v.setUint32(12, code >>> 0, true);
+    v.setBigUint64(24, address, true);
+    v.setUint32(32, parameters.length, true);
+    parameters.forEach((parameter, index) => v.setBigUint64(40 + index * 8, parameter, true));
     v.setUint32(160, 1232, true);
     v.setUint32(164, context, true);
   }))]);
@@ -269,4 +272,61 @@ test("without the engine's crash dumps ArdiaApp.crashReports answers an empty li
   assert.equal(servesCrashDumps(host), false);
   assert.deepEqual(await resolveHostModule(host, "ArdiaApp", "crashReports")(0), []);
   assert.deepEqual(host.invoked, []);
+});
+
+const WIN_CHROME_BASE = 0x7ffa_1000_0000n;
+const WIN_MODULES = [
+  { base: 0x7ff6_0000_0000n, size: 0x30_0000, path: "C:\\Users\\someone\\AppData\\Local\\Ardia WebUI\\Application\\ardia.exe", buildId: "bb".repeat(20) },
+  { base: WIN_CHROME_BASE, size: 0x1000_0000, path: "C:\\Users\\someone\\AppData\\Local\\Ardia WebUI\\Application\\158.0.8127.36\\chrome.dll", buildId: "cc".repeat(20) },
+  { base: 0x7ffb_0000_0000n, size: 0x10_0000, path: "\\\\server\\share\\not a module.txt", buildId: "dd".repeat(20) },
+  { base: 0x7ffc_0000_0000n, size: 0x10_0000, path: "https://example.test/evil.dll", buildId: "ee".repeat(20) },
+];
+const windowsDump = (overrides) => minidump({ ...chainedStack(), platform: 2, modules: WIN_MODULES, signal: 0xc0000005, code: 0, address: WIN_CHROME_BASE + 0x12_3456n, parameters: [1n, 0x10n], ...overrides });
+
+test("a Windows crashpad dump becomes the RNW report: NTSTATUS name, access kind, only the faulting module's file name, uptime and versions", () => {
+  const dump = parseMinidump(windowsDump({}));
+  assert.equal(isWindowsDump(dump), true);
+  assert.deepEqual(windowsCrashReport(dump, { id: "5d0c3e8e-0f3a-4f39-9a59-2f8c2d4f6a11", time: 1_794_770_654_000 }), {
+    incidentId: "5d0c3e8e-0f3a-4f39-9a59-2f8c2d4f6a11",
+    time: 1_794_770_653_000,
+    fileTime: 1_794_770_654_000,
+    process: "renderer",
+    frames: [{ image: "chrome.dll", offset: 0x12_3456 }],
+    terminationNamespace: "WIN32_EXCEPTION",
+    signal: "EXCEPTION_ACCESS_VIOLATION",
+    exceptionSubtype: "ACCESS_WRITE",
+    engineVersion: "157.0.8103.50",
+    uptimeSeconds: 4,
+  });
+  const browser = windowsCrashReport(parseMinidump(windowsDump({ ptype: "browser", version: "0.2.47-nightly.3", parameters: [8n] })), { id: "b", time: 1 });
+  assert.equal(browser.appVersion, "0.2.47-nightly.3");
+  assert.equal(browser.exceptionSubtype, "ACCESS_EXECUTE");
+  assert.equal(browser.engineVersion, undefined);
+});
+
+test("a Windows dump names an unknown status by its code, gives no access kind outside access faults, and leaves unsafe module paths out", () => {
+  const unknown = windowsCrashReport(parseMinidump(windowsDump({ signal: 0xc0001234, parameters: [0n] })), { id: "u", time: 1 });
+  assert.equal(unknown.signal, "STATUS_C0001234");
+  assert.equal(unknown.exceptionSubtype, undefined);
+  const overrun = windowsCrashReport(parseMinidump(windowsDump({ signal: 0xc0000409, parameters: [] })), { id: "o", time: 1 });
+  assert.equal(overrun.signal, "STATUS_STACK_BUFFER_OVERRUN");
+  const read = windowsCrashReport(parseMinidump(windowsDump({ signal: 0xc0000006, parameters: [0n] })), { id: "r", time: 1 });
+  assert.equal(read.exceptionSubtype, "ACCESS_READ");
+  for (const [base, image] of [[0x7ffb_0000_0000n, "???"], [0x7ffc_0000_0000n, "???"], [0x10n, undefined]]) {
+    const report = windowsCrashReport(parseMinidump(windowsDump({ address: base + 4n })), { id: "p", time: 1 });
+    assert.deepEqual(report.frames, image ? [{ image, offset: 4 }] : [{ image: "???" }]);
+  }
+});
+
+test("a Windows dump written without a crash is never reported, and a Linux dump keeps the Linux reader", () => {
+  assert.equal(windowsCrashReport(parseMinidump(windowsDump({ signal: 0x517a7ed })), { id: "s", time: 1 }), null);
+  const linux = parseMinidump(minidump(chainedStack()));
+  assert.equal(isWindowsDump(linux), false);
+  assert.equal(linuxCrashReport(linux, { id: "l", time: 1 }).terminationNamespace, "SIGNAL");
+});
+
+test("ArdiaApp.crashReports reads a Windows host's dumps with the Windows reader", async () => {
+  const host = crashHost([{ id: "w", time: 5, text: base64(windowsDump({ ptype: "browser" })) }, { id: "l", time: 6, text: base64(minidump(chainedStack())) }]);
+  const reports = await resolveHostModule(host, "ArdiaApp", "crashReports")(0);
+  assert.deepEqual(reports.map((report) => [report.incidentId, report.terminationNamespace]), [["w", "WIN32_EXCEPTION"], ["l", "SIGNAL"]]);
 });

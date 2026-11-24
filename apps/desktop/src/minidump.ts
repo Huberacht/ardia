@@ -19,11 +19,12 @@ const SCAN_BYTES = 0x10000n;
 const MAX_COUNT = 4096;
 
 export type MinidumpModule = { base: bigint; size: number; path: string; buildId: string | null };
-type MinidumpException = { signal: number; code: number; threadId: number };
+type MinidumpException = { signal: number; code: number; threadId: number; address: bigint | null; parameter: bigint | null };
 type MinidumpFrame = { module: MinidumpModule | null; address: bigint };
 
 export type Minidump = {
   time: number;
+  platform: number | null;
   processStart: number | null;
   amd64: boolean;
   exception: MinidumpException | null;
@@ -246,6 +247,7 @@ export function parseMinidump(bytes: Uint8Array): Minidump | null {
   const created = flags !== null && flags & MISC_PROCESS_TIMES ? reader.u32(misc!.rva + 12) : null;
   const system = found.get(SYSTEM_INFO);
   const amd64 = !!system && reader.u16(system.rva) === AMD64;
+  const platform = system && system.size >= 24 ? reader.u32(system.rva + 20) : null;
   const list = modules(reader, found.get(MODULE_LIST)?.rva);
   const thrown = found.get(EXCEPTION);
   let exception: MinidumpException | null = null;
@@ -256,12 +258,16 @@ export function parseMinidump(bytes: Uint8Array): Minidump | null {
     const code = reader.u32(thrown.rva + 12);
     const contextSize = reader.u32(thrown.rva + 160);
     const contextRva = reader.u32(thrown.rva + 164);
-    if (threadId !== null && signal !== null && code !== null) exception = { signal, code: code | 0, threadId };
+    const parameters = reader.u32(thrown.rva + 32);
+    const address = reader.u64(thrown.rva + 24);
+    const parameter = parameters ? reader.u64(thrown.rva + 40) : null;
+    if (threadId !== null && signal !== null && code !== null) exception = { signal, code: code | 0, threadId, address, parameter };
     if (contextSize !== null && contextRva !== null && reader.fits(contextRva, contextSize)) context = { size: contextSize, rva: contextRva };
   }
   const regions = memory(reader, found.get(THREAD_LIST)?.rva, found.get(MEMORY_LIST)?.rva);
   return {
     time: seconds * 1000,
+    platform,
     processStart: created ? created * 1000 : null,
     amd64,
     exception,

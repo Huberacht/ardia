@@ -1753,29 +1753,38 @@ Rewritten for the pilot (each marks code the desktop host should own once, share
 | `linux_window::StartCaptionMove` | `WM_SYSCOMMAND SC_MOVE \| HTCAPTION`, only while the left button is down | Win32 move loop, Aero Snap included |
 | `chromium-linux-borderless-frame`, `-window-state` (GTK and Wayland frames) | `ShellTreeHost::GetClientAreaInsets`/`GetDwmFrameInsetsInPixels` + `ShellFrame::NonClientHitTest` + `WebUIShellPreTranslate` | Chrome's own Windows frame model: invisible native resize borders, top edge in the client, DWM shadow and rounded corners; `HTMAXBUTTON` presses are taken in the message pump and toggle maximize |
 
-**Compile probe** of the rest (`ARDIA_LINUX_COMPILE_PROBE=1` and `ardia_linux_compile_probe`, objects only, nothing
-linked; `docs/engine-build-windows.md`): of the 122 `.cc` files,
-**75 compile on Windows as they are** and 47 don't:
+**Compile probe** of the rest (`ARDIA_LINUX_COMPILE_PROBE=1`, objects only, nothing linked;
+`docs/engine-build-windows.md`), on the Windows tree with the patches `series-win` takes (#4107, 2026-11-24): of the
+118 `.cc` files, **81 compile on Windows as they are** and 37 don't (75 of 122 before #4107):
 
 | Why | Files |
 | --- | --- |
 | POSIX headers (`poll.h`, `unistd.h`, `dirent.h`, `dlfcn.h`, `sys/*`) | 18: `automation`, `calendar_eds`, `cli`, `config_core`, `control_core`, `desktop_core`, `import_keyring`, `import_readers`, `import_storage`, `memory_pressure`, `power`, `secret_text`, `self_update`, `sync`, `sync_keystore`, `sync_vault`, `system`, `user_scripts_store` |
 | POSIX types and calls (`uid_t`, `st_mtim`, `S_ISREG`, `mkdir`), mostly through `ac_linux_downloads.h` and `ac_linux_password_check.h` | 10: `downloads`, `file_drop`, `files`, `host`, `import_sessions`, `native_messaging`, `password_check`, `password_field`, `password_prompt`, `user_scripts` |
-| `base::FilePath` is UTF-16 on Windows (`value()` passed as `std::string`) | 7: `background_dialogs`, `import_service`, `live_service`, `profile_service`, `report`, `site_controls_service`, `sync_service`; likely also `download_service`, `extension_service` |
 | D-Bus | 2: `geoclue`, `system_signals` |
-| Needs a Linux-only patch or copy (`ISOLATED_WORLD_ID_ARDIA_PAGE` from `chromium-linux-page-agent`, `ac_test_media_route_provider.h` from `copies.tsv`, the `ac_engine_call` dlsym shim) | 4: `page_channel`, `web_store`, `cast`, `saved_history_engine` |
+| Needs a Linux-only copy or shim (`ac_test_media_route_provider.h` from `copies.tsv`, the `ac_engine_call` dlsym shim, the Rust core's `ardia/core_rs/include/ardia_core.h`) | 3: `cast`, `saved_history_engine`, `sync_keys` |
 | `base::FileDescriptorWatcher` | 1: `config` |
 | Other Linux-only APIs (`password_manager::kPasswordStore` switch, `GetAppOutput(argv)`, `ui::IndexFromPointFlags`) | 3: `credential_service`, `external_apps`, `typeahead_input` |
 
-The 75 that compile include the documents service (`document_reducer`, `documents`, `document_schema`,
-`document_service`), the page layer (`page_lease`, `page_state`, `page_status`, `page_commands`, `page_messages`,
-`page_media`, `page_prompts`, `page_evaluation`), prompts and dialogs (`dialogs`, `dialog_views`,
-`permission_prompts`, `password_prompts`, `autofill_prompts`), extensions (`extensions`, `extension_views`,
-`extension_keybindings`, `extension_shortcuts`), `crash_dumps(_core)`, `report_core`, `notifications(_core)`,
-`sync_crypto`, `sync_json`, `sync_wordlist`, `import_crypto`, `import_formats`, `import_secrets`, `import_zen`,
-`glass`, `pip_player`, `profiles`, `site_controls`, `live`, `telemetry`, `tab_policy`, `window_lifecycle`,
-`window_caption` and the rest. They compile, but most call hooks that Linux-only patches declare, so they won't link
-until those patches are widened.
+`base::FilePath` is UTF-16 on Windows, and no file fails for it any more: the 9 files that passed `value()` as a
+`std::string` or built a path from one (`background_dialogs`, `import_service`, `live_service`, `profile_service`,
+`report`, `site_controls_service`, `sync_service`, `download_service`, `extension_service`), and the path sites of
+`config`, `credential_service` and `user_scripts`, go through `ardia/desktop/ac_desktop_paths.h`: `Text(path)` is
+`value()` where paths are narrow (Linux, byte for byte, never through the locale as `AsUTF8Unsafe` would) and UTF-8
+from `AsUTF8Unsafe` where they're wide, `FromText<base::FilePath>(text)` the reverse. `page_channel` and `web_store`
+compile now that `chromium-linux-page-agent.patch` (its `ISOLATED_WORLD_ID_ARDIA_PAGE`) and
+`chromium-linux-web-store-uninstall.patch` are on the Windows tree.
+
+The 81 that compile include the documents service (`document_reducer`, `documents`, `document_schema`,
+`document_service`), the page layer (`page_channel`, `page_lease`, `page_state`, `page_status`, `page_commands`,
+`page_messages`, `page_media`, `page_prompts`, `page_evaluation`), prompts and dialogs (`dialogs`, `dialog_views`,
+`permission_prompts`, `password_prompts`, `autofill_prompts`, `background_dialogs`), extensions (`extensions`,
+`extension_views`, `extension_keybindings`, `extension_shortcuts`, `extension_service`, `web_store`),
+`crash_dumps(_core)`, `report`, `notifications(_core)`, `close_hooks`, `devtools_authority`, the sync, import, live,
+profile, download and site-controls services, `sync_crypto`, `sync_json`, `sync_wordlist`, `import_crypto`,
+`import_formats`, `import_secrets`, `import_zen`, `glass`, `pip_player`, `profiles`, `site_controls`, `telemetry`,
+`window_lifecycle`, `window_caption` and the rest. The hook globals most of them set are now declared on the Windows
+tree by the patches `series-win` takes; linking them into `chrome.dll` is the BrowserView host's work.
 
 ### Moving a user's data from the RNW shell (#4043)
 
@@ -1905,10 +1914,12 @@ In order, as the next PRs:
    (selector sets in `series_win.py` and the key tooling first, Track 2).
 2. The POSIX seams behind `ac_desktop_platform.h`: files and folders (`dirent`, `mkdir`, `stat`), process and pipe I/O
    (`poll`, `GetAppOutput`), memory locking (`mman`) and file watching (`inotify` → `ReadDirectoryChangesW`), `uid_t`
-   checks (Windows ACLs), `FilePath` UTF-16 at the 9 call sites above. Windows delegates for secrets (DPAPI), calendar,
-   location, power, idle and session signals in place of D-Bus, libsecret and EDS.
+   checks (Windows ACLs). Windows delegates for secrets (DPAPI), calendar, location, power, idle and session signals in
+   place of D-Bus, libsecret and EDS. `FilePath` UTF-16 is done (#4107, above).
 3. Widen to `IS_LINUX || IS_WIN` the Views and browser patches in the table, then host the shell in a `BrowserView`
-   with companion browsers as Linux does, keeping `ShellTreeHost`/`ShellFrame` as the Windows frame.
+   with companion browsers as Linux does, keeping `ShellTreeHost`/`ShellFrame` as the Windows frame. The patches are on
+   the Windows tree since #4107 ([below](#the-linux-patches-windows-takes-4107)); what's left is the host and the
+   guards that change behavior, which it turns on behind the WebUI shell.
 4. The host calls the pilot stubs (logged as `unhandled host call` at start: `ArdiaShell.readDocument`/`writeDocument`,
    `setActiveProfile`, `openWindow`, `setMenuBookmarks`, `setMenuState`, `shellPainted`, `ArdiaTabs.unclaimedTabs`/
    `claimLaunchTab`, `tab.presentations`, `tab.command` `setMuted`/`evaluate`/`capturePicture`, and the `engine.call`s
@@ -1921,10 +1932,50 @@ In order, as the next PRs:
 Two RNW features the desktop host must carry over:
 
 1. **Crash reports** (#2442): the RNW app reads Crashpad minidumps itself (`apps/browser/windows/Ardia/CrashDumps.h`,
-   native API v25). On the desktop host this is `ac_linux_crash_dumps(_core)`, which already compiles on Windows; the
-   Crashpad database path and the dump format reader are Windows'.
-2. **Report a Problem** (#3666): Windows has no native uploader today. `ac_desktop_report_core` compiles on Windows as
-   is; `ac_linux_report` needs its `FilePath` strings made UTF-16-safe.
+   native API v25). On the desktop host this is `ac_linux_crash_dumps(_core)`, which compiles on Windows: it lists and
+   reads Chromium's own Crashpad database (`chrome::DIR_CRASH_DUMPS`, `<User Data>\Crashpad` on Windows, through
+   `crashpad::CrashReportDatabase`, so the `reports\<uuid>.dmp` layout and its metadata are Crashpad's) and hands the
+   dump's bytes to `ArdiaCrash.read`. The dump reader is `apps/desktop/src/hostCrashReports.ts`: a dump whose system info
+   says Windows (`PlatformId` 2) becomes a `WIN32_EXCEPTION` report as RNW's does: the NTSTATUS name (RNW's table,
+   `STATUS_<hex>` otherwise), `ACCESS_READ`/`WRITE`/`EXECUTE` for access and in-page faults, one frame from the
+   exception address, and only a module file name RNW would also send (`.dll`, `.exe` and the like; never a folder,
+   a UNC path or a URL). Linux dumps keep the Linux reader. `hostCrashReports.test.mjs` covers both.
+2. **Report a Problem** (#3666): Windows has no native uploader today. `ac_desktop_report_core` and `ac_linux_report`
+   compile on Windows (#4107): paths are UTF-8 through `ac_desktop_paths.h`, `InsideDrafts` takes the native separator
+   (a drive root and `\` on Windows, where it also refuses `/` and `:` streams), and `0700` on the drafts folder is
+   POSIX only (the profile folder's ACL already keeps it the user's). `report_core_test.cc` covers the Windows paths.
+
+### The Linux patches Windows takes (#4107)
+
+`series.py` still refuses a platform set (`linux,win`), and teaching it one moves every key, the Mac's included, so
+`series-win` names each patch with a `take` line instead: Windows applies that `linux` line at its own place in the
+shared series, as a `linux,win` line will. The Mac and Linux trees are unchanged by it (the Mac key stays; the Linux
+key moves only for the guard edits below). On the Windows tree (MSI, 2026-11-24) all 24 apply with `git apply`, no
+fuzz, and `chromium-win-ardia-layer-calls-mac-only`, `-external-protocol-dialog`, `-hosted-popups-and-menus` and
+`-hosted-theme-change` are remade on top of them, so 132 of the 133 patches apply strictly (the one with fuzz is the
+`mac` line `chromium-safe-storage-one-key-for-every-data-dir`). The 35 Chromium files they touch pass `clang-cl
+-fsyntax-only` with their targets' flags.
+
+Nothing changes for the React Native Windows shell. A taken hook is a null pointer (or a `false` flag) until the
+desktop host sets it, which only the WebUI shell will. Guards that would change behavior on their own stay
+`IS_LINUX`, so Windows compiles stock code there:
+
+| Patch | On Windows |
+| --- | --- |
+| `-private-links`, `-navigation-hold-hook`, `-devtools-open-tab`, `-pip-in-window`, `-web-store-uninstall`, `-media-player-pip`, `-geolocation`, `-document-close` (its GN deps) | guards widened to `IS_LINUX \|\| IS_WIN` (`is_linux \|\| is_win`); null hooks, so stock until set |
+| `-page-agent` | the browser-side binder and `ISOLATED_WORLD_ID_ARDIA_PAGE` widened; the renderer agent (`//ardia/linux:page_agent`) stays Linux until Windows builds it |
+| `-shell-above-input`, `-companion-browsers`, `-window-minimum-size`, `-page-prompts`, `-page-status`, `-wheel-zoom`, `-unhandled-key`, `-action-popup-hook`, `-thin-scroll-bars` | no guards: null hooks |
+| `-background-windows` | taken without its launch-config half, now `chromium-linux-launch-config.patch` (`linux`); its `--ardia-background` check stays Linux |
+| `-auto-pip` | hooks taken; the feature switches it adds in `BasicStartupComplete` stay Linux |
+| `-pip-placement`, `-extension-keybindings`, `-settings-overrides`, `-devtools-authority` | guards stay Linux: they call Linux layer code or change behavior unconditionally; taken so the files match Linux's and the patches after them apply. `-devtools-authority` and `chromium-win-devtools-other-clients` share no file |
+
+`linux-hooks.gn` gives Windows `//ardia/linux:close_hooks` (`ac_linux_close_hooks.cc`, which `-document-close`
+links; with no `g_ardia_linux_close_hooks.defer` every gate answers no) and the `ac_linux_content_hooks.h` header
+`-media-player-pip` includes. `chromium-win-autoplay-policy.patch` stays Windows' autoplay patch and
+`-autoplay-policy` stays Linux, and so do `-window-state`, `-borderless-frame`, `-glass-compositing`,
+`-frameless-utility-windows`, `-open-urls`, `-native-messaging-hosts`, `-branding`, `-wayland-cursor-fallback`,
+`chromium-helium-branding-linux` and `chromium-ardia-linux-layer`.
+
 
 ## Order of work
 

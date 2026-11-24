@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ardia/core/ac_launch_switches.h"
+#include "ardia/desktop/ac_desktop_paths.h"
 #include "ardia/desktop/ac_desktop_report_core.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
@@ -19,6 +20,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "content/public/browser/browser_thread.h"
@@ -38,6 +40,7 @@ namespace ardiacore {
 namespace {
 
 namespace report = ardia::desktop_report;
+namespace paths = ardia::desktop_paths;
 
 using Done = base::OnceCallback<void(bool, base::Value)>;
 
@@ -87,6 +90,18 @@ base::FilePath DraftsFolder(const base::FilePath& documents) {
   return documents.AppendASCII(report::kDraftsFolder);
 }
 
+constexpr char kSeparator = static_cast<char>(base::FilePath::kSeparators[0]);
+
+bool Inside(const base::FilePath& drafts, std::string_view path) {
+  return report::InsideDrafts(paths::Text(drafts), path, kSeparator);
+}
+
+void OwnerOnly(const base::FilePath& folder) {
+#if BUILDFLAG(IS_POSIX)
+  base::SetPosixFilePermissions(folder, 0700);
+#endif
+}
+
 std::optional<base::FilePath> RealPath(const base::FilePath& path) {
   base::FilePath real = base::MakeAbsoluteFilePath(path);
   if (real.empty()) return std::nullopt;
@@ -94,32 +109,32 @@ std::optional<base::FilePath> RealPath(const base::FilePath& path) {
 }
 
 std::optional<base::FilePath> ExistingDraftPath(const base::FilePath& drafts, const std::string& path) {
-  if (!report::InsideDrafts(drafts.value(), path)) return std::nullopt;
+  if (!Inside(drafts, path)) return std::nullopt;
   const std::optional<base::FilePath> real_drafts = RealPath(drafts);
-  const std::optional<base::FilePath> real = RealPath(base::FilePath(path));
-  if (!real_drafts || !real || !report::InsideDrafts(real_drafts->value(), real->value())) return std::nullopt;
+  const std::optional<base::FilePath> real = RealPath(paths::FromText<base::FilePath>(path));
+  if (!real_drafts || !real || !Inside(*real_drafts, paths::Text(*real))) return std::nullopt;
   return real;
 }
 
 std::optional<base::FilePath> NewDraftPath(const base::FilePath& drafts, const std::string& path) {
-  if (!report::InsideDrafts(drafts.value(), path)) return std::nullopt;
-  const base::FilePath given(path);
+  if (!Inside(drafts, path)) return std::nullopt;
+  const base::FilePath given = paths::FromText<base::FilePath>(path);
   const std::optional<base::FilePath> real_drafts = RealPath(drafts);
   const std::optional<base::FilePath> parent = RealPath(given.DirName());
   if (!real_drafts || !parent) return std::nullopt;
   const base::FilePath real = parent->Append(given.BaseName());
-  if (!report::InsideDrafts(real_drafts->value(), real.value()) || base::IsLink(real)) return std::nullopt;
+  if (!Inside(*real_drafts, paths::Text(real)) || base::IsLink(real)) return std::nullopt;
   return real;
 }
 
 std::optional<std::string> CreateDraft(const base::FilePath& documents) {
   const base::FilePath drafts = DraftsFolder(documents);
   if (!base::CreateDirectory(drafts)) return std::nullopt;
-  base::SetPosixFilePermissions(drafts, 0700);
+  OwnerOnly(drafts);
   const base::FilePath draft = drafts.AppendASCII(base::Uuid::GenerateRandomV4().AsLowercaseString());
   if (!base::CreateDirectory(draft)) return std::nullopt;
-  base::SetPosixFilePermissions(draft, 0700);
-  return draft.value();
+  OwnerOnly(draft);
+  return paths::Text(draft);
 }
 
 double FileSize(const base::FilePath& documents, const std::string& path) {
@@ -131,13 +146,13 @@ double FileSize(const base::FilePath& documents, const std::string& path) {
 
 bool RemovePath(const base::FilePath& documents, const std::string& path) {
   const base::FilePath drafts = DraftsFolder(documents);
-  if (!report::InsideDrafts(drafts.value(), path)) return false;
-  const base::FilePath given(path);
+  if (!Inside(drafts, path)) return false;
+  const base::FilePath given = paths::FromText<base::FilePath>(path);
   const std::optional<base::FilePath> real_drafts = RealPath(drafts);
   const std::optional<base::FilePath> parent = RealPath(given.DirName());
   if (!real_drafts || !parent) return false;
   const base::FilePath real = parent->Append(given.BaseName());
-  if (!report::InsideDrafts(real_drafts->value(), real.value())) return false;
+  if (!Inside(*real_drafts, paths::Text(real))) return false;
   return base::DeletePathRecursively(real);
 }
 

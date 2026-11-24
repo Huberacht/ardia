@@ -18,6 +18,37 @@ std::string In(std::string_view tail) {
   return std::string(kDraft) + std::string(tail);
 }
 
+constexpr std::string_view kWindowsDrafts = "C:\\Users\\u\\AppData\\Local\\Ardia WebUI\\Default\\Ardia\\Report Drafts";
+
+std::string InWindows(std::string_view tail) {
+  return std::string(kWindowsDrafts) + "\\0f8fad5b-d9cb-469f-a165-70867728950e" + std::string(tail);
+}
+
+void WindowsPathsUseBackslashesAndADriveRoot() {
+  assert(InsideDrafts(kWindowsDrafts, InWindows(""), '\\'));
+  assert(InsideDrafts(kWindowsDrafts, InWindows("\\recording.mp4"), '\\'));
+  assert(InsideDrafts(kWindowsDrafts, InWindows("\\nested\\local-events.jsonl.gz"), '\\'));
+  assert(InsideDrafts("d:\\Drafts", "d:\\Drafts\\0f8fad5b-d9cb-469f-a165-70867728950e", '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\recording.mp4")));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("/recording.mp4"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\a/..\\..\\..\\Preferences"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\..\\..\\Preferences"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\.\\a"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\\\a"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\recording.mp4:hidden"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\recording.mp4::$DATA"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, std::string(kWindowsDrafts) + "\\notes.txt", '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, std::string(kWindowsDrafts) + "x\\0f8fad5b-d9cb-469f-a165-70867728950e", '\\'));
+  assert(!InsideDrafts(std::string(kWindowsDrafts) + "\\", InWindows("\\a"), '\\'));
+  assert(!InsideDrafts("\\\\server\\share\\Drafts", "\\\\server\\share\\Drafts\\0f8fad5b-d9cb-469f-a165-70867728950e", '\\'));
+  assert(!InsideDrafts("Drafts", "Drafts\\0f8fad5b-d9cb-469f-a165-70867728950e", '\\'));
+  assert(!InsideDrafts("C:Drafts", "C:Drafts\\0f8fad5b-d9cb-469f-a165-70867728950e", '\\'));
+  assert(!InsideDrafts("1:\\Drafts", "1:\\Drafts\\0f8fad5b-d9cb-469f-a165-70867728950e", '\\'));
+  assert(!InsideDrafts(kDrafts, In("/recording.mp4"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows(std::string("\\a\0b", 4)), '\\'));
+}
+
 void OnlyPathsInsideADraftFolderAreTouched() {
   assert(InsideDrafts(kDrafts, kDraft));
   assert(InsideDrafts(kDrafts, In("/recording.mp4")));
@@ -196,6 +227,7 @@ int main(int argc, char** argv) {
   if (argc == 4 && std::string_view(argv[1]) == "gzip") return GzipFile(argv[2], argv[3]);
   if (argc != 1) return 2;
   OnlyPathsInsideADraftFolderAreTouched();
+  WindowsPathsUseBackslashesAndADriveRoot();
   OnlyTheFeedbackEndpointIsReached();
   AttachmentNamesAndCapsAreTheServices();
   EachRequestTakesItsOwnMethodAndHeaders();

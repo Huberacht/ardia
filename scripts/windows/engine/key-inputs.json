@@ -23,7 +23,10 @@
     "engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc",
     "engine/ardiacore-linux/src/ardia/linux/ac_linux_session.h",
     "engine/ardiacore-linux/src/ardia/linux/bootstrap.js",
-    "engine/ardiacore-linux/src/ardia/linux/generate_bootstrap.py"
+    "engine/ardiacore-linux/src/ardia/linux/generate_bootstrap.py",
+    "engine/ardiacore-linux/src/ardia/linux/ac_linux_close_hooks.cc",
+    "engine/ardiacore-linux/src/ardia/linux/ac_linux_close_hooks.h",
+    "engine/ardiacore-linux/src/ardia/linux/ac_linux_content_hooks.h"
   ],
   "resource_lists": [
     "engine/patches/build/ardia_resources.txt",

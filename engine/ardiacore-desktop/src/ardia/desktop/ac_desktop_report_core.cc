@@ -28,6 +28,12 @@ bool Hex(char c) {
   return Digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
+bool AbsoluteRoot(std::string_view path, char separator) {
+  if (separator == '/') return !path.empty() && path.front() == '/';
+  const bool letter = path.size() >= 3 && ((path[0] >= 'a' && path[0] <= 'z') || (path[0] >= 'A' && path[0] <= 'Z'));
+  return letter && path[1] == ':' && path[2] == separator;
+}
+
 bool Numbered(std::string_view number) {
   if (number.empty() || number.size() > 2 || number[0] == '0') return false;
   return std::ranges::all_of(number, Digit);
@@ -115,16 +121,19 @@ size_t Utf8Prefix(std::string_view text, size_t limit) {
 
 }
 
-bool InsideDrafts(std::string_view drafts, std::string_view path) {
-  if (drafts.empty() || drafts.front() != '/' || drafts.back() == '/' || path.size() > kPathMaxBytes ||
-      path.size() <= drafts.size() + 1 || !path.starts_with(drafts) || path[drafts.size()] != '/' ||
-      path.find('\0') != std::string_view::npos || path.back() == '/') {
+bool InsideDrafts(std::string_view drafts, std::string_view path, char separator) {
+  if (!AbsoluteRoot(drafts, separator) || drafts.back() == separator || path.size() > kPathMaxBytes ||
+      path.size() <= drafts.size() + 1 || !path.starts_with(drafts) || path[drafts.size()] != separator ||
+      path.find('\0') != std::string_view::npos || path.back() == separator) {
+    return false;
+  }
+  if (separator != '/' && (path.find('/') != std::string_view::npos || path.find(':', 2) != std::string_view::npos)) {
     return false;
   }
   std::string_view rest = path.substr(drafts.size() + 1);
   bool first = true;
   while (!rest.empty()) {
-    const size_t slash = rest.find('/');
+    const size_t slash = rest.find(separator);
     const std::string_view part = rest.substr(0, slash);
     if (part.empty() || part == "." || part == "..") return false;
     if (first && !DraftFolderName(part)) return false;

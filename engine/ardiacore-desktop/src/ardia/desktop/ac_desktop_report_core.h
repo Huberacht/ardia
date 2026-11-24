@@ -41,7 +41,7 @@ struct Request {
 
 using Header = std::pair<std::string, std::string>;
 
-bool InsideDrafts(std::string_view drafts, std::string_view path);
+bool InsideDrafts(std::string_view drafts, std::string_view path, char separator = '/');
 bool DraftFolderName(std::string_view name);
 bool ReportId(std::string_view id);
 std::optional<int64_t> FileLimit(std::string_view name);

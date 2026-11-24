@@ -4,7 +4,9 @@ platforms include `mac` or `win` (Windows started from the Mac's set; `linux` li
 lines are; a `layer` line it would select, untagged or naming win, is refused unless it is a layer this script runs
 itself: engine/chromium and engine/ardiacore-desktop), then those of
 scripts/windows/engine/series-win (when it exists; its patches in scripts/windows/engine/patches,
-and its `skip <patch>` lines leave a patch of engine/patches/series out), each applied strictly (git apply), else with patch's fuzz.
+its `skip <patch>` lines leave a patch of engine/patches/series out, and its `take <patch>` lines apply a `linux` line
+of engine/patches/series at its own place in that series, as a `linux,win` line would once series.py reads platform
+sets), each applied strictly (git apply), else with patch's fuzz.
 A patch that fails is recorded and the rest still run. Each patch that goes in is written to .series-win-applied beside
 the tree and never applied again: a later patch on the same lines would hide it from a reverse check. Of the layers, engine/chromium runs as is (its
 chrome/browser/ardia gets a Windows BUILD.gn made from the shared one (its shared sources less .mm and pip/, plus the
@@ -13,9 +15,11 @@ ardia-layer-win.patch that make its sources build on Windows, and the files unde
 the ones that are POSIX only), engine/ardiacore
 gives the hook headers the patches include and ac_launch_switches (its Mac signature check answers no),
 engine/ardiacore-desktop/src/ardia/desktop, the host layer Linux and Windows share, is copied to //ardia/desktop as is,
-the files //ardia/win's BUILD.gn names from engine/ardiacore-linux are copied to //ardia/linux (the WebUI shell of
---ardia-shell=webui compiles them as they are; with ARDIA_LINUX_COMPILE_PROBE=1 the whole Linux layer is copied with a
-BUILD.gn made from linux-probe.gn for a compile probe, loaded only with the GN arg ardia_linux_compile_probe=true), and
+the files //ardia/win's BUILD.gn and linux-hooks.gn name from engine/ardiacore-linux are copied to //ardia/linux (the
+WebUI shell of --ardia-shell=webui compiles the first as they are; linux-hooks.gn becomes //ardia/linux's BUILD.gn,
+the hook targets the taken patches depend on; with ARDIA_LINUX_COMPILE_PROBE=1 the whole Linux layer is copied and
+linux-probe.gn's targets follow the hook targets for a compile probe, loaded only with the GN arg
+ardia_linux_compile_probe=true), and
 scripts/windows/engine/src/ardia/win (the app in the browser process, with the app's EngineApi.h and a generated table
 of the engine's ac_* calls in the sources Windows compiles) is copied to //ardia/win, only the files that changed. Writes a table: patch, result, which files it touches (Mac only, Mac and shared, OS-neutral).
 
@@ -42,6 +46,8 @@ LAYER_OVERLAY = os.path.join(HERE, 'src', 'chrome', 'browser', 'ardia')
 LINUX_LAYER = os.path.join(REPO, 'engine', 'ardiacore-linux', 'src', 'ardia', 'linux')
 DESKTOP_LAYER = os.path.join(REPO, 'engine', 'ardiacore-desktop', 'src', 'ardia', 'desktop')
 LINUX_PROBE_BUILD = os.path.join(HERE, 'linux-probe.gn')
+LINUX_HOOKS_BUILD = os.path.join(HERE, 'linux-hooks.gn')
+GN_SOURCE = re.compile(r'"([A-Za-z0-9_][A-Za-z0-9_./]*\.(?:cc|h))"')
 LINUX_PROBE_SKIPPED = ('BUILD.gn', 'ac_linux_desktop_platform.cc')
 LINUX_PROBE_SWITCH = 'ARDIA_LINUX_COMPILE_PROBE'
 LINUX_PROBE_OUTSIDE = ('renderer/', 'mojom/')
@@ -108,7 +114,7 @@ def selector_tags(selector):
     return tuple(names) if len(set(names)) == len(names) and all(name in ENGINES for name in names) else None
 
 
-def series_lines(text, path, tags=WINDOWS_TAGS):
+def series_lines(text, path, tags=WINDOWS_TAGS, takes=()):
     if text is None:
         return []
     out = []
@@ -129,8 +135,19 @@ def series_lines(text, path, tags=WINDOWS_TAGS):
                                  f'yet but {", ".join(WINDOWS_OWN_LAYERS)}: teach it to apply the layer, or select '
                                  'platforms without win')
             continue
-        if any(tag in tags for tag in line_tags):
+        if any(tag in tags for tag in line_tags) or fields[1] in takes:
             out.append(fields[1])
+    return out
+
+
+def shared_lines(text, path):
+    if text is None:
+        return {}
+    out = {}
+    for raw in io.StringIO(text):
+        fields = raw.split('#', 1)[0].split()
+        if len(fields) in (2, 3) and fields[0] == 'chromium':
+            out[fields[1]] = selector_tags(fields[2] if len(fields) == 3 else 'all') or ()
     return out
 
 
@@ -205,7 +222,12 @@ def desktop_layer(tree):
 
 def linux_reused():
     text = read_file(WIN_BUILD, encoding='utf-8')
-    return sorted(set(re.findall(r'"//ardia/linux/([^"]+)"', text)))
+    compiled = sorted(set(re.findall(r'"//ardia/linux/([^"]+)"', text)))
+    return compiled + [rel for rel in linux_hook_sources() if rel not in compiled]
+
+
+def linux_hook_sources():
+    return sorted(set(GN_SOURCE.findall(read_file(LINUX_HOOKS_BUILD, encoding='utf-8'))))
 
 
 def linux_probe_sources(files):
@@ -213,12 +235,17 @@ def linux_probe_sources(files):
                   if rel.endswith(('.cc', '.h')) and not rel.replace(os.sep, '/').startswith(LINUX_PROBE_OUTSIDE))
 
 
+def linux_hooks_build():
+    return read_file(LINUX_HOOKS_BUILD, encoding='utf-8')
+
+
 def linux_probe_build(files):
     template = read_file(LINUX_PROBE_BUILD, encoding='utf-8')
     if template.count('LINUX_PROBE_SOURCES') != 1:
         raise InputError(f'{os.path.relpath(LINUX_PROBE_BUILD, REPO)}: expected one LINUX_PROBE_SOURCES')
-    listed = '[\n' + ''.join(f'    "{rel}",\n' for rel in linux_probe_sources(files)) + '  ]'
-    return template.replace('LINUX_PROBE_SOURCES', listed)
+    hooks = set(linux_hook_sources())
+    listed = '[\n' + ''.join(f'    "{rel}",\n' for rel in linux_probe_sources(files) if rel not in hooks) + '  ]'
+    return linux_hooks_build() + '\n' + template.replace('LINUX_PROBE_SOURCES', listed)
 
 
 def linux_layer(tree):
@@ -236,10 +263,10 @@ def linux_layer(tree):
     changed = 0
     for rel, path in wanted.items():
         changed += copy_if_changed(path, os.path.join(target, rel))
-    if probe:
-        changed += write_if_changed(os.path.join(target, 'BUILD.gn'), linux_probe_build(wanted))
+    build = linux_probe_build(wanted) if probe else linux_hooks_build()
+    changed += write_if_changed(os.path.join(target, 'BUILD.gn'), build)
     for rel, path in files_under(target).items():
-        if rel not in wanted and not (probe and rel == 'BUILD.gn'):
+        if rel not in wanted and rel != 'BUILD.gn':
             os.remove(path)
             changed += 1
     print(f'ardia/linux: {len(wanted)} files of the Linux layer{" for the compile probe" if probe else ""}, '
@@ -685,20 +712,47 @@ def win_layer(tree):
     print(f'ardia/win: {len(wanted) + len(generated)} files, {len(names)} engine calls, {copied} changed')
 
 
-def skip_names(text):
+def directive_names(text, directive):
     if text is None:
         return set()
     return {l.split(None, 1)[1].strip() for l in (r.split('#', 1)[0].strip() for r in io.StringIO(text))
-            if l.startswith('skip ')}
+            if l.startswith(directive + ' ')}
+
+
+def skip_names(text):
+    return directive_names(text, 'skip')
+
+
+def take_names(text):
+    return directive_names(text, 'take')
 
 
 def skipped():
     return skip_names(checkout_text(SERIES_WIN_REL))
 
 
+def taken():
+    return take_names(checkout_text(SERIES_WIN_REL))
+
+
+def check_takes(series_text, series_win_text):
+    lines = shared_lines(series_text, checkout_path(SERIES_REL))
+    takes, skips = take_names(series_win_text), skip_names(series_win_text)
+    for name in sorted(takes):
+        tags = lines.get(name)
+        if tags is None:
+            raise InputError(f'{SERIES_WIN_REL}: `take {name}` names no `chromium` line of {SERIES_REL}')
+        if name in skips:
+            raise InputError(f'{SERIES_WIN_REL}: `{name}` is both taken and skipped')
+        if any(tag in WINDOWS_TAGS for tag in tags):
+            raise InputError(f'{SERIES_WIN_REL}: `take {name}` names a line Windows applies already')
+    return takes
+
+
 def plan_patches(read):
     skips = skip_names(read(SERIES_WIN_REL))
-    shared = [n for n in series_lines(read(SERIES_REL), checkout_path(SERIES_REL)) if n not in skips]
+    takes = check_takes(read(SERIES_REL), read(SERIES_WIN_REL))
+    shared = [n for n in series_lines(read(SERIES_REL), checkout_path(SERIES_REL), takes=takes) if n not in skips]
     own = series_lines(read(SERIES_WIN_REL), checkout_path(SERIES_WIN_REL))
     return [(n, f'engine/patches/{n}') for n in shared] + [(n, f'{WIN_PATCHES_REL}/{n}') for n in own]
 

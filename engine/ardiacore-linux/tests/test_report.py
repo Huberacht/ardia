@@ -105,17 +105,17 @@ class ReportHostTests(unittest.TestCase):
 
     def test_every_path_is_checked_as_given_and_again_once_symlinks_are_resolved(self):
         existing = self.body('std::optional<base::FilePath> ExistingDraftPath(', 'std::optional<base::FilePath> NewDraftPath(')
-        self.assertLess(existing.index('if (!report::InsideDrafts(drafts.value(), path)) return std::nullopt;'),
-                        existing.index('RealPath(base::FilePath(path))'))
-        self.assertIn('!report::InsideDrafts(real_drafts->value(), real->value())', existing)
+        self.assertLess(existing.index('if (!Inside(drafts, path)) return std::nullopt;'),
+                        existing.index('RealPath(paths::FromText<base::FilePath>(path))'))
+        self.assertIn('!Inside(*real_drafts, paths::Text(*real))', existing)
         fresh = self.body('std::optional<base::FilePath> NewDraftPath(', 'std::optional<std::string> CreateDraft(')
-        self.assertLess(fresh.index('if (!report::InsideDrafts(drafts.value(), path)) return std::nullopt;'),
+        self.assertLess(fresh.index('if (!Inside(drafts, path)) return std::nullopt;'),
                         fresh.index('RealPath(given.DirName())'))
-        self.assertIn('if (!report::InsideDrafts(real_drafts->value(), real.value()) || base::IsLink(real)) return std::nullopt;', fresh)
+        self.assertIn('if (!Inside(*real_drafts, paths::Text(real)) || base::IsLink(real)) return std::nullopt;', fresh)
         remove = self.body('bool RemovePath(', 'double GzipInto(')
-        self.assertLess(remove.index('if (!report::InsideDrafts(drafts.value(), path)) return false;'),
+        self.assertLess(remove.index('if (!Inside(drafts, path)) return false;'),
                         remove.index('RealPath(given.DirName())'))
-        self.assertLess(remove.index('if (!report::InsideDrafts(real_drafts->value(), real.value())) return false;'),
+        self.assertLess(remove.index('if (!Inside(*real_drafts, paths::Text(real))) return false;'),
                         remove.index('return base::DeletePathRecursively(real);'))
         self.assertIn('ExistingDraftPath(DraftsFolder(documents), path)', self.body('double FileSize(', 'bool RemovePath('))
         gzip_file = self.body('double GzipFile(', 'double GzipText(')
@@ -124,6 +124,8 @@ class ReportHostTests(unittest.TestCase):
         self.assertIn('NewDraftPath(DraftsFolder(documents), destination)', self.body('double GzipText(', 'struct UploadFile {'))
         self.assertIn('ExistingDraftPath(DraftsFolder(documents), path)', self.body('UploadFile FindUploadFile(', 'scoped_refptr<network::SharedURLLoaderFactory> SystemLoaderFactory()'))
         self.assertIn('base::FilePath real = base::MakeAbsoluteFilePath(path);', self.service)
+        self.assertIn('report::InsideDrafts(paths::Text(drafts), path, kSeparator)', self.body('bool Inside(', 'void OwnerOnly('))
+        self.assertIn('static_cast<char>(base::FilePath::kSeparators[0])', self.service)
         for banned in ('GetTempDir', 'CreateTemporaryFile', 'PathService', 'NormalizeFilePath'):
             self.assertNotIn(banned, self.service)
 
@@ -131,8 +133,9 @@ class ReportHostTests(unittest.TestCase):
         draft = self.body('std::optional<std::string> CreateDraft(', 'double FileSize(')
         self.assertIn('documents.AppendASCII(report::kDraftsFolder)', self.service)
         self.assertIn('drafts.AppendASCII(base::Uuid::GenerateRandomV4().AsLowercaseString())', draft)
-        self.assertEqual(draft.count('base::SetPosixFilePermissions('), 2)
-        self.assertEqual(draft.count('0700'), 2)
+        self.assertEqual(draft.count('OwnerOnly('), 2)
+        owner = self.body('void OwnerOnly(', 'std::optional<base::FilePath> RealPath(')
+        self.assertIn('#if BUILDFLAG(IS_POSIX)\n  base::SetPosixFilePermissions(folder, 0700);\n#endif', owner)
 
     def test_a_json_post_reaches_only_create_and_complete_with_allowed_headers_and_a_bounded_body(self):
         post = self.body('void StartPost(', 'void StartUpload(')
