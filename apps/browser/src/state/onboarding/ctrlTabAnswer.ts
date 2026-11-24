@@ -3,8 +3,8 @@ import { ctrlTabChoice, ctrlTabShortcuts, useCtrlTabChoice } from "../commands/c
 import type { CtrlTabChoice, CtrlTabPreset } from "../commands/ctrlTabKeys";
 import type { Settings } from "../settings/settings";
 import { noteSettingsPick } from "../telemetry/settingsPickerCounts";
-import { draftPreset, previewLive, setOnboardingDraft, setsUpLikeBrowser, useOnboarding } from "./onboarding";
-import { CTRL_TAB_LIKE } from "./presets";
+import { draftPreset, previewLive, setOnboardingDraft, useOnboarding } from "./onboarding";
+import { CTRL_TAB_LIKE, setsUpLikeBrowser } from "./presets";
 
 type Onboarding = Pick<ReturnType<typeof useOnboarding.getState>, "draft" | "baseline" | "prefill" | "preset" | "source">;
 type Browser = Pick<ReturnType<typeof useBrowser.getState>, "settings" | "profileOrder">;
