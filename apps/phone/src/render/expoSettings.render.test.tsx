@@ -11,6 +11,7 @@ import { usePreferences } from "../state/settings/store";
 import { PHONE_SHARING_COPY } from "../lib/telemetryCopy";
 import { appVersion } from "../state/settings/actions";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
+import { pages as platformPages } from "../platform/pages";
 
 const onIos = Platform.OS === "ios" ? test : test.skip;
 
@@ -183,7 +184,10 @@ const firstFrameTitle = (node: ReactTestInstance) => {
 const isPlaceholder = (node: ReactTestInstance) => node.findAll((inner) => typeof inner.type === "string" && Array.isArray(inner.props.modifiers) && (inner.props.modifiers as ({ $type: string } | null)[]).some((modifier) => modifier?.$type === "accessibilityHidden")).length > 0 && textsIn(node).length === 0;
 const destinationKeys = (root: Root) => hosts(root, (props) => props.name === "destination").map((node) => (node.props.extraProps as { value: string }).value);
 
+const quietNativeReads = () => jest.spyOn(platformPages, "listsSitePermissions").mockReturnValue(false);
+
 onIos("every page a Settings screen links to is mounted before the tap with the same first-frame title the page itself shows, hero or inline, and is hidden from VoiceOver until pushed", () => {
+  quietNativeReads();
   const tops = [{ page: "root" }, { page: "general" }, { page: "appearance" }, { page: "search" }, { page: "siteSettings" }, { page: "sync" }, { page: "about" }] as const;
   let compared = 0;
   for (const top of tops) {

@@ -411,7 +411,7 @@ function DownloadList({ bottom, onMenu }: { bottom: number; onMenu: MenuOpener }
   if (!loaded) return <LoadingState testID="libraryLoading" />;
   if (!files.length) return <EmptyState title="No Downloads" message="Files you download show up here." icon="arrowDownCircle" />;
   return (
-    <FlatList bounces={false} overScrollMode="never"
+    <FlatList
       testID="libraryDownloads"
       data={files}
       keyExtractor={(file) => file.uri}
