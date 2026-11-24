@@ -73,14 +73,14 @@ const followsContributors = CONTRIBUTORS.length > 0;
 </section>
 
 <script>
-  import { liveDonors, renderDonors } from "../scripts/sponsors";
+  import { mountLiveDonors } from "../scripts/sponsors";
   import { DONATE_POP_PICKER } from "../data/donate";
 
   const section = document.getElementById("sponsors");
   const list = section?.querySelector<HTMLUListElement>("[data-donor-list]");
   const empty = section?.querySelector<HTMLElement>("[data-donor-empty]");
   if (section && list && empty && section.dataset.sponsorsUrl) {
-    liveDonors(section.dataset.sponsorsUrl).then((donors) => renderDonors(list, empty, donors ?? [], document));
+    void mountLiveDonors({ page: window, list, empty, url: section.dataset.sponsorsUrl, doc: document });
   }
   section?.querySelector("[data-become-sponsor]")?.addEventListener("click", () => {
     const monthly = document.querySelector<HTMLInputElement>(`#${DONATE_POP_PICKER} input[value="monthly"]`);

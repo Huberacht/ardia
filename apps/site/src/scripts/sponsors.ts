@@ -32,3 +32,38 @@ export async function liveDonors(url: string, fetchImpl: typeof fetch = fetch): 
     return null;
   }
 }
+
+interface PageEvents {
+  addEventListener(type: "pagehide" | "pageshow", listener: (event: Event) => void): void;
+}
+
+export function mountLiveDonors({
+  page,
+  list,
+  empty,
+  url,
+  doc,
+  fetchImpl = fetch,
+}: {
+  page: PageEvents;
+  list: ListElement;
+  empty: { hidden: boolean };
+  url: string;
+  doc: DocumentLike;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  let generation = 0;
+  const load = async () => {
+    const mine = ++generation;
+    const donors = await liveDonors(url, fetchImpl);
+    if (mine === generation) renderDonors(list, empty, donors ?? [], doc);
+  };
+  page.addEventListener("pagehide", () => {
+    generation++;
+    renderDonors(list, empty, [], doc);
+  });
+  page.addEventListener("pageshow", (event) => {
+    if ((event as Event & { persisted?: boolean }).persisted) void load();
+  });
+  return load();
+}

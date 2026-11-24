@@ -77,3 +77,10 @@ test("ordinary text still comes through, trimmed and capped", () => {
   assert.equal(elementText(el("div", [], el("span", [], "x".repeat(400)))).length, 255);
   assert.equal(elementText(el("div", [], el("span", [], "4111 1111 1111 1111"))), "");
 });
+
+test("a number split across elements is still caught as sensitive", () => {
+  assert.equal(elementText(el("div", [], el("span", [], "123-"), el("span", [], "45-6789"))), "");
+  assert.equal(elementText(el("p", [], el("b", [], "4111 1111"), el("i", [], " 1111 1111"))), "");
+  assert.equal(ownText(el("p", [], "123-", el("br", []), "45-6789")), "");
+  assert.equal(elementText(el("div", [], el("span", [], "Plan"), el("span", [], "Monthly"))), "Plan Monthly");
+});

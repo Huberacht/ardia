@@ -368,6 +368,8 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
         },
         (error) => {
           sponsorFailedAt = now();
+          const pruned = (error.cause ?? error)?.prunedSponsors;
+          if (Array.isArray(pruned) && sponsorList) sponsorList = { ...sponsorList, body: { sponsors: pruned } };
           log(`[feedback] sponsors refresh failed: ${error.cause?.message ?? error.message}`);
         },
       )

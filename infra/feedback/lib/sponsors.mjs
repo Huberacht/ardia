@@ -54,16 +54,23 @@ const isDonation = (subscription, product) => itemsOf(subscription).some((item) 
 const MONTHS_PER_INTERVAL = { month: 1, year: 12 };
 
 const unitAmountIn = (price, currency) =>
-  price.currency === currency ? price.unit_amount : price.currency_options?.[currency]?.unit_amount;
+  price?.currency === currency ? price.unit_amount : price?.currency_options?.[currency]?.unit_amount;
 
-export function monthlyCentsOf(subscription, product = DONATE_PRODUCT) {
+export const needsCurrencyOptions = (subscription, product = DONATE_PRODUCT) =>
+  subscription?.currency !== TIER_CURRENCY
+    ? []
+    : itemsOf(subscription)
+    .map((item) => item?.price)
+    .filter((price) => idOf(price?.product) === product && price.currency !== subscription.currency && typeof price.id === "string");
+
+export function monthlyCentsOf(subscription, product = DONATE_PRODUCT, pricesById = new Map()) {
   const currency = subscription?.currency;
   if (currency !== TIER_CURRENCY) return null;
   let cents = 0;
   for (const item of itemsOf(subscription)) {
     const price = item?.price;
     if (idOf(price?.product) !== product) continue;
-    const amount = unitAmountIn(price, currency);
+    const amount = unitAmountIn(price, currency) ?? unitAmountIn(pricesById.get(price.id), currency);
     if (amount === null || amount === undefined) return null;
     const months = MONTHS_PER_INTERVAL[price.recurring?.interval] * (Number(price.recurring?.interval_count) || 1);
     const unit = Number(amount);
@@ -77,29 +84,39 @@ export function monthlyCentsOf(subscription, product = DONATE_PRODUCT) {
 const fieldValue = (session) =>
   (Array.isArray(session?.custom_fields) ? session.custom_fields : []).find((f) => f?.key === SPONSOR_FIELD.key)?.text?.value;
 
-export function sponsorsFrom(activeSubscriptions, sessionBySubscription, product = DONATE_PRODUCT) {
+export const publishable = (subscription, product = DONATE_PRODUCT) =>
+  subscription?.status === "active" && isDonation(subscription, product) && subscription.metadata?.[HIDE_METADATA.key] !== HIDE_METADATA.value;
+
+export function sponsorEntries(activeSubscriptions, sessionBySubscription, product = DONATE_PRODUCT, pricesById = new Map()) {
   const seen = new Map();
   for (const subscription of activeSubscriptions) {
-    if (subscription?.status !== "active" || !isDonation(subscription, product)) continue;
-    if (subscription.metadata?.[HIDE_METADATA.key] === HIDE_METADATA.value) continue;
+    if (!publishable(subscription, product)) continue;
     const session = sessionBySubscription.get(subscription.id);
     if (session?.status !== "complete" || !String(session.metadata?.donate ?? "").startsWith("monthly_")) continue;
     const name = cleanSponsorName(fieldValue(session));
     if (!name) continue;
-    const sponsor = { name, tier: sponsorTier(monthlyCentsOf(subscription, product) ?? 0), since: Number(subscription.created) || 0 };
+    const sponsor = { name, tier: sponsorTier(monthlyCentsOf(subscription, product, pricesById) ?? 0), since: Number(subscription.created) || 0, subscriptions: [subscription.id] };
     const key = name.toLocaleLowerCase("en-US");
     const earlier = seen.get(key);
     seen.set(
       key,
       earlier
-        ? { name: earlier.name, tier: tierRank(sponsor.tier) < tierRank(earlier.tier) ? sponsor.tier : earlier.tier, since: Math.min(earlier.since, sponsor.since) }
+        ? {
+            name: earlier.name,
+            tier: tierRank(sponsor.tier) < tierRank(earlier.tier) ? sponsor.tier : earlier.tier,
+            since: Math.min(earlier.since, sponsor.since),
+            subscriptions: [...earlier.subscriptions, subscription.id],
+          }
         : sponsor,
     );
   }
-  return [...seen.values()]
-    .sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.since - b.since)
-    .slice(0, SPONSORS_MAX)
-    .map(({ name, tier }) => ({ name, tier }));
+  return [...seen.values()].sort((a, b) => tierRank(a.tier) - tierRank(b.tier) || a.since - b.since).slice(0, SPONSORS_MAX);
+}
+
+export const publicSponsors = (entries) => entries.map(({ name, tier }) => ({ name, tier }));
+
+export function sponsorsFrom(activeSubscriptions, sessionBySubscription, product = DONATE_PRODUCT, pricesById = new Map()) {
+  return publicSponsors(sponsorEntries(activeSubscriptions, sessionBySubscription, product, pricesById));
 }
 
 export class StripeReadError extends Error {
@@ -110,6 +127,13 @@ export class StripeReadError extends Error {
 }
 
 export class IncompleteListError extends Error {}
+
+export class RefreshFailedAfterScan extends Error {
+  constructor(cause, prunedSponsors) {
+    super(`sponsor refresh failed after the subscription scan: ${cause?.message ?? cause}`, { cause });
+    this.prunedSponsors = prunedSponsors;
+  }
+}
 
 const finishedCheckout = (session) =>
   session?.status === "complete"
@@ -133,13 +157,18 @@ const pause = (ms, signal) =>
     signal.addEventListener("abort", stopWaiting, { once: true });
   });
 
-function pacer(gapMs) {
-  let nextAt = 0;
+export function pacer(gapMs, { clock = Date.now, sleep = pause } = {}) {
+  let nextAt = -Infinity;
   return async (signal) => {
-    const at = Math.max(nextAt, Date.now());
-    nextAt = at + gapMs;
-    if (at > Date.now()) await pause(at - Date.now(), signal);
-    signal.throwIfAborted();
+    for (;;) {
+      signal.throwIfAborted();
+      const now = clock();
+      if (now >= nextAt) {
+        nextAt = now + gapMs;
+        return now;
+      }
+      await sleep(nextAt - now, signal);
+    }
   };
 }
 
@@ -152,17 +181,31 @@ async function eachLimited(items, limit, signal, fn) {
   signal.throwIfAborted();
 }
 
-export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetch, deadlineMs = REFRESH_DEADLINE_MS, requestGapMs = REQUEST_GAP_MS }) {
-  const sessions = new Map();
+const PRICE_CACHE_MS = 24 * 60 * 60 * 1000;
 
-  const get = async (path, params, refresh) => {
+export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetch, deadlineMs = REFRESH_DEADLINE_MS, requestGapMs = REQUEST_GAP_MS, now = Date.now }) {
+  const sessions = new Map();
+  const prices = new Map();
+  let published = [];
+
+  const get = async (path, params, refresh, { list = true } = {}) => {
     await refresh.pace(refresh.signal);
     const response = await fetchImpl(`https://api.stripe.com/v1/${path}?${new URLSearchParams(params)}`, {
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.any([refresh.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     });
+    if (!response.ok) {
+      const error = new StripeReadError(response.status);
+      refresh.fail(error);
+      response.body?.cancel().catch(() => {});
+      throw error;
+    }
     const body = await response.json().catch(() => null);
-    if (!response.ok || !Array.isArray(body?.data)) throw new StripeReadError(response.status, body?.error?.code);
+    if (list ? !Array.isArray(body?.data) : typeof body?.id !== "string") {
+      const error = new StripeReadError(response.status, "unexpected_body");
+      refresh.fail(error);
+      throw error;
+    }
     return body;
   };
 
@@ -179,26 +222,52 @@ export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetc
     throw new IncompleteListError(`${path} still had more after ${STRIPE_PAGE_BUDGET} pages`);
   };
 
+  const pricesById = () => new Map([...prices].map(([id, { price }]) => [id, price]));
+
   return {
     describe: () => "Stripe subscriptions",
     async list() {
       const stop = new AbortController();
-      const refresh = { signal: AbortSignal.any([AbortSignal.timeout(deadlineMs), stop.signal]), pace: pacer(requestGapMs) };
+      const refresh = {
+        signal: AbortSignal.any([AbortSignal.timeout(deadlineMs), stop.signal]),
+        pace: pacer(requestGapMs),
+        fail: (error) => stop.abort(error),
+      };
+      let donations;
       try {
-        const active = await listAll("subscriptions", { status: "active" }, refresh);
-        const donations = active.filter((s) => isDonation(s, product));
-        const wanted = new Set(donations.map((s) => s.id));
-        for (const id of sessions.keys()) if (!wanted.has(id)) sessions.delete(id);
-        const missing = donations.filter((s) => !sessions.has(s.id));
+        donations = (await listAll("subscriptions", { status: "active" }, refresh)).filter((s) => isDonation(s, product));
+      } catch (error) {
+        refresh.fail(error);
+        throw error;
+      }
+      const allowed = new Set(donations.filter((s) => publishable(s, product)).map((s) => s.id));
+      published = published.filter((entry) => entry.subscriptions.some((id) => allowed.has(id)));
+      for (const id of sessions.keys()) if (!allowed.has(id)) sessions.delete(id);
+      try {
+        const missing = donations.filter((s) => allowed.has(s.id) && !sessions.has(s.id));
         await eachLimited(missing, LOOKUP_CONCURRENCY, refresh.signal, async (subscription) => {
           const body = await get("checkout/sessions", { subscription: subscription.id, limit: "1" }, refresh);
           const checkout = finishedCheckout(body.data[0]);
           if (checkout) sessions.set(subscription.id, checkout);
         });
-        return { sponsors: sponsorsFrom(donations, sessions, product) };
+        const stalePrices = [
+          ...new Set(
+            donations
+              .filter((s) => allowed.has(s.id) && sessions.has(s.id))
+              .flatMap((s) => needsCurrencyOptions(s, product))
+              .map((price) => price.id)
+              .filter((id) => !prices.has(id) || now() - prices.get(id).at >= PRICE_CACHE_MS),
+          ),
+        ];
+        await eachLimited(stalePrices, LOOKUP_CONCURRENCY, refresh.signal, async (id) => {
+          const price = await get(`prices/${encodeURIComponent(id)}`, { "expand[]": "currency_options" }, refresh, { list: false });
+          prices.set(id, { price, at: now() });
+        });
+        published = sponsorEntries(donations, sessions, product, pricesById());
+        return { sponsors: publicSponsors(published) };
       } catch (error) {
-        stop.abort(error);
-        throw error;
+        refresh.fail(error);
+        throw new RefreshFailedAfterScan(error, publicSponsors(published));
       }
     },
   };

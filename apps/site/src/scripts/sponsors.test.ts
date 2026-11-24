@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { DONORS_MAX, donorsFrom, type Donor } from "../data/donors.ts";
 import { AUTOCAPTURE_PRIVATE_SELECTOR, NO_CAPTURE_SELECTOR, PRIVATE_SELECTOR } from "../data/telemetry.ts";
-import { liveDonors, renderDonors } from "./sponsors.ts";
+import { liveDonors, mountLiveDonors, renderDonors } from "./sponsors.ts";
 
 test("donorsFrom keeps well-formed names and tiers and drops the rest", () => {
   assert.deepEqual(
@@ -102,7 +102,41 @@ test("F1: the donor list is masked in replays and kept out of autocapture", () =
 test("F2: the built page holds no donor names; only the live list fills it", () => {
   const markup = readFileSync(new URL("../components/Sponsors.astro", import.meta.url), "utf8");
   assert.match(markup, /<ul class="names"[^>]*\shidden><\/ul>/);
-  assert.match(markup, /renderDonors\(list, empty, donors \?\? \[\], document\)/);
+  assert.match(markup, /mountLiveDonors\(\{ page: window, list, empty, url: section\.dataset\.sponsorsUrl, doc: document \}\)/);
   const data = readFileSync(new URL("../data/sponsors.ts", import.meta.url), "utf8");
   assert.doesNotMatch(data, /fetch\(|DONORS\b|process\.env/);
+});
+
+const pageEvent = (type: "pagehide" | "pageshow", persisted = false) => Object.assign(new Event(type), { persisted });
+
+test("R4-2: names are cleared on pagehide and fetched again when Back restores the page", async () => {
+  const { doc, list, empty } = fakeDom();
+  const page = new EventTarget();
+  const answers: unknown[] = [{ sponsors: [{ name: "Alice", tier: "friend" }] }, { sponsors: [] }];
+  let asked = 0;
+  const fetchImpl = (async () => new Response(JSON.stringify(answers[Math.min(asked++, answers.length - 1)]), { status: 200 })) as typeof fetch;
+  await mountLiveDonors({ page, list, empty, url: "/api/sponsors", doc, fetchImpl });
+  assert.equal(list.children.length, 1);
+  page.dispatchEvent(pageEvent("pagehide", true));
+  assert.equal(list.children.length, 0, "nothing is left for the back-forward cache to keep");
+  assert.equal(empty.hidden, false);
+  page.dispatchEvent(pageEvent("pageshow", false));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(asked, 1, "a normal pageshow doesn't fetch again");
+  page.dispatchEvent(pageEvent("pageshow", true));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(asked, 2);
+  assert.equal(list.children.length, 0, "the donor hidden meanwhile stays gone");
+});
+
+test("R4-2: an answer that lands after pagehide doesn't paint names back", async () => {
+  const { doc, list, empty } = fakeDom();
+  const page = new EventTarget();
+  let release: (r: Response) => void = () => {};
+  const fetchImpl = (() => new Promise<Response>((resolve) => (release = resolve))) as typeof fetch;
+  const mounted = mountLiveDonors({ page, list, empty, url: "/api/sponsors", doc, fetchImpl });
+  page.dispatchEvent(pageEvent("pagehide", true));
+  release(new Response(JSON.stringify({ sponsors: [{ name: "Late", tier: "friend" }] }), { status: 200 }));
+  await mounted;
+  assert.equal(list.children.length, 0);
 });
