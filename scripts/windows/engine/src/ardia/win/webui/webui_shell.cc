@@ -39,7 +39,7 @@
 #include "content/public/browser/webui_config_map.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/gfx/geometry/point.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
 
 extern BrowserWindowInterface* (*g_ardia_linux_companion_owner)(

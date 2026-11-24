@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <utility>
@@ -35,7 +36,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/sessions/content/session_tab_helper.h"
@@ -313,6 +316,14 @@ void PageBinding::ReportClosed() {
                base::Value(std::move(delivery)));
 }
 
+void PageBinding::Rebind(content::WebContents* contents) {
+  if (viewport) {
+    viewport->SetWebContents(nullptr);
+  }
+  Observe(contents);
+  id_ = TabId(contents);
+}
+
 void PageBinding::DidFinishNavigation(content::NavigationHandle* handle) {
   if (handle->IsInPrimaryMainFrame()) {
     ReportNavigation();
@@ -342,6 +353,9 @@ void PageBinding::WebContentsDestroyed() {
   }
 }
 
+ShellHostView::CompanionConfirmation::CompanionConfirmation() = default;
+ShellHostView::CompanionConfirmation::~CompanionConfirmation() = default;
+
 ShellHostView::ShellHostView(BrowserWindowInterface* browser,
                              BrowserView* browser_view,
                              Profile* app_profile,
@@ -356,7 +370,12 @@ ShellHostView::ShellHostView(BrowserWindowInterface* browser,
       base::BindRepeating(&ShellHostView::EmitMaximizeButtonState,
                           weak_factory_.GetWeakPtr()),
       base::BindRepeating(&ShellHostView::ToggleMaximize,
-                          weak_factory_.GetWeakPtr()));
+                          weak_factory_.GetWeakPtr()),
+      base::BindRepeating(
+          [](base::WeakPtr<ShellHostView> host) {
+            return host && host->InterceptSystemClose();
+          },
+          weak_factory_.GetWeakPtr()));
 }
 
 ShellHostView::~ShellHostView() {
@@ -563,7 +582,11 @@ void ShellHostView::CloseCompanions() {
     if (!companion) {
       continue;
     }
-    companion->GetTabStripModel()->RemoveObserver(this);
+    TabStripModel* model = companion->GetTabStripModel();
+    model->RemoveObserver(this);
+    while (model->count() > 0) {
+      model->DetachAndDeleteWebContentsAt(model->count() - 1);
+    }
     companion->GetWindow()->Close();
   }
 }
@@ -723,25 +746,38 @@ void ShellHostView::Restack() {
 }
 
 void ShellHostView::ReattachViewports() {
+  std::set<content::WebContents*> taken;
   for (BrowserWindowInterface* member : Members()) {
     BrowserView* view = BrowserView::GetBrowserViewForBrowser(member);
     if (!view) {
       continue;
     }
     if (views::WebView* chrome_view = view->GetActiveContentsWebView()) {
+      if (content::WebContents* held = chrome_view->web_contents()) {
+        taken.insert(held);
+      }
       chrome_view->SetWebContents(nullptr);
       chrome_view->SetVisible(false);
     }
   }
+  views::FocusManager* focus = GetFocusManager();
   for (auto& [id, binding] : bindings_) {
     views::WebView* page = binding->viewport;
     content::WebContents* contents = binding->contents();
     if (!page || !contents || !binding->visible) {
       continue;
     }
-    if (page->web_contents() != contents) {
+    if (taken.contains(contents) || page->web_contents() != contents) {
+      const bool focused = focus && focus->GetFocusedView() == page;
+      if (focused) {
+        focus->ClearFocus();
+      }
       page->SetWebContents(nullptr);
       page->SetWebContents(contents);
+      if (focused) {
+        page->RequestFocus();
+        contents->Focus();
+      }
     }
   }
   Restack();
@@ -822,6 +858,12 @@ void ShellHostView::ClearHandler(ShellBridge* handler) {
     return;
   }
   RetireRenderer();
+}
+
+bool ShellHostView::LiveFor(uint64_t generation) const {
+  return browser_ && !closing_ && handler_ && generation &&
+         renderer_generation_ == generation &&
+         renderer_document_.AsRenderFrameHostIfValid() != nullptr;
 }
 
 void ShellHostView::NoteRequest(base::WeakPtr<ShellBridge> handler,
@@ -969,6 +1011,18 @@ void ShellHostView::ReportWindowState() {
   if (!frame) {
     return;
   }
+  const bool full_screen = frame->IsFullscreen();
+  if (reported_full_screen_ != full_screen) {
+    const bool announce = reported_full_screen_.has_value() || full_screen;
+    reported_full_screen_ = full_screen;
+    if (announce && !is_utility()) {
+      WindowRegistry::Get().BroadcastWindowEvent(
+          base::DictValue()
+              .Set("type", "fullScreen")
+              .Set("id", config_.window_id)
+              .Set("on", full_screen));
+    }
+  }
   const bool maximized = frame->IsMaximized();
   if (reported_maximized_ == maximized) {
     return;
@@ -993,12 +1047,124 @@ void ShellHostView::RememberPlacement() {
 }
 
 void ShellHostView::RequestClose() {
-  if (!browser_) {
+  if (!browser_ || closing_ || close_confirming_) {
     return;
   }
   RememberPlacement();
-  closing_ = true;
-  browser_->GetWindow()->Close();
+  close_confirming_ = true;
+  ConfirmCompanions(base::BindOnce(
+      [](base::WeakPtr<ShellHostView> host, bool proceed) {
+        if (!host) {
+          return;
+        }
+        host->close_confirming_ = false;
+        if (!proceed || !host->browser_ || host->closing_) {
+          host->Note("closing window " + host->config_.window_id +
+                     " was cancelled by a page in another profile");
+          return;
+        }
+        host->browser_->GetWindow()->Close();
+      },
+      GetWeakPtr()));
+}
+
+bool ShellHostView::InterceptSystemClose() {
+  if (!browser_ || closing_ || browser_shutdown::IsTryingToQuit() ||
+      !CompanionsHoldTabs()) {
+    return false;
+  }
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&ShellHostView::RequestClose, GetWeakPtr()));
+  return true;
+}
+
+bool ShellHostView::CompanionsHoldTabs() const {
+  return std::ranges::any_of(companions_, [](const auto& companion) {
+    return companion && companion->GetTabStripModel()->count() > 0;
+  });
+}
+
+void ShellHostView::ConfirmCompanions(base::OnceCallback<void(bool)> done) {
+  std::vector<base::WeakPtr<BrowserWindowInterface>> waiting;
+  for (const auto& companion : companions_) {
+    if (companion && companion->GetTabStripModel()->count() > 0) {
+      waiting.push_back(companion);
+    }
+  }
+  confirmation_steps_.clear();
+  if (waiting.empty() || browser_shutdown::IsTryingToQuit()) {
+    return std::move(done).Run(true);
+  }
+  auto confirmation = std::make_shared<CompanionConfirmation>();
+  confirmation->browsers = std::move(waiting);
+  confirmation->done = std::move(done);
+  auto step = std::make_shared<base::RepeatingClosure>();
+  *step = base::BindRepeating(
+      &ShellHostView::ConfirmNextCompanion, confirmation,
+      std::weak_ptr<base::RepeatingClosure>(step));
+  confirmation_steps_.push_back(step);
+  step->Run();
+}
+
+void ShellHostView::ConfirmNextCompanion(
+    std::shared_ptr<CompanionConfirmation> confirmation,
+    std::weak_ptr<base::RepeatingClosure> self) {
+  while (confirmation->done &&
+         confirmation->next < confirmation->browsers.size()) {
+    const base::WeakPtr<BrowserWindowInterface> browser =
+        confirmation->browsers[confirmation->next++];
+    if (!browser) {
+      continue;
+    }
+    const bool waits =
+        UnloadController::From(browser.get())
+            ->RunBeforeUnloadForShutdown(
+                false,
+                base::BindRepeating(
+                    [](std::shared_ptr<CompanionConfirmation> confirmation,
+                       std::weak_ptr<base::RepeatingClosure> self,
+                       bool proceed) {
+                      if (!confirmation->done) {
+                        return;
+                      }
+                      if (!proceed) {
+                        return FinishCompanionConfirmation(confirmation, false);
+                      }
+                      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                          FROM_HERE,
+                          base::BindOnce(
+                              [](std::weak_ptr<base::RepeatingClosure> self) {
+                                if (auto step = self.lock()) {
+                                  step->Run();
+                                }
+                              },
+                              self));
+                    },
+                    confirmation, self));
+    if (waits) {
+      return;
+    }
+  }
+  if (confirmation->done) {
+    FinishCompanionConfirmation(confirmation, true);
+  }
+}
+
+void ShellHostView::FinishCompanionConfirmation(
+    std::shared_ptr<CompanionConfirmation> confirmation,
+    bool proceed) {
+  base::OnceCallback<void(bool)> done = std::move(confirmation->done);
+  if (!done) {
+    return;
+  }
+  if (!proceed) {
+    for (const auto& browser : confirmation->browsers) {
+      if (browser) {
+        UnloadController::From(browser.get())->ResetBeforeUnloadForShutdown();
+      }
+    }
+  }
+  std::move(done).Run(proceed);
 }
 
 void ShellHostView::OnWidgetBoundsChanged(views::Widget* changed,
@@ -1016,7 +1182,6 @@ void ShellHostView::OnWidgetActivationChanged(views::Widget* changed,
     caption_->Reset();
     return;
   }
-  closing_ = false;
   if (!private_window() && !is_utility()) {
     RememberPlacement();
   }
@@ -1024,6 +1189,11 @@ void ShellHostView::OnWidgetActivationChanged(views::Widget* changed,
 
 void ShellHostView::OnWidgetThemeChanged(views::Widget* changed) {
   Decorate();
+}
+
+void ShellHostView::OnWidgetClosing(views::Widget* changed) {
+  closing_ = true;
+  RememberPlacement();
 }
 
 void ShellHostView::OnWidgetDestroying(views::Widget* changed) {
@@ -1176,11 +1346,45 @@ void ShellHostView::OnTabStripModelChanged(
   }
   if (change.type() == TabStripModelChange::kReplaced) {
     const TabStripModelChange::Replace* replace = change.GetReplace();
-    if (PageBinding* binding = BindingForContents(replace->old_contents)) {
-      binding->ReportClosed();
-    }
+    ReplaceTabContents(replace->old_contents, replace->new_contents);
   }
   ReattachViewports();
+}
+
+void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
+                                       content::WebContents* contents) {
+  PageBinding* binding = BindingForContents(old_contents);
+  const int id = TabId(contents);
+  if (!binding || !contents || id <= 0) {
+    return;
+  }
+  const int old_id = binding->id();
+  if (id != old_id && bindings_.contains(id)) {
+    return;
+  }
+  binding->Rebind(contents);
+  if (id != old_id) {
+    std::unique_ptr<PageBinding> owned = std::move(bindings_[old_id]);
+    bindings_.erase(old_id);
+    bindings_[id] = std::move(owned);
+  }
+  base::DictValue creation = Identity(binding);
+  creation.Remove("snapshot");
+  creation.Set("lease", binding->Envelope("pageLease"));
+  creation.Set("snapshot",
+               base::DictValue()
+                   .Set("watermark", static_cast<double>(binding->sequence))
+                   .Set("events",
+                        base::ListValue().Append(binding->NavigationEvent())));
+  if (!binding->claim.empty()) {
+    base::DictValue delivery = binding->Envelope("pageLifecycle");
+    delivery.Set("action", "rebind");
+    delivery.Set("creation", std::move(creation));
+    Emit("ArdiaWebView", base::NumberToString(old_id),
+         base::Value(std::move(delivery)));
+  }
+  Note("tab " + base::NumberToString(old_id) + " now shows tab " +
+       base::NumberToString(id) + " after Chromium replaced its page");
 }
 
 BEGIN_METADATA(ShellHostView)

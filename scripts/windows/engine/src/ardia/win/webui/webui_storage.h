@@ -45,6 +45,20 @@ std::optional<base::DictValue> WriteSession(const base::FilePath& directory,
                                             base::DictValue base,
                                             base::DictValue local);
 
+struct SessionWrite {
+  SessionWrite();
+  SessionWrite(SessionWrite&&);
+  SessionWrite& operator=(SessionWrite&&);
+  ~SessionWrite();
+
+  std::optional<base::DictValue> session;
+  base::DictValue previous;
+};
+
+SessionWrite WriteSessionTracked(const base::FilePath& directory,
+                                 base::DictValue base,
+                                 base::DictValue local);
+
 StoredDocument ReadDocumentFile(const base::FilePath& directory,
                                 const std::string& name);
 

@@ -14,10 +14,12 @@
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/values.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class BrowserWindowInterface;
 class Profile;
@@ -75,6 +77,12 @@ class WindowRegistry : public BrowserCollectionObserver {
   bool PreTranslate(const MSG& msg);
   void Relaunched(base::ListValue urls);
   void DeliverOpenUrls();
+  void BroadcastWindowEvent(const base::DictValue& event);
+  void BroadcastSession(const std::string& source_window,
+                        const base::DictValue& source_base,
+                        base::DictValue previous,
+                        base::DictValue session);
+  ShellHostView* ReachableHost(const std::string& window_id) const;
   base::ListValue PrivateWindows() const;
   void PrivateWindowsChanged();
   void ProfileLoaded(Profile* profile);
@@ -96,6 +104,7 @@ class WindowRegistry : public BrowserCollectionObserver {
   void Attach(base::WeakPtr<BrowserWindowInterface> browser);
   ShellHostView* AttachTo(BrowserWindowInterface* browser, WindowConfig config);
   void OpenInProfile(base::WeakPtr<ShellHostView> requester,
+                     uint64_t generation,
                      WindowConfig config,
                      std::optional<gfx::Rect> frame,
                      Done done,
@@ -104,7 +113,8 @@ class WindowRegistry : public BrowserCollectionObserver {
   int NextPrivateOrdinal() const;
 
   bool started_ = false;
-  bool observing_ = false;
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browsers_observation_{this};
   base::WeakPtr<Profile> app_profile_;
   std::map<int, raw_ptr<ShellHostView>> hosts_;
   std::map<int, int> companion_owners_;

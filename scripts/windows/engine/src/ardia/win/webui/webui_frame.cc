@@ -150,9 +150,11 @@ ShellBrowserFrameView* ShellFrameOf(BrowserView* browser_view) {
 }
 
 CaptionInput::CaptionInput(StateChanged changed,
-                           base::RepeatingClosure toggle_maximize)
+                           base::RepeatingClosure toggle_maximize,
+                           base::RepeatingCallback<bool()> intercept_close)
     : changed_(std::move(changed)),
-      toggle_maximize_(std::move(toggle_maximize)) {}
+      toggle_maximize_(std::move(toggle_maximize)),
+      intercept_close_(std::move(intercept_close)) {}
 
 CaptionInput::~CaptionInput() {
   Detach();
@@ -207,8 +209,15 @@ bool CaptionInput::FilterMessage(HWND hwnd,
                                  WPARAM w_param,
                                  LPARAM l_param,
                                  LRESULT* l_result) {
-  if (hwnd == root_ && ResetsMaximizeState(message, w_param)) {
+  if (hwnd != root_) {
+    return false;
+  }
+  if (ResetsMaximizeState(message, w_param)) {
     Reset();
+  }
+  if (message == WM_CLOSE && intercept_close_ && intercept_close_.Run()) {
+    *l_result = 0;
+    return true;
   }
   return false;
 }

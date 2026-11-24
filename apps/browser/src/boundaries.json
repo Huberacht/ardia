@@ -2065,29 +2065,32 @@
   {
    "id": "windows-webui-documents:liveDocuments",
    "source": "frame",
-   "guard": "Windows WebUI host (--ardia-shell=webui): documents.watch, unwatch, commit and flush arrive as engine.call from the live trusted chrome://ardia/ shell document only, for the app profile name \"default\" only, with JSON text of at most 8 MiB parsed in RFC mode to depth 48 as an object (ParseDocumentVerb picks the verb; anything else is ERR_DOCUMENT_REQUEST); a subscription names exactly {document: \"live.json\"}; a private window gets ERR_DOCUMENT_AUTH; the client id is scoped to the authority, the window and the renderer generation (EnsureDocumentClient) and is retired with the renderer; change events reach the shell only while the subscription sequence that asked for them is current (DocumentSubscription) and the authority scope still matches; the shared LinuxDocumentService from engine/ardiacore-linux validates every operation and reads and writes its envelope through ReadCanonicalDocument and WriteCanonicalEnvelope, capped at kLinuxLiveMaxBytes; scripts/windows/engine/tests/webui_window_policy_test.cc unit-tests the verb parser and the subscription sequence",
+   "guard": "Windows WebUI host (--ardia-shell=webui): documents.watch, unwatch, commit and flush arrive as engine.call from the live trusted chrome://ardia/ shell document only, for the app profile name \"default\" only, with JSON text of at most 8 MiB (DocumentEngineRequestAllowed) parsed in RFC mode to depth 48 as an object (ParseDocumentVerb picks the verb; anything else is ERR_DOCUMENT_REQUEST); a subscription names exactly {document: \"live.json\"}; a private window gets ERR_DOCUMENT_AUTH; the client id is scoped to the authority, the window and the renderer generation (EnsureDocumentClient) and is retired with the renderer; change events reach the shell only while the subscription sequence that asked for them is current (DocumentSubscription) and the authority scope still matches; the shared LinuxDocumentService from engine/ardiacore-linux validates every operation and reads and writes its envelope through ReadCanonicalDocument and WriteCanonicalEnvelope, capped at kLinuxLiveMaxBytes; scripts/windows/engine/tests/webui_window_policy_test.cc unit-tests the verb parser and the subscription sequence",
    "checks": [
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#ParseDocumentVerb",
+    "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#DocumentEngineRequestAllowed",
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#DocumentSubscription",
     "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#DocumentCall",
     "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#EnsureDocumentClient",
     "scripts/windows/engine/src/ardia/win/webui/webui_storage.cc#ReadCanonicalDocument",
     "scripts/windows/engine/src/ardia/win/webui/webui_storage.cc#WriteCanonicalEnvelope",
     "engine/ardiacore-linux/src/ardia/linux/ac_linux_documents.cc#Commit",
-    "scripts/windows/engine/tests/webui_window_policy_test.cc#TestDocumentVerbs"
+    "scripts/windows/engine/tests/webui_window_policy_test.cc#TestDocumentVerbs",
+    "scripts/windows/engine/tests/webui_window_policy_test.cc#TestHostileSinks"
    ],
    "detected": false
   },
   {
    "id": "windows-webui-windows:openWindow",
    "source": "frame",
-   "guard": "Windows WebUI host (--ardia-shell=webui): ArdiaShell.openWindow, focusWindow and setActiveProfile come only from a live trusted shell document; a window id is 1-256 of [A-Za-z0-9._:-] (ValidWindowId), settings and import open only under their own id and no browser window may take those ids (ClassifyOpenWindow), a private seed needs incognito and a private profile name, utility windows are never private and a small-window seed only opens a non-private small window (OpenWindowProfileAllowed), seeds are capped at 64 KiB of JSON, at most 64 windows are open, a requested frame must be finite and is fitted to the display's work area (ValidRect, FitToWorkArea), a profile joins a window as a hidden companion browser only when neither side is private, a utility window or closing (RouteProfile), and setActiveProfile drops any selection older than the newest one for the same renderer (SelectionSequence); scripts/windows/engine/tests/webui_window_policy_test.cc unit-tests each rule",
+   "guard": "Windows WebUI host (--ardia-shell=webui): ArdiaShell.openWindow, focusWindow and setActiveProfile come only from a live trusted shell document; a window id is 1-256 of [A-Za-z0-9._:-] (ValidWindowId), settings and import open only under their own id and no browser window may take those ids (ClassifyOpenWindow), a private seed needs incognito and a private profile name, utility windows are never private and a small-window seed only opens a non-private small window (OpenWindowProfileAllowed), seeds are capped at 64 KiB of JSON, at most 64 windows are open, a requested frame must be finite and is fitted to the display's work area (ValidRect, FitToWorkArea), a profile joins a window as a hidden companion browser only when neither side is private, a utility window or closing (RouteProfile), and setActiveProfile drops any selection older than the newest one for the same renderer (SelectionSequence); scripts/windows/engine/tests/webui_window_policy_test.cc unit-tests each rule; a window opens only for the shell document that asked: the request and the profile load that follows both check that this window's renderer generation is still the live one (LiveFor), so a reloaded or closed shell document cannot open a window late, and ArdiaShell.minimizeWindow names its target window by id through the registry",
    "checks": [
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#ClassifyOpenWindow",
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#OpenWindowProfileAllowed",
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#RouteProfile",
     "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#SelectionSequence",
     "scripts/windows/engine/src/ardia/win/webui/webui_windows.cc#OpenRequested",
+    "scripts/windows/engine/src/ardia/win/webui/webui_host_view.cc#LiveFor",
     "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#SetActiveProfile",
     "scripts/windows/engine/tests/webui_window_policy_test.cc#TestOpenWindowRequests",
     "scripts/windows/engine/tests/webui_window_policy_test.cc#TestCompanionRouting",
@@ -2098,13 +2101,32 @@
   {
    "id": "windows-webui-files:pickersAndClipboard",
    "source": "frame",
-   "guard": "Windows WebUI host (--ardia-shell=webui): ArdiaShell.pickFolder takes at most a current folder and a button title, each a string or null, the title used only when it is valid UTF-8 of at most 200 bytes and the start folder only when absolute; pickFiles takes no arguments; one dialog per window at a time (ERR_PICKER_OPEN), refused when policy disables file choosers, and a background test instance answers null or [] without showing a dialog; ArdiaShell.copyText takes exactly one string of at most 1 MiB and readText returns at most 1 MiB of text",
+   "guard": "Windows WebUI host (--ardia-shell=webui): ArdiaShell.pickFolder takes at most a current folder and a button title, each a string or null; the title is used only when PickerPromptUsable accepts it (1-200 bytes of valid UTF-8 with no control characters) and the start folder only when absolute; pickFiles takes no arguments; one dialog per window at a time (ERR_PICKER_OPEN), refused when policy disables file choosers, and a background test instance answers null or [] without showing a dialog; ArdiaShell.copyText takes exactly one string that CopyTextFits (valid UTF-8 of at most 1 MiB), and readText returns the clipboard text cut to 1 MiB of UTF-8 bytes at a character boundary (TruncateUtf8), never UTF-16 units; scripts/windows/engine/tests/webui_window_policy_test.cc runs a hostile corpus (NULs, control characters, overlong and surrogate UTF-8, bidi overrides, path traversal, foreign schemes, oversized values) through each of these rules",
    "checks": [
     "scripts/windows/engine/src/ardia/win/webui/webui_file_picker.cc#PickFolder",
     "scripts/windows/engine/src/ardia/win/webui/webui_file_picker.cc#PickFiles",
     "scripts/windows/engine/src/ardia/win/webui/webui_file_picker.cc#FileSelectDialogsAllowed",
+    "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#PickerPromptUsable",
+    "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#CopyTextFits",
+    "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#TruncateUtf8",
     "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#CopyText",
-    "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#ReadText"
+    "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#ReadText",
+    "scripts/windows/engine/tests/webui_window_policy_test.cc#TestHostileSinks"
+   ],
+   "detected": false
+  },
+  {
+   "id": "windows-webui-relaunch:openUrls",
+   "source": "other-app",
+   "guard": "Windows WebUI host (--ardia-shell=webui): a second launch of Ardia hands its command-line arguments to the running browser (WebUIRelaunched); RelaunchUrls keeps only arguments that parse as valid URLs (a relative file path is fixed up against the caller's folder first) whose scheme is http, https or file, each at most 32 KiB and at most 64 of them (RelaunchUrlAccepted); the registry queues them and delivers them only as ArdiaShell onOpenURLs to the most recently active browser window that is not private, not a utility window, not closing, and whose live shell document called ArdiaShell.listenForOpenURLs for its current renderer generation (DeliverOpenUrls, OpenUrlsListening); scripts/windows/engine/tests/webui_window_policy_test.cc runs the hostile corpus through the scheme and size rules",
+   "checks": [
+    "scripts/windows/engine/src/ardia/win/main.cc#RelaunchUrls",
+    "scripts/windows/engine/src/ardia/win/main.cc#WebUIRelaunched",
+    "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#RelaunchUrlAccepted",
+    "scripts/windows/engine/src/ardia/win/webui/webui_window_policy.h#RelaunchUrlSchemeAllowed",
+    "scripts/windows/engine/src/ardia/win/webui/webui_windows.cc#DeliverOpenUrls",
+    "scripts/windows/engine/src/ardia/win/webui/webui_host_calls.cc#OpenUrlsListening",
+    "scripts/windows/engine/tests/webui_window_policy_test.cc#TestHostileSinks"
    ],
    "detected": false
   }

@@ -129,8 +129,7 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
   if (!started_) {
     started_ = true;
     app_profile_ = app_profile->GetWeakPtr();
-    GlobalBrowserCollection::GetInstance()->AddObserver(this);
-    observing_ = true;
+    browsers_observation_.Observe(GlobalBrowserCollection::GetInstance());
     Watch() = std::make_unique<ProfileWatch>();
   }
   if (!placement_loaded_) {
@@ -168,10 +167,7 @@ void WindowRegistry::Start(Profile* app_profile, base::ListValue urls) {
 }
 
 void WindowRegistry::Stop() {
-  if (observing_) {
-    GlobalBrowserCollection::GetInstance()->RemoveObserver(this);
-    observing_ = false;
-  }
+  browsers_observation_.Reset();
   Watch().reset();
   started_ = false;
 }
@@ -271,6 +267,11 @@ void WindowRegistry::OpenRequested(ShellHostView* requester,
                                    const std::string& id,
                                    const base::DictValue* options,
                                    Done done) {
+  if (!requester || !requester->LiveFor(requester->renderer_generation())) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_STALE",
+                       "The shell document that asked for this window is gone"));
+  }
   const std::string kind_text =
       options && options->FindString("kind") ? *options->FindString("kind")
                                              : std::string();
@@ -338,15 +339,22 @@ void WindowRegistry::OpenRequested(ShellHostView* requester,
   const std::optional<gfx::Rect> frame = utility ? std::nullopt : FrameFrom(options);
   WithProfile(profile, base::BindOnce(&WindowRegistry::OpenInProfile,
                                       weak_factory_.GetWeakPtr(),
-                                      requester->GetWeakPtr(), std::move(config),
-                                      frame, std::move(done)));
+                                      requester->GetWeakPtr(),
+                                      requester->renderer_generation(),
+                                      std::move(config), frame, std::move(done)));
 }
 
 void WindowRegistry::OpenInProfile(base::WeakPtr<ShellHostView> requester,
+                                   uint64_t generation,
                                    WindowConfig config,
                                    std::optional<gfx::Rect> frame,
                                    Done done,
                                    Profile* profile) {
+  if (!requester || !requester->LiveFor(generation)) {
+    return std::move(done).Run(
+        false, Failure("ERR_WINDOW_STALE",
+                       "The shell document that asked for this window is gone"));
+  }
   if (!profile) {
     return std::move(done).Run(
         false, Failure("ERR_PROFILE_UNAVAILABLE", "The window's profile did "
@@ -543,6 +551,41 @@ void WindowRegistry::DeliverOpenUrls() {
   base::ListValue urls = std::move(pending_urls_);
   pending_urls_ = base::ListValue();
   chosen->OpenUrls(std::move(urls));
+}
+
+void WindowRegistry::BroadcastWindowEvent(const base::DictValue& event) {
+  for (ShellHostView* host : Hosts()) {
+    if (!host->is_utility()) {
+      host->Emit("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+    }
+  }
+}
+
+void WindowRegistry::BroadcastSession(const std::string& source_window,
+                                      const base::DictValue& source_base,
+                                      base::DictValue previous,
+                                      base::DictValue session) {
+  if (previous == session) {
+    return;
+  }
+  const base::DictValue event = base::DictValue()
+                                    .Set("base", std::move(previous))
+                                    .Set("session", std::move(session))
+                                    .Set("sourceWindowId", source_window);
+  for (ShellHostView* host : Hosts()) {
+    if (host->private_window()) {
+      continue;
+    }
+    base::DictValue update = event.Clone();
+    if (host->window_id() == source_window) {
+      update.Set("base", source_base.Clone());
+    }
+    host->Emit("ArdiaHost", "session", base::Value(std::move(update)));
+  }
+}
+
+ShellHostView* WindowRegistry::ReachableHost(const std::string& window_id) const {
+  return window_id.empty() ? nullptr : HostByWindowId(window_id);
 }
 
 base::ListValue WindowRegistry::PrivateWindows() const {

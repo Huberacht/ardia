@@ -30,7 +30,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
@@ -105,6 +105,7 @@ class PageBinding : public content::WebContentsObserver {
   bool presented = false;
   bool transferable = false;
 
+  void Rebind(content::WebContents* contents);
   base::DictValue NavigationEvent() const;
   base::DictValue Envelope(std::string_view type);
   void ReportNavigation();
@@ -204,6 +205,8 @@ class ShellHostView : public views::View,
   bool TakesOpenUrls() const;
   bool OpenUrlsListening() const;
   void RequestClose();
+  bool InterceptSystemClose();
+  bool LiveFor(uint64_t generation) const;
   void RememberPlacement();
 
   bool HasPassRegions() const;
@@ -224,6 +227,25 @@ class ShellHostView : public views::View,
  private:
   friend class PageBinding;
   friend class ShellBridge;
+
+  struct CompanionConfirmation {
+    CompanionConfirmation();
+    ~CompanionConfirmation();
+    std::vector<base::WeakPtr<BrowserWindowInterface>> browsers;
+    size_t next = 0;
+    base::OnceCallback<void(bool)> done;
+  };
+
+  bool CompanionsHoldTabs() const;
+  void ConfirmCompanions(base::OnceCallback<void(bool)> done);
+  static void ConfirmNextCompanion(
+      std::shared_ptr<CompanionConfirmation> confirmation,
+      std::weak_ptr<base::RepeatingClosure> self);
+  static void FinishCompanionConfirmation(
+      std::shared_ptr<CompanionConfirmation> confirmation,
+      bool proceed);
+  void ReplaceTabContents(content::WebContents* old_contents,
+                          content::WebContents* contents);
 
   static bool CommandFocusesShell(const std::string& command);
   aura::Window* ChildWindowOf(views::WebView* view) const;
@@ -296,6 +318,7 @@ class ShellHostView : public views::View,
   void OnWidgetShowStateChanged(views::Widget* widget) override;
   void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
   void OnWidgetThemeChanged(views::Widget* widget) override;
+  void OnWidgetClosing(views::Widget* widget) override;
   void OnWidgetDestroying(views::Widget* widget) override;
 
   void OnTabStripModelChanged(TabStripModel* tab_strip_model,
@@ -309,6 +332,8 @@ class ShellHostView : public views::View,
   int id_ = 0;
   int private_ordinal_ = 0;
   bool closing_ = false;
+  bool close_confirming_ = false;
+  std::vector<std::shared_ptr<base::RepeatingClosure>> confirmation_steps_;
   bool creating_tab_ = false;
   bool painted_ = false;
   std::vector<base::WeakPtr<BrowserWindowInterface>> companions_;
@@ -336,6 +361,7 @@ class ShellHostView : public views::View,
   std::unique_ptr<CaptionInput> caption_;
   ShellDecorations decorations_;
   std::optional<bool> reported_maximized_;
+  std::optional<bool> reported_full_screen_;
   base::CallbackListSubscription system_state_subscription_;
   WinTelemetryClient telemetry_;
   std::unique_ptr<FilePicker> file_picker_;

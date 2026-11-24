@@ -487,6 +487,100 @@ constexpr PlacementChoice ChoosePlacement(const std::optional<Rect>& requested,
   return {CenteredDefault(work_area), false, PlacementSource::kDefault};
 }
 
+inline constexpr size_t kPickerPromptLimit = 200;
+inline constexpr size_t kDocumentEngineRequestLimit = 8 * 1024 * 1024;
+inline constexpr char kAppProfileName[] = "default";
+
+constexpr size_t Utf8SequenceLength(unsigned char lead) {
+  if (lead < 0x80) {
+    return 1;
+  }
+  if (lead >= 0xc2 && lead <= 0xdf) {
+    return 2;
+  }
+  if (lead >= 0xe0 && lead <= 0xef) {
+    return 3;
+  }
+  if (lead >= 0xf0 && lead <= 0xf4) {
+    return 4;
+  }
+  return 0;
+}
+
+constexpr bool ValidUtf8(std::string_view text) {
+  size_t at = 0;
+  while (at < text.size()) {
+    const unsigned char lead = static_cast<unsigned char>(text[at]);
+    const size_t length = Utf8SequenceLength(lead);
+    if (length == 0 || at + length > text.size()) {
+      return false;
+    }
+    for (size_t next = 1; next < length; ++next) {
+      const unsigned char byte = static_cast<unsigned char>(text[at + next]);
+      if ((byte & 0xc0) != 0x80) {
+        return false;
+      }
+    }
+    if (length > 1) {
+      const unsigned char second = static_cast<unsigned char>(text[at + 1]);
+      if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second > 0x9f) ||
+          (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second > 0x8f)) {
+        return false;
+      }
+    }
+    at += length;
+  }
+  return true;
+}
+
+inline std::string TruncateUtf8(std::string text, size_t limit) {
+  if (text.size() <= limit) {
+    return text;
+  }
+  size_t end = limit;
+  while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) {
+    --end;
+  }
+  text.resize(end);
+  return text;
+}
+
+constexpr bool CopyTextFits(std::string_view text, size_t limit) {
+  return text.size() <= limit && ValidUtf8(text);
+}
+
+constexpr bool PickerPromptUsable(std::string_view prompt) {
+  if (prompt.empty() || prompt.size() > kPickerPromptLimit ||
+      !ValidUtf8(prompt)) {
+    return false;
+  }
+  for (char c : prompt) {
+    if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline constexpr size_t kRelaunchUrlLimit = 64;
+inline constexpr size_t kRelaunchUrlBytes = 32 * 1024;
+
+constexpr bool RelaunchUrlSchemeAllowed(std::string_view scheme) {
+  return scheme == "http" || scheme == "https" || scheme == "file";
+}
+
+constexpr bool RelaunchUrlAccepted(std::string_view scheme,
+                                   size_t spec_bytes,
+                                   size_t already_taken) {
+  return RelaunchUrlSchemeAllowed(scheme) && spec_bytes > 0 &&
+         spec_bytes <= kRelaunchUrlBytes && already_taken < kRelaunchUrlLimit;
+}
+
+constexpr bool DocumentEngineRequestAllowed(std::string_view profile,
+                                            size_t json_bytes) {
+  return profile == kAppProfileName && json_bytes <= kDocumentEngineRequestLimit;
+}
+
 constexpr bool KeepsWindowWithoutTabs(bool hosted, bool companion, bool closing) {
   return (hosted || companion) && !closing;
 }

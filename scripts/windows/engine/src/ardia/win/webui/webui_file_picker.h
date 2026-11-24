@@ -14,8 +14,6 @@ class Widget;
 
 namespace ardia_win::webui {
 
-inline constexpr size_t kPickerPromptLimit = 200;
-
 class FilePicker : public ui::SelectFileDialog::Listener {
  public:
   using Done = base::OnceCallback<void(bool, base::Value)>;

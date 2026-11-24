@@ -7,6 +7,7 @@
 
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/win/main.h"
+#include "ardia/win/webui/webui_window_policy.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
@@ -82,11 +83,9 @@ void FilePicker::PickFolder(views::Widget* owner,
       values && values->size() == 2 && (*values)[1].is_string()
           ? (*values)[1].GetString()
           : std::string();
-  const std::u16string title =
-      !prompt.empty() && prompt.size() <= kPickerPromptLimit &&
-              base::IsStringUTF8(prompt)
-          ? base::UTF8ToUTF16(prompt)
-          : std::u16string(u"Choose a Folder");
+  const std::u16string title = webui_window::PickerPromptUsable(prompt)
+                                   ? base::UTF8ToUTF16(prompt)
+                                   : std::u16string(u"Choose a Folder");
   const base::FilePath start = base::IsStringUTF8(current) && !current.empty()
                                    ? base::FilePath(base::UTF8ToWide(current))
                                    : base::FilePath();

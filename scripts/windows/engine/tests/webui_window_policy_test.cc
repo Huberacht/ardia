@@ -232,6 +232,112 @@ void TestPlacementFit() {
   assert(fallback.frame == CenteredDefault(work));
 }
 
+
+const std::string kHostileCorpus[] = {
+    std::string(),
+    std::string("\0", 1),
+    std::string("a\0b", 3),
+    "\r\n",
+    "line\nbreak",
+    "\t",
+    "\x7f",
+    "\xff",
+    "\xc0\xaf",
+    "\xe0\x80\xaf",
+    "\xed\xa0\x80",
+    "\xf4\x90\x80\x80",
+    "\xf8\x88\x80\x80\x80",
+    "\xe2\x80\xae",
+    "\xef\xbb\xbf",
+    "\xf0\x9f\x98\x80",
+    "../../../../etc/passwd",
+    "..\\..\\Windows\\System32",
+    "%00",
+    "%2e%2e%2f",
+    "javascript:alert(1)",
+    "JAVASCRIPT:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "file:///C:/Windows/System32/calc.exe",
+    "\\\\ardia-fixture.invalid\\share\\x.exe",
+    "steam://run/1",
+    "ms-msdt:/id PCWDiagnostic",
+    "https://user:pass@ardia-fixture.invalid/",
+    "__proto__",
+    "constructor",
+    "default@",
+    "@default",
+    "Default",
+    std::string(kPickerPromptLimit + 1, 'p'),
+    std::string(4096, 'x'),
+};
+
+void TestHostileSinks() {
+  for (const std::string& value : kHostileCorpus) {
+    const std::string truncated = TruncateUtf8(value, 3);
+    assert(truncated.size() <= 3);
+    if (ValidUtf8(value)) {
+      assert(ValidUtf8(truncated));
+    }
+    assert(CopyTextFits(value, 1024 * 1024) == ValidUtf8(value));
+    if (PickerPromptUsable(value)) {
+      assert(!value.empty() && value.size() <= kPickerPromptLimit &&
+             ValidUtf8(value) && value.find('\0') == std::string::npos &&
+             value.find('\n') == std::string::npos);
+    }
+    assert(!RelaunchUrlSchemeAllowed(value));
+    assert(!DocumentEngineRequestAllowed(value, 2));
+    assert(!ParseDocumentVerb(value));
+    assert(!ParseDocumentVerb("documents." + value));
+    assert(!ParseAdoptId(value));
+    assert(!ClassifyOpenWindow(value, "") || ValidWindowId(value));
+    if (ValidWindowId(value)) {
+      assert(value.find_first_of("/\\@%\0 \r\n") == std::string::npos);
+    }
+  }
+  assert(!PickerPromptUsable(std::string(kPickerPromptLimit + 1, 'p')));
+  assert(PickerPromptUsable(std::string(kPickerPromptLimit, 'p')));
+  assert(PickerPromptUsable("Choose \xf0\x9f\x98\x80"));
+  assert(!PickerPromptUsable("bad\xff"));
+  assert(!PickerPromptUsable("tab\there"));
+
+  const std::string emoji = "\xf0\x9f\x98\x80";
+  std::string four_emoji;
+  for (int i = 0; i < 4; ++i) {
+    four_emoji += emoji;
+  }
+  assert(TruncateUtf8(four_emoji, 6) == emoji);
+  assert(TruncateUtf8(four_emoji, 8) == emoji + emoji);
+  assert(TruncateUtf8(four_emoji, 3).empty());
+  assert(TruncateUtf8("abc", 10) == "abc");
+  const std::string wide(1024 * 1024 / 3 + 10, 'a');
+  std::string cjk;
+  for (size_t i = 0; i < 400000; ++i) {
+    cjk += "\xe4\xb8\xad";
+  }
+  const std::string capped = TruncateUtf8(cjk, 1024 * 1024);
+  assert(capped.size() <= 1024 * 1024 && capped.size() % 3 == 0 &&
+         ValidUtf8(capped));
+  assert(!CopyTextFits(cjk, 1024 * 1024));
+  assert(CopyTextFits(wide, 1024 * 1024));
+
+  assert(RelaunchUrlSchemeAllowed("https"));
+  assert(RelaunchUrlSchemeAllowed("http"));
+  assert(RelaunchUrlSchemeAllowed("file"));
+  assert(!RelaunchUrlSchemeAllowed("javascript"));
+  assert(!RelaunchUrlSchemeAllowed("chrome"));
+  assert(!RelaunchUrlSchemeAllowed("ms-settings"));
+  assert(RelaunchUrlAccepted("https", 20, 0));
+  assert(!RelaunchUrlAccepted("https", 0, 0));
+  assert(!RelaunchUrlAccepted("https", kRelaunchUrlBytes + 1, 0));
+  assert(!RelaunchUrlAccepted("https", 20, kRelaunchUrlLimit));
+
+  assert(DocumentEngineRequestAllowed("default", 0));
+  assert(DocumentEngineRequestAllowed("default", kDocumentEngineRequestLimit));
+  assert(!DocumentEngineRequestAllowed("default", kDocumentEngineRequestLimit + 1));
+  assert(!DocumentEngineRequestAllowed("w-1@default", 10));
+  assert(!DocumentEngineRequestAllowed("", 10));
+}
+
 }
 
 int main() {
@@ -245,6 +351,7 @@ int main() {
   TestRects();
   TestPlacement();
   TestPlacementFit();
+  TestHostileSinks();
   std::cout << "webui_window_policy_test: all assertions passed\n";
   return 0;
 }

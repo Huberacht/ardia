@@ -34,6 +34,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
+#include "ui/base/base_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/version_info/version_info.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -54,7 +56,6 @@ namespace {
 constexpr size_t kShortcutLimit = 256;
 constexpr size_t kCopyTextLimit = 1024 * 1024;
 constexpr size_t kTitleLimit = 512;
-constexpr size_t kEngineRequestLimit = 8 * 1024 * 1024;
 
 constexpr std::string_view kWindowCapabilities[] = {
     "ArdiaShell.startWindowMove",
@@ -191,17 +192,21 @@ void ShellHostView::Invoke(const std::string& method,
     }
     FileRunner()->PostTaskAndReplyWithResult(
         FROM_HERE,
-        base::BindOnce(&WriteSession, SessionDirectory(), base->Clone(),
+        base::BindOnce(&WriteSessionTracked, SessionDirectory(), base->Clone(),
                        session->Clone()),
         base::BindOnce(
-            [](Done done, std::optional<base::DictValue> merged) {
-              if (!merged) {
+            [](std::string source_window, base::DictValue source_base,
+               Done done, SessionWrite result) {
+              if (!result.session) {
                 return std::move(done).Run(
                     false, base::Value("The session could not be saved"));
               }
-              std::move(done).Run(true, base::Value(std::move(*merged)));
+              std::move(done).Run(true, base::Value(result.session->Clone()));
+              WindowRegistry::Get().BroadcastSession(
+                  source_window, source_base, std::move(result.previous),
+                  std::move(*result.session));
             },
-            std::move(done)));
+            config_.window_id, session->Clone(), std::move(done)));
     return;
   }
   if (method == "ArdiaShell.readDocument") {
@@ -310,9 +315,17 @@ void ShellHostView::Invoke(const std::string& method,
         base::Value(ardia::desktop::Platform().CaptionDoubleClick(widget())));
   }
   if (method == "ArdiaShell.minimizeWindow") {
-    if (views::Widget* frame = widget()) {
-      frame->Minimize();
+    const std::string target = values && !values->empty() &&
+                                       (*values)[0].is_string()
+                                   ? (*values)[0].GetString()
+                                   : std::string();
+    ShellHostView* host = target.empty() || target == config_.window_id
+                              ? this
+                              : WindowRegistry::Get().ReachableHost(target);
+    if (!host || !host->browser()) {
+      return std::move(done).Run(false, base::Value("No such native window"));
     }
+    host->browser()->GetWindow()->Minimize();
     return std::move(done).Run(true, base::Value());
   }
   if (method == "ArdiaShell.toggleFullScreen") {
@@ -612,7 +625,7 @@ void ShellHostView::SetActiveProfile(const base::ListValue* values, Done done) {
 
 void ShellHostView::CopyText(const base::ListValue* values, Done done) {
   if (!values || values->size() != 1 || !(*values)[0].is_string() ||
-      (*values)[0].GetString().size() > kCopyTextLimit) {
+      !webui_window::CopyTextFits((*values)[0].GetString(), kCopyTextLimit)) {
     return std::move(done).Run(false, base::Value("Text to copy is required"));
   }
   {
@@ -631,10 +644,9 @@ void ShellHostView::ReadText(Done done) {
       ui::ClipboardBuffer::kCopyPaste, std::nullopt,
       base::BindOnce(
           [](Done done, std::u16string text) {
-            if (text.size() > kCopyTextLimit) {
-              text.resize(kCopyTextLimit);
-            }
-            std::move(done).Run(true, base::Value(base::UTF16ToUTF8(text)));
+            std::move(done).Run(
+                true, base::Value(webui_window::TruncateUtf8(
+                          base::UTF16ToUTF8(text), kCopyTextLimit)));
           },
           std::move(done)));
 }
@@ -775,8 +787,8 @@ void ShellHostView::EngineCall(const std::string& name,
   if (const std::optional<webui_window::DocumentVerb> verb =
           webui_window::ParseDocumentVerb(name)) {
     if (!args || !args->is_string() ||
-        args->GetString().size() > kEngineRequestLimit ||
-        profile != kAppProfileName) {
+        !webui_window::DocumentEngineRequestAllowed(profile,
+                                                    args->GetString().size())) {
       return std::move(done).Run(
           false, Failure("ERR_DOCUMENT_REQUEST",
                          "Invalid document transport request"));

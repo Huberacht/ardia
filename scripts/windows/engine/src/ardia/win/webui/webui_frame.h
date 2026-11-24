@@ -60,7 +60,9 @@ class CaptionInput : public ui::HWNDMessageFilter {
   using StateChanged =
       base::RepeatingCallback<void(const MaximizeButtonVisualState&)>;
 
-  CaptionInput(StateChanged changed, base::RepeatingClosure toggle_maximize);
+  CaptionInput(StateChanged changed,
+               base::RepeatingClosure toggle_maximize,
+               base::RepeatingCallback<bool()> intercept_close);
   CaptionInput(const CaptionInput&) = delete;
   CaptionInput& operator=(const CaptionInput&) = delete;
   ~CaptionInput() override;
@@ -87,6 +89,7 @@ class CaptionInput : public ui::HWNDMessageFilter {
   MaximizeButtonStateMachine state_;
   StateChanged changed_;
   base::RepeatingClosure toggle_maximize_;
+  base::RepeatingCallback<bool()> intercept_close_;
 };
 
 }

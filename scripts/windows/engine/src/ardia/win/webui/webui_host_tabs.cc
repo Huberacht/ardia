@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -308,9 +309,24 @@ void ShellHostView::SetPresentations(const base::DictValue& args, Done done) {
     }
     updates.emplace_back(binding, *visible);
   }
+  std::map<BrowserWindowInterface*, content::WebContents*> activate;
   for (const auto& [binding, visible] : updates) {
     binding->presented = visible;
+    if (!visible) {
+      continue;
+    }
+    if (BrowserWindowInterface* owner = OwnerOf(binding->contents())) {
+      activate[owner] = binding->contents();
+    }
   }
+  for (const auto& [owner, contents] : activate) {
+    TabStripModel* model = owner->GetTabStripModel();
+    const int index = model->GetIndexOfWebContents(contents);
+    if (index != TabStripModel::kNoTab && index != model->active_index()) {
+      model->ActivateTabAt(index);
+    }
+  }
+  ReattachViewports();
   std::move(done).Run(true, base::Value());
 }
 

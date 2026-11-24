@@ -23,6 +23,7 @@
 #include "ardia/win/test_gate.h"
 #include "ardia/win/webui/webui_mode.h"
 #include "ardia/win/webui/webui_shell.h"
+#include "ardia/win/webui/webui_window_policy.h"
 #include "base/base_paths.h"
 #include "base/base_paths_win.h"
 #include "base/base_switches.h"
@@ -628,7 +629,9 @@ base::ListValue RelaunchUrls(const base::CommandLine& command_line,
       url = url_formatter::FixupRelativeFile(cur_dir,
                                              base::FilePath(argument));
     }
-    if (url.is_valid() && (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsFile())) {
+    if (url.is_valid() &&
+        webui_window::RelaunchUrlAccepted(url.scheme(), url.spec().size(),
+                                          urls.size())) {
       urls.Append(url.spec());
     }
   }

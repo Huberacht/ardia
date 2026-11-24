@@ -1772,7 +1772,19 @@ in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize bu
   `Navigate` (`kNewBackgroundTab`), so popups, `beforeunload`, session tab ids and tab helpers are Chromium's own. A
   tab of another profile lives in a hidden companion browser of that profile owned by the window (`EnsureMember`,
   `RouteProfile`); private and utility windows take no companions. The `BrowserView`'s own contents view is emptied
-  after every strip change (`ReattachViewports`).
+  after every strip change (`ReattachViewports`), and a page view Chromium took back is detached and reattached so a
+  shown pane never stays blank. When Chromium replaces a tab's contents (a discard), the binding follows the new
+  contents and the shell gets a `pageLifecycle` `rebind`, not a close. `tab.presentations` also activates the
+  presented tab in its native `TabStripModel`, so Chromium's active-tab services follow the shell.
+- Closing: the shell's close and the system's (`WM_CLOSE` from Alt+F4 or the taskbar, taken by `CaptionInput`) first
+  run the companions' `beforeunload` while the visible window is still there to show their prompts
+  (`ConfirmCompanions`, as on Linux); a cancel leaves the window open and resets them. `closing_` is set only when the
+  widget actually starts closing (`OnWidgetClosing`), so a cancelled `beforeunload` never leaves documents refused.
+  Companions closed after their window are emptied without prompts.
+- A `session.write` broadcasts `ArdiaHost` `session` (`base`, `session`, `sourceWindowId`) to every non-private
+  window, the writer getting its own base back, so Settings changes reach open windows at once. Entering and leaving
+  full screen sends `ArdiaShell` `onWindowEvent` `{type: "fullScreen", id, on}`, and `minimizeWindow` takes a target
+  window id. A window opens only for the live shell document that asked for it (`LiveFor`).
 - Host calls served there: `tab.create` (with `adoptId`, `previousClaim` and transfers between windows after
   `ArdiaTabs.prepareTransfer`), `tab.viewport`, `tab.presentations`, `tab.command` (`loadUrl`, `goBack`,
   `goForward`, `goToOffset`, `reload`, `forceReload`, `stopLoading`, `focus`, `blur`, `zoomStep`, `setMuted`,

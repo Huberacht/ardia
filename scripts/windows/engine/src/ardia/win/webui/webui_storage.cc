@@ -99,6 +99,23 @@ std::optional<base::DictValue> ReadSession(const base::FilePath& directory) {
                                       value->GetDict());
 }
 
+SessionWrite::SessionWrite() = default;
+SessionWrite::SessionWrite(SessionWrite&&) = default;
+SessionWrite& SessionWrite::operator=(SessionWrite&&) = default;
+SessionWrite::~SessionWrite() = default;
+
+SessionWrite WriteSessionTracked(const base::FilePath& directory,
+                                 base::DictValue base,
+                                 base::DictValue local) {
+  SessionWrite result;
+  std::optional<base::DictValue> previous = ReadSession(directory);
+  if (previous) {
+    result.previous = previous->Clone();
+  }
+  result.session = WriteSession(directory, std::move(base), std::move(local));
+  return result;
+}
+
 std::optional<base::DictValue> WriteSession(const base::FilePath& directory,
                                             base::DictValue base,
                                             base::DictValue local) {

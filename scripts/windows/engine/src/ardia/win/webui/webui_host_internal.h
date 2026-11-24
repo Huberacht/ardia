@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ardia/win/webui/webui_window_policy.h"
 #include "base/values.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
@@ -23,7 +24,7 @@ class WebView;
 
 namespace ardia_win::webui {
 
-inline constexpr char kAppProfileName[] = "default";
+using webui_window::kAppProfileName;
 
 std::string Text(const base::DictValue& value, std::string_view key);
 
