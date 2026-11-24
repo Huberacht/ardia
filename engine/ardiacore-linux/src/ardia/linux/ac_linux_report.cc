@@ -1,6 +1,7 @@
 #include "ardia/linux/ac_linux_report.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -16,6 +17,7 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
@@ -373,7 +375,9 @@ struct UploadFile {
   std::optional<std::string> body;
 };
 
-UploadFile FindUploadFile(const base::FilePath& documents, const std::string& path, int64_t max_bytes) {
+UploadFile FindUploadFile(const base::FilePath& documents, const std::string& path, int64_t max_bytes,
+                          std::shared_ptr<std::atomic<bool>> cancelled) {
+  if (cancelled && cancelled->load(std::memory_order_relaxed)) return {};
   const base::FilePath drafts = DraftsFolder(documents);
   const std::optional<base::FilePath> real = ExistingDraftPath(drafts, path);
   if (!real || base::DirectoryExists(*real)) return {};
@@ -387,7 +391,15 @@ UploadFile FindUploadFile(const base::FilePath& documents, const std::string& pa
   if (file.bytes < 1 || file.bytes > max_bytes) return file;
   base::File verified(std::move(held));
   std::string body(static_cast<size_t>(file.bytes), '\0');
-  if (!verified.ReadAndCheck(0, base::as_writable_byte_span(body))) return {};
+  constexpr size_t kReadChunk = 256 * 1024;
+  size_t offset = 0;
+  auto output = base::as_writable_byte_span(body);
+  while (offset < output.size()) {
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) return {};
+    const size_t chunk = std::min(kReadChunk, output.size() - offset);
+    if (!verified.ReadAndCheck(static_cast<int64_t>(offset), output.subspan(offset, chunk))) return {};
+    offset += chunk;
+  }
   file.body = std::move(body);
   return file;
 #else
@@ -417,6 +429,8 @@ class Transfer {
   ~Transfer() = default;
 
   int caller() const { return caller_; }
+  std::shared_ptr<std::atomic<bool>> CancelFlag() const { return cancelled_; }
+  base::WeakPtr<Transfer> Weak() { return weak_.GetWeakPtr(); }
 
   void Post(network::mojom::URLLoaderFactory* factory, const std::string& url, const std::vector<report::Header>& headers,
             std::string body) {
@@ -442,8 +456,16 @@ class Transfer {
   }
 
   void Cancel() {
+    cancelled_->store(true, std::memory_order_relaxed);
     loader_.reset();
     if (done_) std::move(done_).Run(true, Reply(0, std::string(), "cancelled"));
+  }
+
+  void RefuseAndRemove(const char* message) {
+    cancelled_->store(true, std::memory_order_relaxed);
+    Done done = std::move(done_);
+    std::erase_if(Running(), [this](const std::unique_ptr<Transfer>& owned) { return owned.get() == this; });
+    Refuse(std::move(done), message);
   }
 
  private:
@@ -493,7 +515,9 @@ class Transfer {
   const size_t reply_limit_;
   LinuxReportEvent emit_;
   Done done_;
+  std::shared_ptr<std::atomic<bool>> cancelled_ = std::make_shared<std::atomic<bool>>(false);
   std::unique_ptr<network::SimpleURLLoader> loader_;
+  base::WeakPtrFactory<Transfer> weak_{this};
 };
 
 std::optional<std::vector<report::Header>> HeadersFrom(const base::Value& value) {
@@ -561,21 +585,23 @@ void StartUpload(const base::ListValue& args, const base::FilePath& documents, i
   auto headers = given ? report::AllowedHeaders(request.target, *given) : std::nullopt;
   if (!headers) return Refuse(std::move(done), "These headers are not sent with a report file");
   if (BackgroundInstance()) return Refuse(std::move(done), "Background instances send no reports");
+  Transfer* transfer = Admit(caller, args[0].GetString(), report::kUploadReplyMaxBytes, std::move(emit), &done);
+  if (!transfer) return;
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&FindUploadFile, documents, args[4].GetString(), request.max_bytes),
+      base::BindOnce(&FindUploadFile, documents, args[4].GetString(), request.max_bytes, transfer->CancelFlag()),
       base::BindOnce(
-          [](report::Request request, std::string id, std::string url, std::vector<report::Header> headers, int caller,
-             LinuxReportEvent emit, Done done, UploadFile file) {
+          [](base::WeakPtr<Transfer> transfer, report::Request request, std::string url,
+             std::vector<report::Header> headers, UploadFile file) {
+            if (!transfer) return;
             if (!report::UploadSizeAllowed(request, file.bytes)) {
-              return Refuse(std::move(done), "The file is missing, empty, too large or outside the report's folder");
+              return transfer->RefuseAndRemove("The file is missing, empty, too large or outside the report's folder");
             }
             scoped_refptr<network::SharedURLLoaderFactory> factory = SystemLoaderFactory();
-            if (!factory) return Refuse(std::move(done), "The network is unavailable");
-            Transfer* transfer = Admit(caller, std::move(id), report::kUploadReplyMaxBytes, std::move(emit), &done);
-            if (transfer) transfer->Put(factory.get(), url, headers, file.path, std::move(file.body));
+            if (!factory) return transfer->RefuseAndRemove("The network is unavailable");
+            transfer->Put(factory.get(), url, headers, file.path, std::move(file.body));
           },
-          request, args[0].GetString(), args[1].GetString(), std::move(*headers), caller, std::move(emit), std::move(done)));
+          transfer->Weak(), request, args[1].GetString(), std::move(*headers)));
 }
 
 void ReplyWithBytes(Done done, const char* failure, double bytes) {

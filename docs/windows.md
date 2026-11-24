@@ -1971,7 +1971,7 @@ Two RNW features the desktop host must carry over:
 `series-win` names each patch with a `take` line instead: Windows applies that `linux` line at its own place in the
 shared series, as a `linux,win` line will. A `take` line changes nothing for the Mac or Linux. The Linux engine key
 does move, for the launch-config split, the widened and gated patches and the changed Linux layer sources
-(`c6e339147f82` on main, `68e380ad4a28` here), so Linux needs a new engine; the macOS key is byte for byte
+(`c6e339147f82` on main, `eb14e4729781` here), so Linux needs a new engine; the macOS key is byte for byte
 `origin/main`'s. On the Windows tree (MSI, 2026-11-24) all 24 apply with `git apply`, no
 fuzz, and `chromium-win-ardia-layer-calls-mac-only`, `-external-protocol-dialog`, `-hosted-popups-and-menus` and
 `-hosted-theme-change` are remade on top of them, so 132 of the 133 patches apply strictly (the one with fuzz is the
