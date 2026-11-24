@@ -266,6 +266,11 @@ static void TestDownloadPickerDetection() {
   CHECK(AwaitingDownloadTarget(1001, @"Work"));
   CHECK(!TakeDownloadTarget(1001, @"Home", 0));
   CHECK(TakeDownloadTarget(1001, @"Work", 1000000.0));
+  NoteDownloadEvent(@{@"id" : @"stale-prompt", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(1000600.0)}, 1100);
+  CHECK(AwaitingDownloadTarget(1110, @"Work"));
+  CHECK(!AwaitingDownloadTarget(1121, @"Work"));
+  CHECK(!TakeDownloadTarget(1121, @"Work", 1000000.0));
+  CHECK(TakeDownloadTarget(1119, @"Work", 1000000.0));
   NoteDownloadEvent(@{@"id" : @"a2", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a2.zip", @"profile" : @"Work"}, 1001);
   NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a.zip", @"offTheRecord" : @NO, @"profile" : @"Work"}, 1002);
   CHECK(!AwaitingDownloadTarget(1003, @"Work"));

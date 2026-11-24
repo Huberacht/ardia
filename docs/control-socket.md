@@ -863,6 +863,9 @@ and again natively (`ArdiaFilePaths.mm`).
   into `file-arms/<arm>/` in Ardia's data folder (`ARDIA_DATA_DIR`, or `~/Library/Application Support/<bundle id>` in
   a normal launch), a `0700` folder only Ardia writes. The chooser is answered with that copy, so a path swapped for a
   link, a pipe or another file after the check can't reach the page.
+- *How long the app keeps track.* The app keeps an answered upload arm for the copies' whole 30 minutes (plus a
+  minute), so its tab closing at any point in that time still removes them, and keeps an answered download arm for the
+  native staging handoff's hour, so a download that saves into its staging folder late is still claimed and placed.
 - *How long copies stay.* A page may send a chosen file long after choosing it, so copies of an arm that answered a
   chooser stay until the first of: its tab closes, control turns off, 30 minutes pass since that arm last answered
   (a timer set for that deadline removes them, whether or not anything else happens in Ardia meanwhile), or Ardia
@@ -890,8 +893,16 @@ download's only when a download of the profile that panel's window shows is wait
 download event, which names the profile but not the tab, arrived with no path yet, in the last two minutes) and the
 panel carries no message and no file-type pop-up (Chromium's download picker passes no title and at most one file
 type, so it gets neither; password export sets a message, and Save Page As offers its save types in a pop-up). Each
-waiting download answers one panel at most: the panel that uses it takes it, so a second save panel in that profile
-(Save Page As for a page that can't be saved complete, which looks the same) can't match the same download again. Any other save panel leaves the arm untouched and runs as it would have. A private window, a window Ardia doesn't know, and a free-standing panel are
+waiting download answers one panel at most, and only for an arm it can belong to: it must have started at or after the
+arm (its own start time, to the millisecond) and announced itself in the last 20 seconds (a real download's picker
+follows its first event within about a tenth of a second); the panel that uses it takes it. A download older than
+that, or one that started before the arm, leaves the arm alone and its picker shows as usual. What can't be told
+apart: Save Page As for a page that can't be saved complete builds exactly the download picker's panel (one file type,
+"all files", no message, no pop-up), and the engine's event before the picker carries no file name to compare (measured:
+path and file name are empty; the name the panel shows can come from the server's `Content-Disposition`). So if the
+person opens that Save Page As in the same profile within those 20 seconds, before the new download's own picker, it
+can take the arm: the page is saved at the armed path and the download's picker then shows normally. Closing that gap
+needs the engine to mark its download picker. Any other save panel leaves the arm untouched and runs as it would have. A private window, a window Ardia doesn't know, and a free-standing panel are
 never answered from an arm, and an armed answer is logged without the window's title or the file name. Anything else
 runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. Chromium
 opens a page's chooser on the window that holds all of that window's tabs, so the panel names the window, not the
@@ -919,6 +930,8 @@ chooser) cancels the chooser and ends `failed` with the reason, rather than show
 - *A download that's cancelled or fails* releases its claim on the arm (`releaseArmedDownload`): nothing is placed, a
   staging folder is removed only if it's empty, and an arm that placed nothing ends `failed` (`cancelled` or
   `downloadFailed`).
+- *If the source can't be removed after a cross-volume copy*, the reply says `sourceLeft`, and when moving it back
+  from its hidden name failed too, `sourceLeftAt` names where it was left.
 - *One arm, one download.* A download claims an arm natively (`claimArmedDownload`) once its path is known, in the
   same registry lock the save panel uses, so a once arm goes to exactly one of them: a save panel finds an arm an
   automatic download already claimed spent, and an automatic download can't claim an arm a save panel already

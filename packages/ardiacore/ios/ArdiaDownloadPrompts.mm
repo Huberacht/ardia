@@ -7,6 +7,7 @@ namespace ardia_files {
 namespace {
 
 constexpr NSTimeInterval kAwaitingSeconds = 120;
+constexpr NSTimeInterval kPickerSeconds = 20;
 constexpr NSUInteger kMaxAwaiting = 256;
 
 os_unfair_lock gLock = OS_UNFAIR_LOCK_INIT;
@@ -46,7 +47,8 @@ bool AwaitingDownloadTarget(NSTimeInterval now, NSString *profile) {
   os_unfair_lock_lock(&gLock);
   DropStale(now);
   bool any = false;
-  for (NSArray *entry in Awaiting().objectEnumerator) any = any || (![entry[2] boolValue] && [entry[1] isEqualToString:profile]);
+  for (NSArray *entry in Awaiting().objectEnumerator)
+    any = any || (![entry[2] boolValue] && [entry[1] isEqualToString:profile] && now - [entry[0] doubleValue] <= kPickerSeconds);
   os_unfair_lock_unlock(&gLock);
   return any;
 }
@@ -58,7 +60,7 @@ bool TakeDownloadTarget(NSTimeInterval now, NSString *profile, double startedNoE
   NSString *oldest = nil;
   for (NSString *key in Awaiting()) {
     NSArray *entry = Awaiting()[key];
-    if ([entry[2] boolValue] || ![entry[1] isEqualToString:profile]) continue;
+    if ([entry[2] boolValue] || ![entry[1] isEqualToString:profile] || now - [entry[0] doubleValue] > kPickerSeconds) continue;
     if ([entry[3] doubleValue] < 0 || [entry[3] doubleValue] < floor(startedNoEarlierThanMs)) continue;
     if (!oldest || [entry[0] doubleValue] < [Awaiting()[oldest][0] doubleValue]) oldest = key;
   }
