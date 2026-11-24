@@ -306,6 +306,61 @@ bool RemoveIfSame(NSString *path, dev_t device, ino_t inode, NSString **recovery
   return false;
 }
 
+namespace {
+
+constexpr NSUInteger kLongestPathBytes = PATH_MAX - 1;
+constexpr NSUInteger kShortestStagedName = 16;
+
+NSString *FitName(NSString *name, NSUInteger budget) {
+  if (Bytes(name) <= budget) return name;
+  NSString *ext = name.pathExtension;
+  NSString *stem = name.stringByDeletingPathExtension;
+  if (ext.length && stem.length && Bytes(ext) + 2 <= budget) return [FitBytes(stem, budget - Bytes(ext) - 1) stringByAppendingFormat:@".%@", ext];
+  return FitBytes(name, budget);
+}
+
+NSString *MakeTemporaryFolder(NSString *pattern) {
+  const char *representation = pattern.fileSystemRepresentation;
+  if (!representation) return nil;
+  std::vector<char> buffer(representation, representation + strlen(representation) + 1);
+  if (!mkdtemp(buffer.data())) return nil;
+  return [NSFileManager.defaultManager stringWithFileSystemRepresentation:buffer.data() length:strlen(buffer.data())];
+}
+
+}
+
+NSString *PlanStaging(NSString *folder, NSString *tag, NSString *name, NSString *fallbackRoot, NSString **stagedName, NSString **reason) {
+  NSMutableArray<NSString *> *patterns = [NSMutableArray array];
+  [patterns addObject:[folder stringByAppendingPathComponent:[NSString stringWithFormat:@".ardia-arm-%@-XXXXXX", tag]]];
+  [patterns addObject:[folder stringByAppendingPathComponent:@".ardia-XXXXXX"]];
+  if (fallbackRoot.length) [patterns addObject:[fallbackRoot stringByAppendingPathComponent:[NSString stringWithFormat:@"%@-XXXXXX", tag]]];
+  NSString *safe = SafeName(name);
+  NSString *chosen = nil;
+  NSString *fitted = nil;
+  for (int pass = 0; pass < 2 && !chosen; pass++)
+    for (NSString *pattern in patterns) {
+      const NSUInteger used = Bytes(pattern) + 1;
+      if (used >= kLongestPathBytes) continue;
+      const NSUInteger budget = MIN(kLongestPathBytes - used, kMaxNameBytes);
+      if (pass == 0 ? budget >= Bytes(safe) : budget >= kShortestStagedName) {
+        chosen = pattern;
+        fitted = FitName(safe, budget);
+        break;
+      }
+    }
+  if (!chosen) {
+    *reason = @"tooLong";
+    return nil;
+  }
+  NSString *made = MakeTemporaryFolder(chosen);
+  if (!made) {
+    *reason = @"folderNotWritable";
+    return nil;
+  }
+  *stagedName = fitted;
+  return made;
+}
+
 NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
   NSString *reason = nil;
   if (![target isKindOfClass:NSString.class] || !WellFormed(source, &reason) || !WellFormed(target, &reason)) return Failure(reason ?: @"badPath");

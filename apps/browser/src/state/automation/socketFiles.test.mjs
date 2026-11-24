@@ -384,6 +384,24 @@ test("a fast download whose first event with a path is finished goes to the arm,
   reloadHooks();
 });
 
+test("a prompted download whose first event with a path is already cancelled releases its staging and reports cancelled", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/never.zip" });
+  const stagedPath = native.answerSavePanel(armed.arm);
+  assert.ok(stagedPath);
+  stub.emitDownload(download({ id: "never", path: stagedPath, state: "cancelled", startTime: armed.armedAt + 10 }));
+  await tick();
+  assert.deepEqual(native.claims.map(([arm, id]) => [arm, id]), [[armed.arm, "never"]], "it is claimed by the arm whose staging it used");
+  assert.deepEqual(native.released, [[armed.arm, "never", "cancelled"]], "and its claim is released at once");
+  assert.equal(native.placed.length, 0);
+  const row = (await ok("files.arms", { arms: [armed.arm] })).items[0];
+  assert.equal(row.state, "cancelled");
+  assert.deepEqual(row.downloads.map((d) => [d.downloadId, d.state]), [["never", "cancelled"]]);
+  stub.emitDownload(download({ id: "elsewhere", path: "/Users/me/Downloads/elsewhere.zip", state: "failed", startTime: armed.armedAt + 20 }));
+  await tick();
+  assert.equal(native.claims.filter(([, id]) => id === "elsewhere").length, 0, "a failed download outside any staging folder never claims an arm");
+});
+
 async function withClockAhead(ms, work) {
   const realNow = Date.now;
   Date.now = () => realNow() + ms;

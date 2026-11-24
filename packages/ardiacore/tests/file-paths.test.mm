@@ -355,6 +355,76 @@ static void TestArmLifetimes() {
   CHECK(Exists(kept));
 }
 
+static NSString *FolderOfBytes(NSString *base, NSUInteger total) {
+  NSString *path = base;
+  while ([path lengthOfBytesUsingEncoding:NSUTF8StringEncoding] < total) {
+    const NSUInteger left = total - [path lengthOfBytesUsingEncoding:NSUTF8StringEncoding] - 1;
+    if (left == 0) break;
+    path = [path stringByAppendingPathComponent:[@"" stringByPaddingToLength:MIN(left, (NSUInteger)200) withString:@"d" startingAtIndex:0]];
+  }
+  [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:nil];
+  return path;
+}
+
+static void TestArmOrderForWaitingDownloads() {
+  ForgetDownloadPrompts();
+  NoteDownloadEvent(@{@"id" : @"between", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(200.0)}, 5000);
+  CHECK(TakeDownloadTargetForArms(5001, @"Work", @[ @(300.0), @(100.0) ]) == 1);
+  CHECK(TakeDownloadTargetForArms(5001, @"Work", @[ @(300.0), @(100.0) ]) == -1);
+  NoteDownloadEvent(@{@"id" : @"late", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(400.0)}, 5002);
+  CHECK(TakeDownloadTargetForArms(5003, @"Work", @[ @(300.0), @(100.0) ]) == 0);
+  NoteDownloadEvent(@{@"id" : @"too-early", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(50.0)}, 5004);
+  CHECK(TakeDownloadTargetForArms(5005, @"Work", @[ @(300.0), @(100.0) ]) == -1);
+  ForgetDownloadPrompts();
+}
+
+static void TestStagingFitsPathMax() {
+  NSString *fallback = At(@"fallback-staging");
+  [NSFileManager.defaultManager createDirectoryAtPath:fallback withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions : @0700} error:nil];
+  NSString *tag = @"f-0123456789abcdef";
+  NSString *suggested = @"a-suggested-name.bin";
+  NSString *reason = nil;
+  NSString *staged = nil;
+
+  NSString *near = FolderOfBytes(At(@"near"), 970);
+  NSString *made = PlanStaging(near, tag, suggested, fallback, &staged, &reason);
+  CHECK(made && [made.stringByDeletingLastPathComponent isEqualToString:near]);
+  CHECK([staged isEqualToString:suggested]);
+  CHECK([[made stringByAppendingPathComponent:staged] lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= PATH_MAX - 1);
+
+  NSString *destinationFolder = FolderOfBytes(At(@"deep"), 992);
+  NSString *destination = [destinationFolder stringByAppendingPathComponent:@"file.bin"];
+  CHECK([destination lengthOfBytesUsingEncoding:NSUTF8StringEncoding] == 1001);
+  BOOL isFolder = YES;
+  reason = nil;
+  CHECK([DownloadTarget(destination, &isFolder, &reason) isEqualToString:destination] && !isFolder);
+  staged = nil;
+  made = PlanStaging(destinationFolder, tag, @"server-named-download.bin", fallback, &staged, &reason);
+  CHECK(made != nil);
+  NSString *stagedPath = [made stringByAppendingPathComponent:staged];
+  CHECK([stagedPath lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= PATH_MAX - 1);
+  CHECK([@"payload" writeToFile:stagedPath atomically:NO encoding:NSUTF8StringEncoding error:nil]);
+  NSDictionary *placed = PlaceFile(stagedPath, destination);
+  CHECK([placed[@"ok"] boolValue] && [Text(destination) isEqualToString:@"payload"]);
+  CHECK(rmdir(made.fileSystemRepresentation) == 0);
+
+  NSString *edge = FolderOfBytes(At(@"edge"), 1015);
+  staged = nil;
+  made = PlanStaging(edge, tag, suggested, fallback, &staged, &reason);
+  CHECK(made && [made.stringByDeletingLastPathComponent isEqualToString:fallback]);
+  CHECK([staged isEqualToString:suggested]);
+
+  NSString *longName = [[@"" stringByPaddingToLength:240 withString:@"n" startingAtIndex:0] stringByAppendingString:@".zip"];
+  staged = nil;
+  made = PlanStaging(near, tag, longName, nil, &staged, &reason);
+  CHECK(made != nil && [staged hasSuffix:@".zip"] && [staged lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >= 16);
+  CHECK([[made stringByAppendingPathComponent:staged] lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= PATH_MAX - 1);
+
+  staged = nil;
+  reason = nil;
+  CHECK(PlanStaging(edge, tag, suggested, nil, &staged, &reason) == nil && [reason isEqualToString:@"tooLong"]);
+}
+
 int main() {
   @autoreleasepool {
     char base[] = "/tmp/ardia-file-paths-XXXXXX";
@@ -373,6 +443,8 @@ int main() {
     TestDownloadPickerDetection();
     TestRemoveIfSame();
     TestArmLifetimes();
+    TestArmOrderForWaitingDownloads();
+    TestStagingFitsPathMax();
     [NSFileManager.defaultManager removeItemAtPath:gRoot error:nil];
     if (failures) return 1;
     std::printf("file-paths: ok\n");

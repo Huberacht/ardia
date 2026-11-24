@@ -21,6 +21,7 @@ const KEEP_ENDED_MS = 600_000;
 export const UPLOAD_COPIES_MS = 1_800_000;
 export const STAGED_HANDOFF_MS = 3_600_000;
 const MARGIN_MS = 60_000;
+const STAGING_MARKS = ["/.ardia-", "/download-staging/"];
 
 const keepTrackedFor = (t: Tracked) => (t.kind === "upload" ? UPLOAD_COPIES_MS : STAGED_HANDOFF_MS) + MARGIN_MS;
 
@@ -158,7 +159,9 @@ function noteDownload(d: Download) {
   if (d.offTheRecord) return;
   let armId = byDownload.get(d.id);
   if (!armId) {
-    if ((d.state !== "downloading" && d.state !== "finished") || !d.path) return;
+    const ended = d.state === "failed" || d.state === "cancelled";
+    if ((d.state !== "downloading" && d.state !== "finished" && !ended) || !d.path) return;
+    if (ended && !STAGING_MARKS.some((mark) => d.path.includes(mark))) return;
     const t = claim(d);
     if (!t) return;
     armId = t.id;

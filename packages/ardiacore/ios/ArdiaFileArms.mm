@@ -2,6 +2,7 @@
 #import "ArdiaArmLifetimes.h"
 #import "ArdiaDownloadMover.h"
 #import "ArdiaDownloadPrompts.h"
+#import "ArdiaFileArmsInternal.h"
 #import "ArdiaFilePaths.h"
 #import "ArdiaInternal.h"
 #import "ArdiaLaunchConfig.h"
@@ -13,59 +14,23 @@
 
 #include <vector>
 
-NS_ASSUME_NONNULL_BEGIN
-
-@interface ArdiaFileArm : NSObject
-@property(nonatomic, copy) NSString *armId;
-@property(nonatomic, copy) NSString *kind;
-@property(nonatomic, copy, nullable) NSString *tabId;
-@property(nonatomic, copy, nullable) NSString *windowId;
-@property(nonatomic, copy) NSArray<NSString *> *paths;
-@property(nonatomic, copy) NSArray<NSString *> *staged;
-@property(nonatomic, copy, nullable) NSString *uploadFolder;
-@property(nonatomic) BOOL folder;
-@property(nonatomic) BOOL once;
-@property(nonatomic) NSTimeInterval armedAt;
-@property(nonatomic) NSTimeInterval expiresAt;
-@property(nonatomic, copy) NSString *state;
-@property(nonatomic, copy, nullable) NSString *reason;
-@property(nonatomic, copy) NSArray<NSString *> *landed;
-@property(nonatomic, strong) NSMutableArray<NSString *> *stagingFolders;
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *claims;
-@property(nonatomic) NSInteger answered;
-@property(nonatomic) NSTimeInterval lastAnsweredAt;
-@property(nonatomic) NSUInteger pendingHandoffs;
-@end
-
 @implementation ArdiaFileArm
 @end
 
-NS_ASSUME_NONNULL_END
-
 namespace ardia_host {
 
-namespace {
+namespace file_arms {
+
+os_unfair_lock gLock = OS_UNFAIR_LOCK_INIT;
 
 constexpr NSUInteger kMaxActiveArms = 16;
 constexpr NSUInteger kMaxKeptArms = 64;
 constexpr NSUInteger kMaxUploadPaths = 64;
 constexpr NSTimeInterval kMaxSeconds = 600;
 constexpr NSUInteger kMaxIdBytes = 64;
-constexpr int kPlaceTries = 8;
 constexpr NSTimeInterval kUploadRetentionSeconds = 1800;
 
 uint64_t gGeneration = 0;
-
-os_unfair_lock gLock = OS_UNFAIR_LOCK_INIT;
-
-template <typename Work>
-auto Locked(Work work) -> decltype(work()) {
-  os_unfair_lock_lock(&gLock);
-  struct Unlock {
-    ~Unlock() { os_unfair_lock_unlock(&gLock); }
-  } unlock;
-  return work();
-}
 
 NSMutableArray<ArdiaFileArm *> *Arms() {
   static NSMutableArray<ArdiaFileArm *> *arms = [NSMutableArray array];
@@ -208,12 +173,15 @@ void EndMoved(NSString *armId) {
   PurgeAll(purge);
 }
 
-NSString *_Nullable PickArm(NSString *kind, ArdiaWindowController *panelWindow) {
+struct Ranked {
+  NSString *armId;
+  int rank;
+  NSTimeInterval armedAt;
+};
+
+std::vector<Ranked> RankArms(NSString *kind, ArdiaWindowController *panelWindow) {
   std::vector<Candidate> candidates = Locked([&] { return CandidatesLocked(kind); });
-  if (candidates.empty()) return nil;
-  NSString *pick = nil;
-  int pickRank = 0;
-  NSTimeInterval pickAt = 0;
+  std::vector<Ranked> ranked;
   for (const Candidate &candidate : candidates) {
     int rank = 1;
     if (candidate.tabId) {
@@ -227,13 +195,16 @@ NSString *_Nullable PickArm(NSString *kind, ArdiaWindowController *panelWindow) 
       if (tab.profile != panelWindow.coreWindow.activeProfile || holder != panelWindow) continue;
       rank = 2;
     }
-    if (rank > pickRank || (rank == pickRank && candidate.armedAt >= pickAt)) {
-      pick = candidate.armId;
-      pickRank = rank;
-      pickAt = candidate.armedAt;
-    }
+    ranked.push_back({candidate.armId, rank, candidate.armedAt});
   }
-  return pick;
+  std::stable_sort(ranked.begin(), ranked.end(), [](const Ranked &a, const Ranked &b) {
+    return a.rank != b.rank ? a.rank > b.rank : a.armedAt > b.armedAt;
+  });
+  return ranked;
+}
+
+NSString *DownloadStagingRoot() {
+  return [ardia_files::AppDataRoot(ArdiaLaunchConfig.shared.dataDirectory, NSBundle.mainBundle.bundleIdentifier) stringByAppendingPathComponent:@"download-staging"];
 }
 
 NSArray<NSURL *> *_Nullable UploadPicks(NSString *armId, NSOpenPanel *panel) {
@@ -288,13 +259,18 @@ NSArray<NSURL *> *_Nullable DownloadPicks(NSString *armId, NSSavePanel *panel) {
   });
   if (!consumed) return nil;
   NSString *reason = nil;
-  NSString *staging = ardia_files::MakeStagingFolder(folder, armId, &reason);
-  NSString *stagedName = name ?: ardia_files::SafeFileName(panel.nameFieldStringValue);
+  NSString *wanted = name ?: ardia_files::SafeFileName(panel.nameFieldStringValue);
+  NSString *fallback = DownloadStagingRoot();
+  NSString *stagedName = nil;
+  NSString *staging = ardia_files::PlanStaging(folder, armId, wanted, PrivateFolder(fallback) ? fallback : nil, &stagedName, &reason);
   Locked([&] {
     ArdiaFileArm *arm = ArmNamed(armId);
     if (!arm) return;
     if (arm.pendingHandoffs) arm.pendingHandoffs -= 1;
-    if (staging) [arm.stagingFolders addObject:staging];
+    if (staging) {
+      [arm.stagingFolders addObject:staging];
+      arm.stagedNames[staging] = wanted;
+    }
     else {
       arm.state = @"failed";
       arm.reason = reason ?: @"stagingFailed";
@@ -318,6 +294,8 @@ void SweepUploadRootOnce() {
 
 }
 
+using namespace file_arms;
+
 void SweepFileArmsAtLaunch() {
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
     SweepUploadRootOnce();
@@ -340,10 +318,16 @@ NSArray<NSURL *> *ArmedPanelPicks(NSSavePanel *panel, NSWindow *parent, bool *ha
   if (!RegularWindow(panelWindow)) return nil;
   NSString *profile = ProfileName(panelWindow.coreWindow.activeProfile);
   if (!open && !ardia_files::LooksLikeDownloadPicker(ardia_files::AwaitingDownloadTarget(Now(), profile), panel.message, panel.accessoryView != nil)) return nil;
-  NSString *pick = PickArm(open ? @"upload" : @"download", panelWindow);
-  if (!pick) return nil;
-  const NSTimeInterval armedAt = Locked([&] { return ArmNamed(pick).armedAt; });
-  if (!open && !ardia_files::TakeDownloadTarget(Now(), profile, armedAt * 1000)) return nil;
+  std::vector<Ranked> ranked = RankArms(open ? @"upload" : @"download", panelWindow);
+  if (ranked.empty()) return nil;
+  NSString *pick = ranked.front().armId;
+  if (!open) {
+    NSMutableArray<NSNumber *> *armedAtMs = [NSMutableArray array];
+    for (const Ranked &arm : ranked) [armedAtMs addObject:@(arm.armedAt * 1000)];
+    const NSInteger taken = ardia_files::TakeDownloadTargetForArms(Now(), profile, armedAtMs);
+    if (taken < 0) return nil;
+    pick = ranked[(size_t)taken].armId;
+  }
   *handled = true;
   *armId = pick;
   return open ? UploadPicks(pick, (NSOpenPanel *)panel) : DownloadPicks(pick, panel);
@@ -352,6 +336,7 @@ NSArray<NSURL *> *ArmedPanelPicks(NSSavePanel *panel, NSWindow *parent, bool *ha
 }
 
 using namespace ardia_host;
+using namespace ardia_host::file_arms;
 
 @implementation ArdiaHost (FileArms)
 
@@ -439,6 +424,7 @@ using namespace ardia_host;
     arm.landed = @[];
     arm.stagingFolders = [NSMutableArray array];
     arm.claims = [NSMutableDictionary dictionary];
+    arm.stagedNames = [NSMutableDictionary dictionary];
     [Arms() addObject:arm];
     return @{@"ok" : @YES, @"arm" : Row(arm)};
   });
@@ -484,112 +470,5 @@ using namespace ardia_host;
   PurgeAll(purge);
   return rows;
 }
-
-+ (NSDictionary<NSString *, id> *)claimArmedDownload:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path {
-  if (!downloadId.length || !path.length) return Refused(@"noPath", nil);
-  NSMutableArray<NSString *> *purge = [NSMutableArray array];
-  NSDictionary *result = Locked([&]() -> NSDictionary * {
-    [purge addObjectsFromArray:SweepLocked()];
-    ArdiaFileArm *arm = ArmNamed(armId);
-    if (!arm || ![arm.kind isEqualToString:@"download"]) return Refused(@"noArm", nil);
-    if (arm.claims[downloadId]) return @{@"ok" : @YES, @"mode" : InStagingLocked(arm, arm.claims[downloadId]) ? @"prompted" : @"automatic"};
-    for (ArdiaFileArm *other in Arms()) {
-      if (![other.kind isEqualToString:@"download"]) continue;
-      if (other.claims[downloadId] && other != arm) return Refused(@"claimedByAnother", nil);
-      if (!InStagingLocked(other, path)) continue;
-      if (other != arm) return Refused(@"stagedForAnother", nil);
-      arm.claims[downloadId] = path;
-      return @{@"ok" : @YES, @"mode" : @"prompted"};
-    }
-    if (!Active(arm)) return Refused(@"taken", nil);
-    arm.claims[downloadId] = path;
-    arm.answered += 1;
-    arm.lastAnsweredAt = Now();
-    if (arm.once) {
-      arm.state = @"claimed";
-      arm.expiresAt = Now();
-    }
-    return @{@"ok" : @YES, @"mode" : @"automatic"};
-  });
-  PurgeAll(purge);
-  return result;
-}
-
-+ (void)placeArmedDownload:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path completion:(void (^)(NSDictionary<NSString *, id> *result))completion {
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    completion([self placeArmedDownloadNow:armId download:downloadId path:path]);
-  });
-}
-
-+ (NSDictionary<NSString *, id> *)placeArmedDownloadNow:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path {
-  NSString *claimed = nil;
-  NSString *destination = nil;
-  BOOL folder = NO;
-  BOOL prompted = NO;
-  Locked([&] {
-    ArdiaFileArm *arm = ArmNamed(armId);
-    if (!arm || ![arm.kind isEqualToString:@"download"]) return;
-    claimed = arm.claims[downloadId];
-    destination = arm.paths.firstObject;
-    folder = arm.folder;
-    prompted = claimed && InStagingLocked(arm, path);
-  });
-  if (!claimed) return Refused(@"notClaimed", nil);
-  if (![claimed isEqualToString:path] && !prompted && ![claimed.stringByDeletingLastPathComponent isEqualToString:path.stringByDeletingLastPathComponent])
-    return Refused(@"notClaimed", nil);
-  NSDictionary *placed = nil;
-  for (int attempt = 0; attempt < kPlaceTries; attempt++) {
-    NSString *reason = nil;
-    NSString *target = folder ? ardia_files::FreePathIn(destination, path.lastPathComponent, &reason) : destination;
-    if (!target) {
-      placed = Refused(reason ?: @"noFreeName", nil);
-      break;
-    }
-    placed = ardia_files::PlaceFile(path, target);
-    if ([placed[@"ok"] boolValue] || placed[@"recoveryPath"] || !folder || ![placed[@"reason"] isEqualToString:@"exists"]) break;
-  }
-  const bool ok = [placed[@"ok"] boolValue];
-  NSMutableDictionary *answer = [placed mutableCopy];
-  [answer removeObjectForKey:@"recoveryPath"];
-  if (!ok && placed[@"recoveryPath"]) answer[@"stagedPath"] = placed[@"recoveryPath"];
-  else if (!ok && prompted) answer[@"stagedPath"] = path;
-  if (ok && placed[@"recoveryPath"]) answer[@"sourceLeftAt"] = placed[@"recoveryPath"];
-  if (ok) [ArdiaDownloadMover.shared rememberMove:downloadId from:path to:placed[@"path"]];
-  Locked([&] {
-    ArdiaFileArm *arm = ArmNamed(armId);
-    if (!arm) return;
-    if (ok) arm.landed = [arm.landed arrayByAddingObject:placed[@"path"]];
-    else {
-      arm.state = @"failed";
-      arm.reason = placed[@"reason"];
-    }
-    [arm.claims removeObjectForKey:downloadId];
-    if (ok && prompted) [arm.stagingFolders removeObject:path.stringByDeletingLastPathComponent];
-  });
-  if (ok && prompted) rmdir(path.stringByDeletingLastPathComponent.fileSystemRepresentation);
-  return answer;
-}
-
-+ (BOOL)releaseArmedDownload:(NSString *)armId download:(NSString *)downloadId state:(NSString *)state {
-  NSString *emptyStaging = nil;
-  const BOOL released = Locked([&] {
-    ArdiaFileArm *arm = ArmNamed(armId);
-    NSString *claimed = arm.claims[downloadId];
-    if (!claimed) return NO;
-    [arm.claims removeObjectForKey:downloadId];
-    if (InStagingLocked(arm, claimed)) {
-      emptyStaging = claimed.stringByDeletingLastPathComponent;
-      [arm.stagingFolders removeObject:emptyStaging];
-    }
-    if (!Active(arm) && !arm.landed.count) {
-      arm.state = @"failed";
-      arm.reason = [state isEqualToString:@"cancelled"] ? @"cancelled" : @"downloadFailed";
-    }
-    return YES;
-  });
-  if (emptyStaging) rmdir(emptyStaging.fileSystemRepresentation);
-  return released;
-}
-
 
 @end

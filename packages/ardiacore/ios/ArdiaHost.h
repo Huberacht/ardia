@@ -97,6 +97,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)armFiles:(NSDictionary<NSString *, id> *)spec completion:(void (^)(NSDictionary<NSString *, id> *result))completion NS_SWIFT_NAME(armFiles(_:completion:));
 + (NSInteger)disarmFiles:(nullable NSArray<NSString *> *)ids purge:(BOOL)purge NS_SWIFT_NAME(disarmFiles(_:purge:));
 @property(class, readonly) NSArray<NSDictionary<NSString *, id> *> *fileArms;
+@end
+
+@interface ArdiaHost (FileArmDownloads)
 + (NSDictionary<NSString *, id> *)claimArmedDownload:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path
     NS_SWIFT_NAME(claimArmedDownload(_:download:path:));
 + (void)placeArmedDownload:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path completion:(void (^)(NSDictionary<NSString *, id> *result))completion

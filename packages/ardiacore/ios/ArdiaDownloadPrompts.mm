@@ -69,6 +69,12 @@ bool TakeDownloadTarget(NSTimeInterval now, NSString *profile, double startedNoE
   return oldest != nil;
 }
 
+NSInteger TakeDownloadTargetForArms(NSTimeInterval now, NSString *profile, NSArray<NSNumber *> *armedAtMsInPriorityOrder) {
+  for (NSUInteger i = 0; i < armedAtMsInPriorityOrder.count; i++)
+    if (TakeDownloadTarget(now, profile, armedAtMsInPriorityOrder[i].doubleValue)) return (NSInteger)i;
+  return -1;
+}
+
 bool LooksLikeDownloadPicker(bool awaitingTarget, NSString *message, bool hasAccessoryView) {
   return awaitingTarget && !message.length && !hasAccessoryView;
 }

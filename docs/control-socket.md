@@ -895,7 +895,9 @@ panel carries no message and no file-type pop-up (Chromium's download picker pas
 type, so it gets neither; password export sets a message, and Save Page As offers its save types in a pop-up). Each
 waiting download answers one panel at most, and only for an arm it can belong to: it must have started at or after the
 arm (its own start time, to the millisecond) and announced itself in the last 20 seconds (a real download's picker
-follows its first event within about a tenth of a second); the panel that uses it takes it. A download older than
+follows its first event within about a tenth of a second); the panel that uses it takes it. When several arms could answer, they're tried in order (a tab arm, then the newest),
+and the waiting download goes to the first arm it can belong to, so a newer arm armed after that download started
+doesn't keep an older one from answering. A download older than
 that, or one that started before the arm, leaves the arm alone and its picker shows as usual. What can't be told
 apart: Save Page As for a page that can't be saved complete builds exactly the download picker's panel (one file type,
 "all files", no message, no pop-up), and the engine's event before the picker carries no file name to compare (measured:
@@ -915,7 +917,10 @@ chooser) cancels the chooser and ends `failed` with the reason, rather than show
 
 **How a download lands.**
 - *When the profile asks where to save*, the save panel is answered with a file in a fresh `0700` staging folder
-  (`.ardia-arm-<arm>-XXXXXX`) inside the target's folder, never with the target itself, so Chromium can't overwrite a
+  (`.ardia-arm-<arm>-XXXXXX`) inside the target's folder, never with the target itself (when that path would pass the
+  system's 1,024-byte limit, a shorter `.ardia-XXXXXX` folder there, then a `0700` folder under Ardia's own
+  `download-staging`, and the staged name is shortened to fit, keeping its extension; a folder arm still names the
+  placed file with the name the download wanted), so Chromium can't overwrite a
   file that appears there meanwhile. When the download finishes, the file is published to the target as above and the
   staging folder is removed. If the target was taken in between, the file stays in the staging folder and the arm
   reports `exists` with that path.
@@ -927,7 +932,8 @@ chooser) cancels the chooser and ends `failed` with the reason, rather than show
 - *When placing fails half way*: if publishing fails and moving the file back to where it was fails too, the file is
   left under its hidden temporary name in the target folder and the arm reports that path, rather than trying again
   from a source that's gone.
-- *A download that's cancelled or fails* releases its claim on the arm (`releaseArmedDownload`): nothing is placed, a
+- *A download that's cancelled or fails*, even when the first event that names its staging file is already the
+  failure, releases its claim on the arm (`releaseArmedDownload`): nothing is placed, a
   staging folder is removed only if it's empty, and an arm that placed nothing ends `failed` (`cancelled` or
   `downloadFailed`).
 - *If the source can't be removed after a cross-volume copy*, the reply says `sourceLeft`, and when moving it back
