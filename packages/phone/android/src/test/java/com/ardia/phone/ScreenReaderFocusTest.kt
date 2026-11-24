@@ -336,6 +336,79 @@ class ScreenReaderFocusTest {
     }
 
     @Test
+    fun aHandOverAsksNothingUntilTheFrameHasDrawnThenFocusesTheExposedTarget() {
+        val asked = mutableListOf<Int>()
+        val target = recording(asked)
+        activity.setContentView(FrameLayout(activity).apply { addView(target, 200, 100) })
+        layOut()
+        val drawn = mutableListOf<Runnable>()
+        val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis, afterDraw = { drawn += it })
+        var looked = 0
+        requests.start(handover = true) {
+            looked += 1
+            target
+        }
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+        assertEquals("nothing is looked up before the draw", 0, looked)
+        assertTrue(asked.isEmpty())
+        assertEquals(1, requests.waiting)
+        drawn.single().run()
+        assertEquals(listOf(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS), asked)
+        assertEquals(0, requests.waiting)
+    }
+
+    @Test
+    fun aHandOverCancelledBeforeItsDrawNeverLooks() {
+        val drawn = mutableListOf<Runnable>()
+        val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis, afterDraw = { drawn += it })
+        var looked = 0
+        val id = requests.start(handover = true) {
+            looked += 1
+            null
+        }
+        requests.cancel(id)
+        drawn.single().run()
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(1))
+        assertEquals(0, looked)
+        assertEquals(0, requests.waiting)
+    }
+
+    @Test
+    fun aHandOverStillWaitingYieldsToFocusTheUserOrAnOverlayMovedElsewhere() {
+        val asked = mutableListOf<Int>()
+        val target = recording(asked).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        var otherHeld = false
+        val other = holding(mutableListOf()) { otherHeld }
+        activity.setContentView(LinearLayout(activity).apply {
+            addView(target, 200, 100)
+            addView(other, 200, 100)
+        })
+        layOut()
+        val drawn = mutableListOf<Runnable>()
+        val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis, afterDraw = { drawn += it })
+        requests.start(handover = true) { target }
+        drawn.single().run()
+        assertEquals("the target is not reachable yet, so it retries", 1, requests.waiting)
+        otherHeld = true
+        target.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+        assertTrue("focus moved elsewhere after the hand-over began, so it gives up", asked.isEmpty())
+        assertEquals(0, requests.waiting)
+    }
+
+    @Test
+    fun movedSinceCountsOnlyAHolderThatIsNeitherTheOneBeforeNorTheTarget() {
+        val before = View(activity)
+        val target = View(activity)
+        val elsewhere = View(activity)
+        assertFalse(ScreenReaderFocus.movedSince(before, null, target))
+        assertFalse(ScreenReaderFocus.movedSince(before, before, target))
+        assertFalse(ScreenReaderFocus.movedSince(before, target, target))
+        assertTrue(ScreenReaderFocus.movedSince(before, elsewhere, target))
+        assertTrue(ScreenReaderFocus.movedSince(null, elsewhere, target))
+    }
+
+    @Test
     fun aCancelledRequestNeverLooksAgain() {
         val requests = FocusRequests(Handler(Looper.getMainLooper()), SystemClock::uptimeMillis)
         var looked = 0

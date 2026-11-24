@@ -30,6 +30,13 @@ class AccessibilityModule : Module() {
 
         AsyncFunction("returnFocus") { tag: Int -> requests.start(recheck = true) { runCatching { appContext.findView<View>(tag) }.getOrNull() } }.runOnQueue(Queues.MAIN)
 
+        AsyncFunction("handOverFocus") { tag: Int, within: Boolean ->
+            requests.start(handover = true) {
+                val view = runCatching { appContext.findView<View>(tag) }.getOrNull()
+                if (within && view != null) ScreenReaderFocus.firstStop(view) else view
+            }
+        }.runOnQueue(Queues.MAIN)
+
         AsyncFunction("cancelFocus") { request: Int -> requests.cancel(request) }.runOnQueue(Queues.MAIN)
 
         OnDestroy {
@@ -50,8 +57,14 @@ class AccessibilityModule : Module() {
     }
 }
 
-internal class FocusRequests(private val handler: Handler, private val clock: () -> Long, private val rootOf: (View) -> View = View::getRootView) {
+internal class FocusRequests(
+    private val handler: Handler,
+    private val clock: () -> Long,
+    private val afterDraw: (Runnable) -> Unit = { next -> android.view.Choreographer.getInstance().postFrameCallback { handler.post(next) } },
+    private val rootOf: (View) -> View = View::getRootView,
+) {
     companion object {
+        private val UNSEEN = Any()
         const val RETRY_EVERY_MS = 16L
         const val GIVE_UP_AFTER_MS = 500L
         const val RECHECK_AFTER_MS = 300L
@@ -66,9 +79,21 @@ internal class FocusRequests(private val handler: Handler, private val clock: ()
 
     val waiting: Int get() = pending.size
 
-    fun start(recheck: Boolean = false, resolve: () -> View?): Int {
+    fun start(recheck: Boolean = false, handover: Boolean = false, resolve: () -> View?): Int {
         if (destroyed) return 0
         val id = ++lastId
+        if (handover) {
+            val handing = object : Runnable {
+                override fun run() {
+                    if (destroyed || pending[id] !== this) return
+                    pending.remove(id)
+                    handOver(id, resolve)
+                }
+            }
+            pending[id] = handing
+            afterDraw(handing)
+            return id
+        }
         val deadline = clock() + GIVE_UP_AFTER_MS
         val again = object : Runnable {
             override fun run() {
@@ -107,6 +132,34 @@ internal class FocusRequests(private val handler: Handler, private val clock: ()
         return id
     }
 
+    private fun handOver(id: Int, resolve: () -> View?) {
+        val deadline = clock() + GIVE_UP_AFTER_MS
+        var baseline: Any? = UNSEEN
+        val attempt = object : Runnable {
+            override fun run() {
+                if (destroyed || pending[id] !== this) return
+                if (clock() >= deadline) {
+                    pending.remove(id)
+                    return
+                }
+                val view = resolve()
+                val holding = view?.takeIf { it.isAttachedToWindow }?.let { ScreenReaderFocus.holder(rootOf(it)) }
+                if (baseline === UNSEEN && view != null && view.isAttachedToWindow) baseline = holding
+                if (baseline !== UNSEEN && ScreenReaderFocus.movedSince(baseline as View?, holding, view)) {
+                    pending.remove(id)
+                    return
+                }
+                if (ScreenReaderFocus.focus(view)) {
+                    pending.remove(id)
+                    return
+                }
+                handler.postDelayed(this, RETRY_EVERY_MS)
+            }
+        }
+        pending[id] = attempt
+        attempt.run()
+    }
+
     fun cancel(id: Int) {
         pending.remove(id)?.let(handler::removeCallbacks)
     }
@@ -136,6 +189,8 @@ internal object ScreenReaderFocus {
     }
 
     fun holds(view: View): Boolean = view.createAccessibilityNodeInfo()?.isAccessibilityFocused == true
+
+    fun movedSince(baseline: View?, holding: View?, target: View?): Boolean = holding != null && holding !== baseline && holding !== target
 
     fun virtualHolder(root: View): View? {
         if (!root.isShown) return null
