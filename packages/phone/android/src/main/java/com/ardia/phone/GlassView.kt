@@ -378,8 +378,13 @@ class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(con
         invalidate()
     }
 
+    internal var placementsChecked = 0
+        private set
+
+    internal val parked: Boolean get() = drawn.isEmpty() && hosted.none { it.samplesNow }
+
     private val moved = ViewTreeObserver.OnPreDrawListener {
-        if (hosted.any { placement(it) != drawn[it] }) invalidate()
+        if (!parked && hosted.any { placement(it) != drawn[it] }) invalidate()
         true
     }
 
@@ -403,6 +408,7 @@ class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(con
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) = Unit
 
     internal fun placement(glass: GlassView): Placement? {
+        placementsChecked += 1
         if (!glass.samplesNow || glass.width <= 0 || glass.height <= 0) return null
         val stop = parent
         var alpha = 1f

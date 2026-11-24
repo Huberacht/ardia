@@ -172,6 +172,31 @@ class GlassBackdropTest {
     }
 
     @Test
+    fun aBackdropWhoseGlassesAreAllHiddenIsParkedAndDoesNoPerFrameWork() {
+        val scene = bar()
+        live(scene)
+        (scene.glasses + scene.pill).forEach {
+            it.shownMs = 0f
+            it.shown = false
+        }
+        onHardware(scene.backdrop)
+        assertTrue("with nothing drawn and nothing sampled the backdrop is parked", scene.backdrop.parked)
+        val before = scene.backdrop.placementsChecked
+        repeat(3) {
+            scene.fold.translationY = it * 4f
+            scene.pillFold.scaleX = 1f + it * 0.1f
+            scene.backdrop.viewTreeObserver.dispatchOnPreDraw()
+        }
+        assertEquals("a parked backdrop places nothing per frame", before, scene.backdrop.placementsChecked)
+        assertFalse(scene.backdrop.isDirty)
+        scene.pill.shown = true
+        assertFalse("a glass shown again unparks it", scene.backdrop.parked)
+        assertTrue(scene.backdrop.isDirty)
+        onHardware(scene.backdrop)
+        assertTrue(scene.backdrop.placement(scene.pill) != null)
+    }
+
+    @Test
     fun aHostedGlassThatChangesSizeRedrawsTheBackdrop() {
         val scene = bar()
         live(scene)
