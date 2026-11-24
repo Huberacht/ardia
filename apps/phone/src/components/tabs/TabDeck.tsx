@@ -108,7 +108,7 @@ import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
 import { arriveFromDeck, dropPreparedDestination, liftDestination, prepareDestination, pressDestination, takeDestinationAction } from "../../state/browse/destination";
 import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarPreviewShown, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, releaseDeckOnHideOnUI, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
-import { cardHitSeq, currentPhoneGeneration, deckDrawnMark, deckHitMark, deckLive, deckOwnsInput, deckReconciled, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
+import { cardHitSeq, currentPhoneGeneration, deckAwaitsEntrance, deckDrawnMark, deckGeometryChanged, deckHitMark, deckLive, deckOwnsInput, deckReconciled, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
@@ -336,6 +336,14 @@ export const TabDeck = memo(function TabDeck() {
     else prepareDeck({ tabId: heldSelected, order, revision: deckRevision });
   }, [shown, pulls, heldSelected, order, deckRevision, phoneTurn]);
   useEffect(() => () => forgetPreparedDeck(), []);
+  const geometryKnown = useRef(false);
+  useLayoutEffect(() => {
+    if (!geometryKnown.current) {
+      geometryKnown.current = true;
+      return;
+    }
+    deckGeometryChanged();
+  }, [g, deckHeight, width, insets.bottom]);
   const deckShownNow = useSharedValue(shown);
   useLayoutEffect(() => {
     deckShownNow.value = shown;
@@ -474,6 +482,7 @@ export const TabDeck = memo(function TabDeck() {
     placeCards(order, index >= 0 ? deckOpeningScroll(index, order.length, material) : initialDeckScroll(order.length));
     const cuts = tabSwitchCuts();
     if (!entrance || index < 0 || grid || cuts) {
+      if (phase.kind !== "settled") setPhase(SETTLED);
       deckPhase.value = DECK_PHASE.settled;
       expandedIndex.value = -1;
       scaleProgress.value = 1;
@@ -1016,6 +1025,7 @@ export const TabDeck = memo(function TabDeck() {
   };
   const openOnTurn = (at: number, tappedAt?: number, posedTurn?: number) => {
     const id = order[at];
+    if (!shown && posedTurn === undefined) return;
     if (shown || posedTurn === undefined || !id) {
       open(at, tappedAt, posedTurn);
       return;
@@ -1167,7 +1177,7 @@ export const TabDeck = memo(function TabDeck() {
               positionProgress.value = 0;
               liftDestination(cardId);
               runOnJS(openPosedCard)(cardId, turn);
-            } else if (cardId !== undefined) runOnJS(openCard)(cardId);
+            } else if (cardId !== undefined && !deckAwaitsEntrance()) runOnJS(openCard)(cardId);
           } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();
         }
         manager.fail();

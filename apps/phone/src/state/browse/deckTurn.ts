@@ -194,10 +194,14 @@ export function prepareDeck(base: PreparedBase | null) {
 
 function wantLayout() {
   layoutSeq += 1;
-  runOnUI((wanted: number) => {
-    "worklet";
-    deckTurn.layout.value = wanted;
-  })(layoutSeq);
+  deckTurn.layout.value = layoutSeq;
+}
+
+export function deckGeometryChanged() {
+  wantLayout();
+  requestAnimationFrame(() => {
+    if (preparedBase) publishPrepared();
+  });
 }
 
 function publishSoon() {
@@ -250,6 +254,8 @@ export const useDeckHits = create<{ hit: DeckHitCommand | null }>()(() => ({ hit
 const consumedHits = new Set<number>();
 
 let commandedTurn = 0;
+
+export const deckHitLive = (hit: DeckHitCommand) => hit.turn !== 0 && hit.turn !== commandedTurn && hit.turn === deckTurn.live.value && !consumedHits.has(hit.seq);
 
 export function queueDeckHit(hit: DeckHitCommand) {
   if (consumedHits.has(hit.seq) || hit.turn === 0 || hit.turn === commandedTurn || hit.turn !== deckTurn.live.value) return false;

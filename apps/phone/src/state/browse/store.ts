@@ -68,7 +68,7 @@ import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages
 import { hideArchiveCard } from "./archiveCard";
 import { tabSwitchCuts } from "./tabSwitch";
 import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, pageBarPreviewShown, pageBarShown, pageBodyShown, peekDeckPullEntrance, previewPageBar, PULL_STAGE, restorePageAfterRefusedCut, showPulledPage, whenDeckStandby } from "./deckPull";
-import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckRevisionOf, deckTurn, noteDeckRevision, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
+import { advancePhoneGeneration, currentPhoneGeneration, deckHitLive, deckReadyFor, deckRevisionOf, deckTurn, noteDeckRevision, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
 import { useScreenLayout } from "../app/screenLayout";
 import { dropEarlyStandby } from "../search/standbyReveal";
 import { beginInteraction, cutInteraction, INTERACTION_WINDOW_MS, markNextUiFrame, markTiming } from "../app/interactionPerf";
@@ -825,6 +825,10 @@ function enterDeckOnTurn(id: string, turn: number): boolean {
 export function deckHitAccepted(hit: DeckHitCommand) {
   if (hit.phone !== currentPhoneGeneration()) {
     labTrace(`PAGELAB ${hit.label} dropped, it was pressed in an earlier screen layout`);
+    return;
+  }
+  if (!deckHitLive(hit)) {
+    labTrace(`PAGELAB ${hit.label} dropped, its deck turn is over or already took a command`);
     return;
   }
   traceSlice(hit.label);

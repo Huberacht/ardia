@@ -1379,3 +1379,80 @@ test("while the page owns input the parked deck costs nothing on the UI thread: 
   watched.forEach((value, at) => value.removeListener(4100 + at));
   unmount(root);
 });
+
+const pressCardAtCut = (selectedOrOther: string, hit: { ids: readonly string[]; scroll: number; g: Parameters<typeof deckLeading>[0] }) => {
+  const index = hit.ids.indexOf(selectedOrOther);
+  const point = { x: deckLeading(hit.g, index - hit.scroll) + hit.g.cardWidth / 2, y: hit.g.cardCenterY };
+  const touch = { id: 0, ...point, absoluteX: point.x, absoluteY: point.y };
+  const manager = { fail: jest.fn(), activate: jest.fn(), end: jest.fn(), begin: jest.fn() };
+  const tap = getByGestureTestId("deckTap") as unknown as { handlers: { onTouchesDown: (event: unknown, manager: unknown) => void; onTouchesUp: (event: unknown, manager: unknown) => void } };
+  act(() => tap.handlers.onTouchesDown({ allTouches: [touch], changedTouches: [touch], numberOfTouches: 1 }, manager));
+  act(() => tap.handlers.onTouchesUp({ allTouches: [], changedTouches: [touch], numberOfTouches: 0 }, manager));
+};
+
+test("a Tabs tap before the parked controls report their bounds takes the JS path, and that deck's chrome takes touches and TalkBack as soon as it is shown", () => {
+  if (Platform.OS !== "android") return;
+  const root = unlaidStandbyDeck();
+  tapTabs();
+  expect(deckPull.cut.value).toBe(false);
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  const chrome = hostWith(root, "deckRedesignedChrome")!;
+  expect(animatedProp(chrome, "pointerEvents")).toBe("box-none");
+  expect(animatedProp(chrome, "importantForAccessibility")).toBe("auto");
+  unmount(root);
+});
+
+test("a card pressed after Plus already took the cut's turn does nothing: no plain open reaches JS to close the search Plus opened", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const selected = currentTabs().selectedId!;
+  const hit = deckPull.hit.value!;
+  tapTabs();
+  pressControl("plus");
+  expect(deckTurn.hitMark.value).toBe("deck-hit:plus");
+  act(() => jest.advanceTimersByTime(0));
+  expect(searchState().open).toBe(true);
+  expect(deckTurn.reconciled.value).not.toBe(deckTurn.live.value);
+  pressCardAtCut(selected, hit);
+  expect(deckTurn.hitMark.value).toBe("deck-hit:plus");
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(searchState().open).toBe(true);
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  act(() => dismissSearch());
+  unmount(root);
+});
+
+test("a command delivered after its deck turn ended never reopens the deck, even with the tab it was pressed for back in front", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const selected = currentTabs().selectedId!;
+  tapTabs();
+  const turn = deckTurn.live.value;
+  act(() => {
+    deckTurn.live.value = 0;
+    browse.deckHitAccepted({ seq: 9300, turn, phone: currentPhoneGeneration(), control: "plus", label: "deck-hit:plus", deck: selected });
+  });
+  expect(browse.useBrowse.getState().surface).toBe("browsing");
+  expect(searchState().open).toBe(false);
+  unmount(root);
+});
+
+test("a window resize that stays in the phone layout invalidates the prepared snapshot at once, so a Tabs tap before the controls report again takes the JS path, and the snapshot is valid again on the next frame", async () => {
+  if (Platform.OS !== "android") return;
+  const { resizeRoot } = require("../state/browse/deckHold") as typeof import("../state/browse/deckHold");
+  const root = await standbyDeck();
+  const selected = currentTabs().selectedId!;
+  expect(deckReadyFor(selected)).toBe(true);
+  act(() => resizeRoot(411, 873));
+  expect(deckReadyFor(selected)).toBe(false);
+  tapTabs();
+  expect(deckPull.cut.value).toBe(false);
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  act(() => browse.openTab(selected));
+  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
+  expect(deckReadyFor(selected)).toBe(true);
+  act(() => resizeRoot(393, 873));
+  unmount(root);
+});
