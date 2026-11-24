@@ -182,9 +182,9 @@ class PageView(context: Context, appContext: AppContext) : ExpoView(context, app
                 return { removeCallbacks(task) }
             }
         },
-    ) { reason, found ->
+    ) { reason, found, hiddenCover ->
         lab { "page view ${page?.id ?: pageId} hid its cover on ${if (reason == CoverHandOver.REASON_CAP) "the ${CoverHandOver.CAP_MILLIS} ms cap" else "its first drawn frame"}${if (found) "" else ", but no view had that nativeID"}" }
-        onPageEvent(mapOf("name" to "coverHidden", "reason" to reason, "found" to found))
+        onPageEvent(mapOf("name" to "coverHidden", "reason" to reason, "found" to found, "cover" to hiddenCover))
     }
 
     var coverNativeId: String?

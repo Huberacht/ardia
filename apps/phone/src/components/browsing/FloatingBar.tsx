@@ -41,7 +41,19 @@ type Props = {
   onPlus: () => void;
   onMore: () => void;
   fold?: BarFoldLook | null;
+  swipe?: SwipeAddresses | null;
 };
+
+export type SwipeAddresses = { offset: SharedValue<number>; from: SharedValue<string>; span: number; left: BrowserTab | null; right: BrowserTab | null };
+
+function useLandedAddress(swipe: SwipeAddresses | null, shownId: string, side: -1 | 0 | 1) {
+  return useAnimatedStyle(() => {
+    if (!swipe) return { opacity: side === 0 ? 1 : 0 };
+    const at = swipe.offset.value;
+    const landed = swipe.from.value === shownId && swipe.span > 0 && Math.abs(Math.abs(at) - swipe.span) < 1 ? (at > 0 ? -1 : 1) : 0;
+    return { opacity: landed === side ? 1 : 0 };
+  }, [swipe, shownId, side]);
+}
 
 export type DuoBar = { stripLeft: number; stripTop: number; squeeze: DuoSqueeze | null; progress: SharedValue<number>; collapsed: boolean };
 
@@ -74,7 +86,10 @@ export function barAddress(tab: BrowserTab): BarAddress {
   };
 }
 
-export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
+export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, swipe = null, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
+  const landedHere = useLandedAddress(swipe, tab.id, 0);
+  const landedLeft = useLandedAddress(swipe, tab.id, -1);
+  const landedRight = useLandedAddress(swipe, tab.id, 1);
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const address = barAddress(tab);
   const menuButton = useRef<ViewInstance>(null);
@@ -126,7 +141,19 @@ export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true
         <Animated.View testID="floatingBarFoldGlyphs" collapsable={false} style={[styles.addressRow, centreFold]}>
         <PullGlyphs style={styles.addressRow}>
         <Animated.View testID="floatingBarAddressFade" collapsable={false} style={[styles.addressFade, addressFade]} pointerEvents={squeezed ? "none" : "box-none"} importantForAccessibility={squeezed ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={squeezed}>
-        <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} />
+        <Animated.View collapsable={false} style={[styles.addressStack, landedHere]} pointerEvents="box-none">
+          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} />
+        </Animated.View>
+        {swipe?.left ? (
+          <Animated.View testID="floatingBarLandedLeft" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedLeft]}>
+            <AddressFace address={barAddress(swipe.left)} dark={dark} testIDPrefix="floatingBarLeft" style={styles.addressHit} onPress={onAddress} />
+          </Animated.View>
+        ) : null}
+        {swipe?.right ? (
+          <Animated.View testID="floatingBarLandedRight" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedRight]}>
+            <AddressFace address={barAddress(swipe.right)} dark={dark} testIDPrefix="floatingBarRight" style={styles.addressHit} onPress={onAddress} />
+          </Animated.View>
+        ) : null}
         </Animated.View>
         <PressInPlace ref={menuButton} label={squeezed ? `Page Menu, ${spokenAddress(address)}` : "Page Menu"} busy={squeezed ? squeezedBusy : undefined} onPress={() => openPageMenuFrom(() => menuButton.current, onMore)} onPressIn={haptics.barPress} style={styles.menu}>
           <Animated.View style={[styles.menuGlyph, dotsFade]}>
@@ -270,6 +297,7 @@ const styles = StyleSheet.create({
   strip: { position: "absolute", width: floatingBarLayout.control, gap: DUO_PLUS_ABOVE - floatingBarLayout.control },
   squeezes: { overflow: "hidden" },
   addressFade: { flex: 1, alignSelf: "stretch", flexDirection: "row" },
+  addressStack: { flex: 1, flexDirection: "row" },
   menuGlyph: { alignItems: "center", justifyContent: "center" },
   menuLock: { position: "absolute", top: 0, bottom: 0, left: 0, right: 0 },
   circle: { width: floatingBarLayout.control, height: floatingBarLayout.control, alignItems: "center", justifyContent: "center" },

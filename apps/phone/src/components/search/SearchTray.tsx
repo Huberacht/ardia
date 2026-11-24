@@ -957,13 +957,19 @@ function FieldInput({ first, closing, standby = false }: { first: boolean; closi
   const panelField = useDesign() === "redesigned";
   const incognitoField = useIncognito();
   const initialText = useSearchInitialText();
-  const [start] = useState(() => searchState().text);
+  const [start] = useState(() => (standby ? "" : searchState().text));
   const [hasText, setHasText] = useState(start.length > 0);
   const input = useRef<TrayInputHandle | null>(null);
   const submitted = useRef(false);
   const staged = useContext(StagedFieldContext);
 
   const [fieldGone, dropField] = useState(false);
+  const focusesInCommit = tabSwitchCuts() && !staged;
+  useLayoutEffect(() => {
+    if (standby || closing || !focusesInCommit) return;
+    trayInput = input.current;
+    input.current?.focus();
+  }, [closing, standby]);
   useEffect(() => {
     if (standby) return;
     trayInput = input.current;
@@ -977,6 +983,7 @@ function FieldInput({ first, closing, standby = false }: { first: boolean; closi
       input.current?.focus();
       return;
     }
+    if (focusesInCommit) return;
     const focus = setTimeout(() => input.current?.focus(), 0);
     return () => clearTimeout(focus);
   }, [closing, staged?.presented, standby]);

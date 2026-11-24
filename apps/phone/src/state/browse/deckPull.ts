@@ -123,6 +123,17 @@ export function hurryDeckPull(x: number, y: number, settled: PullSettled): boole
   return true;
 }
 
+export function queueDeckTapAfterCut(x: number, y: number): boolean {
+  "worklet";
+  const stage = deckPull.stage.value;
+  if (stage !== PULL_STAGE.landed && stage !== PULL_STAGE.handed) return false;
+  const hit = deckPull.hit.value;
+  const tapped = hit ? deckCardAt(hit, x, y) : null;
+  if (!tapped) return false;
+  deckPull.openAfter.value = tapped;
+  return true;
+}
+
 export function settleDeckPull(lands: boolean, velocityY: number, settled: PullSettled) {
   "worklet";
   const target = deckPull.target.value;

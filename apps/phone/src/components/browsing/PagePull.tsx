@@ -4,7 +4,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedValue } from "react-native-reanimated";
 import { DECK, DECK_REDESIGN } from "../../lib/deckGeometry";
 import { pullBarGhosts, pullBarGlyphs, pullBarShift, pullClearsBar, pullPagePose, pullRise } from "../../lib/deckPull";
-import { deckPull, hurryDeckPull, PULL_STAGE, pullFades, setDeckOwnsBar } from "../../state/browse/deckPull";
+import { deckPull, hurryDeckPull, PULL_STAGE, pullFades, queueDeckTapAfterCut, setDeckOwnsBar } from "../../state/browse/deckPull";
 import { deckPullSettled, noteDeckTapWhileLanding } from "../../state/browse/store";
 import { tabsInk, usesGlass, useTheme } from "../ui";
 
@@ -75,7 +75,9 @@ export function PullBlocker() {
         .maxDuration(LANDING_TAP_MS)
         .withTestId("landingTap")
         .onEnd((event, success) => {
-          if (success && hurryDeckPull(event.absoluteX, event.absoluteY, deckPullSettled)) runOnJS(noteDeckTapWhileLanding)(Date.now());
+          if (!success) return;
+          if (hurryDeckPull(event.absoluteX, event.absoluteY, deckPullSettled)) runOnJS(noteDeckTapWhileLanding)(Date.now());
+          else if (queueDeckTapAfterCut(event.absoluteX, event.absoluteY)) runOnJS(noteDeckTapWhileLanding)(Date.now());
         }),
     [],
   );

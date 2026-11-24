@@ -340,7 +340,7 @@ const earlyCoverHides = new Map<string, EarlyCoverHide>();
 function coverMatches(expected: string | null, cover: string | undefined, found: boolean) {
   if (expected === null) return true;
   if (COVER_ACK_NEEDS_ID) return cover === expected && found;
-  return cover === undefined || cover === expected;
+  return cover === expected;
 }
 
 export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string, found = true) {

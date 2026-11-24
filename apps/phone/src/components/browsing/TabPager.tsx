@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
-import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { cancelAnimation, runOnJS, runOnUI, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { incomingPose, landedNear, outgoingPose, PAGER, resolvedOffset, snapTarget } from "../../lib/pagerPhysics";
 import { screenCornerRadius } from "../../state/app/displayCorner";
 import { haptics } from "../../state/app/haptics";
@@ -9,10 +9,13 @@ import { usePageTone } from "../../state/browse/hooks";
 import { display } from "../../state/search/omnibox";
 import type { BrowserTab } from "../../state/tabs/tabModels";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
+import { currentTabs } from "../../state/tabs/store";
+import { findTab } from "../../state/tabs/tabsState";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 
 export type TabPager = {
   offset: SharedValue<number>;
+  from: SharedValue<string>;
   active: SharedValue<number>;
   gesture: ReturnType<typeof Gesture.Pan>;
   outgoing: ReturnType<typeof useAnimatedStyle>;
@@ -35,24 +38,45 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   const hasRight = useSharedValue(right !== null);
   const span = useSharedValue(width);
   const landing = useSharedValue(0);
+  const fromId = useSharedValue(selectedId ?? "");
+  const leftId = useSharedValue(left ?? "");
+  const rightId = useSharedValue(right ?? "");
+  const turn = useSharedValue(0);
 
   useEffect(() => {
     hasLeft.value = left !== null;
     hasRight.value = right !== null;
+    leftId.value = left ?? "";
+    rightId.value = right ?? "";
     span.value = width;
-  }, [hasLeft, hasRight, left, right, span, width]);
+  }, [hasLeft, hasRight, left, leftId, right, rightId, span, width]);
 
   useLayoutEffect(() => {
     landing.value = 0;
     offset.value = 0;
     active.value = 0;
+    fromId.value = selectedId ?? "";
+    turn.value += 1;
   }, [active, landing, offset, selectedId]);
 
-  const commit = (target: number) => {
-    const id = target > 0 ? left : right;
-    if (!id) return;
+  const restore = () => {
+    runOnUI(() => {
+      "worklet";
+      cancelAnimation(offset);
+      landing.value = 0;
+      offset.value = 0;
+      active.value = 0;
+    })();
+  };
+
+  const commit = (from: string, to: string, sent: number) => {
+    const tabs = currentTabs();
+    if (!to || sent !== turn.value || tabs.selectedId !== from || !findTab(tabs, to)) {
+      restore();
+      return;
+    }
     haptics.tabLanded();
-    onCommit(id);
+    onCommit(to);
   };
 
   const land = (target: number) => {
@@ -63,7 +87,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       active.value = 0;
       return;
     }
-    runOnJS(commit)(target);
+    runOnJS(commit)(fromId.value, target > 0 ? leftId.value : rightId.value, turn.value);
   };
 
   useAnimatedReaction(
@@ -86,7 +110,8 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
       return;
     }
     if (cuts) {
-      offset.value = withTiming(0, { duration: PAGER_REFUSED_MS, easing: tabsCurve.easeOut }, landed);
+      offset.value = 0;
+      land(0);
       return;
     }
     offset.value = reduceMotion ? withTiming(target * span.value, { duration: trayMotion.reduced, easing: tabsCurve.easeOut }, landed) : withSpring(target * span.value, { ...tabsMotion.pagerSettle, velocity }, landed);
@@ -144,7 +169,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   });
   const dim = useAnimatedStyle(() => ({ opacity: outgoingPose(offset.value, span.value, hasLeft.value, hasRight.value, reduceMotion).dim }));
 
-  return { offset, active, gesture, outgoing, dim, grab, track, settleTo, peek };
+  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek };
 }
 
 type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; width: number; statusHeight: number; statusOver?: boolean; hasLeft: boolean; hasRight: boolean; coverId?: string };
@@ -170,8 +195,8 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (
     <>
-      <Animated.View testID="pagerEdgeShadow" pointerEvents="none" style={[styles.edge, { top: cornerRadius * 0.6, bottom: cornerRadius * 0.6 }, edge, shadowStyle]} />
-      <Animated.View testID={arrived ? "pagerArrival" : undefined} nativeID={arrived ? coverId : undefined} collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents="none">
+      <Animated.View testID="pagerEdgeShadow" pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[styles.edge, { top: cornerRadius * 0.6, bottom: cornerRadius * 0.6 }, edge, shadowStyle]} />
+      <Animated.View testID={arrived ? "pagerArrival" : undefined} nativeID={arrived ? coverId : undefined} collapsable={false} style={[StyleSheet.absoluteFill, styles.card, { backgroundColor: theme.canvas }, style]} pointerEvents={arrived && cuts ? "auto" : "none"} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
         {statusOver ? null : <View style={{ height: statusHeight, backgroundColor: tone?.top ?? theme.canvas }} />}
         <View style={styles.body}>
           <TabFace tab={tab} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} />
@@ -192,7 +217,5 @@ export function PagerBackdrop() {
 }
 
 const cornerRadius = screenCornerRadius(tabsLayout.displayCornerRadius);
-
-const PAGER_REFUSED_MS = 50;
 
 const styles = StyleSheet.create({ card: { overflow: "hidden", borderRadius: cornerRadius, ...smoothCorners }, edge: { position: "absolute", width: tabsLayout.pagerEdgeShadow }, body: { flex: 1 }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 } });

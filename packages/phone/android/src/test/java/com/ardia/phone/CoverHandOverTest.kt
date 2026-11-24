@@ -29,7 +29,7 @@ class CoverHandOverTest {
         }
     }
 
-    private val handOver = CoverHandOver(surface) { reason, found -> hidden += reason to found }
+    private val handOver = CoverHandOver(surface) { reason, found, _ -> hidden += reason to found }
 
     @Test
     fun theCardIsHiddenInTheFrameThePageReportsDrawn() {

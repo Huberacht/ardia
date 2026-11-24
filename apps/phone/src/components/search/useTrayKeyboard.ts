@@ -3,19 +3,25 @@ import { Keyboard, Platform } from "react-native";
 import { KeyboardState, runOnJS, useAnimatedKeyboard, useAnimatedReaction, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { keyboardIsUp, TRAY_LIFT } from "../../lib/trayMotion";
 import { keyboardTargets } from "../../platform/keyboard";
+import { currentPreferences, setPreference } from "../../state/settings/store";
 
 let knownFull = 0;
+
+const KEYBOARD_REMEMBER_STEP = 4;
+
+const rememberedFull = () => knownFull || currentPreferences().keyboardHeight;
 
 export type TrayKeyboard = { height: SharedValue<number>; full: SharedValue<number>; target: number };
 
 export function useTrayKeyboard(): TrayKeyboard {
   const keyboard = useAnimatedKeyboard({ isStatusBarTranslucentAndroid: true, isNavigationBarTranslucentAndroid: true });
-  const full = useSharedValue(knownFull);
+  const full = useSharedValue(rememberedFull());
   const [target, setTarget] = useState(() => (Keyboard.isVisible() ? knownFull : 0));
   const remember = (height: number) => {
     if (height <= TRAY_LIFT.keyboardThreshold) return;
     knownFull = height;
     full.value = height;
+    if (Math.abs(currentPreferences().keyboardHeight - height) >= KEYBOARD_REMEMBER_STEP) setPreference("keyboardHeight", Math.round(height));
   };
   useEffect(() => {
     if (Platform.OS === "android" && keyboardTargets.isAvailable()) {

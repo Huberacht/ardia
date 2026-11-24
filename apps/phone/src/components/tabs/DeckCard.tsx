@@ -160,6 +160,7 @@ type Props = {
   onOpen: (index: number) => void;
   onClose: (index: number) => void;
   onCloseNow: (index: number) => void;
+  indexOf?: (id: string) => number;
   onMenu?: (index: number, card: RefObject<ViewInstance | null>) => void;
 };
 
@@ -249,7 +250,8 @@ export function useCardPlacement(id: string, g: DeckGeometry, motion: DeckMotion
 
 export type DeckCardProps = Props;
 
-export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion, onOpen, onClose, onCloseNow, onMenu }: Props) {
+export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion, onOpen, onClose, onCloseNow, onMenu, indexOf }: Props) {
+  const placeNow = () => (indexOf ? indexOf(tab.id) : index);
   const reach = useRef<ViewInstance>(null);
   countRender("DeckCard");
   const theme = useTheme();
@@ -345,9 +347,22 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
         tab={tab}
         title={title}
         host={host}
-        open={() => onOpen(index)}
-        close={() => onCloseNow(index)}
-        menu={onMenu ? () => onMenu(index, reach) : undefined}
+        open={() => {
+          const at = placeNow();
+          if (at >= 0) onOpen(at);
+        }}
+        close={() => {
+          const at = placeNow();
+          if (at >= 0) onCloseNow(at);
+        }}
+        menu={
+          onMenu
+            ? () => {
+                const at = placeNow();
+                if (at >= 0) onMenu(at, reach);
+              }
+            : undefined
+        }
         style={[styles.reach, { width: g.cardWidth, height: g.cardHeight }, overCardLayer, reachStyle]}
       />
       <Animated.View style={[styles.header, { width: g.cardWidth }, overCardLayer, headerStyle]} pointerEvents="none">

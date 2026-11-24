@@ -21,6 +21,9 @@ import { searchStageIsNative } from "../../platform/searchStage";
 import { usePreferences } from "../../state/settings/hooks";
 import { closeFrontTab, menuOpenedHaptic, recentTabs, switchToTab, tabTitle } from "../../state/browse/tabMenus";
 import { useBarOrder, useChromeTab, useIncognito, useSwipeIds, useTabWhile } from "../../state/tabs/hooks";
+import { currentTabs } from "../../state/tabs/store";
+import { findTab } from "../../state/tabs/tabsState";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import type { BrowserTab } from "../../state/tabs/tabModels";
 import { countUsage } from "../../state/telemetry/telemetry";
 import {
@@ -131,6 +134,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     onGrab: captureCurrentCover,
   });
   useDemoMotion(pager, width);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);
@@ -164,9 +168,13 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   }, []);
   const neighbourIds = useRef(around);
   neighbourIds.current = around;
+  const shownTab = useRef(tab.id);
+  shownTab.current = tab.id;
   const stepTab = useCallback((delta: -1 | 1) => {
     const id = delta < 0 ? neighbourIds.current.left : neighbourIds.current.right;
-    if (id) switchToNeighbour(id);
+    const tabs = currentTabs();
+    if (!id || tabs.selectedId !== shownTab.current || !findTab(tabs, id)) return;
+    switchToNeighbour(id);
   }, []);
   const incognito = useIncognito();
   const reduceMotion = useReduceMotion();
@@ -268,6 +276,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     anchors={!folds || !collapse.collapsed}
                     duo={duoBar}
                     fold={folds ? collapse.fold.barLook : null}
+                    swipe={swipeAddresses}
                     onTabs={showDeck}
                     onTabsMenu={openTabsMenu}
                     onStep={stepTab}

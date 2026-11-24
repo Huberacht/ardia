@@ -83,7 +83,7 @@ import { cardMenuItems as deckCardMenu, cardOpen, coverFrame, DECK_PHASE, DeckCa
 import { ContainedDeckCard, containedCards, containedDeckScroll } from "./ContainedDeck";
 import { iconRoles, LookBackdrop, MotionView, pageReportsDrawn, type MotionCurve } from "../ui";
 import { hideArchiveCard, offerArchiveCard, offerArchiveCardNow, showArchiveCardNow, useArchiveCardShowing } from "../../state/browse/archiveCard";
-import { takeDeckCommand, useDeckCommand } from "../../state/browse/deckCommands";
+import { sendDeckCommand, takeDeckCommand, useDeckCommand } from "../../state/browse/deckCommands";
 import { ArchiveIntervalCard } from "./ArchiveIntervalCard";
 import { DeckBottomBar } from "./DeckBottomBar";
 import { useBottomBarLayout } from "../ui/useBottomBarLayout";
@@ -103,7 +103,7 @@ import { screenCornerRadius } from "../../state/app/displayCorner";
 import { TabGrid, type GridFrame } from "./TabGrid";
 import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
-import { deckPullGrowing, endDeckPull, growDeckPull, peekDeckPullEntrance, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
+import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, peekDeckPullEntrance, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
 import { barSpanCenter } from "../../lib/bottomBarSpan";
@@ -403,7 +403,9 @@ export const TabDeck = memo(function TabDeck() {
       scaleProgress.value = 1;
       positionProgress.value = 1;
       cardsOpacity.value = 1;
+      const queued = deckPull.openAfter.value;
       endDeckPull();
+      if (queued) sendDeckCommand({ kind: "open", tabId: queued, tappedAt: Date.now() });
       return;
     }
     const entrance = peekDeckEntrance();
@@ -1065,6 +1067,7 @@ export const TabDeck = memo(function TabDeck() {
   const cardActions = useMemo(
     () => ({
       open: (at: number) => latestActions.current.open(at),
+      indexOf: (id: string) => latestActions.current.order.indexOf(id),
       close: (at: number) => latestActions.current.close(at, 0),
       closeNow: (at: number) => latestActions.current.closeNow(at),
       menu: (at: number, card: RefObject<ViewInstance | null>) => {
@@ -1189,6 +1192,7 @@ export const TabDeck = memo(function TabDeck() {
                     onOpen={cardActions.open}
                     onClose={cardActions.close}
                     onCloseNow={cardActions.closeNow}
+                    indexOf={cardActions.indexOf}
                     onMenu={nativeMenus() ? undefined : cardActions.menu}
                   />
                 );

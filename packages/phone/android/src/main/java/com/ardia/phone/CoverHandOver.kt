@@ -8,7 +8,7 @@ internal interface CoverSurface {
     fun schedule(millis: Long, run: () -> Unit): () -> Unit
 }
 
-internal class CoverHandOver(private val surface: CoverSurface, private val onHidden: (reason: String, found: Boolean) -> Unit) {
+internal class CoverHandOver(private val surface: CoverSurface, private val onHidden: (reason: String, found: Boolean, cover: String) -> Unit) {
     var nativeId: String? = null
         private set
     var handedOver = false
@@ -49,7 +49,7 @@ internal class CoverHandOver(private val surface: CoverSurface, private val onHi
         handedOver = true
         val view = surface.find(id)
         view?.visibility = View.INVISIBLE
-        onHidden(reason, view != null)
+        onHidden(reason, view != null, id)
     }
 
     companion object {
