@@ -9,9 +9,9 @@ import {
 } from "../../state/onboarding/onboarding";
 import { isWebDemo } from "../../state/onboarding/demoSteps";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, findNodeHandle, Image, StyleSheet, View } from "react-native";
+import { Animated, AppState, findNodeHandle, Image, StyleSheet, View } from "react-native";
 import { useTheme } from "../ui/theme";
-import { CircleButton, SecondaryButton } from "./Buttons";
+import { CircleButton } from "./Buttons";
 import { useOnboardingColors } from "./Parts";
 import { curve, springs } from "../ui/motion";
 import { space } from "../ui/tokens";
@@ -22,37 +22,48 @@ import { meadowIntroFor } from "./introPage";
 import { INTRO_TAB_KEYS, introHoldsKeyboard, nextIntroStop } from "./introKeys";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { noteIntroEnded, noteIntroShown, noteIntroSkipped, type IntroScene } from "../../state/telemetry/introCounts";
+import { consentToken } from "../../state/telemetry/client";
 
-const ICON = require("../../../assets/app-icon.png");
 const CUES = INTRO_CUES;
+const ICON = require("../../../assets/app-icon.png");
 
 const ms = (s: number) => Math.round(s * 1000);
 const OPENING_TONE: Record<"day" | "night", MeadowTone> = { day: { tone: "light", halo: 0 }, night: { tone: "dark", halo: 0 } };
 
 const PAGE_GONE_LIMIT_MS = 600;
+const MEADOW_READY_LIMIT_MS = 2500;
+const CREEPER_BOOM_LIMIT_MS = 9000;
 
-export function Intro({ onDone }: { onDone: () => void }) {
+const ESCAPE_KEYS = [{ key: "Escape" }];
+
+export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => void; onExitStart?: (burst: boolean) => void; overlay?: boolean }) {
   const colors = useOnboardingColors();
   const dark = useTheme().dark;
+  const creeper = overlay && dark;
   const icon = useRef(new Animated.Value(0)).current;
   const letters = useRef([...WORDMARK].map(() => new Animated.Value(0))).current;
   const tagline = useRef(new Animated.Value(0)).current;
   const exit = useRef(new Animated.Value(0)).current;
+  const appear = useRef(new Animated.Value(overlay ? 0 : 1)).current;
+  const boomed = useRef(false);
+  const consent = useRef(consentToken()).current;
+  const exitStarted = useRef(false);
+  const escapeKeys = useRef<View>(null);
   const done = useRef(false);
   const skipped = useRef(false);
   const [muted, setMuted] = useState(introMusicMuted);
   const [tone, setTone] = useState(() => OPENING_TONE[dark ? "night" : "day"]);
   const [live, setLive] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const startedAt = useRef(Date.now() + introStartDelayMs()).current;
+  const started = useRef(Date.now() + introStartDelayMs());
+  const [began, setBegan] = useState(!overlay);
   const scene = useRef<{ shown: IntroScene | null; firstFrameMs: number | null }>({ shown: null, firstFrameMs: null });
   const pageOpen = useRef<(() => void) | null>(null);
   const pageGone = useRef<Promise<void>>(Promise.resolve());
   const ink = isWebDemo ? null : meadowTextStyle(tone);
-  const pageIntro = useMemo(() => meadowIntroFor({ colors, muted, startedAt }), [colors, muted]);
+  const pageIntro = useMemo(() => meadowIntroFor({ colors, muted, startedAt: started.current }), [colors, muted]);
   const keys = useRef<View>(null);
   const muteStop = useRef<View>(null);
-  const skipStop = useRef<View>(null);
   const holdsKeys = introHoldsKeyboard({ live, leaving, tabReachesUnderOverlays: PLATFORM_FEATURES.tabReachesUnderOverlays });
 
   useEffect(() => {
@@ -60,15 +71,21 @@ export function Intro({ onDone }: { onDone: () => void }) {
   }, [holdsKeys]);
 
   const tab = (target: number | undefined, shift: boolean) => {
-    const stops = [muteStop, skipStop];
+    const stops = [muteStop];
     const focused = stops.findIndex((stop) => target !== undefined && stop.current !== null && findNodeHandle(stop.current) === target);
     stops[nextIntroStop(focused, shift, stops.length)]?.current?.focus();
+  };
+
+  const startExit = (burst = false) => {
+    if (exitStarted.current) return;
+    exitStarted.current = true;
+    onExitStart?.(burst);
   };
 
   const finish = () => {
     if (done.current) return;
     done.current = true;
-    noteIntroEnded({ skipped: skipped.current, ...scene.current });
+    noteIntroEnded({ skipped: skipped.current, ...scene.current }, consent);
     void Promise.race([pageGone.current, new Promise((settle) => setTimeout(settle, PAGE_GONE_LIMIT_MS))]).then(onDone);
   };
 
@@ -78,8 +95,16 @@ export function Intro({ onDone }: { onDone: () => void }) {
   };
 
   useEffect(() => {
+    if (began || !overlay) return;
+    const fallback = setTimeout(() => setBegan(true), MEADOW_READY_LIMIT_MS);
+    return () => clearTimeout(fallback);
+  }, [began]);
+
+  useEffect(() => {
+    if (!began) return;
+    if (overlay) started.current = Date.now();
     const ease = curve.enter;
-    const lag = Date.now() - startedAt;
+    const lag = Date.now() - started.current;
     const at = (s: number) => ({ delay: Math.max(0, ms(s) - lag), useNativeDriver: true });
     const sequence = Animated.parallel([
       Animated.spring(icon, { toValue: 1, ...springs.smooth, ...at(CUES.icon) }),
@@ -87,20 +112,44 @@ export function Intro({ onDone }: { onDone: () => void }) {
         Animated.timing(l, { toValue: 1, duration: ms(LETTER), easing: ease, ...at(CUES.letters + i * CUES.letterStep) }),
       ),
       Animated.timing(tagline, { toValue: 1, duration: ms(TAGLINE), easing: ease, ...at(CUES.tagline) }),
-      Animated.timing(exit, { toValue: 1, duration: ms(EXIT), easing: curve.move, ...at(CUES.exit) }),
+      ...(creeper ? [] : [Animated.timing(exit, { toValue: 1, duration: ms(EXIT), easing: curve.move, ...at(CUES.exit) })]),
     ]);
     noteIntroShown(introMusicMuted());
     playIntroMusic(CUES, introMusicMuted());
-    sequence.start(({ finished }) => finished && finish());
-    return () => sequence.stop();
+    sequence.start(({ finished }) => finished && !creeper && finish());
+    if (overlay) Animated.timing(appear, { toValue: 1, duration: ms(INTRO_LOOK.appearIn), easing: ease, useNativeDriver: true }).start();
+    const exitTimer = creeper ? setTimeout(boom, CREEPER_BOOM_LIMIT_MS) : setTimeout(() => startExit(), Math.max(0, ms(CUES.exit) - lag));
+    return () => {
+      sequence.stop();
+      clearTimeout(exitTimer);
+    };
+  }, [began]);
+
+  useEffect(() => {
+    if (!overlay) return;
+    escapeKeys.current?.focus();
+    let wasActive = AppState.currentState === "active";
+    const watch = AppState.addEventListener("change", (state) => {
+      if (state === "active") wasActive = true;
+      else if (wasActive) skip();
+    });
+    return () => watch.remove();
   }, []);
+
+  const boom = () => {
+    if (boomed.current || skipped.current || done.current) return;
+    boomed.current = true;
+    startExit(true);
+    Animated.timing(exit, { toValue: 1, duration: ms(INTRO_LOOK.boomFade), easing: curve.exit, useNativeDriver: true }).start(finish);
+  };
 
   const skip = () => {
     if (skipped.current || done.current) return;
     skipped.current = true;
     setLeaving(true);
-    noteIntroSkipped();
+    noteIntroSkipped(consent);
     stopIntroMusic(0.35);
+    startExit();
     Animated.timing(exit, { toValue: 1, duration: onboardingMotion.introSkip, easing: curve.enter, useNativeDriver: true }).start(finish);
   };
 
@@ -134,14 +183,14 @@ export function Intro({ onDone }: { onDone: () => void }) {
           backgroundColor: colors.background,
           alignItems: "center",
           justifyContent: "center",
-          opacity: exit.interpolate({ inputRange: [0, INTRO_LOOK.exitHold, 1], outputRange: [1, 1, 0] }),
+          opacity: overlay ? Animated.multiply(appear, exit.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })) : exit.interpolate({ inputRange: [0, INTRO_LOOK.exitHold, 1], outputRange: [1, 1, 0] }),
         },
       ]}
     >
       {isWebDemo ? (
         <PowerUp palette={DIA_SPECTRUM} speed={0.8} origin={0.5} style={[StyleSheet.absoluteFill, { opacity: dark ? 0.9 : 0.6 }]} />
       ) : (
-        <Meadow night={dark} onTone={setTone} intro={leaving && !live ? undefined : pageIntro} onIntro={onIntro} style={StyleSheet.absoluteFill} />
+        <Meadow night={dark} creeper={creeper} onBoom={creeper ? boom : undefined} onReady={overlay ? () => setBegan(true) : undefined} onTone={setTone} intro={leaving && !live ? undefined : pageIntro} onIntro={onIntro} style={StyleSheet.absoluteFill} />
       )}
       <Animated.View
         accessibilityElementsHidden={live}
@@ -152,37 +201,55 @@ export function Intro({ onDone }: { onDone: () => void }) {
           transform: [{ scale: exit.interpolate({ inputRange: [0, 1], outputRange: [1, INTRO_LOOK.exitScale] }) }],
         }}
       >
-        <Animated.View
-          style={{
-            opacity: icon.interpolate({ inputRange: [0, INTRO_LOOK.iconOpaque, 1], outputRange: [0, 1, 1], extrapolate: "clamp" }),
-            transform: [{ scale: icon.interpolate({ inputRange: [0, 1], outputRange: [INTRO_LOOK.iconFrom, 1] }) }],
-          }}
-        >
-          <Image source={ICON} style={{ width: INTRO_LOOK.icon, height: INTRO_LOOK.icon }} />
-        </Animated.View>
-        <View style={{ flexDirection: "row" }} accessibilityLabel={WORDMARK}>
-          {[...WORDMARK].map((ch, i) => (
-            <Animated.Text
-              key={i}
-              style={{
-                ...onboardingType.wordmark,
-                color: colors.title,
-                ...ink,
-                opacity: letters[i],
-                transform: [{ translateY: letters[i]!.interpolate({ inputRange: [0, 1], outputRange: [INTRO_LOOK.letterRise, 0] }) }],
-              }}
-            >
-              {ch}
-            </Animated.Text>
-          ))}
-        </View>
-        <Animated.View style={{ opacity: tagline, transform: [{ translateY: tagline.interpolate({ inputRange: [0, 1], outputRange: [INTRO_LOOK.taglineRise, 0] }) }] }}>
-          <Text color={colors.subtitle} style={[onboardingType.tagline, ink]}>
-            {INTRO_COPY.tagline}
-          </Text>
-        </Animated.View>
+        {overlay ? null : (
+          <Animated.View
+            style={{
+              opacity: icon.interpolate({ inputRange: [0, INTRO_LOOK.iconOpaque, 1], outputRange: [0, 1, 1], extrapolate: "clamp" }),
+              transform: [{ scale: icon.interpolate({ inputRange: [0, 1], outputRange: [INTRO_LOOK.iconFrom, 1] }) }],
+            }}
+          >
+            <Image source={ICON} style={{ width: INTRO_LOOK.icon, height: INTRO_LOOK.icon }} />
+          </Animated.View>
+        )}
+        {overlay ? null : (
+          <View style={{ flexDirection: "row" }} accessibilityLabel={WORDMARK}>
+            {[...WORDMARK].map((ch, i) => (
+              <Animated.Text
+                key={i}
+                style={{
+                  ...onboardingType.wordmark,
+                  color: colors.title,
+                  ...ink,
+                  opacity: letters[i],
+                  transform: [{ translateY: letters[i]!.interpolate({ inputRange: [0, 1], outputRange: [INTRO_LOOK.letterRise, 0] }) }],
+                }}
+              >
+                {ch}
+              </Animated.Text>
+            ))}
+          </View>
+        )}
+        {overlay ? null : (
+          <Animated.View style={{ opacity: tagline, transform: [{ translateY: tagline.interpolate({ inputRange: [0, 1], outputRange: [INTRO_LOOK.taglineRise, 0] }) }] }}>
+            <Text color={colors.subtitle} style={[onboardingType.tagline, ink]}>
+              {INTRO_COPY.tagline}
+            </Text>
+          </Animated.View>
+        )}
       </Animated.View>
-      {live ? null : (
+      {overlay ? (
+        <View
+          ref={escapeKeys}
+          style={StyleSheet.absoluteFill}
+          focusable
+          enableFocusRing={false}
+          keyDownEvents={ESCAPE_KEYS}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.key === "Escape") skip();
+          }}
+        />
+      ) : null}
+      {live || overlay ? null : (
         <View
           ref={keys}
           style={StyleSheet.absoluteFill}
@@ -205,9 +272,6 @@ export function Intro({ onDone }: { onDone: () => void }) {
               onPress={() => muteTo(!muted)}
               pressRef={muteStop}
             />
-          </View>
-          <View style={{ position: "absolute", right: INTRO_LOOK.inset, bottom: INTRO_LOOK.inset }} accessibilityHint={INTRO_COPY.skipHint}>
-            <SecondaryButton title={INTRO_COPY.skip} onPress={skip} pressRef={skipStop} />
           </View>
         </View>
       )}

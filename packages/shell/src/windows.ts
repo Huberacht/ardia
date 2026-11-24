@@ -30,7 +30,7 @@ export type OpenWindowOptions = {
   incognito?: boolean;
   title?: string;
   focus?: boolean;
-  kind?: "browser" | "small" | "settings" | "import" | "popup";
+  kind?: "browser" | "small" | "settings" | "import" | "popup" | "intro";
   profile?: string;
   size?: [number, number];
   behind?: string;

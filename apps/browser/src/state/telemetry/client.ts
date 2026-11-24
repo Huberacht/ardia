@@ -293,7 +293,7 @@ export function setSharing(on: boolean, source: SharingSource, placement?: AskPl
   }
   save({
     sharing: true,
-    installId: current.installId ?? uuidv4(),
+    installId: current.installId ?? upcomingInstallId(),
     crashCursor: now,
     lastVersion: appInfo().appVersion,
     lastBuild: appInfo().appBuild,
@@ -305,6 +305,10 @@ export function setSharing(on: boolean, source: SharingSource, placement?: AskPl
   capture("sharing_turned_on", { source, ...placement }, consentNow());
   return Promise.resolve(true);
 }
+
+let upcoming: string | null = null;
+
+export const upcomingInstallId = () => saved().installId ?? (upcoming ??= uuidv4());
 
 export function replaceInstallId(): string {
   const current = saved();

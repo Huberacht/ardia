@@ -445,6 +445,7 @@ const translate: Modules["ArdiaTranslate"] = {
 };
 
 const magnifyArea: Modules["ArdiaMagnifyArea"] = { devMagnify: () => unfaked("ArdiaMagnifyArea", "devMagnify") };
+const wheelArea: Modules["ArdiaWheelArea"] = { devWheel: () => unfaked("ArdiaWheelArea", "devWheel"), glideScroll: async () => {} };
 const fileDrop: Modules["ArdiaFileDrop"] = {
   devDrag: () => unfaked("ArdiaFileDrop", "devDrag"),
   devLastFileDrag: () => Promise.resolve([]),
@@ -856,6 +857,7 @@ export const shellNativeModules: Modules = {
   ArdiaInlineCompletion: { complete: () => Promise.resolve(0), copyFieldAs: () => Promise.resolve() },
   ArdiaTranslate: translate,
   ArdiaMagnifyArea: magnifyArea,
+  ArdiaWheelArea: wheelArea,
   ArdiaPeekStage: { devState: () => Promise.resolve([]), devPageFrames: () => Promise.resolve([]) },
   ArdiaFileDrop: fileDrop,
   ArdiaCli: cli,
