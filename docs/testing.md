@@ -104,9 +104,11 @@ holds the rest.
   superseded pull request runs: each push runs on its own); manual and release runs each have their own
   group and are never cancelled. `windows.yml` reads the `full-ci` label in its `identity` job: from the event on a
   first attempt, with no API call, and live on a re-run, so adding the label and re-running all jobs gives the full run.
-- Caches that would fill the 10 GB limit are saved on pushes to `main` only and pruned to the newest per branch by
-  `caches.yml`: Gradle (`gradle-phone-`, which `--main-only` also deletes from every other branch), Xcode compilation
-  caches (`xcode-cas-`), Pods (`pods-`, shared by `mac.yml` and the Release workflow, and `phone-pods-`).
+- Jobs on Blacksmith keep their `actions/cache` entries in Blacksmith's cache (25 GB per repo, least recently used
+  entries over 7 days old evicted; `blacksmith cache list` or the Blacksmith dashboard shows them). GitHub's cache
+  REST API doesn't see those, so `caches.yml` prunes only what GitHub's runners save (the Windows jobs). Caches that
+  would fill a limit are saved on pushes to `main` only, and `caches.yml`'s sweep covers Gradle (`gradle-phone-`,
+  which `--main-only` also deletes from every other branch), Xcode compilation caches (`xcode-cas-`), Pods (`pods-`, shared by `mac.yml` and the Release workflow, and `phone-pods-`).
 
 ## ArdiaCore acceptance
 

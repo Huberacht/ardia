@@ -21,7 +21,7 @@ function runnerLabels(text) {
     if (value === "${{ matrix.runner }}") continue;
     labels.push(value.trim());
   }
-  for (const [, value] of text.matchAll(/\brunner: ([a-z0-9.-]+)\s*\}/g)) labels.push(value);
+  for (const [, value] of text.matchAll(/\brunner: ([a-z0-9.-]+)/g)) labels.push(value);
   return labels;
 }
 
@@ -39,7 +39,7 @@ test("every job runs on Blacksmith, except Windows, which stays on GitHub", () =
 test("a matrix runner names its label in the matrix", () => {
   for (const { name, text } of workflows()) {
     if (!text.includes("runs-on: ${{ matrix.runner }}")) continue;
-    assert.ok(/\brunner: [a-z0-9.-]+\s*\}/.test(text), `${name} picks its runner from a matrix without listing one`);
+    assert.ok(/\brunner: [a-z0-9.-]+/.test(text), `${name} picks its runner from a matrix without listing one`);
   }
 });
 
