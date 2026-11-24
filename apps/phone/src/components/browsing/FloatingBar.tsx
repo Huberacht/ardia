@@ -8,7 +8,7 @@ import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageBarPreviewShown } from "../../state/browse/deckPull";
 import { canCutDeckFromTap, cutDeckFromTabsTap, useBrowse } from "../../state/browse/store";
 import { focusForScreenReader } from "../ui/coverFocus";
-import { acceptsPlusPress, dropEarlyStandby, dropEarlyStandbyUnlessOpened, revealStandbyOnPress } from "../../state/search/standbyReveal";
+import { IDLE_PLUS_TOUCH, isTouchRelease, NO_EARLY_REVEAL, plusTouchDown, plusTouchUp, pressWithReveal, revealStandbyOnPress, useStandbyLayout, type EarlyReveal, type PlusTouch } from "../../state/search/standbyReveal";
 import { currentTabs } from "../../state/tabs/store";
 import { useBarReturn } from "./barReturn";
 import { AddressFace, AddressLeaf, DestinationFallbackLeaf } from "./AddressFace";
@@ -243,7 +243,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
   );
   const trailing = (
     <Animated.View testID="floatingBarTrailing" collapsable={false} style={[styles.circleHit, back.trailing]} pointerEvents={back.sidesShown ? "box-none" : "none"} importantForAccessibility={back.sidesShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.sidesShown}>
-      {showsPlus ? <FloatingPlusButton tab={styledTab} dark={dark} testID="floatingBarPlus" glass={back.sidesGlass} glyphs={back.trailingGlyphs} fold={fold} ghost={!handed} onPlus={onPlus} /> : null}
+      {showsPlus ? <FloatingPlusButton tab={styledTab} dark={dark} testID="floatingBarPlus" glass={back.sidesGlass} glyphs={back.trailingGlyphs} fold={fold} ghost={!handed} swipe={swipe} onPlus={onPlus} /> : null}
     </Animated.View>
   );
   return (
@@ -404,41 +404,51 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
   );
 }
 
-export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = null, ghost = false, onPlus }: ButtonProps & { onPlus: () => void }) {
+export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = null, ghost = false, swipe = null, onPlus }: ButtonProps & { swipe?: SwipeAddresses | null; onPlus: () => void }) {
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const foldGlyphs = useFoldGlyphs(fold);
   const plusNow = useRef(onPlus);
   plusNow.current = onPlus;
-  const callPlus = useCallback(() => {
-    plusNow.current();
-    dropEarlyStandby();
+  const pressAccepted = useCallback((reveal: EarlyReveal) => pressWithReveal(reveal, () => plusNow.current()), []);
+  const pressFromButton = useCallback((event?: unknown) => {
+    if (tabSwitchCuts() && isTouchRelease(event)) return;
+    pressWithReveal(NO_EARLY_REVEAL, () => plusNow.current());
   }, []);
   const incognito = tab.isPrivate;
-  const touchedAt = useSharedValue(-1);
+  const tabId = tab.id;
+  const layout = useStandbyLayout();
+  const touch = useSharedValue<PlusTouch>(IDLE_PLUS_TOUCH);
+  const swipeOffset = swipe?.offset ?? null;
   const plusTouch = useMemo(
     () =>
       Gesture.Manual()
         .withTestId(`${testID}Touch`)
         .enabled(tabSwitchCuts())
         .onTouchesDown((event) => {
-          touchedAt.value = event.numberOfTouches === 1 ? Date.now() : -1;
+          touch.value = plusTouchDown(touch.value, event.numberOfTouches);
         })
         .onTouchesUp((event, manager) => {
-          const touch = event.changedTouches[0];
-          const accepted = touch !== undefined && event.numberOfTouches === 0 && acceptsPlusPress(touchedAt.value, Date.now(), touch.x, touch.y, floatingBarLayout.control);
-          touchedAt.value = -1;
+          const lifted = event.changedTouches[0];
+          const step = plusTouchUp(touch.value, event.numberOfTouches, lifted?.x ?? -Infinity, lifted?.y ?? -Infinity, floatingBarLayout.control);
+          touch.value = step.touch;
+          if (event.numberOfTouches > 0) return;
           manager.fail();
-          if (accepted && revealStandbyOnPress(incognito)) runOnJS(dropEarlyStandbyUnlessOpened)();
+          if (!step.accepted) return;
+          const settled = swipeOffset === null || Math.abs(swipeOffset.value) < 0.5;
+          runOnJS(pressAccepted)(settled ? revealStandbyOnPress(tabId, layout, incognito) : NO_EARLY_REVEAL);
         })
         .onTouchesCancelled((_event, manager) => {
-          touchedAt.value = -1;
+          touch.value = IDLE_PLUS_TOUCH;
           manager.fail();
+        })
+        .onFinalize(() => {
+          touch.value = IDLE_PLUS_TOUCH;
         }),
-    [incognito, testID, touchedAt],
+    [incognito, tabId, layout, testID, touch, swipeOffset, pressAccepted],
   );
   return (
     <GestureDetector gesture={plusTouch}>
-    <PressInPlace label={newTabLabel(tab.isPrivate)} onPress={callPlus} onPressIn={haptics.barPress} dims="glyph" style={styles.circleHit}>
+    <PressInPlace label={newTabLabel(tab.isPrivate)} onPress={pressFromButton} onPressIn={haptics.barPress} dims="glyph" style={styles.circleHit}>
       <ChromeSurface testID={testID} shape="circle" cornerRadius={capsule(floatingBarLayout.control)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={glass?.shown} shownMs={glass?.shownMs} style={styles.circle}>
         <PullGlyphs>
           <Animated.View collapsable={false} style={foldGlyphs}>

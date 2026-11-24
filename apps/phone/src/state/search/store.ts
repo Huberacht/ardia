@@ -213,9 +213,9 @@ export function applySearchEngine() {
 
 export type SearchPresenting = { text: string; origin: SearchOrigin; incognito: boolean; editsPage: boolean; prepared: string };
 
-let presentsWith: ((presenting: SearchPresenting) => void) | null = null;
+let presentsWith: ((presenting: SearchPresenting) => string | null) | null = null;
 
-export function whenSearchPresents(hook: ((presenting: SearchPresenting) => void) | null) {
+export function whenSearchPresents(hook: ((presenting: SearchPresenting) => string | null) | null) {
   presentsWith = hook;
 }
 
@@ -227,8 +227,9 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
   context = page ?? { currentUrl: null, currentTabId: null };
   paste = null;
   const editsPage = page?.currentUrl != null;
-  const shownText = editsPage && clearsPagePrefill ? "" : text;
-  if (!useSearch.getState().open) presentsWith?.({ text: shownText, origin, incognito: useTabs.getState().incognito, editsPage, prepared: preparedIdleKey() });
+  const asked = editsPage && clearsPagePrefill ? "" : text;
+  const adopted = useSearch.getState().open ? null : (presentsWith?.({ text: asked, origin, incognito: useTabs.getState().incognito, editsPage, prepared: preparedIdleKey() }) ?? null);
+  const shownText = asked === "" && adopted ? adopted : asked;
   if (!shownText.trim() && !idleMade.has(idleScope()) && !useTabs.getState().incognito) countUsage("search_opens_cold");
   useSearch.setState((state) => ({
     open: true,
@@ -246,6 +247,7 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
     editsPage,
   }));
   markSearchPhase("open");
+  if (shownText !== asked) typeSearch(shownText);
   offerPaste(useSearch.getState().session);
   refreshAfterOpening(useSearch.getState().session);
 }

@@ -8,7 +8,7 @@ import { countRender } from "../../state/app/interactionPerf";
 import { AppState, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type ViewInstance } from "react-native";
 import { SheetScrollContext, SheetScrollView, sheetPullTranslation, type SheetScroll } from "../ui/Sheet";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { cancelAnimation, FadeIn, FadeOut, runOnJS, runOnUI, useAnimatedProps, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, FadeIn, FadeOut, runOnJS, runOnUI, useAnimatedProps, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import type { GestureType } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { activateRow, cancelSearch, submitSearch, toggleTrayIncognito } from "../../state/browse/store";
@@ -26,12 +26,14 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { dropEarlyStandby, STANDBY_ARMED, standbyArmed, standbyShownEarly } from "../../state/search/standbyReveal";
+import { adoptStandby, closeEarlyReveal, dropEarlyStandby, nextStandbyGeneration, NOT_PREPARED, prepareStandby, pressedReveal, shownForGeneration, standbyAdopted, standbyShownEarly, unprepareStandby, useStandbyLayout } from "../../state/search/standbyReveal";
+import { completingFieldIsNative } from "../../platform/completingField";
+import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { preparedIdleKey, preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
 import { useBrowse } from "../../state/browse/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
-import { useIncognito, useSelectedTab } from "../../state/tabs/hooks";
+import { useIncognito, useSelectedTab, useSelectedTabId } from "../../state/tabs/hooks";
 import { useTabs } from "../../state/tabs/store";
 import { countUsage, reportLaunchTray } from "../../state/telemetry/telemetry";
 import { browseLayout, closingGate, departBezier, shadowCss, DeckLookBackdrop, Favicon, FieldAccessory, iconRoles, smoothCorners, FloatingMenu, font, ink, LookFrost, MotionView, moveTo, radius, screenReaderActions, type MotionCurve, type MotionTarget, trayLandingDelayMs, space, stageMotion, barReturnMotion, slotAround, Symbol, SURFACES_FROST, tabsCurve, stroke, tabsInk, tabsLayout, Tappable, ToggleIconButton, trayMotion, trayShadow, useTheme, FadeView, fadeIsNative, floatingPanelLayout, useDesign, useReduceMotion } from "../ui";
@@ -150,13 +152,17 @@ function SheetTray() {
 
 const STANDBY_SESSION = -1;
 
-let revealStandby: ((presenting: SearchPresenting) => void) | null = null;
+let revealStandby: ((presenting: SearchPresenting) => string | null) | null = null;
 let standbyField: TrayInputHandle | null = null;
 let standbyRowsKey: string | null = null;
+let standbyTyped = "";
+let standbyKeptText: string | null = null;
 
-const revealStandbyFor = (presenting: SearchPresenting) => {
-  if (presenting.text === "" && revealStandby) revealStandby(presenting);
-  else dropEarlyStandby();
+const revealStandbyFor = (presenting: SearchPresenting): string | null => {
+  if (presenting.text === "" && revealStandby) return revealStandby(presenting);
+  const early = pressedReveal();
+  if (early.press !== 0) dropEarlyStandby(early.press);
+  return null;
 };
 
 const StandbyContext = createContext(false);
@@ -188,7 +194,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const cutsIn = useRef(tabSwitchCuts() && !closing).current;
   const bornStandby = useRef(standby).current;
   const keepsField = useRef<boolean | null>(null);
-  if (bornStandby && !standby && keepsField.current === null) keepsField.current = searchState().text === "";
+  if (bornStandby && !standby && keepsField.current === null) keepsField.current = searchState().text === (standbyKeptText ?? "");
   const fieldKey = bornStandby && keepsField.current !== false ? "kept" : String(session);
   const landing = useSharedValue(arrivesAtRest || cutsIn ? 1 : 0);
   const [departed, setDeparted] = useState(false);
@@ -208,38 +214,73 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const dim = useSharedValue(cutsIn ? 1 : 0);
   const pinned = useSharedValue(cutsIn);
   const floor = useSharedValue(0);
+  const tabId = useSelectedTabId();
+  const standbyLayout = useStandbyLayout();
+  const armed = useSharedValue(0);
+  const armedNow = useRef(0);
   const revealed = useSharedValue(0);
-  const revealStyle = useAnimatedStyle(() => ({ opacity: standby ? Math.max(revealed.value, standbyShownEarly.value) : 1 }));
+  const revealStyle = useAnimatedStyle(() => {
+    const generation = armed.value;
+    const early = standbyShownEarly.value;
+    const adopted = revealed.value;
+    return { opacity: !standby || shownForGeneration(generation, early, adopted) ? 1 : 0 };
+  });
   const revealProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => {
+    const generation = armed.value;
+    const early = standbyShownEarly.value;
+    const adopted = revealed.value;
     if (!standby) return { pointerEvents: closing ? "none" : "box-none", importantForAccessibility: closing ? "no-hide-descendants" : "auto" };
-    const shown = Math.max(revealed.value, standbyShownEarly.value) > 0;
+    const shown = shownForGeneration(generation, early, adopted);
     return { pointerEvents: shown ? "box-none" : "none", importantForAccessibility: shown ? "auto" : "no-hide-descendants" };
+  });
+  const fieldReveal = useDerivedValue(() => {
+    const generation = armed.value;
+    const early = standbyShownEarly.value;
+    const adopted = revealed.value;
+    return shownForGeneration(generation, early, adopted) ? generation : 0;
+  });
+  const shownMark = useAnimatedProps(() => {
+    const generation = armed.value;
+    const early = standbyShownEarly.value;
+    const adopted = revealed.value;
+    return { mark: shownForGeneration(generation, early, adopted) ? `search-ui:${generation}` : "" };
   });
   useLayoutEffect(() => {
     if (!standby) {
-      if (bornStandby) revealed.value = 1;
+      if (bornStandby && revealed.value !== armedNow.current) revealed.value = armedNow.current;
       return;
     }
     if (cutsIn) floor.value = firstLift(keyboard.full.value, window.height);
     traceSlice("standby ready");
-    dropEarlyStandby();
-    standbyArmed.value = origin === "page" ? (incognito ? STANDBY_ARMED.incognito : STANDBY_ARMED.regular) : STANDBY_ARMED.none;
+    const generation = nextStandbyGeneration();
+    armedNow.current = generation;
+    armed.value = generation;
+    revealed.value = 0;
+    standbyTyped = "";
+    standbyKeptText = null;
+    const armedSession = searchState().session;
+    prepareStandby(origin === "page" && tabId !== null ? { generation, tabId, layout: standbyLayout, incognito } : NOT_PREPARED);
     revealStandby = (presenting) => {
-      if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey) {
-        dropEarlyStandby();
-        return;
+      const early = pressedReveal();
+      if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey || searchState().session !== armedSession) {
+        if (early.press !== 0) dropEarlyStandby(early.press);
+        return null;
       }
       traceSlice("search reveal");
-      revealed.value = 1;
-      dropEarlyStandby();
-      standbyField?.focus();
-      markShownFrame("search");
+      adoptStandby(generation);
+      revealed.value = generation;
+      if (!completingFieldIsNative()) {
+        standbyField?.focus();
+        markShownFrame("search");
+      }
+      standbyKeptText = standbyTyped;
+      return standbyTyped;
     };
     return () => {
       revealStandby = null;
-      standbyArmed.value = STANDBY_ARMED.none;
+      unprepareStandby(generation);
     };
-  }, [standby, origin, incognito]);
+  }, [standby, origin, incognito, tabId, standbyLayout]);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -269,8 +310,16 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const closedOnPressIn = useRef(false);
   const closeFromTouch = () => {
     const now = searchState();
-    const mine = session === STANDBY_SESSION ? revealed.value === 1 : now.session === session;
-    if (now.open && mine) cancelSearch();
+    if (session === STANDBY_SESSION) {
+      const generation = armedNow.current;
+      if (!standbyAdopted(generation)) {
+        closeEarlyReveal(generation);
+        return;
+      }
+      if (now.open) cancelSearch();
+      return;
+    }
+    if (now.open && now.session === session) cancelSearch();
   };
   const closeOnPressIn = () => {
     closedOnPressIn.current = true;
@@ -504,6 +553,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     <DepartContext.Provider value={beginDeparture}>
     <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, bornStandby ? revealStyle : null]} animatedProps={bornStandby ? revealProps : undefined} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
       {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
+      {bornStandby ? <UiFrameMark testID="traySearchUiMark" style={uiFrameMarkStyle} animatedProps={shownMark} /> : null}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable
           accessibilityLabel="Close Search"
@@ -530,7 +580,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
             <SearchPanelContext.Provider value={arcPanel}>
               <GestureDetector gesture={dismissDrag}>
                 <View collapsable={false}>
-                  <TrayField key={fieldKey} closing={closing} standby={standby} />
+                  <TrayField key={fieldKey} closing={closing} standby={standby} reveal={fieldKey === "kept" ? fieldReveal : undefined} />
                 </View>
               </GestureDetector>
               {standby ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
@@ -563,7 +613,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
           <TrayContentContext.Provider value={measuredRows}>
             <GestureDetector gesture={dismissDrag}>
               <View collapsable={false}>
-                <TrayField key={fieldKey} closing={closing} standby={standby} />
+                <TrayField key={fieldKey} closing={closing} standby={standby} reveal={fieldKey === "kept" ? fieldReveal : undefined} />
               </View>
             </GestureDetector>
             {standby ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
@@ -1016,13 +1066,13 @@ const focusTray = () => trayInput?.focus();
 
 const mayFocusTray = () => !useOnboarding.getState().showing && !useVoice.getState().presented;
 
-function TrayField({ closing, standby = false }: { closing: boolean; standby?: boolean }) {
+function TrayField({ closing, standby = false, reveal }: { closing: boolean; standby?: boolean; reveal?: SharedValue<number> }) {
   const live = useSearchFieldVersion();
   const version = standby ? 0 : live;
-  return <FieldInput key={version} first={version === 0} closing={closing} standby={standby} />;
+  return <FieldInput key={version} first={version === 0} closing={closing} standby={standby} reveal={version === 0 ? reveal : undefined} />;
 }
 
-function FieldInput({ first, closing, standby = false }: { first: boolean; closing: boolean; standby?: boolean }) {
+function FieldInput({ first, closing, standby = false, reveal }: { first: boolean; closing: boolean; standby?: boolean; reveal?: SharedValue<number> }) {
   const leaving = useLeavingActions();
   const theme = useTrayTheme();
   const panelField = useDesign() === "redesigned";
@@ -1039,6 +1089,7 @@ function FieldInput({ first, closing, standby = false }: { first: boolean; closi
   useLayoutEffect(() => {
     if (standby || closing || !focusesInCommit) return;
     trayInput = input.current;
+    if (reveal && completingFieldIsNative()) return;
     input.current?.focus();
     markShownFrame("search");
   }, [closing, standby]);
@@ -1095,9 +1146,14 @@ function FieldInput({ first, closing, standby = false }: { first: boolean; closi
           keyboardAppearance={incognitoField ? "dark" : "default"}
           holdsScroll={staged?.holdsScroll}
           nativeID={staged ? SEARCH_FIELD_ID : undefined}
+          revealFocus={reveal}
           onTyped={(text) => {
             lastText.current = text;
             if (text.length > 0 !== hasText) setHasText(text.length > 0);
+            if (standby && !searchState().open) {
+              standbyTyped = text;
+              return;
+            }
             typeSearch(text);
           }}
           onSubmit={(text) => {
