@@ -171,7 +171,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
     <Animated.View
       testID="pageCover"
       needsOffscreenAlphaCompositing
-      pointerEvents={waitsForPaint ? "auto" : "none"}
+      pointerEvents={waitsForPaint && !cutsOnDraw ? "auto" : "none"}
       collapsable={false}
       importantForAccessibility={"no-hide-descendants"}
       accessibilityElementsHidden={!spoken}

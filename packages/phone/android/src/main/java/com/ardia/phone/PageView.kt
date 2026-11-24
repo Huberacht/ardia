@@ -166,25 +166,20 @@ class PageView(context: Context, appContext: AppContext) : ExpoView(context, app
                 (PageDrawnWatch.webViewIn(host) ?: this@PageView).invalidate()
             }
         },
-    ) {
-        cover.pageDrawn()
-        lab { "page view ${page?.id ?: pageId} drawn ${SystemClock.uptimeMillis() - drawnAskedAt} ms after it became visible" }
-        onPageEvent(mapOf("name" to "drawn"))
+        document = { document.generation },
+    ) { drawnDocument ->
+        cover.pageDrawn(drawnDocument)
+        lab { "page view ${page?.id ?: pageId} drawn ${SystemClock.uptimeMillis() - drawnAskedAt} ms after it became visible, document $drawnDocument" }
+        onPageEvent(mapOf("name" to "drawn", "document" to drawnDocument.toDouble()))
     }
 
     private val cover = CoverHandOver(
         object : CoverSurface {
             override fun find(nativeId: String): View? = com.facebook.react.uimanager.util.ReactFindViewUtil.findView(rootView, nativeId)
-
-            override fun schedule(millis: Long, run: () -> Unit): () -> Unit {
-                val task = Runnable(run)
-                postDelayed(task, millis)
-                return { removeCallbacks(task) }
-            }
         },
-    ) { reason, found, hiddenCover ->
-        lab { "page view ${page?.id ?: pageId} hid its cover on ${if (reason == CoverHandOver.REASON_CAP) "the ${CoverHandOver.CAP_MILLIS} ms cap" else "its first drawn frame"}${if (found) "" else ", but no view had that nativeID"}" }
-        onPageEvent(mapOf("name" to "coverHidden", "reason" to reason, "found" to found, "cover" to hiddenCover))
+    ) { found, hiddenCover, hiddenDocument ->
+        lab { "page view ${page?.id ?: pageId} hid its cover on document $hiddenDocument's first drawn frame${if (found) "" else ", but no view had that nativeID"}" }
+        onPageEvent(mapOf("name" to "coverHidden", "reason" to "drawn", "found" to found, "cover" to hiddenCover, "document" to hiddenDocument.toDouble()))
     }
 
     var coverNativeId: String?
@@ -223,7 +218,6 @@ class PageView(context: Context, appContext: AppContext) : ExpoView(context, app
 
     init {
         setWillNotDraw(false)
-        drawn.onVisible = { cover.pageVisible() }
         addView(host, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         gestures.install()
     }
@@ -281,7 +275,6 @@ class PageView(context: Context, appContext: AppContext) : ExpoView(context, app
         insetSettlement.touching = false
         appliedObscuredInsets = obscuredInsets
         dismissSummary(animated = false)
-        cover.cancel()
         drawn.reset()
         page?.id?.let { PhonePages.viewLeaves(it, this) }
         scope?.cancel()
@@ -316,7 +309,6 @@ class PageView(context: Context, appContext: AppContext) : ExpoView(context, app
         viewTreeObserver.removeOnScrollChangedListener(pageScrolled)
         cancelInsetSettlement()
         insetSettlement.touching = false
-        cover.cancel()
         drawn.reset()
         super.onDetachedFromWindow()
     }

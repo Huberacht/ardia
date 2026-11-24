@@ -38,7 +38,7 @@ export function PageSurface({ tab, toneBottom, obscured, summaryBottomInset, top
   const onPageTone = useCallback((next: PageTone) => pageToneChanged(id, next), [id]);
   const onPageDrawn = useCallback((document?: number) => pageDrawn(id, document), [id]);
   const onPageError = useCallback((error: { code: string }) => pageOpenFailed(id, error.code), [id]);
-  const onPageCoverHidden = useCallback((reason: "drawn" | "cap", found: boolean, cover?: string) => pageCoverHidden(id, reason, cover, found), [id]);
+  const onPageCoverHidden = useCallback((reason: "drawn" | "cap", found: boolean, cover?: string, document?: number) => pageCoverHidden(id, reason, cover, found, document), [id]);
   const [setup] = useState(() => ({ url: tab.url, title: tab.title, saved: tabSavedState(id) ?? undefined }));
   useLayoutEffect(() => notePageHosted(id), [id]);
   useEffect(() => {

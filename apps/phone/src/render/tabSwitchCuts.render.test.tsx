@@ -7,7 +7,7 @@ import { Surfaces } from "../App";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
-import { Dimensions, Image, StyleSheet, TextInput } from "react-native";
+import { Dimensions, Image, Platform, StyleSheet, TextInput } from "react-native";
 import { deckPull, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
@@ -78,7 +78,7 @@ const outgoingPose = (root: ReactTestRenderer) => {
   return Object.assign({}, ...((getAnimatedStyle(outgoing!).transform ?? []) as object[])) as { translateX?: number };
 };
 
-test("an accepted bar swipe commits the neighbour within a frame of release, with no spring to wait out, and its arrival card sits full screen from that frame, hidden from TalkBack and holding touches until the page draws", () => {
+test("an accepted bar swipe commits the neighbour within a frame of release, with no spring to wait out, and its arrival card sits full screen from that frame, hidden from TalkBack, and letting touches through to the page under it", () => {
   withTabs(3);
   selectTabById(currentTabs().open[1]!.id);
   browsingNow();
@@ -90,7 +90,7 @@ test("an accepted bar swipe commits the neighbour within a frame of release, wit
   act(() => jest.advanceTimersByTime(16));
   const arrival = arrivalPose(root);
   expect(arrival.at).toMatchObject({ translateX: 0 });
-  expect(arrival.node.props.pointerEvents).toBe("auto");
+  expect(arrival.node.props.pointerEvents).toBe("none");
   expect(arrival.node.props.importantForAccessibility).toBe("no-hide-descendants");
   unmount(root);
 });
@@ -149,9 +149,9 @@ test("an arrival's cover leaves only on its own acknowledgement: a late or unnam
   const cover = browse.useBrowse.getState().arrivalCover!;
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, covered: id });
   act(() => browse.pageCoverHidden(id, "drawn"));
-  act(() => browse.pageCoverHidden(id, "drawn", `${browse.ARRIVAL_COVER_ID}-0`));
+  act(() => browse.pageCoverHidden(id, "drawn", `${browse.ARRIVAL_COVER_ID}-0`, true, 1));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
-  act(() => browse.pageCoverHidden(id, "drawn", cover));
+  act(() => browse.pageCoverHidden(id, "drawn", cover, true, 1));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: null, arrivalCover: null });
   unmount(root);
 });
@@ -375,6 +375,22 @@ test("an Address tap in the frames between a swipe landing and its commit opens 
   unmount(root);
 });
 
+test("on Android a cover acknowledgement must name the document whose drawn frame hid it; one without leaves the cover up", () => {
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  const root = renderSurface(<Page />);
+  const { id, dx } = toNeighbour();
+  releaseSwipe(root, dx, 260, 1600);
+  act(() => jest.advanceTimersByTime(16));
+  const cover = browse.useBrowse.getState().arrivalCover!;
+  act(() => browse.pageCoverHidden(id, "drawn", cover, true));
+  if (Platform.OS === "android") expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
+  act(() => browse.pageCoverHidden(id, "drawn", cover, true, 7));
+  expect(browse.useBrowse.getState()).toMatchObject({ arriving: null });
+  unmount(root);
+});
+
 test("a cover acknowledgement that names the arrival's cover but found no view leaves the cover up", () => {
   withTabs(3);
   selectTabById(currentTabs().open[1]!.id);
@@ -384,11 +400,11 @@ test("a cover acknowledgement that names the arrival's cover but found no view l
   releaseSwipe(root, dx, 260, 1600);
   act(() => jest.advanceTimersByTime(16));
   const cover = browse.useBrowse.getState().arrivalCover!;
-  act(() => browse.pageCoverHidden(id, "drawn", cover, false));
+  act(() => browse.pageCoverHidden(id, "drawn", cover, false, 1));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
   act(() => jest.advanceTimersByTime(1000));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: id, arrivalCover: cover });
-  act(() => browse.pageCoverHidden(id, "drawn", cover, true));
+  act(() => browse.pageCoverHidden(id, "drawn", cover, true, 1));
   expect(browse.useBrowse.getState()).toMatchObject({ arriving: null });
   unmount(root);
 });

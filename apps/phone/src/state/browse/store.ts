@@ -310,7 +310,7 @@ const coverWaiters = new Map<string, CoverWaiter>();
 
 export function whenPageCoverHidden(id: string, capMs: number, then: (reason: CoverHidden) => void, cover: string | null = null): () => void {
   const early = earlyCoverHides.get(id);
-  if (early && coverMatches(cover, early.cover, early.found)) {
+  if (early && coverMatches(cover, early.cover, early.found, early.document)) {
     earlyCoverHides.delete(id);
     then(early.reason);
     return () => undefined;
@@ -334,22 +334,25 @@ export function whenPageCoverHidden(id: string, capMs: number, then: (reason: Co
 
 const COUNTS_CAPPED_COVERS = Platform.OS === "ios";
 
-type EarlyCoverHide = { cover: string | undefined; reason: "drawn" | "cap"; found: boolean };
+type EarlyCoverHide = { cover: string | undefined; reason: "drawn" | "cap"; found: boolean; document: number | undefined };
 
 const earlyCoverHides = new Map<string, EarlyCoverHide>();
 
-function coverMatches(expected: string | null, cover: string | undefined, found: boolean) {
+const COVER_NAMES_ITS_DOCUMENT = Platform.OS === "android";
+
+function coverMatches(expected: string | null, cover: string | undefined, found: boolean, document: number | undefined) {
   if (expected === null) return true;
+  if (COVER_NAMES_ITS_DOCUMENT && document === undefined) return false;
   return cover === expected && found;
 }
 
-export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string, found = true) {
+export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string, found = true, document?: number) {
   const waiter = coverWaiters.get(id);
   if (!waiter) {
-    earlyCoverHides.set(id, { cover, reason, found });
+    earlyCoverHides.set(id, { cover, reason, found, document });
     return;
   }
-  if (!coverMatches(waiter.cover, cover, found)) return;
+  if (!coverMatches(waiter.cover, cover, found, document)) return;
   waiter.hidden(reason);
 }
 
