@@ -261,7 +261,8 @@ NSString *MakeStagingFolder(NSString *folder, NSString *tag, NSString **reason) 
     *reason = @"tooLong";
     return nil;
   }
-  std::vector<char> buffer(pattern.fileSystemRepresentation, pattern.fileSystemRepresentation + strlen(pattern.fileSystemRepresentation) + 1);
+  const char *representation = pattern.fileSystemRepresentation;
+  std::vector<char> buffer(representation, representation + strlen(representation) + 1);
   if (!mkdtemp(buffer.data())) {
     *reason = @"folderNotWritable";
     return nil;

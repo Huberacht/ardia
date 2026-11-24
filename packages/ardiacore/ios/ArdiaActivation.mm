@@ -106,14 +106,13 @@ NSString *DescribePanel(NSSavePanel *panel, NSWindow *parent, NSString *how) {
   const bool open = [panel isKindOfClass:NSOpenPanel.class];
   [parts addObject:[NSString stringWithFormat:@"%@ panel (not shown): %@", open ? @"open" : @"save", how]];
   if (parent)
-    [parts addObject:[NSString stringWithFormat:@"parent %@ #%ld \"%@\"%@", parent.className, (long)parent.windowNumber,
-                                                parent.title, parent.isVisible ? @"" : @" (hidden)"]];
+    [parts addObject:[NSString stringWithFormat:@"parent %@ #%ld%@", parent.className, (long)parent.windowNumber, parent.isVisible ? @"" : @" (hidden)"]];
   if (open) {
     NSOpenPanel *o = (NSOpenPanel *)panel;
     [parts addObject:[NSString stringWithFormat:@"multiple=%d files=%d directories=%d", o.allowsMultipleSelection,
                                                 o.canChooseFiles, o.canChooseDirectories]];
   } else {
-    [parts addObject:[NSString stringWithFormat:@"name=\"%@\"", panel.nameFieldStringValue]];
+    [parts addObject:[NSString stringWithFormat:@"name of %lu characters", (unsigned long)panel.nameFieldStringValue.length]];
   }
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
