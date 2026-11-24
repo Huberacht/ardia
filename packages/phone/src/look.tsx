@@ -138,6 +138,10 @@ export const FrostSource = look<FrostSourceProps>("FrostSource");
 
 export const GlassBackdrop = look<ViewProps>("GlassBackdrop");
 
+export type FrameMarkProps = ViewProps & { mark?: string };
+
+export const FrameMark = look<FrameMarkProps>("FrameMark");
+
 export const Frost = look<FrostProps>("Frost");
 
 const NativeGlass = look<GlassProps>("Glass");

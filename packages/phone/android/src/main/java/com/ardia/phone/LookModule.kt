@@ -244,6 +244,11 @@ class LookModule : Module() {
             Name("GlassBackdrop")
         }
 
+        View(FrameMarkView::class) {
+            Name("FrameMark")
+            Prop("mark") { view: FrameMarkView, value: String? -> view.mark(value) }
+        }
+
         View(FrostSourceView::class) {
             Name("FrostSource")
             Prop("name") { view: FrostSourceView, value: String? -> view.sourceId = value }

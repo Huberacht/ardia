@@ -45,6 +45,8 @@ export {
   FrostSource,
   Glass,
   GlassBackdrop,
+  FrameMark,
+  type FrameMarkProps,
   glassIsNative,
   INCOGNITO_LOOK,
   nativeGlassRender,
