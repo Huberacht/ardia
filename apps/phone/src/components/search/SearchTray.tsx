@@ -162,6 +162,10 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const keyboard = useTrayKeyboard();
   const arrivesAtRest = useRef(searchState().arrival === "atRest").current;
   const cutsIn = useRef(tabSwitchCuts() && !closing).current;
+  const bornStandby = useRef(standby).current;
+  const keepsField = useRef<boolean | null>(null);
+  if (bornStandby && !standby && keepsField.current === null) keepsField.current = searchState().text === "";
+  const fieldKey = bornStandby && keepsField.current !== false ? "kept" : String(session);
   const landing = useSharedValue(arrivesAtRest || cutsIn ? 1 : 0);
   const [departed, setDeparted] = useState(false);
   const back = useSharedValue(0);
@@ -462,7 +466,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
             <SearchPanelContext.Provider value={arcPanel}>
               <GestureDetector gesture={dismissDrag}>
                 <View collapsable={false}>
-                  {standby ? null : <TrayField key={session} closing={closing} />}
+                  <TrayField key={fieldKey} closing={closing} standby={standby} />
                 </View>
               </GestureDetector>
               <TrayRows dismissDrag={dismissDrag} />
@@ -495,7 +499,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
           <TrayContentContext.Provider value={measuredRows}>
             <GestureDetector gesture={dismissDrag}>
               <View collapsable={false}>
-                {standby ? null : <TrayField key={session} closing={closing} />}
+                <TrayField key={fieldKey} closing={closing} standby={standby} />
               </View>
             </GestureDetector>
             <TrayRows dismissDrag={dismissDrag} />
@@ -947,12 +951,12 @@ const focusTray = () => trayInput?.focus();
 
 const mayFocusTray = () => !useOnboarding.getState().showing && !useVoice.getState().presented;
 
-function TrayField({ closing }: { closing: boolean }) {
+function TrayField({ closing, standby = false }: { closing: boolean; standby?: boolean }) {
   const version = useSearchFieldVersion();
-  return <FieldInput key={version} first={version === 0} closing={closing} />;
+  return <FieldInput key={version} first={version === 0} closing={closing} standby={standby} />;
 }
 
-function FieldInput({ first, closing }: { first: boolean; closing: boolean }) {
+function FieldInput({ first, closing, standby = false }: { first: boolean; closing: boolean; standby?: boolean }) {
   const leaving = useLeavingActions();
   const theme = useTrayTheme();
   const panelField = useDesign() === "redesigned";
@@ -966,6 +970,8 @@ function FieldInput({ first, closing }: { first: boolean; closing: boolean }) {
 
   const [fieldGone, dropField] = useState(false);
   useEffect(() => {
+    if (standby) return;
+    trayInput = input.current;
     if (closing) {
       input.current?.blur();
       if (!staged) dropField(true);
@@ -978,7 +984,7 @@ function FieldInput({ first, closing }: { first: boolean; closing: boolean }) {
     }
     const focus = setTimeout(() => input.current?.focus(), 0);
     return () => clearTimeout(focus);
-  }, [closing, staged?.presented]);
+  }, [closing, staged?.presented, standby]);
   const lastText = useRef(start);
   const { fontScale } = useWindowDimensions();
   const fieldHeight = searchFieldHeight(fontScale);
@@ -1002,7 +1008,7 @@ function FieldInput({ first, closing }: { first: boolean; closing: boolean }) {
         <TrayInput
           ref={(field) => {
             input.current = field;
-            trayInput = field;
+            if (!standby) trayInput = field;
           }}
           style={inputStyle}
           weight={panelField ? "medium" : "regular"}

@@ -1252,7 +1252,7 @@ export const TabDeck = memo(function TabDeck() {
                     onMenu={setChromeMenu}
                     onCloseAll={confirmCloseAll}
                     glassShown={glassShown}
-                    glassShownMs={pulledIn.current ? 0 : CHROME_GLASS_MS}
+                    glassShownMs={pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
                     glyphFade={glassChrome ? chromeOpacity : undefined}
                   />
                   <DeckBottomBar
@@ -1268,7 +1268,7 @@ export const TabDeck = memo(function TabDeck() {
                     menusShown={shown && phase.kind === "settled"}
                     onMenu={setChromeMenu}
                     glassShown={barShown}
-                    glassShownMs={barHanded || pulledIn.current ? 0 : CHROME_GLASS_MS}
+                    glassShownMs={barHanded || pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
                     glyphFade={glassChrome ? barGlyphFade : undefined}
                   />
                 </>

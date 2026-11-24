@@ -117,7 +117,7 @@ test("a tray raised by + is at rest with its dim on its first frame, without wai
   keyboard.mockRestore();
 });
 
-test("the next search sheet waits laid out and hidden, with no field to take focus, and + turns that same sheet live instead of mounting one", () => {
+test("the next search sheet waits laid out and hidden, its field made but unfocused, and + turns that same sheet and field live instead of mounting them", () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
   const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
@@ -129,13 +129,33 @@ test("the next search sheet waits laid out and hidden, with no field to take foc
   const host = (id: string) => root.root.findAll((node) => node.props.testID === id && typeof node.type === "string");
   expect(host("trayStandby")).toHaveLength(1);
   expect(host("trayRoot")).toHaveLength(0);
-  expect(host("trayFieldCapsule")).toHaveLength(0);
+  const waitingField = host("trayFieldCapsule");
+  expect(waitingField).toHaveLength(1);
   const waiting = root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")[0]!;
   act(() => presentSearch("page", ""));
   expect(host("trayRoot")).toHaveLength(1);
-  expect(host("trayFieldCapsule")).toHaveLength(1);
+  expect(host("trayFieldCapsule")).toContain(waitingField[0]);
   expect(root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")).toContain(waiting);
   expect(host("trayStandby")).toHaveLength(1);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
+test("a search that opens with text, such as editing the address, gets a field of its own rather than the waiting empty one", () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const fields = () => root.root.findAll((node) => node.props.testID === "trayFieldCapsule" && typeof node.type === "string");
+  const waiting = fields()[0]!;
+  act(() => presentSearch("page", "example.com"));
+  const live = root.root.findAll((node) => node.props.testID === "trayRoot" && typeof node.type === "string")[0]!;
+  const liveField = live.findAll((node) => node.props.testID === "trayFieldCapsule" && typeof node.type === "string")[0]!;
+  expect(liveField).not.toBe(waiting);
   unmount(root);
   keyboard.mockRestore();
 });
