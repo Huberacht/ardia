@@ -5,6 +5,7 @@ import { IconTile } from "../ui";
 import { space } from "../ui/tokens";
 import { isWebDemo } from "../../state/onboarding/demoSteps";
 import { openImport } from "../../state/settings/settingsWindows";
+import { watchImportEnd } from "../../state/onboarding/sourceImport";
 import { noteOnboardingImport } from "../../state/telemetry/usage";
 import { chooseSource, confirmAnswer, skipStep, sourcePatch, useOnboarding, type BrowserSourceId } from "../../state/onboarding/onboarding";
 import { StepActions, StepLayout } from "./StepLayout";
@@ -53,6 +54,8 @@ export function SourceStep() {
   useEffect(() => {
     if (!active) setPastingCode(false);
   }, [active]);
+
+  useEffect(() => (importing ? watchImportEnd(() => setImporting(null)) : undefined), [importing]);
 
   const found = tiles.filter((t) => t.found);
   const others = tiles.filter((t) => !t.found);

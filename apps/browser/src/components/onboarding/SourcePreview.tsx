@@ -147,17 +147,6 @@ const markKey = (m: Mark) => m.id;
 const textKey = (s: string) => s;
 const tileKey = (t: SourceTile) => t.id;
 
-function useAtRest(target: number) {
-  const [rest, setRest] = useState<number | null>(target);
-  const last = useRef(target);
-  if (last.current !== target) {
-    last.current = target;
-    if (rest !== null) setRest(null);
-  }
-  const value = useGlide(target, setRest);
-  return { value, atRest: rest === target };
-}
-
 function Crossfade<T>({ item, keyOf, height, children }: { item: T | null; keyOf: (item: T) => string; height?: number; children: (item: T) => ReactNode }) {
   const layers = useSwap(item, keyOf);
   return (
@@ -253,7 +242,7 @@ export function SourcePreview({
   const listY = useGlide(top);
   const listOpacity = useGlide(listShown ? 1 : 0);
   const pathOpacity = useGlide(tile ? 1 : 0);
-  const captionShift = useAtRest(ardiaY + CAPTION_TOP - restCaptionTop);
+  const captionShift = useGlide(ardiaY + CAPTION_TOP - restCaptionTop);
   const marks = useSwap(mark, markKey);
   const captions = useSwap(caption, captionKey);
 
@@ -289,8 +278,8 @@ export function SourcePreview({
         <Image source={ICON} style={{ width: FLOW.icon, height: FLOW.icon }} />
       </Moving>
       {captions.map((c) => (
-        <Moving key={c.slot} base={styles.layer} opacity={c.opacity} y={captionShift.value}>
-          <View pointerEvents={c.live && captionShift.atRest ? "box-none" : "none"} style={{ marginTop: restCaptionTop }} onLayout={c.live ? measureCaption(c.item.shape) : undefined}>
+        <Moving key={c.slot} base={styles.layer} opacity={c.opacity} y={captionShift}>
+          <View pointerEvents={c.live ? "box-none" : "none"} style={{ marginTop: restCaptionTop }} onLayout={c.live ? measureCaption(c.item.shape) : undefined}>
             {c.item.shape === "tag" ? <Tag title={c.item.label} /> : <ImportCaption caption={c.item} onImport={onImport} />}
           </View>
         </Moving>
