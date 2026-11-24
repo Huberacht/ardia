@@ -251,6 +251,76 @@ test("a tap on the page's Tabs button cuts to the waiting deck from its own UI-t
   unmount(root);
 });
 
+function spyScreenReaderFocus() {
+  const RN = require("react-native") as typeof import("react-native");
+  const native = require("@ardia/phone-native") as typeof import("@ardia/phone-native");
+  jest.spyOn(RN.AccessibilityInfo, "isScreenReaderEnabled").mockResolvedValue(true);
+  const views = new Map<number, unknown>();
+  jest.spyOn(RN, "findNodeHandle").mockImplementation((view) => {
+    const handle = 100 + views.size;
+    views.set(handle, view);
+    return handle;
+  });
+  const landed: unknown[] = [];
+  jest.spyOn(RN.AccessibilityInfo, "setAccessibilityFocus").mockImplementation((handle) => void landed.push(views.get(handle)));
+  jest.spyOn(native, "focusViewNatively").mockImplementation((handle) => {
+    landed.push(views.get(handle));
+    return () => undefined;
+  });
+  return landed;
+}
+
+const focusedAddress = (root: ReactTestRenderer, view: unknown) => {
+  const nodes = root.root.findAll((node) => node.instance === view && node.props.accessibilityLabel === "Address");
+  return nodes.length > 0 ? (nodes[0]!.props.accessibilityValue as { text: string }).text : null;
+};
+
+const settleFocus = async () => {
+  for (let step = 0; step < 4; step += 1) {
+    await act(async () => undefined);
+    act(() => jest.advanceTimersByTime(200));
+  }
+};
+
+test("after a swipe hands the page over, TalkBack focus moves to the destination's Address, which is the same node that was there before the swipe", async () => {
+  const landed = spyScreenReaderFocus();
+  withTabs(3);
+  selectTabById(currentTabs().open[1]!.id);
+  browsingNow();
+  const root = renderSurface(<Page />);
+  const addressNode = () => root.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityLabel === "Address")[0]!;
+  const before = addressNode().instance;
+  await settleFocus();
+  expect(landed.length).toBe(0);
+  const { id, dx } = toNeighbour();
+  releaseSwipe(root, dx, 260, 1600);
+  await settleFocus();
+  expect(currentTabs().selectedId).toBe(id);
+  expect(addressNode().instance).toBe(before);
+  expect(addressNode().props.accessibilityValue.text).toBe(display(findTab(currentTabs(), id)!.url).host);
+  expect(landed.length).toBe(1);
+  expect(focusedAddress(root, landed[0])).toBe(display(findTab(currentTabs(), id)!.url).host);
+  unmount(root);
+});
+
+test("a deck select moves TalkBack focus to the destination's Address once the deck has handed the page over", async () => {
+  const landed = spyScreenReaderFocus();
+  withTabs(3);
+  browse.useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
+  const root = renderSurface(<Surfaces />);
+  await settleFocus();
+  landed.length = 0;
+  const wanted = currentTabs().open[0]!.id;
+  act(() => sendDeckCommand({ kind: "open", tabId: wanted, tappedAt: Date.now() }));
+  await settleFocus();
+  expect(currentTabs().selectedId).toBe(wanted);
+  const address = root.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityLabel === "Address" && node.props.accessibilityValue?.text === display(findTab(currentTabs(), wanted)!.url).host);
+  expect(address).toHaveLength(1);
+  expect(landed.length).toBe(1);
+  expect(focusedAddress(root, landed[0])).toBe(display(findTab(currentTabs(), wanted)!.url).host);
+  unmount(root);
+});
+
 test("a card tapped in the deck is the open tab at once: the deck hands straight to the page, with no growth and no bar hand-over", () => {
   withTabs(3);
   browse.useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });

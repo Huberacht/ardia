@@ -5,7 +5,9 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, type SharedValue }
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageBarPreviewShown } from "../../state/browse/deckPull";
-import { canCutDeckFromTap, cutDeckFromTabsTap } from "../../state/browse/store";
+import { canCutDeckFromTap, cutDeckFromTabsTap, useBrowse } from "../../state/browse/store";
+import { focusForScreenReader } from "../ui/coverFocus";
+import { currentTabs } from "../../state/tabs/store";
 import { useBarReturn } from "./barReturn";
 import { AddressFace, AddressLeaf } from "./AddressFace";
 import { NotSecureLock } from "./NotSecureLock";
@@ -109,6 +111,24 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
     if (wasHanded.current && !handed) barReturnedToPage();
     wasHanded.current = handed;
   });
+  const addressButton = useRef<ViewInstance>(null);
+  const shownTab = useRef(tab.id);
+  const focusOwed = useRef<string | null>(null);
+  if (shownTab.current !== tab.id) {
+    shownTab.current = tab.id;
+    focusOwed.current = tab.id;
+  }
+  useEffect(() => {
+    const destination = tab.id;
+    if (handed || focusOwed.current !== destination) return;
+    return focusForScreenReader(
+      () => {
+        focusOwed.current = null;
+        return addressButton.current;
+      },
+      () => currentTabs().selectedId === destination && useBrowse.getState().surface === "browsing" && !deckPull.cut.value,
+    );
+  }, [tab.id, handed]);
   const swaps = handed || wasHanded.current;
   const handedBack = swaps ? { ...returning, centreGlass: { shown: returning.centreGlass.shown && !handed, shownMs: 0 }, sidesGlass: { shown: returning.sidesGlass.shown && !handed, shownMs: 0 } } : returning;
   const back = useFoldedGlass(handedBack, fold?.glass ?? true);
@@ -151,7 +171,7 @@ export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus
         <PullGlyphs style={styles.addressRow}>
         <Animated.View testID="floatingBarAddressFade" collapsable={false} style={[styles.addressFade, addressFade]} pointerEvents={squeezed ? "none" : "box-none"} importantForAccessibility={squeezed ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={squeezed}>
         <Animated.View collapsable={false} style={[styles.addressStack, landedHere, previewHides]} pointerEvents="box-none">
-          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} />
+          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} pressRef={addressButton} />
         </Animated.View>
         {preview ? (
           <Animated.View testID="floatingBarPreview" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, previewShows]}>
