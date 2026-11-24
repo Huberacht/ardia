@@ -60,12 +60,15 @@ export function usePaneDrag(tabId: string) {
       ),
     [],
   );
+  const pressed = () => {
+    if (!drag.current) clicksIgnoredUntil.current = 0;
+  };
   const clicked = (open: () => void) => {
     const ignored = Date.now() < clicksIgnoredUntil.current;
     clicksIgnoredUntil.current = 0;
     if (!ignored) open();
   };
-  return { ref: view, panHandlers: responder.panHandlers, clicked };
+  return { ref: view, panHandlers: responder.panHandlers, pressed, clicked };
 }
 
 export function PaneSplitButton({ tabId, palette }: { tabId: string; palette: ToolbarPalette }) {
@@ -73,7 +76,7 @@ export function PaneSplitButton({ tabId, palette }: { tabId: string; palette: To
   const orientation = useSplitOrientation(tabId);
   return (
     <View ref={drag.ref} {...drag.panHandlers} collapsable={false} mouseDownCanMoveWindow={false}>
-      <Button variant="icon" toolbar palette={palette} icon={orientation === "vertical" ? "rectangle.split.1x2" : "rectangle.split.2x1"} look="row" onPress={() => drag.clicked(() => void showSplitMenu(tabId))} tooltip="Split View" />
+      <Button variant="icon" toolbar palette={palette} icon={orientation === "vertical" ? "rectangle.split.1x2" : "rectangle.split.2x1"} look="row" onPressIn={drag.pressed} onPress={() => drag.clicked(() => void showSplitMenu(tabId))} tooltip="Split View" />
     </View>
   );
 }
