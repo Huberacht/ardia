@@ -25,6 +25,7 @@ import { closeTabById, currentTabs, selectTabById, updateTabById } from "../stat
 import { noteViewMoved, noteWarmPicture } from "../state/tabs/warmPictures";
 import { findTab } from "../state/tabs/tabsState";
 import * as pageStore from "../state/pages/store";
+import * as perf from "../state/app/interactionPerf";
 import { pageUi } from "../state/page/store";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
@@ -199,6 +200,22 @@ test("with cuts the page bar is one bar that stays mounted under the deck: hidde
   expect(host("keptPageBar")[0]).toBeDefined();
   expect(host("floatingBarHost").map((node) => node.props.children).flat().join("")).toContain(display(destination.url).host);
   act(() => previewPageBar(null));
+  unmount(root);
+});
+
+test("with cuts a deck entrance renders neither the kept page body nor its bar: their visibility, touches and TalkBack follow one UI-thread owner", () => {
+  withTabs(3);
+  browsingNow();
+  const root = renderSurface(<Surfaces />);
+  const names: string[] = [];
+  const counting = jest.spyOn(perf, "countRender").mockImplementation((component: string) => void names.push(component));
+  act(() => browse.useBrowse.setState({ surface: "deck", deckEntrance: currentTabs().selectedId, frozenOrder: null }));
+  expect(names.filter((name) => name === "BrowsingScreen")).toEqual([]);
+  const body = root.root.findAll((node) => node.props.testID === "pageBody" && typeof node.type === "string")[0]!;
+  expect(getAnimatedStyle(body).transform).toEqual([{ translateX: 100_000 }]);
+  act(() => browse.useBrowse.setState({ surface: "browsing", deckEntrance: null }));
+  expect(getAnimatedStyle(body).transform).toEqual([{ translateX: 0 }]);
+  counting.mockRestore();
   unmount(root);
 });
 

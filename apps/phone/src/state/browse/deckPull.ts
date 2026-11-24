@@ -12,6 +12,8 @@ export function pullFades(stage: number): boolean {
 
 export const pageBarShown = makeMutable(1);
 
+export const pageBodyShown = makeMutable(1);
+
 export const deckPull = {
   stage: makeMutable<number>(PULL_STAGE.idle),
   id: makeMutable(""),
@@ -279,6 +281,7 @@ export function cutDeckPullFromRest(id: string, settled: PullSettled, refused: (
   }
   deckPull.cut.value = true;
   pageBarShown.value = 0;
+  pageBodyShown.value = 0;
   deckPull.shrink.value = 1;
   deckPull.reveal.value = 1;
   deckPull.stage.value = PULL_STAGE.landed;
