@@ -1297,6 +1297,10 @@ protocol AutomationNative {
   static func answerPeer(_ ask: Int, _ outcome: String, _ promise: Promise)
   static func approvals(_ promise: Promise)
   static func revokeApproval(_ key: String, _ promise: Promise)
+  static func armFiles(_ spec: [String: Any]) -> [String: Any]
+  static func disarmFiles(_ ids: [String]?) -> Double
+  static func fileArms() -> [[String: Any]]
+  static func placeArmedDownload(_ arm: String, _ path: String) -> [String: Any]
 }
 
 extension AutomationNative {
@@ -1340,6 +1344,22 @@ extension AutomationNative {
 
   static var revokeApprovalFunction: AnyDefinition {
     AsyncFunction("revokeApproval") { (key: String, promise: Promise) in Self.revokeApproval(key, promise) }
+  }
+
+  static var armFilesFunction: AnyDefinition {
+    AsyncFunction("armFiles") { (spec: [String: Any]) -> [String: Any] in Self.armFiles(spec) }.runOnQueue(.main)
+  }
+
+  static var disarmFilesFunction: AnyDefinition {
+    AsyncFunction("disarmFiles") { (ids: [String]?) -> Double in Self.disarmFiles(ids) }.runOnQueue(.main)
+  }
+
+  static var fileArmsFunction: AnyDefinition {
+    AsyncFunction("fileArms") { () -> [[String: Any]] in Self.fileArms() }.runOnQueue(.main)
+  }
+
+  static var placeArmedDownloadFunction: AnyDefinition {
+    AsyncFunction("placeArmedDownload") { (arm: String, path: String) -> [String: Any] in Self.placeArmedDownload(arm, path) }.runOnQueue(.main)
   }
 }
 

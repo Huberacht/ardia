@@ -1323,8 +1323,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "31c46539023fff5c6a5ebc31f0658a48a4986a4187856ad0eaf116bffc1ab6d4",
-        "swift": "f931f68b0f88d5ecedaee1222c97bc7efd94734c461f1cdeb524491a24399661"
+        "types": "2ca84308e22b112a118e915b987a3732d3f59cef2e82b01cf2229986a446f87a",
+        "swift": "c62af9bed2b7184cc134937fa3fedefbcce027cd47521f9ddf00956d7c1781cf"
       },
       "modules": {
         "ArdiaShell": {
@@ -3501,6 +3501,41 @@
               "async": true,
               "mac": "custom",
               "desktop": "custom",
+              "windows": "absent"
+            },
+            "armFiles": {
+              "args": [
+                "spec"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            },
+            "disarmFiles": {
+              "args": [
+                "ids"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            },
+            "fileArms": {
+              "args": [],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
+              "windows": "absent"
+            },
+            "placeArmedDownload": {
+              "args": [
+                "arm",
+                "path"
+              ],
+              "async": true,
+              "mac": "custom",
+              "desktop": "absent",
               "windows": "absent"
             }
           },

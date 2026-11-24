@@ -515,6 +515,15 @@ export function writeHeldReplies() {
   const tickets = controlSocket.held.splice(0);
   if (tickets.length) controlEvents.emit("onWritten", { tickets });
 }
+export const fileArmsNative = {
+  rows: [] as Record<string, unknown>[],
+  specs: [] as Record<string, unknown>[],
+  placed: [] as [string, string][],
+  disarmed: [] as (string[] | null)[],
+  refuse: null as null | { reason: string; path?: string },
+  place: null as null | ((arm: string, path: string) => Record<string, unknown>),
+  supported: true,
+};
 const automation: Modules["ArdiaAutomation"] = {
   start: async () => {
     if (!controlSocket.running) controlSocket.generation++;
@@ -545,6 +554,44 @@ const automation: Modules["ArdiaAutomation"] = {
   },
   addListener: controlEvents.addListener,
 };
+for (const [name, run] of Object.entries({
+  armFiles: async (spec: Record<string, unknown>) => {
+    fileArmsNative.specs.push(spec);
+    if (fileArmsNative.refuse) return { ok: false, ...fileArmsNative.refuse };
+    const now = Date.now();
+    const kind = spec.kind as string;
+    const paths = spec.paths as string[];
+    const folder = kind === "download" && paths[0]!.endsWith("/folder");
+    const row = { id: spec.id, kind, tab: spec.tab, paths, folder, once: spec.once, armedAt: now, expiresAt: now + (spec.seconds as number) * 1000, state: "armed", landed: [] as string[], answered: 0 };
+    fileArmsNative.rows.push(row);
+    return { ok: true, arm: { ...row } };
+  },
+  disarmFiles: async (ids: string[] | null) => {
+    fileArmsNative.disarmed.push(ids);
+    let cleared = 0;
+    for (const row of fileArmsNative.rows) {
+      if (row.state !== "armed" || (ids && !ids.includes(row.id as string))) continue;
+      row.state = "cleared";
+      cleared++;
+    }
+    return cleared;
+  },
+  fileArms: async () => fileArmsNative.rows.map((row) => ({ ...row })),
+  placeArmedDownload: async (arm: string, path: string) => {
+    fileArmsNative.placed.push([arm, path]);
+    if (fileArmsNative.place) return fileArmsNative.place(arm, path);
+    const row = fileArmsNative.rows.find((r) => r.id === arm);
+    const target = row ? ((row.paths as string[])[0] as string) : path;
+    if (row) {
+      row.landed = [...(row.landed as string[]), target];
+      row.answered = (row.answered as number) + 1;
+      if (row.once) row.state = "answered";
+    }
+    return { ok: true, path: target, bytes: 42 };
+  },
+})) {
+  Object.defineProperty(automation, name, { enumerable: true, get: () => (fileArmsNative.supported ? run : undefined) });
+}
 Object.defineProperty(automation, "devtoolsEndpoint", {
   enumerable: true,
   get: () =>

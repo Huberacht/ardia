@@ -1417,6 +1417,22 @@
    ]
   },
   {
+   "id": "socket-family:files",
+   "source": "socket",
+   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); tabs through tabOf; every path through localPathProblem (absolute, no NUL or line break, at most 1024 bytes, no . or ..), then natively: an upload must resolve to an existing readable file or folder, a download target must not exist and its folder must, a symbolic link is never written through, and the file lands with an exclusive rename into the folder resolved at arm time (ArdiaFilePaths.mm); a panel is answered only when Chromium opened it for an armed tab's window, and arms end with their tab, their time limit (at most 600 s) or control going off (clearFileArms) (D3: any same-user process is the owner)",
+   "checks": [
+    "apps/browser/src/state/automation/socketSchema.ts#schemaProblem",
+    "apps/browser/src/state/automation/fileArms.ts#localPathProblem",
+    "apps/browser/src/state/automation/fileArms.ts#clearFileArms",
+    "packages/ardiacore/ios/ArdiaFilePaths.mm#DownloadTarget",
+    "packages/ardiacore/ios/ArdiaFilePaths.mm#PlaceFile",
+    "packages/ardiacore/ios/ArdiaFileArms.mm#ArmFor"
+   ],
+   "findings": [
+    "D3"
+   ]
+  },
+  {
    "id": "raw-settings-write:state/engines/actions.ts",
    "source": "native",
    "guard": "Sets engineMode to one of the engine modes from a user action",

@@ -1,0 +1,227 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { HOSTILE_STRINGS } from "../../../../../scripts/security/hostile-inputs.mjs";
+const { useBrowser } = await import("../browser/store.ts");
+const { startAutomation } = await import("./controlSocket.ts");
+const { ensureRoots } = await import("../bookmarks/bookmarks.ts");
+const { localPathProblem, resetFileArmsForTests } = await import("./fileArms.ts");
+const stub = await import("../../test-native/index.ts");
+
+const S = () => useBrowser.getState();
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+let nextId = 0;
+
+async function call(method, params) {
+  const id = ++nextId;
+  const before = stub.controlSocket.replies.length;
+  stub.emitControlRequest({ connection: 12, generation: stub.controlSocket.generation, line: JSON.stringify({ id, method, ...(params ? { params } : {}) }) });
+  for (let i = 0; i < 50 && !stub.controlSocket.replies.slice(before).some((r) => r.connection === 12); i++) await tick();
+  const replies = stub.controlSocket.replies.slice(before).filter((r) => r.connection === 12);
+  assert.equal(replies.length, 1, `one reply to ${method}`);
+  return JSON.parse(replies[0].line);
+}
+
+const ok = async (method, params) => {
+  const reply = await call(method, params);
+  assert.ok(!reply.error, `${method}: ${JSON.stringify(reply.error)}`);
+  return reply.result;
+};
+
+const native = stub.fileArmsNative;
+
+async function setup() {
+  resetFileArmsForTests();
+  native.rows.length = 0;
+  native.specs.length = 0;
+  native.placed.length = 0;
+  native.disarmed.length = 0;
+  native.refuse = null;
+  native.place = null;
+  native.supported = true;
+  S().hydrate({});
+  S().updateSettings({ cliControl: true });
+  startAutomation();
+  for (let i = 0; i < 5 && !stub.controlSocket.running; i++) await tick();
+  await tick();
+  useBrowser.setState((s) => ({ bookmarks: ensureRoots(s.bookmarks, "")[0] }));
+  return S().createWindow({ url: "https://a.example/" });
+}
+
+const tabIn = (windowId) => S().windows[windowId].tabIds[0];
+const download = (fields) => ({ url: "https://files.example/a.zip", filename: "a.zip", path: "/Users/me/Downloads/a.zip", state: "downloading", paused: false, received: 10, total: 100, speed: 5, mimeType: "application/zip", profile: "", ...fields });
+
+test("files.armUpload arms the tab's next chooser natively and reports what it chose", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  const armed = await ok("files.armUpload", { tab, paths: ["/Users/me/report.pdf"] });
+  assert.equal(armed.kind, "upload");
+  assert.equal(armed.tab, tab);
+  assert.equal(armed.state, "armed");
+  assert.equal(armed.once, true);
+  assert.deepEqual(native.specs[0], { id: armed.arm, kind: "upload", tab, paths: ["/Users/me/report.pdf"], once: true, seconds: 120 });
+  const row = native.rows[0];
+  row.state = "answered";
+  row.answered = 1;
+  row.landed = ["/Users/me/report.pdf"];
+  const listed = await ok("files.arms", { arms: [armed.arm] });
+  assert.equal(listed.items.length, 1);
+  assert.equal(listed.items[0].state, "answered");
+  assert.deepEqual(listed.items[0].chosen, ["/Users/me/report.pdf"]);
+});
+
+test("files.armUpload refuses bad paths before the native layer sees them", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  for (const path of ["relative.txt", "/a/../etc/passwd", "/a/./b", "/a\u0000b", "/a\nb", `/${"x".repeat(1100)}`]) {
+    const reply = await call("files.armUpload", { tab, paths: [path] });
+    assert.equal(reply.error?.code, "bad_request", path.slice(0, 40));
+  }
+  assert.equal(native.specs.length, 0, "nothing reached the native arm");
+  assert.equal((await call("files.armUpload", { tab: "nope", paths: ["/tmp/x"] })).error.code, "no_window");
+  assert.equal((await call("files.armUpload", { tab, paths: [] })).error.code, "bad_request");
+  assert.equal((await call("files.armUpload", { tab, paths: ["/tmp/x"], seconds: 601 })).error.code, "bad_request");
+  native.refuse = { reason: "missing", path: "/tmp/gone.txt" };
+  const missing = await call("files.armUpload", { tab, paths: ["/tmp/gone.txt"] });
+  assert.equal(missing.error.code, "bad_request");
+  assert.match(missing.error.message, /doesn't exist/);
+  native.refuse = { reason: "noTab" };
+  assert.equal((await call("files.armUpload", { tab, paths: ["/tmp/x"] })).error.code, "no_window");
+});
+
+test("an upload arm for a private window's tab is refused", async () => {
+  await setup();
+  const privateWindow = S().createWindow({ url: "https://p.example/", kind: "private" });
+  const privateTab = S().windows[privateWindow]?.tabIds[0];
+  assert.ok(privateTab, "the private window has a tab");
+  assert.equal((await call("files.armUpload", { tab: privateTab, paths: ["/tmp/x"] })).error.code, "no_window");
+  assert.equal(native.specs.length, 0);
+});
+
+test("files.armDownload moves the next download of the tab's profile to the path and reports it", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  S().upsertDownload(download({ id: "old", state: "downloading" }));
+  const armed = await ok("files.armDownload", { tab, path: "/Users/me/Desktop/invoice.zip" });
+  assert.equal(armed.kind, "download");
+  assert.equal(armed.path, "/Users/me/Desktop/invoice.zip");
+  stub.emitDownload(download({ id: "old", state: "finished", received: 100 }));
+  await tick();
+  assert.equal(native.placed.length, 0, "a download that started before the arm isn't taken");
+  stub.emitDownload(download({ id: "d9", state: "downloading" }));
+  stub.emitDownload(download({ id: "d9", state: "finished", received: 100 }));
+  for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
+  await tick();
+  assert.deepEqual(native.placed, [[armed.arm, "/Users/me/Downloads/a.zip"]]);
+  const listed = await ok("files.arms", {});
+  const row = listed.items.find((r) => r.arm === armed.arm);
+  assert.equal(row.state, "finished");
+  assert.deepEqual(row.downloads, [{ downloadId: "d9", state: "finished", path: "/Users/me/Desktop/invoice.zip", bytes: 42 }]);
+  stub.emitDownload(download({ id: "d10", state: "downloading" }));
+  stub.emitDownload(download({ id: "d10", state: "finished" }));
+  await tick();
+  assert.equal(native.placed.length, 1, "a once arm takes one download");
+});
+
+test("files.armDownload skips private downloads and reports a failed move", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/x.zip" });
+  stub.emitDownload(download({ id: "p1", offTheRecord: true }));
+  stub.emitDownload(download({ id: "p1", offTheRecord: true, state: "finished" }));
+  await tick();
+  assert.equal(native.placed.length, 0);
+  native.place = () => ({ ok: false, reason: "exists" });
+  stub.emitDownload(download({ id: "d1" }));
+  stub.emitDownload(download({ id: "d1", state: "finished" }));
+  for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
+  await tick();
+  const row = (await ok("files.arms", { arms: [armed.arm] })).items[0];
+  assert.equal(row.state, "failed");
+  assert.equal(row.downloads[0].reason, "exists");
+});
+
+test("files.disarm clears arms, a closed tab ends its arm, and control off clears everything", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  const one = await ok("files.armUpload", { tab, paths: ["/tmp/a"] });
+  await ok("files.armDownload", { path: "/tmp/folder", once: false });
+  assert.deepEqual(await ok("files.disarm", { arms: [one.arm] }), { cleared: 1 });
+  assert.deepEqual(native.disarmed.at(-1), [one.arm]);
+  const two = await ok("files.armUpload", { tab, paths: ["/tmp/b"] });
+  S().closeTab(tab);
+  await tick();
+  assert.ok(native.disarmed.some((ids) => Array.isArray(ids) && ids.includes(two.arm)), "closing the tab disarms its upload");
+  S().updateSettings({ cliControl: false });
+  for (let i = 0; i < 5; i++) await tick();
+  assert.ok(native.disarmed.some((ids) => ids === null), "turning control off clears every arm");
+  S().updateSettings({ cliControl: true });
+  for (let i = 0; i < 5; i++) await tick();
+});
+
+test("file methods refuse where the platform can't answer panels", async () => {
+  const windowId = await setup();
+  native.supported = false;
+  const reply = await call("files.armUpload", { tab: tabIn(windowId), paths: ["/tmp/a"] });
+  assert.equal(reply.error.code, "refused");
+  assert.deepEqual(await ok("files.arms", {}), { items: [] });
+  native.supported = true;
+});
+
+test("localPathProblem refuses every hostile string that isn't a plain absolute path", () => {
+  let accepted = 0;
+  for (const { value } of HOSTILE_STRINGS) {
+    const problem = localPathProblem(value);
+    if (problem === null) {
+      accepted++;
+      assert.ok(value.startsWith("/"), JSON.stringify(value).slice(0, 80));
+      assert.doesNotMatch(value, /[\0\r\n]/);
+      assert.ok(!value.split("/").includes(".."));
+    }
+  }
+  assert.equal(localPathProblem("/Users/me/file.txt"), null, "a plain path passes");
+  for (const value of [null, undefined, 1, {}, [], "", "~/x", "../x", "/a/../b", "/a b".replace(" ", "\n")]) assert.notEqual(localPathProblem(value), null, String(value));
+});
+
+test("spaces.list counts each profile's tabs and groups and leaves private windows out", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  S().createWindow({ url: "https://p.example/", kind: "private" });
+  const listed = await ok("spaces.list");
+  const space = listed.items.find((s) => s.id === S().windows[windowId].profileId);
+  assert.ok(space);
+  assert.equal(space.profileId, space.id);
+  assert.equal(space.active, true);
+  assert.equal(space.tabCount, Object.values(S().tabs).filter((t) => t.profileId === space.id && S().windows[t.windowId]?.kind !== "private").length);
+  assert.ok(space.windowIds.includes(windowId));
+  assert.equal(typeof space.groupCount, "number");
+  assert.ok(tab);
+});
+
+test("tabGroups.list lists groups with their tabs and filters by space", async () => {
+  const windowId = await setup();
+  const profileId = S().windows[windowId].profileId;
+  const made = await ok("apply", { ops: [{ op: "group.create", urls: ["https://c.example/", "https://d.example/"], name: "Research", window: windowId }] });
+  assert.ok(made.ok, JSON.stringify(made));
+  const listed = await ok("tabGroups.list", {});
+  const group = listed.items.find((g) => g.title === "Research");
+  assert.ok(group, JSON.stringify(listed));
+  assert.equal(group.spaceId, profileId);
+  assert.equal(group.windowId, windowId);
+  assert.deepEqual(group.tabIds, group.tabs.map((t) => t.id));
+  assert.ok(group.tabs.every((t) => typeof t.url === "string" && typeof t.title === "string" && typeof t.active === "boolean"));
+  assert.equal((await ok("tabGroups.list", { space: profileId })).items.length, listed.items.length);
+  assert.equal((await call("tabGroups.list", { space: "nope" })).error.code, "no_window");
+});
+
+test("bookmarks.search filters by folder and names each hit's folders", async () => {
+  await setup();
+  const tree = await ok("bookmarks.tree");
+  const work = await ok("bookmarks.addFolder", { title: "Work", parent: tree.other.id });
+  const deep = await ok("bookmarks.addFolder", { title: "Specs", parent: work.id });
+  const link = await ok("bookmarks.add", { url: "https://spec.example/", title: "Spec", parent: deep.id });
+  await ok("bookmarks.add", { url: "https://elsewhere.example/", title: "Spec too" });
+  const inWork = await ok("bookmarks.search", { folder: work.id, query: "spec" });
+  assert.deepEqual(inWork.items.map((n) => n.id).sort(), [deep.id, link.id].sort());
+  const hit = inWork.items.find((n) => n.id === link.id);
+  assert.deepEqual(hit.folderPath, [tree.other.title, "Work", "Specs"]);
+  assert.equal((await call("bookmarks.search", { folder: link.id })).error.code, "bad_request");
+});

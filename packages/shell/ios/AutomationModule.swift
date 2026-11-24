@@ -1,3 +1,4 @@
+import ArdiaCore
 import ExpoModulesCore
 import Foundation
 
@@ -19,6 +20,14 @@ public class AutomationModule: Module, AutomationNative {
   static func approvals(_ promise: Promise) { ControlSocket.shared.approvals { promise.resolve($0) } }
 
   static func revokeApproval(_ key: String, _ promise: Promise) { ControlSocket.shared.revokeApproval(key) { promise.resolve($0) } }
+
+  static func armFiles(_ spec: [String: Any]) -> [String: Any] { ArdiaHost.armFiles(spec) }
+
+  static func disarmFiles(_ ids: [String]?) -> Double { Double(ArdiaHost.disarmFiles(ids)) }
+
+  static func fileArms() -> [[String: Any]] { ArdiaHost.fileArms }
+
+  static func placeArmedDownload(_ arm: String, _ path: String) -> [String: Any] { ArdiaHost.placeArmedDownload(arm, from: path) }
 
   public func definition() -> ModuleDefinition {
     Name(Self.moduleName)
@@ -46,6 +55,14 @@ public class AutomationModule: Module, AutomationNative {
     Self.approvalsFunction
 
     Self.revokeApprovalFunction
+
+    Self.armFilesFunction
+
+    Self.disarmFilesFunction
+
+    Self.fileArmsFunction
+
+    Self.placeArmedDownloadFunction
 
     OnDestroy {
       ControlSocket.shared.detach(self)

@@ -45,6 +45,7 @@ import { dropAllHistoryHandles, dropHistoryHandles } from "./historyHandles";
 import { dropLateResults, forgetTabCalls } from "./tabCalls";
 import { dropAllLogpoints, dropLogpoints } from "./devToolsLogpoints";
 import { closeAllInspections, closeInspectionsFor } from "./devToolsSession";
+import { clearFileArms } from "./fileArms";
 import { backgroundInstance } from "../app/appSettings";
 import { programControlOn } from "../app/programControlSetting";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
@@ -333,6 +334,7 @@ async function stop() {
   forgetTabCalls();
   releaseAllCliHolds();
   void closeAllInspections();
+  clearFileArms();
   void dropAllLogpoints();
   noteSocketServing(false);
   void capturePageMenus(false).catch(() => undefined);
@@ -359,6 +361,7 @@ function sync() {
     forgetTabCalls();
     releaseAllCliHolds();
     void closeAllInspections();
+    clearFileArms();
     void dropAllLogpoints();
     noteSocketServing(false);
     void capturePageMenus(false).catch(() => undefined);

@@ -5,7 +5,7 @@ export const shell = defineModuleDomain({
   package: "packages/shell",
   imports: {
     "../app": ["AppIcon", "CleanedTitle", "CleanedUrl", "CrashReport", "DiagnosticsSample", "HardwareInfo", "IntroMusicCues", "LaunchConfig", "ShareAnchor", "SystemInfo"],
-    "../automation": ["ControlApprovals", "ControlPeerAnswer", "ControlPeerAsk", "ControlPeerOutcome", "ControlRequest", "ControlSocketStatus", "NativeDevtoolsEndpoint"],
+    "../automation": ["ControlApprovals", "ControlPeerAnswer", "ControlPeerAsk", "ControlPeerOutcome", "ControlRequest", "ControlSocketStatus", "FileArmResult", "FileArmRow", "FileArmSpec", "NativeDevtoolsEndpoint", "PlacedDownload"],
     "../cli": ["CliInstallResult"],
     "../commands": ["CommandEvent"],
     "../config": ["ConfigFileRead"],
@@ -408,6 +408,10 @@ export const shell = defineModuleDomain({
         answerPeer: { args: [["ask", "number", "Int"], ["outcome", "ControlPeerAnswer", "String"]], result: "boolean", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         approvals: { args: [], result: "ControlApprovals", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         revokeApproval: { args: [["key", "string"]], result: "boolean", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
+        armFiles: { args: [["spec", "FileArmSpec", "[String: Any]"]], result: "FileArmResult", swiftResult: "[String: Any]", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
+        disarmFiles: { args: [["ids", "string[] | null", "[String]?"]], result: "number", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
+        fileArms: { args: [], result: "FileArmRow[]", swiftResult: "[[String: Any]]", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
+        placeArmedDownload: { args: [["arm", "string"], ["path", "string"]], result: "PlacedDownload", swiftResult: "[String: Any]", async: true, queue: "main", optional: true, mac: "custom", desktop: "absent", windows: "absent" },
       },
       events: {
         onRequest: { payload: "ControlRequest", mac: "custom", desktop: "adapted", windows: "absent" },

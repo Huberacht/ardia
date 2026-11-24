@@ -40,6 +40,8 @@ function pushApprovedFolders() {
   }
 }
 
+export const claimDownload = (id: string) => remember(id);
+
 function remember(id: string) {
   handled.add(id);
   if (handled.size > HANDLED_CAP) handled.delete(handled.values().next().value!);
