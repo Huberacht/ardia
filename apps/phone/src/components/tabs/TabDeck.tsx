@@ -108,7 +108,7 @@ import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
 import { arriveFromDeck, dropPreparedDestination, liftDestination, prepareDestination, pressDestination, takeDestinationAction } from "../../state/browse/destination";
 import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarPreviewShown, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, releaseDeckOnHideOnUI, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
-import { cardHitSeq, currentPhoneGeneration, deckOwnsInput, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
+import { cardHitSeq, currentPhoneGeneration, deckDrawnMark, deckHitMark, deckLive, deckOwnsInput, deckReconciled, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
@@ -341,12 +341,12 @@ export const TabDeck = memo(function TabDeck() {
     deckShownNow.value = shown;
     if (chromeGlassHeld && shown) pageBarShown.value = 0;
   }, [shown, deckShownNow]);
-  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value || deckTurn.live.value !== 0 ? chromeOpacity.value : 0 }));
-  const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value || deckTurn.live.value !== 0 ? barGlyphFade.value * (deckPull.cut.value || deckShownNow.value ? 1 - pageBarShown.value : 1) : 0 }));
+  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value || deckLive.value !== 0 ? chromeOpacity.value : 0 }));
+  const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value || deckLive.value !== 0 ? barGlyphFade.value * (deckPull.cut.value || deckShownNow.value ? 1 - pageBarShown.value : 1) : 0 }));
   const deckOwnership = useAnimatedProps<{ pointerEvents: "auto" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(
     () => ({
-      pointerEvents: deckTurn.live.value !== 0 || shown ? "auto" : "none",
-      importantForAccessibility: deckTurn.live.value !== 0 || shown ? "auto" : "no-hide-descendants",
+      pointerEvents: deckLive.value !== 0 || shown ? "auto" : "none",
+      importantForAccessibility: deckLive.value !== 0 || shown ? "auto" : "no-hide-descendants",
     }),
   );
   const chromeSettled = useSharedValue(first.phase.kind === "settled");
@@ -354,13 +354,13 @@ export const TabDeck = memo(function TabDeck() {
     chromeSettled.value = phase.kind === "settled";
   }, [phase.kind]);
   const chromeOwnership = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => {
-    const live = deckTurn.live.value;
-    const open = (live !== 0 && deckTurn.reconciled.value !== live) || chromeSettled.value;
+    const live = deckLive.value;
+    const open = (live !== 0 && deckReconciled.value !== live) || chromeSettled.value;
     return { pointerEvents: open ? "box-none" : "none", importantForAccessibility: open ? "auto" : "no-hide-descendants" };
   });
-  const liveMark = useAnimatedProps(() => ({ mark: deckTurn.live.value !== 0 ? "deck-live" : "" }));
-  const drawnMark = useAnimatedProps(() => ({ mark: deckTurn.drawnMark.value }));
-  const hitMark = useAnimatedProps(() => ({ mark: deckTurn.hitMark.value }));
+  const liveMark = useAnimatedProps(() => ({ mark: deckLive.value !== 0 ? "deck-live" : "" }));
+  const drawnMark = useAnimatedProps(() => ({ mark: deckDrawnMark.value }));
+  const hitMark = useAnimatedProps(() => ({ mark: deckHitMark.value }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
   const searchedFor = useRef(needle);
@@ -411,7 +411,7 @@ export const TabDeck = memo(function TabDeck() {
     expandedIndex.value = -1;
     scaleProgress.value = restsPosed ? 1 : 0;
     positionProgress.value = restsPosed ? 1 : 0;
-    cardsOpacity.value = restsPosed ? 1 : 0;
+    cardsOpacity.value = 0;
     touching.value = false;
     runOnUI(releaseDeckOnHideOnUI)();
     dropDeckHits();

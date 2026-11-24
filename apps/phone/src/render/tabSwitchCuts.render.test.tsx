@@ -11,7 +11,7 @@ import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
 import { Dimensions, Image, Platform, StyleSheet, TextInput, View } from "react-native";
 import { deckPull, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, PULL_STAGE } from "../state/browse/deckPull";
-import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckTurn, liftDeckControl, pressDeckControl, queueDeckHit, takeDeckHit, type DeckHitCommand, type PreparedDeck } from "../state/browse/deckTurn";
+import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckTurn, releaseDeckTurnOnUI, liftDeckControl, pressDeckControl, queueDeckHit, takeDeckHit, type DeckHitCommand, type PreparedDeck } from "../state/browse/deckTurn";
 import { beginDeckPull, settleDeckPull } from "../state/browse/deckPull";
 import { deckLeading } from "../lib/deckGeometry";
 import { liftDestination } from "../state/browse/destination";
@@ -1013,6 +1013,7 @@ test("while the page owns input the deck waits laid out under it with one prepar
 test("the Tabs worklet sets the deck's final pose and its input turn in one step: the deck takes touches and TalkBack, the page body and the pull blocker let go, and that frame is marked deck-live, before any JS runs", async () => {
   if (Platform.OS !== "android") return;
   const root = await standbyDeck();
+  expect(getAnimatedStyle(hostWith(root, "deckCards")!).opacity).toBe(0);
   tapTabs();
   expect(deckTurn.live.value).toBeGreaterThan(0);
   expect(deckPull.cut.value).toBe(true);
@@ -1354,5 +1355,26 @@ test("a card pressed in the frames after the cut poses on the UI thread at the l
   for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
   expect(currentTabs().selectedId).toBe(selected);
   expect(browse.useBrowse.getState().surface).toBe("browsing");
+  unmount(root);
+});
+
+test("while the page owns input the parked deck costs nothing on the UI thread: a hidden-deck refresh, a neighbour tab's update, frames going by and a repeated release write none of the deck's turn values, republish no snapshot and don't rebuild the Tabs gesture", async () => {
+  if (Platform.OS !== "android") return;
+  const { refreshHiddenDeck } = require("../state/browse/deckHold") as typeof import("../state/browse/deckHold");
+  const root = await standbyDeck();
+  const watched = [deckTurn.live, deckTurn.reconciled, deckTurn.pressed, deckTurn.hitMark, deckTurn.drawnMark, deckTurn.prepared, deckTurn.layout, deckTurn.press] as { addListener: (id: number, listener: () => void) => void; removeListener: (id: number) => void }[];
+  let writes = 0;
+  watched.forEach((value, at) => value.addListener(4100 + at, () => void (writes += 1)));
+  const layout = deckTurn.prepared.value!.layout;
+  const tabsGesture = getByGestureTestId("floatingBarTabsTap");
+  const neighbour = toNeighbour().id;
+  act(() => refreshHiddenDeck());
+  act(() => updateTabById(neighbour, { title: "Quiet Otters" }));
+  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(16));
+  act(() => releaseDeckTurnOnUI(0));
+  expect(writes).toBe(0);
+  expect(deckTurn.prepared.value!.layout).toBe(layout);
+  expect(getByGestureTestId("floatingBarTabsTap")).toBe(tabsGesture);
+  watched.forEach((value, at) => value.removeListener(4100 + at));
   unmount(root);
 });

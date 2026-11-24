@@ -1,6 +1,6 @@
 import { useDerivedValue, type SharedValue } from "react-native-reanimated";
 import { deckPull, PULL_STAGE, pullFades } from "../../state/browse/deckPull";
-import { deckTurn } from "../../state/browse/deckTurn";
+import { deckLive } from "../../state/browse/deckTurn";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pullHeld } from "../../lib/deckPull";
 import { DECK_PHASE, type Reads } from "./DeckCard";
@@ -29,8 +29,8 @@ export type DeckPulled = {
 export function useDeckPulled(base: Base): DeckPulled {
   const { orderIds } = base;
   const cutShowsDeck = tabSwitchCuts();
-  const pulling = useDerivedValue(() => deckPull.stage.value !== PULL_STAGE.idle && !(cutShowsDeck && deckPull.cut.value && deckTurn.live.value !== 0));
-  const waking = useDerivedValue(() => pulling.value || deckPull.warm.value || deckTurn.live.value !== 0);
+  const pulling = useDerivedValue(() => deckPull.stage.value !== PULL_STAGE.idle && !(cutShowsDeck && deckPull.cut.value && deckLive.value !== 0));
+  const waking = useDerivedValue(() => pulling.value || deckPull.warm.value || deckLive.value !== 0);
   const shrinking = useDerivedValue(() => pulling.value && !pullFades(deckPull.stage.value));
   const steady = useDerivedValue(() => deckPull.steady.value && deckPull.stage.value === PULL_STAGE.growing);
   const held = useDerivedValue(() => (shrinking.value && !steady.value ? pullHeld(deckPull.shrink.value) : 1));

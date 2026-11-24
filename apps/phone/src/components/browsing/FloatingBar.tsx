@@ -347,6 +347,9 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
   tabsNow.current = onTabs;
   const callTabs = useCallback(() => tabsNow.current(), []);
   const tabId = tab.id;
+  const swipeOffset = swipe?.offset ?? null;
+  const swipeFrom = swipe?.from ?? null;
+  const swipeSpan = swipe?.span ?? 0;
   const tabsTap = useMemo(
     () =>
       Gesture.Tap()
@@ -355,11 +358,11 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
         .enabled(tabSwitchCuts())
         .onEnd((_event, success) => {
           if (!success) return;
-          const swipeLanded = swipe !== null && swipe.from.value === tabId && swipe.span > 0 && Math.abs(Math.abs(swipe.offset.value) - swipe.span) < 1;
+          const swipeLanded = swipeFrom !== null && swipeOffset !== null && swipeFrom.value === tabId && swipeSpan > 0 && Math.abs(Math.abs(swipeOffset.value) - swipeSpan) < 1;
           if (!swipeLanded && canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
           else runOnJS(callTabs)();
         }),
-    [tabId, testID, callTabs, swipe],
+    [tabId, testID, callTabs, swipeOffset, swipeFrom, swipeSpan],
   );
   return (
     <TabsMenuTrigger order={order} onTabsMenu={onTabsMenu}>

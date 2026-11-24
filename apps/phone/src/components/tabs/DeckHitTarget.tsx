@@ -3,7 +3,7 @@ import type { LayoutChangeEvent, StyleProp, ViewStyle } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { deckHitAccepted } from "../../state/browse/store";
-import { DECK_PRESS_SLOP, deckPressHolds, deckTurn, dropDeckPress, liftDeckControl, placeDeckControl, presentDeckControl, pressDeckControl, type DeckControl } from "../../state/browse/deckTurn";
+import { DECK_PRESS_SLOP, deckPressed, deckPressHolds, dropDeckPress, liftDeckControl, placeDeckControl, presentDeckControl, pressDeckControl, type DeckControl } from "../../state/browse/deckTurn";
 
 type Props = { control: DeckControl; live: boolean; originX?: number; originY: number; style?: StyleProp<ViewStyle>; children: ReactNode };
 
@@ -60,7 +60,7 @@ export function DeckHitTarget({ control, live, originX = 0, originY, style, chil
         }),
     [control, live],
   );
-  const pressed = useAnimatedStyle(() => ({ transform: [{ scale: deckTurn.pressed.value === control ? DECK_PRESSED_SCALE : 1 }] }));
+  const pressed = useAnimatedStyle(() => ({ transform: [{ scale: deckPressed.value === control ? DECK_PRESSED_SCALE : 1 }] }));
   return (
     <GestureDetector gesture={gesture}>
       <Animated.View testID={`deckHit-${control}`} collapsable={false} onLayout={laidOut} style={[style, pressed]}>

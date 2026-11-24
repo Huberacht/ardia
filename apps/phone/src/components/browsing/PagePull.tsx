@@ -5,7 +5,7 @@ import Animated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useDerivedVal
 import { DECK, DECK_REDESIGN } from "../../lib/deckGeometry";
 import { pullBarGhosts, pullBarGlyphs, pullBarShift, pullClearsBar, pullPagePose, pullRise } from "../../lib/deckPull";
 import { deckPull, hurryDeckPull, PULL_STAGE, pullFades, setDeckOwnsBar } from "../../state/browse/deckPull";
-import { deckTurn } from "../../state/browse/deckTurn";
+import { deckLive } from "../../state/browse/deckTurn";
 import { deckPullSettled, noteDeckTapWhileLanding } from "../../state/browse/store";
 import { tabsInk, usesGlass, useTheme } from "../ui";
 
@@ -83,7 +83,7 @@ export function PullBlocker() {
   );
   const style = useAnimatedStyle(() => {
     const stage = deckPull.stage.value;
-    const deckOwns = deckPull.cut.value && deckTurn.live.value !== 0;
+    const deckOwns = deckPull.cut.value && deckLive.value !== 0;
     const open = deckOwns || stage === PULL_STAGE.idle || (stage === PULL_STAGE.growing && deckPull.pageLive.value);
     return { transform: [{ translateX: open ? PULL_OFFSTAGE : 0 }] };
   });

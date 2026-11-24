@@ -31,6 +31,16 @@ export const deckTurn = {
   revision: makeMutable(""),
 };
 
+export const deckLive = deckTurn.live;
+
+export const deckReconciled = deckTurn.reconciled;
+
+export const deckPressed = deckTurn.pressed;
+
+export const deckHitMark = deckTurn.hitMark;
+
+export const deckDrawnMark = deckTurn.drawnMark;
+
 export const deckRevisionOf = (incognito: boolean, space: string | null) => `${incognito ? 1 : 0}:${space ?? ""}`;
 
 export function deckOwnsInput(): boolean {
