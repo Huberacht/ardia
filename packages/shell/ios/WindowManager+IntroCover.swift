@@ -3,9 +3,9 @@ import ArdiaCore
 
 extension WindowManager {
   func openIntroCover(id: String, over owner: String?) {
-    guard let makeContentView = WindowHost.makeContentView else { return }
+    guard let makeContentView = WindowHost.makeContentView else { return revealHeld(owner) }
     let browser = owner.flatMap { managed[$0]?.window } ?? managed.values.first(where: { $0.kind == .browser })?.window
-    guard let screen = browser?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+    guard let screen = browser?.screen ?? NSScreen.main ?? NSScreen.screens.first else { return revealHeld(owner) }
     let background = LaunchConfig.shared.background
     let frame = background ? browser?.frame ?? screen.visibleFrame : screen.frame
     let window = IntroCoverWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -39,6 +39,10 @@ extension WindowManager {
     } else {
       window.makeKeyAndOrderFront(nil)
     }
+  }
+
+  private func revealHeld(_ owner: String?) {
+    for id in owner.map({ [$0] }) ?? Array(heldHidden) { setShown(id: id, shown: true) }
   }
 
   static func clearBackdrop(_ view: NSView, depth: Int = 2) {
