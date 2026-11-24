@@ -127,6 +127,9 @@ export function ThemePicker({
   useEffect(() => {
     if (!look.dragging) onLiveTheme?.(undefined);
   }, [look.dragging]);
+  const liveTheme = useRef(onLiveTheme);
+  liveTheme.current = onLiveTheme;
+  useEffect(() => () => liveTheme.current?.(undefined), []);
   if (!profileId || incognito || !look.profile) return null;
   const reset = () => {
     look.cancel();
