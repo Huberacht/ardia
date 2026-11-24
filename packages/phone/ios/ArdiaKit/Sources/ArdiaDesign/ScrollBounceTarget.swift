@@ -4,6 +4,8 @@ public enum ScrollBounceTarget {
   public static let ancestorsSearched = 6
   public static let viewsSearched = 400
   public static let tolerance: CGFloat = 2
+  public static let retries = 20
+  public static let retryGap: Double = 0.1
 
   public static func matches(className: String, frame: CGRect, mine: CGRect) -> Bool {
     guard !className.hasPrefix("WK"), !mine.isEmpty, !frame.isEmpty else { return false }

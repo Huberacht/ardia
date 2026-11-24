@@ -508,15 +508,25 @@ final class ScrollBounceOffView: UIView {
     apply()
   }
 
+  private var retries = 0
+
   func apply() {
     guard window != nil else { return }
     if target == nil, let found = findTarget() {
       target = found
+      if PhoneTestBuild.isOn { NSLog("PAGELAB scroll off %@ after %d retries", NSStringFromClass(type(of: found)), retries) }
       watch = found.observe(\.contentSize, options: []) { scroll, _ in
         MainActor.assumeIsolated { ScrollBounceOffView.turnOff(scroll) }
       }
     }
-    if let target { Self.turnOff(target) }
+    if let target {
+      Self.turnOff(target)
+    } else if retries < ScrollBounceTarget.retries {
+      retries += 1
+      DispatchQueue.main.asyncAfter(deadline: .now() + ScrollBounceTarget.retryGap) { [weak self] in self?.apply() }
+    } else if PhoneTestBuild.isOn {
+      NSLog("PAGELAB scroll off found no scroll view behind its form")
+    }
   }
 
   static func turnOff(_ scroll: UIScrollView) {
