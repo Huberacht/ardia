@@ -41,6 +41,7 @@ export function SearchPrivacyStep() {
           if (share !== isSharing() || !redo) setSharing(share, redo ? "settings" : "onboarding");
         }}
         preview={<AnonCard on={share} />}
+        holdScroll
       >
         <OptionCard control="check" icon="stethoscope" title={SHARING_COPY.toggle} subtitle={SHARING_COPY.onboarding.row} selected={share} onPress={() => setOnboardingExtras({ share: !share })} />
       </Page>
