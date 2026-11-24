@@ -1,5 +1,6 @@
 import { useBrowser } from "../browser/store";
-import { capture, stillValid, type ConsentToken, type startClient } from "./usageClient";
+import { capture, queueSavedDurably, stillValid, type ConsentToken, type startClient } from "./usageClient";
+import { telemetryRelay } from "./relay";
 import { contextProperties, hardwareProperties, launchGuardProperties } from "./diagnostics";
 import { topAppsSharingAtLaunch } from "./topAppsSharing";
 import { appInfo } from "./transport";
@@ -23,7 +24,8 @@ export async function launchEvents(session: ReturnType<typeof startClient>, cons
   if (HOST_SHELL === "webui") await reportShellMigrationAtLaunch(consent);
 }
 
-export function reportShellMigrationAtLaunch(consent: ConsentToken | null) {
+export async function reportShellMigrationAtLaunch(consent: ConsentToken | null) {
+  if (telemetryRelay()) return "held" as const;
   return reportShellMigration({
     read: readDocument,
     save: async (name, contents) => {
@@ -31,6 +33,7 @@ export function reportShellMigrationAtLaunch(consent: ConsentToken | null) {
       await documentSaved(name);
     },
     sharing: () => stillValid(consent),
-    send: (properties) => capture("shell_migration", properties, consent),
+    send: (properties) => capture("shell_migration", properties, consent, { persist: true }),
+    persisted: () => queueSavedDurably(),
   }).catch(() => "unsaved" as const);
 }

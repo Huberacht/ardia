@@ -125,12 +125,13 @@ fn parts_of<'a>(
     by_target: &'a BTreeMap<String, StoredCredential>,
 ) -> Option<Vec<&'a [u8]>> {
     let layout = layout_of(first.comment.as_deref());
+    let owner = first.user.as_deref()?;
     let mut parts = Vec::with_capacity(layout.chunks);
     parts.push(first.blob.as_slice());
     let mut total = first.blob.len();
     for index in 1..layout.chunks {
         let part = by_target.get(&chunk_target(base, layout.generation, index))?;
-        if !continuation(part) || part.user != first.user {
+        if !continuation(part) || part.user.as_deref() != Some(owner) {
             return None;
         }
         total += part.blob.len();
@@ -142,29 +143,69 @@ fn parts_of<'a>(
     Some(parts)
 }
 
+pub fn account_in<'a>(prefix: &str, target: &'a str) -> Option<&'a str> {
+    let length = prefix.chars().count();
+    let split = target.char_indices().nth(length).map_or(target.len(), |(at, _)| at);
+    if target[..split].chars().count() != length {
+        return None;
+    }
+    let same = target[..split]
+        .chars()
+        .zip(prefix.chars())
+        .all(|(a, b)| a == b || a.to_uppercase().eq(b.to_uppercase()));
+    same.then(|| &target[split..])
+}
+
+fn claims(base: &str, first: &StoredCredential) -> Vec<String> {
+    let layout = layout_of(first.comment.as_deref());
+    (1..layout.chunks)
+        .map(|index| chunk_target(base, layout.generation, index))
+        .collect()
+}
+
 pub fn assemble(prefix: &str, stored: Vec<StoredCredential>) -> Vec<Assembled> {
     let mut by_target: BTreeMap<String, StoredCredential> = BTreeMap::new();
     for credential in stored {
-        if credential.target.starts_with(prefix) {
+        if account_in(prefix, &credential.target).is_some() {
             by_target.insert(credential.target.clone(), credential);
+        }
+    }
+    let bases: Vec<(&String, &StoredCredential)> = by_target.iter().filter(|(_, c)| !continuation(c)).collect();
+    let mut claimed: BTreeMap<String, usize> = BTreeMap::new();
+    for (base, first) in &bases {
+        for target in claims(base, first) {
+            *claimed.entry(target).or_default() += 1;
         }
     }
     let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut assembled = Vec::new();
-    for (base, first) in by_target.iter().filter(|(_, credential)| !continuation(credential)) {
-        let account = &base[prefix.len()..];
+    for (base, first) in &bases {
+        let Some(account) = account_in(prefix, base) else {
+            continue;
+        };
         if !names::secret_account(account) {
             assembled.push(Assembled::Invalid);
             continue;
         }
-        let Some(parts) = parts_of(base, first, &by_target) else {
+        let owned = first.user.as_deref() == Some(rnw_user(account).as_str());
+        let shared = claims(base, first)
+            .iter()
+            .any(|target| claimed.get(target).copied().unwrap_or(0) > 1);
+        let parts = if owned && !shared {
+            parts_of(base, first, &by_target)
+        } else {
+            None
+        };
+        let Some(parts) = parts else {
             assembled.push(Assembled::Incomplete);
+            for target in claims(base, first) {
+                if shared && claimed.get(&target).copied().unwrap_or(0) > 1 {
+                    used.insert(target);
+                }
+            }
             continue;
         };
-        let layout = layout_of(first.comment.as_deref());
-        for index in 1..layout.chunks {
-            used.insert(chunk_target(base, layout.generation, index));
-        }
+        used.extend(claims(base, first));
         let total = parts.iter().map(|part| part.len()).sum();
         let mut secret = Zeroizing::new(Vec::with_capacity(total));
         for part in parts {
@@ -176,11 +217,12 @@ pub fn assemble(prefix: &str, stored: Vec<StoredCredential>) -> Vec<Assembled> {
         });
     }
     let stale_generation = |target: &str, owner: &Option<String>| {
-        chunk_bases(target).iter().any(|base| {
-            by_target
-                .get(*base)
-                .is_some_and(|first| !continuation(first) && &first.user == owner)
-        })
+        owner.is_some()
+            && chunk_bases(target).iter().any(|base| {
+                by_target
+                    .get(*base)
+                    .is_some_and(|first| !continuation(first) && &first.user == owner)
+            })
     };
     for (target, credential) in &by_target {
         if continuation(credential) && !used.contains(target) && !stale_generation(target, &credential.user) {

@@ -28,7 +28,7 @@ type TelemetryLeadershipDeps = {
   candidate: boolean;
   locks?: LeaderLocks;
   channel: LeaderChannel | null;
-  relay(next: ((message: Relayed) => void) | null): void;
+  relay(next: ((message: Relayed) => boolean) | null): void;
   deliver(message: Relayed): void;
   handle(op: TelemetryOp, arg?: string): Promise<unknown>;
   lead(): Promise<void>;
@@ -83,10 +83,11 @@ export function startTelemetryLeadership(deps: TelemetryLeadershipDeps): Telemet
   const waiting = new Map<string, { op: TelemetryOp; arg?: string; resolve(value: unknown): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout> }>();
 
   const send = (message: Relayed) => {
+    if (unacked.size >= MAX_HELD) return false;
     const id = newId();
     unacked.set(id, message);
-    if (unacked.size > MAX_HELD) unacked.delete(unacked.keys().next().value!);
     post({ kind: "relay", id, message });
+    return true;
   };
   const askAgain = () => {
     for (const [id, { op, arg }] of waiting) post({ kind: "request", id, op, ...(arg === undefined ? {} : { arg }) });
@@ -119,8 +120,10 @@ export function startTelemetryLeadership(deps: TelemetryLeadershipDeps): Telemet
   };
 
   deps.relay((message) => {
-    if (role === "follower") send(message);
-    else if (held.length < MAX_HELD) held.push(message);
+    if (role === "follower") return send(message);
+    if (held.length >= MAX_HELD) return false;
+    held.push(message);
+    return true;
   });
 
   if (channel) channel.onmessage = (event) => {

@@ -200,20 +200,27 @@ enum Opening {
     Lock,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Traverse,
+    Read,
+    Write,
+}
+
 #[cfg(unix)]
 mod sys {
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
     use std::fs::File;
     use std::io;
     use std::os::unix::io::{AsRawFd, FromRawFd};
 
-    use super::{unsafe_path, Entry, Opening};
+    use super::{unsafe_path, Access, Entry, Opening};
 
     fn c_name(name: &str) -> io::Result<CString> {
         CString::new(name).map_err(|_| unsafe_path(name.into()))
     }
 
-    pub fn open_root(path: &std::path::Path) -> io::Result<File> {
+    pub fn open_base(path: &std::path::Path) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         std::fs::OpenOptions::new()
             .read(true)
@@ -222,7 +229,7 @@ mod sys {
             .map_err(|_| unsafe_path(path.to_path_buf()))
     }
 
-    pub fn child_dir(dir: &File, name: &str, create: bool) -> io::Result<Option<File>> {
+    pub fn child_dir(dir: &File, name: &str, _access: Access, create: bool) -> io::Result<Option<File>> {
         let c = c_name(name)?;
         for _ in 0..2 {
             let fd = unsafe {
@@ -292,6 +299,35 @@ mod sys {
         })
     }
 
+    pub fn list(dir: &File) -> io::Result<Vec<String>> {
+        let fd = unsafe { libc::dup(dir.as_raw_fd()) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let stream = unsafe { libc::fdopendir(fd) };
+        if stream.is_null() {
+            let error = io::Error::last_os_error();
+            unsafe { libc::close(fd) };
+            return Err(error);
+        }
+        unsafe { libc::rewinddir(stream) };
+        let mut names = Vec::new();
+        loop {
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+            if let Ok(name) = name.to_str() {
+                if name != "." && name != ".." {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        unsafe { libc::closedir(stream) };
+        Ok(names)
+    }
+
     pub fn rename(dir: &File, _staged: &File, from: &str, to: &str) -> io::Result<()> {
         let (from, to) = (c_name(from)?, c_name(to)?);
         if unsafe { libc::renameat(dir.as_raw_fd(), from.as_ptr(), dir.as_raw_fd(), to.as_ptr()) } != 0 {
@@ -319,28 +355,41 @@ mod sys {
 
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{
-        NtCreateFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF,
-        FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
+        FileDispositionInformationEx, FileRenameInformation, FileRenameInformationEx, NtCreateFile,
+        NtSetInformationFile, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_DISPOSITION_DELETE,
+        FILE_DISPOSITION_INFORMATION_EX, FILE_DISPOSITION_POSIX_SEMANTICS, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+        FILE_OPEN_IF, FILE_OPEN_REPARSE_POINT, FILE_RENAME_INFORMATION, FILE_RENAME_POSIX_SEMANTICS,
+        FILE_RENAME_REPLACE_IF_EXISTS, FILE_SYNCHRONOUS_IO_NONALERT,
     };
-    use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING};
+    use windows_sys::Win32::Foundation::{
+        RtlNtStatusToDosError, HANDLE, NTSTATUS, OBJ_CASE_INSENSITIVE, UNICODE_STRING,
+    };
     use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfo, FileDispositionInfoEx, FileRenameInfo, FileRenameInfoEx, SetFileInformationByHandle,
-        DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_DISPOSITION_FLAG_DELETE,
-        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX, FILE_GENERIC_READ,
-        FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, SYNCHRONIZE,
+        FileDispositionInfo, FileFullDirectoryInfo, FileFullDirectoryRestartInfo, GetFileInformationByHandleEx,
+        SetFileInformationByHandle, DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_ATTRIBUTE_NORMAL,
+        FILE_DISPOSITION_INFO, FILE_FULL_DIR_INFO, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, SYNCHRONIZE,
     };
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
-    use super::{kind_of, unsafe_path, Entry, Opening, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT};
+    use super::{
+        kind_of, unsafe_path, Access, Entry, Opening, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
 
-    const FILE_RENAME_FLAG_REPLACE_IF_EXISTS: u32 = 1;
-    const FILE_RENAME_FLAG_POSIX_SEMANTICS: u32 = 2;
     const ERROR_DIRECTORY: i32 = 267;
     const ERROR_FILE_NOT_FOUND: i32 = 2;
     const ERROR_PATH_NOT_FOUND: i32 = 3;
+    const ERROR_NO_MORE_FILES: i32 = 18;
     const ERROR_CANT_ACCESS_FILE: i32 = 1920;
     const ERROR_STOPPED_ON_SYMLINK: i32 = 681;
+
+    fn status_error(status: NTSTATUS) -> io::Error {
+        io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)
+    }
+
+    fn handle(file: &File) -> HANDLE {
+        file.as_raw_handle() as HANDLE
+    }
 
     fn nt_open(dir: &File, name: &str, access: u32, disposition: u32, options: u32) -> io::Result<File> {
         let wide: Vec<u16> = name.encode_utf16().collect();
@@ -352,17 +401,17 @@ mod sys {
         };
         let attributes = OBJECT_ATTRIBUTES {
             Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
-            RootDirectory: dir.as_raw_handle() as HANDLE,
+            RootDirectory: handle(dir),
             ObjectName: &object_name,
             Attributes: OBJ_CASE_INSENSITIVE,
             SecurityDescriptor: null(),
             SecurityQualityOfService: null(),
         };
-        let mut handle: HANDLE = null_mut();
+        let mut opened: HANDLE = null_mut();
         let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
         let status = unsafe {
             NtCreateFile(
-                &mut handle,
+                &mut opened,
                 access,
                 &attributes,
                 &mut status_block,
@@ -376,42 +425,37 @@ mod sys {
             )
         };
         if status < 0 {
-            let code = unsafe { RtlNtStatusToDosError(status) } as i32;
-            return Err(io::Error::from_raw_os_error(code));
+            return Err(status_error(status));
         }
-        Ok(unsafe { File::from_raw_handle(handle as RawHandle) })
+        Ok(unsafe { File::from_raw_handle(opened as RawHandle) })
     }
 
     fn missing(error: &io::Error) -> bool {
         matches!(error.raw_os_error(), Some(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND))
     }
 
-    pub fn open_root(path: &std::path::Path) -> io::Result<File> {
+    fn folder_access(access: Access) -> u32 {
+        let traverse = FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+        match access {
+            Access::Traverse => traverse,
+            Access::Read => traverse | FILE_LIST_DIRECTORY,
+            Access::Write => traverse | FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
+        }
+    }
+
+    pub fn open_base(path: &std::path::Path) -> io::Result<File> {
         use std::os::windows::fs::OpenOptionsExt;
-        let open = |access: u32| {
-            std::fs::OpenOptions::new()
-                .access_mode(access)
-                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-                .open(path)
-        };
-        let reading = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
-        open(reading | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY)
-            .or_else(|_| open(reading))
+        std::fs::OpenOptions::new()
+            .access_mode(folder_access(Access::Traverse))
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
             .map_err(|_| unsafe_path(path.to_path_buf()))
     }
 
-    pub fn child_dir(dir: &File, name: &str, create: bool) -> io::Result<Option<File>> {
-        let access = FILE_LIST_DIRECTORY
-            | FILE_TRAVERSE
-            | FILE_READ_ATTRIBUTES
-            | SYNCHRONIZE
-            | if create {
-                FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | DELETE
-            } else {
-                0
-            };
+    pub fn child_dir(dir: &File, name: &str, access: Access, create: bool) -> io::Result<Option<File>> {
+        let wanted = if create { Access::Write } else { access };
         let disposition = if create { FILE_OPEN_IF } else { FILE_OPEN };
-        match nt_open(dir, name, access, disposition, FILE_DIRECTORY_FILE) {
+        match nt_open(dir, name, folder_access(wanted), disposition, FILE_DIRECTORY_FILE) {
             Ok(folder) => Ok(Some(folder)),
             Err(error) if !create && missing(&error) => Ok(None),
             Err(error)
@@ -443,74 +487,100 @@ mod sys {
         }
     }
 
-    fn rename_info(dir: &File, to: &str, flags: u32) -> Vec<u64> {
-        let wide: Vec<u16> = to.encode_utf16().collect();
-        let header = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-        let bytes = header + wide.len() * 2 + 2;
-        let mut buffer = vec![0u64; bytes.div_ceil(8)];
-        let info = buffer.as_mut_ptr() as *mut FILE_RENAME_INFO;
-        unsafe {
-            (*info).Anonymous.Flags = flags;
-            (*info).RootDirectory = dir.as_raw_handle() as HANDLE;
-            (*info).FileNameLength = (wide.len() * 2) as u32;
-            std::ptr::copy_nonoverlapping(wide.as_ptr(), (*info).FileName.as_mut_ptr(), wide.len());
+    pub fn list(dir: &File) -> io::Result<Vec<String>> {
+        let mut names = Vec::new();
+        let mut buffer = vec![0u64; 8192];
+        let size = (buffer.len() * 8) as u32;
+        let name_at = std::mem::offset_of!(FILE_FULL_DIR_INFO, FileName);
+        let length_at = std::mem::offset_of!(FILE_FULL_DIR_INFO, FileNameLength);
+        let mut class = FileFullDirectoryRestartInfo;
+        loop {
+            let base = buffer.as_mut_ptr() as *mut u8;
+            if unsafe { GetFileInformationByHandleEx(handle(dir), class, base as *mut c_void, size) } == 0 {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_NO_MORE_FILES) {
+                    return Ok(names);
+                }
+                return Err(error);
+            }
+            class = FileFullDirectoryInfo;
+            let mut offset = 0usize;
+            loop {
+                let entry = unsafe { base.add(offset) };
+                let next = unsafe { std::ptr::read_unaligned(entry as *const u32) } as usize;
+                let length = unsafe { std::ptr::read_unaligned(entry.add(length_at) as *const u32) } as usize;
+                if name_at + length > buffer.len() * 8 - offset {
+                    return Err(io::Error::other("directory entry runs past its buffer"));
+                }
+                let mut wide = vec![0u16; length / 2];
+                unsafe { std::ptr::copy_nonoverlapping(entry.add(name_at), wide.as_mut_ptr() as *mut u8, length) };
+                if let Ok(name) = String::from_utf16(&wide) {
+                    if name != "." && name != ".." {
+                        names.push(name);
+                    }
+                }
+                if next == 0 {
+                    break;
+                }
+                offset += next;
+            }
         }
-        buffer
     }
 
-    pub fn rename(dir: &File, staged: &File, _from: &str, to: &str) -> io::Result<()> {
-        let size = |buffer: &Vec<u64>| (buffer.len() * 8) as u32;
-        let posix = rename_info(
-            dir,
-            to,
-            FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS,
-        );
-        let renamed = unsafe {
-            SetFileInformationByHandle(
-                staged.as_raw_handle() as HANDLE,
-                FileRenameInfoEx,
-                posix.as_ptr() as *const c_void,
-                size(&posix),
-            )
-        };
-        if renamed != 0 {
-            return Ok(());
+    fn rename_buffer(dir: &File, to: &str, flags: u32) -> (Vec<u64>, u32) {
+        let wide: Vec<u16> = to.encode_utf16().collect();
+        let header = std::mem::offset_of!(FILE_RENAME_INFORMATION, FileName);
+        let bytes = header + wide.len() * 2;
+        let mut buffer = vec![0u64; (bytes + 2).div_ceil(8)];
+        let base = buffer.as_mut_ptr() as *mut u8;
+        let info = base as *mut FILE_RENAME_INFORMATION;
+        unsafe {
+            std::ptr::addr_of_mut!((*info).Anonymous).cast::<u32>().write(flags);
+            std::ptr::addr_of_mut!((*info).RootDirectory).write(handle(dir));
+            std::ptr::addr_of_mut!((*info).FileNameLength).write((wide.len() * 2) as u32);
+            std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, base.add(header), wide.len() * 2);
         }
-        let plain = rename_info(dir, to, 1);
-        let renamed = unsafe {
-            SetFileInformationByHandle(
-                staged.as_raw_handle() as HANDLE,
-                FileRenameInfo,
-                plain.as_ptr() as *const c_void,
-                size(&plain),
-            )
-        };
-        if renamed == 0 {
-            return Err(io::Error::last_os_error());
+        (buffer, bytes as u32)
+    }
+
+    fn set_information(file: &File, buffer: *const c_void, length: u32, class: i32) -> io::Result<()> {
+        let mut status_block: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+        let status = unsafe { NtSetInformationFile(handle(file), &mut status_block, buffer, length, class) };
+        if status < 0 {
+            return Err(status_error(status));
         }
         Ok(())
     }
 
+    pub fn rename(dir: &File, staged: &File, _from: &str, to: &str) -> io::Result<()> {
+        let (posix, length) = rename_buffer(dir, to, FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS);
+        if set_information(staged, posix.as_ptr() as *const c_void, length, FileRenameInformationEx).is_ok() {
+            return Ok(());
+        }
+        let (plain, length) = rename_buffer(dir, to, 1);
+        set_information(staged, plain.as_ptr() as *const c_void, length, FileRenameInformation)
+    }
+
     pub fn remove(dir: &File, name: &str) -> io::Result<()> {
         let file = nt_open(dir, name, DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_OPEN, 0)?;
-        let posix = FILE_DISPOSITION_INFO_EX {
-            Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        let posix = FILE_DISPOSITION_INFORMATION_EX {
+            Flags: FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS,
         };
-        let removed = unsafe {
-            SetFileInformationByHandle(
-                file.as_raw_handle() as HANDLE,
-                FileDispositionInfoEx,
-                &posix as *const _ as *const c_void,
-                std::mem::size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
-            )
-        };
-        if removed != 0 {
+        let length = std::mem::size_of::<FILE_DISPOSITION_INFORMATION_EX>() as u32;
+        if set_information(
+            &file,
+            &posix as *const _ as *const c_void,
+            length,
+            FileDispositionInformationEx,
+        )
+        .is_ok()
+        {
             return Ok(());
         }
         let plain = FILE_DISPOSITION_INFO { DeleteFile: true };
         let removed = unsafe {
             SetFileInformationByHandle(
-                file.as_raw_handle() as HANDLE,
+                handle(&file),
                 FileDispositionInfo,
                 &plain as *const _ as *const c_void,
                 std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
@@ -562,9 +632,9 @@ impl Dir {
         sys::child_entry(&self.file, child_name(name)?)
     }
 
-    pub fn child(&self, name: &str, create: bool) -> io::Result<Option<Dir>> {
+    fn child_with(&self, name: &str, access: Access, create: bool) -> io::Result<Option<Dir>> {
         let name = child_name(name)?;
-        let Some(file) = sys::child_dir(&self.file, name, create)? else {
+        let Some(file) = sys::child_dir(&self.file, name, access, create)? else {
             return Ok(None);
         };
         let meta = file.metadata()?;
@@ -577,13 +647,12 @@ impl Dir {
         }))
     }
 
+    pub fn child(&self, name: &str, create: bool) -> io::Result<Option<Dir>> {
+        self.child_with(name, if create { Access::Write } else { Access::Read }, create)
+    }
+
     pub fn list(&self) -> io::Result<Vec<String>> {
-        let mut names = Vec::new();
-        for item in fs::read_dir(final_path(&self.file)?)? {
-            if let Ok(name) = item?.file_name().into_string() {
-                names.push(name);
-            }
-        }
+        let mut names = sys::list(&self.file)?;
         names.sort();
         Ok(names)
     }
@@ -608,7 +677,7 @@ impl Dir {
         if !meta.is_file() {
             return Ok(Fetched::NotRegular);
         }
-        if link_count(&file)? > 1 {
+        if link_count(&file)? != 1 {
             return Ok(Fetched::HardLinked);
         }
         if meta.len() > limit {
@@ -698,62 +767,66 @@ pub struct Root {
     pub resolved: PathBuf,
 }
 
-impl Root {
-    pub fn new(path: &Path) -> io::Result<Root> {
-        check_ancestors(path)?;
-        if !matches!(entry(path)?, Entry::Directory) {
-            return Err(unsafe_path(path.to_path_buf()));
+fn base_and_parts(path: &Path) -> io::Result<(PathBuf, Vec<String>)> {
+    let mut base = PathBuf::new();
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir if parts.is_empty() => base.push(component),
+            Component::Normal(name) => parts.push(
+                name.to_str()
+                    .ok_or_else(|| unsafe_path(path.to_path_buf()))?
+                    .to_string(),
+            ),
+            _ => return Err(unsafe_path(path.to_path_buf())),
         }
-        let file = sys::open_root(path)?;
-        let meta = file.metadata()?;
-        if is_link(&meta) || !meta.is_dir() {
-            return Err(unsafe_path(path.to_path_buf()));
-        }
-        let resolved = final_path(&file)?;
-        if !same_place(&resolved, &plain(fs::canonicalize(path)?)) {
-            return Err(unsafe_path(path.to_path_buf()));
-        }
-        Ok(Root {
-            dir: Dir {
-                file,
-                path: path.to_path_buf(),
-            },
-            path: path.to_path_buf(),
-            resolved,
-        })
     }
+    if base.as_os_str().is_empty() || !path.is_absolute() {
+        return Err(unsafe_path(path.to_path_buf()));
+    }
+    Ok((base, parts))
+}
 
-    pub fn open_or_create(path: &Path) -> io::Result<Root> {
-        check_ancestors(path)?;
-        let mut existing = path.to_path_buf();
-        let mut missing = Vec::new();
-        while matches!(entry(&existing)?, Entry::Missing) {
-            let Some(name) = existing.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
-                return Err(unsafe_path(path.to_path_buf()));
+impl Root {
+    fn walk(path: &Path, create: bool) -> io::Result<Option<Root>> {
+        let (base, parts) = base_and_parts(path)?;
+        let mut dir = Dir {
+            file: sys::open_base(&base)?,
+            path: base,
+        };
+        let last = parts.len();
+        for (index, part) in parts.iter().enumerate() {
+            let access = if index + 1 == last {
+                Access::Read
+            } else {
+                Access::Traverse
             };
-            missing.push(name);
-            if !existing.pop() {
-                return Err(unsafe_path(path.to_path_buf()));
-            }
-        }
-        if missing.is_empty() {
-            return Root::new(path);
-        }
-        let base = Root::new(&existing)?;
-        let mut dir = base.dir;
-        for name in missing.iter().rev() {
-            dir = dir.child(name, true)?.ok_or_else(|| unsafe_path(path.to_path_buf()))?;
+            let next = match dir.child_with(part, access, false)? {
+                Some(next) if create && index + 1 == last => dir.child_with(part, Access::Write, true)?.or(Some(next)),
+                Some(next) => Some(next),
+                None if create => dir.child_with(part, Access::Write, true)?,
+                None => None,
+            };
+            let Some(next) = next else {
+                return Ok(None);
+            };
+            dir = next;
         }
         let resolved = final_path(&dir.file)?;
-        if !within(&resolved, &base.resolved) {
-            return Err(unsafe_path(path.to_path_buf()));
-        }
         dir.path = path.to_path_buf();
-        Ok(Root {
+        Ok(Some(Root {
             dir,
             path: path.to_path_buf(),
             resolved,
-        })
+        }))
+    }
+
+    pub fn new(path: &Path) -> io::Result<Root> {
+        Root::walk(path, false)?.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such folder"))
+    }
+
+    pub fn open_or_create(path: &Path) -> io::Result<Root> {
+        Root::walk(path, true)?.ok_or_else(|| unsafe_path(path.to_path_buf()))
     }
 
     pub fn dir(&self) -> &Dir {

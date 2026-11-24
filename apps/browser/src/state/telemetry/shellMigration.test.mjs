@@ -52,7 +52,7 @@ test("anything unexpected in the report is not sent", () => {
 });
 
 function reporting(store, sharing, sent = []) {
-  return { sent, read: store.read, save: store.save, sharing: () => sharing, send: (properties) => (sent.push(properties), true) };
+  return { sent, read: store.read, save: store.save, sharing: () => sharing, send: (properties) => (sent.push(properties), true), persisted: async () => true };
 }
 
 test("each migration run is reported once, and only after the event was sent", async () => {
@@ -84,6 +84,35 @@ test("a capture that drops or throws leaves the run pending", async () => {
   assert.equal(await reportShellMigration({ ...reporting(store, true), send: () => undefined }), "dropped");
   assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
   assert.ok(pendingShellMigration(store.read));
+});
+
+test("an event whose queue didn't reach disk leaves the run pending", async () => {
+  const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+  assert.equal(await reportShellMigration({ ...reporting(store, true), persisted: async () => false }), "unpersisted");
+  assert.equal(await reportShellMigration({ ...reporting(store, true), persisted: () => Promise.reject(new Error("disk")) }), "unpersisted");
+  assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
+  assert.equal(await reportShellMigration(reporting(store, true)), "reported");
+});
+
+test("a relay that drops the event makes capture say so, and the run stays pending", async () => {
+  const { capture } = await import("./client.ts");
+  const { setTelemetryRelay } = await import("./relay.ts");
+  const { setConsentPeriod, consentToken } = await import("./consentPeriod.ts");
+  setConsentPeriod(true, "relay-drop");
+  const consent = consentToken();
+  const relayed = [];
+  setTelemetryRelay({ capture: (event) => (relayed.push(event), false), log() {}, resetId: async () => "", change: async () => true, installId: () => "" });
+  try {
+    assert.equal(capture("shell_migration", { outcome: "migrated" }, consent), false);
+    const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+    const outcome = await reportShellMigration({ ...reporting(store, true), send: (properties) => capture("shell_migration", properties, consent) });
+    assert.equal(outcome, "dropped");
+    assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
+    assert.deepEqual(relayed, ["shell_migration", "shell_migration"]);
+  } finally {
+    setTelemetryRelay(null);
+    setConsentPeriod(false, null);
+  }
 });
 
 test("a failed save of the reported mark leaves the run pending for the next launch", async () => {

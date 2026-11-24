@@ -135,8 +135,16 @@ function Clear-WebUI([string]$folder = $web) {
   Remove-Item -LiteralPath $folder -Recurse -Force
 }
 
+function All-Processes {
+  try {
+    @(Get-CimInstance Win32_Process -ErrorAction Stop)
+  } catch {
+    throw "the process list can't be read, so it can't be shown that the RNW build stopped: $($_.Exception.Message)"
+  }
+}
+
 function Rnw-Tree([int]$root) {
-  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $all = All-Processes
   $tree = @{ $root = $true }
   do {
     $grew = $false
@@ -148,8 +156,13 @@ function Rnw-Tree([int]$root) {
 }
 
 function Rnw-Running {
-  $folder = (Resolve-Path -LiteralPath $RnwApp).Path.TrimEnd('\') + '\'
-  @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($folder, [StringComparison]::OrdinalIgnoreCase) })
+  $folder = (Resolve-Path -LiteralPath $RnwApp -ErrorAction Stop).Path.TrimEnd('\') + '\'
+  $all = All-Processes
+  $unverified = @($all | Where-Object { -not $_.ExecutablePath -and $_.Name -match '^Ardia' })
+  if ($unverified.Count) {
+    throw "$($unverified.Count) Ardia processes whose program can't be read (another user's, or protected): $(($unverified | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ', ')"
+  }
+  @($all | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($folder, [StringComparison]::OrdinalIgnoreCase) })
 }
 
 function Run-Rnw([int]$Milliseconds) {
@@ -170,7 +183,12 @@ function Run-Rnw([int]$Milliseconds) {
 
 function Assert-RnwStopped([string]$when) {
   if (-not $RnwApp) { return }
-  $left = Rnw-Running
+  try {
+    $left = Rnw-Running
+  } catch {
+    Check "rnw-stopped-$when" $false "$($_.Exception.Message)"
+    throw
+  }
   Check "rnw-stopped-$when" ($left.Count -eq 0) "processes running from $RnwApp $when`: $(($left | ForEach-Object { "$($_.Name) $($_.ProcessId)" }) -join ', ')"
   if ($left.Count) { throw "the RNW build is still running from $RnwApp; not migrating against a live profile" }
 }

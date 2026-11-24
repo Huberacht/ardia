@@ -849,5 +849,65 @@ fn a_destination_name_of_255_characters_stages_and_lands() {
     let name = names::secret_file(&"a".repeat(120));
     assert_eq!(name.len(), 255);
     root.dir().write(&name, b"sealed").unwrap();
-    assert_eq!(fs::read(scratch.0.join("webui").join(&name)).unwrap(), b"sealed");
+    assert_eq!(
+        fs::read(long_path(&scratch.0.join("webui").join(&name))).unwrap(),
+        b"sealed"
+    );
+    root.dir().write(&name, b"sealed again").unwrap();
+    assert_eq!(
+        fs::read(long_path(&scratch.0.join("webui").join(&name))).unwrap(),
+        b"sealed again"
+    );
+}
+
+#[test]
+fn a_255_character_secret_conflicting_twice_is_kept_twice() {
+    let scratch = Scratch::new("long-kept");
+    let sealer = FakeDpapi::new();
+    let layout = layout(&scratch.0);
+    let account = "a".repeat(120);
+    let mut vault = FakeVault::empty();
+    vault.add_rnw(PREFIX, &account, b"real token", 1);
+    let target = layout
+        .webui_data
+        .join(names::SECRETS_FOLDER)
+        .join(names::secret_file(&account));
+    let pilot = |bytes: &[u8]| {
+        fs::create_dir_all(layout.webui_data.join(names::SECRETS_FOLDER)).unwrap();
+        fs::write(long_path(&target), bytes).unwrap();
+    };
+    pilot(b"pilot one");
+    let first = migrate(
+        &layout,
+        &sealer,
+        &vault,
+        &Faults {
+            fail_at_commit: Some(2),
+        },
+    );
+    assert_eq!(first.outcome, Outcome::Failed, "{first:?}");
+    pilot(b"pilot two");
+    let second = run(&layout, &sealer, &vault);
+    assert_eq!(second.outcome, Outcome::Migrated, "{second:?}");
+    let kept = tree(&long_path(
+        &layout.webui_data.join(names::KEPT_FOLDER).join(names::SECRETS_FOLDER),
+    ));
+    let mut found: Vec<&[u8]> = kept.values().map(Vec::as_slice).collect();
+    found.sort();
+    assert_eq!(found, vec![b"pilot one".as_slice(), b"pilot two".as_slice()]);
+    assert!(kept.keys().all(|name| name.encode_utf16().count() <= 255));
+    assert_eq!(opened(&sealer, &layout.webui_data, &account).unwrap(), b"real token");
+}
+
+#[test]
+fn an_empty_run_still_sweeps_its_staged_files() {
+    let scratch = Scratch::new("empty-sweep");
+    let sealer = FakeDpapi::new();
+    let layout = layout(&scratch.0);
+    let leftover = format!(".ardia-mig-1-1-abcd{}", names::PARTIAL_SUFFIX);
+    write(&layout.webui_data.join(&leftover), b"half");
+    let report = run(&layout, &sealer, &FakeVault::empty());
+    assert_eq!(report.outcome, Outcome::NothingToMigrate);
+    assert_eq!(report.counts.partials_swept, 1);
+    assert!(!layout.webui_data.join(&leftover).exists());
 }

@@ -11,6 +11,14 @@ use ardia_shell_migration::credentials::{self, StoredCredential};
 use ardia_shell_migration::{names, Layout, Sealer, Vault};
 use zeroize::Zeroizing;
 
+pub fn long_path(path: &Path) -> PathBuf {
+    if cfg!(windows) && !path.to_string_lossy().starts_with(r"\\?\") {
+        PathBuf::from(format!(r"\\?\{}", path.display()))
+    } else {
+        path.to_path_buf()
+    }
+}
+
 pub struct Scratch(pub PathBuf);
 
 impl Scratch {

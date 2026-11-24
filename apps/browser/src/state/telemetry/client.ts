@@ -81,21 +81,26 @@ function persistQueue(now = false) {
   else persistTimer = setTimeout(write, 2000);
 }
 
-export function saveQueueNow(timeoutMs = 1000): Promise<void> {
-  try {
-    flushLocalNow();
-  } catch {}
-  if (!saved().sharing) return Promise.resolve();
+function saveQueueDoc(timeoutMs: number): Promise<boolean> {
+  if (!saved().sharing) return Promise.resolve(false);
   clearTimeout(persistTimer);
   persistTimer = undefined;
   try {
     loadQueue();
-    const landed = saveDocument(QUEUE_DOC, queueDoc()).catch(() => {});
-    return withDeadline(landed, timeoutMs, undefined);
+    return withDeadline(saveDocument(QUEUE_DOC, queueDoc()).then(() => true, () => false), timeoutMs, false);
   } catch {
-    return Promise.resolve();
+    return Promise.resolve(false);
   }
 }
+
+export function saveQueueNow(timeoutMs = 1000): Promise<void> {
+  try {
+    flushLocalNow();
+  } catch {}
+  return saveQueueDoc(timeoutMs).then(() => undefined);
+}
+
+export const queueSavedDurably = (timeoutMs = 5000): Promise<boolean> => (telemetryRelay() ? Promise.resolve(false) : saveQueueDoc(timeoutMs));
 
 function clearQueue() {
   queue = { events: [], logs: [] };
@@ -139,8 +144,8 @@ export function capture<P extends Record<string, unknown>, R extends Record<stri
   }
   const relay = telemetryRelay();
   if (relay) {
-    relay.capture(event, withoutSecrets(props, "telemetry"), consent, { ...options, raw: withoutSecrets(options.raw, "telemetry") });
-    return sharing;
+    const relayed = relay.capture(event, withoutSecrets(props, "telemetry"), consent, { ...options, raw: withoutSecrets(options.raw, "telemetry") });
+    return sharing && relayed === true;
   }
   try {
     const { installId } = saved();

@@ -299,9 +299,32 @@ fn read_report(root: &Root, name: &str) -> Option<Value> {
     }
 }
 
+pub fn valid_marker(marker: &Value) -> bool {
+    let finished = ["migrated", "migrated_with_skips", "nothing_to_migrate"];
+    let run_ok = marker
+        .get("run")
+        .and_then(Value::as_str)
+        .is_some_and(|run| run.len() == 32 && run.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    let outcome_ok = marker
+        .get("outcome")
+        .and_then(Value::as_str)
+        .is_some_and(|outcome| finished.contains(&outcome));
+    let counts_ok = marker.get("counts").and_then(Value::as_object).is_some_and(|counts| {
+        Counts::default()
+            .fields()
+            .iter()
+            .all(|(name, _)| counts.get(*name).is_some_and(Value::is_u64))
+    });
+    marker.get("version").and_then(Value::as_u64) == Some(MARKER_VERSION)
+        && run_ok
+        && outcome_ok
+        && counts_ok
+        && marker.get("failed_stage").is_none()
+        && marker.get("attempt").is_some_and(Value::is_u64)
+}
+
 fn marker_in(root: &Root) -> Option<Value> {
-    read_report(root, names::MARKER_NAME)
-        .filter(|marker| marker.get("version").and_then(Value::as_u64) == Some(MARKER_VERSION))
+    read_report(root, names::MARKER_NAME).filter(valid_marker)
 }
 
 pub fn read_marker(webui_data: &Path) -> Option<Value> {
@@ -320,8 +343,30 @@ fn write_report(root: &Root, name: &str, report: &Report) -> io::Result<()> {
     root.dir().write(name, &report_bytes(report)?)
 }
 
-fn kept_name(name: &str, run: &str) -> String {
-    format!("{name}.{}.kept", &run[..run.len().min(12)])
+const NAME_LIMIT: usize = 255;
+
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+pub fn kept_name(name: &str, run: &str) -> String {
+    let suffix = format!(".{}.kept", &run[..run.len().min(12)]);
+    let full = format!("{name}{suffix}");
+    if full.encode_utf16().count() <= NAME_LIMIT {
+        return full;
+    }
+    let tag = format!(".{:016x}{suffix}", fnv(name));
+    let room = NAME_LIMIT - tag.len();
+    let mut cut = String::new();
+    for c in name.chars() {
+        if cut.encode_utf16().count() + c.len_utf16() > room {
+            break;
+        }
+        cut.push(c);
+    }
+    format!("{cut}{tag}")
 }
 
 impl Migration<'_> {
@@ -503,10 +548,6 @@ impl Migration<'_> {
             let Some(account) = names::sync_key_account(&name) else {
                 continue;
             };
-            if !seen.insert(names::folded(&name)) {
-                self.counts.skipped_case_clash += 1;
-                continue;
-            }
             let bytes = match source.read(&name, SYNC_KEY_LIMIT)? {
                 Fetched::Data(bytes) => bytes,
                 other => {
@@ -524,6 +565,10 @@ impl Migration<'_> {
                 continue;
             }
             let target = names::webui_sync_key_file(account);
+            if !seen.insert(target.clone()) {
+                self.counts.skipped_case_clash += 1;
+                continue;
+            }
             match self.place(&[names::SYNC_FOLDER], &target, &bytes, &|existing| {
                 existing == bytes.as_slice()
             })? {
@@ -711,7 +756,11 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         counts: Counts::default(),
         commits: 0,
     };
-    let stepped = if nothing { Ok(()) } else { migration.steps() };
+    let stepped = if nothing {
+        migration.sweep().map_err(|e| (Stage::Lock, e))
+    } else {
+        migration.steps()
+    };
     report.counts = migration.counts.clone();
     if let Err((stage, _error)) = stepped {
         return failed(report, stage);

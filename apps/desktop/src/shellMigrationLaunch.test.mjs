@@ -34,6 +34,7 @@ async function launch(disk, sharing, writes = "store") {
     },
     sharing: () => sharing,
     send: (properties) => (sent.push(properties), true),
+    persisted: async () => true,
   }).catch((error) => `unsaved: ${error.code}`);
   return { outcome, sent };
 }
@@ -77,6 +78,7 @@ test("on a host that serves no documents (today's Windows pilot) nothing is read
     save: (name, contents) => documents.write(name, contents),
     sharing: () => true,
     send: (properties) => (sent.push(properties), true),
+    persisted: async () => true,
   });
   assert.deepEqual({ outcome, sent }, { outcome: "none", sent: [] });
 });

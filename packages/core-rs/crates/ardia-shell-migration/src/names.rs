@@ -22,7 +22,9 @@ const RNW_SCRATCH_FILES: [&str; 5] = [
     "Ardia.png",
 ];
 
-const RNW_FOLDERS: [&str; 9] = [
+const RNW_FOLDERS: [&str; 11] = [
+    SECRETS_FOLDER,
+    KEPT_FOLDER,
     CHROMIUM_USER_DATA,
     SYNC_FOLDER,
     CONFIG_FOLDER,

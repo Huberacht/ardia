@@ -100,10 +100,13 @@ fn credential_manager_chunks_assemble_from_the_real_vault() {
 
 #[test]
 fn an_empty_vault_lists_nothing() {
-    assert!(CredentialManager
-        .list("Ardia Shell Migration Test That Does Not Exist/")
-        .unwrap()
-        .is_empty());
+    match CredentialManager.list("Ardia Shell Migration Test That Does Not Exist/") {
+        Ok(listed) => assert!(listed.is_empty()),
+        Err(error) if error.raw_os_error() == Some(NO_LOGON_SESSION) => {
+            eprintln!("Credential Manager has no logon session here: skipped")
+        }
+        Err(error) => panic!("{error}"),
+    }
 }
 
 fn junction(link: &std::path::Path, target: &std::path::Path) {

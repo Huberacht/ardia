@@ -449,21 +449,131 @@ fn hostile_names_never_become_files_or_purposes_that_escape() {
 }
 
 #[test]
-fn a_chunk_name_two_accounts_could_claim_goes_to_its_owner() {
+fn a_chunk_two_bases_both_claim_fails_both() {
     let shared = format!("{PREFIX}a#g1#1");
     let parts = vec![
         owned(&format!("{PREFIX}a"), Some("Ardia g1 2"), "a", &[1u8; CHUNK_BYTES]),
         owned(&format!("{PREFIX}a#g1"), Some("Ardia 2"), "a#g1", &[2u8; CHUNK_BYTES]),
-        owned(&shared, None, "a#g1", b"belongs to the legacy account"),
+        owned(&shared, None, "a#g1", b"which account is this?"),
     ];
     let assembled = assemble(PREFIX, parts);
     assert_eq!(
         assembled.iter().filter(|a| matches!(a, Assembled::Incomplete)).count(),
-        1
+        2
     );
-    let mut expected = vec![2u8; CHUNK_BYTES];
-    expected.extend_from_slice(b"belongs to the legacy account");
-    assert_eq!(secrets(assembled), vec![("a#g1".to_string(), expected)]);
+    assert_eq!(assembled.iter().filter(|a| matches!(a, Assembled::Orphan)).count(), 0);
+    assert!(secrets(assembled).is_empty());
+}
+
+#[test]
+fn owners_must_be_the_exact_account_and_never_two_blanks() {
+    let mut blank = rnw_layout(PREFIX, "acct", &vec![1u8; CHUNK_BYTES + 1], 1);
+    for part in &mut blank {
+        part.user = None;
+    }
+    assert!(secrets(assemble(PREFIX, blank)).is_empty());
+    let mut borrowed = rnw_layout(PREFIX, "acct", &vec![1u8; CHUNK_BYTES + 1], 1);
+    for part in &mut borrowed {
+        part.user = Some("other".into());
+    }
+    assert!(secrets(assemble(PREFIX, borrowed)).is_empty());
+    let single = vec![owned(&format!("{PREFIX}solo"), Some("Ardia g1 1"), "SOLO", b"x")];
+    assert!(matches!(assemble(PREFIX, single)[0], Assembled::Incomplete));
+}
+
+#[test]
+fn the_namespace_matches_without_case_but_the_account_keeps_its_case() {
+    let written = names::credential_prefix(Some("C:\\Scratch\\RNW"));
+    let asked = names::credential_prefix(Some("c:\\scratch\\rnw"));
+    let parts = rnw_layout(&written, "GitHub", b"token", 1);
+    assert_eq!(
+        secrets(assemble(&asked, parts)),
+        vec![("GitHub".to_string(), b"token".to_vec())]
+    );
+    assert_eq!(
+        credentials::account_in(&asked, &format!("{written}MixedCase")),
+        Some("MixedCase")
+    );
+    assert_eq!(
+        credentials::account_in(&asked, "Ardia Connected Accounts [d:\\other]/x"),
+        None
+    );
+    assert_eq!(credentials::account_in("Ärdia/", "ärdia/Ä"), Some("Ä"));
+    assert_eq!(credentials::account_in("abc/", "ab"), None);
+}
+
+#[test]
+fn kept_names_stay_within_255_and_apart() {
+    let long = names::secret_file(&"a".repeat(120));
+    let other = names::secret_file(&format!("{}b", "a".repeat(119)));
+    let run = "0123456789abcdef0123456789abcdef";
+    for name in [&long, &other] {
+        assert!(
+            ardia_shell_migration::migrate::kept_name(name, run)
+                .encode_utf16()
+                .count()
+                <= 255
+        );
+    }
+    assert_ne!(
+        ardia_shell_migration::migrate::kept_name(&long, run),
+        ardia_shell_migration::migrate::kept_name(&other, run)
+    );
+    assert_eq!(
+        ardia_shell_migration::migrate::kept_name("session.json", run),
+        "session.json.0123456789ab.kept"
+    );
+}
+
+#[test]
+fn a_marker_must_be_a_whole_finished_report() {
+    use ardia_shell_migration::migrate::valid_marker;
+    let counts: serde_json::Map<String, serde_json::Value> = [
+        "documents",
+        "placement",
+        "config_files",
+        "sync_keys",
+        "credentials",
+        "unchanged",
+        "kept_aside",
+        "skipped_links",
+        "skipped_invalid",
+        "skipped_too_large",
+        "skipped_case_clash",
+        "sync_keys_unreadable",
+        "credentials_incomplete",
+        "credential_chunks_orphaned",
+        "partials_swept",
+    ]
+    .iter()
+    .map(|name| (name.to_string(), serde_json::json!(0)))
+    .collect();
+    let good = serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "migrated", "attempt": 1, "duration_ms": 3, "counts": counts});
+    assert!(valid_marker(&good));
+    for broken in [
+        serde_json::json!({"version": 1}),
+        serde_json::json!({"version": 1, "run": "x", "outcome": "migrated", "attempt": 1, "counts": counts}),
+        serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "failed", "attempt": 1, "counts": counts}),
+        serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "migrated", "attempt": 1, "counts": {}}),
+        serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "migrated", "failed_stage": "marker", "attempt": 1, "counts": counts}),
+        serde_json::json!({"version": 2, "run": "0123456789abcdef0123456789abcdef", "outcome": "migrated", "attempt": 1, "counts": counts}),
+    ] {
+        assert!(!valid_marker(&broken), "{broken}");
+    }
+}
+
+#[test]
+fn migrator_folders_are_never_documents() {
+    for name in [
+        "Secrets",
+        "SECRETS",
+        "rnw-migration-kept",
+        "RNW-Migration-Kept",
+        "Sync",
+        "config",
+    ] {
+        assert!(!names::document_name(name), "{name}");
+    }
 }
 
 #[test]
