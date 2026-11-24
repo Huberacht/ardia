@@ -4076,7 +4076,7 @@ Whole stack (`SettingsView.swift`):
 Root (`ExpoSettingsRoot.tsx`), laid out as the Mac's Settings window (2026-11-23, the owner: "change the settings in
 iPhone similar to the Mac app"). The Mac's sidebar becomes the root list and each Mac pane a pushed page, so the
 root holds no switches or pickers. Main's SwiftUI root (one long list of tinted rows, Archive and Spaces shortcuts) and
-the regrouping after build 13 are gone. Android's Settings uses the same pane order and keeps it when Material You is on.
+the regrouping after build 13 are gone. Android's Settings uses the same pane order and neutral form colors in both browser designs.
 Material You and its Dynamic Colors switch are under Settings › Appearance on Android.
 1. Sync card: `NavigationLink` to Sync; `SettingsIconTile("macbook.and.iphone", sync blue, baseSide 56)` beside a
    headline title and a subheadline secondary status (`.contentTransition(.opacity)`), 6 pt vertical padding, 14 pt

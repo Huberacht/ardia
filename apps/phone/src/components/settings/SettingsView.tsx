@@ -20,7 +20,8 @@ import { ExpoSettingsStack } from "./ExpoSettingsStack";
 import { BrowseForMePage } from "./BrowseForMePage";
 import { PageSummaryPage } from "./PageSummaryPage";
 import { ExperimentalPane, GeneralPane, SearchPane, TabsPane } from "./SettingsPanes";
-import { DesignProvider } from "../ui";
+import { DesignProvider, rolesFor, useTheme } from "../ui";
+import { SettingsFormColorsContext } from "./SettingsKit";
 
 export function SettingsPageFor({ route }: { route: SettingsRoute }) {
   switch (route.page) {
@@ -109,6 +110,7 @@ const shownPageOf = (open: boolean, stack: readonly SettingsRoute[]): ShownPage 
 };
 
 function HandBuiltSettings() {
+  const form = rolesFor(useTheme().dark);
   const open = useSettingsNav((s) => s.open);
   const generation = useSettingsNav((s) => s.generation);
   const stack = useSettingsNav((s) => s.stack);
@@ -123,7 +125,9 @@ function HandBuiltSettings() {
   return (
     <View testID="settingsStack" style={StyleSheet.absoluteFill}>
       <View key={`${generation}:${shown.key}`} testID="settingsPage" style={StyleSheet.absoluteFill}>
-        <SettingsPageFor route={shown.route} />
+        <SettingsFormColorsContext.Provider value={form}>
+          <SettingsPageFor route={shown.route} />
+        </SettingsFormColorsContext.Provider>
       </View>
     </View>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useContext, useEffect, useMemo, type ReactNode } from "react";
 import { themeAccent, themePalette } from "@ardia/core/src/theme.ts";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
@@ -16,7 +16,7 @@ import { matchMyMac } from "../../state/sync/actions";
 import { useSyncEnabled } from "../../state/sync/hooks";
 import { capsule, font, materialYouOffered, PROFILE_COLORS, settingsLayout, settingsMotion, settingsTint, space, Symbol, themeEditorLayout, useDesign, useProfileLook, useTheme, type ProfileColor, usePressStyle } from "../ui";
 import { MaterialSettingsLeading } from "./MaterialSettingsKit";
-import { Divider, Group, IconTile, NavRow, SettingsPage, ToggleRow } from "./SettingsKit";
+import { Divider, Group, IconTile, NavRow, SettingsFormColorsContext, SettingsPage, ToggleRow } from "./SettingsKit";
 import { actionWords } from "../../lib/sharedWords";
 
 const COLORS = Object.keys(PROFILE_COLORS) as ProfileColor[];
@@ -75,6 +75,7 @@ function AndroidAppearanceControls() {
 
 export function CheckRow({ title, checked, divider, onPress, disabled = false }: { title: string; checked: boolean; divider: boolean; onPress: () => void; disabled?: boolean }) {
   const theme = useTheme();
+  const accent = useContext(SettingsFormColorsContext)?.formAccent ?? theme.formAccent;
   return (
     <View>
       <Pressable
@@ -85,8 +86,8 @@ export function CheckRow({ title, checked, divider, onPress, disabled = false }:
         onPress={onPress}
         style={({ pressed }) => [styles.row, pressed ? { backgroundColor: theme.rowHighlight } : null]}
       >
-        <Text style={[font.body, styles.fill, { color: theme.label }]}>{title}</Text>
-        {checked ? <Symbol name="checkmark" size={18} color={theme.formAccent} /> : null}
+        <Text style={[font.body, styles.fill, { color: disabled ? theme.secondaryLabel : theme.label }]}>{title}</Text>
+        {checked ? <Symbol name="checkmark" size={18} color={accent} /> : null}
       </Pressable>
       {divider ? <Divider /> : null}
     </View>

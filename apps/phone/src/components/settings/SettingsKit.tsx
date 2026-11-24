@@ -5,11 +5,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { isSettingsOpening, rememberSettingsScroll, settingsScroll, useSettingsNav } from "../../state/settings/nav";
 import { MenuTrigger } from "../ui/MenuTrigger";
 import { MaterialBarButton, MaterialButtonRow, MaterialEmptyState, MaterialGroup, MaterialIconTile, MaterialMediumTitle, MaterialNavRow, MaterialPickerRow, MaterialSettingsAppBar, MaterialToggleRow, MaterialValueRow, materialMediumTitleHeight, materialSettingsListStyles } from "./MaterialSettingsKit";
-import { duration, LookBackdrop, settingsMotion, useSheetFrame, font, ink, settingsLayout, space, Symbol, tabsLayout, ToggleRow as SharedToggleRow, Tappable, smoothCorners, slotAround, controlSize, useDesign, useTheme, type MenuItem, type SymbolName } from "../ui";
+import { duration, LookBackdrop, settingsMotion, useSheetFrame, font, ink, settingsLayout, space, Symbol, tabsLayout, rolesFor, ToggleRow as SharedToggleRow, Tappable, smoothCorners, slotAround, controlSize, useDesign, useTheme, type MenuItem, type SymbolName } from "../ui";
 import { useMaterialTheme } from "../ui/materialTheme";
 import { revealInList, type SettingsReveal } from "./settingsReveal";
 
 export const SettingsHostedContext = createContext(false);
+export const SettingsFormColorsContext = createContext<ReturnType<typeof rolesFor> | null>(null);
 
 type PageProps = { title: string; onBack?: () => void; onClose?: () => void; leading?: ReactNode; trailing?: ReactNode; children: ReactNode; scroll?: boolean; onRefresh?: () => Promise<unknown>; heroTitle?: boolean; mediumAppBar?: boolean; overlay?: ReactNode; dismissesKeyboard?: boolean; revealRef?: RefObject<SettingsReveal | null> };
 
@@ -17,6 +18,7 @@ export function SettingsPage({ title, onBack, onClose, leading, trailing, childr
   const design = useDesign();
   const material = design === "material";
   const theme = useTheme();
+  const form = useContext(SettingsFormColorsContext);
   const { scheme } = useMaterialTheme();
   const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
@@ -50,8 +52,8 @@ export function SettingsPage({ title, onBack, onClose, leading, trailing, childr
   const titleStyle = useAnimatedStyle(() => ({ opacity: titleOpacity.value }));
   const hosted = useContext(SettingsHostedContext);
   return (
-    <View testID={material ? "materialSettingsPage" : undefined} style={[StyleSheet.absoluteFill, material ? { backgroundColor: scheme.surfaceContainer } : null]}>
-      {material ? null : <LookBackdrop />}
+    <View testID={material ? "materialSettingsPage" : undefined} style={[StyleSheet.absoluteFill, material ? { backgroundColor: scheme.surfaceContainer } : form ? { backgroundColor: form.groupedBackground } : null]}>
+      {material || form ? null : <LookBackdrop />}
       {material ? (
         <MaterialSettingsAppBar
           title={title}
@@ -78,7 +80,7 @@ export function SettingsPage({ title, onBack, onClose, leading, trailing, childr
           <View style={styles.topSide}>
             {onBack ? (
               <Tappable kind="icon" label="Back" onPress={onBack} style={styles.back}>
-                <Symbol name="chevronLeft" size={22} color={theme.formAccent} />
+                <Symbol name="chevronLeft" size={22} color={form?.label ?? theme.formAccent} />
               </Tappable>
             ) : null}
             {leading}
@@ -169,15 +171,17 @@ export function CrossfadeText({ text, style, testID }: { text: string; style: St
 
 function ClassicBarButton({ title, onPress, emphasized, enabled = true }: { title: string; onPress: () => void; emphasized?: boolean; enabled?: boolean }) {
   const theme = useTheme();
+  const accent = useContext(SettingsFormColorsContext)?.formAccent ?? theme.formAccent;
   return (
     <Tappable kind="text" label={title} disabled={!enabled} onPress={onPress} style={styles.barButton}>
-      <Text style={[font.body, emphasized ? styles.bold : null, { color: enabled ? theme.formAccent : theme.tertiaryLabel }]}>{title}</Text>
+      <Text style={[font.body, emphasized ? styles.bold : null, { color: enabled ? accent : theme.tertiaryLabel }]}>{title}</Text>
     </Tappable>
   );
 }
 
 function ClassicGroup({ header, footer, children }: { header?: string; footer?: string | null; children: ReactNode }) {
   const theme = useTheme();
+  const fill = useContext(SettingsFormColorsContext)?.groupedCell ?? theme.groupFill;
   return (
     <View style={styles.groupOuter}>
       {header ? (
@@ -185,7 +189,7 @@ function ClassicGroup({ header, footer, children }: { header?: string; footer?: 
           {header}
         </Text>
       ) : null}
-      <View style={[styles.group, { backgroundColor: theme.groupFill }]}>{children}</View>
+      <View style={[styles.group, { backgroundColor: fill }]}>{children}</View>
       {footer ? <Text style={[font.footnote, styles.groupFooter, { color: theme.secondaryLabel }]}>{footer}</Text> : null}
     </View>
   );
