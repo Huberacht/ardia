@@ -203,9 +203,12 @@ test("with cuts the page bar is one bar that stays mounted under the deck: hidde
   });
   expect(getAnimatedStyle(kept()!).opacity).toBe(1);
   expect(getAnimatedStyle(previewLeaf).opacity).toBe(1);
+  const fill = host("keptBarReleaseFill")[0]!;
+  expect(getAnimatedStyle(fill).opacity).toBe(1);
   act(() => sendDeckCommand({ kind: "open", tabId: destination.id, tappedAt: Date.now() }));
   expect(currentTabs().selectedId).toBe(destination.id);
   expect(host("keptPageBar")[0]).toBeDefined();
+  expect(getAnimatedStyle(host("keptBarReleaseFill")[0]!).opacity).toBe(0);
   expect(host("floatingBarHost").map((node) => node.props.children).flat().join("")).toContain(display(destination.url).host);
   act(() => previewPageBar(null));
   unmount(root);

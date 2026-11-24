@@ -109,9 +109,11 @@ function PageBodyOwner({ kept }: { kept: boolean }) {
   return null;
 }
 
-type KeptBarProps = { tab: BrowserTab; kept: boolean; pageDark: boolean; children: (preview: BrowserTab | null, barDark: boolean) => ReactNode };
+type KeptBarProps = { tab: BrowserTab; kept: boolean; pageDark: boolean; barHeight: number; children: (preview: BrowserTab | null, barDark: boolean) => ReactNode };
 
-function KeptBarSlot({ tab, kept, pageDark, children }: KeptBarProps) {
+function KeptBarSlot({ tab, kept, pageDark, barHeight: stripHeight, children }: KeptBarProps) {
+  const theme = useTheme();
+  const releaseFill = useAnimatedStyle(() => ({ opacity: kept && pageBarShown.value > 0 && pageBodyShown.value === 0 ? 1 : 0 }));
   const deckUp = useBrowse((s) => kept && s.surface === "deck");
   const previewId = usePageBarPreview((s) => (kept ? s.id : null));
   const previewTab = useTabWhile(previewId ?? "", deckUp && previewId !== null && previewId !== tab.id);
@@ -124,6 +126,7 @@ function KeptBarSlot({ tab, kept, pageDark, children }: KeptBarProps) {
   }));
   return (
     <Animated.View testID="keptPageBar" style={[StyleSheet.absoluteFill, keptBarStyle]} animatedProps={keptBarProps} pointerEvents="box-none" collapsable={false}>
+      {kept ? <Animated.View testID="keptBarReleaseFill" pointerEvents="none" style={[styles.bar, { height: stripHeight, backgroundColor: theme.canvas }, releaseFill]} /> : null}
       {children(preview, barDark)}
     </Animated.View>
   );
@@ -345,7 +348,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
         </Animated.View>
         <GlassSource name={PAGE_FROST}>
         {materialBarHosted && design === "material" ? null : (
-        <KeptBarSlot tab={tab} kept={barKept} pageDark={barDark}>
+        <KeptBarSlot tab={tab} kept={barKept} pageDark={barDark} barHeight={barSlotHeight}>
         {(preview, barDark) => (
         <GestureDetector gesture={barGesture}>
           <Animated.View
