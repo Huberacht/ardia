@@ -83,6 +83,12 @@ export function createFlowSlots(): FlowSlots {
   };
 }
 
+export function publishedForward(slots: FlowSlots, currentKey: string | null): (() => void) | null {
+  const owner = slots.shown()?.key;
+  if (!currentKey || !owner || (owner !== currentKey && !owner.startsWith(`${currentKey}:`))) return null;
+  return slots.forward.run;
+}
+
 export const FlowSlotsContext = createContext<FlowSlots>(createFlowSlots());
 
 export function useFlowShown() {

@@ -4,9 +4,9 @@ import { reduceMotion } from "../ui";
 import type { WheelInfo } from "../ui/native";
 import { previousStep } from "../../state/onboarding/onboarding";
 import { glideNativeScroll, wheelSteersSections } from "../../state/onboarding/scrollGlide";
-import { currentPlace, goToSection, type OnboardingSection, type SectionMove } from "../../state/onboarding/sections";
+import { currentPlace, currentSectionIndex, goToSection, type OnboardingSection, type SectionMove } from "../../state/onboarding/sections";
 import { noteOnboarding } from "../../state/telemetry/usage";
-import { SectionContext, useFlowSlots } from "./sectionContext";
+import { publishedForward, SectionContext, useFlowSlots } from "./sectionContext";
 import { useSectionFades } from "./sectionFades";
 import { clampTo, newWheelGesture, readWheel, type SectionRange } from "./sectionGesture";
 import { onboardingFlow, onboardingMotion, sectionEase } from "./tokens";
@@ -96,14 +96,16 @@ export const SectionScroller = forwardRef<SectionScrollerHandle, { sections: Onb
       const { keys: order, ranges: now, active: at } = live.current;
       const next = now[at + direction];
       const nextKey = order[at + direction];
-      const lead = !!next && !!nextKey && (direction > 0 ? !!slots.forward.run : at > 0);
+      const current = sections[currentSectionIndex(sections)];
+      const forward = direction > 0 ? publishedForward(slots, current ? sectionKey(current) : null) : null;
+      const lead = !!next && !!nextKey && (direction > 0 ? !!forward : at > 0);
       if (lead) {
         motion.placedKey = nextKey;
         fades.light(order, nextKey, glideMs());
         moveTo(direction > 0 ? next.lo : next.hi, glideMs());
       }
       const before = currentPlace();
-      unstable_batchedUpdates(() => (direction > 0 ? slots.forward.run?.() : previousStep()));
+      unstable_batchedUpdates(() => (direction > 0 ? forward?.() : previousStep()));
       if (currentPlace() !== before) return noteOnboarding(`${via}Move`);
       if (lead) {
         motion.placedKey = order[at] ?? null;
