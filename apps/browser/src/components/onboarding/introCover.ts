@@ -3,7 +3,7 @@ import { holdWindowHidden, introCanCoverScreen } from "../../state/onboarding/in
 import { reduceMotion } from "../ui/reduceMotion";
 
 export { INTRO_WINDOW_ID } from "../../state/onboarding/introWindow";
-export { closeIntroWindow, coverScreenForIntro, handOffFromIntro, uncoverScreen } from "../../state/onboarding/introCover";
+export { closeIntroWindow, closeIntroWindowFor, coverScreenForIntro, handOffFromIntro, uncoverScreen } from "../../state/onboarding/introCover";
 
 export const onboardingShowsDesktop = introCanCoverScreen;
 export const introCoversScreen = () => introCanCoverScreen && reduceMotion() !== true;

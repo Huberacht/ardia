@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { useBrowser } from "../browser/store.ts";
 import { windows } from "../../test-native/shell.ts";
-import { coverScreenForIntro, handOffFromIntro, uncoverScreen } from "./introCover.ts";
+import { closeIntroWindowFor, coverScreenForIntro, handOffFromIntro, uncoverScreen } from "./introCover.ts";
 import { INTRO_WINDOW_ID } from "./introWindow.ts";
 import { startOnboarding, useOnboarding } from "./onboarding.ts";
 
@@ -34,6 +34,29 @@ test("the hand-off from one session's intro doesn't move a newer session past it
     startOnboarding(id, "intro");
     mock.timers.tick(5000);
     assert.equal(useOnboarding.getState().step, "intro");
+  } finally {
+    mock.timers.reset();
+    useOnboarding.setState({ windowId: null, leaving: false, redo: false });
+  }
+});
+
+test("a new session's intro in the reused cover window isn't closed or handed off by the old session's intro", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const id = useBrowser.getState().createWindow();
+    startOnboarding(id, "intro");
+    const first = useOnboarding.getState().session;
+    coverScreenForIntro(id);
+    startOnboarding(id, "intro");
+    const second = useOnboarding.getState().session;
+    coverScreenForIntro(id);
+    handOffFromIntro(false, first);
+    closeIntroWindowFor(first);
+    mock.timers.tick(5000);
+    assert.ok(windows.open.has(INTRO_WINDOW_ID), "the new session's cover is still open");
+    assert.equal(useOnboarding.getState().step, "intro", "the new session is still on its intro");
+    closeIntroWindowFor(second);
+    assert.ok(!windows.open.has(INTRO_WINDOW_ID), "the new session's own intro closes it");
   } finally {
     mock.timers.reset();
     useOnboarding.setState({ windowId: null, leaving: false, redo: false });

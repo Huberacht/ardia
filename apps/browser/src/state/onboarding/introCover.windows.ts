@@ -6,6 +6,8 @@ export function coverScreenForIntro(_browserWindowId: string) {}
 
 export function uncoverScreen(_browserWindowId: string) {}
 
-export function handOffFromIntro(_burst: boolean) {}
+export function handOffFromIntro(_burst: boolean, _from?: number) {}
 
 export function closeIntroWindow() {}
+
+export function closeIntroWindowFor(_session: number) {}

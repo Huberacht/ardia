@@ -34,8 +34,9 @@ export function uncoverScreen(browserWindowId: string) {
   }, INTRO_WINDOW_LINGER_MS);
 }
 
-export function handOffFromIntro(burst: boolean) {
+export function handOffFromIntro(burst: boolean, from: number = useOnboarding.getState().session) {
   const { windowId, session } = useOnboarding.getState();
+  if (session !== from) return;
   if (windowId) void setWindowShown(windowId, true, burst);
   setTimeout(() => {
     const now = useOnboarding.getState();
@@ -45,4 +46,8 @@ export function handOffFromIntro(burst: boolean) {
 
 export function closeIntroWindow() {
   void closeWindow(INTRO_WINDOW_ID);
+}
+
+export function closeIntroWindowFor(session: number) {
+  if (useOnboarding.getState().session === session) closeIntroWindow();
 }
