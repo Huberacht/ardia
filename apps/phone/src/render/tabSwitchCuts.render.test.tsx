@@ -471,6 +471,26 @@ test("the waiting + sheet carries no live frost behind the page: its panel shows
   keyboard.mockRestore();
 });
 
+test("while you browse, the waiting + sheet is a minimal shell with no rows mounted, and the bar's neighbour addresses are plain leaves, not buttons", () => {
+  withTabs(3);
+  browsingNow();
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const tray = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = tray.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  expect(waiting.findAll((node) => node.props.testID === "searchPanelRowsScroll")).toHaveLength(0);
+  unmount(tray);
+  keyboard.mockRestore();
+  const page = renderSurface(<Page />);
+  const leaves = page.root.findAll((node) => (node.props.testID === "floatingBarLandedLeft" || node.props.testID === "floatingBarLandedRight") && typeof node.type === "string");
+  expect(leaves.length).toBeGreaterThan(0);
+  for (const leaf of leaves) expect(leaf.findAll((node) => node.props.accessibilityRole === "button")).toHaveLength(0);
+  unmount(page);
+});
+
 test("a search that opens with text waits for its own commit: the waiting empty sheet is not shown early", async () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });

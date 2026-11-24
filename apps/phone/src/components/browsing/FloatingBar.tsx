@@ -3,7 +3,7 @@ import { markShownFrame } from "../../platform/lab";
 import { Platform, StyleSheet, View, type ViewInstance } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { useBarReturn } from "./barReturn";
-import { AddressFace } from "./AddressFace";
+import { AddressFace, AddressLeaf } from "./AddressFace";
 import { NotSecureLock } from "./NotSecureLock";
 import { haptics } from "../../state/app/haptics";
 import { TabsMenuTrigger } from "./tabsMenu";
@@ -148,12 +148,12 @@ export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true
         </Animated.View>
         {swipe?.left ? (
           <Animated.View testID="floatingBarLandedLeft" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedLeft]}>
-            <AddressFace address={barAddress(swipe.left)} dark={dark} testIDPrefix="floatingBarLeft" style={styles.addressHit} onPress={onAddress} />
+            <AddressLeaf address={barAddress(swipe.left)} dark={dark} testIDPrefix="floatingBarLeft" style={styles.addressHit} />
           </Animated.View>
         ) : null}
         {swipe?.right ? (
           <Animated.View testID="floatingBarLandedRight" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedRight]}>
-            <AddressFace address={barAddress(swipe.right)} dark={dark} testIDPrefix="floatingBarRight" style={styles.addressHit} onPress={onAddress} />
+            <AddressLeaf address={barAddress(swipe.right)} dark={dark} testIDPrefix="floatingBarRight" style={styles.addressHit} />
           </Animated.View>
         ) : null}
         </Animated.View>

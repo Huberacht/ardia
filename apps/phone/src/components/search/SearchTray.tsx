@@ -520,7 +520,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
                   <TrayField key={fieldKey} closing={closing} standby={standby} />
                 </View>
               </GestureDetector>
-              <TrayRows dismissDrag={dismissDrag} />
+              {standby ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
             </SearchPanelContext.Provider>
           </View>
         </Animated.View>
@@ -553,7 +553,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
                 <TrayField key={fieldKey} closing={closing} standby={standby} />
               </View>
             </GestureDetector>
-            <TrayRows dismissDrag={dismissDrag} />
+            {standby ? <StandbyRowsKey /> : <TrayRows dismissDrag={dismissDrag} />}
           </TrayContentContext.Provider>
         </View>
       </Animated.View>
@@ -1154,6 +1154,15 @@ function PanelIncognitoToggle() {
       </View>
     </ToggleIconButton>
   );
+}
+
+function StandbyRowsKey() {
+  useIncognito();
+  const key = preparedIdleKey();
+  useLayoutEffect(() => {
+    standbyRowsKey = key;
+  });
+  return null;
 }
 
 function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
