@@ -26,7 +26,8 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { adoptStandby, closeEarlyReveal, dropEarlyStandby, nextStandbyGeneration, NOT_PREPARED, prepareStandby, pressedReveal, refuseEarlyReveal, shownForGeneration, standbyAdopted, standbyShownEarly, unprepareStandby, useStandbyLayout, whenPressRefused } from "../../state/search/standbyReveal";
+import { adoptStandby, closeEarlyReveal, dropEarlyStandby, earlyRevealWithdrawn, nextStandbyGeneration, NOT_PREPARED, PLUS_ORIGIN, prepareStandby, pressedReveal, refuseEarlyReveal, shownForGeneration, standbyAdopted, standbyShownEarly, unprepareStandby, useStandbyLayout, whenPressRefused } from "../../state/search/standbyReveal";
+import { deckTurn, usePhoneTurn } from "../../state/browse/deckTurn";
 import { completingFieldIsNative } from "../../platform/completingField";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { preparedIdleKey, preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
@@ -157,6 +158,22 @@ let standbyField: TrayInputHandle | null = null;
 let standbyRowsKey: string | null = null;
 let standbyTyped = "";
 let standbyKeptText: string | null = null;
+let standbyArmed = 0;
+let standbyGo: { generation: number; text: string } | null = null;
+let adoptedGo: string | null = null;
+
+const holdStandbyGo = (text: string) => {
+  const shown = standbyShownEarly.value;
+  if (standbyArmed === 0 || shown.generation !== standbyArmed || shown.press === 0) return false;
+  standbyGo = { generation: standbyArmed, text };
+  return true;
+};
+
+const takeAdoptedGo = () => {
+  const go = adoptedGo;
+  adoptedGo = null;
+  return go;
+};
 
 const revealStandbyFor = (presenting: SearchPresenting): string | null => {
   if (presenting.text === "" && revealStandby) return revealStandby(presenting);
@@ -217,36 +234,26 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const floor = useSharedValue(0);
   const tabId = useSelectedTabId();
   const standbyLayout = useStandbyLayout();
+  const phone = usePhoneTurn((state) => state.generation);
   const armed = useSharedValue(0);
   const armedNow = useRef(0);
   const revealed = useSharedValue(0);
   const [furnished, setFurnished] = useState(!bornStandby);
-  const revealStyle = useAnimatedStyle(() => {
-    const generation = armed.value;
-    const early = standbyShownEarly.value;
-    const adopted = revealed.value;
-    return { opacity: !standby || shownForGeneration(generation, early, adopted) ? 1 : 0 };
-  });
+  const shownNow = useDerivedValue(() => shownForGeneration(armed.value, standbyShownEarly.value, revealed.value, deckTurn.live.value, deckTurn.appliedTurn.value));
+  const revealStyle = useAnimatedStyle(() => ({ opacity: !standby || shownNow.value ? 1 : 0 }));
   const revealProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => {
-    const generation = armed.value;
-    const early = standbyShownEarly.value;
-    const adopted = revealed.value;
+    const shown = shownNow.value;
     if (!standby) return { pointerEvents: closing ? "none" : "box-none", importantForAccessibility: closing ? "no-hide-descendants" : "auto" };
-    const shown = shownForGeneration(generation, early, adopted);
     return { pointerEvents: shown ? "box-none" : "none", importantForAccessibility: shown ? "auto" : "no-hide-descendants" };
   });
-  const fieldReveal = useDerivedValue(() => {
-    const generation = armed.value;
-    const early = standbyShownEarly.value;
-    const adopted = revealed.value;
-    return shownForGeneration(generation, early, adopted) ? generation : 0;
-  });
-  const shownMark = useAnimatedProps(() => {
-    const generation = armed.value;
-    const early = standbyShownEarly.value;
-    const adopted = revealed.value;
-    return { mark: shownForGeneration(generation, early, adopted) ? `search-ui:${generation}` : "" };
-  });
+  const fieldReveal = useDerivedValue(() => (shownNow.value ? armed.value : 0));
+  const shownMark = useAnimatedProps(() => ({ mark: armed.value !== 0 ? `search-ui:${armed.value}` : "" }));
+  useAnimatedReaction(
+    () => (shownNow.value && revealed.value !== armed.value ? armed.value : 0),
+    (early, was) => {
+      if (was && early !== was && revealed.value !== was) runOnJS(earlyRevealWithdrawn)(was);
+    },
+  );
   useLayoutEffect(() => {
     if (!standby) {
       if (bornStandby && revealed.value !== armedNow.current) revealed.value = armedNow.current;
@@ -260,17 +267,21 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     revealed.value = 0;
     standbyTyped = "";
     standbyKeptText = null;
+    standbyArmed = generation;
+    standbyGo = null;
     const armedSession = searchState().session;
-    prepareStandby(origin === "page" && tabId !== null ? { generation, tabId, layout: standbyLayout, incognito } : NOT_PREPARED);
+    prepareStandby(origin === PLUS_ORIGIN && tabId !== null ? { generation, tabId, layout: standbyLayout, incognito, origin, phone } : NOT_PREPARED);
     const discardDraft = (refused: number) => {
       if (refused !== generation) return;
       standbyTyped = "";
+      if (standbyGo?.generation === generation) standbyGo = null;
       standbyField?.discardDraft();
     };
     whenPressRefused(discardDraft);
     revealStandby = (presenting) => {
       const early = pressedReveal();
-      if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey || searchState().session !== armedSession) {
+      const otherSheet = early.press !== 0 && early.generation !== generation;
+      if (otherSheet || presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey || searchState().session !== armedSession) {
         if (early.press !== 0) dropEarlyStandby(early.press);
         discardDraft(generation);
         return null;
@@ -278,6 +289,8 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       traceSlice("search reveal");
       adoptStandby(generation);
       revealed.value = generation;
+      adoptedGo = standbyGo?.generation === generation ? standbyGo.text : null;
+      standbyGo = null;
       if (!completingFieldIsNative()) {
         standbyField?.focus();
         markShownFrame("search");
@@ -288,9 +301,10 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     return () => {
       revealStandby = null;
       whenPressRefused(null);
+      if (standbyArmed === generation) standbyArmed = 0;
       unprepareStandby(generation);
     };
-  }, [standby, origin, incognito, tabId, standbyLayout]);
+  }, [standby, origin, incognito, tabId, standbyLayout, phone]);
   useEffect(() => {
     if (standby || furnished) return;
     const frame = requestAnimationFrame(() => setFurnished(true));
@@ -570,7 +584,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     <DepartContext.Provider value={beginDeparture}>
     <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, bornStandby ? revealStyle : null]} animatedProps={bornStandby ? revealProps : undefined} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
       {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
-      {bornStandby ? <UiFrameMark testID="traySearchUiMark" style={uiFrameMarkStyle} animatedProps={shownMark} /> : null}
+      {bornStandby ? <UiFrameMark testID="traySearchUiMark" drawn style={uiFrameMarkStyle} animatedProps={shownMark} /> : null}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable
           accessibilityLabel="Close Search"
@@ -1114,6 +1128,8 @@ function FieldInput({ first, closing, standby = false, reveal }: { first: boolea
   useEffect(() => {
     if (standby) return;
     trayInput = input.current;
+    const go = closing || !reveal ? null : takeAdoptedGo();
+    if (go !== null && !submitted.current && ownsField() && leaving.submit(go)) submitted.current = true;
     if (closing) {
       input.current?.blur();
       if (!staged) dropField(true);
@@ -1175,7 +1191,11 @@ function FieldInput({ first, closing, standby = false, reveal }: { first: boolea
             typeSearch(text);
           }}
           onSubmit={(text) => {
-            if (submitted.current || !ownsField()) return;
+            if (submitted.current) return;
+            if (!ownsField()) {
+              if (standby) holdStandbyGo(text);
+              return;
+            }
             if (leaving.submit(text)) submitted.current = true;
           }}
         />

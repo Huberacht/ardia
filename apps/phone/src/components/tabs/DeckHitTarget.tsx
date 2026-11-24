@@ -3,6 +3,7 @@ import type { LayoutChangeEvent, StyleProp, ViewStyle } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { deckHitAccepted } from "../../state/browse/store";
+import { revealStandbyFromDeck } from "../../state/search/standbyReveal";
 import { DECK_PRESS_SLOP, deckPressed, deckPressHolds, dropDeckPress, liftDeckControl, placeDeckControl, presentDeckControl, pressDeckControl, type DeckControl } from "../../state/browse/deckTurn";
 
 type Props = { control: DeckControl; live: boolean; originX?: number; originY: number; style?: StyleProp<ViewStyle>; children: ReactNode };
@@ -53,6 +54,7 @@ export function DeckHitTarget({ control, live, originX = 0, originY, style, chil
             return;
           }
           const hit = liftDeckControl(control, event.absoluteX, event.absoluteY);
+          if (hit) revealStandbyFromDeck(hit);
           if (hit) runOnJS(deckHitAccepted)(hit);
         })
         .onFinalize(() => {

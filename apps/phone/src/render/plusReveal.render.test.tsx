@@ -9,10 +9,10 @@ import { DesignProvider } from "../components/ui";
 import * as browse from "../state/browse/store";
 import { cutTabSwitches } from "../state/browse/tabSwitch";
 import { dismissSearch, presentSearch, searchState, typeSearch } from "../state/search/store";
-import { dropEarlyStandby, revealStandbyOnPress, standbyPrepared, standbyShownEarly, withinPressRect } from "../state/search/standbyReveal";
+import { dropEarlyStandby, earlyRevealCurrent, pressedReveal, revealStandbyOnPress, standbyPrepared, standbyShownEarly, withinPressRect } from "../state/search/standbyReveal";
 import { setPreference } from "../state/settings/store";
 import { useSelectedTab } from "../state/tabs/hooks";
-import { currentTabs, useTabs } from "../state/tabs/store";
+import { currentTabs, selectTabById, useTabs } from "../state/tabs/store";
 import { floatingBarLayout } from "../components/ui";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
@@ -310,8 +310,10 @@ test("the native press focuses the waiting editor itself: its reveal generation 
   focus.mockClear();
   const fieldNode = () => t.layer().findAll((node) => node.props.jestAnimatedProps !== undefined && typeof node.props.onTypedChange === "function")[0]!;
   expect(revealFocusOf(fieldNode())).toBe(0);
-  const mark = () => (t.root.root.findAll((node) => node.props.testID === "traySearchUiMark" && node.props.jestAnimatedProps !== undefined)[0]?.props.jestAnimatedProps as { value: { mark?: string } } | undefined)?.value.mark ?? "";
-  expect(mark()).toBe("");
+  const markNode = () => t.root.root.findAll((node) => node.props.testID === "traySearchUiMark" && node.props.jestAnimatedProps !== undefined)[0]!;
+  const mark = () => (markNode().props.jestAnimatedProps as { value: { mark?: string } }).value.mark ?? "";
+  expect(markNode().props.drawn).toBe(true);
+  expect(mark()).toBe(`search-ui:${standbyPrepared.value.generation}`);
   t.tap();
   const generation = standbyShownEarly.value.generation;
   expect(generation).toBeGreaterThan(0);
@@ -531,5 +533,34 @@ test("the + a press opened search from stays mounted under the open sheet, hidde
     jest.advanceTimersByTime(4000);
   });
   expect(slot().props.pointerEvents).toBe("box-none");
+  finish(t.root);
+});
+
+test("a press is revalidated before JS runs it: a sheet revealed for a tab that is no longer selected is refused with its draft, and the press opens the sheet prepared for the tab now shown, empty", () => {
+  const t = setUp();
+  const typeInto = (text: string) => {
+    const typing = t.layer().findAll((node) => typeof node.props.onTyped === "function")[0]!;
+    act(() => typing.props.onTyped(text));
+  };
+  const carried: number[] = [];
+  t.presses.mockImplementation(() => {
+    carried.push(pressedReveal().generation);
+    presentSearch("page", "", false);
+  });
+  t.tap();
+  const early = standbyShownEarly.value.generation;
+  expect(early).toBeGreaterThan(0);
+  expect(earlyRevealCurrent(standbyShownEarly.value)).toBe(true);
+  typeInto("ot");
+  const other = currentTabs().open.find((tab) => tab.id !== currentTabs().selectedId)!.id;
+  act(() => selectTabById(other));
+  expect(standbyPrepared.value.generation).not.toBe(early);
+  expect(standbyPrepared.value.tabId).toBe(other);
+  expect(earlyRevealCurrent({ generation: early, press: 1, deckTurn: 0 })).toBe(false);
+  t.flush();
+  expect(t.presses).toHaveBeenCalledTimes(1);
+  expect(carried).toEqual([0]);
+  expect(searchState().open).toBe(true);
+  expect(searchState().text).toBe("");
   finish(t.root);
 });

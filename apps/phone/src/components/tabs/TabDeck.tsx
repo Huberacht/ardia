@@ -107,6 +107,7 @@ import { TabGrid, type GridFrame } from "./TabGrid";
 import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
 import { arriveFromDeck, dropPreparedDestination, liftDestination, prepareDestination, pressDestination, takeDestinationAction } from "../../state/browse/destination";
+import { pressDeckPlus } from "../../state/search/standbyReveal";
 import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarPreviewShown, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, releaseDeckOnHideOnUI, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
 import { cardHitSeq, currentPhoneGeneration, DECK_HIT_LABELS, deckAwaitsEntrance, deckCardLift, deckChromeOwned, deckChromeTurn, deckCommandPending, deckLiftCurrent, settleDeckCommand, deckGeometryChanged, deckHitMark, deckLive, deckOwnsInput, deckRevisionOf, dropDeckHits, followDeckChromeOnUI, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckCardLift, type DeckHitCommand } from "../../state/browse/deckTurn";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
@@ -1026,7 +1027,7 @@ export const TabDeck = memo(function TabDeck() {
     } else if (hit.control === "more") moreOpener.current?.();
     else if (hit.control === "spaces") spacesOpener.current?.();
     else if (hit.control === "search") searchOpener.current?.();
-    else if (hit.control === "plus") openNewTab();
+    else if (hit.control === "plus") pressDeckPlus(hit.turn, openNewTab);
     else if (hit.control === "privacy") switchDeckIncognito();
   };
   const openOnTurn = (at: number, tappedAt?: number, posedTurn?: number, lift?: DeckCardLift) => {
