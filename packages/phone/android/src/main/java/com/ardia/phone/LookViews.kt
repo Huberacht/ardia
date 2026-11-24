@@ -1575,6 +1575,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             strip.laidOutAt = drawingTime
             return
         }
+        val routedBefore = if (strip.stale) relabel(strip, sharing) else null
         val placed = FrostStrip.place(area, width, height, strip.key.scale)
         val slots = FrostStrip.slotOrder(sharing.mapNotNull { consumer -> consumer.lensIn(this, placed, strip.key.scale)?.let { consumer to it } }) { it.first.number }
         val lenses = LiquidGlassRules.lensField(slots.map { it.second }, resources.displayMetrics.density, strip.key.scale, strip.key.saturation)
@@ -1583,12 +1584,20 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             strip.laidOutAt = drawingTime
             return
         }
-        val routedBefore = sharing.associateWith { strip.nodeFor(it) }
+        val routed = routedBefore ?: sharing.associateWith { strip.nodeFor(it) }
         strip.record(content, placed, drawingTime, lenses, slotted, sharing)
         strip.stale = false
-        for ((consumer, node) in routedBefore) if (consumer !== drawing && strip.nodeFor(consumer) !== node) consumer.invalidate()
+        for ((consumer, node) in routed) if (consumer !== drawing && strip.nodeFor(consumer) !== node) consumer.invalidate()
         publishStats()
         LookActivity.stripRecords += 1
+    }
+
+    private fun relabel(strip: FrostStrip, sharing: List<FrostView>): Map<FrostView, RenderNode>? {
+        val label = FrostStrip.label(sourceId, sharing.map { it.role })
+        if (label == strip.label) return null
+        val routed = sharing.associateWith { strip.nodeFor(it) }
+        strip.relabel(label)
+        return routed
     }
 
     private fun stopRecording() {
@@ -1707,8 +1716,11 @@ internal object FrostPage {
 internal class FrostStrip(val key: Key, private val afterNextFrame: (() -> Unit) -> Unit = FrostStrip::afterNextFrame) {
     data class Key(val blurPx: Float, val saturation: Float, val scale: Float)
 
-    val node = RenderNode("ardiaFrostStrip").apply { setUseCompositingLayer(true, null) }
-    private val filtered = RenderNode("ardiaFrostStripFiltered")
+    var label: String = UNLABELLED
+        private set
+    var node = RenderNode(NODE_NAME).apply { setUseCompositingLayer(true, null) }
+        private set
+    private var filtered = RenderNode(FILTERED_NAME)
     private var plainNode: RenderNode? = null
     private var plainFiltered: RenderNode? = null
     val consumers = LinkedHashSet<FrostView>()
@@ -1782,8 +1794,8 @@ internal class FrostStrip(val key: Key, private val afterNextFrame: (() -> Unit)
         slotted = slots
         val plainWanted = lensed > 0 && drawers.any { it !in slots }
         if (plainWanted) {
-            val outer = plainNode ?: RenderNode("ardiaFrostStripPlain").apply { setUseCompositingLayer(true, null) }.also { plainNode = it }
-            val inner = plainFiltered ?: RenderNode("ardiaFrostStripPlainFiltered").also { plainFiltered = it }
+            val outer = plainNode ?: RenderNode(named(PLAIN_NAME)).apply { setUseCompositingLayer(true, null) }.also { plainNode = it }
+            val inner = plainFiltered ?: RenderNode(named(PLAIN_FILTERED_NAME)).also { plainFiltered = it }
             outer.setPosition(scaledLeft, scaledTop, scaledLeft + scaledWidth, scaledTop + scaledHeight)
             inner.setPosition(0, 0, scaledWidth, scaledHeight)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) inner.setRenderEffect(FrostStrip.frosted(key.blurPx / key.scale, key.saturation))
@@ -1791,6 +1803,23 @@ internal class FrostStrip(val key: Key, private val afterNextFrame: (() -> Unit)
             dropPlain()
         }
         draw(source)
+    }
+
+    private fun named(base: String): String = if (label == UNLABELLED) base else "$base:$label"
+
+    fun relabel(next: String) {
+        if (next == label) return
+        val gone = listOf(node, filtered)
+        label = next
+        node = RenderNode(named(NODE_NAME)).apply { setUseCompositingLayer(true, null) }
+        filtered = RenderNode(named(FILTERED_NAME))
+        gone.forEach { retired += it to laidOutAt }
+        afterNextFrame { discard(gone) }
+        dropPlain()
+        effectSet = false
+        lensesApplied = null
+        lensed = 0
+        stale = true
     }
 
     private val retired = ArrayList<Pair<RenderNode, Long>>()
@@ -1864,6 +1893,15 @@ internal class FrostStrip(val key: Key, private val afterNextFrame: (() -> Unit)
     val bytes: Long get() = if (width <= 0 || height <= 0) 0L else ceil(width / key.scale).toLong() * ceil(height / key.scale).toLong() * 4 * (if (holdsPlain) 4 else 2)
 
     companion object {
+        const val NODE_NAME = "ardiaFrostStrip"
+        const val FILTERED_NAME = "ardiaFrostStripFiltered"
+        const val PLAIN_NAME = "ardiaFrostStripPlain"
+        const val PLAIN_FILTERED_NAME = "ardiaFrostStripPlainFiltered"
+        const val UNLABELLED = ""
+        const val UNNAMED_ROLE = "unnamed"
+
+        fun label(source: String?, roles: List<String>): String = "${source ?: UNNAMED_ROLE}:${roles.distinct().sorted().joinToString("+")}"
+
         fun afterNextFrame(work: () -> Unit) {
             android.view.Choreographer.getInstance().postFrameCallback { work() }
         }
@@ -1921,6 +1959,8 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     var variant: String? = null
 
     internal val number = FrostRefresh.nextNumber()
+
+    internal val role: String get() = name?.takeIf { it.isNotBlank() } ?: FrostStrip.UNNAMED_ROLE
 
     internal val logLabel: String get() = FrostRefresh.label(name, source, variant, number)
     private var joined: FrostSourceView? = null
@@ -2070,7 +2110,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         )
         report(choice, from?.finding?.why)
         if (choice.path == FrostPage.Path.Live && from != null) {
-            val layerNode = blurNode ?: RenderNode("ardiaFrost").also { blurNode = it }
+            val layerNode = blurNode ?: RenderNode("ardiaFrost:$role").also { blurNode = it }
             val blur = style.blurRadius.value * density
             val scale = FrostScale.of(blur)
             val margin = LiquidGlassRules.marginPx(blur, lensReach())

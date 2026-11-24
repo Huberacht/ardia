@@ -269,4 +269,31 @@ class GlassBackdropTest {
         assertFalse(glass in scene.backdrop.glasses)
         assertTrue("its redraw no longer reaches the backdrop's list", scene.backdrop.glasses.size == 2)
     }
+
+    @Test
+    fun aSharedStripIsNamedForItsSourceAndTheRolesDrawingIt() {
+        val scene = bar()
+        scene.glasses[0].name = "floatingBarTabs"
+        scene.glasses[1].name = "floatingBarAddress"
+        scene.pill.name = "hostPill"
+        live(scene)
+        val strip = scene.source.stripsHeld.single()
+        assertEquals("backdrop-test:floatingBarAddress+floatingBarTabs+hostPill", strip.label)
+        val shared = strip.node
+        scene.pill.shownMs = 0f
+        scene.pill.shown = false
+        live(scene)
+        assertEquals("a role that stops sampling leaves the name", "backdrop-test:floatingBarAddress+floatingBarTabs", strip.label)
+        assertNotEquals("and the strip records into a newly named node", shared, strip.node)
+        scene.glasses.forEach { assertSame(strip.node, strip.nodeFor(it)) }
+        val renamed = strip.node
+        live(scene)
+        assertSame("an unchanged set of roles keeps its node", renamed, strip.node)
+    }
+
+    @Test
+    fun aStripWithAnUnnamedConsumerSaysSo() {
+        assertEquals("page:hostPill+unnamed", FrostStrip.label("page", listOf("unnamed", "hostPill", "hostPill")))
+        assertEquals("unnamed:deckGlass", FrostStrip.label(null, listOf("deckGlass")))
+    }
 }

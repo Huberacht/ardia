@@ -182,6 +182,7 @@ export function CustomLookBackdrop({ look, dark, testID, style }: { look: Profil
 
 type FrostProps = {
   source: string;
+  name?: string;
   variant: FrostVariant;
   cornerRadius: number;
   fill: string;
@@ -212,6 +213,7 @@ export const plateMaterial = (face: PlateFace, solid: boolean, glassIsLive: bool
 
 export function LookFrost({
   source,
+  name,
   variant,
   cornerRadius,
   fill,
@@ -238,6 +240,7 @@ export function LookFrost({
     return (
       <Glass
         source={source}
+        name={name}
         shape="rounded"
         cornerRadius={cornerRadius}
         interactive={false}
@@ -252,6 +255,7 @@ export function LookFrost({
   return (
     <Frost
       source={source}
+      name={name}
       variant={variant}
       cornerRadius={cornerRadius}
       {...lookColors(look, incognito, shade)}
@@ -311,7 +315,7 @@ export function ChromeSurface({
   if (glassIsNative()) {
     const shade = dark ?? (incognito || theme.dark);
     const glass = (
-      <Glass testID={testID} source={source} shape={shape} cornerRadius={cornerRadius} tint={incognito ? undefined : lookGlassTint(look)} interactive={interactive} tinted={tinted} surface={surface} barShadow={barShadow} shown={shown} shownMs={shownMs} classicChrome={nativeClassicChrome} {...lookColors(look, incognito, shade)} dark={shade} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
+      <Glass testID={testID} source={source} name={testID} shape={shape} cornerRadius={cornerRadius} tint={incognito ? undefined : lookGlassTint(look)} interactive={interactive} tinted={tinted} surface={surface} barShadow={barShadow} shown={shown} shownMs={shownMs} classicChrome={nativeClassicChrome} {...lookColors(look, incognito, shade)} dark={shade} style={[style, { borderRadius: cornerRadius }]} onLayout={underlay ? laidOut : undefined}>
         {children}
       </Glass>
     );
@@ -356,6 +360,7 @@ export function LookGlass({
     <Glass
       testID="deckGlass"
       source={frost.source}
+      name={frost.name ?? "deckGlass"}
       shape={shape}
       tint={frost.incognito ? undefined : lookGlassTint(look)}
       classicChrome={nativeClassicChrome}
