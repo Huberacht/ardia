@@ -144,3 +144,19 @@ test("the split menu offers Add Right and Add Bottom by the insert rule and move
   assert.equal(arrange(items).find((it) => it.id === "convert").title, "Convert to Horizontal Split View");
   void [w, c];
 });
+
+test("a closed window saved with its two panes in one stacked slot reopens as a plain stacked split that flips and grows normally", () => {
+  const { w, a, b } = freshWindow();
+  S().createWindow({ url: "https://keep.example/" });
+  assert.equal(S().openSplitPane(w, { anchorTabId: a, tabId: b, side: "bottom" }).ok, true);
+  S().closeWindow(w);
+  const entry = S().closedWindows.at(-1);
+  useBrowser.setState({ closedWindows: [...S().closedWindows.slice(0, -1), { ...entry, splits: [{ orientation: "horizontal", slots: [{ size: 1, stack: ["0", "1"], stackSizes: [0.3, 0.7] }] }] }] });
+  S().reopenClosedWindow();
+  const restored = Object.values(S().splits).find((v) => v.windowId === S().windowOrder.at(-1));
+  assert.equal(restored.orientation, "vertical");
+  assert.deepEqual(restored.slots.map((slot) => slot.size), [0.3, 0.7]);
+  const [top, bottom] = splitTabIds(restored);
+  S().flipSplit(restored.id);
+  assert.deepEqual(splitTabIds(S().splits[restored.id]), [bottom, top]);
+});

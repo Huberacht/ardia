@@ -10,7 +10,7 @@ import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
 import type { AdoptId, BrowserWindow, SplitSlot, SplitView, Tab } from "../browser/types";
 import { evenSlots, insertPane, MAX_SPLIT_PANES, movePaneTo, normalized, paneNeighbor, type PaneDirection, type SplitSide, splitTabIds, splitTabIdsOf, swappedPanes, withoutPanes, withPaneIds } from "./layout";
 
-export { evenSlots, isStacked, mapSlotIds, MAX_SPLIT_PANES, type PaneDirection, type SplitSide, slotTabIds, splitTabIds, splitTabIdsOf, stackAt, withPaneIds } from "./layout";
+export { evenSlots, isStacked, mapSlotIds, MAX_SPLIT_PANES, normalized, type PaneDirection, type SplitSide, slotTabIds, splitTabIds, splitTabIdsOf, stackAt, withPaneIds } from "./layout";
 
 export type SplitsSlice = {
   splits: Record<string, SplitView>;

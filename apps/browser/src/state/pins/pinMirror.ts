@@ -3,7 +3,7 @@ import { changedIds } from "../browser/changes";
 import { ancestorIds, depthsIn, orderSections, placeBlock, syncGroupOrder, withParent } from "../groups/groups";
 import { isIncognitoProfile, isPinnedRow, makeTab, newId, pinHomeOf, pinKeyOf, pinSection, TILE_PIN, without } from "../browser/model";
 import { ASLEEP, hasPage, holderOfPage } from "../tabs/pageSession";
-import { mapSlotIds, removeFromSplits, splitTabIds, stackAt } from "../splits/splits";
+import { mapSlotIds, normalized, removeFromSplits, splitTabIds, stackAt } from "../splits/splits";
 import { sharedListTab, sharesTabs } from "../tabs/tabShare";
 import { removeTabs } from "../tabs/tabs";
 import type { BrowserWindow, SplitView, Tab, TabGroup } from "../browser/types";
@@ -297,7 +297,7 @@ export function conform(s: BrowserState, windowId: string, profileId: string, sp
     for (const x of wanted) {
       if (!Object.values(splits).some((v) => same(v, x))) {
         const id = newId("split");
-        splits = { ...removeFromSplits(splits, new Set(splitTabIds(x))), [id]: { id, windowId, orientation: x.orientation, slots: x.slots } };
+        splits = { ...removeFromSplits(splits, new Set(splitTabIds(x))), [id]: normalized({ id, windowId, orientation: x.orientation, slots: x.slots }) };
       }
       ids = placeBlock(ids, ids.filter((id) => splitTabIds(x).includes(id)));
     }

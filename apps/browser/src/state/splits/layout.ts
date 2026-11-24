@@ -142,7 +142,7 @@ export function insertPane(split: SplitView | undefined, anchorId: string, tabId
   return { ...split, slots };
 }
 
-export function normalized(split: SplitView): SplitView {
+export function normalized<T extends Layout>(split: T): T {
   const only = split.slots.length === 1 ? split.slots[0] : undefined;
   if (!only || !("stack" in only)) return split;
   return { ...split, orientation: flipped(split.orientation), slots: only.stack.map((tabId, i) => ({ size: only.stackSizes[i]!, tabId })) };
