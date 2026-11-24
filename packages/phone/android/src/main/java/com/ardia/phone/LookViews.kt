@@ -1437,8 +1437,56 @@ internal object FrostSources {
     fun frostsOf(source: FrostSourceView): List<FrostView> = frosts().filter { it.source != null && find(it.source) === source }
 }
 
+internal object FrostHold {
+    const val REASON = "held solid for a hand-over until its cover hides"
+
+    fun held(fill: Int?, coverShown: Boolean?): Int? = if (fill == null || coverShown == false) null else fill
+
+    fun coverShown(cover: View?): Boolean = cover != null && cover.isAttachedToWindow && cover.visibility == View.VISIBLE
+}
+
 class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
     private var recorder: RenderNode? = null
+
+    var heldFill: Int? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            heldChanged()
+        }
+
+    var heldUntil: String? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            heldCover = null
+            heldChanged()
+        }
+
+    private var heldCover: java.lang.ref.WeakReference<View>? = null
+    private var heldDrawn: Int? = null
+
+    internal var findCover: (String) -> View? = { id -> com.facebook.react.uimanager.util.ReactFindViewUtil.findView(rootView, id) }
+
+    internal fun heldNow(): Int? {
+        val until = heldUntil ?: return FrostHold.held(heldFill, null)
+        if (heldFill == null) return null
+        val cover = heldCover?.get()?.takeIf { it.isAttachedToWindow } ?: findCover(until)?.also { heldCover = java.lang.ref.WeakReference(it) }
+        return FrostHold.held(heldFill, FrostHold.coverShown(cover))
+    }
+
+    internal fun recheckHold(): Boolean {
+        val now = heldNow()
+        if (now == heldDrawn) return false
+        heldDrawn = now
+        FrostSources.redrawFrostsOf(this)
+        return true
+    }
+
+    private fun heldChanged() {
+        recheckHold()
+        invalidate()
+    }
 
     internal val node: RenderNode? get() = recorder
 
@@ -1547,6 +1595,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
 
     private val beforeDraw = ViewTreeObserver.OnPreDrawListener {
         if (stripsBehind) refreshStrips()
+        if (heldFill != null || heldDrawn != null) recheckHold()
         true
     }
 
@@ -2066,6 +2115,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal fun wantsSource(): Boolean {
         if (!canBlur()) return false
         val from = FrostSources.find(source)
+        if (from?.heldNow() != null) return true
         return FrostPage.wantsSource(lastChoice, onlyBackdropUnder = from?.holdsOnlyBackdrop == true, blurOverBackdrop = blursBackdrop(), holdsPage = from?.holdsPage == true, pageMode = effectivePageMode())
     }
 
@@ -2092,6 +2142,17 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
         clip.reset()
         clip.addRoundRect(bounds, radius, radius, Path.Direction.CW)
         val from = FrostSources.find(source)
+        val held = from?.heldNow()
+        if (held != null) {
+            report(FrostPage.Choice(FrostPage.Path.Solid, FrostHold.REASON), from.finding.why)
+            paint.style = Paint.Style.FILL
+            paint.color = held
+            canvas.drawPath(clip, paint)
+            paint.color = style.tint.resolve(dark).toArgb()
+            canvas.drawPath(clip, paint)
+            drawEdge(canvas, style, dark)
+            return
+        }
         val blurs = canBlur()
         val choice = FrostPage.choose(
             blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && Frosting.isBlurSupported,
@@ -2149,6 +2210,10 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             paint.color = solidFill(dark) ?: style.fallback.resolve(dark).toArgb()
             canvas.drawPath(clip, paint)
         }
+        drawEdge(canvas, style, dark)
+    }
+
+    private fun drawEdge(canvas: Canvas, style: com.ardia.design.FrostedStyle, dark: Boolean) {
         style.edge?.let { edge ->
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = style.edgeWidth.value * density

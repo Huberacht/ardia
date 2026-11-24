@@ -252,6 +252,8 @@ class LookModule : Module() {
         View(FrostSourceView::class) {
             Name("FrostSource")
             Prop("name") { view: FrostSourceView, value: String? -> view.sourceId = value }
+            Prop("heldFill") { view: FrostSourceView, value: android.graphics.Color? -> view.heldFill = value?.toArgb() }
+            Prop("heldUntil") { view: FrostSourceView, value: String? -> view.heldUntil = value?.takeIf { it.isNotEmpty() } }
         }
 
         View(FrostView::class) {

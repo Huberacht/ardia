@@ -18,7 +18,7 @@ export type ProfileBackdropProps = ViewProps & LookColors & { dark?: boolean; th
 
 export type FilmGrainProps = ViewProps & { opacity?: number; children?: ReactNode };
 
-export type FrostSourceProps = ViewProps & { name: string; children?: ReactNode };
+export type FrostSourceProps = ViewProps & { name: string; heldFill?: string | null; heldUntil?: string | null; children?: ReactNode };
 
 export type FrostVariant = "bar" | "sheet" | "glass" | "thin";
 

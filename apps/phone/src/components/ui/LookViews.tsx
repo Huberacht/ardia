@@ -1,6 +1,7 @@
 import {
   DeckBackdrop,
   Frost,
+  FrostSource,
   Glass,
   GlassBackdrop,
   glassIsNative,
@@ -10,7 +11,8 @@ import {
   type FrostVariant,
   type GlassShape,
 } from "@ardia/phone-native";
-import { createContext, useContext, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useContext, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
+import Animated from "react-native-reanimated";
 import { Platform, Pressable, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewInstance, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
@@ -39,6 +41,15 @@ export const PAGE_FROST = "page";
 export const START_FROST = "start";
 
 const GlassSourceContext = createContext<string>(SURFACES_FROST);
+
+const makeHeldFrostSource = () => Animated.createAnimatedComponent(FrostSource);
+
+let heldFrostSource: ReturnType<typeof makeHeldFrostSource> | null = null;
+
+export function HeldFrostSource(props: ComponentProps<ReturnType<typeof makeHeldFrostSource>>) {
+  const Held = (heldFrostSource ??= makeHeldFrostSource());
+  return <Held {...props} />;
+}
 
 export function GlassSource({ name, children }: { name: string; children: ReactNode }) {
   return <GlassSourceContext.Provider value={name}>{children}</GlassSourceContext.Provider>;
