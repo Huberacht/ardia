@@ -13,7 +13,7 @@ import { useTour } from "../../state/onboarding/tour";
 import { useOpenedOnce } from "../ui/useOpenedOnce";
 import { useOnboardingColors } from "./Parts";
 import { DevResetOnboarding } from "./DevResetOnboarding";
-import { coverScreenForIntro, introCoversScreen, onboardingShowsDesktop, uncoverScreen } from "./introCover";
+import { coverOrReveal, introCoversScreen, onboardingShowsDesktop } from "./introCover";
 
 export function OnboardingOverlay() {
   const windowId = useWindowId();
@@ -41,11 +41,7 @@ function Overlay({ session }: { session: number }) {
     Animated.timing(presence, { toValue: 1, duration: onboardingMotion.overlayIn, easing: curve.enter, useNativeDriver: true }).start();
   }, []);
 
-  useEffect(() => {
-    if (!introCovers) return;
-    coverScreenForIntro(windowId);
-    return () => uncoverScreen(windowId);
-  }, [introCovers, windowId]);
+  useEffect(() => coverOrReveal(windowId, introCovers), [introCovers, windowId]);
 
   useEffect(() => {
     if (step === "intro") return card.setValue(0);

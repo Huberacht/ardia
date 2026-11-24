@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 import { useBrowser } from "../browser/store.ts";
 import { windows } from "../../test-native/shell.ts";
-import { closeIntroWindowFor, coverScreenForIntro, handOffFromIntro, uncoverScreen } from "./introCover.ts";
+import { closeIntroWindowFor, coverOrReveal, coverScreenForIntro, handOffFromIntro, holdWindowHidden, uncoverScreen } from "./introCover.ts";
 import { INTRO_WINDOW_ID } from "./introWindow.ts";
 import { startOnboarding, useOnboarding } from "./onboarding.ts";
 
@@ -60,5 +60,31 @@ test("a new session's intro in the reused cover window isn't closed or handed of
   } finally {
     mock.timers.reset();
     useOnboarding.setState({ windowId: null, leaving: false, redo: false });
+  }
+});
+
+test("an intro that doesn't cover the screen shows the browser window the intro hold hid", () => {
+  const id = useBrowser.getState().createWindow();
+  holdWindowHidden(id);
+  assert.equal(windows.shown.get(id), false);
+  const before = windows.open.has(INTRO_WINDOW_ID);
+  assert.equal(coverOrReveal(id, false), undefined);
+  assert.equal(windows.shown.get(id), true, "the held browser window is shown again");
+  assert.equal(windows.open.has(INTRO_WINDOW_ID), before, "no cover opens");
+});
+
+test("an intro that covers the screen keeps the browser window hidden until the cover is let go", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const id = useBrowser.getState().createWindow();
+    holdWindowHidden(id);
+    const release = coverOrReveal(id, true);
+    assert.equal(windows.shown.get(id), false);
+    assert.ok(windows.open.has(INTRO_WINDOW_ID));
+    release();
+    assert.equal(windows.shown.get(id), true);
+    mock.timers.tick(5000);
+  } finally {
+    mock.timers.reset();
   }
 });

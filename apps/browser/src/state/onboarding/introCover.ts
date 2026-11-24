@@ -34,6 +34,15 @@ export function uncoverScreen(browserWindowId: string) {
   }, INTRO_WINDOW_LINGER_MS);
 }
 
+export function coverOrReveal(browserWindowId: string, covers: boolean): (() => void) | undefined {
+  if (!covers) {
+    void setWindowShown(browserWindowId, true);
+    return undefined;
+  }
+  coverScreenForIntro(browserWindowId);
+  return () => uncoverScreen(browserWindowId);
+}
+
 export function handOffFromIntro(burst: boolean, from: number = useOnboarding.getState().session) {
   const { windowId, session } = useOnboarding.getState();
   if (session !== from) return;

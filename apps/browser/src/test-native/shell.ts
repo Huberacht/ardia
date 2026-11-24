@@ -79,6 +79,7 @@ export const windows = {
   open: new Map<string, FakeWindow>(),
   closed: [] as string[],
   focused: null as string | null,
+  shown: new Map<string, boolean>(),
   emit: (event: WindowEvent) => shellEvents.emit("onWindowEvent", event),
   geometry: windowGeometries,
 };
@@ -112,6 +113,10 @@ const windowsModule: Modules["ArdiaAppWindows"] & { requestClose(id: string): Pr
     windows.open.delete(id);
     windows.closed.push(id);
     if (windows.focused === id) windows.focused = null;
+    return Promise.resolve();
+  },
+  setWindowShown: (id, shown) => {
+    windows.shown.set(id, shown);
     return Promise.resolve();
   },
   focusWindow: (id) => {
