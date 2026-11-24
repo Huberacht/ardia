@@ -297,6 +297,45 @@ test("on Android a fold's glass stays through the crossfade and leaves once the 
   unmount(root);
 });
 
+test("on Android a fold reversed partway keeps both glasses until it settles on an end, whichever way it was going", () => {
+  if (!android) return;
+  for (const at of [0.25, 0.5, 0.75]) {
+    for (const folding of [true, false]) {
+      const root = page("redesigned");
+      if (!folding) {
+        scrolled("down");
+        settle();
+      }
+      const progress = () => moved(host(root, "hostPillFold")!).opacity;
+      const pillShown = () => root.root.findAll((node) => node.props.testID === "hostPill" && node.props.shown !== undefined && typeof node.type !== "string")[0]!.props.shown;
+      const bars = () => ["floatingBarAddress", "floatingBarTabs", "floatingBarPlus"].map((id) => barGlass(root, id));
+      const bothShown = (label: string) => {
+        expect([label, pillShown(), ...bars()]).toEqual([label, true, true, true, true]);
+      };
+      scrolled(folding ? "down" : "up");
+      for (let frame = 0; frame < 120; frame++) {
+        if (folding ? progress() >= at : progress() <= 1 - at) break;
+        act(() => jest.advanceTimersByTime(16));
+      }
+      const turned = progress();
+      expect(turned).toBeGreaterThan(0);
+      expect(turned).toBeLessThan(1);
+      bothShown(`${folding ? "folding" : "unfolding"} at ${at}`);
+      scrolled(folding ? "up" : "down");
+      bothShown(`reversed at ${at}`);
+      for (let frame = 0; frame < 120; frame++) {
+        act(() => jest.advanceTimersByTime(16));
+        const now = progress();
+        if (now > 0 && now < 1) bothShown(`after reversing at ${at}, progress ${now.toFixed(2)}`);
+      }
+      settle();
+      expect(pillShown()).toBe(!folding);
+      expect(bars()).toEqual(folding ? [true, true, true] : [false, false, false]);
+      unmount(root);
+    }
+  }
+});
+
 test("on iPhone the bar's glass and the pill's glass cross over the moment the bar turns, however fast scrolls reverse, with no callback from an earlier fold left to flip them later", () => {
   if (android) return;
   const root = page("redesigned");

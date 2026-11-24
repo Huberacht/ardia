@@ -70,7 +70,7 @@ export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
   useAnimatedReaction(
     () => (fold.value >= 1 ? 1 : fold.value <= 0 ? 0 : -1),
     (end, before) => {
-      if (end !== before && end !== -1) runOnJS(setRest)(end === 1 ? "pill" : "bar");
+      if (end !== before) runOnJS(setRest)(end === 1 ? "pill" : end === 0 ? "bar" : null);
     },
   );
   useLayoutEffect(() => {
