@@ -84,6 +84,8 @@ export class CreeperCharge {
     this.stage = "done";
     this.contact = null;
     this.near = false;
+    this.flash?.remove();
+    this.flash = null;
     const wait = Math.max(0, this.createdAt + FALLBACK_MS - now);
     this.fallback = window.setTimeout(() => this.boom(), wait);
   }
