@@ -5,7 +5,10 @@
 #import "ArdiaWindowController.h"
 
 #include <os/lock.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#include <vector>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -343,7 +346,7 @@ using namespace ardia_host;
       [staged addObject:copy];
     }
   }
-  __block NSString *busyWith = nil;
+  NSString *busyWith = nil;
   NSMutableArray<NSString *> *purge = [NSMutableArray array];
   NSDictionary *result = Locked([&]() -> NSDictionary * {
     [purge addObjectsFromArray:SweepLocked()];
@@ -449,10 +452,10 @@ using namespace ardia_host;
 }
 
 + (NSDictionary<NSString *, id> *)placeArmedDownloadNow:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path {
-  __block NSString *claimed = nil;
-  __block NSString *destination = nil;
-  __block BOOL folder = NO;
-  __block BOOL prompted = NO;
+  NSString *claimed = nil;
+  NSString *destination = nil;
+  BOOL folder = NO;
+  BOOL prompted = NO;
   Locked([&] {
     ArdiaFileArm *arm = ArmNamed(armId);
     if (!arm || ![arm.kind isEqualToString:@"download"]) return;
