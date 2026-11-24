@@ -1457,21 +1457,59 @@ test("a window resize that stays in the phone layout invalidates the prepared sn
   unmount(root);
 });
 
-test("Search Tabs pressed during the cut goes through the UI press like the other controls: the field holds its touches until the entrance, the press marks deck-hit:search, and the entrance focuses the field", async () => {
+type TurnFocus = { workletEventHandler: { worklet: (event: object) => void; eventNames: string[] } };
+
+const focusOnTurn = (root: ReactTestRenderer) => {
+  const field = root.root.findAll((node) => node.props.testID === "deckSearchField" && node.props.onFocusOnTurn !== undefined)[0]!;
+  const handler = field.props.onFocusOnTurn as TurnFocus;
+  expect(handler.workletEventHandler.eventNames).toEqual(["onFocus"]);
+  return () => act(() => handler.workletEventHandler.worklet({}));
+};
+
+test("Search Tabs focused natively during the cut claims the turn's first command from its focus event: the keyboard keeps its native focus, deck-hit:search is marked on the UI thread, the field's own onFocus still reaches React, and nothing blurs it", async () => {
   if (Platform.OS !== "android") return;
+  const telemetry = require("../state/telemetry/telemetry") as typeof import("../state/telemetry/telemetry");
+  const counted = jest.spyOn(telemetry, "countUsage").mockImplementation(() => undefined);
+  const commands = jest.spyOn(Reanimated, "dispatchCommand").mockImplementation(() => undefined);
   const root = await standbyDeck();
-  const held = () => animatedProp(hostWith(root, "deckSearchHeld")!, "pointerEvents");
-  expect(held()).toBe("auto");
+  const focused = focusOnTurn(root);
   tapTabs();
-  expect(held()).toBe("none");
-  pressControl("search");
+  focused();
   expect(deckTurn.hitMark.value).toBe("deck-hit:search");
   expect(markOf(root, "deckHitMark")).toBe("deck-hit:search");
-  const field = root.root.findAll((node) => node.props.testID === "deckSearchField" && typeof node.props.onFocus === "function")[0]!;
-  const focused = jest.spyOn(field.instance as { focus: () => void }, "focus").mockImplementation(() => undefined);
+  expect(commands).not.toHaveBeenCalled();
+  const host = root.root.findAll((node) => node.props.testID === "deckSearchField" && typeof node.type === "string")[0]!;
+  act(() => host.props.onFocus({ nativeEvent: {} }));
+  expect(counted).toHaveBeenCalledWith("search_tabs_opened");
   for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
   expect(browse.useBrowse.getState().surface).toBe("deck");
-  expect(held()).toBe("auto");
-  expect(focused).toHaveBeenCalled();
+  expect(searchState().open).toBe(false);
+  unmount(root);
+});
+
+test("Search Tabs focused natively after Plus already took the cut's turn is blurred on the UI thread, so Plus stays the turn's only command", async () => {
+  if (Platform.OS !== "android") return;
+  const commands = jest.spyOn(Reanimated, "dispatchCommand").mockImplementation(() => undefined);
+  const root = await standbyDeck();
+  const focused = focusOnTurn(root);
+  tapTabs();
+  pressControl("plus");
+  focused();
+  expect(deckTurn.hitMark.value).toBe("deck-hit:plus");
+  expect(commands).toHaveBeenCalledTimes(1);
+  expect(commands.mock.calls[0]![1]).toBe("blur");
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(searchState().open).toBe(true);
+  act(() => dismissSearch());
+  unmount(root);
+});
+
+test("a field focused while no cut is waiting claims nothing and blurs nothing", async () => {
+  if (Platform.OS !== "android") return;
+  const commands = jest.spyOn(Reanimated, "dispatchCommand").mockImplementation(() => undefined);
+  const root = await standbyDeck();
+  focusOnTurn(root)();
+  expect(deckTurn.hitMark.value).toBe("");
+  expect(commands).not.toHaveBeenCalled();
   unmount(root);
 });

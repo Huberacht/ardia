@@ -1,12 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type MutableRefObject, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type MutableRefObject, type ReactNode, type RefObject } from "react";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { actionWords, incognitoWords } from "../../lib/sharedWords";
 import { Platform, Pressable, StyleSheet, TextInput, View, type StyleProp, type TextInputInstance, type ViewInstance, type ViewStyle } from "react-native";
-import Animated, { useAnimatedKeyboard, useAnimatedProps, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { dispatchCommand, runOnJS, useAnimatedKeyboard, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useEvent, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { floatingBarCenter } from "../../lib/deckGeometry";
 import { haptics } from "../../state/app/haptics";
-import { switchDeckIncognito } from "../../state/browse/store";
+import { deckHitAccepted, switchDeckIncognito } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { countUsage } from "../../state/telemetry/telemetry";
 import { noteDeckBarTop, watchDeckBar } from "../../state/toasts/store";
@@ -19,7 +19,7 @@ import { useKeyboardTopFromBottom } from "../search/useKeyboardHeight";
 import { FadingGlyphs, PlusMenuButton, type ChromeFade } from "./ChromeButtons";
 import { besideStrip, duoFieldReach, type BottomBarLayout } from "../../lib/bottomBarSpan";
 import { DeckHitTarget } from "./DeckHitTarget";
-import { deckLive, deckReconciled } from "../../state/browse/deckTurn";
+import { claimDeckSearchFocus } from "../../state/browse/deckTurn";
 
 type Props = {
   searchOpener?: MutableRefObject<(() => void) | null>;
@@ -128,10 +128,26 @@ export function useSearchTabs(shown: boolean, incognito: boolean, onQuery: (need
   return { input, text, focused, change, focus, blur: () => setFocused(false) };
 }
 
+const TurnTextInput = Animated.createAnimatedComponent(TextInput) as unknown as (props: ComponentProps<typeof TextInput> & { onFocusOnTurn?: unknown }) => ReactNode;
+
 export function SearchTabsField({ search, testID = "deckSearchTabs", style, resting = false, incognito = false, contentStyle, glassShown, glassShownMs, glyphFade }: { search: SearchTabs; testID?: string; style?: StyleProp<ViewStyle>; resting?: boolean; incognito?: boolean; contentStyle?: ComponentProps<typeof Animated.View>["style"] } & ChromeFade) {
   const roles = useTheme();
   const dark = roles.dark || incognito;
   const { input, text, change, focus, blur } = search;
+  const nativeField = useAnimatedRef<TextInput>();
+  const fieldRef = useCallback(
+    (node: TextInputInstance | null) => {
+      input.current = node;
+      nativeField(node as never);
+    },
+    [input, nativeField],
+  );
+  const focusOnTurn = useEvent(() => {
+    "worklet";
+    const claimed = claimDeckSearchFocus();
+    if (claimed === "refused") dispatchCommand(nativeField, "blur");
+    else if (claimed) runOnJS(deckHitAccepted)(claimed);
+  }, ["onFocus"]);
   return (
     <Pressable accessible={false} onPress={() => input.current?.focus()} style={style} collapsable={false} pointerEvents={resting ? "none" : "auto"} importantForAccessibility={resting ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={resting}>
       <ChromeSurface testID={testID} shape="capsule" cornerRadius={deckLook.fieldCorner} incognito={incognito} dark={dark} shown={glassShown} shownMs={glassShownMs} style={[styles.search, { paddingRight: text ? deckLook.clearTrail : deckChromeLayout.searchTrail }]}>
@@ -140,8 +156,9 @@ export function SearchTabsField({ search, testID = "deckSearchTabs", style, rest
             <View pointerEvents="none">
               <SystemGlyph testID="deckSearchGlyph" systemName="magnifyingglass" pointSize={14} weight="medium" fitted name="magnifyingglass" size={deckChromeLayout.searchGlyph} color={roles.secondaryLabel} />
             </View>
-            <TextInput
-              ref={input}
+            <TurnTextInput
+              ref={fieldRef}
+              onFocusOnTurn={focusOnTurn}
               testID="deckSearchField"
               accessibilityLabel="Search Tabs"
               placeholder="Search Tabs"
@@ -215,12 +232,7 @@ export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, wid
     return { transform: [{ translateY: typing.value ? -deckBarLift(centerY, deckHeight, keyboardTop.value) : 0 }] };
   }, [centerY, deckHeight]);
   const { span, strip } = layout;
-  const searchWaits = hits && !strip;
-  const searchHeld = useAnimatedProps<{ pointerEvents: "auto" | "none" }>(() => {
-    const live = deckLive.value;
-    return { pointerEvents: searchWaits && live !== 0 && deckReconciled.value !== live ? "none" : "auto" };
-  });
-  const rowHits = searchWaits;
+  const rowHits = hits && !strip;
   const rowTop = centerY - controlSize.bar / 2;
   const plusTop = strip ? (strip.ends ? strip.plus : strip.tabs) : 0;
   const plusPlace = strip ? { bottom: deckHeight - centerY - controlSize.bar / 2 - plusTop, ...besideStrip(strip, width, tabsLayout.menuWidth, deckChromeLayout.menuGap) } : { bottom: deckHeight - centerY + controlSize.bar / 2 + deckChromeLayout.menuGap, right: span.right, width: tabsLayout.menuWidth };
@@ -282,9 +294,7 @@ export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, wid
           </Animated.View>
         ) : (
           <DeckHitTarget control="search" live={rowHits} originY={rowTop} style={styles.searchHit}>
-            <Animated.View testID="deckSearchHeld" style={styles.searchHit} animatedProps={searchHeld} collapsable={false}>
-              <SearchTabsField search={search} style={styles.searchHit} incognito={incognito} {...fade} />
-            </Animated.View>
+            <SearchTabsField search={search} style={styles.searchHit} incognito={incognito} {...fade} />
           </DeckHitTarget>
         )}
         {strip ? null : plus}

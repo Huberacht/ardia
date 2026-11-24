@@ -162,6 +162,19 @@ export function takeDeckCardHit(): boolean {
   return true;
 }
 
+export function claimDeckSearchFocus(): DeckHitCommand | "refused" | null {
+  "worklet";
+  if (!deckAwaitsEntrance()) return null;
+  const live = deckTurn.live.value;
+  const prepared = deckTurn.prepared.value;
+  if (deckTurn.commandTurn.value === live || prepared === null) return "refused";
+  deckTurn.commandTurn.value = live;
+  const seq = deckTurn.hitSeq.value + 1;
+  deckTurn.hitSeq.value = seq;
+  deckTurn.hitMark.value = "deck-hit:search";
+  return { seq, turn: live, phone: deckTurn.phone.value, control: "search", label: "deck-hit:search", deck: prepared.tabId };
+}
+
 let phoneGeneration = 0;
 
 export const usePhoneTurn = create<{ generation: number }>()(() => ({ generation: 0 }));
