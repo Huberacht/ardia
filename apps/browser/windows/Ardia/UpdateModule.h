@@ -78,7 +78,7 @@ inline std::string BuildFile() noexcept {
 }
 
 inline std::wstring FeedOverride() noexcept {
-  if (!Paths::HasCustomDataDirectory()) return {};
+  if (!AppLaunch::Shared().testInstance) return {};
   try {
     auto const &settings = AppLaunch::Shared().instance;
     auto found = settings.find("updateFeed");
@@ -89,7 +89,7 @@ inline std::wstring FeedOverride() noexcept {
 }
 
 inline std::wstring KeyOverride() noexcept {
-  if (!Paths::HasCustomDataDirectory()) return {};
+  if (!AppLaunch::Shared().testInstance) return {};
   try {
     auto const &settings = AppLaunch::Shared().instance;
     auto found = settings.find("updateKey");
@@ -565,15 +565,30 @@ inline std::string VerifyUpdate(std::wstring const &feedUrl, uint64_t currentBui
     if (IsLink(updatesDir)) return JsonFailed("missing", "the updates folder is a link");
 
     static std::atomic<uint64_t> nextScratch{1};
-    std::filesystem::path scratch = updatesDir / (L"verify-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(nextScratch.fetch_add(1)));
+    std::filesystem::path scratch;
+    bool created = false;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+      std::filesystem::path candidate = updatesDir / (L"verify-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(nextScratch.fetch_add(1)));
+      if (CreateDirectoryW(candidate.c_str(), nullptr)) {
+        scratch = std::move(candidate);
+        created = true;
+        break;
+      }
+      if (GetLastError() != ERROR_ALREADY_EXISTS) break;
+    }
+    if (!created) return JsonFailed("missing", "the update check could not stage its files");
     struct ScratchGuard {
       std::filesystem::path dir;
       ~ScratchGuard() noexcept {
+        if (dir.empty()) return;
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);
       }
     } guard{scratch};
-    if (!std::filesystem::create_directories(scratch, ignored) || IsLink(scratch)) return JsonFailed("missing", "the update check could not stage its files");
+    if (IsLink(scratch)) {
+      guard.dir.clear();
+      return JsonFailed("missing", "the update check could not stage its files");
+    }
     std::filesystem::path manifestFile = scratch / L"windows-update.json";
     std::filesystem::path sigFile = scratch / L"windows-update.json.sig";
     if (!WriteExactFile(manifestFile, manifestBytes) || !WriteExactFile(sigFile, signatureBytes)) return JsonFailed("missing", "the update check could not save its files");

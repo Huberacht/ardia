@@ -81,22 +81,23 @@ async function check(asked: boolean) {
   if (checking || !update || !current || !configured()) return;
   if (!asked && !checksByItself()) return;
   checking = true;
+  const startedEpoch = windowsUpdateCounts.consentEpoch();
   try {
     if (typeof update.fetchVerifiedManifest !== "function") {
-      windowsUpdateCounts.note("verifier");
+      windowsUpdateCounts.note("verifier", startedEpoch);
       throw new Error("the update verifier is not available");
     }
     let rawAnswer: string;
     try {
       rawAnswer = await update.fetchVerifiedManifest(feed(), current.build);
     } catch (error) {
-      windowsUpdateCounts.note("network");
+      windowsUpdateCounts.note("network", startedEpoch);
       throw error;
     }
     const verified = parseVerifiedUpdate(rawAnswer, publishedUnder(), current.build);
     if (verified.status === "notPublished") {
       if (feedOverride()) {
-        windowsUpdateCounts.note("network");
+        windowsUpdateCounts.note("network", startedEpoch);
         throw new Error("the server answered 404");
       }
       console.info("[ardia windows] update check failed: the server answered 404");
@@ -105,10 +106,10 @@ async function check(asked: boolean) {
       return;
     }
     if (verified.status === "failed") {
-      windowsUpdateCounts.note(verified.reason);
+      windowsUpdateCounts.note(verified.reason, startedEpoch);
       throw new Error(verified.message);
     }
-    windowsUpdateCounts.note("verified");
+    windowsUpdateCounts.note("verified", startedEpoch);
     remember({ lastCheck: Date.now() });
     if (verified.status === "upToDate") {
       if (asked) await tell("Ardia is up to date", `You have ${named(current.version, current.build)}.`);

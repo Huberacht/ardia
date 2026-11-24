@@ -1,12 +1,14 @@
 param(
   [Parameter(Mandatory = $true)][ValidateSet("x64", "arm64")][string]$Cpu,
-  [string]$Out = ""
+  [string]$Out = "",
+  [string]$CoreDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$core = Join-Path $root "packages\core-rs"
+$core = if ($CoreDir) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($CoreDir) } else { Join-Path $root "packages\core-rs" }
+$resolvedOut = if ($Out) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out) } else { "" }
 $targets = @{
   x64 = "x86_64-pc-windows-msvc"
   arm64 = "aarch64-pc-windows-msvc"
@@ -38,9 +40,9 @@ try {
   if (-not [System.IO.Path]::IsPathRooted($targetDir)) { $targetDir = Join-Path $core $targetDir }
   $binary = Join-Path $targetDir "$target\release\ardia-update-verify.exe"
   if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "update-verify.ps1: cargo built no $binary" }
-  if ($Out) {
-    New-Item -ItemType Directory -Force -Path $Out | Out-Null
-    $dest = Join-Path (Resolve-Path -LiteralPath $Out).Path "ardia-update-verify.exe"
+  if ($resolvedOut) {
+    New-Item -ItemType Directory -Force -Path $resolvedOut | Out-Null
+    $dest = Join-Path (Resolve-Path -LiteralPath $resolvedOut).Path "ardia-update-verify.exe"
     Copy-Item -LiteralPath $binary -Destination $dest -Force
     $binary = $dest
   }

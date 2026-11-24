@@ -112,8 +112,9 @@ function hasDuplicateKeys(text: string): boolean {
       }
       return false;
     }
+    const start = pos;
     while (pos < text.length && !/[\s,}\]]/.test(text[pos] ?? "")) pos += 1;
-    return true;
+    return /^(?:0|[1-9][0-9]*)$/.test(text.slice(start, pos));
   };
   const walkObject = (): boolean => {
     pos += 1;

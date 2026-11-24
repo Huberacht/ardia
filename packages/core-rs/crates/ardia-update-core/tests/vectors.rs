@@ -738,6 +738,8 @@ fn windows_cases() -> Vec<WindowsCase> {
         win_case("build zero", base.replace("\"build\": 60", "\"build\": 0"), Err(E::Manifest)),
         win_case("negative build", base.replace("\"build\": 60", "\"build\": -1"), Err(E::Manifest)),
         win_case("fractional build", base.replace("\"build\": 60", "\"build\": 60.5"), Err(E::Manifest)),
+        win_case("decimal integer build 60.0", base.replace("\"build\": 60", "\"build\": 60.0"), Err(E::Manifest)),
+        win_case("exponent integer build 6e1", base.replace("\"build\": 60", "\"build\": 6e1"), Err(E::Manifest)),
         win_case("string build", base.replace("\"build\": 60", "\"build\": \"60\""), Err(E::Manifest)),
         win_case("leading zero build", base.replace("\"build\": 60", "\"build\": 060"), Err(E::Manifest)),
         win_case(
@@ -813,6 +815,16 @@ fn windows_cases() -> Vec<WindowsCase> {
         win_case(
             "zero installer bytes",
             base.replace("180000000", "0"),
+            Err(E::Manifest),
+        ),
+        win_case(
+            "exponent installer bytes 1e2",
+            base.replace("180000000", "1e2"),
+            Err(E::Manifest),
+        ),
+        win_case(
+            "decimal installer bytes 180000000.0",
+            base.replace("180000000", "180000000.0"),
             Err(E::Manifest),
         ),
         win_case(

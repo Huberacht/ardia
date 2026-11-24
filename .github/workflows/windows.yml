@@ -316,6 +316,10 @@ jobs:
           & scripts/windows/update-verify.ps1 -Cpu $env:SLUG -Out $env:APP
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -LiteralPath "scripts/windows/windows-update.pem" -Destination (Join-Path $env:APP "windows-update.pem") -Force
+          foreach ($required in @("ardia-update-verify.exe", "windows-update.pem")) {
+            $path = Join-Path $env:APP $required
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "expected $path after building ardia-update-verify" }
+          }
       - name: Keep the Hermes compiler beside the built app
         if: steps.built.outputs.cache-hit != 'true'
         shell: pwsh
@@ -414,6 +418,10 @@ jobs:
         if: env.SLUG == 'x64' && env.PART == 'launch'
         shell: pwsh
         run: scripts/windows/relaunch-facts.test.ps1
+      - name: Check the Windows update verifier packaging scripts
+        if: env.SLUG == 'x64' && env.PART == 'launch'
+        shell: pwsh
+        run: scripts/windows/update-verify.test.ps1
       - name: Take the app this run compiled
         if: env.COMPILED == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333

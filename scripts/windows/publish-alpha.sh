@@ -17,14 +17,15 @@
 # version. They were built at --commit (default HEAD). A run id's source is packed here by engine-source.sh, from the
 # engine its commit pins; a release's is the archive it already carries.
 # The version and build come from Ardia.build.json, the identity the build carries. The build is the number of
-# commits in the built commit's history, so a release outranks every build before it. A build at or below the live
-# feed's is refused: no installed app would take it.
+# commits in the built commit's history, so a release outranks every build before it. A build below the live
+# feed's is refused, and a build equal to the live feed's is refused unless the live feed's windows-update.json.sig
+# is missing or invalid (allowing a retry to repair a partial publish).
 # Signing uses --key <pem> (or WINDOWS_UPDATE_KEY_FILE / WINDOWS_UPDATE_ED_PRIVATE_KEY), refused if its public half
 # doesn't match --public-key (default scripts/windows/windows-update.pem), and self-verifies windows-update.json,
-# windows-update.json.sig and both installers with ardia-update-verify before uploading. A live publish without a
-# signing key fails closed. --dry-run downloads, packs and signs into <dir> (default dist/windows-alpha-<build>, which
-# must not hold files yet), using an ephemeral test key when no signing key is provided, prints the gh commands and
-# publishes nothing.
+# windows-update.json.sig and both installers with ardia-update-verify before uploading windows-update.json.sig and
+# then windows-update.json sequentially. A live publish without a signing key fails closed. --dry-run downloads,
+# packs and signs into <dir> (default dist/windows-alpha-<build>, which must not hold files yet), using an ephemeral
+# test key when no signing key is provided, prints the gh commands and publishes nothing.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
@@ -98,6 +99,7 @@ resolve_verifier() {
 }
 
 stage="$(mktemp -d "${TMPDIR:-/tmp}/ardia-windows-alpha.XXXXXX")"
+stage="$(cd "$stage" && pwd -P)"
 trap 'rm -rf "$stage"' EXIT
 
 if [ -z "$key_file" ] && [ -n "${WINDOWS_UPDATE_ED_PRIVATE_KEY:-}" ]; then
@@ -147,12 +149,29 @@ else
   status="Its release, with the Mac and Linux downloads and the notes: https://github.com/$repo/releases/tag/v$version"
 fi
 
-live="$(curl -fsSL --retry 3 --max-time 30 "$published/windows-update.json" 2>/dev/null || true)"
-if [ -n "$live" ]; then
-  live_build="$(python3 -I -c 'import json, sys; print(int(json.loads(sys.argv[1])["build"]))' "$live" 2>/dev/null)" || die "the live windows-update.json names no build"
-  if [ "$build" -le "$live_build" ]; then
+verifier=""
+live_json="$stage/live-windows-update.json"
+live_sig="$stage/live-windows-update.json.sig"
+if curl -fsSL --retry 3 --max-time 30 -o "$live_json" "$published/windows-update.json" 2>/dev/null && [ -s "$live_json" ]; then
+  live_build="$(python3 -I -c 'import json, sys; print(int(json.load(open(sys.argv[1]))["build"]))' "$live_json" 2>/dev/null)" || die "the live windows-update.json names no build"
+  if [ "$build" -lt "$live_build" ]; then
     [ "$dry" = 1 ] || die "build $build isn't above the live feed's build $live_build, so no installed app would take it"
     echo "warning: build $build isn't above the live feed's build $live_build: a real run would stop here" >&2
+  elif [ "$build" -eq "$live_build" ]; then
+    live_sig_ok=0
+    if curl -fsSL --retry 3 --max-time 30 -o "$live_sig" "$published/windows-update.json.sig" 2>/dev/null && [ -s "$live_sig" ]; then
+      verifier="$(resolve_verifier)"
+      if "$verifier" windows-manifest --key "$public_key" --manifest "$live_json" --signature "$live_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null 2>&1 \
+        && "$verifier" windows-manifest --key "$public_key" --manifest "$live_json" --signature "$live_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null 2>&1; then
+        live_sig_ok=1
+      fi
+    fi
+    if [ "$live_sig_ok" = 1 ]; then
+      [ "$dry" = 1 ] || die "build $build isn't above the live feed's build $live_build, so no installed app would take it"
+      echo "warning: build $build isn't above the live feed's build $live_build: a real run would stop here" >&2
+    else
+      echo "warning: live build $build has no valid windows-update.json.sig; repairing incomplete publish" >&2
+    fi
   fi
 fi
 
@@ -182,7 +201,7 @@ PY
 cat "$out/windows-update.json"
 
 echo "==> Sign and verify feed"
-verifier="$(resolve_verifier)"
+[ -n "$verifier" ] || verifier="$(resolve_verifier)"
 sign_args=(
   "$root/scripts/windows/sign-update.mjs"
   --manifest "$out/windows-update.json"
@@ -237,7 +256,8 @@ before=""
 [ "$dry" = 1 ] || before="$(gh release view "$tag" -R "$repo" --json assets -q '.assets[].name')"
 for cpu in x64 arm64; do cp "$out/Ardia-Setup-$cpu.exe" "$out/Ardia-Setup-$cpu-$build.exe"; done
 run gh release upload "$tag" -R "$repo" --clobber "$out/Ardia-Setup-x64-$build.exe" "$out/Ardia-Setup-arm64-$build.exe" "$out/$name.tar.xz"
-run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json.sig" "$out/windows-update.json"
+run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json.sig"
+run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json"
 run gh release upload "$tag" -R "$repo" --clobber "$out/Ardia-Setup-x64.exe" "$out/Ardia-Setup-arm64.exe"
 run gh release edit "$tag" -R "$repo" --prerelease --latest=false --notes-file "$notes"
 previous="$(printf '%s\n' "$before" | sed -n -E 's/^Ardia-Setup-(x64|arm64)-([0-9]+)\.exe$/\2/p' | grep -v -x "$build" | sort -n | tail -1 || true)"

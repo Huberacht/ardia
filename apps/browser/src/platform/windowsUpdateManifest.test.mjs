@@ -19,7 +19,23 @@ test("a published manifest reads with both installers", () => {
 });
 
 test("a manifest that is not JSON, not an object, or has no usable build is refused", () => {
-  for (const text of ["", "<html>", "[]", "null", JSON.stringify({ version: "1" }), manifest({ build: 0 }), manifest({ build: 1.5 }), manifest({ build: "60" }), manifest({ version: "" }), manifest({ version: "a b" }), manifest({ extra: 1 })]) {
+  for (const text of [
+    "",
+    "<html>",
+    "[]",
+    "null",
+    JSON.stringify({ version: "1" }),
+    manifest({ build: 0 }),
+    manifest({ build: 1.5 }),
+    manifest({ build: "60" }),
+    manifest().replace('"build":60', '"build":60.0'),
+    manifest().replace('"build":60', '"build":6e1'),
+    manifest().replace('"bytes":180000000', '"bytes":1e2'),
+    manifest().replace('"bytes":180000000', '"bytes":180000000.0'),
+    manifest({ version: "" }),
+    manifest({ version: "a b" }),
+    manifest({ extra: 1 }),
+  ]) {
     assert.equal(readManifest(text, under), null, text);
   }
 });
@@ -137,18 +153,24 @@ test("Windows update verification telemetry counts obey consent epochs and stay 
   const counts = createWindowsUpdateCounts();
   counts.note("signature");
   assert.deepEqual(counts.takeCounts(), {});
+  const offStart = counts.consentEpoch();
   counts.setConsentEpoch("e1");
-  counts.note("verified");
-  counts.note("signature");
-  counts.note("signature");
+  counts.note("verified", offStart);
+  assert.deepEqual(counts.takeCounts(), {});
+  const e1Start = counts.consentEpoch();
+  counts.note("verified", e1Start);
+  counts.note("signature", e1Start);
+  counts.note("signature", e1Start);
   assert.deepEqual(counts.takeCounts(), {
     e1: { verified: 1, signature: 2, manifest: 0, tooLarge: 0, missing: 0, network: 0, verifier: 0, other: 0 },
   });
   assert.deepEqual(counts.takeCounts(), {});
-  counts.note("manifest");
+  counts.note("manifest", e1Start);
   counts.setConsentEpoch("e2");
+  counts.note("verified", e1Start);
   assert.deepEqual(counts.takeCounts(), {});
   counts.setConsentEpoch("");
+  counts.note("network", "e2");
   counts.note("network");
   assert.deepEqual(counts.takeCounts(), {});
 
