@@ -66,6 +66,7 @@ extension SearchStageView {
     guard let field = Self.find(nativeId: id, in: self) as? CompletingFieldView, field.window != nil else { return }
     field.focus()
     focusPending = false
+    if PhoneTestBuild.isOn { NSLog("PAGELAB time stage focused %.0f", Date().timeIntervalSince1970 * 1000) }
   }
 
   func holdReveals() {
@@ -79,7 +80,13 @@ extension SearchStageView {
   }
 
   func fadeInReveals(from base: CFTimeInterval) {
-    let fades: [(String?, CFTimeInterval)] = [(revealNativeId, Motion.stageRevealFieldDelay), (rowsRevealNativeId, Motion.stageRevealRowsDelay)]
+    if let id = revealNativeId, let field = Self.find(nativeId: id, in: self) {
+      UIView.performWithoutAnimation {
+        field.layer.removeAllAnimations()
+        field.layer.opacity = 1
+      }
+    }
+    let fades: [(String?, CFTimeInterval)] = [(rowsRevealNativeId, Motion.stageRevealRowsDelay)]
     for (id, delay) in fades {
       guard let id, let view = Self.find(nativeId: id, in: self) else { continue }
       view.restartStageOpacityFade(to: 1, after: reduceMotionNow ? 0 : delay, from: base, curve: Motion.stageRevealCurve)

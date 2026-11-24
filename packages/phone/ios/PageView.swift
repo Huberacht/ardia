@@ -55,15 +55,16 @@ final class PageView: ExpoView {
   var hiddenCoverWasHidden = false
   var coverCapTask: Task<Void, Never>?
   var coverRetryTask: Task<Void, Never>?
+  var lastFrameView: UIView?
+  var hostedAt: CFTimeInterval = 0
   var coverNativeID: String? {
     didSet { if coverNativeID != oldValue { MainActor.assumeIsolated { coverChanged() } } }
   }
   static let coverCap: Duration = .milliseconds(200)
   static let coverRetryGap: Duration = .milliseconds(16)
   static let coverRetries = 12
-  static let drawnProbeTries = 8
+  static let drawnProbeTries = 30
   static let flatProbesAccepted = 3
-  static let drawnProbeGap: Duration = .milliseconds(50)
   static let scrollRest: TimeInterval = 0.5
   static let drawnProbeWidth: Double = 64
   private var madeGestures: PageGestures?
@@ -180,7 +181,10 @@ final class PageView: ExpoView {
   @MainActor
   private func host(_ webView: WKWebView?) {
     guard webView !== hostedWebView || webView?.superview !== self else { return }
-    if let hostedWebView, hostedWebView.superview === self { hostedWebView.removeFromSuperview() }
+    if let hostedWebView, hostedWebView.superview === self {
+      if webView !== hostedWebView, let page { PageLastFrame.keep(hostedWebView, document: page.navigationGeneration) }
+      hostedWebView.removeFromSuperview()
+    }
     if webView !== hostedWebView { forgetHostedWebView() }
     hostedWebView = webView
     scrollObservation = nil
@@ -193,6 +197,9 @@ final class PageView: ExpoView {
     webView.frame = webViewFrame
     webView.autoresizingMask = []
     addSubview(webView)
+    hostedAt = CACurrentMediaTime()
+    showLastFrame(of: webView)
+    if PhoneTestBuild.isOn { NSLog("PAGELAB time page hosted %.0f", Date().timeIntervalSince1970 * 1000) }
     if let summaryLayer { bringSubviewToFront(summaryLayer) }
     applyObscuredInsets()
     gestures.attach(webView, page: page)
@@ -208,6 +215,7 @@ final class PageView: ExpoView {
 
   @MainActor
   private func forgetHostedWebView() {
+    removeLastFrame()
     drawnTask?.cancel()
     drawnTask = nil
     drawnSent = false
@@ -272,6 +280,7 @@ final class PageView: ExpoView {
 
   @MainActor
   private func scrollMoved() {
+    if lastFrameView != nil, hostedWebView?.scrollView.isTracking == true { removeLastFrame() }
     keepOffsetWithinContent()
     lastScroll = CACurrentMediaTime()
     scheduleScrollRest()
@@ -328,6 +337,14 @@ final class PageView: ExpoView {
           self.page?.id == id else { return }
     sampled = tone
     sendTone(theme: page.themeColor, underPage: page.underPageBackgroundColor)
+  }
+
+  override func willMove(toWindow newWindow: UIWindow?) {
+    super.willMove(toWindow: newWindow)
+    guard newWindow == nil else { return }
+    MainActor.assumeIsolated {
+      if let hostedWebView, hostedWebView.superview === self, let page { PageLastFrame.keep(hostedWebView, document: page.navigationGeneration) }
+    }
   }
 
   override func didMoveToWindow() {

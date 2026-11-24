@@ -361,7 +361,7 @@ function useBarCollapse(tabId: string, isPrivate: boolean, finding: boolean, des
   const slidesAway = hidden && !materialFind;
   const wasCollapsed = useRef(collapsed);
   useEffect(() => {
-    if ((android || squeezes) && collapsed && !wasCollapsed.current && !isPrivate) countUsage("bottom_bar_collapses");
+    if (collapsed && !wasCollapsed.current && !isPrivate) countUsage("bottom_bar_collapses");
     wasCollapsed.current = collapsed;
   }, [collapsed, tabId, isPrivate, squeezes]);
   const fold = useBarFold(collapsed, reduceMotion);
