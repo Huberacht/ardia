@@ -7,7 +7,7 @@ import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { pageBarPreviewShown } from "../../state/browse/deckPull";
 import { canCutDeckFromTap, cutDeckFromTabsTap, useBrowse } from "../../state/browse/store";
 import { focusForScreenReader } from "../ui/coverFocus";
-import { dropEarlyStandby, revealStandbyOnPress } from "../../state/search/standbyReveal";
+import { acceptsPlusPress, dropEarlyStandby, dropEarlyStandbyUnlessOpened, revealStandbyOnPress } from "../../state/search/standbyReveal";
 import { currentTabs } from "../../state/tabs/store";
 import { useBarReturn } from "./barReturn";
 import { AddressFace, AddressLeaf } from "./AddressFace";
@@ -326,22 +326,31 @@ export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = nu
     dropEarlyStandby();
   }, []);
   const incognito = tab.isPrivate;
-  const plusTap = useMemo(
+  const touchedAt = useSharedValue(-1);
+  const plusTouch = useMemo(
     () =>
-      Gesture.Tap()
-        .withTestId(`${testID}Tap`)
-        .maxDuration(TABS_TAP_MS)
+      Gesture.Manual()
+        .withTestId(`${testID}Touch`)
         .enabled(tabSwitchCuts())
-        .onEnd((_event, success) => {
-          if (!success) return;
-          revealStandbyOnPress(incognito);
-          runOnJS(callPlus)();
+        .onTouchesDown((event) => {
+          touchedAt.value = event.numberOfTouches === 1 ? Date.now() : -1;
+        })
+        .onTouchesUp((event, manager) => {
+          const touch = event.changedTouches[0];
+          const accepted = touch !== undefined && event.numberOfTouches === 0 && acceptsPlusPress(touchedAt.value, Date.now(), touch.x, touch.y, floatingBarLayout.control);
+          touchedAt.value = -1;
+          manager.fail();
+          if (accepted && revealStandbyOnPress(incognito)) runOnJS(dropEarlyStandbyUnlessOpened)();
+        })
+        .onTouchesCancelled((_event, manager) => {
+          touchedAt.value = -1;
+          manager.fail();
         }),
-    [incognito, testID, callPlus],
+    [incognito, testID, touchedAt],
   );
   return (
-    <GestureDetector gesture={plusTap}>
-    <PressInPlace label={newTabLabel(tab.isPrivate)} onPress={onPlus} onPressIn={haptics.barPress} dims="glyph" style={styles.circleHit}>
+    <GestureDetector gesture={plusTouch}>
+    <PressInPlace label={newTabLabel(tab.isPrivate)} onPress={callPlus} onPressIn={haptics.barPress} dims="glyph" style={styles.circleHit}>
       <ChromeSurface testID={testID} shape="circle" cornerRadius={capsule(floatingBarLayout.control)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={glass?.shown} shownMs={glass?.shownMs} style={styles.circle}>
         <PullGlyphs>
           <Animated.View collapsable={false} style={foldGlyphs}>

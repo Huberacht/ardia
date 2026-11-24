@@ -482,17 +482,16 @@ test("+ shows and focuses the waiting sheet before React renders it live: the pr
   keyboard.mockRestore();
 });
 
-test("a tap on the page bar's + reveals the waiting sheet from its own UI-thread worklet before any JS runs, and JS drops that reveal when the press doesn't open it", () => {
+test("a press on the page bar's + reveals the waiting sheet from its touch watcher on the UI thread before any JS runs, leaves the press itself to the button, and drops that reveal when the press doesn't open it", () => {
   withTabs(2);
   browsingNow();
   const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
   const original = browse.newTab;
   const seen: number[] = [];
-  let opens = true;
   const waiting = () => root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
   jest.spyOn(browse, "newTab").mockImplementation(() => {
     seen.push(getAnimatedStyle(waiting()).opacity as number);
-    if (opens) original();
+    original();
   });
   const root = renderSurface(
     <DesignProvider design="redesigned">
@@ -500,23 +499,34 @@ test("a tap on the page bar's + reveals the waiting sheet from its own UI-thread
       <SearchTray />
     </DesignProvider>,
   );
-  const tap = () => {
-    act(() => fireGestureHandler(getByGestureTestId("floatingBarPlusTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
-    act(() => jest.advanceTimersByTime(0));
+  type Watcher = { handlers: { onTouchesDown: (event: object, manager: object) => void; onTouchesUp: (event: object, manager: object) => void } };
+  const watcher = getByGestureTestId("floatingBarPlusTouch") as unknown as Watcher;
+  const manager = { fail: jest.fn(), activate: jest.fn(), begin: jest.fn(), end: jest.fn() };
+  const touch = (heldMs: number, x = 20, y = 20) => {
+    act(() => watcher.handlers.onTouchesDown({ numberOfTouches: 1, changedTouches: [{ x, y }], allTouches: [{ x, y }] }, manager));
+    act(() => jest.advanceTimersByTime(heldMs));
+    act(() => watcher.handlers.onTouchesUp({ numberOfTouches: 0, changedTouches: [{ x, y }], allTouches: [] }, manager));
   };
+  const plus = () => root.root.findAll((node) => node.props.accessibilityLabel === "New Tab" && typeof node.props.onPress === "function")[0]!;
   expect(getAnimatedStyle(waiting()).opacity).toBe(0);
-  opens = false;
-  act(() => fireGestureHandler(getByGestureTestId("floatingBarPlusTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
-  expect(seen).toEqual([]);
+  touch(40);
+  expect(manager.fail).toHaveBeenCalled();
+  expect(manager.activate).not.toHaveBeenCalled();
   expect(getAnimatedStyle(waiting()).opacity).toBe(1);
-  act(() => jest.advanceTimersByTime(0));
-  expect(seen).toEqual([1]);
+  act(() => jest.advanceTimersByTime(400));
   expect(searchState().open).toBe(false);
   expect(getAnimatedStyle(waiting()).opacity).toBe(0);
-  opens = true;
-  tap();
-  expect(seen).toEqual([1, 1]);
+  touch(500);
+  expect(getAnimatedStyle(waiting()).opacity).toBe(0);
+  touch(40, 20, 400);
+  expect(getAnimatedStyle(waiting()).opacity).toBe(0);
+  touch(40);
+  expect(seen).toEqual([]);
+  expect(getAnimatedStyle(waiting()).opacity).toBe(1);
+  act(() => plus().props.onPress());
+  expect(seen).toEqual([1]);
   expect(searchState().open).toBe(true);
+  act(() => jest.advanceTimersByTime(400));
   const live = root.root.findAll((node) => node.props.testID === "trayRoot" && typeof node.type === "string");
   expect(live).toHaveLength(1);
   expect(getAnimatedStyle(live[0]!).opacity).toBe(1);
