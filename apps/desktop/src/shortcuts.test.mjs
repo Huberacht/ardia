@@ -150,7 +150,7 @@ test("Ctrl+Shift+C copies the page's URL, as ⇧⌘C does on the Mac, and Ctrl+A
   assert.deepEqual(inspect.aliases, []);
   const remapped = keyboardCombo(event("KeyU", { ctrlKey: true, shiftKey: true }));
   assert.equal(commandAt(linuxBindings({ copyUrl: ["u", "command", "shift"] }), remapped.keyCode, remapped.flags)?.command, "copyUrl");
-  assert.notEqual(commandAt(linuxBindings({ copyUrl: ["u", "command", "shift"] }), copyKeys.keyCode, copyKeys.flags)?.command, "copyUrl");
+  assert.equal(commandAt(linuxBindings({ copyUrl: ["u", "command", "shift"] }), copyKeys.keyCode, copyKeys.flags), undefined);
 });
 
 test("a saved shortcut spelled with +, { or } binds as Linux's shifted =, [ or ], as the defaults do", () => {
