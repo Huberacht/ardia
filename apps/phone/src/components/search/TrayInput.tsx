@@ -1,6 +1,6 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ComponentProps } from "react";
 import { Platform, TextInput, type StyleProp, type TextStyle, type TextInputInstance } from "react-native";
-import Animated, { useAnimatedProps, useSharedValue, type SharedValue } from "react-native-reanimated";
+import Animated, { useAnimatedProps, type SharedValue } from "react-native-reanimated";
 import { withAlpha } from "../../lib/color";
 import { inlineOffer } from "../../lib/inlineOffer";
 import { CompletingField, completingFieldIsNative, type CompletingFieldHandle } from "../../platform/completingField";
@@ -41,7 +41,14 @@ export const TrayInput = forwardRef<TrayInputHandle, Props>(function TrayInput(p
   return completingFieldIsNative() ? <CompletingInput {...props} ref={ref} /> : <PlainInput {...props} ref={ref} />;
 });
 
-const RevealingField = Animated.createAnimatedComponent(CompletingField);
+const AnimatedField = Animated.createAnimatedComponent(CompletingField);
+
+type FieldProps = ComponentProps<typeof CompletingField>;
+
+const RevealingField = forwardRef<CompletingFieldHandle, FieldProps & { reveal: SharedValue<number> }>(function RevealingField({ reveal, ...props }, ref) {
+  const revealProps = useAnimatedProps(() => ({ revealFocus: reveal.value }));
+  return <AnimatedField {...props} ref={ref} animatedProps={revealProps} />;
+});
 
 const CompletingInput = forwardRef<TrayInputHandle, Props>(function CompletingInput({ start, selectsStart, color, placeholderColor, accent, keyboardAppearance, holdsScroll, nativeID, revealFocus, onTyped, onSubmit, style, weight = "regular" }, ref) {
   const field = useRef<CompletingFieldHandle>(null);
@@ -50,9 +57,6 @@ const CompletingInput = forwardRef<TrayInputHandle, Props>(function CompletingIn
   const completedFor = useSearchCompletedFor();
   const typedNow = useRef(onTyped);
   typedNow.current = onTyped;
-  const unrevealed = useSharedValue(0);
-  const reveal = revealFocus ?? unrevealed;
-  const revealProps = useAnimatedProps(() => ({ revealFocus: reveal.value }));
   useImperativeHandle(
     ref,
     () => ({
@@ -71,33 +75,30 @@ const CompletingInput = forwardRef<TrayInputHandle, Props>(function CompletingIn
   useEffect(() => {
     if (selectsStart && start) field.current?.setText(start, true);
   }, []);
-  return (
-    <RevealingField
-      ref={field}
-      animatedProps={revealProps}
-      {...SHARED}
-      style={style}
-      text={typed}
-      offer={inlineOffer(completion, completedFor)}
-      highlightColor={withAlpha(accent, 0.3)}
-      keyboardAppearance={keyboardAppearance}
-      holdsScroll={holdsScroll}
-      nativeID={nativeID}
-      selectsAllOnFocus={selectsStart && start.length > 0}
-      cursorColor={accent}
-      selectionColor={withAlpha(accent, 0.3)}
-      color={color}
-      placeholderTextColor={placeholderColor}
-      fontSize={font.title3.fontSize}
-      fontWeight={weight}
-      onTypedChange={(next) => {
+  const fieldProps: FieldProps = {
+      ...SHARED,
+      style,
+      text: typed,
+      offer: inlineOffer(completion, completedFor),
+      highlightColor: withAlpha(accent, 0.3),
+      keyboardAppearance,
+      holdsScroll,
+      nativeID,
+      selectsAllOnFocus: selectsStart && start.length > 0,
+      cursorColor: accent,
+      selectionColor: withAlpha(accent, 0.3),
+      color,
+      placeholderTextColor: placeholderColor,
+      fontSize: font.title3.fontSize,
+      fontWeight: weight,
+      onTypedChange: (next) => {
         setTyped(next);
         onTyped(next);
-      }}
-      onSubmit={onSubmit}
-      onFieldScroll={countFieldScroll}
-    />
-  );
+      },
+      onSubmit,
+      onFieldScroll: countFieldScroll,
+  };
+  return revealFocus ? <RevealingField {...fieldProps} ref={field} reveal={revealFocus} /> : <CompletingField {...fieldProps} ref={field} />;
 });
 
 const countFieldScroll = () => {
