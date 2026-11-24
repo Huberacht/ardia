@@ -123,7 +123,7 @@ NSMutableArray<NSString *> *SweepLocked() {
   }];
   [arms removeObjectsAtIndexes:old];
   while (arms.count > kMaxKeptArms) {
-    NSUInteger oldest = [arms indexOfObjectPassingTest:^BOOL(ArdiaFileArm *arm, NSUInteger, BOOL *) { return !Active(arm) && !arm.uploadFolder && !arm.claims.count; }];
+    NSUInteger oldest = [arms indexOfObjectPassingTest:^BOOL(ArdiaFileArm *arm, NSUInteger, BOOL *) { return !Active(arm) && !arm.uploadFolder && !arm.claims.count && !arm.stagingFolders.count; }];
     if (oldest == NSNotFound) break;
     [arms removeObjectAtIndex:oldest];
   }
