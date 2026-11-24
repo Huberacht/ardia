@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -87,6 +88,7 @@
 #include "content/public/common/referrer.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
+#include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -503,7 +505,7 @@ StoredDocument ReadStoredDocument(const base::FilePath& directory,
   }
   bool dir_missing = false;
   const std::optional<std::wstring> root_final =
-      OpenDirectoryFinalPath(directory, false, &dir_missing);
+      OpenDirectoryFinalPath(directory, true, &dir_missing);
   if (!root_final) {
     return {dir_missing ? ardia::desktop_policy::StoredRead::kMissing
                         : ardia::desktop_policy::StoredRead::kFailed,
@@ -558,7 +560,7 @@ bool WriteStoredDocument(const base::FilePath& directory,
       directory,
       FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_TRAVERSE |
           FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-      false, &root_final);
+      true, &root_final);
   if (!dir_handle.valid()) {
     return false;
   }
@@ -628,7 +630,7 @@ bool RemoveStoredDocument(const base::FilePath& directory,
   }
   bool dir_missing = false;
   const std::optional<std::wstring> root_final =
-      OpenDirectoryFinalPath(directory, false, &dir_missing);
+      OpenDirectoryFinalPath(directory, true, &dir_missing);
   if (!root_final) {
     return dir_missing;
   }
@@ -661,7 +663,7 @@ bool RemoveStoredDocument(const base::FilePath& directory,
 base::DictValue ReadBootstrapDocuments(const base::FilePath& directory) {
   base::DictValue documents;
   const std::optional<std::wstring> root_final =
-      OpenDirectoryFinalPath(directory, false);
+      OpenDirectoryFinalPath(directory, true);
   if (!root_final) {
     return documents;
   }
@@ -798,6 +800,37 @@ int& TelemetryInFlight() {
   return in_flight;
 }
 
+int& TelemetryRequestsStarted() {
+  static int started = 0;
+  return started;
+}
+
+bool TelemetryPostAllowed(const std::string& body, const std::string& key) {
+  if (!ardia::desktop_telemetry_policy::PostAcceptable(body, key)) {
+    return false;
+  }
+  const std::optional<base::Value> parsed =
+      base::JSONReader::Read(body, base::JSON_PARSE_RFC);
+  return parsed && parsed->is_dict();
+}
+
+GURL TelemetryEndpoint() {
+  if (ardiacore::TestInstance()) {
+    wchar_t buffer[512] = {};
+    const DWORD length = ::GetEnvironmentVariableW(
+        L"ARDIA_TEST_TELEMETRY_ENDPOINT", buffer,
+        static_cast<DWORD>(std::size(buffer)));
+    if (length > 0 && length < std::size(buffer)) {
+      const GURL loopback(base::WideToUTF8(std::wstring(buffer, length)));
+      if (loopback.is_valid() && loopback.SchemeIs("http") &&
+          net::IsLocalhost(loopback)) {
+        return loopback;
+      }
+    }
+  }
+  return GURL(ardia::desktop_telemetry_policy::kEndpoint);
+}
+
 scoped_refptr<network::SharedURLLoaderFactory> TelemetryLoaderFactory() {
   if (!g_browser_process || g_browser_process->IsShuttingDown()) {
     return nullptr;
@@ -820,7 +853,7 @@ class WinTelemetryClient {
 
   void Post(std::string body, const std::string& ingest_key, PostReply reply) {
     namespace policy = ardia::desktop_telemetry_policy;
-    if (!policy::PostAcceptable(body, ingest_key) ||
+    if (!TelemetryPostAllowed(body, ingest_key) ||
         !policy::AdmitPost(TelemetryInFlight())) {
       PostStatus(std::move(reply), 0);
       return;
@@ -853,7 +886,7 @@ class WinTelemetryClient {
               const std::string& ingest_key) {
       namespace policy = ardia::desktop_telemetry_policy;
       auto request = std::make_unique<network::ResourceRequest>();
-      request->url = GURL(policy::kEndpoint);
+      request->url = TelemetryEndpoint();
       request->method = "POST";
       request->credentials_mode = network::mojom::CredentialsMode::kOmit;
       request->redirect_mode = network::mojom::RedirectMode::kError;
@@ -866,6 +899,7 @@ class WinTelemetryClient {
       loader_->SetTimeoutDuration(base::Seconds(policy::kTimeoutSeconds));
       loader_->SetAllowHttpErrorResults(true);
       loader_->AttachStringForUpload(std::move(body), "application/json");
+      ++TelemetryRequestsStarted();
       loader_->DownloadHeadersOnly(
           factory,
           base::BindOnce(&TelemetryPost::OnLoaded, base::Unretained(this)));
@@ -2206,8 +2240,8 @@ void ShellWindow::Invoke(const std::string& method,
   if (method == "ArdiaTelemetry.post") {
     if (!values || values->size() != 2 || !(*values)[0].is_string() ||
         !(*values)[1].is_string() ||
-        !ardia::desktop_telemetry_policy::PostAcceptable(
-            (*values)[0].GetString(), (*values)[1].GetString())) {
+        !TelemetryPostAllowed((*values)[0].GetString(),
+                              (*values)[1].GetString())) {
       return std::move(done).Run(
           false, base::Value(base::DictValue()
                                  .Set("code", "ERR_TELEMETRY_REFUSED")
@@ -2317,6 +2351,12 @@ void ShellWindow::Invoke(const std::string& method,
         true, base::Value(base::DictValue()
                               .Set("calls", ExternalOpenCount())
                               .Set("defaultBrowserCalls", DefaultAppsOpenCount())));
+  }
+  if (method == "ArdiaShell.testTelemetrySink" && ardiacore::TestInstance()) {
+    return std::move(done).Run(
+        true, base::Value(base::DictValue()
+                              .Set("requestsStarted", TelemetryRequestsStarted())
+                              .Set("inFlight", TelemetryInFlight())));
   }
   if (method == "ArdiaShell.testWindowDecorations" && ardiacore::TestInstance()) {
     return std::move(done).Run(true, base::Value(DecorationReport()));
@@ -3103,8 +3143,44 @@ void RegisterWebUIShell() {
       std::make_unique<ShellConfig>());
 }
 
+namespace {
+
+void RefuseIncompleteMigration(StartupMigrationResult migration) {
+  const std::string outcome =
+      std::string(StartupMigrationOutcomeName(migration.outcome)) +
+      (migration.outcome == StartupMigrationOutcome::kExited ||
+               migration.exit_code != 0
+           ? " " + base::NumberToString(migration.exit_code)
+           : std::string());
+  LOG(ERROR) << "Ardia WebUI shell: moving data from the previous version did "
+                "not finish ("
+             << outcome << "); not opening the shell on a partial copy";
+  NoteForTest("webui shell: startup migration incomplete (" + outcome +
+              "); quitting");
+  const DWORD background = ::GetEnvironmentVariableW(L"ARDIA_BACKGROUND",
+                                                     nullptr, 0);
+  if (background == 0) {
+    ::MessageBoxW(nullptr,
+                  L"Ardia couldn't finish moving your data from the previous "
+                  L"version, so it didn't open, to keep that data safe.\n\n"
+                  L"Open Ardia again to finish the move. Nothing was "
+                  L"changed in the previous version's data.",
+                  L"Ardia",
+                  MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+  }
+  QuitAppWithExitCode(kStartupMigrationIncompleteExitCode);
+}
+
+}
+
 void OpenWebUIShell() {
-  RunWebUIStartupMigration(*base::CommandLine::ForCurrentProcess());
+  const StartupMigrationResult migration =
+      RunWebUIStartupMigration(*base::CommandLine::ForCurrentProcess());
+  if (!StartupMigrationAllowsShell(migration)) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&RefuseIncompleteMigration, migration));
+    return;
+  }
   WithProfile(kShellProfile, base::BindOnce(&ShowWindowFor));
 }
 

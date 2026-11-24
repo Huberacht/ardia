@@ -134,12 +134,10 @@ bool ShouldRunWebUIStartupMigration(const base::CommandLine& command_line,
   });
 }
 
-void RunWebUIStartupMigration(const base::CommandLine& command_line) {
-  static bool checked = false;
-  if (checked) {
-    return;
-  }
-  checked = true;
+namespace {
+
+StartupMigrationResult LaunchWebUIStartupMigration(
+    const base::CommandLine& command_line) {
   const std::wstring env_data_dir = ReadEnv(L"ARDIA_DATA_DIR");
   const bool has_custom_data_dir = !Trimmed(env_data_dir).empty();
   const std::wstring rnw_data_dir =
@@ -152,25 +150,26 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
                       "(ARDIA_DATA_DIR requires --ardia-migrate-rnw-data)";
       NoteForTest("webui shell: startup migration skipped (missing rnw-data)");
     }
-    return;
+    return {StartupMigrationOutcome::kNotRequested};
   }
   base::FilePath exe_dir;
   if (!base::PathService::Get(base::DIR_EXE, &exe_dir) || exe_dir.empty()) {
-    LOG(WARNING) << "Ardia WebUI shell: startup migration skipped (no executable directory)";
-    NoteForTest("webui shell: startup migration skipped (no executable directory)");
-    return;
+    LOG(WARNING) << "Ardia WebUI shell: startup migration could not find the "
+                    "executable directory";
+    NoteForTest("webui shell: startup migration lookup failed (no executable directory)");
+    return {StartupMigrationOutcome::kLookupFailed};
   }
   const base::FilePath binary = exe_dir.Append(kMigratorBinaryName);
   const MigratorLookup lookup = VerifyMigratorBinary(exe_dir, binary);
   if (lookup == MigratorLookup::kMissing) {
     LOG(INFO) << "Ardia WebUI shell: startup migrator not present beside chrome.exe; continuing";
     NoteForTest("webui shell: startup migrator absent");
-    return;
+    return {StartupMigrationOutcome::kMigratorAbsent};
   }
   if (lookup == MigratorLookup::kUnsafe) {
-    LOG(WARNING) << "Ardia WebUI shell: startup migrator failed binary containment check; skipping";
+    LOG(WARNING) << "Ardia WebUI shell: startup migrator failed binary containment check";
     NoteForTest("webui shell: startup migrator refused");
-    return;
+    return {StartupMigrationOutcome::kMigratorUnsafe};
   }
   const std::wstring webui_data_dir = Trimmed(AppDataDirectory());
   const std::optional<std::vector<std::wstring>> args =
@@ -179,9 +178,9 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
           rnw_data_dir.empty() ? std::wstring() : webui_data_dir,
           ardiacore::TestInstance());
   if (!args) {
-    LOG(WARNING) << "Ardia WebUI shell: startup migration skipped (incomplete migration paths)";
+    LOG(WARNING) << "Ardia WebUI shell: startup migration has incomplete migration paths";
     NoteForTest("webui shell: startup migration skipped (incomplete paths)");
-    return;
+    return {StartupMigrationOutcome::kIncompleteArguments};
   }
   std::wstring command_text = BuildWinCommandLine(binary.value(), *args);
   STARTUPINFOW startup{};
@@ -195,8 +194,9 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
                  << error << ")";
     NoteForTest("webui shell: startup migrator launch failed " +
                 base::NumberToString(error));
-    return;
+    return {StartupMigrationOutcome::kLaunchFailed, error};
   }
+  StartupMigrationResult result;
   const DWORD waited =
       ::WaitForSingleObject(process.hProcess, kStartupMigrationTimeoutMs);
   if (waited == WAIT_TIMEOUT) {
@@ -205,6 +205,7 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
     LOG(WARNING) << "Ardia WebUI shell: startup migrator timed out after "
                  << kStartupMigrationTimeoutMs << " ms and was terminated";
     NoteForTest("webui shell: startup migrator timed out");
+    result = {StartupMigrationOutcome::kTimedOut};
   } else if (waited == WAIT_OBJECT_0) {
     DWORD exit_code = 1;
     if (::GetExitCodeProcess(process.hProcess, &exit_code)) {
@@ -216,6 +217,15 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
       }
       NoteForTest("webui shell: startup migrator exit " +
                   base::NumberToString(exit_code));
+      result = {StartupMigrationOutcome::kExited, exit_code};
+    } else {
+      const DWORD error = ::GetLastError();
+      LOG(WARNING) << "Ardia WebUI shell: startup migrator exit code unreadable "
+                      "(error "
+                   << error << ")";
+      NoteForTest("webui shell: startup migrator exit unreadable " +
+                  base::NumberToString(error));
+      result = {StartupMigrationOutcome::kWaitFailed, error};
     }
   } else {
     const DWORD error = ::GetLastError();
@@ -223,9 +233,22 @@ void RunWebUIStartupMigration(const base::CommandLine& command_line) {
                  << error << ")";
     NoteForTest("webui shell: startup migrator wait failed " +
                 base::NumberToString(error));
+    result = {StartupMigrationOutcome::kWaitFailed, error};
   }
   ::CloseHandle(process.hThread);
   ::CloseHandle(process.hProcess);
+  return result;
+}
+
+}
+
+StartupMigrationResult RunWebUIStartupMigration(
+    const base::CommandLine& command_line) {
+  static std::optional<StartupMigrationResult> result;
+  if (!result) {
+    result = LaunchWebUIStartupMigration(command_line);
+  }
+  return *result;
 }
 
 }

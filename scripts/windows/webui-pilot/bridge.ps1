@@ -13,6 +13,18 @@ function Invoke-Host([string]$method, [string]$argsJson) {
 }
 function Profiles { @(Get-ChildItem -LiteralPath "$Data\Chromium" -Directory -Filter 'Ardia *' -ErrorAction SilentlyContinue | ForEach-Object Name) }
 
+function Free-LoopbackPort {
+  $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $probe.Start()
+  $port = $probe.LocalEndpoint.Port
+  $probe.Stop()
+  $port
+}
+$telemetryPort = Free-LoopbackPort
+$telemetryCapture = Join-Path $Proof "bridge-telemetry-capture-$telemetryPort.json"
+Remove-Item -LiteralPath $telemetryCapture, "$telemetryCapture.ready" -Force -ErrorAction SilentlyContinue
+$env:ARDIA_TEST_TELEMETRY_ENDPOINT = "http://127.0.0.1:$telemetryPort/otel/v1/logs"
+
 Stop-Engine
 Start-Shell -Fresh | Out-Null
 Wait-ShellReady 60 | Out-Null
@@ -243,27 +255,137 @@ $protoRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["__proto__"]'
 $ordinaryRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["pilot-bootstrap.json"]'
 Check 'bootstrap-keeps-proto-document' (($protoWrite.ok -eq $true) -and ($ordinaryWrite.ok -eq $true) -and $bootstrapDocs.ownProto -and ($bootstrapDocs.proto -ceq $protoDocument) -and ($bootstrapDocs.mapped -ceq $protoDocument) -and ($bootstrapDocs.ordinary -ceq 'ordinary') -and $bootstrapDocs.plain -and $bootstrapDocs.clean -and ($protoRemove.ok -eq $true) -and ($ordinaryRemove.ok -eq $true) -and (-not (Test-Path -LiteralPath (Join-Path $Data '__proto__')))) "bootstrap documents after reload: $(Answer-Text $bootstrapDocs)"
 
+function Telemetry-Sink {
+  $answer = Invoke-HostExpr 'ArdiaShell.testTelemetrySink' '[]'
+  if ($answer.ok -eq $true) { $answer.value } else { $null }
+}
+$telemetryKey = 'ak_app_0123456789abcdef01234567'
+$telemetryKeyExpr = Js $telemetryKey
 $telemetryBadCases = @(
   '[]',
   '["{}"]',
-  '["{}", "ak_app_0123456789abcdef01234567", "extra"]',
-  '[123, "ak_app_0123456789abcdef01234567"]',
+  "[`"{}`", $telemetryKeyExpr, `"extra`"]",
+  "[123, $telemetryKeyExpr]",
   '["{}", 123]',
-  '["", "ak_app_0123456789abcdef01234567"]',
-  '["not-json", "ak_app_0123456789abcdef01234567"]',
+  "[`"`", $telemetryKeyExpr]",
+  "[`"not-json`", $telemetryKeyExpr]",
+  "[`"{`", $telemetryKeyExpr]",
+  "[`"{\`"a\`":`", $telemetryKeyExpr]",
+  "[`"{} trailing`", $telemetryKeyExpr]",
+  "[`"[]`", $telemetryKeyExpr]",
+  "[`"\`"x\`"`", $telemetryKeyExpr]",
+  "[`"null`", $telemetryKeyExpr]",
   '["{}", "bad_key"]',
-  '["{}", "ak_app_0123456789abcdef01234567\r\nX-Injected: 1"]',
-  '["{" + "a".repeat(524289) + "}", "ak_app_0123456789abcdef01234567"]'
+  '["{}", "ak_app_0123456789ABCDEF01234567"]',
+  '["{}", "ak__0123456789abcdef01234567"]',
+  "[`"{}`", $(Js "$telemetryKey`r`nX-Injected: 1")]",
+  "[`"{}`", $(Js "$telemetryKey`nX-Injected: 1")]",
+  "[`"{\`"a\`":\`"`" + `"a`".repeat(524289) + `"\`"}`", $telemetryKeyExpr]"
 )
+$telemetrySinkBefore = Telemetry-Sink
 $telemetryUnrefused = @()
-foreach ($caseExpr in $telemetryBadCases) {
-  $ans = Invoke-HostExpr 'ArdiaTelemetry.post' $caseExpr
-  if (-not (Native-Refusal $ans 'ERR_TELEMETRY_REFUSED')) { $telemetryUnrefused += "$caseExpr => $(Answer-Text $ans)" }
+function Expect-TelemetryRefusal([string]$label, [string]$argsExpression) {
+  $ans = Invoke-HostExpr 'ArdiaTelemetry.post' $argsExpression
+  if (-not (Native-Refusal $ans 'ERR_TELEMETRY_REFUSED')) {
+    $script:telemetryUnrefused += "$label => $(Answer-Text $ans)"
+  }
 }
+foreach ($caseExpr in $telemetryBadCases) {
+  Expect-TelemetryRefusal $caseExpr $caseExpr
+}
+foreach ($case in $corpus.cases) {
+  Expect-TelemetryRefusal "body:$($case.id)" "[$($case.expression), $telemetryKeyExpr]"
+  Expect-TelemetryRefusal "key:$($case.id)" "[`"{}`", $($case.expression)]"
+}
+foreach ($shape in $corpus.shapes) {
+  Expect-TelemetryRefusal "shape:$($shape.id)" $shape.expression
+}
+Hold 1000
+$telemetrySinkAfter = Telemetry-Sink
 $telemetryCap = Cdp-Eval 'Boolean(window.__ardiaHost && Array.isArray(__ardiaHost.bootstrap.capabilities) && __ardiaHost.bootstrap.capabilities.includes("ArdiaTelemetry.post"))'
-Check 'telemetry-refuses-invalid-requests' (($telemetryCap -eq $true) -and ($telemetryUnrefused.Count -eq 0)) "advertised=$telemetryCap; not refused with ERR_TELEMETRY_REFUSED: $($telemetryUnrefused -join '; ')"
+Check 'telemetry-refuses-invalid-requests' (($telemetryCap -eq $true) -and ($telemetryUnrefused.Count -eq 0) -and ($null -ne $telemetrySinkBefore) -and ($telemetrySinkBefore.requestsStarted -eq 0) -and ($telemetrySinkAfter.requestsStarted -eq 0) -and ($telemetrySinkAfter.inFlight -eq 0)) "advertised=$telemetryCap; $($telemetryBadCases.Count) bad requests and $($corpus.cases.Count) corpus values in both positions; not refused with ERR_TELEMETRY_REFUSED: $($telemetryUnrefused -join '; '); requests started $($telemetrySinkBefore.requestsStarted) -> $($telemetrySinkAfter.requestsStarted)"
+
+$listener = Start-Job -ArgumentList $telemetryPort, $telemetryCapture -ScriptBlock {
+  param([int]$port, [string]$capture)
+  $server = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+  $server.Start()
+  Set-Content -LiteralPath "$capture.ready" 'ready'
+  try {
+    $accept = $server.AcceptTcpClientAsync()
+    if (-not $accept.Wait(30000)) { return }
+    $client = $accept.Result
+    $client.ReceiveTimeout = 10000
+    $stream = $client.GetStream()
+    $buffer = New-Object byte[] 65536
+    $data = New-Object System.Collections.Generic.List[byte]
+    $headerEnd = -1
+    $length = 0
+    while ($true) {
+      $read = $stream.Read($buffer, 0, $buffer.Length)
+      if ($read -le 0) { break }
+      $data.AddRange([System.ArraySegment[byte]]::new($buffer, 0, $read))
+      if ($headerEnd -lt 0) {
+        $text = [Text.Encoding]::ASCII.GetString($data.ToArray())
+        $headerEnd = $text.IndexOf("`r`n`r`n")
+        if ($headerEnd -ge 0 -and $text.Substring(0, $headerEnd) -match '(?im)^content-length:\s*(\d+)\s*$') { $length = [int]$Matches[1] }
+      }
+      if ($headerEnd -ge 0 -and $data.Count -ge $headerEnd + 4 + $length) { break }
+    }
+    $bytes = $data.ToArray()
+    $head = if ($headerEnd -ge 0) { [Text.Encoding]::ASCII.GetString($bytes, 0, $headerEnd) } else { '' }
+    $body = if ($headerEnd -ge 0) { [Text.Encoding]::UTF8.GetString($bytes, $headerEnd + 4, $bytes.Length - $headerEnd - 4) } else { '' }
+    $reply = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 204 No Content`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+    $stream.Write($reply, 0, $reply.Length)
+    $stream.Flush()
+    $client.Close()
+    @{ head = $head; body = $body } | ConvertTo-Json -Compress | Set-Content -LiteralPath $capture -Encoding UTF8
+  } finally {
+    $server.Stop()
+  }
+}
+$listenerReady = Wait-Until { Test-Path -LiteralPath "$telemetryCapture.ready" } 15 'the loopback telemetry listener' -NoThrow
+$controlBody = '{"resourceLogs":[],"pilot":"bridge"}'
+$controlPost = Invoke-HostExpr 'ArdiaTelemetry.post' "[$(Js $controlBody), $telemetryKeyExpr]"
+Wait-Job $listener -Timeout 30 | Out-Null
+Stop-Job $listener -ErrorAction SilentlyContinue
+Remove-Job $listener -Force -ErrorAction SilentlyContinue
+$captured = if (Test-Path -LiteralPath $telemetryCapture) { Get-Content -LiteralPath $telemetryCapture -Raw | ConvertFrom-Json } else { $null }
+$telemetrySinkControl = Telemetry-Sink
+$controlHead = if ($captured) { [string]$captured.head } else { '' }
+$controlOk = [bool]$listenerReady -and ($controlPost.ok -eq $true) -and ($controlPost.value.status -eq 204) -and ($telemetrySinkControl.requestsStarted -eq 1) -and ($controlHead -match '^POST /otel/v1/logs HTTP/1\.1') -and ($controlHead -cmatch "(?im)^x-ardia-key: $telemetryKey\s*$") -and ($controlHead -match '(?im)^content-type: application/json\s*$') -and ($controlHead -notmatch '(?im)^cookie:') -and ($captured.body -ceq $controlBody)
+Check 'telemetry-control-reaches-loopback-sink' $controlOk "answer $(Answer-Text $controlPost); requests started $($telemetrySinkAfter.requestsStarted) -> $($telemetrySinkControl.requestsStarted); captured head: $($controlHead -replace "`r`n", ' | ')"
+Remove-Item -LiteralPath $telemetryCapture, "$telemetryCapture.ready" -Force -ErrorAction SilentlyContinue
 
 Stop-Engine
+Remove-Item Env:ARDIA_TEST_TELEMETRY_ENDPOINT -ErrorAction SilentlyContinue
+
+$linkedRoot = Join-Path $RunRoot 'data-real'
+$linkedData = Join-Path $RunRoot 'data-link'
+New-Item -ItemType Directory -Force $linkedRoot | Out-Null
+cmd /c mklink /J "$linkedData" "$linkedRoot" | Out-Null
+$linkedItem = Get-Item -LiteralPath $linkedData -Force -ErrorAction SilentlyContinue
+$script:Data = $linkedData
+Start-Shell | Out-Null
+$linkedReady = $false
+try {
+  Wait-ShellReady 60 | Out-Null
+  $linkedReady = $true
+} catch {
+  Log "junction data root shell did not become ready: $($_.Exception.Message)"
+}
+$linkedWrite = $null
+$linkedRead = $null
+$linkedOnDisk = $null
+$linkedRemove = $null
+if ($linkedReady) {
+  $linkedWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["junction-root.json", "{\"root\":\"linked\"}"]'
+  $linkedRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["junction-root.json"]'
+  $linkedOnDisk = Get-Content -LiteralPath (Join-Path $linkedRoot 'junction-root.json') -Raw -ErrorAction SilentlyContinue
+  $linkedRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["junction-root.json"]'
+}
+Stop-Engine
+Check 'documents-work-under-junction-data-root' ([bool]($linkedItem -and $linkedItem.LinkType -eq 'Junction') -and $linkedReady -and ($linkedWrite.ok -eq $true) -and ($linkedRead.ok -eq $true) -and ($linkedRead.value -ceq '{"root":"linked"}') -and ($linkedOnDisk -ceq '{"root":"linked"}') -and ($linkedRemove.ok -eq $true) -and (-not (Test-Path -LiteralPath (Join-Path $linkedRoot 'junction-root.json')))) "write=$(Answer-Text $linkedWrite) read=$(Answer-Text $linkedRead) on disk=$linkedOnDisk remove=$(Answer-Text $linkedRemove)"
+
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\bridge-results.json"
 Remove-PilotRun $RunRoot
 "DONE bridge"

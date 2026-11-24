@@ -192,6 +192,31 @@ void TestDownloadCommands() {
   assert(command_routes == 4);
 }
 
+void TestStartupMigrationGate() {
+  using Outcome = StartupMigrationOutcome;
+  static_assert(kStartupMigrationTimeoutMs == 60000);
+  static_assert(kStartupMigrationIncompleteExitCode != 0);
+  assert(StartupMigrationAllowsShell({Outcome::kNotRequested}));
+  assert(StartupMigrationAllowsShell({Outcome::kMigratorAbsent}));
+  assert(StartupMigrationAllowsShell({Outcome::kExited, 0}));
+  assert(StartupMigrationAllowsShell(StartupMigrationResult{}));
+  for (const unsigned long code : {1ul, 2ul, 3ul, 64ul, 255ul, 0xC0000005ul}) {
+    assert(!StartupMigrationAllowsShell({Outcome::kExited, code}));
+  }
+  assert(!StartupMigrationAllowsShell({Outcome::kTimedOut}));
+  assert(!StartupMigrationAllowsShell({Outcome::kWaitFailed, 6}));
+  assert(!StartupMigrationAllowsShell({Outcome::kLaunchFailed, 5}));
+  assert(!StartupMigrationAllowsShell({Outcome::kMigratorUnsafe}));
+  assert(!StartupMigrationAllowsShell({Outcome::kLookupFailed}));
+  assert(!StartupMigrationAllowsShell({Outcome::kIncompleteArguments}));
+  assert(std::string_view(StartupMigrationOutcomeName(Outcome::kTimedOut)) ==
+         "timed_out");
+  assert(std::string_view(StartupMigrationOutcomeName(Outcome::kExited)) ==
+         "exited");
+  assert(std::string_view(StartupMigrationOutcomeName(Outcome::kMigratorAbsent)) ==
+         "migrator_absent");
+}
+
 void TestCanonicalPathContainment() {
   assert(NormalizeWinFinalPath(L"\\\\?\\C:\\app\\ardia-ui") ==
          L"C:\\app\\ardia-ui");
@@ -405,6 +430,7 @@ int main() {
   TestDownloadCommands();
   TestCanonicalPathContainment();
   TestStartupMigrationPolicy();
+  TestStartupMigrationGate();
   TestWinRenameHelpers();
   TestDesktopTelemetryPolicy();
   TestMaximizeButtonStateMachine();

@@ -14,7 +14,8 @@ inline constexpr char kMigrateFromRnwSwitch[] = "ardia-migrate-from-rnw";
 inline constexpr char kNoMigrateSwitch[] = "ardia-no-migrate";
 inline constexpr char kMigrateRnwDataSwitch[] = "ardia-migrate-rnw-data";
 inline constexpr wchar_t kMigratorBinaryName[] = L"ardia-webui-migrate.exe";
-inline constexpr unsigned long kStartupMigrationTimeoutMs = 15000;
+inline constexpr unsigned long kStartupMigrationTimeoutMs = 60000;
+inline constexpr int kStartupMigrationIncompleteExitCode = 75;
 
 inline constexpr size_t kMigratorDocumentNameLimit = 200;
 inline constexpr size_t kMigratorDocumentLimit = 64 * 1024 * 1024;
@@ -395,6 +396,67 @@ inline constexpr bool ShouldRunStartupMigration(
     return input.has_migrate_switch && input.has_migrate_rnw_data;
   }
   return true;
+}
+
+enum class StartupMigrationOutcome {
+  kNotRequested,
+  kMigratorAbsent,
+  kMigratorUnsafe,
+  kLookupFailed,
+  kIncompleteArguments,
+  kLaunchFailed,
+  kExited,
+  kTimedOut,
+  kWaitFailed,
+};
+
+struct StartupMigrationResult {
+  StartupMigrationOutcome outcome = StartupMigrationOutcome::kNotRequested;
+  unsigned long exit_code = 0;
+};
+
+inline constexpr bool StartupMigrationAllowsShell(
+    const StartupMigrationResult& result) {
+  switch (result.outcome) {
+    case StartupMigrationOutcome::kNotRequested:
+    case StartupMigrationOutcome::kMigratorAbsent:
+      return true;
+    case StartupMigrationOutcome::kExited:
+      return result.exit_code == 0;
+    case StartupMigrationOutcome::kMigratorUnsafe:
+    case StartupMigrationOutcome::kLookupFailed:
+    case StartupMigrationOutcome::kIncompleteArguments:
+    case StartupMigrationOutcome::kLaunchFailed:
+    case StartupMigrationOutcome::kTimedOut:
+    case StartupMigrationOutcome::kWaitFailed:
+      return false;
+  }
+  return false;
+}
+
+inline constexpr const char* StartupMigrationOutcomeName(
+    StartupMigrationOutcome outcome) {
+  switch (outcome) {
+    case StartupMigrationOutcome::kNotRequested:
+      return "not_requested";
+    case StartupMigrationOutcome::kMigratorAbsent:
+      return "migrator_absent";
+    case StartupMigrationOutcome::kMigratorUnsafe:
+      return "migrator_unsafe";
+    case StartupMigrationOutcome::kLookupFailed:
+      return "lookup_failed";
+    case StartupMigrationOutcome::kIncompleteArguments:
+      return "incomplete_arguments";
+    case StartupMigrationOutcome::kLaunchFailed:
+      return "launch_failed";
+    case StartupMigrationOutcome::kExited:
+      return "exited";
+    case StartupMigrationOutcome::kTimedOut:
+      return "timed_out";
+    case StartupMigrationOutcome::kWaitFailed:
+      return "wait_failed";
+  }
+  return "unknown";
 }
 
 inline std::optional<std::vector<std::wstring>> BuildStartupMigrationArguments(
