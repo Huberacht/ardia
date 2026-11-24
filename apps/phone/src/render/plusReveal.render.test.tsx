@@ -504,3 +504,32 @@ test("the first tap on a live sheet's dim closes it even when aborting the last 
   expect(searchState().open).toBe(false);
   finish(t.root);
 });
+
+test("the + a press opened search from stays mounted under the open sheet, hidden from touch and TalkBack, so that press's own touch-end still reaches its responder and the first dim tap after it closes search", async () => {
+  const t = setUp();
+  const responder = () => t.root.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityLabel === "New Tab" && typeof node.props.onResponderRelease === "function")[0];
+  const slot = () => t.root.root.findAll((node) => node.props.testID === "floatingBarPlusSlot" && typeof node.type === "string")[0]!;
+  const pressed = responder();
+  expect(pressed).toBeDefined();
+  expect(slot().props.pointerEvents).toBe("box-none");
+  t.down();
+  t.up();
+  t.flush();
+  expect(searchState().open).toBe(true);
+  expect(responder() === pressed).toBe(true);
+  expect(slot().props.pointerEvents).toBe("none");
+  expect(slot().props.importantForAccessibility).toBe("no-hide-descendants");
+  act(() => pressed!.props.onResponderRelease({ nativeEvent: { changedTouches: [{ pageX: 1, pageY: 1 }], touches: [], timestamp: Date.now() }, persist: () => undefined, currentTarget: pressed, target: pressed }));
+  expect(t.presses).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    jest.advanceTimersByTime(1300);
+  });
+  const dim = t.layer().findAll((node) => node.props.accessibilityLabel === "Close Search" && typeof node.props.onPressIn === "function")[0]!;
+  act(() => dim.props.onPressIn());
+  expect(searchState().open).toBe(false);
+  await act(async () => {
+    jest.advanceTimersByTime(4000);
+  });
+  expect(slot().props.pointerEvents).toBe("box-none");
+  finish(t.root);
+});

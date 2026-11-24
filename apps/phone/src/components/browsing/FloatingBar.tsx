@@ -245,7 +245,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
   );
   const trailing = (
     <Animated.View testID="floatingBarTrailing" collapsable={false} style={[styles.circleHit, back.trailing]} pointerEvents={back.sidesShown ? "box-none" : "none"} importantForAccessibility={back.sidesShown ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={!back.sidesShown}>
-      {showsPlus ? <FloatingPlusButton tab={styledTab} dark={dark} testID="floatingBarPlus" glass={back.sidesGlass} glyphs={back.trailingGlyphs} fold={fold} ghost={!handed} swipe={swipe} onPlus={onPlus} /> : null}
+      <FloatingPlusButton tab={styledTab} dark={dark} testID="floatingBarPlus" glass={back.sidesGlass} glyphs={back.trailingGlyphs} fold={fold} ghost={!handed} swipe={swipe} hidden={!showsPlus} onPlus={onPlus} />
     </Animated.View>
   );
   return (
@@ -409,7 +409,7 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
   );
 }
 
-export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = null, ghost = false, swipe = null, onPlus }: ButtonProps & { swipe?: SwipeAddresses | null; onPlus: () => void }) {
+export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = null, ghost = false, swipe = null, hidden = false, onPlus }: ButtonProps & { swipe?: SwipeAddresses | null; hidden?: boolean; onPlus: () => void }) {
   const ink = dark ? chromeInk.dark : chromeInk.light;
   const foldGlyphs = useFoldGlyphs(fold);
   const plusNow = useRef(onPlus);
@@ -428,7 +428,7 @@ export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = nu
     () =>
       Gesture.Manual()
         .withTestId(`${testID}Touch`)
-        .enabled(tabSwitchCuts())
+        .enabled(tabSwitchCuts() && !hidden)
         .onTouchesDown((event) => {
           touch.value = plusTouchDown(touch.value, event.numberOfTouches);
         })
@@ -449,12 +449,13 @@ export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = nu
         .onFinalize(() => {
           touch.value = IDLE_PLUS_TOUCH;
         }),
-    [incognito, tabId, layout, testID, touch, swipeOffset, pressAccepted],
+    [incognito, tabId, layout, testID, touch, swipeOffset, pressAccepted, hidden],
   );
   return (
+    <View testID={`${testID}Slot`} collapsable={false} pointerEvents={hidden ? "none" : "box-none"} importantForAccessibility={hidden ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={hidden} style={[styles.circleHit, hidden ? styles.plusHidden : null]}>
     <GestureDetector gesture={plusTouch}>
     <PressInPlace label={newTabLabel(tab.isPrivate)} onPress={pressFromButton} onPressIn={haptics.barPress} dims="glyph" style={styles.circleHit}>
-      <ChromeSurface testID={testID} shape="circle" cornerRadius={capsule(floatingBarLayout.control)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={glass?.shown} shownMs={glass?.shownMs} style={styles.circle}>
+      <ChromeSurface testID={testID} shape="circle" cornerRadius={capsule(floatingBarLayout.control)} incognito={tab.isPrivate} dark={dark} barShadow={chromeLayout.barCastsShadow} shown={hidden ? false : glass?.shown} shownMs={glass?.shownMs} style={styles.circle}>
         <PullGlyphs>
           <Animated.View collapsable={false} style={foldGlyphs}>
             <PressedGlyph>
@@ -472,6 +473,7 @@ export function FloatingPlusButton({ tab, dark, testID, glass, glyphs, fold = nu
       </ChromeSurface>
     </PressInPlace>
     </GestureDetector>
+    </View>
   );
 }
 
@@ -484,6 +486,7 @@ const styles = StyleSheet.create({
     height: floatingBarLayout.control,
   },
   circleHit: { width: floatingBarLayout.control, height: floatingBarLayout.control },
+  plusHidden: { opacity: 0 },
   strip: { position: "absolute", width: floatingBarLayout.control, gap: DUO_PLUS_ABOVE - floatingBarLayout.control },
   squeezes: { overflow: "hidden" },
   addressFade: { flex: 1, alignSelf: "stretch", flexDirection: "row" },
