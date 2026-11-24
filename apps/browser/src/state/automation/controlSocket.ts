@@ -25,7 +25,8 @@ import { automationWindows, type AutomationWindow } from "./automationWindows";
 import { consentToken, type ConsentToken } from "../telemetry/client";
 import { warnFor } from "../telemetry/logs";
 import { controlTabTargets } from "../../platform/control";
-import { releaseAllCliHolds } from "../tabs/cliHolds";
+import { releaseAllCliHolds, releaseCliHoldsOf } from "../tabs/cliHolds";
+import { watchCliHoldsForEngine } from "./cliHoldsEngine";
 import { TAB_IDLE_EVENTS, USER_IDLE_EVENTS, type AutomationEventName } from "./eventNames";
 import { clientProtocolProblem, commands, failure, hello, parseRequest, parseSubscription, planRun, type RequestId, type Subscription } from "./automationMethods";
 import { changeSubscription, feedNeeds, stopFeed, updateFeed } from "./automationFeed";
@@ -42,6 +43,8 @@ import { fittedEvent, fittedReply } from "./socketWire";
 import { dismissSocketAsks } from "./socketAsk";
 import { dropAllHistoryHandles, dropHistoryHandles } from "./historyHandles";
 import { dropLateResults, forgetTabCalls } from "./tabCalls";
+import { dropAllLogpoints, dropLogpoints } from "./devToolsLogpoints";
+import { closeAllInspections, closeInspectionsFor } from "./devToolsSession";
 import { backgroundInstance } from "../app/appSettings";
 import { programControlOn } from "../app/programControlSetting";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
@@ -282,6 +285,7 @@ function takeIdleReplay(connection: number) {
 }
 
 function handleClose({ connection }: { connection: number }) {
+  releaseCliHoldsOf(connection);
   idleReplays.delete(connection);
   openConnections.delete(connection);
   dismissSocketAsks(connection);
@@ -290,12 +294,15 @@ function handleClose({ connection }: { connection: number }) {
   dropResponder(connection);
   dropHistoryHandles(connection);
   dropLateResults(connection);
+  void closeInspectionsFor(connection);
+  void dropLogpoints(connection);
   if (subscriptions.delete(connection)) refreshFeed();
 }
 
 function listen() {
   if (listening) return;
   listening = true;
+  watchCliHoldsForEngine();
   onControlRequest((request) => {
     try {
       handleControlRequest(request);
@@ -325,6 +332,8 @@ async function stop() {
   dropAllHistoryHandles();
   forgetTabCalls();
   releaseAllCliHolds();
+  void closeAllInspections();
+  void dropAllLogpoints();
   noteSocketServing(false);
   void capturePageMenus(false).catch(() => undefined);
   subscriptions.clear();
@@ -349,6 +358,8 @@ function sync() {
     dropAllHistoryHandles();
     forgetTabCalls();
     releaseAllCliHolds();
+    void closeAllInspections();
+    void dropAllLogpoints();
     noteSocketServing(false);
     void capturePageMenus(false).catch(() => undefined);
     stopResponders();
