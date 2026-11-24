@@ -10,7 +10,7 @@ import { countUsage } from "../../state/telemetry/telemetry";
 import { font } from "../ui";
 import { searchPanel } from "./searchPanelTokens";
 
-export type TrayInputHandle = { focus(): void; blur(): void; clearsInPlace(): boolean };
+export type TrayInputHandle = { focus(): void; blur(): void; clearsInPlace(): boolean; discardDraft(): void };
 
 type Props = {
   start: string;
@@ -69,6 +69,11 @@ const CompletingInput = forwardRef<TrayInputHandle, Props>(function CompletingIn
         typedNow.current("");
         return true;
       },
+      discardDraft: () => {
+        field.current?.setText("", false);
+        setTyped("");
+        typedNow.current("");
+      },
     }),
     [],
   );
@@ -110,7 +115,21 @@ const PlainInput = forwardRef<TrayInputHandle, Props>(function PlainInput({ star
   const [selection, setSelection] = useState<{ start: number; end: number } | undefined>(
     selectsStart && start ? { start: 0, end: start.length } : { start: start.length, end: start.length },
   );
-  useImperativeHandle(ref, () => ({ focus: () => input.current?.focus(), blur: () => input.current?.blur(), clearsInPlace: () => false }), []);
+  const typedNow = useRef(onTyped);
+  typedNow.current = onTyped;
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus: () => input.current?.focus(),
+      blur: () => input.current?.blur(),
+      clearsInPlace: () => false,
+      discardDraft: () => {
+        input.current?.clear();
+        typedNow.current("");
+      },
+    }),
+    [],
+  );
   return (
     <TextInput
       ref={input}

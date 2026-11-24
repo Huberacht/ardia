@@ -403,3 +403,61 @@ test("a draft queued in a private search never lands in the regular search that 
   expect(searchState().text).toBe("otters");
   act(() => useTabs.setState({ incognito: false }));
 });
+
+const typeNatively = (layer: ReactTestInstance, text: string) => act(() => fieldOf(layer).props.onChangeText(text));
+
+test("a draft typed into the early editor is cleared before the sheet goes live when JS refuses to adopt it, so a search opened another way starts empty in field and store alike", () => {
+  mockNativeField = true;
+  const t = setUp();
+  t.presses.mockImplementation(() => presentSearch("start", ""));
+  t.tap();
+  typeNatively(t.waiting(), "ot");
+  expect(fieldOf(t.waiting()).props.value).toBe("ot");
+  t.flush();
+  act(() => jest.advanceTimersByTime(40));
+  expect(searchState().open).toBe(true);
+  expect(searchState().text).toBe("");
+  expect(fieldOf(t.layer()).props.value).toBe("");
+  finish(t.root);
+});
+
+test("a Go from the early editor after its press was refused opens nothing: only a field that owns the open search submits", () => {
+  mockNativeField = true;
+  const t = setUp();
+  const submits = jest.spyOn(browse, "submitSearch");
+  t.presses.mockImplementationOnce(() => undefined);
+  t.tap();
+  typeNatively(t.waiting(), "ot");
+  t.flush();
+  expect(searchState().open).toBe(false);
+  act(() => fieldOf(t.waiting()).props.onSubmitEditing());
+  expect(submits).not.toHaveBeenCalled();
+  t.tap();
+  t.flush();
+  expect(searchState().open).toBe(true);
+  typeNatively(t.layer(), "otters");
+  act(() => fieldOf(t.layer()).props.onSubmitEditing());
+  expect(submits).toHaveBeenCalledTimes(1);
+  finish(t.root);
+});
+
+test("a tap on the dim closes the press it dismisses by token, and every earlier press on that sheet with it: two queued presses then the dim open nothing", () => {
+  const t = setUp();
+  t.down();
+  t.up();
+  t.down();
+  t.up();
+  expect(t.presses).not.toHaveBeenCalled();
+  expect(standbyShownEarly.value.press).toBeGreaterThan(1);
+  act(() => t.dim().props.onPressIn());
+  t.flush();
+  t.flush();
+  expect(t.presses).not.toHaveBeenCalled();
+  expect(searchState().open).toBe(false);
+  expect(t.shown()).toBe(0);
+  t.tap();
+  t.flush();
+  expect(t.presses).toHaveBeenCalledTimes(1);
+  expect(searchState().open).toBe(true);
+  finish(t.root);
+});

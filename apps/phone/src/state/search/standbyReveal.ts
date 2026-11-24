@@ -19,7 +19,8 @@ const plusPresses = makeMutable(0);
 let lastGeneration = 0;
 let pressing: EarlyReveal = NOT_SHOWN;
 let adopted = 0;
-let closedEarly = 0;
+let closedThrough: EarlyReveal = NOT_SHOWN;
+let refused: ((generation: number) => void) | null = null;
 
 export const nextStandbyGeneration = () => (lastGeneration += 1);
 
@@ -63,7 +64,7 @@ export function dropEarlyStandby(press = 0) {
 
 export function prepareStandby(prepared: StandbyPrepared) {
   adopted = 0;
-  closedEarly = 0;
+  closedThrough = NOT_SHOWN;
   standbyPrepared.value = prepared;
   dropEarlyStandby();
 }
@@ -84,15 +85,28 @@ export function adoptStandby(generation: number) {
 
 export const standbyAdopted = (generation: number) => generation !== 0 && adopted === generation;
 
-export function closeEarlyReveal(generation: number) {
-  closedEarly = generation;
-  runOnUI(withdrawGenerationOnUI)(generation);
+export function whenPressRefused(hook: ((generation: number) => void) | null) {
+  refused = hook;
 }
 
+export function refuseEarlyReveal(reveal: EarlyReveal) {
+  if (reveal.press === 0) return;
+  dropEarlyStandby(reveal.press);
+  refused?.(reveal.generation);
+}
+
+export function closeEarlyReveal(generation: number) {
+  const shown = standbyShownEarly.value;
+  if (shown.generation !== generation || shown.press === 0) return;
+  if (closedThrough.generation !== generation || closedThrough.press < shown.press) closedThrough = shown;
+  dropEarlyStandby(shown.press);
+}
+
+const closedBeforeAdoption = (reveal: EarlyReveal) => reveal.press !== 0 && closedThrough.generation === reveal.generation && reveal.press <= closedThrough.press;
+
 export function pressWithReveal(reveal: EarlyReveal, press: () => void) {
-  if (reveal.generation !== 0 && closedEarly === reveal.generation) {
-    closedEarly = 0;
-    dropEarlyStandby(reveal.press);
+  if (closedBeforeAdoption(reveal)) {
+    refuseEarlyReveal(reveal);
     return;
   }
   pressing = reveal;
@@ -100,7 +114,7 @@ export function pressWithReveal(reveal: EarlyReveal, press: () => void) {
     press();
   } finally {
     pressing = NOT_SHOWN;
-    if (reveal.press !== 0 && adopted !== reveal.generation) dropEarlyStandby(reveal.press);
+    if (adopted !== reveal.generation) refuseEarlyReveal(reveal);
   }
 }
 
