@@ -209,9 +209,10 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const pinned = useSharedValue(cutsIn);
   const floor = useSharedValue(0);
   const revealed = useSharedValue(0);
-  const revealStyle = useAnimatedStyle(() => ({ opacity: Math.max(revealed.value, standby ? standbyShownEarly.value : 0) }));
+  const revealStyle = useAnimatedStyle(() => ({ opacity: standby ? Math.max(revealed.value, standbyShownEarly.value) : 1 }));
   const revealProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => {
-    const shown = Math.max(revealed.value, standby ? standbyShownEarly.value : 0) > 0;
+    if (!standby) return { pointerEvents: closing ? "none" : "box-none", importantForAccessibility: closing ? "no-hide-descendants" : "auto" };
+    const shown = Math.max(revealed.value, standbyShownEarly.value) > 0;
     return { pointerEvents: shown ? "box-none" : "none", importantForAccessibility: shown ? "auto" : "no-hide-descendants" };
   });
   useLayoutEffect(() => {
@@ -501,7 +502,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   return (
     <StandbyContext.Provider value={standby}>
     <DepartContext.Provider value={beginDeparture}>
-    <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, standby ? revealStyle : null]} animatedProps={standby ? revealProps : undefined} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
+    <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, bornStandby ? revealStyle : null]} animatedProps={bornStandby ? revealProps : undefined} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
       {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable

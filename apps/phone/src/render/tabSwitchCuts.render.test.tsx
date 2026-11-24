@@ -477,7 +477,7 @@ test("+ shows and focuses the waiting sheet before React renders it live: the pr
   });
   expect(host("trayRoot")).toHaveLength(1);
   expect(host("trayRoot")[0] === waiting).toBe(true);
-  expect(StyleSheet.flatten(waiting.props.style)?.opacity ?? 1).toBe(1);
+  expect(getAnimatedStyle(waiting).opacity).toBe(1);
   unmount(root);
   keyboard.mockRestore();
 });
@@ -559,21 +559,33 @@ test("the early reveal only shows a sheet prepared for the origin and privacy mo
     </DesignProvider>,
   );
   const waiting = () => root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  const liveOpacity = () => {
+    const live = root.root.findAll((node) => node.props.testID === "trayRoot" && typeof node.type === "string");
+    expect(live).toHaveLength(1);
+    return (getAnimatedStyle(live[0]!) as { opacity?: number } | undefined)?.opacity ?? StyleSheet.flatten(live[0]!.props.style)?.opacity ?? 1;
+  };
+  const { standbyShownEarly, revealStandbyOnPress, standbyArmed } = require("../state/search/standbyReveal") as typeof import("../state/search/standbyReveal");
+  expect(revealStandbyOnPress(false)).toBe(true);
+  expect(getAnimatedStyle(waiting()).opacity).toBe(1);
   presentSearch("start", "");
+  expect(standbyShownEarly.value).toBe(0);
   expect(getAnimatedStyle(waiting()).opacity).toBe(0);
   await act(async () => {
     jest.advanceTimersByTime(0);
   });
+  expect(liveOpacity()).toBe(1);
   act(() => dismissSearch());
   await act(async () => {
     jest.advanceTimersByTime(4000);
   });
   useTabs.setState({ incognito: true });
+  expect(standbyArmed.value).toBeGreaterThan(0);
   presentSearch("page", "");
   expect(getAnimatedStyle(waiting()).opacity).toBe(0);
   await act(async () => {
     jest.advanceTimersByTime(0);
   });
+  expect(liveOpacity()).toBe(1);
   act(() => useTabs.setState({ incognito: false }));
   unmount(root);
   keyboard.mockRestore();
