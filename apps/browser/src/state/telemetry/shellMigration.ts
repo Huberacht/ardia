@@ -77,7 +77,7 @@ export type ShellMigrationReporting = {
   persisted(): Promise<boolean>;
 };
 
-export async function reportShellMigration(reporting: ShellMigrationReporting): Promise<"none" | "held" | "dropped" | "unpersisted" | "reported"> {
+export async function reportShellMigration(reporting: ShellMigrationReporting): Promise<"none" | "held" | "dropped" | "unpersisted" | "revoked" | "reported"> {
   const report = pendingShellMigration(reporting.read);
   if (!report) return "none";
   if (!reporting.sharing()) return "held";
@@ -89,6 +89,7 @@ export async function reportShellMigration(reporting: ShellMigrationReporting): 
   }
   if (!accepted) return "dropped";
   if ((await reporting.persisted().catch(() => false)) !== true) return "unpersisted";
+  if (!reporting.sharing()) return "revoked";
   await reporting.save(SHELL_MIGRATION_REPORTED_DOC, JSON.stringify({ run: report.run }));
   return "reported";
 }

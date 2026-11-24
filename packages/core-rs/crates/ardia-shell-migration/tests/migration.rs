@@ -911,3 +911,116 @@ fn an_empty_run_still_sweeps_its_staged_files() {
     assert_eq!(report.counts.partials_swept, 1);
     assert!(!layout.webui_data.join(&leftover).exists());
 }
+
+#[test]
+fn a_one_character_destination_stages_and_lands() {
+    let scratch = Scratch::new("one-char");
+    let root = ardia_shell_migration::fsafe::Root::open_or_create(&scratch.0.join("webui")).unwrap();
+    for (name, bytes) in [
+        ("a", b"first".as_slice()),
+        ("a", b"replaced".as_slice()),
+        ("ab", b"two".as_slice()),
+    ] {
+        root.dir().write(name, bytes).unwrap();
+        assert_eq!(fs::read(scratch.0.join("webui").join(name)).unwrap(), bytes);
+    }
+    write(&scratch.0.join("rnw").join("b"), b"one letter document");
+    let layout = Layout::custom(
+        &scratch.0.join("rnw").to_string_lossy(),
+        &scratch.0.join("webui2"),
+        false,
+    );
+    let report = run(&layout, &FakeDpapi::new(), &FakeVault::empty());
+    assert_eq!(report.outcome, Outcome::Migrated, "{report:?}");
+    assert_eq!(
+        fs::read(scratch.0.join("webui2").join("b")).unwrap(),
+        b"one letter document"
+    );
+}
+
+#[test]
+fn a_prior_attempt_at_the_top_of_u64_does_not_overflow() {
+    let scratch = Scratch::new("attempt-max");
+    let sealer = FakeDpapi::new();
+    let populated = populate(&scratch.0, &sealer);
+    let prior = format!(
+        "{{\"version\":1,\"run\":\"{}\",\"outcome\":\"failed\",\"attempt\":{},\"counts\":{{}}}}",
+        "0".repeat(32),
+        u64::MAX
+    );
+    write(&populated.layout.webui_data.join(names::ATTEMPT_NAME), prior.as_bytes());
+    let report = run(&populated.layout, &sealer, &populated.vault);
+    assert_eq!(report.outcome, Outcome::MigratedWithSkips);
+    assert_eq!(report.attempt, 1_000_000);
+}
+
+#[test]
+fn the_sweep_removes_only_the_migrators_own_staged_files() {
+    let scratch = Scratch::new("own-partials");
+    let sealer = FakeDpapi::new();
+    let layout = layout(&scratch.0);
+    let own = format!(".ardia-mig-1-2-abcd{}", names::PARTIAL_SUFFIX);
+    let theirs = [".draft.partial".to_string(), format!(".draft{}", names::PARTIAL_SUFFIX)];
+    write(&layout.webui_data.join(&own), b"ours");
+    for name in &theirs {
+        write(&layout.webui_data.join(name), b"someone else's");
+    }
+    let report = run(&layout, &sealer, &FakeVault::empty());
+    assert_eq!(report.counts.partials_swept, 1);
+    assert!(!layout.webui_data.join(&own).exists());
+    for name in &theirs {
+        assert_eq!(
+            fs::read(layout.webui_data.join(name)).unwrap(),
+            b"someone else's",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn an_unchanged_pilot_copy_reuses_its_backup_and_a_changed_one_gets_its_own() {
+    let scratch = Scratch::new("kept-reuse");
+    let sealer = FakeDpapi::new();
+    let populated = populate(&scratch.0, &sealer);
+    let layout = &populated.layout;
+    let session = layout.webui_data.join("session.json");
+    let kept = layout.webui_data.join(names::KEPT_FOLDER);
+    let stop = |at| {
+        migrate(
+            layout,
+            &sealer,
+            &populated.vault,
+            &Faults {
+                fail_at_commit: Some(at),
+            },
+        )
+    };
+    write(&session, b"pilot A");
+    assert_eq!(stop(3).outcome, Outcome::Failed);
+    write(&session, b"pilot B");
+    assert_eq!(stop(3).outcome, Outcome::Failed);
+    write(&session, b"pilot B");
+    assert_eq!(stop(2).outcome, Outcome::Failed);
+    let backups = |tree: std::collections::BTreeMap<String, Vec<u8>>| {
+        let mut found: Vec<Vec<u8>> = tree
+            .into_iter()
+            .filter(|(name, _)| name.starts_with("session.json"))
+            .map(|(_, bytes)| bytes)
+            .collect();
+        found.sort();
+        found
+    };
+    assert_eq!(
+        backups(tree(&kept)),
+        vec![b"pilot A".to_vec(), b"pilot B".to_vec()],
+        "B is kept once across retries"
+    );
+    write(&session, b"pilot C");
+    let done = run(layout, &sealer, &populated.vault);
+    assert_eq!(done.outcome, Outcome::MigratedWithSkips);
+    assert_eq!(
+        backups(tree(&kept)),
+        vec![b"pilot A".to_vec(), b"pilot B".to_vec(), b"pilot C".to_vec()]
+    );
+    assert!(tree(&kept).keys().all(|name| name.encode_utf16().count() <= 255));
+}

@@ -226,7 +226,6 @@ struct Migration<'a> {
     sealer: &'a dyn Sealer,
     vault: &'a dyn Vault,
     faults: &'a Faults,
-    run: &'a str,
     counts: Counts,
     commits: usize,
 }
@@ -345,19 +344,23 @@ fn write_report(root: &Root, name: &str, report: &Report) -> io::Result<()> {
 
 const NAME_LIMIT: usize = 255;
 
-fn fnv(text: &str) -> u64 {
-    text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().copied().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
-pub fn kept_name(name: &str, run: &str) -> String {
-    let suffix = format!(".{}.kept", &run[..run.len().min(12)]);
+pub fn content_tag(bytes: &[u8]) -> String {
+    format!("{:016x}", fnv(bytes))
+}
+
+pub fn kept_name(name: &str, tag: &str) -> String {
+    let suffix = format!(".{}.kept", &tag[..tag.len().min(12)]);
     let full = format!("{name}{suffix}");
     if full.encode_utf16().count() <= NAME_LIMIT {
         return full;
     }
-    let tag = format!(".{:016x}{suffix}", fnv(name));
+    let tag = format!(".{:016x}{suffix}", fnv(name.as_bytes()));
     let room = NAME_LIMIT - tag.len();
     let mut cut = String::new();
     for c in name.chars() {
@@ -395,7 +398,7 @@ impl Migration<'_> {
             Fetched::Missing => name.to_string(),
             Fetched::Data(earlier) if earlier.as_slice() == bytes => return Ok(()),
             Fetched::Data(_) => {
-                let newer = kept_name(name, self.run);
+                let newer = kept_name(name, &content_tag(bytes));
                 if let Fetched::Data(earlier) = kept.read(&newer, DOCUMENT_LIMIT)? {
                     if earlier.as_slice() == bytes {
                         return Ok(());
@@ -403,7 +406,7 @@ impl Migration<'_> {
                 }
                 newer
             }
-            _ => kept_name(name, self.run),
+            _ => kept_name(name, &content_tag(bytes)),
         };
         self.write(&kept, &target, bytes)?;
         self.counts.kept_aside += 1;
@@ -727,7 +730,7 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
     }
     report.attempt = read_report(&webui, names::ATTEMPT_NAME)
         .and_then(|previous| previous.get("attempt").and_then(Value::as_u64))
-        .map_or(1, |previous| (previous + 1).min(ATTEMPT_CAP));
+        .map_or(1, |previous| previous.saturating_add(1).min(ATTEMPT_CAP));
     let failed = |mut report: Report, stage: Stage| {
         report.outcome = Outcome::Failed;
         report.failed_stage = Some(stage);
@@ -743,7 +746,6 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         Err(_) => return failed(report, Stage::Credentials),
     };
 
-    let run = report.run.clone();
     let mut migration = Migration {
         layout,
         webui: &webui,
@@ -752,7 +754,6 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         sealer,
         vault,
         faults,
-        run: &run,
         counts: Counts::default(),
         commits: 0,
     };

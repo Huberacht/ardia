@@ -1784,12 +1784,12 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   RNW build opens exactly what it left. The tests compare every file's bytes and write time and the vault before and
   after, including after interrupted runs.
 - **Restartable.** Each file is written to a `.<name>.<random>.rnw-migration.partial` beside it, flushed, then renamed;
-  a later run removes leftovers. `rnw-migration.json`, the marker, is written last and only when every step finished;
+  a later run removes its own leftovers (only `.ardia-mig-*.rnw-migration.partial`; other dot files stay). `rnw-migration.json`, the marker, is written last and only when every step finished;
   with it present (a whole finished report: version, run id, a finished outcome, every count) the migration doesn't
   run again, so what the WebUI host writes afterwards is never overwritten. A
   file the run finds already in place with the same content (for secrets, the same plaintext) counts as unchanged; one
   that differs (pilot data) is copied to `rnw-migration-kept\` before the RNW copy replaces it; a retry that finds a
-  different pilot copy than the one kept keeps it too, as `<name>.<run>.kept`, shortened with a hash of the name when that would pass 255 characters. An exclusive lock
+  different pilot copy than the one kept keeps it too, as `<name>.<run>.kept`, named by a hash of its content, so an unchanged copy reuses its backup on every retry and a changed one gets its own, and shortened with a hash of the name when that would pass 255 characters. An exclusive lock
   on `rnw-migration.lock` makes a second concurrent run answer `busy`. `migration.rs` stops before every rename in
   turn and resumes each to the same result as an uninterrupted run.
 - **Safety.** Overlapping or relative folders are refused, and so is a root with a link or junction anywhere above it,
@@ -1821,7 +1821,7 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   events read it, and sends `shell_migration` once per run only while sharing is on; the run is marked reported
   (`rnw-migration-reported.json`) only after the event went out and that mark is saved, so with sharing off it
   stays pending, and so it does when the event is dropped or throws (`capture` now says whether it queued the
-  event, and a relay that drops it says so), and until the queue holding the event is saved to disk. It is reported
+  event, and a relay that drops it says so), and until the queue holding the event is saved to disk while the consent the launch started with is still the current one. It is reported
   only by the telemetry leader. If the host can't store the mark, the next launch sends the run again: a duplicate, never a lost report. The
   desktop document and telemetry routes are live on Linux and reach Windows with the cutover's host wiring; the
   pilot's `webui_shell.cc` serves no documents yet, so on the pilot nothing is read or sent. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms` and the counts: known enums

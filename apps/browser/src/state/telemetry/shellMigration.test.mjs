@@ -94,6 +94,40 @@ test("an event whose queue didn't reach disk leaves the run pending", async () =
   assert.equal(await reportShellMigration(reporting(store, true)), "reported");
 });
 
+test("sharing turned off while the queue is being saved leaves the run pending", async () => {
+  const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+  let sharing = true;
+  const sent = [];
+  const outcome = await reportShellMigration({
+    read: store.read,
+    save: store.save,
+    sharing: () => sharing,
+    send: (properties) => (sent.push(properties), true),
+    persisted: async () => {
+      sharing = false;
+      return true;
+    },
+  });
+  assert.equal(outcome, "revoked");
+  assert.equal(sent.length, 1);
+  assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
+  assert.ok(pendingShellMigration(store.read));
+});
+
+test("the launch checks the consent it started with, not whatever consent is current", async () => {
+  const { stillValid } = await import("./client.ts");
+  const { setConsentPeriod, consentToken } = await import("./consentPeriod.ts");
+  setConsentPeriod(true, "launch-epoch");
+  const atLaunch = consentToken();
+  setConsentPeriod(false, null);
+  setConsentPeriod(true, "a-later-epoch");
+  try {
+    assert.equal(stillValid(atLaunch), false, "a token from before sharing was turned off and on again is not the same consent");
+  } finally {
+    setConsentPeriod(false, null);
+  }
+});
+
 test("a relay that drops the event makes capture say so, and the run stays pending", async () => {
   const { capture } = await import("./client.ts");
   const { setTelemetryRelay } = await import("./relay.ts");

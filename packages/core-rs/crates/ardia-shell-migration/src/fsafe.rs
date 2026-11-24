@@ -530,7 +530,7 @@ mod sys {
     fn rename_buffer(dir: &File, to: &str, flags: u32) -> (Vec<u64>, u32) {
         let wide: Vec<u16> = to.encode_utf16().collect();
         let header = std::mem::offset_of!(FILE_RENAME_INFORMATION, FileName);
-        let bytes = header + wide.len() * 2;
+        let bytes = (header + wide.len() * 2).max(std::mem::size_of::<FILE_RENAME_INFORMATION>());
         let mut buffer = vec![0u64; (bytes + 2).div_ceil(8)];
         let base = buffer.as_mut_ptr() as *mut u8;
         let info = base as *mut FILE_RENAME_INFORMATION;
@@ -614,9 +614,11 @@ pub struct Dir {
 
 static STAGED: AtomicU64 = AtomicU64::new(0);
 
+pub const STAGED_PREFIX: &str = ".ardia-mig-";
+
 pub fn partial_name() -> String {
     format!(
-        ".ardia-mig-{:x}-{}-{}{PARTIAL_SUFFIX}",
+        "{STAGED_PREFIX}{:x}-{}-{}{PARTIAL_SUFFIX}",
         std::process::id(),
         STAGED.fetch_add(1, Ordering::Relaxed),
         random_hex(4)
@@ -736,7 +738,7 @@ impl Dir {
     pub fn sweep_partials(&self) -> io::Result<usize> {
         let mut swept = 0;
         for name in self.list()? {
-            if !(name.starts_with('.') && name.ends_with(PARTIAL_SUFFIX)) {
+            if !(name.starts_with(STAGED_PREFIX) && name.ends_with(PARTIAL_SUFFIX)) {
                 continue;
             }
             if matches!(self.entry(&name)?, Entry::File | Entry::Link) {
