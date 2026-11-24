@@ -8,25 +8,38 @@ export const introCanCoverScreen = !isWebDemo;
 const INTRO_WINDOW_LINGER_MS = 900;
 const CARD_AFTER_WINDOW_MS = 300;
 
+let lingering: ReturnType<typeof setTimeout> | null = null;
+
+function stopLingering() {
+  if (lingering !== null) clearTimeout(lingering);
+  lingering = null;
+}
+
 export function holdWindowHidden(browserWindowId: string) {
   void setWindowShown(browserWindowId, false);
 }
 
 export function coverScreenForIntro(browserWindowId: string) {
+  stopLingering();
   void setWindowShown(browserWindowId, false);
   void openWindow(INTRO_WINDOW_ID, { kind: "intro", title: "Ardia" });
 }
 
 export function uncoverScreen(browserWindowId: string) {
   void setWindowShown(browserWindowId, true);
-  setTimeout(closeIntroWindow, INTRO_WINDOW_LINGER_MS);
+  stopLingering();
+  lingering = setTimeout(() => {
+    lingering = null;
+    closeIntroWindow();
+  }, INTRO_WINDOW_LINGER_MS);
 }
 
 export function handOffFromIntro(burst: boolean) {
-  const { windowId } = useOnboarding.getState();
+  const { windowId, session } = useOnboarding.getState();
   if (windowId) void setWindowShown(windowId, true, burst);
   setTimeout(() => {
-    if (useOnboarding.getState().step === "intro") goToStep("source");
+    const now = useOnboarding.getState();
+    if (now.session === session && now.step === "intro") goToStep("source");
   }, CARD_AFTER_WINDOW_MS);
 }
 
