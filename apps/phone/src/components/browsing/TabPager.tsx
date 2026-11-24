@@ -1,3 +1,4 @@
+import { probes } from "../../state/app/launchFlags";
 import { useEffect, useLayoutEffect } from "react";
 import { Image, StyleSheet, useWindowDimensions, View } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
@@ -227,7 +228,7 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
   });
   const shown = display(tab.url);
   const viewport = useWindowDimensions();
-  const warm = useWarmPicture(tab, viewport, cuts);
+  const warm = useWarmPicture(tab, viewport, cuts && !probes("warm"));
   const faceTab = cuts && !warm && tab.snapshotFileName ? { ...tab, snapshotFileName: null } : tab;
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (

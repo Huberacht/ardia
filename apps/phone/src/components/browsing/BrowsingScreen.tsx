@@ -1,3 +1,4 @@
+import { probes } from "../../state/app/launchFlags";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { countRender } from "../../state/app/interactionPerf";
 import { Platform, StyleSheet, useWindowDimensions, View, type StyleProp, type ViewStyle } from "react-native";
@@ -143,7 +144,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     onGrab: grabbedSwipe,
   });
   useDemoMotion(pager, width);
-  const swipeAddresses = useMemo(() => (tabSwitchCuts() ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right]);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() && !probes("landed") ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);

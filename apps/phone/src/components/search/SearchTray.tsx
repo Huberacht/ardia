@@ -1,3 +1,4 @@
+import { probes } from "../../state/app/launchFlags";
 import { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { markShownFrame, traceSlice } from "../../platform/lab";
 import { hardwareKeyboardShown } from "@ardia/phone-native";
@@ -134,7 +135,7 @@ function SheetTray() {
     whenSearchPresents(revealStandbyFor);
     return () => whenSearchPresents(null);
   }, []);
-  const standby = tabSwitchCuts() ? <TrayLayer key={presentation.current + 1} session={STANDBY_SESSION} closing={false} standby onClosed={noClose} /> : null;
+  const standby = tabSwitchCuts() && !probes("tray") ? <TrayLayer key={presentation.current + 1} session={STANDBY_SESSION} closing={false} standby onClosed={noClose} /> : null;
   const shown = target ?? presenceShown(presence.current);
   if (shown === null) return standby;
   const closed = () => {
