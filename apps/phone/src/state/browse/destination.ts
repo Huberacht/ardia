@@ -81,33 +81,40 @@ function spendFace(id: string) {
   useDestination.setState((now) => (now.arriving === id ? now : { spent: spentAfter(now.spent, id) }));
 }
 
-const faceHolds = new Map<string, number>();
+export type DestinationCard = { id: string; index: number };
 
-export const useDestinationFaces = create<{ ids: readonly string[] }>()(() => ({ ids: [] }));
+const faceHolds = new Map<string, { count: number; index: number }>();
+
+export const useDestinationFaces = create<{ cards: readonly DestinationCard[] }>()(() => ({ cards: [] }));
 
 const publishFaces = () => {
-  const ids = [...faceHolds.keys()];
-  const was = useDestinationFaces.getState().ids;
-  if (was.length !== ids.length || was.some((id, at) => id !== ids[at])) useDestinationFaces.setState({ ids });
+  const cards = [...faceHolds].map(([id, hold]) => ({ id, index: hold.index }));
+  const was = useDestinationFaces.getState().cards;
+  if (was.length !== cards.length || was.some((card, at) => card.id !== cards[at]!.id || card.index !== cards[at]!.index)) useDestinationFaces.setState({ cards });
 };
 
-export function holdDestinationFace(id: string): () => void {
-  faceHolds.set(id, (faceHolds.get(id) ?? 0) + 1);
+export function holdDestinationFace(id: string, index: number): () => void {
+  faceHolds.set(id, { count: (faceHolds.get(id)?.count ?? 0) + 1, index });
   publishFaces();
   let held = true;
   return () => {
     if (!held) return;
     held = false;
-    const left = (faceHolds.get(id) ?? 1) - 1;
-    if (left > 0) faceHolds.set(id, left);
+    const hold = faceHolds.get(id);
+    if (!hold) return;
+    if (hold.count > 1) faceHolds.set(id, { ...hold, count: hold.count - 1 });
     else faceHolds.delete(id);
     publishFaces();
   };
 }
 
-export function destinationFaceIds(held: readonly string[], prepared: string | null, arriving: string | null): readonly string[] {
-  const extra = [prepared, arriving].filter((id, at, all): id is string => id !== null && !held.includes(id) && all.indexOf(id) === at);
-  return extra.length === 0 ? held : [...held, ...extra];
+export const PARKED_FACE_REACH = 2;
+
+export function destinationFaceIds(cards: readonly DestinationCard[], shownId: string, deckShown: boolean, prepared: string | null, arriving: string | null): readonly string[] {
+  const shownAt = cards.find((card) => card.id === shownId)?.index ?? -1;
+  const reachable = cards.filter((card) => deckShown || (shownAt >= 0 && card.index >= 0 && Math.abs(card.index - shownAt) <= PARKED_FACE_REACH)).map((card) => card.id);
+  const extra = [prepared, arriving].filter((id, at, all): id is string => id !== null && !reachable.includes(id) && all.indexOf(id) === at);
+  return extra.length === 0 ? reachable : [...reachable, ...extra];
 }
 
 export const deckScope = (turn: number) => `deck:${turn}`;

@@ -71,7 +71,6 @@ import { ReaderView, useLeavingReader } from "./ReaderView";
 import { PageFailureView } from "./PageFailureView";
 import { DestinationFace, PageCover } from "./PageCover";
 import { barFencedForDestination, destination, destinationAddresses, destinationFaceIds, destinationFaceKey, destinationHeldFill, destinationHeldUntil, destinationLiftPending, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, useDestinationFaces, type DestinationAddress } from "../../state/browse/destination";
-import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { HeldFrostSource } from "../ui/LookViews";
 import { PageSurface } from "./PageSurface";
 import { PagePull, PullBlocker, usePullBarShift } from "./PagePull";
@@ -148,15 +147,17 @@ function usePageSourceHold(kept: boolean) {
   return { held };
 }
 
-function useDestinationFaceIds() {
-  const held = useDestinationFaces((s) => s.ids);
+function useDestinationFaceIds(shownId: string) {
+  const cards = useDestinationFaces((s) => s.cards);
+  const deckShown = useBrowse((s) => s.surface === "deck");
   const prepared = useDestination((s) => s.prepared);
   const arriving = useDestination((s) => s.arriving);
-  return useMemo(() => destinationFaceIds(held, prepared, arriving), [held, prepared, arriving]);
+  const key = destinationFaceIds(cards, shownId, deckShown, prepared, arriving).join("\n");
+  return useMemo(() => (key === "" ? [] : key.split("\n")), [key]);
 }
 
 function DestinationSlot({ shownId, statusHeight, statusOver }: { shownId: string; statusHeight: number; statusOver: boolean }) {
-  const ids = useDestinationFaceIds();
+  const ids = useDestinationFaceIds(shownId);
   const arriving = useDestination((s) => s.arriving);
   const cover = useDestination((s) => (s.arriving !== null && s.arriving === s.prepared ? s.cover : null));
   const spent = useDestination((s) => s.spent);
@@ -173,15 +174,6 @@ const PremountedFace = memo(function PremountedFace({ id, cover, statusHeight, s
   return tab ? <DestinationFace tab={tab} cover={cover} statusHeight={statusHeight} statusOver={statusOver} /> : null;
 });
 
-function DestinationBarMarks() {
-  const ids = useDestinationFaceIds();
-  return ids.map((id) => <DestinationBarMark key={id} id={id} />);
-}
-
-function DestinationBarMark({ id }: { id: string }) {
-  const lifted = useAnimatedStyle(() => ({ opacity: destination.id.value === id && pageBarShown.value > 0 ? 1 : 0 }), [id]);
-  return <UiFrameMark testID="destinationBarMark" style={[uiFrameMarkStyle, lifted]} markWhenShown={`dest-bar:${id}`} />;
-}
 
 type KeptBar = { preview: BrowserTab | null; standsIn: boolean; privateLook: boolean | undefined };
 
@@ -204,7 +196,6 @@ function KeptBarSlot({ tab, kept, pageDark, children }: KeptBarProps) {
     <Animated.View testID="keptPageBar" style={[StyleSheet.absoluteFill, keptBarStyle]} animatedProps={keptBarProps} pointerEvents="box-none" collapsable={false}>
       {children(keptBar, barDark)}
       {kept && deckUp ? <DeckAddresses /> : null}
-      {kept ? <DestinationBarMarks /> : null}
     </Animated.View>
   );
 }

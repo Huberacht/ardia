@@ -217,6 +217,11 @@ export const DestinationFace = memo(function DestinationFace({ tab, cover, statu
     const bar = pageBarShown.value;
     return { opacity: destinationFaceShows(id, lifted, bar) ? 1 : 0 };
   }, [id]);
+  const barMark = useAnimatedStyle(() => {
+    const lifted = destination.id.value;
+    const bar = pageBarShown.value;
+    return { opacity: destinationFaceShows(id, lifted, bar) ? 1 : 0 };
+  }, [id]);
   const touches = useAnimatedProps<{ pointerEvents: "auto" | "none" }>(() => {
     const lifted = destination.id.value;
     const bar = pageBarShown.value;
@@ -236,6 +241,7 @@ export const DestinationFace = memo(function DestinationFace({ tab, cover, statu
       {warm ? <Image testID="destinationPicture" source={{ uri: warm.uri }} resizeMethod="scale" fadeDuration={0} onLoad={() => pictureDecoded(warm.uri)} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height, opacity: pictured ? 1 : 0 }]} /> : null}
       {statusOver ? <View style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
       <UiFrameMark testID="destinationFaceMark" style={[uiFrameMarkStyle, faceMark]} markWhenShown={`dest-face:${id}`} />
+      <UiFrameMark testID="destinationBarMark" style={[uiFrameMarkStyle, barMark]} markWhenShown={`dest-bar:${id}`} />
     </Animated.View>
   );
 });

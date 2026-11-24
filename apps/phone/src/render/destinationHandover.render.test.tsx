@@ -51,7 +51,7 @@ const opacityOf = (node: ReactTestInstance): number => {
 const drawnMarks = (root: ReactTestRenderer) => [
   ...new Set(
     root.root
-      .findAll((node) => typeof node.props.markWhenShown === "string" && /^dest-(face|bar):/.test(node.props.markWhenShown) && node.props.jestAnimatedStyle !== undefined && (node.props.jestAnimatedStyle.value as { opacity?: number }).opacity === 1)
+      .findAll((node) => (node.props.testID === "destinationFaceMark" || node.props.testID === "destinationBarMark") && typeof node.props.markWhenShown === "string" && node.props.jestAnimatedStyle !== undefined && (node.props.jestAnimatedStyle.value as { opacity?: number }).opacity === 1)
       .map((node) => node.props.markWhenShown as string),
   ),
 ];
@@ -579,5 +579,49 @@ test("while browsing with the deck parked, no destination mark keeps a per-frame
   const labels = root.root.findAll((node) => typeof node.props.markWhenShown === "string" && /^dest-(face|bar):/.test(node.props.markWhenShown) && node.props.jestAnimatedStyle !== undefined);
   expect(labels.length).toBeGreaterThanOrEqual(6);
   expect(labels.every((node) => (node.props.jestAnimatedStyle.value as { opacity?: number }).opacity === 0)).toBe(true);
+  unmount(root);
+});
+
+const browsing = () => browse.useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, arriving: null, leaving: null });
+const parkedDeck = () => {
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  flush();
+  act(() => browsing());
+  flush();
+  return root;
+};
+const faceViews = (root: ReactTestRenderer) => hosts(root, "destinationFace").length;
+const standaloneMarks = (root: ReactTestRenderer) =>
+  root.root.findAll((node) => (node.props.testID === "destinationFaceMark" || node.props.testID === "destinationBarMark") && node.props.jestAnimatedStyle !== undefined).filter((node) => {
+    for (let at: ReactTestInstance | null = node.parent; at; at = at.parent) if (at.props.testID === "destinationFace") return false;
+    return true;
+  }).length;
+
+test("while browsing with 20 tabs only the cards a parked-deck tap can reach have faces: the shown card and two each side, with no mark views outside them", () => {
+  withTabs(20);
+  const root = parkedDeck();
+  expect(deckCardIds(root).length).toBeGreaterThan(5);
+  expect(faceViews(root) + standaloneMarks(root)).toBeLessThanOrEqual(6);
+  expect(faceViews(root)).toBeGreaterThanOrEqual(3);
+  expect(standaloneMarks(root)).toBe(0);
+  expect(faceIds(root)).toContain(currentTabs().selectedId);
+  unmount(root);
+});
+
+test("a parked card beyond the reach gets its face on touch-down, and every mounted card has one once the deck is shown", () => {
+  withTabs(20);
+  const root = parkedDeck();
+  const far = deckCardIds(root).find((id) => !faceIds(root).includes(id))!;
+  expect(far).toBeDefined();
+  act(() => require("../state/browse/destination").pressDestination(far));
+  expect(faceIds(root)).toContain(far);
+  lift(far);
+  expect(drawnMarks(root).sort()).toEqual(both(far));
+  act(() => releaseDestination());
+  flush();
+  act(() => deckUp());
+  flush();
+  expect(faceIds(root)).toEqual(deckCardIds(root));
   unmount(root);
 });

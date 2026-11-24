@@ -258,7 +258,7 @@ export const DeckCard = memo(function DeckCard({ tab, index, geometry: g, motion
   countRender("DeckCard");
   const theme = useTheme();
   const design = useDesign();
-  useLayoutEffect(() => (design === "redesigned" && tabSwitchCuts() ? holdDestinationFace(tab.id) : undefined), [tab.id, design]);
+  useLayoutEffect(() => (design === "redesigned" && tabSwitchCuts() ? holdDestinationFace(tab.id, index) : undefined), [tab.id, design, index]);
   const tone = shownTone(useHeldPageTone(tab.id), tab.themeColorHex);
   const { orderIds, scaleProgress, covering } = motion;
   const id = tab.id;
