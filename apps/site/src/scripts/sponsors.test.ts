@@ -107,6 +107,10 @@ test("F2: the built page holds no donor names; only the live list fills it", () 
   assert.doesNotMatch(data, /fetch\(|DONORS\b|process\.env/);
 });
 
+const ticks = async (count: number) => {
+  for (let tick = 0; tick < count; tick++) await new Promise((resolve) => setTimeout(resolve, 0));
+};
+
 const pageEvent = (type: "pagehide" | "pageshow", persisted = false) => Object.assign(new Event(type), { persisted });
 
 test("R4-2: names are cleared on pagehide and fetched again when Back restores the page", async () => {
@@ -121,10 +125,11 @@ test("R4-2: names are cleared on pagehide and fetched again when Back restores t
   assert.equal(list.children.length, 0, "nothing is left for the back-forward cache to keep");
   assert.equal(empty.hidden, false);
   page.dispatchEvent(pageEvent("pageshow", false));
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await ticks(5);
   assert.equal(asked, 1, "a normal pageshow doesn't fetch again");
   page.dispatchEvent(pageEvent("pageshow", true));
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  for (let tick = 0; asked < 2 && tick < 50; tick++) await ticks(1);
+  await ticks(5);
   assert.equal(asked, 2);
   assert.equal(list.children.length, 0, "the donor hidden meanwhile stays gone");
 });
