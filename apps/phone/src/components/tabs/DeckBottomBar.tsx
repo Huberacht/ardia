@@ -18,6 +18,7 @@ import { deckLook } from "./deckLook";
 import { useKeyboardTopFromBottom } from "../search/useKeyboardHeight";
 import { FadingGlyphs, PlusMenuButton, type ChromeFade } from "./ChromeButtons";
 import { besideStrip, duoFieldReach, type BottomBarLayout } from "../../lib/bottomBarSpan";
+import { DeckHitTarget } from "./DeckHitTarget";
 
 type Props = {
   searchOpener?: MutableRefObject<(() => void) | null>;
@@ -32,6 +33,7 @@ type Props = {
   onQuery: (needle: string) => void;
   menusShown?: boolean;
   onMenu?: (open: boolean) => void;
+  hits?: boolean;
 } & ChromeFade;
 
 
@@ -165,7 +167,7 @@ export function SearchTabsField({ search, testID = "deckSearchTabs", style, rest
   );
 }
 
-export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, width, layout, incognito, privateCount = 0, onCloseIncognito, onQuery, menusShown = true, onMenu, glassShown, glassShownMs, glyphFade }: Props) {
+export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, width, layout, incognito, privateCount = 0, onCloseIncognito, onQuery, menusShown = true, onMenu, hits = false, glassShown, glassShownMs, glyphFade }: Props) {
   const fade = { glassShown, glassShownMs, glyphFade };
   const roles = useTheme();
   const dark = roles.dark || incognito;
@@ -212,15 +214,19 @@ export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, wid
     return { transform: [{ translateY: typing.value ? -deckBarLift(centerY, deckHeight, keyboardTop.value) : 0 }] };
   }, [centerY, deckHeight]);
   const { span, strip } = layout;
+  const rowHits = hits && !strip;
+  const rowTop = centerY - controlSize.bar / 2;
   const plusTop = strip ? (strip.ends ? strip.plus : strip.tabs) : 0;
   const plusPlace = strip ? { bottom: deckHeight - centerY - controlSize.bar / 2 - plusTop, ...besideStrip(strip, width, tabsLayout.menuWidth, deckChromeLayout.menuGap) } : { bottom: deckHeight - centerY + controlSize.bar / 2 + deckChromeLayout.menuGap, right: span.right, width: tabsLayout.menuWidth };
   const switchPlace = strip ? plusPlace : { bottom: deckHeight - centerY + controlSize.bar / 2 + deckChromeLayout.menuGap, left: span.left, width: tabsLayout.menuWidth };
   const closeIncognito: MenuItem[] = onCloseIncognito ? [{ label: incognitoWords.closeIncognitoTabs, destructive: true, onPress: onCloseIncognito }] : [];
   const switchMenuShown = menusShown && privateCount > 0 && closeIncognito.length > 0;
   const incognitoSwitch = (
-    <MenuTrigger items={closeIncognito} trigger="longPress" haptic={menuOpenedHaptic} disabled={!switchMenuShown} onOpen={() => onMenu?.(true)} onClose={() => onMenu?.(false)} place={switchPlace} style={{ width: controlSize.bar, height: controlSize.bar }}>
-      {({ onLongPress }) => <IncognitoSwitch incognito={incognito} dark={dark} onLongPress={switchMenuShown ? onLongPress : undefined} {...fade} />}
-    </MenuTrigger>
+    <DeckHitTarget control="privacy" live={rowHits} originY={rowTop} style={styles.circleHit}>
+      <MenuTrigger items={closeIncognito} trigger="longPress" haptic={menuOpenedHaptic} disabled={!switchMenuShown} onOpen={() => onMenu?.(true)} onClose={() => onMenu?.(false)} place={switchPlace} style={{ width: controlSize.bar, height: controlSize.bar }}>
+        {({ onLongPress }) => <IncognitoSwitch incognito={incognito} dark={dark} onLongPress={switchMenuShown ? onLongPress : undefined} {...fade} />}
+      </MenuTrigger>
+    </DeckHitTarget>
   );
   const ends = strip?.ends ?? false;
   const opened = search.focused || search.text !== "";
@@ -238,7 +244,11 @@ export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, wid
   const grow = useAnimatedStyle(() => (reachSide === "marginLeft" ? { marginLeft: edge.value } : reachSide === "marginRight" ? { marginRight: edge.value } : {}), [reachSide]);
   const fieldFade = useAnimatedStyle(() => (ends ? { opacity: Math.min(Math.max(growth.value, 0), 1) } : {}), [ends]);
   const circleFade = useAnimatedStyle(() => ({ opacity: 1 - Math.min(Math.max(growth.value, 0), 1) }));
-  const plus = <PlusMenuButton width={controlSize.bar} label={incognito ? actionWords.newIncognitoTab : actionWords.newTab} testID="deckBarPlus" dark={dark} incognito={incognito} place={plusPlace} menusShown={menusShown} onMenu={onMenu} {...fade} />;
+  const plus = (
+    <DeckHitTarget control="plus" live={rowHits} originY={rowTop} style={styles.circleHit}>
+      <PlusMenuButton width={controlSize.bar} label={incognito ? actionWords.newIncognitoTab : actionWords.newTab} testID="deckBarPlus" dark={dark} incognito={incognito} place={plusPlace} menusShown={menusShown} onMenu={onMenu} {...fade} />
+    </DeckHitTarget>
+  );
   const measure = () =>
     row.current?.measureInWindow((_x, y, _width, height) => {
       if (height > 0) noteDeckBarTop(y);
@@ -265,7 +275,9 @@ export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, wid
             </Animated.View>
           </Animated.View>
         ) : (
-          <SearchTabsField search={search} style={styles.searchHit} incognito={incognito} {...fade} />
+          <DeckHitTarget control="search" live={rowHits} originY={rowTop} style={styles.searchHit}>
+            <SearchTabsField search={search} style={styles.searchHit} incognito={incognito} {...fade} />
+          </DeckHitTarget>
         )}
         {strip ? null : plus}
       </View>

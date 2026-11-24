@@ -10,7 +10,7 @@ import type { Design } from "../../lib/design";
 import { neighbours, PAGER } from "../../lib/pagerPhysics";
 import { useSystemBars } from "../../state/app/systemBars";
 import { useNavigation, usePageTone } from "../../state/browse/hooks";
-import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
+import { armDeckPull, beginDeckPull, deckCutOwns, deckPull, disarmDeckPull, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
 import { refreshHiddenDeck } from "../../state/browse/deckHold";
 import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } from "../../state/page/actions";
 import { useDrawnMenuOpen, useFindOpen, useMenuDocked, usePressOpen, useReaderTabId } from "../../state/page/hooks";
@@ -205,8 +205,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const barDark = (design === "redesigned" || design === "material") && !pageTone?.bottom ? theme.dark : isDarkColor(bottom);
   const bodyStyle = useAnimatedStyle(() => ({ transform: [{ translateX: barKept && pageBodyShown.value === 0 ? BODY_UNDER_DECK : 0 }] }));
   const bodyProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({
-    pointerEvents: barKept && pageBodyShown.value === 0 ? "none" : "box-none",
-    importantForAccessibility: barKept && pageBodyShown.value === 0 ? "no-hide-descendants" : "auto",
+    pointerEvents: barKept && (pageBodyShown.value === 0 || deckCutOwns()) ? "none" : "box-none",
+    importantForAccessibility: barKept && (pageBodyShown.value === 0 || deckCutOwns()) ? "no-hide-descendants" : "auto",
   }));
   const barSlotHeight = barHeight(insets.bottom, design);
   const collapse = useBarCollapse(tab.id, tab.isPrivate, finding, design, barSlotHeight, squeeze !== null);

@@ -2,6 +2,7 @@ import { cancelAnimation, makeMutable, ReduceMotion, runOnJS, runOnUI, withSprin
 import { create } from "zustand";
 import { labTrace } from "../../platform/lab";
 import { DECK_PULL, DECK_PULL_SPRING, deckCardAt, landingVelocity, pullLands, pullShrink, pullSpeed, type DeckHit, type PullTarget } from "../../lib/deckPull";
+import { deckReadyFor, deckTurn, releaseDeckTurnOnUI, takeDeckTurn } from "./deckTurn";
 
 export const PULL_STAGE = { idle: 0, tracking: 1, landing: 2, returning: 3, landed: 4, handed: 5, fading: 6, faded: 7, growing: 8 } as const;
 
@@ -38,12 +39,25 @@ export const deckPull = {
   hit: makeMutable<DeckHit | null>(null),
   landing: makeMutable(0),
   openAfter: makeMutable(""),
-  menuAfter: makeMutable<"" | DeckMenu>(""),
-  header: makeMutable<HeaderHit | null>(null),
   hitTurn: makeMutable(0),
 };
 
-export type PullSettled = (id: string, landed: boolean, worstFrameMs: number, openAfter?: string) => void;
+export type PullSettled = (id: string, landed: boolean, worstFrameMs: number, openAfter?: string, turn?: number, phone?: number) => void;
+
+export type PullRefused = (id: string, phone: number) => void;
+
+export function deckCutOwns(): boolean {
+  "worklet";
+  return deckPull.cut.value && deckTurn.live.value !== 0;
+}
+
+function showPageOnUI() {
+  "worklet";
+  pageBarShown.value = 1;
+  pageBodyShown.value = 1;
+  pageBarPreviewShown.value = 0;
+}
+
 
 function watchPullFrames() {
   "worklet";
@@ -92,7 +106,6 @@ export function resetDeckPull() {
   deckPull.reveal.value = 0;
   deckPull.fade.value = 0;
   deckPull.openAfter.value = "";
-  deckPull.menuAfter.value = "";
 }
 
 export function handOverDeckPull() {
@@ -100,6 +113,21 @@ export function handOverDeckPull() {
   if (deckPull.stage.value !== PULL_STAGE.landed && deckPull.stage.value !== PULL_STAGE.faded) return;
   deckPull.awayId.value = deckPull.id.value;
   deckPull.stage.value = PULL_STAGE.handed;
+}
+
+function ownDeckAtCut(id: string): number {
+  "worklet";
+  deckPull.cut.value = true;
+  pageBarShown.value = 0;
+  pageBodyShown.value = 0;
+  cancelAnimation(deckPull.shrink);
+  cancelAnimation(deckPull.reveal);
+  deckPull.shrink.value = 1;
+  deckPull.reveal.value = 1;
+  deckPull.id.value = id;
+  deckPull.stage.value = PULL_STAGE.landed;
+  handOverDeckPull();
+  return takeDeckTurn();
 }
 
 function landingEnded(id: string, landing: number, finished: boolean | undefined, settled: PullSettled) {
@@ -132,54 +160,6 @@ export function hurryDeckPull(x: number, y: number, settled: PullSettled): boole
     "worklet";
     landingEnded(id, landing, finished, settled);
   });
-  return true;
-}
-
-export type DeckMenu = "more" | "spaces" | "search" | "plus" | "privacy";
-export type HeaderHit = { top: number; bottom: number; moreLeft: number; moreRight: number; spacesLeft: number; spacesRight: number; barTop: number; barBottom: number; privacyLeft: number; privacyRight: number; searchLeft: number; searchRight: number; plusLeft: number; plusRight: number };
-export type LatchedDeckTap = { id: string; hitTurn: number } | { menu: DeckMenu; hitTurn: number } | null;
-
-export function headerMenuAt(header: HeaderHit | null, x: number, y: number): DeckMenu | null {
-  "worklet";
-  if (!header) return null;
-  if (y >= header.barTop && y <= header.barBottom) {
-    if (x >= header.privacyLeft && x <= header.privacyRight) return "privacy";
-    if (x >= header.plusLeft && x <= header.plusRight) return "plus";
-    if (x >= header.searchLeft && x <= header.searchRight) return "search";
-    return null;
-  }
-  if (y < header.top || y > header.bottom) return null;
-  if (x >= header.moreLeft && x <= header.moreRight) return "more";
-  if (x >= header.spacesLeft && x <= header.spacesRight) return "spaces";
-  return null;
-}
-
-export function publishDeckHeader(header: HeaderHit | null) {
-  runOnUI((next: HeaderHit | null) => {
-    "worklet";
-    deckPull.header.value = next;
-  })(header);
-}
-
-export function latchDeckTap(x: number, y: number): LatchedDeckTap {
-  "worklet";
-  const hit = deckPull.hit.value;
-  const tapped = hit ? deckCardAt(hit, x, y) : null;
-  if (tapped) return { id: tapped, hitTurn: deckPull.hitTurn.value };
-  const menu = headerMenuAt(deckPull.header.value, x, y);
-  return menu ? { menu, hitTurn: deckPull.hitTurn.value } : null;
-}
-
-export function queueDeckTapAfterCut(latched: LatchedDeckTap): boolean {
-  "worklet";
-  const stage = deckPull.stage.value;
-  if (stage !== PULL_STAGE.landed && stage !== PULL_STAGE.handed) return false;
-  if (!latched || latched.hitTurn !== deckPull.hitTurn.value) return false;
-  if ("menu" in latched) {
-    deckPull.menuAfter.value = latched.menu;
-    return true;
-  }
-  deckPull.openAfter.value = latched.id;
   return true;
 }
 
@@ -282,20 +262,31 @@ export function fadeDeckPullFromRest(id: string, settled: PullSettled, refused: 
   });
 }
 
-export function cutDeckPullFromRest(id: string, settled: PullSettled, refused: (id: string) => void) {
+export function cutDeckPullFromRest(id: string, settled: PullSettled, refused: PullRefused) {
   "worklet";
-  if (!beginDeckPull(id, 0)) {
-    runOnJS(refused)(id);
+  const phone = deckTurn.phone.value;
+  if (!deckReadyFor(id) || !beginDeckPull(id, 0)) {
+    runOnJS(refused)(id, phone);
     return;
   }
-  deckPull.cut.value = true;
-  pageBarShown.value = 0;
-  pageBodyShown.value = 0;
-  deckPull.shrink.value = 1;
-  deckPull.reveal.value = 1;
-  deckPull.stage.value = PULL_STAGE.landed;
-  handOverDeckPull();
-  runOnJS(settled)(id, true, 0);
+  const turn = ownDeckAtCut(id);
+  runOnJS(settled)(id, true, 0, "", turn, phone);
+}
+
+export function releaseDeckOnHideOnUI() {
+  "worklet";
+  if (deckPull.cut.value && deckPull.stage.value !== PULL_STAGE.idle) return;
+  releaseDeckTurnOnUI(0);
+}
+
+export function restorePageAfterRefusedCut(turn: number) {
+  runOnUI((refused: number) => {
+    "worklet";
+    if (refused !== 0 && deckTurn.live.value !== refused) return;
+    releaseDeckTurnOnUI(refused);
+    resetDeckPull();
+    showPageOnUI();
+  })(turn);
 }
 
 export const usePullBar = create<{ deckOwns: boolean }>()(() => ({ deckOwns: false }));
@@ -445,7 +436,9 @@ export function barReturnedToPage() {
 let standbyId: string | null = null;
 let armedId: string | null = null;
 let armedFades = false;
-let entrance: string | null = null;
+export type DeckPullEntrance = { id: string; turn: number; phone: number };
+
+let entrance: DeckPullEntrance | null = null;
 const standbyWaiters = new Set<(id: string | null) => void>();
 
 export function publishDeckStandby(target: PullTarget | null, hit: DeckHit | null = null) {
@@ -497,14 +490,14 @@ export function disarmDeckPull(id: string, settled: PullSettled) {
 
 export const deckPullArmed = () => armedId;
 
-export function noteDeckPullEntrance(id: string | null) {
-  entrance = id;
+export function noteDeckPullEntrance(next: DeckPullEntrance | null) {
+  entrance = next;
 }
 
 export const peekDeckPullEntrance = () => entrance;
 
-export function takeDeckPullEntrance(): boolean {
-  const was = entrance !== null;
+export function takeDeckPullEntrance(): DeckPullEntrance | null {
+  const was = entrance;
   entrance = null;
   return was;
 }

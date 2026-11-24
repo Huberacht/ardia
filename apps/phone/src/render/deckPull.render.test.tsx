@@ -207,7 +207,7 @@ test("let go past the commit point, the page lands in its own card and only then
   expect(deckPull.stage.value).toBe(PULL_STAGE.idle);
   const deck = host(root, "tabDeck")!;
   expect(moved(deck).translateX).toBe(0);
-  expect(deck.props.pointerEvents).toBe("auto");
+  expect(deck.props.jestAnimatedProps?.value?.pointerEvents ?? deck.props.pointerEvents).toBe("auto");
   expect(opacity(host(root, "deckCards")!)).toBe(1);
   expect(hosts(root, "deckCard").every((card) => before.has(card))).toBe(true);
   expect(hosts(root, "deckCard").every((card) => opacity(card) === 1)).toBe(true);

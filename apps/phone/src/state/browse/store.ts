@@ -67,7 +67,8 @@ import { showToast } from "../toasts/store";
 import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages";
 import { hideArchiveCard } from "./archiveCard";
 import { tabSwitchCuts } from "./tabSwitch";
-import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, PULL_STAGE, showPulledPage, whenDeckStandby } from "./deckPull";
+import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, pageBarPreviewShown, pageBarShown, pageBodyShown, peekDeckPullEntrance, previewPageBar, PULL_STAGE, restorePageAfterRefusedCut, showPulledPage, whenDeckStandby } from "./deckPull";
+import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckTurn, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
 import { useScreenLayout } from "../app/screenLayout";
 import { dropEarlyStandby } from "../search/standbyReveal";
 import { beginInteraction, cutInteraction, INTERACTION_WINDOW_MS, markNextUiFrame, markTiming } from "../app/interactionPerf";
@@ -497,7 +498,8 @@ export function cancelSearch() {
   if (incognitoOnCancel !== null) setIncognito(incognitoOnCancel);
 }
 
-function deckCutFromTap(id: string) {
+function deckCutFromTap(id: string, phone: number) {
+  if (phone !== currentPhoneGeneration()) return;
   markTiming("deck press");
   landingFromRest = id;
   pullBusySince = Date.now();
@@ -506,19 +508,23 @@ function deckCutFromTap(id: string) {
   beginInteraction(PULL_LANDING_PERF, INTERACTION_WINDOW_MS.deckPullLanding);
 }
 
-function deckTapCutRefused(id: string) {
+function deckTapCutRefused(id: string, phone: number) {
   if (landingFromRest === id) landingFromRest = null;
+  if (phone !== currentPhoneGeneration()) {
+    labTrace("PAGELAB deck tap refused for an earlier screen layout, nothing opens");
+    return;
+  }
   void showDeck();
 }
 
 export function canCutDeckFromTap(id: string): boolean {
   "worklet";
-  return deckPull.target.value?.id === id && deckPull.stage.value === PULL_STAGE.idle;
+  return deckPull.target.value?.id === id && deckPull.stage.value === PULL_STAGE.idle && deckReadyFor(id);
 }
 
 export function cutDeckFromTabsTap(id: string) {
   "worklet";
-  runOnJS(deckCutFromTap)(id);
+  runOnJS(deckCutFromTap)(id, deckTurn.phone.value);
   cutDeckPullFromRest(id, deckPullSettled, deckTapCutRefused);
 }
 
@@ -569,7 +575,6 @@ function revokePhoneTurnOnUI() {
   deckPull.hitTurn.value += 1;
   deckPull.target.value = null;
   deckPull.hit.value = null;
-  deckPull.header.value = null;
   deckPull.awayId.value = "";
   pageBarShown.value = 1;
   pageBodyShown.value = 1;
@@ -581,6 +586,14 @@ export function screenLayoutChanged() {
   trackedPull = null;
   heldBarAction = null;
   committedBarAction = null;
+  landingTapAt = null;
+  entranceSeq += 1;
+  if (deckCapture && !deckCapture.done) deckCapture = null;
+  if (peekDeckPullEntrance() && useBrowse.getState().surface === "deck") useBrowse.setState({ surface: "browsing", deckEntrance: null, leaving: null });
+  noteDeckPullEntrance(null);
+  noteDeckTurnReconciled(0);
+  dropDeckHits();
+  advancePhoneGeneration();
   endDeckPull();
   runOnUI(revokePhoneTurnOnUI)();
   previewPageBar(null);
@@ -731,9 +744,10 @@ function cardShowsPicture(id: string) {
   return picture != null && picturePainted(pictureKey(`deck:${id}`, picture));
 }
 
-function deckPullRefused(id: string) {
+function deckPullRefused(id: string, phone: number = currentPhoneGeneration()) {
   if (landingFromRest !== id) return;
   landingFromRest = null;
+  if (phone !== currentPhoneGeneration()) return;
   if (trackedPull !== null || useBrowse.getState().surface !== "browsing" || currentTabs().selectedId !== id) return;
   deckCapture = null;
   labTrace("PAGELAB deck pull refused on the UI thread, the deck opens without it");
@@ -746,9 +760,14 @@ export function noteDeckTapWhileLanding(at: number) {
   landingTapAt = at;
 }
 
-export function deckPullSettled(id: string, landed: boolean, worstFrameMs = 0, openAfter = "") {
+export function deckPullSettled(id: string, landed: boolean, worstFrameMs = 0, openAfter = "", turn = 0, phone: number = currentPhoneGeneration()) {
   const tappedAt = landingTapAt;
   landingTapAt = null;
+  if (phone !== currentPhoneGeneration()) {
+    labTrace("PAGELAB deck pull settled for an earlier screen layout, dropped");
+    if (deckCapture?.id === id && !deckCapture.done) deckCapture = null;
+    return;
+  }
   labTrace(`PAGELAB deck pull animation ${landed ? "landed" : "returned"}`);
   if (landingFromRest === id) landingFromRest = null;
   if (trackedPull === id) trackedPull = null;
@@ -759,23 +778,47 @@ export function deckPullSettled(id: string, landed: boolean, worstFrameMs = 0, o
     return;
   }
   if (deckCapture?.id === id) void takeDeckCapture(deckCapture);
+  if (deckTurnReconciled(turn)) return;
   if (!cardPictureShown(id)) {
     if (pullCounts(id)) countUsage("deck_pictures_late");
     labTrace("PAGELAB deck pull handed over before its card had a picture painted");
   }
-  if (useBrowse.getState().surface !== "browsing" || currentTabs().selectedId !== id) {
-    if (deckPullGrowing() === null) endDeckPull();
-    return;
-  }
-  dismissSearch();
-  noteDeckPullEntrance(id);
-  labTrace(`PAGELAB deck shown with ${currentTabs().open.length} tabs, ${currentTabs().privates.length} private`);
-  markTiming("deck taps");
-  useBrowse.setState({ surface: "deck", deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, leaving: null });
+  if (!enterDeckOnTurn(id, turn)) return;
   if (!openAfter || !findTab(currentTabs(), openAfter)) return;
   labTrace("PAGELAB deck card tapped while the deck landed opens as it lands");
   if (pullCounts(openAfter)) countUsage("deck_opens_while_landing");
   sendDeckCommand({ kind: "open", tabId: openAfter, tappedAt: tappedAt ?? Date.now() });
+}
+
+function enterDeckOnTurn(id: string, turn: number): boolean {
+  if (useBrowse.getState().surface !== "browsing" || currentTabs().selectedId !== id) {
+    labTrace("PAGELAB deck cut refused in JS, its page is no longer in front, the page gets its bar and body back");
+    if (turn !== 0) restorePageAfterRefusedCut(turn);
+    else if (deckPullGrowing() === null) endDeckPull();
+    return false;
+  }
+  noteDeckTurnReconciled(turn);
+  dismissSearch();
+  noteDeckPullEntrance({ id, turn, phone: currentPhoneGeneration() });
+  labTrace(`PAGELAB deck shown with ${currentTabs().open.length} tabs, ${currentTabs().privates.length} private`);
+  markTiming("deck taps");
+  useBrowse.setState({ surface: "deck", deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, leaving: null });
+  return true;
+}
+
+export function deckHitAccepted(hit: DeckHitCommand) {
+  if (hit.phone !== currentPhoneGeneration()) {
+    labTrace(`PAGELAB ${hit.label} dropped, it was pressed in an earlier screen layout`);
+    return;
+  }
+  traceSlice(hit.label);
+  markTiming("deck hit");
+  if (!deckTurnReconciled(hit.turn)) {
+    if (landingFromRest === hit.deck) landingFromRest = null;
+    if (!enterDeckOnTurn(hit.deck, hit.turn)) return;
+    labTrace(`PAGELAB ${hit.label} reached JS before the deck's entrance, both apply together`);
+  }
+  if (queueDeckHit(hit) && hit.control === "card" && hit.tabId && pullCounts(hit.tabId)) countUsage("deck_opens_while_landing");
 }
 
 const pullBusy = () => {
