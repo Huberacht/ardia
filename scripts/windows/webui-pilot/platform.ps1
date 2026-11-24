@@ -19,12 +19,17 @@ function Spawned { @(Get-Process -Name $Spawned -ErrorAction SilentlyContinue | 
 function Named([int[]]$ids) { @($ids | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.Name)#$_ parent $((Get-CimInstance Win32_Process -Filter "ProcessId=$_" -ErrorAction SilentlyContinue).ParentProcessId)" } }) -join ', ' }
 
 $edgeWasRunning = [bool](Get-Process -Name msedge -ErrorAction SilentlyContinue)
-$Refusal = 'A URL is required|Opening at login takes one boolean|The arguments must be a list'
-function Refused($answer, [switch]$FalseIsRefusal) {
-  if ($null -eq $answer) { return $false }
-  if ($answer.ok) { return $FalseIsRefusal -and $answer.r -eq $false }
-  return [string]$answer.e -match $Refusal
+$OpenRefusals = @('A URL is required', 'The arguments must be a list')
+$LoginRefusals = @('Opening at login takes one boolean', 'The arguments must be a list')
+$DefaultRefusals = @('The arguments must be a list')
+function Refused($answer, [string[]]$Expected, [switch]$FalseIsRefusal) {
+  if ($null -eq $answer -or $null -eq $answer.ok) { return $false }
+  if ($answer.ok -eq $true) { return [bool]$FalseIsRefusal -and ($answer.r -is [bool]) -and -not $answer.r }
+  return ($answer.ok -eq $false) -and ($Expected -ccontains [string]$answer.e)
 }
+$MailApps = @('olk', 'HxOutlook', 'OUTLOOK', 'HxTsr', 'OpenWith')
+$webuiRunBefore = Run-Value 'Ardia WebUI'
+$mailWasRunning = @(Get-Process -Name $MailApps -ErrorAction SilentlyContinue | ForEach-Object Id)
 $failedRun = $false
 try {
   Stop-Engine
@@ -54,19 +59,23 @@ try {
   $unrefused = @()
   foreach ($case in $corpus.cases) {
     $answer = Open-With "[$($case.expression)]"
-    if (-not (Refused $answer -FalseIsRefusal)) { $unrefused += $case.id; Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($case.id)" }
+    if (-not (Refused $answer $OpenRefusals -FalseIsRefusal)) { $unrefused += $case.id; Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($case.id)" }
   }
   foreach ($shape in $corpus.shapes) {
     $answer = Open-With $shape.expression
-    if (-not (Refused $answer -FalseIsRefusal)) { $unrefused += $shape.id; Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($shape.id)" }
+    if (-not (Refused $answer $OpenRefusals -FalseIsRefusal)) { $unrefused += $shape.id; Log "open-external answered $($answer | ConvertTo-Json -Compress) for $($shape.id)" }
   }
   Hold 2000
   $sinkAfter = Sink-Calls
   $fresh = @(Spawned | Where-Object { $before -notcontains $_ })
-  Check 'open-external-refuses-shared-corpus' (($null -ne $sinkBefore) -and ($unrefused.Count -eq 0) -and ($sinkAfter -eq $sinkBefore) -and ($fresh.Count -eq 0)) "$($corpus.cases.Count) corpus values and $($corpus.shapes.Count) bad shapes; not explicitly refused: $($unrefused -join ', '); ShellExecuteExW calls $sinkBefore -> $sinkAfter; new processes: $(Named $fresh)"
+  Check 'open-external-refuses-shared-corpus' (($null -ne $sinkBefore) -and ($unrefused.Count -eq 0) -and ($sinkBefore -eq 0) -and ($sinkAfter -eq 0) -and ($fresh.Count -eq 0)) "$($corpus.cases.Count) corpus values and $($corpus.shapes.Count) bad shapes; not explicitly refused: $($unrefused -join ', '); ShellExecuteExW calls $sinkBefore -> $sinkAfter; new processes: $(Named $fresh)"
   $valid = Open-With "[$(Js $corpus.control)]"
   $sinkControl = Sink-Calls
-  Check 'open-external-control-reaches-sink' ($valid.ok -and $valid.r -eq $true -and ($null -ne $sinkAfter) -and $sinkControl -eq $sinkAfter + 1) "answer $($valid | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkAfter -> $sinkControl"
+  Check 'open-external-control-reaches-sink' (($valid.ok -eq $true) -and ($valid.r -is [bool]) -and $valid.r -and ($sinkAfter -eq 0) -and ($sinkControl -eq 1)) "answer $($valid | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkAfter -> $sinkControl"
+
+  $mailto = Open-With "[$(Js $corpus.mailto)]"
+  $sinkMail = Sink-Calls
+  Check 'mailto-with-embedded-url-reaches-sink' (($mailto.ok -eq $true) -and ($mailto.r -is [bool]) -and ($sinkMail -eq 2)) "answer $($mailto | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkControl -> $sinkMail"
 
   $rnwBefore = Run-Value 'Ardia'
   $expected = '"' + "$App\chrome.exe" + '" --ardia-shell=webui'
@@ -79,14 +88,16 @@ try {
     foreach ($case in $corpus.cases) {
       if ($case.id -eq 'type.true' -or $case.id -eq 'type.false') { continue }
       $answer = Set-Login "[$($case.expression)]"
-      if (-not (Refused $answer) -or (Run-Value 'Ardia WebUI') -ne $value) { $bad += $case.id; Log "setLaunchAtLogin answered $($answer | ConvertTo-Json -Compress) for $($case.id) while $state" }
+      if (-not (Refused $answer $LoginRefusals) -or (Run-Value 'Ardia WebUI') -ne $value) { $bad += $case.id; Log "setLaunchAtLogin answered $($answer | ConvertTo-Json -Compress) for $($case.id) while $state" }
     }
     foreach ($shape in @($corpus.shapes) + @([pscustomobject]@{ id = 'shape.boolNotInList'; expression = 'true' }, [pscustomobject]@{ id = 'shape.twoBooleans'; expression = '[true, false]' })) {
       $answer = Set-Login $shape.expression
-      if (-not (Refused $answer) -or (Run-Value 'Ardia WebUI') -ne $value) { $bad += $shape.id; Log "setLaunchAtLogin answered $($answer | ConvertTo-Json -Compress) for $($shape.id) while $state" }
+      if (-not (Refused $answer $LoginRefusals) -or (Run-Value 'Ardia WebUI') -ne $value) { $bad += $shape.id; Log "setLaunchAtLogin answered $($answer | ConvertTo-Json -Compress) for $($shape.id) while $state" }
     }
     ,$bad
   }
+  Remove-ItemProperty -LiteralPath $RunKey -Name 'Ardia WebUI' -ErrorAction SilentlyContinue
+  $absentAtStart = $null -eq (Run-Value 'Ardia WebUI')
   $status0 = Invoke-Host 'ArdiaSystem.launchAtLoginStatus' '{ "args": [] }'
   $badAbsent = Login-Corpus 'absent'
   $on = Set-Login '[true]'
@@ -96,12 +107,12 @@ try {
   $storedAfter = Run-Value 'Ardia WebUI'
   $off = Set-Login '[false]'
   $status2 = Invoke-Host 'ArdiaSystem.launchAtLoginStatus' '{ "args": [] }'
-  Check 'set-launch-at-login-refuses-shared-corpus' (($badAbsent.Count -eq 0) -and ($badPresent.Count -eq 0) -and ($storedAfter -eq $expected)) "not refused or changed the Run value while absent: $($badAbsent -join ', '); while present: $($badPresent -join ', ')"
+  Check 'set-launch-at-login-refuses-shared-corpus' ($absentAtStart -and ($badAbsent.Count -eq 0) -and ($badPresent.Count -eq 0) -and ($storedAfter -eq $expected)) "not refused or changed the Run value while absent: $($badAbsent -join ', '); while present: $($badPresent -join ', ')"
   Check 'login-item-toggles-run-key' ($on.ok -and $off.ok -and $stored -eq $expected -and $status1.r -eq 'enabled' -and $status2.r -eq 'notRegistered' -and (Run-Value 'Ardia WebUI') -eq $null -and (Run-Value 'Ardia') -eq $rnwBefore) "before $($status0.r), stored '$stored', after on $($status1.r), after off $($status2.r), RNW value unchanged: $((Run-Value 'Ardia') -eq $rnwBefore)"
 
   $defaultBad = Invoke-Host 'ArdiaSystem.setAsDefaultBrowser' '{ "args": "x" }'
   $defaultObject = Invoke-Host 'ArdiaSystem.setAsDefaultBrowser' '{ "args": { "0": 1 } }'
-  Check 'non-list-args-refused-before-dispatch' ((Refused $defaultBad) -and (Refused $defaultObject) -and -not (Get-Process -Name SystemSettings -ErrorAction SilentlyContinue)) "string args $($defaultBad | ConvertTo-Json -Compress); object args $($defaultObject | ConvertTo-Json -Compress)"
+  Check 'non-list-args-refused-before-dispatch' ((Refused $defaultBad $DefaultRefusals) -and (Refused $defaultObject $DefaultRefusals) -and -not (Get-Process -Name SystemSettings -ErrorAction SilentlyContinue)) "string args $($defaultBad | ConvertTo-Json -Compress); object args $($defaultObject | ConvertTo-Json -Compress)"
 
   $isDefault = Invoke-Host 'ArdiaSystem.isDefaultBrowser' '{ "args": [] }'
   $badDefault = Invoke-Host 'ArdiaSystem.isDefaultBrowser' '{ "args": [1] }'
@@ -119,7 +130,9 @@ try {
 } finally {
   Stop-Engine
   if (-not $edgeWasRunning) { Get-Process -Name msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
-  if ((Run-Value 'Ardia WebUI') -ne $null) { Remove-ItemProperty -LiteralPath $RunKey -Name 'Ardia WebUI' -ErrorAction SilentlyContinue }
+  if ($null -eq $webuiRunBefore) { Remove-ItemProperty -LiteralPath $RunKey -Name 'Ardia WebUI' -ErrorAction SilentlyContinue }
+  else { Set-ItemProperty -LiteralPath $RunKey -Name 'Ardia WebUI' -Value $webuiRunBefore }
+  Get-Process -Name $MailApps -ErrorAction SilentlyContinue | Where-Object { $mailWasRunning -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
   $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\platform-results.json"
   if ($RunRoot) { Remove-PilotRun $RunRoot }
 }

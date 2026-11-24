@@ -22,6 +22,9 @@ const UNLISTED_SCHEMES = [
   "mailto:a@ardia-fixture.invalid?body=%0d%0a" + "\t",
   "https:///ardia-fixture.invalid",
   "https://@ardia-fixture.invalid/",
+  "https://ardia-fixture.invalid/" + "\ud800",
+  "https://ardia-fixture.invalid/" + "\udfff" + "x",
+  "https://ardia-fixture.invalid/" + "\ufffd",
   "https://ardia-fixture.invalid@ardia-other.invalid/",
   "https://ardia-fixture.invalid/" + "\u061c",
   "https://ardia-fixture.invalid/" + String.fromCodePoint(0xe0001),
@@ -56,6 +59,11 @@ const shapes = [
   { id: "shape.argsObject", expression: '{ "0": "https://ardia-fixture.invalid/" }' },
 ];
 const out = process.argv[2];
-const corpus = JSON.stringify({ cases, shapes, control: "https://ardia-fixture.invalid/ardia-open-external" });
+const corpus = JSON.stringify({
+  cases,
+  shapes,
+  control: "https://ardia-fixture.invalid/ardia-open-external",
+  mailto: "mailto:ardia@ardia-fixture.invalid?body=https://ardia-fixture.invalid/x",
+});
 if (out) writeFileSync(out, corpus);
 else process.stdout.write(corpus);

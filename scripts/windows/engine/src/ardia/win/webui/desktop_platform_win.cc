@@ -556,7 +556,7 @@ bool PlainCodePoints(std::string_view text) {
   while (offset < length) {
     UChar32 point = 0;
     U8_NEXT(bytes, offset, length, point);
-    if (point < 0) {
+    if (point < 0 || point == 0xfffd) {
       return false;
     }
     switch (u_charType(point)) {
@@ -577,11 +577,12 @@ bool PlainCodePoints(std::string_view text) {
 }
 
 bool RawUserInfo(std::string_view text) {
-  const size_t marker = text.find("://");
-  if (marker == std::string_view::npos) {
+  const std::string lowered = base::ToLowerASCII(text.substr(0, 8));
+  const size_t start = lowered.starts_with("https://") ? 8 : lowered.starts_with("http://") ? 7 : 0;
+  if (!start) {
     return false;
   }
-  const std::string_view rest = text.substr(marker + 3);
+  const std::string_view rest = text.substr(start);
   const std::string_view authority = rest.substr(0, rest.find_first_of("/?#"));
   return authority.find('@') != std::string_view::npos;
 }
