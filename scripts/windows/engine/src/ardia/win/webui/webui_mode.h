@@ -21,6 +21,11 @@ std::wstring WebUIAppDataDirectory(const std::wstring& ardia_data_dir,
 
 std::wstring WebUIUserDataDirectory(const std::wstring& app_data_dir);
 
+bool ShouldRunWebUIStartupMigration(const base::CommandLine& command_line,
+                                    const std::wstring& ardia_data_dir_env);
+
+void RunWebUIStartupMigration(const base::CommandLine& command_line);
+
 }
 
 #endif

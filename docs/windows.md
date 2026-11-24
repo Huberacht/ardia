@@ -1650,11 +1650,12 @@ folder and refused all 3 launches), the concurrent-runs check (`ports.ps1`) and
 
 | File | What it does |
 | --- | --- |
-| `src/ardia/win/webui/webui_mode.{h,cc}` | the switch and the folder rules above |
-| `src/ardia/win/webui/webui_shell.{h,cc}` | the bridge bound to the live shell document as on Linux (`Trusted`: the shell's live primary main frame with the committed origin `chrome://ardia/`; `OwnsHandler`: the handler of that document's generation; a new document (a reload or a renderer swap) or a renderer exit retires the generation, which drops its pending replies (`DeliverReply`), its events and its pages; `OnJavascriptDisallowed` drops that handler's pending replies at once and retires the generation only if the handler no longer owns the live document; a page whose creation was asked by a retired document is never made and its profile never loaded; closing the window tears the shell down while its views are still alive (`TearDown`, from `OnWidgetDestroying` and before the widget is reset: the document is retired, pages, delegate, pass-through regions and the view pointers are cleared, and `ShellContents` deletes its children before its own state), so destroying the shell's WebContents can't call back into freed views; tab URLs pass one check (`AllowedPageUrl`) before any profile loads and again before a page navigates: no `javascript:`, no `chrome://ardia` in any spelling or behind `view-source:`, nothing that doesn't parse; a row in `boundaries.json`); one `views::Widget` (`ShellTreeHost`, a `DesktopWindowTreeHostWin` with Chrome's client-area insets; `ShellFrame`, a `views::FrameView` hit tester), the `chrome://ardia` WebUI config, data source and `ardiaRequest` handler, the transparent shell `WebView` above the page `WebView`s, input pass-through, page leases and navigation events, accelerators, `session.read`/`session.write`, `engine.call` for the 36 routes of `ac_linux_contract.h` through the Windows `ac_*` table |
-| `src/ardia/win/webui/webui_caption_script.h` | lines added to `host-bootstrap.js` that report the shell's maximize button rectangle (`ArdiaShell.setMaximizeButton`) |
-| `scripts/windows/assemble-webui.ps1` | engine + `apps/desktop/dist/linux` as `ardia-ui\` beside `chrome.exe`, the layout `scripts/linux/package.py` ships |
-| `scripts/windows/webui-pilot/` | the real-input run below (`run.ps1`, its helpers and test page), the stale-document check (`stale.ps1`), the hostile-input check at the bridge's sinks (`bridge.ps1`), the junction check (`junction.ps1`) and the close-cycle check (`close.ps1`), the policy and cleanup-race check (`profile-edges.ps1`) and the concurrent-runs check (`ports.ps1`); they track the processes they start and stop only those and their children, launch with `--remote-debugging-port=0` and read the port back from the run's own `DevToolsActivePort`, using it only while the process listening on it is one this run started, run each launch in its own marked folder under `C:\pilot\runs`, and delete only a folder whose `.pilot-run` marker names it |
+| `src/ardia/win/webui/webui_mode.{h,cc}` | the switch, the folder rules above, and the one-shot startup migration hook (`RunWebUIStartupMigration`, which launches `ardia-webui-migrate.exe --from-rnw` from the executable's own folder before documents/session load, with a 15 s timeout, skipped for scratch `ARDIA_DATA_DIR` unless `--ardia-migrate-from-rnw` is passed and always skipped with `--ardia-no-migrate`, non-fatal when absent) |
+| `src/ardia/win/webui/webui_policy.h` | pure testable helpers for Windows document names/limits, canonical final-path containment (`NormalizeWinFinalPath`, `IsStrictlyWithinWinDirectory`, `IsDirectChildOfWinDirectory`), startup migration policy/CLI quoting, and the `HTMAXBUTTON` hover/press state machine (`MaximizeButtonStateMachine`) |
+| `src/ardia/win/webui/webui_shell.{h,cc}` | the bridge bound to the live shell document as on Linux (`Trusted`: the shell's live primary main frame with the committed origin `chrome://ardia/`; `OwnsHandler`: the handler of that document's generation; a new document (a reload or a renderer swap) or a renderer exit retires the generation, which drops its pending replies (`DeliverReply`), its events and its pages; `OnJavascriptDisallowed` drops that handler's pending replies at once and retires the generation only if the handler no longer owns the live document; a page whose creation was asked by a retired document is never made and its profile never loaded; closing the window tears the shell down while its views are still alive (`TearDown`, from `OnWidgetDestroying` and before the widget is reset: the document is retired, pages, delegate, pass-through regions and the view pointers are cleared, and `ShellContents` deletes its children before its own state), so destroying the shell's WebContents can't call back into freed views; tab URLs pass one check (`AllowedPageUrl`) before any profile loads and again before a page navigates: no `javascript:`, no `chrome://ardia` in any spelling or behind `view-source:`, nothing that doesn't parse; rows in `boundaries.json`); one `views::Widget` (`ShellTreeHost`, a `DesktopWindowTreeHostWin` with Chrome's client-area insets; `ShellFrame`, a `views::FrameView` hit tester), the `chrome://ardia` WebUI config, handle-verified `ReadAsset` data source (strict final-path containment via `GetFinalPathNameByHandleW` against the opened `AssetDirectory()` handle) and `ardiaRequest` handler, desktop document store (`ArdiaShell.readDocument`/`writeDocument`/`saveDocument`/`removeDocument` and `bootstrap.documents` with strict name/device/reserved validation, `FILE_FLAG_OPEN_REPARSE_POINT`, final-path direct-child checks and atomic temp-file writes), `HTMAXBUTTON` hover/press tracking (`WM_NCMOUSEMOVE`, `WM_NCMOUSELEAVE` via `TME_NONCLIENT \| TME_LEAVE`, `WM_NCLBUTTONDOWN`/`UP`, deactivation/capture reset) emitting `ArdiaShell.maximizeButtonState`, the transparent shell `WebView` above the page `WebView`s, input pass-through, page leases and navigation events, accelerators, `session.read`/`session.write`, `engine.call` for all 37 generated routes of `ardia/desktop/generated/ac_desktop_routes.h` through the Windows `ac_*` table |
+| `src/ardia/win/webui/webui_caption_script.h` | lines added to `host-bootstrap.js` that report the shell's maximize button rectangle (`ArdiaShell.setMaximizeButton`) and mirror `ArdiaShell.maximizeButtonState` onto `data-ardia-nc-hover`/`data-ardia-nc-pressed` |
+| `scripts/windows/assemble-webui.ps1` | engine + `apps/desktop/dist/win` (default, or any UI build folder with `index.html`) as `ardia-ui\` beside `chrome.exe`, plus optional `-MigrateBin` to bundle `ardia-webui-migrate.exe` beside `chrome.exe` |
+| `scripts/windows/webui-pilot/` | the real-input run below (`run.ps1`, its helpers and test page), the stale-document check (`stale.ps1`), the hostile-input check at the bridge and document sinks (`bridge.ps1`), the junction and `ardia-ui\` asset-escape check (`junction.ps1`) and the close-cycle check (`close.ps1`), the policy and cleanup-race check (`profile-edges.ps1`) and the concurrent-runs check (`ports.ps1`); they track the processes they start and stop only those and their children, launch with `--remote-debugging-port=0` and read the port back from the run's own `DevToolsActivePort`, using it only while the process listening on it is one this run started, run each launch in its own marked folder under `C:\pilot\runs`, and delete only a folder whose `.pilot-run` marker names it |
 
 The frontend is `apps/desktop`'s Linux-mode production build (`pnpm -C apps/desktop build`), unchanged, with Linux wording; its `--mode win` build (#3972) has the Windows wording and is the next one to run here. Host calls the pilot doesn't answer
 resolve to `null` (and `engine.call`s outside the routes fail as unknown) and are logged once each as
@@ -1721,10 +1722,10 @@ key's `key-inputs.json`, so a change to one moves the Windows key too:
 | Linux file | Used as | What for |
 | --- | --- | --- |
 | `bootstrap.js` + `generate_bootstrap.py` | as is | the `chrome.send` bridge, `window.__ardiaHost` |
-| `ac_linux_contract.h` | as is | `kRoutes`: `engine.call` names to `ac_*` services |
 | `ac_linux_session.{h,cc}` | as is | `MergeLinuxSession` for `session.read`/`session.write` |
-| `ac_desktop_policy.h` | as is | asset path validation |
-| `ac_desktop_window_state.h` | as is | `ArdiaShell.windowState`/`windowButtonLayout` names |
+| `ac_desktop_routes.h` (from `engine/ardiacore-desktop`) | as is | generated `kRoutes` (37 routes): `engine.call` names to `ac_*` services |
+| `ac_desktop_policy.h` (from `engine/ardiacore-desktop`) | as is | asset path validation and document limits |
+| `ac_desktop_window_state.h` (from `engine/ardiacore-desktop`) | as is | `ArdiaShell.windowState`/`windowButtonLayout` names |
 
 Rewritten for the pilot (each marks code the desktop host should own once, shared):
 
@@ -1765,9 +1766,11 @@ until those patches are widened.
 
 The cutover is an upgrade, so the WebUI host gets the React Native Windows shell's data by a one-time copy that
 never changes the original. `packages/core-rs/crates/ardia-shell-migration` is the migration;
-its `ardia-webui-migrate --from-rnw` binary runs it on demand. Nothing runs it on its own yet: the default shell is
-still RNW, and the cutover PR decides where the WebUI host calls it (before Chromium starts, beside
-`RelaunchIntoWebUIProfile`).
+its `ardia-webui-migrate --from-rnw` binary runs it on demand, and the WebUI host (`--ardia-shell=webui`) invokes it
+automatically at startup in `OpenWebUIShell` (`RunWebUIStartupMigration` in `webui_mode.cc`) before loading
+`session.json` or `bootstrap.documents` whenever `ardia-webui-migrate.exe` is bundled beside `chrome.exe` and the
+default user app-data folder is in use (or `--ardia-migrate-from-rnw` is passed; `--ardia-no-migrate` disables it;
+scratch `ARDIA_DATA_DIR` launches skip it unless explicitly requested). The default Windows shell is still RNW.
 
 | RNW keeps | at | WebUI gets | how |
 | --- | --- | --- | --- |
@@ -1823,9 +1826,9 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   stays pending, and so it does when the event is dropped or throws (`capture` now says whether it queued the
   event, and a relay that drops it says so), and until the queue holding the event is saved to disk while the consent the launch started with is still the current one. It is reported
   only by the telemetry leader: on the desktop host, once the window has taken over from the startup relay (the
-  leadership's after-lead hook), with the consent the launch started with, and at most once per run of the app. If the host can't store the mark, the next launch sends the run again: a duplicate, never a lost report. The
-  desktop document and telemetry routes are live on Linux and reach Windows with the cutover's host wiring; the
-  pilot's `webui_shell.cc` serves no documents yet, so on the pilot nothing is read or sent. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms` and the counts: known enums
+  leadership's after-lead hook), with the consent the launch started with, and at most once per run of the app. If the host can't store the mark, the next launch sends the run again: a duplicate, never a lost report. The desktop document and telemetry routes are live on both Linux and Windows WebUI (`webui_shell.cc` serves
+`ArdiaShell.readDocument`/`writeDocument`/`saveDocument`/`removeDocument` and populates `bootstrap.documents`), so
+`rnw-migration-attempt.json` and `rnw-migration-reported.json` flow end-to-end into `shell_migration` telemetry. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms` and the counts: known enums
   and capped counts only. Watch
   `shell_migration` by outcome: `failed` and `refused` should stay near zero, and `credentials_incomplete` and
   `sync_keys_unreadable` against `credentials` and `sync_keys`.
@@ -1867,14 +1870,19 @@ None: the pilot runs in a plain `views::Widget`. It adds one Windows patch of it
 ### Blockers
 
 None fundamental. Views on Windows hosts the WebUI shell, a page below it, native resize and snap, and the snap
-layouts flyout over an HTML button. Open points:
+layouts flyout over an HTML button. Closed in #4087:
 
-- **`HTMAXBUTTON` has no hover or press look.** Windows sends non-client messages for that rectangle, so the HTML
-  button gets no `mouseenter`/`mousedown`; the host should send `ArdiaShell` hover and press events so the shell can
-  draw them (Chrome draws its caption buttons in Views for the same reason).
-- **Asset containment is lexical**, as on Linux: a junction planted inside the installed `ardia-ui\` would be
-  followed. Only someone who can write to the install folder can do that; the desktop host should still read assets
-  through the opened file's final path.
+- **`HTMAXBUTTON` hover and press state:** `ShellWindow::PreTranslate` tracks `WM_NCMOUSEMOVE`, `WM_NCMOUSELEAVE`
+  (armed via `TrackMouseEvent` with `TME_NONCLIENT | TME_LEAVE`), `WM_NCLBUTTONDOWN`, `WM_NCLBUTTONUP`, and clears
+  state on client input, capture loss, or deactivation via `MaximizeButtonStateMachine`, emitting
+  `ArdiaShell.maximizeButtonState` (`{ windowId, hovered, pressed }`) to `apps/desktop/src/maximizeButtonState.ts`
+  and `WindowControls.tsx` for immediate hover/active styling alongside Snap Layouts.
+- **Final-path asset containment:** `ReadAsset` opens `AssetDirectory()` and the asset file handle directly, verifies
+  a regular disk file, resolves both handles with `GetFinalPathNameByHandleW`, and requires strict containment
+  (`IsStrictlyWithinWinDirectory`), refusing junctions/symlinks that escape `ardia-ui\` (checked in `junction.ps1`).
+
+Remaining open points:
+
 - **Private pages and private `engine.call`s are refused** in the pilot (a private page would trip
   `ScopedProfileKeepAlive`'s check on an off-the-record profile).
 - **Pages are bare `WebContents`.** No tab helpers, `TabStripModel`, dialogs, permission prompts, downloads, popups or

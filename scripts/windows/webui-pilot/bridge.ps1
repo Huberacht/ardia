@@ -116,6 +116,84 @@ Wait-Until { ((PageTargets) -contains 'file:///C:/pilot/form.html?second') -and 
 $targets = PageTargets
 Check 'valid-create-after-hostile-input' ($second.ok -and ($targets -contains 'file:///C:/pilot/form.html?second') -and ((PagesCreated) -eq $baseCreated + 1)) "pages: $($targets -join ' | ')"
 
+function Invoke-HostExpr([string]$method, [string]$argsExpression) {
+  Cdp-Eval "(() => { try { return __ardiaHost.invoke($(Js $method), { args: $argsExpression }).then(r => JSON.stringify({ ok: true, r }), e => JSON.stringify({ ok: false, e: String(e && e.message || e) })); } catch (e) { return JSON.stringify({ ok: false, e: 'threw ' + e.message }); } })()" | ConvertFrom-Json
+}
+function Folder-Snapshot([string]$root) {
+  @(Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+    if ($_.PSIsContainer) { "D:$($_.Name)" } else { "F:$($_.Name):$($_.Length):$($_.LastWriteTimeUtc.Ticks)" }
+  }) -join '|'
+}
+
+$outsideCanary = Join-Path $RunRoot 'outside-canary.json'
+Set-Content -LiteralPath $outsideCanary '{"canary":"untouched"}' -NoNewline
+$canaryBefore = Get-Content -LiteralPath $outsideCanary -Raw
+$runBefore = Folder-Snapshot $RunRoot
+$dataBefore = Folder-Snapshot $Data
+
+$corpus = Get-Content -LiteralPath 'C:\pilot\hostile-corpus.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+$docHostileNames = @(
+  '', '.', '..', '../outside-canary.json', '..\\outside-canary.json', 'a/b.json', 'a\\b.json',
+  '.hidden.json', 'trailing.', ' leading.json', 'trailing.json ', 'foo:bar.json', 'foo.json:$DATA',
+  'CON', 'CON.json', 'PRN.txt', 'AUX', 'NUL.json', 'COM1', 'COM9.json', 'LPT1', 'LPT9.txt',
+  'session.json', 'SESSION.JSON', 'live.json', 'LIVE.JSON', 'live.canonical.json', 'Live.Canonical.Json',
+  'rnw-migration.lock', 'RNW-MIGRATION.LOCK', ('a' * 129)
+)
+$docUnrefused = @()
+foreach ($case in $corpus.cases) {
+  $readAns = Invoke-HostExpr 'ArdiaShell.readDocument' "[$($case.expression)]"
+  if ($readAns.ok -ne $false) { $docUnrefused += "read:$($case.id)" }
+  $writeAns = Invoke-HostExpr 'ArdiaShell.writeDocument' "[$($case.expression), `"x`"]"
+  if ($writeAns.ok -ne $false) { $docUnrefused += "write:$($case.id)" }
+  $removeAns = Invoke-HostExpr 'ArdiaShell.removeDocument' "[$($case.expression)]"
+  if ($removeAns.ok -ne $false) { $docUnrefused += "remove:$($case.id)" }
+}
+foreach ($name in $docHostileNames) {
+  $expr = Js $name
+  $readAns = Invoke-HostExpr 'ArdiaShell.readDocument' "[$expr]"
+  if ($readAns.ok -ne $false) { $docUnrefused += "read:$name" }
+  $writeAns = Invoke-HostExpr 'ArdiaShell.writeDocument' "[$expr, `"x`"]"
+  if ($writeAns.ok -ne $false) { $docUnrefused += "write:$name" }
+  $removeAns = Invoke-HostExpr 'ArdiaShell.removeDocument' "[$expr]"
+  if ($removeAns.ok -ne $false) { $docUnrefused += "remove:$name" }
+}
+foreach ($shape in @('[]', '["a.json", "b", "extra"]', '"a.json"', '{ "0": "a.json" }')) {
+  $readAns = Invoke-HostExpr 'ArdiaShell.readDocument' $shape
+  if ($readAns.ok -ne $false) { $docUnrefused += "read-shape:$shape" }
+  $removeAns = Invoke-HostExpr 'ArdiaShell.removeDocument' $shape
+  if ($removeAns.ok -ne $false) { $docUnrefused += "remove-shape:$shape" }
+}
+foreach ($shape in @('[]', '["a.json"]', '["a.json", 123]', '["a.json", "x", "extra"]')) {
+  $writeAns = Invoke-HostExpr 'ArdiaShell.writeDocument' $shape
+  if ($writeAns.ok -ne $false) { $docUnrefused += "write-shape:$shape" }
+}
+$oversized = Invoke-HostExpr 'ArdiaShell.writeDocument' '["oversized-doc.json", "x".repeat(8 * 1024 * 1024 + 1)]'
+if ($oversized.ok -ne $false) { $docUnrefused += 'write:oversized' }
+
+$canaryAfterHostile = Get-Content -LiteralPath $outsideCanary -Raw
+$runAfterHostile = Folder-Snapshot $RunRoot
+$dataAfterHostile = Folder-Snapshot $Data
+Check 'documents-refuse-hostile-corpus' (($docUnrefused.Count -eq 0) -and ($canaryAfterHostile -eq $canaryBefore) -and ($runAfterHostile -eq $runBefore) -and ($dataAfterHostile -eq $dataBefore)) "unrefused: $($docUnrefused -join ', '); outside canary intact: $($canaryAfterHostile -eq $canaryBefore); data unchanged: $($dataAfterHostile -eq $dataBefore)"
+
+$linkPath = Join-Path $Data 'escape-link.json'
+cmd /c mklink "$linkPath" "$outsideCanary" | Out-Null
+$linkItem = Get-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue
+$linkRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["escape-link.json"]'
+$linkWrite = Invoke-HostExpr 'ArdiaShell.writeDocument' '["escape-link.json", "{\"pwned\":true}"]'
+$linkRemove = Invoke-HostExpr 'ArdiaShell.removeDocument' '["escape-link.json"]'
+$canaryAfterLink = Get-Content -LiteralPath $outsideCanary -Raw
+$linkStillExists = Test-Path -LiteralPath $linkPath
+if ($linkStillExists) { Remove-Item -LiteralPath $linkPath -Force }
+Check 'documents-refuse-reparse-point' ([bool]($linkItem -and $linkItem.LinkType) -and ($linkRead.ok -eq $false) -and ($linkWrite.ok -eq $false) -and ($linkRemove.ok -eq $false) -and ($canaryAfterLink -eq $canaryBefore) -and $linkStillExists) "link read/write/remove ok=$($linkRead.ok)/$($linkWrite.ok)/$($linkRemove.ok); outside canary intact: $($canaryAfterLink -eq $canaryBefore)"
+
+$docAbsent = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
+$docWritten = Invoke-HostExpr 'ArdiaShell.writeDocument' '["pilot-roundtrip.json", "{\"ok\":true}"]'
+$docRead = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
+$docDisk = Get-Content -LiteralPath (Join-Path $Data 'pilot-roundtrip.json') -Raw -ErrorAction SilentlyContinue
+$docRemoved = Invoke-HostExpr 'ArdiaShell.removeDocument' '["pilot-roundtrip.json"]'
+$docGone = Invoke-HostExpr 'ArdiaShell.readDocument' '["pilot-roundtrip.json"]'
+Check 'documents-valid-roundtrip' (($docAbsent.ok -eq $true) -and ($null -eq $docAbsent.r) -and ($docWritten.ok -eq $true) -and ($docRead.ok -eq $true) -and ($docRead.r -eq '{"ok":true}') -and ($docDisk -eq '{"ok":true}') -and ($docRemoved.ok -eq $true) -and ($docGone.ok -eq $true) -and ($null -eq $docGone.r) -and (-not (Test-Path -LiteralPath (Join-Path $Data 'pilot-roundtrip.json')))) "absent=$($docAbsent.r), read=$($docRead.r), gone=$($docGone.r)"
+
 Stop-Engine
 $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\bridge-results.json"
 Remove-PilotRun $RunRoot

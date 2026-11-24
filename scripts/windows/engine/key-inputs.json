@@ -19,7 +19,6 @@
     "engine/ardiacore/src/ardia/core/ac_host_visibility.h",
     "engine/ardiacore/src/ardia/core/ac_launch_switches.cc",
     "engine/ardiacore/src/ardia/core/ac_launch_switches.h",
-    "engine/ardiacore-linux/src/ardia/linux/ac_linux_contract.h",
     "engine/ardiacore-linux/src/ardia/linux/ac_linux_session.cc",
     "engine/ardiacore-linux/src/ardia/linux/ac_linux_session.h",
     "engine/ardiacore-linux/src/ardia/linux/bootstrap.js",

@@ -1,4 +1,3 @@
-ac_linux_contract.h
 ac_linux_session.cc
 ac_linux_session.h
 bootstrap.js

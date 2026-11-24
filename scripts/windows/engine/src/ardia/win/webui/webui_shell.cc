@@ -15,11 +15,11 @@
 #include <utility>
 #include <vector>
 
-#include "ardia/linux/ac_linux_contract.h"
 #include "ardia/desktop/ac_desktop_platform.h"
 #include "ardia/desktop/ac_desktop_policy.h"
-#include "ardia/linux/ac_linux_session.h"
 #include "ardia/desktop/ac_desktop_window_state.h"
+#include "ardia/desktop/generated/ac_desktop_routes.h"
+#include "ardia/linux/ac_linux_session.h"
 #include "ardia/core/ac_launch_switches.h"
 #include "ardia/linux/host_bootstrap.h"
 #include "ardia/win/ac_calls.h"
@@ -28,6 +28,8 @@
 #include "ardia/win/profiles.h"
 #include "ardia/win/webui/desktop_platform_win.h"
 #include "ardia/win/webui/webui_caption_script.h"
+#include "ardia/win/webui/webui_mode.h"
+#include "ardia/win/webui/webui_policy.h"
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -43,6 +45,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -221,11 +224,347 @@ std::optional<base::DictValue> WriteSession(const base::FilePath& directory,
   return std::move(*merged);
 }
 
+class ScopedHandle {
+ public:
+  ScopedHandle() = default;
+  explicit ScopedHandle(HANDLE handle) : handle_(handle) {}
+  ScopedHandle(const ScopedHandle&) = delete;
+  ScopedHandle& operator=(const ScopedHandle&) = delete;
+  ScopedHandle(ScopedHandle&& other) noexcept
+      : handle_(std::exchange(other.handle_, INVALID_HANDLE_VALUE)) {}
+  ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+    if (this != &other) {
+      Reset();
+      handle_ = std::exchange(other.handle_, INVALID_HANDLE_VALUE);
+    }
+    return *this;
+  }
+  ~ScopedHandle() { Reset(); }
+
+  bool valid() const {
+    return handle_ != INVALID_HANDLE_VALUE && handle_ != nullptr;
+  }
+  HANDLE get() const { return handle_; }
+
+  void Reset() {
+    if (valid()) {
+      ::CloseHandle(handle_);
+    }
+    handle_ = INVALID_HANDLE_VALUE;
+  }
+
+ private:
+  HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+std::optional<std::wstring> HandleFinalPath(HANDLE handle) {
+  constexpr DWORD kFlags = VOLUME_NAME_DOS | FILE_NAME_NORMALIZED;
+  const DWORD size = ::GetFinalPathNameByHandleW(handle, nullptr, 0, kFlags);
+  if (size == 0) {
+    return std::nullopt;
+  }
+  std::wstring value(size, L'\0');
+  const DWORD written =
+      ::GetFinalPathNameByHandleW(handle, value.data(), size, kFlags);
+  if (written == 0 || written >= size) {
+    return std::nullopt;
+  }
+  value.resize(written);
+  return value;
+}
+
+std::optional<std::wstring> OpenDirectoryFinalPath(
+    const base::FilePath& directory,
+    bool* missing = nullptr) {
+  if (missing) {
+    *missing = false;
+  }
+  if (directory.empty()) {
+    return std::nullopt;
+  }
+  ScopedHandle handle(::CreateFileW(
+      directory.value().c_str(), FILE_LIST_DIRECTORY | SYNCHRONIZE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr));
+  if (!handle.valid()) {
+    const DWORD error = ::GetLastError();
+    if (missing &&
+        (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)) {
+      *missing = true;
+    }
+    return std::nullopt;
+  }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!::GetFileInformationByHandle(handle.get(), &info) ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    return std::nullopt;
+  }
+  return HandleFinalPath(handle.get());
+}
+
+std::optional<std::string> ReadHandleBytes(HANDLE handle, size_t limit) {
+  if (::GetFileType(handle) != FILE_TYPE_DISK) {
+    return std::nullopt;
+  }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!::GetFileInformationByHandle(handle, &info) ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+    return std::nullopt;
+  }
+  const uint64_t size =
+      (static_cast<uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+  if (size > limit) {
+    return std::nullopt;
+  }
+  std::string contents;
+  contents.reserve(static_cast<size_t>(size));
+  char buffer[65536];
+  for (;;) {
+    DWORD read = 0;
+    if (!::ReadFile(handle, buffer, sizeof(buffer), &read, nullptr)) {
+      return std::nullopt;
+    }
+    if (read == 0) {
+      break;
+    }
+    if (contents.size() + read > limit) {
+      return std::nullopt;
+    }
+    contents.append(buffer, read);
+  }
+  return contents;
+}
+
+bool WriteAllToHandle(HANDLE handle, std::string_view contents) {
+  size_t offset = 0;
+  while (offset < contents.size()) {
+    const DWORD chunk = static_cast<DWORD>(
+        std::min<size_t>(contents.size() - offset, 1024 * 1024));
+    DWORD written = 0;
+    if (!::WriteFile(handle, contents.data() + offset, chunk, &written,
+                     nullptr) ||
+        written == 0) {
+      return false;
+    }
+    offset += written;
+  }
+  return ::FlushFileBuffers(handle) != FALSE;
+}
+
+struct StoredDocument {
+  ardia::desktop_policy::StoredRead outcome =
+      ardia::desktop_policy::StoredRead::kFailed;
+  std::string contents;
+};
+
+StoredDocument ReadStoredDocument(const base::FilePath& directory,
+                                  const std::string& name) {
+  if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+    return {};
+  }
+  bool dir_missing = false;
+  const std::optional<std::wstring> root_final =
+      OpenDirectoryFinalPath(directory, &dir_missing);
+  if (!root_final) {
+    return {dir_missing ? ardia::desktop_policy::StoredRead::kMissing
+                        : ardia::desktop_policy::StoredRead::kFailed,
+            std::string()};
+  }
+  const base::FilePath target = directory.AppendASCII(name);
+  ScopedHandle file(::CreateFileW(
+      target.value().c_str(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN,
+      nullptr));
+  if (!file.valid()) {
+    const DWORD error = ::GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) {
+      return {ardia::desktop_policy::StoredRead::kMissing, std::string()};
+    }
+    return {};
+  }
+  if (::GetFileType(file.get()) != FILE_TYPE_DISK) {
+    return {};
+  }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!::GetFileInformationByHandle(file.get(), &info) ||
+      (info.dwFileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+    return {};
+  }
+  const std::optional<std::wstring> file_final = HandleFinalPath(file.get());
+  if (!file_final || !IsDirectChildOfWinDirectory(*root_final, *file_final)) {
+    return {};
+  }
+  std::optional<std::string> contents =
+      ReadHandleBytes(file.get(), WindowsDocumentLimit(name));
+  if (!contents) {
+    return {};
+  }
+  return {ardia::desktop_policy::StoredRead::kFound, std::move(*contents)};
+}
+
+bool WriteStoredDocument(const base::FilePath& directory,
+                         const std::string& name,
+                         const std::string& contents) {
+  if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name) ||
+      contents.size() > WindowsDocumentLimit(name) ||
+      !base::CreateDirectory(directory)) {
+    return false;
+  }
+  const std::optional<std::wstring> root_final =
+      OpenDirectoryFinalPath(directory);
+  if (!root_final) {
+    return false;
+  }
+  const base::FilePath target = directory.AppendASCII(name);
+  {
+    ScopedHandle existing(::CreateFileW(
+        target.value().c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (existing.valid()) {
+      BY_HANDLE_FILE_INFORMATION info{};
+      const std::optional<std::wstring> existing_final =
+          HandleFinalPath(existing.get());
+      if (::GetFileType(existing.get()) != FILE_TYPE_DISK ||
+          !::GetFileInformationByHandle(existing.get(), &info) ||
+          (info.dwFileAttributes &
+           (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0 ||
+          !existing_final ||
+          !IsDirectChildOfWinDirectory(*root_final, *existing_final)) {
+        return false;
+      }
+    } else {
+      const DWORD error = ::GetLastError();
+      if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) {
+        return false;
+      }
+    }
+  }
+  const std::string suffix =
+      base::ToLowerASCII(base::HexEncode(base::RandBytesAsVector(8)));
+  const base::FilePath temp = directory.AppendASCII(
+      ".ardia-doc-" + base::NumberToString(::GetCurrentProcessId()) + "-" +
+      suffix + ".tmp");
+  {
+    ScopedHandle staged(::CreateFileW(
+        temp.value().c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    if (!staged.valid()) {
+      return false;
+    }
+    const std::optional<std::wstring> staged_final =
+        HandleFinalPath(staged.get());
+    if (!staged_final ||
+        !IsDirectChildOfWinDirectory(*root_final, *staged_final) ||
+        !WriteAllToHandle(staged.get(), contents)) {
+      FILE_DISPOSITION_INFO dispose{};
+      dispose.DeleteFile = TRUE;
+      ::SetFileInformationByHandle(staged.get(), FileDispositionInfo, &dispose,
+                                   sizeof(dispose));
+      return false;
+    }
+  }
+  const DWORD target_attrs = ::GetFileAttributesW(target.value().c_str());
+  if (target_attrs != INVALID_FILE_ATTRIBUTES &&
+      (target_attrs &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+    ::DeleteFileW(temp.value().c_str());
+    return false;
+  }
+  if (!::MoveFileExW(temp.value().c_str(), target.value().c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    ::DeleteFileW(temp.value().c_str());
+    return false;
+  }
+  return true;
+}
+
+bool RemoveStoredDocument(const base::FilePath& directory,
+                          const std::string& name) {
+  if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+    return false;
+  }
+  bool dir_missing = false;
+  const std::optional<std::wstring> root_final =
+      OpenDirectoryFinalPath(directory, &dir_missing);
+  if (!root_final) {
+    return dir_missing;
+  }
+  const base::FilePath target = directory.AppendASCII(name);
+  ScopedHandle file(::CreateFileW(
+      target.value().c_str(), DELETE | FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  if (!file.valid()) {
+    const DWORD error = ::GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+  }
+  if (::GetFileType(file.get()) != FILE_TYPE_DISK) {
+    return false;
+  }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!::GetFileInformationByHandle(file.get(), &info) ||
+      (info.dwFileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+    return false;
+  }
+  const std::optional<std::wstring> file_final = HandleFinalPath(file.get());
+  if (!file_final || !IsDirectChildOfWinDirectory(*root_final, *file_final)) {
+    return false;
+  }
+  FILE_DISPOSITION_INFO dispose{};
+  dispose.DeleteFile = TRUE;
+  return ::SetFileInformationByHandle(file.get(), FileDispositionInfo, &dispose,
+                                      sizeof(dispose)) != FALSE;
+}
+
+base::DictValue ReadBootstrapDocuments(const base::FilePath& directory) {
+  base::DictValue documents;
+  const std::optional<std::wstring> root_final =
+      OpenDirectoryFinalPath(directory);
+  if (!root_final) {
+    return documents;
+  }
+  const std::wstring pattern = directory.value() + L"\\*";
+  WIN32_FIND_DATAW data{};
+  HANDLE find = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &data,
+                                   FindExSearchNameMatch, nullptr, 0);
+  if (find == INVALID_HANDLE_VALUE) {
+    return documents;
+  }
+  size_t total_bytes = 0;
+  do {
+    if ((data.dwFileAttributes &
+         (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
+      continue;
+    }
+    const std::wstring_view file_name(data.cFileName);
+    std::string name;
+    if (!base::WideToUTF8(file_name.data(), file_name.size(), &name) ||
+        !BootstrapDocumentEligible(name)) {
+      continue;
+    }
+    StoredDocument stored = ReadStoredDocument(directory, name);
+    if (stored.outcome != ardia::desktop_policy::StoredRead::kFound) {
+      continue;
+    }
+    if (documents.size() < kBootstrapDocumentMaxCount &&
+        total_bytes + stored.contents.size() <= kBootstrapDocumentMaxBytes) {
+      total_bytes += stored.contents.size();
+      documents.Set(name, std::move(stored.contents));
+    }
+  } while (::FindNextFileW(find, &data));
+  ::FindClose(find);
+  return documents;
+}
+
 std::optional<std::string> ReadAsset(base::FilePath directory,
                                      std::string path,
                                      std::string bootstrap_json,
                                      base::FilePath documents) {
-  if (!ardia::desktop_policy::ValidAssetPath(path) || MimeType(path).empty()) {
+  if (!ValidWindowsAssetPath(path) || MimeType(path).empty()) {
     return std::nullopt;
   }
   if (path == "host-bootstrap.js") {
@@ -237,6 +576,7 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     if (std::optional<base::DictValue> session = ReadSession(documents)) {
       bootstrap->GetDict().Set("session", std::move(*session));
     }
+    bootstrap->GetDict().Set("documents", ReadBootstrapDocuments(documents));
     const std::optional<std::string> json = base::WriteJson(*bootstrap);
     if (!json) {
       return std::nullopt;
@@ -244,22 +584,34 @@ std::optional<std::string> ReadAsset(base::FilePath directory,
     return "globalThis.__ardiaBootstrap=" + *json + ";\n" +
            ardia::kArdiaHostBootstrap + "\n" + kWindowsCaptionScript;
   }
-  const base::FilePath root = base::MakeAbsoluteFilePath(directory);
-  const base::FilePath file =
-      base::MakeAbsoluteFilePath(directory.AppendASCII(path));
-  if (root.empty() || file.empty() || !root.IsParent(file)) {
+  const std::optional<std::wstring> root_final =
+      OpenDirectoryFinalPath(directory);
+  if (!root_final) {
     return std::nullopt;
   }
-  std::string contents;
-  if (!base::ReadFileToStringWithMaxSize(file, &contents, kAssetLimit)) {
+  const base::FilePath candidate = directory.AppendASCII(path);
+  ScopedHandle file(::CreateFileW(
+      candidate.value().c_str(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
+  if (!file.valid()) {
+    return std::nullopt;
+  }
+  const std::optional<std::wstring> file_final = HandleFinalPath(file.get());
+  if (!file_final || !IsStrictlyWithinWinDirectory(*root_final, *file_final)) {
+    return std::nullopt;
+  }
+  std::optional<std::string> contents =
+      ReadHandleBytes(file.get(), kAssetLimit);
+  if (!contents) {
     return std::nullopt;
   }
   if (path == "index.html") {
-    const size_t head = contents.find("<head>");
+    const size_t head = contents->find("<head>");
     if (head == std::string::npos) {
       return std::nullopt;
     }
-    contents.insert(head + 6, "<script src=\"/host-bootstrap.js\"></script>");
+    contents->insert(head + 6, "<script src=\"/host-bootstrap.js\"></script>");
   }
   return contents;
 }
@@ -803,6 +1155,12 @@ class ShellWindow : public views::WidgetDelegate,
     ReportWindowState();
   }
 
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
+    if (!active) {
+      ResetMaximizeButtonState();
+    }
+  }
+
   void OnWidgetDestroying(views::Widget* widget) override {
     if (widget_observation_) {
       widget->RemoveObserver(this);
@@ -956,9 +1314,40 @@ class ShellWindow : public views::WidgetDelegate,
     if (frame_) {
       frame_->SetMaximizeButton(std::nullopt);
     }
+    nc_leave_tracked_hwnd_ = nullptr;
+    maximize_button_state_.Reset();
     Note("shell document retired; generation is now " +
          base::NumberToString(renderer_generation_) + ", " +
          base::NumberToString(pages) + " pages of the old document dropped");
+  }
+
+  void EmitMaximizeButtonState() {
+    const MaximizeButtonVisualState state = maximize_button_state_.state();
+    base::DictValue payload;
+    payload.Set("windowId", kWindowId);
+    payload.Set("hovered", state.hovered);
+    payload.Set("pressed", state.pressed);
+    Emit("ArdiaShell", "maximizeButtonState", base::Value(std::move(payload)));
+  }
+
+  void ResetMaximizeButtonState() {
+    nc_leave_tracked_hwnd_ = nullptr;
+    if (maximize_button_state_.Reset()) {
+      EmitMaximizeButtonState();
+    }
+  }
+
+  void ArmNonClientLeave(HWND target) {
+    if (!target || nc_leave_tracked_hwnd_ == target) {
+      return;
+    }
+    TRACKMOUSEEVENT track{};
+    track.cbSize = sizeof(track);
+    track.dwFlags = TME_NONCLIENT | TME_LEAVE;
+    track.hwndTrack = target;
+    if (::TrackMouseEvent(&track)) {
+      nc_leave_tracked_hwnd_ = target;
+    }
   }
 
   base::DictValue WindowState() const {
@@ -1063,7 +1452,8 @@ class ShellWindow : public views::WidgetDelegate,
   std::map<ui::Accelerator, base::DictValue> shortcuts_;
   views::UnhandledKeyboardEventHandler unhandled_keys_;
   std::optional<bool> reported_maximized_;
-  bool maximize_pressed_ = false;
+  MaximizeButtonStateMachine maximize_button_state_;
+  HWND nc_leave_tracked_hwnd_ = nullptr;
   bool painted_ = false;
   ShellDecorations decorations_;
   base::CallbackListSubscription system_state_subscription_;
@@ -1272,7 +1662,7 @@ std::string ShellWindow::BootstrapJson() const {
       capabilities.Append(call);
     }
   }
-  for (const auto& route : ardiacore::linux_contract::kRoutes) {
+  for (const auto& route : ardia::desktop_routes::kRoutes) {
     capabilities.Append(route.name);
   }
   base::DictValue native_modules;
@@ -1356,6 +1746,123 @@ void ShellWindow::Invoke(const std::string& method,
             std::move(done)));
     return;
   }
+  if (method == "ArdiaShell.readDocument") {
+    if (!values || values->size() != 1 || !(*values)[0].is_string()) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOCUMENT_REQUEST")
+                                 .Set("message", "A document name is required")));
+    }
+    const std::string name = (*values)[0].GetString();
+    if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOCUMENT_NAME")
+                                 .Set("message",
+                                      "Invalid or reserved document name")));
+    }
+    FileRunner()->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&ReadStoredDocument, SessionDirectory(), name),
+        base::BindOnce(
+            [](Done done, StoredDocument stored) {
+              if (stored.outcome ==
+                  ardia::desktop_policy::StoredRead::kFailed) {
+                return std::move(done).Run(
+                    false,
+                    base::Value(base::DictValue()
+                                    .Set("code", "ERR_DOCUMENT_READ")
+                                    .Set("message",
+                                         "The document could not be read")));
+              }
+              std::move(done).Run(
+                  true,
+                  stored.outcome == ardia::desktop_policy::StoredRead::kFound
+                      ? base::Value(std::move(stored.contents))
+                      : base::Value());
+            },
+            std::move(done)));
+    return;
+  }
+  if (method == "ArdiaShell.writeDocument" ||
+      method == "ArdiaShell.saveDocument") {
+    if (!values || values->size() != 2 || !(*values)[0].is_string() ||
+        !(*values)[1].is_string()) {
+      return std::move(done).Run(
+          false,
+          base::Value(base::DictValue()
+                          .Set("code", "ERR_DOCUMENT_REQUEST")
+                          .Set("message",
+                               "A document name and text are required")));
+    }
+    const std::string name = (*values)[0].GetString();
+    if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOCUMENT_NAME")
+                                 .Set("message",
+                                      "Invalid or reserved document name")));
+    }
+    std::string contents = (*values)[1].GetString();
+    if (contents.size() > WindowsDocumentLimit(name)) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOCUMENT_LIMIT")
+                                 .Set("message",
+                                      "Document storage limit exceeded")));
+    }
+    FileRunner()->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&WriteStoredDocument, SessionDirectory(), name,
+                       std::move(contents)),
+        base::BindOnce(
+            [](Done done, bool ok) {
+              if (!ok) {
+                return std::move(done).Run(
+                    false,
+                    base::Value(base::DictValue()
+                                    .Set("code", "ERR_DOCUMENT_WRITE")
+                                    .Set("message",
+                                         "Could not persist the document")));
+              }
+              std::move(done).Run(true, base::Value());
+            },
+            std::move(done)));
+    return;
+  }
+  if (method == "ArdiaShell.removeDocument") {
+    if (!values || values->size() != 1 || !(*values)[0].is_string()) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOCUMENT_REQUEST")
+                                 .Set("message", "A document name is required")));
+    }
+    const std::string name = (*values)[0].GetString();
+    if (!ValidWindowsDocumentName(name) || ReservedWindowsDocumentName(name)) {
+      return std::move(done).Run(
+          false, base::Value(base::DictValue()
+                                 .Set("code", "ERR_DOCUMENT_NAME")
+                                 .Set("message",
+                                      "Invalid or reserved document name")));
+    }
+    FileRunner()->PostTaskAndReplyWithResult(
+        FROM_HERE,
+        base::BindOnce(&RemoveStoredDocument, SessionDirectory(), name),
+        base::BindOnce(
+            [](Done done, bool ok) {
+              if (!ok) {
+                return std::move(done).Run(
+                    false,
+                    base::Value(base::DictValue()
+                                    .Set("code", "ERR_DOCUMENT_REMOVE")
+                                    .Set("message",
+                                         "Could not remove the document")));
+              }
+              std::move(done).Run(true, base::Value());
+            },
+            std::move(done)));
+    return;
+  }
   if (method == "ArdiaShell.setKeyboardShortcuts") {
     return SetKeyboardShortcuts(values, std::move(done));
   }
@@ -1405,9 +1912,12 @@ void ShellWindow::Invoke(const std::string& method,
                               .Set("desktop", "windows")));
   }
   if (method == "ArdiaShell.setMaximizeButton") {
-    const base::DictValue* rect = args.FindDict("rect");
+    const std::optional<gfx::Rect> bounds = RectFrom(args.FindDict("rect"));
     if (frame_) {
-      frame_->SetMaximizeButton(RectFrom(rect));
+      frame_->SetMaximizeButton(bounds);
+    }
+    if (!bounds) {
+      ResetMaximizeButtonState();
     }
     return std::move(done).Run(true, base::Value());
   }
@@ -1538,7 +2048,7 @@ void ShellWindow::EngineCall(const std::string& name,
         },
         std::move(done)));
   }
-  const auto* route = ardiacore::linux_contract::FindRoute(name);
+  const auto* route = ardia::desktop_routes::FindRoute(name);
   ac_engine_call_t call =
       route ? FindEngineCall(std::string(route->service)) : nullptr;
   if (!call) {
@@ -1990,6 +2500,21 @@ const wchar_t* SizeCursor(WPARAM hit) {
 bool ShellWindow::PreTranslate(const MSG& msg) {
   HWND root = Hwnd();
   const bool ours = root && msg.hwnd && ::GetAncestor(msg.hwnd, GA_ROOT) == root;
+  if (msg.message == WM_NCMOUSELEAVE &&
+      (ours || msg.hwnd == nc_leave_tracked_hwnd_)) {
+    nc_leave_tracked_hwnd_ = nullptr;
+    if (maximize_button_state_.OnNcMouseLeave()) {
+      EmitMaximizeButtonState();
+    }
+    return false;
+  }
+  if (msg.message == WM_CAPTURECHANGED || msg.message == WM_CANCELMODE ||
+      (msg.message == WM_ACTIVATE && LOWORD(msg.wParam) == WA_INACTIVE)) {
+    if (ours) {
+      ResetMaximizeButtonState();
+    }
+    return false;
+  }
   const bool button =
       msg.message == WM_LBUTTONDOWN || msg.message == WM_LBUTTONUP ||
       msg.message == WM_RBUTTONDOWN || msg.message == WM_RBUTTONUP ||
@@ -2002,16 +2527,23 @@ bool ShellWindow::PreTranslate(const MSG& msg) {
   if (button && !(ours && msg.wParam == HTMAXBUTTON &&
                   (msg.message == WM_NCLBUTTONDOWN ||
                    msg.message == WM_NCLBUTTONUP))) {
-    maximize_pressed_ = false;
+    ResetMaximizeButtonState();
   }
   if (!ours) {
+    return false;
+  }
+  if (msg.message == WM_MOUSEMOVE || msg.message == WM_MOUSELEAVE) {
+    ResetMaximizeButtonState();
     return false;
   }
   const bool child = msg.hwnd != root;
   if (msg.message == WM_NCLBUTTONDOWN || msg.message == WM_NCLBUTTONDBLCLK) {
     if (msg.wParam == HTMAXBUTTON) {
-      maximize_pressed_ = true;
+      ArmNonClientLeave(msg.hwnd);
       maximize_pressed_at_ = msg.time;
+      if (maximize_button_state_.OnNcLeftButtonDown(true)) {
+        EmitMaximizeButtonState();
+      }
       return true;
     }
     if (child && IsSizingHit(msg.wParam)) {
@@ -2031,16 +2563,23 @@ bool ShellWindow::PreTranslate(const MSG& msg) {
     return false;
   }
   if (msg.message == WM_NCLBUTTONUP && msg.wParam == HTMAXBUTTON) {
-    if (maximize_pressed_ &&
+    const bool was_pressed = maximize_button_state_.state().pressed;
+    if (maximize_button_state_.OnNcLeftButtonUp(true)) {
+      EmitMaximizeButtonState();
+    }
+    if (was_pressed &&
         msg.time - maximize_pressed_at_ <= kMaximizeClickLimitMs) {
       ToggleMaximize();
     }
-    maximize_pressed_ = false;
     return true;
   }
   if (msg.message == WM_NCMOUSEMOVE) {
-    if (msg.wParam != HTMAXBUTTON) {
-      maximize_pressed_ = false;
+    const bool on_max = msg.wParam == HTMAXBUTTON;
+    if (on_max) {
+      ArmNonClientLeave(msg.hwnd);
+    }
+    if (maximize_button_state_.OnNcMouseMove(on_max)) {
+      EmitMaximizeButtonState();
     }
     if (child && IsSizingHit(msg.wParam)) {
       ::SetCursor(::LoadCursorW(nullptr, SizeCursor(msg.wParam)));
@@ -2178,6 +2717,7 @@ void RegisterWebUIShell() {
 }
 
 void OpenWebUIShell() {
+  RunWebUIStartupMigration(*base::CommandLine::ForCurrentProcess());
   WithProfile(kShellProfile, base::BindOnce(&ShowWindowFor));
 }
 

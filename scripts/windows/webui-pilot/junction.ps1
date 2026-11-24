@@ -202,6 +202,33 @@ Clear-WebUI
 Opens 'control-user-data-dir-with-a-space' @('--ardia-shell=webui', "--user-data-dir=$web\Chromium")
 Clear-WebUI
 
+$assetUi = Join-Path $run 'asset-ui'
+$assetSecretDir = Join-Path $elsewhere 'asset-secret'
+New-Item -ItemType Directory -Force $assetSecretDir | Out-Null
+Set-Content -LiteralPath (Join-Path $assetSecretDir 'secret.json') '{"secret":"escaped"}' -NoNewline
+Copy-Item -LiteralPath (Join-Path $App 'ardia-ui') -Destination $assetUi -Recurse
+Set-Content -LiteralPath (Join-Path $assetUi 'control.json') '{"ok":true}' -NoNewline
+$assetLinkOk = Link junction (Join-Path $assetUi 'escape') $assetSecretDir
+$assetData = Join-Path $run 'asset-data'
+New-Item -ItemType Directory -Force $assetData | Out-Null
+$script:Data = $assetData
+Start-Shell -Extra @("--ardia-ui-dir=$assetUi") | Out-Null
+$assetReady = $false
+try {
+  Wait-ShellReady 60 | Out-Null
+  $assetReady = $true
+} catch {
+  Log "asset containment shell did not become ready: $($_.Exception.Message)"
+}
+$controlFetch = $null
+$escapeFetch = $null
+if ($assetReady) {
+  $controlFetch = Cdp-Eval "fetch('/control.json').then(async r => JSON.stringify({ ok: r.ok, status: r.status, text: await r.text() }), e => JSON.stringify({ ok: false, err: String(e) }))" | ConvertFrom-Json
+  $escapeFetch = Cdp-Eval "fetch('/escape/secret.json').then(async r => JSON.stringify({ ok: r.ok, status: r.status, text: await r.text() }), e => JSON.stringify({ ok: false, err: String(e) }))" | ConvertFrom-Json
+}
+Stop-Engine
+Check 'asset-junction-escape-refused' ($assetLinkOk -and $assetReady -and $controlFetch.ok -and ($controlFetch.text -eq '{"ok":true}') -and (-not $escapeFetch.ok) -and ("$($escapeFetch.text)" -notmatch 'escaped')) "control=$($controlFetch | ConvertTo-Json -Compress); escape=$($escapeFetch | ConvertTo-Json -Compress)"
+
 cmd /c rmdir "$rn\User Data" | Out-Null
 Move-Item -LiteralPath (Join-Path $elsewhere 'profile') -Destination "$rn\User Data"
 Check 'react-native-fixture-intact' ((Snapshot) -eq $fixture) "every React Native fixture file has the size and time it was written with"

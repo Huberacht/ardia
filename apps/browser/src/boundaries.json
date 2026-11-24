@@ -1801,6 +1801,27 @@
    "detected": false
   },
   {
+   "id": "windows-webui-documents:documentStore",
+   "source": "frame",
+   "guard": "Windows WebUI host (--ardia-shell=webui): ArdiaShell.readDocument, writeDocument, saveDocument and removeDocument run only for the live trusted chrome://ardia/ shell document; document names must pass ValidWindowsDocumentName (1-128 [A-Za-z0-9._-], no path separators, colons/ADS, control chars, .., leading/trailing dots or spaces, or Windows reserved device names CON/PRN/AUX/NUL/COM0-9/LPT0-9) and must not be reserved (session.json, live.json, live.canonical.json, rnw-migration.lock, case-insensitive); sizes are capped at WindowsDocumentLimit; reads, writes and deletes open handles with FILE_FLAG_OPEN_REPARSE_POINT, refuse directories/devices/reparse points, verify final-path direct-child containment inside the app-data root via GetFinalPathNameByHandleW and IsDirectChildOfWinDirectory, write atomically through a CREATE_NEW temp file + MoveFileExW, and delete via FileDispositionInfo on the open handle; bootstrap.documents enumerates only eligible non-reparse regular files bounded by count and total bytes; ReadAsset verifies regular disk files and strict final-path containment inside AssetDirectory() via IsStrictlyWithinWinDirectory; scripts/windows/webui-pilot/bridge.ps1 runs the shared hostile corpus and reparse-point escape checks against the document sinks, scripts/windows/webui-pilot/junction.ps1 proves junction escapes out of ardia-ui are refused, and scripts/windows/engine/tests/webui_policy_test.cc unit-tests the pure validators",
+   "checks": [
+    "scripts/windows/engine/src/ardia/win/webui/webui_policy.h#ValidWindowsDocumentName",
+    "scripts/windows/engine/src/ardia/win/webui/webui_policy.h#ReservedWindowsDocumentName",
+    "scripts/windows/engine/src/ardia/win/webui/webui_policy.h#IsStrictlyWithinWinDirectory",
+    "scripts/windows/engine/src/ardia/win/webui/webui_policy.h#IsDirectChildOfWinDirectory",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#ReadStoredDocument",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#WriteStoredDocument",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#RemoveStoredDocument",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#ReadBootstrapDocuments",
+    "scripts/windows/engine/src/ardia/win/webui/webui_shell.cc#ReadAsset",
+    "scripts/windows/webui-pilot/bridge.ps1#documents-refuse-hostile-corpus",
+    "scripts/windows/webui-pilot/bridge.ps1#documents-refuse-reparse-point",
+    "scripts/windows/webui-pilot/junction.ps1#asset-junction-escape-refused",
+    "scripts/windows/engine/tests/webui_policy_test.cc#TestDocumentNames"
+   ],
+   "detected": false
+  },
+  {
    "id": "windows-webui-platform:desktopPlatform",
    "source": "frame",
    "guard": "Windows WebUI host (--ardia-shell=webui): only the trusted shell document's ardiaRequest reaches ardia::desktop::Platform(); ArdiaApp.openExternalURL takes exactly one string and allows only http, https and mailto: the raw text may not hold whitespace, control characters, quotes or backslashes or exceed 32 KB, http(s) must be written scheme://host with no credentials, and only then does ShellExecuteExW see the canonical spec; a background instance opens nothing; setLaunchAtLogin takes one boolean and writes only HKCU Run 'Ardia WebUI' as the quoted executable path (refusing a path with quotes or control characters) plus --ardia-shell=webui, never RNW's 'Ardia' value; the default browser calls take no arguments and only open ms-settings:defaultapps, and platform.ps1 sends the shared corpus as one-item lists to setAsDefaultBrowser and checks the default apps launch count never moves until an empty-list control moves it by one; DPAPI secrets accept account names of 1-64 [A-Za-z0-9_-] only, are stored as sync-key-x<hex of the exact account bytes>.dpapi so accounts differing only by case never share a file on NTFS, live under the WebUI data folder's Sync, are bound to the ardia-sync-key/v1 purpose and instance, and are zeroed after use; scripts/windows/webui-pilot/platform.ps1 sends the shared hostile corpus (scripts/security/hostile-inputs.mjs via hostile-corpus.mjs) plus unlisted schemes and bad shapes to openExternalURL in a Windows guest and checks at the sink that the ShellExecuteExW count never moves, then that one https control moves it by one",
