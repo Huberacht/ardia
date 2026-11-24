@@ -143,7 +143,7 @@ test("without the system glass the redesigned chrome fades as one layer, as befo
   unmount(root);
 });
 
-test("with cuts, the deck's chrome glass is shown from the standby on and never flips; the chrome's own UI-thread opacity hides it behind the page and shows it with the deck", () => {
+test("with cuts, the deck's chrome glass is shown from the standby on and never flips; the chrome's own UI-thread opacity keeps it all but invisible behind the page, so its glass keeps a sample, and shows it with the deck", () => {
   withGlass(true);
   cutTabSwitches(true);
   try {
@@ -162,7 +162,7 @@ test("with cuts, the deck's chrome glass is shown from the standby on and never 
     expect(glasses(root)).toHaveLength(CHROME.length);
     expect(glassShown(root)).toEqual(CHROME.map(() => true));
     for (const glass of glasses(root)) expect(glass.props.shownMs).toBe(0);
-    for (const glass of glasses(root)) expect(seen(glass)).toBe(0);
+    for (const glass of glasses(root)) expect(seen(glass)).toBeLessThan(0.01);
     act(() => useBrowse.setState({ surface: "deck", deckEntrance: currentTabs().selectedId }));
     for (let frame = 0; frame < 4; frame++) {
       expect(glassShown(root)).toEqual(CHROME.map(() => true));

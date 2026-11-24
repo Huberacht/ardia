@@ -324,7 +324,7 @@ export const TabDeck = memo(function TabDeck() {
   useLayoutEffect(() => {
     deckShownNow.value = shown;
   }, [shown, deckShownNow]);
-  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? chromeOpacity.value : 0 }));
+  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: Math.max(pulling.value || deckShownNow.value ? chromeOpacity.value : 0, HELD_GLASS_SAMPLES) }));
   const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? barGlyphFade.value : 0 }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
@@ -1440,6 +1440,7 @@ const dismissKeyboard = () => Keyboard.dismiss();
 const flickTick = () => haptics.tap();
 
 const DECK_FROST = "deck";
+const HELD_GLASS_SAMPLES = 1 / 255;
 const SHOWN = { opacity: 1 };
 const HIDDEN = { opacity: 0 };
 const HANDOVER_CAP_MS = 250;

@@ -311,6 +311,28 @@ test("the early reveal only shows a sheet prepared for the origin and privacy mo
   keyboard.mockRestore();
 });
 
+test("a keystroke in the frame right after + lands in the new search, before React has rendered the sheet live", async () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  const typing = waiting.findAll((node) => typeof node.props.onTyped === "function")[0]!;
+  presentSearch("page", "");
+  typing.props.onTyped("o");
+  expect(searchState().open).toBe(true);
+  await act(async () => {
+    jest.advanceTimersByTime(20);
+  });
+  expect(searchState().text).toBe("o");
+  unmount(root);
+  keyboard.mockRestore();
+});
+
 test("a field-version reset at the press keeps the input the reveal focused", async () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
