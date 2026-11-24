@@ -271,6 +271,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       if (!arrivesAtRest && searchState().arrival === "atRest") launchTrayUp();
       const unpin = setTimeout(() => {
         pinned.value = false;
+        floor.value = 0;
       }, PIN_HOLDS_MS);
       return () => clearTimeout(unpin);
     }
@@ -426,14 +427,18 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     },
   );
 
+  const liftOf = (held: number, height: number, full: number, landed: boolean, closingNow: boolean, pinnedNow: boolean, floorNow: number) => {
+    "worklet";
+    if (held >= 0) return held;
+    const live = liveLift(height, safeBottom, landed, closingNow);
+    if (closingNow) return live;
+    return Math.max(pinnedNow ? Math.max(live, full) : live, floorNow);
+  };
   const currentLift = () => {
     "worklet";
-    if (heldLift.value >= 0) return heldLift.value;
-    const live = liveLift(keyboard.height.value, safeBottom, hasLanded.value, isClosing.value);
-    if (isClosing.value) return live;
-    return Math.max(pinned.value ? Math.max(live, keyboard.full.value) : live, floor.value);
+    return liftOf(heldLift.value, keyboard.height.value, keyboard.full.value, hasLanded.value, isClosing.value, pinned.value, floor.value);
   };
-  const dimStyle = useAnimatedStyle(() => ({ opacity: dim.value * (1 - clampedProgress(drag.value, trayHeight + currentLift())) }), [trayHeight, safeBottom]);
+  const dimStyle = useAnimatedStyle(() => ({ opacity: dim.value * (1 - clampedProgress(drag.value, trayHeight + liftOf(heldLift.value, keyboard.height.value, keyboard.full.value, hasLanded.value, isClosing.value, pinned.value, floor.value))) }), [trayHeight, safeBottom]);
   const covered = useTrayCovers((state) => state.covers > 0);
   const voicePresented = useVoice((state) => state.presented);
   const trayOnTop = !closing && !covered && !voicePresented && !standby;
@@ -461,7 +466,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     return landing.value + keyboard.height.value + keyboard.full.value + drag.value + back.value + heldLift.value + dim.value;
   };
   const trayStyle = useAnimatedStyle(() => {
-    const lift = currentLift();
+    const lift = liftOf(heldLift.value, keyboard.height.value, keyboard.full.value, hasLanded.value, isClosing.value, pinned.value, floor.value);
     const rise = reduceMotion ? 1 : Math.max(landing.value, keyboardProgress(keyboard.height.value, keyboard.full.value, 0));
     if (command) return commandBarMotion(Math.max(landing.value, keyboardProgress(keyboard.height.value, keyboard.full.value, 0)), dim.value, reduceMotion, drag.value, back.value * trayBackTravel);
     return {

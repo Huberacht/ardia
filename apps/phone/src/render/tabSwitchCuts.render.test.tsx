@@ -203,6 +203,31 @@ test("a tray raised by + is at rest with its dim on its first frame, without wai
   keyboard.mockRestore();
 });
 
+test("a first-use sheet lifted to where the keyboard will be comes back down when no keyboard arrives", () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  presentSearch("page", "");
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+    { flushTimers: false },
+  );
+  const lift = () => {
+    const panel = root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")[0]!;
+    return ((getAnimatedStyle(panel).transform ?? []) as { translateY?: number }[]).find((step) => step.translateY !== undefined)?.translateY ?? 0;
+  };
+  const resting = lift();
+  act(() => jest.advanceTimersByTime(100));
+  const anchored = lift();
+  expect(anchored).toBeLessThan(resting);
+  act(() => jest.advanceTimersByTime(800));
+  expect(lift()).toBe(resting);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
 test("the next search sheet waits laid out and hidden, its field made but unfocused; + turns that same sheet and field live instead of mounting them, and no second sheet is made while it is up", () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
