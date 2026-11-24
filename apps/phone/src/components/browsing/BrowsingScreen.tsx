@@ -69,7 +69,7 @@ import { PageRequestHost, PressMenu } from "./PageRequests";
 import { ReaderView, useLeavingReader } from "./ReaderView";
 import { PageFailureView } from "./PageFailureView";
 import { DestinationFace, PageCover } from "./PageCover";
-import { barFencedForDestination, destination, destinationAddresses, destinationBarMark, destinationHeldFill, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, type DestinationAddress } from "../../state/browse/destination";
+import { barFencedForDestination, destination, destinationAddresses, destinationBarMark, destinationHeldFill, destinationHeldUntil, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, type DestinationAddress } from "../../state/browse/destination";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { HeldFrostSource } from "../ui/LookViews";
 import { PageSurface } from "./PageSurface";
@@ -132,14 +132,14 @@ function DeckAddresses() {
 }
 
 function usePageSourceHold(kept: boolean) {
-  const cover = useDestination((s) => (s.arriving !== null && s.arriving === s.prepared ? s.cover : null));
-  const held = useAnimatedProps<{ heldFill: string | null }>(() => {
+  const held = useAnimatedProps<{ heldFill: string | null; heldUntil: string | null }>(() => {
     const lifted = destination.id.value;
     const bar = pageBarShown.value;
     const table = destinationAddresses.value;
-    return { heldFill: kept ? destinationHeldFill(lifted, bar, table) : null };
+    const cover = destination.cover.value;
+    return { heldFill: kept ? destinationHeldFill(lifted, bar, table) : null, heldUntil: kept ? destinationHeldUntil(lifted, cover) : null };
   }, [kept]);
-  return { held, heldUntil: kept ? cover : null };
+  return { held };
 }
 
 function DestinationSlot({ shownId, statusHeight, statusOver }: { shownId: string; statusHeight: number; statusOver: boolean }) {
@@ -313,13 +313,14 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     }
     editPageQuery();
   }, [barKept]);
+  const arrivedCover = useDestination((s) => (s.arriving === tab.id ? s.cover : null));
   useEffect(() => {
     const action = takeCommittedBarAction(tab.id);
     if (action === "address") editPageQuery();
     else if (action === "more") openPageMenu();
     else if (action === "plus") newTab();
     else if (action === "tabs") showDeck();
-  }, [tab.id]);
+  }, [tab.id, arrivedCover]);
   const heldOr = useCallback((action: BarAction, now: () => void) => () => {
     if (barKept && routeBarToDestination(shownTab.current, action)) return;
     const landed = heldFor();
@@ -393,7 +394,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     <View style={[StyleSheet.absoluteFill, pulls ? null : { backgroundColor: theme.canvas }]} onLayout={() => pageLaidOut(tab.id)}>
       <Shade shaded={menuOpen || dockedSearch || readerId === tab.id || pressing || tabsMenu}>
         <Animated.View testID="pageBody" style={[StyleSheet.absoluteFill, bodyStyle]} animatedProps={bodyProps} pointerEvents="box-none" collapsable={false}>
-        <HeldFrostSource testID="pageFrostSource" name={PAGE_FROST} heldUntil={barKept ? sourceHold.heldUntil : undefined} animatedProps={barKept ? sourceHold.held : undefined} style={StyleSheet.absoluteFill} pointerEvents="box-none" collapsable={false}>
+        <HeldFrostSource testID="pageFrostSource" name={PAGE_FROST} animatedProps={barKept ? sourceHold.held : undefined} style={StyleSheet.absoluteFill} pointerEvents="box-none" collapsable={false}>
         <PageStack pulledTab={pulls ? tab.id : null} barTop={barTop}>
         <PagerBackdrop pager={pager} />
         <Animated.View style={[StyleSheet.absoluteFill, styles.outgoing, { backgroundColor: theme.canvas }, pager.outgoing]}>

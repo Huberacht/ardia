@@ -125,6 +125,8 @@ function useSpokenAddress(swipe: SwipeAddresses | null, shownId: string, here: s
   return { spoken, mark };
 }
 
+const SPEAKS_LANDED_ADDRESS = Platform.OS === "android";
+
 export type DuoBar = { stripLeft: number; stripTop: number; squeeze: DuoSqueeze | null; progress: SharedValue<number>; collapsed: boolean };
 
 export type BarAddress = { tabId: string; host: string; insecure: boolean; isPrivate: boolean; iconUrl: string | null; pageUrl: string | null };
@@ -257,7 +259,7 @@ export function FloatingBar({ tab, preview = null, standsIn = false, privateLook
         <PullGlyphs style={styles.addressRow}>
         <Animated.View testID="floatingBarAddressFade" collapsable={false} style={[styles.addressFade, addressFade]} pointerEvents={squeezed ? "none" : "box-none"} importantForAccessibility={squeezed ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={squeezed}>
         <Animated.View testID="floatingBarAddressStack" collapsable={false} style={[styles.addressStack, landedHere, previewHides]} pointerEvents="box-none">
-          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} pressRef={addressButton} spoken={spoken} />
+          <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} pressRef={addressButton} spoken={SPEAKS_LANDED_ADDRESS && tabSwitchCuts() ? spoken : undefined} />
         </Animated.View>
         {preview ? (
           <Animated.View testID="floatingBarPreview" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, previewShows]}>

@@ -221,7 +221,8 @@ test("with cuts the page bar is one bar that stays mounted under the deck: hidde
   act(() => sendDeckCommand({ kind: "open", tabId: destination.id, tappedAt: Date.now() }));
   expect(currentTabs().selectedId).toBe(destination.id);
   expect(host("keptPageBar")[0]).toBeDefined();
-  expect(root.root.findAll((node) => node.props.testID === "pageFrostSource" && typeof node.props.heldUntil === "string")).not.toHaveLength(0);
+  act(() => jest.advanceTimersByTime(16));
+  expect(root.root.findAll((node) => node.props.testID === "pageFrostSource" && typeof node.props.jestAnimatedProps?.value?.heldUntil === "string")).not.toHaveLength(0);
   expect(host("floatingBarHost").map((node) => node.props.children).flat().join("")).toContain(display(destination.url).host);
   act(() => previewPageBar(null));
   unmount(root);

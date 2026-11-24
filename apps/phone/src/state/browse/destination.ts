@@ -1,15 +1,16 @@
 import { makeMutable, runOnUI } from "react-native-reanimated";
 import { create } from "zustand";
 import { labTrace } from "../../platform/lab";
-import { pageNavigation } from "../pages/store";
+import { pageNavigation, usePages } from "../pages/store";
 import { currentTabs } from "../tabs/store";
 import { findTab } from "../tabs/tabsState";
 import { pageBarPreviewShown, pageBarShown, previewPageBar } from "./deckPull";
-import { commitBarAction, holdBarAction, takeBarAction, whenPageCoverHidden, type BarAction } from "./store";
+import { commitBarAction, holdBarAction, takeBarAction, useBrowse, whenPageCoverHidden, type BarAction } from "./store";
 
 export const destination = {
   id: makeMutable(""),
   turn: makeMutable(0),
+  cover: makeMutable({ id: "", name: "" }),
 };
 
 export type DestinationAddress = { host: string; spoken: string; isPrivate: boolean; insecure: boolean; fill: string };
@@ -48,6 +49,11 @@ export function destinationHeldFill(liftedId: string, barShown: number, table: R
   return liftedId !== "" && barShown > 0 ? (table[liftedId]?.fill ?? null) : null;
 }
 
+export function destinationHeldUntil(liftedId: string, cover: { id: string; name: string }): string | null {
+  "worklet";
+  return liftedId !== "" && cover.id === liftedId && cover.name !== "" ? cover.name : null;
+}
+
 export function destinationLeafShows(liftedId: string, shownId: string, leafId: string | null, previewShown: number): boolean {
   "worklet";
   return previewShown > 0 && liftedId !== "" && liftedId !== shownId && leafId === liftedId;
@@ -71,8 +77,12 @@ export function pressDestination(id: string) {
 
 export function prepareDestination(id: string) {
   const now = useDestination.getState();
-  if (now.arriving !== null || now.prepared === id) return;
-  useDestination.setState({ prepared: id });
+  if (now.arriving === id || (now.arriving === null && now.prepared === id)) return;
+  if (now.arriving !== null) {
+    stopWaiting();
+    destination.cover.value = { id: "", name: "" };
+  }
+  useDestination.setState({ prepared: id, arriving: null, cover: null });
 }
 
 let coverSeq = 0;
@@ -84,17 +94,17 @@ const stopWaiting = () => {
   stop?.();
 };
 
-export function routeBarToDestination(shownId: string, action: BarAction): boolean {
+export const barFencedForDestination = (_shownId: string) => {
+  if (useBrowse.getState().surface !== "deck") return false;
   const lifted = destination.id.value;
-  if (!lifted || lifted === shownId || useDestination.getState().arriving === lifted) return false;
-  holdBarAction(lifted, action, deckScope(destination.turn.value));
+  return lifted !== "" && useDestination.getState().arriving !== lifted;
+};
+
+export function routeBarToDestination(shownId: string, action: BarAction): boolean {
+  if (!barFencedForDestination(shownId)) return false;
+  holdBarAction(destination.id.value, action, deckScope(destination.turn.value));
   return true;
 }
-
-export const barFencedForDestination = (shownId: string) => {
-  const lifted = destination.id.value;
-  return lifted !== "" && lifted !== shownId && useDestination.getState().arriving !== lifted;
-};
 
 export const takeDestinationAction = (id: string): BarAction | null => takeBarAction(deckScope(destination.turn.value), id);
 
@@ -105,24 +115,37 @@ export function arriveFromDeck(id: string, held: BarAction | null = null) {
   coverSeq += 1;
   const cover = `${DESTINATION_COVER_ID}-${coverSeq}`;
   useDestination.setState({ prepared: id, arriving: id, cover });
+  destination.cover.value = { id, name: cover };
+  const failed = () => {
+    if (pageNavigation(id)?.failure && useDestination.getState().cover === cover) releaseDestination(id);
+  };
+  const stopFailure = usePages.subscribe(failed);
   const wait = (): (() => void) =>
     whenPageCoverHidden(
       id,
       DESTINATION_HELD_MS,
       (reason) => {
-        stopWait = null;
         const now = useDestination.getState();
         if (now.arriving !== id || now.cover !== cover) return;
         if (reason === "lost" && findTab(currentTabs(), id) && currentTabs().selectedId === id && !pageNavigation(id)?.failure) {
           labTrace(`PAGELAB destination ${id} still undrawn after ${DESTINATION_HELD_MS} ms, its face stays and waits again`);
-          stopWait = wait();
+          const again = wait();
+          stopWait = () => {
+            stopFailure();
+            again();
+          };
           return;
         }
+        stopFailure();
         releaseDestination(id);
       },
       cover,
     );
-  stopWait = wait();
+  const stopCover = wait();
+  stopWait = () => {
+    stopFailure();
+    stopCover();
+  };
 }
 
 export function releaseDestination(id: string | null = null) {
@@ -130,7 +153,7 @@ export function releaseDestination(id: string | null = null) {
   if (id !== null && now.prepared !== id && now.arriving !== id) return;
   if (id === null || now.arriving === id) stopWaiting();
   useDestination.setState({ prepared: null, arriving: null, cover: null });
-  if (id === null || destination.id.value === id) destination.id.value = "";
+  destination.cover.value = { id: "", name: "" };
   runOnUI((released: string | null) => {
     "worklet";
     if (released !== null && destination.id.value !== released) return;
@@ -142,11 +165,15 @@ export function dropPreparedDestination() {
   const now = useDestination.getState();
   if (now.arriving !== null) return;
   if (now.prepared !== null) useDestination.setState({ prepared: null });
-  destination.id.value = "";
   runOnUI(() => {
     "worklet";
     destination.id.value = "";
   })();
+}
+
+export function destinationPageFailed(id: string) {
+  const now = useDestination.getState();
+  if (now.arriving === id || now.prepared === id) releaseDestination(id);
 }
 
 export const destinationCoverOf = (id: string) => {

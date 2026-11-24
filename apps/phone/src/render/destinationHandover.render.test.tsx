@@ -206,3 +206,113 @@ test("the deck's own tap prepares the pressed card at touch-down and its lift pu
   expect(useDestination.getState().prepared).not.toBeNull();
   unmount(root);
 });
+
+const pageViewOf = (root: ReactTestRenderer, id: string) => root.root.findAll((node) => node.props.pageId === id && typeof node.props.onPageError === "function")[0]!;
+const frostSource = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.testID === "pageFrostSource" && node.props.jestAnimatedProps !== undefined)[0]!;
+
+test("a destination page that native refuses to bind, so it never draws, releases its face and the frost hold at once instead of keeping both up and taking the page's touches", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const wanted = otherTab();
+  commit(wanted.id);
+  flush();
+  expect(host(root, "destinationFace")).toBeDefined();
+  act(() => pageViewOf(root, wanted.id).props.onPageError({ code: "savedStateUnreadable", message: "bind refused" }));
+  flush();
+  act(() => jest.advanceTimersByTime(16));
+  expect(host(root, "destinationFace")).toBeUndefined();
+  expect(useDestination.getState().arriving).toBeNull();
+  expect(destination.id.value).toBe("");
+  expect(animatedProp(frostSource(root), "heldFill") ?? null).toBeNull();
+  unmount(root);
+});
+
+test("a destination page that fails to load releases its face on the failure itself, not after the long wait", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const wanted = otherTab();
+  commit(wanted.id);
+  flush();
+  act(() => require("../state/pages/store").storeNavigation(wanted.id, { isLive: true, isLoading: false, url: wanted.url, title: "", failure: { code: "offline" }, progress: 1 }));
+  flush();
+  expect(host(root, "destinationFace")).toBeUndefined();
+  unmount(root);
+});
+
+test("reopening the deck before one destination draws and pressing another hands the face and the frost hold to the new card: the old arrival can't refuse it or keep its cover over the new hold", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const selected = currentTabs().selectedId!;
+  const [first, second] = currentTabs().open.filter((tab) => tab.id !== selected);
+  commit(first!.id);
+  flush();
+  const firstCover = useDestination.getState().cover;
+  expect(firstCover).not.toBeNull();
+  act(() => {
+    pageBarShown.value = 0;
+    pageBarPreviewShown.value = 0;
+  });
+  deckUp();
+  flush();
+  act(() => require("../state/browse/destination").pressDestination(second!.id));
+  expect(useDestination.getState().prepared).toBe(second!.id);
+  expect(useDestination.getState().arriving).toBeNull();
+  const face = host(root, "destinationFace")!;
+  lift(second!.id);
+  expect(getAnimatedStyle(face).opacity).toBe(1);
+  expect(animatedProp(frostSource(root), "heldUntil") ?? null).toBeNull();
+  unmount(root);
+});
+
+test("a deck select of a tab whose swipe arrival is still waiting keeps the deck cover's own acknowledgement: the arrival's re-wait can't take its slot", () => {
+  withTabs(3);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, arriving: null, leaving: null });
+  const root = renderSurface(<Surfaces />);
+  const wanted = otherTab();
+  act(() => browse.arriveAtNeighbour(wanted.id));
+  act(() => jest.advanceTimersByTime(1_000));
+  deckUp();
+  flush();
+  commit(wanted.id);
+  flush();
+  const cover = useDestination.getState().cover!;
+  expect(cover).toMatch(/^destinationCover-/);
+  act(() => jest.advanceTimersByTime(3_100));
+  act(() => browse.pageCoverHidden(wanted.id, "drawn", cover, true, 1));
+  flush();
+  expect(useDestination.getState().arriving).toBeNull();
+  expect(host(root, "destinationFace")).toBeUndefined();
+  unmount(root);
+});
+
+test("an Address press after lifting the card that is already the shown tab is held until that card commits, so search isn't opened and then dismissed by the commit", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const selected = currentTabs().selectedId!;
+  lift(selected);
+  const address = root.root.findAll((node) => node.props.accessibilityLabel === "Address" && typeof node.props.onPress === "function")[0]!;
+  act(() => address.props.onPress());
+  expect(searchState().open).toBe(false);
+  commit(selected);
+  flush();
+  act(() => jest.advanceTimersByTime(16));
+  expect(currentTabs().selectedId).toBe(selected);
+  expect(searchState().open).toBe(true);
+  expect(searchState().initialText).toContain(hostOf(selected));
+  unmount(root);
+});
+
+test("without tab-switch cuts the Address stays the plain Pressable, with no UI-thread value over its own", () => {
+  cutTabSwitches(false);
+  withTabs(3);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, arriving: null, leaving: null });
+  const root = renderSurface(<Surfaces />);
+  const nodes = root.root.findAll((node) => node.props.accessibilityLabel === "Address");
+  expect(nodes.length).toBeGreaterThan(0);
+  expect(nodes.every((node) => node.props.jestAnimatedProps === undefined && node.props.animatedProps === undefined)).toBe(true);
+  unmount(root);
+});
