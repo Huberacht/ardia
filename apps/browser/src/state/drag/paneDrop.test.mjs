@@ -21,21 +21,30 @@ function splitWindow() {
 const windowCount = () => Object.keys(S().windows).length;
 const panesOf = (tabId) => splitTabIdsOf(splitOf(S(), tabId)) ?? [];
 
-function dragTo(tabId, x, y, target, { lifted = null, onPage = false } = {}) {
-  beginTabDrag(tabId);
+function dragTo(tabId, x, y, target, { lifted = null, onPage = false, staysOnPage = false } = {}) {
+  beginTabDrag(tabId, undefined, { staysOnPage });
   updateTabDrag(x, y, lifted);
   if (onPage) setOnPage(true);
   setDropTarget(target);
   return endTabDrag();
 }
 
-test("a split pane dragged onto its own page with no drop zone stays where it is and opens no window", () => {
+test("a pane dragged by its Split View button onto its own page with no drop zone stays where it is and opens no window", () => {
   const { a, b } = splitWindow();
   const before = windowCount();
-  assert.equal(dragTo(b, 600, 400, null, { lifted: true, onPage: true }), false);
+  assert.equal(dragTo(b, 600, 400, null, { lifted: true, onPage: true, staysOnPage: true }), false);
   assert.equal(windowCount(), before);
   assert.deepEqual(panesOf(a), [a, b]);
   assert.equal(useTabDrag.getState().phase, "idle");
+});
+
+test("a pane lifted from the tab strip onto the page with no drop zone still tears out into a new window", () => {
+  const { w, a, b } = splitWindow();
+  const before = windowCount();
+  assert.equal(dragTo(b, 600, 400, null, { lifted: true, onPage: true }), true);
+  assert.equal(windowCount(), before + 1);
+  assert.notEqual(S().tabs[b].windowId, w);
+  assert.ok(!panesOf(a).includes(b));
 });
 
 test("a split pane dragged out of the window still moves to a new window", () => {

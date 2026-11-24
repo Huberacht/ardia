@@ -71,7 +71,7 @@ export function zoneHit(panes: [string, Rect][], px: number, py: number, current
       const r = zoneRect(pane, side, keep ? "active" : "grown", px, py);
       if (!overlaps(card, r)) continue;
       const edge = pointToRect(px, py, r);
-      const rank = edge === 0 ? (keep ? 0 : 1) : keep ? 2 : inPane ? 3 : 4;
+      const rank = edge === 0 ? (side === "center" ? -1 : keep ? 0 : 1) : keep ? 2 : inPane ? 3 : 4;
       const centre =
         side === "center" ? Math.hypot(r.x + r.width / 2 - px, r.y + r.height / 2 - py) : isVerticalSplitSide(side) ? Math.abs(r.y + r.height / 2 - py) : Math.abs(r.x + r.width / 2 - px);
       if (!best || rank < best.rank || (rank === best.rank && (edge < best.edge || (edge === best.edge && centre < best.centre)))) {

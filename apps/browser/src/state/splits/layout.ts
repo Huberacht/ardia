@@ -177,6 +177,7 @@ function redocked(split: SplitView, tabId: string, anchorId: string, side: Split
 export function movePaneTo(split: SplitView, tabId: string, anchorId: string, side: SplitSide): SplitView | null {
   const ids = splitTabIds(split);
   if (tabId === anchorId || !ids.includes(tabId) || !ids.includes(anchorId)) return null;
-  const moved = reordered(split, tabId, anchorId, side) ?? redocked(split, tabId, anchorId, side);
-  return moved && shapeOf(moved) === shapeOf(split) ? split : moved;
+  const base = normalized(split);
+  const moved = reordered(base, tabId, anchorId, side) ?? redocked(base, tabId, anchorId, side);
+  return moved && shapeOf(moved) === shapeOf(base) ? split : moved;
 }

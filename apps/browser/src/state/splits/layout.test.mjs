@@ -129,3 +129,12 @@ test("a move to where the pane already is returns the same split; a bad move ret
   assert.equal(movePaneTo(two, "A", "Z", "left"), null);
   assert.equal(movePaneTo(two, "Z", "A", "left"), null);
 });
+
+test("a saved split of one stacked slot is read as two plain panes, and a move that changes nothing keeps its sizes", () => {
+  const lone = { id: "s", windowId: "w", orientation: "horizontal", slots: [{ size: 1, stack: ["B", "C"], stackSizes: [0.3, 0.7] }] };
+  assert.equal(movePaneTo(lone, "C", "B", "bottom"), lone);
+  const moved = movePaneTo(lone, "B", "C", "bottom");
+  assert.equal(moved.orientation, "vertical");
+  assert.deepEqual(splitTabIds(moved), ["C", "B"]);
+  assert.deepEqual(moved.slots.map((slot) => slot.size), [0.7, 0.3]);
+});

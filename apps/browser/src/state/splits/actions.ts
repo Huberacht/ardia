@@ -106,11 +106,13 @@ export function dropTabIntoSplit(tabId: string, targetTabId: string, side: Split
   return openSplitPane(target.windowId, { tabId, anchorTabId: targetTabId, side });
 }
 
-export function dropTabOnPane(tabId: string, targetTabId: string, side: SplitSide): string | null {
-  const redock = !!splitTabIdsOf(splitOf(store(), targetTabId))?.includes(tabId);
+export function dropTabOnPane(tabId: string, targetTabId: string, side: SplitSide, consent?: ConsentToken | null): string | null {
+  const before = splitOf(store(), targetTabId);
+  const redock = !!splitTabIdsOf(before)?.includes(tabId);
   const dropped = dropTabIntoSplit(tabId, targetTabId, side);
-  if (dropped && redock) noteSplit("splitPaneDragRedocks");
-  else if (dropped && (side === "top" || side === "bottom")) noteSplit("splitStackedDrops");
+  if (dropped && redock) {
+    if (splitOf(store(), targetTabId) !== before) noteSplit("splitPaneDragRedocks", consent);
+  } else if (dropped && (side === "top" || side === "bottom")) noteSplit("splitStackedDrops", consent);
   return dropped;
 }
 

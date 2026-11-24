@@ -8,7 +8,7 @@ import { crossesLane } from "./lanes";
 import { choose } from "../settings/settings";
 import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
 import type { AdoptId, BrowserWindow, SplitSlot, SplitView, Tab } from "../browser/types";
-import { evenSlots, insertPane, MAX_SPLIT_PANES, movePaneTo, paneNeighbor, type PaneDirection, type SplitSide, splitTabIds, splitTabIdsOf, swappedPanes, withoutPanes, withPaneIds } from "./layout";
+import { evenSlots, insertPane, MAX_SPLIT_PANES, movePaneTo, normalized, paneNeighbor, type PaneDirection, type SplitSide, splitTabIds, splitTabIdsOf, swappedPanes, withoutPanes, withPaneIds } from "./layout";
 
 export { evenSlots, isStacked, mapSlotIds, MAX_SPLIT_PANES, type PaneDirection, type SplitSide, slotTabIds, splitTabIds, splitTabIdsOf, stackAt, withPaneIds } from "./layout";
 
@@ -113,7 +113,7 @@ export function sanitizeSplits(splits: Record<string, SplitView>, tabs: Record<s
     const fixed = gone.size ? removeFromSplits({ [v.id]: v }, gone)[v.id] : v;
     if (!fixed || splitTabIds(fixed).length > MAX_SPLIT_PANES) continue;
     splitTabIds(fixed).forEach((id) => used.add(id));
-    next[v.id] = fixed;
+    next[v.id] = normalized(fixed);
   }
   return next;
 }

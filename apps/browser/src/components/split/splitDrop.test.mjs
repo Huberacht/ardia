@@ -111,6 +111,11 @@ function freshWindow() {
   return { S, w, a, b, c };
 }
 
+test("pointing inside the swap zone picks it even while a neighbouring edge zone is active and leaning into it", () => {
+  const pane = { x: 0, y: 0, width: 1000, height: 800 };
+  assert.deepEqual(zoneHit([["t1", pane]], 335, 400, { tabId: "t1", side: "left" }, PANE_SIDES), { tabId: "t1", side: "center" });
+});
+
 test("all 8 two- and three-pane split combinations are reachable from drop sides", () => {
   const W = 1200, H = 800, G = 9;
 
