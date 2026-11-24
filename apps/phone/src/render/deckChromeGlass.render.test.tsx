@@ -8,6 +8,7 @@ import { useArchiveCard } from "../state/browse/archiveCard";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import { useBrowse } from "../state/browse/store";
 import { currentTabs } from "../state/tabs/store";
+import { cutTabSwitches } from "../state/browse/tabSwitch";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const lookModule = require("@ardia/phone-native/src/look") as typeof import("@ardia/phone-native/src/look");
@@ -140,4 +141,36 @@ test("without the system glass the redesigned chrome fades as one layer, as befo
   act(() => jest.advanceTimersByTime(3000));
   expect(animatedOpacity(host(root, "deckRedesignedChrome"))).toBe(1);
   unmount(root);
+});
+
+test("with cuts, the deck's chrome glass is shown from the standby on and never flips; the chrome's own UI-thread opacity hides it behind the page and shows it with the deck", () => {
+  withGlass(true);
+  cutTabSwitches(true);
+  try {
+    useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
+    const root = renderSurface(
+      <DesignProvider design="redesigned">
+        <TabDeck />
+      </DesignProvider>,
+      { flushTimers: false },
+    );
+    const seen = (glass: ReactTestInstance) => {
+      let product = 1;
+      for (let at = glass.parent; at; at = at.parent) if (typeof at.type === "string") product *= opacity(at);
+      return product;
+    };
+    expect(glasses(root)).toHaveLength(CHROME.length);
+    expect(glassShown(root)).toEqual(CHROME.map(() => true));
+    for (const glass of glasses(root)) expect(glass.props.shownMs).toBe(0);
+    for (const glass of glasses(root)) expect(seen(glass)).toBe(0);
+    act(() => useBrowse.setState({ surface: "deck", deckEntrance: currentTabs().selectedId }));
+    for (let frame = 0; frame < 4; frame++) {
+      expect(glassShown(root)).toEqual(CHROME.map(() => true));
+      frames(1);
+    }
+    for (const glass of glasses(root)) expect(seen(glass)).toBe(1);
+    unmount(root);
+  } finally {
+    cutTabSwitches(false);
+  }
 });

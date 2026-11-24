@@ -7,7 +7,7 @@ import { Surfaces } from "../App";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
-import { Image } from "react-native";
+import { Image, StyleSheet, TextInput } from "react-native";
 import { deckPull, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
@@ -222,6 +222,53 @@ test("the next search sheet waits laid out and hidden, its field made but unfocu
   expect(host("trayFieldCapsule")).toContain(waitingField[0]);
   expect(root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")).toContain(waiting);
   expect(host("trayStandby")).toHaveLength(0);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
+test("+ shows and focuses the waiting sheet before React renders it live: the press itself reveals it, and the live commit changes nothing on screen", async () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const host = (id: string) => root.root.findAll((node) => node.props.testID === id && typeof node.type === "string");
+  const waiting = host("trayStandby")[0]!;
+  expect(getAnimatedStyle(waiting).opacity).toBe(0);
+  const input = waiting.findAll((node) => node.type === TextInput)[0]!;
+  const focus = jest.spyOn(input.instance as { focus(): void }, "focus");
+  presentSearch("page", "");
+  expect(host("trayRoot")).toHaveLength(0);
+  expect(getAnimatedStyle(waiting).opacity).toBe(1);
+  expect(focus).toHaveBeenCalled();
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+  });
+  expect(host("trayRoot")).toHaveLength(1);
+  expect(host("trayRoot")[0] === waiting).toBe(true);
+  expect(StyleSheet.flatten(waiting.props.style)?.opacity ?? 1).toBe(1);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
+test("a search that opens with text waits for its own commit: the waiting empty sheet is not shown early", async () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  presentSearch("page", "example.com");
+  expect(getAnimatedStyle(waiting).opacity).toBe(0);
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+  });
   unmount(root);
   keyboard.mockRestore();
 });

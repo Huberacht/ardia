@@ -24,7 +24,7 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle } from "../../state/search/store";
+import { searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents } from "../../state/search/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
 import { useIncognito, useSelectedTab } from "../../state/tabs/hooks";
@@ -127,6 +127,11 @@ function SheetTray() {
     presence.current = step.presence;
     if (step.motion === "in" && (step.fromHidden || wasClosing)) presentation.current += 1;
   }
+  useEffect(() => {
+    if (!tabSwitchCuts()) return;
+    whenSearchPresents(revealStandbyFor);
+    return () => whenSearchPresents(null);
+  }, []);
   const standby = tabSwitchCuts() ? <TrayLayer key={presentation.current + 1} session={STANDBY_SESSION} closing={false} standby onClosed={noClose} /> : null;
   const shown = target ?? presenceShown(presence.current);
   if (shown === null) return standby;
@@ -140,6 +145,13 @@ function SheetTray() {
 }
 
 const STANDBY_SESSION = -1;
+
+let revealStandby: (() => void) | null = null;
+let standbyField: TrayInputHandle | null = null;
+
+const revealStandbyFor = (text: string) => {
+  if (text === "") revealStandby?.();
+};
 
 const noClose = () => undefined;
 
@@ -181,6 +193,28 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const dim = useSharedValue(cutsIn ? 1 : 0);
   const pinned = useSharedValue(cutsIn);
   const floor = useSharedValue(0);
+  const revealed = useSharedValue(0);
+  const revealStyle = useAnimatedStyle(() => ({ opacity: revealed.value }));
+  useAnimatedReaction(
+    () => revealed.value,
+    (now, was) => {
+      if (bornStandby && now === 1 && was === 0) runOnJS(markShownFrame)("search");
+    },
+  );
+  useLayoutEffect(() => {
+    if (!standby) {
+      if (bornStandby) revealed.value = 1;
+      return;
+    }
+    if (cutsIn) floor.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold ? 0 : window.height * FIRST_KEYBOARD_SHARE;
+    revealStandby = () => {
+      revealed.value = 1;
+      standbyField?.focus();
+    };
+    return () => {
+      revealStandby = null;
+    };
+  }, [standby]);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -438,7 +472,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
 
   return (
     <DepartContext.Provider value={beginDeparture}>
-    <View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, standby ? styles.standby : null]} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
+    <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, standby ? revealStyle : null]} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
       {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable
@@ -507,7 +541,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
         </View>
       </Animated.View>
       )}
-    </View>
+    </Animated.View>
     </DepartContext.Provider>
   );
 }
@@ -1016,7 +1050,8 @@ function FieldInput({ first, closing, standby = false }: { first: boolean; closi
         <TrayInput
           ref={(field) => {
             input.current = field;
-            if (!standby) trayInput = field;
+            if (standby) standbyField = field;
+            else trayInput = field;
           }}
           style={inputStyle}
           weight={panelField ? "medium" : "regular"}
@@ -1402,7 +1437,6 @@ function ScrubbedRows({ rows, typed, budget, onRefine, onMenu, onContentHeight }
 }
 
 const styles = StyleSheet.create({
-  standby: { opacity: 0 },
   sheet: {
     position: "absolute",
     elevation: trayShadow.elevation,

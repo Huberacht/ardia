@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { DeckLookProbe } from "./DeckLookProbe";
 import { actionWords, destinationWords, incognitoWords } from "../../lib/sharedWords";
 import { IncognitoLook } from "../ui/theme";
@@ -319,6 +319,13 @@ export const TabDeck = memo(function TabDeck() {
   const chromeOpacity = useDerivedValue(() => deckChromeOpacity(chromeProgress.value));
   const barGlyphFade = useBarGlyphFade(pulling, chromeOpacity);
   const chromeStyle = useAnimatedStyle(() => ({ opacity: chromeOpacity.value }));
+  const chromeGlassHeld = cutsAway && glassChrome;
+  const deckShownNow = useSharedValue(shown);
+  useLayoutEffect(() => {
+    deckShownNow.value = shown;
+  }, [shown, deckShownNow]);
+  const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? chromeOpacity.value : 0 }));
+  const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? barGlyphFade.value : 0 }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
   const searchedFor = useRef(needle);
@@ -1293,34 +1300,38 @@ export const TabDeck = memo(function TabDeck() {
             <ChromeGlassShown progress={chromeProgress} initiallyIn={first.progress >= DECK_CHROME_FROM} hidden={!shown} away={phase.kind === "closing" || openingCard !== null}>
               {(glassShown, barShown, barHanded) => (
                 <>
-                  <DeckHeader
-                    safeTop={g.safeTop}
-                    safeSide={g.safeSide}
-                    sideInset={chromeLayout.barSideInset}
-                    hasTabs={allTabs.length > 0}
-                    menusShown={shown && phase.kind === "settled"}
-                    onMenu={setChromeMenu}
-                    onCloseAll={confirmCloseAll}
-                    glassShown={glassShown}
-                    glassShownMs={pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
-                    glyphFade={glassChrome ? chromeOpacity : undefined}
-                  />
-                  <DeckBottomBar
-                    shown={shown}
-                    barCenterY={g.barCenterY}
-                    deckHeight={deckHeight}
-                    width={width}
-                    layout={deckBarLayout}
-                    incognito={incognito}
-                    privateCount={privateCount}
-                    onCloseIncognito={confirmLeaveIncognito}
-                    onQuery={setNeedle}
-                    menusShown={shown && phase.kind === "settled"}
-                    onMenu={setChromeMenu}
-                    glassShown={barShown}
-                    glassShownMs={barHanded || pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
-                    glyphFade={glassChrome ? barGlyphFade : undefined}
-                  />
+                  <HeldChrome held={chromeGlassHeld} style={heldHeaderStyle}>
+                    <DeckHeader
+                      safeTop={g.safeTop}
+                      safeSide={g.safeSide}
+                      sideInset={chromeLayout.barSideInset}
+                      hasTabs={allTabs.length > 0}
+                      menusShown={shown && phase.kind === "settled"}
+                      onMenu={setChromeMenu}
+                      onCloseAll={confirmCloseAll}
+                      glassShown={chromeGlassHeld || glassShown}
+                      glassShownMs={pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
+                      glyphFade={glassChrome && !chromeGlassHeld ? chromeOpacity : undefined}
+                    />
+                  </HeldChrome>
+                  <HeldChrome held={chromeGlassHeld} style={heldBarStyle}>
+                    <DeckBottomBar
+                      shown={shown}
+                      barCenterY={g.barCenterY}
+                      deckHeight={deckHeight}
+                      width={width}
+                      layout={deckBarLayout}
+                      incognito={incognito}
+                      privateCount={privateCount}
+                      onCloseIncognito={confirmLeaveIncognito}
+                      onQuery={setNeedle}
+                      menusShown={shown && phase.kind === "settled"}
+                      onMenu={setChromeMenu}
+                      glassShown={chromeGlassHeld || barShown}
+                      glassShownMs={barHanded || pulledIn.current || tabSwitchCuts() ? 0 : CHROME_GLASS_MS}
+                      glyphFade={glassChrome && !chromeGlassHeld ? barGlyphFade : undefined}
+                    />
+                  </HeldChrome>
                 </>
               )}
             </ChromeGlassShown>
@@ -1395,6 +1406,15 @@ function StackLayer({ available, grid, motion, onFaded, children }: { available:
     >
       {children}
     </MotionView>
+  );
+}
+
+function HeldChrome({ held, style, children }: { held: boolean; style: ComponentProps<typeof Animated.View>["style"]; children: ReactNode }) {
+  if (!held) return <>{children}</>;
+  return (
+    <Animated.View style={[StyleSheet.absoluteFill, style]} pointerEvents="box-none" collapsable={false}>
+      {children}
+    </Animated.View>
   );
 }
 
