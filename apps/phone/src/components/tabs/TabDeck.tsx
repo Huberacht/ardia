@@ -105,7 +105,7 @@ import { screenCornerRadius } from "../../state/app/displayCorner";
 import { TabGrid, type GridFrame } from "./TabGrid";
 import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
-import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckHeader, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
+import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarPreviewShown, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckHeader, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
 import { barSpanCenter } from "../../lib/bottomBarSpan";
@@ -648,6 +648,7 @@ export const TabDeck = memo(function TabDeck() {
       "worklet";
       if (poseTurn.value !== posed || deckPhase.value !== DECK_PHASE.closing) return;
       pageBarShown.value = 0;
+      pageBarPreviewShown.value = 0;
       deckPhase.value = DECK_PHASE.settled;
       expandedIndex.value = -1;
       scaleProgress.value = 1;
@@ -1082,6 +1083,7 @@ export const TabDeck = memo(function TabDeck() {
               scaleProgress.value = 0;
               positionProgress.value = 0;
               pageBarShown.value = 1;
+              pageBarPreviewShown.value = 1;
               runOnJS(openPosedCard)(cardId, turn);
             } else if (cardId !== undefined) runOnJS(openCard)(cardId);
           } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();

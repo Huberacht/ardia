@@ -4,6 +4,7 @@ import { Platform, StyleSheet, View, type ViewInstance } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
+import { pageBarPreviewShown } from "../../state/browse/deckPull";
 import { canCutDeckFromTap, cutDeckFromTabsTap } from "../../state/browse/store";
 import { useBarReturn } from "./barReturn";
 import { AddressFace, AddressLeaf } from "./AddressFace";
@@ -32,6 +33,7 @@ import { pageWords } from "../../lib/sharedWords";
 
 type Props = {
   tab: BrowserTab;
+  preview?: BrowserTab | null;
   order: BrowserTab[];
   roles: ColorRoles;
   dark: boolean;
@@ -90,7 +92,9 @@ export function barAddress(tab: BrowserTab): BarAddress {
   };
 }
 
-export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, swipe = null, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
+export function FloatingBar({ tab, preview = null, order, roles, dark, showsPlus, anchors = true, duo = null, fold = null, swipe = null, onTabs, onTabsMenu, onStep, onAddress, onPlus, onMore }: Props) {
+  const previewHides = useAnimatedStyle(() => ({ opacity: preview ? 1 - pageBarPreviewShown.value : 1 }));
+  const previewShows = useAnimatedStyle(() => ({ opacity: pageBarPreviewShown.value }));
   useLayoutEffect(() => markShownFrame(`bar:${tab.id}`), [tab.id]);
   const landedHere = useLandedAddress(swipe, tab.id, 0);
   const landedLeft = useLandedAddress(swipe, tab.id, -1);
@@ -146,9 +150,14 @@ export function FloatingBar({ tab, order, roles, dark, showsPlus, anchors = true
         <Animated.View testID="floatingBarFoldGlyphs" collapsable={false} style={[styles.addressRow, centreFold]}>
         <PullGlyphs style={styles.addressRow}>
         <Animated.View testID="floatingBarAddressFade" collapsable={false} style={[styles.addressFade, addressFade]} pointerEvents={squeezed ? "none" : "box-none"} importantForAccessibility={squeezed ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={squeezed}>
-        <Animated.View collapsable={false} style={[styles.addressStack, landedHere]} pointerEvents="box-none">
+        <Animated.View collapsable={false} style={[styles.addressStack, landedHere, previewHides]} pointerEvents="box-none">
           <AddressFace address={address} dark={dark} testIDPrefix="floatingBar" style={styles.addressHit} onPress={onAddress} onPressIn={haptics.barPress} />
         </Animated.View>
+        {preview ? (
+          <Animated.View testID="floatingBarPreview" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, previewShows]}>
+            <AddressLeaf address={barAddress(preview)} dark={dark} testIDPrefix="floatingBarPreview" style={styles.addressHit} />
+          </Animated.View>
+        ) : null}
         {swipe?.left ? (
           <Animated.View testID="floatingBarLandedLeft" collapsable={false} pointerEvents="none" importantForAccessibility="no-hide-descendants" accessibilityElementsHidden style={[StyleSheet.absoluteFill, styles.addressStack, landedLeft]}>
             <AddressLeaf address={barAddress(swipe.left)} dark={dark} testIDPrefix="floatingBarLeft" style={styles.addressHit} />

@@ -14,6 +14,8 @@ export const pageBarShown = makeMutable(1);
 
 export const pageBodyShown = makeMutable(1);
 
+export const pageBarPreviewShown = makeMutable(0);
+
 export const deckPull = {
   stage: makeMutable<number>(PULL_STAGE.idle),
   id: makeMutable(""),

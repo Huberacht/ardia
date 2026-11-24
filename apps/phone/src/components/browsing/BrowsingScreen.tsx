@@ -10,7 +10,7 @@ import type { Design } from "../../lib/design";
 import { neighbours, PAGER } from "../../lib/pagerPhysics";
 import { useSystemBars } from "../../state/app/systemBars";
 import { useNavigation, usePageTone } from "../../state/browse/hooks";
-import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, pageBarShown, pageBodyShown, previewPageBar, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
+import { armDeckPull, beginDeckPull, deckPull, disarmDeckPull, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, releaseDeckPull, trackDeckPull, usePageBarPreview, type PullSettled } from "../../state/browse/deckPull";
 import { refreshHiddenDeck } from "../../state/browse/deckHold";
 import { closePageMenu, editPageQuery, openDockedSiteSettings, openPageMenu } from "../../state/page/actions";
 import { useDrawnMenuOpen, useFindOpen, useMenuDocked, usePressOpen, useReaderTabId } from "../../state/page/hooks";
@@ -102,24 +102,21 @@ function PageBodyOwner({ kept }: { kept: boolean }) {
     if (!kept) return;
     pageBodyShown.value = deckUp ? 0 : 1;
     pageBarShown.value = deckUp ? 0 : 1;
-    if (!deckUp) previewPageBar(null);
+    if (deckUp) return;
+    pageBarPreviewShown.value = 0;
+    previewPageBar(null);
   }, [kept, deckUp]);
   return null;
 }
 
-type KeptBarProps = { tab: BrowserTab; kept: boolean; pageDark: boolean; blankPage: string; children: (barTab: BrowserTab, barDark: boolean) => ReactNode };
+type KeptBarProps = { tab: BrowserTab; kept: boolean; pageDark: boolean; children: (preview: BrowserTab | null, barDark: boolean) => ReactNode };
 
-function KeptBarSlot({ tab, kept, pageDark, blankPage, children }: KeptBarProps) {
-  const theme = useTheme();
-  const design = useDesign();
+function KeptBarSlot({ tab, kept, pageDark, children }: KeptBarProps) {
   const deckUp = useBrowse((s) => kept && s.surface === "deck");
   const previewId = usePageBarPreview((s) => (kept ? s.id : null));
   const previewTab = useTabWhile(previewId ?? "", deckUp && previewId !== null && previewId !== tab.id);
-  const barTab = deckUp && previewTab ? previewTab : tab;
-  const previewTone = usePageTone(barTab.id);
-  const previewFailed = useNavigation(barTab.id, (n) => n?.failure != null);
-  const previewPage = previewFailed ? null : shownTone(previewTone, barTab.themeColorHex);
-  const barDark = barTab === tab ? pageDark : (design === "redesigned" || design === "material") && !previewPage?.bottom ? theme.dark : isDarkColor(previewPage?.bottom ?? blankPage);
+  const preview = deckUp && previewTab ? previewTab : null;
+  const barDark = pageDark;
   const keptBarStyle = useAnimatedStyle(() => ({ opacity: kept ? pageBarShown.value : 1 }));
   const keptBarProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({
     pointerEvents: !kept || pageBarShown.value > 0 ? "box-none" : "none",
@@ -127,7 +124,7 @@ function KeptBarSlot({ tab, kept, pageDark, blankPage, children }: KeptBarProps)
   }));
   return (
     <Animated.View testID="keptPageBar" style={[StyleSheet.absoluteFill, keptBarStyle]} animatedProps={keptBarProps} pointerEvents="box-none" collapsable={false}>
-      {children(barTab, barDark)}
+      {children(preview, barDark)}
     </Animated.View>
   );
 }
@@ -348,8 +345,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
         </Animated.View>
         <GlassSource name={PAGE_FROST}>
         {materialBarHosted && design === "material" ? null : (
-        <KeptBarSlot tab={tab} kept={barKept} pageDark={barDark} blankPage={blankPage}>
-        {(barTab, barDark) => (
+        <KeptBarSlot tab={tab} kept={barKept} pageDark={barDark}>
+        {(preview, barDark) => (
         <GestureDetector gesture={barGesture}>
           <Animated.View
             testID="pageBar"
@@ -372,7 +369,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                   <GlassBehind />
                   <FoldLayer testID="floatingBarFoldLayer">
                   <FloatingBar
-                    tab={barTab}
+                    tab={tab}
+                    preview={preview}
                     order={barOrder}
                     roles={rolesFor(barDark)}
                     dark={barDark}
