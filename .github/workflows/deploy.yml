@@ -24,6 +24,8 @@ on:
       - "infra/telemetry/clickhouse/**"
       - "infra/telemetry/collector/**"
       - ".github/workflows/deploy.yml"
+  schedule:
+    - cron: "23 7 * * *"
   workflow_dispatch:
     inputs:
       service:
@@ -41,7 +43,7 @@ jobs:
   changes:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
-      site: ${{ steps.filter.outputs.site == 'true' || inputs.service == 'site' }}
+      site: ${{ steps.filter.outputs.site == 'true' || inputs.service == 'site' || github.event_name == 'schedule' }}
       dashboard: ${{ steps.filter.outputs.dashboard == 'true' || inputs.service == 'dashboard' }}
       telemetry-group: ${{ steps.filter.outputs.telemetry-group == 'true' || inputs.service == 'telemetry' }}
       clickhouse: ${{ steps.filter.outputs.clickhouse }}
