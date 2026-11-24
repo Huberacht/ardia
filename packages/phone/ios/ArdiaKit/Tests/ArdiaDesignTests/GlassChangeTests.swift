@@ -20,6 +20,20 @@ struct GlassChangeTests {
     #expect(!again)
   }
 
+  @Test func `a tab switch doesn't ask WebKit for the page picture until the switch has settled`() {
+    var gate = GlassSnapshotGate()
+    let ask = GlassSnapshotAsk(hasImage: false, pending: false, stillFrames: 5, distance: 0, age: 0, committed: true, speed: 0, allowsMoving: false)
+    gate.observe(GlassPageKey(page: 1, committed: 1), arrivingAt: 10)
+    #expect(!gate.mayRequest(now: 10, ask), "the arriving page paints first")
+    #expect(!gate.mayRequest(now: 10 + GlassFlowRules.arrivalSettle - 0.01, ask))
+    #expect(gate.mayRequest(now: 10 + GlassFlowRules.arrivalSettle, ask))
+    gate.observe(GlassPageKey(page: 1, committed: 2), arrivingAt: 20)
+    #expect(gate.mayRequest(now: 20, ask), "a new document in the same tab is no switch")
+    gate.observe(GlassPageKey(page: 2, committed: 1), arrivingAt: 30)
+    #expect(!gate.mayRequest(now: 30.2, ask), "another tab")
+    #expect(GlassFlowRules.arrivalSettle >= 0.3 && GlassFlowRules.arrivalSettle <= 0.5, "past the card and pager springs, short of a noticeable wait")
+  }
+
   @Test func `a masked view is never an opaque floor, however solid its fill`() {
     #expect(GlassStacking.coversOpaquely(isPage: false, alpha: 1, fillAlpha: 1, masked: false))
     #expect(!GlassStacking.coversOpaquely(isPage: false, alpha: 1, fillAlpha: 1, masked: true), "a mask can show only part of it")

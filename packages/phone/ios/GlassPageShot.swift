@@ -57,7 +57,7 @@ final class GlassPageShot {
     }
     let key = Self.key(of: web).key
     let zoomed = zoomWatch.observe(Double(web.scrollView.zoomScale))
-    let changed = gate.observe(key) || self.web !== web || zoomed
+    let changed = gate.observe(key, arrivingAt: now) || self.web !== web || zoomed
     guard changed else { return false }
     self.web = web
     pendingToken = nil
