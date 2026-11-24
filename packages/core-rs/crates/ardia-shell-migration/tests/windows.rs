@@ -169,3 +169,62 @@ fn a_junction_root_is_refused() {
         Outcome::Refused
     );
 }
+
+#[test]
+fn hard_links_are_skipped_on_windows_too() {
+    let scratch = Scratch::new("hard-link");
+    let layout = Layout::custom(
+        &scratch.0.join("rnw").to_string_lossy(),
+        &scratch.0.join("webui"),
+        false,
+    );
+    let outside = scratch.0.join("outside.txt");
+    write(&outside, b"private");
+    write(&layout.rnw_data.join("session.json"), b"{}");
+    fs::hard_link(&outside, layout.rnw_data.join("hard.json")).unwrap();
+    let report = migrate(&layout, &Dpapi, &CredentialManager, &Faults::default());
+    assert_eq!(report.outcome, Outcome::MigratedWithSkips, "{report:?}");
+    assert_eq!(report.counts.skipped_invalid, 1);
+    assert!(!layout.webui_data.join("hard.json").exists());
+}
+
+#[test]
+fn a_junction_above_any_root_is_refused() {
+    let scratch = Scratch::new("junction-ancestor");
+    let real = scratch.0.join("real");
+    write(&real.join("rnw").join("session.json"), b"{}");
+    let linked = scratch.0.join("linked");
+    junction(&linked, &real);
+    let through = Layout::custom(&linked.join("rnw").to_string_lossy(), &scratch.0.join("webui"), false);
+    assert_eq!(
+        migrate(&through, &Dpapi, &CredentialManager, &Faults::default()).outcome,
+        Outcome::Refused
+    );
+    let into = Layout::custom(&real.join("rnw").to_string_lossy(), &linked.join("webui"), false);
+    assert_eq!(
+        migrate(&into, &Dpapi, &CredentialManager, &Faults::default()).outcome,
+        Outcome::Refused
+    );
+    assert!(!real.join("webui").exists(), "nothing was created through the junction");
+}
+
+#[test]
+fn the_webui_sync_key_name_and_entropy_match_the_webui_store() {
+    let scratch = Scratch::new("webui-name");
+    let layout = Layout::custom(&scratch.0.join("rnw").to_string_lossy(), &scratch.0.join("webui"), true);
+    let key = [5u8; 32];
+    write(
+        &layout.rnw_data.join("Sync").join("sync-key-caseTest.dpapi"),
+        &Dpapi.seal(&key, "ardia-sync-key/v1/test-instance/caseTest").unwrap(),
+    );
+    let report = migrate(&layout, &Dpapi, &CredentialManager, &Faults::default());
+    assert_eq!(report.outcome, Outcome::Migrated, "{report:?}");
+    let sealed = fs::read(layout.webui_data.join("Sync").join("sync-key-x6361736554657374.dpapi")).unwrap();
+    assert_eq!(
+        Dpapi
+            .open(&sealed, "ardia-sync-key/v1/test-instance/caseTest")
+            .unwrap()
+            .as_slice(),
+        &key
+    );
+}

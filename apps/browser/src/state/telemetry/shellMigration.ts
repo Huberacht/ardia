@@ -2,7 +2,7 @@ export const SHELL_MIGRATION_ATTEMPT_DOC = "rnw-migration-attempt.json";
 export const SHELL_MIGRATION_REPORTED_DOC = "rnw-migration-reported.json";
 
 const OUTCOMES = new Set(["migrated", "migrated_with_skips", "already_migrated", "nothing_to_migrate", "busy", "refused", "failed"]);
-const STAGES = new Set(["layout", "lock", "documents", "config", "sync_keys", "credentials", "marker"]);
+const STAGES = new Set(["layout", "lock", "documents", "config", "sync_keys", "credentials", "report", "marker"]);
 const COUNTS = [
   "documents",
   "placement",
@@ -17,6 +17,7 @@ const COUNTS = [
   "skipped_case_clash",
   "sync_keys_unreadable",
   "credentials_incomplete",
+  "credential_chunks_orphaned",
   "partials_swept",
 ] as const;
 const COUNT_CAP = 1_000_000;
@@ -61,11 +62,25 @@ const reportedRun = (text: string | null) => {
   return isObject(reported) && typeof reported.run === "string" ? reported.run : null;
 };
 
-export type ShellMigrationDocuments = { read(name: string): string | null; save(name: string, contents: string): void };
+export const SHELL_MIGRATION_DOCUMENTS = [SHELL_MIGRATION_ATTEMPT_DOC, SHELL_MIGRATION_REPORTED_DOC] as const;
 
-export function shellMigrationOnce(documents: ShellMigrationDocuments): ShellMigrationProperties | null {
-  const report = shellMigrationReport(documents.read(SHELL_MIGRATION_ATTEMPT_DOC));
-  if (!report || reportedRun(documents.read(SHELL_MIGRATION_REPORTED_DOC)) === report.run) return null;
-  documents.save(SHELL_MIGRATION_REPORTED_DOC, JSON.stringify({ run: report.run }));
-  return report.properties;
+export function pendingShellMigration(read: (name: string) => string | null): ShellMigrationReport | null {
+  const report = shellMigrationReport(read(SHELL_MIGRATION_ATTEMPT_DOC));
+  return report && reportedRun(read(SHELL_MIGRATION_REPORTED_DOC)) !== report.run ? report : null;
+}
+
+export type ShellMigrationReporting = {
+  read(name: string): string | null;
+  save(name: string, contents: string): Promise<void>;
+  sharing(): boolean;
+  send(properties: ShellMigrationProperties): void;
+};
+
+export async function reportShellMigration(reporting: ShellMigrationReporting): Promise<"none" | "held" | "reported"> {
+  const report = pendingShellMigration(reporting.read);
+  if (!report) return "none";
+  if (!reporting.sharing()) return "held";
+  reporting.send(report.properties);
+  await reporting.save(SHELL_MIGRATION_REPORTED_DOC, JSON.stringify({ run: report.run }));
+  return "reported";
 }

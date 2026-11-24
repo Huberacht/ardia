@@ -1773,8 +1773,8 @@ still RNW, and the cutover PR decides where the WebUI host calls it (before Chro
 | --- | --- | --- | --- |
 | documents (`session.json` and the rest of `DocumentStore`), window placement | `%LOCALAPPDATA%\Ardia\<name>` | `%LOCALAPPDATA%\Ardia WebUI\<name>`, where the WebUI host already reads `session.json` | byte copy |
 | config, hooks, themes | `%APPDATA%\Ardia\{config.json,hooks.json,themes\*.json}` (`<data>\config` with `ARDIA_DATA_DIR`) | `Ardia WebUI\config\…` | byte copy |
-| sealed sync keys | `%LOCALAPPDATA%\Ardia\Sync\sync-key-<account>.dpapi`, DPAPI with entropy `ardia-sync-key/v1[/test-instance]/<account>` | `Ardia WebUI\Sync\` | byte copy, only once the key unseals to 32 bytes for its own account |
-| connected accounts | Credential Manager `Ardia Connected Accounts/<account>` (`… [<data dir>]/` with `ARDIA_DATA_DIR`): the first 2,560 bytes on the base item, comment `Ardia g<1|2> <chunks>`, the rest on `<base>#g<generation>#<n>` (`<base>#<n>` before generations), up to 64 chunks | `Ardia WebUI\Secrets\account-<hex of the UTF-8 account>.dpapi`, DPAPI with entropy `ardia-connected-account/v1[/test-instance]/<account>` | reassembled as `CredentialStore::Get` does; a missing chunk leaves the account out |
+| sealed sync keys | `%LOCALAPPDATA%\Ardia\Sync\sync-key-<account>.dpapi`, DPAPI with entropy `ardia-sync-key/v1[/test-instance]/<account>` | `Ardia WebUI\Sync\sync-key-x<lowercase hex of the account>.dpapi`, the name and entropy the WebUI host's DPAPI secret store (`desktop_platform_win.cc`, #4039) reads | byte copy under the new name, only once the key unseals to 32 bytes for its own account |
+| connected accounts | Credential Manager `Ardia Connected Accounts/<account>` (`… [<data dir>]/` with `ARDIA_DATA_DIR`): the first 2,560 bytes on the base item, comment `Ardia g<1|2> <chunks>`, the rest on `<base>#g<generation>#<n>` (`<base>#<n>` before generations), up to 64 chunks | `Ardia WebUI\Secrets\account-x<lowercase hex of the UTF-8 account>.dpapi`, DPAPI with entropy `ardia-connected-account/v1[/test-instance]/<account>`; the WebUI host has no connected-accounts store yet (`ArdiaKeychain` is refused on desktop), so the cutover's store reads this layout | reassembled as `CredentialStore::Get` does. RNW writes continuation chunks (no comment) before the base (comment `Ardia …`), so an item counts as a chunk only when it has no comment and a chunk-shaped name: one no base claims is an orphan of an interrupted first write and is left out (`credential_chunks_orphaned`), while a chunk-shaped name with its own comment is an account of its own. A missing chunk leaves the account out |
 | Chromium's profile (cookies, saved passwords, extensions) and the install identity | `%LOCALAPPDATA%\Ardia\User Data`, the installer's registry | untouched and not copied | stays where it is |
 
 Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`, `Ardia.png`), dot files, staged
@@ -1790,22 +1790,31 @@ Scratch files (`dialog.json`, `menu.json`, `activation.log`, `file-chooser.txt`,
   that differs (pilot data) is copied once to `rnw-migration-kept\` before the RNW copy replaces it. An exclusive lock
   on `rnw-migration.lock` makes a second concurrent run answer `busy`. `migration.rs` stops before every rename in
   turn and resumes each to the same result as an uninterrupted run.
-- **Safety.** Overlapping or relative folders are refused, and so is a linked root, marker or lock. Nothing is opened
-  through a symlink, junction or other reparse point (`O_NOFOLLOW`, `FILE_FLAG_OPEN_REPARSE_POINT`, checked again on
-  the handle) on either side, every folder on the way to a write is checked, hard-linked files and files over the
+- **Safety.** Overlapping or relative folders are refused, and so is a root with a link or junction anywhere above it,
+  or a linked marker or lock. Each root is pinned to its resolved path; every read, write, lock, folder creation,
+  rename and partial sweep first walks each folder from its root and opens it without following links, and each
+  opened handle's final path (`GetFinalPathNameByHandleW`, `F_GETPATH`, `/proc/self/fd`) must stay inside the root.
+  Nothing is opened through a symlink, junction or other reparse point (`O_NOFOLLOW`, `FILE_FLAG_OPEN_REPARSE_POINT`)
+  on either side, files with more than one link (`nNumberOfLinks`, `st_nlink`) and files over the
   limits (64 MiB documents, 4 MiB config, 64 KiB keys) are skipped, names follow the RNW stores' own rules, account
-  file names are lowercase hex, DPAPI runs with `CRYPTPROTECT_UI_FORBIDDEN` and plaintext buffers are zeroed. Boundary
+  file names are lowercase hex, DPAPI runs with `CRYPTPROTECT_UI_FORBIDDEN` and plaintext is read into one buffer of its exact size and zeroed. Boundary
   row `native:rnw-webui-migration`.
-- **Report.** Each run writes `rnw-migration-attempt.json` with only an outcome (`migrated`, `migrated_with_skips`,
-  `already_migrated`, `nothing_to_migrate`, `busy`, `refused`, `failed`), the failed stage, the attempt number, the
+- **Report.** The report is committed before the marker, so a marker never exists without the report of its run; a
+  report that can't be written fails the run (`failed_stage: report`). Each run writes `rnw-migration-attempt.json` with only an outcome (`migrated`, `migrated_with_skips`,
+  `already_migrated`, `nothing_to_migrate`, `busy`, `refused`, `failed`), the failed stage (`layout`, `lock`,
+  `documents`, `config`, `sync_keys`, `credentials`, `report`, `marker`), the attempt number, the
   duration and counts. The exit code is 0, 1 (failed, run again), 2 (refused), 3 (busy) or 64 (usage).
 - **Telemetry.** Every event on Windows carries `host_shell` (`rnw` or `webui`, `state/telemetry/hostShell.*.ts`). On
-  the WebUI host, the launch events read the attempt report and sends `shell_migration` once per run (its
-  outcome, `failed_stage`, `attempt`, `duration_ms` and the counts), known enums and capped counts only. Watch
+  the WebUI host the telemetry leader loads the attempt report from disk with its own documents before the launch
+  events read it, and sends `shell_migration` once per run only while sharing is on; the run is marked reported
+  (`rnw-migration-reported.json`) only after the event went out and that mark is saved, so with sharing off it
+  stays pending. The event carries the outcome, `failed_stage`, `attempt`, `duration_ms` and the counts: known enums
+  and capped counts only. Watch
   `shell_migration` by outcome: `failed` and `refused` should stay near zero, and `credentials_incomplete` and
   `sync_keys_unreadable` against `credentials` and `sync_keys`.
 - **Checks.** `cargo test -p ardia-shell-migration` (Mac, Linux and Windows in `rust.yml`; on Windows also real DPAPI,
-  a chunked account through Credential Manager and junctions on both sides). In a Windows 11 guest,
+  a chunked account through Credential Manager, junctions on both sides and above a root, hard links and the WebUI
+  sync-key name). In a Windows 11 guest,
   `scripts/windows/webui-pilot/upgrade.ps1 -Migrator <dir>\ardia-webui-migrate.exe [-RnwApp <RNW build>]` seeds a
   scratch RNW profile (documents, config, sealed keys, single, chunked, legacy and torn accounts, a fake Chromium
   profile), stops the migrator before each rename and resumes it (needs `Ardia.test-build` beside the migrator for

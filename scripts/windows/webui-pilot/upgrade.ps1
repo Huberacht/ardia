@@ -159,6 +159,7 @@ try {
   foreach ($account in $secrets.Keys) { Write-Rnw $account $secrets[$account].bytes $secrets[$account].generation }
   Write-Rnw 'torn' (Pattern ($chunkBytes * 3) 1) 1
   [RnwVault]::Delete("${prefix}torn#g1#2")
+  if (-not [RnwVault]::Write("${prefix}half-written#g1#1", $null, 'half-written', (Pattern 300 2))) { throw 'CredWrite of the orphan chunk failed' }
 
   if ($RnwApp) {
     $env:ARDIA_DATA_DIR = $rnw
@@ -199,17 +200,18 @@ try {
   $first = Migrate
   $c = $first.report.counts
   Check 'migrated' ($first.code -eq 0 -and $first.report.outcome -eq 'migrated_with_skips') "exit $($first.code), $($first.text)"
-  Check 'counts' ($c.documents -eq 2 -and $c.placement -eq 1 -and $c.config_files -eq 3 -and $c.sync_keys -eq 1 -and $c.sync_keys_unreadable -eq 1 -and $c.credentials -eq 3 -and $c.credentials_incomplete -eq 1) ($c | ConvertTo-Json -Compress)
+  Check 'counts' ($c.documents -eq 2 -and $c.placement -eq 1 -and $c.config_files -eq 3 -and $c.sync_keys -eq 1 -and $c.sync_keys_unreadable -eq 1 -and $c.credentials -eq 3 -and $c.credentials_incomplete -eq 1 -and $c.credential_chunks_orphaned -eq 1) ($c | ConvertTo-Json -Compress)
 
   $docs = @('session.json', 'history-index.json', 'window-placement.txt') | Where-Object { -not (Same ([IO.File]::ReadAllBytes("$rnw\$_")) ([IO.File]::ReadAllBytes("$web\$_"))) }
   Check 'documents-copied' ($docs.Count -eq 0) "documents and window placement byte for byte; different: $($docs -join ', ')"
   $configs = @('config.json', 'hooks.json', 'themes\dusk.json') | Where-Object { -not (Same ([IO.File]::ReadAllBytes("$rnw\config\$_")) ([IO.File]::ReadAllBytes("$web\config\$_"))) }
   Check 'config-copied' ($configs.Count -eq 0) "config, hooks and themes; different: $($configs -join ', ')"
-  $copiedKey = [IO.File]::ReadAllBytes("$web\Sync\sync-key-acct1.dpapi")
-  Check 'sync-key-copied' ((Same $copiedKey ([IO.File]::ReadAllBytes("$rnw\Sync\sync-key-acct1.dpapi"))) -and (Same (Unseal $copiedKey 'ardia-sync-key/v1/test-instance/acct1') $syncKey) -and -not (Test-Path "$web\Sync\sync-key-acct2.dpapi")) 'the sealed key is copied as is and still unseals for its account; the key sealed for someone else stays behind'
+  $webuiKeyName = "sync-key-x$(Hex 'acct1').dpapi"
+  $copiedKey = [IO.File]::ReadAllBytes("$web\Sync\$webuiKeyName")
+  Check 'sync-key-copied' ((Same $copiedKey ([IO.File]::ReadAllBytes("$rnw\Sync\sync-key-acct1.dpapi"))) -and (Same (Unseal $copiedKey 'ardia-sync-key/v1/test-instance/acct1') $syncKey) -and -not (Test-Path "$web\Sync\sync-key-x$(Hex 'acct2').dpapi") -and @(Get-ChildItem -LiteralPath "$web\Sync" -Force).Count -eq 1) "the sealed key is copied as is to $webuiKeyName, the name the WebUI host's DPAPI store reads, and still unseals for its account; the key sealed for someone else stays behind"
   $wrong = @()
   foreach ($account in $secrets.Keys) {
-    $file = "$web\Secrets\account-$(Hex $account).dpapi"
+    $file = "$web\Secrets\account-x$(Hex $account).dpapi"
     $plain = if (Test-Path -LiteralPath $file) { Unseal ([IO.File]::ReadAllBytes($file)) "ardia-connected-account/v1/test-instance/$account" } else { $null }
     if (-not (Same $plain $secrets[$account].bytes)) { $wrong += $account }
   }
@@ -266,15 +268,19 @@ try {
   $outsideBefore = Tree-Snapshot $outside
   $through = Migrate @() $linked
   Check 'junction-not-written-through' ($through.code -eq 1 -and (Same-Snapshot $outsideBefore (Tree-Snapshot $outside))) "a junction at Secrets: exit $($through.code), nothing written through it"
-  Clear-WebUI $linked
+} catch {
+  Check 'no-terminating-error' $false "$($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)"
 } finally {
   foreach ($target in ([RnwVault]::Snapshot($prefix)).Keys) { [RnwVault]::Delete($target) }
   Stop-Engine
-  Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND, Env:ARDIA_TEST_MIGRATION_STOP_AT_COMMIT -ErrorAction SilentlyContinue
+  Remove-Item Env:ARDIA_DATA_DIR, Env:ARDIA_BACKGROUND, Env:ARDIA_TEST_MIGRATION_STOP_AT_COMMIT, Env:ARDIA_REMOTE_DEBUGGING_PORT -ErrorAction SilentlyContinue
+  Check 'test-credentials-removed' (([RnwVault]::Snapshot($prefix)).Count -eq 0) 'the run removed the Credential Manager items it made'
+  try { Remove-PilotRun $run; Check 'scratch-removed' (-not (Test-Path -LiteralPath $run)) "the run folder $run is gone" }
+  catch { Check 'scratch-removed' $false "$($_.Exception.Message)" }
+  $results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\$Label-results.json"
 }
 
-Check 'test-credentials-removed' (([RnwVault]::Snapshot($prefix)).Count -eq 0) 'the run removed the Credential Manager items it made'
-Remove-PilotRun $run
-$results | ConvertTo-Json -Depth 4 | Set-Content "$Proof\$Label-results.json"
 $failed = @($results.Values | Where-Object { -not $_.ok }).Count
 "DONE $Label, $failed failed"
+if ($failed -gt 0) { exit 1 }
+exit 0

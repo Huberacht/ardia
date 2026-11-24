@@ -105,18 +105,20 @@ pub fn sync_key_file(account: &str) -> String {
     format!("sync-key-{account}.dpapi")
 }
 
+fn lower_hex(text: &str) -> String {
+    text.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn webui_sync_key_file(account: &str) -> String {
+    format!("sync-key-x{}.dpapi", lower_hex(account))
+}
+
 pub fn secret_account(account: &str) -> bool {
     !account.is_empty() && account.len() <= SECRET_ACCOUNT_LIMIT && !account.chars().any(|c| (c as u32) < 32)
 }
 
 pub fn secret_file(account: &str) -> String {
-    let mut name = String::with_capacity(16 + account.len() * 2);
-    name.push_str("account-");
-    for byte in account.as_bytes() {
-        name.push_str(&format!("{byte:02x}"));
-    }
-    name.push_str(".dpapi");
-    name
+    format!("account-x{}.dpapi", lower_hex(account))
 }
 
 pub fn folded(name: &str) -> String {

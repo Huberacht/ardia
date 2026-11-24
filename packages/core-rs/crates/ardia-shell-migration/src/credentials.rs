@@ -21,6 +21,7 @@ pub enum Assembled {
     },
     Incomplete,
     Invalid,
+    Orphan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,6 +110,37 @@ fn chunk_bases(target: &str) -> Vec<&str> {
     bases
 }
 
+pub fn chunk_shaped(target: &str) -> bool {
+    !chunk_bases(target).is_empty()
+}
+
+fn continuation(credential: &StoredCredential) -> bool {
+    credential.comment.is_none() && chunk_shaped(&credential.target)
+}
+
+fn parts_of<'a>(
+    base: &str,
+    first: &'a StoredCredential,
+    by_target: &'a BTreeMap<String, StoredCredential>,
+) -> Option<Vec<&'a [u8]>> {
+    let layout = layout_of(first.comment.as_deref());
+    let mut parts = Vec::with_capacity(layout.chunks);
+    parts.push(first.blob.as_slice());
+    let mut total = first.blob.len();
+    for index in 1..layout.chunks {
+        let part = by_target.get(&chunk_target(base, layout.generation, index))?;
+        if !continuation(part) {
+            return None;
+        }
+        total += part.blob.len();
+        if total > MAX_SECRET_BYTES {
+            return None;
+        }
+        parts.push(part.blob.as_slice());
+    }
+    Some(parts)
+}
+
 pub fn assemble(prefix: &str, stored: Vec<StoredCredential>) -> Vec<Assembled> {
     let mut by_target: BTreeMap<String, StoredCredential> = BTreeMap::new();
     for credential in stored {
@@ -116,39 +148,41 @@ pub fn assemble(prefix: &str, stored: Vec<StoredCredential>) -> Vec<Assembled> {
             by_target.insert(credential.target.clone(), credential);
         }
     }
-    let is_chunk = |target: &str| chunk_bases(target).iter().any(|base| by_target.contains_key(*base));
-    let bases: Vec<String> = by_target.keys().filter(|target| !is_chunk(target)).cloned().collect();
+    let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut assembled = Vec::new();
-    for base in bases {
+    for (base, first) in by_target.iter().filter(|(_, credential)| !continuation(credential)) {
         let account = &base[prefix.len()..];
         if !names::secret_account(account) {
             assembled.push(Assembled::Invalid);
             continue;
         }
-        let first = &by_target[&base];
-        let layout = layout_of(first.comment.as_deref());
-        let mut secret = Zeroizing::new(Vec::with_capacity(first.blob.len()));
-        secret.extend_from_slice(&first.blob);
-        let mut complete = true;
-        for index in 1..layout.chunks {
-            match by_target.get(&chunk_target(&base, layout.generation, index)) {
-                Some(part) if secret.len() + part.blob.len() <= MAX_SECRET_BYTES => {
-                    secret.extend_from_slice(&part.blob)
-                }
-                _ => {
-                    complete = false;
-                    break;
-                }
-            }
-        }
-        if !complete || secret.len() > MAX_SECRET_BYTES {
+        let Some(parts) = parts_of(base, first, &by_target) else {
             assembled.push(Assembled::Incomplete);
             continue;
+        };
+        let layout = layout_of(first.comment.as_deref());
+        for index in 1..layout.chunks {
+            used.insert(chunk_target(base, layout.generation, index));
+        }
+        let total = parts.iter().map(|part| part.len()).sum();
+        let mut secret = Zeroizing::new(Vec::with_capacity(total));
+        for part in parts {
+            secret.extend_from_slice(part);
         }
         assembled.push(Assembled::Secret {
             account: account.to_string(),
             secret,
         });
+    }
+    let stale_generation = |target: &str| {
+        chunk_bases(target)
+            .iter()
+            .any(|base| by_target.get(*base).is_some_and(|first| !continuation(first)))
+    };
+    for (target, credential) in &by_target {
+        if continuation(credential) && !used.contains(target) && !stale_generation(target) {
+            assembled.push(Assembled::Orphan);
+        }
     }
     assembled
 }

@@ -242,5 +242,6 @@ pub fn populate(root: &Path, sealer: &FakeDpapi) -> Populated {
         .retain(|(target, _, _)| target != &format!("{PREFIX}torn#g1#2"));
     vault.add_rnw("Ardia Connected Accounts [C:\\scratch]/", "github", b"scratch only", 1);
     vault.add("Other App/github", None, b"not ours");
+    vault.add(&format!("{PREFIX}half-written#g1#1"), None, b"orphan continuation");
     Populated { layout, vault, secrets }
 }

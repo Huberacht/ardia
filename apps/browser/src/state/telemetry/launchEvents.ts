@@ -1,12 +1,12 @@
 import { useBrowser } from "../browser/store";
-import { capture, type ConsentToken, type startClient } from "./usageClient";
+import { capture, stillValid, type ConsentToken, type startClient } from "./usageClient";
 import { contextProperties, hardwareProperties, launchGuardProperties } from "./diagnostics";
 import { topAppsSharingAtLaunch } from "./topAppsSharing";
 import { appInfo } from "./transport";
 import { engineMatchProperties } from "./engineMatch";
 import { HOST_SHELL } from "./hostShell";
-import { shellMigrationOnce } from "./shellMigration";
-import { readDocument, saveDocument } from "../../platform/documents";
+import { reportShellMigration } from "./shellMigration";
+import { documentSaved, readDocument, saveDocument } from "../../platform/documents";
 
 const rebootedSince = (lastLaunchAt: number | null) => {
   const boot = appInfo().bootTime;
@@ -20,6 +20,17 @@ export async function launchEvents(session: ReturnType<typeof startClient>, cons
   capture("app_launched", { previous_session: session.previous, ...hardware, ...previous, ...launchGuardProperties(), ...engineMatchProperties(appInfo().engineMatch) }, consent);
   if (session.updatedFrom) capture("app_updated", { from_version: session.updatedFrom }, consent);
   capture("top_apps_sharing", topApps, consent);
-  const migration = HOST_SHELL === "webui" ? shellMigrationOnce({ read: readDocument, save: saveDocument }) : null;
-  if (migration) capture("shell_migration", migration, consent);
+  if (HOST_SHELL === "webui") await reportShellMigrationAtLaunch(consent);
+}
+
+export function reportShellMigrationAtLaunch(consent: ConsentToken | null) {
+  return reportShellMigration({
+    read: readDocument,
+    save: async (name, contents) => {
+      await saveDocument(name, contents);
+      await documentSaved(name);
+    },
+    sharing: () => stillValid(consent),
+    send: (properties) => capture("shell_migration", properties, consent),
+  }).catch(() => "none" as const);
 }

@@ -132,19 +132,56 @@ fn a_chunk_in_the_wrong_generation_does_not_complete_a_secret() {
 }
 
 #[test]
-fn an_account_named_like_a_chunk_is_its_own_secret_when_no_base_exists() {
+fn orphan_continuation_chunks_are_never_sealed_as_accounts() {
     let parts = vec![
-        stored(&format!("{PREFIX}work#1"), None, b"own"),
-        stored(&format!("{PREFIX}home#g2#3"), None, b"too"),
+        stored(&format!("{PREFIX}work#1"), None, b"half of a secret"),
+        stored(&format!("{PREFIX}home#g2#3"), None, b"another half"),
+        stored(&format!("{PREFIX}plain"), Some("Ardia g1 1"), b"real"),
     ];
+    let assembled = assemble(PREFIX, parts);
+    assert_eq!(assembled.iter().filter(|a| matches!(a, Assembled::Orphan)).count(), 2);
+    assert_eq!(secrets(assembled), vec![("plain".to_string(), b"real".to_vec())]);
+}
+
+#[test]
+fn an_interrupted_first_write_leaves_only_orphans() {
+    let mut parts = rnw_layout(PREFIX, "fresh", &vec![4u8; CHUNK_BYTES * 3], 1);
+    parts.retain(|part| part.comment.is_none());
+    let assembled = assemble(PREFIX, parts);
+    assert_eq!(assembled.len(), 2);
+    assert!(assembled.iter().all(|a| matches!(a, Assembled::Orphan)));
+}
+
+#[test]
+fn a_chunk_shaped_account_with_its_own_metadata_is_kept_beside_its_namesake() {
+    let mut parts = rnw_layout(PREFIX, "work", b"work token", 1);
+    parts.extend(rnw_layout(PREFIX, "work#1", b"its own token", 2));
+    parts.extend(rnw_layout(PREFIX, "home#g2#3", &vec![6u8; CHUNK_BYTES + 3], 1));
     let mut found = secrets(assemble(PREFIX, parts));
     found.sort();
     assert_eq!(
         found,
         vec![
-            ("home#g2#3".to_string(), b"too".to_vec()),
-            ("work#1".to_string(), b"own".to_vec())
+            ("home#g2#3".to_string(), vec![6u8; CHUNK_BYTES + 3]),
+            ("work".to_string(), b"work token".to_vec()),
+            ("work#1".to_string(), b"its own token".to_vec()),
         ]
+    );
+}
+
+#[test]
+fn a_base_never_borrows_another_accounts_base_as_a_chunk() {
+    let mut parts = rnw_layout(PREFIX, "acct", &vec![1u8; CHUNK_BYTES + 1], 1);
+    parts.retain(|part| part.comment.is_some());
+    parts.extend(rnw_layout(PREFIX, "acct#g1#1", b"standalone", 1));
+    let assembled = assemble(PREFIX, parts);
+    assert_eq!(
+        assembled.iter().filter(|a| matches!(a, Assembled::Incomplete)).count(),
+        1
+    );
+    assert_eq!(
+        secrets(assembled),
+        vec![("acct#g1#1".to_string(), b"standalone".to_vec())]
     );
 }
 
@@ -249,7 +286,15 @@ fn theme_and_sync_key_names_match_the_rnw_rules() {
 
 #[test]
 fn secret_file_names_are_case_safe_and_cannot_escape() {
-    assert_eq!(names::secret_file("Ab"), "account-4162.dpapi");
+    assert_eq!(names::secret_file("Ab"), "account-x4162.dpapi");
+    assert_eq!(
+        names::webui_sync_key_file("caseTest"),
+        "sync-key-x6361736554657374.dpapi"
+    );
+    assert_ne!(
+        names::webui_sync_key_file("caseTest"),
+        names::webui_sync_key_file("CaseTest")
+    );
     assert_ne!(names::secret_file("Ab"), names::secret_file("aB"));
     for account in ["../../evil", "a\\b", "CON", "x:y", "名前"] {
         let file = names::secret_file(account);

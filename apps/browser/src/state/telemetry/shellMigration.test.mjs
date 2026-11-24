@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-const { shellMigrationReport, shellMigrationOnce, SHELL_MIGRATION_ATTEMPT_DOC, SHELL_MIGRATION_REPORTED_DOC } = await import("./shellMigration.ts");
+const { shellMigrationReport, pendingShellMigration, reportShellMigration, SHELL_MIGRATION_ATTEMPT_DOC, SHELL_MIGRATION_REPORTED_DOC } = await import("./shellMigration.ts");
 const { HOST_SHELL } = await import("./hostShell.ts");
 const { HOST_SHELL: RNW } = await import("./hostShell.windows.ts");
 const { HOST_SHELL: WEBUI } = await import("./hostShell.win.ts");
@@ -20,7 +20,7 @@ const attempt = (overrides = {}) =>
 
 function documents(initial) {
   const docs = new Map(Object.entries(initial));
-  return { docs, read: (name) => docs.get(name) ?? null, save: (name, contents) => void docs.set(name, contents) };
+  return { docs, read: (name) => docs.get(name) ?? null, save: async (name, contents) => void docs.set(name, contents) };
 }
 
 test("host_shell is rnw on React Native Windows, webui on the Windows WebUI build and absent elsewhere", () => {
@@ -32,7 +32,7 @@ test("host_shell is rnw on React Native Windows, webui on the Windows WebUI buil
 test("the migration's attempt report becomes enums and counts only", () => {
   const { run, properties } = shellMigrationReport(attempt({ failed_stage: "credentials", outcome: "failed", path: "C:\\Users\\me", counts: { documents: 2, secret: 9, credentials: -1, sync_keys: 1.5, kept_aside: 9e15 } }));
   assert.equal(run, RUN);
-  assert.deepEqual(Object.keys(properties).sort(), ["attempt", "config_files", "credentials", "credentials_incomplete", "documents", "duration_ms", "failed_stage", "kept_aside", "outcome", "partials_swept", "placement", "skipped_case_clash", "skipped_invalid", "skipped_links", "skipped_too_large", "sync_keys", "sync_keys_unreadable", "unchanged"]);
+  assert.deepEqual(Object.keys(properties).sort(), ["attempt", "config_files", "credential_chunks_orphaned", "credentials", "credentials_incomplete", "documents", "duration_ms", "failed_stage", "kept_aside", "outcome", "partials_swept", "placement", "skipped_case_clash", "skipped_invalid", "skipped_links", "skipped_too_large", "sync_keys", "sync_keys_unreadable", "unchanged"]);
   assert.equal(properties.outcome, "failed");
   assert.equal(properties.failed_stage, "credentials");
   assert.equal(properties.documents, 2);
@@ -51,14 +51,37 @@ test("anything unexpected in the report is not sent", () => {
   assert.equal(shellMigrationReport(attempt({ duration_ms: 1e12 })).properties.duration_ms, 3_600_000);
 });
 
-test("each migration run is reported once", () => {
+function reporting(store, sharing, sent = []) {
+  return { sent, read: store.read, save: store.save, sharing: () => sharing, send: (properties) => sent.push(properties) };
+}
+
+test("each migration run is reported once, and only after the event was sent", async () => {
   const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
-  assert.equal(shellMigrationOnce(store).credentials, 4);
+  const on = reporting(store, true);
+  assert.equal(await reportShellMigration(on), "reported");
+  assert.equal(on.sent[0].credentials, 4);
   assert.deepEqual(JSON.parse(store.docs.get(SHELL_MIGRATION_REPORTED_DOC)), { run: RUN });
-  assert.equal(shellMigrationOnce(store), null);
+  assert.equal(await reportShellMigration(on), "none");
+  assert.equal(on.sent.length, 1);
   store.docs.set(SHELL_MIGRATION_ATTEMPT_DOC, attempt({ run: "f".repeat(32), outcome: "migrated" }));
-  assert.equal(shellMigrationOnce(store).outcome, "migrated");
-  assert.equal(shellMigrationOnce(documents({})), null);
+  assert.equal(pendingShellMigration(store.read).properties.outcome, "migrated");
+  assert.equal(await reportShellMigration(reporting(documents({}), true)), "none");
+});
+
+test("with sharing off the report stays pending, nothing is sent and nothing is marked", async () => {
+  const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+  const off = reporting(store, false);
+  assert.equal(await reportShellMigration(off), "held");
+  assert.equal(off.sent.length, 0);
+  assert.equal(store.docs.has(SHELL_MIGRATION_REPORTED_DOC), false);
+  assert.equal(await reportShellMigration(reporting(store, true)), "reported");
+});
+
+test("a failed save of the reported mark leaves the run pending for the next launch", async () => {
+  const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt() });
+  const failing = { ...reporting(store, true), save: async () => Promise.reject(new Error("disk full")) };
+  await assert.rejects(reportShellMigration(failing));
+  assert.ok(pendingShellMigration(store.read));
 });
 
 test("hostile values in the migration's report never reach an event", async () => {
@@ -70,6 +93,6 @@ test("hostile values in the migration's report never reach an event", async () =
       for (const sent of Object.values(report.properties)) assert.ok(typeof sent === "number" ? Number.isSafeInteger(sent) && sent >= 0 : /^[a-z_]+$/.test(sent), `${id} in ${field}`);
     }
     const store = documents({ [SHELL_MIGRATION_ATTEMPT_DOC]: attempt(), [SHELL_MIGRATION_REPORTED_DOC]: typeof value === "string" ? value : JSON.stringify({ run: value }) });
-    assert.equal(shellMigrationOnce(store)?.outcome ?? "migrated_with_skips", "migrated_with_skips", id);
+    assert.equal(pendingShellMigration(store.read)?.properties.outcome ?? "migrated_with_skips", "migrated_with_skips", id);
   }
 });

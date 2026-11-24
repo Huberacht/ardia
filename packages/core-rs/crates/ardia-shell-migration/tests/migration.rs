@@ -28,15 +28,24 @@ fn assert_no_partials(root: &Path) {
     }
 }
 
+fn webui_sync_account(file: &str) -> Option<String> {
+    let hex = file.strip_prefix("sync-key-x")?.strip_suffix(".dpapi")?;
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
+}
+
 fn comparable(webui: &Path, sealer: &FakeDpapi, accounts: &[&str]) -> Vec<(String, Vec<u8>)> {
     use ardia_shell_migration::Sealer;
     let mut files: Vec<(String, Vec<u8>)> = tree(webui)
         .into_iter()
         .map(
-            |(path, bytes)| match path.strip_prefix("Sync/").and_then(names::sync_key_account) {
+            |(path, bytes)| match path.strip_prefix("Sync/").and_then(webui_sync_account) {
                 Some(account) => {
                     let plain = sealer
-                        .open(&bytes, &names::sync_purpose(account, false))
+                        .open(&bytes, &names::sync_purpose(&account, false))
                         .map(|p| p.to_vec());
                     (path.clone(), plain.unwrap_or_default())
                 }
@@ -100,7 +109,7 @@ fn every_rnw_item_lands_in_the_webui_layout() {
     assert!(!config.join("themes").join("notes.txt").exists());
     let sync = webui.join(names::SYNC_FOLDER);
     assert_eq!(
-        fs::read(sync.join("sync-key-Abc_1.dpapi")).unwrap(),
+        fs::read(sync.join("sync-key-x4162635f31.dpapi")).unwrap(),
         fs::read(rnw.join("Sync").join("sync-key-Abc_1.dpapi")).unwrap()
     );
     assert!(
@@ -112,6 +121,11 @@ fn every_rnw_item_lands_in_the_webui_layout() {
         "a key of the wrong length is not copied"
     );
     assert!(!sync.join("vault.nns").exists());
+    assert!(
+        !sync.join("sync-key-Abc_1.dpapi").exists(),
+        "the WebUI store names keys by the hex of the account"
+    );
+    assert_eq!(tree(&sync).len(), 1);
     for (account, secret) in &populated.secrets {
         assert_eq!(
             opened(&sealer, webui, account).as_deref(),
@@ -133,6 +147,11 @@ fn every_rnw_item_lands_in_the_webui_layout() {
     assert_eq!(counts.sync_keys_unreadable, 2);
     assert_eq!(counts.credentials, 4);
     assert_eq!(counts.credentials_incomplete, 1);
+    assert_eq!(counts.credential_chunks_orphaned, 1);
+    assert!(
+        opened(&sealer, webui, "half-written#g1#1").is_none(),
+        "an orphan chunk never becomes an account"
+    );
     assert_eq!(counts.unchanged, 0);
     assert_eq!(counts.kept_aside, 0);
     assert_eq!(read_marker(webui).unwrap()["outcome"], "migrated_with_skips");
@@ -220,6 +239,13 @@ fn a_crash_before_any_rename_resumes_to_the_same_result() {
         );
         assert!(resumed.counts.partials_swept <= 1);
         assert_no_partials(&layout.webui_data);
+        let attempt = ardia_shell_migration::migrate::read_attempt(&layout.webui_data).unwrap();
+        let marker = read_marker(&layout.webui_data).unwrap();
+        assert_eq!(
+            attempt["run"], marker["run"],
+            "commit {fail_at}: the report and the marker describe the same run"
+        );
+        assert_eq!(attempt["outcome"], marker["outcome"]);
         let again = run(layout, &sealer, &populated.vault);
         assert_eq!(again.outcome, Outcome::AlreadyMigrated);
         fail_at += 1;
@@ -605,5 +631,154 @@ mod links {
         symlink(&outside, layout.webui_data.join(names::LOCK_NAME)).unwrap();
         assert_eq!(run(&layout, &sealer, &FakeVault::empty()).outcome, Outcome::Refused);
         assert_eq!(fs::read(&outside).unwrap(), b"{\"version\":1}");
+    }
+}
+
+#[test]
+fn a_stop_between_the_report_and_the_marker_resumes_with_both() {
+    let sealer = FakeDpapi::new();
+    let mut total = 0;
+    for fail_at in 1..100 {
+        let scratch = Scratch::new("report-marker");
+        let populated = populate(&scratch.0, &sealer);
+        let faults = Faults {
+            fail_at_commit: Some(fail_at),
+        };
+        if migrate(&populated.layout, &sealer, &populated.vault, &faults).outcome != Outcome::Failed {
+            total = fail_at - 1;
+            break;
+        }
+    }
+    assert!(total > 2);
+    let stopped_root = Scratch::new("report-marker-stop");
+    let stopped = populate(&stopped_root.0, &sealer);
+    let before_report = Scratch::new("report-marker-before");
+    let early = populate(&before_report.0, &sealer);
+    let report = migrate(
+        &early.layout,
+        &sealer,
+        &early.vault,
+        &Faults {
+            fail_at_commit: Some(total - 1),
+        },
+    );
+    assert_eq!(report.failed_stage, Some(Stage::Report));
+    assert!(ardia_shell_migration::migrate::read_attempt(&early.layout.webui_data).is_none());
+    assert!(read_marker(&early.layout.webui_data).is_none());
+    let report = migrate(
+        &stopped.layout,
+        &sealer,
+        &stopped.vault,
+        &Faults {
+            fail_at_commit: Some(total),
+        },
+    );
+    assert_eq!(report.outcome, Outcome::Failed);
+    assert_eq!(report.failed_stage, Some(Stage::Marker));
+    let written = ardia_shell_migration::migrate::read_attempt(&stopped.layout.webui_data).unwrap();
+    assert_eq!(
+        written["outcome"], "migrated_with_skips",
+        "the report is on disk before the marker"
+    );
+    assert!(read_marker(&stopped.layout.webui_data).is_none());
+    let resumed = run(&stopped.layout, &sealer, &stopped.vault);
+    assert_eq!(resumed.outcome, Outcome::MigratedWithSkips);
+    assert_eq!(resumed.attempt, 2);
+    let attempt = ardia_shell_migration::migrate::read_attempt(&stopped.layout.webui_data).unwrap();
+    assert_eq!(attempt["run"], read_marker(&stopped.layout.webui_data).unwrap()["run"]);
+    assert_eq!(attempt["attempt"], 2);
+}
+
+#[cfg(unix)]
+mod ancestors {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    #[test]
+    fn a_linked_folder_above_any_root_is_refused() {
+        let scratch = Scratch::new("ancestor");
+        let sealer = FakeDpapi::new();
+        let real = scratch.0.join("real");
+        write(&real.join("Local").join("Ardia").join("session.json"), b"{}");
+        fs::create_dir_all(real.join("Roaming")).unwrap();
+        let linked = scratch.0.join("linked");
+        symlink(&real, &linked).unwrap();
+        let through = Layout::standard(&linked.join("Local"), &linked.join("Roaming"), false);
+        assert_eq!(run(&through, &sealer, &FakeVault::empty()).outcome, Outcome::Refused);
+        assert!(
+            !real.join("Local").join("Ardia WebUI").exists(),
+            "nothing was created through the link"
+        );
+
+        let plain = Layout::standard(&real.join("Local"), &real.join("Roaming"), false);
+        let elsewhere = scratch.0.join("elsewhere");
+        fs::create_dir_all(&elsewhere).unwrap();
+        let webui_parent = scratch.0.join("webui-parent");
+        symlink(&elsewhere, &webui_parent).unwrap();
+        let linked_webui = Layout {
+            webui_data: webui_parent.join("Ardia WebUI"),
+            ..plain.clone()
+        };
+        assert_eq!(
+            run(&linked_webui, &sealer, &FakeVault::empty()).outcome,
+            Outcome::Refused
+        );
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+
+        let config_parent = scratch.0.join("config-parent");
+        symlink(real.join("Roaming"), &config_parent).unwrap();
+        let linked_config = Layout {
+            rnw_config: config_parent.join("Ardia"),
+            ..plain.clone()
+        };
+        assert_eq!(
+            run(&linked_config, &sealer, &FakeVault::empty()).outcome,
+            Outcome::Refused
+        );
+        assert_eq!(run(&plain, &sealer, &FakeVault::empty()).outcome, Outcome::Migrated);
+    }
+
+    #[test]
+    fn the_sweep_never_reaches_through_a_link() {
+        let scratch = Scratch::new("sweep");
+        let sealer = FakeDpapi::new();
+        let populated = populate(&scratch.0, &sealer);
+        let layout = &populated.layout;
+        let outside = scratch.0.join("outside");
+        let planted = format!(".config.json.abc{}", names::PARTIAL_SUFFIX);
+        write(&outside.join(&planted), b"not ours");
+        write(&outside.join("themes").join(&planted), b"not ours");
+        fs::create_dir_all(layout.webui_data.join(names::KEPT_FOLDER)).unwrap();
+        symlink(
+            &outside,
+            layout.webui_data.join(names::KEPT_FOLDER).join(names::CONFIG_FOLDER),
+        )
+        .unwrap();
+        symlink(&outside, layout.webui_data.join(names::CONFIG_FOLDER)).unwrap();
+        let report = run(layout, &sealer, &populated.vault);
+        assert_eq!(report.outcome, Outcome::Failed);
+        assert_eq!(report.counts.partials_swept, 0);
+        assert_eq!(fs::read(outside.join(&planted)).unwrap(), b"not ours");
+        assert_eq!(fs::read(outside.join("themes").join(&planted)).unwrap(), b"not ours");
+        assert_eq!(tree(&outside).len(), 3, "{:?}", tree(&outside).keys());
+    }
+
+    #[test]
+    fn a_folder_swapped_for_a_link_mid_run_is_not_written_through() {
+        let scratch = Scratch::new("swap");
+        let sealer = FakeDpapi::new();
+        let populated = populate(&scratch.0, &sealer);
+        let layout = &populated.layout;
+        let outside = scratch.0.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(&layout.webui_data).unwrap();
+        let root = ardia_shell_migration::fsafe::Root::new(&layout.webui_data).unwrap();
+        let sync = root.ensure_folder(&[names::SYNC_FOLDER]).unwrap();
+        fs::remove_dir(&sync).unwrap();
+        symlink(&outside, &sync).unwrap();
+        assert!(root.stage(&sync, "x.dpapi", b"secret").is_err());
+        assert!(root.read_regular(&sync.join("x.dpapi"), 10).is_err());
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     }
 }
