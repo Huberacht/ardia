@@ -1435,6 +1435,17 @@ internal object FrostSources {
     }
 
     fun frostsOf(source: FrostSourceView): List<FrostView> = frosts().filter { it.source != null && find(it.source) === source }
+
+    fun consumersChanged() {
+        if (!LookTrace.enabled()) return
+        var total = 0
+        for (source in allSources()) {
+            val count = source.stripConsumers
+            total += count
+            LookTrace.counter("ardiaStripConsumers:${source.sourceId ?: "unnamed"}", count.toLong())
+        }
+        LookTrace.counter("ardiaStripConsumers", total.toLong())
+    }
 }
 
 internal object FrostHold {
@@ -1523,7 +1534,17 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
 
     internal fun backdrop(): DeckBackdropView? = finding.backdrop
 
+    internal var findScroller: () -> View? = { FrostPage.pageView(this) }
+
+    private var scroller: WeakReference<View>? = null
+
+    internal fun pageScroll(): Long? {
+        val view = scroller?.get()?.takeIf { it.isAttachedToWindow } ?: findScroller()?.also { scroller = WeakReference(it) } ?: return null
+        return (view.scrollX.toLong() shl 32) or (view.scrollY.toLong() and 0xFFFFFFFFL)
+    }
+
     private val laidOut = ViewTreeObserver.OnGlobalLayoutListener {
+        scroller = null
         val pageBefore = if (pageKnown) pageHeld else null
         pageKnown = false
         val before = knownFinding
@@ -1566,7 +1587,10 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             }
         }
         val strip = strips.getOrPut(key) { FrostStrip(key) }
-        if (strip.consumers.add(frost)) strip.stale = true
+        if (strip.consumers.add(frost)) {
+            strip.stale = true
+            FrostSources.consumersChanged()
+        }
         strip.discardRetiredBefore(drawingTime)
         if (strip.stale || strip.laidOutAt != drawingTime || !strip.covers(FrostStrip.place(wanted, width, height, key.scale))) layout(strip, drawingTime, frost)
         if (evicted) publishStats()
@@ -1588,8 +1612,13 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
                 strip.wakeOneConsumer()
             }
         }
-        if (changed) publishStats()
+        if (changed) {
+            publishStats()
+            FrostSources.consumersChanged()
+        }
     }
+
+    internal val stripConsumers: Int get() = strips.values.sumOf { it.consumers.size }
 
     private var stripsBehind = false
 
@@ -1650,12 +1679,18 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
     }
 
     private fun stopRecording() {
-        recorder?.discardDisplayList()
+        val was = recorder
+        was?.discardDisplayList()
         recorder = null
+        val consumers = strips.isNotEmpty()
         strips.values.forEach(FrostStrip::release)
         strips.clear()
         publishStats()
+        if (was != null) LookTrace.flag(recordingCounter, false)
+        if (consumers) FrostSources.consumersChanged()
     }
+
+    private val recordingCounter: String get() = "ardiaSourceRecording:${sourceId ?: "unnamed"}"
 
     internal fun release() {
         stopRecording()
@@ -1701,6 +1736,7 @@ class FrostSourceView(context: Context, appContext: AppContext) : ExpoView(conte
             node.endRecording()
         }
         canvas.drawRenderNode(node)
+        if (fresh) LookTrace.flag(recordingCounter, true)
         if (fresh) FrostSources.redrawFrostsOf(this) else FrostSources.wakeFrostsWaitingOn(this)
     }
 }
@@ -1712,6 +1748,14 @@ internal object FrostPage {
     const val INSIDE_SOURCE = "inside its own source"
 
     fun unsourced(choice: Choice?): Boolean = choice?.path == Path.Fallback && (choice.reason == NO_SOURCE || choice.reason == INSIDE_SOURCE)
+
+    fun pageView(view: View): View? {
+        if (view.visibility != View.VISIBLE) return null
+        if (view is android.webkit.WebView) return view.takeIf { it.width > 0 && it.height > 0 }
+        if (view !is android.view.ViewGroup) return null
+        for (index in 0 until view.childCount) pageView(view.getChildAt(index))?.let { return it }
+        return null
+    }
 
     fun holdsPage(view: View, sized: (View) -> Boolean = { it.width > 0 && it.height > 0 }): Boolean {
         if (view.visibility != View.VISIBLE) return false
@@ -2055,14 +2099,154 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
     internal var lastChoice: FrostPage.Choice? = null
         private set
 
+    var sampleHold: String? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            dropSample()
+            watchPage(value != null && isAttachedToWindow)
+            invalidate()
+        }
+
+    internal var sampleCapture: SampleCapture = LayerCapture
+
+    internal var heldSample: HeldSample? = null
+        private set
+
+    internal var sampleHeld = false
+        private set
+
+    internal var pageScrolling = false
+        private set
+
+    internal var samplesCaptured = 0L
+        private set
+
+    private var capture: Any? = null
+    private var captureTries = 0
+    private var scrollMark: Long? = null
+    private var watchingPage = false
+    private var drawnMargin = 0f
+    private var drawnScale = 1f
+    private val samplePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val sampleBox = RectF()
+    private val holdCounter: String get() = "ardiaSampleHeld:$role"
+    private val scrollCounter: String get() = "ardiaSampleScroll:$role"
+
+    private val pageScrollListener = ViewTreeObserver.OnScrollChangedListener { pageScrolled() }
+
+    private val scrollSettled = Runnable { settleScroll() }
+
+    private fun watchPage(on: Boolean) {
+        if (on == watchingPage) return
+        watchingPage = on
+        if (on) {
+            viewTreeObserver.addOnScrollChangedListener(pageScrollListener)
+            scrollMark = FrostSources.find(source)?.pageScroll()
+        } else {
+            viewTreeObserver.removeOnScrollChangedListener(pageScrollListener)
+            scrollMark = null
+            settleScroll()
+        }
+    }
+
+    internal fun pageScrolled() {
+        if (sampleHold == null) return
+        val mark = FrostSources.find(source)?.pageScroll() ?: return
+        val before = scrollMark
+        scrollMark = mark
+        if (before == null || before == mark) return
+        removeCallbacks(scrollSettled)
+        postDelayed(scrollSettled, SampleHoldRules.SETTLE_MS)
+        if (pageScrolling) return
+        pageScrolling = true
+        captureTries = 0
+        LookTrace.flag(scrollCounter, true)
+        if (heldSample != null) invalidate() else requestSample()
+    }
+
+    internal fun settleScroll() {
+        removeCallbacks(scrollSettled)
+        if (!pageScrolling) return
+        pageScrolling = false
+        LookTrace.flag(scrollCounter, false)
+        invalidate()
+    }
+
+    private fun dropSample() {
+        heldSample = null
+        capture = null
+        markHeld(false)
+    }
+
+    private fun markHeld(on: Boolean) {
+        if (sampleHeld == on) return
+        sampleHeld = on
+        LookTrace.flag(holdCounter, on)
+        if (on) forgetLayer()
+        FrostSources.sourceChanged(source)
+    }
+
+    private fun sampleStamp(from: FrostSourceView, style: com.ardia.design.FrostedStyle, margin: Float, scale: Float, offset: Long = offsetTo(from)): SampleHoldRules.Stamp? {
+        val key = sampleHold ?: return null
+        val blur = style.blurRadius.value * density
+        return SampleHoldRules.Stamp(key, width, height, offset, isDark, lookOrNull, blur, style.saturation, scale, margin)
+    }
+
+    private fun requestSample() {
+        if (capture != null || sampleHold == null || captureTries >= SampleHoldRules.CAPTURE_TRIES) return
+        val node = blurNode ?: return
+        if (lastChoice?.path != FrostPage.Path.Live) return
+        val from = FrostSources.find(source) ?: return
+        val stamp = sampleStamp(from, LookRules.frost(variant, lookOrNull), drawnMargin, drawnScale, lastOffset) ?: return
+        val width = layerWidth
+        val height = layerHeight
+        val token = Any()
+        capture = token
+        captureTries += 1
+        post {
+            if (capture !== token) return@post
+            if (blurNode !== node || sampleHold != stamp.key) {
+                capture = null
+                return@post
+            }
+            sampleCapture.capture(node, width, height) { bitmap ->
+                if (capture !== token) return@capture
+                capture = null
+                if (bitmap == null || sampleHold != stamp.key) return@capture
+                samplesCaptured += 1
+                heldSample = HeldSample(bitmap, stamp, width, height)
+                if (pageScrolling) invalidate()
+            }
+        }
+    }
+
+    private fun drawSample(canvas: Canvas, sample: HeldSample, style: com.ardia.design.FrostedStyle, dark: Boolean) {
+        val margin = sample.stamp.margin
+        val scale = sample.stamp.scale
+        canvas.save()
+        canvas.clipPath(clip)
+        canvas.translate(-margin, -margin)
+        canvas.scale(scale, scale)
+        sampleBox.set(0f, 0f, sample.layerWidth.toFloat(), sample.layerHeight.toFloat())
+        canvas.drawBitmap(sample.bitmap, null, sampleBox, samplePaint)
+        canvas.restore()
+        paint.style = Paint.Style.FILL
+        paint.color = style.tint.resolve(dark).toArgb()
+        canvas.drawPath(clip, paint)
+    }
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         viewTreeObserver.addOnPreDrawListener(moved)
         FrostSources.attach(this)
         FrostSources.sourceChanged(source)
+        watchPage(sampleHold != null)
     }
 
     override fun onDetachedFromWindow() {
+        watchPage(false)
+        dropSample()
         FrostSources.detach(this)
         viewTreeObserver.removeOnPreDrawListener(moved)
         forgetLayer()
@@ -2114,6 +2298,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     internal fun wantsSource(): Boolean {
         if (!canBlur()) return false
+        if (sampleHeld) return false
         val from = FrostSources.find(source)
         if (from?.heldNow() != null) return true
         return FrostPage.wantsSource(lastChoice, onlyBackdropUnder = from?.holdsOnlyBackdrop == true, blurOverBackdrop = blursBackdrop(), holdsPage = from?.holdsPage == true, pageMode = effectivePageMode())
@@ -2154,6 +2339,17 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             return
         }
         val blurs = canBlur()
+        val sample = heldSample
+        val stampNow = if (sample != null && from != null) sampleStamp(from, style, sample.stamp.margin, sample.stamp.scale) else null
+        if (SampleHoldRules.holds(sampleHold, pageScrolling, samplesNow && blurs, sample?.stamp, stampNow)) {
+            markHeld(true)
+            report(FrostPage.Choice(FrostPage.Path.Solid, SampleHoldRules.HELD_REASON), from?.finding?.why)
+            drawSample(canvas, sample!!, style, dark)
+            drawEdge(canvas, style, dark)
+            return
+        }
+        markHeld(false)
+        if (sample != null && sample.stamp != stampNow) heldSample = null
         val choice = FrostPage.choose(
             blurSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && Frosting.isBlurSupported,
             reduceTransparency = reduceTransparency,
@@ -2170,6 +2366,12 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             onScreen = onScreen(),
         )
         report(choice, from?.finding?.why)
+        val bridge = heldSample
+        if (bridge != null && SampleHoldRules.bridges(sampleHold, choice, bridge.stamp, stampNow)) {
+            drawSample(canvas, bridge, style, dark)
+            drawEdge(canvas, style, dark)
+            return
+        }
         if (choice.path == FrostPage.Path.Live && from != null) {
             val layerNode = blurNode ?: RenderNode("ardiaFrost:$role").also { blurNode = it }
             val blur = style.blurRadius.value * density
@@ -2202,6 +2404,9 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
             paint.style = Paint.Style.FILL
             paint.color = style.tint.resolve(dark).toArgb()
             canvas.drawPath(clip, paint)
+            drawnMargin = margin
+            drawnScale = scale
+            if (!pageScrolling) heldSample = null else if (heldSample == null) requestSample()
         } else if (choice.path == FrostPage.Path.Tinted && from != null && tintedFill(canvas, from, style, dark)) {
             if (blurNode != null || joined != null) forgetLayer()
         } else {

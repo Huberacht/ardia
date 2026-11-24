@@ -293,6 +293,7 @@ class LookModule : Module() {
             Prop("classicChrome") { view: GlassView, value: Map<String, Any?>? -> view.classicFill = GlassRules.chromeFill(value) }
             Prop("shown") { view: GlassView, value: Boolean? -> view.shown = value ?: true }
             Prop("shownMs") { view: GlassView, value: Float? -> view.shownMs = (value ?: GlassRules.DEFAULT_SHOWN_MS).coerceAtLeast(0f) }
+            Prop("sampleHold") { view: GlassView, value: String? -> view.sampleHold = value?.takeIf { it.isNotEmpty() } }
             OnViewDidUpdateProps { view -> view.update() }
         }
     }

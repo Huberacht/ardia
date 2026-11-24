@@ -59,7 +59,7 @@ import { MaterialBarBand } from "./MaterialPageBar";
 import { materialBarPill, materialBottomBar } from "../ui/materialTokens";
 import { MaterialBarPill, useMaterialBarFold, useMaterialBarRegistration, useMaterialPillFold } from "./PersistentMaterialBar";
 import { useMaterialTheme } from "../ui/materialTheme";
-import { HostPill, useBarFold } from "./HostPill";
+import { HostPill, pillHoldOff, pillSampleHold, useBarFold } from "./HostPill";
 import { hostPillLayout } from "./hostPillTokens";
 import { FindBar } from "./FindBar";
 import { MaterialFindBar } from "./MaterialFindBar";
@@ -384,6 +384,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const pullReleased = (lands: boolean) => deckPullReleased(tab.id, lands);
   const barPull = tracks ? { id: tab.id, prepare: refreshHiddenDeck, began: pullBegan, released: pullReleased, settled: deckPullSettled } : null;
   const hostPill = useRef<ViewInstance | null>(null);
+  const pillHold = pillSampleHold(Platform.OS === "android", folds && collapse.collapsed, pillHoldOff(), tab.id, tab.isPrivate, barDark);
   const handoverTarget: HandOverFocus["target"] = searching || menuOpen || dockedSearch || finding || fullscreen || pressing || tabsMenu || readerId === tab.id || collapse.hidden ? null : folds && collapse.collapsed ? "pill" : "address";
   const handover = useMemo(() => ({ target: handoverTarget, pill: hostPill }), [handoverTarget]);
   const barGesture = useMemo(() => Gesture.Race(pager.gesture, barSwipeUp(swipesUp, pager.active, openDeckFromBar, barPull, pulls && reduceMotion)), [pager.gesture, swipesUp, incognito, tracks, tab.id]);
@@ -500,7 +501,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
                     <GlassBranch attached={collapse.fold.attached.pill}>
                     <GlassBehind />
                     <FoldLayer testID="hostPillFoldLayer" textured={collapse.fold.attached.pill} style={styles.pillLayer}>
-                      <HostPill tab={tab} dark={barDark} shown={collapse.fold.pillGlass} anchors={collapse.collapsed} contentStyle={collapse.fold.pillContent} onExpand={collapse.expand} />
+                      <HostPill tab={tab} dark={barDark} shown={collapse.fold.pillGlass} anchors={collapse.collapsed} sampleHold={pillHold} contentStyle={collapse.fold.pillContent} onExpand={collapse.expand} />
                     </FoldLayer>
                     </GlassBranch>
                   </Animated.View>
