@@ -92,7 +92,7 @@ try {
   $sinkControl = Sink-Calls
   Check 'open-external-control-reaches-sink' (($valid.ok -eq $true) -and ($valid.r -is [bool]) -and $valid.r -and ($sinkAfter -eq 0) -and ($sinkControl -eq 1)) "answer $($valid | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkAfter -> $sinkControl"
 
-  $pilotEnginePids = @(Get-Process -Name chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$App*" } | ForEach-Object Id)
+  $pilotEnginePids = @(Engine-Processes | ForEach-Object Id)
   $mailto = Open-With "[$(Js $corpus.mailto)]"
   $sinkMail = Sink-Calls
   Check 'mailto-with-embedded-url-reaches-sink' (($mailto.ok -eq $true) -and ($mailto.r -is [bool]) -and ($sinkMail -eq 2)) "answer $($mailto | ConvertTo-Json -Compress); ShellExecuteExW calls $sinkControl -> $sinkMail"
@@ -130,9 +130,11 @@ try {
   Check 'set-launch-at-login-refuses-shared-corpus' ($absentAtStart -and ($badAbsent.Count -eq 0) -and ($badPresent.Count -eq 0) -and ($storedAfter -eq $expected)) "not refused or changed the Run value while absent: $($badAbsent -join ', '); while present: $($badPresent -join ', ')"
   Check 'login-item-toggles-run-key' ($on.ok -and $off.ok -and $stored -eq $expected -and $status1.r -eq 'enabled' -and $status2.r -eq 'notRegistered' -and (Run-Value 'Ardia WebUI') -eq $null -and (Run-Value 'Ardia') -eq $rnwBefore) "before $($status0.r), stored '$stored', after on $($status1.r), after off $($status2.r), RNW value unchanged: $((Run-Value 'Ardia') -eq $rnwBefore)"
 
+  $settingsBefore = @(Get-Process -Name SystemSettings -ErrorAction SilentlyContinue | ForEach-Object Id)
   $defaultBad = Invoke-Host 'ArdiaSystem.setAsDefaultBrowser' '{ "args": "x" }'
   $defaultObject = Invoke-Host 'ArdiaSystem.setAsDefaultBrowser' '{ "args": { "0": 1 } }'
-  Check 'non-list-args-refused-before-dispatch' ((Refused $defaultBad $DefaultRefusals) -and (Refused $defaultObject $DefaultRefusals) -and -not (Get-Process -Name SystemSettings -ErrorAction SilentlyContinue)) "string args $($defaultBad | ConvertTo-Json -Compress); object args $($defaultObject | ConvertTo-Json -Compress)"
+  $settingsNew = @(Get-Process -Name SystemSettings -ErrorAction SilentlyContinue | Where-Object { $settingsBefore -notcontains $_.Id })
+  Check 'non-list-args-refused-before-dispatch' ((Refused $defaultBad $DefaultRefusals) -and (Refused $defaultObject $DefaultRefusals) -and ($settingsNew.Count -eq 0)) "string args $($defaultBad | ConvertTo-Json -Compress); object args $($defaultObject | ConvertTo-Json -Compress)"
 
   $isDefault = Invoke-Host 'ArdiaSystem.isDefaultBrowser' '{ "args": [] }'
   $badDefault = Invoke-Host 'ArdiaSystem.isDefaultBrowser' '{ "args": [1] }'
