@@ -26,7 +26,8 @@ final class ControlSocket {
   private var bound: (path: String, device: dev_t, inode: ino_t)?
   private var connections: [Int: ControlConnection] = [:]
   private var peerFinished = Set<Int>()
-  private var peers: [Int: (peer: ControlPeerIdentity, identity: [String: Any]?)] = [:]
+  private var peers: [Int: ControlPeerIdentity] = [:]
+  private var asking: [Int: (peer: ControlPeer, lookupMs: Double)] = [:]
   private var nextConnection = 0
   private var generation = 0
   private var quitObserver: NSObjectProtocol?
@@ -42,7 +43,10 @@ final class ControlSocket {
     queue: queue,
     capacity: { [weak self] in self.map { Self.maxConnections - $0.connections.count } ?? 0 },
     dismiss: { id in DispatchQueue.main.async { DialogsModule.dismissShownOnly(key: "\(Self.doorbellKey)\(id)") } },
-    open: { [weak self] connection, fd, key, until in self?.open(connection, fd: fd, key: key, until: until) ?? false },
+    open: { [weak self] connection, fd, key, until in
+      guard let self else { return false }
+      return self.open(connection, fd: fd, key: key, until: until, verified: self.asking.removeValue(forKey: connection))
+    },
     send: { [weak self] name, body in
       guard let sink = self?.sink else { return false }
       sink.send(name, body)
@@ -127,13 +131,14 @@ final class ControlSocket {
   func peer(_ connection: Int, _ done: @escaping ([String: Any]?) -> Void) {
     queue.async { [self] in
       guard let entry = peers[connection] else { return done(nil) }
-      if let known = entry.identity { return done(known) }
-      DispatchQueue.global(qos: .userInitiated).async { [self] in
-        let identity = entry.peer.identity()
+      if let verified = entry.verified { return done(ControlPeerIdentity.reply(verified)) }
+      resolver.async { [self] in
+        let verified = ControlPeerIdentity.resolve(entry.token)
         queue.async { [self] in
           guard peers[connection] != nil else { return done(nil) }
-          peers[connection]?.identity = identity
-          done(identity)
+          let kept = peers[connection]?.verified ?? verified
+          peers[connection]?.verified = kept
+          done(ControlPeerIdentity.reply(kept))
         }
       }
     }
@@ -192,6 +197,7 @@ final class ControlSocket {
     queue.async { [self] in
       guard let outcome = ControlDoorbell.Outcome(rawValue: outcome) else { return done(false) }
       done(doorbell.answer(ask, outcome, approvals: approvalStore()))
+      dropUnaskedPeers()
     }
   }
 
@@ -356,6 +362,7 @@ final class ControlSocket {
     connections.removeAll()
     peerFinished.removeAll()
     peers.removeAll()
+    asking.removeAll()
     approvalKeys.removeAll()
     approvedUntil.removeAll()
     for item in expiries.values { item.cancel() }
@@ -392,17 +399,17 @@ final class ControlSocket {
       nextConnection += 1
       let id = nextConnection
       if policy.sameUserIsEnough {
-        _ = open(id, fd: fd, key: nil, until: nil)
+        _ = open(id, fd: fd, key: nil, until: nil, verified: nil)
         continue
       }
       resolving[id] = fd
       resolverJobs += 1
       let generation = generation
       resolver.async { [weak self] in
-        let peer = ControlPeer.resolve(token)
+        let verified = ControlPeerIdentity.resolve(token)
         self?.queue.async {
           self?.resolverJobs -= 1
-          self?.resolved(id, peer, token, generation)
+          self?.resolved(id, verified, token, generation)
         }
       }
       queue.asyncAfter(deadline: .now() + Self.resolveDeadline) { [weak self] in
@@ -413,7 +420,8 @@ final class ControlSocket {
     }
   }
 
-  private func resolved(_ id: Int, _ peer: ControlPeer, _ token: audit_token_t, _ generation: Int) {
+  private func resolved(_ id: Int, _ verified: (peer: ControlPeer, lookupMs: Double), _ token: audit_token_t, _ generation: Int) {
+    let peer = verified.peer
     guard let fd = resolving.removeValue(forKey: id) else { return }
     guard bound != nil, generation == self.generation else {
       Darwin.close(fd)
@@ -424,17 +432,24 @@ final class ControlSocket {
     let approvals = store?.load(now: now) ?? []
     switch policy.verdict(peer, approvals: approvals, now: now) {
     case .ardia, .sameUser:
-      if !open(id, fd: fd, key: nil, until: nil) { ControlDoorbell.refuse(fd, .full) }
+      if !open(id, fd: fd, key: nil, until: nil, verified: verified) { ControlDoorbell.refuse(fd, .full) }
     case let .approved(key):
       let until = approvals.first { $0.key == key }?.until.map { Date(timeIntervalSince1970: $0) }
-      if !open(id, fd: fd, key: key, until: until) { ControlDoorbell.refuse(fd, .full) }
+      if !open(id, fd: fd, key: key, until: until, verified: verified) { ControlDoorbell.refuse(fd, .full) }
     case let .ask(key):
       NSLog("[control] asking whether %@ (%@) may control Ardia", peer.name, peer.signedBy)
+      asking[id] = verified
       doorbell.ring(connection: id, fd: fd, peer: peer, key: key, token: token)
+      dropUnaskedPeers()
     }
   }
 
-  private func open(_ id: Int, fd: Int32, key: String?, until: Date?) -> Bool {
+  private func dropUnaskedPeers() {
+    let waiting = Set(doorbell.openAsks.flatMap(\.connections))
+    asking = asking.filter { waiting.contains($0.key) }
+  }
+
+  private func open(_ id: Int, fd: Int32, key: String?, until: Date?, verified: (peer: ControlPeer, lookupMs: Double)?) -> Bool {
     guard bound != nil, !isCutOff, connections.count < Self.maxConnections else { return false }
     let generation = generation
     let connection = ControlConnection(
@@ -454,11 +469,12 @@ final class ControlSocket {
       onWritten: { [weak self] tickets in self?.sink?.send("onWritten", ["tickets": tickets]) },
       onPeerFinished: { [weak self] connection in
         guard let self, self.connections[connection.id] != nil, self.peerFinished.insert(connection.id).inserted else { return }
+        self.peers.removeValue(forKey: connection.id)
         self.sink?.send("onClose", ["connection": connection.id])
       },
       mayWrite: { [weak self] connection in self?.mayWrite(connection) ?? false })
     connections[id] = connection
-    if let peer = ControlPeerIdentity.of(fd) { peers[id] = (peer, nil) }
+    if let token = ControlPeer.auditToken(of: fd) { peers[id] = ControlPeerIdentity(token: token, verified: verified) }
     if let key {
       approvalKeys[id] = key
       if let until {

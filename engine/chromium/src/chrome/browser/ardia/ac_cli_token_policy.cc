@@ -42,6 +42,11 @@ bool IsVaultProtected(content::DevToolsAgentHost* host) {
          g_ardia_vault_browser_context(host->GetBrowserContext());
 }
 
+bool IsVaultTarget(const std::string* target_id) {
+  return target_id &&
+         IsVaultProtected(content::ArdiaDevToolsAgentHostForId(*target_id));
+}
+
 namespace {
 
 struct CountedDomain {
