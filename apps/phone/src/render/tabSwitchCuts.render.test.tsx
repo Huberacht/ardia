@@ -223,8 +223,10 @@ test("a tap on the page's Tabs button cuts to the waiting deck from its own UI-t
   if (Platform.OS !== "android") return;
   withTabs(3);
   browsingNow();
-  const root = renderSurface(<Surfaces />);
-  act(() => jest.advanceTimersByTime(500));
+  const { setRootSize } = require("../state/app/rootSize") as typeof import("../state/app/rootSize");
+  act(() => setRootSize(393, 873));
+  const root = renderSurface(<Surfaces />, { flushTimers: false });
+  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
   const selected = currentTabs().selectedId!;
   expect(deckPull.target.value?.id).toBe(selected);
   const press = jest.spyOn(browse, "showDeck");
