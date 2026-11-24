@@ -1833,3 +1833,71 @@ test("a pull settle stamped with an earlier phone layout is dropped before it to
   expect(command?.kind).toBe("open");
   expect(command && command.kind === "open" ? command.tappedAt : null).toBe(4242);
 });
+
+const menuItems = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.accessibilityRole === "menuitem" && typeof node.type === "string");
+
+const TOUCH_PRESS = { nativeEvent: { changedTouches: [{ identifier: 0 }], touches: [{ identifier: 0 }], pageX: 300, pageY: 800 } };
+
+for (const drift of [0, 15]) {
+  test(`a Tabs press held past the long press with ${drift} dp of drift ends in Recent Tabs alone: the held gesture opens the menu, and Pressability's own long press or release of that touch opens nothing more`, async () => {
+    if (Platform.OS !== "android") return;
+    const root = await standbyDeck();
+    expect(menuItems(root)).toHaveLength(0);
+    act(() => fireGestureHandler(getByGestureTestId("floatingBarTabsHold"), [{ state: State.BEGAN, absoluteX: 300, absoluteY: 800 }, { state: State.ACTIVE, absoluteX: 300 + drift, absoluteY: 800 }, { state: State.END, absoluteX: 300 + drift, absoluteY: 800 }]));
+    act(() => fireGestureHandler(getByGestureTestId("floatingBarTabsTap"), [{ state: State.BEGAN }, { state: State.FAILED }]));
+    if (drift === 0) act(() => tabsButtonOf(root).props.onLongPress(TOUCH_PRESS));
+    else echoTabsTouch(root);
+    for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+    expect(menuItems(root).length).toBeGreaterThan(0);
+    expect(deckPull.cut.value).toBe(false);
+    expect(deckTurn.live.value).toBe(0);
+    expect(browse.useBrowse.getState().surface).toBe("browsing");
+    unmount(root);
+  });
+}
+
+test("Recent Tabs from TalkBack's long press action, which has no touch, still opens the menu with cuts on", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const node = root.root.findAll((each) => each.props.accessibilityLabel === "Tabs" && typeof each.props.onAccessibilityAction === "function")[0]!;
+  act(() => node.props.onAccessibilityAction({ nativeEvent: { actionName: "longpress" } }));
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(menuItems(root).length).toBeGreaterThan(0);
+  expect(browse.useBrowse.getState().surface).toBe("browsing");
+  unmount(root);
+});
+
+test("a held Tabs press made before a phone, Duo and back to phone round trip opens no menu once delivered", async () => {
+  if (Platform.OS !== "android") return;
+  const { reportScreenLayout } = require("../state/app/screenLayout") as typeof import("../state/app/screenLayout");
+  const root = await standbyDeck();
+  act(() => {
+    fireGestureHandler(getByGestureTestId("floatingBarTabsHold"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]);
+    reportScreenLayout({ layout: "wide" });
+    reportScreenLayout({ layout: "phone" });
+  });
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(menuItems(root)).toHaveLength(0);
+  unmount(root);
+});
+
+test("an early deck control pressed before a resize and released before its new bounds are republished runs nothing, and the controls are current again once they are republished", async () => {
+  if (Platform.OS !== "android") return;
+  const { resizeRoot } = require("../state/browse/deckHold") as typeof import("../state/browse/deckHold");
+  const root = await standbyDeck();
+  tapTabs();
+  const more = centreOf("more");
+  expect(pressDeckControl("more", more.absoluteX, more.absoluteY)).toBe(true);
+  act(() => resizeRoot(411, 873));
+  expect(deckControlsCurrent()).toBe(false);
+  expect(liftDeckControl("more", more.absoluteX, more.absoluteY)).toBeNull();
+  expect(deckTurn.hitMark.value).toBe("");
+  expect(deckTurn.commandTurn.value).not.toBe(deckTurn.live.value);
+  for (let frame = 0; frame < 20 && !deckControlsCurrent(); frame++) act(() => jest.advanceTimersByTime(16));
+  expect(deckControlsCurrent()).toBe(true);
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(deckTurn.hitMark.value).toBe("");
+  expect(menuItems(root)).toHaveLength(0);
+  act(() => resizeRoot(393, 873));
+  unmount(root);
+});

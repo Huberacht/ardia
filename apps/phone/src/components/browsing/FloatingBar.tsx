@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ComponentProps, type RefObject } from "react";
 import { searchState } from "../../state/search/store";
 import { markShownFrame } from "../../platform/lab";
-import { Platform, StyleSheet, View, type ViewInstance } from "react-native";
+import { Platform, StyleSheet, View, type GestureResponderEvent, type ViewInstance } from "react-native";
 import Animated, { runOnJS, useAnimatedProps, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
@@ -380,7 +380,8 @@ function useFoldedGlass<Back extends { centreGlass: { shown: boolean; shownMs: n
 }
 
 const TABS_LONG_PRESS_MS = 500;
-const TABS_TAP_DRIFT = 24;
+const TABS_TAP_OUTLASTS_HOLD_MS = 150;
+const TABS_PRESS_DRIFT = 24;
 
 export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, glyphs, fold = null, ghost = false, swipe = null, onTabs, onTabsMenu, onStep }: ButtonProps & { order: BrowserTab[]; roles: ColorRoles; swipe?: SwipeAddresses | null; onTabs: () => void; onTabsMenu: () => void; onStep: (delta: -1 | 1) => void }) {
   const count = order.length;
@@ -392,30 +393,46 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
     if (tabSwitchCuts() && isTouchRelease(event)) return;
     tabsNow.current();
   }, []);
+  const holdNow = useRef<((event?: GestureResponderEvent) => void) | undefined>(undefined);
+  const holdTabs = useCallback((phone: number, pageX: number, pageY: number) => tabsPressedOnPhone(phone, () => holdNow.current?.({ nativeEvent: { pageX, pageY } } as GestureResponderEvent)), []);
+  const pressHeld = useCallback((event?: GestureResponderEvent) => {
+    if (tabSwitchCuts() && isTouchRelease(event)) return;
+    holdNow.current?.(event);
+  }, []);
   const tabId = tab.id;
   const swipeOffset = swipe?.offset ?? null;
   const swipeFrom = swipe?.from ?? null;
   const swipeSpan = swipe?.span ?? 0;
-  const tabsTap = useMemo(
-    () =>
-      Gesture.Tap()
-        .withTestId(`${testID}Tap`)
-        .maxDuration(TABS_LONG_PRESS_MS)
-        .shouldCancelWhenOutside(false)
-        .maxDistance(TABS_TAP_DRIFT)
-        .enabled(tabSwitchCuts())
-        .onEnd((_event, success) => {
-          if (!success) return;
-          const swipeLanded = swipeFrom !== null && swipeOffset !== null && swipeFrom.value === tabId && swipeSpan > 0 && Math.abs(Math.abs(swipeOffset.value) - swipeSpan) < 1;
-          if (!swipeLanded && canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
-          else runOnJS(callTabs)(deckTurn.phone.value);
-        }),
-    [tabId, testID, callTabs, swipeOffset, swipeFrom, swipeSpan],
-  );
+  const tabsPress = useMemo(() => {
+    const hold = Gesture.LongPress()
+      .withTestId(`${testID}Hold`)
+      .minDuration(TABS_LONG_PRESS_MS)
+      .maxDistance(TABS_PRESS_DRIFT)
+      .shouldCancelWhenOutside(false)
+      .enabled(tabSwitchCuts())
+      .onStart((event) => {
+        runOnJS(holdTabs)(deckTurn.phone.value, event.absoluteX, event.absoluteY);
+      });
+    const tap = Gesture.Tap()
+      .withTestId(`${testID}Tap`)
+      .maxDuration(TABS_LONG_PRESS_MS + TABS_TAP_OUTLASTS_HOLD_MS)
+      .maxDistance(TABS_PRESS_DRIFT)
+      .shouldCancelWhenOutside(false)
+      .enabled(tabSwitchCuts())
+      .onEnd((_event, success) => {
+        if (!success) return;
+        const swipeLanded = swipeFrom !== null && swipeOffset !== null && swipeFrom.value === tabId && swipeSpan > 0 && Math.abs(Math.abs(swipeOffset.value) - swipeSpan) < 1;
+        if (!swipeLanded && canCutDeckFromTap(tabId)) cutDeckFromTabsTap(tabId);
+        else runOnJS(callTabs)(deckTurn.phone.value);
+      });
+    return Gesture.Race(hold, tap);
+  }, [tabId, testID, callTabs, holdTabs, swipeOffset, swipeFrom, swipeSpan]);
   return (
     <TabsMenuTrigger order={order} onTabsMenu={onTabsMenu}>
-      {({ onLongPress, screenReaderActions }) => (
-        <GestureDetector gesture={tabsTap}>
+      {({ onLongPress, screenReaderActions }) => {
+        holdNow.current = onLongPress;
+        return (
+        <GestureDetector gesture={tabsPress}>
         <PressInPlace
           label="Tabs"
           value={`${count} ${count === 1 ? "tab" : "tabs"}`}
@@ -428,7 +445,7 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
           ]}
           onPress={pressTabs}
           onPressIn={haptics.barPress}
-          onLongPress={onLongPress}
+          onLongPress={onLongPress ? pressHeld : undefined}
           dims="glyph"
           style={styles.circleHit}
         >
@@ -450,7 +467,8 @@ export function FloatingTabsButton({ tab, order, roles, dark, testID, glass, gly
           </ChromeSurface>
         </PressInPlace>
         </GestureDetector>
-      )}
+        );
+      }}
     </TabsMenuTrigger>
   );
 }

@@ -179,7 +179,7 @@ export function liftDeckControl(control: DeckControl, x: number, y: number): Dec
   if (deckTurn.live.value !== press.turn || deckTurn.phone.value !== press.phone) return null;
   const prepared = deckTurn.prepared.value;
   const now = prepared?.controls[control];
-  if (!prepared || !now || prepared.tabId !== press.deck || !sameBounds(now, press.bounds) || !within(press.bounds, x, y, DECK_PRESS_SLOP)) return null;
+  if (!prepared || !now || !deckControlsCurrent() || prepared.tabId !== press.deck || !sameBounds(now, press.bounds) || !within(press.bounds, x, y, DECK_PRESS_SLOP)) return null;
   if (deckTurn.commandTurn.value === press.turn) return null;
   deckTurn.commandTurn.value = press.turn;
   const seq = deckTurn.hitSeq.value + 1;
