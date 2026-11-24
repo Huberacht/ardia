@@ -17,8 +17,12 @@ public struct GlassMotionHold: Sendable {
   @discardableResult
   public mutating func observe(_ frames: [CGRect], in space: CGRect, now: TimeInterval) -> Bool {
     let large = Self.large(frames, in: space)
-    defer { placements = large }
-    guard let placements, Self.moved(from: placements, to: large) else { return false }
+    guard let reference = placements else {
+      placements = large
+      return false
+    }
+    guard Self.moved(from: reference, to: large) else { return false }
+    placements = large
     heldUntil = max(heldUntil, now + Self.quiet)
     return true
   }

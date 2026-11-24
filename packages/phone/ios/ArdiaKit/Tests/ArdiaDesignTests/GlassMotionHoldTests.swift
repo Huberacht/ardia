@@ -33,6 +33,33 @@ struct GlassMotionHoldTests {
     #expect(!moved7, "subpixel settling")
   }
 
+  @Test func `a slow drag of under half a point a frame adds up and holds, while jitter in place never does`() {
+    var hold = GlassMotionHold()
+    let card = CGRect(x: 40, y: 120, width: 320, height: 600)
+    hold.observe([card], in: screen, now: 0)
+    let first = hold.observe([card.offsetBy(dx: 0, dy: 0.4)], in: screen, now: 1.0 / 120)
+    #expect(!first, "0.4 points from where it was seen is still within tolerance")
+    let second = hold.observe([card.offsetBy(dx: 0, dy: 0.8)], in: screen, now: 2.0 / 120)
+    #expect(second, "0.8 points from the reference is movement")
+    #expect(hold.holds(now: 2.0 / 120 + GlassMotionHold.quiet - 0.01))
+    var moves = 0
+    for step in 3...60 {
+      if hold.observe([card.offsetBy(dx: 0, dy: 0.4 * Double(step))], in: screen, now: Double(step) / 120) { moves += 1 }
+    }
+    #expect(moves >= 25, "a drag at 0.4 points a frame keeps extending the hold")
+    #expect(hold.holds(now: 60.0 / 120 + GlassMotionHold.quiet - 0.01))
+
+    var still = GlassMotionHold()
+    still.observe([card], in: screen, now: 0)
+    var jitters = 0
+    for step in 1...60 {
+      let offset = step % 2 == 0 ? 0.3 : -0.3
+      if still.observe([card.offsetBy(dx: 0, dy: offset)], in: screen, now: Double(step) / 120) { jitters += 1 }
+    }
+    #expect(jitters == 0, "jitter within tolerance around one place is no movement")
+    #expect(!still.holds(now: 1))
+  }
+
   @Test func `an arriving tab holds for the arrival, and later commits or routes on it never shorten that`() {
     var hold = GlassMotionHold()
     hold.observe([screen], in: screen, now: 0)

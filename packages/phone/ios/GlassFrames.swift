@@ -267,7 +267,6 @@ final class GlassFrames: NSObject {
       return
     }
     mark("pieces\(pieces.count)")
-    if let landed = capture.land(sigma: sigma, blurs: &blurs, now: now) { finish(landed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil) }
     capture.strikes = sourceWhole && web == nil ? LiquidGlassRules.backdropStrikes : 1
     let pageIndex = pieces.firstIndex { $0.page != nil }
     let page = pageIndex.map { pieces[$0] }
@@ -295,6 +294,7 @@ final class GlassFrames: NSObject {
       if PhoneTestBuild.isOn { stats.heldFrames += 1 }
       return
     }
+    if let landed = capture.land(sigma: sigma, blurs: &blurs, now: now) { finish(landed, capture: capture, members: members, pieces: pieces.count, sourceWhole: sourceWhole, page: web != nil) }
     if capture.dropsPageCapture(shiftable: shiftable) {
       capture.drop()
       if PhoneTestBuild.isOn { NSLog("PAGELAB look glass %@ page capture dropped: the page no longer shifts under it", members.map(\.label).joined(separator: ",")) }

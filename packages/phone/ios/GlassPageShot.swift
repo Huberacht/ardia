@@ -131,6 +131,10 @@ final class GlassPageShot {
                 self.rejected += 1
                 return
               }
+              guard !self.isHeld(at: landed) else {
+                self.held += 1
+                return
+              }
               guard let picture, Self.usable(picture, under: web) else {
                 self.gate.failed(now: landed)
                 return
