@@ -150,7 +150,7 @@ test("Checks' code filter covers every site file the meadow check builds from", 
 });
 
 test("Linux starts on every repository file its fixture suites read", () => {
-  const suites = ["engine/ardiacore-linux/tests", "engine/patches/build/tests", "engine/chromium/src/chrome/browser/ardia/tests", "scripts/linux", "apps/linux/scripts"];
+  const suites = ["engine/ardiacore-linux/tests", "engine/patches/build/tests", "engine/chromium/src/chrome/browser/ardia/tests", "scripts/linux", "apps/desktop/scripts"];
   const files = suites.flatMap((dir) => filesUnder(dir, (name) => /\.(?:py|mjs|sh)$/.test(name)));
   const triggers = triggerPaths(workflow("linux.yml"), "pull_request");
   const named = repoPathsNamedIn(files);
@@ -213,6 +213,20 @@ test("Mac starts on the paths its jobs read, and its Swift tests run for the plu
     assert.ok(text.includes(`      ${name}: \${{ steps.filter.outcome != 'success' || steps.filter.outputs.${name} == 'true' }}`), `${name} falls back to running`);
     assert.match(text, new RegExp(`\\(needs\\.changes\\.result != 'success' \\|\\| needs\\.changes\\.outputs\\.${name} == 'true'\\)`), `${name} runs when the changes job failed`);
   }
+});
+
+test("the conventions check runs on every pull request and push to main, with no paths filter and no install", () => {
+  const text = workflow("conventions.yml");
+  assert.match(text, /^on:\n  pull_request:\n  push:\n    branches: \[main\]\n\n/m, "no paths filter, so a file in a new folder is checked too");
+  assert.match(text, /\n        run: node apps\/browser\/src\/conventions\.test\.mjs\n/);
+  assert.doesNotMatch(text, /pnpm install|npm ci|paths:/);
+});
+
+test("the weekly expiry run lists skips past their date in its summary, without an install", () => {
+  const text = workflow("expiring-skips.yml");
+  assert.match(text, /^  schedule:\n    - cron: "[^"]+"\n  workflow_dispatch:\n/m);
+  assert.match(text, /\n        run: node apps\/browser\/src\/conventions\.test\.mjs --expired --summary "\$GITHUB_STEP_SUMMARY"\n/);
+  assert.doesNotMatch(text, /pnpm install|npm ci/);
 });
 
 test("Deploy starts on main only for the paths one of its services deploys from", () => {

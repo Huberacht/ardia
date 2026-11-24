@@ -3,13 +3,28 @@ import { moveTabsToProfile, switchToTab } from "../browser/actions";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { inPinnedContainer, isIncognitoProfile, isPinnedRow, pinnedSectionTitle, pinSection, viewTabIds } from "../browser/model";
 import { groupOf } from "../pins/tabGrouping";
+import { innermostGroupOf } from "../groups/groupNesting";
+import { withSplitRows } from "../splits/splits";
 import { bookmarkTabs, copyUrls, newGroupWithSelection } from "./actions";
+import { noteSelectionRemovedFromGroups } from "../telemetry/usage";
 import { bookmarksShown } from "../bookmarks/visibility";
 import { bookmarkFolderItems, groupItems, hintWhen, profileItems, sections, windowItems, withAlternate, type Destination } from "./menuParts";
+import { userClose, type ByUser } from "../tabs/closeActivation";
+import { selectedTabIds } from "../pins/organize";
+import { consentToken } from "../telemetry/client";
 
 const store = () => useBrowser.getState();
 
-export function multiTabMenuFacts(s: BrowserState, windowId: string, ids: string[]) {
+export function closeSelectionByKey(windowId: string, user: ByUser | undefined): number {
+  const s = store();
+  const ids = (s.selection[windowId]?.length ?? 0) > 1 ? selectedTabIds(s, windowId) : [];
+  if (ids.length < 2) return 0;
+  s.closeTabs(ids, user ? userClose(ids, user) : {});
+  s.setSelection(windowId, []);
+  return ids.length;
+}
+
+function multiTabMenuFacts(s: BrowserState, windowId: string, ids: string[]) {
   const tabs = ids.map((id) => s.tabs[id]!);
   const chosen = new Set(ids);
   return {
@@ -73,6 +88,7 @@ function sendTabs(windowId: string, ids: string[], profileId: string, to: Destin
 }
 
 export async function openMultiMenu(windowId: string, shown: string[]) {
+  const consent = consentToken();
   const f = multiTabMenuFacts(store(), windowId, shown);
   const choice = await chooseFromMenu(multiTabMenuItems(store(), windowId, shown, f));
   const s = store();
@@ -85,10 +101,13 @@ export async function openMultiMenu(windowId: string, shown: string[]) {
   else if (choice === "pinRows") s.pinTabs(ids, true, true);
   else if (choice === "duplicate") ids.forEach((id) => store().duplicateTab(id));
   else if (choice === "newGroup") newGroupWithSelection(windowId, ids);
-  else if (choice === "ungroup") s.removeTabsFromGroup(ids);
-  else if (choice === "copy") copyUrls(ids, false);
+  else if (choice === "ungroup") {
+    const leaving = withSplitRows(s, ids).filter((id) => innermostGroupOf(s.groups, id)).length;
+    s.removeTabsFromGroup(ids);
+    noteSelectionRemovedFromGroups(leaving, consent);
+  } else if (choice === "copy") copyUrls(ids, false);
   else if (choice === "copyMd") copyUrls(ids, true);
-  else if (choice === "close") s.closeTabs(ids);
-  else if (choice === "closeOthers") s.closeTabs(here(f.others));
+  else if (choice === "close") s.closeTabs(ids, userClose(ids, { consent }));
+  else if (choice === "closeOthers") s.closeTabs(here(f.others), userClose(here(f.others), { consent }));
   if (choice !== "copy" && choice !== "copyMd") store().setSelection(windowId, []);
 }

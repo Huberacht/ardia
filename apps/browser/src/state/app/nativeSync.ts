@@ -13,6 +13,7 @@ import { Appearance } from "react-native";
 import { useBrowser } from "../browser/store";
 import { setLastTabKeepsWindow } from "../omnibox/newTabBarPolicy";
 import { isUtilityWindowId } from "../settings/settingsWindows";
+import { INTRO_WINDOW_ID } from "../onboarding/introWindow";
 import { openingLightsCenter } from "../windows/layout";
 import { createWindowSync, type WindowPort } from "../windows/windowSync";
 import { closeLittleArdiaForAppLink, openExternalUrls } from "../littleArdia/actions";
@@ -45,7 +46,7 @@ import { startCaptionRegionSync } from "../windows/captionRegions";
 const QUIT_SAVES_WAIT_MS = 3_000;
 
 
-export const shellWindowPort: WindowPort = {
+const shellWindowPort: WindowPort = {
   open(id, options, lightsCenter) {
     if (options.maximized) noteWindowReopenedMaximized();
     void setTrafficLightsCenter(id, lightsCenter);
@@ -65,7 +66,8 @@ export function startNativeSync() {
   cancelAbandonedFocusMoves();
   onCommand((e) => {
     if (e.mouseButton) noteMouseShortcutRun(e.mouseButton, nativeConsent(e));
-    settlingCommandFocus(e, runCommand);
+    const user = { consent: nativeConsent(e) };
+    settlingCommandFocus(e, (event) => runCommand(event, { user }));
   });
   startWindowCloseGuard();
   startExtensionsBridge();
@@ -117,7 +119,7 @@ export function startNativeSync() {
     getState: store.getState,
     isQuitting,
     lightsCenter: (s, id) => (s.windows[id]?.kind === "small" ? SMALL_LIGHTS_CENTER : openingLightsCenter(s, id)),
-    isUtilityWindow: isUtilityWindowId });
+    isUtilityWindow: (id) => isUtilityWindowId(id) || id === INTRO_WINDOW_ID });
   windows.listen();
 
   let lastMenu = "";

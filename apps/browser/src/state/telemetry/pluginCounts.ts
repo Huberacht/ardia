@@ -60,6 +60,13 @@ const NONE = {
   plugin_page_reads: 0,
   plugin_decide_calls: 0,
   plugin_decide_timeouts: 0,
+  plugin_state_events: 0,
+  plugin_state_events_dropped: 0,
+  plugin_state_flushes_slow: 0,
+  plugin_state_subscribe_refusals: 0,
+  plugin_state_resyncs: 0,
+  plugin_state_intents: 0,
+  plugin_state_intent_refusals: 0,
 };
 
 export type PluginCount = keyof typeof NONE;
@@ -78,7 +85,7 @@ export function takePluginCounts() {
   return taken;
 }
 
-export function pluginsSetting(installed: number, active: readonly PluginManifest[]): Record<string, string> {
+function pluginsSetting(installed: number, active: readonly PluginManifest[]): Record<string, string> {
   const used = Object.fromEntries(CONTRIBUTIONS.map((c) => [`plugins_with_${c}`, 0]));
   for (const m of active) for (const c of contributionsOf(m)) used[`plugins_with_${c}`]! += 1;
   return {

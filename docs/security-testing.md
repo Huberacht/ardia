@@ -82,8 +82,9 @@ detected forms, the boundary test names it. Anything else needs a hand-kept row.
    the guard's return value alone. A guard that should refuse everything in a class needs a positive control too, so
    the test can't pass because nothing ran.
 3. If the guard lets something through, write the failing case. Fix it in the same change when the fix is small and
-   clearly right; otherwise open an issue and mark the case `{ todo: "<finding> open: ..." }` so it runs, shows up
-   and turns green when fixed.
+   clearly right; otherwise open an issue and mark the case `{ todo: "@<owner> until <YYYY-MM-DD>: <finding> open, #<issue>" }` so it
+   runs, shows up and turns green when fixed; once the date passes the conventions check warns about it
+   (`docs/conventions.md` › Skips and accepted risks carry an expiry).
 
 A regression case is named after the finding it guards (`A1`, `D5`) and should fail with the fix reverted. Check that
 once by reverting the fix's lines in your checkout before you commit the case.
@@ -151,7 +152,7 @@ A new secret: add its kind to `SECRET_KINDS`, brand it where it enters JS, revea
 source, canary and rows to the test.
 
 **Linux.** Sync runs in one window; the others forward their calls over a `BroadcastChannel`, which would clone a
-`Secret` into an empty object. `apps/linux/src/syncAuthority.ts` carries only the phrase argument of
+`Secret` into an empty object. `apps/desktop/src/syncAuthority.ts` carries only the phrase argument of
 `enterRecoveryPhrase` across, as its kind and text, and brands it again on arrival only in that position; a secret in
 any other argument is refused before it is sent (`hostSync.test.mjs`). The channel reaches every window of the app's
 own origin, as it did before secrets were branded; moving the phrase to a host route bound to the sync window is left
