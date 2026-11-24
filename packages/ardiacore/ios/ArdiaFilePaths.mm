@@ -8,6 +8,9 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <sys/clonefile.h>
+
+#include <vector>
 
 namespace ardia_files {
 
@@ -106,6 +109,10 @@ bool Missing(NSString *path) {
 
 }
 
+NSString *SafeFileName(NSString *name) {
+  return SafeName(name);
+}
+
 NSString *ChosenPath(id value, NSString **reason) {
   NSString *path = WellFormed(value, reason);
   if (!path) return nil;
@@ -119,11 +126,15 @@ NSString *ChosenPath(id value, NSString **reason) {
     *reason = @"missing";
     return nil;
   }
-  if (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode)) {
+  if (S_ISDIR(info.st_mode)) {
+    *reason = @"folderUpload";
+    return nil;
+  }
+  if (!S_ISREG(info.st_mode)) {
     *reason = @"notAFile";
     return nil;
   }
-  if (access(canonical.fileSystemRepresentation, S_ISDIR(info.st_mode) ? (R_OK | X_OK) : R_OK) != 0) {
+  if (access(canonical.fileSystemRepresentation, R_OK) != 0) {
     *reason = @"unreadable";
     return nil;
   }
@@ -207,36 +218,106 @@ bool StillFree(NSString *target, NSString **reason) {
   return true;
 }
 
-NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
-  if (![source isKindOfClass:NSString.class] || ![target isKindOfClass:NSString.class] || !source.length || !target.length) return Failure(@"sourceMissing");
+NSString *StageUpload(NSString *canonical, NSString *dir, NSString **reason) {
+  if (mkdir(dir.fileSystemRepresentation, 0700) != 0 && errno != EEXIST) {
+    *reason = @"stagingFailed";
+    return nil;
+  }
+  ScopedFd folder(open(dir.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+  struct stat folderInfo;
+  if (!folder.valid() || fstat(folder.get(), &folderInfo) != 0 || folderInfo.st_uid != geteuid() || (folderInfo.st_mode & 077)) {
+    *reason = @"stagingFailed";
+    return nil;
+  }
+  ScopedFd from(open(canonical.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK));
   struct stat info;
-  if (lstat(source.fileSystemRepresentation, &info) != 0 || !S_ISREG(info.st_mode)) return Failure(@"sourceMissing");
+  if (!from.valid() || fstat(from.get(), &info) != 0) {
+    *reason = errno == ELOOP ? @"symlink" : @"unreadable";
+    return nil;
+  }
+  if (!S_ISREG(info.st_mode)) {
+    *reason = @"notAFile";
+    return nil;
+  }
+  NSString *name = canonical.lastPathComponent;
+  if (!ValidName(name)) {
+    *reason = @"badName";
+    return nil;
+  }
+  if (fclonefileat(from.get(), folder.get(), name.fileSystemRepresentation, 0) != 0) {
+    ScopedFd to(openat(folder.get(), name.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+    if (!to.valid() || fcopyfile(from.get(), to.get(), nullptr, COPYFILE_DATA) != 0) {
+      unlinkat(folder.get(), name.fileSystemRepresentation, 0);
+      *reason = @"stagingFailed";
+      return nil;
+    }
+  }
+  return [dir stringByAppendingPathComponent:name];
+}
+
+NSString *MakeStagingFolder(NSString *folder, NSString *tag, NSString **reason) {
+  NSString *pattern = [folder stringByAppendingPathComponent:[NSString stringWithFormat:@".ardia-arm-%@-XXXXXX", tag]];
+  if (Bytes(pattern) > kMaxPathBytes) {
+    *reason = @"tooLong";
+    return nil;
+  }
+  std::vector<char> buffer(pattern.fileSystemRepresentation, pattern.fileSystemRepresentation + strlen(pattern.fileSystemRepresentation) + 1);
+  if (!mkdtemp(buffer.data())) {
+    *reason = @"folderNotWritable";
+    return nil;
+  }
+  return [NSFileManager.defaultManager stringWithFileSystemRepresentation:buffer.data() length:strlen(buffer.data())];
+}
+
+NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
+  NSString *reason = nil;
+  if (![target isKindOfClass:NSString.class] || !WellFormed(source, &reason) || !WellFormed(target, &reason)) return Failure(reason ?: @"badPath");
+  ScopedFd from(open(source.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK));
+  struct stat info;
+  if (!from.valid() || fstat(from.get(), &info) != 0) return Failure(errno == ELOOP ? @"symlink" : @"sourceMissing");
+  if (!S_ISREG(info.st_mode)) return Failure(@"notAFile");
   if ([source isEqualToString:target]) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(info.st_size)};
   NSString *parent = target.stringByDeletingLastPathComponent;
   NSString *name = target.lastPathComponent;
   if (!ValidName(name)) return Failure(@"badName");
-  NSString *reason = nil;
   if (!StillFree(target, &reason)) return Failure(reason);
   ScopedFd dir(open(parent.fileSystemRepresentation, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
   if (!dir.valid()) return Failure(@"folderChanged");
   char where[MAXPATHLEN];
   if (fcntl(dir.get(), F_GETPATH, where) != 0 || ![[NSFileManager.defaultManager stringWithFileSystemRepresentation:where length:strlen(where)] isEqualToString:parent])
     return Failure(@"folderChanged");
+  NSString *temporary = [NSString stringWithFormat:@".ardia-placing-%08x%08x", arc4random(), arc4random()];
+  const char *tmp = temporary.fileSystemRepresentation;
   const off_t bytes = info.st_size;
-  if (renameatx_np(AT_FDCWD, source.fileSystemRepresentation, dir.get(), name.fileSystemRepresentation, RENAME_EXCL) == 0)
-    return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
-  if (errno == EEXIST) return Failure(@"exists");
-  if (errno != EXDEV) return Failure(@"moveFailed");
-  ScopedFd from(open(source.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
-  if (!from.valid()) return Failure(@"sourceMissing");
-  ScopedFd to(openat(dir.get(), name.fileSystemRepresentation, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
-  if (!to.valid()) return Failure(errno == EEXIST ? @"exists" : @"moveFailed");
-  if (fcopyfile(from.get(), to.get(), nullptr, COPYFILE_DATA | COPYFILE_STAT | COPYFILE_XATTR) != 0) {
-    unlinkat(dir.get(), name.fileSystemRepresentation, 0);
-    return Failure(@"moveFailed");
+  if (renameatx_np(AT_FDCWD, source.fileSystemRepresentation, dir.get(), tmp, RENAME_EXCL) == 0) {
+    struct stat moved;
+    if (fstatat(dir.get(), tmp, &moved, AT_SYMLINK_NOFOLLOW) != 0 || moved.st_dev != info.st_dev || moved.st_ino != info.st_ino) {
+      renameatx_np(dir.get(), tmp, AT_FDCWD, source.fileSystemRepresentation, RENAME_EXCL);
+      return Failure(@"sourceChanged");
+    }
+    if (renameatx_np(dir.get(), tmp, dir.get(), name.fileSystemRepresentation, RENAME_EXCL) == 0) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
+    const int failed = errno;
+    renameatx_np(dir.get(), tmp, AT_FDCWD, source.fileSystemRepresentation, RENAME_EXCL);
+    return Failure(failed == EEXIST ? @"exists" : @"moveFailed");
   }
-  unlink(source.fileSystemRepresentation);
-  return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
+  if (errno == EEXIST) return Failure(@"moveFailed");
+  if (errno != EXDEV) return Failure(@"moveFailed");
+  {
+    ScopedFd to(openat(dir.get(), tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600));
+    if (!to.valid()) return Failure(@"moveFailed");
+    if (fcopyfile(from.get(), to.get(), nullptr, COPYFILE_DATA | COPYFILE_STAT | COPYFILE_XATTR) != 0) {
+      unlinkat(dir.get(), tmp, 0);
+      return Failure(@"moveFailed");
+    }
+  }
+  if (renameatx_np(dir.get(), tmp, dir.get(), name.fileSystemRepresentation, RENAME_EXCL) != 0) {
+    const int failed = errno;
+    unlinkat(dir.get(), tmp, 0);
+    return Failure(failed == EEXIST ? @"exists" : @"moveFailed");
+  }
+  struct stat still;
+  const bool same = lstat(source.fileSystemRepresentation, &still) == 0 && still.st_dev == info.st_dev && still.st_ino == info.st_ino;
+  if (same && unlink(source.fileSystemRepresentation) == 0) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
+  return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes), @"sourceLeft" : @YES};
 }
-
 }

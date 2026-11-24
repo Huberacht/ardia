@@ -837,38 +837,61 @@ question), on macOS (`PLATFORM_FEATURES.silentFilePanels`; Linux and Windows ans
 
 | Method | Mutates | What it does |
 | --- | --- | --- |
-| `files.armUpload {tab, paths, once?, seconds?}` | yes | The next file chooser opened in the tab's window is answered with `paths` (files, or folders for a folder chooser; more than one only when the chooser takes several), without a panel, in a visible Ardia as in a background one |
+| `files.armUpload {tab, paths, once?, seconds?}` | yes | The next file chooser opened in the tab's window is answered with `paths` (regular files; more than one only when the chooser takes several), without a panel, in a visible Ardia as in a background one |
 | `files.armDownload {tab?, path, once?, seconds?}` | yes | The next download (of the tab's profile, or of any regular profile without `tab`) lands at `path` without asking where. `path` is a file that doesn't exist yet in a folder that does, or an existing folder, where each download keeps its own name (`once: false` keeps answering, numbering names that are taken) |
-| `files.arms {arms?}` | no | Arms from the last ten minutes: `state` (`armed`, `answered`, `downloading`, `finished`, `failed`, `cancelled`, `expired`, `cleared`), `reason`, `chosen` for uploads, and for downloads each `{downloadId, state, path, bytes, reason?}` |
+| `files.arms {arms?}` | no | Arms from the last ten minutes: `state` (`armed`, `answered`, `claimed`, `downloading`, `finished`, `failed`, `cancelled`, `expired`, `cleared`), `reason`, `chosen` for uploads, and for downloads each `{downloadId, state, path, bytes, reason?}` (a failed placement names where the file was left in `path`) |
 | `files.disarm {arms?}` | yes | Stops the named arms, or every waiting one |
 
+**An arm outlives its connection.** The command arms in one call and clicks in the next, often on a new connection,
+so closing the connection that armed doesn't end an arm. It ends when its time runs out (`seconds`, default 120, at
+most 600), after its one answer when `once` (the default), when its tab closes, at `files.disarm`, and with every
+other arm when control turns off: the app clears the native arms first, before the socket is cut off. At most 16 wait
+at once.
+
 **Paths.** Checked in JS (`localPathProblem`: absolute, no NUL or line break, at most 1,024 bytes, no `.` or `..`)
-and again natively when armed and when answered (`ArdiaFilePaths.mm`). An upload path resolves to an existing,
-readable file or folder and is handed over by its resolved path. A download target never exists yet and is never a
-symbolic link; the folder above it is resolved when armed (`/tmp` becomes `/private/tmp`, and the reply names the
-resolved path), must still resolve to the same place when the file lands, and the file lands with an exclusive rename
-(`renameatx_np(RENAME_EXCL)`, or an exclusive copy across volumes), so nothing already there is replaced and nothing
-is written through a link.
+and again natively (`ArdiaFilePaths.mm`).
+- *Uploads* are regular files only (a folder is refused). When armed, each is opened without following a link
+  (`O_NOFOLLOW`), checked to be a regular file on the open descriptor, and copied from that descriptor (an APFS clone
+  when it can be) into `<data dir>/file-arms/<arm>/`, a `0700` folder only Ardia writes. The chooser is answered with
+  that copy, so a path swapped for a link, a pipe or another file after the check can't reach the page. Copies stay
+  while the page may still send them, and go when the tab closes, when control turns off, when the arm ends unused,
+  and at the next launch.
+- *Download targets* never exist yet and are never a symbolic link; the folder above is resolved when armed (`/tmp`
+  becomes `/private/tmp`, and the reply names the resolved path) and must resolve to the same place when the file
+  lands. Placing a file opens the source without following a link, checks it's a regular file, moves it to a hidden
+  temporary name in the target folder, checks it's still the file that was opened (device and inode), and publishes
+  it with `renameatx_np(RENAME_EXCL)`; across volumes it copies from the open descriptor into an exclusive temporary
+  file and publishes that the same way, then removes the source only if it's still that file (`sourceLeft` says when
+  it couldn't). Nothing already at the target is ever replaced. Placing runs off the main thread.
 
 **How a panel is answered.** `ArdiaActivation.mm` wraps `NSOpenPanel` and `NSSavePanel`'s three ways of running. A
-panel is answered from an arm only when Chromium opened it (its call stack) and an arm of the right kind waits for a
-tab in the panel's window (a tab arm wins over an any-tab download arm, the newest wins among equals); anything else
+panel is answered from an arm only when Chromium opened it (its call stack), its window is a known regular Ardia
+window (`ArdiaWindowController`, with an app window id and a profile that isn't off the record), and an arm of the
+right kind waits for it: a tab arm when its tab is held by that very window, an any-tab download arm for any regular
+window (a tab arm wins, then the newest). A private window, a window Ardia doesn't know, and a free-standing panel are
+never answered from an arm, and an armed answer is logged without the window's title or the file name. Anything else
 runs as before: shown in a visible Ardia, logged and answered from `file-chooser.txt` in a background one. Chromium
 opens a page's chooser on the window that holds all of that window's tabs, so the panel names the window, not the
 tab: an upload arm answers the next chooser from its tab's window, and a second upload arm for a window that already
-has one waiting is `refused` (naming the waiting arm) rather than guessed between. Tell tabs apart by window (a tab
-`offscreen` moved or one in another window has its own). An upload
-arm that can't be honoured (two files for a one-file chooser, a folder for a file chooser, a file gone since) cancels
-the chooser and ends `failed` with the reason, rather than showing a panel the person didn't expect.
+has one waiting is `refused` (naming the waiting arm). The native registry checks this under its lock, so two requests
+racing each other can't both get in. An upload arm that can't be honoured (two files for a one-file chooser, a folder
+chooser) cancels the chooser and ends `failed` with the reason, rather than showing a panel the person didn't expect.
 
-**How a download lands.** When the profile asks where to save, the save panel is answered with the target. When it
-doesn't, the download saves to the profile's folder as usual, and when it finishes it is moved to the target
-(`placeArmedDownload`) and the downloads list follows it. Ardia takes the first download that starts after the arm, in
-the tab's profile; a download another tab of that profile starts at the same moment can be the one taken, so arm just
-before the click. Private downloads are never taken, and a taken download skips the `hooks.json` folder rules.
-
-**Lifetime.** An arm lasts `seconds` (default 120, at most 600), ends when its tab closes, after its one answer when
-`once` (the default), at `files.disarm`, and with every other arm when control turns off. At most 16 wait at once.
+**How a download lands.**
+- *When the profile asks where to save*, the save panel is answered with a file in a fresh `0700` staging folder
+  (`.ardia-arm-<arm>-XXXXXX`) inside the target's folder, never with the target itself, so Chromium can't overwrite a
+  file that appears there meanwhile. When the download finishes, the file is published to the target as above and the
+  staging folder is removed. If the target was taken in between, the file stays in the staging folder and the arm
+  reports `exists` with that path.
+- *When it doesn't ask*, the download saves to the profile's folder as usual and, once finished, is placed at the
+  target and the downloads list follows it.
+- *One arm, one download.* A download claims an arm natively (`claimArmedDownload`) once its path is known, in the
+  same registry lock the save panel uses, so a once arm goes to exactly one of them: a save panel finds an arm an
+  automatic download already claimed spent, and an automatic download can't claim an arm a save panel already
+  answered (only the download saving into that arm's staging folder can). Ardia takes the first download in the
+  tab's profile (or any regular profile) that started after the arm; another tab of that profile starting one at the
+  same moment can be the one taken, so arm just before the click. Private downloads are never taken, and a taken
+  download skips the `hooks.json` folder rules. Placing only moves a file a download of that arm claimed.
 
 **Telemetry** (counts only, never a path): `cli_socket_calls_files`, `cli_files_upload_arms`,
 `cli_files_download_arms`, `cli_files_uploads_answered`, `cli_files_downloads_placed`, `cli_files_arm_failures`.

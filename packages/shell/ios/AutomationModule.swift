@@ -21,13 +21,17 @@ public class AutomationModule: Module, AutomationNative {
 
   static func revokeApproval(_ key: String, _ promise: Promise) { ControlSocket.shared.revokeApproval(key) { promise.resolve($0) } }
 
-  static func armFiles(_ spec: [String: Any]) -> [String: Any] { ArdiaHost.armFiles(spec) }
+  static func armFiles(_ spec: [String: Any], _ promise: Promise) { ArdiaHost.armFiles(spec) { promise.resolve($0) } }
 
-  static func disarmFiles(_ ids: [String]?) -> Double { Double(ArdiaHost.disarmFiles(ids)) }
+  static func disarmFiles(_ ids: [String]?, _ purge: Bool) -> Double { Double(ArdiaHost.disarmFiles(ids, purge: purge)) }
 
   static func fileArms() -> [[String: Any]] { ArdiaHost.fileArms }
 
-  static func placeArmedDownload(_ arm: String, _ path: String) -> [String: Any] { ArdiaHost.placeArmedDownload(arm, from: path) }
+  static func claimArmedDownload(_ arm: String, _ download: String, _ path: String) -> [String: Any] { ArdiaHost.claimArmedDownload(arm, download: download, path: path) }
+
+  static func placeArmedDownload(_ arm: String, _ download: String, _ path: String, _ promise: Promise) {
+    ArdiaHost.placeArmedDownload(arm, download: download, path: path) { promise.resolve($0) }
+  }
 
   public func definition() -> ModuleDefinition {
     Name(Self.moduleName)
@@ -61,6 +65,8 @@ public class AutomationModule: Module, AutomationNative {
     Self.disarmFilesFunction
 
     Self.fileArmsFunction
+
+    Self.claimArmedDownloadFunction
 
     Self.placeArmedDownloadFunction
 

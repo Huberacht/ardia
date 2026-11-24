@@ -42,7 +42,8 @@ static void TestChosenPath() {
   NSString *reason = nil;
   NSString *file = Make(@"up/report.pdf", @"pdf");
   CHECK([ChosenPath(file, &reason) isEqualToString:file]);
-  CHECK([ChosenPath(At(@"up"), &reason) isEqualToString:At(@"up")]);
+  reason = nil;
+  CHECK(ChosenPath(At(@"up"), &reason) == nil && [reason isEqualToString:@"folderUpload"]);
   symlink(file.fileSystemRepresentation, At(@"up/link.pdf").fileSystemRepresentation);
   CHECK([ChosenPath(At(@"up/link.pdf"), &reason) isEqualToString:file]);
   for (id bad : @[ @"", @"relative/path", @"/a/../etc/passwd", @"/a/./b", @"/a\nb", [NSString stringWithFormat:@"/a%C", (unichar)0], @42, NSNull.null ]) {
@@ -141,6 +142,61 @@ static void TestPlaceFile() {
   CHECK(Exists(second));
   placed = PlaceFile(second, At(@"place/.."));
   CHECK(![placed[@"ok"] boolValue]);
+  symlink(second.fileSystemRepresentation, At(@"staging/second-link.bin").fileSystemRepresentation);
+  placed = PlaceFile(At(@"staging/second-link.bin"), At(@"place/from-link.bin"));
+  CHECK(![placed[@"ok"] boolValue] && [placed[@"reason"] isEqualToString:@"symlink"]);
+  CHECK(!Exists(At(@"place/from-link.bin")));
+  placed = PlaceFile(@"relative.bin", At(@"place/rel.bin"));
+  CHECK(![placed[@"ok"] boolValue]);
+  NSArray *leftovers = [[NSFileManager.defaultManager contentsOfDirectoryAtPath:At(@"place") error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH '.ardia-placing-'"]];
+  CHECK(leftovers.count == 0);
+}
+
+static void TestStageUpload() {
+  NSString *reason = nil;
+  NSString *file = Make(@"stage-src/doc.txt", @"original");
+  NSString *dir = At(@"staging-area");
+  NSString *staged = StageUpload(file, dir, &reason);
+  CHECK([staged isEqualToString:[dir stringByAppendingPathComponent:@"doc.txt"]]);
+  CHECK([Text(staged) isEqualToString:@"original"]);
+  struct stat info;
+  CHECK(lstat(dir.fileSystemRepresentation, &info) == 0 && (info.st_mode & 0777) == 0700);
+  [@"changed" writeToFile:file atomically:NO encoding:NSUTF8StringEncoding error:nil];
+  CHECK([Text(staged) isEqualToString:@"original"]);
+  [NSFileManager.defaultManager removeItemAtPath:file error:nil];
+  symlink("/etc/hosts", file.fileSystemRepresentation);
+  reason = nil;
+  CHECK(StageUpload(file, At(@"staging-two"), &reason) == nil && [reason isEqualToString:@"symlink"]);
+  mkfifo(At(@"stage-src/pipe").fileSystemRepresentation, 0600);
+  reason = nil;
+  CHECK(StageUpload(At(@"stage-src/pipe"), At(@"staging-three"), &reason) == nil && [reason isEqualToString:@"notAFile"]);
+  [NSFileManager.defaultManager createDirectoryAtPath:At(@"open-staging") withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions : @0755} error:nil];
+  reason = nil;
+  CHECK(StageUpload(Make(@"stage-src/b.txt", @"b"), At(@"open-staging"), &reason) == nil && [reason isEqualToString:@"stagingFailed"]);
+}
+
+static void TestPromptedDownloadConflict() {
+  NSString *reason = nil;
+  NSString *folder = At(@"prompted");
+  [NSFileManager.defaultManager createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:nil];
+  NSString *staging = MakeStagingFolder(folder, @"f-test", &reason);
+  CHECK(staging && [staging.stringByDeletingLastPathComponent isEqualToString:folder]);
+  struct stat info;
+  CHECK(lstat(staging.fileSystemRepresentation, &info) == 0 && (info.st_mode & 0777) == 0700);
+  NSString *staged = [staging stringByAppendingPathComponent:@"report.zip"];
+  [@"downloaded" writeToFile:staged atomically:NO encoding:NSUTF8StringEncoding error:nil];
+  NSString *target = [folder stringByAppendingPathComponent:@"report.zip"];
+  Make(@"prompted/report.zip", @"someone else's file");
+  NSDictionary *placed = PlaceFile(staged, target);
+  CHECK(![placed[@"ok"] boolValue] && [placed[@"reason"] isEqualToString:@"exists"]);
+  CHECK([Text(target) isEqualToString:@"someone else's file"]);
+  CHECK([Text(staged) isEqualToString:@"downloaded"]);
+  [NSFileManager.defaultManager removeItemAtPath:target error:nil];
+  placed = PlaceFile(staged, target);
+  CHECK([placed[@"ok"] boolValue] && [Text(target) isEqualToString:@"downloaded"] && !Exists(staged));
+  CHECK(rmdir(staging.fileSystemRepresentation) == 0);
+  NSArray *left = [NSFileManager.defaultManager contentsOfDirectoryAtPath:folder error:nil];
+  CHECK(left.count == 1);
 }
 
 int main() {
@@ -154,6 +210,8 @@ int main() {
     TestDownloadTarget();
     TestFreePathIn();
     TestPlaceFile();
+    TestStageUpload();
+    TestPromptedDownloadConflict();
     [NSFileManager.defaultManager removeItemAtPath:gRoot error:nil];
     if (failures) return 1;
     std::printf("file-paths: ok\n");

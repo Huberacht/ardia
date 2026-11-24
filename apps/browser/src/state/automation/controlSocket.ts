@@ -327,6 +327,7 @@ async function start(consent: ConsentToken | null) {
 }
 
 async function stop() {
+  clearFileArms();
   openConnections.clear();
   generation = null;
   dismissSocketAsks();
@@ -334,7 +335,6 @@ async function stop() {
   forgetTabCalls();
   releaseAllCliHolds();
   void closeAllInspections();
-  clearFileArms();
   void dropAllLogpoints();
   noteSocketServing(false);
   void capturePageMenus(false).catch(() => undefined);
@@ -353,6 +353,7 @@ function sync() {
   applied = on;
   const consent = consentToken();
   if (!on) {
+    clearFileArms();
     cutOffControlSocket();
     openConnections.clear();
     generation = null;
@@ -361,7 +362,6 @@ function sync() {
     forgetTabCalls();
     releaseAllCliHolds();
     void closeAllInspections();
-    clearFileArms();
     void dropAllLogpoints();
     noteSocketServing(false);
     void capturePageMenus(false).catch(() => undefined);

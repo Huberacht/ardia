@@ -10,7 +10,10 @@ constexpr NSUInteger kMaxNameBytes = 255;
 NSString *_Nullable ChosenPath(id _Nullable path, NSString *_Nullable *_Nonnull reason);
 NSString *_Nullable DownloadTarget(id _Nullable path, BOOL *folder, NSString *_Nullable *_Nonnull reason);
 NSString *_Nullable FreePathIn(NSString *folder, NSString *_Nullable name, NSString *_Nullable *_Nonnull reason);
+NSString *SafeFileName(NSString *_Nullable name);
 bool StillFree(NSString *target, NSString *_Nullable *_Nonnull reason);
+NSString *_Nullable StageUpload(NSString *canonical, NSString *dir, NSString *_Nullable *_Nonnull reason);
+NSString *_Nullable MakeStagingFolder(NSString *folder, NSString *tag, NSString *_Nullable *_Nonnull reason);
 NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target);
 
 }

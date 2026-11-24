@@ -1,5 +1,5 @@
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
-import { armFilePanel, armsFilePanels as nativeArmsFilePanels, disarmFilePanels, filePanelArms, placeArmedDownload, type FileArmKind, type FileArmRow } from "../../platform/automation";
+import { armFilePanel, armsFilePanels as nativeArmsFilePanels, claimArmedDownload, disarmFilePanels, filePanelArms, placeArmedDownload, type FileArmKind, type FileArmRow } from "../../platform/automation";
 import { onDownload, type Download } from "../../platform/downloads";
 import { secureRandomHex } from "../../platform/secureRandom";
 import { foreignWriteHooks } from "../browser/foreignWriteHooks";
@@ -39,6 +39,7 @@ type Tracked = {
   failureSeen: boolean;
   downloads: DownloadProgress[];
   consent: ConsentToken | null;
+  cleared: boolean;
 };
 
 const tracked = new Map<string, Tracked>();
@@ -66,8 +67,10 @@ const REASONS: Record<string, string> = {
   traversal: "steps through . or ..",
   missing: "doesn't exist",
   unreadable: "can't be read",
-  notAFile: "isn't a file or folder",
-  symlink: "is a symbolic link; name the file or folder itself",
+  notAFile: "isn't a regular file",
+  folderUpload: "is a folder; only files can be armed for upload",
+  stagingFailed: "couldn't be copied for the page to read",
+  symlink: "is a symbolic link; name the file itself",
   exists: "already exists; Ardia won't replace a file",
   folderMissing: "is in a folder that doesn't exist",
   notAFolder: "is inside something that isn't a folder",
@@ -75,11 +78,12 @@ const REASONS: Record<string, string> = {
   badName: "has a name a file can't take",
 };
 
-function armRefusal(reason: string, path?: string): OpError {
+function armRefusal(reason: string, path?: string, arm?: string): OpError {
   if (reason === "noTab") return new OpError("no_window", "That tab has no page loaded; wake it first.");
   if (reason === "tooMany") return new OpError("refused", `At most ${MAX_ARMS} file arms wait at once; clear some with files.disarm.`);
   if (reason === "onceForFile") return new OpError("bad_request", "A download path names one file; arm again for the next one, or name a folder to keep answering.");
   if (reason === "unsupported") return new OpError("refused", UNSUPPORTED);
+  if (reason === "windowBusy") return new OpError("refused", `Upload arm ${arm ?? "another arm"} already waits in this tab's window, and a file chooser names only its window; clear it with files.disarm first.`);
   const why = REASONS[reason];
   if (why) return new OpError("bad_request", `${path ? path.slice(0, 200) : "The path"} ${why}.`);
   return new OpError("failed", `Ardia couldn't arm that (${reason.slice(0, 40)}).`);
@@ -105,22 +109,29 @@ function end(t: Tracked) {
   t.endedAt = Date.now();
 }
 
-function claimant(d: Download): Tracked | null {
-  let pick: Tracked | null = null;
-  for (const t of tracked.values()) {
-    if (t.kind !== "download" || !t.open || Date.now() >= t.expiresAt || t.before.has(d.id)) continue;
-    if (t.engineProfile !== null && (d.profile ?? "") !== t.engineProfile) continue;
-    if (t.once && t.downloads.length) continue;
-    if (!pick || (t.tab !== null && pick.tab === null)) pick = t;
+function candidates(d: Download): Tracked[] {
+  const now = Date.now();
+  return [...tracked.values()]
+    .filter((t) => t.kind === "download" && !t.cleared && now < t.expiresAt + KEEP_ENDED_MS && !t.before.has(d.id))
+    .filter((t) => t.engineProfile === null || (d.profile ?? "") === t.engineProfile)
+    .filter((t) => !t.once || !t.downloads.length)
+    .sort((a, b) => Number(b.tab !== null) - Number(a.tab !== null) || b.expiresAt - a.expiresAt);
+}
+
+function claim(d: Download): Tracked | null {
+  for (const t of candidates(d)) {
+    const claimed = claimArmedDownload(t.id, d.id, d.path);
+    if (claimed.ok) return t;
   }
-  return pick;
+  return null;
 }
 
 async function settle(t: Tracked, row: DownloadProgress, d: Download, consent: ConsentToken | null) {
-  const placed = await placeArmedDownload(t.id, d.path).catch((error: unknown) => ({ ok: false as const, reason: String(error).slice(0, 80) }));
+  const placed = await placeArmedDownload(t.id, d.id, d.path).catch((error: unknown) => ({ ok: false as const, reason: String(error).slice(0, 80), stagedPath: undefined }));
   if (!placed.ok) {
     row.state = "failed";
     row.reason = placed.reason;
+    if (placed.stagedPath) row.path = placed.stagedPath;
     noteFileArm("arm_failures", 1, consent);
     return;
   }
@@ -137,8 +148,8 @@ function noteDownload(d: Download) {
   if (d.offTheRecord) return;
   let armId = byDownload.get(d.id);
   if (!armId) {
-    if (d.state !== "downloading" && d.state !== "finished") return;
-    const t = claimant(d);
+    if ((d.state !== "downloading" && d.state !== "finished") || !d.path) return;
+    const t = claim(d);
     if (!t) return;
     armId = t.id;
     byDownload.set(d.id, armId);
@@ -165,10 +176,16 @@ function noteDownload(d: Download) {
 function watchTabs() {
   if (tabsWatched) return;
   tabsWatched = useBrowser.subscribeTo(["tabs"], (s) => {
-    const gone = [...tracked.values()].filter((t) => t.open && t.tab !== null && !s.tabs[t.tab]);
+    const gone = [...tracked.values()].filter((t) => !t.cleared && t.tab !== null && !s.tabs[t.tab]);
     if (!gone.length) return;
-    for (const t of gone) end(t);
-    void disarmFilePanels(gone.map((t) => t.id)).catch(() => 0);
+    for (const t of gone) {
+      end(t);
+      t.cleared = true;
+    }
+    disarmFilePanels(
+      gone.map((t) => t.id),
+      true,
+    );
   });
 }
 
@@ -185,7 +202,7 @@ function account(rows: readonly FileArmRow[]) {
       t.failureSeen = true;
       noteFileArm("arm_failures", 1, t.consent);
     }
-    if (row.state !== "armed" && (t.kind === "upload" || row.state !== "answered")) end(t);
+    if (row.state !== "armed") end(t);
   }
   sweepTracked();
 }
@@ -228,10 +245,10 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
   const engine = request.profileId !== null ? engineProfile(s, request.profileId) : null;
   const before = new Set(s.downloads.map((d) => d.id));
   call.stillServing();
-  const made = await armFilePanel({ id, kind: request.kind, tab: request.tab, paths: request.paths, once: request.once, seconds: request.seconds });
-  if (!made.ok) throw armRefusal(made.reason, made.path);
+  const made = await armFilePanel({ id, kind: request.kind, tab: request.tab, window: windowId ?? null, paths: request.paths, once: request.once, seconds: request.seconds });
+  if (!made.ok) throw armRefusal(made.reason, made.path, made.arm);
   if (!call.serving()) {
-    void disarmFilePanels([id]).catch(() => 0);
+    disarmFilePanels([id], true);
     call.stillServing();
   }
   tracked.set(id, {
@@ -248,6 +265,7 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
     failureSeen: false,
     downloads: [],
     consent,
+    cleared: false,
   });
   noteFileArm(request.kind === "upload" ? "upload_arms" : "download_arms", 1, consent);
   if (request.kind === "download") downloadsWatched ??= onDownload(noteDownload);
@@ -260,7 +278,7 @@ export function armView(row: FileArmRow) {
   const t = tracked.get(row.id);
   const downloads = t?.downloads.map((d) => ({ ...d })) ?? [];
   const last = downloads[downloads.length - 1];
-  const state = row.kind === "download" && last ? last.state : row.kind === "download" && row.state === "answered" ? "downloading" : row.state;
+  const state = row.kind === "download" && last ? last.state : row.kind === "download" && (row.state === "answered" || row.state === "claimed") ? "downloading" : row.state;
   return {
     arm: row.id,
     kind: row.kind,
@@ -286,20 +304,24 @@ export async function listArms(only: readonly string[] | null) {
 export async function disarm(only: readonly string[] | null) {
   if (!armsFilePanels()) return { cleared: 0 };
   for (const t of tracked.values()) if (only === null || only.includes(t.id)) end(t);
-  return { cleared: await disarmFilePanels(only === null ? null : [...only]) };
+  return { cleared: disarmFilePanels(only === null ? null : [...only], false) };
 }
 
 export function clearFileArms() {
-  const had = tracked.size > 0;
-  tracked.clear();
-  byDownload.clear();
+  if (armsFilePanels()) disarmFilePanels(null, true);
+  for (const [id, t] of tracked) {
+    end(t);
+    t.cleared = true;
+    if (t.kind === "upload") tracked.delete(id);
+  }
   if (poll) clearInterval(poll);
   poll = null;
-  if (had && armsFilePanels()) void disarmFilePanels(null).catch(() => 0);
 }
 
 export function resetFileArmsForTests() {
   clearFileArms();
+  tracked.clear();
+  byDownload.clear();
   downloadsWatched?.remove();
   downloadsWatched = null;
   settling.clear();

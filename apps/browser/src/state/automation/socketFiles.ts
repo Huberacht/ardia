@@ -34,7 +34,7 @@ export const FILE_METHODS: MethodSpec[] = [
     params: obj(
       {
         tab: TAB,
-        paths: { type: "array", items: PATH, minItems: 1, maxItems: MAX_UPLOAD_PATHS, description: "Files to choose, or folders for a folder chooser; more than one only for a chooser that takes several" },
+        paths: { type: "array", items: PATH, minItems: 1, maxItems: MAX_UPLOAD_PATHS, description: "Regular files to choose (Ardia hands the page its own copy of each); more than one only for a chooser that takes several" },
         once: ONCE,
         seconds: SECONDS,
       },

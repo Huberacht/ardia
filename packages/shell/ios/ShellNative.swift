@@ -1297,10 +1297,11 @@ protocol AutomationNative {
   static func answerPeer(_ ask: Int, _ outcome: String, _ promise: Promise)
   static func approvals(_ promise: Promise)
   static func revokeApproval(_ key: String, _ promise: Promise)
-  static func armFiles(_ spec: [String: Any]) -> [String: Any]
-  static func disarmFiles(_ ids: [String]?) -> Double
+  static func armFiles(_ spec: [String: Any], _ promise: Promise)
+  static func disarmFiles(_ ids: [String]?, _ purge: Bool) -> Double
   static func fileArms() -> [[String: Any]]
-  static func placeArmedDownload(_ arm: String, _ path: String) -> [String: Any]
+  static func claimArmedDownload(_ arm: String, _ download: String, _ path: String) -> [String: Any]
+  static func placeArmedDownload(_ arm: String, _ download: String, _ path: String, _ promise: Promise)
 }
 
 extension AutomationNative {
@@ -1347,19 +1348,23 @@ extension AutomationNative {
   }
 
   static var armFilesFunction: AnyDefinition {
-    AsyncFunction("armFiles") { (spec: [String: Any]) -> [String: Any] in Self.armFiles(spec) }.runOnQueue(.main)
+    AsyncFunction("armFiles") { (spec: [String: Any], promise: Promise) in Self.armFiles(spec, promise) }
   }
 
   static var disarmFilesFunction: AnyDefinition {
-    AsyncFunction("disarmFiles") { (ids: [String]?) -> Double in Self.disarmFiles(ids) }.runOnQueue(.main)
+    Function("disarmFiles") { (ids: [String]?, purge: Bool) -> Double in Self.disarmFiles(ids, purge) }
   }
 
   static var fileArmsFunction: AnyDefinition {
-    AsyncFunction("fileArms") { () -> [[String: Any]] in Self.fileArms() }.runOnQueue(.main)
+    AsyncFunction("fileArms") { () -> [[String: Any]] in Self.fileArms() }.runOnQueue(DispatchQueue.global(qos: .userInitiated))
+  }
+
+  static var claimArmedDownloadFunction: AnyDefinition {
+    Function("claimArmedDownload") { (arm: String, download: String, path: String) -> [String: Any] in Self.claimArmedDownload(arm, download, path) }
   }
 
   static var placeArmedDownloadFunction: AnyDefinition {
-    AsyncFunction("placeArmedDownload") { (arm: String, path: String) -> [String: Any] in Self.placeArmedDownload(arm, path) }.runOnQueue(.main)
+    AsyncFunction("placeArmedDownload") { (arm: String, download: String, path: String, promise: Promise) in Self.placeArmedDownload(arm, download, path, promise) }
   }
 }
 

@@ -1,7 +1,7 @@
 import { asSecret, type Secret } from "@ardia/core";
-import { DEVTOOLS_ENDPOINT_PROBLEMS, nativeModule, type ControlApprovals, type FileArmResult, type FileArmRow, type FileArmSpec, type PlacedDownload, type DevtoolsEndpointProblem, type ControlPeerAnswer, type ControlPeerAsk, type ControlPeerOutcome, type ControlRequest } from "@ardia/shell";
+import { DEVTOOLS_ENDPOINT_PROBLEMS, nativeModule, type ControlApprovals, type FileArmClaim, type FileArmResult, type FileArmRow, type FileArmSpec, type PlacedDownload, type DevtoolsEndpointProblem, type ControlPeerAnswer, type ControlPeerAsk, type ControlPeerOutcome, type ControlRequest } from "@ardia/shell";
 
-export type { FileArmKind, FileArmResult, FileArmRow, FileArmSpec, FileArmState, PlacedDownload } from "@ardia/shell";
+export type { FileArmClaim, FileArmKind, FileArmResult, FileArmRow, FileArmSpec, FileArmState, PlacedDownload } from "@ardia/shell";
 export type { ControlApproval, ControlApprovals, ControlPeerAnswer, ControlPeerAsk, ControlPeerOutcome, ControlRequest, ControlSocketStatus } from "@ardia/shell";
 
 let bound: ReturnType<typeof nativeModule<"ArdiaAutomation">> | null = null;
@@ -22,9 +22,10 @@ export const controlApprovals = async (): Promise<ControlApprovals> => (await Au
 export const revokeControlApproval = async (key: string) => (await Automation().revokeApproval?.(key)) ?? false;
 export const armsFilePanels = () => typeof Automation().armFiles === "function";
 export const armFilePanel = async (spec: FileArmSpec): Promise<FileArmResult> => (await Automation().armFiles?.(spec)) ?? { ok: false, reason: "unsupported" };
-export const disarmFilePanels = async (ids: string[] | null): Promise<number> => (await Automation().disarmFiles?.(ids)) ?? 0;
+export const disarmFilePanels = (ids: string[] | null, purge: boolean): number => Automation().disarmFiles?.(ids, purge) ?? 0;
 export const filePanelArms = async (): Promise<FileArmRow[]> => (await Automation().fileArms?.()) ?? [];
-export const placeArmedDownload = async (arm: string, path: string): Promise<PlacedDownload> => (await Automation().placeArmedDownload?.(arm, path)) ?? { ok: false, reason: "unsupported" };
+export const claimArmedDownload = (arm: string, download: string, path: string): FileArmClaim => Automation().claimArmedDownload?.(arm, download, path) ?? { ok: false, reason: "unsupported" };
+export const placeArmedDownload = async (arm: string, download: string, path: string): Promise<PlacedDownload> => (await Automation().placeArmedDownload?.(arm, download, path)) ?? { ok: false, reason: "unsupported" };
 
 export type DevtoolsEndpoint = { port: number; generation: number; token: Secret<"devtoolsToken"> };
 type DevtoolsEndpointRead = DevtoolsEndpoint | { problem: DevtoolsEndpointProblem | "unsupported" };

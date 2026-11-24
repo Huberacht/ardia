@@ -1441,8 +1441,8 @@
       "types": "packages/shell/src/generated/native.ts",
       "swift": "packages/shell/ios/ShellNative.swift",
       "sha256": {
-        "types": "2ca84308e22b112a118e915b987a3732d3f59cef2e82b01cf2229986a446f87a",
-        "swift": "c62af9bed2b7184cc134937fa3fedefbcce027cd47521f9ddf00956d7c1781cf"
+        "types": "126e17699aecadf49c424a3037ceed69f23a8ffb8c4eda33da7e09d8e2568868",
+        "swift": "82baa13c7a617570f017e3471e7d7ce2b5020f64fd6a76c266b73839862d0bf3"
       },
       "modules": {
         "ArdiaShell": {
@@ -3635,9 +3635,10 @@
             },
             "disarmFiles": {
               "args": [
-                "ids"
+                "ids",
+                "purge"
               ],
-              "async": true,
+              "async": false,
               "mac": "custom",
               "desktop": "custom",
               "windows": "absent"
@@ -3649,9 +3650,21 @@
               "desktop": "custom",
               "windows": "absent"
             },
+            "claimArmedDownload": {
+              "args": [
+                "arm",
+                "download",
+                "path"
+              ],
+              "async": false,
+              "mac": "custom",
+              "desktop": "custom",
+              "windows": "absent"
+            },
             "placeArmedDownload": {
               "args": [
                 "arm",
+                "download",
                 "path"
               ],
               "async": true,

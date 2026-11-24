@@ -35,6 +35,8 @@ async function setup() {
   native.specs.length = 0;
   native.placed.length = 0;
   native.disarmed.length = 0;
+  native.claims.length = 0;
+  native.armDelayMs = 0;
   native.refuse = null;
   native.place = null;
   native.supported = true;
@@ -58,7 +60,7 @@ test("files.armUpload arms the tab's next chooser natively and reports what it c
   assert.equal(armed.tab, tab);
   assert.equal(armed.state, "armed");
   assert.equal(armed.once, true);
-  assert.deepEqual(native.specs[0], { id: armed.arm, kind: "upload", tab, paths: ["/Users/me/report.pdf"], once: true, seconds: 120 });
+  assert.deepEqual(native.specs[0], { id: armed.arm, kind: "upload", tab, window: windowId, paths: ["/Users/me/report.pdf"], once: true, seconds: 120 });
   const row = native.rows[0];
   row.state = "answered";
   row.answered = 1;
@@ -111,7 +113,7 @@ test("files.armDownload moves the next download of the tab's profile to the path
   stub.emitDownload(download({ id: "d9", state: "finished", received: 100 }));
   for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
   await tick();
-  assert.deepEqual(native.placed, [[armed.arm, "/Users/me/Downloads/a.zip"]]);
+  assert.deepEqual(native.placed, [[armed.arm, "d9", "/Users/me/Downloads/a.zip"]]);
   const listed = await ok("files.arms", {});
   const row = listed.items.find((r) => r.arm === armed.arm);
   assert.equal(row.state, "finished");
@@ -148,16 +150,81 @@ test("files.disarm clears arms, a closed tab ends its arm, and control off clear
   assert.match(sameWindow.error.message, new RegExp(one.arm));
   await ok("files.armDownload", { path: "/tmp/folder", once: false });
   assert.deepEqual(await ok("files.disarm", { arms: [one.arm] }), { cleared: 1 });
-  assert.deepEqual(native.disarmed.at(-1), [one.arm]);
+  assert.deepEqual(native.disarmed.at(-1), [[one.arm], false]);
   const two = await ok("files.armUpload", { tab, paths: ["/tmp/b"] });
   S().closeTab(tab);
   await tick();
-  assert.ok(native.disarmed.some((ids) => Array.isArray(ids) && ids.includes(two.arm)), "closing the tab disarms its upload");
+  assert.ok(native.disarmed.some(([ids, purge]) => Array.isArray(ids) && ids.includes(two.arm) && purge), "closing the tab disarms its upload and drops its copies");
   S().updateSettings({ cliControl: false });
   for (let i = 0; i < 5; i++) await tick();
-  assert.ok(native.disarmed.some((ids) => ids === null), "turning control off clears every arm");
+  assert.ok(native.disarmed.some(([ids, purge]) => ids === null && purge), "turning control off clears every arm");
+  const cutAt = stub.controlSocket.calls.lastIndexOf("cutOff");
+  assert.equal(stub.controlSocket.calls[cutAt - 1], "disarmFiles", `native arms are cleared just before the socket is cut off: ${stub.controlSocket.calls.slice(-6)}`);
   S().updateSettings({ cliControl: true });
   for (let i = 0; i < 5; i++) await tick();
+});
+
+test("two upload arms for one window racing each other: the native registry lets exactly one in", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  native.armDelayMs = 5;
+  const before = stub.controlSocket.replies.length;
+  const ids = [++nextId, ++nextId];
+  for (const [i, id] of ids.entries()) stub.emitControlRequest({ connection: 12, generation: stub.controlSocket.generation, line: JSON.stringify({ id, method: "files.armUpload", params: { tab, paths: [`/tmp/${i}`] } }) });
+  for (let i = 0; i < 100 && stub.controlSocket.replies.slice(before).filter((r) => r.connection === 12).length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 2));
+  const results = stub.controlSocket.replies.slice(before).filter((r) => r.connection === 12).map((r) => JSON.parse(r.line));
+  assert.equal(results.length, 2);
+  assert.equal(results.filter((r) => !r.error).length, 1, JSON.stringify(results));
+  const refused = results.find((r) => r.error);
+  assert.equal(refused.error.code, "refused");
+  assert.match(refused.error.message, new RegExp(results.find((r) => !r.error).result.arm));
+  assert.equal(native.specs.length, 2, "both requests reached the native registry");
+});
+
+test("a prompted download that took the arm first keeps a slow automatic download from claiming it", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/out.zip" });
+  const stagedPath = native.answerSavePanel(armed.arm);
+  assert.ok(stagedPath, "the save panel took the armed arm");
+  stub.emitDownload(download({ id: "slow", path: "/Users/me/Downloads/slow.zip" }));
+  stub.emitDownload(download({ id: "asked", path: stagedPath }));
+  stub.emitDownload(download({ id: "slow", path: "/Users/me/Downloads/slow.zip", state: "finished" }));
+  stub.emitDownload(download({ id: "asked", path: stagedPath, state: "finished" }));
+  for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
+  await tick();
+  assert.deepEqual(native.placed, [[armed.arm, "asked", stagedPath]], "only the prompted download is placed");
+  const row = (await ok("files.arms", { arms: [armed.arm] })).items[0];
+  assert.deepEqual(row.downloads.map((d) => d.downloadId), ["asked"]);
+});
+
+test("an automatic download that claimed the arm first leaves no arm for a later save panel", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/out.zip" });
+  stub.emitDownload(download({ id: "auto", path: "/Users/me/Downloads/auto.zip" }));
+  await tick();
+  assert.equal(native.answerSavePanel(armed.arm), null, "the panel finds the arm already claimed");
+  stub.emitDownload(download({ id: "auto", path: "/Users/me/Downloads/auto.zip", state: "finished" }));
+  for (let i = 0; i < 10 && !native.placed.length; i++) await tick();
+  assert.deepEqual(native.placed, [[armed.arm, "auto", "/Users/me/Downloads/auto.zip"]]);
+});
+
+test("closing a tab mid-download still drops its arm natively", async () => {
+  const windowId = await setup();
+  const tab = tabIn(windowId);
+  const armed = await ok("files.armDownload", { tab, path: "/Users/me/Desktop/inflight.zip" });
+  stub.emitDownload(download({ id: "inflight", path: "/Users/me/Downloads/inflight.zip" }));
+  await tick();
+  S().closeTab(tab);
+  await tick();
+  assert.ok(native.disarmed.some(([ids, purge]) => Array.isArray(ids) && ids.includes(armed.arm) && purge), "the claimed arm's tab closing still disarms it");
+});
+
+test("a download without a path yet isn't claimed", async () => {
+  await setup();
+  await ok("files.armDownload", { path: "/Users/me/Desktop/later.zip" });
+  stub.emitDownload(download({ id: "nopath", path: "" }));
+  await tick();
+  assert.equal(native.claims.length, 0);
 });
 
 test("file methods refuse where the platform can't answer panels", async () => {
@@ -227,4 +294,20 @@ test("bookmarks.search filters by folder and names each hit's folders", async ()
   const hit = inWork.items.find((n) => n.id === link.id);
   assert.deepEqual(hit.folderPath, [tree.other.title, "Work", "Specs"]);
   assert.equal((await call("bookmarks.search", { folder: link.id })).error.code, "bad_request");
+});
+
+test("tabGroups.list clips huge tab URLs and caps a group's tabs so one group fits on a line", async () => {
+  const windowId = await setup();
+  const urls = Array.from({ length: 6 }, (_, i) => `https://huge.example/${i}`);
+  const made = await ok("apply", { ops: [{ op: "group.create", urls, name: "Huge", window: windowId }] });
+  assert.ok(made.ok);
+  const group = Object.values(S().groups).find((g) => g.name === "Huge");
+  const long = `https://huge.example/${"x".repeat(200_000)}`;
+  useBrowser.setState((s) => ({ tabs: Object.fromEntries(Object.entries(s.tabs).map(([id, t]) => [id, group.tabIds.includes(id) ? { ...t, url: long, title: "t".repeat(5000) } : t])) }));
+  const reply = await call("tabGroups.list", { limit: 1 });
+  assert.ok(!reply.error, JSON.stringify(reply.error));
+  const row = reply.result.items.find((g) => g.title === "Huge");
+  assert.ok(row);
+  assert.ok(row.tabs.every((t) => t.url.length <= 2048 && t.title.length <= 512 && t.clipped.includes("url") && t.clipped.includes("title")));
+  assert.ok(JSON.stringify(reply).length < 1024 * 1024);
 });

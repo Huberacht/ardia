@@ -149,8 +149,9 @@ bool AnswerArmed(NSSavePanel *panel, NSWindow *parent, NSString *how, NSModalRes
   NSString *armId = nil;
   NSArray<NSURL *> *picks = ArmedPanelPicks(panel, parent, &handled, &armId);
   if (!handled) return false;
-  NSString *answer = picks ? [NSString stringWithFormat:@"armed %@ chose %lu", armId, (unsigned long)picks.count] : [NSString stringWithFormat:@"armed %@ cancelled", armId];
-  Log([NSString stringWithFormat:@"%@ | %@", DescribePanel(panel, parent, how), answer], @[]);
+  Log([NSString stringWithFormat:@"%@ panel (not shown): %@ | armed %@ %@", [panel isKindOfClass:NSOpenPanel.class] ? @"open" : @"save", how, armId,
+                                 picks ? [NSString stringWithFormat:@"chose %lu", (unsigned long)picks.count] : @"cancelled"],
+      @[]);
   if (picks) ReturnPicks(panel, picks);
   *response = picks ? NSModalResponseOK : NSModalResponseCancel;
   return true;

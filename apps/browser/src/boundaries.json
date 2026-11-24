@@ -1419,14 +1419,16 @@
   {
    "id": "socket-family:files",
    "source": "socket",
-   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); tabs through tabOf; every path through localPathProblem (absolute, no NUL or line break, at most 1024 bytes, no . or ..), then natively: an upload must resolve to an existing readable file or folder, a download target must not exist and its folder must, a symbolic link is never written through, and the file lands with an exclusive rename into the folder resolved at arm time (ArdiaFilePaths.mm); a panel is answered only when Chromium opened it for an armed tab's window, and arms end with their tab, their time limit (at most 600 s) or control going off (clearFileArms) (D3: any same-user process is the owner)",
+   "guard": "Native listener checks the peer UID and a 0600 socket; params checked against the method's JSON schema (socketSchema.schemaProblem); tabs through tabOf; every path through localPathProblem (absolute, no NUL or line break, at most 1024 bytes, no . or ..), then natively: an upload must be a regular file, opened O_NOFOLLOW and copied from that descriptor into Ardia's 0700 file-arms folder, and the chooser gets the copy; a download target must not exist and its folder must, a prompted download saves into a fresh 0700 staging folder, and every file lands through PlaceFile (O_NOFOLLOW open, identity check, exclusive rename or exclusive copy) so nothing is replaced or written through a link; panels are answered only for Chromium in a known regular, non-private window (ArmFor/PickArm), one waiting upload arm per window and one download per once arm are enforced under the registry lock, and arms end with their tab, their time limit (at most 600 s) or control going off (clearFileArms, before the socket is cut off) (D3: any same-user process is the owner)",
    "checks": [
     "apps/browser/src/state/automation/socketSchema.ts#schemaProblem",
     "apps/browser/src/state/automation/fileArms.ts#localPathProblem",
     "apps/browser/src/state/automation/fileArms.ts#clearFileArms",
     "packages/ardiacore/ios/ArdiaFilePaths.mm#DownloadTarget",
+    "packages/ardiacore/ios/ArdiaFilePaths.mm#StageUpload",
     "packages/ardiacore/ios/ArdiaFilePaths.mm#PlaceFile",
-    "packages/ardiacore/ios/ArdiaFileArms.mm#ArmFor"
+    "packages/ardiacore/ios/ArdiaFileArms.mm#PickArm",
+    "packages/ardiacore/ios/ArdiaFileArms.mm#claimArmedDownload"
    ],
    "findings": [
     "D3"

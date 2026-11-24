@@ -16,8 +16,9 @@ export type DevtoolsEndpointProblem = (typeof DEVTOOLS_ENDPOINT_PROBLEMS)[number
 export type NativeDevtoolsEndpoint = { port: number; generation: number; token: string } | { problem: DevtoolsEndpointProblem };
 
 export type FileArmKind = "upload" | "download";
-export type FileArmState = "armed" | "answered" | "failed" | "expired" | "cleared";
-export type FileArmSpec = { id: string; kind: FileArmKind; tab: string | null; paths: string[]; once: boolean; seconds: number };
+export type FileArmState = "armed" | "answered" | "claimed" | "failed" | "expired" | "cleared";
+export type FileArmSpec = { id: string; kind: FileArmKind; tab: string | null; window: string | null; paths: string[]; once: boolean; seconds: number };
 export type FileArmRow = { id: string; kind: FileArmKind; tab: string | null; paths: string[]; folder: boolean; once: boolean; armedAt: number; expiresAt: number; state: FileArmState; reason?: string; landed: string[]; answered: number };
-export type FileArmResult = { ok: true; arm: FileArmRow } | { ok: false; reason: string; path?: string };
-export type PlacedDownload = { ok: true; path: string; bytes: number } | { ok: false; reason: string };
+export type FileArmResult = { ok: true; arm: FileArmRow } | { ok: false; reason: string; path?: string; arm?: string };
+export type FileArmClaim = { ok: true; mode: "automatic" | "prompted" } | { ok: false; reason: string };
+export type PlacedDownload = { ok: true; path: string; bytes: number; sourceLeft?: boolean } | { ok: false; reason: string; stagedPath?: string };
