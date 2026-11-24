@@ -168,3 +168,24 @@ test("hostile values in the migration's report never reach an event", async () =
     assert.equal(pendingShellMigration(store.read)?.properties.outcome ?? "migrated_with_skips", "migrated_with_skips", id);
   }
 });
+
+test("the launch report waits for the leader: none off the WebUI shell, held while events still go through a relay", async () => {
+  const { reportShellMigrationAtLaunch } = await import("./shellMigrationLaunch.ts");
+  const { setTelemetryRelay } = await import("./relay.ts");
+  assert.equal(await reportShellMigrationAtLaunch(null, null), "none");
+  assert.equal(await reportShellMigrationAtLaunch(null, "rnw"), "none");
+  setTelemetryRelay({ capture: () => true, log() {}, resetId: async () => "", change: async () => true, installId: () => "" });
+  try {
+    assert.equal(await reportShellMigrationAtLaunch(null, "webui"), "held");
+  } finally {
+    setTelemetryRelay(null);
+  }
+});
+
+test("after the lead hands over, the report runs once with the consent the launch noted, and only if a launch noted one", async () => {
+  const { noteLaunchConsent, reportShellMigrationAfterLead } = await import("./shellMigrationLaunch.ts");
+  assert.equal(await reportShellMigrationAfterLead(), "none", "a continuing session noted no launch");
+  noteLaunchConsent(null);
+  assert.equal(await reportShellMigrationAfterLead(), "none", "off the WebUI shell the noted launch sends nothing");
+  assert.equal(await reportShellMigrationAfterLead(), "none", "a noted launch is used once");
+});

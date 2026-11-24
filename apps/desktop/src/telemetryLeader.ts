@@ -32,6 +32,7 @@ type TelemetryLeadershipDeps = {
   deliver(message: Relayed): void;
   handle(op: TelemetryOp, arg?: string): Promise<unknown>;
   lead(): Promise<void>;
+  led?(): void;
   changed?(): void;
   report(error: unknown): void;
   newId?: () => string;
@@ -166,6 +167,11 @@ export function startTelemetryLeadership(deps: TelemetryLeadershipDeps): Telemet
     }
     for (const { id, op, arg } of asked.splice(0)) void answer(id, op, arg);
     for (const [id, { op, arg }] of [...waiting]) void run(id, op, arg).then((value) => settle(id, true, value), () => settle(id, false));
+    try {
+      deps.led?.();
+    } catch (error) {
+      deps.report(error);
+    }
     post({ kind: "leader" });
     return new Promise<void>(() => {});
   };

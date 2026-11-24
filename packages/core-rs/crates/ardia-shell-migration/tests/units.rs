@@ -521,7 +521,7 @@ fn kept_names_stay_within_255_and_apart() {
     );
     assert_eq!(
         ardia_shell_migration::migrate::kept_name("session.json", run),
-        "session.json.0123456789ab.kept"
+        "session.json.0123456789abcdef.kept"
     );
 }
 
@@ -552,6 +552,7 @@ fn a_marker_must_be_a_whole_finished_report() {
     assert!(valid_marker(&good));
     for broken in [
         serde_json::json!({"version": 1}),
+        serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "migrated", "attempt": 1, "counts": counts}),
         serde_json::json!({"version": 1, "run": "x", "outcome": "migrated", "attempt": 1, "counts": counts}),
         serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "failed", "attempt": 1, "counts": counts}),
         serde_json::json!({"version": 1, "run": "0123456789abcdef0123456789abcdef", "outcome": "migrated", "attempt": 1, "counts": {}}),

@@ -220,7 +220,7 @@ mod sys {
         CString::new(name).map_err(|_| unsafe_path(name.into()))
     }
 
-    pub fn open_base(path: &std::path::Path) -> io::Result<File> {
+    pub fn open_base(path: &std::path::Path, _access: Access) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         std::fs::OpenOptions::new()
             .read(true)
@@ -313,9 +313,15 @@ mod sys {
         unsafe { libc::rewinddir(stream) };
         let mut names = Vec::new();
         loop {
+            unsafe { *errno() = 0 };
             let entry = unsafe { libc::readdir(stream) };
             if entry.is_null() {
-                break;
+                let code = unsafe { *errno() };
+                unsafe { libc::closedir(stream) };
+                if code != 0 {
+                    return Err(io::Error::from_raw_os_error(code));
+                }
+                return Ok(names);
             }
             let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
             if let Ok(name) = name.to_str() {
@@ -324,8 +330,16 @@ mod sys {
                 }
             }
         }
-        unsafe { libc::closedir(stream) };
-        Ok(names)
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe fn errno() -> *mut libc::c_int {
+        unsafe { libc::__error() }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    unsafe fn errno() -> *mut libc::c_int {
+        unsafe { libc::__errno_location() }
     }
 
     pub fn rename(dir: &File, _staged: &File, from: &str, to: &str) -> io::Result<()> {
@@ -443,10 +457,10 @@ mod sys {
         }
     }
 
-    pub fn open_base(path: &std::path::Path) -> io::Result<File> {
+    pub fn open_base(path: &std::path::Path, access: Access) -> io::Result<File> {
         use std::os::windows::fs::OpenOptionsExt;
         std::fs::OpenOptions::new()
-            .access_mode(folder_access(Access::Traverse))
+            .access_mode(folder_access(access))
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
             .open(path)
             .map_err(|_| unsafe_path(path.to_path_buf()))
@@ -792,8 +806,13 @@ fn base_and_parts(path: &Path) -> io::Result<(PathBuf, Vec<String>)> {
 impl Root {
     fn walk(path: &Path, create: bool) -> io::Result<Option<Root>> {
         let (base, parts) = base_and_parts(path)?;
+        let base_access = match (parts.is_empty(), create) {
+            (true, true) => Access::Write,
+            (true, false) => Access::Read,
+            (false, _) => Access::Traverse,
+        };
         let mut dir = Dir {
-            file: sys::open_base(&base)?,
+            file: sys::open_base(&base, base_access)?,
             path: base,
         };
         let last = parts.len();

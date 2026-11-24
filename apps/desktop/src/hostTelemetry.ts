@@ -6,6 +6,7 @@ import { reloadChoice, savedChoice, useTelemetry, type ConsentToken } from "../.
 import { setConsentPeriod } from "../../browser/src/state/telemetry/consentPeriod";
 import { requestLog } from "../../browser/src/state/telemetry/requestLog";
 import { setTelemetryRelay, type ChoiceChange } from "../../browser/src/state/telemetry/relay";
+import { reportShellMigrationAfterLead } from "../../browser/src/state/telemetry/shellMigrationLaunch";
 import { reopenSession } from "../../browser/src/state/telemetry/sessionControl";
 import { uuidv4 } from "../../browser/src/state/telemetry/ids";
 import { setTelemetryHost } from "../../browser/src/state/telemetry/transport";
@@ -167,6 +168,7 @@ export function startHostTelemetry(options: { host: ArdiaHost; candidate: boolea
       await documentSaved(STATE_DOC).catch(report);
       current.announce();
     },
+    led: () => void reportShellMigrationAfterLead().catch(report),
     changed: () => void refreshState(),
     report,
   });

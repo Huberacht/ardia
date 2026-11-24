@@ -224,7 +224,6 @@ struct Migration<'a> {
     rnw_data: Option<&'a Root>,
     rnw_config: Option<&'a Root>,
     sealer: &'a dyn Sealer,
-    vault: &'a dyn Vault,
     faults: &'a Faults,
     counts: Counts,
     commits: usize,
@@ -320,6 +319,7 @@ pub fn valid_marker(marker: &Value) -> bool {
         && counts_ok
         && marker.get("failed_stage").is_none()
         && marker.get("attempt").is_some_and(Value::is_u64)
+        && marker.get("duration_ms").is_some_and(Value::is_u64)
 }
 
 fn marker_in(root: &Root) -> Option<Value> {
@@ -355,7 +355,7 @@ pub fn content_tag(bytes: &[u8]) -> String {
 }
 
 pub fn kept_name(name: &str, tag: &str) -> String {
-    let suffix = format!(".{}.kept", &tag[..tag.len().min(12)]);
+    let suffix = format!(".{}.kept", tag.get(..tag.len().min(16)).unwrap_or(tag));
     let full = format!("{name}{suffix}");
     if full.encode_utf16().count() <= NAME_LIMIT {
         return full;
@@ -397,16 +397,26 @@ impl Migration<'_> {
         let target = match kept.read(name, DOCUMENT_LIMIT)? {
             Fetched::Missing => name.to_string(),
             Fetched::Data(earlier) if earlier.as_slice() == bytes => return Ok(()),
-            Fetched::Data(_) => {
-                let newer = kept_name(name, &content_tag(bytes));
-                if let Fetched::Data(earlier) = kept.read(&newer, DOCUMENT_LIMIT)? {
-                    if earlier.as_slice() == bytes {
-                        return Ok(());
+            _ => {
+                let tag = content_tag(bytes);
+                let mut found = None;
+                for round in 0..64u32 {
+                    let candidate = if round == 0 {
+                        kept_name(name, &tag)
+                    } else {
+                        kept_name(name, &format!("{}-{round}", &tag[..tag.len().min(12)]))
+                    };
+                    match kept.read(&candidate, DOCUMENT_LIMIT)? {
+                        Fetched::Missing => {
+                            found = Some(candidate);
+                            break;
+                        }
+                        Fetched::Data(earlier) if earlier.as_slice() == bytes => return Ok(()),
+                        _ => {}
                     }
                 }
-                newer
+                found.ok_or_else(|| io::Error::other("no free name to keep a pilot copy under"))?
             }
-            _ => kept_name(name, &content_tag(bytes)),
         };
         self.write(&kept, &target, bytes)?;
         self.counts.kept_aside += 1;
@@ -635,22 +645,13 @@ impl Migration<'_> {
         Ok(())
     }
 
-    fn steps(&mut self) -> StepResult {
+    fn steps(&mut self, stored: Vec<StoredCredential>) -> StepResult {
         self.sweep().map_err(|e| (Stage::Lock, e))?;
         self.documents().map_err(|e| (Stage::Documents, e))?;
         self.config().map_err(|e| (Stage::Config, e))?;
         self.sync_keys().map_err(|e| (Stage::SyncKeys, e))?;
-        let stored = self
-            .vault
-            .list(&self.layout.credential_prefix)
-            .map_err(|e| (Stage::Credentials, e))?;
         self.credentials(stored).map_err(|e| (Stage::Credentials, e))
     }
-}
-
-fn nothing_there(layout: &Layout, vault: &dyn Vault) -> io::Result<bool> {
-    let missing = |path: &Path| fsafe::entry(path).map(|e| matches!(e, Entry::Missing));
-    Ok(missing(&layout.rnw_data)? && missing(&layout.rnw_config)? && vault.list(&layout.credential_prefix)?.is_empty())
 }
 
 pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: &Faults) -> Report {
@@ -741,10 +742,11 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         report
     };
 
-    let nothing = match nothing_there(layout, vault) {
-        Ok(nothing) => nothing,
+    let stored = match vault.list(&layout.credential_prefix) {
+        Ok(stored) => stored,
         Err(_) => return failed(report, Stage::Credentials),
     };
+    let nothing = rnw_data.is_none() && rnw_config.is_none() && stored.is_empty();
 
     let mut migration = Migration {
         layout,
@@ -752,7 +754,6 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
         rnw_data: rnw_data.as_ref(),
         rnw_config: rnw_config.as_ref(),
         sealer,
-        vault,
         faults,
         counts: Counts::default(),
         commits: 0,
@@ -760,7 +761,7 @@ pub fn migrate(layout: &Layout, sealer: &dyn Sealer, vault: &dyn Vault, faults: 
     let stepped = if nothing {
         migration.sweep().map_err(|e| (Stage::Lock, e))
     } else {
-        migration.steps()
+        migration.steps(stored)
     };
     report.counts = migration.counts.clone();
     if let Err((stage, _error)) = stepped {

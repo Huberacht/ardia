@@ -1024,3 +1024,46 @@ fn an_unchanged_pilot_copy_reuses_its_backup_and_a_changed_one_gets_its_own() {
     );
     assert!(tree(&kept).keys().all(|name| name.encode_utf16().count() <= 255));
 }
+
+#[test]
+fn a_different_file_already_at_the_backup_name_is_never_overwritten() {
+    let scratch = Scratch::new("kept-collision");
+    let sealer = FakeDpapi::new();
+    let populated = populate(&scratch.0, &sealer);
+    let layout = &populated.layout;
+    let kept = layout.webui_data.join(names::KEPT_FOLDER);
+    write(&kept.join("session.json"), b"pilot A");
+    let tagged = ardia_shell_migration::migrate::kept_name(
+        "session.json",
+        &ardia_shell_migration::migrate::content_tag(b"pilot B"),
+    );
+    write(&kept.join(&tagged), b"something else that got this name");
+    write(&layout.webui_data.join("session.json"), b"pilot B");
+    let report = run(layout, &sealer, &populated.vault);
+    assert_eq!(report.outcome, Outcome::MigratedWithSkips);
+    assert_eq!(
+        fs::read(kept.join(&tagged)).unwrap(),
+        b"something else that got this name"
+    );
+    assert_eq!(fs::read(kept.join("session.json")).unwrap(), b"pilot A");
+    let holders: Vec<String> = tree(&kept)
+        .into_iter()
+        .filter(|(_, bytes)| bytes == b"pilot B")
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(holders.len(), 1, "{:?}", tree(&kept).keys());
+    assert_ne!(holders[0], tagged);
+    assert!(holders[0].encode_utf16().count() <= 255);
+    let again = layout.webui_data.join("session.json");
+    write(&again, b"pilot B");
+    fs::remove_file(layout.webui_data.join(names::MARKER_NAME)).unwrap();
+    run(layout, &sealer, &populated.vault);
+    assert_eq!(
+        tree(&kept)
+            .values()
+            .filter(|bytes| bytes.as_slice() == b"pilot B")
+            .count(),
+        1,
+        "the second backup is reused"
+    );
+}
