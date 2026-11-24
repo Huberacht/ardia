@@ -44,6 +44,7 @@ function DefaultBrowserQuestion() {
   const redo = useOnboarding((s) => s.redo);
   const [system, setSystem] = useState<OnboardingSystem | null>(null);
   const [busy, setBusy] = useState(false);
+  const [pending, setPending] = useState(false);
   const setDefault = extras.setDefault ?? !backgroundInstance;
   const trial = !redo && PLATFORM_FEATURES.setsDefaultBrowser && (extras.trial ?? false);
   const dock = extras.dock ?? true;
@@ -57,6 +58,7 @@ function DefaultBrowserQuestion() {
   const apply = async () => {
     if (!system || applying) return;
     applying = true;
+    setPending(true);
     const slow = setTimeout(() => setBusy(true), onboardingMotion.busyLabelDelay);
     const picked: string[] = [];
     try {
@@ -70,6 +72,7 @@ function DefaultBrowserQuestion() {
       clearTimeout(slow);
       applying = false;
       setBusy(false);
+      setPending(false);
       confirmDefaultBrowserAnswer(picked);
     }
   };
@@ -85,6 +88,7 @@ function DefaultBrowserQuestion() {
         <StepActions
           continueTitle={busy ? "Setting Up…" : "Continue"}
           disabled={!system || busy}
+          holdForward={pending}
           onContinue={() => void apply()}
           onSkip={() => skipStep("question")}
           holdScroll

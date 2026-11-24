@@ -64,6 +64,7 @@ export function StepActions({
   onSkip,
   icon,
   holdScroll,
+  holdForward,
 }: {
   onContinue: () => void;
   continueTitle?: string;
@@ -71,6 +72,7 @@ export function StepActions({
   onSkip?: () => void;
   icon?: string;
   holdScroll?: boolean;
+  holdForward?: boolean;
 }) {
   const step = useOnboarding((s) => s.step);
   const sub = useOnboarding((s) => s.sub);
@@ -78,7 +80,7 @@ export function StepActions({
   const steps = activeSteps();
   const first = steps[steps.indexOf(step) - 1] === "intro" && sub === 0;
   useLayoutEffect(() => {
-    slots.forward.run = disabled ? null : holdScroll ? (onSkip ?? null) : onContinue;
+    slots.forward.run = disabled || holdForward ? null : holdScroll ? (onSkip ?? null) : onContinue;
   });
   return (
     <>
