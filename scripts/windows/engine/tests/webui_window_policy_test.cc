@@ -99,8 +99,6 @@ void TestBindingGenerations() {
     generation = *next;
   }
   assert(generation == 6);
-  assert(CloseCancelResetsUnload(false));
-  assert(!CloseCancelResetsUnload(true));
 }
 
 void TestSelectionSequence() {
@@ -212,6 +210,37 @@ void TestPlacement() {
   assert(ParsePlacement(text) == saved);
 }
 
+void TestMultiMonitorPlacement() {
+  const Rect primary{0, 0, 1920, 1040};
+  const Rect secondary{1920, -200, 2560, 1400};
+  const Placement saved_on_secondary{{2400, 100, 1200, 800}, false};
+  const std::optional<Rect> effective =
+      EffectivePlacementRect(std::nullopt, std::nullopt, saved_on_secondary);
+  assert(effective == saved_on_secondary.frame);
+  const PlacementChoice kept = ChoosePlacement(std::nullopt, std::nullopt,
+                                               saved_on_secondary, secondary);
+  assert(kept.frame == (Rect{2400, 100, 1200, 800}));
+  const PlacementChoice clamped = ChoosePlacement(std::nullopt, std::nullopt,
+                                                  saved_on_secondary, primary);
+  assert(clamped.frame.right() <= primary.right());
+
+  const Placement front_on_secondary{{2000, 0, 1000, 700}, false};
+  const std::optional<Rect> cascaded =
+      EffectivePlacementRect(std::nullopt, front_on_secondary, saved_on_secondary);
+  assert(cascaded == (Rect{2028, 28, 1000, 700}));
+  assert(ChoosePlacement(std::nullopt, front_on_secondary, saved_on_secondary,
+                         secondary)
+             .frame == (Rect{2028, 28, 1000, 700}));
+
+  const Rect requested{3000, 500, 900, 600};
+  assert(EffectivePlacementRect(requested, front_on_secondary,
+                                saved_on_secondary) == requested);
+  assert(EffectivePlacementRect(Rect{0, 0, 0, 0}, std::nullopt, std::nullopt) ==
+         std::nullopt);
+  assert(EffectivePlacementRect(std::nullopt, std::nullopt, std::nullopt) ==
+         std::nullopt);
+}
+
 void TestPlacementFit() {
   const Rect work{0, 0, 1920, 1040};
   assert(FitToWorkArea({100, 100, 800, 600}, work) == (Rect{100, 100, 800, 600}));
@@ -301,6 +330,13 @@ void TestHostileSinks() {
              value.find('\n') == std::string::npos);
     }
     assert(!RelaunchUrlSchemeAllowed(value));
+    const std::string_view link_profile = PrivateLinkProfile(value);
+    assert(link_profile.empty() || link_profile == value);
+    if (!link_profile.empty()) {
+      assert(value.find('@') == std::string::npos &&
+             value.find('\n') == std::string::npos &&
+             value.size() <= kWindowIdLimit);
+    }
     assert(!DocumentEngineRequestAllowed(value, 2));
     assert(!ParseDocumentVerb(value));
     assert(!ParseDocumentVerb("documents." + value));
@@ -336,6 +372,13 @@ void TestHostileSinks() {
   assert(!CopyTextFits(cjk, 1024 * 1024));
   assert(CopyTextFits(wide, 1024 * 1024));
 
+  assert(PrivateLinkProfile("default") == "default");
+  assert(PrivateLinkProfile("work") == "work");
+  assert(PrivateLinkProfile("").empty());
+  assert(PrivateLinkProfile("w-1@default").empty());
+  assert(PrivateLinkProfile("bad\nname").empty());
+  assert(PrivateLinkProfile(std::string(kWindowIdLimit + 1, 'p')).empty());
+
   assert(RelaunchUrlSchemeAllowed("https"));
   assert(RelaunchUrlSchemeAllowed("http"));
   assert(RelaunchUrlSchemeAllowed("file"));
@@ -368,6 +411,7 @@ int main() {
   TestRects();
   TestPlacement();
   TestPlacementFit();
+  TestMultiMonitorPlacement();
   TestHostileSinks();
   std::cout << "webui_window_policy_test: all assertions passed\n";
   return 0;

@@ -1778,16 +1778,20 @@ in `webui_frame.cc`: top-edge resize, `HTMAXBUTTON` over the shell's maximize bu
   close. `tab.presentations` also activates the
   presented tab in its native `TabStripModel`, so Chromium's active-tab services follow the shell.
 - Closing: when companions hold tabs, the shell's close and the system's (`WM_CLOSE` from Alt+F4 or the taskbar,
-  taken by `CaptionInput`) first run the window's and its companions' `beforeunload` while the visible window is
-  still there to show their prompts (`ConfirmWindowUnload`, like Linux's `ConfirmCompanions`), then close without
-  asking again. A cancel there, or a later refusal (a download warning, `RegisterBrowserCloseCancelled`), leaves the
-  window open and resets every confirmation, so the next close asks again. `closing_` is set only when the
+  taken by `CaptionInput`) first run the companions' `beforeunload` while the visible window is still there to show
+  their prompts (`ConfirmWindowUnload`, like Linux's `ConfirmCompanions`); the window's own tabs then go through
+  Chromium's ordinary close, download warning included. A cancel resets the companions, and each new close attempt
+  clears any confirmation a cancelled one left behind, so the next close asks again. `closing_` is set only when the
   widget actually starts closing (`OnWidgetClosing`), so a cancelled `beforeunload` never leaves documents refused.
   Companions closed after their window are emptied without prompts.
 - A `session.write` broadcasts `ArdiaHost` `session` (`base`, `session`, `sourceWindowId`) to every non-private
   window, the writer getting its own base back, so Settings changes reach open windows at once. Entering and leaving
   full screen sends `ArdiaShell` `onWindowEvent` `{type: "fullScreen", id, on}`, and `minimizeWindow` takes a target
-  window id. A window opens only for the live shell document that asked for it (`LiveFor`).
+  window id. A window opens only for the live shell document that asked for it (`LiveFor`), on the display its
+  requested, cascaded or saved frame falls on (`EffectivePlacementRect`). A closed window sends
+  `onWindowEvent` `{type: "close", id}` to the other windows (a private one only to its opener). Chromium's "Open link
+  in private window" becomes the shell's `openWindow` page event (`OffTheRecordNavigation`), and any other private
+  window Chromium opens hands its pages to the shell's private windows and closes (`HandOverPrivateWindow`).
 - Host calls served there: `tab.create` (with `adoptId`, `previousClaim` and transfers between windows after
   `ArdiaTabs.prepareTransfer`), `tab.viewport`, `tab.presentations`, `tab.command` (`loadUrl`, `goBack`,
   `goForward`, `goToOffset`, `reload`, `forceReload`, `stopLoading`, `focus`, `blur`, `zoomStep`, `setMuted`,

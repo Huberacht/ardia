@@ -22,6 +22,7 @@
 #include "ui/gfx/native_ui_types.h"
 
 class BrowserWindowInterface;
+class GURL;
 class Profile;
 
 namespace content {
@@ -77,6 +78,7 @@ class WindowRegistry : public BrowserCollectionObserver {
   bool PreTranslate(const MSG& msg);
   void Relaunched(base::ListValue urls);
   void DeliverOpenUrls();
+  bool OffTheRecordNavigation(content::WebContents* contents, const GURL& url);
   void BroadcastWindowEvent(const base::DictValue& event);
   void BroadcastSession(const std::string& source_window,
                         const base::DictValue& source_base,
@@ -110,6 +112,8 @@ class WindowRegistry : public BrowserCollectionObserver {
                      Done done,
                      Profile* profile);
   std::string NextWindowId();
+  void HandOverPrivateWindow(BrowserWindowInterface* browser);
+  void NotifyWindowClosed(ShellHostView* closed);
   int NextPrivateOrdinal() const;
 
   bool started_ = false;

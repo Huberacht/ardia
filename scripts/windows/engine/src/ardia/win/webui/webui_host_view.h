@@ -39,6 +39,7 @@
 
 class BrowserView;
 class BrowserWindowInterface;
+class GURL;
 class Profile;
 
 namespace aura {
@@ -107,6 +108,7 @@ class PageBinding : public content::WebContentsObserver {
   bool transferable = false;
 
   void Rebind(content::WebContents* contents);
+  bool ReportOpenPrivateWindow(const GURL& url, const std::string& profile);
   base::DictValue NavigationEvent() const;
   base::DictValue Envelope(std::string_view type);
   void ReportNavigation();
@@ -207,6 +209,8 @@ class ShellHostView : public views::View,
   bool OpenUrlsListening() const;
   void RequestClose();
   bool InterceptSystemClose();
+  bool OpenPrivateLink(content::WebContents* contents, const GURL& url);
+  bool RequestPrivateWindow(const GURL& url);
   bool LiveFor(uint64_t generation) const;
   void RememberPlacement();
 
@@ -365,7 +369,6 @@ class ShellHostView : public views::View,
   std::optional<bool> reported_maximized_;
   std::optional<bool> reported_full_screen_;
   base::CallbackListSubscription system_state_subscription_;
-  base::CallbackListSubscription close_cancelled_subscription_;
   WinTelemetryClient telemetry_;
   std::unique_ptr<FilePicker> file_picker_;
 

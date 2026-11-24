@@ -18,6 +18,8 @@
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "content/public/browser/web_contents.h"
+#include "url/gurl.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -189,15 +191,18 @@ ShellHostView* WindowRegistry::Open(Profile* page_profile,
     front = webui_window::Placement{ToRect(window->GetRestoredBounds()),
                                     window->IsMaximized()};
   }
-  const display::Display display =
-      requested_frame
-          ? display::Screen::Get()->GetDisplayMatching(*requested_frame)
-          : display::Screen::Get()->GetPrimaryDisplay();
-  const webui_window::PlacementChoice choice = webui_window::ChoosePlacement(
+  const std::optional<webui_window::Rect> requested =
       requested_frame ? std::make_optional(ToRect(*requested_frame))
-                      : std::nullopt,
-      front, browser_kind ? saved_placement_ : std::nullopt,
-      ToRect(display.work_area()));
+                      : std::nullopt;
+  const std::optional<webui_window::Placement> saved =
+      browser_kind ? saved_placement_ : std::nullopt;
+  const std::optional<webui_window::Rect> effective =
+      webui_window::EffectivePlacementRect(requested, front, saved);
+  const display::Display display =
+      effective ? display::Screen::Get()->GetDisplayMatching(FromRect(*effective))
+                : display::Screen::Get()->GetPrimaryDisplay();
+  const webui_window::PlacementChoice choice = webui_window::ChoosePlacement(
+      requested, front, saved, ToRect(display.work_area()));
   BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
                                    *page_profile, true);
   params.omit_from_session_restore = true;
@@ -282,7 +287,9 @@ void WindowRegistry::OpenRequested(ShellHostView* requester,
                                base::Value("Invalid native window request"));
   }
   if (ShellHostView* existing = HostByWindowId(id)) {
-    existing->FocusWindow();
+    if (!options || options->FindBool("focus").value_or(true)) {
+      existing->FocusWindow();
+    }
     return std::move(done).Run(true, base::Value());
   }
   if (hosts_.size() >= webui_window::kOpenWindowLimit) {
@@ -654,9 +661,11 @@ void WindowRegistry::Attach(base::WeakPtr<BrowserWindowInterface> browser) {
     return;
   }
   Profile* profile = browser->GetProfile();
-  if (!profile || profile->IsOffTheRecord()) {
-    LOG(WARNING) << "Ardia WebUI shell left a private Chromium window alone";
+  if (!profile) {
     return;
+  }
+  if (profile->IsOffTheRecord()) {
+    return HandOverPrivateWindow(browser.get());
   }
   WindowConfig config;
   config.window_id = NextWindowId();
@@ -667,6 +676,67 @@ void WindowRegistry::Attach(base::WeakPtr<BrowserWindowInterface> browser) {
     NoteForTest("webui shell: adopted a window Chromium opened as " +
                 host->window_id());
   }
+}
+
+void WindowRegistry::HandOverPrivateWindow(BrowserWindowInterface* browser) {
+  ShellHostView* front = nullptr;
+  for (auto it = activation_order_.rbegin(); it != activation_order_.rend();
+       ++it) {
+    const auto found = hosts_.find(*it);
+    if (found != hosts_.end() && found->second->browser() &&
+        !found->second->private_window() && !found->second->is_utility() &&
+        !found->second->closing()) {
+      front = found->second;
+      break;
+    }
+  }
+  TabStripModel* model = browser->GetTabStripModel();
+  size_t handed = 0;
+  for (int index = 0; front && index < model->count(); ++index) {
+    const GURL url = model->GetWebContentsAt(index)->GetVisibleURL();
+    if (url.is_valid() && !url.IsAboutBlank() &&
+        front->RequestPrivateWindow(url)) {
+      ++handed;
+    }
+  }
+  NoteForTest("webui shell: a private window Chromium opened handed " +
+              base::NumberToString(handed) +
+              " pages to the shell's private windows");
+  browser->GetWindow()->Close();
+}
+
+void WindowRegistry::NotifyWindowClosed(ShellHostView* closed) {
+  const base::DictValue event =
+      base::DictValue().Set("type", "close").Set("id", closed->window_id());
+  if (closed->private_window()) {
+    const auto opener = hosts_.find(closed->opener());
+    if (opener != hosts_.end() && opener->second != closed &&
+        opener->second->browser()) {
+      opener->second->Emit("ArdiaShell", "onWindowEvent",
+                           base::Value(event.Clone()));
+    }
+    return;
+  }
+  for (ShellHostView* host : Hosts()) {
+    if (host != closed && !host->is_utility()) {
+      host->Emit("ArdiaShell", "onWindowEvent", base::Value(event.Clone()));
+    }
+  }
+}
+
+bool WindowRegistry::OffTheRecordNavigation(content::WebContents* contents,
+                                            const GURL& url) {
+  if (!contents || !url.is_valid()) {
+    return false;
+  }
+  for (ShellHostView* host : Hosts()) {
+    if (host->OpenPrivateLink(contents, url)) {
+      return true;
+    }
+  }
+  LOG(WARNING) << "Ardia WebUI shell refused a private link: its tab has no "
+                  "live shell page";
+  return true;
 }
 
 void WindowRegistry::OnBrowserClosed(BrowserWindowInterface* browser) {
@@ -686,6 +756,9 @@ void WindowRegistry::OnBrowserClosed(BrowserWindowInterface* browser) {
   }
   ShellHostView* host = found->second;
   const bool private_window = host->private_window();
+  if (!host->is_utility()) {
+    NotifyWindowClosed(host);
+  }
   host->DetachBrowser();
   std::erase(activation_order_, session);
   if (private_window) {

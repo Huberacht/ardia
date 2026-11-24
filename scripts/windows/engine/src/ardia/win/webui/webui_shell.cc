@@ -50,6 +50,9 @@ extern bool (*g_ardia_linux_is_companion)(const BrowserWindowInterface*);
 extern int (*g_ardia_linux_window_tab_count)(const BrowserWindowInterface*);
 extern bool (*g_ardia_linux_shell_passes_point)(gfx::NativeView child,
                                                 const gfx::Point& location);
+extern bool (*g_ardia_linux_off_the_record_navigation)(
+    content::WebContents* source,
+    const GURL& url);
 
 namespace ardia_win {
 
@@ -233,6 +236,10 @@ bool ShellPassesPoint(gfx::NativeView child, const gfx::Point& location) {
   return WindowRegistry::Get().ShellPassesPoint(child, location);
 }
 
+bool OffTheRecordNavigation(content::WebContents* source, const GURL& url) {
+  return WindowRegistry::Get().OffTheRecordNavigation(source, url);
+}
+
 }
 
 void RegisterWebUIShell() {
@@ -250,6 +257,7 @@ void InstallWebUIShellHooks() {
   g_ardia_linux_is_companion = &IsCompanion;
   g_ardia_linux_window_tab_count = &WindowTabCount;
   g_ardia_linux_shell_passes_point = &ShellPassesPoint;
+  g_ardia_linux_off_the_record_navigation = &OffTheRecordNavigation;
 }
 
 void OpenWebUIShell() {

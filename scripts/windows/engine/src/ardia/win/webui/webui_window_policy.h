@@ -462,6 +462,25 @@ constexpr Rect CascadeFrom(const Rect& front, const Rect& work_area) {
 
 enum class PlacementSource { kRequested, kFront, kSaved, kDefault };
 
+constexpr std::optional<Rect> EffectivePlacementRect(
+    const std::optional<Rect>& requested,
+    const std::optional<Placement>& front,
+    const std::optional<Placement>& saved) {
+  if (requested && requested->width > 0 && requested->height > 0) {
+    return requested;
+  }
+  if (front) {
+    Rect next = front->frame;
+    next.x += kCascadeOffset;
+    next.y += kCascadeOffset;
+    return next;
+  }
+  if (saved) {
+    return saved->frame;
+  }
+  return std::nullopt;
+}
+
 struct PlacementChoice {
   Rect frame;
   bool maximized = false;
@@ -588,8 +607,17 @@ constexpr std::optional<uint64_t> NextBindingGeneration(uint64_t current) {
   return current + 1;
 }
 
-constexpr bool CloseCancelResetsUnload(bool unload_handlers_need_time) {
-  return !unload_handlers_need_time;
+constexpr std::string_view PrivateLinkProfile(std::string_view profile) {
+  if (profile.empty() || profile.size() > kWindowIdLimit ||
+      profile.find('@') != std::string_view::npos) {
+    return {};
+  }
+  for (char c : profile) {
+    if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+      return {};
+    }
+  }
+  return profile;
 }
 
 constexpr bool KeepsWindowWithoutTabs(bool hosted, bool companion, bool closing) {

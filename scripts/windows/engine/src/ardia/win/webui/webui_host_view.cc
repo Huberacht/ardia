@@ -316,6 +316,27 @@ void PageBinding::ReportClosed() {
                base::Value(std::move(delivery)));
 }
 
+bool PageBinding::ReportOpenPrivateWindow(const GURL& url,
+                                          const std::string& profile) {
+  if (!owner_ || claim.empty() || !url.is_valid() ||
+      webui_window::PrivateLinkProfile(profile).empty()) {
+    return false;
+  }
+  base::DictValue delivery = Envelope("pageEvent");
+  delivery.Set("event",
+               base::DictValue()
+                   .Set("name", "openWindow")
+                   .Set("data", base::DictValue()
+                                    .Set("url", url.spec())
+                                    .Set("disposition", "incognito")
+                                    .Set("profile",
+                                         webui_window::PrivateLinkProfile(
+                                             profile))));
+  owner_->Emit("ArdiaWebView", base::NumberToString(id_),
+               base::Value(std::move(delivery)));
+  return true;
+}
+
 void PageBinding::Rebind(content::WebContents* contents) {
   if (viewport) {
     viewport->SetWebContents(nullptr);
@@ -393,18 +414,6 @@ void ShellHostView::Initialize() {
   shell_->GetWebContents()->SetDelegate(this);
   transparency_ = std::make_unique<ShellTransparency>(shell_->GetWebContents());
   ObserveMember(browser_);
-  close_cancelled_subscription_ = browser_->RegisterBrowserCloseCancelled(
-      base::BindRepeating(
-          [](base::WeakPtr<ShellHostView> host, BrowserWindowInterface* browser,
-             BrowserWindowInterface::ClosingStatus status) {
-            if (host && host->browser_ == browser &&
-                webui_window::CloseCancelResetsUnload(
-                    status == BrowserWindowInterface::ClosingStatus::
-                                  kDeniedUnloadHandlersNeedTime)) {
-              host->ResetUnloadConfirmations();
-            }
-          },
-          GetWeakPtr()));
   if (views::Widget* frame = widget()) {
     original_targeter_ = frame->GetNativeWindow()->SetEventTargeter(
         std::make_unique<ShellRootTargeter>(GetWeakPtr()));
@@ -434,7 +443,6 @@ void ShellHostView::DetachBrowser() {
   telemetry_.CancelAll();
   file_picker_.reset();
   system_state_subscription_ = {};
-  close_cancelled_subscription_ = {};
   TabStripModelObserver::StopObservingAll(this);
   CloseCompanions();
   for (auto& [id, binding] : bindings_) {
@@ -1067,6 +1075,7 @@ void ShellHostView::RequestClose() {
     return;
   }
   RememberPlacement();
+  ResetUnloadConfirmations();
   if (!CompanionsHoldTabs() || browser_shutdown::IsTryingToQuit()) {
     browser_->GetWindow()->Close();
     return;
@@ -1107,9 +1116,6 @@ bool ShellHostView::CompanionsHoldTabs() const {
 void ShellHostView::ConfirmWindowUnload(
     base::OnceCallback<void(bool)> done) {
   std::vector<base::WeakPtr<BrowserWindowInterface>> waiting;
-  if (browser_ && browser_->GetTabStripModel()->count() > 0) {
-    waiting.push_back(browser_->GetWeakPtr());
-  }
   for (const auto& companion : companions_) {
     if (companion && companion->GetTabStripModel()->count() > 0) {
       waiting.push_back(companion);
@@ -1175,8 +1181,11 @@ void ShellHostView::ConfirmNextCompanion(
 }
 
 void ShellHostView::ResetUnloadConfirmations() {
-  for (BrowserWindowInterface* member : Members()) {
-    UnloadController* unload = UnloadController::From(member);
+  for (const auto& companion : companions_) {
+    if (!companion) {
+      continue;
+    }
+    UnloadController* unload = UnloadController::From(companion.get());
     if (unload && unload->is_attempting_to_close_browser()) {
       unload->ResetBeforeUnloadForShutdown();
     }
@@ -1382,6 +1391,39 @@ void ShellHostView::OnTabStripModelChanged(
     ReplaceTabContents(replace->old_contents, replace->new_contents);
   }
   ReattachViewports();
+}
+
+bool ShellHostView::OpenPrivateLink(content::WebContents* contents,
+                                     const GURL& url) {
+  PageBinding* binding = BindingForContents(contents);
+  if (!binding) {
+    return false;
+  }
+  return binding->ReportOpenPrivateWindow(url, binding->profile().empty()
+                                                   ? config_.page_profile
+                                                   : binding->profile());
+}
+
+bool ShellHostView::RequestPrivateWindow(const GURL& url) {
+  if (!browser_ || private_window() || is_utility() || closing_) {
+    return false;
+  }
+  PageBinding* chosen = nullptr;
+  for (const auto& [id, binding] : bindings_) {
+    if (!binding->contents() || binding->claim.empty()) {
+      continue;
+    }
+    if (binding->presented) {
+      chosen = binding.get();
+      break;
+    }
+    if (!chosen) {
+      chosen = binding.get();
+    }
+  }
+  return chosen && chosen->ReportOpenPrivateWindow(
+                       url, chosen->profile().empty() ? config_.page_profile
+                                                      : chosen->profile());
 }
 
 void ShellHostView::ReplaceTabContents(content::WebContents* old_contents,
