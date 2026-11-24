@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+#include <sys/types.h>
+
 NS_ASSUME_NONNULL_BEGIN
 
 namespace ardia_files {
@@ -15,6 +17,7 @@ NSString *SafeFileName(NSString *_Nullable name);
 bool StillFree(NSString *target, NSString *_Nullable *_Nonnull reason);
 NSString *_Nullable StageUpload(NSString *canonical, NSString *dir, NSString *_Nullable *_Nonnull reason);
 NSString *_Nullable MakeStagingFolder(NSString *folder, NSString *tag, NSString *_Nullable *_Nonnull reason);
+bool RemoveIfSame(NSString *path, dev_t device, ino_t inode);
 NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target);
 
 }

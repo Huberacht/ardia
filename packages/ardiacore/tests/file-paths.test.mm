@@ -264,6 +264,23 @@ static void TestDownloadPickerDetection() {
   CHECK(!AwaitingDownloadTarget(2001, @""));
 }
 
+static void TestRemoveIfSame() {
+  NSString *copied = Make(@"remove/original.bin", @"copied");
+  struct stat info;
+  lstat(copied.fileSystemRepresentation, &info);
+  CHECK(RemoveIfSame(copied, info.st_dev, info.st_ino));
+  CHECK(!Exists(copied));
+  NSString *swapped = Make(@"remove/swapped.bin", @"original");
+  lstat(swapped.fileSystemRepresentation, &info);
+  [NSFileManager.defaultManager removeItemAtPath:swapped error:nil];
+  Make(@"remove/swapped.bin", @"a different file at the same path");
+  CHECK(!RemoveIfSame(swapped, info.st_dev, info.st_ino));
+  CHECK([Text(swapped) isEqualToString:@"a different file at the same path"]);
+  NSArray *listing = [NSFileManager.defaultManager contentsOfDirectoryAtPath:At(@"remove") error:nil];
+  CHECK(listing != nil && listing.count == 1);
+  CHECK(!RemoveIfSame(At(@"remove/none.bin"), info.st_dev, info.st_ino));
+}
+
 int main() {
   @autoreleasepool {
     char base[] = "/tmp/ardia-file-paths-XXXXXX";
@@ -280,6 +297,7 @@ int main() {
     TestAppDataRoot();
     TestNamesKeepWholeCharacters();
     TestDownloadPickerDetection();
+    TestRemoveIfSame();
     [NSFileManager.defaultManager removeItemAtPath:gRoot error:nil];
     if (failures) return 1;
     std::printf("file-paths: ok\n");

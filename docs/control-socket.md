@@ -873,8 +873,9 @@ and again natively (`ArdiaFilePaths.mm`).
   lands. Placing a file opens the source without following a link, checks it's a regular file, moves it to a hidden
   temporary name in the target folder, checks it's still the file that was opened (device and inode), and publishes
   it with `renameatx_np(RENAME_EXCL)`; across volumes it copies from the open descriptor into an exclusive temporary
-  file and publishes that the same way, then removes the source only if it's still that file (`sourceLeft` says when
-  it couldn't). Nothing already at the target is ever replaced. Placing runs off the main thread.
+  file and publishes that the same way, then removes the source only if it's still that file: it first renames the
+  source to a hidden name beside it, checks that entry is the file it copied, and removes only that, moving anything
+  else back (`sourceLeft` says when it couldn't). Nothing already at the target is ever replaced. Placing runs off the main thread.
 
 **How a panel is answered.** `ArdiaActivation.mm` wraps `NSOpenPanel` and `NSSavePanel`'s three ways of running. A
 panel is answered from an arm only when Chromium opened it (its call stack), its window is a known regular Ardia

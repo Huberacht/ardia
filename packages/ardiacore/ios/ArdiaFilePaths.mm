@@ -294,6 +294,17 @@ NSString *MakeStagingFolder(NSString *folder, NSString *tag, NSString **reason) 
   return [NSFileManager.defaultManager stringWithFileSystemRepresentation:buffer.data() length:strlen(buffer.data())];
 }
 
+bool RemoveIfSame(NSString *path, dev_t device, ino_t inode) {
+  NSString *removing = [path.stringByDeletingLastPathComponent
+      stringByAppendingPathComponent:[NSString stringWithFormat:@".ardia-removing-%08x%08x", arc4random(), arc4random()]];
+  if (renamex_np(path.fileSystemRepresentation, removing.fileSystemRepresentation, RENAME_EXCL) != 0) return false;
+  struct stat taken;
+  if (lstat(removing.fileSystemRepresentation, &taken) == 0 && taken.st_dev == device && taken.st_ino == inode && unlink(removing.fileSystemRepresentation) == 0)
+    return true;
+  renamex_np(removing.fileSystemRepresentation, path.fileSystemRepresentation, RENAME_EXCL);
+  return false;
+}
+
 NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
   NSString *reason = nil;
   if (![target isKindOfClass:NSString.class] || !WellFormed(source, &reason) || !WellFormed(target, &reason)) return Failure(reason ?: @"badPath");
@@ -342,9 +353,7 @@ NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
     unlinkat(dir.get(), tmp, 0);
     return Failure(failed == EEXIST ? @"exists" : @"moveFailed");
   }
-  struct stat still;
-  const bool same = lstat(source.fileSystemRepresentation, &still) == 0 && still.st_dev == info.st_dev && still.st_ino == info.st_ino;
-  if (same && unlink(source.fileSystemRepresentation) == 0) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
+  if (RemoveIfSame(source, info.st_dev, info.st_ino)) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
   return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes), @"sourceLeft" : @YES};
 }
 }
