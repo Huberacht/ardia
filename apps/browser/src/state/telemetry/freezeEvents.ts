@@ -33,6 +33,7 @@ const UPTIMES = [
 ] as const;
 const TAB_FLOORS = [0, 10, 25, 50, 100, 250, 500, 1000];
 const THERMAL = ["nominal", "fair", "serious", "critical"] as const;
+const WAITING_STATES: readonly unknown[] = [3, 4];
 const startedAt = Date.now();
 
 let sentThisSession = 0;
@@ -116,6 +117,7 @@ export async function reportFreeze(record: FreezeRecord, consent: ConsentToken |
       uptime: bucket(UPTIMES, (Date.now() - startedAt) / 60_000),
       signature,
       samples: record.samples.length,
+      samples_waiting: record.samples.filter((sample) => WAITING_STATES.includes(sample.state)).length,
     },
     consent,
     { raw: { freeze_frames: nativeFrames(frames), freeze_images: images } },

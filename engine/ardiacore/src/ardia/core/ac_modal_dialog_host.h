@@ -1,7 +1,9 @@
 #ifndef ARDIA_CORE_AC_MODAL_DIALOG_HOST_H_
 #define ARDIA_CORE_AC_MODAL_DIALOG_HOST_H_
 
+#include "base/callback_list.h"
 #include "base/observer_list.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "ui/gfx/geometry/point.h"
@@ -48,8 +50,12 @@ class ACTabDialogHost : public web_modal::WebContentsModalDialogHost,
   explicit ACTabDialogHost(content::WebContents* contents);
 
   WindowHost* window_host() const;
+  void TabWillDetach(tabs::TabInterface* tab,
+                     tabs::TabInterface::DetachReason reason);
+  void ReleaseDialogs();
 
   base::ObserverList<web_modal::ModalDialogHostObserver> observers_;
+  base::CallbackListSubscription will_detach_;
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 

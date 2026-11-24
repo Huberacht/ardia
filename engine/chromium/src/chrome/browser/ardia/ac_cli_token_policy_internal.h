@@ -35,6 +35,7 @@ inline constexpr int kRefused = -32000;
 inline constexpr size_t kMaxPending = 4096;
 
 bool NeedsResponse(std::string_view method);
+bool IsVaultProtected(content::DevToolsAgentHost* host);
 bool IsOffscreenTarget(const std::string* target_id);
 void CountCommand(std::string_view method);
 

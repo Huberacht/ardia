@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "base/functional/bind.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "components/tabs/public/tab_interface.h"
@@ -94,15 +95,32 @@ void DialogHostObserverRemoved() {
 }
 
 ACTabDialogHost::ACTabDialogHost(content::WebContents* contents)
-    : content::WebContentsUserData<ACTabDialogHost>(*contents) {}
+    : content::WebContentsUserData<ACTabDialogHost>(*contents) {
+  if (auto* tab = tabs::TabInterface::MaybeGetFromContents(contents)) {
+    will_detach_ = tab->RegisterWillDetach(base::BindRepeating(
+        &ACTabDialogHost::TabWillDetach, base::Unretained(this)));
+  }
+}
 
 ACTabDialogHost::~ACTabDialogHost() {
+  ReleaseDialogs();
+}
+
+void ACTabDialogHost::TabWillDetach(tabs::TabInterface* tab,
+                                    tabs::TabInterface::DetachReason reason) {
+  if (reason == tabs::TabInterface::DetachReason::kDelete) {
+    ReleaseDialogs();
+  }
+}
+
+void ACTabDialogHost::ReleaseDialogs() {
   for (auto& observer : observers_) {
     observer.OnHostDestroying();
   }
   for ([[maybe_unused]] auto& observer : observers_) {
     DialogHostObserverRemoved();
   }
+  observers_.Clear();
 }
 
 WindowHost* ACTabDialogHost::window_host() const {

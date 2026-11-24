@@ -50,6 +50,7 @@ import { programControlOn } from "../app/programControlSetting";
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
 import { startPeerDoorbell } from "./peerDoorbell";
 import { CONTROL_OFF, DEVTOOLS_ENDPOINT, devtoolsEndpointLine, devtoolsEndpointMethod, isDevtoolsEndpoint, refuseDevtoolsEndpoint } from "./socketDevtools";
+import { vaultConnectionClosed, vaultControlStopped } from "./socketVault";
 
 const useControlSocket = create<{ status: ControlSocketStatus | null }>()(() => ({ status: null }));
 
@@ -296,6 +297,7 @@ function handleClose({ connection }: { connection: number }) {
   dropLateResults(connection);
   void closeInspectionsFor(connection);
   void dropLogpoints(connection);
+  vaultConnectionClosed(connection);
   if (subscriptions.delete(connection)) refreshFeed();
 }
 
@@ -329,6 +331,7 @@ async function stop() {
   openConnections.clear();
   generation = null;
   dismissSocketAsks();
+  vaultControlStopped();
   dropAllHistoryHandles();
   forgetTabCalls();
   releaseAllCliHolds();
@@ -355,6 +358,7 @@ function sync() {
     openConnections.clear();
     generation = null;
     dismissSocketAsks();
+    vaultControlStopped();
     dropAllHistoryHandles();
     forgetTabCalls();
     releaseAllCliHolds();

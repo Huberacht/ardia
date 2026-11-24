@@ -5,7 +5,7 @@ export const shell = defineModuleDomain({
   package: "packages/shell",
   imports: {
     "../app": ["AppIcon", "CleanedTitle", "CleanedUrl", "CrashReport", "DiagnosticsSample", "HardwareInfo", "IntroMusicCues", "LaunchConfig", "ShareAnchor", "SystemInfo"],
-    "../automation": ["ControlApprovals", "ControlPeerAnswer", "ControlPeerAsk", "ControlPeerOutcome", "ControlRequest", "ControlSocketStatus", "NativeDevtoolsEndpoint"],
+    "../automation": ["ControlApprovals", "ControlPeer", "ControlPeerAnswer", "ControlPeerAsk", "ControlPeerOutcome", "ControlRequest", "ControlSocketStatus", "NativeDevtoolsEndpoint"],
     "../cli": ["CliInstallResult"],
     "../commands": ["CommandEvent"],
     "../config": ["ConfigFileRead"],
@@ -408,6 +408,7 @@ export const shell = defineModuleDomain({
         answerPeer: { args: [["ask", "number", "Int"], ["outcome", "ControlPeerAnswer", "String"]], result: "boolean", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         approvals: { args: [], result: "ControlApprovals", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
         revokeApproval: { args: [["key", "string"]], result: "boolean", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
+        peer: { args: [["connection", "number", "Int"]], result: "ControlPeer | null", async: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
       },
       events: {
         onRequest: { payload: "ControlRequest", mac: "custom", desktop: "adapted", windows: "absent" },

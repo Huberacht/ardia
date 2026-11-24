@@ -1,7 +1,7 @@
 import { asSecret, type Secret } from "@ardia/core";
 import { DEVTOOLS_ENDPOINT_PROBLEMS, nativeModule, type ControlApprovals, type DevtoolsEndpointProblem, type ControlPeerAnswer, type ControlPeerAsk, type ControlPeerOutcome, type ControlRequest } from "@ardia/shell";
 
-export type { ControlApproval, ControlApprovals, ControlPeerAnswer, ControlPeerAsk, ControlPeerOutcome, ControlRequest, ControlSocketStatus } from "@ardia/shell";
+export type { ControlApproval, ControlApprovals, ControlPeer, ControlPeerAnswer, ControlPeerAsk, ControlPeerOutcome, ControlRequest, ControlSocketStatus } from "@ardia/shell";
 
 let bound: ReturnType<typeof nativeModule<"ArdiaAutomation">> | null = null;
 const Automation = () => (bound ??= nativeModule("ArdiaAutomation"));
@@ -10,6 +10,7 @@ export const startControlSocket = () => Automation().start();
 export const stopControlSocket = () => Automation().stop();
 export const cutOffControlSocket = () => Automation().cutOff?.() ?? false;
 export const replyOnControlSocket = (connection: number, line: string, ticket = 0) => Automation().reply(connection, line, ticket);
+export const controlPeer = (connection: number) => Automation().peer(connection);
 export const broadcastOnControlSocket = (connections: number[], line: string) => Automation().broadcast(connections, line);
 export const onControlRequest = (listener: (request: ControlRequest) => void) => Automation().addListener("onRequest", listener);
 export const onControlClose = (listener: (e: { connection: number }) => void) => Automation().addListener("onClose", listener);

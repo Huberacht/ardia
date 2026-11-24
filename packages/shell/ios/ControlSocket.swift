@@ -26,6 +26,7 @@ final class ControlSocket {
   private var bound: (path: String, device: dev_t, inode: ino_t)?
   private var connections: [Int: ControlConnection] = [:]
   private var peerFinished = Set<Int>()
+  private var peers: [Int: (peer: ControlPeerIdentity, identity: [String: Any]?)] = [:]
   private var nextConnection = 0
   private var generation = 0
   private var quitObserver: NSObjectProtocol?
@@ -119,6 +120,21 @@ final class ControlSocket {
         target.reply(data, ticket: ticket)
       } else if ticket > 0 {
         sink?.send("onWritten", ["tickets": [ticket]])
+      }
+    }
+  }
+
+  func peer(_ connection: Int, _ done: @escaping ([String: Any]?) -> Void) {
+    queue.async { [self] in
+      guard let entry = peers[connection] else { return done(nil) }
+      if let known = entry.identity { return done(known) }
+      DispatchQueue.global(qos: .userInitiated).async { [self] in
+        let identity = entry.peer.identity()
+        queue.async { [self] in
+          guard peers[connection] != nil else { return done(nil) }
+          peers[connection]?.identity = identity
+          done(identity)
+        }
       }
     }
   }
@@ -339,6 +355,7 @@ final class ControlSocket {
     for connection in Array(connections.values) { connection.retire() }
     connections.removeAll()
     peerFinished.removeAll()
+    peers.removeAll()
     approvalKeys.removeAll()
     approvedUntil.removeAll()
     for item in expiries.values { item.cancel() }
@@ -428,6 +445,7 @@ final class ControlSocket {
       },
       onClose: { [weak self] connection in
         guard let self, self.connections.removeValue(forKey: connection.id) != nil else { return }
+        self.peers.removeValue(forKey: connection.id)
         self.approvalKeys[connection.id] = nil
         self.approvedUntil[connection.id] = nil
         guard self.peerFinished.remove(connection.id) == nil else { return }
@@ -440,6 +458,7 @@ final class ControlSocket {
       },
       mayWrite: { [weak self] connection in self?.mayWrite(connection) ?? false })
     connections[id] = connection
+    if let peer = ControlPeerIdentity.of(fd) { peers[id] = (peer, nil) }
     if let key {
       approvalKeys[id] = key
       if let until {

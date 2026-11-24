@@ -20,6 +20,8 @@ public class AutomationModule: Module, AutomationNative {
 
   static func revokeApproval(_ key: String, _ promise: Promise) { ControlSocket.shared.revokeApproval(key) { promise.resolve($0) } }
 
+  static func peer(_ connection: Int, _ promise: Promise) { ControlSocket.shared.peer(connection) { promise.resolve($0) } }
+
   public func definition() -> ModuleDefinition {
     Name(Self.moduleName)
 
@@ -46,6 +48,8 @@ public class AutomationModule: Module, AutomationNative {
     Self.approvalsFunction
 
     Self.revokeApprovalFunction
+
+    Self.peerFunction
 
     OnDestroy {
       ControlSocket.shared.detach(self)

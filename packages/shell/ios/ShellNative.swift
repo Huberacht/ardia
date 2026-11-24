@@ -1297,6 +1297,7 @@ protocol AutomationNative {
   static func answerPeer(_ ask: Int, _ outcome: String, _ promise: Promise)
   static func approvals(_ promise: Promise)
   static func revokeApproval(_ key: String, _ promise: Promise)
+  static func peer(_ connection: Int, _ promise: Promise)
 }
 
 extension AutomationNative {
@@ -1340,6 +1341,10 @@ extension AutomationNative {
 
   static var revokeApprovalFunction: AnyDefinition {
     AsyncFunction("revokeApproval") { (key: String, promise: Promise) in Self.revokeApproval(key, promise) }
+  }
+
+  static var peerFunction: AnyDefinition {
+    AsyncFunction("peer") { (connection: Int, promise: Promise) in Self.peer(connection, promise) }
   }
 }
 

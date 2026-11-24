@@ -87,6 +87,7 @@
       "devPagePhase",
       "devClosePage"
     ],
+    "vault": ["state", "screenLocked", "signIn", "cancelSignIn", "warm", "saveSecret", "keepOfferedCode", "hasSecret", "secrets", "removeSecret", "always", "setAlways", "authenticate", "cancelAuthenticate", "appendLog", "readLog"],
     "webView": [
       "setDisplayMediaPicker",
       "setSelectionPopover",
