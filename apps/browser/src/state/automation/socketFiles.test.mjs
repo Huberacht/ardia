@@ -143,6 +143,9 @@ test("files.disarm clears arms, a closed tab ends its arm, and control off clear
   const windowId = await setup();
   const tab = tabIn(windowId);
   const one = await ok("files.armUpload", { tab, paths: ["/tmp/a"] });
+  const sameWindow = await call("files.armUpload", { tab, paths: ["/tmp/c"] });
+  assert.equal(sameWindow.error?.code, "refused", "a second upload arm in the same window is refused");
+  assert.match(sameWindow.error.message, new RegExp(one.arm));
   await ok("files.armDownload", { path: "/tmp/folder", once: false });
   assert.deepEqual(await ok("files.disarm", { arms: [one.arm] }), { cleared: 1 });
   assert.deepEqual(native.disarmed.at(-1), [one.arm]);

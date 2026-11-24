@@ -206,6 +206,12 @@ function startPolling() {
 
 export type ArmRequest = { kind: FileArmKind; tab: string | null; profileId: string | null; paths: string[]; once: boolean; seconds: number };
 
+function waitingUploadIn(windowId: string): Tracked | null {
+  const s = useBrowser.getState();
+  for (const t of tracked.values()) if (t.kind === "upload" && t.open && Date.now() < t.expiresAt && t.tab !== null && s.tabs[t.tab]?.windowId === windowId) return t;
+  return null;
+}
+
 export async function armFiles(request: ArmRequest, call: SocketCall) {
   const consent = consentToken();
   if (!armsFilePanels()) throw new OpError("refused", UNSUPPORTED);
@@ -214,8 +220,11 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
     if (problem) throw new OpError("bad_request", `${problem}.`);
   }
   sweepTracked();
-  const id = `f-${secureRandomHex(16)}`;
   const s = useBrowser.getState();
+  const windowId = request.tab !== null ? s.tabs[request.tab]?.windowId : undefined;
+  const sharing = request.kind === "upload" && windowId ? waitingUploadIn(windowId) : null;
+  if (sharing) throw new OpError("refused", `Upload arm ${sharing.id} already waits in this tab's window, and a file chooser names only its window; clear it with files.disarm first.`);
+  const id = `f-${secureRandomHex(16)}`;
   const engine = request.profileId !== null ? engineProfile(s, request.profileId) : null;
   const before = new Set(s.downloads.map((d) => d.id));
   call.stillServing();
