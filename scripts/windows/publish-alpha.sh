@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Publishes one Windows build as the update the app offers, on the GitHub prerelease windows-alpha (never latest): its
-# two installers under this build's own names (Ardia-Setup-<cpu>-<build>.exe), the engine's source, then the feed
-# windows-update.json that names those installers with their SHA-256, then the same installers under the names people
-# download (Ardia-Setup-<cpu>.exe). The feed only ever names files that are already there and never change. The build
-# before this one keeps its files, so an update the app offered from the last feed can still be downloaded; older
-# builds' files go last.
+# two installers under this build's own names (Ardia-Setup-<cpu>-<build>.exe), the engine's source, then the signed feed
+# windows-update.json and its raw 64-byte Ed25519 signature windows-update.json.sig, then the same installers under the
+# names people download (Ardia-Setup-<cpu>.exe). The feed only ever names files that are already there and never change.
+# The build before this one keeps its files, so an update the app offered from the last feed can still be downloaded;
+# older builds' files go last.
 #
-#   scripts/windows/publish-alpha.sh [--dry-run] [--out <dir>] <Windows workflow run id>
-#   scripts/windows/publish-alpha.sh [--dry-run] [--out <dir>] [--commit <rev>] --installers <dir>
+#   scripts/windows/publish-alpha.sh [--dry-run] [--out <dir>] [--key <pem>] [--public-key <pem>] [--verify-bin <bin>] <Windows workflow run id>
+#   scripts/windows/publish-alpha.sh [--dry-run] [--out <dir>] [--key <pem>] [--public-key <pem>] [--verify-bin <bin>] [--commit <rev>] --installers <dir>
 #   scripts/windows/publish-alpha.sh -h | --help
 #
 # A run id publishes the Ardia-Setup-x64 and Ardia-Setup-arm64 artifacts of a green Windows workflow run, as an alpha.
@@ -19,16 +19,21 @@
 # The version and build come from Ardia.build.json, the identity the build carries. The build is the number of
 # commits in the built commit's history, so a release outranks every build before it. A build at or below the live
 # feed's is refused: no installed app would take it.
-# --dry-run downloads and packs into <dir> (default dist/windows-alpha-<build>, which must not hold files yet),
-# prints the gh commands and publishes nothing.
+# Signing uses --key <pem> (or WINDOWS_UPDATE_KEY_FILE / WINDOWS_UPDATE_ED_PRIVATE_KEY), refused if its public half
+# doesn't match --public-key (default scripts/windows/windows-update.pem), and self-verifies windows-update.json,
+# windows-update.json.sig and both installers with ardia-update-verify before uploading. A live publish without a
+# signing key fails closed. --dry-run downloads, packs and signs into <dir> (default dist/windows-alpha-<build>, which
+# must not hold files yet), using an ephemeral test key when no signing key is provided, prints the gh commands and
+# publishes nothing.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 repo="ardia-browser/ardia"
 tag="windows-alpha"
 published="https://github.com/$repo/releases/download/$tag"
+published_under="https://github.com/$repo/releases/download/"
 die() { echo "error: $*" >&2; exit 1; }
-dry=0 out="" run_id="" installers="" commit_rev=""
+dry=0 out="" run_id="" installers="" commit_rev="" key_file="${WINDOWS_UPDATE_KEY_FILE:-}" public_key="$root/scripts/windows/windows-update.pem" verify_bin=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
@@ -36,6 +41,9 @@ while [ $# -gt 0 ]; do
     --out) out="${2:?--out takes a directory}"; shift ;;
     --installers) installers="${2:?--installers takes a directory}"; shift ;;
     --commit) commit_rev="${2:?--commit takes a revision}"; shift ;;
+    --key) key_file="${2:?--key takes a PEM file}"; shift ;;
+    --public-key) public_key="${2:?--public-key takes a PEM file}"; shift ;;
+    --verify-bin) verify_bin="${2:?--verify-bin takes an executable path}"; shift ;;
     -*) die "unknown option $1 (--help)" ;;
     *) run_id="$1" ;;
   esac
@@ -73,9 +81,34 @@ with open(sys.argv[1], "rb") as file:
 print(digest.hexdigest())
 PY
 }
+resolve_verifier() {
+  if [ -n "$verify_bin" ]; then
+    [ -x "$verify_bin" ] || die "--verify-bin $verify_bin is not executable"
+    printf '%s\n' "$verify_bin"
+    return
+  fi
+  local target_dir="${CARGO_TARGET_DIR:-$root/packages/core-rs/target}"
+  local candidate="$target_dir/release/ardia-update-verify"
+  if [ ! -x "$candidate" ]; then
+    PATH="$PATH:$HOME/.cargo/bin" command -v cargo >/dev/null || die "cargo or --verify-bin is required to self-verify windows-update.json"
+    (cd "$root/packages/core-rs" && PATH="$PATH:$HOME/.cargo/bin" cargo build --locked --release --quiet -p ardia-update-verify)
+  fi
+  [ -x "$candidate" ] || die "couldn't build ardia-update-verify at $candidate"
+  printf '%s\n' "$candidate"
+}
 
 stage="$(mktemp -d "${TMPDIR:-/tmp}/ardia-windows-alpha.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
+
+if [ -z "$key_file" ] && [ -n "${WINDOWS_UPDATE_ED_PRIVATE_KEY:-}" ]; then
+  key_file="$stage/windows-update-key.pem"
+  install -m 600 /dev/null "$key_file"
+  printf '%s\n' "$WINDOWS_UPDATE_ED_PRIVATE_KEY" >"$key_file"
+fi
+if [ -z "$key_file" ] && [ "$dry" != 1 ]; then
+  die "a signing key is required to publish (--key, WINDOWS_UPDATE_KEY_FILE or WINDOWS_UPDATE_ED_PRIVATE_KEY)"
+fi
+
 if [ -n "$run_id" ]; then
   info="$(gh run view "$run_id" -R "$repo" --json workflowName,conclusion,headSha -q '[.workflowName, .conclusion, .headSha] | @tsv')"
   IFS=$'\t' read -r workflow conclusion commit <<<"$info"
@@ -148,6 +181,23 @@ with open(os.path.join(out, "windows-update.json"), "w") as file:
 PY
 cat "$out/windows-update.json"
 
+echo "==> Sign and verify feed"
+verifier="$(resolve_verifier)"
+sign_args=(
+  "$root/scripts/windows/sign-update.mjs"
+  --manifest "$out/windows-update.json"
+  --published-under "$published_under"
+  --verify-bin "$verifier"
+  --package-dir "$out"
+)
+if [ -n "$key_file" ]; then
+  sign_args+=(--key "$key_file" --public-key "$public_key")
+else
+  echo "warning: dry run signed with a throwaway key; a live publish requires --key or WINDOWS_UPDATE_ED_PRIVATE_KEY" >&2
+  sign_args+=(--ephemeral-key-out "$stage/dry-run-public.pem")
+fi
+node "${sign_args[@]}"
+
 echo "==> Source"
 name="ardia-windows-source-$build"
 if [ -n "$installers" ]; then
@@ -187,7 +237,7 @@ before=""
 [ "$dry" = 1 ] || before="$(gh release view "$tag" -R "$repo" --json assets -q '.assets[].name')"
 for cpu in x64 arm64; do cp "$out/Ardia-Setup-$cpu.exe" "$out/Ardia-Setup-$cpu-$build.exe"; done
 run gh release upload "$tag" -R "$repo" --clobber "$out/Ardia-Setup-x64-$build.exe" "$out/Ardia-Setup-arm64-$build.exe" "$out/$name.tar.xz"
-run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json"
+run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json.sig" "$out/windows-update.json"
 run gh release upload "$tag" -R "$repo" --clobber "$out/Ardia-Setup-x64.exe" "$out/Ardia-Setup-arm64.exe"
 run gh release edit "$tag" -R "$repo" --prerelease --latest=false --notes-file "$notes"
 previous="$(printf '%s\n' "$before" | sed -n -E 's/^Ardia-Setup-(x64|arm64)-([0-9]+)\.exe$/\2/p' | grep -v -x "$build" | sort -n | tail -1 || true)"

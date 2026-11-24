@@ -78,6 +78,12 @@ $launcherImage = Read-PeImage ([System.IO.File]::ReadAllBytes((Join-Path $outRoo
 if (-not $launcherImage -or @("x64", "arm64") -notcontains $launcherImage.Cpu) { throw "$launcher is not an x64 or ARM64 program" }
 Add-VcRuntime $outRoot $launcherImage.Cpu $VcRedist
 
+$updateKeySource = Join-Path $PSScriptRoot "windows-update.pem"
+$updateKeyTarget = Join-Path $outRoot "windows-update.pem"
+if ((Test-Path -LiteralPath $updateKeySource -PathType Leaf) -and -not (Test-Path -LiteralPath $updateKeyTarget -PathType Leaf)) {
+  Copy-Item -LiteralPath $updateKeySource -Destination $updateKeyTarget -Force
+}
+
 if ($Build -gt 0) {
   if (-not $Version) { $Version = & (Join-Path $PSScriptRoot "project-version.ps1") }
   $identity = [ordered]@{ version = $Version; build = $Build } | ConvertTo-Json -Compress

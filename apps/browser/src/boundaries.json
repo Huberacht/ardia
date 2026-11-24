@@ -1720,6 +1720,20 @@
    "detected": false
   },
   {
+   "id": "update:windows-manifest",
+   "source": "update",
+   "guard": "UpdateModule fetches windows-update.json (at most 64 KiB) and windows-update.json.sig (64 bytes) only from GitHub releases (or a test instance's updateFeed) and runs ardia-update-verify.exe (ardia-update-core) against the pinned windows-update.pem without following symlinks or reparse points; anything unsigned, tampered, malformed, oversized, non-newer or outside the allowed HTTPS prefix is refused before download, and packages/expo-windows/src/updater/manifest.ts validates the verified reply again; the shared hostile list runs through both the verifier binary and the TypeScript parser",
+   "checks": [
+    "apps/browser/windows/Ardia/UpdateModule.h#VerifyUpdate",
+    "packages/core-rs/crates/ardia-update-verify/src/main.rs#fn verify_windows(",
+    "packages/core-rs/crates/ardia-update-core/src/windows.rs#pub fn verify_windows_update",
+    "packages/expo-windows/src/updater/manifest.ts#parseVerifiedUpdate",
+    "apps/browser/src/hostileInputs.test.mjs#windows update manifest",
+    "packages/core-rs/tests/windows-update/test_windows_update.py#test_no_hostile_string_passes_the_windows_verifier"
+   ],
+   "detected": false
+  },
+  {
    "id": "import:netscape-html-rust",
    "source": "import",
    "guard": "Rust Netscape HTML bookmarks parser behind libardia_import, not linked by any host yet: a file over 64 MiB is refused before it is read, 64 folder levels and 250,000 nodes with each folder reserved before its contents, no recursion on the input, and one slot per attribute the parser reads whatever a tag carries; entities decode once and titles and URLs reach the tree verbatim, place: queries are skipped and scheme policy stays with import:bookmarks; the shared hostile list runs through the static library",
