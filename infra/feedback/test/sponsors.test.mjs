@@ -3,9 +3,20 @@ import { createServer } from "node:http";
 import { after, test } from "node:test";
 import { HOSTILE_VALUES, embedded } from "../../../scripts/security/hostile-inputs.mjs";
 import { localEvents, localIssues, localStore } from "../lib/backends.mjs";
-import { monthlySessionForm } from "../lib/donate.mjs";
-import { createService } from "../lib/service.mjs";
-import { SPONSOR_FIELD, SPONSORS_MAX, cleanSponsorName, sponsorTier, sponsorsFrom, stripeSponsors } from "../lib/sponsors.mjs";
+import { DONATE_PRODUCT, monthlySessionForm } from "../lib/donate.mjs";
+import { SPONSORS_TIMING, createService } from "../lib/service.mjs";
+import {
+  IncompleteListError,
+  SPONSOR_FIELD,
+  SPONSORS_MAX,
+  STRIPE_PAGE_BUDGET,
+  StripeReadError,
+  cleanSponsorName,
+  monthlyCentsOf,
+  sponsorTier,
+  sponsorsFrom,
+  stripeSponsors,
+} from "../lib/sponsors.mjs";
 
 const servers = [];
 after(() => servers.forEach((s) => s.close()));
@@ -22,18 +33,30 @@ async function service(sponsors, { rateLimits = false, now = Date.now, log = () 
   return `http://127.0.0.1:${server.address().port}`;
 }
 
-let sessionSeq = 0;
-const session = (name, { cents = 500, sub = `sub_${++sessionSeq}`, donate = "monthly_5", mode = "subscription", created = sessionSeq } = {}) => ({
-  id: `cs_${sessionSeq}`,
-  mode,
-  status: "complete",
+let seq = 0;
+const subscription = ({ id = `sub_${++seq}`, cents = 500, quantity = 1, currency = "usd", interval = "month", product = DONATE_PRODUCT, status = "active", metadata = {}, created = seq } = {}) => ({
+  id,
+  object: "subscription",
+  status,
   created,
-  amount_total: cents,
-  subscription: sub,
+  metadata,
+  customer: "cus_private",
+  items: { data: [{ quantity, price: { unit_amount: cents, currency, product, recurring: { interval, interval_count: 1 } } }] },
+});
+const checkout = (name, { donate = "monthly_5", status = "complete", amountTotal = 500 } = {}) => ({
+  id: `cs_${++seq}`,
+  status,
+  mode: "subscription",
+  amount_total: amountTotal,
   metadata: { donate },
   customer_details: { email: "donor@example.com", name: "Private Person", address: { city: "Secret City" } },
   custom_fields: name === undefined ? [] : [{ key: SPONSOR_FIELD.key, type: "text", text: { value: name } }],
 });
+const donor = (name, subOptions = {}, checkoutOptions = {}) => {
+  const sub = subscription(subOptions);
+  return [sub, checkout(name, checkoutOptions)];
+};
+const listed = (pairs) => sponsorsFrom(pairs.map(([sub]) => sub), new Map(pairs.map(([sub, session]) => [sub.id, session])));
 
 const HIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]/u;
 
@@ -44,7 +67,8 @@ function assertShowable(name, label) {
   assert.doesNotMatch(name, HIDDEN_CHARS, `${label}: hidden character`);
   assert.doesNotMatch(name, /\s{2}|[^\S ]/u, `${label}: odd spacing`);
   assert.match(name, /[\p{L}\p{N}]/u, `${label}: nothing readable`);
-  assert.doesNotMatch(name, /:\/\/|www\.|\S@\S|^[a-z][a-z0-9+.-]*:\S/iu, `${label}: link or address`);
+  const probe = name.normalize("NFKC");
+  assert.doesNotMatch(probe, /:\/\/|www\.|\S@\S|^[a-z][a-z0-9+.-]*:\S|\d{1,3}(\.\d{1,3}){3}/iu, `${label}: link or address`);
 }
 
 test("cleanSponsorName keeps ordinary names and companies, flattened to one plain line", () => {
@@ -52,13 +76,15 @@ test("cleanSponsorName keeps ordinary names and companies, flattened to one plai
     ["Ada Lovelace", "Ada Lovelace"],
     ["  Zoë   Ångström ", "Zoë Ångström"],
     ["株式会社アーディア", "株式会社アーディア"],
+    ["Ａｃｍｅ\u3000Ｃｏ", "Ａｃｍｅ Ｃｏ"],
     ["Ada\nLovelace", "Ada Lovelace"],
     ["Ada\u202eLovelace", "AdaLovelace"],
     ["Ad\u200ba", "Ada"],
     ["Acme Inc.", "Acme Inc."],
     ["J.R.R. Tolkien", "J.R.R. Tolkien"],
     ["Team: Ardia fans", "Team: Ardia fans"],
-    ["e\u0301\u0301\u0301\u0301\u0301", "\u00e9\u0301\u0301"],
+    ["Version 1.2 fans", "Version 1.2 fans"],
+    ["e\u0301\u0301\u0301\u0301\u0301", "é\u0301\u0301"],
     ["x".repeat(80), "x".repeat(SPONSOR_FIELD.maxLength)],
     ["😀a".repeat(30), "😀a".repeat(SPONSOR_FIELD.maxLength / 2)],
   ]) assert.equal(cleanSponsorName(raw), want, JSON.stringify(raw));
@@ -70,15 +96,30 @@ test("cleanSponsorName refuses links, addresses and names with nothing to read",
   }
 });
 
+test("F6: compatibility forms, IP addresses and addresses past the length cap are refused too", () => {
+  for (const raw of [
+    "ａｄａ＠ｅｘａｍｐｌｅ．ｃｏｍ",
+    "ada﹫example.com",
+    "ａｃｍｅ．ｉｏ",
+    "acme。io",
+    "ｈｔｔｐｓ：／／evil.example",
+    "192.168.0.1",
+    "Ping 10 . 0 . 0 . 1",
+    "１９２．１６８．０．１",
+    "2001:db8::1",
+    `${"x".repeat(SPONSOR_FIELD.maxLength - 2)} ada@example.com`,
+  ]) assert.equal(cleanSponsorName(raw), null, JSON.stringify(raw));
+});
+
 test("every shared hostile input reaches the sponsor list clean or not at all", () => {
   let shown = 0;
   for (const { id, value } of HOSTILE_VALUES) {
     const shapes = typeof value === "string" ? embedded(value, "Ada ", " Lovelace") : [value];
     for (const [i, raw] of shapes.entries()) {
       const label = `${id}#${i}`;
-      const listed = sponsorsFrom([session(raw)], null);
-      assert.ok(listed.length <= 1, label);
-      for (const sponsor of listed) {
+      const sponsors = listed([donor(raw)]);
+      assert.ok(sponsors.length <= 1, label);
+      for (const sponsor of sponsors) {
         assert.deepEqual(Object.keys(sponsor).sort(), ["name", "tier"], label);
         assertShowable(sponsor.name, label);
         shown++;
@@ -93,83 +134,130 @@ test("sponsorTier gives a coarse tier, never the amount", () => {
   assert.equal(sponsorTier(4_999), "friend");
   assert.equal(sponsorTier(5_000), "backer");
   assert.equal(sponsorTier(50_000), "patron");
-  assert.equal(sponsorTier(100_000), "patron");
   assert.equal(sponsorTier(null), "friend");
 });
 
-test("sponsorsFrom lists active monthly donors who opted in, biggest tier first, then longest standing", () => {
-  const active = new Map([
-    ["sub_a", { id: "sub_a" }], ["sub_b", { id: "sub_b" }], ["sub_c", { id: "sub_c" }], ["sub_d", { id: "sub_d" }],
-    ["sub_hidden", { id: "sub_hidden", metadata: { ardia_sponsor: "hide" } }], ["sub_e", { id: "sub_e" }],
+test("F5: the tier follows the subscription's current recurring USD amount, not the first checkout", () => {
+  assert.equal(monthlyCentsOf(subscription({ cents: 100, quantity: 60 })), 6_000);
+  assert.equal(monthlyCentsOf(subscription({ cents: 120_000, interval: "year" })), 10_000);
+  assert.equal(monthlyCentsOf(subscription({ currency: "eur", cents: 100_000 })), null);
+  const mixed = subscription({ cents: 500 });
+  mixed.items.data.push({ quantity: 1, price: { unit_amount: 99_999, currency: "usd", product: "prod_other", recurring: { interval: "month" } } });
+  assert.equal(monthlyCentsOf(mixed), 500);
+  assert.deepEqual(listed([
+    donor("Upgraded", { cents: 50_000 }, { amountTotal: 500 }),
+    donor("Downgraded", { cents: 500 }, { amountTotal: 100_000 }),
+    donor("Euro Patron", { cents: 100_000, currency: "eur" }),
+  ]), [
+    { name: "Upgraded", tier: "patron" },
+    { name: "Downgraded", tier: "friend" },
+    { name: "Euro Patron", tier: "friend" },
   ]);
-  const listed = sponsorsFrom([
-    session("Late Friend", { sub: "sub_a", created: 30 }),
-    session("Early Friend", { sub: "sub_b", created: 10 }),
-    session("Big Co", { sub: "sub_c", cents: 100_000, donate: "monthly_1000", created: 40 }),
-    session("Custom Backer", { sub: "sub_d", cents: 7_500, donate: "monthly_custom", created: 50 }),
-    session("Cancelled", { sub: "sub_gone" }),
-    session("Hidden By Owner", { sub: "sub_hidden" }),
-    session(undefined, { sub: "sub_e" }),
-    session("One Time", { mode: "payment", sub: null, donate: "once_5" }),
-    session("Other Product", { sub: "sub_e", donate: "" }),
-    session("early friend", { sub: "sub_a", created: 60 }),
-  ], active);
-  assert.deepEqual(listed, [
+});
+
+test("sponsorsFrom lists active donation subscriptions that opted in, biggest tier first, then longest standing", () => {
+  assert.deepEqual(listed([
+    donor("Late Friend", { created: 30 }),
+    donor("Early Friend", { created: 10 }),
+    donor("Big Co", { cents: 100_000, created: 40 }, { donate: "monthly_1000" }),
+    donor("Custom Backer", { cents: 7_500, created: 50 }, { donate: "monthly_custom" }),
+    donor("Past Due", { status: "past_due" }),
+    donor("Hidden By Owner", { metadata: { ardia_sponsor: "hide" } }),
+    donor(undefined),
+    donor("Other Product", { product: "prod_other" }),
+    donor("Not A Donation Checkout", {}, { donate: "" }),
+    donor("Open Checkout", {}, { status: "open" }),
+    donor("early friend", { created: 60 }),
+  ]), [
     { name: "Big Co", tier: "patron" },
     { name: "Custom Backer", tier: "backer" },
     { name: "Early Friend", tier: "friend" },
     { name: "Late Friend", tier: "friend" },
   ]);
+  const [sub] = donor("No Checkout");
+  assert.deepEqual(sponsorsFrom([sub], new Map([[sub.id, null]])), []);
 });
 
-test("sponsorsFrom keeps cancelled donors only when subscriptions can't be read, and caps the list", () => {
-  assert.deepEqual(sponsorsFrom([session("Cancelled", { sub: "sub_gone" })], null), [{ name: "Cancelled", tier: "friend" }]);
-  const many = Array.from({ length: SPONSORS_MAX + 20 }, (_, i) => session(`Donor ${i}`));
-  assert.equal(sponsorsFrom(many, null).length, SPONSORS_MAX);
+test("sponsorsFrom caps the published list", () => {
+  const many = Array.from({ length: SPONSORS_MAX + 20 }, (_, i) => donor(`Donor ${i}`));
+  assert.equal(listed(many).length, SPONSORS_MAX);
 });
 
-const stripeFake = (routes) => async (url, init) => {
-  assert.equal(init.headers.Authorization, "Bearer rk_test_x");
-  const { pathname, searchParams } = new URL(url);
-  const route = routes[pathname];
-  return route(searchParams);
-};
 const ok = (data, has_more = false) => new Response(JSON.stringify({ object: "list", data, has_more }), { status: 200 });
 
-test("stripeSponsors pages through sessions and active subscriptions and returns names and tiers only", async () => {
-  const seen = [];
-  const fake = stripeFake({
-    "/v1/checkout/sessions": (q) => {
-      seen.push(`sessions:${q.get("status")}:${q.get("starting_after") ?? ""}`);
-      return q.get("starting_after") ? ok([session("Second Page", { sub: "sub_2" })]) : ok([session("First Page", { sub: "sub_1" })], true);
-    },
-    "/v1/subscriptions": (q) => {
-      seen.push(`subscriptions:${q.get("status")}`);
-      return ok([{ id: "sub_1" }, { id: "sub_2" }]);
-    },
-  });
-  const body = await stripeSponsors({ key: "rk_test_x", fetchImpl: fake, log: () => {} }).list();
-  assert.deepEqual(body, { sponsors: [{ name: "First Page", tier: "friend" }, { name: "Second Page", tier: "friend" }] });
-  assert.equal(seen.length, 3);
-  assert.ok(seen.includes("sessions:complete:") && seen.includes("subscriptions:active"));
-  assert.ok(seen.some((s) => /^sessions:complete:cs_\d+$/.test(s)));
+function fakeStripe({ subscriptions, sessions, subscriptionStatus = 200, sessionStatus = 200, pageSize = 100 }) {
+  const calls = { subscriptions: 0, sessions: [] };
+  const fetchImpl = async (url, init) => {
+    assert.equal(init.headers.Authorization, "Bearer rk_test_x");
+    const { pathname, searchParams } = new URL(url);
+    if (pathname === "/v1/subscriptions") {
+      calls.subscriptions++;
+      assert.equal(searchParams.get("status"), "active");
+      if (subscriptionStatus !== 200) return new Response(JSON.stringify({ error: { code: "permission" } }), { status: subscriptionStatus });
+      const after = searchParams.get("starting_after");
+      const start = after ? subscriptions.findIndex((s) => s.id === after) + 1 : 0;
+      const page = subscriptions.slice(start, start + pageSize);
+      return ok(page, start + pageSize < subscriptions.length);
+    }
+    if (pathname === "/v1/checkout/sessions") {
+      const id = searchParams.get("subscription");
+      calls.sessions.push(id);
+      if (sessionStatus !== 200) return new Response("{}", { status: sessionStatus });
+      return ok(sessions.has(id) ? [sessions.get(id)] : []);
+    }
+    throw new Error(`unexpected ${pathname}`);
+  };
+  return { fetchImpl, calls };
+}
+
+test("F3: stripeSponsors starts from active subscriptions, so a long checkout history can't hide a donor", async () => {
+  const others = Array.from({ length: 150 }, (_, i) => subscription({ product: `prod_other_${i}` }));
+  const [sub, session] = donor("Still Here", { cents: 5_000 });
+  const stripe = fakeStripe({ subscriptions: [...others, sub], sessions: new Map([[sub.id, session]]) });
+  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl });
+  const body = await sponsors.list();
+  assert.deepEqual(body, { sponsors: [{ name: "Still Here", tier: "backer" }] });
+  assert.equal(stripe.calls.subscriptions, 2);
+  assert.deepEqual(stripe.calls.sessions, [sub.id]);
   const text = JSON.stringify(body);
-  for (const secret of ["donor@example.com", "Private Person", "Secret City", "500", "sub_", "cs_"]) assert.ok(!text.includes(secret), secret);
+  for (const secret of ["donor@example.com", "Private Person", "Secret City", "cus_private", "5000", "sub_", "cs_"]) assert.ok(!text.includes(secret), secret);
+  await sponsors.list();
+  assert.deepEqual(stripe.calls.sessions, [sub.id], "a known subscription's checkout isn't fetched again");
 });
 
-test("stripeSponsors lists every opted-in donor when the key can't read subscriptions, and fails on other errors", async () => {
-  const logs = [];
-  const denied = stripeFake({
-    "/v1/checkout/sessions": () => ok([session("Still Listed", { sub: "sub_gone" })]),
-    "/v1/subscriptions": () => new Response(JSON.stringify({ error: { type: "invalid_request_error" } }), { status: 403 }),
-  });
-  assert.deepEqual(await stripeSponsors({ key: "rk_test_x", fetchImpl: denied, log: (l) => logs.push(l) }).list(), { sponsors: [{ name: "Still Listed", tier: "friend" }] });
-  assert.equal(logs.length, 1);
-  const broken = stripeFake({
-    "/v1/checkout/sessions": () => new Response("{}", { status: 403 }),
-    "/v1/subscriptions": () => ok([]),
-  });
-  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: broken, log: () => {} }).list());
+test("F3: a new hide on the subscription takes the name off at the next refresh", async () => {
+  const [sub, session] = donor("Changed Mind");
+  const stripe = fakeStripe({ subscriptions: [sub], sessions: new Map([[sub.id, session]]) });
+  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl });
+  assert.equal((await sponsors.list()).sponsors.length, 1);
+  sub.metadata = { ardia_sponsor: "hide" };
+  assert.deepEqual(await sponsors.list(), { sponsors: [] });
+});
+
+test("F2: stripeSponsors publishes nothing when subscriptions or a checkout can't be read", async () => {
+  const [sub, session] = donor("Hidden Donor", { metadata: { ardia_sponsor: "hide" } });
+  for (const status of [401, 403, 500]) {
+    const stripe = fakeStripe({ subscriptions: [sub], sessions: new Map([[sub.id, session]]), subscriptionStatus: status });
+    await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl }).list(), StripeReadError, String(status));
+  }
+  const [visible, visibleSession] = donor("Visible");
+  const lookupFails = fakeStripe({ subscriptions: [visible], sessions: new Map([[visible.id, visibleSession]]), sessionStatus: 403 });
+  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: lookupFails.fetchImpl }).list(), StripeReadError);
+});
+
+test("B: a listing still reporting more at the page budget is incomplete, never a short list", async () => {
+  const [sub, session] = donor("On Page One");
+  const filler = Array.from({ length: STRIPE_PAGE_BUDGET + 5 }, () => subscription({ product: "prod_other" }));
+  const stripe = fakeStripe({ subscriptions: [sub, ...filler], sessions: new Map([[sub.id, session]]), pageSize: 1 });
+  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl }).list(), IncompleteListError);
+  assert.equal(stripe.calls.subscriptions, STRIPE_PAGE_BUDGET);
+});
+
+test("F4: a refresh stops at its deadline even when Stripe never answers", async () => {
+  const hang = (url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+  const started = Date.now();
+  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: hang, deadlineMs: 150 }).list());
+  assert.ok(Date.now() - started < 2000);
 });
 
 test("custom monthly checkouts ask for the same optional public name", () => {
@@ -181,48 +269,98 @@ test("custom monthly checkouts ask for the same optional public name", () => {
   assert.equal(form.get("custom_fields[0][text][maximum_length]"), String(SPONSOR_FIELD.maxLength));
 });
 
-test("GET /api/sponsors serves a cached list, keeps the last one when Stripe fails, and is cacheable", async () => {
-  let clock = 1_000_000;
-  let calls = 0;
-  let failing = false;
-  const url = await service({
+function controlledList() {
+  const state = { calls: 0, mode: "ok", release: null };
+  const backend = {
     describe: () => "fake",
-    list: async () => {
-      calls++;
-      if (failing) throw new Error("stripe down");
-      return { sponsors: [{ name: `Donor ${calls}`, tier: "friend" }] };
+    list: () => {
+      state.calls++;
+      if (state.mode === "fail") return Promise.reject(new Error("stripe down"));
+      if (state.mode === "hang") return new Promise((resolve) => (state.release = () => resolve({ sponsors: [{ name: `Donor ${state.calls}`, tier: "friend" }] })));
+      return Promise.resolve({ sponsors: [{ name: `Donor ${state.calls}`, tier: "friend" }] });
     },
-  }, { now: () => clock });
-  const [a, b] = await Promise.all([fetch(`${url}/api/sponsors`), fetch(`${url}/api/sponsors`)]);
+  };
+  return { state, backend };
+}
+
+const getJson = async (url) => {
+  const res = await fetch(`${url}/api/sponsors`);
+  return { status: res.status, body: await res.json(), res };
+};
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+test("GET /api/sponsors serves the cached list, refreshes it in the background, and is cacheable", async () => {
+  let clock = 1_000_000;
+  const { state, backend } = controlledList();
+  const url = await service(backend, { now: () => clock });
+  const [a, b] = await Promise.all([getJson(url), getJson(url)]);
   assert.equal(a.status, 200);
-  assert.match(a.headers.get("cache-control"), /^public, max-age=\d+$/);
-  assert.equal(a.headers.get("x-content-type-options"), "nosniff");
-  assert.deepEqual(await a.json(), { sponsors: [{ name: "Donor 1", tier: "friend" }] });
-  assert.deepEqual(await b.json(), { sponsors: [{ name: "Donor 1", tier: "friend" }] });
-  assert.equal(calls, 1);
-  clock += 11 * 60 * 1000;
-  failing = true;
-  assert.deepEqual(await (await fetch(`${url}/api/sponsors`)).json(), { sponsors: [{ name: "Donor 1", tier: "friend" }] });
-  assert.equal(calls, 2);
-  assert.equal((await fetch(`${url}/api/sponsors`)).status, 200);
-  assert.equal(calls, 2);
-  clock += 61 * 1000;
-  failing = false;
-  assert.deepEqual(await (await fetch(`${url}/api/sponsors`)).json(), { sponsors: [{ name: "Donor 3", tier: "friend" }] });
+  assert.equal(a.res.headers.get("cache-control"), `public, max-age=${SPONSORS_TIMING.browserCacheSeconds}`);
+  assert.equal(a.res.headers.get("x-content-type-options"), "nosniff");
+  assert.deepEqual(a.body, { sponsors: [{ name: "Donor 1", tier: "friend" }] });
+  assert.deepEqual(b.body, a.body);
+  assert.equal(state.calls, 1);
+  clock += SPONSORS_TIMING.freshMs;
+  state.mode = "hang";
+  assert.deepEqual((await getJson(url)).body, { sponsors: [{ name: "Donor 1", tier: "friend" }] }, "a stale list answers at once");
+  assert.equal(state.calls, 2);
+  state.release();
+  await settle();
+  assert.deepEqual((await getJson(url)).body, { sponsors: [{ name: "Donor 2", tier: "friend" }] });
 });
 
-test("GET /api/sponsors answers 503 when off, 502 when Stripe fails with nothing cached, 405 for other methods", async () => {
+test("F2+F4: a failing refresh waits out a cooldown, and a stale list is dropped after its max age", async () => {
+  let clock = 1_000_000;
+  const { state, backend } = controlledList();
+  const url = await service(backend, { now: () => clock });
+  assert.equal((await getJson(url)).status, 200);
+  state.mode = "fail";
+  clock += SPONSORS_TIMING.freshMs;
+  assert.equal((await getJson(url)).status, 200);
+  await settle();
+  assert.equal(state.calls, 2);
+  clock += SPONSORS_TIMING.cooldownMs - 1;
+  assert.equal((await getJson(url)).status, 200);
+  assert.equal(state.calls, 2, "no retry inside the cooldown");
+  clock = 1_000_000 + SPONSORS_TIMING.maxAgeMs;
+  const dropped = await getJson(url);
+  await settle();
+  assert.equal(dropped.status, 503);
+  assert.equal(dropped.body.error, "sponsors_unavailable");
+  assert.equal(dropped.res.headers.get("retry-after"), String(SPONSORS_TIMING.cooldownMs / 1000));
+  assert.equal(state.calls, 3);
+  assert.equal((await getJson(url)).status, 503, "still nothing inside the next cooldown");
+  assert.equal(state.calls, 3);
+});
+
+test("F4: a cold request waits briefly, then answers 503 while the refresh carries on", async (t) => {
+  const coldWait = SPONSORS_TIMING.coldWaitMs;
+  SPONSORS_TIMING.coldWaitMs = 100;
+  t.after(() => (SPONSORS_TIMING.coldWaitMs = coldWait));
+  const { state, backend } = controlledList();
+  state.mode = "hang";
+  const url = await service(backend);
+  const started = Date.now();
+  assert.equal((await getJson(url)).status, 503);
+  assert.ok(Date.now() - started < 1000);
+  state.release();
+  await settle();
+  assert.deepEqual((await getJson(url)).body, { sponsors: [{ name: "Donor 1", tier: "friend" }] });
+  assert.equal(state.calls, 1);
+});
+
+test("GET /api/sponsors answers 503 when off and when the first refresh fails, 405 for other methods", async () => {
   assert.equal((await fetch(`${await service(null)}/api/sponsors`)).status, 503);
   const failing = await service({ describe: () => "fake", list: async () => { throw new Error("down"); } });
   const res = await fetch(`${failing}/api/sponsors`);
-  assert.equal(res.status, 502);
-  assert.equal((await res.json()).backend, "sponsors");
+  assert.equal(res.status, 503);
+  assert.equal((await res.json()).error, "sponsors_unavailable");
   assert.equal((await fetch(`${failing}/api/sponsors`, { method: "POST" })).status, 405);
 });
 
-test("GET /api/sponsors stops at 30 requests per address in 10 minutes", async () => {
+test("GET /api/sponsors stops at 120 requests per address in 10 minutes", async () => {
   const url = await service({ describe: () => "fake", list: async () => ({ sponsors: [] }) }, { rateLimits: true });
   const get = () => fetch(`${url}/api/sponsors`, { headers: { "X-Real-IP": "203.0.113.9" } });
-  for (let i = 0; i < 30; i++) assert.equal((await get()).status, 200);
+  for (let i = 0; i < 120; i++) assert.equal((await get()).status, 200);
   assert.equal((await get()).status, 429);
 });

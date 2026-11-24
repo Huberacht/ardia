@@ -5,6 +5,7 @@ import icon from "../assets/app-icon.png";
 import DownloadButton from "./DownloadButton.astro";
 import Donate from "./Donate.astro";
 import { HEART_PATH } from "../data/icons";
+import { DONATE_POP_PICKER } from "../data/donate";
 import { STARS } from "../data/github";
 import { DISCORD, DMG, LINUX_NIGHTLY, LINUX_TARBALL, LINUX_VERSION, MIN_MACOS_MAJOR, REPO, VERSION, WINDOWS_SETUP } from "../data/release";
 
@@ -180,7 +181,7 @@ const pages: { page?: Page; href: string; section?: string; label: string; menuL
     </div>
   </nav>
   <div id="donate-pop" class="donate-pop paint dark" data-paint="latenight" popover>
-    <Donate id="donate-pop-picker" location="header_popover" compact />
+    <Donate id={DONATE_POP_PICKER} location="header_popover" compact />
   </div>
 </header>
 

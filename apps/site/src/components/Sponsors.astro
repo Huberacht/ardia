@@ -4,6 +4,8 @@ import BlacksmithWordmark from "../assets/sponsors/blacksmith.svg";
 import { COMPANY_SPONSORS, DONORS } from "../data/sponsors";
 import { CONTRIBUTORS } from "../data/contributors";
 import { HEART_PATH } from "../data/icons";
+import { SPONSORS_PATH } from "../data/donors";
+import { base } from "../data/site";
 
 const followsContributors = CONTRIBUTORS.length > 0;
 ---
@@ -14,6 +16,7 @@ const followsContributors = CONTRIBUTORS.length > 0;
   id="sponsors"
   aria-labelledby="sponsors-title"
   data-shot="sponsors"
+  data-sponsors-url={`${base}${SPONSORS_PATH}`}
 >
   <div class="wrap">
     <div class="body">
@@ -55,28 +58,39 @@ const followsContributors = CONTRIBUTORS.length > 0;
 
       <div class="donors" data-reveal style="--i: 2">
         <p class="label">Monthly sponsors</p>
-        {
-          DONORS.length > 0 ? (
-            <ul class="names" role="list" aria-label="Monthly sponsors">
-              {DONORS.map((donor) => (
-                <li class:list={["name", donor.tier]}>{donor.name}</li>
-              ))}
-            </ul>
-          ) : (
-            <p class="empty">This spot is saving a seat for your name.</p>
-          )
-        }
+        <ul class="names" role="list" aria-label="Monthly sponsors" data-private data-ac-no-capture data-donor-list hidden={DONORS.length === 0}>
+          {DONORS.map((donor) => <li class:list={["name", donor.tier]}>{donor.name}</li>)}
+        </ul>
+        <p class="empty" data-donor-empty hidden={DONORS.length > 0}>This spot is saving a seat for your name.</p>
         <div class="become">
-          <button class="btn sun-btn" type="button" popovertarget="donate-pop" data-track="donate_clicked" data-track-location="sponsors">
+          <button class="btn sun-btn" type="button" popovertarget="donate-pop" data-become-sponsor data-track="donate_clicked" data-track-location="sponsors">
             <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d={HEART_PATH} /></svg>
             Become a sponsor
           </button>
-          <p class="fine">Give monthly and add a name at checkout. It shows up here within a day.</p>
+          <p class="fine">Give monthly and add a name at checkout. It shows up here within minutes.</p>
         </div>
       </div>
     </div>
   </div>
 </section>
+
+<script>
+  import { liveDonors, renderDonors } from "../scripts/sponsors";
+  import { DONATE_POP_PICKER } from "../data/donate";
+
+  const section = document.getElementById("sponsors");
+  const list = section?.querySelector<HTMLUListElement>("[data-donor-list]");
+  const empty = section?.querySelector<HTMLElement>("[data-donor-empty]");
+  if (section && list && empty && section.dataset.sponsorsUrl) {
+    liveDonors(section.dataset.sponsorsUrl).then((donors) => {
+      if (donors) renderDonors(list, empty, donors, document);
+    });
+  }
+  section?.querySelector("[data-become-sponsor]")?.addEventListener("click", () => {
+    const monthly = document.querySelector<HTMLInputElement>(`#${DONATE_POP_PICKER} input[value="monthly"]`);
+    if (monthly) monthly.checked = true;
+  });
+</script>
 
 <style>
   .sponsors {
@@ -179,7 +193,11 @@ const followsContributors = CONTRIBUTORS.length > 0;
     padding: 0;
     list-style: none;
   }
-  .name {
+  .names[hidden],
+  .empty[hidden] {
+    display: none;
+  }
+  .names :global(.name) {
     display: inline-flex;
     align-items: center;
     min-height: 36px;
@@ -193,12 +211,12 @@ const followsContributors = CONTRIBUTORS.length > 0;
     overflow-wrap: anywhere;
     unicode-bidi: isolate;
   }
-  .name.backer {
+  .names :global(.name.backer) {
     font-size: 1.05rem;
     min-height: 42px;
     padding: 0 16px;
   }
-  .name.patron {
+  .names :global(.name.patron) {
     min-height: 48px;
     padding: 0 18px;
     font-family: var(--poster);

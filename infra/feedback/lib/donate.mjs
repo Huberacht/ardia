@@ -1,8 +1,11 @@
-import { SPONSOR_FIELD } from "./sponsors.mjs";
-
 export const MONTHLY_MIN_DOLLARS = 1;
 export const MONTHLY_MAX_DOLLARS = 10_000;
 export const DONATE_PRODUCT = "prod_Vfh8KWt8NYQmm0";
+export const SPONSOR_FIELD = {
+  key: "sponsorname",
+  label: "Name or company to show publicly on ardia.dev",
+  maxLength: 40,
+};
 
 export function parseMonthlyDollars(raw) {
   const text = String(raw ?? "").trim().replace(/^\$/, "");

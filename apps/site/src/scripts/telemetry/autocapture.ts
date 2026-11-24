@@ -1,8 +1,9 @@
 import { capture, type Props } from "./core";
+import { AUTOCAPTURE_PRIVATE_SELECTOR, NO_CAPTURE_SELECTOR } from "../../data/telemetry";
 
 const AUTOCAPTURE = 'a, button, [role="button"], [role="link"], summary, label, select, input[type="button"], input[type="submit"], input[type="checkbox"], input[type="radio"], [data-track]';
-const NO_CAPTURE = ".ph-no-capture, [data-ac-no-capture]";
-const PRIVATE = ".ac-private, [data-private], .ph-sensitive";
+const NO_CAPTURE = NO_CAPTURE_SELECTOR;
+const PRIVATE = AUTOCAPTURE_PRIVATE_SELECTOR;
 const FIELD = /^(input|textarea|select|option)$/;
 
 const clean = (s: string) => s.replace(/\s+/g, " ").trim();

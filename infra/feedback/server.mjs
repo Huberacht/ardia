@@ -29,8 +29,8 @@ production env:
   GITHUB_REPO             default ardia-browser/ardia
   DASHBOARD_URL           default https://dash.ardia.dev
   PUBLIC_URL              origin used in upload_urls, default https://ardia.dev
-  DONATE_STRIPE_KEY       Stripe restricted key that can create Checkout Sessions; without it monthly custom donations and the sponsor list are off.
-                          Subscriptions read lets the sponsor list drop cancelled monthly donors
+  DONATE_STRIPE_KEY       Stripe restricted key with Checkout Sessions write and Subscriptions read; without it monthly custom donations
+                          and the sponsor list are off, and without Subscriptions read the sponsor list stays unavailable
 `;
 
 const { values } = parseArgs({

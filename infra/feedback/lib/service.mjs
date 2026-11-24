@@ -15,8 +15,13 @@ const COMPLETE_ROUTE = /^\/api\/feedback\/([^/]+)\/complete$/;
 const SERVICE_NAME = "ardia-feedback";
 const SERVICE_VERSION = "1.0.0";
 const RETRY_AFTER_SECONDS = 60;
-const SPONSORS_FRESH_MS = 10 * 60 * 1000;
-const SPONSORS_RETRY_MS = 60 * 1000;
+export const SPONSORS_TIMING = {
+  freshMs: 10 * 60 * 1000,
+  maxAgeMs: 6 * 60 * 60 * 1000,
+  cooldownMs: 60 * 1000,
+  coldWaitMs: 4000,
+  browserCacheSeconds: 60,
+};
 export const EVENT_RETRY_MS = [30_000, 120_000, 600_000, 1_800_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000];
 
 export const UPSTREAM_MESSAGES = {
@@ -138,7 +143,8 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
   const donations = blame("donations", rawDonations);
   const sponsors = blame("sponsors", rawSponsors);
   let sponsorList = null;
-  let sponsorFetch = null;
+  let sponsorRefresh = null;
+  let sponsorFailedAt = null;
   const opened = new Map();
   const queuedEvents = new Set();
   const limits = {
@@ -148,7 +154,7 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
     complete: rateLimiter({ limit: 30, windowMs: 10 * 60 * 1000, now }),
     donate: rateLimiter({ limit: 20, windowMs: 10 * 60 * 1000, now }),
     donateGlobal: rateLimiter({ limit: 200, windowMs: 10 * 60 * 1000, now }),
-    sponsors: rateLimiter({ limit: 30, windowMs: 10 * 60 * 1000, now }),
+    sponsors: rateLimiter({ limit: 120, windowMs: 10 * 60 * 1000, now }),
   };
   const reserved = new Set();
   const completing = new Map();
@@ -346,31 +352,48 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
     res.end();
   }
 
-  const freshSponsors = () => {
-    sponsorFetch ??= sponsors
+  const usableSponsors = () => {
+    if (sponsorList && now() - sponsorList.at >= SPONSORS_TIMING.maxAgeMs) sponsorList = null;
+    return sponsorList;
+  };
+
+  const refreshSponsors = () => {
+    if (sponsorRefresh) return sponsorRefresh;
+    if (sponsorFailedAt !== null && now() - sponsorFailedAt < SPONSORS_TIMING.cooldownMs) return null;
+    sponsorRefresh = sponsors
       .list()
       .then(
-        (body) => (sponsorList = { at: now(), body }),
+        (body) => {
+          sponsorList = { at: now(), body };
+          sponsorFailedAt = null;
+        },
         (error) => {
-          if (!sponsorList) throw error;
-          log(`[feedback] sponsors refresh failed, serving the last list: ${error.cause?.message ?? error.message}`);
-          sponsorList = { ...sponsorList, at: now() - SPONSORS_FRESH_MS + SPONSORS_RETRY_MS };
-          return sponsorList;
+          sponsorFailedAt = now();
+          log(`[feedback] sponsors refresh failed: ${error.cause?.message ?? error.message}`);
         },
       )
-      .finally(() => (sponsorFetch = null));
-    return sponsorFetch;
+      .finally(() => (sponsorRefresh = null));
+    return sponsorRefresh;
   };
 
   async function listSponsors(res, ip) {
     if (!sponsors) throw new HttpError(503, "sponsors_off", "the sponsor list is not set up here");
     limit("sponsors", ip);
-    const list = sponsorList && now() - sponsorList.at < SPONSORS_FRESH_MS ? sponsorList : await freshSponsors();
+    let list = usableSponsors();
+    if (!list || now() - list.at >= SPONSORS_TIMING.freshMs) {
+      const pending = refreshSponsors();
+      if (!list && pending) await Promise.race([pending, new Promise((resolve) => later(resolve, SPONSORS_TIMING.coldWaitMs))]);
+      list = usableSponsors();
+    }
+    if (!list) {
+      res.setHeader("Retry-After", String(SPONSORS_TIMING.cooldownMs / 1000));
+      throw new HttpError(503, "sponsors_unavailable", "the sponsor list isn't ready; try again in a minute");
+    }
     const body = JSON.stringify(list.body);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(body),
-      "Cache-Control": `public, max-age=${SPONSORS_FRESH_MS / 1000}`,
+      "Cache-Control": `public, max-age=${SPONSORS_TIMING.browserCacheSeconds}`,
       "X-Content-Type-Options": "nosniff",
     });
     res.end(body);
