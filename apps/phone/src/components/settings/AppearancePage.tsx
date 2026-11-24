@@ -35,14 +35,15 @@ export function AppearancePage() {
   const syncEnabled = useSyncEnabled();
   const offersSync = syncOffered();
   const material = usePreferences((p) => materialYouOffered() && p.materialYou);
+  const wallpaper = usePreferences((p) => material && wallpaperColorsEnabled(p.colorChoice, p.dynamicColors));
   const style = offeredInterfaceStyle(usePreferences((p) => p.interfaceStyle), offersSync);
   const scheme = offeredScheme(usePreferences((p) => p.schemeChoice), offersSync);
   const styleChoices = offersSync ? INTERFACE_STYLES : INTERFACE_STYLES.filter((choice) => choice !== "matchMac");
   const schemeChoices = offersSync ? SCHEME_CHOICES : SCHEME_CHOICES.filter((choice) => choice !== "matchMac");
   return (
     <SettingsPage title="Appearance" onBack={popSettings}>
-      <Group footer={material ? "Custom themes are available with Material You off." : undefined}>
-        <ColorRow labelled={false} customAvailable={!material} />
+      <Group footer={wallpaper ? "Turn off Dynamic Colors to choose a color." : material ? "Custom themes are available with Material You off." : undefined}>
+        <ColorRow labelled={false} customAvailable={!material} presetsAvailable={!wallpaper} />
         {syncEnabled ? <MatchMyMac labelled={false} /> : null}
       </Group>
       <Group header="Interface style" footer={material ? "Turn off Material You to use Glass or Classic." : offersSync ? "Match My Mac follows your Mac." : undefined}>
@@ -104,7 +105,7 @@ export function MatchMyMac({ labelled = true }: { labelled?: boolean }) {
   );
 }
 
-export function ColorRow({ labelled = true, plainIcon = false, customAvailable = true }: { labelled?: boolean; plainIcon?: boolean; customAvailable?: boolean }) {
+export function ColorRow({ labelled = true, plainIcon = false, customAvailable = true, presetsAvailable = true }: { labelled?: boolean; plainIcon?: boolean; customAvailable?: boolean; presetsAvailable?: boolean }) {
   const theme = useTheme();
   const look = useProfileLook();
   const choice = usePreferences((p) => p.colorChoice);
@@ -120,7 +121,7 @@ export function ColorRow({ labelled = true, plainIcon = false, customAvailable =
         </View>
         <View style={[styles.swatches, material ? null : styles.swatchGrid]} accessibilityRole="radiogroup">
           {COLORS.map((color) => (
-            <Swatch key={color} color={color} selected={color === selected} grid={!material} />
+            <Swatch key={color} color={color} selected={color === selected} grid={!material} disabled={!presetsAvailable} />
           ))}
           {material ? null : <CustomSwatch selected={custom} disabled={!customAvailable} />}
         </View>
@@ -176,14 +177,15 @@ function CustomSwatch({ selected, disabled }: { selected: boolean; disabled: boo
   );
 }
 
-function Swatch({ color, selected, grid }: { color: ProfileColor; selected: boolean; grid: boolean }) {
+function Swatch({ color, selected, grid, disabled }: { color: ProfileColor; selected: boolean; grid: boolean; disabled: boolean }) {
   const swatch = PROFILE_COLORS[color].swatch;
   const pressStyle = usePressStyle("icon", { style: grid ? CUSTOM_SWATCH_HIT : styles.swatchHit });
   return (
     <Pressable
       accessibilityRole="radio"
       accessibilityLabel={PROFILE_COLORS[color].name}
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, ...(disabled ? { disabled } : {}) }}
+      disabled={disabled}
       onPress={() => setColorChoice(color)}
       style={pressStyle}
     >

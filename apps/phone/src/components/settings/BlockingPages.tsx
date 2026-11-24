@@ -310,9 +310,12 @@ export function MyFiltersPage() {
   const large = useWindowDimensions().fontScale >= settingsLayout.accessibilityFontScale;
   const field = useRef<TextInputInstance>(null);
   useEffect(() => () => Keyboard.dismiss(), []);
-  const leave = () => {
+  const dismissKeyboard = () => {
     field.current?.blur();
     Keyboard.dismiss();
+  };
+  const leave = () => {
+    dismissKeyboard();
     popSettings();
   };
   const apply = async () => {
@@ -360,7 +363,10 @@ export function MyFiltersPage() {
           style={[font.footnote, styles.bold, { color: changed ? theme.formAccent : theme.secondaryLabel }]}
         />
         {large ? null : <Text style={[font.footnote, { color: theme.secondaryLabel }]}>||site.com^ blocks a site. site.com##.ad hides part of a page. Lines that start with ! are notes.</Text>}
-        <Tappable kind="text" role="link" label={FILTER_SYNTAX} hitSlop={slopToReach(controlSize.hitTarget, font.footnote.lineHeight + space.xs * 2)} onPress={() => openFromSettings(FILTER_SYNTAX_URL)} style={styles.syntax}>
+        <Tappable kind="text" role="link" label={FILTER_SYNTAX} hitSlop={slopToReach(controlSize.hitTarget, font.footnote.lineHeight + space.xs * 2)} onPress={() => {
+          dismissKeyboard();
+          openFromSettings(FILTER_SYNTAX_URL);
+        }} style={styles.syntax}>
           <Text style={[font.footnote, styles.bold, { color: theme.formAccent }]}>{FILTER_SYNTAX}</Text>
         </Tappable>
       </View>

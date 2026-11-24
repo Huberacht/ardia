@@ -57,13 +57,15 @@ onAndroid("Dynamic Colors still changes the browser palette and saves the prefer
   pushSettings({ page: "appearance" });
   const root = renderSurface(<Surfaces />);
   const toggle = row(root, "Dynamic Colors");
-  const scheme = () => root.root.findAllByType(MaterialBottomBar)[0]!.props.scheme;
+  const scheme = () => root.root.findAll((node) => node.type === MaterialBottomBar)[0]!.props.scheme;
   expect(toggle.props.accessibilityState.checked).toBe(true);
   expect(row(root, "Custom").props.accessibilityState.disabled).toBe(true);
+  expect(row(root, "Blue").props.accessibilityState.disabled).toBe(true);
   expect(row(root, "Glass").props.accessibilityState.disabled).toBe(true);
   expect(scheme()).toEqual(SEEDED_SCHEMES.green.light);
   act(() => toggle.props.onPress());
   expect(scheme()).toEqual(SEEDED_SCHEMES.blue.light);
+  expect(row(root, "Blue").props.accessibilityState.disabled).toBeUndefined();
   act(() => loadPreferences());
   expect(currentPreferences().dynamicColors).toBe(false);
   expect(currentPreferences().colorChoice).toBe("blue");
