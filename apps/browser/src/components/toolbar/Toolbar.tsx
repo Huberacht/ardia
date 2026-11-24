@@ -20,6 +20,7 @@ import { toggleBookmarkOfTab } from "../../state/bookmarks/actions";
 import { useBookmarksShown } from "../../state/bookmarks/hooks";
 import { copyPageUrl } from "../../state/site/selection";
 import { openSplitPane, pressClosePane, showSplitMenu } from "../../state/splits/actions";
+import { useSplitOrientation } from "../../state/splits/hooks";
 import { splitViewAvailable } from "../../state/splits/splits";
 import { useEasedColor, type ToolbarPalette } from "../ui/toolbarColors";
 import { useSitePalette } from "./useSitePalette";
@@ -93,6 +94,7 @@ export const Toolbar = memo(function Toolbar({
   const tabsIcon = useTabsToggleIcon(windowId);
   const tabsShown = useTabsShown(windowId);
   const tab = useToolbarTab(tabId);
+  const splitOrientation = useSplitOrientation(inSplit ? tabId : undefined);
   const isLoading = useTabLive(tabId, (l) => l.isLoading);
   const palette = useSitePalette(tabId);
   const band = useEasedColor(bare ? null : palette.background);
@@ -161,7 +163,7 @@ export const Toolbar = memo(function Toolbar({
         </View>
         {inSplit && (
           <View style={{ position: "absolute", top: at.top, right: trailing.splitRight + geometry.trailing, flexDirection: "row" }}>
-            <Button variant="icon" toolbar palette={palette} icon="rectangle.split.2x1" look="row" onPress={splitMenu} tooltip="Split View" />
+            <Button variant="icon" toolbar palette={palette} icon={splitOrientation === "vertical" ? "rectangle.split.1x2" : "rectangle.split.2x1"} look="row" onPress={splitMenu} tooltip="Split View" />
             <Button variant="icon" toolbar palette={palette} icon="xmark" look="row" weight="medium" onPress={closeThisPane} tooltip="Close Pane" />
           </View>
         )}
