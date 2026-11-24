@@ -205,28 +205,40 @@ test("a tray raised by + is at rest with its dim on its first frame, without wai
   keyboard.mockRestore();
 });
 
-test("a first-use sheet lifted to where the keyboard will be comes back down when no keyboard arrives", () => {
+test("a first-use sheet waits lifted where the soft keyboard will be with no timer to drop it, and starts at rest when a hardware keyboard is attached", () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
   const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
-  presentSearch("page", "");
-  const root = renderSurface(
-    <DesignProvider design="redesigned">
-      <SearchTray />
-    </DesignProvider>,
-    { flushTimers: false },
-  );
-  const lift = () => {
-    const panel = root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")[0]!;
-    return ((getAnimatedStyle(panel).transform ?? []) as { translateY?: number }[]).find((step) => step.translateY !== undefined)?.translateY ?? 0;
+  const native = require("@ardia/phone-native") as { hardwareKeyboardShown: () => boolean };
+  const lifted = (hardware: boolean) => {
+    const attached = jest.spyOn(native, "hardwareKeyboardShown").mockImplementation(() => hardware);
+    presentSearch("page", "");
+    const root = renderSurface(
+      <DesignProvider design="redesigned">
+        <SearchTray />
+      </DesignProvider>,
+      { flushTimers: false },
+    );
+    const lift = () => {
+      const panel = root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")[0]!;
+      return ((getAnimatedStyle(panel).transform ?? []) as { translateY?: number }[]).find((step) => step.translateY !== undefined)?.translateY ?? 0;
+    };
+    const resting = lift();
+    act(() => jest.advanceTimersByTime(100));
+    const early = lift();
+    act(() => jest.advanceTimersByTime(1500));
+    const late = lift();
+    unmount(root);
+    act(() => dismissSearch());
+    act(() => jest.advanceTimersByTime(4000));
+    attached.mockRestore();
+    return { resting, early, late };
   };
-  const resting = lift();
-  act(() => jest.advanceTimersByTime(100));
-  const anchored = lift();
-  expect(anchored).toBeLessThan(resting);
-  act(() => jest.advanceTimersByTime(800));
-  expect(lift()).toBe(resting);
-  unmount(root);
+  const soft = lifted(false);
+  expect(soft.early).toBeLessThan(soft.resting);
+  expect(soft.late).toBe(soft.early);
+  const hard = lifted(true);
+  expect(hard.late).toBe(hard.resting);
   keyboard.mockRestore();
 });
 
@@ -356,6 +368,48 @@ test("a field-version reset at the press keeps the input the reveal focused", as
   keyboard.mockRestore();
 });
 
+test("after an Address sheet is dismissed, the waiting + sheet carries no edit-this-page row", async () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const tab = currentTabs().open[0]!;
+  act(() => presentSearch("page", tab.url, null, { currentUrl: tab.url, currentTabId: tab.id }));
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  act(() => dismissSearch());
+  for (let step = 0; step < 40; step++)
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+    });
+  expect(searchState().editsPage).toBeTruthy();
+  const waiting = root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  expect(waiting.findAll((node) => node.props.testID === "trayCurrentPageRow" && typeof node.type === "string")).toHaveLength(0);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
+test("a tap on the dim of a sheet + revealed before React rendered it live closes that search", () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  const dim = waiting.findAll((node) => node.props.accessibilityLabel === "Close Search" && typeof node.props.onPressIn === "function")[0]!;
+  presentSearch("page", "");
+  expect(searchState().open).toBe(true);
+  dim.props.onPressIn();
+  expect(searchState().open).toBe(false);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
 test("a search that opens with text waits for its own commit: the waiting empty sheet is not shown early", async () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
@@ -479,6 +533,16 @@ test("an action held for a swipe is dropped by any other navigation before its c
   browse.holdBarAction(currentTabs().open[2]!.id, "address", "swipe:999");
   act(() => browse.openTab(currentTabs().open[0]!.id));
   expect(browse.takeBarAction("swipe:999", currentTabs().open[2]!.id)).toBeNull();
+});
+
+test("a page counts as drawn only for the document it is showing now: a draw of an earlier document doesn't let a cover go", () => {
+  withTabs(2);
+  const id = currentTabs().open[0]!.id;
+  act(() => pageStore.storeNavigation(id, { ...pageStore.pageNavigation(id), isLive: true, isLoading: false, url: "https://site0.example/", document: 4 } as never));
+  act(() => browse.pageDrawn(id, 3));
+  expect(browse.documentWasDrawn(id)).toBe(false);
+  act(() => browse.pageDrawn(id, 4));
+  expect(browse.documentWasDrawn(id)).toBe(true);
 });
 
 test("on Android a cover acknowledgement must name the document whose drawn frame hid it; one without leaves the cover up", () => {

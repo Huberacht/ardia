@@ -58,10 +58,15 @@ class CoverHandOverTest {
     }
 
     @Test
-    fun aCoverThatIsntThereIsReportedNotFound() {
+    fun aCoverThatIsntMountedYetIsReportedNotFoundAndStillWaitsForItsView() {
         handOver.cover("gone")
         handOver.pageDrawn(2)
         assertEquals(listOf(Triple(false, "gone", 2L)), hidden)
+        assertFalse(handOver.handedOver)
+        handOver.cover("openingCard")
+        handOver.pageDrawn(3)
+        assertEquals(Triple(true, "openingCard", 3L), hidden.last())
+        assertTrue(handOver.handedOver)
     }
 
     @Test

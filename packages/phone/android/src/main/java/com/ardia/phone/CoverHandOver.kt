@@ -21,9 +21,11 @@ internal class CoverHandOver(private val surface: CoverSurface, private val onHi
     fun pageDrawn(document: Long) {
         val id = nativeId ?: return
         if (handedOver) return
-        handedOver = true
         val view = surface.find(id)
-        view?.visibility = View.INVISIBLE
+        if (view != null) {
+            handedOver = true
+            view.visibility = View.INVISIBLE
+        }
         onHidden(view != null, id, document)
     }
 }

@@ -95,6 +95,8 @@ function idleRowsNow(): TrayRow[] {
 
 export const preparedIdleRows = (): TrayRow[] => withPasteRow(idleRowsNow(), "", paste);
 
+export const preparedIdleKey = () => `${idleScope()}|${idleRevision()}|${paste === null ? "" : "paste"}`;
+
 function rowsAtPress(text: string): TrayRow[] {
   if (text.trim()) return rowsFor(text, []);
   const made = idleMade.get(idleScope());
@@ -209,7 +211,7 @@ export function applySearchEngine() {
   else setSearchEngine(currentPreferences().searchEngineId);
 }
 
-export type SearchPresenting = { text: string; origin: SearchOrigin; incognito: boolean };
+export type SearchPresenting = { text: string; origin: SearchOrigin; incognito: boolean; editsPage: boolean; prepared: string };
 
 let presentsWith: ((presenting: SearchPresenting) => void) | null = null;
 
@@ -226,7 +228,7 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
   paste = null;
   const editsPage = page?.currentUrl != null;
   const shownText = editsPage && clearsPagePrefill ? "" : text;
-  if (!useSearch.getState().open) presentsWith?.({ text: shownText, origin, incognito: useTabs.getState().incognito });
+  if (!useSearch.getState().open) presentsWith?.({ text: shownText, origin, incognito: useTabs.getState().incognito, editsPage, prepared: preparedIdleKey() });
   if (!shownText.trim() && !idleMade.has(idleScope()) && !useTabs.getState().incognito) countUsage("search_opens_cold");
   useSearch.setState((state) => ({
     open: true,

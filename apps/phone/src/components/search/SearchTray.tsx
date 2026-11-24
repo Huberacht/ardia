@@ -1,5 +1,6 @@
 import { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { markShownFrame } from "../../platform/lab";
+import { hardwareKeyboardShown } from "@ardia/phone-native";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { FabricCatchUp } from "../ui/FabricCatchUp";
 import { countRender } from "../../state/app/interactionPerf";
@@ -24,7 +25,7 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
+import { preparedIdleKey, preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
 import { useBrowse } from "../../state/browse/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
@@ -149,6 +150,7 @@ const STANDBY_SESSION = -1;
 
 let revealStandby: ((presenting: SearchPresenting) => void) | null = null;
 let standbyField: TrayInputHandle | null = null;
+let standbyRowsKey: string | null = null;
 
 const revealStandbyFor = (presenting: SearchPresenting) => {
   if (presenting.text === "") revealStandby?.(presenting);
@@ -166,8 +168,9 @@ const noClose = () => undefined;
 
 type LayerProps = { session: number; closing: boolean; standby?: boolean; onClosed: () => void };
 
-const PIN_HOLDS_MS = 700;
 const FIRST_KEYBOARD_SHARE = 0.42;
+
+const firstLift = (rememberedKeyboard: number, windowHeight: number) => (hardwareKeyboardShown() || rememberedKeyboard > TRAY_LIFT.keyboardThreshold ? 0 : windowHeight * FIRST_KEYBOARD_SHARE);
 
 function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) {
   countRender("TrayLayer");
@@ -210,9 +213,9 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       if (bornStandby) revealed.value = 1;
       return;
     }
-    if (cutsIn) floor.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold ? 0 : window.height * FIRST_KEYBOARD_SHARE;
+    if (cutsIn) floor.value = firstLift(keyboard.full.value, window.height);
     revealStandby = (presenting) => {
-      if (presenting.origin !== origin || presenting.incognito !== incognito) return;
+      if (presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey) return;
       revealed.value = 1;
       standbyField?.focus();
       markShownFrame("search");
@@ -249,7 +252,9 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const extend = placement === "underKeyboard" ? window.height : 0;
   const closedOnPressIn = useRef(false);
   const closeFromTouch = () => {
-    if (searchState().open && searchState().session === session) cancelSearch();
+    const now = searchState();
+    const mine = session === STANDBY_SESSION ? revealed.value === 1 : now.session === session;
+    if (now.open && mine) cancelSearch();
   };
   const closeOnPressIn = () => {
     closedOnPressIn.current = true;
@@ -273,13 +278,9 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     if (cutsIn) {
       dim.value = 1;
       pinned.value = true;
-      floor.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold ? 0 : window.height * FIRST_KEYBOARD_SHARE;
+      floor.value = firstLift(keyboard.full.value, window.height);
       if (!arrivesAtRest && searchState().arrival === "atRest") launchTrayUp();
-      const unpin = setTimeout(() => {
-        pinned.value = false;
-        floor.value = 0;
-      }, PIN_HOLDS_MS);
-      return () => clearTimeout(unpin);
+      return;
     }
     const land = setTimeout(() => {
       if (isClosing.value || hasLanded.value) return;
@@ -414,6 +415,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     (progress) => {
       if (isClosing.value || progress < TRAY_LIFT.landedProgress) return;
       pinned.value = false;
+      floor.value = 0;
       if (hasLanded.value) return;
       hasLanded.value = true;
       landing.value = 1;
@@ -1158,7 +1160,11 @@ function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
   const liveRows = useSearchRows();
   const liveTyped = useSearchText();
   const incognito = useIncognito();
-  const preparedRows = useMemo(() => (standby ? preparedIdleRows() : null), [standby, incognito]);
+  const preparedKey = standby ? preparedIdleKey() : null;
+  const preparedRows = useMemo(() => (standby ? preparedIdleRows() : null), [standby, preparedKey]);
+  useLayoutEffect(() => {
+    if (standby) standbyRowsKey = preparedKey;
+  }, [standby, preparedKey]);
   const rows = preparedRows ?? liveRows;
   const typed = standby ? "" : liveTyped;
   const [room, setRoom] = useState(0);
@@ -1177,7 +1183,8 @@ function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
   const arc = useContext(SearchPanelContext);
   const list = useContext(TrayListContext);
   const reportRows = useContext(TrayContentContext);
-  const editsPage = useSearchEditsPage();
+  const liveEditsPage = useSearchEditsPage();
+  const editsPage = standby ? false : liveEditsPage;
   const caption = incognito && !typed.trim();
   const openedPage = useOpenedPage();
   const currentPage = arc && editsPage && openedPage && !typed.trim() ? <CurrentPageRow page={openedPage} /> : null;

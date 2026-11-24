@@ -27,6 +27,18 @@ class SystemModule : Module() {
 
         Function("syncOffered") { SyncOffer.isOffered }
 
+        Function("hardwareKeyboardShown") {
+            val configuration = appContext.reactContext?.resources?.configuration ?: return@Function false
+            configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY && configuration.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+        }
+
+        Function("labSlice") { label: String ->
+            if (PhoneLab.isOn) {
+                android.os.Trace.beginSection("ardia:$label")
+                android.os.Trace.endSection()
+            }
+        }
+
         AsyncFunction("setSystemBarIcons") { lightStatus: Boolean, lightNavigation: Boolean ->
             SystemBars.want(SystemBars.Icons(lightStatus, lightNavigation), appContext.currentActivity)
         }.runOnQueue(Queues.MAIN)
