@@ -5,6 +5,7 @@ import { IconTile, Text } from "../ui";
 import { space } from "../ui/tokens";
 import { isWebDemo } from "../../state/onboarding/demoSteps";
 import { openImport } from "../../state/settings/settingsWindows";
+import { useImportFlow } from "../../state/import/flow";
 import { watchImportEnd } from "../../state/onboarding/sourceImport";
 import { noteOnboardingImport } from "../../state/telemetry/usage";
 import { chooseSource, confirmAnswer, skipStep, sourcePatch, useOnboarding, type BrowserSourceId } from "../../state/onboarding/onboarding";
@@ -110,11 +111,12 @@ export function SourceStep() {
 
 function CompactImport({ name, running, onImport }: { name: string; running: boolean; onImport: () => void }) {
   const colors = useOnboardingColors();
+  const done = useImportFlow((f) => f.step.name === "done");
   return (
     <View style={{ alignItems: "flex-start" }}>
       {running ? (
         <Text size="small" color={colors.rowSubtitle}>
-          {`Importing from ${name}… It runs in its own window.`}
+          {done ? `Imported from ${name}` : `Importing from ${name}… It runs in its own window.`}
         </Text>
       ) : (
         <SecondaryButton title={`Import from ${name}`} filled onPress={onImport} />
