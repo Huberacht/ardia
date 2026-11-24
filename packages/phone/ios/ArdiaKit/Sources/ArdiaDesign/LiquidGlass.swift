@@ -69,6 +69,12 @@ public struct GlassFrostStyle: Equatable, Sendable {
   public func edge(dark: Bool) -> GlassInk { dark ? edge.dark : edge.light }
   public func clear(dark: Bool) -> GlassInk { dark ? clear.dark : clear.light }
 
+  public func opaqueFallback(dark: Bool) -> GlassInk {
+    var ink = fallback(dark: dark)
+    ink.alpha = 1
+    return ink
+  }
+
   public static let glass = GlassFrostStyle(
     blur: 12,
     saturation: 1.5,
@@ -101,6 +107,7 @@ public enum LiquidGlassRules {
   public enum Render: String, Sendable {
     case lens
     case frost
+    case clear
     case solid
     case classic
   }
@@ -125,7 +132,8 @@ public enum LiquidGlassRules {
   public static func render(classic: Bool, flat: Bool, metal: Bool, lensFailed: Bool) -> Render {
     if classic { return .classic }
     if !metal { return .solid }
-    if flat || lensFailed { return .frost }
+    if lensFailed { return .clear }
+    if flat { return .frost }
     return .lens
   }
 
@@ -194,7 +202,7 @@ public enum LiquidGlassRules {
 
   public static func overBudget(_ samples: [CaptureSample], now: TimeInterval) -> Bool {
     let recent = recentSamples(samples, now: now)
-    guard let first = recent.first, now - first.at >= budgetWindow * 0.75 else { return false }
+    guard let oldest = recent.map(\.at).min(), now - oldest >= budgetWindow * 0.75 else { return false }
     let spent = recent.reduce(0) { $0 + $1.ms }
     return spent > budgetWindow * 1000 * captureBudgetShare
   }

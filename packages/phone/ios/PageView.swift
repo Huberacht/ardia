@@ -1,4 +1,5 @@
 import ArdiaBrowser
+import ArdiaDesign
 import ExpoModulesCore
 import Observation
 import SwiftUI
@@ -128,8 +129,8 @@ final class PageView: ExpoView {
   }
 
   @objc private func glassToneChanged(_ note: Notification) {
-    guard let web = note.object as? WKWebView, web === hostedWebView, let dark = note.userInfo?[GlassTone.darkKey] as? Bool, let page else { return }
-    glassBarDark = dark
+    guard let web = note.object as? WKWebView, web === hostedWebView, let page else { return }
+    glassBarDark = note.userInfo?[GlassTone.darkKey] as? Bool
     sendTone(theme: page.themeColor, underPage: page.underPageBackgroundColor)
   }
 
@@ -274,7 +275,7 @@ final class PageView: ExpoView {
   @MainActor
   private func sendTone(theme: UIColor?, underPage: UIColor?) {
     let tone = PageTone.resolve(theme: theme, underPage: underPage, sampled: sampled, stored: nil)
-    guard tone != sentTone || glassBarDark != sentBarDark, tone.top != nil || tone.bottom != nil || glassBarDark != nil else { return }
+    guard GlassToneSend.needed(toneChanged: tone != sentTone, hasColors: tone.top != nil || tone.bottom != nil, barDark: glassBarDark, sentBarDark: sentBarDark) else { return }
     sentTone = tone
     sentBarDark = glassBarDark
     var payload: [String: Any] = ["name": "tone"]

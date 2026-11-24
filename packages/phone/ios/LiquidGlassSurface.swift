@@ -5,8 +5,8 @@ import UIKit
 
 final class LiquidGlassSurface: UIView {
   var source: String? { didSet { if source != oldValue { needsPath() } } }
-  var capsule = true { didSet { if capsule != oldValue { setNeedsLayout() } } }
-  var cornerRadius: CGFloat = 0 { didSet { if cornerRadius != oldValue { setNeedsLayout() } } }
+  var capsule = true { didSet { if capsule != oldValue { invalidate() } } }
+  var cornerRadius: CGFloat = 0 { didSet { if cornerRadius != oldValue { invalidate() } } }
   var dark: Bool? { didSet { if dark != oldValue { invalidate() } } }
   var tint: UIColor? { didSet { if !Self.same(tint, oldValue) { invalidate() } } }
   var solidFill: UIColor? { didSet { if !Self.same(solidFill, oldValue) { invalidate() } } }

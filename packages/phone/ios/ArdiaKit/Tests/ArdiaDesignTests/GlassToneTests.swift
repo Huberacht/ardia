@@ -52,4 +52,12 @@ struct GlassToneTests {
     let middle = LiquidGlassRules.toneLimit(dark: false, since: 0.09)
     #expect(middle.ceiling > light.ceiling && middle.ceiling < 1)
   }
+
+  @Test func `a bar tone that clears is sent as a reset, even when the page has no tone colours`() {
+    #expect(GlassToneSend.needed(toneChanged: false, hasColors: false, barDark: nil, sentBarDark: true), "the old barDark must not stay in JS")
+    #expect(!GlassToneSend.needed(toneChanged: false, hasColors: false, barDark: nil, sentBarDark: nil))
+    #expect(GlassToneSend.needed(toneChanged: false, hasColors: false, barDark: false, sentBarDark: true))
+    #expect(!GlassToneSend.needed(toneChanged: false, hasColors: true, barDark: true, sentBarDark: true))
+    #expect(GlassToneSend.needed(toneChanged: true, hasColors: true, barDark: nil, sentBarDark: nil))
+  }
 }

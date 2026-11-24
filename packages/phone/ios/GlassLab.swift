@@ -230,7 +230,7 @@ enum GlassCopyProbe {
     let expected = Array(UnsafeBufferPointer(start: data.assumingMemoryBound(to: UInt8.self), count: width * height * 4))
     capture.probe = { [weak capture] pixels in
       capture?.probe = nil
-      CVPixelBufferLockBaseAddress(pixels, .readOnly)
+      guard CVPixelBufferLockBaseAddress(pixels, .readOnly) == kCVReturnSuccess else { return }
       defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
       guard CVPixelBufferGetWidth(pixels) == width, CVPixelBufferGetHeight(pixels) == height, let base = CVPixelBufferGetBaseAddress(pixels) else {
         NSLog("PAGELAB glass copy probe size changed")

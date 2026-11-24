@@ -51,11 +51,24 @@ struct LiquidGlassTests {
     let style = GlassFrostStyle.glass
     #expect(glass.contains("blurRadius = \(Int(style.blur)).dp"))
     #expect(Self.number("saturation", in: glass) == style.saturation)
-    #expect(glass.contains("tint = adaptive(ardiaColor(0xFFFFFF, 0.45f), ardiaColor(0xFFFFFF, 0.1f))"))
-    #expect(glass.contains("fallback = adaptive(ardiaColor(0xFFFFFF, 0.82f), ardiaColor(0x3A3A3C, 0.82f))"))
-    #expect(glass.contains("edge = adaptive(Color.Black.copy(alpha = 0.06f), Color.White.copy(alpha = 0.1f))"))
-    #expect(style.tint(dark: false) == GlassInk(hex: 0xFFFFFF, alpha: 0.45))
-    #expect(style.fallback(dark: true) == GlassInk(hex: 0x3A3A3C, alpha: 0.82))
+    func ink(_ match: Regex<(Substring, Substring?, Substring?, Substring?, Substring?)>.Match) -> GlassInk? {
+      if let hex = match.output.1.flatMap({ UInt32($0, radix: 16) }), let alpha = match.output.2.flatMap({ Double($0) }) { return GlassInk(hex: hex, alpha: alpha) }
+      guard let named = match.output.3, let alpha = match.output.4.flatMap({ Double($0) }) else { return nil }
+      return GlassInk(hex: named == "White" ? 0xFFFFFF : 0x000000, alpha: alpha)
+    }
+    func pair(_ name: String) throws -> (light: GlassInk, dark: GlassInk) {
+      let range = try #require(glass.range(of: "\(name) = adaptive("))
+      let line = String(glass[range.upperBound...].prefix { $0 != "\n" })
+      let inks = line.matches(of: /ardiaColor\(0x([0-9A-Fa-f]{6}), ([0-9.]+)f\)|Color\.(Black|White)\.copy\(alpha = ([0-9.]+)f\)/).compactMap(ink)
+      try #require(inks.count == 2)
+      return (inks[0], inks[1])
+    }
+    for (name, light, dark) in [("tint", style.tint(dark: false), style.tint(dark: true)), ("fallback", style.fallback(dark: false), style.fallback(dark: true)), ("edge", style.edge(dark: false), style.edge(dark: true))] {
+      let android = try pair(name)
+      #expect(android.light == light, "\(name) in light")
+      #expect(android.dark == dark, "\(name) in dark")
+    }
+    #expect(style.opaqueFallback(dark: true) == GlassInk(hex: 0x3A3A3C, alpha: 1), "Reduce Transparency keeps the fallback's colour, opaque")
     #expect(style.edgeWidth == 0.5)
   }
 
@@ -146,6 +159,13 @@ struct LiquidGlassTests {
     #expect(LiquidGlassRules.backdrop(hasSource: false, insideSource: false) == .beneath)
   }
 
+  @Test func `the sustained budget measures from the oldest sample, whatever order they arrived in`() {
+    let late = LiquidGlassRules.CaptureSample(at: 1.9, ms: 150)
+    let early = LiquidGlassRules.CaptureSample(at: 0.4, ms: 150)
+    #expect(LiquidGlassRules.overBudget([late, early], now: 2.0), "a delayed frame sample carries the earlier time")
+    #expect(LiquidGlassRules.overBudget([early, late], now: 2.0))
+  }
+
   @Test func `a capture is over budget only when it keeps the main thread busy for two seconds`() {
     func samples(every gap: Double, ms: Double, for seconds: Double) -> [LiquidGlassRules.CaptureSample] {
       stride(from: 0.0, through: seconds, by: gap).map { LiquidGlassRules.CaptureSample(at: $0, ms: ms) }
@@ -160,7 +180,8 @@ struct LiquidGlassTests {
   @Test func `the render reported at launch is the best the phone can draw`() {
     #expect(LiquidGlassRules.render(classic: false, flat: false, metal: true, lensFailed: false) == .lens)
     #expect(LiquidGlassRules.render(classic: false, flat: true, metal: true, lensFailed: false) == .frost)
-    #expect(LiquidGlassRules.render(classic: false, flat: false, metal: true, lensFailed: true) == .frost)
+    #expect(LiquidGlassRules.render(classic: false, flat: false, metal: true, lensFailed: true) == .clear, "without the shader the glass draws clear glass, not frost")
+    #expect(LiquidGlassRules.render(classic: false, flat: true, metal: true, lensFailed: true) == .clear)
     #expect(LiquidGlassRules.render(classic: false, flat: false, metal: false, lensFailed: false) == .solid)
     #expect(LiquidGlassRules.render(classic: true, flat: false, metal: true, lensFailed: false) == .classic)
   }

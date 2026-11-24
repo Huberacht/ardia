@@ -281,7 +281,9 @@ final class GlassFrames: NSObject {
     if let web, page != nil, capture.page.observe(web, now: now) {
       capture.drop()
       capture.tone = GlassToneGate()
+      NotificationCenter.default.post(name: GlassTone.changed, object: web)
     }
+    if !shiftable, capture.followsPage { capture.drop() }
     capture.survey(pieces, rect: shiftable ? strip : wanted, shiftable: shiftable)
     mark("survey")
     if let web, let page {
@@ -360,8 +362,9 @@ final class GlassFrames: NSObject {
     switch outcome {
     case .captured:
       if PhoneTestBuild.isOn {
-        stats.noteCapture(ms: capture.lastMs, pieces: pieces)
-        if capture.offMainMs > 0 { stats.offMainMs.append(capture.offMainMs) }
+        let timing = capture.lastTiming
+        stats.noteCapture(ms: timing.offMain ? nil : timing.ms, pieces: pieces)
+        if timing.offMain { stats.offMainMs.append(timing.ms) }
         stats.snapshotMs += capture.page.takeLatencies()
         let counts = capture.page.takeCounts()
         stats.rejected += counts.rejected
@@ -411,10 +414,10 @@ final class GlassFrames: NSObject {
       worstInterval = max(worstInterval, interval)
     }
 
-    mutating func noteCapture(ms: Double, pieces: Int) {
+    mutating func noteCapture(ms: Double?, pieces: Int) {
       captures += 1
       self.pieces += pieces
-      captureMs.append(ms)
+      if let ms { captureMs.append(ms) }
     }
 
     mutating func noteTick(ms: Double) {

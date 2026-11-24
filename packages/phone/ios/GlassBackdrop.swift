@@ -31,8 +31,9 @@ struct GlassLayerPiece {
   let fill: CGColor?
   let alpha: CGFloat
   let clips: [GlassClip]
+  let masked: Bool
 
-  init(view: UIView?, page: WKWebView? = nil, transform: CGAffineTransform, bounds: CGRect, radius: CGFloat, fill: CGColor?, alpha: CGFloat, clips: [GlassClip]) {
+  init(view: UIView?, page: WKWebView? = nil, transform: CGAffineTransform, bounds: CGRect, radius: CGFloat, fill: CGColor?, alpha: CGFloat, clips: [GlassClip], masked: Bool = false) {
     self.view = view
     self.page = page
     self.transform = transform
@@ -41,12 +42,13 @@ struct GlassLayerPiece {
     self.fill = fill
     self.alpha = alpha
     self.clips = clips
+    self.masked = masked
   }
 
   var axisAligned: Bool { transform.b == 0 && transform.c == 0 }
 
   var coverage: GlassStacking.Coverage {
-    let opaque = page == nil && alpha >= 1 && (fill?.alpha ?? 0) >= 1
+    let opaque = GlassStacking.coversOpaquely(isPage: page != nil, alpha: Double(alpha), fillAlpha: Double(fill?.alpha ?? 0), masked: masked)
     return GlassStacking.Coverage(rect: bounds.applying(transform), radius: radius * max(abs(transform.a), abs(transform.d)), axisAligned: axisAligned, opaque: opaque, clips: clips.map(\.solidRect))
   }
 }
@@ -71,21 +73,23 @@ enum GlassBackdrop {
     func shown(_ view: UIView) -> CALayer? { usesPresentation ? view.layer.presentation() : view.layer }
 
     func expand(_ view: UIView, clips: [GlassClip], alpha: CGFloat) -> [GlassLayerPiece] {
-      guard !view.isHidden, let layer = shown(view), !layer.isHidden, layer.opacity > 0.01, layer.bounds.width > 0, layer.bounds.height > 0 else { return [] }
+      guard !view.isHidden, let layer = shown(view), !layer.isHidden, layer.opacity > 0.01 else { return [] }
+      let reach = GlassStacking.reach(bounds: layer.bounds, clips: layer.masksToBounds, children: (layer.sublayers ?? []).map(\.frame))
+      guard !reach.isNull, !reach.isEmpty else { return [] }
       let place = GlassBackdrop.transform(of: layer, to: root)
       let visible = clips.reduce(root.bounds) { $0.intersection($1.outerRect) }
-      let area = layer.bounds.applying(place).intersection(visible)
+      let area = reach.applying(place).intersection(visible)
       guard !area.isNull, area.intersects(wanted) else { return [] }
       let shownAlpha = alpha * CGFloat(layer.opacity)
       if let web, view === web {
         return [GlassLayerPiece(view: nil, page: web, transform: place, bounds: layer.bounds, radius: layer.cornerRadius, fill: nil, alpha: shownAlpha, clips: clips)]
       }
       guard let web, web.isDescendant(of: view) else {
-        return [GlassLayerPiece(view: view, transform: place, bounds: layer.bounds, radius: layer.cornerRadius, fill: layer.backgroundColor, alpha: shownAlpha, clips: clips)]
+        return [GlassLayerPiece(view: view, transform: place, bounds: layer.bounds, radius: layer.cornerRadius, fill: layer.backgroundColor, alpha: shownAlpha, clips: clips, masked: layer.mask != nil)]
       }
       var pieces: [GlassLayerPiece] = []
       if let fill = layer.backgroundColor, fill.alpha > 0 {
-        pieces.append(GlassLayerPiece(view: nil, transform: place, bounds: layer.bounds, radius: layer.cornerRadius, fill: fill, alpha: shownAlpha, clips: clips))
+        pieces.append(GlassLayerPiece(view: nil, transform: place, bounds: layer.bounds, radius: layer.cornerRadius, fill: fill, alpha: shownAlpha, clips: clips, masked: layer.mask != nil))
       }
       let inner = layer.masksToBounds ? clips + [GlassClip(transform: place, bounds: layer.bounds, radius: layer.cornerRadius)] : clips
       let subviews = view.subviews
@@ -102,7 +106,7 @@ enum GlassBackdrop {
     let walk = Walk(root: root, usesPresentation: usesPresentation, wanted: wanted, web: web)
     var pieces: [GlassLayerPiece] = []
     if let fill = root.backgroundColor, fill.alpha > 0 {
-      pieces.append(GlassLayerPiece(view: nil, transform: .identity, bounds: root.bounds, radius: 0, fill: fill, alpha: 1, clips: []))
+      pieces.append(GlassLayerPiece(view: nil, transform: .identity, bounds: root.bounds, radius: 0, fill: fill, alpha: 1, clips: [], masked: root.mask != nil))
     }
     let subviews = source.subviews
     let order = GlassStacking.drawOrder(subviews.enumerated().map { GlassStacking.Sibling(index: $0.offset, zPosition: Double((walk.shown($0.element) ?? $0.element.layer).zPosition)) })
@@ -132,7 +136,7 @@ enum GlassBackdrop {
       alpha *= CGFloat(parentLayer.opacity)
       let parentTransform = transform(of: parentLayer, to: rootLayer)
       if let fill = parentLayer.backgroundColor, fill.alpha > 0 {
-        pieces.append(GlassLayerPiece(view: nil, transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius, fill: fill, alpha: alpha, clips: clips))
+        pieces.append(GlassLayerPiece(view: nil, transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius, fill: fill, alpha: alpha, clips: clips, masked: parentLayer.mask != nil))
       }
       if parentLayer.masksToBounds {
         clips.append(GlassClip(transform: parentTransform, bounds: parentLayer.bounds, radius: parentLayer.cornerRadius))

@@ -147,6 +147,13 @@ public enum GlassToneRows {
   }
 }
 
+public enum GlassToneSend {
+  public static func needed(toneChanged: Bool, hasColors: Bool, barDark: Bool?, sentBarDark: Bool?) -> Bool {
+    guard toneChanged || barDark != sentBarDark else { return false }
+    return hasColors || barDark != nil || sentBarDark != nil
+  }
+}
+
 public struct GlassToneGate: Sendable {
   public static let darkBelow = 0.2
   public static let lightAbove = 0.4

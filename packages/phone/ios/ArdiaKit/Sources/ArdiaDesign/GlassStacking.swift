@@ -1,6 +1,15 @@
 import CoreGraphics
 
 public enum GlassStacking {
+  public static func coversOpaquely(isPage: Bool, alpha: Double, fillAlpha: Double, masked: Bool) -> Bool {
+    !isPage && !masked && alpha >= 1 && fillAlpha >= 1
+  }
+
+  public static func reach(bounds: CGRect, clips: Bool, children: [CGRect]) -> CGRect {
+    guard !clips else { return bounds }
+    return children.reduce(bounds.isEmpty ? CGRect.null : bounds) { $0.union($1) }
+  }
+
   public struct Sibling: Equatable, Sendable {
     public var index: Int
     public var zPosition: Double

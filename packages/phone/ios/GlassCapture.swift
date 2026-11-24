@@ -44,9 +44,8 @@ final class GlassCapture {
   private var token = 0
   private var flying = false
   private var landed: Landed?
-  private(set) var offMainMs = 0.0
+  private(set) var lastTiming: (ms: Double, offMain: Bool) = (0, false)
   var probe: ((CVPixelBuffer) -> Void)?
-  private(set) var lastMs = 0.0
   private var samples: [LiquidGlassRules.CaptureSample] = []
   private var quiet = 0
   let page = GlassPageShot()
@@ -65,6 +64,8 @@ final class GlassCapture {
   }
 
   var velocity: CGPoint { scrollWeb == nil ? .zero : page.velocity }
+
+  var followsPage: Bool { scrollWeb != nil }
 
   var travel: ClosedRange<CGFloat>? {
     guard let scroll = scrollWeb?.scrollView else { return nil }
@@ -165,7 +166,7 @@ final class GlassCapture {
     guard width <= Self.largest, height <= Self.largest else { return fail(now) }
     let captured = CGRect(x: wanted.minX, y: wanted.minY, width: CGFloat(width) / pixelsPerPoint, height: CGFloat(height) / pixelsPerPoint)
     guard let pixels = makeBuffer(width: width, height: height) else { return fail(now) }
-    CVPixelBufferLockBaseAddress(pixels, [])
+    guard CVPixelBufferLockBaseAddress(pixels, []) == kCVReturnSuccess else { return fail(now) }
     guard let base = CVPixelBufferGetBaseAddress(pixels), let context = CGContext(data: base, width: width, height: height, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pixels), space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else {
       CVPixelBufferUnlockBaseAddress(pixels, [])
       return fail(now)
@@ -184,7 +185,7 @@ final class GlassCapture {
     flying = false
     landed = nil
     guard inked, install(pixels, rect: captured, valid: wanted, sigma: sigma, blurs: &blurs, at: now) else { return fail(now) }
-    lastMs = (CACurrentMediaTime() - started) * 1000
+    lastTiming = ((CACurrentMediaTime() - started) * 1000, false)
     return .captured
   }
 
@@ -223,7 +224,7 @@ final class GlassCapture {
   func land(sigma: Double, blurs: inout [GlassBlurJob], now: CFTimeInterval) -> Outcome? {
     guard let landed else { return nil }
     self.landed = nil
-    offMainMs = landed.ms
+    lastTiming = (landed.ms, true)
     probe?(landed.pixels)
     guard landed.inked, install(landed.pixels, rect: landed.rect, valid: landed.valid, sigma: sigma, blurs: &blurs, at: landed.askedAt) else { return fail(now) }
     scrollWeb = landed.follow?.web
@@ -247,7 +248,7 @@ final class GlassCapture {
   }
 
   nonisolated private static func render(_ steps: GlassSteps, into pixels: CVPixelBuffer, rect captured: CGRect, pixelsPerPoint: CGFloat) -> Bool {
-    CVPixelBufferLockBaseAddress(pixels, [])
+    guard CVPixelBufferLockBaseAddress(pixels, []) == kCVReturnSuccess else { return false }
     defer { CVPixelBufferUnlockBaseAddress(pixels, []) }
     let width = CVPixelBufferGetWidth(pixels)
     let height = CVPixelBufferGetHeight(pixels)

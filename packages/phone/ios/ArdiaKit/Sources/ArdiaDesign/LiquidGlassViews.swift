@@ -12,6 +12,7 @@ public struct LiquidGlassFill<S: Shape>: View {
   private let fill: AnyShapeStyle?
 
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
   public init(_ shape: S, tint: Color? = nil, fill: AnyShapeStyle? = nil) {
     self.shape = shape
@@ -24,10 +25,12 @@ public struct LiquidGlassFill<S: Shape>: View {
     let style = GlassFrostStyle.glass
     let params = LiquidGlassParams.defaults
     ZStack {
-      shape.fill(fill ?? AnyShapeStyle(Color(glassInk: style.fallback(dark: dark))))
+      shape.fill(fill ?? AnyShapeStyle(Color(glassInk: reduceTransparency ? style.opaqueFallback(dark: dark) : style.fallback(dark: dark))))
       if let tint { shape.fill(tint) }
       shape.stroke(Color(glassInk: style.edge(dark: dark)), lineWidth: style.edgeWidth * 2).clipShape(shape)
-      shape.stroke(Self.rim(dark: dark), lineWidth: params.specularWidth * 2).clipShape(shape).blendMode(.plusLighter)
+      if !reduceTransparency {
+        shape.stroke(Self.rim(dark: dark), lineWidth: params.specularWidth * 2).clipShape(shape).blendMode(.plusLighter)
+      }
     }
     .allowsHitTesting(false)
     .accessibilityHidden(true)
