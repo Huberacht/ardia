@@ -622,6 +622,12 @@ export const TabDeck = memo(function TabDeck() {
     runOnUI(markNextUiFrame)("card motion");
     if (searchChrome) Keyboard.dismiss();
     if (grid || tabSwitchCuts() || (reduceMotion && !pulls)) {
+      if (tabSwitchCuts() && !grid) {
+        deckPhase.value = DECK_PHASE.closing;
+        expandedIndex.value = index;
+        scaleProgress.value = 0;
+        positionProgress.value = 0;
+      }
       settledOpen(id);
       return;
     }
