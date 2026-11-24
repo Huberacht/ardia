@@ -3,7 +3,10 @@ package com.ardia.phone
 import android.app.Activity
 import android.widget.EditText
 import android.widget.FrameLayout
+import com.facebook.react.bridge.BridgeReactContext
+import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.DynamicFromObject
+import com.facebook.react.uimanager.ThemedReactContext
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.views.AnyViewProp
 import expo.modules.kotlin.views.ViewManagerDefinition
@@ -36,7 +39,17 @@ class RevealFocusTest {
     }
 
     private val other = EditText(activity)
-    private val view = CompletingFieldView(activity, appContext)
+
+    @Suppress("DEPRECATION")
+    private val noModules = object : BridgeReactContext(activity) {
+        override fun isBridgeless(): Boolean = true
+
+        override fun getNativeModules(): Collection<NativeModule> = emptyList()
+    }
+
+    private val reactContext = ThemedReactContext(noModules, activity, null, -1)
+
+    private val view = CompletingFieldView(reactContext, appContext)
     private val editor get() = view.getChildAt(0) as EditText
 
     init {
