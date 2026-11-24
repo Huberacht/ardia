@@ -4,6 +4,7 @@ import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-
 import { Dimensions, StyleSheet } from "react-native";
 import { Surfaces } from "../App";
 import { sendDeckCommand } from "../state/browse/deckCommands";
+import * as deckPull from "../state/browse/deckPull";
 import { pageBarPreviewShown, pageBarShown } from "../state/browse/deckPull";
 import { destination, liftDestination, releaseDestination, useDestination } from "../state/browse/destination";
 import * as browse from "../state/browse/store";
@@ -47,13 +48,13 @@ const opacityOf = (node: ReactTestInstance): number => {
   if (animated !== undefined) return animated;
   return typeof node.type === "string" ? ((StyleSheet.flatten(node.props.style) as { opacity?: number } | undefined)?.opacity ?? 1) : 1;
 };
-const shownThrough = (node: ReactTestInstance) => {
-  for (let at: ReactTestInstance | null = node; at; at = at.parent) if (opacityOf(at) <= 0) return false;
-  return true;
-};
-const drawnMarkNodes = (root: ReactTestRenderer) =>
-  root.root.findAll((node) => typeof node.type !== "string" && node.props.drawn === true && typeof node.props.mark === "string" && node.props.mark !== "" && node.findAll((inner) => inner !== node && inner.props.drawn === true).length === 0);
-const drawnMarks = (root: ReactTestRenderer) => [...new Set(drawnMarkNodes(root).filter(shownThrough).map((node) => node.props.mark as string))];
+const drawnMarks = (root: ReactTestRenderer) => [
+  ...new Set(
+    root.root
+      .findAll((node) => typeof node.props.markWhenShown === "string" && /^dest-(face|bar):/.test(node.props.markWhenShown) && node.props.jestAnimatedStyle !== undefined && (node.props.jestAnimatedStyle.value as { opacity?: number }).opacity === 1)
+      .map((node) => node.props.markWhenShown as string),
+  ),
+];
 const faceOf = (root: ReactTestRenderer, id: string) =>
   root.root
     .findAll((node) => typeof node.type !== "string" && (node.props.tab as { id?: string } | undefined)?.id === id && "statusOver" in node.props)
@@ -499,5 +500,84 @@ test("from the release to the page's first drawn frame some face always covers t
     if (roundOf(wanted.id) > round) expect(opacityOf(face)).toBe(0);
   }
   expectReleased(root, wanted.id, round);
+  unmount(root);
+});
+
+const shownMark = (root: ReactTestRenderer, label: string) =>
+  root.root.findAll((node) => node.props.markWhenShown === label && node.props.jestAnimatedStyle !== undefined).some((node) => (node.props.jestAnimatedStyle.value as { opacity?: number }).opacity === 1);
+
+test("a stale drawn acknowledgement from an earlier arrival of the same tab can't clear a newer lift of it: its face stays up through the second hand-over", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  const wanted = otherTab();
+  commit(wanted.id);
+  flush();
+  const first = useDestination.getState().cover!;
+  act(() => {
+    pageBarShown.value = 0;
+    pageBarPreviewShown.value = 0;
+  });
+  deckUp();
+  flush();
+  lift(wanted.id);
+  act(() => browse.pageCoverHidden(wanted.id, "drawn", first, true, 1));
+  flush();
+  act(() => jest.advanceTimersByTime(16));
+  expect(destination.id.value).toBe(wanted.id);
+  expect(opacityOf(faceOf(root, wanted.id)!)).toBe(1);
+  commit(wanted.id);
+  flush();
+  const second = useDestination.getState().cover!;
+  expect(second).not.toBe(first);
+  expect(faceOf(root, wanted.id)!.props.nativeID).toBe(second);
+  expect(opacityOf(faceOf(root, wanted.id)!)).toBe(1);
+  unmount(root);
+});
+
+test("a card lifted after the Tabs cut but before the deck's entrance commits stays lifted: the entrance doesn't hide its face and bar, and after the hand-over its face never shows again until it is lifted again", () => {
+  withTabs(3);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null, deckEntrance: null, frozenOrder: null, opening: null, veiled: null, covered: null, arriving: null, leaving: null });
+  const root = renderSurface(<Surfaces />);
+  flush();
+  const wanted = otherTab();
+  const shows: boolean[] = [];
+  const step = () => {
+    act(() => jest.advanceTimersByTime(16));
+    shows.push(shownMark(root, `dest-face:${wanted.id}`) && shownMark(root, `dest-bar:${wanted.id}`));
+  };
+  act(() => {
+    deckPull.pageBodyShown.value = 0;
+    pageBarShown.value = 0;
+    pageBarPreviewShown.value = 0;
+  });
+  act(() => {
+    liftDestination(wanted.id);
+  });
+  step();
+  deckUp();
+  step();
+  expect(pageBarShown.value).toBe(1);
+  expect(opacityOf(faceOf(root, wanted.id)!)).toBe(1);
+  commit(wanted.id);
+  for (let frame = 0; frame < 4; frame++) step();
+  act(() => browse.pageCoverHidden(wanted.id, "drawn", useDestination.getState().cover!, true, 1));
+  for (let frame = 0; frame < 6; frame++) step();
+  const turnedOn = shows.filter((shown, at) => shown && !(shows[at - 1] ?? false)).length;
+  expect(shows[0]).toBe(true);
+  expect(turnedOn).toBe(1);
+  expect(shows.at(-1)).toBe(false);
+  expect(shownFaces(root)).toHaveLength(0);
+  unmount(root);
+});
+
+test("while browsing with the deck parked, no destination mark keeps a per-frame watch: each mark is shown by its own opacity, and every one is hidden", () => {
+  withTabs(3);
+  deckUp();
+  const root = renderSurface(<Surfaces />);
+  expect(root.root.findAll((node) => node.props.drawn === true)).toHaveLength(0);
+  const labels = root.root.findAll((node) => typeof node.props.markWhenShown === "string" && /^dest-(face|bar):/.test(node.props.markWhenShown) && node.props.jestAnimatedStyle !== undefined);
+  expect(labels.length).toBeGreaterThanOrEqual(6);
+  expect(labels.every((node) => (node.props.jestAnimatedStyle.value as { opacity?: number }).opacity === 0)).toBe(true);
   unmount(root);
 });

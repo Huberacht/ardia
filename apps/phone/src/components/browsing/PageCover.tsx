@@ -14,12 +14,12 @@ import { findTab } from "../../state/tabs/tabsState";
 import { noteWarmDecoded, useWarmPicture, warmDecoded } from "../../state/tabs/warmPictures";
 import { TabFace, useTheme } from "../ui";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
-import { FrameMark, pageReportsDrawn } from "@ardia/phone-native";
+import { pageReportsDrawn } from "@ardia/phone-native";
 import { PageLoadingPlaceholder } from "./PageLoadingPlaceholder";
 import { pageWords } from "../../lib/sharedWords";
 import { destination, destinationCovers, destinationFaceShows } from "../../state/browse/destination";
 import { pageBarShown } from "../../state/browse/deckPull";
-import { uiFrameMarkStyle } from "../ui/UiFrameMark";
+import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 
 export type CoverFace = { kind: "card"; picture: string | null; title: string; host: string; cardWidth: number | null } | { kind: "placeholder" };
 
@@ -212,6 +212,11 @@ export const DestinationFace = memo(function DestinationFace({ tab, cover, statu
     const bar = pageBarShown.value;
     return { opacity: destinationFaceShows(id, lifted, bar) ? 1 : 0 };
   }, [id]);
+  const faceMark = useAnimatedStyle(() => {
+    const lifted = destination.id.value;
+    const bar = pageBarShown.value;
+    return { opacity: destinationFaceShows(id, lifted, bar) ? 1 : 0 };
+  }, [id]);
   const touches = useAnimatedProps<{ pointerEvents: "auto" | "none" }>(() => {
     const lifted = destination.id.value;
     const bar = pageBarShown.value;
@@ -230,7 +235,7 @@ export const DestinationFace = memo(function DestinationFace({ tab, cover, statu
       </View>
       {warm ? <Image testID="destinationPicture" source={{ uri: warm.uri }} resizeMethod="scale" fadeDuration={0} onLoad={() => pictureDecoded(warm.uri)} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height, opacity: pictured ? 1 : 0 }]} /> : null}
       {statusOver ? <View style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
-      <FrameMark style={uiFrameMarkStyle} mark={`dest-face:${id}`} drawn />
+      <UiFrameMark testID="destinationFaceMark" style={[uiFrameMarkStyle, faceMark]} markWhenShown={`dest-face:${id}`} />
     </Animated.View>
   );
 });

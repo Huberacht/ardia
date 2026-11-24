@@ -69,7 +69,7 @@ import { PageRequestHost, PressMenu } from "./PageRequests";
 import { ReaderView, useLeavingReader } from "./ReaderView";
 import { PageFailureView } from "./PageFailureView";
 import { DestinationFace, PageCover } from "./PageCover";
-import { barFencedForDestination, destination, destinationAddresses, destinationFaceIds, destinationFaceKey, destinationHeldFill, destinationHeldUntil, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, useDestinationFaces, type DestinationAddress } from "../../state/browse/destination";
+import { barFencedForDestination, destination, destinationAddresses, destinationFaceIds, destinationFaceKey, destinationHeldFill, destinationHeldUntil, destinationLiftPending, dropPreparedDestination, publishDestinationAddresses, releaseDestination, routeBarToDestination, useDestination, useDestinationFaces, type DestinationAddress } from "../../state/browse/destination";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { HeldFrostSource } from "../ui/LookViews";
 import { PageSurface } from "./PageSurface";
@@ -103,9 +103,14 @@ function PageBodyOwner({ kept }: { kept: boolean }) {
   const deckUp = useBrowse((s) => kept && s.surface === "deck");
   useLayoutEffect(() => {
     if (!kept) return;
-    pageBodyShown.value = deckUp ? 0 : 1;
-    pageBarShown.value = deckUp ? 0 : 1;
-    if (deckUp) return;
+    if (deckUp) {
+      if (destinationLiftPending()) return;
+      pageBodyShown.value = 0;
+      pageBarShown.value = 0;
+      return;
+    }
+    pageBodyShown.value = 1;
+    pageBarShown.value = 1;
     pageBarPreviewShown.value = 0;
     previewPageBar(null);
     dropPreparedDestination();
@@ -173,8 +178,8 @@ function DestinationBarMarks() {
 }
 
 function DestinationBarMark({ id }: { id: string }) {
-  const lifted = useAnimatedStyle(() => ({ opacity: destination.id.value === id ? 1 : 0 }), [id]);
-  return <UiFrameMark testID="destinationBarMark" style={[uiFrameMarkStyle, lifted]} mark={`dest-bar:${id}`} drawn />;
+  const lifted = useAnimatedStyle(() => ({ opacity: destination.id.value === id && pageBarShown.value > 0 ? 1 : 0 }), [id]);
+  return <UiFrameMark testID="destinationBarMark" style={[uiFrameMarkStyle, lifted]} markWhenShown={`dest-bar:${id}`} />;
 }
 
 type KeptBar = { preview: BrowserTab | null; standsIn: boolean; privateLook: boolean | undefined };

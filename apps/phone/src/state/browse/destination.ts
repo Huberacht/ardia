@@ -11,6 +11,8 @@ export const destination = {
   id: makeMutable(""),
   turn: makeMutable(0),
   cover: makeMutable({ id: "", name: "" }),
+  pending: makeMutable(0),
+  bound: makeMutable({ cover: "", turn: 0 }),
 };
 
 export type DestinationAddress = { host: string; spoken: string; isPrivate: boolean; insecure: boolean; fill: string };
@@ -24,9 +26,22 @@ export const DESTINATION_HELD_MS = 4_000;
 export function liftDestination(id: string) {
   "worklet";
   destination.turn.value += 1;
+  destination.pending.value = destination.turn.value;
   destination.id.value = id;
   pageBarShown.value = 1;
   pageBarPreviewShown.value = 1;
+}
+
+export function destinationLiftPending(): boolean {
+  "worklet";
+  return destination.id.value !== "" && destination.pending.value !== 0 && destination.pending.value === destination.turn.value;
+}
+
+function bindArrival(id: string, cover: string) {
+  "worklet";
+  if (destination.id.value !== id) liftDestination(id);
+  destination.pending.value = 0;
+  destination.bound.value = { cover, turn: destination.turn.value };
 }
 
 export function destinationFaceShows(faceId: string, liftedId: string, barShown: number): boolean {
@@ -138,9 +153,9 @@ export const takeDestinationAction = (id: string): BarAction | null => takeBarAc
 export function arriveFromDeck(id: string, held: BarAction | null = null) {
   stopWaiting();
   if (held && currentTabs().selectedId === id) commitBarAction(id, held);
-  if (destination.id.value !== id) runOnUI(liftDestination)(id);
   coverSeq += 1;
   const cover = `${DESTINATION_COVER_ID}-${coverSeq}`;
+  runOnUI(bindArrival)(id, cover);
   const replaced = useDestination.getState().arriving;
   useDestination.setState((now) => ({ prepared: id, arriving: id, cover, spent: replaced !== null && replaced !== id ? spentAfter(now.spent, replaced) : now.spent }));
   destination.cover.value = { id, name: cover };
@@ -182,11 +197,15 @@ export function releaseDestination(id: string | null = null) {
   if (id === null || now.arriving === id) stopWaiting();
   useDestination.setState({ prepared: null, arriving: null, cover: null });
   destination.cover.value = { id: "", name: "" };
-  runOnUI((released: string | null, spent: string | null) => {
+  runOnUI((released: string | null, spent: string | null, cover: string | null) => {
     "worklet";
-    if (released === null || destination.id.value === released) destination.id.value = "";
+    const newerLift = cover !== null && (destination.bound.value.cover !== cover || destination.bound.value.turn !== destination.turn.value);
+    if (!newerLift && (released === null || destination.id.value === released)) {
+      destination.id.value = "";
+      destination.pending.value = 0;
+    }
     if (spent !== null) runOnJS(spendFace)(spent);
-  })(id, now.arriving);
+  })(id, now.arriving, now.arriving !== null ? now.cover : null);
 }
 
 export function dropPreparedDestination() {
@@ -196,6 +215,7 @@ export function dropPreparedDestination() {
   runOnUI(() => {
     "worklet";
     destination.id.value = "";
+    destination.pending.value = 0;
   })();
 }
 
