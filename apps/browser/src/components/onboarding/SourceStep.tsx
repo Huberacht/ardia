@@ -6,7 +6,7 @@ import { space } from "../ui/tokens";
 import { isWebDemo } from "../../state/onboarding/demoSteps";
 import { openImport } from "../../state/settings/settingsWindows";
 import { useImportFlow } from "../../state/import/flow";
-import { watchImportEnd } from "../../state/onboarding/sourceImport";
+import { importedFrom, importFailed, importSucceeded, watchImportEnd } from "../../state/onboarding/sourceImport";
 import { noteOnboardingImport } from "../../state/telemetry/usage";
 import { chooseSource, confirmAnswer, skipStep, sourcePatch, useOnboarding, type BrowserSourceId } from "../../state/onboarding/onboarding";
 import { StepActions, StepLayout } from "./StepLayout";
@@ -111,12 +111,14 @@ export function SourceStep() {
 
 function CompactImport({ name, running, onImport }: { name: string; running: boolean; onImport: () => void }) {
   const colors = useOnboardingColors();
-  const done = useImportFlow((f) => f.step.name === "done");
+  const succeeded = useImportFlow(importSucceeded);
+  const failed = useImportFlow(importFailed);
+  const from = useImportFlow(importedFrom);
   return (
     <View style={{ alignItems: "flex-start" }}>
-      {running ? (
+      {running && !failed ? (
         <Text size="small" color={colors.rowSubtitle}>
-          {done ? `Imported from ${name}` : `Importing from ${name}… It runs in its own window.`}
+          {succeeded ? `Imported from ${from ?? name}` : `Importing from ${name}… It runs in its own window.`}
         </Text>
       ) : (
         <SecondaryButton title={`Import from ${name}`} filled onPress={onImport} />

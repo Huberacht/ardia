@@ -4,6 +4,7 @@ import { Checkbox, Symbol, Text } from "../ui";
 import { nativeLoop } from "../ui/motion";
 import { radius, space } from "../ui/tokens";
 import { useImportFlow } from "../../state/import/flow";
+import { importedFrom, importFailed, importSucceeded } from "../../state/onboarding/sourceImport";
 import { PRESET_NAMES, presetFor, type BrowserSourceId } from "../../state/onboarding/onboarding";
 import { SecondaryButton } from "./Buttons";
 import { Tag, useOnboardingColors } from "./Parts";
@@ -139,7 +140,7 @@ function BrowserMark({ icon, size }: { icon: ImageSourcePropType | null; size: n
   );
 }
 
-type Caption = { shape: "tag"; label: string } | { shape: "idle" | "busy"; tile: SourceTile; done: boolean };
+type Caption = { shape: "tag"; label: string } | { shape: "idle" | "busy"; tile: SourceTile; done: boolean; name: string };
 type Mark = { id: BrowserSourceId; icon: ImageSourcePropType | null };
 
 const captionKey = (c: Caption) => (c.shape === "tag" ? `tag:${c.label}` : "import");
@@ -171,9 +172,9 @@ function Crossfade<T>({ item, keyOf, height, children }: { item: T | null; keyOf
 
 function ImportCaption({ caption, onImport }: { caption: Extract<Caption, { tile: SourceTile }>; onImport: () => void }) {
   const colors = useOnboardingColors();
-  const { tile, done } = caption;
+  const { tile, done, name } = caption;
   const busy = caption.shape === "busy";
-  const title = done ? `Imported from ${tile.name}` : busy ? `Importing from ${tile.name}…` : `Bring your stuff from ${tile.name}`;
+  const title = done ? `Imported from ${name}` : busy ? `Importing from ${tile.name}…` : `Bring your stuff from ${tile.name}`;
   return (
     <View style={{ alignItems: "center", gap: space.l, width: FLOW.textWidth }}>
       <View style={{ alignSelf: "stretch", alignItems: "center", gap: space.xs }}>
@@ -217,16 +218,18 @@ export function SourcePreview({
   importing: BrowserSourceId | null;
   onImport: () => void;
 }) {
-  const importStep = useImportFlow((f) => f.step.name);
+  const succeeded = useImportFlow(importSucceeded);
+  const failed = useImportFlow(importFailed);
+  const from = useImportFlow(importedFrom);
   const preset = presetFor(tile?.id ?? (fresh ? "fresh" : null));
   const [listHeight, setListHeight] = useState(LIST_GUESS);
   const [captionHeight, setCaptionHeight] = useState(CAPTION_GUESS);
-  const running = !!tile && canImport && importing === tile.id;
-  const done = running && importStep === "done";
+  const running = !!tile && canImport && importing === tile.id && !failed;
+  const done = running && succeeded;
   const listed = found.slice(0, 6);
   const listShown = !tile && !fresh && listed.length > 0;
   const tag = `Starts out ${PRESET_NAMES[preset]}-style`;
-  const caption: Caption | null = tile ? (canImport ? { shape: running ? "busy" : "idle", tile, done } : { shape: "tag", label: tag }) : fresh ? { shape: "tag", label: tag } : null;
+  const caption: Caption | null = tile ? (canImport ? { shape: running ? "busy" : "idle", tile, done, name: done ? (from ?? tile.name) : tile.name } : { shape: "tag", label: tag }) : fresh ? { shape: "tag", label: tag } : null;
   const mark: Mark | null = tile ? { id: tile.id, icon: browserIcon(tile.id, tile.icon) } : null;
 
   const listBlock = listHeight + space.huge;
