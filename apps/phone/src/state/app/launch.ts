@@ -175,6 +175,12 @@ async function deckStep({ kind, argument }: DeckStep) {
       if (selected) openTab(selected);
       return;
     }
+    case "goincognito":
+      setIncognito(true);
+      return;
+    case "goregular":
+      setIncognito(false);
+      return;
     case "incognito":
       for (const url of DEMO_PRIVATE_URLS) openNewTab({ url, origin: "typed", isPrivate: true });
       await showDeck();

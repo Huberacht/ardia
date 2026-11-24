@@ -362,15 +362,14 @@ struct SettingsPageModifier: ViewModifier, Record {
 struct ChromeSurfaceModifier: ViewModifier, Record {
   @Field var shape: String = "capsule"
   @Field var cornerRadius: Double = 0
-  @Field var interactive: Bool = true
   @Field var tinted: Bool = false
 
   @ViewBuilder
   func body(content: Content) -> some View {
     switch shape {
-    case "circle": content.chromeSurface(in: Circle(), interactive: interactive, tinted: tinted)
-    case "rounded": content.chromeSurface(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), interactive: interactive, tinted: tinted)
-    default: content.chromeSurface(in: Capsule(), interactive: interactive, tinted: tinted)
+    case "circle": content.chromeSurface(in: Circle(), tinted: tinted)
+    case "rounded": content.chromeSurface(in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), tinted: tinted)
+    default: content.chromeSurface(in: Capsule(), tinted: tinted)
     }
   }
 }

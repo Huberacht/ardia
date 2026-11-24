@@ -42,7 +42,7 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["color_choice"],
       },
       {
-        text: "With each launch, the best glass this phone can draw, not what each surface drew: the Liquid Glass lens, frosted glass or no blur on Android, the system’s own glass, Classic, or none in Material You",
+        text: "With each launch, the best glass this phone can draw, not what each surface drew: the Liquid Glass lens, frosted glass, clear glass when the lens can’t be drawn, or no blur on Android, the system’s own glass, Classic, or none in Material You",
         fields: ["glass_render"],
       },
       {
@@ -122,8 +122,16 @@ export const PHONE_WHATS_SENT: { title: string; items: SentItem[] }[] = [
         fields: ["custom_theme_chosen", "theme_edits"],
       },
       {
-        text: "In the same daily counts, on Android: how often the phone refused to draw the Liquid Glass lens or its rim light, so the glass fell back to plain frost. Counts only",
+        text: "In the same daily counts: how often the phone refused to draw the Liquid Glass lens or its rim light, so the glass fell back to plain frost or a flat fill. Counts only",
         fields: ["glass_shaders_failed"],
+      },
+      {
+        text: "In the same daily counts, on iPhone: how often drawing what is under the Liquid Glass took too long, so that glass turned to clear glass for a few seconds. Counts only",
+        fields: ["glass_captures_over_budget"],
+      },
+      {
+        text: "In the same daily counts, on iPhone: how often the Liquid Glass over a page briefly showed clear glass because its picture of the page couldn’t keep up, at most once a second per glass. Counts only",
+        fields: ["glass_lens_bridged"],
       },
       {
         text: "In the same daily counts, on iPhone: how often you opened one of the Settings panes, such as General or Tabs. Counts only, never which pane or what you changed",

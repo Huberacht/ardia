@@ -486,7 +486,11 @@ final class StageMorphView: UIView {
     self.cardSize = cardSize
     self.fieldCenter = fieldCenter
     if look.usesGlass {
-      surface = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+      let glass = LiquidGlassSurface()
+      glass.capsule = false
+      glass.followsPresentation = true
+      glass.label = "searchMorph"
+      surface = glass
       classicFill = nil
     } else if look.frosted {
       let frost = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
@@ -516,6 +520,9 @@ final class StageMorphView: UIView {
     tint.overrideUserInterfaceStyle = look.panelStyle
     tint.layer.cornerCurve = .continuous
     tint.clipsToBounds = true
+    if let glass = surface as? LiquidGlassSurface {
+      glass.presentedRadius = { [weak tint] in tint.map { $0.layer.presentation()?.cornerRadius ?? $0.layer.cornerRadius } }
+    }
     let layers = look.usesGlass ? [tint, surface, contents, faceSlot] : [surface, tint, contents, faceSlot]
     layers.forEach(addSubview)
     if let snapshot {
@@ -541,8 +548,8 @@ final class StageMorphView: UIView {
     for piece in [surface, tint, contents] {
       piece.frame = bounds
     }
-    if let glass = surface as? UIVisualEffectView {
-      glass.cornerConfiguration = .uniformCorners(radius: .fixed(radius))
+    if let glass = surface as? LiquidGlassSurface {
+      glass.cornerRadius = radius
     } else {
       surface.layer.cornerRadius = radius
     }
