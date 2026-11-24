@@ -21,4 +21,4 @@ export type FileArmSpec = { id: string; kind: FileArmKind; tab: string | null; w
 export type FileArmRow = { id: string; kind: FileArmKind; tab: string | null; paths: string[]; folder: boolean; once: boolean; armedAt: number; expiresAt: number; state: FileArmState; reason?: string; landed: string[]; answered: number };
 export type FileArmResult = { ok: true; arm: FileArmRow } | { ok: false; reason: string; path?: string; arm?: string };
 export type FileArmClaim = { ok: true; mode: "automatic" | "prompted" } | { ok: false; reason: string };
-export type PlacedDownload = { ok: true; path: string; bytes: number; sourceLeft?: boolean } | { ok: false; reason: string; stagedPath?: string };
+export type PlacedDownload = { ok: true; path: string; bytes: number; sourceLeft?: boolean; sourceLeftAt?: string } | { ok: false; reason: string; stagedPath?: string };

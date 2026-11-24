@@ -36,7 +36,8 @@ void NoteDownloadEvent(NSDictionary *event, NSTimeInterval now) {
   os_unfair_lock_lock(&gLock);
   DropStale(now);
   if (!waiting) [Awaiting() removeObjectForKey:downloadId];
-  else if (!Awaiting()[downloadId] && Awaiting().count < kMaxAwaiting) Awaiting()[downloadId] = @[ @(now), profile, @NO ];
+  const double startTime = [event[@"startTime"] isKindOfClass:NSNumber.class] ? floor([event[@"startTime"] doubleValue]) : -1;
+  if (waiting && !Awaiting()[downloadId] && Awaiting().count < kMaxAwaiting) Awaiting()[downloadId] = @[ @(now), profile, @NO, @(startTime) ];
   os_unfair_lock_unlock(&gLock);
 }
 
@@ -50,7 +51,7 @@ bool AwaitingDownloadTarget(NSTimeInterval now, NSString *profile) {
   return any;
 }
 
-bool TakeDownloadTarget(NSTimeInterval now, NSString *profile) {
+bool TakeDownloadTarget(NSTimeInterval now, NSString *profile, double startedNoEarlierThanMs) {
   if (!profile) return false;
   os_unfair_lock_lock(&gLock);
   DropStale(now);
@@ -58,9 +59,10 @@ bool TakeDownloadTarget(NSTimeInterval now, NSString *profile) {
   for (NSString *key in Awaiting()) {
     NSArray *entry = Awaiting()[key];
     if ([entry[2] boolValue] || ![entry[1] isEqualToString:profile]) continue;
+    if ([entry[3] doubleValue] < 0 || [entry[3] doubleValue] < floor(startedNoEarlierThanMs)) continue;
     if (!oldest || [entry[0] doubleValue] < [Awaiting()[oldest][0] doubleValue]) oldest = key;
   }
-  if (oldest) Awaiting()[oldest] = @[ Awaiting()[oldest][0], profile, @YES ];
+  if (oldest) Awaiting()[oldest] = @[ Awaiting()[oldest][0], profile, @YES, Awaiting()[oldest][3] ];
   os_unfair_lock_unlock(&gLock);
   return oldest != nil;
 }

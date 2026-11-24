@@ -294,14 +294,15 @@ NSString *MakeStagingFolder(NSString *folder, NSString *tag, NSString **reason) 
   return [NSFileManager.defaultManager stringWithFileSystemRepresentation:buffer.data() length:strlen(buffer.data())];
 }
 
-bool RemoveIfSame(NSString *path, dev_t device, ino_t inode) {
+bool RemoveIfSame(NSString *path, dev_t device, ino_t inode, NSString **recoveryPath, void (^beforeRestore)(void)) {
   NSString *removing = [path.stringByDeletingLastPathComponent
       stringByAppendingPathComponent:[NSString stringWithFormat:@".ardia-removing-%08x%08x", arc4random(), arc4random()]];
   if (renamex_np(path.fileSystemRepresentation, removing.fileSystemRepresentation, RENAME_EXCL) != 0) return false;
   struct stat taken;
   if (lstat(removing.fileSystemRepresentation, &taken) == 0 && taken.st_dev == device && taken.st_ino == inode && unlink(removing.fileSystemRepresentation) == 0)
     return true;
-  renamex_np(removing.fileSystemRepresentation, path.fileSystemRepresentation, RENAME_EXCL);
+  if (beforeRestore) beforeRestore();
+  if (renamex_np(removing.fileSystemRepresentation, path.fileSystemRepresentation, RENAME_EXCL) != 0 && recoveryPath) *recoveryPath = removing;
   return false;
 }
 
@@ -353,7 +354,9 @@ NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
     unlinkat(dir.get(), tmp, 0);
     return Failure(failed == EEXIST ? @"exists" : @"moveFailed");
   }
-  if (RemoveIfSame(source, info.st_dev, info.st_ino)) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
+  NSString *retained = nil;
+  if (RemoveIfSame(source, info.st_dev, info.st_ino, &retained)) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
+  if (retained) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes), @"sourceLeft" : @YES, @"recoveryPath" : retained};
   return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes), @"sourceLeft" : @YES};
 }
 }

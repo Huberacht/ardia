@@ -251,13 +251,21 @@ static void TestDownloadPickerDetection() {
   CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Home"), @"", false));
   CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"Export passwords", false));
   CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"", true));
-  CHECK(TakeDownloadTarget(1001, @"Work"));
-  CHECK(!AwaitingDownloadTarget(1001, @"Work"));
-  CHECK(!TakeDownloadTarget(1001, @"Work"));
-  NoteDownloadEvent(@{@"id" : @"a2", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work"}, 1001);
+  CHECK(!TakeDownloadTarget(1001, @"Work", 0));
+  NoteDownloadEvent(@{@"id" : @"a", @"state" : @"cancelled", @"path" : @"", @"profile" : @"Work"}, 1001);
+  NoteDownloadEvent(@{@"id" : @"early", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(999000.0)}, 1001);
   CHECK(AwaitingDownloadTarget(1001, @"Work"));
-  CHECK(!TakeDownloadTarget(1001, @"Home"));
-  CHECK(TakeDownloadTarget(1001, @"Work"));
+  CHECK(!TakeDownloadTarget(1001, @"Work", 1000000.0));
+  CHECK(AwaitingDownloadTarget(1001, @"Work"));
+  NoteDownloadEvent(@{@"id" : @"early", @"state" : @"cancelled", @"path" : @"", @"profile" : @"Work"}, 1001);
+  NoteDownloadEvent(@{@"id" : @"t1", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(1000000.4)}, 1001);
+  CHECK(TakeDownloadTarget(1001, @"Work", 1000000.9));
+  CHECK(!AwaitingDownloadTarget(1001, @"Work"));
+  CHECK(!TakeDownloadTarget(1001, @"Work", 0));
+  NoteDownloadEvent(@{@"id" : @"a2", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work", @"startTime" : @(1000500.0)}, 1001);
+  CHECK(AwaitingDownloadTarget(1001, @"Work"));
+  CHECK(!TakeDownloadTarget(1001, @"Home", 0));
+  CHECK(TakeDownloadTarget(1001, @"Work", 1000000.0));
   NoteDownloadEvent(@{@"id" : @"a2", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a2.zip", @"profile" : @"Work"}, 1001);
   NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a.zip", @"offTheRecord" : @NO, @"profile" : @"Work"}, 1002);
   CHECK(!AwaitingDownloadTarget(1003, @"Work"));
@@ -278,17 +286,35 @@ static void TestRemoveIfSame() {
   NSString *copied = Make(@"remove/original.bin", @"copied");
   struct stat info;
   lstat(copied.fileSystemRepresentation, &info);
-  CHECK(RemoveIfSame(copied, info.st_dev, info.st_ino));
+  CHECK(RemoveIfSame(copied, info.st_dev, info.st_ino, nil));
   CHECK(!Exists(copied));
   NSString *swapped = Make(@"remove/swapped.bin", @"original");
   lstat(swapped.fileSystemRepresentation, &info);
   [NSFileManager.defaultManager removeItemAtPath:swapped error:nil];
   Make(@"remove/swapped.bin", @"a different file at the same path");
-  CHECK(!RemoveIfSame(swapped, info.st_dev, info.st_ino));
+  CHECK(!RemoveIfSame(swapped, info.st_dev, info.st_ino, nil));
   CHECK([Text(swapped) isEqualToString:@"a different file at the same path"]);
   NSArray *listing = [NSFileManager.defaultManager contentsOfDirectoryAtPath:At(@"remove") error:nil];
   CHECK(listing != nil && listing.count == 1);
-  CHECK(!RemoveIfSame(At(@"remove/none.bin"), info.st_dev, info.st_ino));
+  CHECK(!RemoveIfSame(At(@"remove/none.bin"), info.st_dev, info.st_ino, nil));
+  NSString *raced = Make(@"remove/raced.bin", @"first");
+  lstat(raced.fileSystemRepresentation, &info);
+  [NSFileManager.defaultManager removeItemAtPath:raced error:nil];
+  Make(@"remove/raced.bin", @"second");
+  NSString *recovery = nil;
+  CHECK(!RemoveIfSame(raced, info.st_dev, info.st_ino, &recovery, ^{
+    Make(@"remove/raced.bin", @"third, written while Ardia held the second aside");
+  }));
+  CHECK(recovery != nil && [recovery.lastPathComponent hasPrefix:@".ardia-removing-"]);
+  CHECK([Text(recovery) isEqualToString:@"second"]);
+  CHECK([Text(raced) isEqualToString:@"third, written while Ardia held the second aside"]);
+  NSString *restored = nil;
+  NSString *calm = Make(@"remove/calm.bin", @"one");
+  lstat(calm.fileSystemRepresentation, &info);
+  [NSFileManager.defaultManager removeItemAtPath:calm error:nil];
+  Make(@"remove/calm.bin", @"two");
+  CHECK(!RemoveIfSame(calm, info.st_dev, info.st_ino, &restored));
+  CHECK(restored == nil && [Text(calm) isEqualToString:@"two"]);
 }
 
 static void TestArmLifetimes() {

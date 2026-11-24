@@ -384,6 +384,49 @@ test("a fast download whose first event with a path is finished goes to the arm,
   reloadHooks();
 });
 
+async function withClockAhead(ms, work) {
+  const realNow = Date.now;
+  Date.now = () => realNow() + ms;
+  try {
+    return await work();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+test("closing a tab 11 minutes after its upload was answered still drops the copies the page was given", async () => {
+  const windowId = await setup();
+  await ok("apply", { ops: [{ op: "open", urls: ["https://uploads.example/"], window: windowId }] });
+  const tab = S().windows[windowId].tabIds.find((t) => S().tabs[t].url.includes("uploads.example"));
+  const armed = await ok("files.armUpload", { tab, paths: ["/Users/me/report.pdf"] });
+  const row = native.rows.find((r) => r.id === armed.arm);
+  row.state = "answered";
+  row.answered = 1;
+  row.landed = ["/Users/me/report.pdf"];
+  await ok("files.arms", {});
+  await withClockAhead(11 * 60_000, async () => {
+    await ok("files.arms", {});
+    S().closeTab(tab);
+    await tick();
+  });
+  assert.ok(native.disarmed.some(([ids, purge]) => Array.isArray(ids) && ids.includes(armed.arm) && purge), "the tab closing still disarms the answered arm and drops its copies");
+});
+
+test("a staged download whose first path event arrives 13 minutes after a 2-minute arm answered its save panel is still claimed and placed", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/slow.zip" });
+  const stagedPath = native.answerSavePanel(armed.arm);
+  assert.ok(stagedPath);
+  await ok("files.arms", {});
+  await withClockAhead(13 * 60_000, async () => {
+    await ok("files.arms", {});
+    stub.emitDownload(download({ id: "slow-start", path: stagedPath, startTime: armed.armedAt + 500 }));
+    stub.emitDownload(download({ id: "slow-start", path: stagedPath, state: "finished", startTime: armed.armedAt + 500 }));
+    for (let i = 0; i < 20 && !native.placed.length; i++) await tick();
+  });
+  assert.deepEqual(native.placed, [[armed.arm, "slow-start", stagedPath]]);
+});
+
 test("file methods refuse where the platform can't answer panels", async () => {
   const windowId = await setup();
   native.supported = false;

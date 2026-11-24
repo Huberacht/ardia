@@ -342,7 +342,8 @@ NSArray<NSURL *> *ArmedPanelPicks(NSSavePanel *panel, NSWindow *parent, bool *ha
   if (!open && !ardia_files::LooksLikeDownloadPicker(ardia_files::AwaitingDownloadTarget(Now(), profile), panel.message, panel.accessoryView != nil)) return nil;
   NSString *pick = PickArm(open ? @"upload" : @"download", panelWindow);
   if (!pick) return nil;
-  if (!open && !ardia_files::TakeDownloadTarget(Now(), profile)) return nil;
+  const NSTimeInterval armedAt = Locked([&] { return ArmNamed(pick).armedAt; });
+  if (!open && !ardia_files::TakeDownloadTarget(Now(), profile, armedAt * 1000)) return nil;
   *handled = true;
   *armId = pick;
   return open ? UploadPicks(pick, (NSOpenPanel *)panel) : DownloadPicks(pick, panel);
@@ -552,6 +553,7 @@ using namespace ardia_host;
   [answer removeObjectForKey:@"recoveryPath"];
   if (!ok && placed[@"recoveryPath"]) answer[@"stagedPath"] = placed[@"recoveryPath"];
   else if (!ok && prompted) answer[@"stagedPath"] = path;
+  if (ok && placed[@"recoveryPath"]) answer[@"sourceLeftAt"] = placed[@"recoveryPath"];
   if (ok) [ArdiaDownloadMover.shared rememberMove:downloadId from:path to:placed[@"path"]];
   Locked([&] {
     ArdiaFileArm *arm = ArmNamed(armId);

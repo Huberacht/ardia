@@ -17,7 +17,7 @@ NSString *SafeFileName(NSString *_Nullable name);
 bool StillFree(NSString *target, NSString *_Nullable *_Nonnull reason);
 NSString *_Nullable StageUpload(NSString *canonical, NSString *dir, NSString *_Nullable *_Nonnull reason);
 NSString *_Nullable MakeStagingFolder(NSString *folder, NSString *tag, NSString *_Nullable *_Nonnull reason);
-bool RemoveIfSame(NSString *path, dev_t device, ino_t inode);
+bool RemoveIfSame(NSString *path, dev_t device, ino_t inode, NSString *_Nullable *_Nullable recoveryPath, void (^_Nullable beforeRestore)(void) = nil);
 NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target);
 
 }

@@ -18,12 +18,17 @@ export const MAX_ARM_SECONDS = 600;
 export const MAX_ARMS = 16;
 const POLL_MS = 2_000;
 const KEEP_ENDED_MS = 600_000;
+export const UPLOAD_COPIES_MS = 1_800_000;
+export const STAGED_HANDOFF_MS = 3_600_000;
+const MARGIN_MS = 60_000;
+
+const keepTrackedFor = (t: Tracked) => (t.kind === "upload" ? UPLOAD_COPIES_MS : STAGED_HANDOFF_MS) + MARGIN_MS;
 
 const armsFilePanels = () => PLATFORM_FEATURES.silentFilePanels && nativeArmsFilePanels();
 
 export const UNSUPPORTED = "Answering file panels for the ardia command needs Ardia on macOS for now.";
 
-export type DownloadProgress = { downloadId: string; state: "downloading" | "finished" | "failed" | "cancelled"; path: string | null; bytes: number; reason?: string; sourceLeft?: true };
+export type DownloadProgress = { downloadId: string; state: "downloading" | "finished" | "failed" | "cancelled"; path: string | null; bytes: number; reason?: string; sourceLeft?: true; sourceLeftAt?: string };
 
 type Tracked = {
   id: string;
@@ -98,7 +103,7 @@ function sweepTracked(now = Date.now()) {
       t.endedAt = now;
     }
     const busy = t.downloads.some((d) => d.state === "downloading");
-    if (!t.open && !busy && t.endedAt !== null && now - t.endedAt > KEEP_ENDED_MS) {
+    if (!t.open && !busy && t.endedAt !== null && now - t.endedAt > Math.max(KEEP_ENDED_MS, keepTrackedFor(t))) {
       tracked.delete(id);
       for (const d of t.downloads) byDownload.delete(d.downloadId);
     }
@@ -114,7 +119,7 @@ function end(t: Tracked) {
 function candidates(d: Download): Tracked[] {
   const now = Date.now();
   return [...tracked.values()]
-    .filter((t) => t.kind === "download" && !t.cleared && now < t.expiresAt + KEEP_ENDED_MS && !t.before.has(d.id))
+    .filter((t) => t.kind === "download" && !t.cleared && now < t.expiresAt + STAGED_HANDOFF_MS && !t.before.has(d.id))
     .filter((t) => typeof d.startTime !== "number" || Math.floor(d.startTime) >= Math.floor(t.armedAt))
     .filter((t) => t.engineProfile === null || (d.profile ?? "") === t.engineProfile)
     .filter((t) => !t.once || !t.downloads.length)
@@ -142,6 +147,7 @@ async function settle(t: Tracked, row: DownloadProgress, d: Download, consent: C
   row.path = placed.path;
   row.bytes = placed.bytes;
   if (placed.sourceLeft) row.sourceLeft = true;
+  if (placed.sourceLeftAt) row.sourceLeftAt = placed.sourceLeftAt;
   noteFileArm("downloads_placed", 1, consent);
   if (placed.path === d.path) return;
   const current = useBrowser.getState().downloads.find((x) => x.id === d.id);
