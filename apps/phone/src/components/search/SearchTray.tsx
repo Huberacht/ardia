@@ -116,30 +116,42 @@ function SheetTray() {
   const session = useSearchSession();
   const target = open ? session : null;
   const presence = useRef(initialPresence<number>(target));
-  const [presentation, setPresentation] = useState(0);
+  const presentation = useRef(0);
+  const steppedFor = useRef(target);
   const [, redraw] = useState(0);
-  useEffect(() => {
+  if (steppedFor.current !== target) {
+    steppedFor.current = target;
     const wasClosing = presence.current.target === null && presence.current.mounted !== null;
     const step = presenceTarget(presence.current, target);
     presence.current = step.presence;
-    if (step.motion === "in" && (step.fromHidden || wasClosing)) setPresentation((count) => count + 1);
-  }, [target]);
+    if (step.motion === "in" && (step.fromHidden || wasClosing)) presentation.current += 1;
+  }
+  const standby = tabSwitchCuts() ? <TrayLayer key={presentation.current + 1} session={STANDBY_SESSION} closing={false} standby onClosed={noClose} /> : null;
   const shown = target ?? presenceShown(presence.current);
-  if (shown === null) return null;
+  if (shown === null) return standby;
   const closed = () => {
     const next = presenceSettled(presence.current, presence.current.generation, true);
     if (next === presence.current) return;
     presence.current = next;
     redraw((count) => count + 1);
   };
-  return <TrayLayer key={presentation} session={shown} closing={target === null} onClosed={closed} />;
+  return (
+    <>
+      <TrayLayer key={presentation.current} session={shown} closing={target === null} onClosed={closed} />
+      {standby}
+    </>
+  );
 }
 
-type LayerProps = { session: number; closing: boolean; onClosed: () => void };
+const STANDBY_SESSION = -1;
+
+const noClose = () => undefined;
+
+type LayerProps = { session: number; closing: boolean; standby?: boolean; onClosed: () => void };
 
 const PIN_HOLDS_MS = 700;
 
-function TrayLayer({ session, closing, onClosed }: LayerProps) {
+function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) {
   countRender("TrayLayer");
   const origin = useSearchOrigin();
   const theme = useTrayTheme();
@@ -186,9 +198,11 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   const [rowsHeight, setRowsHeight] = useState(ROWS_FALLBACK * browseLayout.suggestionPitch * window.fontScale);
   const measuredRows = useCallback((height: number) => setRowsHeight((was) => (Math.abs(was - height) < 1 ? was : height)), []);
   useLayoutEffect(() => {
-    if (arcPanel && !closing) clearPagePrefill();
-  }, []);
-  useLayoutEffect(() => setSearchClearsPagePrefill(arcPanel), [arcPanel]);
+    if (arcPanel && !closing && !standby) clearPagePrefill();
+  }, [standby]);
+  useLayoutEffect(() => {
+    if (!standby) setSearchClearsPagePrefill(arcPanel);
+  }, [arcPanel, standby]);
   const trayHeight = searchTrayHeight({ commandBarMaxHeight: command?.maxHeight ?? null, placement, place, fieldHeight, fontScale: window.fontScale, rowsHeight, windowHeight: window.height, safeTop: insets.top, resting });
   const extend = placement === "underKeyboard" ? window.height : 0;
   const closedOnPressIn = useRef(false);
@@ -208,13 +222,16 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   };
 
   useEffect(() => {
-    if (closing) return;
+    if (closing || standby) return;
     isClosing.value = false;
     const progress = keyboardProgress(keyboard.height.value, keyboard.full.value, 0);
     const landed = arrivesAtRest || cutsIn || (keyboardIsUp(keyboard.height.value) && progress >= TRAY_LIFT.landedProgress);
     hasLanded.value = landed;
     landing.value = landed ? 1 : 0;
     if (cutsIn) {
+      dim.value = 1;
+      pinned.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold;
+      if (!arrivesAtRest && searchState().arrival === "atRest") launchTrayUp();
       const unpin = setTimeout(() => {
         pinned.value = false;
       }, PIN_HOLDS_MS);
@@ -226,7 +243,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
       landing.value = reduceMotion ? withTiming(1, { duration: trayMotion.reduced, easing: tabsCurve.easeOut }) : moveTo(1, trayMotion.rise);
     }, trayLandingDelayMs);
     return () => clearTimeout(land);
-  }, [session, closing]);
+  }, [session, closing, standby]);
 
   const settleAfterDrag = () => {
     if (heldLift.value < 0 || isClosing.value) return;
@@ -254,7 +271,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   const voice = useVoice((state) => state.presented);
   const voiceWasUp = useRef(voice);
   useEffect(() => {
-    if (closing) return;
+    if (closing || standby) return;
     if (voice) trayInput?.blur();
     else if (voiceWasUp.current && mayFocusTray()) focusTray();
     voiceWasUp.current = voice;
@@ -381,7 +398,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   const dimStyle = useAnimatedStyle(() => ({ opacity: dim.value * (1 - clampedProgress(drag.value, trayHeight + currentLift())) }), [trayHeight, safeBottom]);
   const covered = useTrayCovers((state) => state.covers > 0);
   const voicePresented = useVoice((state) => state.presented);
-  const trayOnTop = !closing && !covered && !voicePresented;
+  const trayOnTop = !closing && !covered && !voicePresented && !standby;
   useEffect(() => {
     if (!trayOnTop) return;
     const stop = followTrayBack({
@@ -417,8 +434,8 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
 
   return (
     <DepartContext.Provider value={beginDeparture}>
-    <View testID="trayRoot" style={StyleSheet.absoluteFill} pointerEvents={closing ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing}>
-      {closing ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
+    <View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, standby ? styles.standby : null]} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
+      {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable
           accessibilityLabel="Close Search"
@@ -445,7 +462,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
             <SearchPanelContext.Provider value={arcPanel}>
               <GestureDetector gesture={dismissDrag}>
                 <View collapsable={false}>
-                  <TrayField key={session} closing={closing} />
+                  {standby ? null : <TrayField key={session} closing={closing} />}
                 </View>
               </GestureDetector>
               <TrayRows dismissDrag={dismissDrag} />
@@ -478,7 +495,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
           <TrayContentContext.Provider value={measuredRows}>
             <GestureDetector gesture={dismissDrag}>
               <View collapsable={false}>
-                <TrayField key={session} closing={closing} />
+                {standby ? null : <TrayField key={session} closing={closing} />}
               </View>
             </GestureDetector>
             <TrayRows dismissDrag={dismissDrag} />
@@ -1371,6 +1388,7 @@ function ScrubbedRows({ rows, typed, budget, onRefine, onMenu, onContentHeight }
 }
 
 const styles = StyleSheet.create({
+  standby: { opacity: 0 },
   sheet: {
     position: "absolute",
     elevation: trayShadow.elevation,

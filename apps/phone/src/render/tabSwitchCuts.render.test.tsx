@@ -116,3 +116,26 @@ test("a tray raised by + is at rest with its dim on its first frame, without wai
   unmount(root);
   keyboard.mockRestore();
 });
+
+test("the next search sheet waits laid out and hidden, with no field to take focus, and + turns that same sheet live instead of mounting one", () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const host = (id: string) => root.root.findAll((node) => node.props.testID === id && typeof node.type === "string");
+  expect(host("trayStandby")).toHaveLength(1);
+  expect(host("trayRoot")).toHaveLength(0);
+  expect(host("trayFieldCapsule")).toHaveLength(0);
+  const waiting = root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")[0]!;
+  act(() => presentSearch("page", ""));
+  expect(host("trayRoot")).toHaveLength(1);
+  expect(host("trayFieldCapsule")).toHaveLength(1);
+  expect(root.root.findAll((node) => node.props.testID === "trayPanel" && typeof node.type === "string")).toContain(waiting);
+  expect(host("trayStandby")).toHaveLength(1);
+  unmount(root);
+  keyboard.mockRestore();
+});

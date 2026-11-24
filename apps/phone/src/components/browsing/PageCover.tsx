@@ -12,6 +12,8 @@ import type { BrowserTab } from "../../state/tabs/tabModels";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
 import { TabFace, useTheme } from "../ui";
+import { tabSwitchCuts } from "../../state/browse/tabSwitch";
+import { pageReportsDrawn } from "@ardia/phone-native";
 import { PageLoadingPlaceholder } from "./PageLoadingPlaceholder";
 import { pageWords } from "../../lib/sharedWords";
 
@@ -50,6 +52,8 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
   const [picture] = useState(() => findTab(currentTabs(), tab.id)?.snapshotFileName ?? tab.snapshotFileName);
   const [needed] = useState(() => frozen || pageCoverNeeded(pageNavigation(tab.id), Boolean(picture) && (WAITS_FOR_PAINT || !arrivalCovers(tab.id))));
   const [atRest] = useState(() => pageAtRest(pageNavigation(tab.id)));
+  const [cutsOnDraw] = useState(() => !WAITS_FOR_PAINT && tabSwitchCuts() && pageReportsDrawn());
+  const waitsForPaint = WAITS_FOR_PAINT || cutsOnDraw;
   const [face] = useState(() => coverFace(tab, frozen ? null : picture, openingCardOf(tab.id)));
   const window = useWindowDimensions();
   const [box, setBox] = useState<Box>(() => ({ width: window.width, height: window.height }));
@@ -101,8 +105,8 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
       if (shownAlone && !deadline) deadline = setTimeout(fade, PAGE_COVER.deadlineMs);
       const page = pageNavigation(tab.id);
       if (!page?.isLive) return;
-      if (WAITS_FOR_PAINT && shownAlone && documentWasDrawn(tab.id)) {
-        if (atRest && !sawLoading) cut();
+      if (waitsForPaint && shownAlone && documentWasDrawn(tab.id)) {
+        if (cutsOnDraw || (atRest && !sawLoading)) cut();
         else fade();
         return;
       }
@@ -117,7 +121,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
         stopSettle();
         return;
       }
-      if (WAITS_FOR_PAINT) {
+      if (waitsForPaint) {
         const shownDocument = `${page.document ?? ""}:${page.url ?? ""}`;
         if (paintDeadlineFor !== shownDocument) {
           stopPaintDeadline();
@@ -140,7 +144,7 @@ export const PageCover = memo(function PageCover({ tab }: { tab: BrowserTab }) {
           fadeIfShownAlone();
         }, PAGE_COVER.settleMs);
     };
-    const stopDrawn = WAITS_FOR_PAINT ? listenForPageDrawn(tab.id, check) : null;
+    const stopDrawn = waitsForPaint ? listenForPageDrawn(tab.id, check) : null;
     check();
     const pages = usePages.subscribe(check);
     const browse = useBrowse.subscribe(check);
