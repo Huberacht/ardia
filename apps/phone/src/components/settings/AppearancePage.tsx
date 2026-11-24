@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { linearGradientCss } from "../../lib/gradient";
 import { rainbow } from "../../lib/themeEditor";
-import { INTERFACE_STYLE_NAMES, INTERFACE_STYLES, offeredInterfaceStyle, offeredScheme, SCHEME_CHOICES, SCHEME_NAMES, TABS_STYLE_FOOTER } from "../../lib/appearance";
+import { INTERFACE_STYLE_NAMES, INTERFACE_STYLES, offeredInterfaceStyle, offeredScheme, SCHEME_CHOICES, SCHEME_NAMES } from "../../lib/appearance";
 import { syncOffered } from "../../state/sync/offer";
 import { setColorChoice, setInterfaceStyle, setSchemeChoice } from "../../state/settings/actions";
 import { useAppearanceSummary } from "../../state/settings/appearance";
@@ -13,8 +13,6 @@ import { usePreferences } from "../../state/settings/hooks";
 import { popSettings, pushSettings } from "../../state/settings/nav";
 import { matchMyMac } from "../../state/sync/actions";
 import { useSyncEnabled } from "../../state/sync/hooks";
-import { setDeckGrid, useDeckGrid } from "../../state/browse/deckGrid";
-import { useIncognito } from "../../state/tabs/hooks";
 import { capsule, font, PROFILE_COLORS, settingsLayout, settingsMotion, settingsTint, space, Symbol, themeEditorLayout, useDesign, useProfileLook, useTheme, type ProfileColor, usePressStyle } from "../ui";
 import { MaterialSettingsLeading } from "./MaterialSettingsKit";
 import { Divider, Group, IconTile, NavRow, SettingsPage, ToggleRow } from "./SettingsKit";
@@ -39,33 +37,27 @@ export function AppearancePage() {
   const scheme = offeredScheme(usePreferences((p) => p.schemeChoice), offersSync);
   const styleChoices = offersSync ? INTERFACE_STYLES : INTERFACE_STYLES.filter((choice) => choice !== "matchMac");
   const schemeChoices = offersSync ? SCHEME_CHOICES : SCHEME_CHOICES.filter((choice) => choice !== "matchMac");
-  const grid = useDeckGrid();
-  const incognito = useIncognito();
   return (
     <SettingsPage title="Appearance" onBack={popSettings}>
       <Group>
         <ColorRow labelled={false} />
         {syncEnabled ? <MatchMyMac labelled={false} /> : null}
       </Group>
-      <Group header="Interface Style" footer={offersSync ? "Match My Mac follows your Mac." : undefined}>
+      <Group header="Interface style" footer={offersSync ? "Match My Mac follows your Mac." : undefined}>
         {styleChoices.map((choice, index) => (
           <CheckRow key={choice} title={INTERFACE_STYLE_NAMES[choice]} checked={style === choice} divider={index < styleChoices.length - 1} onPress={() => setInterfaceStyle(choice)} />
         ))}
       </Group>
-      <Group header="Light or Dark" footer={offersSync ? "Match My Mac follows your Mac. System follows this device." : "System follows this device."}>
+      <Group header="Light or dark" footer={offersSync ? "Match My Mac follows your Mac. System follows this device." : "System follows this device."}>
         {schemeChoices.map((choice, index) => (
           <CheckRow key={choice} title={SCHEME_NAMES[choice]} checked={scheme === choice} divider={index < schemeChoices.length - 1} onPress={() => setSchemeChoice(choice)} />
         ))}
-      </Group>
-      <Group header="Tabs" footer={TABS_STYLE_FOOTER}>
-        <CheckRow title="Stack" checked={!grid} divider onPress={() => setDeckGrid(false, !incognito)} />
-        <CheckRow title="Grid" checked={grid} divider={false} onPress={() => setDeckGrid(true, !incognito)} />
       </Group>
     </SettingsPage>
   );
 }
 
-function CheckRow({ title, checked, divider, onPress }: { title: string; checked: boolean; divider: boolean; onPress: () => void }) {
+export function CheckRow({ title, checked, divider, onPress }: { title: string; checked: boolean; divider: boolean; onPress: () => void }) {
   const theme = useTheme();
   return (
     <View>

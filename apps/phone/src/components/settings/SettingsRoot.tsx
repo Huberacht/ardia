@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { Pressable, StyleSheet, Text, useWindowDimensions, View, type ViewInstance } from "react-native";
 import Animated, { FadeIn, FadeOut, LayoutAnimationConfig } from "react-native-reanimated";
 import { refreshDefaultBrowser, useDefaultBrowser } from "../../state/settings/defaultBrowser";
@@ -15,7 +15,8 @@ import { AUTO_ARCHIVE_INTERVALS, autoArchiveTitle, type AutoArchiveInterval } fr
 import { controlRadius, duration, font, materialYouOffered, settingsLayout, settingsTint, space, Symbol, useDesign, useTheme, useWarningInk, Tappable } from "../ui";
 import { PHONE_SHARING_COPY } from "../../lib/telemetryCopy";
 import { setUsageSharing, useUsageSharing } from "../../state/telemetry/telemetry";
-import { AppearanceRow, ColorRow, MatchMyMac } from "./AppearancePage";
+import { ColorRow, MatchMyMac } from "./AppearancePage";
+import { SettingsPaneList } from "./SettingsPanes";
 import { focusForScreenReader } from "../ui/coverFocus";
 import { BarButton, Group, IconTile, NavRow, PickerRow, SettingsPage, ToggleRow } from "./SettingsKit";
 import type { SettingsReveal } from "./settingsReveal";
@@ -35,21 +36,6 @@ const APP_LINKS = [
 const INTERVALS = (Object.keys(AUTO_ARCHIVE_INTERVALS) as AutoArchiveInterval[]).map((id) => ({ id, title: autoArchiveTitle(id) }));
 
 export function SettingsRoot() {
-  const theme = useTheme();
-  const engineId = usePreferences((p) => p.searchEngineId);
-  const suggestions = usePreferences((p) => p.searchSuggestions);
-  const keyboard = usePreferences((p) => p.autoOpensKeyboard);
-  const interval = usePreferences((p) => p.autoArchiveInterval);
-  const engines = useEngines((s) => s.engines);
-  const appLinks = useEngines((s) => s.appLinks);
-  const sharing = useUsageSharing((s) => s.sharing);
-  const syncEnabled = useSyncEnabled();
-  const offersDefault = offersDefaultBrowser(useDefaultBrowser((s) => s.status));
-  useEffect(() => {
-    void refreshDefaultBrowser();
-  }, []);
-  const synced = useSyncView().search;
-  const engineName = syncEnabled && synced ? syncedEngineName(synced, engines) : (engines.find((engine) => engine.id === engineId)?.name ?? "");
   const stacks = useWindowDimensions().fontScale >= settingsLayout.accessibilityFontScale;
   const design = useDesign();
   const redesigned = design === "redesigned";
@@ -67,6 +53,34 @@ export function SettingsRoot() {
     restoreSwitchFocus.current = true;
     setMaterialYou(value);
   };
+  return (
+    <SettingsPage title={destinationWords.settings} mediumAppBar revealRef={reveal} onClose={material ? closeSettings : undefined} trailing={material ? undefined : <BarButton title={dismissWords.done} emphasized onPress={closeSettings} />}>
+      {syncOffered() ? (
+        <Group>
+          <SyncCard stacks={stacks} />
+        </Group>
+      ) : null}
+      {redesigned ? <SettingsPaneList materialSwitch={materialSwitch} onMaterialYou={changeMaterialYou} /> : <ClassicSettingsGroups stacks={stacks} material={material} materialSwitch={materialSwitch} onMaterialYou={changeMaterialYou} />}
+    </SettingsPage>
+  );
+}
+
+function ClassicSettingsGroups({ stacks, material, materialSwitch, onMaterialYou }: { stacks: boolean; material: boolean; materialSwitch: RefObject<ViewInstance | null>; onMaterialYou: (value: boolean) => void }) {
+  const theme = useTheme();
+  const engineId = usePreferences((p) => p.searchEngineId);
+  const suggestions = usePreferences((p) => p.searchSuggestions);
+  const keyboard = usePreferences((p) => p.autoOpensKeyboard);
+  const interval = usePreferences((p) => p.autoArchiveInterval);
+  const engines = useEngines((s) => s.engines);
+  const appLinks = useEngines((s) => s.appLinks);
+  const sharing = useUsageSharing((s) => s.sharing);
+  const syncEnabled = useSyncEnabled();
+  const offersDefault = offersDefaultBrowser(useDefaultBrowser((s) => s.status));
+  useEffect(() => {
+    void refreshDefaultBrowser();
+  }, []);
+  const synced = useSyncView().search;
+  const engineName = syncEnabled && synced ? syncedEngineName(synced, engines) : (engines.find((engine) => engine.id === engineId)?.name ?? "");
   const dynamicColors = wallpaperColorsEnabled(usePreferences((p) => p.colorChoice), usePreferences((p) => p.dynamicColors));
   const chatGPT = useChatGPTConnected();
   const summaryProvider = usePageSummaryProvider();
@@ -79,12 +93,7 @@ export function SettingsRoot() {
     void refreshPageSummariesEnabled();
   }, []);
   return (
-    <SettingsPage title={destinationWords.settings} mediumAppBar revealRef={reveal} onClose={material ? closeSettings : undefined} trailing={material ? undefined : <BarButton title={dismissWords.done} emphasized onPress={closeSettings} />}>
-      {syncOffered() ? (
-        <Group>
-          <SyncCard stacks={stacks} />
-        </Group>
-      ) : null}
+    <>
       <View testID="settingsShortcuts" style={[styles.shortcuts, { flexDirection: stacks ? "column" : "row" }]}>
         <Tappable
           kind="filled"
@@ -116,9 +125,7 @@ export function SettingsRoot() {
         ) : null}
       </View>
       <Group header="General">
-        {redesigned ? (
-          <AppearanceRow />
-        ) : material ? (
+        {material ? (
           <>
             <ToggleRow title="Dynamic Colors" icon="paintpaletteFill" tint={settingsTint.neutral} value={dynamicColors} divider onChange={setDynamicColors} />
             {!dynamicColors ? <ColorRow plainIcon /> : null}
@@ -130,7 +137,7 @@ export function SettingsRoot() {
           </>
         )}
         {material ? null : <View style={[styles.divider, { backgroundColor: theme.separator }]} />}
-        {materialYouOffered() ? <ToggleRow buttonRef={materialSwitch} title="Material You" icon="handDrawFill" tint={settingsTint.nightShade} value={material} divider onChange={changeMaterialYou} /> : null}
+        {materialYouOffered() ? <ToggleRow buttonRef={materialSwitch} title="Material You" icon="handDrawFill" tint={settingsTint.nightShade} value={material} divider onChange={onMaterialYou} /> : null}
         <NavRow title="Site Settings" icon="globe" tint={settingsTint.neutral} divider onPress={() => pushSettings({ page: "siteSettings" })} />
         {offersDefault ? <NavRow title="Default Browser" icon="safariFill" tint={settingsTint.defaultBrowser} divider onPress={() => pushSettings({ page: "defaultBrowser" })} /> : null}
         <PickerRow title="Open App Links In" icon="arrowUpForwardAppFill" tint={settingsTint.appLinks} options={APP_LINKS} selected={appLinks} onSelect={setAppLinks} />
@@ -183,7 +190,7 @@ export function SettingsRoot() {
         <NavRow title="About Ardia" icon="info" tint={settingsTint.neutral} onPress={() => pushSettings({ page: "about" })} />
       </Group>
       <Text style={[font.footnote, styles.centered, { color: theme.secondaryLabel }]}>{appVersion()}</Text>
-    </SettingsPage>
+    </>
   );
 }
 

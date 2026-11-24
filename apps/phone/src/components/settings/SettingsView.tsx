@@ -19,15 +19,18 @@ import { popSettings, pushSettings, settingsRouteKey } from "../../state/setting
 import { ExpoSettingsStack } from "./ExpoSettingsStack";
 import { BrowseForMePage } from "./BrowseForMePage";
 import { PageSummaryPage } from "./PageSummaryPage";
+import { ExperimentalPane, GeneralPane, SearchPane, TabsPane } from "./SettingsPanes";
+import { useDesign } from "../ui";
 
 export function SettingsPageFor({ route }: { route: SettingsRoute }) {
   switch (route.page) {
     case "root":
+      return <SettingsRoot />;
     case "general":
     case "tabs":
     case "search":
     case "experimental":
-      return <SettingsRoot />;
+      return <PaneFor page={route.page} />;
     case "appearance":
       return <AppearancePage />;
     case "theme":
@@ -80,6 +83,14 @@ export function SettingsPageFor({ route }: { route: SettingsRoute }) {
     case "pageSummary":
       return <PageSummaryPage />;
   }
+}
+
+function PaneFor({ page }: { page: "general" | "tabs" | "search" | "experimental" }) {
+  if (useDesign() !== "redesigned") return <SettingsRoot />;
+  if (page === "general") return <GeneralPane />;
+  if (page === "tabs") return <TabsPane />;
+  if (page === "search") return <SearchPane />;
+  return <ExperimentalPane />;
 }
 
 export function SettingsView() {

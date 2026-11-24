@@ -197,12 +197,19 @@ function ClassicIconTile({ icon, tint, side = settingsLayout.tile }: { icon: Sym
   );
 }
 
-function Label({ title, icon, tint, color }: { title: string; icon?: SymbolName; tint?: string; color?: string }) {
+function Label({ title, icon, tint, color, detail }: { title: string; icon?: SymbolName; tint?: string; color?: string; detail?: string }) {
   const theme = useTheme();
   return (
     <View style={styles.label}>
       {icon && tint ? <IconTile icon={icon} tint={tint} /> : null}
-      <Text style={[font.body, styles.labelText, { color: color ?? theme.label }]}>{title}</Text>
+      {detail ? (
+        <View style={styles.labelLines}>
+          <Text style={[font.body, styles.labelText, { color: color ?? theme.label }]}>{title}</Text>
+          <Text style={[font.footnote, styles.labelText, { color: theme.secondaryLabel }]}>{detail}</Text>
+        </View>
+      ) : (
+        <Text style={[font.body, styles.labelText, { color: color ?? theme.label }]}>{title}</Text>
+      )}
     </View>
   );
 }
@@ -214,22 +221,22 @@ function ClassicDivider({ inset = settingsLayout.rowInset }: { inset?: number })
 
 type RowBase = { title: string; icon?: SymbolName; tint?: string; divider?: boolean };
 
-function ClassicNavRow({ title, icon, tint, value, divider, onPress }: RowBase & { value?: string; onPress: () => void }) {
+function ClassicNavRow({ title, icon, tint, value, detail, chevron = true, divider, onPress }: RowBase & { value?: string; detail?: string; chevron?: boolean; onPress: () => void }) {
   const theme = useTheme();
   return (
     <View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={title}
+        accessibilityLabel={detail ? `${title}, ${detail}` : title}
         accessibilityValue={value ? { text: value } : undefined}
         onPress={onPress} style={({ pressed }) => [styles.row, pressed ? { backgroundColor: theme.rowHighlight } : null]}>
-        <Label title={title} icon={icon} tint={tint} />
+        <Label title={title} icon={icon} tint={tint} detail={detail} />
         {value ? (
           <Text style={[font.body, styles.value, { color: theme.secondaryLabel }]} numberOfLines={1}>
             {value}
           </Text>
         ) : null}
-        <Symbol name="chevronRight" size={14} color={theme.tertiaryLabel} />
+        {chevron ? <Symbol name="chevronRight" size={14} color={theme.tertiaryLabel} /> : null}
       </Pressable>
       {divider ? <Divider /> : null}
     </View>
@@ -369,6 +376,7 @@ const styles = StyleSheet.create({
   tile: { alignItems: "center", justifyContent: "center", ...smoothCorners },
   label: { flexDirection: "row", alignItems: "center", gap: settingsLayout.labelGap, flexShrink: 1, flexGrow: 1 },
   labelText: { flexShrink: 1 },
+  labelLines: { flexShrink: 1, gap: space.tight },
   divider: { height: StyleSheet.hairlineWidth },
   row: { flexDirection: "row", alignItems: "center", gap: space.s, minHeight: settingsLayout.rowMinHeight, paddingHorizontal: settingsLayout.rowInset, paddingVertical: space.s },
   value: { flexShrink: 0, maxWidth: "55%", textAlign: "right" },

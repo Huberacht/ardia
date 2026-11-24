@@ -228,6 +228,8 @@ export const settingsTint = {
   appLinks: "#3EA82E",
   defaultBrowser: "#007AFF",
   bottomBar: "#30B0C7",
+  orange: "#FF901A",
+  purple: "#B059EE",
 } as const;
 
 export const faviconInk = { letter: "#FFFFFF", lightPlate: "rgba(255,255,255,0.92)", darkPlate: "rgba(0,0,0,0.78)" } as const;

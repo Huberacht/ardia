@@ -176,7 +176,7 @@ function TrayLayer({ session, closing, onClosed }: LayerProps) {
   const panelRadius = searchPanelRadius(fieldHeight);
   const resting = Math.max(keyboard.target, safeBottom);
   const placement = searchPanelPlacement(arcPanel, command !== null);
-  const place = searchPanelPlace(placement, resting, false);
+  const place = searchPanelPlace(placement, resting, true);
   const corners = place.corners;
   const [rowsHeight, setRowsHeight] = useState(ROWS_FALLBACK * browseLayout.suggestionPitch * window.fontScale);
   const measuredRows = useCallback((height: number) => setRowsHeight((was) => (Math.abs(was - height) < 1 ? was : height)), []);
@@ -1028,7 +1028,7 @@ function IncognitoToggle() {
   return (
     <ToggleIconButton testID="trayIncognito" checked={on} onChange={toggleTrayIncognito} label={INCOGNITO} role="switch" visual={searchPanel.eyes}>
       <View testID="trayIncognitoGlyph">
-        <IncognitoEyes incognito={on} size={searchPanel.eyes} color={theme.foregroundTertiary} />
+        <IncognitoEyes incognito={on} size={searchPanel.eyes} color={theme.label} />
       </View>
     </ToggleIconButton>
   );
@@ -1046,7 +1046,7 @@ function PanelIncognitoToggle() {
         </Animated.Text>
       ) : null}
       <View testID="trayIncognitoGlyph">
-        <IncognitoEyes incognito={on} size={searchPanel.eyes} color={on ? searchPanel.incognito.label : theme.foregroundTertiary} />
+        <IncognitoEyes incognito={on} size={searchPanel.eyes} color={theme.label} />
       </View>
     </ToggleIconButton>
   );
