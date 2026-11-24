@@ -68,6 +68,7 @@ import {
   useBrowse,
   whenPageCoverHidden,
   whenPageLaidOut,
+  noteCutCard,
 } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { useCanReopen, useHasArchivedTabs, useIncognito, usePrivateCount, useShownSpace } from "../../state/tabs/hooks";
@@ -639,6 +640,7 @@ export const TabDeck = memo(function TabDeck() {
         expandedIndex.value = index;
         scaleProgress.value = 0;
         positionProgress.value = 0;
+        noteCutCard(id, g.cardWidth);
       }
       settledOpen(id);
       return;

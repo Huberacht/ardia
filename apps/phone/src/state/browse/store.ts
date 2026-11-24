@@ -379,6 +379,14 @@ export function stopOpeningTab(id: string) {
   if (useBrowse.getState().opening === id) useBrowse.setState({ opening: null, veiled: null, covered: null });
 }
 
+let cutCard: { id: string; width: number } | null = null;
+
+export function noteCutCard(id: string, width: number) {
+  cutCard = { id, width };
+}
+
+export const cutCardWidth = (id: string) => (cutCard?.id === id ? cutCard.width : null);
+
 export function openTab(id: string) {
   const tabs = currentTabs();
   if (!tabs.open.some((tab) => tab.id === id) && !tabs.privates.some((tab) => tab.id === id)) return;

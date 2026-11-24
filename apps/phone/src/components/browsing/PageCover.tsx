@@ -4,7 +4,7 @@ import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { PAGE_COVER, pageAtRest, pageCoverNeeded } from "../../lib/pageCover";
 import { usePageTone } from "../../state/browse/hooks";
-import { arrivalCovers, documentWasDrawn, listenForPageDrawn, useBrowse } from "../../state/browse/store";
+import { arrivalCovers, cutCardWidth, documentWasDrawn, listenForPageDrawn, useBrowse } from "../../state/browse/store";
 import { holdTone, pageNavigation, releaseTone, usePages } from "../../state/pages/store";
 import { display } from "../../state/search/omnibox";
 import { launchArguments } from "../../state/app/launchFlags";
@@ -29,7 +29,9 @@ export function coverFace(tab: Pick<BrowserTab, "title" | "url">, picture: strin
 
 const openingCardOf = (id: string): OpeningCard | null => {
   const { opening, openingCardWidth } = useBrowse.getState();
-  return opening === id ? { cardWidth: openingCardWidth } : null;
+  if (opening === id) return { cardWidth: openingCardWidth };
+  const cut = cutCardWidth(id);
+  return cut === null ? null : { cardWidth: cut };
 };
 
 type Box = { width: number; height: number };
