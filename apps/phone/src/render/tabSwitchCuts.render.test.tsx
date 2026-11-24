@@ -1456,3 +1456,22 @@ test("a window resize that stays in the phone layout invalidates the prepared sn
   act(() => resizeRoot(393, 873));
   unmount(root);
 });
+
+test("Search Tabs pressed during the cut goes through the UI press like the other controls: the field holds its touches until the entrance, the press marks deck-hit:search, and the entrance focuses the field", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const held = () => animatedProp(hostWith(root, "deckSearchHeld")!, "pointerEvents");
+  expect(held()).toBe("auto");
+  tapTabs();
+  expect(held()).toBe("none");
+  pressControl("search");
+  expect(deckTurn.hitMark.value).toBe("deck-hit:search");
+  expect(markOf(root, "deckHitMark")).toBe("deck-hit:search");
+  const field = root.root.findAll((node) => node.props.testID === "deckSearchField" && typeof node.props.onFocus === "function")[0]!;
+  const focused = jest.spyOn(field.instance as { focus: () => void }, "focus").mockImplementation(() => undefined);
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  expect(held()).toBe("auto");
+  expect(focused).toHaveBeenCalled();
+  unmount(root);
+});
