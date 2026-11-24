@@ -108,7 +108,7 @@ import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
 import { arriveFromDeck, dropPreparedDestination, liftDestination, prepareDestination, pressDestination, takeDestinationAction } from "../../state/browse/destination";
 import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarPreviewShown, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, releaseDeckOnHideOnUI, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
-import { cardHitSeq, currentPhoneGeneration, deckAwaitsEntrance, deckDrawnMark, deckGeometryChanged, deckHitMark, deckLive, deckOwnsInput, deckReconciled, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
+import { cardHitSeq, currentPhoneGeneration, deckAwaitsEntrance, deckCommandPending, settleDeckCommand, deckDrawnMark, deckGeometryChanged, deckHitMark, deckLive, deckOwnsInput, deckReconciled, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
@@ -515,8 +515,9 @@ export const TabDeck = memo(function TabDeck() {
 
   const earlyHit = useDeckHits((s) => s.hit);
   useLayoutEffect(() => {
-    if (!earlyHit || !shown || !takeDeckHit(earlyHit)) return;
-    runEarlyHit(earlyHit);
+    if (!earlyHit || !shown) return;
+    if (takeDeckHit(earlyHit)) runEarlyHit(earlyHit);
+    settleDeckCommand(earlyHit.turn);
   }, [earlyHit, shown]);
 
   useEffect(() => {
@@ -1177,7 +1178,7 @@ export const TabDeck = memo(function TabDeck() {
               positionProgress.value = 0;
               liftDestination(cardId);
               runOnJS(openPosedCard)(cardId, turn);
-            } else if (cardId !== undefined && !deckAwaitsEntrance()) runOnJS(openCard)(cardId);
+            } else if (cardId !== undefined && !deckAwaitsEntrance() && !deckCommandPending()) runOnJS(openCard)(cardId);
           } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();
         }
         manager.fail();

@@ -68,7 +68,7 @@ import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages
 import { hideArchiveCard } from "./archiveCard";
 import { tabSwitchCuts } from "./tabSwitch";
 import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, pageBarPreviewShown, pageBarShown, pageBodyShown, peekDeckPullEntrance, previewPageBar, PULL_STAGE, restorePageAfterRefusedCut, showPulledPage, whenDeckStandby } from "./deckPull";
-import { advancePhoneGeneration, currentPhoneGeneration, deckHitLive, deckReadyFor, deckRevisionOf, deckTurn, noteDeckRevision, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
+import { advancePhoneGeneration, currentPhoneGeneration, deckHitLive, settleDeckCommand, deckReadyFor, deckRevisionOf, deckTurn, noteDeckRevision, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
 import { useScreenLayout } from "../app/screenLayout";
 import { dropEarlyStandby } from "../search/standbyReveal";
 import { beginInteraction, cutInteraction, INTERACTION_WINDOW_MS, markNextUiFrame, markTiming } from "../app/interactionPerf";
@@ -829,13 +829,17 @@ export function deckHitAccepted(hit: DeckHitCommand) {
   }
   if (!deckHitLive(hit)) {
     labTrace(`PAGELAB ${hit.label} dropped, its deck turn is over or already took a command`);
+    settleDeckCommand(hit.turn);
     return;
   }
   traceSlice(hit.label);
   markTiming("deck hit");
   if (!deckTurnReconciled(hit.turn)) {
     if (landingFromRest === hit.deck) landingFromRest = null;
-    if (!enterDeckOnTurn(hit.deck, hit.turn)) return;
+    if (!enterDeckOnTurn(hit.deck, hit.turn)) {
+      settleDeckCommand(hit.turn);
+      return;
+    }
     labTrace(`PAGELAB ${hit.label} reached JS before the deck's entrance, both apply together`);
   }
   if (queueDeckHit(hit) && hit.control === "card" && hit.tabId && pullCounts(hit.tabId)) countUsage("deck_opens_while_landing");

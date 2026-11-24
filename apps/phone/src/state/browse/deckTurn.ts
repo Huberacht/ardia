@@ -9,7 +9,7 @@ export type DeckControls = Partial<Record<DeckControl, DeckBounds>>;
 
 export type PreparedDeck = { tabId: string; order: readonly string[]; revision: string; layout: number; phone: number; present: readonly DeckControl[]; controls: DeckControls };
 
-export type DeckPress = { control: DeckControl; turn: number; phone: number; deck: string; bounds: DeckBounds };
+export type DeckPress = { control: DeckControl; turn: number; phone: number; deck: string; bounds: DeckBounds | null };
 
 export type DeckHitCommand = { seq: number; turn: number; phone: number; control: DeckControl | "card"; label: string; deck: string; tabId?: string; posedTurn?: number };
 
@@ -27,6 +27,7 @@ export const deckTurn = {
   drawnMark: makeMutable(""),
   hitSeq: makeMutable(0),
   commandTurn: makeMutable(0),
+  appliedTurn: makeMutable(0),
   layout: makeMutable(0),
   revision: makeMutable(""),
 };
@@ -52,6 +53,12 @@ export function deckAwaitsEntrance(): boolean {
   "worklet";
   const live = deckTurn.live.value;
   return live !== 0 && deckTurn.reconciled.value !== live;
+}
+
+export function deckCommandPending(): boolean {
+  "worklet";
+  const live = deckTurn.live.value;
+  return live !== 0 && deckTurn.commandTurn.value === live && deckTurn.appliedTurn.value !== live;
 }
 
 export function deckReadyFor(id: string): boolean {
@@ -115,6 +122,10 @@ const sameBounds = (a: DeckBounds, b: DeckBounds) => {
 export function pressDeckControl(control: DeckControl, x: number, y: number): boolean {
   "worklet";
   const prepared = deckTurn.prepared.value;
+  if (deckCommandPending() && prepared) {
+    deckTurn.press.value = { control, turn: deckTurn.live.value, phone: prepared.phone, deck: prepared.tabId, bounds: null };
+    return true;
+  }
   const bounds = prepared?.controls[control];
   if (!deckAwaitsEntrance() || !prepared || !bounds || prepared.phone !== deckTurn.phone.value || !within(bounds, x, y, DECK_PRESS_SLOP)) return false;
   deckTurn.press.value = { control, turn: deckTurn.live.value, phone: prepared.phone, deck: prepared.tabId, bounds };
@@ -138,7 +149,7 @@ export function liftDeckControl(control: DeckControl, x: number, y: number): Dec
   "worklet";
   const press = deckTurn.press.value;
   dropDeckPress(control);
-  if (!press || press.control !== control) return null;
+  if (!press || press.control !== control || press.bounds === null) return null;
   if (deckTurn.live.value !== press.turn || deckTurn.phone.value !== press.phone) return null;
   const prepared = deckTurn.prepared.value;
   const now = prepared?.controls[control];
@@ -155,6 +166,7 @@ export function liftDeckControl(control: DeckControl, x: number, y: number): Dec
 export function takeDeckCardHit(): boolean {
   "worklet";
   const live = deckTurn.live.value;
+  if (deckCommandPending()) return false;
   if (!deckAwaitsEntrance()) return true;
   if (deckTurn.commandTurn.value === live) return false;
   deckTurn.commandTurn.value = live;
@@ -164,6 +176,7 @@ export function takeDeckCardHit(): boolean {
 
 export function claimDeckSearchFocus(): DeckHitCommand | "refused" | null {
   "worklet";
+  if (deckCommandPending()) return "refused";
   if (!deckAwaitsEntrance()) return null;
   const live = deckTurn.live.value;
   const prepared = deckTurn.prepared.value;
@@ -173,6 +186,10 @@ export function claimDeckSearchFocus(): DeckHitCommand | "refused" | null {
   deckTurn.hitSeq.value = seq;
   deckTurn.hitMark.value = "deck-hit:search";
   return { seq, turn: live, phone: deckTurn.phone.value, control: "search", label: "deck-hit:search", deck: prepared.tabId };
+}
+
+export function settleDeckCommand(turn: number) {
+  if (turn !== 0) deckTurn.appliedTurn.value = turn;
 }
 
 let phoneGeneration = 0;
