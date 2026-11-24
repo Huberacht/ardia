@@ -1774,6 +1774,34 @@
    "detected": false
   },
   {
+   "id": "update:windows-webui-manifest",
+   "source": "update",
+   "guard": "Windows WebUI host (--ardia-shell=webui): webui_updates.cc fetches windows-update.json (at most 64 KiB) and windows-update.json.sig (exactly 64 bytes) through Chromium's system URLLoaderFactory with credentials omitted and the cache off, only from the GitHub windows-alpha release (or, in a test instance only, an ARDIA_INSTANCE updateFeed that ValidFeedUrl accepts: https, or http to 127.0.0.1, localhost or 10.0.2.2), and follows a redirect only to https on port 443 at github.com, objects.githubusercontent.com or release-assets.githubusercontent.com for the release feed and never for a test feed (AllowedRedirect); it writes both files with CREATE_NEW and FILE_FLAG_OPEN_REPARSE_POINT into a fresh scratch folder inside <app data>\\Updates whose final path (GetFinalPathNameByHandleW) must be a real direct child, and runs the bundled ardia-update-verify.exe windows-manifest against the pinned windows-update.pem beside Ardia.exe (a test key only in a test instance) with a 15 s deadline and only its own pipe and NUL inherited; ReadVerifierAnswer takes only its last line, an ok line of exactly five words whose version, build above Ardia.build.json's, URL under the published prefix (ValidInstallerUrl), lowercase SHA-256 and size up to 1 GiB all pass, and keeps the verified offer and its signed bytes in the browser process: the renderer never sends a URL, hash or path. The installer downloads to Ardia-Setup-<sha16>.exe.part capped at the signed size, must be a single-link regular file in the Updates folder whose size and SHA-256 match, is renamed and checked again with ardia-update-verify.exe windows-package, and runs only on Restart to Update after LaunchInstaller re-hashes it while holding it open without write sharing; a background instance never runs it. scripts/windows/engine/tests/webui_update_policy_test.cc runs hostile URLs, paths, versions and verifier lines through the pure policy",
+   "checks": [
+    "scripts/windows/engine/src/ardia/win/webui/webui_updates.cc#VerifyManifest",
+    "scripts/windows/engine/src/ardia/win/webui/webui_updates.cc#LaunchInstaller",
+    "scripts/windows/engine/src/ardia/win/webui/webui_update_policy.h#ReadVerifierAnswer",
+    "scripts/windows/engine/src/ardia/win/webui/webui_update_policy.h#AllowedRedirect",
+    "scripts/windows/engine/tests/webui_update_policy_test.cc#TestVerifierAnswers",
+    "scripts/windows/engine/tests/webui_update_policy_test.cc#TestFeedsAndUrls",
+    "packages/core-rs/crates/ardia-update-verify/src/main.rs#fn verify_windows("
+   ],
+   "detected": false
+  },
+  {
+   "id": "windows-webui-updates:calls",
+   "source": "frame",
+   "guard": "Windows WebUI host (--ardia-shell=webui): ArdiaUpdates.installKind, status, check, update, claimOutcome and restart run only for the live trusted chrome://ardia/ shell document; installKind, status, check and restart take no arguments, update takes one whole build number from 1 to 2^53-1 (BuildArgument) and starts only when it is the build the last verified check offered and the copy is installed (BeginDownload), claimOutcome takes one whole run number (RunArgument), anything else is refused with an error; the renderer reads every reply through readEngineStatus and readCheckAnswer in apps/desktop/src/platform/win/hostUpdates.ts, which keep only known phases, kinds and reasons, versions matching ^[0-9][0-9A-Za-z.+-]{0,63}$, safe integer builds above the running build and sizes up to 1 GiB, and messages of at most 200 characters without control characters; apps/desktop/src/platform/win/hostUpdates.test.mjs runs the shared hostile list through both readers and the saved preferences",
+   "checks": [
+    "scripts/windows/engine/src/ardia/win/webui/webui_updates.cc#BuildArgument",
+    "scripts/windows/engine/src/ardia/win/webui/webui_update_policy.h#BeginDownload",
+    "apps/desktop/src/platform/win/hostUpdates.ts#readEngineStatus",
+    "apps/desktop/src/platform/win/hostUpdates.ts#readCheckAnswer",
+    "apps/desktop/src/platform/win/hostUpdates.test.mjs#windows webui update replies refuse every hostile input"
+   ],
+   "detected": false
+  },
+  {
    "id": "import:netscape-html-rust",
    "source": "import",
    "guard": "Rust Netscape HTML bookmarks parser behind libardia_import, not linked by any host yet: a file over 64 MiB is refused before it is read, 64 folder levels and 250,000 nodes with each folder reserved before its contents, no recursion on the input, and one slot per attribute the parser reads whatever a tag carries; entities decode once and titles and URLs reach the tree verbatim, place: queries are skipped and scheme policy stays with import:bookmarks; the shared hostile list runs through the static library",

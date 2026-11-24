@@ -1,0 +1,391 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  CHECK_EVERY_MS,
+  FIRST_CHECK_AFTER_MS,
+  UPDATE_CHECK_LOCK,
+  UPDATE_PREFERENCES,
+  WATCH_EVERY_MS,
+  WINDOWS_RELEASE_PAGE,
+  WINDOWS_UPDATE_METHODS,
+  installsUpdates,
+  readCheckAnswer,
+  readEngineStatus,
+  scheduleUpdateChecks,
+  updatesAvailable,
+  windowsUpdater,
+} from "./hostUpdates.ts";
+import { SELF_UPDATE_METHODS } from "../../hostCapabilities.ts";
+import { takeUpdateCounts } from "../../../../browser/src/state/telemetry/updateCounts.ts";
+import { setConsentPeriod } from "../../../../browser/src/state/telemetry/consentPeriod.ts";
+import { windowsUpdateCounts } from "../../../../browser/src/platform/windowsUpdateCounts.win.ts";
+import { HOSTILE_VALUES } from "../../../../../scripts/security/hostile-inputs.mjs";
+
+setConsentPeriod(true, "windows-updates-test");
+windowsUpdateCounts.setConsentEpoch("windows-updates-test");
+
+const CURRENT = { version: "0.2.45", build: 7000 };
+const OFFER = { version: "0.2.46", build: 7100, bytes: 180 * 1024 * 1024 };
+
+function fakeEngine({ kind = "installer", current = CURRENT, answer = { status: "ok", ...OFFER }, failWith = null, background = false, isolated = false, testFeed = false, launches = true } = {}) {
+  const engine = { phase: "idle", offer: null, reason: null, run: 0, claimed: false, kind, current, background, isolated, testFeed, answer, checks: 0, updates: [], restarts: 0, claims: [] };
+  engine.status = () => ({
+    phase: engine.phase,
+    kind: engine.kind,
+    reason: engine.reason,
+    run: engine.run,
+    version: engine.offer?.version ?? null,
+    build: engine.offer?.build ?? null,
+    bytes: engine.offer?.bytes ?? null,
+    current: engine.current,
+    background: engine.background,
+    isolated: engine.isolated,
+    testFeed: engine.testFeed,
+  });
+  engine.check = () => {
+    engine.checks++;
+    if (["checking", "downloading", "ready"].includes(engine.phase)) return { status: "busy" };
+    const reply = typeof engine.answer === "function" ? engine.answer() : engine.answer;
+    if (reply?.status === "ok") Object.assign(engine, { phase: "available", offer: { version: reply.version, build: reply.build, bytes: reply.bytes }, reason: null });
+    else if (reply?.status === "upToDate" || reply?.status === "notPublished") Object.assign(engine, { phase: "upToDate", offer: null, reason: null });
+    else Object.assign(engine, { phase: "idle", offer: null, reason: reply?.reason ?? "other" });
+    return reply;
+  };
+  engine.update = (build) => {
+    engine.updates.push(build);
+    if (engine.kind === "installer" && engine.phase === "available" && engine.offer?.build === build) Object.assign(engine, { phase: "downloading", run: engine.run + 1, claimed: false, reason: null });
+    return engine.status();
+  };
+  engine.advance = () => {
+    if (engine.phase !== "downloading") return;
+    if (failWith) Object.assign(engine, { phase: "failed", reason: failWith });
+    else engine.phase = "ready";
+  };
+  engine.claim = (run) => {
+    const answer = run === engine.run && !engine.claimed && (engine.phase === "ready" || engine.phase === "failed");
+    if (answer) {
+      engine.claimed = true;
+      engine.claims.push(run);
+    }
+    return answer;
+  };
+  engine.restart = () => {
+    engine.restarts++;
+    if (!launches || engine.phase !== "ready" || engine.background) {
+      if (engine.phase === "ready" && !engine.background) Object.assign(engine, { phase: "failed", reason: "checksum", claimed: false });
+      return false;
+    }
+    return true;
+  };
+  return engine;
+}
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+function harness({ engine = fakeEngine(), capabilities = WINDOWS_UPDATE_METHODS, showsToasts, docs = new Map(), answers = true } = {}) {
+  const seen = { asked: [], told: [], offered: [], offeredInstalls: [], ready: [], opened: [], calls: [] };
+  const host = {
+    bootstrap: { windowId: "main", capabilities: [...capabilities] },
+    invoke: async (method, { args }) => {
+      seen.calls.push([method, ...args]);
+      if (method === "ArdiaUpdates.status") return engine.status();
+      if (method === "ArdiaUpdates.check") return engine.check();
+      if (method === "ArdiaUpdates.update") return engine.update(...args);
+      if (method === "ArdiaUpdates.claimOutcome") return engine.claim(...args);
+      if (method === "ArdiaUpdates.restart") return engine.restart();
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const updater = windowsUpdater({
+    host,
+    read: (name) => docs.get(name) ?? null,
+    write: async (name, contents) => void docs.set(name, contents),
+    ask: async (title, message, confirmTitle) => (seen.asked.push({ title, message, confirmTitle }), answers),
+    tell: async (title, message) => void seen.told.push({ title, message }),
+    offer: (update, failed) => void seen.offered.push(failed ? `${update.build} failed` : `${update.build}`),
+    offerInstall: (update, install) => void seen.offeredInstalls.push({ build: update.build, install }),
+    ready: (update, restart) => void seen.ready.push({ build: update.build, restart }),
+    open: (url) => void seen.opened.push(url),
+    showsToasts,
+    wait: async () => (engine.advance(), tick()),
+    now: () => 1_000,
+  });
+  return { updater, engine, seen, docs, host };
+}
+
+const settled = async (until) => {
+  for (let i = 0; i < 100 && !until(); i++) await tick();
+  assert.ok(until(), "the update flow settled");
+};
+
+const SELF_UPDATE_COUNTS = (counts) => Object.fromEntries(Object.entries(counts).filter(([field, n]) => /^update_(downloads?|installs?|install_failures|download_failures|restarts)/.test(field) && n));
+
+test("the Windows WebUI updater needs every ArdiaUpdates call, the Linux five plus check", () => {
+  assert.deepEqual(WINDOWS_UPDATE_METHODS, [...SELF_UPDATE_METHODS, "ArdiaUpdates.check"]);
+  assert.equal(updatesAvailable(harness().host), true);
+  assert.equal(updatesAvailable(harness({ capabilities: SELF_UPDATE_METHODS }).host), false, "an engine without ArdiaUpdates.check is not the Windows updater");
+  assert.equal(updatesAvailable(harness({ capabilities: WINDOWS_UPDATE_METHODS.slice(1) }).host), false);
+});
+
+test("Check Now verifies the feed, downloads the newer build and offers Restart, counting each step", async () => {
+  takeUpdateCounts();
+  windowsUpdateCounts.takeCounts();
+  const { updater, engine, seen, docs, host } = harness();
+  await updater.methods.checkForUpdates();
+  await settled(() => seen.ready.length === 1);
+  assert.deepEqual(engine.updates, [OFFER.build], "the renderer names only the verified build, never a URL or hash");
+  assert.ok(seen.calls.every(([, ...args]) => args.every((arg) => typeof arg === "number")), "no call carries text from the feed");
+  assert.equal(seen.ready[0].build, OFFER.build);
+  assert.equal(installsUpdates(host), true);
+  const state = await updater.methods.updaterState();
+  assert.equal(state.configured, true);
+  assert.equal(state.displayVersion, "0.2.45, Windows alpha 7000");
+  assert.deepEqual(state.switchCheck, { phase: "ready", channel: "stable", version: OFFER.version });
+  assert.equal(state.channel, undefined, "Windows has one feed, so Settings shows no channel picker");
+  assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).lastCheck, 1_000);
+  assert.equal(await updater.menuItem(), "restart");
+  const counts = takeUpdateCounts();
+  assert.equal(counts.update_checks_asked, 1);
+  assert.equal(counts.update_checks_found, 1);
+  assert.deepEqual(SELF_UPDATE_COUNTS(counts), { update_downloads_started: 1, update_downloads_finished: 1 });
+  assert.equal(windowsUpdateCounts.takeCounts()["windows-updates-test"].verified, 1);
+});
+
+test("Restart to Update claims the run, counts the restart and asks the engine to run the installer", async () => {
+  takeUpdateCounts();
+  const { updater, engine, seen } = harness();
+  await updater.check(true);
+  await settled(() => seen.ready.length === 1);
+  await seen.ready[0].restart();
+  await settled(() => engine.restarts === 1);
+  assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), { update_downloads_started: 1, update_downloads_finished: 1, update_restarts: 1 });
+  assert.deepEqual(seen.told, []);
+});
+
+test("an installer that doesn't start says so, and the failed run is counted once as an install failure", async () => {
+  takeUpdateCounts();
+  const { updater, engine, seen } = harness({ engine: fakeEngine({ launches: false }) });
+  await updater.check(true);
+  await settled(() => seen.ready.length === 1);
+  await updater.restartWhenReady();
+  assert.equal(engine.restarts, 1);
+  assert.deepEqual(seen.told.map((told) => told.title), ["Ardia couldn't install the update"]);
+  await updater.watch();
+  await updater.watch();
+  assert.deepEqual(SELF_UPDATE_COUNTS(takeUpdateCounts()), {
+    update_downloads_started: 1,
+    update_downloads_finished: 1,
+    update_restarts: 1,
+    update_install_failures_checksum: 1,
+  });
+  assert.deepEqual(seen.offered, [], "the failure was already told, so no second notice follows");
+});
+
+test("the Settings window's Check Now restarts once the update is ready", async () => {
+  const { updater, engine, seen } = harness();
+  await updater.check(true);
+  await settled(() => seen.ready.length === 1);
+  assert.equal((await updater.methods.updaterState()).switchCheck.phase, "ready");
+  await updater.methods.checkForUpdates();
+  assert.equal(engine.restarts, 1);
+  assert.equal(engine.checks, 1, "a ready update restarts instead of checking again");
+});
+
+test("up to date and not yet published both say so when asked and record the check", async () => {
+  takeUpdateCounts();
+  windowsUpdateCounts.takeCounts();
+  for (const status of ["upToDate", "notPublished"]) {
+    const { updater, seen, engine } = harness({ engine: fakeEngine({ answer: { status } }) });
+    await updater.methods.checkForUpdates();
+    assert.deepEqual(seen.told.map((told) => told.title), [status === "upToDate" ? "Ardia is up to date" : "No Windows update published yet"]);
+    assert.deepEqual(engine.updates, []);
+    assert.equal((await updater.methods.updaterState()).lastCheck, 1_000);
+  }
+  const counts = takeUpdateCounts();
+  assert.equal(counts.update_checks_asked, 2);
+  assert.equal(counts.update_check_failures, 0);
+  const verify = windowsUpdateCounts.takeCounts()["windows-updates-test"];
+  assert.equal(verify.verified, 1);
+  assert.equal(verify.network, 1);
+});
+
+test("a test feed that isn't there is a failure, not up to date", async () => {
+  takeUpdateCounts();
+  const { updater, seen } = harness({ engine: fakeEngine({ answer: { status: "notPublished" }, isolated: true, testFeed: true }) });
+  await updater.methods.checkForUpdates();
+  assert.deepEqual(seen.told.map((told) => told.title), ["Ardia couldn't check for updates"]);
+  assert.equal(takeUpdateCounts().update_check_failures, 1);
+});
+
+test("a feed that fails verification is refused, counted by reason, and never downloaded", async () => {
+  takeUpdateCounts();
+  windowsUpdateCounts.takeCounts();
+  for (const reason of ["signature", "manifest", "tooLarge", "missing", "network", "verifier"]) {
+    const { updater, seen, engine } = harness({ engine: fakeEngine({ answer: { status: "failed", reason, message: "the update signature could not be verified" } }) });
+    await updater.methods.checkForUpdates();
+    assert.deepEqual(seen.told.map((told) => told.title), ["Ardia couldn't check for updates"], reason);
+    assert.match(seen.told[0].message, /^The update signature could not be verified\./);
+    assert.deepEqual(engine.updates, [], reason);
+    assert.equal((await updater.methods.updaterState()).switchCheck.phase, "failed");
+  }
+  assert.equal(takeUpdateCounts().update_check_failures, 6);
+  assert.deepEqual(windowsUpdateCounts.takeCounts()["windows-updates-test"], { verified: 0, signature: 1, manifest: 1, tooLarge: 1, missing: 1, network: 1, verifier: 1, other: 0 });
+});
+
+test("a busy engine and a download under way are reported, not checked twice", async () => {
+  const busy = harness({ engine: fakeEngine({ answer: { status: "busy" } }) });
+  await busy.updater.methods.checkForUpdates();
+  assert.deepEqual(busy.seen.told.map((told) => told.title), ["Ardia is already checking for updates"]);
+  const engine = fakeEngine();
+  engine.check();
+  engine.update(OFFER.build);
+  const downloading = harness({ engine });
+  await downloading.updater.methods.checkForUpdates();
+  assert.equal(engine.checks, 1);
+  assert.deepEqual(downloading.seen.told.map((told) => told.title), [`Downloading Ardia ${OFFER.version}`]);
+  assert.equal((await downloading.updater.methods.updaterState()).canCheck, false);
+});
+
+test("a download that fails offers the release page once and isn't retried automatically", async () => {
+  takeUpdateCounts();
+  const docs = new Map();
+  const engine = fakeEngine({ failWith: "checksum" });
+  const { updater, seen } = harness({ engine, docs });
+  await updater.check(false);
+  await settled(() => seen.offered.length === 1);
+  assert.deepEqual(seen.offered, [`${OFFER.build} failed`]);
+  assert.equal(JSON.parse(docs.get(UPDATE_PREFERENCES)).failed, OFFER.build);
+  const counts = SELF_UPDATE_COUNTS(takeUpdateCounts());
+  assert.equal(counts.update_downloads_finished, 1);
+  assert.equal(counts.update_install_failures_checksum, 1);
+  await updater.check(false);
+  assert.deepEqual(engine.updates, [OFFER.build], "an automatic check skips the build that failed");
+  await updater.check(true);
+  await settled(() => seen.asked.length === 1);
+  assert.equal(seen.asked[0].confirmTitle, "Open Release Page");
+  assert.deepEqual(seen.opened, [WINDOWS_RELEASE_PAGE]);
+});
+
+test("with automatic downloads off an automatic check offers Update once, and accepting downloads", async () => {
+  const docs = new Map([[UPDATE_PREFERENCES, JSON.stringify({ automaticDownloads: false })]]);
+  const { updater, engine, seen } = harness({ docs });
+  await updater.check(false);
+  await updater.check(false);
+  assert.equal(seen.offeredInstalls.length, 1);
+  assert.deepEqual(engine.updates, []);
+  seen.offeredInstalls[0].install();
+  await settled(() => seen.ready.length === 1);
+  assert.deepEqual(engine.updates, [OFFER.build]);
+  assert.equal((await updater.methods.updaterState()).automaticDownloads, false);
+});
+
+test("a copy that isn't installed points to the release page and never downloads", async () => {
+  const { updater, engine, seen, host } = harness({ engine: fakeEngine({ kind: "portable" }) });
+  await updater.methods.checkForUpdates();
+  assert.equal(seen.asked.length, 1);
+  assert.match(seen.asked[0].message, /isn't installed/);
+  assert.deepEqual(seen.opened, [WINDOWS_RELEASE_PAGE]);
+  assert.deepEqual(engine.updates, []);
+  assert.equal(installsUpdates(host), false);
+  const state = await updater.methods.updaterState();
+  assert.equal(state.configured, false);
+  assert.equal(state.switchCheck, null);
+  assert.equal(await updater.checksByItself(), false);
+});
+
+test("a build without its verifier, key or build file isn't set up and never checks", async () => {
+  for (const engine of [fakeEngine({ kind: "unsupported" }), fakeEngine({ current: null })]) {
+    const { updater, seen } = harness({ engine });
+    await updater.methods.checkForUpdates();
+    assert.equal(engine.checks, 0);
+    assert.deepEqual(seen.told.map((told) => told.title), ["Updates aren't set up for this build"]);
+    assert.equal((await updater.methods.updaterState()).configured, false);
+    assert.equal(await updater.checksByItself(), false);
+  }
+});
+
+test("automatic checks stay off in hidden and scratch instances and when turned off, and run in one window only", async () => {
+  assert.equal(await harness({ engine: fakeEngine({ background: true }) }).updater.checksByItself(), false);
+  assert.equal(await harness({ engine: fakeEngine({ isolated: true }) }).updater.checksByItself(), false);
+  assert.equal(await harness({ engine: fakeEngine({ isolated: true, testFeed: true }) }).updater.checksByItself(), true, "a test instance naming a feed checks it");
+  const { updater, engine } = harness();
+  assert.equal(await updater.checksByItself(), true);
+  await updater.methods.setAutomaticUpdateChecks(false);
+  assert.equal(await updater.checksByItself(), false);
+  await updater.check(false);
+  assert.equal(engine.checks, 0);
+  const requested = [];
+  const timers = { setTimeout: (fn, ms) => requested.push(["timeout", ms]), setInterval: (fn, ms) => requested.push(["interval", ms]) };
+  scheduleUpdateChecks(updater, { locks: { request: (name, callback) => (requested.push(["lock", name]), callback(), new Promise(() => {})) }, timers });
+  assert.deepEqual(requested, [["lock", UPDATE_CHECK_LOCK], ["timeout", FIRST_CHECK_AFTER_MS], ["interval", CHECK_EVERY_MS], ["interval", WATCH_EVERY_MS]]);
+});
+
+test("the Settings window leaves the ready toast to a browser window, which shows it once", async () => {
+  const engine = fakeEngine();
+  const docs = new Map();
+  const settings = harness({ engine, docs, showsToasts: false });
+  await settings.updater.check(true);
+  await settled(() => engine.phase === "ready");
+  await tick();
+  assert.deepEqual(settings.seen.ready, [], "the Settings window shows no toast");
+  assert.equal((await settings.updater.methods.updaterState()).switchCheck.phase, "ready", "its status line says the update is ready");
+  assert.deepEqual(engine.claims, []);
+  const browser = harness({ engine, docs });
+  await browser.updater.watch();
+  assert.equal(browser.seen.ready.length, 0, "a run is settled only once it has been seen twice");
+  await browser.updater.watch();
+  assert.equal(browser.seen.ready.length, 1);
+  assert.deepEqual(engine.claims, [1]);
+  await browser.updater.watch();
+  assert.equal(browser.seen.ready.length, 1);
+});
+
+test("hostile preferences fall back to the defaults", async () => {
+  for (const { id, value } of HOSTILE_VALUES) {
+    const text = typeof value === "string" ? value : JSON.stringify({ automaticChecks: value, automaticDownloads: value, lastCheck: value, notified: value, failed: value, readyNotified: value });
+    const { updater } = harness({ docs: new Map([[UPDATE_PREFERENCES, text ?? "null"]]) });
+    const state = await updater.methods.updaterState();
+    assert.equal(typeof state.automaticChecks, "boolean", id);
+    assert.ok(state.lastCheck === null || Number.isFinite(state.lastCheck), id);
+  }
+  assert.equal(Object.prototype.polluted, undefined);
+});
+
+test("windows webui update replies refuse every hostile input while passing a valid control", () => {
+  const control = readCheckAnswer({ status: "ok", ...OFFER }, CURRENT);
+  assert.deepEqual(control, { status: "ok", ...OFFER }, "positive control check answer passes");
+  const status = readEngineStatus({ phase: "ready", kind: "installer", reason: null, run: 2, ...OFFER, current: CURRENT, background: false, isolated: false, testFeed: false });
+  assert.deepEqual(status?.offer, OFFER, "positive control status passes");
+  assert.deepEqual(status?.current, CURRENT);
+  assert.equal(readCheckAnswer({ status: "ok", ...OFFER, build: CURRENT.build }, CURRENT), null, "an offer no newer than this build is refused");
+  assert.equal(readCheckAnswer({ status: "ok", ...OFFER, bytes: 2 ** 30 + 1 }, CURRENT), null);
+
+  for (const { id, value } of HOSTILE_VALUES) {
+    assert.equal(readCheckAnswer(value, CURRENT), null, `${id} raw check answer`);
+    assert.equal(readEngineStatus(value), null, `${id} raw status`);
+    for (const forged of [{ status: "ok", ...OFFER, version: value }, { status: "ok", ...OFFER, build: value }, { status: "ok", ...OFFER, bytes: value }, { status: value }]) {
+      const answer = readCheckAnswer(forged, CURRENT);
+      if (answer?.status === "ok") {
+        assert.match(answer.version, /^[0-9][0-9A-Za-z.+-]{0,63}$/, `${id} version`);
+        assert.ok(Number.isSafeInteger(answer.build) && answer.build > CURRENT.build, `${id} build`);
+        assert.ok(Number.isSafeInteger(answer.bytes) && answer.bytes >= 1 && answer.bytes <= 2 ** 30, `${id} bytes`);
+      } else {
+        assert.ok(answer === null || ["upToDate", "notPublished", "busy"].includes(answer.status), `${id} ${JSON.stringify(forged).slice(0, 60)}`);
+      }
+    }
+    const failed = readCheckAnswer({ status: "failed", reason: value, message: value }, CURRENT);
+    assert.equal(failed?.status, "failed", id);
+    assert.ok(["signature", "manifest", "tooLarge", "missing", "network", "verifier", "other"].includes(failed.reason), `${id} reason`);
+    assert.ok(failed.message.length <= 200 && [...failed.message].every((character) => character.charCodeAt(0) >= 0x20 && character !== "\u007f"), `${id} message`);
+    const read = readEngineStatus({ phase: value, run: 1 });
+    assert.equal(read, null, `${id} phase`);
+    const fields = readEngineStatus({ phase: "ready", kind: value, reason: value, run: 1, version: value, build: value, bytes: value, current: value, background: value, isolated: value, testFeed: value });
+    assert.ok(fields, id);
+    assert.ok(["installer", "portable", "unsupported"].includes(fields.kind), `${id} kind`);
+    assert.ok(fields.reason === null || /^[A-Za-z]{1,32}$/.test(fields.reason), `${id} reason`);
+    assert.ok(fields.offer === null || /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(fields.offer.version), `${id} offer`);
+    assert.ok(fields.current === null || /^[0-9][0-9A-Za-z.+-]{0,63}$/.test(fields.current.version), `${id} current`);
+    assert.equal(fields.background || fields.isolated || fields.testFeed, value === true, `${id} flags`);
+  }
+  assert.equal(Object.prototype.polluted, undefined);
+});
