@@ -621,7 +621,15 @@ export const TabDeck = memo(function TabDeck() {
   const open = (index: number, tappedAt?: number) => {
     beginInteraction("card open", INTERACTION_WINDOW_MS.cardOpen);
     const id = order[index];
-    if (!id || phase.kind !== "settled" || dragIndex.value === index || openingId.current !== null || useBrowse.getState().surface !== "deck") return;
+    if (!id || phase.kind !== "settled" || dragIndex.value === index || openingId.current !== null || useBrowse.getState().surface !== "deck") {
+      if (tabSwitchCuts() && deckPhase.value === DECK_PHASE.closing) {
+        deckPhase.value = DECK_PHASE.settled;
+        expandedIndex.value = -1;
+        scaleProgress.value = 1;
+        positionProgress.value = 1;
+      }
+      return;
+    }
     markTiming("card tap", tappedAt);
     runOnUI(markNextUiFrame)("card motion");
     if (searchChrome) Keyboard.dismiss();
@@ -1017,13 +1025,19 @@ export const TabDeck = memo(function TabDeck() {
           if (closing >= 0) {
             if (closingId !== undefined) runOnJS(closeCardFromX)(closingId);
           } else if (card >= 0) {
+            if (cardId !== undefined && cutsAway && !grid && deckPhase.value === DECK_PHASE.settled && dragIndex.value !== card) {
+              deckPhase.value = DECK_PHASE.closing;
+              expandedIndex.value = card;
+              scaleProgress.value = 0;
+              positionProgress.value = 0;
+            }
             if (cardId !== undefined) runOnJS(openCard)(cardId);
           } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();
         }
         manager.fail();
       });
     return Gesture.Race(pan, longPress, tap);
-  }, [g, count, anchor, reduceMotion, material, redesigned, bottomRowTop, barBandBottom, panEnabled, longPressEnabled, measuresInteractions]);
+  }, [g, count, anchor, reduceMotion, material, redesigned, grid, bottomRowTop, barBandBottom, panEnabled, longPressEnabled, measuresInteractions]);
   const idleGesture = useMemo(() => Gesture.Race(Gesture.Manual().enabled(false).onTouchesDown(ignoreTouch)), []);
 
   const cardMenuItems = (index: number): MenuItem[] => {
