@@ -271,6 +271,60 @@ class GlassBackdropTest {
     }
 
     @Test
+    fun aBackdropMountedAfterItsGlassesHostsThem() {
+        val scene = bar()
+        live(scene)
+        scene.bar.removeView(scene.backdrop)
+        (scene.glasses + scene.pill).forEach { assertNull(it.backdrop) }
+        scene.bar.addView(scene.backdrop, 0)
+        (scene.glasses + scene.pill).forEach { assertSame("a backdrop that attaches after its glasses takes them back", scene.backdrop, it.backdrop) }
+        assertEquals(scene.glasses + scene.pill, scene.backdrop.glasses)
+        assertTrue(scene.backdrop.isDirty)
+        live(scene)
+        assertEquals("and draws them live again", FrostPage.Path.Live, scene.glasses[0].lastChoice?.path)
+    }
+
+    @Test
+    fun aBackdropAdoptsOnlyTheGlassesThatWouldFindIt() {
+        val scene = bar()
+        scene.bar.removeView(scene.backdrop)
+        val early = GlassView(activity, appContext).apply { source = "backdrop-test" }
+        scene.bar.addView(early, 0)
+        val pillBackdrop = GlassBackdropView(activity, appContext)
+        scene.pillFold.addView(pillBackdrop, 0)
+        assertSame("the pill's own backdrop takes the pill", pillBackdrop, scene.pill.backdrop)
+        scene.bar.addView(scene.backdrop, 1)
+        scene.glasses.forEach { assertSame(scene.backdrop, it.backdrop) }
+        assertSame("a glass with a nearer backdrop keeps it", pillBackdrop, scene.pill.backdrop)
+        assertNull("a glass before the backdrop is not its to host", early.backdrop)
+        assertEquals(scene.glasses, scene.backdrop.glasses)
+    }
+
+    @Test
+    fun aWholeBranchMountedAtOnceBindsItsGlass() {
+        val scene = bar()
+        val branch = FrameLayout(activity)
+        val backdrop = GlassBackdropView(activity, appContext)
+        val layer = FrameLayout(activity)
+        val glass = GlassView(activity, appContext).apply { source = "backdrop-test"; shape = "capsule" }
+        layer.addView(glass)
+        branch.addView(backdrop)
+        branch.addView(layer)
+        val backdropsBefore = GlassAttachment.backdrops
+        val hostedBefore = GlassAttachment.hosted
+        scene.bar.addView(branch)
+        assertSame(backdrop, glass.backdrop)
+        assertEquals(listOf(glass), backdrop.glasses)
+        assertEquals("the attached backdrops are counted for the trace", backdropsBefore + 1, GlassAttachment.backdrops)
+        assertEquals(hostedBefore + 1, GlassAttachment.hosted)
+        scene.bar.removeView(branch)
+        assertNull(glass.backdrop)
+        assertTrue(backdrop.glasses.isEmpty())
+        assertEquals("and a detached branch takes its counts with it", backdropsBefore, GlassAttachment.backdrops)
+        assertEquals(hostedBefore, GlassAttachment.hosted)
+    }
+
+    @Test
     fun aSharedStripIsNamedForItsSourceAndTheRolesDrawingIt() {
         val scene = bar()
         scene.glasses[0].name = "floatingBarTabs"
