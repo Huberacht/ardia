@@ -1,7 +1,7 @@
 ---
 import GreptileMark from "../assets/sponsors/greptile.svg";
 import BlacksmithWordmark from "../assets/sponsors/blacksmith.svg";
-import { COMPANY_SPONSORS, DONORS } from "../data/sponsors";
+import { COMPANY_SPONSORS } from "../data/sponsors";
 import { CONTRIBUTORS } from "../data/contributors";
 import { HEART_PATH } from "../data/icons";
 import { SPONSORS_PATH } from "../data/donors";
@@ -58,10 +58,8 @@ const followsContributors = CONTRIBUTORS.length > 0;
 
       <div class="donors" data-reveal style="--i: 2">
         <p class="label">Monthly sponsors</p>
-        <ul class="names" role="list" aria-label="Monthly sponsors" data-private data-ac-no-capture data-donor-list hidden={DONORS.length === 0}>
-          {DONORS.map((donor) => <li class:list={["name", donor.tier]}>{donor.name}</li>)}
-        </ul>
-        <p class="empty" data-donor-empty hidden={DONORS.length > 0}>This spot is saving a seat for your name.</p>
+        <ul class="names" role="list" aria-label="Monthly sponsors" data-private data-ac-no-capture data-donor-list hidden></ul>
+        <p class="empty" data-donor-empty>This spot is saving a seat for your name.</p>
         <div class="become">
           <button class="btn sun-btn" type="button" popovertarget="donate-pop" data-become-sponsor data-track="donate_clicked" data-track-location="sponsors">
             <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d={HEART_PATH} /></svg>
@@ -82,9 +80,7 @@ const followsContributors = CONTRIBUTORS.length > 0;
   const list = section?.querySelector<HTMLUListElement>("[data-donor-list]");
   const empty = section?.querySelector<HTMLElement>("[data-donor-empty]");
   if (section && list && empty && section.dataset.sponsorsUrl) {
-    liveDonors(section.dataset.sponsorsUrl).then((donors) => {
-      if (donors) renderDonors(list, empty, donors, document);
-    });
+    liveDonors(section.dataset.sponsorsUrl).then((donors) => renderDonors(list, empty, donors ?? [], document));
   }
   section?.querySelector("[data-become-sponsor]")?.addEventListener("click", () => {
     const monthly = document.querySelector<HTMLInputElement>(`#${DONATE_POP_PICKER} input[value="monthly"]`);

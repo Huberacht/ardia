@@ -20,7 +20,6 @@ export const SPONSORS_TIMING = {
   maxAgeMs: 6 * 60 * 60 * 1000,
   cooldownMs: 60 * 1000,
   coldWaitMs: 4000,
-  browserCacheSeconds: 60,
 };
 export const EVENT_RETRY_MS = [30_000, 120_000, 600_000, 1_800_000, 3_600_000, 3_600_000, 3_600_000, 3_600_000];
 
@@ -393,7 +392,7 @@ export function createService({ store: rawStore, events: rawEvents, issues: rawI
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(body),
-      "Cache-Control": `public, max-age=${SPONSORS_TIMING.browserCacheSeconds}`,
+      "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
     });
     res.end(body);

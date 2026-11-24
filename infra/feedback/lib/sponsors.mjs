@@ -12,8 +12,10 @@ export const HIDE_METADATA = { key: "ardia_sponsor", value: "hide" };
 export const STRIPE_PAGE_BUDGET = 20;
 export const REFRESH_DEADLINE_MS = 20_000;
 
+export const LOOKUP_CONCURRENCY = 3;
+export const REQUEST_GAP_MS = 120;
+
 const REQUEST_TIMEOUT_MS = 8_000;
-const LOOKUP_CONCURRENCY = 6;
 const SPACING = /[\p{Cc}\p{Zl}\p{Zp}\s]+/gu;
 const INVISIBLE = /[\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu;
 const PILED_MARKS = /(\p{M}{2})\p{M}+/gu;
@@ -51,14 +53,20 @@ const isDonation = (subscription, product) => itemsOf(subscription).some((item) 
 
 const MONTHS_PER_INTERVAL = { month: 1, year: 12 };
 
+const unitAmountIn = (price, currency) =>
+  price.currency === currency ? price.unit_amount : price.currency_options?.[currency]?.unit_amount;
+
 export function monthlyCentsOf(subscription, product = DONATE_PRODUCT) {
+  const currency = subscription?.currency;
+  if (currency !== TIER_CURRENCY) return null;
   let cents = 0;
   for (const item of itemsOf(subscription)) {
     const price = item?.price;
     if (idOf(price?.product) !== product) continue;
-    if (price.currency !== TIER_CURRENCY) return null;
+    const amount = unitAmountIn(price, currency);
+    if (amount === null || amount === undefined) return null;
     const months = MONTHS_PER_INTERVAL[price.recurring?.interval] * (Number(price.recurring?.interval_count) || 1);
-    const unit = Number(price.unit_amount);
+    const unit = Number(amount);
     const quantity = Number(item.quantity ?? 1);
     if (!Number.isFinite(months) || !Number.isFinite(unit) || !Number.isFinite(quantity)) return null;
     cents += (unit * quantity) / months;
@@ -103,8 +111,8 @@ export class StripeReadError extends Error {
 
 export class IncompleteListError extends Error {}
 
-const keptSession = (session) =>
-  session
+const finishedCheckout = (session) =>
+  session?.status === "complete"
     ? {
         status: session.status,
         metadata: { donate: session.metadata?.donate },
@@ -112,32 +120,57 @@ const keptSession = (session) =>
       }
     : null;
 
-async function eachLimited(items, limit, fn) {
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) await fn(items[next++]);
+const pause = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const stopWaiting = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", stopWaiting);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", stopWaiting, { once: true });
+  });
+
+function pacer(gapMs) {
+  let nextAt = 0;
+  return async (signal) => {
+    const at = Math.max(nextAt, Date.now());
+    nextAt = at + gapMs;
+    if (at > Date.now()) await pause(at - Date.now(), signal);
+    signal.throwIfAborted();
   };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetch, deadlineMs = REFRESH_DEADLINE_MS }) {
+async function eachLimited(items, limit, signal, fn) {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length && !signal.aborted) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  signal.throwIfAborted();
+}
+
+export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetch, deadlineMs = REFRESH_DEADLINE_MS, requestGapMs = REQUEST_GAP_MS }) {
   const sessions = new Map();
 
-  const get = async (path, params, deadline) => {
+  const get = async (path, params, refresh) => {
+    await refresh.pace(refresh.signal);
     const response = await fetchImpl(`https://api.stripe.com/v1/${path}?${new URLSearchParams(params)}`, {
       headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.any([deadline, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+      signal: AbortSignal.any([refresh.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     });
     const body = await response.json().catch(() => null);
     if (!response.ok || !Array.isArray(body?.data)) throw new StripeReadError(response.status, body?.error?.code);
     return body;
   };
 
-  const listAll = async (path, params, deadline) => {
+  const listAll = async (path, params, refresh) => {
     const items = [];
     let after = null;
     for (let page = 0; page < STRIPE_PAGE_BUDGET; page++) {
-      const body = await get(path, { ...params, limit: "100", ...(after ? { starting_after: after } : {}) }, deadline);
+      const body = await get(path, { ...params, limit: "100", ...(after ? { starting_after: after } : {}) }, refresh);
       items.push(...body.data);
       if (!body.has_more) return items;
       if (body.data.length === 0) break;
@@ -149,17 +182,24 @@ export function stripeSponsors({ key, product = DONATE_PRODUCT, fetchImpl = fetc
   return {
     describe: () => "Stripe subscriptions",
     async list() {
-      const deadline = AbortSignal.timeout(deadlineMs);
-      const active = await listAll("subscriptions", { status: "active" }, deadline);
-      const donations = active.filter((s) => isDonation(s, product));
-      const wanted = new Set(donations.map((s) => s.id));
-      for (const id of sessions.keys()) if (!wanted.has(id)) sessions.delete(id);
-      const missing = donations.filter((s) => !sessions.has(s.id));
-      await eachLimited(missing, LOOKUP_CONCURRENCY, async (subscription) => {
-        const body = await get("checkout/sessions", { subscription: subscription.id, limit: "1" }, deadline);
-        sessions.set(subscription.id, keptSession(body.data[0]));
-      });
-      return { sponsors: sponsorsFrom(donations, sessions, product) };
+      const stop = new AbortController();
+      const refresh = { signal: AbortSignal.any([AbortSignal.timeout(deadlineMs), stop.signal]), pace: pacer(requestGapMs) };
+      try {
+        const active = await listAll("subscriptions", { status: "active" }, refresh);
+        const donations = active.filter((s) => isDonation(s, product));
+        const wanted = new Set(donations.map((s) => s.id));
+        for (const id of sessions.keys()) if (!wanted.has(id)) sessions.delete(id);
+        const missing = donations.filter((s) => !sessions.has(s.id));
+        await eachLimited(missing, LOOKUP_CONCURRENCY, refresh.signal, async (subscription) => {
+          const body = await get("checkout/sessions", { subscription: subscription.id, limit: "1" }, refresh);
+          const checkout = finishedCheckout(body.data[0]);
+          if (checkout) sessions.set(subscription.id, checkout);
+        });
+        return { sponsors: sponsorsFrom(donations, sessions, product) };
+      } catch (error) {
+        stop.abort(error);
+        throw error;
+      }
     },
   };
 }

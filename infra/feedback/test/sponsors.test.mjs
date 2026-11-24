@@ -34,14 +34,15 @@ async function service(sponsors, { rateLimits = false, now = Date.now, log = () 
 }
 
 let seq = 0;
-const subscription = ({ id = `sub_${++seq}`, cents = 500, quantity = 1, currency = "usd", interval = "month", product = DONATE_PRODUCT, status = "active", metadata = {}, created = seq } = {}) => ({
+const subscription = ({ id = `sub_${++seq}`, cents = 500, quantity = 1, currency = "usd", priceCurrency = currency, currencyOptions, interval = "month", product = DONATE_PRODUCT, status = "active", metadata = {}, created = seq } = {}) => ({
   id,
   object: "subscription",
   status,
   created,
   metadata,
   customer: "cus_private",
-  items: { data: [{ quantity, price: { unit_amount: cents, currency, product, recurring: { interval, interval_count: 1 } } }] },
+  currency,
+  items: { data: [{ quantity, price: { unit_amount: cents, currency: priceCurrency, ...(currencyOptions ? { currency_options: currencyOptions } : {}), product, recurring: { interval, interval_count: 1 } } }] },
 });
 const checkout = (name, { donate = "monthly_5", status = "complete", amountTotal = 500 } = {}) => ({
   id: `cs_${++seq}`,
@@ -137,6 +138,22 @@ test("sponsorTier gives a coarse tier, never the amount", () => {
   assert.equal(sponsorTier(null), "friend");
 });
 
+test("R3-5: the tier reads the subscription's own currency, including a multi-currency price", () => {
+  const cadOnUsdDefault = subscription({ currency: "cad", priceCurrency: "usd", cents: 100_000, currencyOptions: { cad: { unit_amount: 137_000 } } });
+  assert.equal(monthlyCentsOf(cadOnUsdDefault), null);
+  const usdOnCadDefault = subscription({ currency: "usd", priceCurrency: "cad", cents: 137_000, currencyOptions: { usd: { unit_amount: 60_000 } } });
+  assert.equal(monthlyCentsOf(usdOnCadDefault), 60_000);
+  const usdWithoutOption = subscription({ currency: "usd", priceCurrency: "cad", cents: 137_000 });
+  assert.equal(monthlyCentsOf(usdWithoutOption), null);
+  assert.deepEqual(listed([
+    [cadOnUsdDefault, checkout("Canadian Patron")],
+    [usdOnCadDefault, checkout("Dollar Patron")],
+  ]), [
+    { name: "Dollar Patron", tier: "patron" },
+    { name: "Canadian Patron", tier: "friend" },
+  ]);
+});
+
 test("F5: the tier follows the subscription's current recurring USD amount, not the first checkout", () => {
   assert.equal(monthlyCentsOf(subscription({ cents: 100, quantity: 60 })), 6_000);
   assert.equal(monthlyCentsOf(subscription({ cents: 120_000, interval: "year" })), 10_000);
@@ -183,11 +200,21 @@ test("sponsorsFrom caps the published list", () => {
   assert.equal(listed(many).length, SPONSORS_MAX);
 });
 
+async function holdingTheLoop(run) {
+  const hold = setInterval(() => {}, 1000);
+  try {
+    return await run();
+  } finally {
+    clearInterval(hold);
+  }
+}
+
 const ok = (data, has_more = false) => new Response(JSON.stringify({ object: "list", data, has_more }), { status: 200 });
 
-function fakeStripe({ subscriptions, sessions, subscriptionStatus = 200, sessionStatus = 200, pageSize = 100 }) {
-  const calls = { subscriptions: 0, sessions: [] };
+function fakeStripe({ subscriptions, sessions, subscriptionStatus = 200, sessionStatus = 200, pageSize = 100, sessionAnswer = null }) {
+  const calls = { subscriptions: 0, sessions: [], startedAt: [], inFlight: 0, maxInFlight: 0 };
   const fetchImpl = async (url, init) => {
+    calls.startedAt.push(Date.now());
     assert.equal(init.headers.Authorization, "Bearer rk_test_x");
     const { pathname, searchParams } = new URL(url);
     if (pathname === "/v1/subscriptions") {
@@ -202,6 +229,15 @@ function fakeStripe({ subscriptions, sessions, subscriptionStatus = 200, session
     if (pathname === "/v1/checkout/sessions") {
       const id = searchParams.get("subscription");
       calls.sessions.push(id);
+      if (sessionAnswer) {
+        calls.inFlight++;
+        calls.maxInFlight = Math.max(calls.maxInFlight, calls.inFlight);
+        try {
+          return await sessionAnswer(id, calls.sessions.length, init.signal);
+        } finally {
+          calls.inFlight--;
+        }
+      }
       if (sessionStatus !== 200) return new Response("{}", { status: sessionStatus });
       return ok(sessions.has(id) ? [sessions.get(id)] : []);
     }
@@ -214,7 +250,7 @@ test("F3: stripeSponsors starts from active subscriptions, so a long checkout hi
   const others = Array.from({ length: 150 }, (_, i) => subscription({ product: `prod_other_${i}` }));
   const [sub, session] = donor("Still Here", { cents: 5_000 });
   const stripe = fakeStripe({ subscriptions: [...others, sub], sessions: new Map([[sub.id, session]]) });
-  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl });
+  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 0 });
   const body = await sponsors.list();
   assert.deepEqual(body, { sponsors: [{ name: "Still Here", tier: "backer" }] });
   assert.equal(stripe.calls.subscriptions, 2);
@@ -228,7 +264,7 @@ test("F3: stripeSponsors starts from active subscriptions, so a long checkout hi
 test("F3: a new hide on the subscription takes the name off at the next refresh", async () => {
   const [sub, session] = donor("Changed Mind");
   const stripe = fakeStripe({ subscriptions: [sub], sessions: new Map([[sub.id, session]]) });
-  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl });
+  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 0 });
   assert.equal((await sponsors.list()).sponsors.length, 1);
   sub.metadata = { ardia_sponsor: "hide" };
   assert.deepEqual(await sponsors.list(), { sponsors: [] });
@@ -238,26 +274,28 @@ test("F2: stripeSponsors publishes nothing when subscriptions or a checkout can'
   const [sub, session] = donor("Hidden Donor", { metadata: { ardia_sponsor: "hide" } });
   for (const status of [401, 403, 500]) {
     const stripe = fakeStripe({ subscriptions: [sub], sessions: new Map([[sub.id, session]]), subscriptionStatus: status });
-    await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl }).list(), StripeReadError, String(status));
+    await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 0 }).list(), StripeReadError, String(status));
   }
   const [visible, visibleSession] = donor("Visible");
   const lookupFails = fakeStripe({ subscriptions: [visible], sessions: new Map([[visible.id, visibleSession]]), sessionStatus: 403 });
-  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: lookupFails.fetchImpl }).list(), StripeReadError);
+  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: lookupFails.fetchImpl, requestGapMs: 0 }).list(), StripeReadError);
 });
 
 test("B: a listing still reporting more at the page budget is incomplete, never a short list", async () => {
   const [sub, session] = donor("On Page One");
   const filler = Array.from({ length: STRIPE_PAGE_BUDGET + 5 }, () => subscription({ product: "prod_other" }));
   const stripe = fakeStripe({ subscriptions: [sub, ...filler], sessions: new Map([[sub.id, session]]), pageSize: 1 });
-  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl }).list(), IncompleteListError);
+  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 0 }).list(), IncompleteListError);
   assert.equal(stripe.calls.subscriptions, STRIPE_PAGE_BUDGET);
 });
 
 test("F4: a refresh stops at its deadline even when Stripe never answers", async () => {
   const hang = (url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
-  const started = Date.now();
-  await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: hang, deadlineMs: 150 }).list());
-  assert.ok(Date.now() - started < 2000);
+  await holdingTheLoop(async () => {
+    const started = Date.now();
+    await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: hang, deadlineMs: 150 }).list());
+    assert.ok(Date.now() - started < 2000);
+  });
 });
 
 test("custom monthly checkouts ask for the same optional public name", () => {
@@ -289,13 +327,13 @@ const getJson = async (url) => {
 };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-test("GET /api/sponsors serves the cached list, refreshes it in the background, and is cacheable", async () => {
+test("GET /api/sponsors serves the cached list, refreshes it in the background, and is never cached by browsers", async () => {
   let clock = 1_000_000;
   const { state, backend } = controlledList();
   const url = await service(backend, { now: () => clock });
   const [a, b] = await Promise.all([getJson(url), getJson(url)]);
   assert.equal(a.status, 200);
-  assert.equal(a.res.headers.get("cache-control"), `public, max-age=${SPONSORS_TIMING.browserCacheSeconds}`);
+  assert.equal(a.res.headers.get("cache-control"), "no-store");
   assert.equal(a.res.headers.get("x-content-type-options"), "nosniff");
   assert.deepEqual(a.body, { sponsors: [{ name: "Donor 1", tier: "friend" }] });
   assert.deepEqual(b.body, a.body);
@@ -363,4 +401,68 @@ test("GET /api/sponsors stops at 120 requests per address in 10 minutes", async 
   const get = () => fetch(`${url}/api/sponsors`, { headers: { "X-Real-IP": "203.0.113.9" } });
   for (let i = 0; i < 120; i++) assert.equal((await get()).status, 200);
   assert.equal((await get()).status, 429);
+});
+
+test("R3-3: an empty or unfinished checkout lookup isn't cached, so the donor appears once the checkout is there", async () => {
+  const [sub, session] = donor("Late Checkout");
+  const sessions = new Map();
+  const stripe = fakeStripe({ subscriptions: [sub], sessions });
+  const sponsors = stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 0 });
+  assert.deepEqual(await sponsors.list(), { sponsors: [] });
+  sessions.set(sub.id, { ...session, status: "open" });
+  assert.deepEqual(await sponsors.list(), { sponsors: [] });
+  sessions.set(sub.id, session);
+  assert.deepEqual(await sponsors.list(), { sponsors: [{ name: "Late Checkout", tier: "friend" }] });
+  assert.deepEqual(stripe.calls.sessions, [sub.id, sub.id, sub.id]);
+  await sponsors.list();
+  assert.equal(stripe.calls.sessions.length, 3, "a completed checkout is cached");
+});
+
+test("R3-4: a cold refresh paces its requests and keeps at most 3 lookups in flight", async () => {
+  const pairs = Array.from({ length: 12 }, (_, i) => donor(`Donor ${i}`));
+  const stripe = fakeStripe({
+    subscriptions: pairs.map(([sub]) => sub),
+    sessions: new Map(),
+    sessionAnswer: async (id) => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return ok([pairs.find(([sub]) => sub.id === id)[1]]);
+    },
+  });
+  const body = await stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 30 }).list();
+  assert.equal(body.sponsors.length, 12);
+  assert.ok(stripe.calls.maxInFlight <= 3, `in flight ${stripe.calls.maxInFlight}`);
+  const gaps = stripe.calls.startedAt.slice(1).map((at, i) => at - stripe.calls.startedAt[i]);
+  assert.ok(Math.min(...gaps) >= 25, `smallest gap ${Math.min(...gaps)} ms`);
+});
+
+test("R3-4: a 429 fails the refresh and no request starts after it", async () => {
+  const pairs = Array.from({ length: 40 }, (_, i) => donor(`Donor ${i}`));
+  const stripe = fakeStripe({
+    subscriptions: pairs.map(([sub]) => sub),
+    sessions: new Map(),
+    sessionAnswer: async (id, n) => (n === 2 ? new Response(JSON.stringify({ error: { code: "rate_limit" } }), { status: 429 }) : ok([pairs.find(([sub]) => sub.id === id)[1]])),
+  });
+  const failure = await stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, requestGapMs: 5 }).list().catch((error) => error);
+  assert.ok(failure instanceof StripeReadError);
+  assert.equal(failure.status, 429);
+  const issued = stripe.calls.startedAt.length;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(stripe.calls.startedAt.length, issued, "no request after the refresh failed");
+  assert.ok(stripe.calls.sessions.length <= 4, `lookups started ${stripe.calls.sessions.length}`);
+});
+
+test("R3-4: no request starts after the refresh deadline aborts it", async () => {
+  const pairs = Array.from({ length: 40 }, (_, i) => donor(`Donor ${i}`));
+  const stripe = fakeStripe({
+    subscriptions: pairs.map(([sub]) => sub),
+    sessions: new Map(),
+    sessionAnswer: (id, n, signal) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))),
+  });
+  await holdingTheLoop(async () => {
+    await assert.rejects(stripeSponsors({ key: "rk_test_x", fetchImpl: stripe.fetchImpl, deadlineMs: 150, requestGapMs: 0 }).list());
+    const issued = stripe.calls.startedAt.length;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(stripe.calls.startedAt.length, issued);
+    assert.ok(stripe.calls.sessions.length <= 3, `lookups started ${stripe.calls.sessions.length}`);
+  });
 });

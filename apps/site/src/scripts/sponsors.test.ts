@@ -73,7 +73,7 @@ test("renderDonors builds pills from text only and swaps the empty line", () => 
 
 const answer = (status: number, body: unknown) => async () => new Response(JSON.stringify(body), { status });
 
-test("liveDonors returns the list, an empty list after a hide, and nothing to apply on failure", async () => {
+test("liveDonors returns the list, an empty list after a hide, and null on any failure", async () => {
   assert.deepEqual(await liveDonors("/api/sponsors", answer(200, { sponsors: [{ name: "Ada", tier: "friend" }] })), [{ name: "Ada", tier: "friend" }]);
   assert.deepEqual(await liveDonors("/api/sponsors", answer(200, { sponsors: [] })), []);
   assert.equal(await liveDonors("/api/sponsors", answer(503, { error: "sponsors_unavailable" })), null);
@@ -93,7 +93,16 @@ test("F1: the donor list is masked in replays and kept out of autocapture", () =
   assert.ok(NO_CAPTURE_SELECTOR.split(",").map((s) => s.trim()).includes("[data-ac-no-capture]"), "autocapture skips [data-ac-no-capture]");
   const autocapture = readFileSync(new URL("./telemetry/autocapture.ts", import.meta.url), "utf8");
   assert.match(autocapture, /const NO_CAPTURE = NO_CAPTURE_SELECTOR;/);
-  assert.match(autocapture, /const PRIVATE = AUTOCAPTURE_PRIVATE_SELECTOR;/);
+  assert.match(autocapture, /from "\.\/elementText"/);
+  assert.doesNotMatch(autocapture, /\.textContent/, "autocapture reads text only through elementText");
   const recorder = readFileSync(new URL("./telemetry/recorder.ts", import.meta.url), "utf8");
   assert.match(recorder, /maskTextSelector: PRIVATE_SELECTOR/);
+});
+
+test("F2: the built page holds no donor names; only the live list fills it", () => {
+  const markup = readFileSync(new URL("../components/Sponsors.astro", import.meta.url), "utf8");
+  assert.match(markup, /<ul class="names"[^>]*\shidden><\/ul>/);
+  assert.match(markup, /renderDonors\(list, empty, donors \?\? \[\], document\)/);
+  const data = readFileSync(new URL("../data/sponsors.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(data, /fetch\(|DONORS\b|process\.env/);
 });
