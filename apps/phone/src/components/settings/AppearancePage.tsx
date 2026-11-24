@@ -3,17 +3,18 @@ import { themeAccent, themePalette } from "@ardia/core/src/theme.ts";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { linearGradientCss } from "../../lib/gradient";
+import { wallpaperColorsEnabled } from "../../lib/material/schemePick";
 import { rainbow } from "../../lib/themeEditor";
 import { INTERFACE_STYLE_NAMES, INTERFACE_STYLES, offeredInterfaceStyle, offeredScheme, SCHEME_CHOICES, SCHEME_NAMES } from "../../lib/appearance";
 import { syncOffered } from "../../state/sync/offer";
-import { setColorChoice, setInterfaceStyle, setSchemeChoice } from "../../state/settings/actions";
+import { setColorChoice, setDynamicColors, setInterfaceStyle, setMaterialYou, setSchemeChoice } from "../../state/settings/actions";
 import { useAppearanceSummary } from "../../state/settings/appearance";
 import { openThemeEditor } from "../../state/settings/customTheme";
 import { usePreferences } from "../../state/settings/hooks";
 import { popSettings, pushSettings } from "../../state/settings/nav";
 import { matchMyMac } from "../../state/sync/actions";
 import { useSyncEnabled } from "../../state/sync/hooks";
-import { capsule, font, PROFILE_COLORS, settingsLayout, settingsMotion, settingsTint, space, Symbol, themeEditorLayout, useDesign, useProfileLook, useTheme, type ProfileColor, usePressStyle } from "../ui";
+import { capsule, font, materialYouOffered, PROFILE_COLORS, settingsLayout, settingsMotion, settingsTint, space, Symbol, themeEditorLayout, useDesign, useProfileLook, useTheme, type ProfileColor, usePressStyle } from "../ui";
 import { MaterialSettingsLeading } from "./MaterialSettingsKit";
 import { Divider, Group, IconTile, NavRow, SettingsPage, ToggleRow } from "./SettingsKit";
 import { actionWords } from "../../lib/sharedWords";
@@ -33,19 +34,20 @@ export function AppearanceRow() {
 export function AppearancePage() {
   const syncEnabled = useSyncEnabled();
   const offersSync = syncOffered();
+  const material = usePreferences((p) => materialYouOffered() && p.materialYou);
   const style = offeredInterfaceStyle(usePreferences((p) => p.interfaceStyle), offersSync);
   const scheme = offeredScheme(usePreferences((p) => p.schemeChoice), offersSync);
   const styleChoices = offersSync ? INTERFACE_STYLES : INTERFACE_STYLES.filter((choice) => choice !== "matchMac");
   const schemeChoices = offersSync ? SCHEME_CHOICES : SCHEME_CHOICES.filter((choice) => choice !== "matchMac");
   return (
     <SettingsPage title="Appearance" onBack={popSettings}>
-      <Group>
-        <ColorRow labelled={false} />
+      <Group footer={material ? "Custom themes are available with Material You off." : undefined}>
+        <ColorRow labelled={false} customAvailable={!material} />
         {syncEnabled ? <MatchMyMac labelled={false} /> : null}
       </Group>
-      <Group header="Interface style" footer={offersSync ? "Match My Mac follows your Mac." : undefined}>
+      <Group header="Interface style" footer={material ? "Turn off Material You to use Glass or Classic." : offersSync ? "Match My Mac follows your Mac." : undefined}>
         {styleChoices.map((choice, index) => (
-          <CheckRow key={choice} title={INTERFACE_STYLE_NAMES[choice]} checked={style === choice} divider={index < styleChoices.length - 1} onPress={() => setInterfaceStyle(choice)} />
+          <CheckRow key={choice} title={INTERFACE_STYLE_NAMES[choice]} checked={style === choice} disabled={material} divider={index < styleChoices.length - 1} onPress={() => setInterfaceStyle(choice)} />
         ))}
       </Group>
       <Group header="Light or dark" footer={offersSync ? "Match My Mac follows your Mac. System follows this device." : "System follows this device."}>
@@ -53,18 +55,32 @@ export function AppearancePage() {
           <CheckRow key={choice} title={SCHEME_NAMES[choice]} checked={scheme === choice} divider={index < schemeChoices.length - 1} onPress={() => setSchemeChoice(choice)} />
         ))}
       </Group>
+      {materialYouOffered() ? <AndroidAppearanceControls /> : null}
     </SettingsPage>
   );
 }
 
-export function CheckRow({ title, checked, divider, onPress }: { title: string; checked: boolean; divider: boolean; onPress: () => void }) {
+function AndroidAppearanceControls() {
+  const material = usePreferences((p) => p.materialYou);
+  const colorChoice = usePreferences((p) => p.colorChoice);
+  const dynamic = usePreferences((p) => p.dynamicColors);
+  return (
+    <Group>
+      <ToggleRow title="Material You" value={material} divider={material} onChange={setMaterialYou} />
+      {material ? <ToggleRow title="Dynamic Colors" value={wallpaperColorsEnabled(colorChoice, dynamic)} onChange={setDynamicColors} /> : null}
+    </Group>
+  );
+}
+
+export function CheckRow({ title, checked, divider, onPress, disabled = false }: { title: string; checked: boolean; divider: boolean; onPress: () => void; disabled?: boolean }) {
   const theme = useTheme();
   return (
     <View>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={title}
-        accessibilityState={{ selected: checked }}
+        accessibilityState={{ selected: checked, ...(disabled ? { disabled } : {}) }}
+        disabled={disabled}
         onPress={onPress}
         style={({ pressed }) => [styles.row, pressed ? { backgroundColor: theme.rowHighlight } : null]}
       >
@@ -88,7 +104,7 @@ export function MatchMyMac({ labelled = true }: { labelled?: boolean }) {
   );
 }
 
-export function ColorRow({ labelled = true, plainIcon = false }: { labelled?: boolean; plainIcon?: boolean }) {
+export function ColorRow({ labelled = true, plainIcon = false, customAvailable = true }: { labelled?: boolean; plainIcon?: boolean; customAvailable?: boolean }) {
   const theme = useTheme();
   const look = useProfileLook();
   const choice = usePreferences((p) => p.colorChoice);
@@ -106,10 +122,10 @@ export function ColorRow({ labelled = true, plainIcon = false }: { labelled?: bo
           {COLORS.map((color) => (
             <Swatch key={color} color={color} selected={color === selected} grid={!material} />
           ))}
-          {material ? null : <CustomSwatch selected={custom} />}
+          {material ? null : <CustomSwatch selected={custom} disabled={!customAvailable} />}
         </View>
       </View>
-      {custom ? (
+      {custom && customAvailable ? (
         <>
           <Divider />
           <NavRow title="Edit Theme" onPress={() => pushSettings({ page: "theme" })} />
@@ -136,7 +152,7 @@ function SwatchRing({ ring, selected, children }: { ring: string; selected: bool
   );
 }
 
-function CustomSwatch({ selected }: { selected: boolean }) {
+function CustomSwatch({ selected, disabled }: { selected: boolean; disabled: boolean }) {
   const look = useProfileLook();
   const saved = usePreferences((p) => p.customTheme);
   const colors = useMemo(() => (saved ? themePalette(saved) : RAINBOW), [saved]);
@@ -148,7 +164,8 @@ function CustomSwatch({ selected }: { selected: boolean }) {
       accessibilityRole="radio"
       accessibilityLabel="Custom"
       accessibilityHint="Opens the theme editor"
-      accessibilityState={{ selected }}
+      accessibilityState={{ selected, ...(disabled ? { disabled } : {}) }}
+      disabled={disabled}
       onPress={() => openThemeEditor(look)}
       style={pressStyle}
     >

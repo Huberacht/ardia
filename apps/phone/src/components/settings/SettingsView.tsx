@@ -20,7 +20,7 @@ import { ExpoSettingsStack } from "./ExpoSettingsStack";
 import { BrowseForMePage } from "./BrowseForMePage";
 import { PageSummaryPage } from "./PageSummaryPage";
 import { ExperimentalPane, GeneralPane, SearchPane, TabsPane } from "./SettingsPanes";
-import { useDesign } from "../ui";
+import { DesignProvider } from "../ui";
 
 export function SettingsPageFor({ route }: { route: SettingsRoute }) {
   switch (route.page) {
@@ -86,7 +86,6 @@ export function SettingsPageFor({ route }: { route: SettingsRoute }) {
 }
 
 function PaneFor({ page }: { page: "general" | "tabs" | "search" | "experimental" }) {
-  if (useDesign() !== "redesigned") return <SettingsRoot />;
   if (page === "general") return <GeneralPane />;
   if (page === "tabs") return <TabsPane />;
   if (page === "search") return <SearchPane />;
@@ -95,7 +94,11 @@ function PaneFor({ page }: { page: "general" | "tabs" | "search" | "experimental
 
 export function SettingsView() {
   if (Platform.OS === "ios") return <ExpoSettingsStack />;
-  return <HandBuiltSettings />;
+  return (
+    <DesignProvider design="redesigned">
+      <HandBuiltSettings />
+    </DesignProvider>
+  );
 }
 
 type ShownPage = { key: string; route: SettingsRoute };

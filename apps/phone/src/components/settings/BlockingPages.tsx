@@ -31,7 +31,7 @@ import {
   filterListAddress,
   FILTER_LIST_ADDRESS,
 } from "../../state/settings/settingsRules";
-import { capsule, ConfirmSheet, duration, font, ink, screenReaderActions, Sheet, usePresence, settingsLayout, settingsTint, space, Symbol, Toggle, useDesign, useTheme, type Confirmation, useWarningInk, Tappable, slopToReach, smoothCorners, controlSize } from "../ui";
+import { capsule, ConfirmSheet, duration, font, ink, screenReaderActions, Sheet, usePresence, settingsLayout, settingsTint, space, Symbol, Toggle, useTheme, type Confirmation, useWarningInk, Tappable, slopToReach, smoothCorners, controlSize } from "../ui";
 import { copy } from "../../lib/platformCopy";
 
 const FILTER_SYNTAX_URL = "https://github.com/gorhill/uBlock/wiki/Static-filter-syntax";
@@ -309,13 +309,10 @@ export function MyFiltersPage() {
   const lift = useAnimatedStyle(() => ({ height: Math.max(keyboard.height.value - insets.bottom, 0) }));
   const large = useWindowDimensions().fontScale >= settingsLayout.accessibilityFontScale;
   const field = useRef<TextInputInstance>(null);
-  const material = useDesign() === "material";
-  useEffect(() => (material ? () => Keyboard.dismiss() : undefined), [material]);
+  useEffect(() => () => Keyboard.dismiss(), []);
   const leave = () => {
-    if (material) {
-      field.current?.blur();
-      Keyboard.dismiss();
-    }
+    field.current?.blur();
+    Keyboard.dismiss();
     popSettings();
   };
   const apply = async () => {

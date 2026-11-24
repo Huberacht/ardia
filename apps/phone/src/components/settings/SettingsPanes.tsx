@@ -1,5 +1,4 @@
-import { useEffect, type ReactNode, type RefObject } from "react";
-import type { ViewInstance } from "react-native";
+import { useEffect, type ReactNode } from "react";
 import { refreshDefaultBrowser, useDefaultBrowser } from "../../state/settings/defaultBrowser";
 import { offersDefaultBrowser } from "../../state/settings/settingsRules";
 import { useSyncEnabled, useSyncView } from "../../state/sync/hooks";
@@ -19,7 +18,7 @@ import { browseForMeRowValue } from "../../state/browseForMe/copy";
 import { pageSummaryChoiceOffered, refreshPageSummaryProvider, usePageSummaryProvider } from "../../state/pageSummary/store";
 import { PAGE_SUMMARY_COPY, pageSummaryRowValue } from "../../state/pageSummary/copy";
 import { refreshPageSummariesEnabled, usePageSummariesEnabled } from "../../state/pageSummary/enabled";
-import { materialYouOffered, settingsTint, type SymbolName } from "../ui";
+import { settingsTint, type SymbolName } from "../ui";
 import { CheckRow } from "./AppearancePage";
 import { Group, NavRow, PickerRow, SettingsPage, ToggleRow } from "./SettingsKit";
 
@@ -47,21 +46,14 @@ const APP_LINKS = [
 
 const INTERVALS = (Object.keys(AUTO_ARCHIVE_INTERVALS) as AutoArchiveInterval[]).map((id) => ({ id, title: autoArchiveTitle(id) }));
 
-export function SettingsPaneList({ materialSwitch, onMaterialYou }: { materialSwitch: RefObject<ViewInstance | null>; onMaterialYou: (value: boolean) => void }) {
+export function SettingsPaneList() {
   const panes = SETTINGS_PANES.filter(paneShown);
   return (
-    <>
-      <Group>
-        {panes.map((pane, index) => (
-          <NavRow key={pane.page} title={pane.title} icon={pane.icon} tint={pane.tint} divider={index < panes.length - 1} onPress={() => pushSettings({ page: pane.page })} />
-        ))}
-      </Group>
-      {materialYouOffered() ? (
-        <Group>
-          <ToggleRow buttonRef={materialSwitch} title="Material You" icon="handDrawFill" tint={settingsTint.nightShade} value={false} onChange={onMaterialYou} />
-        </Group>
-      ) : null}
-    </>
+    <Group>
+      {panes.map((pane, index) => (
+        <NavRow key={pane.page} title={pane.title} icon={pane.icon} tint={pane.tint} divider={index < panes.length - 1} onPress={() => pushSettings({ page: pane.page })} />
+      ))}
+    </Group>
   );
 }
 
@@ -106,13 +98,14 @@ export function GeneralPane() {
 
 export function TabsPane() {
   const interval = usePreferences((p) => p.autoArchiveInterval);
-  const grid = useDeckGrid();
+  const material = usePreferences((p) => p.materialYou);
+  const grid = useDeckGrid() && !material;
   const incognito = useIncognito();
   return (
     <Pane title="Tabs">
-      <Group header="Tab view" footer={TABS_STYLE_FOOTER}>
-        <CheckRow title="Stack" checked={!grid} divider onPress={() => setDeckGrid(false, !incognito)} />
-        <CheckRow title="Grid" checked={grid} divider={false} onPress={() => setDeckGrid(true, !incognito)} />
+      <Group header="Tab view" footer={material ? "Grid is available with Material You off." : TABS_STYLE_FOOTER}>
+        <CheckRow title="Stack" checked={!grid} disabled={material} divider onPress={() => setDeckGrid(false, !incognito)} />
+        <CheckRow title="Grid" checked={grid} disabled={material} divider={false} onPress={() => setDeckGrid(true, !incognito)} />
       </Group>
       <Group header="Clean up" footer="Moves tabs you haven't used in this long to the Archive.">
         <PickerRow title="Archive inactive tabs" options={INTERVALS} selected={interval} onSelect={setArchiveInterval} />

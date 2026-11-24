@@ -91,15 +91,6 @@ function frostUnder(glass: ReactTestInstance) {
   return glass.findAll((node) => node.type === lookModule.Frost)[0];
 }
 
-onAndroid("the original Settings keeps Compose's colour row and has no Appearance row", () => {
-  openSettings();
-  const root = settings("original");
-  expect(pressable(root, "Appearance")).toBeUndefined();
-  expect(textOf(root)).toContain("Color");
-  expect(root.root.findAll((node) => node.props.testID === "swatchRing" && typeof node.type === "string").length).toBe(10);
-  unmount(root);
-});
-
 onAndroid("the hand-built redesigned Settings lists Appearance as one of iPhone's panes, with no value beside it as on iPhone and no colour row on the root", () => {
   openSettings();
   const root = settings("redesigned");

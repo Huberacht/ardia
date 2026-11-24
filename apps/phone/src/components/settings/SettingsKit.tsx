@@ -62,7 +62,7 @@ export function SettingsPage({ title, onBack, onClose, leading, trailing, childr
           mediumAppBar={mediumAppBar}
           collapsed={collapsed}
           scrolled={scrolled}
-          topInset={frame && !frame.fullScreen ? 0 : insets.top}
+          topInset={frame ? 0 : insets.top}
           leftInset={insets.left}
           rightInset={insets.right}
         />
