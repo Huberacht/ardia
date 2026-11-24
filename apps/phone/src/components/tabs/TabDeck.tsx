@@ -268,6 +268,8 @@ export const TabDeck = memo(function TabDeck() {
     deckPhase.value = DECK_PHASE.settled;
     expandedIndex.value = -1;
   };
+  const cutsAway = tabSwitchCuts();
+  const chromeCutAway = useAnimatedStyle(() => ({ opacity: cutsAway && deckPhase.value === DECK_PHASE.closing ? 0 : 1 }));
   const scroll = useSharedValue(first.scroll);
   const scaleProgress = useSharedValue(first.progress);
   const positionProgress = useSharedValue(first.progress);
@@ -1245,7 +1247,7 @@ export const TabDeck = memo(function TabDeck() {
               />
           </View>
         ) : redesigned ? (
-          <Animated.View testID="deckRedesignedChrome" style={glassChrome ? StyleSheet.absoluteFill : [StyleSheet.absoluteFill, chromeStyle]} pointerEvents={phase.kind === "settled" ? "box-none" : "none"} collapsable={false} importantForAccessibility={phase.kind === "settled" ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={phase.kind !== "settled"}>
+          <Animated.View testID="deckRedesignedChrome" style={glassChrome ? [StyleSheet.absoluteFill, cutsAway ? chromeCutAway : null] : [StyleSheet.absoluteFill, chromeStyle, cutsAway ? chromeCutAway : null]} pointerEvents={phase.kind === "settled" ? "box-none" : "none"} collapsable={false} importantForAccessibility={phase.kind === "settled" ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={phase.kind !== "settled"}>
             <ChromeGlassShown progress={chromeProgress} initiallyIn={first.progress >= DECK_CHROME_FROM} hidden={!shown} away={phase.kind === "closing" || openingCard !== null}>
               {(glassShown, barShown, barHanded) => (
                 <>
