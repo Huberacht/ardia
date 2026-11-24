@@ -26,7 +26,7 @@ import { settingsNav } from "../settings/nav";
 import { refreshDefaultBrowser } from "../settings/defaultBrowser";
 import { forgetPosition, frontScrollCameToRest, saveTabPosition, watchFrontScroll } from "./positions";
 import { noteLocalChange, showSpace } from "../sync/store";
-import { spaceToShow, tabsInSpace } from "../tabs/spaces";
+import { isSplit, spaceToShow, tabsInSpace } from "../tabs/spaces";
 import { currentPreferences, loadPreferences, setPreference } from "../settings/store";
 import type { VisitTransition, Visit } from "../store/browserDatabase";
 import { enterTarget, rowTarget, resolve, type TrayRow } from "../search/omnibox";
@@ -68,7 +68,7 @@ import { PRIVATE_PAGES_UNAVAILABLE, refuseIncognito } from "../tabs/privatePages
 import { hideArchiveCard } from "./archiveCard";
 import { tabSwitchCuts } from "./tabSwitch";
 import { cutDeckPullFromRest, deckPull, deckPullArmed, deckPullFades, deckPullGrowing, deckStandbyId, endDeckPull, fadeDeckPullFromRest, landDeckPullFromRest, noteDeckPullEntrance, pageBarPreviewShown, pageBarShown, pageBodyShown, peekDeckPullEntrance, previewPageBar, PULL_STAGE, restorePageAfterRefusedCut, showPulledPage, whenDeckStandby } from "./deckPull";
-import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckTurn, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
+import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckRevisionOf, deckTurn, noteDeckRevision, deckTurnReconciled, dropDeckHits, noteDeckTurnReconciled, queueDeckHit, type DeckHitCommand } from "./deckTurn";
 import { useScreenLayout } from "../app/screenLayout";
 import { dropEarlyStandby } from "../search/standbyReveal";
 import { beginInteraction, cutInteraction, INTERACTION_WINDOW_MS, markNextUiFrame, markTiming } from "../app/interactionPerf";
@@ -599,6 +599,16 @@ export function screenLayoutChanged() {
   previewPageBar(null);
   dropEarlyStandby();
 }
+
+let deckRevision = "";
+const followDeckRevision = (tabs: ReturnType<typeof useTabs.getState>) => {
+  const next = deckRevisionOf(tabs.incognito, isSplit(tabs.spaces) ? tabs.spaces.current : null);
+  if (next === deckRevision) return;
+  deckRevision = next;
+  noteDeckRevision(next);
+};
+followDeckRevision(useTabs.getState());
+useTabs.subscribe(followDeckRevision);
 
 let phoneLayout = useScreenLayout.getState().layout.name === "phone";
 useScreenLayout.subscribe((state) => {

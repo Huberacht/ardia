@@ -40,6 +40,7 @@ export const deckPull = {
   landing: makeMutable(0),
   openAfter: makeMutable(""),
   hitTurn: makeMutable(0),
+  landingPhone: makeMutable(0),
 };
 
 export type PullSettled = (id: string, landed: boolean, worstFrameMs: number, openAfter?: string, turn?: number, phone?: number) => void;
@@ -135,14 +136,14 @@ function landingEnded(id: string, landing: number, finished: boolean | undefined
   if (deckPull.stage.value !== PULL_STAGE.landing || deckPull.id.value !== id || deckPull.landing.value !== landing) return;
   if (!finished) {
     resetDeckPull();
-    runOnJS(settled)(id, false, 0);
+    runOnJS(settled)(id, false, 0, "", 0, deckPull.landingPhone.value);
     return;
   }
   const openAfter = deckPull.openAfter.value;
   deckPull.openAfter.value = "";
   deckPull.stage.value = PULL_STAGE.landed;
   handOverDeckPull();
-  runOnJS(settled)(id, true, deckPull.worstFrame.value, openAfter);
+  runOnJS(settled)(id, true, deckPull.worstFrame.value, openAfter, 0, deckPull.landingPhone.value);
 }
 
 export function hurryDeckPull(x: number, y: number, settled: PullSettled): boolean {
@@ -172,6 +173,7 @@ export function settleDeckPull(lands: boolean, velocityY: number, settled: PullS
     return;
   }
   const velocity = pullSpeed(velocityY, target.pull);
+  deckPull.landingPhone.value = deckTurn.phone.value;
   if (lands && cuts && deckReadyFor(id)) {
     const worst = deckPull.worstFrame.value;
     const turn = ownDeckAtCut(id);
@@ -197,7 +199,7 @@ export function settleDeckPull(lands: boolean, velocityY: number, settled: PullS
     if (deckPull.stage.value !== PULL_STAGE.returning || deckPull.id.value !== id) return;
     const worst = finished ? deckPull.worstFrame.value : 0;
     resetDeckPull();
-    runOnJS(settled)(id, false, worst);
+    runOnJS(settled)(id, false, worst, "", 0, deckPull.landingPhone.value);
   });
 }
 
@@ -236,21 +238,24 @@ export function replayDeckPull(id: string, path: PullPath, began: () => void, re
   requestAnimationFrame(step);
 }
 
-export function landDeckPullFromRest(id: string, settled: PullSettled, refused: (id: string) => void) {
+export function landDeckPullFromRest(id: string, settled: PullSettled, refused: PullRefused) {
   "worklet";
+  const phone = deckTurn.phone.value;
   if (!beginDeckPull(id, 0)) {
-    runOnJS(refused)(id);
+    runOnJS(refused)(id, phone);
     return;
   }
   settleDeckPull(true, 0, settled);
 }
 
-export function fadeDeckPullFromRest(id: string, settled: PullSettled, refused: (id: string) => void) {
+export function fadeDeckPullFromRest(id: string, settled: PullSettled, refused: PullRefused) {
   "worklet";
+  const phone = deckTurn.phone.value;
   if (!beginDeckPull(id, 0)) {
-    runOnJS(refused)(id);
+    runOnJS(refused)(id, phone);
     return;
   }
+  deckPull.landingPhone.value = phone;
   deckPull.shrink.value = 1;
   deckPull.reveal.value = 1;
   deckPull.stage.value = PULL_STAGE.fading;
@@ -259,12 +264,12 @@ export function fadeDeckPullFromRest(id: string, settled: PullSettled, refused: 
     if (deckPull.stage.value !== PULL_STAGE.fading || deckPull.id.value !== id) return;
     if (!finished) {
       resetDeckPull();
-      runOnJS(settled)(id, false, 0);
+      runOnJS(settled)(id, false, 0, "", 0, phone);
       return;
     }
     deckPull.stage.value = PULL_STAGE.faded;
     handOverDeckPull();
-    runOnJS(settled)(id, true, deckPull.worstFrame.value);
+    runOnJS(settled)(id, true, deckPull.worstFrame.value, "", 0, phone);
   });
 }
 

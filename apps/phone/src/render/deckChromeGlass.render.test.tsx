@@ -70,13 +70,13 @@ test("where the system glass exists, no view above the deck's glass surfaces fad
   expect(glassShown(root)).toEqual(CHROME.map(() => false));
   for (const glass of glasses(root)) expect(glass.props.shownMs).toBe(150);
   for (const glyph of GLYPHS) expect(opacity(host(root, glyph))).toBe(0);
-  expect(host(root, "deckRedesignedChrome").props.pointerEvents).toBe("none");
+  expect(host(root, "deckRedesignedChrome").props.jestAnimatedProps?.value?.pointerEvents ?? host(root, "deckRedesignedChrome").props.pointerEvents).toBe("none");
   expect(host(root, "deckRedesignedChrome").props.accessibilityElementsHidden).toBe(true);
   act(() => jest.advanceTimersByTime(3000));
   for (const glass of glasses(root)) expect(fadingAncestors(glass)).toEqual([]);
   expect(glassShown(root)).toEqual(CHROME.map(() => true));
   for (const glyph of GLYPHS) expect(opacity(host(root, glyph))).toBe(1);
-  expect(host(root, "deckRedesignedChrome").props.pointerEvents).toBe("box-none");
+  expect(host(root, "deckRedesignedChrome").props.jestAnimatedProps?.value?.pointerEvents ?? host(root, "deckRedesignedChrome").props.pointerEvents).toBe("box-none");
   expect(host(root, "deckRedesignedChrome").props.accessibilityElementsHidden).toBe(false);
   unmount(root);
 });

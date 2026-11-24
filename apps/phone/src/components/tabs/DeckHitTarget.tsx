@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { LayoutChangeEvent, StyleProp, ViewStyle } from "react-native";
 import Animated, { runOnJS, useAnimatedStyle } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { deckHitAccepted } from "../../state/browse/store";
-import { DECK_PRESS_SLOP, deckPressHolds, deckTurn, dropDeckPress, liftDeckControl, placeDeckControl, pressDeckControl, type DeckControl } from "../../state/browse/deckTurn";
+import { DECK_PRESS_SLOP, deckPressHolds, deckTurn, dropDeckPress, liftDeckControl, placeDeckControl, presentDeckControl, pressDeckControl, type DeckControl } from "../../state/browse/deckTurn";
 
 type Props = { control: DeckControl; live: boolean; originX?: number; originY: number; style?: StyleProp<ViewStyle>; children: ReactNode };
 
@@ -21,7 +21,14 @@ export function DeckHitTarget({ control, live, originX = 0, originY, style, chil
     placeDeckControl(control, box && box.width > 0 && box.height > 0 ? { left: originX + box.x, top: originY + box.y, right: originX + box.x + box.width, bottom: originY + box.y + box.height } : null);
   };
   useEffect(place, [live, control, originX, originY]);
-  useEffect(() => (live ? () => placeDeckControl(control, null) : undefined), [live, control]);
+  useLayoutEffect(() => {
+    if (!live) return;
+    presentDeckControl(control, true);
+    return () => {
+      presentDeckControl(control, false);
+      placeDeckControl(control, null);
+    };
+  }, [live, control]);
   const laidOut = (event: LayoutChangeEvent) => {
     laid.current = event.nativeEvent.layout;
     place();

@@ -7,7 +7,7 @@ export type DeckBounds = { left: number; top: number; right: number; bottom: num
 
 export type DeckControls = Partial<Record<DeckControl, DeckBounds>>;
 
-export type PreparedDeck = { tabId: string; order: readonly string[]; revision: string; layout: number; phone: number; controls: DeckControls };
+export type PreparedDeck = { tabId: string; order: readonly string[]; revision: string; layout: number; phone: number; present: readonly DeckControl[]; controls: DeckControls };
 
 export type DeckPress = { control: DeckControl; turn: number; phone: number; deck: string; bounds: DeckBounds };
 
@@ -24,15 +24,21 @@ export const deckTurn = {
   press: makeMutable<DeckPress | null>(null),
   pressed: makeMutable(""),
   hitMark: makeMutable(""),
+  drawnMark: makeMutable(""),
   hitSeq: makeMutable(0),
+  commandTurn: makeMutable(0),
+  layout: makeMutable(0),
+  revision: makeMutable(""),
 };
+
+export const deckRevisionOf = (incognito: boolean, space: string | null) => `${incognito ? 1 : 0}:${space ?? ""}`;
 
 export function deckOwnsInput(): boolean {
   "worklet";
   return deckTurn.live.value !== 0;
 }
 
-function deckAwaitsEntrance(): boolean {
+export function deckAwaitsEntrance(): boolean {
   "worklet";
   const live = deckTurn.live.value;
   return live !== 0 && deckTurn.reconciled.value !== live;
@@ -41,7 +47,10 @@ function deckAwaitsEntrance(): boolean {
 export function deckReadyFor(id: string): boolean {
   "worklet";
   const prepared = deckTurn.prepared.value;
-  return prepared !== null && prepared.tabId === id && prepared.phone === deckTurn.phone.value && prepared.order.includes(id);
+  if (prepared === null || prepared.tabId !== id || prepared.phone !== deckTurn.phone.value || !prepared.order.includes(id)) return false;
+  if (prepared.layout !== deckTurn.layout.value || prepared.revision !== deckTurn.revision.value) return false;
+  for (const control of prepared.present) if (prepared.controls[control] === undefined) return false;
+  return true;
 }
 
 export function takeDeckTurn(): number {
@@ -51,7 +60,11 @@ export function takeDeckTurn(): number {
   deckTurn.reconciled.value = 0;
   deckTurn.press.value = null;
   deckTurn.pressed.value = "";
+  deckTurn.drawnMark.value = "";
   deckTurn.live.value = turn;
+  requestAnimationFrame(() => {
+    if (deckTurn.live.value === turn) deckTurn.drawnMark.value = "deck-drawn";
+  });
   return turn;
 }
 
@@ -69,6 +82,7 @@ export function releaseDeckTurnOnUI(turn: number) {
   deckTurn.press.value = null;
   deckTurn.pressed.value = "";
   deckTurn.hitMark.value = "";
+  deckTurn.drawnMark.value = "";
 }
 
 function revokeDeckTurnOnUI(phone: number) {
@@ -119,6 +133,8 @@ export function liftDeckControl(control: DeckControl, x: number, y: number): Dec
   const prepared = deckTurn.prepared.value;
   const now = prepared?.controls[control];
   if (!prepared || !now || prepared.tabId !== press.deck || !sameBounds(now, press.bounds) || !within(press.bounds, x, y, DECK_PRESS_SLOP)) return null;
+  if (deckTurn.commandTurn.value === press.turn) return null;
+  deckTurn.commandTurn.value = press.turn;
   const seq = deckTurn.hitSeq.value + 1;
   deckTurn.hitSeq.value = seq;
   const label = `deck-hit:${control}`;
@@ -126,11 +142,14 @@ export function liftDeckControl(control: DeckControl, x: number, y: number): Dec
   return { seq, turn: press.turn, phone: press.phone, control, label, deck: press.deck };
 }
 
-export function markDeckCardHit(): number {
+export function takeDeckCardHit(): boolean {
   "worklet";
-  if (deckTurn.live.value === 0) return 0;
+  const live = deckTurn.live.value;
+  if (!deckAwaitsEntrance()) return true;
+  if (deckTurn.commandTurn.value === live) return false;
+  deckTurn.commandTurn.value = live;
   deckTurn.hitMark.value = "deck-hit:card";
-  return deckTurn.live.value;
+  return true;
 }
 
 let phoneGeneration = 0;
@@ -151,15 +170,39 @@ type PreparedBase = { tabId: string; order: readonly string[]; revision: string 
 
 let preparedBase: PreparedBase | null = null;
 let preparedControls: DeckControls = {};
+let presentControls: DeckControl[] = [];
 let layoutSeq = 0;
-let publishQueued = false;
 let publishedPhone = -1;
 
 export function prepareDeck(base: PreparedBase | null) {
   const same = base !== null && preparedBase !== null && publishedPhone === phoneGeneration && base.tabId === preparedBase.tabId && base.revision === preparedBase.revision && base.order.length === preparedBase.order.length && base.order.every((id, at) => id === preparedBase!.order[at]);
   if (same) return;
   preparedBase = base;
+  wantLayout();
   publishPrepared();
+}
+
+function wantLayout() {
+  layoutSeq += 1;
+  runOnUI((wanted: number) => {
+    "worklet";
+    deckTurn.layout.value = wanted;
+  })(layoutSeq);
+}
+
+function publishSoon() {
+  wantLayout();
+  publishPrepared();
+}
+
+export function presentDeckControl(control: DeckControl, present: boolean) {
+  if (presentControls.includes(control) === present) return;
+  presentControls = present ? [...presentControls, control] : presentControls.filter((each) => each !== control);
+  publishSoon();
+}
+
+export function noteDeckRevision(revision: string) {
+  deckTurn.revision.value = revision;
 }
 
 export function placeDeckControl(control: DeckControl, bounds: DeckBounds | null) {
@@ -169,21 +212,15 @@ export function placeDeckControl(control: DeckControl, bounds: DeckBounds | null
   if (bounds === null) delete next[control];
   else next[control] = bounds;
   preparedControls = next;
-  if (publishQueued) return;
-  publishQueued = true;
-  void Promise.resolve().then(() => {
-    publishQueued = false;
-    publishPrepared();
-  });
+  publishSoon();
 }
 
 const sameRect = (a: DeckBounds, b: DeckBounds) => a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
 
 function publishPrepared() {
   const base = preparedBase;
-  layoutSeq += 1;
   publishedPhone = phoneGeneration;
-  const prepared: PreparedDeck | null = base ? { ...base, order: [...base.order], layout: layoutSeq, phone: phoneGeneration, controls: { ...preparedControls } } : null;
+  const prepared: PreparedDeck | null = base ? { ...base, order: [...base.order], layout: layoutSeq, phone: phoneGeneration, present: [...presentControls], controls: { ...preparedControls } } : null;
   runOnUI((next: PreparedDeck | null) => {
     "worklet";
     deckTurn.prepared.value = next;
@@ -193,6 +230,8 @@ function publishPrepared() {
 export function forgetPreparedDeck() {
   preparedBase = null;
   preparedControls = {};
+  presentControls = [];
+  wantLayout();
   publishPrepared();
 }
 
@@ -200,19 +239,19 @@ export const useDeckHits = create<{ hit: DeckHitCommand | null }>()(() => ({ hit
 
 const consumedHits = new Set<number>();
 
+let commandedTurn = 0;
+
 export function queueDeckHit(hit: DeckHitCommand) {
-  if (consumedHits.has(hit.seq)) return false;
+  if (consumedHits.has(hit.seq) || hit.turn === 0 || hit.turn === commandedTurn || hit.turn !== deckTurn.live.value) return false;
+  commandedTurn = hit.turn;
   useDeckHits.setState({ hit });
   return true;
 }
 
 export function takeDeckHit(hit: DeckHitCommand): boolean {
-  if (consumedHits.has(hit.seq) || hit.phone !== phoneGeneration) {
-    if (useDeckHits.getState().hit === hit) useDeckHits.setState({ hit: null });
-    return false;
-  }
-  consumedHits.add(hit.seq);
   if (useDeckHits.getState().hit === hit) useDeckHits.setState({ hit: null });
+  if (consumedHits.has(hit.seq) || hit.phone !== phoneGeneration || hit.turn !== deckTurn.live.value) return false;
+  consumedHits.add(hit.seq);
   return true;
 }
 

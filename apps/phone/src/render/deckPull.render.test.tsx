@@ -6,7 +6,7 @@ import { act, type ReactTestInstance } from "react-test-renderer";
 import { DECK_PULL, pullPagePose, pullShrink } from "../lib/deckPull";
 import { deckGeometry, deckLeading } from "../lib/deckGeometry";
 import { deckHeaderBottom } from "../components/tabs/DeckHeader";
-import { framesUntil, landOpeningPage, renderSurface, unmount, withTabs } from "../../test/render/harness";
+import { framesUntil, landOpeningPage, layOutDeckControls, renderSurface, unmount, withTabs } from "../../test/render/harness";
 
 const mockMotion = { reduced: false };
 
@@ -98,6 +98,7 @@ function app() {
   mounted.push(root);
   act(() => jest.advanceTimersByTime(tabsMotion.deckStandby + 50));
   frame();
+  layOutDeckControls(root);
   return root;
 }
 
@@ -518,7 +519,7 @@ for (const lands of [true, false]) {
     act(() => void jest.advanceTimersByTime(PULL_SETTLE_STARTED_MS));
     expect(settled).not.toHaveBeenCalled();
     act(() => void jest.advanceTimersByTime(PULL_SETTLE_CAP_MS));
-    expect(settled).toHaveBeenCalledWith(id, lands, expect.any(Number), ...(lands ? [""] : []));
+    expect(settled).toHaveBeenCalledWith(id, lands, expect.any(Number), "", 0, expect.any(Number));
   });
 }
 

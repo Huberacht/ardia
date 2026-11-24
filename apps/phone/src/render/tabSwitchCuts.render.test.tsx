@@ -1,6 +1,6 @@
 import { useState } from "react";
 import * as Reanimated from "react-native-reanimated";
-import { getAnimatedStyle, KeyboardState, makeMutable } from "react-native-reanimated";
+import { getAnimatedStyle, KeyboardState, makeMutable, runOnUI } from "react-native-reanimated";
 import { State } from "react-native-gesture-handler";
 import { fireGestureHandler, getByGestureTestId } from "react-native-gesture-handler/jest-utils";
 import { act, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
@@ -11,7 +11,9 @@ import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
 import { Dimensions, Image, Platform, StyleSheet, TextInput, View } from "react-native";
 import { deckPull, pageBarPreviewShown, pageBarShown, pageBodyShown, previewPageBar, PULL_STAGE } from "../state/browse/deckPull";
-import { currentPhoneGeneration, deckTurn, liftDeckControl, pressDeckControl, queueDeckHit, takeDeckHit, type DeckHitCommand, type PreparedDeck } from "../state/browse/deckTurn";
+import { advancePhoneGeneration, currentPhoneGeneration, deckReadyFor, deckTurn, liftDeckControl, pressDeckControl, queueDeckHit, takeDeckHit, type DeckHitCommand, type PreparedDeck } from "../state/browse/deckTurn";
+import { beginDeckPull, settleDeckPull } from "../state/browse/deckPull";
+import { deckLeading } from "../lib/deckGeometry";
 import { liftDestination } from "../state/browse/destination";
 import { MenuTrigger } from "../components/ui/MenuTrigger";
 import { neighbours } from "../lib/pagerPhysics";
@@ -241,14 +243,9 @@ test("with cuts a deck entrance renders neither the kept page body nor its bar: 
   unmount(root);
 });
 
-test("a tap on the page's Tabs button cuts to the waiting deck from its own UI-thread worklet, before any JS press handler runs", () => {
+test("a tap on the page's Tabs button cuts to the waiting deck from its own UI-thread worklet, before any JS press handler runs", async () => {
   if (Platform.OS !== "android") return;
-  withTabs(3);
-  browsingNow();
-  const { setRootSize } = require("../state/app/rootSize") as typeof import("../state/app/rootSize");
-  act(() => setRootSize(393, 873));
-  const root = renderSurface(<Surfaces />, { flushTimers: false });
-  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
+  const root = await standbyDeck();
   const selected = currentTabs().selectedId!;
   expect(deckPull.target.value?.id).toBe(selected);
   const press = jest.spyOn(browse, "showDeck");
@@ -262,15 +259,10 @@ test("a tap on the page's Tabs button cuts to the waiting deck from its own UI-t
   unmount(root);
 });
 
-test("switching to a Duo layout in the middle of a cut revokes the phone's deck turn and gives the page back its bar and body, and returning to the phone layout owns them again from the surface", () => {
+test("switching to a Duo layout in the middle of a cut revokes the phone's deck turn and gives the page back its bar and body, and returning to the phone layout owns them again from the surface", async () => {
   if (Platform.OS !== "android") return;
   const { reportScreenLayout } = require("../state/app/screenLayout") as typeof import("../state/app/screenLayout");
-  withTabs(3);
-  browsingNow();
-  const { setRootSize } = require("../state/app/rootSize") as typeof import("../state/app/rootSize");
-  act(() => setRootSize(393, 873));
-  const root = renderSurface(<Surfaces />, { flushTimers: false });
-  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
+  const root = await standbyDeck();
   const selected = currentTabs().selectedId!;
   expect(deckPull.target.value?.id).toBe(selected);
   act(() => fireGestureHandler(getByGestureTestId("floatingBarTabsTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
@@ -296,6 +288,7 @@ test("switching to a Duo layout in the middle of a cut revokes the phone's deck 
   expect(pageBarShown.value).toBe(1);
   expect(pageBodyShown.value).toBe(1);
   expect(deckPull.target.value?.id).toBe(selected);
+  await layOutControls(root);
   act(() => fireGestureHandler(getByGestureTestId("floatingBarTabsTap"), [{ state: State.BEGAN }, { state: State.ACTIVE }, { state: State.END }]));
   expect(deckPull.cut.value).toBe(true);
   act(() => jest.advanceTimersByTime(100));
@@ -906,7 +899,7 @@ test("a favicon another view already resolved shows its icon on its own first fr
   unmount(second);
 });
 
-test("a swipe's neighbour shows its own last picture at the geometry it was captured at, and only its title card once that page's view has moved", () => {
+test("a swipe's neighbour shows its own last picture at the geometry it was captured at, and only its title card once that page's view has moved", async () => {
   withTabs(3);
   browsingNow();
   const { id } = toNeighbour();
@@ -932,13 +925,19 @@ test("a swipe's neighbour shows its own last picture at the geometry it was capt
   unmount(warm);
 });
 
-const standbyDeck = () => {
+const unlaidStandbyDeck = () => {
   withTabs(3);
   browsingNow();
   const { setRootSize } = require("../state/app/rootSize") as typeof import("../state/app/rootSize");
   act(() => setRootSize(393, 873));
   const root = renderSurface(<Surfaces />, { flushTimers: false });
   for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
+  return root;
+};
+
+const standbyDeck = async () => {
+  const root = unlaidStandbyDeck();
+  await layOutControls(root);
   return root;
 };
 
@@ -983,7 +982,7 @@ const pressControl = (control: keyof typeof CONTROL_BOXES) => {
 
 test("while the page owns input the deck waits laid out under it with one prepared snapshot: the selected tab, the order, a privacy and space revision, the phone layout and the real bounds of each control it has, and no Spaces control when there is no switcher", async () => {
   if (Platform.OS !== "android") return;
-  const root = standbyDeck();
+  const root = unlaidStandbyDeck();
   const selected = currentTabs().selectedId!;
   const prepared = deckTurn.prepared.value as PreparedDeck;
   expect(prepared.tabId).toBe(selected);
@@ -993,8 +992,12 @@ test("while the page owns input the deck waits laid out under it with one prepar
   expect(deckTurn.live.value).toBe(0);
   expect(animatedProp(hostWith(root, "tabDeck")!, "pointerEvents")).toBe("none");
   expect(animatedProp(hostWith(root, "tabDeck")!, "importantForAccessibility")).toBe("no-hide-descendants");
+  expect(animatedProp(hostWith(root, "deckRedesignedChrome")!, "pointerEvents")).toBe("none");
+  expect([...prepared.present].sort()).toEqual(["more", "plus", "privacy", "search"]);
+  expect(deckReadyFor(selected)).toBe(false);
   const before = prepared.layout;
   await layOutControls(root);
+  expect(deckReadyFor(selected)).toBe(true);
   const laid = deckTurn.prepared.value!;
   expect(laid.layout).toBeGreaterThan(before);
   const header = hostWith(root, "deckHeader")!;
@@ -1007,9 +1010,9 @@ test("while the page owns input the deck waits laid out under it with one prepar
   unmount(root);
 });
 
-test("the Tabs worklet sets the deck's final pose and its input turn in one step: the deck takes touches and TalkBack, the page body and the pull blocker let go, and that frame is marked deck-live, before any JS runs", () => {
+test("the Tabs worklet sets the deck's final pose and its input turn in one step: the deck takes touches and TalkBack, the page body and the pull blocker let go, and that frame is marked deck-live, before any JS runs", async () => {
   if (Platform.OS !== "android") return;
-  const root = standbyDeck();
+  const root = await standbyDeck();
   tapTabs();
   expect(deckTurn.live.value).toBeGreaterThan(0);
   expect(deckPull.cut.value).toBe(true);
@@ -1019,6 +1022,10 @@ test("the Tabs worklet sets the deck's final pose and its input turn in one step
   expect(animatedProp(deck, "pointerEvents")).toBe("auto");
   expect(animatedProp(deck, "importantForAccessibility")).toBe("auto");
   expect(markOf(root, "deckLiveMark")).toBe("deck-live");
+  expect(markOf(root, "deckDrawnMark")).toBe("");
+  const chrome = hostWith(root, "deckRedesignedChrome")!;
+  expect(animatedProp(chrome, "pointerEvents")).toBe("box-none");
+  expect(animatedProp(chrome, "importantForAccessibility")).toBe("auto");
   expect(animatedProp(hostWith(root, "pageBody")!, "pointerEvents")).toBe("none");
   expect(getAnimatedStyle(deck).transform).toEqual([{ translateX: 0 }]);
   const blocker = hostWith(root, "pagePullBlocker")!;
@@ -1036,7 +1043,7 @@ test("the Tabs worklet sets the deck's final pose and its input turn in one step
 test("More, Plus and the privacy switch pressed in the frames after the cut answer on the UI thread with a deck-hit mark, and JS applies the deck's entrance and that command in one dispatch", async () => {
   if (Platform.OS !== "android") return;
   for (const control of ["plus", "privacy", "more"] as const) {
-    const root = standbyDeck();
+    const root = await standbyDeck();
     await layOutControls(root);
     const wasIncognito = useTabs.getState().incognito;
     tapTabs();
@@ -1059,7 +1066,7 @@ test("More, Plus and the privacy switch pressed in the frames after the cut answ
 
 test("a deck control pressed once the deck's entrance has committed is left to the control itself, so nothing runs twice", async () => {
   if (Platform.OS !== "android") return;
-  const root = standbyDeck();
+  const root = await standbyDeck();
   await layOutControls(root);
   tapTabs();
   act(() => jest.advanceTimersByTime(100));
@@ -1072,20 +1079,20 @@ test("a deck control pressed once the deck's entrance has committed is left to t
   unmount(root);
 });
 
-const preparedAt = (controls: PreparedDeck["controls"], layout: number): PreparedDeck => ({ tabId: "t0", order: ["t0", "t1"], revision: "0:0::0", layout, phone: currentPhoneGeneration(), controls });
+const preparedAt = (controls: PreparedDeck["controls"], layout: number): PreparedDeck => ({ tabId: "t0", order: ["t0", "t1"], revision: deckTurn.revision.value, layout, phone: currentPhoneGeneration(), present: ["more"], controls });
 
 test("a press that touches down before a standby republish and lifts after it keeps its target when the control didn't move, and is revoked when the control moved or the turn changed", () => {
   const more = { left: 330, top: 40, right: 374, bottom: 84 };
   deckTurn.prepared.value = preparedAt({ more }, 1);
-  deckTurn.live.value = 7;
+  deckTurn.live.value = 7007;
   deckTurn.reconciled.value = 0;
   expect(pressDeckControl("more", 350, 60)).toBe(true);
   expect(deckTurn.pressed.value).toBe("more");
   deckTurn.prepared.value = preparedAt({ more: { ...more } }, 2);
-  deckTurn.reconciled.value = 7;
+  deckTurn.reconciled.value = 7007;
   const kept = liftDeckControl("more", 352, 62);
   expect(kept).not.toBeNull();
-  expect(kept!.turn).toBe(7);
+  expect(kept!.turn).toBe(7007);
   expect(kept!.label).toBe("deck-hit:more");
   expect(deckTurn.pressed.value).toBe("");
   deckTurn.reconciled.value = 0;
@@ -1094,30 +1101,39 @@ test("a press that touches down before a standby republish and lifts after it ke
   expect(liftDeckControl("more", 350, 60)).toBeNull();
   deckTurn.prepared.value = preparedAt({ more }, 4);
   expect(pressDeckControl("more", 350, 60)).toBe(true);
-  deckTurn.live.value = 8;
+  deckTurn.live.value = 7008;
   expect(liftDeckControl("more", 350, 60)).toBeNull();
   expect(pressDeckControl("more", 200, 400)).toBe(false);
   expect(pressDeckControl("spaces", 60, 60)).toBe(false);
-  deckTurn.reconciled.value = 8;
+  deckTurn.reconciled.value = 7008;
   expect(pressDeckControl("more", 350, 60)).toBe(false);
   deckTurn.live.value = 0;
   deckTurn.prepared.value = null;
 });
 
-test("a deck command is consumed exactly once, and one stamped with an earlier screen layout is dropped", () => {
-  const hit: DeckHitCommand = { seq: 9001, turn: 3, phone: currentPhoneGeneration(), control: "plus", label: "deck-hit:plus", deck: "t0" };
+test("a deck command is consumed exactly once, only on its own turn: the first one of a turn wins, one stamped with an earlier screen layout is dropped, and none outlives its turn", () => {
+  deckTurn.live.value = 9003;
+  const hit: DeckHitCommand = { seq: 9001, turn: 9003, phone: currentPhoneGeneration(), control: "plus", label: "deck-hit:plus", deck: "t0" };
   expect(queueDeckHit(hit)).toBe(true);
+  expect(queueDeckHit({ ...hit, seq: 9003, control: "privacy", label: "deck-hit:privacy" })).toBe(false);
   expect(takeDeckHit(hit)).toBe(true);
   expect(takeDeckHit(hit)).toBe(false);
   expect(queueDeckHit(hit)).toBe(false);
-  const stale: DeckHitCommand = { ...hit, seq: 9002, phone: currentPhoneGeneration() - 1 };
+  deckTurn.live.value = 9004;
+  const stale: DeckHitCommand = { ...hit, seq: 9002, turn: 9004, phone: currentPhoneGeneration() - 1 };
   expect(queueDeckHit(stale)).toBe(true);
   expect(takeDeckHit(stale)).toBe(false);
+  deckTurn.live.value = 9005;
+  const late: DeckHitCommand = { ...hit, seq: 9004, turn: 9005 };
+  expect(queueDeckHit(late)).toBe(true);
+  deckTurn.live.value = 0;
+  expect(takeDeckHit(late)).toBe(false);
+  expect(queueDeckHit({ ...hit, seq: 9005, turn: 9006 })).toBe(false);
 });
 
-test("a card command that reaches JS before the deck's entrance opens that card in the same dispatch as the entrance", () => {
+test("a card command that reaches JS before the deck's entrance opens that card in the same dispatch as the entrance", async () => {
   if (Platform.OS !== "android") return;
-  const root = standbyDeck();
+  const root = await standbyDeck();
   const selected = currentTabs().selectedId!;
   const destination = currentTabs().open.find((tab) => tab.id !== selected)!.id;
   tapTabs();
@@ -1147,10 +1163,10 @@ test("a cut JS refuses because its page is no longer in front gives the page its
   expect(deckPull.cut.value).toBe(false);
 });
 
-test("a cut made before a phone, Duo and back to phone round trip and delivered after it is dropped at dispatch: the page keeps its bar and body, and the next tap cuts again", () => {
+test("a cut made before a phone, Duo and back to phone round trip and delivered after it is dropped at dispatch: the page keeps its bar and body, and the next tap cuts again", async () => {
   if (Platform.OS !== "android") return;
   const { reportScreenLayout } = require("../state/app/screenLayout") as typeof import("../state/app/screenLayout");
-  const root = standbyDeck();
+  const root = await standbyDeck();
   const selected = currentTabs().selectedId!;
   tapTabs();
   expect(deckTurn.live.value).toBeGreaterThan(0);
@@ -1172,9 +1188,9 @@ test("a cut made before a phone, Duo and back to phone round trip and delivered 
   unmount(root);
 });
 
-test("a Tabs tap right after an accepted swipe lands, before its commit, doesn't cut to the deck of the tab it left: it is held for the destination", () => {
+test("a Tabs tap right after an accepted swipe lands, before its commit, doesn't cut to the deck of the tab it left: it is held for the destination", async () => {
   if (Platform.OS !== "android") return;
-  const root = standbyDeck();
+  const root = await standbyDeck();
   const from = currentTabs().selectedId!;
   expect(deckPull.target.value?.id).toBe(from);
   const { id, dx } = toNeighbour();
@@ -1188,9 +1204,9 @@ test("a Tabs tap right after an accepted swipe lands, before its commit, doesn't
   unmount(root);
 });
 
-test("an accepted upward pull with cuts hands the deck its input turn on the release itself, with no frame wait or landing spring", () => {
+test("an accepted upward pull with cuts hands the deck its input turn on the release itself, with no frame wait or landing spring", async () => {
   if (Platform.OS !== "android") return;
-  const root = standbyDeck();
+  const root = await standbyDeck();
   act(() =>
     fireGestureHandler(getByGestureTestId("barSwipeUp"), [
       { state: State.BEGAN, translationX: 0, translationY: 0, velocityX: 0, velocityY: 0 },
@@ -1205,5 +1221,138 @@ test("an accepted upward pull with cuts hands the deck its input turn on the rel
   expect(pageBodyShown.value).toBe(0);
   act(() => jest.advanceTimersByTime(100));
   expect(browse.useBrowse.getState().surface).toBe("deck");
+  unmount(root);
+});
+
+test("the deck-drawn mark lands on the first UI frame after the cut hands the deck its turn, not inside the touch that cut", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  tapTabs();
+  expect(markOf(root, "deckLiveMark")).toBe("deck-live");
+  expect(markOf(root, "deckDrawnMark")).toBe("");
+  act(() => jest.advanceTimersByTime(16));
+  expect(markOf(root, "deckDrawnMark")).toBe("deck-drawn");
+  unmount(root);
+});
+
+test("a standby whose controls haven't reported their bounds, whose layout changed since it was published, or whose privacy or space revision is stale doesn't cut: the Tabs press takes the JS path", () => {
+  if (Platform.OS !== "android") return;
+  const root = unlaidStandbyDeck();
+  const selected = currentTabs().selectedId!;
+  expect(deckPull.target.value?.id).toBe(selected);
+  expect(deckReadyFor(selected)).toBe(false);
+  tapTabs();
+  expect(deckPull.cut.value).toBe(false);
+  expect(deckTurn.live.value).toBe(0);
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  unmount(root);
+  const more = { left: 330, top: 40, right: 374, bottom: 84 };
+  deckTurn.prepared.value = { ...preparedAt({ more }, 9), tabId: "t0" };
+  deckTurn.layout.value = 9;
+  expect(deckReadyFor("t0")).toBe(true);
+  deckTurn.layout.value = 10;
+  expect(deckReadyFor("t0")).toBe(false);
+  deckTurn.layout.value = 9;
+  const revision = deckTurn.revision.value;
+  deckTurn.revision.value = `${revision}x`;
+  expect(deckReadyFor("t0")).toBe(false);
+  deckTurn.revision.value = revision;
+  deckTurn.prepared.value = { ...preparedAt({}, 9), tabId: "t0" };
+  expect(deckReadyFor("t0")).toBe(false);
+  deckTurn.prepared.value = null;
+});
+
+test("two deck controls pressed before React takes either: the first one wins and the second is refused on the UI thread", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const wasIncognito = useTabs.getState().incognito;
+  tapTabs();
+  pressControl("plus");
+  expect(deckTurn.hitMark.value).toBe("deck-hit:plus");
+  pressControl("privacy");
+  expect(deckTurn.hitMark.value).toBe("");
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(searchState().open).toBe(true);
+  expect(useTabs.getState().incognito).toBe(wasIncognito);
+  act(() => dismissSearch());
+  unmount(root);
+});
+
+test("an early command never outlives its deck turn: a Plus queued for a turn that ended before React took it doesn't fire on the next deck opening", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const selected = currentTabs().selectedId!;
+  tapTabs();
+  const turn = deckTurn.live.value;
+  act(() => {
+    browse.deckHitAccepted({ seq: 9200, turn, phone: currentPhoneGeneration(), control: "plus", label: "deck-hit:plus", deck: selected });
+    deckTurn.live.value = 0;
+  });
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(searchState().open).toBe(false);
+  act(() => browse.openTab(selected));
+  for (let step = 0; step < 30; step++) act(() => jest.advanceTimersByTime(100));
+  await layOutControls(root);
+  tapTabs();
+  for (let step = 0; step < 3; step++) act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  expect(searchState().open).toBe(false);
+  unmount(root);
+});
+
+test("a spring landing carries the phone layout generation from the moment it started, so its completion delivered after a phone, Duo and back to phone round trip is refused", () => {
+  withTabs(3);
+  browsingNow();
+  const id = currentTabs().selectedId!;
+  const settled = jest.fn();
+  const started = currentPhoneGeneration();
+  act(() => {
+    deckPull.target.value = { id, pull: 300 } as never;
+    deckPull.stage.value = PULL_STAGE.idle;
+  });
+  act(() =>
+    runOnUI((tab: string, done: typeof settled) => {
+      "worklet";
+      if (beginDeckPull(tab, 0)) settleDeckPull(true, 0, done);
+    })(id, settled),
+  );
+  act(() => jest.advanceTimersByTime(16));
+  expect(deckPull.stage.value).toBe(PULL_STAGE.landing);
+  expect(deckPull.landingPhone.value).toBe(started);
+  advancePhoneGeneration();
+  advancePhoneGeneration();
+  for (let step = 0; step < 120 && settled.mock.calls.length === 0; step++) act(() => jest.advanceTimersByTime(16));
+  expect(settled).toHaveBeenCalled();
+  const [, landed, , , , phone] = settled.mock.calls[0] as [string, boolean, number, string, number, number];
+  expect(landed).toBe(true);
+  expect(phone).toBe(started);
+  act(() => browse.deckPullSettled(id, true, 0, "", 0, phone));
+  expect(browse.useBrowse.getState().surface).toBe("browsing");
+  act(() => {
+    deckPull.target.value = null;
+  });
+});
+
+test("a card pressed in the frames after the cut poses on the UI thread at the lift and marks deck-hit:card in that same step, before any JS runs, and then opens", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  const selected = currentTabs().selectedId!;
+  const hit = deckPull.hit.value!;
+  tapTabs();
+  const index = hit.ids.indexOf(selected);
+  const point = { x: deckLeading(hit.g, index - hit.scroll) + hit.g.cardWidth / 2, y: hit.g.cardCenterY };
+  const touch = { id: 0, ...point, absoluteX: point.x, absoluteY: point.y };
+  const manager = { fail: jest.fn(), activate: jest.fn(), end: jest.fn(), begin: jest.fn() };
+  const tap = getByGestureTestId("deckTap") as unknown as { handlers: { onTouchesDown: (event: unknown, manager: unknown) => void; onTouchesUp: (event: unknown, manager: unknown) => void } };
+  act(() => tap.handlers.onTouchesDown({ allTouches: [touch], changedTouches: [touch], numberOfTouches: 1 }, manager));
+  act(() => tap.handlers.onTouchesUp({ allTouches: [], changedTouches: [touch], numberOfTouches: 0 }, manager));
+  expect(deckTurn.hitMark.value).toBe("deck-hit:card");
+  expect(markOf(root, "deckHitMark")).toBe("deck-hit:card");
+  expect(pageBarPreviewShown.value).toBe(1);
+  expect(browse.useBrowse.getState().surface).toBe("browsing");
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(currentTabs().selectedId).toBe(selected);
+  expect(browse.useBrowse.getState().surface).toBe("browsing");
   unmount(root);
 });

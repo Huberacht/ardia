@@ -108,7 +108,7 @@ import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
 import { arriveFromDeck, dropPreparedDestination, liftDestination, prepareDestination, pressDestination, takeDestinationAction } from "../../state/browse/destination";
 import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarPreviewShown, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, releaseDeckOnHideOnUI, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
-import { cardHitSeq, currentPhoneGeneration, deckOwnsInput, deckTurn, forgetPreparedDeck, markDeckCardHit, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
+import { cardHitSeq, currentPhoneGeneration, deckOwnsInput, deckRevisionOf, deckTurn, dropDeckHits, forgetPreparedDeck, markDeckEntranceCommitted, peekDeckHit, prepareDeck, takeDeckCardHit, takeDeckHit, useDeckHits, usePhoneTurn, type DeckHitCommand } from "../../state/browse/deckTurn";
 import { UiFrameMark, uiFrameMarkStyle } from "../ui/UiFrameMark";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
@@ -329,7 +329,7 @@ export const TabDeck = memo(function TabDeck() {
   const searchOpener = useRef<(() => void) | null>(null);
   const restsPosed = cutsAway && pulls;
   const phoneTurn = usePhoneTurn((s) => s.generation);
-  const deckRevision = `${side ? 1 : 0}:${incognito ? 1 : 0}:${shownSpace ?? ""}:${grid ? 1 : 0}`;
+  const deckRevision = deckRevisionOf(incognito, shownSpace);
   useLayoutEffect(() => {
     if (shown) return;
     if (!pulls || !heldSelected || !order.includes(heldSelected)) prepareDeck(null);
@@ -349,7 +349,17 @@ export const TabDeck = memo(function TabDeck() {
       importantForAccessibility: deckTurn.live.value !== 0 || shown ? "auto" : "no-hide-descendants",
     }),
   );
+  const chromeSettled = useSharedValue(first.phase.kind === "settled");
+  useLayoutEffect(() => {
+    chromeSettled.value = phase.kind === "settled";
+  }, [phase.kind]);
+  const chromeOwnership = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => {
+    const live = deckTurn.live.value;
+    const open = (live !== 0 && deckTurn.reconciled.value !== live) || chromeSettled.value;
+    return { pointerEvents: open ? "box-none" : "none", importantForAccessibility: open ? "auto" : "no-hide-descendants" };
+  });
   const liveMark = useAnimatedProps(() => ({ mark: deckTurn.live.value !== 0 ? "deck-live" : "" }));
+  const drawnMark = useAnimatedProps(() => ({ mark: deckTurn.drawnMark.value }));
   const hitMark = useAnimatedProps(() => ({ mark: deckTurn.hitMark.value }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
@@ -404,6 +414,7 @@ export const TabDeck = memo(function TabDeck() {
     cardsOpacity.value = restsPosed ? 1 : 0;
     touching.value = false;
     runOnUI(releaseDeckOnHideOnUI)();
+    dropDeckHits();
     const standbyIndex = heldSelected ? order.indexOf(heldSelected) : -1;
     const tile = gridFocus.current;
     if (!pulls || !heldSelected || standbyIndex < 0) publishDeckStandby(null);
@@ -1021,12 +1032,6 @@ export const TabDeck = memo(function TabDeck() {
   useLayoutEffect(() => {
     gestureActions.current = { order, open: openOnTurn, unpose, flownOff, closeFromX, showHeldCardMenu, settleAnchor };
   });
-  useAnimatedReaction(
-    () => (pageBarPreviewShown.value === 1 && deckPhase.value === DECK_PHASE.closing ? poseTurn.value : 0),
-    (now, was) => {
-      if (now !== 0 && now !== was) markDeckCardHit();
-    },
-  );
   const panEnabled = !(pulls && reduceMotion && phase.kind === "closing");
   const longPressEnabled = !nativeMenus();
   const deckGesture = useMemo(() => {
@@ -1153,7 +1158,7 @@ export const TabDeck = memo(function TabDeck() {
           if (closing >= 0) {
             if (closingId !== undefined) runOnJS(closeCardFromX)(closingId);
           } else if (card >= 0) {
-            if (cardId !== undefined && cutsAway && !grid && deckPhase.value === DECK_PHASE.settled && dragIndex.value !== card) {
+            if (cardId !== undefined && cutsAway && !grid && deckPhase.value === DECK_PHASE.settled && dragIndex.value !== card && takeDeckCardHit()) {
               const turn = poseTurn.value + 1;
               poseTurn.value = turn;
               deckPhase.value = DECK_PHASE.closing;
@@ -1278,6 +1283,7 @@ export const TabDeck = memo(function TabDeck() {
     >
       {cutsAway ? <UiFrameMark testID="deckLiveMark" style={uiFrameMarkStyle} animatedProps={liveMark} /> : null}
       {cutsAway ? <UiFrameMark testID="deckHitMark" style={uiFrameMarkStyle} animatedProps={hitMark} /> : null}
+      {cutsAway ? <UiFrameMark testID="deckDrawnMark" style={uiFrameMarkStyle} animatedProps={drawnMark} /> : null}
       <Animated.View style={[StyleSheet.absoluteFill, backdropStyle]} pointerEvents="none">
         {material ? (
           <MaterialDeckBackdrop incognito={incognito} />
@@ -1398,7 +1404,7 @@ export const TabDeck = memo(function TabDeck() {
               />
           </View>
         ) : redesigned ? (
-          <Animated.View testID="deckRedesignedChrome" style={glassChrome ? [StyleSheet.absoluteFill, cutsAway ? chromeCutAway : null] : [StyleSheet.absoluteFill, chromeStyle, cutsAway ? chromeCutAway : null]} pointerEvents={phase.kind === "settled" ? "box-none" : "none"} collapsable={false} importantForAccessibility={phase.kind === "settled" ? "auto" : "no-hide-descendants"} accessibilityElementsHidden={phase.kind !== "settled"}>
+          <Animated.View testID="deckRedesignedChrome" style={glassChrome ? [StyleSheet.absoluteFill, cutsAway ? chromeCutAway : null] : [StyleSheet.absoluteFill, chromeStyle, cutsAway ? chromeCutAway : null]} pointerEvents={phase.kind === "settled" ? "box-none" : "none"} collapsable={false} importantForAccessibility={phase.kind === "settled" ? "auto" : "no-hide-descendants"} animatedProps={chromeOwnership} accessibilityElementsHidden={phase.kind !== "settled"}>
             <ChromeGlassShown progress={chromeProgress} initiallyIn={first.progress >= DECK_CHROME_FROM} hidden={!shown} away={phase.kind === "closing" || openingCard !== null}>
               {(glassShown, barShown, barHanded) => (
                 <>
