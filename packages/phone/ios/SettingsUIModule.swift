@@ -508,26 +508,31 @@ final class ScrollBounceOffView: UIView {
     apply()
   }
 
-  private var retries = 0
+  private var checks = 0
 
   func apply() {
-    guard window != nil else { return }
+    guard let window else { return }
+    if let bound = target, bound.window == nil || !ScrollBounceTarget.matches(className: NSStringFromClass(type(of: bound)), frame: bound.convert(bound.bounds, to: window), mine: convert(bounds, to: window)) {
+      target = nil
+      watch = nil
+    }
     if target == nil, let found = findTarget() {
       target = found
-      if PhoneTestBuild.isOn { NSLog("PAGELAB scroll off %@ after %d retries", NSStringFromClass(type(of: found)), retries) }
+      if PhoneTestBuild.isOn { NSLog("PAGELAB scroll off %@ after %d checks", NSStringFromClass(type(of: found)), checks) }
       watch = found.observe(\.contentSize, options: []) { scroll, _ in
         MainActor.assumeIsolated { ScrollBounceOffView.turnOff(scroll) }
       }
     }
-    if let target {
-      Self.turnOff(target)
-    } else if retries < ScrollBounceTarget.retries {
-      retries += 1
-      DispatchQueue.main.asyncAfter(deadline: .now() + ScrollBounceTarget.retryGap) { [weak self] in self?.apply() }
-    } else if PhoneTestBuild.isOn, let window {
-      let mine = convert(bounds, to: window)
-      NSLog("PAGELAB scroll off found no scroll view behind its form at %.0f,%.0f,%.0fx%.0f", mine.minX, mine.minY, mine.width, mine.height)
+    if let target { Self.turnOff(target) }
+    guard checks < ScrollBounceTarget.retries else {
+      if target == nil, PhoneTestBuild.isOn {
+        let mine = convert(bounds, to: window)
+        NSLog("PAGELAB scroll off found no scroll view behind its form at %.0f,%.0f,%.0fx%.0f", mine.minX, mine.minY, mine.width, mine.height)
+      }
+      return
     }
+    checks += 1
+    DispatchQueue.main.asyncAfter(deadline: .now() + ScrollBounceTarget.retryGap) { [weak self] in self?.apply() }
   }
 
   static func turnOff(_ scroll: UIScrollView) {
