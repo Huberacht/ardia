@@ -9,7 +9,7 @@ import { PullGhost } from "../components/browsing/PagePull";
 import { SearchTray } from "../components/search/SearchTray";
 import { DesignProvider, Favicon } from "../components/ui";
 import { Dimensions, Image, Platform, StyleSheet, TextInput } from "react-native";
-import { deckPull, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
+import { deckPull, pageBarShown, previewPageBar, PULL_STAGE, queueDeckTapAfterCut } from "../state/browse/deckPull";
 import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import * as browse from "../state/browse/store";
@@ -173,6 +173,30 @@ test("right after a swipe lands, the bar already belongs to the destination: its
   act(() => address.props.onPress());
   expect(searchState().editsPage).toBeTruthy();
   expect(currentTabs().selectedId).toBe(id);
+  unmount(root);
+});
+
+test("with cuts the page bar is one bar that stays mounted under the deck: hidden, untouchable and out of TalkBack there, it holds the pressed card's address, and the release shows it and hides the deck's own bar in one UI-thread step", () => {
+  withTabs(3);
+  browse.useBrowse.setState({ surface: "deck", sheet: null, deckEntrance: null, frozenOrder: null, opening: null });
+  const root = renderSurface(<Surfaces />);
+  const host = (id: string) => root.root.findAll((node) => node.props.testID === id && typeof node.type === "string");
+  const kept = () => host("keptPageBar")[0];
+  expect(kept()).toBeDefined();
+  expect(getAnimatedStyle(kept()!).opacity).toBe(0);
+  const destination = currentTabs().open.find((tab) => tab.id !== currentTabs().selectedId)!;
+  act(() => previewPageBar(destination.id));
+  const address = host("floatingBarHost").map((node) => node.props.children).flat().join("");
+  expect(address).toContain(display(destination.url).host);
+  act(() => {
+    pageBarShown.value = 1;
+  });
+  expect(getAnimatedStyle(kept()!).opacity).toBe(1);
+  act(() => sendDeckCommand({ kind: "open", tabId: destination.id, tappedAt: Date.now() }));
+  expect(currentTabs().selectedId).toBe(destination.id);
+  expect(host("keptPageBar")[0]).toBeDefined();
+  expect(host("floatingBarHost").map((node) => node.props.children).flat().join("")).toContain(display(destination.url).host);
+  act(() => previewPageBar(null));
   unmount(root);
 });
 

@@ -10,6 +10,7 @@ import { SearchTray } from "./components/search/SearchTray";
 import { StartScreen } from "./components/search/StartScreen";
 import { ArchiveView } from "./components/tabs/ArchiveView";
 import { TabDeck } from "./components/tabs/TabDeck";
+import { tabSwitchCuts } from "./state/browse/tabSwitch";
 import { OnboardingView } from "./components/onboarding/OnboardingView";
 import { ImportFailedView } from "./components/upgrade/ImportFailedView";
 import { ExpoSettingsSheet } from "./components/settings/ExpoSettingsStack";
@@ -181,10 +182,11 @@ export function Surfaces() {
   useEffect(goBackToStartIfEmpty, [tabId, surface]);
   const duo = useScreenLayout((s) => s.layout.name === "wide" || s.layout.name === "split");
   const deckMounted = useDeckStandby(surface, surface === "browsing" && tabId !== null && opening === null && leaving === null && !searching && !voice && !onboarding && front === null, tabId);
-  const page = !duo && (surface === "browsing" || pageUnderDeck) && tabId ? <BrowsingScreen tabId={tabId} /> : null;
+  const keepsBar = tabSwitchCuts() && pageOverDeck && surface === "deck";
+  const page = !duo && (surface === "browsing" || pageUnderDeck || keepsBar) && tabId ? <BrowsingScreen tabId={tabId} /> : null;
   const deck = !duo && deckMounted ? <TabDeck key="deck" /> : null;
   const pageLayer = page && tabId ? (
-    <PageLayer key="page" away={surface === "deck"} unseen={pageOverDeck && surface === "deck" && tabId === opening && deckPullGrowing() !== tabId}>
+    <PageLayer key="page" away={surface === "deck" && !keepsBar} unseen={!keepsBar && pageOverDeck && surface === "deck" && tabId === opening && deckPullGrowing() !== tabId}>
       {page}
     </PageLayer>
   ) : null;

@@ -106,7 +106,7 @@ import { screenCornerRadius } from "../../state/app/displayCorner";
 import { TabGrid, type GridFrame } from "./TabGrid";
 import { tabGridMotion } from "./tabGridLayout";
 import { useDeckGrid } from "../../state/browse/deckGrid";
-import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, peekDeckPullEntrance, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
+import { deckPull, deckPullGrowing, endDeckPull, growDeckPull, pageBarShown, peekDeckPullEntrance, previewPageBar, publishDeckStandby, showGrowingPage, takeDeckPullEntrance } from "../../state/browse/deckPull";
 import { DECK_PULL, pullTarget, stackPullTarget } from "../../lib/deckPull";
 import { glassFadeMs } from "../ui/motion";
 import { barSpanCenter } from "../../lib/bottomBarSpan";
@@ -324,10 +324,11 @@ export const TabDeck = memo(function TabDeck() {
   const deckShownNow = useSharedValue(shown);
   useLayoutEffect(() => {
     deckShownNow.value = shown;
+    if (chromeGlassHeld && shown) pageBarShown.value = 0;
   }, [shown, deckShownNow]);
   const headerSamples = launchArguments().deckHeaderCold ? 0 : HELD_GLASS_SAMPLES;
   const heldHeaderStyle = useAnimatedStyle(() => ({ opacity: Math.max(pulling.value || deckShownNow.value ? chromeOpacity.value : 0, headerSamples) }));
-  const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? barGlyphFade.value : 0 }));
+  const heldBarStyle = useAnimatedStyle(() => ({ opacity: pulling.value || deckShownNow.value ? barGlyphFade.value * (deckPull.cut.value || deckShownNow.value ? 1 - pageBarShown.value : 1) : 0 }));
   const chipStyle = useAnimatedStyle(() => ({ opacity: dragIndex.value >= 0 ? 0 : deckChromeOpacity(positionProgress.value) }));
 
   const searchedFor = useRef(needle);
@@ -636,6 +637,7 @@ export const TabDeck = memo(function TabDeck() {
     runOnUI((posed: number) => {
       "worklet";
       if (poseTurn.value !== posed || deckPhase.value !== DECK_PHASE.closing) return;
+      pageBarShown.value = 0;
       deckPhase.value = DECK_PHASE.settled;
       expandedIndex.value = -1;
       scaleProgress.value = 1;
@@ -1045,7 +1047,12 @@ export const TabDeck = memo(function TabDeck() {
       .hitSlop(barBand)
       .onTouchesDown((e) => {
         const touch = e.allTouches[0];
-        if (touch) tapFrom.value = { x: touch.x, y: touch.y };
+        if (!touch) return;
+        tapFrom.value = { x: touch.x, y: touch.y };
+        if (!cutsAway || grid) return;
+        const pressed = deckCardAt(g, count, scroll.value, touch.x, touch.y, anchor, DECK_MOUNT_REACH);
+        const pressedId = pressed >= 0 ? orderIds.value[pressed] : undefined;
+        if (pressedId !== undefined) runOnJS(previewPageBar)(pressedId);
       })
       .onTouchesUp((e, manager) => {
         const touch = e.changedTouches[0];
@@ -1064,6 +1071,7 @@ export const TabDeck = memo(function TabDeck() {
               expandedIndex.value = card;
               scaleProgress.value = 0;
               positionProgress.value = 0;
+              pageBarShown.value = 1;
               runOnJS(openPosedCard)(cardId, turn);
             } else if (cardId !== undefined) runOnJS(openCard)(cardId);
           } else if (redesigned || (material && touch.y < bottomRowTop)) runOnJS(dismissKeyboard)();

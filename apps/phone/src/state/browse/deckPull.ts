@@ -10,6 +10,8 @@ export function pullFades(stage: number): boolean {
   return stage === PULL_STAGE.fading || stage === PULL_STAGE.faded;
 }
 
+export const pageBarShown = makeMutable(1);
+
 export const deckPull = {
   stage: makeMutable<number>(PULL_STAGE.idle),
   id: makeMutable(""),
@@ -250,6 +252,7 @@ export function cutDeckPullFromRest(id: string, settled: PullSettled, refused: (
     return;
   }
   deckPull.cut.value = true;
+  pageBarShown.value = 0;
   deckPull.shrink.value = 1;
   deckPull.reveal.value = 1;
   deckPull.stage.value = PULL_STAGE.landed;
@@ -258,6 +261,13 @@ export function cutDeckPullFromRest(id: string, settled: PullSettled, refused: (
 }
 
 export const usePullBar = create<{ deckOwns: boolean }>()(() => ({ deckOwns: false }));
+
+
+export const usePageBarPreview = create<{ id: string | null }>()(() => ({ id: null }));
+
+export function previewPageBar(id: string | null) {
+  if (usePageBarPreview.getState().id !== id) usePageBarPreview.setState({ id });
+}
 
 export function setDeckOwnsBar(deckOwns: boolean) {
   if (usePullBar.getState().deckOwns === deckOwns) return;
