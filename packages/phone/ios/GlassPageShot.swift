@@ -100,7 +100,7 @@ final class GlassPageShot {
     let started = CACurrentMediaTime()
     busy = busy.filter { started - ($0.end ?? started) <= LiquidGlassRules.budgetWindow } + [(token: token, start: started, end: nil)]
     let width = max(Int((area.width * GlassFlowRules.rasterScale(area: area, zoom: zoom, pixelsPerPoint: pixelsPerPoint)).rounded()), 1)
-    if PhoneTestBuild.isOn { NSLog("PAGELAB glass pdf ask %.0f points at %.3f", area.height, started) }
+    if PhoneTestBuild.isOn { NSLog("PAGELAB time glass pdf ask %.0f", Date().timeIntervalSince1970 * 1000) }
     web.createPDF(configuration: configuration) { [weak self, weak web] result in
       MainActor.assumeIsolated {
         let working = CACurrentMediaTime()

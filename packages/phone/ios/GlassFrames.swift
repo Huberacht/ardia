@@ -289,7 +289,7 @@ final class GlassFrames: NSObject {
     let held = capture.motion.holds(now: now)
     if held != capture.wasHeld {
       capture.wasHeld = held
-      if PhoneTestBuild.isOn { NSLog("PAGELAB glass hold %@ %@ at %.3f", held ? "on" : "off", members.map(\.label).joined(separator: ","), now) }
+      if PhoneTestBuild.isOn { NSLog("PAGELAB time glass hold %@ %.0f", held ? "on" : "off", Date().timeIntervalSince1970 * 1000) }
     }
     if held {
       if PhoneTestBuild.isOn { stats.heldFrames += 1 }
