@@ -309,7 +309,9 @@ export type CoverHidden = "drawn" | "cap" | "lost";
 
 type CoverWaiter = { cover: string | null; hidden: (reason: CoverHidden) => void };
 
-const coverWaiters = new Map<string, CoverWaiter>();
+const coverWaiters = new Map<string, Map<string, CoverWaiter>>();
+
+const coverKey = (cover: string | null) => cover ?? "";
 
 export function whenPageCoverHidden(id: string, capMs: number, then: (reason: CoverHidden) => void, cover: string | null = null): () => void {
   const early = earlyCoverHides.get(id);
@@ -322,7 +324,10 @@ export function whenPageCoverHidden(id: string, capMs: number, then: (reason: Co
   const stop = () => {
     called = true;
     clearTimeout(cap);
-    if (coverWaiters.get(id) === waiter) coverWaiters.delete(id);
+    const waiting = coverWaiters.get(id);
+    if (waiting?.get(coverKey(cover)) !== waiter) return;
+    waiting.delete(coverKey(cover));
+    if (waiting.size === 0) coverWaiters.delete(id);
   };
   const hidden = (reason: CoverHidden) => {
     if (called) return;
@@ -331,7 +336,9 @@ export function whenPageCoverHidden(id: string, capMs: number, then: (reason: Co
   };
   const waiter: CoverWaiter = { cover, hidden };
   const cap = setTimeout(() => hidden("lost"), capMs);
-  coverWaiters.set(id, waiter);
+  const waiting = coverWaiters.get(id) ?? new Map<string, CoverWaiter>();
+  waiting.set(coverKey(cover), waiter);
+  coverWaiters.set(id, waiting);
   return stop;
 }
 
@@ -350,13 +357,12 @@ function coverMatches(expected: string | null, cover: string | undefined, found:
 }
 
 export function pageCoverHidden(id: string, reason: "drawn" | "cap", cover?: string, found = true, document?: number) {
-  const waiter = coverWaiters.get(id);
-  if (!waiter) {
+  const waiting = coverWaiters.get(id);
+  if (!waiting || waiting.size === 0) {
     earlyCoverHides.set(id, { cover, reason, found, document });
     return;
   }
-  if (!coverMatches(waiter.cover, cover, found, document)) return;
-  waiter.hidden(reason);
+  for (const waiter of [...waiting.values()]) if (coverMatches(waiter.cover, cover, found, document)) waiter.hidden(reason);
 }
 
 let openingSeq = 0;
