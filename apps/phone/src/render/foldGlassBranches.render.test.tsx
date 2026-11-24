@@ -2,7 +2,7 @@ import { Platform, StyleSheet } from "react-native";
 import { getAnimatedStyle } from "react-native-reanimated";
 import { act, type ReactTestInstance } from "react-test-renderer";
 import { BrowsingScreen } from "../components/browsing/BrowsingScreen";
-import { foldBranchesAttached } from "../components/browsing/HostPill";
+import { FOLD_REST_EDGE, foldBranchesAttached, foldRestAt } from "../components/browsing/HostPill";
 import { DesignProvider } from "../components/ui";
 import { useBrowse } from "../state/browse/store";
 import { usePageUi } from "../state/page/store";
@@ -130,6 +130,22 @@ test("Android's buttons, glyphs and their accessibility nodes stay mounted while
   unmount(root);
 });
 
+test("a fold rests once it is within 2% of an end, so the branch it hid lets go of its glass and page strip without waiting out the spring's tail", () => {
+  expect([foldRestAt(1), foldRestAt(0.985), foldRestAt(0.97), foldRestAt(0.5), foldRestAt(0.03), foldRestAt(0.015), foldRestAt(0)]).toEqual([1, 1, -1, -1, -1, 0, 0]);
+  if (!android) return;
+  const root = page();
+  scrolled("down");
+  let ms = 0;
+  while (ms < 1000 && roles(root).includes("floatingBarAddress")) {
+    act(() => jest.advanceTimersByTime(16));
+    ms += 16;
+  }
+  expect(roles(root)).not.toContain("floatingBarAddress");
+  expect(pillProgress(root)).toBeGreaterThanOrEqual(1 - FOLD_REST_EDGE);
+  expect(ms).toBeLessThan(400);
+  unmount(root);
+});
+
 test("Android keeps both branches attached through a fold reversed partway, and detaches only once it rests on an end", () => {
   if (!android) return;
   for (const reverseAt of [0.3, 0.7]) {
@@ -141,7 +157,7 @@ test("Android keeps both branches attached through a fold reversed partway, and 
     for (let frame = 0; frame < 120; frame++) {
       act(() => jest.advanceTimersByTime(16));
       const now = pillProgress(root);
-      if (now > 0 && now < 1) expectBranches(root, folding);
+      if (now > FOLD_REST_EDGE && now < 1 - FOLD_REST_EDGE) expectBranches(root, folding);
     }
     settle();
     expectBranches(root, expanded);

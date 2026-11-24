@@ -65,6 +65,13 @@ export function HostPill({ tab, dark, shown, anchors = false, sampleHold = null,
 
 export type FoldRest = "bar" | "pill" | null;
 
+export const FOLD_REST_EDGE = 0.02;
+
+export const foldRestAt = (progress: number) => {
+  "worklet";
+  return progress >= 1 - FOLD_REST_EDGE ? 1 : progress <= FOLD_REST_EDGE ? 0 : -1;
+};
+
 export const foldGlassShown = (android: boolean, collapsed: boolean, rest: FoldRest) => ({
   bar: android ? !collapsed || rest !== "pill" : !collapsed,
   pill: android ? collapsed || rest !== "bar" : collapsed,
@@ -77,7 +84,7 @@ export function useBarFold(collapsed: boolean, reduceMotion: boolean) {
   const fold = useSharedValue(collapsed ? 1 : 0);
   const [rest, setRest] = useState<FoldRest>(collapsed ? "pill" : "bar");
   useAnimatedReaction(
-    () => (fold.value >= 1 ? 1 : fold.value <= 0 ? 0 : -1),
+    () => foldRestAt(fold.value),
     (end, before) => {
       if (end !== before) runOnJS(setRest)(end === 1 ? "pill" : end === 0 ? "bar" : null);
     },
