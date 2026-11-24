@@ -524,8 +524,9 @@ final class ScrollBounceOffView: UIView {
     } else if retries < ScrollBounceTarget.retries {
       retries += 1
       DispatchQueue.main.asyncAfter(deadline: .now() + ScrollBounceTarget.retryGap) { [weak self] in self?.apply() }
-    } else if PhoneTestBuild.isOn {
-      NSLog("PAGELAB scroll off found no scroll view behind its form")
+    } else if PhoneTestBuild.isOn, let window {
+      let mine = convert(bounds, to: window)
+      NSLog("PAGELAB scroll off found no scroll view behind its form at %.0f,%.0f,%.0fx%.0f", mine.minX, mine.minY, mine.width, mine.height)
     }
   }
 
