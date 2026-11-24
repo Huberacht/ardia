@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type MutableRefObject, type RefObject } from "react";
 import { IncognitoEyes } from "../ui/IncognitoEyes";
 import { actionWords, incognitoWords } from "../../lib/sharedWords";
 import { Platform, Pressable, StyleSheet, TextInput, View, type StyleProp, type TextInputInstance, type ViewInstance, type ViewStyle } from "react-native";
@@ -20,6 +20,7 @@ import { FadingGlyphs, PlusMenuButton, type ChromeFade } from "./ChromeButtons";
 import { besideStrip, duoFieldReach, type BottomBarLayout } from "../../lib/bottomBarSpan";
 
 type Props = {
+  searchOpener?: MutableRefObject<(() => void) | null>;
   shown: boolean;
   barCenterY: number;
   deckHeight: number;
@@ -164,12 +165,19 @@ export function SearchTabsField({ search, testID = "deckSearchTabs", style, rest
   );
 }
 
-export function DeckBottomBar({ shown, barCenterY, deckHeight, width, layout, incognito, privateCount = 0, onCloseIncognito, onQuery, menusShown = true, onMenu, glassShown, glassShownMs, glyphFade }: Props) {
+export function DeckBottomBar({ searchOpener, shown, barCenterY, deckHeight, width, layout, incognito, privateCount = 0, onCloseIncognito, onQuery, menusShown = true, onMenu, glassShown, glassShownMs, glyphFade }: Props) {
   const fade = { glassShown, glassShownMs, glyphFade };
   const roles = useTheme();
   const dark = roles.dark || incognito;
   const search = useSearchTabs(shown, incognito, onQuery);
   const { focused } = search;
+  useLayoutEffect(() => {
+    if (!searchOpener) return;
+    searchOpener.current = () => search.input.current?.focus();
+    return () => {
+      searchOpener.current = null;
+    };
+  }, [searchOpener, search.input]);
   const row = useRef<ViewInstance>(null);
   const reach = duoFieldReach(width, layout, chromeLayout.barSideInset);
   const keyboard = useKeyboardTopFromBottom(shown && (!LIVE_KEYBOARD || reach !== null));

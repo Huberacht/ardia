@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { DeckLookProbe } from "./DeckLookProbe";
+import { floatingBarCenter } from "../../lib/deckGeometry";
+import { newTab as openNewTab, switchDeckIncognito } from "../../state/browse/store";
 import { actionWords, destinationWords, incognitoWords } from "../../lib/sharedWords";
 import { IncognitoLook } from "../ui/theme";
 import { useDeckOwnsBar, useSheet, useSurface } from "../../state/browse/hooks";
@@ -73,7 +75,7 @@ import {
 } from "../../state/browse/store";
 import { menuOpenedHaptic } from "../../state/browse/tabMenus";
 import { useCanReopen, useHasArchivedTabs, useIncognito, usePrivateCount, useShownSpace } from "../../state/tabs/hooks";
-import { archiveCardLayout, browseLayout, chromeLayout, ConfirmSheet, deckChromeLayout, DeckLookBackdrop, iPhoneOr, DeckLookBackdropBase, FrostSource, GlassSource, measureAnchor, Menu, menuExitMs, MenuFloorProvider, moveTo, pointPlacer, Portal, ScrollActions, Shade, space, tabsCurve, tabsLayout, tabsMotion, type Confirmation, type MenuItem, useDesign, useFocusReturn, useReduceMotion, usesGlass, useTheme } from "../ui";
+import { archiveCardLayout, browseLayout, chromeLayout, controlSize, ConfirmSheet, deckChromeLayout, DeckLookBackdrop, iPhoneOr, DeckLookBackdropBase, FrostSource, GlassSource, measureAnchor, Menu, menuExitMs, MenuFloorProvider, moveTo, pointPlacer, Portal, ScrollActions, Shade, space, tabsCurve, tabsLayout, tabsMotion, type Confirmation, type MenuItem, useDesign, useFocusReturn, useReduceMotion, usesGlass, useTheme } from "../ui";
 import { openSettings } from "../../state/settings/hooks";
 import { confirmInSheet, nativeMenus } from "../ui/MenuTrigger";
 import { useSyncEnabled } from "../../state/sync/hooks";
@@ -322,13 +324,32 @@ export const TabDeck = memo(function TabDeck() {
   const chromeGlassHeld = cutsAway && glassChrome;
   const moreOpener = useRef<(() => void) | null>(null);
   const spacesOpener = useRef<(() => void) | null>(null);
+  const searchOpener = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!chromeGlassHeld) return;
     const side = g.safeSide + chromeLayout.barSideInset;
     const top = g.safeTop + deckChromeLayout.headerCenter - browseLayout.hitTarget / 2;
-    publishDeckHeader({ top, bottom: top + browseLayout.hitTarget, moreLeft: width - side - deckChromeLayout.headerCircle, moreRight: width - side, spacesLeft: side, spacesRight: width / 2 });
+    const barCenter = deckHeight - floatingBarCenter(insets.bottom, "android");
+    const span = deckBarLayout.span;
+    const plusRight = width - span.right;
+    publishDeckHeader({
+      top,
+      bottom: top + browseLayout.hitTarget,
+      moreLeft: width - side - deckChromeLayout.headerCircle,
+      moreRight: width - side,
+      spacesLeft: side,
+      spacesRight: width / 2,
+      barTop: barCenter - controlSize.bar / 2,
+      barBottom: barCenter + controlSize.bar / 2,
+      privacyLeft: span.left,
+      privacyRight: span.left + controlSize.bar,
+      plusLeft: plusRight - controlSize.bar,
+      plusRight,
+      searchLeft: span.left + controlSize.bar,
+      searchRight: plusRight - controlSize.bar,
+    });
     return () => publishDeckHeader(null);
-  }, [chromeGlassHeld, g.safeSide, g.safeTop, width]);
+  }, [chromeGlassHeld, g.safeSide, g.safeTop, width, deckHeight, insets.bottom, deckBarLayout.span.left, deckBarLayout.span.right]);
   const deckShownNow = useSharedValue(shown);
   useLayoutEffect(() => {
     deckShownNow.value = shown;
@@ -428,7 +449,11 @@ export const TabDeck = memo(function TabDeck() {
       const queuedMenu = deckPull.menuAfter.value;
       endDeckPull();
       if (queued) sendDeckCommand({ kind: "open", tabId: queued, tappedAt: Date.now() });
-      else if (queuedMenu) (queuedMenu === "more" ? moreOpener : spacesOpener).current?.();
+      else if (queuedMenu === "more") moreOpener.current?.();
+      else if (queuedMenu === "spaces") spacesOpener.current?.();
+      else if (queuedMenu === "search") searchOpener.current?.();
+      else if (queuedMenu === "plus") openNewTab();
+      else if (queuedMenu === "privacy") switchDeckIncognito();
       return;
     }
     const entrance = peekDeckEntrance();
@@ -1342,6 +1367,7 @@ export const TabDeck = memo(function TabDeck() {
                   </HeldChrome>
                   <HeldChrome held={chromeGlassHeld} style={heldBarStyle}>
                     <DeckBottomBar
+                      searchOpener={searchOpener}
                       shown={shown}
                       barCenterY={g.barCenterY}
                       deckHeight={deckHeight}

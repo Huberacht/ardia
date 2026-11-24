@@ -746,9 +746,9 @@ test("on a cut to the deck the page bar's Search Tabs ghost never draws, so only
   unmount(root);
 });
 
-test("a tap on the deck header's More or Spaces during the cut is latched with the deck's turn and queued as that menu, and a turn that changed drops it", () => {
+test("a tap on the deck header's More or Spaces, or the bar's privacy switch, Search Tabs or Plus, during the cut is latched with the deck's turn and queued as that menu, and a turn that changed drops it", () => {
   act(() => {
-    deckPull.header.value = { top: 40, bottom: 90, moreLeft: 330, moreRight: 380, spacesLeft: 16, spacesRight: 196 };
+    deckPull.header.value = { top: 40, bottom: 90, moreLeft: 330, moreRight: 380, spacesLeft: 16, spacesRight: 196, barTop: 800, barBottom: 844, privacyLeft: 16, privacyRight: 60, searchLeft: 60, searchRight: 333, plusLeft: 333, plusRight: 377 };
     deckPull.stage.value = PULL_STAGE.landed;
   });
   const more = latchDeckTap(350, 60);
@@ -764,6 +764,13 @@ test("a tap on the deck header's More or Spaces during the cut is latched with t
   expect(queueDeckTapAfterCut(spaces)).toBe(false);
   expect(deckPull.menuAfter.value).toBe("");
   expect(latchDeckTap(250, 60)).toBeNull();
+  expect(latchDeckTap(30, 820)).toMatchObject({ menu: "privacy" });
+  expect(latchDeckTap(200, 820)).toMatchObject({ menu: "search" });
+  expect(latchDeckTap(350, 820)).toMatchObject({ menu: "plus" });
+  const plus = latchDeckTap(350, 820);
+  expect(queueDeckTapAfterCut(plus)).toBe(true);
+  expect(deckPull.menuAfter.value).toBe("plus");
+  deckPull.menuAfter.value = "";
   act(() => {
     deckPull.header.value = null;
     deckPull.stage.value = PULL_STAGE.idle;

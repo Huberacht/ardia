@@ -135,13 +135,20 @@ export function hurryDeckPull(x: number, y: number, settled: PullSettled): boole
   return true;
 }
 
-export type DeckMenu = "more" | "spaces";
-export type HeaderHit = { top: number; bottom: number; moreLeft: number; moreRight: number; spacesLeft: number; spacesRight: number };
+export type DeckMenu = "more" | "spaces" | "search" | "plus" | "privacy";
+export type HeaderHit = { top: number; bottom: number; moreLeft: number; moreRight: number; spacesLeft: number; spacesRight: number; barTop: number; barBottom: number; privacyLeft: number; privacyRight: number; searchLeft: number; searchRight: number; plusLeft: number; plusRight: number };
 export type LatchedDeckTap = { id: string; hitTurn: number } | { menu: DeckMenu; hitTurn: number } | null;
 
 export function headerMenuAt(header: HeaderHit | null, x: number, y: number): DeckMenu | null {
   "worklet";
-  if (!header || y < header.top || y > header.bottom) return null;
+  if (!header) return null;
+  if (y >= header.barTop && y <= header.barBottom) {
+    if (x >= header.privacyLeft && x <= header.privacyRight) return "privacy";
+    if (x >= header.plusLeft && x <= header.plusRight) return "plus";
+    if (x >= header.searchLeft && x <= header.searchRight) return "search";
+    return null;
+  }
+  if (y < header.top || y > header.bottom) return null;
   if (x >= header.moreLeft && x <= header.moreRight) return "more";
   if (x >= header.spacesLeft && x <= header.spacesRight) return "spaces";
   return null;
