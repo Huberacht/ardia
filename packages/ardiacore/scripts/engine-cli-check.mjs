@@ -356,6 +356,11 @@ await run("a DevTools session reaches only its own tab", async () => {
   const attached = await client.call("devtools.send", { session: session.session, method: "Target.attachToTarget", params: { targetId: "0".repeat(32), flatten: true } });
   const created = await client.call("devtools.send", { session: session.session, method: "Target.createTarget", params: { url: "about:blank" } });
   check("Target.getTargets, attachToTarget and createTarget are refused", !!listed.error && !!attached.error && !!created.error, { listed: listed.error, attached: attached.error, created: created.error });
+  const permission = await client.call("devtools.send", { session: session.session, method: "Browser.setPermission", params: { permission: { name: "geolocation" }, setting: "granted", origin: "https://example.com" } });
+  const cookies = await client.call("devtools.send", { session: session.session, method: "Network.getAllCookies" });
+  const version = await client.call("devtools.send", { session: session.session, method: "Browser.getVersion" });
+  const scoped = (reply) => /reaches only its own tab/.test(reply.error?.message ?? "");
+  check("browser-wide Browser and cookie commands are refused, Browser.getVersion is left to Chromium", scoped(permission) && scoped(cookies) && !scoped(version), { permission: permission.error, cookies: cookies.error, version: version.error ?? "answered" });
   await ok("devtools.detach", { session: session.session });
 });
 
