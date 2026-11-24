@@ -37,7 +37,7 @@ export const shell = defineModuleDomain({
         setAppearance: { args: [["mode", "AppearanceMode", "String"]], result: "void", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
         isDarkAppearance: { args: [], result: "boolean", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
         startDictation: { args: [], result: "void | Promise<void>", swiftResult: "Void", async: false, mac: "custom", desktop: "custom", windows: "custom" },
-        fetchBangList: { args: [["etag", "string | null", "String?"]], result: "BangListReply", async: true, promise: true, mac: "custom", desktop: "host", windows: "custom" },
+        fetchBangList: { args: [["etag", "string | null", "String?"]], result: "BangListReply", async: true, promise: true, deadline: 75000, mac: "custom", desktop: "host", windows: "custom" },
         copyText: { args: [["text", "string"]], result: "void | Promise<void>", swiftResult: "Void", async: false, mac: "custom", desktop: "host", windows: "custom" },
         copyURL: { args: [["address", "CleanedUrl", "String"]], result: "void | Promise<void>", swiftResult: "Void", async: false, optional: true, mac: "custom", desktop: "custom", windows: "custom" },
         readText: { args: [], result: "string", async: true, queue: "main", mac: "custom", desktop: "host", windows: "custom" },
@@ -286,7 +286,7 @@ export const shell = defineModuleDomain({
     ArdiaCalendar: {
       functions: {
         authorizationStatus: { args: [], result: "CalendarAuthorization", swiftResult: "String", async: false, mac: "custom", desktop: "custom", windows: "custom" },
-        requestAccess: { args: [], result: "CalendarAccessRequest", async: true, promise: true, queue: "main", instance: "strong", mac: "custom", desktop: "adapted", windows: "absent" },
+        requestAccess: { args: [], result: "CalendarAccessRequest", async: true, promise: true, queue: "main", instance: "strong", deadline: 120000, mac: "custom", desktop: "adapted", windows: "absent" },
         calendars: { args: [], result: "SystemCalendar[]", swiftResult: "[[String: Any]]", async: true, queue: "main", instance: "strong", mac: "custom", desktop: "custom", windows: "absent" },
         events: { args: [["start", "number"], ["end", "number"], ["calendarIds", "string[]"]], result: "SystemCalendarEvent[]", swiftResult: "[[String: Any]]", async: true, queue: "main", instance: "strong", mac: "custom", desktop: "custom", windows: "absent" },
       },
@@ -370,7 +370,7 @@ export const shell = defineModuleDomain({
       functions: {
         installedVersion: { args: [], result: "string | null", async: false, mac: "absent", desktop: "adapted", windows: "custom" },
         canInstallUnattended: { args: [], result: "boolean", async: false, mac: "absent", desktop: "custom", windows: "custom" },
-        install: { args: [], result: "CliInstallResult", async: true, mac: "absent", desktop: "adapted", windows: "custom" },
+        install: { args: [], result: "CliInstallResult", async: true, deadline: 330000, mac: "absent", desktop: "adapted", windows: "custom" },
       },
       events: {
         onInstallLine: { payload: "{ line: string }", mac: "absent", desktop: "adapted", windows: "absent" },

@@ -130,7 +130,8 @@
         "removeAllowed": {
           "mac": "custom",
           "desktop": "custom",
-          "windows": "absent"
+          "windows": "absent",
+          "deadline": 90000
         },
         "hiddenElements": {
           "mac": "custom",
@@ -172,6 +173,18 @@
       "types": "packages/ardiacore/src/engine/generated/downloads.ts",
       "swift": "packages/ardiacore/ios/DownloadsCalls.swift",
       "calls": {
+        "settings": {
+          "service": "ac_downloads_settings",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
+        "setSettings": {
+          "service": "ac_downloads_set_settings",
+          "mac": "service",
+          "desktop": "route",
+          "windows": "service"
+        },
         "cancel": {
           "service": "ac_downloads_command",
           "mac": "custom",
@@ -199,18 +212,6 @@
           "desktop": "route",
           "windows": "custom",
           "routeField": "null"
-        },
-        "settings": {
-          "service": "ac_downloads_settings",
-          "mac": "service",
-          "desktop": "route",
-          "windows": "service"
-        },
-        "setSettings": {
-          "service": "ac_downloads_set_settings",
-          "mac": "service",
-          "desktop": "route",
-          "windows": "service"
         }
       },
       "events": {
@@ -625,6 +626,123 @@
           "mac": "forward",
           "desktop": "forward",
           "windows": "forward"
+        }
+      }
+    },
+    "media": {
+      "kind": "engine",
+      "types": "packages/ardiacore/src/engine/generated/media.ts",
+      "swift": "packages/ardiacore/ios/MediaCalls.swift",
+      "calls": {
+        "displayMediaSources": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "displayMediaThumbnails": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "screenRecordingAllowed": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "requestScreenRecording": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "selectDevice": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "cancelDeviceChooser": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "refreshDeviceChooser": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "openBluetoothSettings": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "devShowBluetoothChooser": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "devChooserEvents": {
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "showCastDialog": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "startCasting": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "stopCasting": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "closeCastDialog": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "watchCastRoutes": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "terminateCastRoute": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "changeCaptureSource": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "stopCapture": {
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        }
+      },
+      "events": {
+        "deviceChooser": {
+          "topic": "media.deviceChooser",
+          "mac": "custom",
+          "desktop": "absent",
+          "windows": "absent"
+        },
+        "castDialog": {
+          "topic": "media.castDialog",
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
+        },
+        "castRoutes": {
+          "topic": "media.castRoutes",
+          "mac": "custom",
+          "desktop": "custom",
+          "windows": "absent"
         }
       }
     },
@@ -1360,7 +1478,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "host",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 75000
             },
             "copyText": {
               "args": [
@@ -2938,7 +3057,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "absent"
+              "windows": "absent",
+              "deadline": 120000
             },
             "calendars": {
               "args": [],
@@ -3329,7 +3449,8 @@
               "async": true,
               "mac": "absent",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 330000
             }
           },
           "events": {
@@ -4220,7 +4341,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 900000
             },
             "newDeviceId": {
               "args": [],
@@ -4250,7 +4372,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "enterPhrase": {
               "args": [
@@ -4261,7 +4384,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "unlock": {
               "args": [
@@ -4270,7 +4394,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "forget": {
               "args": [
@@ -4279,7 +4404,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "chainStatus": {
               "args": [
@@ -4308,7 +4434,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 120000
             },
             "read": {
               "args": [
@@ -4319,7 +4446,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 120000
             },
             "remove": {
               "args": [
@@ -4339,7 +4467,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 120000
             },
             "sealLocal": {
               "args": [
@@ -4364,14 +4493,16 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "qrCode": {
               "args": [],
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "recoveryKitPreview": {
               "args": [
@@ -4389,7 +4520,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 900000
             },
             "copyRecoveryKit": {
               "args": [],
@@ -4410,7 +4542,8 @@
               "async": true,
               "mac": "custom",
               "desktop": "adapted",
-              "windows": "custom"
+              "windows": "custom",
+              "deadline": 180000
             },
             "revealFolder": {
               "args": [
