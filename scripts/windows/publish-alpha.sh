@@ -6,8 +6,8 @@
 # The build before this one keeps its files, so an update the app offered from the last feed can still be downloaded;
 # older builds' files go last.
 #
-#   scripts/windows/publish-alpha.sh [--dry-run] [--out <dir>] [--key <pem>] [--public-key <pem>] [--verify-bin <bin>] <Windows workflow run id>
-#   scripts/windows/publish-alpha.sh [--dry-run] [--out <dir>] [--key <pem>] [--public-key <pem>] [--verify-bin <bin>] [--commit <rev>] --installers <dir>
+#   scripts/windows/publish-alpha.sh [--dry-run] [--allow-local-publish] [--out <dir>] [--key <pem>] [--public-key <pem>] [--verify-bin <bin>] <Windows workflow run id>
+#   scripts/windows/publish-alpha.sh [--dry-run] [--allow-local-publish] [--out <dir>] [--key <pem>] [--public-key <pem>] [--verify-bin <bin>] [--commit <rev>] --installers <dir>
 #   scripts/windows/publish-alpha.sh -h | --help
 #
 # A run id publishes the Ardia-Setup-x64 and Ardia-Setup-arm64 artifacts of a green Windows workflow run, as an alpha.
@@ -21,8 +21,10 @@
 # feed's is refused, and a build equal to the live feed's is refused unless the live feed's windows-update.json.sig
 # is confirmed missing (HTTP 404), empty, or invalid AND the staged manifest matches the live windows-update.json
 # exactly (in which case only windows-update.json.sig is uploaded after rechecking live windows-update.json, never
-# clobbering published installers). Live publishes serialize on a per-release lock and verify the live manifest and
-# signature after uploading.
+# clobbering published installers). Live publishes must run in GitHub Actions (.github/workflows/windows-alpha.yml or
+# .github/workflows/release.yml, serialized on windows-alpha-publish) unless --allow-local-publish is passed; they also
+# hold a per-release lock, retry or roll back if uploading windows-update.json fails after windows-update.json.sig, and
+# verify the live manifest and signature after uploading.
 # Signing uses --key <pem> (or WINDOWS_UPDATE_KEY_FILE / WINDOWS_UPDATE_ED_PRIVATE_KEY), refused if its public half
 # doesn't match --public-key (default scripts/windows/windows-update.pem), and self-verifies windows-update.json,
 # windows-update.json.sig and both installers with ardia-update-verify before uploading windows-update.json.sig and
@@ -37,11 +39,12 @@ tag="windows-alpha"
 published="https://github.com/$repo/releases/download/$tag"
 published_under="https://github.com/$repo/releases/download/"
 die() { echo "error: $*" >&2; exit 1; }
-dry=0 out="" run_id="" installers="" commit_rev="" key_file="${WINDOWS_UPDATE_KEY_FILE:-}" public_key="$root/scripts/windows/windows-update.pem" verify_bin=""
+dry=0 allow_local_publish=0 out="" run_id="" installers="" commit_rev="" key_file="${WINDOWS_UPDATE_KEY_FILE:-}" public_key="$root/scripts/windows/windows-update.pem" verify_bin=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     --dry-run) dry=1 ;;
+    --allow-local-publish) allow_local_publish=1 ;;
     --out) out="${2:?--out takes a directory}"; shift ;;
     --installers) installers="${2:?--installers takes a directory}"; shift ;;
     --commit) commit_rev="${2:?--commit takes a revision}"; shift ;;
@@ -109,7 +112,7 @@ resolve_verifier() {
 fetch_live() {
   local url="$1" dest="$2" code="" rc=0
   rm -f "$dest"
-  code="$(curl -sSL --retry 3 --max-time 30 -o "$dest" -w '%{http_code}' "$url" 2>/dev/null)" || rc=$?
+  code="$(curl -sSL --retry 3 --max-time 30 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' -o "$dest" -w '%{http_code}' "$url" 2>/dev/null)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$dest"
     printf 'err:%s\n' "$rc"
@@ -137,7 +140,20 @@ fetch_live() {
 
 stage="$(mktemp -d "${TMPDIR:-/tmp}/ardia-windows-alpha.XXXXXX")"
 stage="$(cd "$stage" && pwd -P)"
-trap 'rm -rf "$stage"' EXIT
+lock_pid=""
+cleanup() {
+  if [ -n "$lock_pid" ]; then
+    exec 8>&- 2>/dev/null || true
+    kill "$lock_pid" 2>/dev/null || true
+    wait "$lock_pid" 2>/dev/null || true
+  fi
+  rm -rf "$stage"
+}
+trap cleanup EXIT
+
+if [ "$dry" != 1 ] && [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "$allow_local_publish" != 1 ]; then
+  die "live publishes must run in GitHub Actions (.github/workflows/windows-alpha.yml or .github/workflows/release.yml) so they serialize on windows-alpha-publish; pass --allow-local-publish only to intentionally publish locally"
+fi
 
 if [ -z "$key_file" ] && [ -n "${WINDOWS_UPDATE_ED_PRIVATE_KEY:-}" ]; then
   key_file="$stage/windows-update-key.pem"
@@ -188,10 +204,73 @@ fi
 
 if [ "$dry" != 1 ]; then
   lock_key="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:16])' "$repo/$tag")"
-  lock_file="${ARDIA_WINDOWS_PUBLISH_LOCK:-/tmp/ardia-windows-publish-$lock_key.lock}"
-  mkdir -p "$(dirname "$lock_file")"
-  exec 9>>"$lock_file"
-  python3 -I -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX)' || die "failed to acquire publish lock $lock_file"
+  if [ -n "${ARDIA_WINDOWS_PUBLISH_LOCK:-}" ]; then
+    lock_file="$ARDIA_WINDOWS_PUBLISH_LOCK"
+    mkdir -p "$(dirname "$lock_file")"
+  else
+    lock_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ardia/locks"
+    mkdir -p "$lock_dir"
+    chmod 700 "$lock_dir"
+    lock_file="$lock_dir/windows-publish-$lock_key.lock"
+  fi
+  mkfifo "$stage/lock.hold" "$stage/lock.ready"
+  python3 -I - "$lock_file" "${ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT:-60}" "$stage/lock.hold" "$stage/lock.ready" <<'PY' &
+import errno, fcntl, os, stat, sys, time
+path, timeout_raw, hold_fifo, ready_fifo = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+try:
+    timeout = float(timeout_raw)
+except ValueError:
+    timeout = -1.0
+if timeout < 0:
+    with open(ready_fifo, "w") as out:
+        out.write("ERR invalid lock timeout\n")
+    sys.exit(1)
+try:
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+except OSError as error:
+    with open(ready_fifo, "w") as out:
+        out.write(f"ERR {error}\n")
+    sys.exit(1)
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        with open(ready_fifo, "w") as out:
+            out.write("ERR lock path is not a regular file\n")
+        sys.exit(1)
+    deadline = time.monotonic() + timeout
+    locked = False
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+            break
+        except OSError as error:
+            if error.errno not in (errno.EAGAIN, errno.EACCES):
+                with open(ready_fifo, "w") as out:
+                    out.write(f"ERR {error}\n")
+                sys.exit(1)
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+    if not locked:
+        with open(ready_fifo, "w") as out:
+            out.write(f"ERR timed out waiting for publish lock {path}\n")
+        sys.exit(1)
+    with open(ready_fifo, "w") as out:
+        out.write("READY\n")
+    with open(hold_fifo, "rb") as hold:
+        hold.read()
+finally:
+    os.close(fd)
+PY
+  lock_pid=$!
+  lock_status=""
+  IFS= read -r lock_status <"$stage/lock.ready" || true
+  if [ "$lock_status" != "READY" ]; then
+    wait "$lock_pid" 2>/dev/null || true
+    lock_pid=""
+    die "failed to acquire publish lock $lock_file (${lock_status#ERR })"
+  fi
+  exec 8>"$stage/lock.hold"
 fi
 
 verifier=""
@@ -341,6 +420,16 @@ if [ "$repair_sig_only" = 1 ]; then
   fi
   run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json.sig"
 else
+  have_prev_valid_sig=0
+  prev_sig="$stage/prev-windows-update.json.sig"
+  if [ "$dry" != 1 ] && [ "$live_json_state" = "200" ]; then
+    prev_sig_state="$(fetch_live "$published/windows-update.json.sig" "$prev_sig")"
+    if [ "$prev_sig_state" = "200" ] \
+      && "$verifier" windows-manifest --key "$public_key" --manifest "$live_json" --signature "$prev_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null 2>&1 \
+      && "$verifier" windows-manifest --key "$public_key" --manifest "$live_json" --signature "$prev_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null 2>&1; then
+      have_prev_valid_sig=1
+    fi
+  fi
   if [ "$dry" = 1 ] || ! gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
     run gh release create "$tag" -R "$repo" --prerelease --latest=false --target "$commit" --title "Ardia for Windows (alpha)" --notes-file "$notes"
   fi
@@ -349,7 +438,45 @@ else
   for cpu in x64 arm64; do cp "$out/Ardia-Setup-$cpu.exe" "$out/Ardia-Setup-$cpu-$build.exe"; done
   run gh release upload "$tag" -R "$repo" --clobber "$out/Ardia-Setup-x64-$build.exe" "$out/Ardia-Setup-arm64-$build.exe" "$out/$name.tar.xz"
   run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json.sig"
-  run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json"
+  json_uploaded=0
+  if [ "$dry" = 1 ]; then
+    run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json"
+    json_uploaded=1
+  else
+    for attempt in 1 2 3; do
+      if run gh release upload "$tag" -R "$repo" --clobber "$out/windows-update.json"; then
+        json_uploaded=1
+        break
+      fi
+      if [ "$attempt" -lt 3 ]; then
+        echo "warning: uploading windows-update.json failed (attempt $attempt/3); retrying" >&2
+      fi
+    done
+  fi
+  if [ "$json_uploaded" != 1 ]; then
+    if [ "$have_prev_valid_sig" = 1 ]; then
+      rollback_dir="$stage/rollback"
+      mkdir -p "$rollback_dir"
+      cp "$prev_sig" "$rollback_dir/windows-update.json.sig"
+      gh release upload "$tag" -R "$repo" --clobber "$rollback_dir/windows-update.json.sig" \
+        || die "uploading windows-update.json failed and restoring previous windows-update.json.sig also failed"
+      rb_json="$stage/rb-windows-update.json"
+      rb_sig="$stage/rb-windows-update.json.sig"
+      rb_json_state="$(fetch_live "$published/windows-update.json" "$rb_json")"
+      rb_sig_state="$(fetch_live "$published/windows-update.json.sig" "$rb_sig")"
+      if [ "$rb_json_state" = "200" ] && [ "$rb_sig_state" = "200" ] \
+        && cmp -s "$rb_json" "$live_json" && cmp -s "$rb_sig" "$prev_sig" \
+        && "$verifier" windows-manifest --key "$public_key" --manifest "$rb_json" --signature "$rb_sig" --published-under "$published_under" --cpu x64 --current-build 0 >/dev/null 2>&1 \
+        && "$verifier" windows-manifest --key "$public_key" --manifest "$rb_json" --signature "$rb_sig" --published-under "$published_under" --cpu arm64 --current-build 0 >/dev/null 2>&1; then
+        die "uploading windows-update.json failed after retries; restored previous valid windows-update.json.sig"
+      fi
+      die "uploading windows-update.json failed and restored live pair failed verification"
+    else
+      gh release delete-asset "$tag" windows-update.json.sig -R "$repo" --yes \
+        || die "uploading windows-update.json failed and removing orphaned windows-update.json.sig also failed"
+      die "uploading windows-update.json failed after retries; removed orphaned windows-update.json.sig"
+    fi
+  fi
   run gh release upload "$tag" -R "$repo" --clobber "$out/Ardia-Setup-x64.exe" "$out/Ardia-Setup-arm64.exe"
   run gh release edit "$tag" -R "$repo" --prerelease --latest=false --notes-file "$notes"
   previous="$(printf '%s\n' "$before" | sed -n -E 's/^Ardia-Setup-(x64|arm64)-([0-9]+)\.exe$/\2/p' | grep -v -x "$build" | sort -n | tail -1 || true)"

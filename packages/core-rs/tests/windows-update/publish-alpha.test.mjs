@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -53,6 +53,7 @@ function makeFakeBin(
     jsonHttpCode = null,
     driftAfterFirstJsonFetch = null,
     pauseOnUploadSig = null,
+    failJsonUploadExit = 0,
   } = {},
 ) {
   const bin = join(dir, "bin");
@@ -83,7 +84,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift ;;
     -w) write_out="$2"; shift ;;
-    --retry|--max-time) shift ;;
+    -H|--retry|--max-time) shift ;;
     -*) ;;
     *) url="$1" ;;
   esac
@@ -156,6 +157,15 @@ while not os.path.exists(resume) and time.monotonic() < deadline:
 fi`
     : "";
 
+  const failJsonSnippet =
+    failJsonUploadExit !== 0
+      ? `  for arg in "$@"; do
+    case "$arg" in
+      */windows-update.json) exit "${failJsonUploadExit}" ;;
+    esac
+  done`
+      : "";
+
   const ghBin = join(bin, "gh");
   writeFileSync(
     ghBin,
@@ -164,12 +174,19 @@ set -euo pipefail
 ${pauseSnippet}
 printf '%s\\n' "$*" >> "${ghLog}"
 if [ "\${1:-}" = "release" ] && [ "\${2:-}" = "upload" ]; then
+${failJsonSnippet}
   for arg in "$@"; do
     case "$arg" in
       */windows-update.json) cp "$arg" "${join(state, "live.json")}" ;;
       */windows-update.json.sig) cp "$arg" "${join(state, "live.sig")}" ;;
     esac
   done
+  exit 0
+fi
+if [ "\${1:-}" = "release" ] && [ "\${2:-}" = "delete-asset" ]; then
+  if [ "\${4:-}" = "windows-update.json.sig" ]; then
+    rm -f "${join(state, "live.sig")}"
+  fi
   exit 0
 fi
 if [ "\${1:-}" = "release" ] && [ "\${2:-}" = "view" ]; then
@@ -192,33 +209,39 @@ exit 0
   return { bin, state, ghLog, lockFile };
 }
 
-function runPublish(args, { binDir, lockFile, env = {} }) {
+function runPublish(args, { binDir, lockFile, env = {}, githubActions = true }) {
+  const baseEnv = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    ARDIA_WINDOWS_PUBLISH_LOCK: lockFile,
+    WINDOWS_UPDATE_ED_PRIVATE_KEY: "",
+    WINDOWS_UPDATE_KEY_FILE: "",
+    ...env,
+  };
+  if (githubActions) baseEnv.GITHUB_ACTIONS = "true";
+  else delete baseEnv.GITHUB_ACTIONS;
   return spawnSync("bash", [publishScript, ...args], {
     cwd: root,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      ARDIA_WINDOWS_PUBLISH_LOCK: lockFile,
-      WINDOWS_UPDATE_ED_PRIVATE_KEY: "",
-      WINDOWS_UPDATE_KEY_FILE: "",
-      ...env,
-    },
+    env: baseEnv,
   });
 }
 
-function spawnPublish(args, { binDir, lockFile, env = {} }) {
+function spawnPublish(args, { binDir, lockFile, env = {}, githubActions = true }) {
+  const baseEnv = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    ARDIA_WINDOWS_PUBLISH_LOCK: lockFile,
+    WINDOWS_UPDATE_ED_PRIVATE_KEY: "",
+    WINDOWS_UPDATE_KEY_FILE: "",
+    ...env,
+  };
+  if (githubActions) baseEnv.GITHUB_ACTIONS = "true";
+  else delete baseEnv.GITHUB_ACTIONS;
   const child = spawn("bash", [publishScript, ...args], {
     cwd: root,
     stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH}`,
-      ARDIA_WINDOWS_PUBLISH_LOCK: lockFile,
-      WINDOWS_UPDATE_ED_PRIVATE_KEY: "",
-      WINDOWS_UPDATE_KEY_FILE: "",
-      ...env,
-    },
+    env: baseEnv,
   });
   let stdout = "";
   let stderr = "";
@@ -321,6 +344,77 @@ test("live publish uploads installers, then windows-update.json.sig alone, then 
     assert.doesNotMatch(uploads[2], /windows-update\.json\.sig/);
     assert.match(uploads[3], /Ardia-Setup-x64\.exe.*Ardia-Setup-arm64\.exe/);
     verifyLiveFeed(state, pubPem, 500);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("live publish outside GitHub Actions fails closed without --allow-local-publish and succeeds with it", () => {
+  ensureVerifier();
+  const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-local-gate-"));
+  try {
+    const { installers, privPem, pubPem } = makeFixture(dir, "0.2.99", 500);
+    const { bin, state, ghLog, lockFile } = makeFakeBin(dir);
+    const blocked = runPublish(
+      ["--installers", installers, "--out", join(dir, "out-blocked"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile, githubActions: false },
+    );
+    assert.notEqual(blocked.status, 0);
+    assert.match(blocked.stderr, /--allow-local-publish/);
+    assert.deepEqual(loggedUploads(ghLog), []);
+
+    const allowed = runPublish(
+      ["--allow-local-publish", "--installers", installers, "--out", join(dir, "out-allowed"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile, githubActions: false },
+    );
+    assert.equal(allowed.status, 0, allowed.stderr + allowed.stdout);
+    verifyLiveFeed(state, pubPem, 500);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("failed windows-update.json upload after windows-update.json.sig restores prior valid signature", () => {
+  ensureVerifier();
+  const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-rollback-"));
+  try {
+    const keypair = makeKeypair(dir);
+    const f501 = makeFixture(dir, "0.2.99", 501, { keypair });
+    const m500 = signedManifest("0.2.99", 500, keypair.privateKey);
+    const { bin, state, ghLog, lockFile } = makeFakeBin(dir, {
+      liveJson: m500.json,
+      liveSig: m500.sig,
+      failJsonUploadExit: 42,
+    });
+    const result = runPublish(
+      ["--installers", f501.installers, "--out", join(dir, "out-501"), "--key", keypair.privPem, "--public-key", keypair.pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /restored previous valid windows-update\.json\.sig/);
+    const uploads = loggedUploads(ghLog);
+    assert.ok(uploads.some((line) => /rollback\/windows-update\.json\.sig$/.test(line)), uploads.join("\n"));
+    verifyLiveFeed(state, keypair.pubPem, 500);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("first-ever publish deletes orphaned windows-update.json.sig when windows-update.json upload fails", () => {
+  ensureVerifier();
+  const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-orphan-"));
+  try {
+    const { installers, privPem, pubPem } = makeFixture(dir, "0.2.99", 500);
+    const { bin, state, ghLog, lockFile } = makeFakeBin(dir, { failJsonUploadExit: 42 });
+    const result = runPublish(
+      ["--installers", installers, "--out", join(dir, "out-500"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /removed orphaned windows-update\.json\.sig/);
+    const log = readFileSync(ghLog, "utf8");
+    assert.match(log, /release delete-asset windows-alpha windows-update\.json\.sig/);
+    assert.equal(existsSync(join(state, "live.sig")), false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -439,6 +533,64 @@ test("concurrent repair of build 500 and publish of build 501 serialize on the r
   }
 });
 
+test("publish lock refuses symlinks and times out cleanly when held past ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT", async () => {
+  ensureVerifier();
+  const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-lock-hardening-"));
+  try {
+    const { installers, privPem, pubPem } = makeFixture(dir, "0.2.99", 500);
+    const { bin, ghLog, lockFile } = makeFakeBin(dir);
+    const target = join(dir, "real-target");
+    const symLock = join(dir, "sym.lock");
+    writeFileSync(target, "keep\n");
+    symlinkSync(target, symLock);
+    const symRes = runPublish(
+      ["--installers", installers, "--out", join(dir, "out-sym"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+      { binDir: bin, lockFile: symLock },
+    );
+    assert.notEqual(symRes.status, 0);
+    assert.match(symRes.stderr, /failed to acquire publish lock/);
+    assert.deepEqual(loggedUploads(ghLog), []);
+
+    const heldMarker = join(dir, "lock-held");
+    const releaseMarker = join(dir, "lock-release");
+    const holder = spawn(
+      "python3",
+      [
+        "-I",
+        "-c",
+        `import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_CREAT | os.O_WRONLY, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], "w").close()
+deadline = time.monotonic() + 10.0
+while not os.path.exists(sys.argv[3]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+os.close(fd)
+`,
+        lockFile,
+        heldMarker,
+        releaseMarker,
+      ],
+      { stdio: "ignore" },
+    );
+    try {
+      await waitForFile(heldMarker);
+      const timeoutRes = runPublish(
+        ["--installers", installers, "--out", join(dir, "out-timeout"), "--key", privPem, "--public-key", pubPem, "--verify-bin", verifierPath],
+        { binDir: bin, lockFile, env: { ARDIA_WINDOWS_PUBLISH_LOCK_TIMEOUT: "1" } },
+      );
+      assert.notEqual(timeoutRes.status, 0);
+      assert.match(timeoutRes.stderr, /timed out waiting for publish lock/);
+      assert.deepEqual(loggedUploads(ghLog), []);
+    } finally {
+      writeFileSync(releaseMarker, "done\n");
+      await new Promise((resolveDone) => holder.on("close", resolveDone));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("cross-host drift to build 501 before repair upload aborts build 500 without clobbering build 501's signature", () => {
   ensureVerifier();
   const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-drift-"));
@@ -544,7 +696,7 @@ test("an already validly signed same build and any lower build are refused", () 
   }
 });
 
-test("live publish fails closed without a signing key while --dry-run uses an ephemeral key", () => {
+test("live publish fails closed without a signing key while --dry-run works locally with an ephemeral key", () => {
   ensureVerifier();
   const dir = mkdtempSync(join(tmpdir(), "ardia-win-pub-key-"));
   try {
@@ -555,7 +707,11 @@ test("live publish fails closed without a signing key while --dry-run uses an ep
     assert.match(liveNoKey.stderr, /a signing key is required to publish/);
 
     const dryOut = join(dir, "out-dry");
-    const dryRes = runPublish(["--dry-run", "--installers", installers, "--out", dryOut, "--verify-bin", verifierPath], { binDir: bin, lockFile });
+    const dryRes = runPublish(["--dry-run", "--installers", installers, "--out", dryOut, "--verify-bin", verifierPath], {
+      binDir: bin,
+      lockFile,
+      githubActions: false,
+    });
     assert.equal(dryRes.status, 0, dryRes.stderr + dryRes.stdout);
     assert.equal(readFileSync(join(dryOut, "windows-update.json.sig")).length, 64);
     assert.ok(execFileSync("bash", ["-n", publishScript], { encoding: "utf8" }) === "");
