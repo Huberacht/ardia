@@ -155,7 +155,9 @@ static void TestPlaceFile() {
   CHECK(!Exists(At(@"place/from-link.bin")));
   placed = PlaceFile(@"relative.bin", At(@"place/rel.bin"));
   CHECK(![placed[@"ok"] boolValue]);
-  NSArray *leftovers = [[NSFileManager.defaultManager contentsOfDirectoryAtPath:At(@"place") error:nil] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH '.ardia-placing-'"]];
+  NSArray *listing = [NSFileManager.defaultManager contentsOfDirectoryAtPath:At(@"place") error:nil];
+  CHECK(listing != nil);
+  NSArray *leftovers = [listing filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH '.ardia-placing-'"]];
   CHECK(leftovers.count == 0);
 }
 
@@ -229,29 +231,37 @@ static void TestNamesKeepWholeCharacters() {
   [@"x" writeToFile:made atomically:NO encoding:NSUTF8StringEncoding error:nil];
   NSString *next = FreePathIn(folder, name, &reason).lastPathComponent;
   CHECK([next hasSuffix:@" (1)"] && [next lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= kMaxNameBytes && [next dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO] != nil);
+  NSString *longExtension = [@"a." stringByPaddingToLength:250 withString:@"x" startingAtIndex:0];
+  NSString *firstLong = FreePathIn(folder, longExtension, &reason);
+  CHECK(firstLong != nil);
+  [@"x" writeToFile:firstLong atomically:NO encoding:NSUTF8StringEncoding error:nil];
+  NSString *numberedLong = FreePathIn(folder, longExtension, &reason).lastPathComponent;
+  CHECK(numberedLong.length > 0 && [numberedLong lengthOfBytesUsingEncoding:NSUTF8StringEncoding] <= kMaxNameBytes && ![numberedLong isEqualToString:firstLong.lastPathComponent]);
 }
 
 static void TestDownloadPickerDetection() {
   ForgetDownloadPrompts();
-  CHECK(!AwaitingDownloadTarget(1000));
-  NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"", @"offTheRecord" : @NO}, 1000);
-  CHECK(AwaitingDownloadTarget(1001));
-  CHECK(LooksLikeDownloadPicker(AwaitingDownloadTarget(1001), @""));
-  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001), @"Export passwords"));
-  NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a.zip", @"offTheRecord" : @NO}, 1002);
-  CHECK(!AwaitingDownloadTarget(1003));
-  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1003), nil));
-  NoteDownloadEvent(@{@"id" : @"p", @"state" : @"downloading", @"path" : @"", @"offTheRecord" : @YES}, 1004);
-  CHECK(!AwaitingDownloadTarget(1005));
-  NoteDownloadEvent(@{@"id" : @"b", @"state" : @"downloading", @"path" : @""}, 1006);
-  CHECK(AwaitingDownloadTarget(1007));
-  NoteDownloadEvent(@{@"id" : @"b", @"state" : @"cancelled", @"path" : @""}, 1008);
-  CHECK(!AwaitingDownloadTarget(1009));
-  NoteDownloadEvent(@{@"id" : @"c", @"state" : @"downloading", @"path" : @""}, 1010);
-  CHECK(!AwaitingDownloadTarget(1010 + 121));
+  CHECK(!AwaitingDownloadTarget(1000, @"Work"));
+  NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"", @"offTheRecord" : @NO, @"profile" : @"Work"}, 1000);
+  CHECK(AwaitingDownloadTarget(1001, @"Work"));
+  CHECK(!AwaitingDownloadTarget(1001, @"Home"));
+  CHECK(!AwaitingDownloadTarget(1001, nil));
+  CHECK(LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @""));
+  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Home"), @""));
+  CHECK(!LooksLikeDownloadPicker(AwaitingDownloadTarget(1001, @"Work"), @"Export passwords"));
+  NoteDownloadEvent(@{@"id" : @"a", @"state" : @"downloading", @"path" : @"/Users/me/Downloads/a.zip", @"offTheRecord" : @NO, @"profile" : @"Work"}, 1002);
+  CHECK(!AwaitingDownloadTarget(1003, @"Work"));
+  NoteDownloadEvent(@{@"id" : @"p", @"state" : @"downloading", @"path" : @"", @"offTheRecord" : @YES, @"profile" : @"Work"}, 1004);
+  CHECK(!AwaitingDownloadTarget(1005, @"Work"));
+  NoteDownloadEvent(@{@"id" : @"b", @"state" : @"downloading", @"path" : @"", @"profile" : @""}, 1006);
+  CHECK(AwaitingDownloadTarget(1007, @""));
+  NoteDownloadEvent(@{@"id" : @"b", @"state" : @"cancelled", @"path" : @"", @"profile" : @""}, 1008);
+  CHECK(!AwaitingDownloadTarget(1009, @""));
+  NoteDownloadEvent(@{@"id" : @"c", @"state" : @"downloading", @"path" : @"", @"profile" : @"Work"}, 1010);
+  CHECK(!AwaitingDownloadTarget(1010 + 121, @"Work"));
   NoteDownloadEvent(@{@"state" : @"downloading"}, 2000);
   NoteDownloadEvent((NSDictionary *)@"junk", 2000);
-  CHECK(!AwaitingDownloadTarget(2001));
+  CHECK(!AwaitingDownloadTarget(2001, @""));
 }
 
 int main() {

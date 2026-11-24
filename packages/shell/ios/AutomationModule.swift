@@ -29,6 +29,8 @@ public class AutomationModule: Module, AutomationNative {
 
   static func claimArmedDownload(_ arm: String, _ download: String, _ path: String) -> [String: Any] { ArdiaHost.claimArmedDownload(arm, download: download, path: path) }
 
+  static func releaseArmedDownload(_ arm: String, _ download: String, _ state: String) -> Bool { ArdiaHost.releaseArmedDownload(arm, download: download, state: state) }
+
   static func placeArmedDownload(_ arm: String, _ download: String, _ path: String, _ promise: Promise) {
     ArdiaHost.placeArmedDownload(arm, download: download, path: path) { promise.resolve($0) }
   }
@@ -69,6 +71,8 @@ public class AutomationModule: Module, AutomationNative {
     Self.claimArmedDownloadFunction
 
     Self.placeArmedDownloadFunction
+
+    Self.releaseArmedDownloadFunction
 
     OnDestroy {
       ControlSocket.shared.detach(self)

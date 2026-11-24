@@ -375,6 +375,7 @@ export type AutomationNative = {
   fileArms?(): Promise<FileArmRow[]>;
   claimArmedDownload?(arm: string, download: string, path: string): FileArmClaim;
   placeArmedDownload?(arm: string, download: string, path: string): Promise<PlacedDownload>;
+  releaseArmedDownload?(arm: string, download: string, state: string): boolean;
   addListener(name: "onRequest", listener: (event: AutomationNativeEvents["onRequest"]) => void): { remove(): void };
   addListener(name: "onClose", listener: (event: AutomationNativeEvents["onClose"]) => void): { remove(): void };
   addListener(name: "onWritten", listener: (event: AutomationNativeEvents["onWritten"]) => void): { remove(): void };

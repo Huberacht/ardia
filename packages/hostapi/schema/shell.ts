@@ -413,6 +413,7 @@ export const shell = defineModuleDomain({
         fileArms: { args: [], result: "FileArmRow[]", swiftResult: "[[String: Any]]", async: true, queue: "userInitiated", optional: true, mac: "custom", desktop: "custom", windows: "absent" },
         claimArmedDownload: { args: [["arm", "string"], ["download", "string"], ["path", "string"]], result: "FileArmClaim", swiftResult: "[String: Any]", async: false, optional: true, mac: "custom", desktop: "custom", windows: "absent" },
         placeArmedDownload: { args: [["arm", "string"], ["download", "string"], ["path", "string"]], result: "PlacedDownload", async: true, optional: true, promise: true, mac: "custom", desktop: "custom", windows: "absent" },
+        releaseArmedDownload: { args: [["arm", "string"], ["download", "string"], ["state", "string"]], result: "boolean", async: false, optional: true, mac: "custom", desktop: "custom", windows: "absent" },
       },
       events: {
         onRequest: { payload: "ControlRequest", mac: "custom", desktop: "adapted", windows: "absent" },

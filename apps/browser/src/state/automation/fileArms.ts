@@ -1,5 +1,5 @@
 import { PLATFORM_FEATURES } from "../../lib/platformFeatures";
-import { armFilePanel, armsFilePanels as nativeArmsFilePanels, claimArmedDownload, disarmFilePanels, filePanelArms, placeArmedDownload, type FileArmKind, type FileArmRow } from "../../platform/automation";
+import { armFilePanel, armsFilePanels as nativeArmsFilePanels, claimArmedDownload, disarmFilePanels, filePanelArms, placeArmedDownload, releaseArmedDownload, type FileArmKind, type FileArmRow } from "../../platform/automation";
 import { onDownload, type Download } from "../../platform/downloads";
 import { secureRandomHex } from "../../platform/secureRandom";
 import { foreignWriteHooks } from "../browser/foreignWriteHooks";
@@ -18,6 +18,7 @@ export const MAX_ARM_SECONDS = 600;
 export const MAX_ARMS = 16;
 const POLL_MS = 2_000;
 const KEEP_ENDED_MS = 600_000;
+const START_SLACK_MS = 2_000;
 
 const armsFilePanels = () => PLATFORM_FEATURES.silentFilePanels && nativeArmsFilePanels();
 
@@ -33,6 +34,7 @@ type Tracked = {
   before: ReadonlySet<string>;
   once: boolean;
   open: boolean;
+  armedAt: number;
   expiresAt: number;
   endedAt: number | null;
   answeredSeen: number;
@@ -114,6 +116,7 @@ function candidates(d: Download): Tracked[] {
   const now = Date.now();
   return [...tracked.values()]
     .filter((t) => t.kind === "download" && !t.cleared && now < t.expiresAt + KEEP_ENDED_MS && !t.before.has(d.id))
+    .filter((t) => typeof d.startTime !== "number" || d.startTime >= t.armedAt - START_SLACK_MS)
     .filter((t) => t.engineProfile === null || (d.profile ?? "") === t.engineProfile)
     .filter((t) => !t.once || !t.downloads.length)
     .sort((a, b) => Number(b.tab !== null) - Number(a.tab !== null) || b.expiresAt - a.expiresAt);
@@ -172,6 +175,7 @@ function noteDownload(d: Download) {
     return;
   }
   row.state = d.state;
+  releaseArmedDownload(t.id, d.id, d.state);
   noteFileArm("arm_failures", 1, t.consent);
 }
 
@@ -257,6 +261,7 @@ export async function armFiles(request: ArmRequest, call: SocketCall) {
     before,
     once: made.arm.once,
     open: true,
+    armedAt: made.arm.armedAt,
     expiresAt: made.arm.expiresAt,
     endedAt: null,
     answeredSeen: 0,

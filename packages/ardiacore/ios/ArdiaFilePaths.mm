@@ -103,6 +103,7 @@ NSString *Numbered(NSString *name, int n) {
     ext = @"";
   }
   NSString *tail = ext.length ? [NSString stringWithFormat:@" (%d).%@", n, ext] : [NSString stringWithFormat:@" (%d)", n];
+  if (Bytes(tail) >= kMaxNameBytes) tail = [NSString stringWithFormat:@" (%d)", n];
   if (Bytes(stem) + Bytes(tail) > kMaxNameBytes) stem = FitBytes(stem, kMaxNameBytes - Bytes(tail));
   return [stem stringByAppendingString:tail];
 }
@@ -316,12 +317,14 @@ NSDictionary<NSString *, id> *PlaceFile(NSString *source, NSString *target) {
   if (renameatx_np(AT_FDCWD, source.fileSystemRepresentation, dir.get(), tmp, RENAME_EXCL) == 0) {
     struct stat moved;
     if (fstatat(dir.get(), tmp, &moved, AT_SYMLINK_NOFOLLOW) != 0 || moved.st_dev != info.st_dev || moved.st_ino != info.st_ino) {
-      renameatx_np(dir.get(), tmp, AT_FDCWD, source.fileSystemRepresentation, RENAME_EXCL);
+      if (renameatx_np(dir.get(), tmp, AT_FDCWD, source.fileSystemRepresentation, RENAME_EXCL) != 0)
+        return @{@"ok" : @NO, @"reason" : @"sourceChanged", @"recoveryPath" : [parent stringByAppendingPathComponent:temporary]};
       return Failure(@"sourceChanged");
     }
     if (renameatx_np(dir.get(), tmp, dir.get(), name.fileSystemRepresentation, RENAME_EXCL) == 0) return @{@"ok" : @YES, @"path" : target, @"bytes" : @(bytes)};
     const int failed = errno;
-    renameatx_np(dir.get(), tmp, AT_FDCWD, source.fileSystemRepresentation, RENAME_EXCL);
+    if (renameatx_np(dir.get(), tmp, AT_FDCWD, source.fileSystemRepresentation, RENAME_EXCL) != 0)
+      return @{@"ok" : @NO, @"reason" : failed == EEXIST ? @"exists" : @"moveFailed", @"recoveryPath" : [parent stringByAppendingPathComponent:temporary]};
     return Failure(failed == EEXIST ? @"exists" : @"moveFailed");
   }
   if (errno == EEXIST) return Failure(@"moveFailed");

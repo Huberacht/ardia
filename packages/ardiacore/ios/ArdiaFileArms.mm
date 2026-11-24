@@ -1,4 +1,5 @@
 #import "ArdiaHost.h"
+#import "ArdiaDownloadMover.h"
 #import "ArdiaDownloadPrompts.h"
 #import "ArdiaFilePaths.h"
 #import "ArdiaInternal.h"
@@ -179,21 +180,29 @@ bool RegularWindow(ArdiaWindowController *_Nullable c) {
 struct Candidate {
   NSString *armId;
   NSString *_Nullable tabId;
+  NSString *_Nullable windowId;
   NSTimeInterval armedAt;
 };
 
 std::vector<Candidate> CandidatesLocked(NSString *kind) {
   std::vector<Candidate> found;
   for (ArdiaFileArm *arm in Arms())
-    if (Active(arm) && [arm.kind isEqualToString:kind]) found.push_back({arm.armId, arm.tabId, arm.armedAt});
+    if (Active(arm) && [arm.kind isEqualToString:kind]) found.push_back({arm.armId, arm.tabId, arm.windowId, arm.armedAt});
   return found;
 }
 
-NSString *_Nullable PickArm(NSString *kind, NSWindow *_Nullable parent) {
+void EndMoved(NSString *armId) {
+  NSMutableArray<NSString *> *purge = [NSMutableArray array];
+  Locked([&] {
+    ArdiaFileArm *arm = ArmNamed(armId);
+    if (arm && Active(arm)) End(arm, @"cleared", @"tabMoved", purge);
+  });
+  PurgeAll(purge);
+}
+
+NSString *_Nullable PickArm(NSString *kind, ArdiaWindowController *panelWindow) {
   std::vector<Candidate> candidates = Locked([&] { return CandidatesLocked(kind); });
   if (candidates.empty()) return nil;
-  ArdiaWindowController *panelWindow = ControllerOf(parent);
-  if (!RegularWindow(panelWindow)) return nil;
   NSString *pick = nil;
   int pickRank = 0;
   NSTimeInterval pickAt = 0;
@@ -201,7 +210,13 @@ NSString *_Nullable PickArm(NSString *kind, NSWindow *_Nullable parent) {
     int rank = 1;
     if (candidate.tabId) {
       ArdiaCoreTab *tab = TabWithAppTabId(candidate.tabId);
-      if (!tab || !tab.profile || tab.profile.offTheRecord || tab.profile != panelWindow.coreWindow.activeProfile || [ArdiaWindowController holding:tab] != panelWindow) continue;
+      if (!tab || !tab.profile || tab.profile.offTheRecord) continue;
+      ArdiaWindowController *holder = [ArdiaWindowController holding:tab];
+      if ([kind isEqualToString:@"upload"] && holder && candidate.windowId && ![holder.appWindowId isEqualToString:candidate.windowId]) {
+        EndMoved(candidate.armId);
+        continue;
+      }
+      if (tab.profile != panelWindow.coreWindow.activeProfile || holder != panelWindow) continue;
       rank = 2;
     }
     if (rank > pickRank || (rank == pickRank && candidate.armedAt >= pickAt)) {
@@ -306,8 +321,11 @@ NSArray<NSURL *> *ArmedPanelPicks(NSSavePanel *panel, NSWindow *parent, bool *ha
   *handled = false;
   PurgeAll(Locked([] { return SweepLocked(); }));
   const bool open = [panel isKindOfClass:NSOpenPanel.class];
-  if (!open && !ardia_files::LooksLikeDownloadPicker(ardia_files::AwaitingDownloadTarget(Now()), panel.message)) return nil;
-  NSString *pick = PickArm(open ? @"upload" : @"download", parent);
+  ArdiaWindowController *panelWindow = ControllerOf(parent);
+  if (!RegularWindow(panelWindow)) return nil;
+  NSString *profile = ProfileName(panelWindow.coreWindow.activeProfile);
+  if (!open && !ardia_files::LooksLikeDownloadPicker(ardia_files::AwaitingDownloadTarget(Now(), profile), panel.message)) return nil;
+  NSString *pick = PickArm(open ? @"upload" : @"download", panelWindow);
   if (!pick) return nil;
   *handled = true;
   *armId = pick;
@@ -321,12 +339,13 @@ using namespace ardia_host;
 @implementation ArdiaHost (FileArms)
 
 + (void)armFiles:(NSDictionary<NSString *, id> *)spec completion:(void (^)(NSDictionary<NSString *, id> *result))completion {
+  const uint64_t generation = Locked([] { return gGeneration; });
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-    completion([self armFilesNow:spec]);
+    completion([self armFilesNow:spec generation:generation]);
   });
 }
 
-+ (NSDictionary<NSString *, id> *)armFilesNow:(NSDictionary<NSString *, id> *)spec {
++ (NSDictionary<NSString *, id> *)armFilesNow:(NSDictionary<NSString *, id> *)spec generation:(uint64_t)generation {
   SweepUploadRootOnce();
   NSString *armId = spec[@"id"];
   NSString *kind = spec[@"kind"];
@@ -347,7 +366,6 @@ using namespace ardia_host;
   if (!upload && paths.count != 1) return Refused(@"badPaths", nil);
   const NSTimeInterval ttl = [seconds isKindOfClass:NSNumber.class] ? MIN(MAX(seconds.doubleValue, 1), kMaxSeconds) : 120;
   const BOOL onlyOnce = ![once isKindOfClass:NSNumber.class] || once.boolValue;
-  const uint64_t generation = Locked([] { return gGeneration; });
   NSMutableArray<NSString *> *resolved = [NSMutableArray array];
   BOOL folder = NO;
   for (id path in paths) {
@@ -511,11 +529,14 @@ using namespace ardia_host;
       break;
     }
     placed = ardia_files::PlaceFile(path, target);
-    if ([placed[@"ok"] boolValue] || !folder || ![placed[@"reason"] isEqualToString:@"exists"]) break;
+    if ([placed[@"ok"] boolValue] || placed[@"recoveryPath"] || !folder || ![placed[@"reason"] isEqualToString:@"exists"]) break;
   }
   const bool ok = [placed[@"ok"] boolValue];
   NSMutableDictionary *answer = [placed mutableCopy];
-  if (!ok && prompted) answer[@"stagedPath"] = path;
+  [answer removeObjectForKey:@"recoveryPath"];
+  if (!ok && placed[@"recoveryPath"]) answer[@"stagedPath"] = placed[@"recoveryPath"];
+  else if (!ok && prompted) answer[@"stagedPath"] = path;
+  if (ok) [ArdiaDownloadMover.shared rememberMove:downloadId from:path to:placed[@"path"]];
   Locked([&] {
     ArdiaFileArm *arm = ArmNamed(armId);
     if (!arm) return;
@@ -530,5 +551,27 @@ using namespace ardia_host;
   if (ok && prompted) rmdir(path.stringByDeletingLastPathComponent.fileSystemRepresentation);
   return answer;
 }
+
++ (BOOL)releaseArmedDownload:(NSString *)armId download:(NSString *)downloadId state:(NSString *)state {
+  NSString *emptyStaging = nil;
+  const BOOL released = Locked([&] {
+    ArdiaFileArm *arm = ArmNamed(armId);
+    NSString *claimed = arm.claims[downloadId];
+    if (!claimed) return NO;
+    [arm.claims removeObjectForKey:downloadId];
+    if (InStagingLocked(arm, claimed)) {
+      emptyStaging = claimed.stringByDeletingLastPathComponent;
+      [arm.stagingFolders removeObject:emptyStaging];
+    }
+    if (!Active(arm) && !arm.landed.count) {
+      arm.state = @"failed";
+      arm.reason = [state isEqualToString:@"cancelled"] ? @"cancelled" : @"downloadFailed";
+    }
+    return YES;
+  });
+  if (emptyStaging) rmdir(emptyStaging.fileSystemRepresentation);
+  return released;
+}
+
 
 @end

@@ -25,6 +25,7 @@ export const armFilePanel = async (spec: FileArmSpec): Promise<FileArmResult> =>
 export const disarmFilePanels = (ids: string[] | null, purge: boolean): number => Automation().disarmFiles?.(ids, purge) ?? 0;
 export const filePanelArms = async (): Promise<FileArmRow[]> => (await Automation().fileArms?.()) ?? [];
 export const claimArmedDownload = (arm: string, download: string, path: string): FileArmClaim => Automation().claimArmedDownload?.(arm, download, path) ?? { ok: false, reason: "unsupported" };
+export const releaseArmedDownload = (arm: string, download: string, state: string): boolean => Automation().releaseArmedDownload?.(arm, download, state) ?? false;
 export const placeArmedDownload = async (arm: string, download: string, path: string): Promise<PlacedDownload> => (await Automation().placeArmedDownload?.(arm, download, path)) ?? { ok: false, reason: "unsupported" };
 
 export type DevtoolsEndpoint = { port: number; generation: number; token: Secret<"devtoolsToken"> };

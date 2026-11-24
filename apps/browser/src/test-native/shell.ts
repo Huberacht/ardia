@@ -520,6 +520,7 @@ export const fileArmsNative = {
   specs: [] as Record<string, unknown>[],
   placed: [] as [string, string, string][],
   claims: [] as [string, string, string][],
+  released: [] as [string, string, string][],
   disarmed: [] as [string[] | null, boolean][],
   disarmedAfter: [] as (string | undefined)[],
   refuse: null as null | { reason: string; path?: string },
@@ -616,6 +617,14 @@ for (const [name, run] of Object.entries({
     row.answered = (row.answered as number) + 1;
     if (row.once) row.state = "claimed";
     return { ok: true, mode: "automatic" };
+  },
+  releaseArmedDownload: (arm: string, download: string, state: string) => {
+    fileArmsNative.released.push([arm, download, state]);
+    const row = fileArmsNative.rows.find((r) => r.id === arm);
+    const claimed = row?.claimed as Record<string, string> | undefined;
+    if (!claimed?.[download]) return false;
+    delete claimed[download];
+    return true;
   },
   placeArmedDownload: async (arm: string, download: string, path: string) => {
     fileArmsNative.placed.push([arm, download, path]);

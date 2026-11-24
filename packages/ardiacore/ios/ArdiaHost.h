@@ -101,6 +101,7 @@ NS_ASSUME_NONNULL_BEGIN
     NS_SWIFT_NAME(claimArmedDownload(_:download:path:));
 + (void)placeArmedDownload:(NSString *)armId download:(NSString *)downloadId path:(NSString *)path completion:(void (^)(NSDictionary<NSString *, id> *result))completion
     NS_SWIFT_NAME(placeArmedDownload(_:download:path:completion:));
++ (BOOL)releaseArmedDownload:(NSString *)armId download:(NSString *)downloadId state:(NSString *)state NS_SWIFT_NAME(releaseArmedDownload(_:download:state:));
 @end
 
 NS_ASSUME_NONNULL_END

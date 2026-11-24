@@ -1302,6 +1302,7 @@ protocol AutomationNative {
   static func fileArms() -> [[String: Any]]
   static func claimArmedDownload(_ arm: String, _ download: String, _ path: String) -> [String: Any]
   static func placeArmedDownload(_ arm: String, _ download: String, _ path: String, _ promise: Promise)
+  static func releaseArmedDownload(_ arm: String, _ download: String, _ state: String) -> Bool
 }
 
 extension AutomationNative {
@@ -1365,6 +1366,10 @@ extension AutomationNative {
 
   static var placeArmedDownloadFunction: AnyDefinition {
     AsyncFunction("placeArmedDownload") { (arm: String, download: String, path: String, promise: Promise) in Self.placeArmedDownload(arm, download, path, promise) }
+  }
+
+  static var releaseArmedDownloadFunction: AnyDefinition {
+    Function("releaseArmedDownload") { (arm: String, download: String, state: String) -> Bool in Self.releaseArmedDownload(arm, download, state) }
   }
 }
 

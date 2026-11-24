@@ -226,6 +226,13 @@ int OpenOwnStaging(int source, NSString *name) {
   [_defaults setObject:[_moved copy] forKey:kMovedDefault];
 }
 
+- (void)rememberMove:(NSString *)downloadId from:(NSString *)from to:(NSString *)to {
+  if (!downloadId.length || !from.length || !to.length) return;
+  os_unfair_lock_lock(&_lock);
+  [self lockedRemember:downloadId from:from to:to];
+  os_unfair_lock_unlock(&_lock);
+}
+
 - (void)journal:(NSString *)downloadId entry:(NSDictionary *)entry {
   os_unfair_lock_lock(&_lock);
   NSMutableDictionary *journal = [[_defaults dictionaryForKey:kJournalDefault] mutableCopy] ?: [NSMutableDictionary dictionary];

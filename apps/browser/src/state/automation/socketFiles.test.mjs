@@ -36,6 +36,7 @@ async function setup() {
   native.placed.length = 0;
   native.disarmed.length = 0;
   native.claims.length = 0;
+  native.released.length = 0;
   native.disarmedAfter.length = 0;
   native.gate = null;
   native.refuse = null;
@@ -330,6 +331,30 @@ test("spaces.list pages", async () => {
   const rest = await ok("spaces.list", { offset: 1 });
   assert.equal(rest.items.length, first.total - 1);
   assert.equal(rest.nextOffset, null);
+});
+
+test("an old download re-announced after the arm (a profile loading its history) never takes it", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/new.zip" });
+  stub.emitDownload(download({ id: "history", path: "/Users/me/Downloads/old.zip", state: "finished", startTime: armed.armedAt - 86_400_000 }));
+  await tick();
+  assert.equal(native.claims.length, 0, "a download that started a day before the arm isn't offered to it");
+  stub.emitDownload(download({ id: "fresh", path: "/Users/me/Downloads/fresh.zip", startTime: armed.armedAt + 50 }));
+  await tick();
+  assert.deepEqual(native.claims.map(([arm, id]) => [arm, id]), [[armed.arm, "fresh"]]);
+});
+
+test("a cancelled or failed claimed download releases its native claim and places nothing", async () => {
+  await setup();
+  const armed = await ok("files.armDownload", { path: "/Users/me/Desktop/gone.zip" });
+  stub.emitDownload(download({ id: "gone", path: "/Users/me/Downloads/gone.zip" }));
+  await tick();
+  stub.emitDownload(download({ id: "gone", path: "/Users/me/Downloads/gone.zip", state: "cancelled" }));
+  await tick();
+  assert.deepEqual(native.released, [[armed.arm, "gone", "cancelled"]]);
+  assert.equal(native.placed.length, 0);
+  const row = (await ok("files.arms", { arms: [armed.arm] })).items[0];
+  assert.equal(row.downloads[0].state, "cancelled");
 });
 
 test("file methods refuse where the platform can't answer panels", async () => {

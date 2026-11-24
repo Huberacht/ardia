@@ -120,6 +120,7 @@ const MODULE_FALLBACKS: Record<string, Record<string, Fallback>> = {
     fileArms: answer([]),
     claimArmedDownload: now({ ok: false, reason: "unsupported" }),
     placeArmedDownload: answer({ ok: false, reason: "unsupported" }),
+    releaseArmedDownload: now(false),
   },
   ArdiaSystemSignals: {
     watchIdle: () => undefined,
