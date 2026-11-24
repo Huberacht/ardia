@@ -420,7 +420,7 @@ class ExportPicker : public ui::SelectFileDialog::Listener {
   void FileSelected(const ui::SelectedFileInfo& file, int) override {
     DeleteLater();
     const base::FilePath path = file.path();
-    credentials::Plan plan = credentials::PlanExport(ardia::desktop_paths::Text(path));
+    credentials::Plan plan = credentials::PlanExport(ardia::desktop_paths::Text(path), static_cast<char>(base::FilePath::kSeparators[0]));
     if (!plan.ok()) {
       return Fail(std::move(done_), plan.code, plan.message);
     }

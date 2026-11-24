@@ -17,6 +17,9 @@ const AMD64_RIP = 0xf8;
 const MAX_FRAMES = 64;
 const SCAN_BYTES = 0x10000n;
 const MAX_COUNT = 4096;
+const MODULE_RECORD_BYTES = 108;
+const MAX_STRING_BYTES = 4096;
+const MAX_BUILD_ID_BYTES = 64;
 
 export type MinidumpModule = { base: bigint; size: number; path: string; buildId: string | null };
 type MinidumpException = { signal: number; code: number; threadId: number; address: bigint | null; parameter: bigint | null };
@@ -57,12 +60,12 @@ class Reader {
   }
   utf16(rva: number) {
     const length = this.u32(rva);
-    const text = length === null || length % 2 ? null : this.slice(rva + 4, length);
+    const text = length === null || length % 2 || length > MAX_STRING_BYTES ? null : this.slice(rva + 4, length);
     return text ? new TextDecoder("utf-16le").decode(text) : null;
   }
   utf8(rva: number) {
     const length = this.u32(rva);
-    const text = length === null ? null : this.slice(rva + 4, length);
+    const text = length === null || length > MAX_STRING_BYTES ? null : this.slice(rva + 4, length);
     return text ? new TextDecoder().decode(text) : null;
   }
 }
@@ -96,19 +99,19 @@ function streams(reader: Reader) {
   return found;
 }
 
-function modules(reader: Reader, rva: number | undefined): MinidumpModule[] {
-  const count = rva === undefined ? null : reader.u32(rva);
-  if (rva === undefined || count === null || count > MAX_COUNT) return [];
+function modules(reader: Reader, stream: { size: number; rva: number } | undefined): MinidumpModule[] {
+  const count = stream === undefined ? null : reader.u32(stream.rva);
+  if (stream === undefined || count === null || count > MAX_COUNT || 4 + count * MODULE_RECORD_BYTES > stream.size) return [];
   const list: MinidumpModule[] = [];
   for (let index = 0; index < count; index++) {
-    const at = rva + 4 + index * 108;
+    const at = stream.rva + 4 + index * MODULE_RECORD_BYTES;
     const base = reader.u64(at);
     const size = reader.u32(at + 8);
     const name = reader.u32(at + 20);
     if (base === null || size === null || name === null) break;
     const cvSize = reader.u32(at + 76) ?? 0;
     const cvRva = reader.u32(at + 80) ?? 0;
-    const buildId = cvSize > 4 && reader.u32(cvRva) === ELF_BUILD_ID ? reader.slice(cvRva + 4, cvSize - 4) : null;
+    const buildId = cvSize > 4 && cvSize - 4 <= MAX_BUILD_ID_BYTES && reader.u32(cvRva) === ELF_BUILD_ID ? reader.slice(cvRva + 4, cvSize - 4) : null;
     list.push({ base, size, path: reader.utf16(name) ?? "", buildId: buildId?.length ? hex(buildId) : null });
   }
   return list;
@@ -138,7 +141,7 @@ function annotationObjects(reader: Reader, rva: number, into: Record<string, str
     if (name === null || type !== ANNOTATION_STRING || value === null) continue;
     const key = reader.utf8(name);
     const length = reader.u32(value);
-    const data = length === null ? null : reader.slice(value + 4, length);
+    const data = length === null || length > MAX_STRING_BYTES ? null : reader.slice(value + 4, length);
     if (key && data) into[key] = new TextDecoder().decode(data).replace(/\0+$/, "");
   }
 }
@@ -248,7 +251,7 @@ export function parseMinidump(bytes: Uint8Array): Minidump | null {
   const system = found.get(SYSTEM_INFO);
   const amd64 = !!system && reader.u16(system.rva) === AMD64;
   const platform = system && system.size >= 24 ? reader.u32(system.rva + 20) : null;
-  const list = modules(reader, found.get(MODULE_LIST)?.rva);
+  const list = modules(reader, found.get(MODULE_LIST));
   const thrown = found.get(EXCEPTION);
   let exception: MinidumpException | null = null;
   let context: { size: number; rva: number } | null = null;

@@ -8,7 +8,10 @@ its `skip <patch>` lines leave a patch of engine/patches/series out, and its `ta
 of engine/patches/series at its own place in that series, as a `linux,win` line would once series.py reads platform
 sets), each applied strictly (git apply), else with patch's fuzz.
 A patch that fails is recorded and the rest still run. Each patch that goes in is written to .series-win-applied beside
-the tree and never applied again: a later patch on the same lines would hide it from a reverse check. Of the layers, engine/chromium runs as is (its
+the tree (its place in the plan, name and sha256, with a copy in .series-win-applied.d) and never applied again: a later
+patch on the same lines would hide it from a reverse check. Before patching, apply checks every recorded patch against
+the plan at the same place and with the same content, and refuses a tree an earlier plan patched (rewind reverses the
+recorded copies back to where the plans part). Of the layers, engine/chromium runs as is (its
 chrome/browser/ardia gets a Windows BUILD.gn made from the shared one (its shared sources less .mm and pip/, plus the
 portable files of its Mac block named in WINDOWS_FROM_MAC_BLOCK), the fixes in
 ardia-layer-win.patch that make its sources build on Windows, and the files under src/chrome/browser/ardia in place of
@@ -23,9 +26,10 @@ ardia_linux_compile_probe=true), and
 scripts/windows/engine/src/ardia/win (the app in the browser process, with the app's EngineApi.h and a generated table
 of the engine's ac_* calls in the sources Windows compiles) is copied to //ardia/win, only the files that changed. Writes a table: patch, result, which files it touches (Mac only, Mac and shared, OS-neutral).
 
-Usage: series_win.py apply --report TSV | layer | classify (CHROMIUM_SRC is the tree)
+Usage: series_win.py apply --report TSV | rewind | layer | classify (CHROMIUM_SRC is the tree)
 """
 import argparse
+import hashlib
 import io
 import os
 import re
@@ -765,33 +769,154 @@ def state_path(tree):
     return os.path.join(os.path.dirname(os.path.abspath(tree)), '.series-win-applied')
 
 
-def read_state(tree):
+def copies_path(tree):
+    return state_path(tree) + '.d'
+
+
+def patch_digest(path):
+    return hashlib.sha256(read_file(path, 'rb')).hexdigest()
+
+
+def read_ledger(tree):
     path = state_path(tree)
-    return set(read_file(path).split()) if os.path.isfile(path) else set()
+    if not os.path.isfile(path):
+        return []
+    entries = []
+    for line in read_file(path).splitlines():
+        fields = line.split('\t')
+        if len(fields) == 3 and fields[0].isdigit():
+            entries.append((int(fields[0]), fields[1], fields[2]))
+        elif len(fields) == 1 and fields[0]:
+            entries.append((None, fields[0], None))
+        elif line:
+            raise InputError(f'{path}: unreadable line {line!r}')
+    return entries
 
 
-def record(tree, name):
+def copy_of(tree, index, name):
+    return os.path.join(copies_path(tree), f'{index:04d}-{name}')
+
+
+def write_ledger(tree, entries):
+    with open(state_path(tree), 'w') as f:
+        f.write(''.join(f'{index}\t{name}\t{digest}\n' for index, name, digest in entries))
+
+
+def record(tree, index, name, path):
+    os.makedirs(copies_path(tree), exist_ok=True)
+    shutil.copyfile(path, copy_of(tree, index, name))
     with open(state_path(tree), 'a') as f:
-        f.write(name + '\n')
+        f.write(f'{index}\t{name}\t{patch_digest(path)}\n')
 
 
-def cmd_apply(args):
-    tree = os.environ['CHROMIUM_SRC']
-    done = read_state(tree)
+def divergence(tree, plan):
+    entries = read_ledger(tree)
+    legacy = [entry for entry in entries if entry[0] is None]
+    if legacy and len(legacy) != len(entries):
+        return 0, 'mixes entries with and without their place in the plan'
+    if legacy:
+        for position, (_, name, _) in enumerate(entries):
+            if position >= len(plan) or plan[position][0] != name:
+                planned = plan[position][0] if position < len(plan) else 'nothing'
+                return position, f'records {name} at place {position}, where the plan applies {planned}'
+            if not applied(plan[position][1], tree):
+                return position, f'records {name} without its content, and the tree does not carry the current {name}'
+        return None
+    last = -1
+    for position, (index, name, digest) in enumerate(entries):
+        if index <= last:
+            return position, f'records {name} out of order'
+        last = index
+        if index >= len(plan) or plan[index][0] != name:
+            planned = plan[index][0] if index < len(plan) else 'nothing'
+            return position, f'records {name} at place {index}, where the plan applies {planned}'
+        if patch_digest(plan[index][1]) != digest:
+            return position, f'records {name} with other content than the current patch'
+    return None
+
+
+def upgrade_legacy(tree, plan):
+    entries = read_ledger(tree)
+    if not entries or entries[0][0] is not None:
+        return
+    upgraded = []
+    for position, (_, name, _) in enumerate(entries):
+        os.makedirs(copies_path(tree), exist_ok=True)
+        shutil.copyfile(plan[position][1], copy_of(tree, position, name))
+        upgraded.append((position, name, patch_digest(plan[position][1])))
+    write_ledger(tree, upgraded)
+
+
+def refusal(tree, position, reason):
+    return (f'{state_path(tree)}: an earlier plan patched this tree; entry {position + 1} {reason}. Patching on top would '
+            'misapply. Run `series_win.py rewind` to reverse the recorded patches back to that point (it needs their '
+            f'copies in {copies_path(tree)}), or restore the files the series touches from a fresh 03-helium.py run, '
+            'then apply again.')
+
+
+def apply_plan(tree, plan):
+    parted = divergence(tree, plan)
+    if parted is not None:
+        raise InputError(refusal(tree, *parted))
+    upgrade_legacy(tree, plan)
+    done = {index for index, _, _ in read_ledger(tree)}
     rows, failed = [], 0
-    for name in sorted(skipped()):
-        rows.append((name, 'skipped (series-win)', classify(patch_files(os.path.join(PATCHES, name))), ''))
-        print(f'{"skipped":16} {name}', flush=True)
-    for name, path in names():
-        if name in done:
+    for index, (name, path) in enumerate(plan):
+        if index in done:
             result, detail = 'already applied', 'recorded'
         else:
             result, detail = apply_one(path, tree)
             if result != 'FAILED':
-                record(tree, name)
+                record(tree, index, name, path)
         failed += result == 'FAILED'
         rows.append((name, result, classify(patch_files(path)), detail))
         print(f'{result:16} {name}', flush=True)
+    return rows, failed
+
+
+def unapply(path, tree):
+    if run(['git', 'apply', '-R', '--whitespace=nowarn', path], tree).returncode == 0:
+        return True
+    return run(['patch', '-p1', '-R', '--no-backup-if-mismatch', '-s', '-f', '-i', path], tree).returncode == 0
+
+
+def rewind(tree, plan):
+    entries = read_ledger(tree)
+    parted = divergence(tree, plan)
+    keep = len(entries) if parted is None else parted[0]
+    if entries and entries[0][0] is None:
+        if keep < len(entries):
+            raise InputError(f'{state_path(tree)}: no copy of {entries[keep][1]} as it was applied (a ledger from before '
+                             'copies were kept); restore the files the series touches from a fresh 03-helium.py run')
+        upgrade_legacy(tree, plan)
+        return len(entries)
+    for index, name, _digest in reversed(entries[keep:]):
+        copy = copy_of(tree, index, name) if index is not None else None
+        if copy is None or not os.path.isfile(copy):
+            raise InputError(f'{state_path(tree)}: no copy of {name} as it was applied; restore the files the series '
+                             'touches from a fresh 03-helium.py run instead')
+        if not unapply(copy, tree):
+            raise InputError(f'{copy} no longer reverses on {tree}; restore the files the series touches from a fresh '
+                             '03-helium.py run instead')
+        os.remove(copy)
+        entries = entries[:-1]
+        write_ledger(tree, entries)
+        print(f'{"reversed":16} {name}', flush=True)
+    return len(entries)
+
+
+def cmd_apply(args):
+    tree = os.environ['CHROMIUM_SRC']
+    rows = []
+    for name in sorted(skipped()):
+        rows.append((name, 'skipped (series-win)', classify(patch_files(os.path.join(PATCHES, name))), ''))
+        print(f'{"skipped":16} {name}', flush=True)
+    try:
+        applied_rows, failed = apply_plan(tree, names())
+    except InputError as error:
+        print(error, file=sys.stderr)
+        return 2
+    rows += applied_rows
     layers(tree)
     os.makedirs(os.path.dirname(args.report), exist_ok=True)
     with open(args.report, 'w') as f:
@@ -801,6 +926,17 @@ def cmd_apply(args):
     skips = sum(1 for r in rows if r[1].startswith('skipped'))
     print(f'{len(rows) - failed - skips} of {len(rows) - skips} patches in, {skips} skipped; report: {args.report}')
     return 1 if failed else 0
+
+
+def cmd_rewind(args):
+    tree = os.environ['CHROMIUM_SRC']
+    try:
+        kept = rewind(tree, names())
+    except InputError as error:
+        print(error, file=sys.stderr)
+        return 2
+    print(f'{kept} recorded patches match the plan and stay; apply goes on from there')
+    return 0
 
 
 def cmd_layer(args):
@@ -821,8 +957,9 @@ def main():
     apply.add_argument('--report', required=True)
     sub.add_parser('classify')
     sub.add_parser('layer')
+    sub.add_parser('rewind')
     args = parser.parse_args()
-    return {'apply': cmd_apply, 'classify': cmd_classify, 'layer': cmd_layer}[args.command](args)
+    return {'apply': cmd_apply, 'classify': cmd_classify, 'layer': cmd_layer, 'rewind': cmd_rewind}[args.command](args)
 
 
 if __name__ == '__main__':

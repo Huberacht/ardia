@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveHostModule } from "./hostModules.ts";
-import { CRASH_DUMPS, isWindowsDump, linuxCrashReport, servesCrashDumps, windowsCrashReport } from "./hostCrashReports.ts";
+import { CRASH_DUMPS, hostCrashReport, isWindowsDump, linuxCrashReport, servesCrashDumps, windowsCrashReport } from "./hostCrashReports.ts";
 import { parseMinidump } from "./minidump.ts";
 
 const CHROME_BASE = 0x5555_0000_0000n;
@@ -53,11 +53,11 @@ const utf16 = (blob, text) => blob.put(struct(4 + text.length * 2, (v) => {
   for (let i = 0; i < text.length; i++) v.setUint16(4 + i * 2, text.charCodeAt(i), true);
 }));
 
-function minidump({ time = 1_794_770_653, created = 1_794_770_649, ptype = "renderer", version, signal = 11, code = 1, rip, rsp, rbp, stack = [], modules = defaultModules(), platform = 0x8201, address = 0n, parameters = [] }) {
+function minidump({ time = 1_794_770_653, created = 1_794_770_649, ptype = "renderer", version, signal = 11, code = 1, rip, rsp, rbp, stack = [], modules = defaultModules(), platform = 0x8201, address = 0n, parameters = [], systemInfo = true, moduleListSize }) {
   const blob = new Blob();
   const streams = [];
   blob.put(new Uint8Array(32));
-  streams.push([7, 56, blob.put(struct(56, (v) => { v.setUint16(0, 9, true); v.setUint32(20, platform, true); }))]);
+  if (systemInfo) streams.push([7, 56, blob.put(struct(56, (v) => { v.setUint16(0, 9, true); v.setUint32(20, platform, true); }))]);
   streams.push([15, 24, blob.put(struct(24, (v) => { v.setUint32(0, 24, true); v.setUint32(4, 2, true); v.setUint32(8, 1, true); v.setUint32(12, created, true); }))]);
   const context = blob.put(struct(1232, (v) => { v.setBigUint64(0x98, rsp, true); v.setBigUint64(0xa0, rbp, true); v.setBigUint64(0xf8, rip, true); }));
   const stackBytes = struct(0x400, (v) => { for (const [address, value] of stack) v.setBigUint64(Number(address - rsp), value, true); });
@@ -87,7 +87,7 @@ function minidump({ time = 1_794_770_653, created = 1_794_770_649, ptype = "rend
     const cv = blob.put(struct(4 + id.length, (v) => { v.setUint32(0, 0x4270454c, true); new Uint8Array(v.buffer).set(id, 4); }));
     return { base, size, name, cv, cvSize: 4 + id.length };
   });
-  streams.push([4, 4 + records.length * 108, blob.put(struct(4 + records.length * 108, (v) => {
+  streams.push([4, moduleListSize ?? 4 + records.length * 108, blob.put(struct(4 + records.length * 108, (v) => {
     v.setUint32(0, records.length, true);
     records.forEach((record, index) => {
       const at = 4 + index * 108;
@@ -248,10 +248,12 @@ test("a dump written without a crash, and bytes that aren't a minidump, are neve
   assert.doesNotThrow(() => parseMinidump(truncated));
 });
 
+const HOST_PLATFORM = process.env.ARDIA_DESKTOP_MODE === "win" ? 2 : 0x8201;
+
 test("ArdiaApp.crashReports reads the engine's crashpad dumps after the cursor, newest five of each kind, and skips a dump it can't read", async () => {
   const at = (n) => 1_794_770_000_000 + n * 1000;
-  const renderer = base64(minidump(chainedStack()));
-  const browser = base64(minidump({ ...chainedStack(), ptype: "browser" }));
+  const renderer = base64(minidump({ ...chainedStack(), platform: HOST_PLATFORM }));
+  const browser = base64(minidump({ ...chainedStack(), ptype: "browser", platform: HOST_PLATFORM }));
   const dumps = [
     { id: "old", time: at(0), text: renderer },
     ...Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, time: at(10 + i), text: renderer })),
@@ -325,8 +327,39 @@ test("a Windows dump written without a crash is never reported, and a Linux dump
   assert.equal(linuxCrashReport(linux, { id: "l", time: 1 }).terminationNamespace, "SIGNAL");
 });
 
-test("ArdiaApp.crashReports reads a Windows host's dumps with the Windows reader", async () => {
+test("ArdiaApp.crashReports reads only dumps of the platform the host was built for, with that platform's reader", async () => {
   const host = crashHost([{ id: "w", time: 5, text: base64(windowsDump({ ptype: "browser" })) }, { id: "l", time: 6, text: base64(minidump(chainedStack())) }]);
   const reports = await resolveHostModule(host, "ArdiaApp", "crashReports")(0);
-  assert.deepEqual(reports.map((report) => [report.incidentId, report.terminationNamespace]), [["w", "WIN32_EXCEPTION"], ["l", "SIGNAL"]]);
+  const expected = HOST_PLATFORM === 2 ? [["w", "WIN32_EXCEPTION"]] : [["l", "SIGNAL"]];
+  assert.deepEqual(reports.map((report) => [report.incidentId, report.terminationNamespace]), expected);
+});
+
+test("a dump without system info, or whose platform contradicts the host, is never reported", () => {
+  const entry = { id: "m", time: 1 };
+  assert.equal(hostCrashReport(parseMinidump(windowsDump({ systemInfo: false })), entry, 2), null);
+  assert.equal(hostCrashReport(parseMinidump(minidump({ ...chainedStack(), systemInfo: false })), entry, 0x8201), null);
+  assert.equal(hostCrashReport(parseMinidump(minidump({ ...chainedStack(), platform: 0x8101 })), entry, 0x8201), null);
+  assert.equal(hostCrashReport(parseMinidump(windowsDump({})), entry, 0x8201), null);
+  assert.equal(hostCrashReport(parseMinidump(minidump(chainedStack())), entry, 2), null);
+  assert.equal(hostCrashReport(parseMinidump(windowsDump({})), entry, 2).terminationNamespace, "WIN32_EXCEPTION");
+  assert.equal(hostCrashReport(parseMinidump(minidump(chainedStack())), entry, 0x8201).terminationNamespace, "SIGNAL");
+});
+
+test("a Windows module path in a Linux dump leaves only its file name", () => {
+  const leaky = [{ base: CHROME_BASE, size: CHROME_SIZE, path: "C:\\Users\\someone\\secret\\chrome.dll", buildId: CHROME_ID }];
+  const report = linuxCrashReport(parseMinidump(minidump({ ...chainedStack(), modules: leaky })), { id: "x", time: 1 });
+  assert.equal(report.frames[0].image, "chrome.dll");
+  assert.ok(report.frames.every((frame) => !frame.image.includes("\\") && !frame.image.includes("/")));
+});
+
+test("module records past their stream's declared size, and module names over the string cap, are not read", () => {
+  const short = parseMinidump(minidump({ ...chainedStack(), moduleListSize: 4 + 108 }));
+  assert.deepEqual(short.modules, []);
+  assert.deepEqual(linuxCrashReport(short, { id: "s", time: 1 }).frames[0], { image: "???" });
+  const huge = [{ base: CHROME_BASE, size: CHROME_SIZE, path: `/usr/lib/${"a".repeat(5000)}`, buildId: CHROME_ID }];
+  const named = parseMinidump(minidump({ ...chainedStack(), modules: huge }));
+  assert.equal(named.modules[0].path, "");
+  assert.equal(linuxCrashReport(named, { id: "h", time: 1 }).frames[0].image, "???");
+  const windows = parseMinidump(windowsDump({ modules: [{ ...WIN_MODULES[1], path: `C:\\${"b".repeat(3000)}\\chrome.dll` }] }));
+  assert.deepEqual(windowsCrashReport(windows, { id: "w", time: 1 }).frames, [{ image: "???", offset: 0x12_3456 }]);
 });

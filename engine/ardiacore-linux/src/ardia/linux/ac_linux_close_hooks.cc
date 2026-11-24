@@ -11,6 +11,7 @@
 #include "base/location.h"
 #include "base/no_destructor.h"
 #include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 
 namespace ardia {
 namespace {
@@ -237,6 +238,14 @@ LinuxCloseDispatchCompletion::~LinuxCloseDispatchCompletion() {
 }
 
 LinuxCloseHooks g_ardia_linux_close_hooks = {};
+
+bool LinuxCloseHooksActive() {
+#if BUILDFLAG(IS_LINUX)
+  return true;
+#else
+  return g_ardia_linux_close_hooks.defer != nullptr;
+#endif
+}
 
 namespace {
 bool linux_quit_asks_about_downloads = false;

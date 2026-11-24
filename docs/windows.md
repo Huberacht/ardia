@@ -1939,18 +1939,35 @@ Two RNW features the desktop host must carry over:
    says Windows (`PlatformId` 2) becomes a `WIN32_EXCEPTION` report as RNW's does: the NTSTATUS name (RNW's table,
    `STATUS_<hex>` otherwise), `ACCESS_READ`/`WRITE`/`EXECUTE` for access and in-page faults, one frame from the
    exception address, and only a module file name RNW would also send (`.dll`, `.exe` and the like; never a folder,
-   a UNC path or a URL). Linux dumps keep the Linux reader. `hostCrashReports.test.mjs` covers both.
+   a UNC path or a URL). Which reader runs is the build's, never the dump's: `@platform/crashPlatform` says what
+   `SystemInfo` platform the host expects (Linux `0x8201`, Windows 2), and a dump without system info or naming
+   another platform isn't reported. Both readers keep only what follows the last `/` or `\`, strings over 4 KiB
+   aren't decoded, and a module list whose count runs past its stream's declared size is dropped.
+   `hostCrashReports.test.mjs` covers both readers and those malformed dumps.
 2. **Report a Problem** (#3666): Windows has no native uploader today. `ac_desktop_report_core` and `ac_linux_report`
    compile on Windows (#4107): paths are UTF-8 through `ac_desktop_paths.h`, `InsideDrafts` takes the native separator
-   (a drive root and `\` on Windows, where it also refuses `/` and `:` streams), and `0700` on the drafts folder is
-   POSIX only (the profile folder's ACL already keeps it the user's). `report_core_test.cc` covers the Windows paths.
+   (a drive root and `\` on Windows, where it also refuses `/`, `:` streams and segments ending in `.` or a space,
+   which Windows strips, and folds only the drive letter's case), and `0700` on the drafts folder is POSIX only (the
+   profile folder's ACL already keeps it the user's). On Windows `_wfullpath` resolves no junction, so every path is
+   checked through an opened handle: the drafts folder and the target and its parent resolve with
+   `GetFinalPathNameByHandleW` (`DosFinalPath` refuses UNC and volume-GUID forms), the target and its parent are opened
+   with `FILE_FLAG_OPEN_REPARSE_POINT` and refused when they are reparse points, an output is created with
+   `CREATE_NEW` on such a handle (after removing a regular file there) and checked inside the drafts folder before a
+   byte is written, and an input's open handle is checked the same way. A gzip refuses a destination that is its
+   source by file identity (volume serial and file index on Windows, `st_dev`/`st_ino` on POSIX), not by path text,
+   which a case alias or a hard link would pass. The password export (`PlanExport`) takes the native separator too,
+   so a Windows drive-rooted destination reaches `ac_passwords_export`, which `ardia-layer-win.patch` already reads
+   with `FilePath::IsAbsolute`. `apps/desktop` joins a Windows draft folder
+   and its file with `\` (`draftFilePath`). `report_core_test.cc` and `hostReport.test.mjs` cover the Windows paths.
 
 ### The Linux patches Windows takes (#4107)
 
 `series.py` still refuses a platform set (`linux,win`), and teaching it one moves every key, the Mac's included, so
 `series-win` names each patch with a `take` line instead: Windows applies that `linux` line at its own place in the
-shared series, as a `linux,win` line will. The Mac and Linux trees are unchanged by it (the Mac key stays; the Linux
-key moves only for the guard edits below). On the Windows tree (MSI, 2026-11-24) all 24 apply with `git apply`, no
+shared series, as a `linux,win` line will. A `take` line changes nothing for the Mac or Linux. The Linux engine key
+does move, for the launch-config split, the widened and gated patches and the changed Linux layer sources
+(`c6e339147f82` on main, `d578c7c75a96` here), so Linux needs a new engine; the macOS key is byte for byte
+`origin/main`'s. On the Windows tree (MSI, 2026-11-24) all 24 apply with `git apply`, no
 fuzz, and `chromium-win-ardia-layer-calls-mac-only`, `-external-protocol-dialog`, `-hosted-popups-and-menus` and
 `-hosted-theme-change` are remade on top of them, so 132 of the 133 patches apply strictly (the one with fuzz is the
 `mac` line `chromium-safe-storage-one-key-for-every-data-dir`). The 35 Chromium files they touch pass `clang-cl
@@ -1967,10 +1984,11 @@ desktop host sets it, which only the WebUI shell will. Guards that would change 
 | `-shell-above-input`, `-companion-browsers`, `-window-minimum-size`, `-page-prompts`, `-page-status`, `-wheel-zoom`, `-unhandled-key`, `-action-popup-hook`, `-thin-scroll-bars` | no guards: null hooks |
 | `-background-windows` | taken without its launch-config half, now `chromium-linux-launch-config.patch` (`linux`); its `--ardia-background` check stays Linux |
 | `-auto-pip` | hooks taken; the feature switches it adds in `BasicStartupComplete` stay Linux |
+| `-document-close` | every path it changes asks `ardia::LinuxCloseHooksActive()`: always true on Linux, true on Windows only once a host sets `g_ardia_linux_close_hooks.defer`. Until then `BrowserCloseManager` runs Chromium's own bodies (no deferred success callback, no confirmed-browser rescan), `UnloadController` keeps Chromium's state transitions and repeat `OnWindowCloseComplete`, and `RenderFrameHostImpl` starts no close dispatch for any `beforeunload`, navigations included, and posts Chromium's own ACK |
 | `-pip-placement`, `-extension-keybindings`, `-settings-overrides`, `-devtools-authority` | guards stay Linux: they call Linux layer code or change behavior unconditionally; taken so the files match Linux's and the patches after them apply. `-devtools-authority` and `chromium-win-devtools-other-clients` share no file |
 
 `linux-hooks.gn` gives Windows `//ardia/linux:close_hooks` (`ac_linux_close_hooks.cc`, which `-document-close`
-links; with no `g_ardia_linux_close_hooks.defer` every gate answers no) and the `ac_linux_content_hooks.h` header
+links) and the `ac_linux_content_hooks.h` header
 `-media-player-pip` includes. `chromium-win-autoplay-policy.patch` stays Windows' autoplay patch and
 `-autoplay-policy` stays Linux, and so do `-window-state`, `-borderless-frame`, `-glass-compositing`,
 `-frameless-utility-windows`, `-open-urls`, `-native-messaging-hosts`, `-branding`, `-wayland-cursor-fallback`,

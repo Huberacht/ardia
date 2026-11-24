@@ -1,17 +1,16 @@
-diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
 --- a/chrome/browser/lifetime/BUILD.gn
 +++ b/chrome/browser/lifetime/BUILD.gn
-@@ -200,6 +200,10 @@
+@@ -198,6 +198,10 @@
+       "//components/policy/core/common",
+       "//components/prefs",
      ]
-   }
- 
-+  if (is_linux || is_win) {
-+    deps += [ "//ardia/linux:close_hooks" ]
 +  }
 +
++  if (is_linux || is_win) {
++    deps += [ "//ardia/linux:close_hooks" ]
+   }
+ 
    if (is_linux && use_dbus) {
-     sources += [ "session_end_listener_linux.cc" ]
-     deps += [
 --- a/chrome/browser/lifetime/browser_close_manager.cc
 +++ b/chrome/browser/lifetime/browser_close_manager.cc
 @@ -4,6 +4,8 @@
@@ -32,7 +31,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  #include "build/build_config.h"
  #include "chrome/browser/background/extensions/background_mode_manager.h"
  #include "chrome/browser/background/glic/glic_background_mode_manager.h"
-@@ -53,10 +57,14 @@
+@@ -53,10 +57,16 @@
  
  }  // namespace
  
@@ -41,14 +40,16 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  BrowserCloseManager::~BrowserCloseManager() = default;
  
  void BrowserCloseManager::StartClosingBrowsers() {
-+  linux_cancelled_ = false;
-+  current_browser_ = nullptr;
-+  linux_confirmed_browsers_.clear();
-+  linux_weak_factory_.InvalidateWeakPtrs();
++  if (ardia::LinuxCloseHooksActive()) {
++    linux_cancelled_ = false;
++    current_browser_ = nullptr;
++    linux_confirmed_browsers_.clear();
++    linux_weak_factory_.InvalidateWeakPtrs();
++  }
    close_timer_.emplace();
  
    // If the session is ending or a silent exit was requested, skip straight to
-@@ -70,7 +78,25 @@
+@@ -70,7 +80,27 @@
    TryToCloseBrowsers();
  }
  
@@ -64,17 +65,19 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
 +}
 +
  void BrowserCloseManager::CancelBrowserClose() {
-+  if (linux_cancelled_) {
-+    return;
++  if (ardia::LinuxCloseHooksActive()) {
++    if (linux_cancelled_) {
++      return;
++    }
++    linux_cancelled_ = true;
++    linux_weak_factory_.InvalidateWeakPtrs();
++    current_browser_ = nullptr;
++    linux_confirmed_browsers_.clear();
 +  }
-+  linux_cancelled_ = true;
-+  linux_weak_factory_.InvalidateWeakPtrs();
-+  current_browser_ = nullptr;
-+  linux_confirmed_browsers_.clear();
    // This is the abort endpoint. Record the metric if we haven't already.
    if (close_timer_) {
      base::UmaHistogramMediumTimes("Shutdown.Time.BrowserCloseManager.Canceled",
-@@ -88,6 +114,9 @@
+@@ -88,6 +118,9 @@
  }
  
  void BrowserCloseManager::TryToCloseBrowsers() {
@@ -84,10 +87,20 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    // If all browser windows can immediately be closed, fall out of this loop and
    // close the browsers. If any browser window cannot be closed, temporarily
    // stop closing. CallBeforeUnloadHandlers prompts the user and calls
-@@ -96,12 +125,60 @@
+@@ -96,13 +129,71 @@
    bool should_stop = false;
    GlobalBrowserCollection::GetInstance()->ForEach(
        [this, &should_stop](BrowserWindowInterface* browser) {
++        if (!ardia::LinuxCloseHooksActive()) {
++          if (UnloadController::From(browser)->RunBeforeUnloadForShutdown(
++                  false,
++                  base::BindRepeating(
++                      &BrowserCloseManager::OnBrowserReportCloseable, this))) {
++            current_browser_ = browser->GetWeakPtr();
++            should_stop = true;
++          }
++          return !should_stop;
++        }
 +        auto* unload = UnloadController::From(browser);
 +        unload->SetLinuxQuitCancel(MakeLinuxQuitCancel());
 +        if (ardia::GateLinuxClose(
@@ -138,19 +151,22 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
            should_stop = true;
 +        } else {
 +          current_browser_ = nullptr;
-+        }
+         }
 +        if (linux_cancelled_) {
 +          should_stop = true;
 +        }
 +        if (!should_stop) {
 +          linux_confirmed_browsers_.push_back(browser->GetWeakPtr());
-         }
++        }
          return !should_stop;
        },
-@@ -121,8 +198,80 @@
-   CheckForDownloadsInProgress();
- }
+       BrowserCollection::Order::kCreation);
+@@ -119,10 +210,82 @@
+   }
  
+   CheckForDownloadsInProgress();
++}
++
 +void BrowserCloseManager::OnLinuxCloseReady(
 +    base::WeakPtr<BrowserCloseManager> attempt,
 +    base::WeakPtr<BrowserWindowInterface> browser,
@@ -221,15 +237,15 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
 +  if (attempt) {
 +    CloseBrowsers();
 +  }
-+}
-+
+ }
+ 
  void BrowserCloseManager::OnBrowserReportCloseable(bool proceed) {
 -  if (!current_browser_) {
 +  if (linux_cancelled_ || !current_browser_) {
      return;
    }
  
-@@ -141,14 +290,21 @@
+@@ -141,14 +304,21 @@
    CloseBrowsers();
  #else
    int download_count = DownloadCoreService::BlockingShutdownCountAllProfiles();
@@ -253,7 +269,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  #endif
  }
  
-@@ -169,6 +325,9 @@
+@@ -169,6 +339,9 @@
  }
  
  void BrowserCloseManager::OnReportDownloadsCancellable(bool proceed) {
@@ -263,54 +279,68 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    if (proceed) {
      CloseBrowsers();
      return;
-@@ -189,6 +348,41 @@
+@@ -189,6 +362,43 @@
  }
  
  void BrowserCloseManager::CloseBrowsers() {
-+  if (linux_cancelled_) {
-+    return;
-+  }
-+  bool waiting = false;
-+  bool needs_beforeunload = false;
-+  GlobalBrowserCollection::GetInstance()->ForEach(
-+      [this, &waiting, &needs_beforeunload](BrowserWindowInterface* browser) {
-+        UnloadController::From(browser)->SetLinuxQuitCancel(
-+            MakeLinuxQuitCancel());
-+        if (ardia::CanCancelLinuxClose(browser) &&
-+            !browser_shutdown::ShouldIgnoreUnloadHandlers() &&
-+            (UnloadController::From(browser)->TabsNeedBeforeUnloadFired() ||
-+             !std::ranges::any_of(linux_confirmed_browsers_,
-+                                  [browser](const auto& confirmed) {
-+                                    return confirmed.get() == browser;
-+                                  }))) {
-+          needs_beforeunload = true;
-+          return false;
-+        }
-+        waiting = ardia::GateLinuxClose(
-+            browser, ardia::LinuxCloseStage::kPrepare,
-+            base::BindOnce(&BrowserCloseManager::OnLinuxCloseReady,
-+                           base::RetainedRef(this),
-+                           linux_weak_factory_.GetWeakPtr(),
-+                           browser->GetWeakPtr()));
-+        return !waiting;
-+      },
-+      BrowserCollection::Order::kCreation);
-+  if (needs_beforeunload) {
-+    TryToCloseBrowsers();
-+    return;
-+  }
-+  if (waiting || linux_cancelled_) {
-+    return;
++  if (ardia::LinuxCloseHooksActive()) {
++    if (linux_cancelled_) {
++      return;
++    }
++    bool waiting = false;
++    bool needs_beforeunload = false;
++    GlobalBrowserCollection::GetInstance()->ForEach(
++        [this, &waiting, &needs_beforeunload](BrowserWindowInterface* browser) {
++          UnloadController::From(browser)->SetLinuxQuitCancel(
++              MakeLinuxQuitCancel());
++          if (ardia::CanCancelLinuxClose(browser) &&
++              !browser_shutdown::ShouldIgnoreUnloadHandlers() &&
++              (UnloadController::From(browser)->TabsNeedBeforeUnloadFired() ||
++               !std::ranges::any_of(linux_confirmed_browsers_,
++                                    [browser](const auto& confirmed) {
++                                      return confirmed.get() == browser;
++                                    }))) {
++            needs_beforeunload = true;
++            return false;
++          }
++          waiting = ardia::GateLinuxClose(
++              browser, ardia::LinuxCloseStage::kPrepare,
++              base::BindOnce(&BrowserCloseManager::OnLinuxCloseReady,
++                             base::RetainedRef(this),
++                             linux_weak_factory_.GetWeakPtr(),
++                             browser->GetWeakPtr()));
++          return !waiting;
++        },
++        BrowserCollection::Order::kCreation);
++    if (needs_beforeunload) {
++      TryToCloseBrowsers();
++      return;
++    }
++    if (waiting || linux_cancelled_) {
++      return;
++    }
 +  }
  #if BUILDFLAG(ENABLE_SESSION_SERVICE)
    // Before we close the browsers shutdown all session services. That way an
    // exit can restore all browsers open before exiting.
-@@ -216,13 +410,63 @@
+@@ -216,13 +426,75 @@
    }
  
    ForEachCurrentAndNewBrowserWindowInterfaceOrderedByActivation(
 -      [](BrowserWindowInterface* browser_window) {
 +      [this](BrowserWindowInterface* browser_window) {
++        if (!ardia::LinuxCloseHooksActive()) {
++          bool ignore_unload_handlers =
++              browser_shutdown::ShouldIgnoreUnloadHandlers();
++          UnloadController::From(browser_window)
++              ->set_force_skip_warning_user_on_close(ignore_unload_handlers);
++          browser_window->GetWindow()->Close();
++          if (ignore_unload_handlers) {
++            browser_window->GetTabStripModel()->CloseAllTabs();
++            BrowserManagerService::SynchronouslyDestroyBrowser(browser_window);
++          }
++          return true;
++        }
 +        if (linux_cancelled_) {
 +          return false;
 +        }
@@ -370,7 +400,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  
          if (ignore_unload_handlers) {
            // This path is hit during logoff/power-down. It could be the case
-@@ -232,8 +476,26 @@
+@@ -232,8 +504,26 @@
            // session, we will force skip these warnings and manually close all
            // the tabs to make sure the browser is destroyed and cleanup can
            // happen.
@@ -451,16 +481,18 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
          "//extensions/browser",
 --- a/chrome/browser/ui/unload_controller.cc
 +++ b/chrome/browser/ui/unload_controller.cc
-@@ -7,6 +7,8 @@
+@@ -6,7 +6,10 @@
+ #include "ardia/core/ac_hooks.h"  // nogncheck
  
  #include <algorithm>
++#include <optional>
  
 +#include "ardia/linux/ac_linux_close_hooks.h"
 +
  #include "base/command_line.h"
  #include "base/functional/bind.h"
  #include "base/location.h"
-@@ -48,6 +50,8 @@
+@@ -48,6 +51,8 @@
  #include "components/tabs/public/tab_group.h"
  #include "components/tabs/public/tab_interface.h"
  #include "components/webapps/common/web_app_id.h"
@@ -469,7 +501,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  #include "content/public/browser/render_view_host.h"
  #include "content/public/browser/web_contents.h"
  #include "extensions/buildflags/buildflags.h"
-@@ -111,6 +115,16 @@
+@@ -111,6 +116,16 @@
  }
  
  bool UnloadController::HandleBeforeClose() {
@@ -486,17 +518,22 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    // If `force_skip_warning_user_on_close_` is true, then we should immediately
    // return true.
    if (force_skip_warning_user_on_close()) {
-@@ -153,8 +167,7 @@
+@@ -153,8 +168,12 @@
          // is committing the window close, so advance to kRunningUnload to fire
          // their unload handlers (ClosePage).
          CHECK(!on_close_confirmed_.is_null());
 -        on_close_confirmed_.Reset();
 -        TransitionTo(State::kRunningUnload);
-+        linux_window_close_requested_ = true;
++        if (ardia::LinuxCloseHooksActive()) {
++          linux_window_close_requested_ = true;
++        } else {
++          on_close_confirmed_.Reset();
++          TransitionTo(State::kRunningUnload);
++        }
          ProcessPendingTabs(false);
          break;
        case State::kRunningBeforeUnloadForShutdown:
-@@ -180,6 +193,17 @@
+@@ -180,6 +199,17 @@
    if (is_delete_scheduled_) {
      return;
    }
@@ -514,7 +551,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  
    if (!HandleBeforeClose()) {
      return;
-@@ -211,6 +235,17 @@
+@@ -211,6 +241,17 @@
      tab_restore_service->BrowserClosing(BrowserLiveTabContext::From(browser_));
    }
  
@@ -532,7 +569,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    if (!browser_->GetTabStripModel()->empty()) {
      // Closing all the tabs results in eventually calling back to
      // OnWindowClosing() again.
-@@ -227,6 +262,15 @@
+@@ -227,6 +268,15 @@
        scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this),
        web_contents_collection_(this) {
    browser_->tab_strip_model()->AddObserver(this);
@@ -548,7 +585,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  }
  
  void UnloadController::AddTabUnloadHandler(
-@@ -235,6 +279,17 @@
+@@ -235,6 +285,17 @@
  }
  
  UnloadController::~UnloadController() {
@@ -566,7 +603,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    browser_->tab_strip_model()->RemoveObserver(this);
  }
  
-@@ -461,6 +516,10 @@
+@@ -461,6 +522,10 @@
            state_ == State::kRunningBeforeUnloadForWindowClose);
      // Now that beforeunload has fired, put the tab on the queue to fire
      // unload.
@@ -577,7 +614,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      tabs_needing_unload_fired_.insert(contents);
      ProcessPendingTabs(false);
      // We want to handle firing the unload event ourselves since we want to
-@@ -518,6 +577,9 @@
+@@ -518,6 +583,9 @@
  bool UnloadController::RunBeforeUnloadForShutdown(
      bool skip_beforeunload,
      const base::RepeatingCallback<void(bool)>& on_close_confirmed) {
@@ -587,7 +624,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    cancel_download_confirmation_state_ =
        CancelDownloadConfirmationState::kResponseReceived;
    // The devtools browser gets its beforeunload events as the results of
-@@ -533,6 +595,7 @@
+@@ -533,6 +601,7 @@
      return false;
    }
  
@@ -595,7 +632,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    on_close_confirmed_ = on_close_confirmed;
    TransitionTo(State::kRunningBeforeUnloadForShutdown);
  
-@@ -541,12 +604,19 @@
+@@ -541,12 +610,19 @@
  }
  
  void UnloadController::ResetBeforeUnloadForShutdown() {
@@ -615,7 +652,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      return;
    }
    CancelWindowClose();
-@@ -572,7 +642,16 @@
+@@ -572,7 +648,16 @@
      // Note that we filter out tabs in `tabs_needing_unload_fired_` as they have
      // already had their BeforeUnload fired (and don't need it fired again
      // unless browser closing gets cancelled).
@@ -633,7 +670,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
          should_fire_beforeunload) {
        tabs_needing_beforeunload.insert(contents);
      }
-@@ -580,7 +659,76 @@
+@@ -580,7 +665,79 @@
    return tabs_needing_beforeunload;
  }
  
@@ -693,9 +730,12 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
 +}
 +
  void UnloadController::CancelWindowClose() {
-+  ardia::LinuxCloseCancellation cancellation(browser_);
-+  if (!cancellation) {
-+    return;
++  std::optional<ardia::LinuxCloseCancellation> cancellation;
++  if (ardia::LinuxCloseHooksActive()) {
++    cancellation.emplace(browser_);
++    if (!*cancellation) {
++      return;
++    }
 +  }
 +  linux_window_close_requested_ = false;
 +  const auto linux_token = ardia::CurrentLinuxCloseToken(browser_);
@@ -710,7 +750,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    // Note that this method may be called if closing was canceled in a number of
    // different ways, so is_attempting_to_close_browser() may be false. In that
    // case some of this code might not have an effect, but it's still useful to,
-@@ -603,13 +751,62 @@
+@@ -603,13 +760,62 @@
    }
  
    chrome::OnClosingAllBrowsers(false);
@@ -773,7 +813,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    if (is_attempting_to_close_browser()) {
      ClearUnloadState(web_contents,
                       false);  // See comment for ClearUnloadState().
-@@ -721,7 +918,7 @@
+@@ -721,7 +927,7 @@
        //   ClearUnloadState(..., /*process_now=*/false) runs after state_
        //   already reached kUnloadCompleted and discovers a newly registered
        //   beforeunload handler.
@@ -782,7 +822,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
              state_ == State::kRunningBeforeUnloadForWindowClose ||
              state_ == State::kRunningUnload ||
              state_ == State::kUnloadCompleted);
-@@ -754,9 +951,12 @@
+@@ -754,9 +960,12 @@
    // If the tab crashes in the beforeunload or unload handler, it won't be
    // able to ack. But we know we can close it.
    web_contents_collection_.StartObserving(contents);
@@ -795,7 +835,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    if (is_attempting_to_close_browser()) {
      ClearUnloadState(contents, false);
    }
-@@ -772,6 +972,7 @@
+@@ -772,6 +981,7 @@
  void UnloadController::ProcessPendingTabs(bool skip_beforeunload) {
    // Cancel posted/queued ProcessPendingTabs task if there is any.
    weak_factory_.InvalidateWeakPtrs();
@@ -803,7 +843,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  
    if (!is_attempting_to_close_browser()) {
      // Because we might invoke this after a delay it's possible for the value of
-@@ -780,6 +981,32 @@
+@@ -780,6 +990,32 @@
      return;
    }
  
@@ -836,7 +876,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    // If the window close is committed and all previously queued beforeunload and
    // unload tabs have finished, re-scan the tab strip in case a tab registered a
    // new beforeunload handler while other tabs were closing. If none did, finish
-@@ -817,9 +1044,43 @@
+@@ -817,9 +1053,43 @@
            state_ == State::kRunningBeforeUnloadForWindowClose);
      content::WebContents* const web_contents =
          *(tabs_needing_before_unload_fired_.begin());
@@ -880,7 +920,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
        // If there's a devtools window attached to |web_contents|,
        // we would like devtools to call its own beforeunload handlers first,
        // and then call beforeunload handlers for |web_contents|.
-@@ -857,7 +1118,8 @@
+@@ -857,7 +1127,8 @@
      return;
    }
  
@@ -890,15 +930,26 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      CHECK(tabs_needing_before_unload_fired_.empty());
      return;
    }
-@@ -870,12 +1132,23 @@
+@@ -870,12 +1141,34 @@
    // TODO(ojan): We can probably fire all the unload events in parallel and
    // get a perf benefit from that in the cases where the tab hangs in it's
    // unload handler or takes a long time to page in.
 -  TransitionTo(State::kRunningUnload);
++  if (!ardia::LinuxCloseHooksActive()) {
++    TransitionTo(State::kRunningUnload);
++  }
    content::WebContents* const web_contents =
        *(tabs_needing_unload_fired_.begin());
 -  // Null check render_view_host here as this gets called on a PostTask and
 -  // the tab's render_view_host may have been nulled out.
++  if (!ardia::LinuxCloseHooksActive()) {
++    if (web_contents->GetPrimaryMainFrame()->GetRenderViewHost()) {
++      web_contents->ClosePage();
++    } else {
++      ClearUnloadState(web_contents, true);
++    }
++    return;
++  }
    if (web_contents->GetPrimaryMainFrame()->GetRenderViewHost()) {
 +    if (DeferLinuxClose(ardia::LinuxCloseStage::kBeginTeardown,
 +                        base::BindOnce(
@@ -917,11 +968,11 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      web_contents->ClosePage();
    } else {
      ClearUnloadState(web_contents, true);
-@@ -1212,9 +1485,24 @@
+@@ -1212,9 +1505,24 @@
  }
  
  void UnloadController::OnWindowCloseComplete() {
-+  if (is_delete_scheduled_) {
++  if (ardia::LinuxCloseHooksActive() && is_delete_scheduled_) {
 +    return;
 +  }
 +  if (DeferLinuxClose(ardia::LinuxCloseStage::kDestroy,
@@ -942,7 +993,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  
    // At this point the browser has successfully closed and is scheduled for
    // deletion.
-@@ -1248,6 +1536,21 @@
+@@ -1248,6 +1556,21 @@
        base::BindOnce(
            [](base::WeakPtr<BrowserWindowInterface> browser) {
              if (browser) {
@@ -974,21 +1025,20 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  #include <memory>
  #include <set>
  #include <vector>
-@@ -18,8 +19,14 @@
+@@ -18,7 +19,13 @@
  #include "chrome/browser/ui/download_close_type.h"
  #include "chrome/browser/ui/simple_message_box.h"
  #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 +#include "content/public/browser/weak_document_ptr.h"
  #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
- 
++
 +namespace ardia {
 +enum class LinuxCloseStage;
 +struct LinuxCloseDispatch;
 +}
-+
+ 
  class TabStripModel;
  
- namespace content {
 @@ -238,6 +245,10 @@
    // Clears all the state associated with processing tabs' beforeunload/unload
    // events since the user cancelled closing the window.
@@ -1030,17 +1080,18 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -399,6 +399,10 @@
+@@ -399,7 +399,11 @@
      "//v8",
      "//v8:v8_version",
    ]
 +  if (is_linux || is_win) {
 +    deps += [ "//ardia/linux:close_hooks" ]
 +  }
-+
  
++
    public_deps = [
      "//base",
+     "//components/memory_pressure",
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
 @@ -3,6 +3,7 @@
@@ -1145,11 +1196,17 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
        has_before_unload_handler_ = present;
        break;
      case blink::mojom::SuddenTerminationDisablerType::kPageHideHandler:
-@@ -12435,6 +12450,77 @@
+@@ -12433,8 +12448,83 @@
+     return;
+   }
    GetAssociatedLocalFrame()->StopLoading();
- }
- 
++}
++
 +void RenderFrameHostImpl::StartLinuxBeforeUnloadDispatch() {
++  if (!ardia::LinuxCloseHooksActive()) {
++    linux_before_unload_request_.reset();
++    return;
++  }
 +  if (!is_waiting_for_beforeunload_completion_ ||
 +      !linux_before_unload_request_) {
 +    linux_before_unload_request_ =
@@ -1192,8 +1249,8 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
 +        std::weak_ptr<ardia::LinuxCloseDispatch>(linux_before_unload_request_));
 +  }
 +  ardia::AdoptLinuxCloseDispatch(linux_before_unload_request_);
-+}
-+
+ }
+ 
 +void RenderFrameHostImpl::CompleteLinuxBeforeUnloadDispatch(
 +    std::shared_ptr<ardia::LinuxCloseDispatch> dispatch,
 +    bool proceed) {
@@ -1223,7 +1280,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  void RenderFrameHostImpl::DispatchBeforeUnload(BeforeUnloadType type,
                                                 bool is_reload) {
    TRACE_EVENT("navigation", "RenderFrameHostImpl::DispatchBeforeUnload",
-@@ -12454,6 +12540,7 @@
+@@ -12454,6 +12544,7 @@
          IsOutermostMainFrame());
  
    CHECK(owner_);  // Only active documents are subject to BeforeUnload.
@@ -1231,8 +1288,19 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  
    if (!for_navigation) {
      // Cancel any pending navigations, to avoid their navigation commit/fail
-@@ -12477,9 +12564,8 @@
+@@ -12475,11 +12566,19 @@
+     CHECK(!for_navigation);
+ 
      // Dispatch the ACK to prevent re-entrancy.
++    if (!ardia::LinuxCloseHooksActive()) {
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE,
++          base::BindOnce(&RenderFrameHostManager::BeforeUnloadCompleted,
++                         owner_->GetRenderFrameHostManager().GetWeakPtr(),
++                         /*proceed=*/true,
++                         std::shared_ptr<ardia::LinuxCloseDispatch>()));
++      return;
++    }
      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
          FROM_HERE,
 -        base::BindOnce(&RenderFrameHostManager::BeforeUnloadCompleted,
@@ -1243,7 +1311,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      return;
    }
  
-@@ -12765,8 +12851,9 @@
+@@ -12765,8 +12864,9 @@
    // Dispatch the ACK to prevent re-entrancy.
    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
        FROM_HERE,
@@ -1255,7 +1323,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
                       /*treat_as_final_completion_callback=*/true,
                       approx_renderer_start_time, base::TimeTicks::Now(),
                       BeforeUnloadExecutionMode::kSync));
-@@ -18060,7 +18147,7 @@
+@@ -18060,7 +18160,7 @@
      ProcessBeforeUnloadCompleted(
          /*proceed=*/true, /*treat_as_final_completion_callback=*/true,
          approx_renderer_start_time, base::TimeTicks::Now(),
@@ -1264,7 +1332,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
    }
  
    // When a frame enters pending deletion, it waits for itself and its children
-@@ -18221,12 +18308,18 @@
+@@ -18221,12 +18321,18 @@
    rfh->GetAssociatedLocalFrame()->BeforeUnload(
        is_reload, /*force_to_proceed=*/false,
        base::BindOnce(
@@ -1285,7 +1353,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
                return;
              }
  
-@@ -18250,9 +18343,9 @@
+@@ -18250,9 +18356,9 @@
                  proceed, /*treat_as_final_completion_callback=*/false,
                  renderer_before_unload_start_time,
                  renderer_before_unload_end_time,
@@ -1297,7 +1365,7 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
  }
  
  void RenderFrameHostImpl::ContinueNavigationAfterBeforeUnloadCheck(
-@@ -18270,8 +18363,8 @@
+@@ -18270,8 +18376,8 @@
    //    unblock the navigation and proceed—is the closest logical equivalent to
    //    the end of the navigation blocking phase.
    auto continue_navigation_closure = base::BindOnce(
@@ -1310,17 +1378,17 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
        execution_mode);
 --- a/content/browser/renderer_host/render_frame_host_impl.h
 +++ b/content/browser/renderer_host/render_frame_host_impl.h
-@@ -286,6 +286,10 @@
- class RemoteValidation;
- }
+@@ -284,6 +284,10 @@
  
-+namespace ardia {
-+struct LinuxCloseDispatch;
+ namespace webauthn {
+ class RemoteValidation;
 +}
 +
- namespace content {
++namespace ardia {
++struct LinuxCloseDispatch;
+ }
  
- class AgentSchedulingGroupHost;
+ namespace content {
 @@ -3768,12 +3772,25 @@
    // for any further completion callbacks from subframes. Completion callbacks
    // invoked from the renderer set |treat_as_final_completion_callback| to
@@ -1403,17 +1471,17 @@ diff --git a/chrome/browser/lifetime/BUILD.gn b/chrome/browser/lifetime/BUILD.gn
      // close in the current RFH, we'll lose the tab close.
 --- a/content/browser/renderer_host/render_frame_host_manager.h
 +++ b/content/browser/renderer_host/render_frame_host_manager.h
-@@ -44,6 +44,10 @@
+@@ -43,6 +43,10 @@
+ namespace blink {
  struct FramePolicy;
  }  // namespace blink
- 
++
 +namespace ardia {
 +struct LinuxCloseDispatch;
 +}
-+
+ 
  namespace content {
  class BatchedProxyIPCSender;
- class FrameTree;
 @@ -411,7 +415,9 @@
    //   2- The FrameTreeNode is being prepared for attaching an inner Delegate,
    //      in which case beforeunload is triggered in the current frame. This

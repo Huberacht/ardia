@@ -49,6 +49,37 @@ void WindowsPathsUseBackslashesAndADriveRoot() {
   assert(!InsideDrafts(kWindowsDrafts, InWindows(std::string("\\a\0b", 4)), '\\'));
 }
 
+void WindowsAliasesAndDriveCaseAreHandled() {
+  std::string lower_drive = InWindows("\\recording.mp4");
+  lower_drive[0] = 'c';
+  assert(InsideDrafts(kWindowsDrafts, lower_drive, '\\'));
+  std::string other_drive = InWindows("\\recording.mp4");
+  other_drive[0] = 'D';
+  assert(!InsideDrafts(kWindowsDrafts, other_drive, '\\'));
+  std::string folded_folder = InWindows("\\recording.mp4");
+  folded_folder.replace(3, 5, "users");
+  assert(!InsideDrafts(kWindowsDrafts, folded_folder, '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\recording.mp4."), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\recording.mp4 "), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\nested.\\a"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("\\nested \\a"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows(".\\a"), '\\'));
+  assert(InsideDrafts(kWindowsDrafts, InWindows("\\.hidden"), '\\'));
+  assert(InsideDrafts(kDrafts, In("/recording.mp4.")));
+  assert(InsideDrafts(kWindowsDrafts, InWindows("\\local-events.jsonl.gz"), '\\'));
+  assert(!InsideDrafts(kWindowsDrafts, InWindows("/local-events.jsonl.gz"), '\\'));
+  assert(DosFinalPath("\\\\?\\C:\\Users\\u\\Drafts") == "C:\\Users\\u\\Drafts");
+  assert(DosFinalPath("\\\\?\\d:\\x") == "D:\\x");
+  assert(DosFinalPath("e:\\x") == "E:\\x");
+  assert(!DosFinalPath("\\\\?\\UNC\\server\\share\\x"));
+  assert(!DosFinalPath("\\\\?\\Volume{6d2ac5f6-0000-0000-0000-100000000000}\\x"));
+  assert(!DosFinalPath("\\\\server\\share\\x"));
+  assert(!DosFinalPath("C:relative"));
+  assert(!DosFinalPath(""));
+  assert(!DosFinalPath(std::string("C:\\a\0b", 6)));
+  assert(!DosFinalPath("C:\\" + std::string(kPathMaxBytes, 'a')));
+}
+
 void OnlyPathsInsideADraftFolderAreTouched() {
   assert(InsideDrafts(kDrafts, kDraft));
   assert(InsideDrafts(kDrafts, In("/recording.mp4")));
@@ -228,6 +259,7 @@ int main(int argc, char** argv) {
   if (argc != 1) return 2;
   OnlyPathsInsideADraftFolderAreTouched();
   WindowsPathsUseBackslashesAndADriveRoot();
+  WindowsAliasesAndDriveCaseAreHandled();
   OnlyTheFeedbackEndpointIsReached();
   AttachmentNamesAndCapsAreTheServices();
   EachRequestTakesItsOwnMethodAndHeaders();

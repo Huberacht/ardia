@@ -1,4 +1,5 @@
 import type { CrashProcess, CrashReport } from "../../../packages/shell/src/app";
+import { CRASH_DUMP_PLATFORM_ID } from "@platform/crashPlatform";
 import { hostSupports, invokeHost, type ArdiaHost } from "./host.ts";
 import { parseMinidump, type Minidump, type MinidumpModule } from "./minidump.ts";
 
@@ -76,7 +77,7 @@ const WINDOWS_EXCEPTIONS: Record<number, string> = {
 
 export const servesCrashDumps = (host: ArdiaHost | undefined) => !!host && hostSupports(CRASH_DUMPS, host);
 
-const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1) || "???";
+const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1) || "???";
 const folder = (path: string) => path.slice(0, path.lastIndexOf("/") + 1);
 
 function bundledImages(dump: Minidump): { name: string; uuid: string }[] {
@@ -142,6 +143,11 @@ export function windowsCrashReport(dump: Minidump, entry: CrashDumpEntry): Crash
   return report;
 }
 
+export function hostCrashReport(dump: Minidump, entry: CrashDumpEntry, platform: number = CRASH_DUMP_PLATFORM_ID): CrashReport | null {
+  if (dump.platform !== platform) return null;
+  return platform === WINDOWS_PLATFORM ? windowsCrashReport(dump, entry) : linuxCrashReport(dump, entry);
+}
+
 function decodeBase64(text: string): Uint8Array {
   const binary = atob(text);
   const bytes = new Uint8Array(binary.length);
@@ -168,7 +174,7 @@ export async function linuxCrashReports(host: ArdiaHost, since: number): Promise
     if (typeof text !== "string" || !text) continue;
     let dump: Minidump | null = null;
     try { dump = parseMinidump(decodeBase64(text)); } catch { dump = null; }
-    const report = dump && (isWindowsDump(dump) ? windowsCrashReport(dump, entry) : linuxCrashReport(dump, entry));
+    const report = dump && hostCrashReport(dump, entry);
     if (report) reports.push(report);
   }
   return newestPerKind(reports);
