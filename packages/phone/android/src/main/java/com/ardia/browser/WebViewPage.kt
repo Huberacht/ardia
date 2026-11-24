@@ -107,6 +107,20 @@ internal class WebViewPage(
     private var lastTouchY = 0f
     internal val answeredSignIns = HashSet<String>()
     internal var lastCaptureRoute: CaptureRoute? = null
+    internal var viewVersion = 0L
+        private set
+    private var viewMovedOnce: (() -> Unit)? = null
+
+    internal fun whenViewMoves(moved: () -> Unit) {
+        viewMovedOnce = moved
+    }
+
+    private fun viewMoved() {
+        viewVersion += 1
+        val moved = viewMovedOnce ?: return
+        viewMovedOnce = null
+        moved()
+    }
     private var reportsContent = false
     private var nextVisualStateRequest = 1L
 
@@ -471,8 +485,12 @@ internal class WebViewPage(
             false
         }
         web.setOnLongClickListener { longPressed(web) }
-        web.setOnScrollChangeListener { _, _, scrollY, _, _ -> scrolled(web, scrollY) }
-        web.addOnLayoutChangeListener { view, left, top, right, bottom, _, oldTop, _, oldBottom ->
+        web.setOnScrollChangeListener { _, _, scrollY, _, _ ->
+            if (web === webView) viewMoved()
+            scrolled(web, scrollY)
+        }
+        web.addOnLayoutChangeListener { view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (web === webView && (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop)) viewMoved()
             engine.notePageSize(view, right - left, bottom - top)
             if (bottom - top != oldBottom - oldTop) scrollTracker.resized(SystemClock.uptimeMillis())
         }
@@ -723,8 +741,13 @@ internal class WebViewPage(
         }
     }
 
+    internal fun scaleChanged(web: WebView) {
+        if (web === webView) viewMoved()
+    }
+
     internal fun historyUpdated(web: WebView, url: String, isReload: Boolean) {
         if (web !== webView) return
+        viewMoved()
         val previous = lastCommittedUrl
         lastCommittedUrl = url
         val kind = pendingVisit

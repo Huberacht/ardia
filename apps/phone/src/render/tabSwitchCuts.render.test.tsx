@@ -13,12 +13,13 @@ import { neighbours } from "../lib/pagerPhysics";
 import { sendDeckCommand } from "../state/browse/deckCommands";
 import * as browse from "../state/browse/store";
 import { cutTabSwitches } from "../state/browse/tabSwitch";
-import { dismissSearch, presentSearch, searchState, setSearchText } from "../state/search/store";
+import { dismissSearch, presentSearch, searchState, setSearchText, useSearch } from "../state/search/store";
+import { useTabs } from "../state/tabs/store";
 import { display } from "../state/search/omnibox";
 import { setPreference } from "../state/settings/store";
 import { useSelectedTab } from "../state/tabs/hooks";
 import { closeTabById, currentTabs, selectTabById, updateTabById } from "../state/tabs/store";
-import { noteSettledScroll, noteWarmPicture } from "../state/tabs/warmPictures";
+import { noteViewMoved, noteWarmPicture } from "../state/tabs/warmPictures";
 import { findTab } from "../state/tabs/tabsState";
 import * as pageStore from "../state/pages/store";
 import { renderSurface, unmount, withTabs } from "../../test/render/harness";
@@ -280,6 +281,58 @@ test("+ shows and focuses the waiting sheet before React renders it live: the pr
   keyboard.mockRestore();
 });
 
+test("the early reveal only shows a sheet prepared for the origin and privacy mode the press asks for; anything else waits for its own commit", async () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = () => root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  presentSearch("start", "");
+  expect(getAnimatedStyle(waiting()).opacity).toBe(0);
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+  });
+  act(() => dismissSearch());
+  await act(async () => {
+    jest.advanceTimersByTime(4000);
+  });
+  useTabs.setState({ incognito: true });
+  presentSearch("page", "");
+  expect(getAnimatedStyle(waiting()).opacity).toBe(0);
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+  });
+  act(() => useTabs.setState({ incognito: false }));
+  unmount(root);
+  keyboard.mockRestore();
+});
+
+test("a field-version reset at the press keeps the input the reveal focused", async () => {
+  withTabs(2);
+  browse.useBrowse.setState({ surface: "browsing", sheet: null });
+  const keyboard = jest.spyOn(Reanimated, "useAnimatedKeyboard").mockImplementation(() => ({ height: makeMutable(0), state: makeMutable(KeyboardState.CLOSED) }) as never);
+  act(() => useSearch.setState({ fieldVersion: 3 }));
+  const root = renderSurface(
+    <DesignProvider design="redesigned">
+      <SearchTray />
+    </DesignProvider>,
+  );
+  const waiting = root.root.findAll((node) => node.props.testID === "trayStandby" && typeof node.type === "string")[0]!;
+  const focused = waiting.findAll((node) => node.type === TextInput)[0]!;
+  presentSearch("page", "");
+  await act(async () => {
+    jest.advanceTimersByTime(0);
+  });
+  const live = root.root.findAll((node) => node.props.testID === "trayRoot" && typeof node.type === "string")[0]!;
+  expect(live.findAll((node) => node.type === TextInput)[0] === focused).toBe(true);
+  unmount(root);
+  keyboard.mockRestore();
+});
+
 test("a search that opens with text waits for its own commit: the waiting empty sheet is not shown early", async () => {
   withTabs(2);
   browse.useBrowse.setState({ surface: "browsing", sheet: null });
@@ -443,25 +496,23 @@ test("a favicon another view already resolved shows its icon on its own first fr
   unmount(second);
 });
 
-test("a swipe's neighbour shows its own last picture while it still matches the tab, and only its title card once that page's scroll or document moved on", () => {
+test("a swipe's neighbour shows its own last picture at the geometry it was captured at, and only its title card once that page's view has moved", () => {
   withTabs(3);
   browsingNow();
   const { id } = toNeighbour();
   const uri = `file:///warm-${id}.jpg`;
   act(() => updateTabById(id, { snapshotFileName: uri }));
   const neighbour = findTab(currentTabs(), id)!;
-  noteWarmPicture(id, uri, neighbour.url, Dimensions.get("window"), { width: 600, height: 1333 });
+  const window = Dimensions.get("window");
+  const frame = { x: 0, y: 0, width: window.width, height: window.height - 40 };
+  noteWarmPicture(id, { uri, url: neighbour.url, window, frame, settled: true });
   const pictures = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.testID === "pagerWarmPicture" && typeof node.type === "string");
   const warm = renderSurface(<Page />);
   expect(pictures(warm)).toHaveLength(1);
   expect(pictures(warm)[0]!.props.source).toEqual({ uri });
+  expect(StyleSheet.flatten(pictures(warm)[0]!.props.style)).toMatchObject({ top: 0, height: window.height - 40 });
   unmount(warm);
-  noteSettledScroll(id, 900);
-  const scrolled = renderSurface(<Page />);
-  expect(pictures(scrolled)).toHaveLength(0);
-  unmount(scrolled);
-  noteWarmPicture(id, uri, neighbour.url, Dimensions.get("window"), { width: 600, height: 1333 });
-  act(() => updateTabById(id, { url: "https://example.com/moved" }));
+  noteViewMoved(id);
   const moved = renderSurface(<Page />);
   expect(pictures(moved)).toHaveLength(0);
   unmount(moved);

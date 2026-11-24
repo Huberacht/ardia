@@ -6,7 +6,7 @@ import { countRender } from "../../state/app/interactionPerf";
 import { AppState, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type ViewInstance } from "react-native";
 import { SheetScrollContext, SheetScrollView, sheetPullTranslation, type SheetScroll } from "../ui/Sheet";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { cancelAnimation, FadeIn, FadeOut, runOnJS, runOnUI, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, FadeIn, FadeOut, runOnJS, runOnUI, useAnimatedProps, useAnimatedReaction, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import type { GestureType } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { activateRow, cancelSearch, submitSearch, toggleTrayIncognito } from "../../state/browse/store";
@@ -24,7 +24,8 @@ import { idleScrub, SCRUB, scrubBegin, scrubEnd, scrubMove, type RowFrame, type 
 import { rowFade, rowsFadeEdge, rowsOverflow, wholeRowsHeight } from "../../lib/trayRows";
 import { haptics } from "../../state/app/haptics";
 import { refinedText, type TrayRow } from "../../state/search/omnibox";
-import { searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents } from "../../state/search/store";
+import { preparedIdleRows, searchPresented, searchState, setSearchClearsPagePrefill, setSearchText, typeSearch, warmSearchWhenIdle, whenSearchPresents, type SearchOrigin, type SearchPresenting } from "../../state/search/store";
+import { useBrowse } from "../../state/browse/store";
 import { endSearchTiming, markSearchClosePhase, markSearchPhase } from "../../state/search/searchTiming";
 import { coverTray, followTrayBack, trayBackTravel, useTrayCovers } from "../../state/search/trayBack";
 import { useIncognito, useSelectedTab } from "../../state/tabs/hooks";
@@ -146,11 +147,19 @@ function SheetTray() {
 
 const STANDBY_SESSION = -1;
 
-let revealStandby: (() => void) | null = null;
+let revealStandby: ((presenting: SearchPresenting) => void) | null = null;
 let standbyField: TrayInputHandle | null = null;
 
-const revealStandbyFor = (text: string) => {
-  if (text === "") revealStandby?.();
+const revealStandbyFor = (presenting: SearchPresenting) => {
+  if (presenting.text === "") revealStandby?.(presenting);
+};
+
+const StandbyContext = createContext(false);
+
+const useTrayOrigin = (standby: boolean): SearchOrigin => {
+  const live = useSearchOrigin();
+  const prepared = useBrowse((state) => (state.surface === "start" ? "start" : "page"));
+  return standby ? prepared : live;
 };
 
 const noClose = () => undefined;
@@ -162,7 +171,7 @@ const FIRST_KEYBOARD_SHARE = 0.42;
 
 function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) {
   countRender("TrayLayer");
-  const origin = useSearchOrigin();
+  const origin = useTrayOrigin(standby);
   const theme = useTrayTheme();
   const incognito = useIncognito();
   const insets = useSafeAreaInsets();
@@ -195,26 +204,23 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   const floor = useSharedValue(0);
   const revealed = useSharedValue(0);
   const revealStyle = useAnimatedStyle(() => ({ opacity: revealed.value }));
-  useAnimatedReaction(
-    () => revealed.value,
-    (now, was) => {
-      if (bornStandby && now === 1 && was === 0) runOnJS(markShownFrame)("search");
-    },
-  );
+  const revealProps = useAnimatedProps<{ pointerEvents: "box-none" | "none"; importantForAccessibility: "auto" | "no-hide-descendants" }>(() => ({ pointerEvents: revealed.value ? "box-none" : "none", importantForAccessibility: revealed.value ? "auto" : "no-hide-descendants" }));
   useLayoutEffect(() => {
     if (!standby) {
       if (bornStandby) revealed.value = 1;
       return;
     }
     if (cutsIn) floor.value = keyboard.full.value > TRAY_LIFT.keyboardThreshold ? 0 : window.height * FIRST_KEYBOARD_SHARE;
-    revealStandby = () => {
+    revealStandby = (presenting) => {
+      if (presenting.origin !== origin || presenting.incognito !== incognito) return;
       revealed.value = 1;
       standbyField?.focus();
+      markShownFrame("search");
     };
     return () => {
       revealStandby = null;
     };
-  }, [standby]);
+  }, [standby, origin, incognito]);
   const drag = useSharedValue(0);
   const dragging = useSharedValue(false);
   const released = useSharedValue(false);
@@ -476,8 +482,9 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
   }, [trayHeight, safeBottom, reduceMotion, command !== null, panelRadius]);
 
   return (
+    <StandbyContext.Provider value={standby}>
     <DepartContext.Provider value={beginDeparture}>
-    <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, standby ? revealStyle : null]} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
+    <Animated.View testID={standby ? "trayStandby" : "trayRoot"} style={[StyleSheet.absoluteFill, standby ? revealStyle : null]} animatedProps={standby ? revealProps : undefined} pointerEvents={closing || standby ? "none" : "box-none"} collapsable={false} importantForAccessibility={closing || standby ? "no-hide-descendants" : "auto"} accessibilityElementsHidden={closing || standby}>
       {closing || standby ? null : <FabricCatchUp motion={trayMotionNow} testID="trayFabricCatchUp" />}
       <Animated.View testID="trayDim" style={[StyleSheet.absoluteFill, dimStyle]}>
         <Pressable
@@ -548,6 +555,7 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
       )}
     </Animated.View>
     </DepartContext.Provider>
+    </StandbyContext.Provider>
   );
 }
 
@@ -991,7 +999,8 @@ const focusTray = () => trayInput?.focus();
 const mayFocusTray = () => !useOnboarding.getState().showing && !useVoice.getState().presented;
 
 function TrayField({ closing, standby = false }: { closing: boolean; standby?: boolean }) {
-  const version = useSearchFieldVersion();
+  const live = useSearchFieldVersion();
+  const version = standby ? 0 : live;
   return <FieldInput key={version} first={version === 0} closing={closing} standby={standby} />;
 }
 
@@ -1145,9 +1154,13 @@ function PanelIncognitoToggle() {
 function TrayRows({ dismissDrag }: { dismissDrag: GestureType }) {
   const leaving = useLeavingActions();
   const theme = useTrayTheme();
-  const rows = useSearchRows();
-  const typed = useSearchText();
+  const standby = useContext(StandbyContext);
+  const liveRows = useSearchRows();
+  const liveTyped = useSearchText();
   const incognito = useIncognito();
+  const preparedRows = useMemo(() => (standby ? preparedIdleRows() : null), [standby, incognito]);
+  const rows = preparedRows ?? liveRows;
+  const typed = standby ? "" : liveTyped;
   const [room, setRoom] = useState(0);
   const [bottoms, setBottoms] = useState<number[]>([]);
   const refine = useCallback((row: TrayRow) => setSearchText(refinedText(row)), []);

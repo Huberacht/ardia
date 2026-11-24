@@ -40,6 +40,10 @@ export function useTrayKeyboard(): TrayKeyboard {
   const window = useWindowDimensions();
   const full = useSharedValue(rememberedKeyboardHeight(window.width, window.height));
   const [target, setTarget] = useState(() => (Keyboard.isVisible() ? knownFull : 0));
+  useEffect(() => {
+    if (keyboard.height.value > TRAY_LIFT.keyboardThreshold) return;
+    full.value = rememberedKeyboardHeight(window.width, window.height);
+  }, [window.width, window.height]);
   const remember = (height: number) => {
     if (height <= TRAY_LIFT.keyboardThreshold) return;
     knownFull = height;

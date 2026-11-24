@@ -124,10 +124,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const left = useTabWhile(around.left ?? "", around.left !== null);
   const right = useTabWhile(around.right ?? "", around.right !== null);
   const handsOver = pageReportsDrawn();
-  const [swiping, setSwiping] = useState(false);
   const grabbedSwipe = useCallback(() => {
     captureCurrentCover();
-    setSwiping(true);
   }, []);
   const pager = useTabPager({
     width,
@@ -140,8 +138,7 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
     onGrab: grabbedSwipe,
   });
   useDemoMotion(pager, width);
-  useEffect(() => setSwiping(false), [tab.id]);
-  const swipeAddresses = useMemo(() => (tabSwitchCuts() && swiping ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right, swiping]);
+  const swipeAddresses = useMemo(() => (tabSwitchCuts() ? { offset: pager.offset, from: pager.from, span: width, left, right } : null), [pager.offset, pager.from, width, left, right]);
   const arrived = useBrowse((s) => s.arriving === tab.id && s.covered === tab.id);
   const arrivalTab = useTabWhile(tab.id, arrived);
   const arrivalCover = useBrowse((s) => s.arrivalCover);
@@ -186,10 +183,12 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   }, []);
   const landedTarget = useRef(pager.landedTarget);
   landedTarget.current = pager.landedTarget;
+  const landedScope = useRef(pager.landedScope);
+  landedScope.current = pager.landedScope;
   const editAddress = useCallback(() => {
     const landed = tabSwitchCuts() ? landedTarget.current() : null;
     if (landed) {
-      holdBarAction(landed, "address");
+      holdBarAction(landed, "address", landedScope.current());
       return;
     }
     editPageQuery();

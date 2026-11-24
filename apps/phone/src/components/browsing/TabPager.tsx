@@ -11,8 +11,8 @@ import type { BrowserTab } from "../../state/tabs/tabModels";
 import { tabSwitchCuts } from "../../state/browse/tabSwitch";
 import { currentTabs } from "../../state/tabs/store";
 import { findTab } from "../../state/tabs/tabsState";
+import { dropBarAction } from "../../state/browse/store";
 import { warmPicture } from "../../state/tabs/warmPictures";
-import { snapshotPageTop } from "../../lib/shownSnapshots";
 import { TabFace, tabsCurve, tabsLayout, tabsMotion, trayMotion, useTheme, useReduceMotion, smoothCorners } from "../ui";
 
 export type TabPager = {
@@ -28,6 +28,7 @@ export type TabPager = {
   peek: (toward: -1 | 1) => boolean;
   validates: (from: string, to: string) => boolean;
   landedTarget: () => string | null;
+  landedScope: () => string;
 };
 
 type Options = { width: number; selectedId: string | null; left: string | null; right: string | null; landsEarly?: boolean; isNeighbour?: (id: string) => boolean; onCommit: (id: string) => void; onGrab: () => void };
@@ -81,8 +82,12 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   };
 
   const commit = (from: string, to: string, sent: number) => {
-    if (sent !== turn.value) return;
+    if (sent !== turn.value) {
+      dropBarAction(swipeScope(sent));
+      return;
+    }
     if (!validates(from, to)) {
+      dropBarAction(swipeScope(sent));
       restore();
       return;
     }
@@ -90,6 +95,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
     onCommit(to);
   };
 
+  const landedScope = () => swipeScope(turn.value);
   const landedTarget = () => {
     const at = offset.value;
     if (fromId.value !== (selectedId ?? "") || span.value <= 0 || Math.abs(Math.abs(at) - span.value) >= 1) return null;
@@ -193,7 +199,7 @@ export function useTabPager({ width, selectedId, left, right, landsEarly = false
   });
   const dim = useAnimatedStyle(() => ({ opacity: outgoingPose(offset.value, span.value, hasLeft.value, hasRight.value, reduceMotion).dim }));
 
-  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget };
+  return { offset, from: fromId, active, gesture, outgoing, dim, grab, track, settleTo, peek, validates, landedTarget, landedScope };
 }
 
 type NeighbourProps = { pager: TabPager; tab: BrowserTab; side: -1 | 0 | 1; width: number; statusHeight: number; statusOver?: boolean; hasLeft: boolean; hasRight: boolean; coverId?: string };
@@ -218,7 +224,6 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
   const shown = display(tab.url);
   const viewport = useWindowDimensions();
   const warm = cuts ? warmPicture(tab, viewport) : null;
-  const warmTop = warm ? (snapshotPageTop(warm.uri) ?? statusHeight) : 0;
   const edge = side < 0 ? { left: width, experimental_backgroundImage: EDGE_SHADOW_TRAILING } : { left: -tabsLayout.pagerEdgeShadow, experimental_backgroundImage: EDGE_SHADOW_LEADING };
   return (
     <>
@@ -228,7 +233,7 @@ export function PagerNeighbour({ pager, tab, side, width, statusHeight, statusOv
         <View style={styles.body}>
           <TabFace tab={tab} title={tab.title || shown.host} host={shown.host} tone={tone?.top ?? null} roles={theme} />
         </View>
-        {warm ? <Image testID="pagerWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { top: warmTop, width, height: (width * warm.size.height) / warm.size.width }]} /> : null}
+        {warm ? <Image testID="pagerWarmPicture" source={{ uri: warm.uri }} fadeDuration={0} style={[styles.warm, { left: warm.frame.x, top: warm.frame.y, width: warm.frame.width, height: warm.frame.height }]} /> : null}
         {statusOver ? <View testID="pagerStatusStrip" style={[styles.statusOver, { height: statusHeight, backgroundColor: tone?.top ?? theme.pageSurface }]} /> : null}
       </Animated.View>
     </>
@@ -239,6 +244,8 @@ const EDGE_SHADOW_STOPS = ["rgba(0,0,0,0)", "rgba(0,0,0,0.08)", "rgba(0,0,0,0.26
 const EDGE_SHADOW_LEADING = `linear-gradient(to right, ${EDGE_SHADOW_STOPS.join(", ")})`;
 const EDGE_SHADOW_TRAILING = `linear-gradient(to left, ${EDGE_SHADOW_STOPS.join(", ")})`;
 
+const swipeScope = (turn: number) => `swipe:${turn}`;
+
 export function PagerBackdrop() {
   const theme = useTheme();
   return <View testID="pagerBackdrop" style={[StyleSheet.absoluteFill, { backgroundColor: theme.canvas }]} />;
@@ -246,4 +253,4 @@ export function PagerBackdrop() {
 
 const cornerRadius = screenCornerRadius(tabsLayout.displayCornerRadius);
 
-const styles = StyleSheet.create({ card: { overflow: "hidden", borderRadius: cornerRadius, ...smoothCorners }, edge: { position: "absolute", width: tabsLayout.pagerEdgeShadow }, body: { flex: 1 }, warm: { position: "absolute", left: 0 }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 } });
+const styles = StyleSheet.create({ card: { overflow: "hidden", borderRadius: cornerRadius, ...smoothCorners }, edge: { position: "absolute", width: tabsLayout.pagerEdgeShadow }, body: { flex: 1 }, warm: { position: "absolute" }, statusOver: { position: "absolute", left: 0, right: 0, top: 0 } });
