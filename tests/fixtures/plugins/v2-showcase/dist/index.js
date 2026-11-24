@@ -227,7 +227,7 @@
         const joining = listeners.size > 0;
         const added = addTo(listeners, listener);
         state.subscriptionsChanged();
-        if (joining) state.topicJoined(topic);
+        state.listenerAdded(topic, joining);
         return {
           dispose() {
             added.dispose();
@@ -1046,7 +1046,18 @@
       if (!joined.size) enqueueMicrotask(() => void sendJoined());
       joined.add(topic);
     };
-    return { sync, deliverState, noteDropped, topicJoined };
+    const listenerAdded = (topic, joining) => {
+      if (gaveUp) {
+        gaveUp = false;
+        streak = 0;
+        lastResyncAt = Number.NEGATIVE_INFINITY;
+        waiting = true;
+        enqueueMicrotask(() => void resync());
+        return;
+      }
+      if (joining) topicJoined(topic);
+    };
+    return { sync, deliverState, noteDropped, listenerAdded };
   }
 
   var SDK_VERSION = "2.0.0";
@@ -1144,7 +1155,7 @@
       values: {},
       info: { name: "", app: "", version: "", protocol: 0 },
       subscriptionsChanged: () => subscriptions.sync(),
-      topicJoined: (topic) => subscriptions.topicJoined(topic),
+      listenerAdded: (topic, joining) => subscriptions.listenerAdded(topic, joining),
       report
     };
     const ardia2 = createArdia(rpc, registry, state);

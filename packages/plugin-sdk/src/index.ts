@@ -9,6 +9,7 @@ export * from "./protocol";
 export { createHostRuntime, SDK_VERSION, type HostRuntime, type HostRuntimeOptions } from "./runtime";
 export { createRpc, PluginError, type Rpc, type Transport } from "./rpc";
 export { useSurface, type SurfaceInfo } from "./surfaces";
+export { joinGroupPages, type GroupPages } from "./stateMirror";
 export type { Ardia, PluginInfo, PluginResponse } from "./api";
 export type {
   Awaitable,

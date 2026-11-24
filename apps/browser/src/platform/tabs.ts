@@ -51,6 +51,8 @@ type CommitReader = "automation" | "pageBars" | "pluginState";
 const commitReaders = new Set<CommitReader>();
 let reportsSent: boolean | null = false;
 
+export const pageCommitsFlowing = () => reportsSent === true;
+
 export function reportPageCommits(reader: CommitReader, on: boolean): Promise<null> {
   if (on) commitReaders.add(reader);
   else commitReaders.delete(reader);

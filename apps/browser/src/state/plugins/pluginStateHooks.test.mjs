@@ -11,9 +11,13 @@ const lifecycle = await import("./lifecycle.ts");
 const { ensurePluginActivated } = await import("./activation.ts");
 const { settledStops } = await import("./process.ts");
 const { flushStateEvents, stateSubscriberCount } = await import("./stateEvents.ts");
-const { packEvents, STATE_EVENT_BUDGET_BYTES, STATE_ROUND_BYTES } = await import("./stateEventPacking.ts");
+const { packFrames, takeRound, wireLine, STATE_EVENT_BUDGET_BYTES, STATE_ROUND_BYTES } = await import("./stateEventPacking.ts");
+const NATIVE_LINE_CAP = 262144;
+const DROP_MARKER = (n) => `"dropped":${n},`.length;
 const wireBytes = (line) => new TextEncoder().encode(line).length + 1;
-const { HOSTILE_STRINGS } = await import("../../../../../scripts/security/hostile-inputs.mjs");
+const { HOSTILE_STRINGS, HOSTILE_VALUES } = await import("../../../../../scripts/security/hostile-inputs.mjs");
+const { showDownloadProgress } = await import("../downloads/progress.ts");
+const { reportPageCommits } = await import("../../platform/tabs.ts");
 const { notePluginStateCommit } = await import("./stateCommits.ts");
 const { consentLines } = await import("./consent.ts");
 const { redactedDownloads, pluginStateUrl } = await import("./pluginEventRedaction.ts");
@@ -415,36 +419,61 @@ test("a big window arrives in parts sized by encoded bytes, and only the first i
   });
   const lines = host.events.filter((e) => e.name === "watcher" && JSON.parse(e.line).event === "state.tabs").map((e) => e.line);
   assert.ok(lines.length > 1, "split into parts");
-  for (const line of lines) assert.ok(wireBytes(line) <= STATE_EVENT_BUDGET_BYTES, "each part, newline included, fits its byte budget");
+  for (const line of lines) assert.ok(wireBytes(line) + DROP_MARKER(1e12) <= NATIVE_LINE_CAP, "each part, newline and a dropped marker included, fits the native cap");
   const parts = lines.map((l) => JSON.parse(l).data);
   assert.equal(parts[0].initial, true);
   assert.ok(parts.slice(1).every((p) => p.initial === undefined));
   assert.equal(parts.reduce((n, p) => n + p.tabs.length, 0), 601);
 });
 
-test("packEvents measures the whole wire line, keeps every row, and sends nothing when nothing changed", () => {
+test("packFrames measures the whole wire line with room for more and a dropped marker, keeps every row, and sends nothing when nothing changed", () => {
   const rows = Array.from({ length: 50 }, (_, i) => ({ key: `t${i}`, field: "tabs", value: { id: `t${i}`, title: "\u00e9".repeat(100) } }));
   const removed = [{ key: "\u0000removed:x", field: "removed", value: "x" }, { key: "\u0000removed:y", field: "removed", value: "y" }];
-  const packed = packEvents("tabs", ["tabs", "removed"], [...rows, ...removed], { initial: true, time: Date.now(), budget: 2048 });
-  assert.ok(packed.lines.length > 1);
-  for (const line of packed.lines) assert.ok(wireBytes(line) <= 2048, `${wireBytes(line)} bytes`);
-  assert.deepEqual(packed.events.flatMap((e) => e.tabs).map((r) => r.id), rows.map((r) => r.key));
-  assert.deepEqual(packed.events.flatMap((e) => e.removed), ["x", "y"]);
-  assert.equal(packed.events[0].initial, true);
-  assert.equal(packed.held, false);
-  assert.deepEqual(packEvents("tabs", ["tabs", "removed"], [], { initial: false, time: 1 }).lines, []);
-  assert.deepEqual(packEvents("tabs", ["tabs", "removed"], [], { initial: true, time: 1 }).events, [{ initial: true, tabs: [], removed: [] }]);
+  const frames = packFrames("tabs", ["tabs", "removed"], [...rows, ...removed], { initial: true, budget: 2048 });
+  assert.ok(frames.length > 1);
+  for (const f of frames) {
+    const worst = wireBytes(wireLine("tabs", 9_999_999_999_999, { ...f.data, more: true })) + DROP_MARKER(1e12);
+    assert.ok(worst <= 2048, `${worst} bytes`);
+    assert.ok(f.bytes <= 2048);
+  }
+  assert.deepEqual(frames.flatMap((f) => f.data.tabs).map((r) => r.id), rows.map((r) => r.key));
+  assert.deepEqual(frames.flatMap((f) => f.data.removed), ["x", "y"]);
+  assert.deepEqual(frames.flatMap((f) => f.completes), [...rows.map((r) => r.key), ...removed.map((r) => r.key)]);
+  assert.equal(frames[0].data.initial, true);
+  assert.deepEqual(packFrames("tabs", ["tabs", "removed"], [], { initial: false }), []);
+  assert.deepEqual(packFrames("tabs", ["tabs", "removed"], [], { initial: true }).map((f) => f.data), [{ initial: true, tabs: [], removed: [] }]);
 });
 
-test("a group with more tab ids than one event holds arrives in pages, each within 256 KB on the wire", () => {
-  const tabIds = Array.from({ length: 30000 }, (_, i) => `tab-${"x".repeat(20)}-${i}`);
-  const group = { id: "g1", windowId: "w1", name: "Huge", color: "blue", icon: null, collapsed: false, pinned: false, parentId: null, tabIds };
-  const packed = packEvents("workspace", ["windows", "groups", "removedWindows", "removedGroups"], [{ key: "g:g1", field: "groups", value: group }], { initial: true, time: Date.now() });
-  assert.ok(packed.lines.length > 1, "split");
-  for (const line of packed.lines) assert.ok(wireBytes(line) <= STATE_EVENT_BUDGET_BYTES, `${wireBytes(line)} bytes`);
-  const pages = packed.events.flatMap((e) => e.groups);
+const hugeGroup = (count) => ({ id: "g1", windowId: "w1", name: "Huge", color: "blue", icon: null, collapsed: false, pinned: false, parentId: null, tabIds: Array.from({ length: count }, (_, i) => `tab-${"x".repeat(20)}-${i}`) });
+
+test("a group with more tab ids than one event holds arrives in pages, each under the native cap even with a dropped marker", () => {
+  const group = hugeGroup(30000);
+  const frames = packFrames("workspace", ["windows", "groups", "removedWindows", "removedGroups"], [{ key: "g:g1", field: "groups", value: group }], { initial: true });
+  assert.ok(frames.length > 1, "split");
+  for (const f of frames) assert.ok(wireBytes(wireLine("workspace", 9_999_999_999_999, { ...f.data, more: true })) + DROP_MARKER(1e12) <= NATIVE_LINE_CAP);
+  assert.ok(frames.every((f) => f.bytes <= STATE_EVENT_BUDGET_BYTES));
+  const pages = frames.flatMap((f) => f.data.groups);
   assert.ok(pages.every((p, i) => p.id === "g1" && p.tabIdsPage.index === i && p.tabIdsPage.count === pages.length));
-  assert.deepEqual(pages.flatMap((p) => p.tabIds), tabIds);
+  assert.deepEqual(pages.flatMap((p) => p.tabIds), group.tabIds);
+  assert.deepEqual(frames.flatMap((f) => f.completes), ["g:g1"], "the group counts as sent only with its last page");
+  assert.equal(frames.at(-1).completes[0], "g:g1");
+});
+
+test("a multi-megabyte group goes out over rounds of at most 1 MB, pages split across rounds, with more on every round but the last", () => {
+  const group = hugeGroup(200000);
+  const frames = packFrames("workspace", ["windows", "groups", "removedWindows", "removedGroups"], [{ key: "g:g1", field: "groups", value: group }], { initial: true });
+  const total = frames.reduce((n, f) => n + f.bytes, 0);
+  assert.ok(total > 4 * 1024 * 1024, `${total} bytes: bigger than the native queue`);
+  const outbox = [...frames];
+  const rounds = [];
+  while (outbox.length) rounds.push(takeRound(outbox));
+  assert.ok(rounds.length >= 5);
+  for (const round of rounds) assert.ok(round.reduce((n, r) => n + r.frame.bytes, 0) <= STATE_ROUND_BYTES, "each round fits its budget");
+  rounds.forEach((round, i) => {
+    assert.equal(round.at(-1).more, i < rounds.length - 1, `round ${i}`);
+    assert.ok(round.slice(0, -1).every((r) => !r.more));
+  });
+  assert.deepEqual(rounds.flat().flatMap((r) => r.frame.data.groups).flatMap((p) => p.tabIds), group.tabIds);
 });
 
 test("a snapshot bigger than one flush's round goes out over several flushes, never all at once", async () => {
@@ -455,7 +484,7 @@ test("a snapshot bigger than one flush's round goes out over several flushes, ne
   });
   const first = host.events.filter((e) => e.name === "watcher").map((e) => e.line);
   const firstBytes = first.reduce((n, line) => n + wireBytes(line), 0);
-  assert.ok(firstBytes <= STATE_ROUND_BYTES + 16 * 1024, `${firstBytes} bytes in one flush`);
+  assert.ok(firstBytes <= STATE_ROUND_BYTES, `${firstBytes} bytes in one flush`);
   const parts = first.map((l) => JSON.parse(l).data);
   assert.equal(parts[0].initial, true);
   assert.equal(parts.at(-1).more, true, "the last part says more follows");
@@ -673,10 +702,14 @@ test("hostile text in an intent never reaches the store as anything but plain te
 
 test("a refused commit-report registration is tried again on the next delivery", async () => {
   let w;
-  stub.commitReportFailures.next = 1;
-  const from = stub.commitReports.length;
-  await subscribed(WATCHER, ["navigation"], () => (w = S().createWindow({ url: "https://a.example/" })));
+  let from = 0;
+  await subscribed(WATCHER, ["navigation"], () => {
+    w = S().createWindow({ url: "https://a.example/" });
+    from = stub.commitReports.length;
+    stub.commitReportFailures.next = 1;
+  });
   await settle();
+  assert.equal(stub.commitReportFailures.next, 0, "the first registration was refused");
   S().newTab(w, { url: "https://b.example/" });
   flushStateEvents();
   await settle();
@@ -700,6 +733,154 @@ test("a navigation that happened while sharing was off is never counted in a lat
   assert.equal(stateEvents("watcher", "navigation").length, 1, "the event itself still goes out");
   assert.equal(takePluginCounts().plugin_state_events, 0, "but it isn't counted in the new period");
   setConsentPeriod(true, "plugin-state-hooks-test");
+});
+
+test("a held snapshot still finishes with a part without more when its unsent rows disappear first", async () => {
+  const long = "a".repeat(8000);
+  let w, made;
+  await subscribed(WATCHER, ["tabs"], () => {
+    w = S().createWindow({ url: "https://a.example/" });
+    made = Array.from({ length: 200 }, (_, i) => S().newTab(w, { url: `https://n${i}.example/${long}` }));
+  });
+  assert.equal(stateEvents("watcher", "tabs").at(-1).more, true);
+  for (const id of made) S().closeTab(id);
+  host.events.length = 0;
+  for (let i = 0; i < 6 && !host.events.length; i++) flushStateEvents();
+  const parts = stateEvents("watcher", "tabs");
+  assert.ok(parts.length >= 1);
+  assert.equal(parts.at(-1).more, undefined, "the round closes");
+  host.events.length = 0;
+  for (let i = 0; i < 6; i++) flushStateEvents();
+  const after = stateEvents("watcher", "tabs");
+  assert.deepEqual(new Set(after.flatMap((p) => p.removed)), new Set(made), "and the closed tabs are then removed");
+});
+
+test("navigation telemetry counts only frames holding a commit made while sharing was on", async () => {
+  const long = "p".repeat(8000);
+  let w, tabs;
+  await subscribed(WATCHER, ["navigation"], () => {
+    w = S().createWindow({ url: "https://a.example/" });
+    tabs = Array.from({ length: 41 }, (_, i) => S().newTab(w, { url: `https://t${i}.example/` }));
+  });
+  host.events.length = 0;
+  const at = Date.now() + 1000;
+  setConsentPeriod(false, "plugin-state-off-40");
+  for (let i = 0; i < 40; i++) notePluginStateCommit(tabs[i], `https://t${i}.example/${long}`, at + i);
+  setConsentPeriod(true, "plugin-state-on-1");
+  notePluginStateCommit(tabs[40], "https://t40.example/on", at + 100);
+  takePluginCounts();
+  flushStateEvents();
+  const frames = stateEvents("watcher", "navigation");
+  assert.ok(frames.length >= 2, `${frames.length} frames`);
+  assert.equal(frames.flatMap((f) => f.commits).length, 41);
+  const onlyOff = frames.filter((f) => !f.commits.some((c) => c.url === "https://t40.example/on")).length;
+  assert.ok(onlyOff >= 1, "at least one frame holds only off-period commits");
+  assert.equal(takePluginCounts().plugin_state_events, frames.length - onlyOff, "only frames with an in-period commit count");
+  setConsentPeriod(true, "plugin-state-hooks-test");
+});
+
+test("a navigation subscriber never gets commits made before it joined", async () => {
+  await enable(WATCHER, FULL);
+  const w = S().createWindow({ url: "https://a.example/" });
+  const tab = activeTabId(S(), w);
+  const watcher = await activated("watcher");
+  const full = await activated("full");
+  await ask("watcher", "state.subscribe", { topics: ["navigation"] }, watcher);
+  notePluginStateCommit(tab, "https://before.example/", Date.now() + 1000);
+  host.events.length = 0;
+  await ask("full", "state.subscribe", { topics: ["navigation"] }, full);
+  flushStateEvents();
+  assert.deepEqual(stateEvents("watcher", "navigation").flatMap((e) => e.commits).map((c) => c.url), ["https://before.example/"]);
+  assert.deepEqual(stateEvents("full", "navigation"), [], "queued before it joined");
+  host.events.length = 0;
+  notePluginStateCommit(tab, "https://after.example/", Date.now() + 2000);
+  flushStateEvents();
+  assert.deepEqual(stateEvents("full", "navigation").flatMap((e) => e.commits).map((c) => c.url), ["https://after.example/"]);
+  assert.deepEqual(stateEvents("watcher", "navigation").flatMap((e) => e.commits).map((c) => c.url), ["https://after.example/"]);
+});
+
+test("a refused commit-report registration is retried on a timer even with nothing else happening", async () => {
+  let from = 0;
+  await subscribed(WATCHER, ["navigation"], () => {
+    S().createWindow({ url: "https://a.example/" });
+    from = stub.commitReports.length;
+    stub.commitReportFailures.next = 2;
+  });
+  await settle();
+  const askedNow = () => stub.commitReports.slice(from).filter((on) => on === true).length;
+  assert.equal(stub.commitReportFailures.next, 0, "both the registration and the delivery's retry were refused");
+  const before = askedNow();
+  const deadline = Date.now() + 3000;
+  while (askedNow() <= before && Date.now() < deadline) await settle();
+  assert.ok(askedNow() > before, `the timer asked again with nothing else happening: ${JSON.stringify(stub.commitReports.slice(from))}`);
+});
+
+test("hostile topics, resync values and request keys never change a subscription or send an event they don't allow", async () => {
+  await enable(NARROW);
+  const w = S().createWindow({ url: "https://a.example/" });
+  const run = await activated("narrow");
+  const subscribe = (params) => ask("narrow", "state.subscribe", params, run);
+  for (const { value } of HOSTILE_VALUES) {
+    for (const params of [{ topics: [value] }, { topics: value }, { topics: ["tabs"], resync: value }, { topics: ["tabs", value] }]) {
+      const reply = await subscribe(params);
+      const resyncOk = params.resync === undefined || typeof params.resync === "boolean" || (Array.isArray(params.resync) && params.resync.length <= ALL_TOPICS.length && params.resync.every((t) => ALL_TOPICS.includes(t)));
+      const allowed = Array.isArray(params.topics) && params.topics.every((t) => t === "tabs") && resyncOk;
+      if (allowed) {
+        assert.ok(reply.result?.ok, JSON.stringify(params).slice(0, 120));
+        assert.equal((await subscribe({ topics: [] })).result?.ok, true);
+      } else assert.ok(reply.error, JSON.stringify(params).slice(0, 120));
+      assert.equal(stateSubscriberCount(), 0, `nothing left subscribed by ${JSON.stringify(params).slice(0, 120)}`);
+    }
+    if (typeof value === "string" && value !== "topics" && value !== "resync") {
+      const params = JSON.parse(`{"topics":["tabs"],${JSON.stringify(value)}:1}`);
+      assert.equal((await subscribe(params)).error?.code, "bad_request", JSON.stringify(value).slice(0, 80));
+      assert.equal(stateSubscriberCount(), 0);
+    }
+  }
+  host.events.length = 0;
+  flushStateEvents();
+  assert.deepEqual(host.events.filter((e) => e.name === "narrow" && JSON.parse(e.line).event?.startsWith("state.")), [], "no event went out for a refused request");
+  assert.deepEqual((await subscribe({ topics: ["tabs"] })).result, { ok: true, topics: ["tabs"] }, "a plain request still works");
+  flushStateEvents();
+  assert.equal(stateEvents("narrow", "tabs")[0]?.initial, true);
+  assert.ok(w);
+});
+
+test("download progress reaches subscribers before the download finishes", async () => {
+  await subscribed(DOWNLOADS_ONLY, ["downloads"], () => S().upsertDownload(download({ id: "live", received: 0, total: 0 })));
+  host.events.length = 0;
+  showDownloadProgress(download({ id: "live", received: 10, total: 100 }));
+  flushStateEvents();
+  assert.deepEqual(stateEvents("fetcher", "downloads").flatMap((e) => e.downloads).map((d) => [d.id, d.received, d.total]), [["live", 10, 100]]);
+  host.events.length = 0;
+  showDownloadProgress(download({ id: "live", received: 50, total: 100 }));
+  flushStateEvents();
+  assert.deepEqual(stateEvents("fetcher", "downloads").flatMap((e) => e.downloads).map((d) => [d.id, d.received, d.total]), [["live", 50, 100]]);
+});
+
+test("joining while another reader already has commit reports on keeps real baselines, so in-page changes still arrive", async () => {
+  let w;
+  await enable(WATCHER);
+  w = S().createWindow({ url: "https://doc.example/page" });
+  const tab = activeTabId(S(), w);
+  await reportPageCommits("pageBars", true);
+  const committed = Date.now() - 60_000;
+  notePluginStateCommit(tab, "https://doc.example/page", committed);
+  const run = await activated("watcher");
+  await ask("watcher", "state.subscribe", { topics: ["navigation"] }, run);
+  flushStateEvents();
+  host.events.length = 0;
+  notePluginStateCommit(tab, "https://doc.example/page#first", committed);
+  flushStateEvents();
+  notePluginStateCommit(tab, "https://doc.example/page#second", committed);
+  flushStateEvents();
+  notePluginStateCommit(tab, "https://doc.example/page#second", committed);
+  flushStateEvents();
+  assert.deepEqual(stateEvents("watcher", "navigation").flatMap((e) => e.commits).map((c) => [c.url, c.sameDocument]), [
+    ["https://doc.example/page", true],
+    ["https://doc.example/page", true],
+  ], "both in-page changes arrive, fragments cut as always, and the repeat doesn't");
+  await reportPageCommits("pageBars", false);
 });
 
 test("subscriptions end with the run", async () => {

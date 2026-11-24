@@ -573,21 +573,30 @@ view, diffs it against what that plugin last got and sends the difference; fifty
 The work happens in a timer, never inside a commit, so tab switching and typing never wait on it, and a plugin that is
 slow, hung or gone can't slow them down: sends go to the helper's own buffered channel.
 
-- **Parts.** Each event's whole line on the wire, newline included, is at most 256 KB of UTF-8
-  (`stateEventPacking.ts`), so a big window arrives in parts and only the first is `initial`. A group with more tab ids
-  than one part holds arrives as several copies of the group, each with a page of `tabIds` and
-  `tabIdsPage: {index, count}`; join the pages in order.
-- **Rounds.** One delivery sends at most about 1 MB to a plugin. A bigger snapshot goes out over the next deliveries,
-  100 ms apart, and the last part of each round but the final one has `more: true`; later rounds aren't `initial`, they
-  carry the rows not sent yet. So a whole snapshot never has to fit in the channel's 4 MB at once.
-- **What counts as sent.** Ardia records a row as sent only once its part went out. A send that fails leaves nothing
-  recorded, so that topic's next event is a whole `initial` one.
+- **Parts.** Each event's whole line on the wire, newline included, with room for `"more": true` and for the channel's
+  `"dropped": N` marker, is at most 256 KB of UTF-8 (`stateEventPacking.ts`), so a big window arrives in parts and only
+  the first is `initial`. A group with more tab ids than one part holds arrives as several copies of the group, each
+  with a page of `tabIds` and `tabIdsPage: {index, count}`; `joinGroupPages` from `@ardia/plugin-sdk` joins them, and
+  shows a group only once all its pages arrived in order.
+- **Rounds.** Each plugin has its own queue of parts. One delivery sends at most 1 MB of it, part by part, whatever
+  topic they belong to and even partway through one group's pages; the rest goes out on the next deliveries, 100 ms
+  apart. The last part of a round that leaves parts of its topic waiting has `more: true`, and a held snapshot always
+  ends with a part without it, even when the rows still to come were closed meanwhile (their removal follows). A topic
+  isn't diffed again until its queued parts are out. So a whole snapshot never has to fit in the channel's 4 MB at
+  once.
+- **What counts as sent.** Ardia records a row as sent only once its part went out (a paged group with its last page).
+  A send that fails drops that topic's queue and leaves nothing recorded, so its next event is a whole `initial` one.
+- **Navigation per plugin.** Commits are logged in order, and each plugin reads only those made after it subscribed to
+  `navigation`. If another part of Ardia already had commit reports on (page bars, the `ardia` command's event feed),
+  the last commit of each tab is already known, so the first in-page change after subscribing still arrives. If
+  turning reports on is refused, Ardia tries again at the next delivery and on a timer, 250 ms doubling to 60 s.
+- **Downloads** carry live `received` and `total` while they run, not only once they finish.
 - **Drops and resync.** The channel drops the oldest waiting events when a helper falls 4 MB or 1,000 events behind,
   and marks the next line `"dropped": N` (`docs/automation.md` › Limits). The SDK then sends
   `state.subscribe {topics, resync: true}`, and Ardia sends every subscribed topic whole again; a sidecar should do the
   same. A drop within 30 s of the last resync waits before resyncing, 1 s doubling up to 60 s. After 5 such drops in a
-  row the SDK stops and reports a `state_desync` error, until the plugin subscribes to a topic again. Navigation
-  commits lost to a drop don't come back.
+  row the SDK stops and reports a `state_desync` error; adding a listener again, even to a topic it already hears,
+  starts over with a whole snapshot. Navigation commits lost to a drop don't come back.
 - **A second listener.** When a listener joins a topic another listener already hears, the SDK asks for that topic
   whole again (`resync: ["tabs"]`), so every listener starts from an `initial` event; the ones already listening get it
   too and should treat it as a reset.
@@ -1261,7 +1270,7 @@ in the local copy. Hourly `usage_counts`:
   plugin URL rules, such as one that isn't http or https or has a user name and password, by the operation that held it),
   `plugin_storage_writes`, `plugin_storage_cancels` (a storage request dropped because the plugin was being removed),
   `plugin_secret_writes`, `plugin_page_reads` (`activePage` reads), `plugin_decide_calls`,
-  `plugin_decide_timeouts`, `plugin_state_events` (state events sent), `plugin_state_events_dropped` (too big, or the
+  `plugin_decide_timeouts`, `plugin_state_events` (state events sent; a navigation part counts only in the sharing period of a commit inside it, so one holding only commits made while sharing was off isn't counted), `plugin_state_events_dropped` (too big, or the
   send failed), `plugin_state_flushes_slow` (building them took over 16 ms), `plugin_state_subscribe_refusals`,
   `plugin_state_resyncs` (a plugin asked for everything again after the channel dropped events), `plugin_state_intents`
   (intents applied) and `plugin_state_intent_refusals`.

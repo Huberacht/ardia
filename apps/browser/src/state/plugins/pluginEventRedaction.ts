@@ -4,6 +4,7 @@ import type { PluginPermissions } from "../../lib/pluginManifest";
 import { activeTabId } from "../browser/model";
 import type { BrowserState } from "../browser/store";
 import { downloadSession } from "../downloads/downloadsSlice";
+import { withLiveProgress } from "../downloads/progress";
 import { eligibleKind, isEligibleTab, type AutomationWindowKind } from "../automation/automationWindows";
 import { iconName, isEligibleGroup } from "../automation/workspaceTree";
 import { innermostGroupOf } from "../groups/groups";
@@ -128,7 +129,7 @@ export function redactedGroups(s: Snapshot): GroupState[] {
 const baseName = (name: string) => name.split(/[/\\]/).pop() ?? "";
 
 export function redactedDownloads(s: Snapshot, r: Redaction): DownloadState[] {
-  return s.downloads
+  return withLiveProgress(s.downloads)
     .filter((d) => !d.offTheRecord && downloadSession(s, d) === null)
     .map((d) => ({
       id: d.id,

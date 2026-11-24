@@ -2,36 +2,41 @@ import { sendToPlugin } from "../../platform/plugins";
 import { grantsTopic, isStateTopic, STATE_TOPICS, type StateTopic } from "../../lib/pluginState";
 import type { PluginManifest } from "../../lib/pluginManifest";
 import { useBrowser, type BrowserState } from "../browser/store";
+import { useDownloadProgress } from "../downloads/progress";
 import { failure } from "../automation/automationMethods";
 import type { Body } from "../automation/controlSocket";
-import { isEligibleTab } from "../automation/automationWindows";
 import { notePlugin, notePluginTimes } from "../telemetry/pluginCounts";
-import { consentToken, type ConsentToken } from "../telemetry/choice";
+import { consentToken, stillValid, type ConsentToken } from "../telemetry/choice";
 import { warnFor } from "../telemetry/consoleConsent";
 import { acceptsRun } from "./process";
 import { activeManifest, currentPlugins } from "./store";
-import { listenForPluginStateCommits, takePluginStateCommits, type PageCommit } from "./stateCommits";
-import { byteLength, packEvents, STATE_ROUND_BYTES, type Item } from "./stateEventPacking";
-import { cleanStateText, pluginStateUrl, redactedDownloads, redactedGroups, redactedTabs, redactedWindows, redactionFor, type Redaction } from "./pluginEventRedaction";
+import { commitCursor, commitsAfter, forgetCommitsThrough, listenForPluginStateCommits } from "./stateCommits";
+import { packFrames, takeRound, wireLine, type Frame } from "./stateEventPacking";
+import { commitItems, diffRows, itemsFor, REMOVED, rowsOf, type Rows, type Sent, type SnapshotTopic } from "./stateProjection";
+import { redactionFor, type Redaction } from "./pluginEventRedaction";
 
 export const STATE_FLUSH_MS = 100;
 const SLOW_FLUSH_MS = 16;
 
 type Caller = { name: string; run: number };
-type Sent = Map<string, string>;
-type Subscriber = Caller & { topics: Set<StateTopic>; sent: Map<StateTopic, Sent> };
-type Rows = Map<string, unknown>;
+type Queued = Frame & { settles: [string, string | null][]; consent: ConsentToken | null };
+type Subscriber = Caller & { topics: Set<StateTopic>; sent: Map<StateTopic, Sent>; outbox: Queued[]; cursor: number };
 
 const subscribers = new Map<string, Subscriber>();
 let dirty = new Set<StateTopic>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopWatching: (() => void) | null = null;
+let stopWatchingProgress: (() => void) | null = null;
 
 const keyOf = (c: Caller) => `${c.name}#${c.run}`;
 
+function scheduleFlush() {
+  if (!timer && subscribers.size) timer = setTimeout(flushStateEvents, STATE_FLUSH_MS);
+}
+
 function markDirty(topics: Iterable<StateTopic>) {
   for (const topic of topics) dirty.add(topic);
-  if (dirty.size && !timer && subscribers.size) timer = setTimeout(flushStateEvents, STATE_FLUSH_MS);
+  if (dirty.size) scheduleFlush();
 }
 
 function onCommit(s: BrowserState, prev: BrowserState) {
@@ -49,12 +54,13 @@ const wantsCommits = () => [...subscribers.values()].some((sub) => sub.topics.ha
 
 function syncWatching() {
   if (subscribers.size) stopWatching ??= useBrowser.subscribeTo(["tabs", "windows", "windowOrder", "groups", "peeks", "ui", "downloads", "profiles"], onCommit);
-  if (wantsCommits()) {
-    listenForPluginStateCommits(onPageCommit);
-  } else listenForPluginStateCommits(null);
+  if (subscribers.size) stopWatchingProgress ??= useDownloadProgress.subscribe(() => markDirty(["downloads"]));
+  listenForPluginStateCommits(wantsCommits() ? onPageCommit : null);
   if (subscribers.size) return;
   stopWatching?.();
   stopWatching = null;
+  stopWatchingProgress?.();
+  stopWatchingProgress = null;
   dirty = new Set();
   if (timer) clearTimeout(timer);
   timer = null;
@@ -86,11 +92,13 @@ export function subscribeState(c: Caller, m: PluginManifest, params: Record<stri
     syncWatching();
     return { result: { ok: true, topics: [] } };
   }
-  const sub: Subscriber = existing ?? { name: c.name, run: c.run, topics, sent: new Map() };
+  const sub: Subscriber = existing ?? { name: c.name, run: c.run, topics, sent: new Map(), outbox: [], cursor: commitCursor() };
   const resyncing = new Set<StateTopic>(askedResync === true ? topics : Array.isArray(askedResync) ? (askedResync as StateTopic[]).filter((t) => topics.has(t)) : []);
   if (askedResync === true && existing) notePlugin("plugin_state_resyncs", consentToken());
   for (const topic of [...sub.sent.keys()]) if (!topics.has(topic) || resyncing.has(topic)) sub.sent.delete(topic);
+  sub.outbox = sub.outbox.filter((f) => topics.has(f.topic as StateTopic) && !resyncing.has(f.topic as StateTopic));
   const added = [...topics].filter((t) => resyncing.has(t) || !existing || !sub.topics.has(t));
+  if (topics.has("navigation") && (!existing || !sub.topics.has("navigation"))) sub.cursor = commitCursor();
   sub.topics = topics;
   subscribers.set(key, sub);
   syncWatching();
@@ -105,141 +113,98 @@ export function dropStateSubscriptions(name: string) {
 
 export const stateSubscriberCount = () => subscribers.size;
 
-function projected(cache: Map<string, Rows>, key: string, make: () => [string, unknown][]): Rows {
-  let hit = cache.get(key);
-  if (!hit) cache.set(key, (hit = new Map(make())));
-  return hit;
+function settlesFor(frame: Frame, signatures: Sent): [string, string | null][] {
+  return frame.completes.map((key): [string, string | null] => (key.startsWith(REMOVED) ? [key.slice(REMOVED.length), null] : [key, signatures.get(key)!]));
 }
 
-const levelOf = (r: Redaction) => (r.urls ? (r.full ? "full" : "short") : "none");
-
-function rowsOf(topic: Exclude<StateTopic, "navigation">, s: BrowserState, r: Redaction, cache: Map<string, Rows>): Rows {
-  switch (topic) {
-    case "tabs":
-      return projected(cache, `tabs:${levelOf(r)}`, () => redactedTabs(s, r).map((t) => [t.id, t]));
-    case "workspace":
-      return projected(cache, "workspace", () => [...redactedWindows(s).map((w): [string, unknown] => [`w:${w.id}`, w]), ...redactedGroups(s).map((g): [string, unknown] => [`g:${g.id}`, g])]);
-    case "downloads":
-      return projected(cache, `downloads:${levelOf(r)}`, () => redactedDownloads(s, r).map((d) => [d.id, d]));
-  }
-}
-
-type Diff = { changed: [string, unknown][]; removed: string[]; before: Sent | undefined; signatures: Sent };
-
-function diffRows(sub: Subscriber, topic: StateTopic, rows: Rows): Diff {
-  const before = sub.sent.get(topic);
-  const signatures: Sent = new Map();
-  const changed: [string, unknown][] = [];
-  for (const [id, row] of rows) {
-    const sig = JSON.stringify(row);
-    signatures.set(id, sig);
-    if (before?.get(id) !== sig) changed.push([id, row]);
-  }
-  const removed = before ? [...before.keys()].filter((id) => !signatures.has(id)) : [];
-  return { changed, removed, before, signatures };
-}
-
-const REMOVED = "\u0000removed:";
-
-function itemsFor(diff: Diff, topic: Exclude<StateTopic, "navigation">): { fields: string[]; items: Item[] } {
-  const removedItems = (prefix: string, field: string): Item[] => diff.removed.filter((id) => id.startsWith(prefix)).map((id) => ({ key: REMOVED + id, field, value: id.slice(prefix.length) }));
-  if (topic === "workspace") {
-    return {
-      fields: ["windows", "groups", "removedWindows", "removedGroups"],
-      items: [
-        ...diff.changed.filter(([id]) => id.startsWith("w:")).map(([key, value]) => ({ key, field: "windows", value })),
-        ...diff.changed.filter(([id]) => id.startsWith("g:")).map(([key, value]) => ({ key, field: "groups", value })),
-        ...removedItems("w:", "removedWindows"),
-        ...removedItems("g:", "removedGroups"),
-      ],
-    };
-  }
-  return { fields: [topic, "removed"], items: [...diff.changed.map(([key, value]) => ({ key, field: topic, value })), ...removedItems("", "removed")] };
-}
-
-function nextBaseline(diff: Diff, sentKeys: Set<string>): Sent {
-  const next: Sent = new Map(diff.before ?? []);
-  for (const [id] of diff.changed) if (sentKeys.has(id)) next.set(id, diff.signatures.get(id)!);
-  for (const id of diff.removed) if (sentKeys.has(REMOVED + id)) next.delete(id);
-  return next;
-}
-
-function commitItems(s: BrowserState, commits: PageCommit[], r: Redaction): Item[] {
-  return commits.flatMap((c) => {
-    const t = s.tabs[c.tabId];
-    if (!t || !isEligibleTab(s, c.tabId)) return [];
-    const url = pluginStateUrl(c.url, r);
-    if (url === null) return [];
-    const title = t.url === c.url ? cleanStateText(t.customTitle || t.title, 500) : null;
-    return [{ key: null, field: "commits", value: { tabId: c.tabId, windowId: t.windowId, url, title, sameDocument: c.sameDocument } }];
-  });
-}
-
-function send(sub: Subscriber, lines: string[]): number {
-  for (const line of lines) sendToPlugin(sub.name, sub.run, line);
-  return lines.length;
-}
-
-type Round = { left: number };
-
-function deliver(sub: Subscriber, topic: StateTopic, s: BrowserState, r: Redaction, cache: Map<string, Rows>, commits: PageCommit[], time: number, round: Round): number {
+function queueTopic(sub: Subscriber, topic: StateTopic, s: BrowserState, r: Redaction, cache: Map<string, Rows>, consent: ConsentToken | null) {
   if (topic === "navigation") {
-    const items = commitItems(s, commits, r);
-    return items.length ? send(sub, packEvents(topic, ["commits"], items, { initial: false, time }).lines) : 0;
+    const items = commitItems(s, commitsAfter(sub.cursor), r);
+    sub.cursor = commitCursor();
+    for (const frame of items.length ? packFrames(topic, ["commits"], items, { initial: false }) : []) {
+      const tokens = frame.tags as (ConsentToken | null)[];
+      sub.outbox.push({ ...frame, settles: [], consent: tokens.find((t) => stillValid(t)) ?? null });
+    }
+    return;
   }
-  const diff = diffRows(sub, topic, rowsOf(topic, s, r, cache));
-  if (diff.before && !diff.changed.length && !diff.removed.length) return 0;
-  const { fields, items } = itemsFor(diff, topic);
-  const packed = packEvents(topic, fields, items, { initial: !diff.before, time, roundBytes: Math.max(0, round.left) });
-  round.left -= packed.lines.reduce((n, line) => n + byteLength(line) + 1, 0);
-  const count = send(sub, packed.lines);
-  sub.sent.set(topic, nextBaseline(diff, packed.sentKeys));
-  if (packed.held) markDirty([topic]);
-  return count;
+  const diff = diffRows(sub.sent.get(topic), rowsOf(topic as SnapshotTopic, s, r, cache));
+  if (diff.before && !diff.changed.length && !diff.removed.length) return;
+  const { fields, items } = itemsFor(diff, topic as SnapshotTopic);
+  for (const frame of packFrames(topic, fields, items, { initial: !diff.before })) sub.outbox.push({ ...frame, settles: settlesFor(frame, diff.signatures), consent });
 }
 
-type Delivered = { state: number; navigation: number };
+type Counts = Map<ConsentToken | null, number>;
 
-function flushFor(sub: Subscriber, topics: Set<StateTopic>, s: BrowserState, cache: Map<string, Rows>, commits: PageCommit[], time: number, consent: ConsentToken | null): Delivered {
-  const delivered: Delivered = { state: 0, navigation: 0 };
-  const m = activeManifest(currentPlugins(), sub.name);
-  if (!m || !acceptsRun(sub.name, sub.run)) {
-    subscribers.delete(keyOf(sub));
-    return delivered;
+function sendFrame(sub: Subscriber, frame: Queued, more: boolean, time: number, counts: Counts) {
+  const topic = frame.topic as StateTopic;
+  sendToPlugin(sub.name, sub.run, wireLine(topic, time, more ? { ...frame.data, more: true } : frame.data));
+  if (topic !== "navigation") {
+    const sent = sub.sent.get(topic) ?? new Map<string, string>();
+    for (const [key, sig] of frame.settles) {
+      if (sig === null) sent.delete(key);
+      else sent.set(key, sig);
+    }
+    sub.sent.set(topic, sent);
   }
-  const r = redactionFor(m.permissions);
-  const round: Round = { left: STATE_ROUND_BYTES };
-  for (const topic of sub.topics) {
-    if (!topics.has(topic) || !grantsTopic(m.permissions.state, topic)) continue;
+  counts.set(frame.consent, (counts.get(frame.consent) ?? 0) + 1);
+}
+
+function drain(sub: Subscriber, time: number, counts: Counts, consent: ConsentToken | null) {
+  const failed = new Set<string>();
+  for (const { frame, more } of takeRound(sub.outbox)) {
+    if (failed.has(frame.topic)) continue;
     try {
-      delivered[topic === "navigation" ? "navigation" : "state"] += deliver(sub, topic, s, r, cache, commits, time, round);
+      sendFrame(sub, frame, more, time, counts);
     } catch (error) {
-      sub.sent.delete(topic);
+      failed.add(frame.topic);
+      sub.sent.delete(frame.topic as StateTopic);
+      sub.outbox = sub.outbox.filter((f) => f.topic !== frame.topic);
       notePlugin("plugin_state_events_dropped", consent);
       warnFor(consent, "[plugins] a state event couldn't be sent", error);
     }
   }
-  return delivered;
+}
+
+function flushFor(sub: Subscriber, topics: Set<StateTopic>, s: BrowserState, cache: Map<string, Rows>, time: number, counts: Counts, consent: ConsentToken | null) {
+  const m = activeManifest(currentPlugins(), sub.name);
+  if (!m || !acceptsRun(sub.name, sub.run)) {
+    subscribers.delete(keyOf(sub));
+    return;
+  }
+  const r = redactionFor(m.permissions);
+  for (const topic of sub.topics) {
+    if (!topics.has(topic) || !grantsTopic(m.permissions.state, topic)) continue;
+    if (sub.outbox.some((f) => f.topic === topic)) {
+      dirty.add(topic);
+      continue;
+    }
+    try {
+      queueTopic(sub, topic, s, r, cache, consent);
+    } catch (error) {
+      sub.sent.delete(topic);
+      notePlugin("plugin_state_events_dropped", consent);
+      warnFor(consent, "[plugins] a state event couldn't be built", error);
+    }
+  }
+  drain(sub, time, counts, consent);
 }
 
 export function flushStateEvents() {
   timer = null;
   const topics = dirty;
   dirty = new Set();
-  const commits = takePluginStateCommits();
-  if (!topics.size || !subscribers.size) return;
+  const waiting = [...subscribers.values()].some((sub) => sub.outbox.length);
+  if ((!topics.size && !waiting) || !subscribers.size) return;
   const started = Date.now();
   const consent = consentToken();
   const s = useBrowser.getState();
   const cache = new Map<string, Rows>();
-  const total: Delivered = { state: 0, navigation: 0 };
-  for (const sub of [...subscribers.values()]) {
-    const delivered = flushFor(sub, topics, s, cache, commits, started, consent);
-    total.state += delivered.state;
-    total.navigation += delivered.navigation;
-  }
-  notePluginTimes("plugin_state_events", total.state, consent);
-  notePluginTimes("plugin_state_events", total.navigation, commits.length ? commits[0]!.consent : consent);
+  const counts: Counts = new Map();
+  for (const sub of [...subscribers.values()]) flushFor(sub, topics, s, cache, started, counts, consent);
+  for (const [token, times] of counts) if (token !== null) notePluginTimes("plugin_state_events", times, token);
   if (Date.now() - started > SLOW_FLUSH_MS) notePlugin("plugin_state_flushes_slow", consent);
+  const readers = [...subscribers.values()].filter((sub) => sub.topics.has("navigation"));
+  if (readers.length) forgetCommitsThrough(Math.min(...readers.map((sub) => sub.cursor)));
+  if ([...subscribers.values()].some((sub) => sub.outbox.length) || dirty.size) scheduleFlush();
   syncWatching();
 }

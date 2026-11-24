@@ -137,19 +137,19 @@ export type StateTab = { id: string; windowId: string; index: number; url: strin
 
 export type StateWindow = { id: string; kind: "normal" | "little"; focused: boolean; activeTabId: string | null; tabCount: number };
 
-export type StateGroup = { id: string; windowId: string; name: string; color: string; icon: string | null; collapsed: boolean; pinned: boolean; parentId: string | null; tabIds: string[] };
+export type StateGroup = { id: string; windowId: string; name: string; color: string; icon: string | null; collapsed: boolean; pinned: boolean; parentId: string | null; tabIds: string[]; tabIdsPage?: { index: number; count: number } };
 
 export type StateDownload = { id: string; state: "downloading" | "finished" | "failed" | "cancelled"; paused: boolean; dangerous: boolean; received: number; total: number; mimeType: string; filename: string; url: string | null };
 
-export type TabsChange = { initial?: true; tabs: StateTab[]; removed: string[] };
+export type TabsChange = { initial?: true; more?: true; tabs: StateTab[]; removed: string[] };
 
-export type WorkspaceChange = { initial?: true; windows: StateWindow[]; groups: StateGroup[]; removedWindows: string[]; removedGroups: string[] };
+export type WorkspaceChange = { initial?: true; more?: true; windows: StateWindow[]; groups: StateGroup[]; removedWindows: string[]; removedGroups: string[] };
 
 export type NavigationCommit = { tabId: string; windowId: string; url: string; title: string | null; sameDocument: boolean };
 
 export type NavigationChange = { commits: NavigationCommit[] };
 
-export type DownloadsChange = { initial?: true; downloads: StateDownload[]; removed: string[] };
+export type DownloadsChange = { initial?: true; more?: true; downloads: StateDownload[]; removed: string[] };
 
 export type StateEventMap = { tabs: TabsChange; workspace: WorkspaceChange; navigation: NavigationChange; downloads: DownloadsChange };
 

@@ -1,22 +1,23 @@
 export const STATE_EVENT_BUDGET_BYTES = 256 * 1024;
+export const DROP_MARKER_ROOM = 64;
 export const STATE_ROUND_BYTES = 1024 * 1024;
 
 export type Event = Record<string, unknown>;
-export type Item = { key: string | null; field: string; value: unknown };
-export type Packed = { events: Event[]; lines: string[]; sentKeys: Set<string>; held: boolean };
+export type Item = { key: string | null; field: string; value: unknown; tag?: unknown };
+export type Frame = { topic: string; data: Event; bytes: number; completes: string[]; tags: unknown[] };
 
 const encoder = new TextEncoder();
 export const byteLength = (text: string) => encoder.encode(text).length;
 
 const LONGEST_TIME = 9_999_999_999_999;
 const PAGE_ROOM = 64;
+const MORE_BYTES = byteLength(',"more":true');
 
 export const wireLine = (topic: string, time: number, data: Event) => JSON.stringify({ event: `state.${topic}`, time, data });
 
-function envelopeBytes(topic: string, fields: readonly string[]): number {
-  const data: Event = { initial: true, more: true, ...Object.fromEntries(fields.map((f) => [f, []])) };
-  return byteLength(wireLine(topic, LONGEST_TIME, data)) + 1;
-}
+export const wireBytes = (line: string) => byteLength(line) + 1;
+
+const frameBytes = (topic: string, data: Event) => wireBytes(wireLine(topic, LONGEST_TIME, data)) + MORE_BYTES + DROP_MARKER_ROOM;
 
 function pagedGroup(value: Record<string, unknown>, room: number): Record<string, unknown>[] | null {
   const ids = value.tabIds;
@@ -49,43 +50,41 @@ function fitted(items: Item[], room: number): Item[] {
   });
 }
 
-export function packEvents(topic: string, fields: readonly string[], given: Item[], options: { initial: boolean; time: number; roundBytes?: number; budget?: number }): Packed {
+export function packFrames(topic: string, fields: readonly string[], given: Item[], options: { initial: boolean; budget?: number }): Frame[] {
   const budget = options.budget ?? STATE_EVENT_BUDGET_BYTES;
-  const envelope = envelopeBytes(topic, fields);
+  const empty = (first: boolean): Event => ({ ...(first && options.initial ? { initial: true } : {}), ...Object.fromEntries(fields.map((f) => [f, [] as unknown[]])) });
+  const envelope = frameBytes(topic, empty(true));
   const items = fitted(given, budget - envelope);
-  const empty = (): Event => Object.fromEntries(fields.map((f) => [f, [] as unknown[]]));
-  const events: Event[] = [];
-  const sentKeys = new Set<string>();
-  let current = empty();
-  let size = envelope;
-  let inCurrent = 0;
-  let spent = 0;
-  let held = false;
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]!;
-    const startsKey = i === 0 || item.key === null || items[i - 1]!.key !== item.key;
-    if (startsKey && spent + (inCurrent ? size : 0) >= (options.roundBytes ?? Infinity)) {
-      held = true;
-      break;
-    }
+  if (!items.length && !options.initial) return [];
+  const frames: Frame[] = [];
+  let current: Frame = { topic, data: empty(true), bytes: envelope, completes: [], tags: [] };
+  items.forEach((item, i) => {
     const bytes = byteLength(JSON.stringify(item.value)) + 1;
-    if (inCurrent && size + bytes > budget) {
-      events.push(current);
-      spent += size;
-      current = empty();
-      size = envelope;
-      inCurrent = 0;
+    if (current.bytes + bytes > budget && current.bytes > envelope) {
+      frames.push(current);
+      current = { topic, data: empty(false), bytes: frameBytes(topic, empty(false)), completes: [], tags: [] };
     }
-    (current[item.field] as unknown[]).push(item.value);
-    if (item.key !== null) sentKeys.add(item.key);
-    size += bytes;
-    inCurrent++;
+    (current.data[item.field] as unknown[]).push(item.value);
+    current.bytes += bytes;
+    if (item.tag !== undefined) current.tags.push(item.tag);
+    if (item.key !== null && items[i + 1]?.key !== item.key) current.completes.push(item.key);
+  });
+  frames.push(current);
+  for (const frame of frames) frame.bytes = frameBytes(topic, frame.data);
+  if (frames.some((f) => f.bytes > budget)) throw new Error("A state event came out larger than its budget.");
+  return frames;
+}
+
+export function takeRound<F extends Pick<Frame, "topic" | "bytes">>(outbox: F[], roundBytes = STATE_ROUND_BYTES): { frame: F; more: boolean }[] {
+  const round: { frame: F; more: boolean }[] = [];
+  let spent = 0;
+  while (outbox.length) {
+    const frame = outbox[0]!;
+    if (spent > 0 && spent + frame.bytes > roundBytes) break;
+    outbox.shift();
+    spent += frame.bytes;
+    const next = outbox[0];
+    round.push({ frame, more: !!next && next.topic === frame.topic && spent + next.bytes > roundBytes });
   }
-  if (!options.initial && (!items.length || (held && !sentKeys.size))) return { events: [], lines: [], sentKeys, held };
-  if (inCurrent || !events.length) events.push(current);
-  if (options.initial) events[0] = { initial: true, ...events[0] };
-  if (held) events[events.length - 1] = { ...events[events.length - 1], more: true };
-  const lines = events.map((data) => wireLine(topic, options.time, data));
-  for (const line of lines) if (byteLength(line) + 1 > budget) throw new Error("A state event came out larger than its budget.");
-  return { events, lines, sentKeys, held };
+  return round;
 }

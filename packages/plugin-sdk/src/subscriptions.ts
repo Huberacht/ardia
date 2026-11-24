@@ -140,5 +140,17 @@ export function createSubscriptionSync(rpc: Rpc, registry: Registry, report: (er
     joined.add(topic);
   };
 
-  return { sync, deliverState, noteDropped, topicJoined };
+  const listenerAdded = (topic: string, joining: boolean) => {
+    if (gaveUp) {
+      gaveUp = false;
+      streak = 0;
+      lastResyncAt = Number.NEGATIVE_INFINITY;
+      waiting = true;
+      enqueueMicrotask(() => void resync());
+      return;
+    }
+    if (joining) topicJoined(topic);
+  };
+
+  return { sync, deliverState, noteDropped, listenerAdded };
 }

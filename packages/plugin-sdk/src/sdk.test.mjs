@@ -912,10 +912,13 @@ describe("createHostRuntime", () => {
     clock += 120_000;
     await drop();
     assert.equal(resyncs(), 5, "it stays stopped until the plugin subscribes again");
-    runtime.ardia.downloads.onChange(() => {});
+    runtime.ardia.tabs.onChange(() => {});
     await settle();
-    await drop(6);
-    assert.equal(resyncs(), 6, "a new subscription starts over");
+    assert.equal(resyncs(), 6, "a listener subscribing again, even to the same topic, starts over with a whole snapshot");
+    assert.equal(host.calls("state.subscribe").at(-1).params.resync, true);
+    clock += 120_000;
+    await drop(7);
+    assert.equal(resyncs(), 7, "and drops resync again");
   });
 
   test("a drop long after the last resync starts a fresh streak with no wait", async () => {
@@ -946,6 +949,38 @@ describe("createHostRuntime", () => {
     await settle();
     const after = host.calls("state.subscribe").slice(before).map((m) => m.params);
     assert.deepEqual(after.filter((p) => p.resync), [{ topics: ["downloads", "navigation", "tabs"], resync: ["tabs"] }]);
+  });
+
+  test("paged workspace groups can be put back together through the public API", async () => {
+    const { joinGroupPages } = await import("./index.ts");
+    const { host, runtime } = await started({});
+    const groups = new Map();
+    let waiting = new Map();
+    let rounds = 0;
+    runtime.ardia.workspace.onChange((change) => {
+      if (change.initial) groups.clear();
+      const joined = joinGroupPages(change.groups, waiting);
+      waiting = joined.waiting;
+      for (const g of joined.complete) groups.set(g.id, g);
+      for (const id of change.removedGroups) groups.delete(id);
+      if (!change.more) rounds++;
+    });
+    await settle();
+    const base = { windowId: "w1", name: "Big", color: "blue", icon: null, collapsed: false, pinned: false, parentId: null };
+    const page = (index, tabIds) => ({ id: "g1", ...base, tabIds, tabIdsPage: { index, count: 3 } });
+    const empty = { windows: [], groups: [], removedWindows: [], removedGroups: [] };
+    host.push({ event: "state.workspace", data: { ...empty, initial: true, groups: [page(0, ["a", "b"]), { id: "g2", ...base, tabIds: ["z"] }] } });
+    host.push({ event: "state.workspace", data: { ...empty, more: true, groups: [page(1, ["c"])] } });
+    await settle();
+    assert.equal(groups.has("g1"), false, "an incomplete group isn't shown");
+    assert.deepEqual(groups.get("g2").tabIds, ["z"]);
+    host.push({ event: "state.workspace", data: { ...empty, groups: [page(2, ["d", "e"])] } });
+    await settle();
+    assert.deepEqual(groups.get("g1").tabIds, ["a", "b", "c", "d", "e"]);
+    assert.equal(groups.get("g1").tabIdsPage, undefined);
+    assert.equal(rounds, 2);
+    const broken = joinGroupPages([page(1, ["x"])]);
+    assert.deepEqual(broken.complete, [], "a page out of order is never joined");
   });
 
   test("a drop with no state listeners asks for nothing", async () => {
