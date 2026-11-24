@@ -11,6 +11,7 @@ final class GlassPageShot {
   private var zoomWatch = GlassZoomWatch()
   private weak var web: WKWebView?
   private(set) var image: CGImage?
+  private var rows: [Float] = []
   private(set) var generation = 0
   private var area: CGRect = .null
   private var zoom: CGFloat = 1
@@ -105,7 +106,7 @@ final class GlassPageShot {
         }
         let moved = self.movedWhilePending
         Self.rasterQueue.async {
-          let picture = Self.raster(data, width: width)
+          let (picture, rows) = Self.raster(data, width: width)
           let rasterMs = (CACurrentMediaTime() - started) * 1000
           DispatchQueue.main.async {
             MainActor.assumeIsolated {
@@ -120,7 +121,7 @@ final class GlassPageShot {
                 self.gate.failed(now: landed)
                 return
               }
-              self.keep(picture, area: area, zoom: zoom, at: landed, moved: moved)
+              self.keep(picture, rows: rows, area: area, zoom: zoom, at: landed, moved: moved)
               if PhoneTestBuild.isOn { self.latencies.append(rasterMs) }
               if GlassLaunch.placementProbe { GlassPlacementProbe.check(picture, area: area, zoom: zoom, web: web) }
             }
@@ -168,7 +169,7 @@ final class GlassPageShot {
           return
         }
         let area = CGRect(x: offset.x / zoom, y: offset.y / zoom, width: web.bounds.width / zoom, height: web.bounds.height / zoom)
-        self.keep(picture, area: area, zoom: zoom, at: working, moved: moved)
+        self.keep(picture, rows: [], area: area, zoom: zoom, at: working, moved: moved)
         if PhoneTestBuild.isOn { self.latencies.append((working - started) * 1000) }
       }
     }
@@ -181,9 +182,10 @@ final class GlassPageShot {
 
   func isOverBudget(now: CFTimeInterval) -> Bool { GlassFlowRules.documentOverBudget(busy.map { (start: $0.start, end: $0.end) }, now: now) }
 
-  private func keep(_ picture: CGImage, area: CGRect, zoom: CGFloat, at time: CFTimeInterval, moved: Bool) {
+  private func keep(_ picture: CGImage, rows: [Float], area: CGRect, zoom: CGFloat, at time: CFTimeInterval, moved: Bool) {
     gate.succeeded()
     image = picture
+    self.rows = rows
     generation += 1
     moving += moved ? 1 : 0
     self.area = area
@@ -194,6 +196,11 @@ final class GlassPageShot {
   func placed(_ web: WKWebView) -> (image: CGImage, rect: CGRect)? {
     guard let image, self.web === web, web.scrollView.zoomScale == zoom else { return nil }
     return (image, GlassFlowRules.place(area: area, zoom: zoom, offset: web.scrollView.contentOffset))
+  }
+
+  func luminance(under needed: CGRect, of web: WKWebView) -> Double? {
+    guard let placed = placed(web), placed.rect.height > 0 else { return nil }
+    return GlassToneRows.mean(rows, from: Double((needed.minY - placed.rect.minY) / placed.rect.height), to: Double((needed.maxY - placed.rect.minY) / placed.rect.height))
   }
 
   func covers(_ needed: CGRect, of web: WKWebView) -> Bool {
@@ -239,21 +246,23 @@ final class GlassPageShot {
   private func forgetImage() {
     guard image != nil else { return }
     image = nil
+    rows = []
     area = .null
     generation += 1
   }
 
-  nonisolated private static func raster(_ data: Data, width: Int) -> CGImage? {
-    guard let provider = CGDataProvider(data: data as CFData), let document = CGPDFDocument(provider), let page = document.page(at: 1) else { return nil }
+  nonisolated private static func raster(_ data: Data, width: Int) -> (CGImage?, [Float]) {
+    guard let provider = CGDataProvider(data: data as CFData), let document = CGPDFDocument(provider), let page = document.page(at: 1) else { return (nil, []) }
     let box = page.getBoxRect(.mediaBox)
-    guard box.width > 0, box.height > 0 else { return nil }
+    guard box.width > 0, box.height > 0 else { return (nil, []) }
     let height = max(Int((box.height * CGFloat(width) / box.width).rounded()), 1)
-    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+    guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return (nil, []) }
     context.interpolationQuality = .low
     context.scaleBy(x: CGFloat(width) / box.width, y: CGFloat(height) / box.height)
     context.translateBy(x: -box.minX, y: -box.minY)
     context.drawPDFPage(page)
-    return context.makeImage()
+    let rows = context.data.map { GlassToneRows.rows(UnsafeRawPointer($0), width: width, height: height, bytesPerRow: context.bytesPerRow) } ?? []
+    return (context.makeImage(), rows)
   }
 
   private static func usable(_ image: CGImage, under web: WKWebView) -> Bool {

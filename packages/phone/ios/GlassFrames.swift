@@ -278,10 +278,23 @@ final class GlassFrames: NSObject {
       let reason = GlassLaunch.pageMode != .shift ? "mode" : !pageFrame.contains(strip) ? "frame" : page == nil ? "nopage" : "overlap"
       stats.unshifted[reason, default: 0] += 1
     }
-    if let web, page != nil, capture.page.observe(web, now: now) { capture.drop() }
+    if let web, page != nil, capture.page.observe(web, now: now) {
+      capture.drop()
+      capture.tone = GlassToneGate()
+    }
     capture.survey(pieces, rect: shiftable ? strip : wanted, shiftable: shiftable)
     mark("survey")
-    if let web, let page { capture.page.request(web, around: strip.applying(page.transform.inverted()), pixelsPerPoint: pixelsPerPoint, now: now) }
+    if let web, let page {
+      let under = strip.applying(page.transform.inverted())
+      capture.page.request(web, around: under, pixelsPerPoint: pixelsPerPoint, now: now)
+      if let luminance = capture.page.luminance(under: under, of: web), capture.tone.observe(luminance: luminance, now: now), let dark = capture.tone.dark {
+        NotificationCenter.default.post(name: GlassTone.changed, object: web, userInfo: [GlassTone.darkKey: dark])
+        if PhoneTestBuild.isOn {
+          stats.toneFlips += 1
+          NSLog("PAGELAB glass tone %@ (under the bar %.2f)", dark ? "dark" : "light", luminance)
+        }
+      }
+    }
     mark("request")
     var need: CGRect?
     var pageOnly: (steps: GlassSteps, drawn: CGRect)?
@@ -379,6 +392,7 @@ final class GlassFrames: NSObject {
     var clearFrames = 0
     var clearReasons: [String: Int] = [:]
     var unshifted: [String: Int] = [:]
+    var toneFlips = 0
     var offMainMs: [Double] = []
     var mainMs: [Double] = []
     var worstInterval = 0.0
@@ -409,7 +423,7 @@ final class GlassFrames: NSObject {
       if since == 0 { since = now }
       guard now - since >= 1, frames > 0 else { return nil }
       func fixed(_ value: Double) -> String { String(format: "%.2f", value) }
-      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) moving_snapshots=\(moving)  lens_frames=\(lensFrames) clear_frames=\(clearFrames) unshifted=\(unshifted.map { "\($0.key):\($0.value)" }.joined(separator: ",")) clear_why=\(clearReasons.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key):\($0.value)" }.joined(separator: ",")) off_main_ms_p50=\(fixed(LiquidGlassRules.median(offMainMs))) off_main_ms_max=\(fixed(offMainMs.max() ?? 0)) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
+      let line = "PAGELAB glass frames method=\(GlassLaunch.capture.rawValue) surfaces=\(surfaces) frames=\(frames) late=\(late) dropped=\(dropped) worst_frame_ms=\(fixed(worstInterval * 1000)) captures=\(captures) failed=\(failed) rejected=\(rejected) uncovered=\(uncovered) moving_snapshots=\(moving)  lens_frames=\(lensFrames) clear_frames=\(clearFrames) tone_flips=\(toneFlips) unshifted=\(unshifted.map { "\($0.key):\($0.value)" }.joined(separator: ",")) clear_why=\(clearReasons.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key):\($0.value)" }.joined(separator: ",")) off_main_ms_p50=\(fixed(LiquidGlassRules.median(offMainMs))) off_main_ms_max=\(fixed(offMainMs.max() ?? 0)) main_ms_p50=\(fixed(LiquidGlassRules.median(mainMs))) main_ms_max=\(fixed(mainMs.max() ?? 0)) snapshots=\(snapshotMs.count) snapshot_ms_p50=\(fixed(LiquidGlassRules.median(snapshotMs))) pieces_avg=\(fixed(captures > 0 ? Double(pieces) / Double(captures) : 0)) capture_ms_p50=\(fixed(LiquidGlassRules.median(captureMs))) capture_ms_max=\(fixed(captureMs.max() ?? 0)) tick_ms_p50=\(fixed(LiquidGlassRules.median(tickMs))) tick_ms_max=\(fixed(tickMs.max() ?? 0))"
       self = FrameStats()
       since = now
       return line
@@ -419,4 +433,9 @@ final class GlassFrames: NSObject {
 
 final class GlassCooldownBox {
   var cooldown = GlassBudgetCooldown()
+}
+
+enum GlassTone {
+  static let changed = Notification.Name("ArdiaGlassToneChanged")
+  static let darkKey = "dark"
 }

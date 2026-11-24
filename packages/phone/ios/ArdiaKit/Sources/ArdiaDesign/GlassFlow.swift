@@ -114,6 +114,80 @@ public struct GlassZoomWatch: Sendable {
   }
 }
 
+public enum GlassToneRows {
+  private static let linear: [Float] = (0..<256).map { value in
+    let channel = Double(value) / 255
+    return Float(channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4))
+  }
+
+  public static func rows(_ base: UnsafeRawPointer, width: Int, height: Int, bytesPerRow: Int) -> [Float] {
+    guard width > 0, height > 0 else { return [] }
+    return (0..<height).map { row in
+      let line = base.advanced(by: row * bytesPerRow)
+      var sum: Float = 0
+      var count: Float = 0
+      for column in stride(from: 0, to: width, by: 2) {
+        let pixel = line.advanced(by: column * 4)
+        let blue = linear[Int(pixel.load(fromByteOffset: 0, as: UInt8.self))]
+        let green = linear[Int(pixel.load(fromByteOffset: 1, as: UInt8.self))]
+        let red = linear[Int(pixel.load(fromByteOffset: 2, as: UInt8.self))]
+        sum += 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        count += 1
+      }
+      return sum / max(count, 1)
+    }
+  }
+
+  public static func mean(_ rows: [Float], from top: Double, to bottom: Double) -> Double? {
+    guard !rows.isEmpty, bottom > top else { return nil }
+    let first = max(Int((top * Double(rows.count)).rounded(.down)), 0)
+    let last = min(Int((bottom * Double(rows.count)).rounded(.up)), rows.count)
+    guard last > first else { return nil }
+    return Double(rows[first..<last].reduce(0, +)) / Double(last - first)
+  }
+}
+
+public struct GlassToneGate: Sendable {
+  public static let darkBelow = 0.2
+  public static let lightAbove = 0.4
+  public static let settle: TimeInterval = 0.3
+
+  public private(set) var dark: Bool?
+  private var pending: Bool?
+  private var since: TimeInterval = 0
+
+  public init() {}
+
+  public mutating func observe(luminance: Double, now: TimeInterval) -> Bool {
+    let wants: Bool
+    if luminance < Self.darkBelow {
+      wants = true
+    } else if luminance > Self.lightAbove {
+      wants = false
+    } else {
+      pending = nil
+      return false
+    }
+    guard let shown = dark else {
+      dark = wants
+      return true
+    }
+    guard wants != shown else {
+      pending = nil
+      return false
+    }
+    if pending != wants {
+      pending = wants
+      since = now
+      return false
+    }
+    guard now - since >= Self.settle else { return false }
+    dark = wants
+    pending = nil
+    return true
+  }
+}
+
 public struct GlassFlight: Sendable {
   public private(set) var inFlight = 0
   public let limit: Int

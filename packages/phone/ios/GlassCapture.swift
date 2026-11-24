@@ -81,6 +81,7 @@ final class GlassCapture {
   var wholeMethod: GlassLaunch.Capture = .layer
 
   var strikes = 1
+  var tone = GlassToneGate()
 
   func overBudget(now: CFTimeInterval, frameMs: Double) -> Bool { LiquidGlassRules.overBudget(samples, now: now, frameMs: frameMs, strikes: strikes) || page.isOverBudget(now: now) }
 

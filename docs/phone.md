@@ -1440,6 +1440,17 @@ Metal.
     `tokens.ts`. On the simulator, the frames of the Glass to Stained glass navigation, a route change, a zoom and a
     scroll past the rose window all measure 4.7:1 or better around the host text; before, the bar could show a lens
     sampled from white page pixels under white ink (1.2:1).
+  - **The bar's tone follows what is under it.** Native owns the decision, from the lens's own page picture: each
+    picture's rows carry their mean luminance (worked out on the raster queue), and every frame the glass reads the
+    mean under the bar for free. `GlassToneGate` turns the bar dark under 0.2 and light over 0.4 (and holds in
+    between), once the new tone has lasted 300 ms, so an edge or thin stripes never flicker it. The decision goes to
+    JS with the page's tone event (`barDark`), and JS sets the one `dark` the bar's ink and its glass both follow, so
+    the two always change in the same commit; without a page picture (Classic, the lab's snapshot mode, Android) the
+    old tone sampled at scroll rest still decides. Text can't crossfade between white and dark without passing through
+    a grey that reads against neither, so the ink switches in one frame and the glass eases instead: it starts at the
+    readable edge nearest the old look and reaches its own tone in 180 ms, readable for the new ink on every frame.
+    Before this the tone was sampled only once the page had rested, so a bar that left a dark image mid-scroll stayed a
+    dark pill over white text (main's Apple glass keeps white text over a light lens the same way).
   - **Clear glass.** Whenever a refracting glass has no capture that covers it (past the snapshot during a fling,
     before its first capture, after a failure, while the shader compiles, while it is over budget), it shows clear
     glass instead of an opaque fill: a translucent veil (#FFFFFF at 66 %, #1C1C1E at 62 % in dark) under the profile

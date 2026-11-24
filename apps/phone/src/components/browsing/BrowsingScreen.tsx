@@ -139,7 +139,8 @@ const BrowsingPage = memo(function BrowsingPage({ tab }: { tab: BrowserTab }) {
   const blankPage = underBar ? theme.pageSurface : theme.canvas;
   const top = pageTone?.top ?? blankPage;
   const bottom = pageTone?.bottom ?? blankPage;
-  const barDark = (design === "redesigned" || design === "material") && !pageTone?.bottom ? theme.dark : isDarkColor(bottom);
+  const glassTone = failed ? undefined : tone?.barDark;
+  const barDark = glassTone ?? ((design === "redesigned" || design === "material") && !pageTone?.bottom ? theme.dark : isDarkColor(bottom));
   useSystemBars(isDarkColor(top), barDark);
   const barSlotHeight = barHeight(insets.bottom, design);
   const collapse = useBarCollapse(tab.id, tab.isPrivate, finding, design, barSlotHeight, squeeze !== null);

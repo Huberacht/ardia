@@ -14,7 +14,7 @@ public enum LiquidGlassShader {
     case edgeRed, edgeGreen, edgeBlue, edgeAlpha
     case tintRed, tintGreen, tintBlue, tintAlpha
     case rimOnly
-    case readable
+    case ceiling, floor
   }
 
   public struct Frame: Equatable, Sendable {
@@ -33,6 +33,7 @@ public enum LiquidGlassShader {
     public var params: LiquidGlassParams
     public var bound: LiquidGlassBound?
     public var rimOnly = false
+    public var toneLimit: (ceiling: Double, floor: Double) = (1, 0)
 
     public init(width: Double, height: Double, scale: Double, radius: Double, live: Bool, lens: Bool, rim: Bool, dark: Bool, uv: (left: Double, top: Double, width: Double, height: Double) = (0, 0, 1, 1), fill: GlassInk, tint: GlassInk = .clear, style: GlassFrostStyle = .glass, params: LiquidGlassParams = .defaults, bound: LiquidGlassBound? = nil) {
       self.width = width
@@ -100,7 +101,8 @@ public enum LiquidGlassShader {
       set(.edgeRed, ink: style.edge(dark: dark))
       set(.tintRed, ink: tint)
       set(.rimOnly, rimOnly ? 1 : 0)
-      set(.readable, dark ? 1 : 2)
+      set(.ceiling, dark ? min(LiquidGlassRules.readableCeiling, toneLimit.ceiling) : toneLimit.ceiling)
+      set(.floor, dark ? toneLimit.floor : max(LiquidGlassRules.readableFloor, toneLimit.floor))
       return values
     }
   }
@@ -121,7 +123,7 @@ struct GlassUniforms {
   float edgeRed; float edgeGreen; float edgeBlue; float edgeAlpha;
   float tintRed; float tintGreen; float tintBlue; float tintAlpha;
   float rimOnly;
-  float readable;
+  float ceiling; float floor;
 };
 
 struct GlassVertexOut {
@@ -202,14 +204,14 @@ static float rimLight(float2 p, float edge, float inward, float feather, constan
   return clamp((lit + back) * mask, 0.0, 1.0) * u.rimOpacity;
 }
 
-static float4 readable(float4 color, float mode) {
-  if (mode < 0.5 || color.a <= 0.0) return color;
+static float4 readable(float4 color, float ceiling, float floor) {
+  if (color.a <= 0.0) return color;
   float3 lin = pow(clamp(color.rgb / color.a, 0.0, 1.0), float3(2.2));
   float light = dot(lin, float3(0.2126, 0.7152, 0.0722));
-  if (mode < 1.5) {
-    if (light > \(LiquidGlassRules.readableCeiling)) lin *= \(LiquidGlassRules.readableCeiling) / light;
-  } else if (light < \(LiquidGlassRules.readableFloor)) {
-    lin += (1.0 - lin) * ((\(LiquidGlassRules.readableFloor) - light) / max(1.0 - light, 0.0001));
+  if (light > ceiling) {
+    lin *= ceiling / max(light, 0.0001);
+  } else if (light < floor) {
+    lin += (1.0 - lin) * ((floor - light) / max(1.0 - light, 0.0001));
   }
   return float4(pow(lin, float3(1.0 / 2.2)) * color.a, color.a);
 }
@@ -247,7 +249,7 @@ fragment float4 liquidGlassFragment(GlassVertexOut in [[stage_in]], constant Gla
   float edgeMask = 1.0 - smoothstep(u.edgeWidth, u.edgeWidth + feather, inward);
   color = over(float4(u.edgeRed, u.edgeGreen, u.edgeBlue, u.edgeAlpha) * edgeMask, color);
   color = over(float4(u.tintRed, u.tintGreen, u.tintBlue, u.tintAlpha), color);
-  if (u.live > 0.5) color = readable(color, u.readable);
+  if (u.live > 0.5) color = readable(color, u.ceiling, u.floor);
   return color * coverage;
 }
 """

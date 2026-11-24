@@ -41,6 +41,8 @@ final class LiquidGlassSurface: UIView {
   private var lensWanted = false
   private var lensOn: Bool?
   private var lastBridge: CFTimeInterval = 0
+  private var toneDark: Bool?
+  private var toneChangedAt: CFTimeInterval = -.infinity
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -325,6 +327,9 @@ final class LiquidGlassSurface: UIView {
 
   private func makeFrame(size: CGSize, live: Bool, uv: (left: Double, top: Double, width: Double, height: Double), rimOnly: Bool) -> LiquidGlassShader.Frame {
     let dark = isDark
+    let now = CACurrentMediaTime()
+    if let toneDark, toneDark != dark { toneChangedAt = now }
+    toneDark = dark
     let fill = choice.path == .solid ? (solidFill.map { GlassInk($0.resolvedColor(with: traits(dark))) } ?? GlassFrostStyle.glass.fallback(dark: dark)) : GlassFrostStyle.glass.fallback(dark: dark)
     var frame = LiquidGlassShader.Frame(
       width: Double(size.width),
@@ -341,6 +346,7 @@ final class LiquidGlassSurface: UIView {
       bound: bound.measure(size)
     )
     frame.rimOnly = rimOnly
+    frame.toneLimit = LiquidGlassRules.toneLimit(dark: dark, since: now - toneChangedAt)
     return frame
   }
 

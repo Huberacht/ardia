@@ -36,6 +36,8 @@ final class PageView: ExpoView {
   private var failedID: String?
   private var sampled: PageTone?
   private var sentTone: PageTone?
+  private var glassBarDark: Bool?
+  private var sentBarDark: Bool?
   private var sentState: NSDictionary?
   private var wasLoading = false
   var observing = 0
@@ -122,6 +124,13 @@ final class PageView: ExpoView {
     sideMargins.isUserInteractionEnabled = false
     sideMargins.isHidden = true
     addSubview(sideMargins)
+    NotificationCenter.default.addObserver(self, selector: #selector(glassToneChanged(_:)), name: GlassTone.changed, object: nil)
+  }
+
+  @objc private func glassToneChanged(_ note: Notification) {
+    guard let web = note.object as? WKWebView, web === hostedWebView, let dark = note.userInfo?[GlassTone.darkKey] as? Bool, let page else { return }
+    glassBarDark = dark
+    sendTone(theme: page.themeColor, underPage: page.underPageBackgroundColor)
   }
 
   @MainActor
@@ -174,6 +183,8 @@ final class PageView: ExpoView {
     failedID = nil
     sampled = nil
     sentTone = nil
+    glassBarDark = nil
+    sentBarDark = nil
     sentState = nil
   }
 
@@ -208,6 +219,7 @@ final class PageView: ExpoView {
 
   @MainActor
   private func forgetHostedWebView() {
+    glassBarDark = nil
     drawnTask?.cancel()
     drawnTask = nil
     drawnSent = false
@@ -262,9 +274,11 @@ final class PageView: ExpoView {
   @MainActor
   private func sendTone(theme: UIColor?, underPage: UIColor?) {
     let tone = PageTone.resolve(theme: theme, underPage: underPage, sampled: sampled, stored: nil)
-    guard tone != sentTone, tone.top != nil || tone.bottom != nil else { return }
+    guard tone != sentTone || glassBarDark != sentBarDark, tone.top != nil || tone.bottom != nil || glassBarDark != nil else { return }
     sentTone = tone
+    sentBarDark = glassBarDark
     var payload: [String: Any] = ["name": "tone"]
+    if let glassBarDark { payload["barDark"] = glassBarDark }
     if let top = tone.top { payload["top"] = top.hex }
     if let bottom = tone.bottom { payload["bottom"] = bottom.hex }
     onPageEvent(payload)

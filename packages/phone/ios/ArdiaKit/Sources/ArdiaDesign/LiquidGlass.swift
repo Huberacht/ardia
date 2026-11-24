@@ -211,6 +211,16 @@ public enum LiquidGlassRules {
   public static let readableCeiling = readableBound(ink: lightInk, dark: true)
   public static let readableFloor = readableBound(ink: darkInk, dark: false)
 
+  public static let toneEase: TimeInterval = 0.18
+
+  public static func toneLimit(dark: Bool, since: TimeInterval) -> (ceiling: Double, floor: Double) {
+    let progress = min(max(since / toneEase, 0), 1)
+    let eased = 1 - (1 - progress) * (1 - progress)
+    if dark { return (1, (readableCeiling - 0.005) * (1 - eased)) }
+    let start = readableFloor + 0.02
+    return (start + (1 - start) * eased, 0)
+  }
+
   public static func text(_ ink: GlassInk, over glass: (red: Double, green: Double, blue: Double)) -> Double {
     luminance(red: ink.red * ink.alpha + glass.red * (1 - ink.alpha), green: ink.green * ink.alpha + glass.green * (1 - ink.alpha), blue: ink.blue * ink.alpha + glass.blue * (1 - ink.alpha))
   }

@@ -4,7 +4,7 @@ import Metal
 import Testing
 
 struct GlassReadabilityTests {
-  private static func lens(over backdrop: [UInt8], dark: Bool) throws -> [Double]? {
+  private static func lens(over backdrop: [UInt8], dark: Bool, since: TimeInterval = .infinity) throws -> [Double]? {
     guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
     let library = try device.makeLibrary(source: LiquidGlassShader.source, options: nil)
     let descriptor = MTLRenderPipelineDescriptor()
@@ -12,7 +12,8 @@ struct GlassReadabilityTests {
     descriptor.fragmentFunction = library.makeFunction(name: LiquidGlassShader.fragmentName)
     descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
     let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-    let frame = LiquidGlassShader.Frame(width: 120, height: 48, scale: 1, radius: 24, live: true, lens: true, rim: false, dark: dark, fill: GlassFrostStyle.glass.fallback(dark: dark))
+    var frame = LiquidGlassShader.Frame(width: 120, height: 48, scale: 1, radius: 24, live: true, lens: true, rim: false, dark: dark, fill: GlassFrostStyle.glass.fallback(dark: dark))
+    frame.toneLimit = LiquidGlassRules.toneLimit(dark: dark, since: since)
     let target = device.makeTexture(descriptor: { let made = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 120, height: 48, mipmapped: false); made.usage = [.renderTarget, .shaderRead]; made.storageMode = .shared; return made }())!
     let source = device.makeTexture(descriptor: MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false))!
     var pixel = backdrop
@@ -98,6 +99,17 @@ struct GlassReadabilityTests {
       let shown = Double(step) / 10
       let mixed = (0..<3).map { lens[$0] * shown + clear[$0] * (1 - shown) }
       #expect(Self.reads(mixed, dark: true) >= 4.5, "at \(shown)")
+    }
+  }
+
+  @Test func `every frame of a tone change keeps the new ink readable, over white and over black`() throws {
+    for dark in [true, false] {
+      for backdrop: [UInt8] in [[255, 255, 255, 255], [0, 0, 0, 255], [16, 0, 122, 255]] {
+        for step in 0...6 {
+          guard let shown = try Self.lens(over: backdrop, dark: dark, since: Double(step) * 0.03) else { return }
+          #expect(Self.reads(shown, dark: dark) >= 4.5, "dark \(dark) backdrop \(backdrop) at \(Double(step) * 30) ms")
+        }
+      }
     }
   }
 }
