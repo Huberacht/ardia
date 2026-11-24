@@ -70,7 +70,7 @@ export function Intro({ onDone, onExitStart, overlay = false }: { onDone: () => 
   const catchesEscape = overlay || (!holdsKeys && !live);
 
   useEffect(() => {
-    if (holdsKeys) keys.current?.focus();
+    if (holdsKeys && !overlay) keys.current?.focus();
     else if (catchesEscape) escapeKeys.current?.focus();
   }, [holdsKeys, catchesEscape]);
 
