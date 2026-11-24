@@ -2021,7 +2021,7 @@ open class FrostView(context: Context, appContext: AppContext) : LookView(contex
 
     private fun effectivePageMode(): FrostSources.PageMode = if (pageLive()) FrostSources.PageMode.Live else FrostSources.pageMode
 
-    internal fun waitsOnSource(): Boolean = lastChoice?.path != FrostPage.Path.Live && wantsSource()
+    internal fun waitsOnSource(): Boolean = samplesNow && lastChoice?.path != FrostPage.Path.Live && wantsSource()
 
     internal fun wantsSource(): Boolean {
         if (!canBlur()) return false

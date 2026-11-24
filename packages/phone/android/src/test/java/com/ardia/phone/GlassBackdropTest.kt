@@ -172,6 +172,69 @@ class GlassBackdropTest {
     }
 
     @Test
+    fun aHostedGlassThatChangesSizeRedrawsTheBackdrop() {
+        val scene = bar()
+        live(scene)
+        onHardware(scene.backdrop)
+        val wide = scene.backdrop.placement(scene.glasses[1])!!
+        assertFalse(scene.backdrop.isDirty)
+        scene.glasses[1].at(64, 10, 48, 44)
+        assertTrue("the squeezed capsule redraws the backdrop at once", scene.backdrop.isDirty)
+        assertNotEquals("and its placement carries its new size", wide, scene.backdrop.placement(scene.glasses[1]))
+        onHardware(scene.backdrop)
+        scene.glasses[1].at(64, 10, 200, 44)
+        scene.backdrop.viewTreeObserver.dispatchOnPreDraw()
+        assertTrue(scene.backdrop.isDirty)
+    }
+
+    @Test
+    fun aTouchBesideTheGlassReachesWhatIsUnderTheBackdrop() {
+        val root = FrameLayout(activity).apply { id = 101 }
+        activity.setContentView(root)
+        val page = View(activity).apply { id = 102 }
+        root.addView(page)
+        val backdrop = GlassBackdropView(activity, appContext).apply { id = 103 }
+        root.addView(backdrop)
+        root.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(470, View.MeasureSpec.EXACTLY))
+        root.at(0, 0, 320, 470)
+        page.at(0, 0, 320, 470)
+        backdrop.at(0, 390, 320, 80)
+        assertEquals(com.facebook.react.uimanager.PointerEvents.NONE, backdrop.pointerEvents)
+        assertEquals("a tap in the bar's blank space lands on the page", 102, com.facebook.react.uimanager.TouchTargetHelper.findTargetTagForTouch(20f, 430f, root))
+    }
+
+    @Test
+    fun aHiddenGlassNeverWaitsOnItsSourceSoTheSourceNeverWakesTheBackdrop() {
+        val scene = bar()
+        scene.pill.shownMs = 0f
+        scene.pill.shown = false
+        assertNull(scene.pill.lastChoice)
+        assertFalse("a hidden glass that never drew waits on nothing", scene.pill.waitsOnSource())
+        live(scene)
+        onHardware(scene.backdrop)
+        assertFalse(scene.backdrop.isDirty)
+        for (colour in listOf(Color.GREEN, Color.RED)) {
+            scene.source.getChildAt(0).setBackgroundColor(colour)
+            scene.source.invalidate()
+            onHardware(scene.source)
+        }
+        assertFalse("the source recording again doesn't wake the backdrop for the hidden pill", scene.backdrop.isDirty)
+    }
+
+    @Test
+    fun glassesWhoseBackdropGoesDrawThemselvesAgain() {
+        val scene = bar()
+        live(scene)
+        scene.bar.removeView(scene.backdrop)
+        (scene.glasses + scene.pill).forEach {
+            assertNull("the glass lets go of the removed backdrop", it.backdrop)
+            assertTrue("and draws itself", it.isDirty)
+        }
+        scene.glasses[0].invalidate()
+        assertTrue(scene.glasses[0].isDirty)
+    }
+
+    @Test
     fun aGlassThatLeavesGoesBackToDrawingItself() {
         val scene = bar()
         live(scene)

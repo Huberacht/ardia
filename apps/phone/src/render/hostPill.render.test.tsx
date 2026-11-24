@@ -99,6 +99,12 @@ test("on iPhone's design, scrolling down with Collapse Bottom Bar on shrinks the
   expect(host(root, "floatingBarFold")!.props.pointerEvents).toBe("none");
   expect(host(root, "floatingBarFold")!.props.accessibilityElementsHidden).toBe(true);
   expect(moved(host(root, "pageBar")!)).toEqual({ opacity: 1, translateY: 0, scale: 1 });
+  for (const [fold, layer] of [["floatingBarFold", "floatingBarFoldLayer"], ["hostPillFold", "hostPillFoldLayer"]] as const) {
+    expect(host(root, fold)!.props.needsOffscreenAlphaCompositing).toBe(android);
+    expect(host(root, fold)!.props.renderToHardwareTextureAndroid).toBeFalsy();
+    expect(host(root, layer)!.props.renderToHardwareTextureAndroid).toBe(android);
+    expect(host(root, layer)!.props.pointerEvents).toBe("box-none");
+  }
   unmount(root);
 });
 

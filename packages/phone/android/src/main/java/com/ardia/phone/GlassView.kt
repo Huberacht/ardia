@@ -17,6 +17,8 @@ import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
 import androidx.compose.ui.graphics.toArgb
 import expo.modules.kotlin.AppContext
+import com.facebook.react.uimanager.PointerEvents
+import com.facebook.react.uimanager.ReactPointerEventsView
 import expo.modules.kotlin.views.ExpoView
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -206,6 +208,7 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         invalidateOutline()
+        backdrop?.invalidate()
     }
 
     internal var backdrop: GlassBackdropView? = null
@@ -216,6 +219,12 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     override fun invalidate() {
         val host = backdrop
         if (host != null) host.invalidate() else super.invalidate()
+    }
+
+    internal fun backdropGone(host: GlassBackdropView) {
+        if (backdrop !== host) return
+        backdrop = null
+        super.invalidate()
     }
 
     internal fun drawHosted(canvas: Canvas) {
@@ -335,7 +344,9 @@ class GlassView(context: Context, appContext: AppContext) : FrostView(context, a
     }
 }
 
-class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
+class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(context, appContext), ReactPointerEventsView {
+    override val pointerEvents: PointerEvents get() = PointerEvents.NONE
+
     private val hosted = ArrayList<GlassView>()
     private val drawn = HashMap<GlassView, Placement>()
     private val global = Matrix()
@@ -344,9 +355,9 @@ class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(con
 
     internal val glasses: List<GlassView> get() = hosted.toList()
 
-    internal data class Placement(val matrix: FloatArray, val alpha: Float) {
-        override fun equals(other: Any?): Boolean = other is Placement && alpha == other.alpha && matrix.contentEquals(other.matrix)
-        override fun hashCode(): Int = 31 * matrix.contentHashCode() + alpha.hashCode()
+    internal data class Placement(val matrix: FloatArray, val alpha: Float, val width: Int, val height: Int) {
+        override fun equals(other: Any?): Boolean = other is Placement && alpha == other.alpha && width == other.width && height == other.height && matrix.contentEquals(other.matrix)
+        override fun hashCode(): Int = ((31 * matrix.contentHashCode() + alpha.hashCode()) * 31 + width) * 31 + height
     }
 
     init {
@@ -380,6 +391,9 @@ class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(con
     override fun onDetachedFromWindow() {
         viewTreeObserver.removeOnPreDrawListener(moved)
         drawn.clear()
+        val left = hosted.toList()
+        hosted.clear()
+        left.forEach { it.backdropGone(this) }
         super.onDetachedFromWindow()
     }
 
@@ -406,10 +420,11 @@ class GlassBackdropView(context: Context, appContext: AppContext) : ExpoView(con
         global.postConcat(ownInverse)
         val values = FloatArray(9)
         global.getValues(values)
-        return Placement(values, alpha)
+        return Placement(values, alpha, glass.width, glass.height)
     }
 
     override fun onDraw(canvas: Canvas) {
+        canvas.clipRect(0, 0, width, height)
         val matrix = Matrix()
         for (glass in hosted) {
             val place = placement(glass)
