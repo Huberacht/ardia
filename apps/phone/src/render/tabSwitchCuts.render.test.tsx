@@ -1553,3 +1553,40 @@ test("Plus taken at its lift during the cut, then a card pressed after the entra
   expect(destination.turn.value).toBe(posed + 1);
   unmount(root);
 });
+
+const tabsButtonOf = (root: ReactTestRenderer) => root.root.findAll((node) => node.props.accessibilityLabel === "Tabs" && typeof node.props.onPress === "function")[0]!;
+
+for (const cardFirst of [true, false]) {
+  test(`an early card tap during the cut opens that tab with exactly one deck entrance, and the deck never comes back, even when the Tabs press's own JS echo arrives after the card lifted (card ${cardFirst ? "before" : "after"} the entrance commit in JS)`, async () => {
+    if (Platform.OS !== "android") return;
+    const root = await standbyDeck();
+    const selected = currentTabs().selectedId!;
+    const hit = deckPull.hit.value!;
+    const surfaces: string[] = [];
+    const stop = browse.useBrowse.subscribe((now, was) => {
+      if (now.surface !== was.surface) surfaces.push(now.surface);
+    });
+    const shows = jest.spyOn(browse, "showDeck");
+    tapTabs();
+    if (!cardFirst) act(() => jest.advanceTimersByTime(0));
+    pressCardAtCut(selected, hit);
+    expect(deckTurn.hitMark.value).toBe("deck-hit:card");
+    act(() => tabsButtonOf(root).props.onPress());
+    for (let step = 0; step < 60; step++) act(() => jest.advanceTimersByTime(50));
+    stop();
+    expect(surfaces).toEqual(["deck", "browsing"]);
+    expect(shows).not.toHaveBeenCalled();
+    expect(currentTabs().selectedId).toBe(selected);
+    expect(browse.useBrowse.getState().surface).toBe("browsing");
+    unmount(root);
+  });
+}
+
+test("a TalkBack activation of Tabs, which has no touch, still opens the deck, and so does a later tap once the echo window has passed", async () => {
+  if (Platform.OS !== "android") return;
+  const root = await standbyDeck();
+  act(() => tabsButtonOf(root).props.onPress());
+  for (let step = 0; step < 5; step++) act(() => jest.advanceTimersByTime(100));
+  expect(browse.useBrowse.getState().surface).toBe("deck");
+  unmount(root);
+});
