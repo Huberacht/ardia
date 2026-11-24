@@ -19,6 +19,12 @@ const move = (by: number): WheelAction => ({ kind: "move", direction: by > 0 ? 1
 
 export function readWheel(gesture: WheelGesture, { dy, phase, momentum, precise }: WheelInfo, at: number, range: SectionRange, now: number, tune: WheelTuning): WheelAction {
   const ending = phase === "ended" || phase === "cancelled";
+  const starting = precise && !momentum && (phase === "began" || phase === "mayBegin");
+  if (starting) {
+    gesture.accum = 0;
+    gesture.committed = false;
+    gesture.scrolledInside = false;
+  }
   if (!Number.isFinite(dy) || (dy === 0 && !ending)) return NONE;
   const by = precise ? -dy : -dy * tune.wheelLine;
   const tall = range.hi > range.lo;
@@ -39,7 +45,7 @@ export function readWheel(gesture: WheelGesture, { dy, phase, momentum, precise 
     return next === null ? NONE : place(next);
   }
   if (ending) return gesture.committed || gesture.scrolledInside ? NONE : { kind: "settle" };
-  if (phase === "began" || phase === "mayBegin" || now - gesture.lastAt > tune.wheelGestureGapMs) {
+  if (!starting && now - gesture.lastAt > tune.wheelGestureGapMs) {
     gesture.accum = 0;
     gesture.committed = false;
     gesture.scrolledInside = false;

@@ -78,3 +78,8 @@ test("a pull at the edge that reverses scrolls back inside the section", () => {
   assert.deepEqual(kinds(out), ["place", "place"]);
   assert.equal(out[1].y, TALL.hi - 30);
 });
+
+test("a new swipe that opens with a zero-length began moves again right after the last one", () => {
+  const out = run([["began", -15], ["changed", -15], ["ended", 0], ["began", 0, { gap: 40 }], ["changed", -15], ["changed", -15], ["ended", 0]]);
+  assert.deepEqual(kinds(out), ["place", "move1", "none", "none", "place", "move1", "none"]);
+});
