@@ -281,7 +281,9 @@ function TrayLayer({ session, closing, standby = false, onClosed }: LayerProps) 
     revealStandby = (presenting) => {
       const early = pressedReveal();
       const otherSheet = early.press !== 0 && early.generation !== generation;
-      if (otherSheet || presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || presenting.prepared !== standbyRowsKey || searchState().session !== armedSession) {
+      const shownByPress = early.press !== 0 && early.generation === generation;
+      const rowsDiffer = presenting.prepared !== standbyRowsKey && !shownByPress;
+      if (otherSheet || rowsDiffer || presenting.origin !== origin || presenting.incognito !== incognito || presenting.editsPage || searchState().session !== armedSession) {
         if (early.press !== 0) dropEarlyStandby(early.press);
         discardDraft(generation);
         return null;

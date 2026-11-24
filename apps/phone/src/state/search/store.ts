@@ -255,6 +255,7 @@ export function presentSearch(origin: SearchOrigin, text = "", incognitoOnCancel
 export function dismissSearch(ending: SearchEnding = "cancelled") {
   if (useSearch.getState().open) markSearchClosing();
   useSearch.setState({ open: false, ending, incognitoOnCancel: null });
+  paste = null;
   dropQueuedDraft();
 }
 

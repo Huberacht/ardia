@@ -7,8 +7,10 @@ import { Surfaces } from "../App";
 import { deckPull, pageBarShown, pageBodyShown, PULL_STAGE } from "../state/browse/deckPull";
 import { currentPhoneGeneration, deckTurn, type DeckHitCommand } from "../state/browse/deckTurn";
 import * as browse from "../state/browse/store";
+import * as system from "../platform/system";
 import { cutTabSwitches } from "../state/browse/tabSwitch";
-import { dismissSearch, searchState } from "../state/search/store";
+import { dismissSearch, preparedIdleKey, searchState } from "../state/search/store";
+import { setSearchEngine } from "../state/search/omnibox";
 import { revealStandbyFromDeck, standbyPrepared, standbyShownEarly } from "../state/search/standbyReveal";
 import { setPreference } from "../state/settings/store";
 import { currentTabs, useTabs } from "../state/tabs/store";
@@ -254,5 +256,62 @@ test("a deck + that JS runs but doesn't adopt is withdrawn once the turn's comma
   expect(searchState().open).toBe(false);
   expect(sheetShown(root)).toBe(0);
   expect(standbyShownEarly.value.generation).toBe(0);
+  unmount(root);
+});
+
+test("after a search that offered the clipboard closes, text and a Go typed into the next early deck editor still open and submit: the offer the new search drops doesn't throw away a valid reveal's draft", async () => {
+  if (Platform.OS !== "android") return;
+  mockNativeField = true;
+  jest.spyOn(system, "clipboardOffer").mockResolvedValue("text");
+  const submits = jest.spyOn(browse, "submitSearch").mockImplementation(() => true);
+  const root = await standbyDeck();
+  act(() => browse.newTab());
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(searchState().rows.some((row) => row.key === "paste")).toBe(true);
+  act(() => dismissSearch());
+  for (let step = 0; step < 40; step++)
+    await act(async () => {
+      jest.advanceTimersByTime(100);
+    });
+  expect(searchState().open).toBe(false);
+  expect(hostWith(root, "trayStandby")).toBeDefined();
+  await layOutControls(root);
+  tapTabs();
+  pressPlus();
+  expect(sheetShown(root)).toBe(1);
+  const waiting = sheetOf(root);
+  act(() => fieldOf(waiting).props.onChangeText("otters"));
+  act(() => fieldOf(waiting).props.onSubmitEditing());
+  runJS();
+  expect(searchState().open).toBe(true);
+  expect(searchState().text).toBe("otters");
+  expect(submits).toHaveBeenCalledTimes(1);
+  expect(submits.mock.calls[0]![0]).toBe("otters");
+  expect(hostWith(root, "trayRoot") === waiting).toBe(true);
+  unmount(root);
+});
+
+test("rows that change between an early deck + and JS taking it, here a new search engine, re-key the adopted sheet's rows but keep the draft and held Go that press typed", async () => {
+  if (Platform.OS !== "android") return;
+  mockNativeField = true;
+  const submits = jest.spyOn(browse, "submitSearch").mockImplementation(() => true);
+  const root = await standbyDeck();
+  tapTabs();
+  pressPlus();
+  const waiting = sheetOf(root);
+  act(() => fieldOf(waiting).props.onChangeText("otters"));
+  act(() => fieldOf(waiting).props.onSubmitEditing());
+  const before = preparedIdleKey();
+  setSearchEngine("duckduckgo");
+  expect(preparedIdleKey()).not.toBe(before);
+  runJS();
+  expect(searchState().open).toBe(true);
+  expect(searchState().text).toBe("otters");
+  expect(submits).toHaveBeenCalledTimes(1);
+  expect(submits.mock.calls[0]![0]).toBe("otters");
+  expect(hostWith(root, "trayRoot") === waiting).toBe(true);
+  setSearchEngine("google");
   unmount(root);
 });
